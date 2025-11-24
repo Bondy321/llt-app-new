@@ -1,10 +1,23 @@
 // services/bookingServiceRealtime.js
-import { realtimeDb } from '../firebase';
+const isTestEnv = process.env.NODE_ENV === 'test';
+let realtimeDb;
+
+if (!isTestEnv) {
+  try {
+    ({ realtimeDb } = require('../firebase'));
+  } catch (error) {
+    console.warn('Realtime database module not initialized during load:', error.message);
+  }
+}
 
 // Validate booking reference and get associated tour
-export const validateBookingReference = async (bookingRef) => {
+const validateBookingReference = async (bookingRef) => {
   try {
     console.log('Validating booking reference:', bookingRef);
+
+    if (!realtimeDb) {
+      throw new Error('Realtime database not initialized');
+    }
     
     // Convert to uppercase to be case-insensitive
     const upperRef = bookingRef.toUpperCase().trim();
@@ -67,42 +80,55 @@ export const validateBookingReference = async (bookingRef) => {
 };
 
 // Join tour (update participant count)
-export const joinTour = async (tourId, userId) => {
+const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
   try {
+    const db = dbInstance || realtimeDb;
+
+    if (!db) {
+      throw new Error('Realtime database not initialized');
+    }
+
     console.log('Joining tour:', tourId, 'for user:', userId);
-    
+
     // Add user to participants
-    await realtimeDb
+    await db
       .ref(`tours/${tourId}/participants/${userId}`)
       .set({
         joinedAt: new Date().toISOString(),
         userId: userId
       });
-    
-    // Get current participant count
-    const countSnapshot = await realtimeDb
+
+    console.log('Incrementing participant count transactionally');
+    const transactionResult = await db
       .ref(`tours/${tourId}/currentParticipants`)
-      .once('value');
-    
-    const currentCount = countSnapshot.val() || 0;
-    
-    // Update count
-    await realtimeDb
-      .ref(`tours/${tourId}/currentParticipants`)
-      .set(currentCount + 1);
-    
-    console.log('User joined tour successfully');
-    return { success: true };
+      .transaction((currentCount) => {
+        const safeCount = typeof currentCount === 'number' ? currentCount : 0;
+        const nextCount = safeCount + 1;
+        console.log('Participant count update', { currentCount: safeCount, nextCount });
+        return nextCount;
+      });
+
+    if (!transactionResult?.committed) {
+      throw new Error('Participant count transaction not committed');
+    }
+
+    const newCount = transactionResult?.snapshot?.val?.() ?? null;
+    console.log('User joined tour successfully via transaction', { newCount });
+    return { success: true, currentParticipants: newCount };
   } catch (error) {
     console.error('Error joining tour:', error);
-    return { success: false, error: error.message };
+    throw error;
   }
 };
 
 // Get tour itinerary
-export const getTourItinerary = async (tourId) => {
+const getTourItinerary = async (tourId) => {
   try {
     console.log('Getting itinerary for tour:', tourId);
+
+    if (!realtimeDb) {
+      throw new Error('Realtime database not initialized');
+    }
     
     const tourSnapshot = await realtimeDb
       .ref(`tours/${tourId}`)
@@ -152,4 +178,10 @@ export const getTourItinerary = async (tourId) => {
     console.error('Error getting itinerary:', error);
     return null;
   }
+};
+
+module.exports = {
+  validateBookingReference,
+  joinTour,
+  getTourItinerary
 };
