@@ -21,6 +21,7 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
     { id: 'GroupPhotobook', title: 'Group Photo Album', icon: 'image-multiple', color: '#16a085' },
     { id: 'Itinerary', title: 'Tour Itinerary', icon: 'map-legend', color: '#3498DB' },
     { id: 'Chat', title: 'Group Chat', icon: 'chat-processing-outline', color: '#2ECC71' },
+    { id: 'Notes', title: 'My Notes', icon: 'notebook-outline', color: '#9b59b6' },
     { id: 'Map', title: 'Driver Location', icon: 'map-marker-radius-outline', color: COLORS.coralAccent },
   ];
 
