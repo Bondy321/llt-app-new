@@ -1,0 +1,39 @@
+{
+  "name": "Loch Lomond Travel Expo App",
+  "image": "mcr.microsoft.com/devcontainers/universal:latest",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "18" // Matches recommended Node version for RN/Expo
+    }
+  },
+  
+  // Install dependencies when the container is created
+  "postCreateCommand": "npm install",
+  
+  // Automatically run the Expo start command
+  "postAttachCommand": {
+    "server": "npm run start"
+  },
+
+  // Forward the necessary Expo port (default)
+  "portsAttributes": {
+    "19000": {
+      "label": "Expo Dev Server",
+      "onAutoForward": "notify"
+    },
+    "19001": {
+      "label": "Metro Bundler",
+      "onAutoForward": "notify"
+    }
+  },
+
+  // Set necessary environment variables (like the Secrets you defined)
+  // NOTE: This assumes you have already set these as GitHub Secrets.
+  "remoteEnv": {
+    "FIREBASE_API_KEY": "${localEnv:FIREBASE_API_KEY}",
+    "FIREBASE_AUTH_DOMAIN": "${localEnv:FIREBASE_AUTH_DOMAIN}",
+    "FIREBASE_DB_URL": "${localEnv:FIREBASE_DB_URL}",
+    "FIREBASE_PROJECT_ID": "${localEnv:FIREBASE_PROJECT_ID}",
+    "FIREBASE_STORAGE_BUCKET": "${localEnv:FIREBASE_STORAGE_BUCKET}"
+  }
+}
