@@ -3,75 +3,75 @@
 ## 1. Project Overview
 **App Name:** Loch Lomond Travel App
 **Company:** Loch Lomond Travel (Coach tour operator based in the UK)
-**Purpose:** A companion app for clients on coach tours (ranging from day trips to week-long European tours).
+**Purpose:** Companion app for tour passengers (day trips to week-long European tours).
 **Primary User:** Tour passengers.
-**Authentication:** Users do not create accounts. They "log in" using a specific **Booking Reference Number** (e.g., `T114737`).
+**Authentication:** Anonymous "Log in" via Booking Reference Number (e.g., `T114737`).
 
-## 2. Business Logic & Architecture
-The app relies on a specific data flow pipeline involving Google Sheets and Firebase.
+## 2. Architecture & Data Flow
+1.  **Source of Truth:** Google Sheets (Business Database).
+2.  **Sync Layer:** Data syncs from Sheets to **Firebase Realtime Database**.
+3.  **App Layer:** React Native app reads from Firebase Realtime DB (and Firestore for some legacy validations).
 
-### Data Pipeline
-1.  **Source of Truth:** Google Sheets acts as the primary SQL-like database for the company.
-2.  **Sync:** Data from Google Sheets is synced/pushed to **Firebase Realtime Database**.
-3.  **App Consumption:** The React Native app reads directly from Firebase Realtime Database (and occasionally Firestore) to display tour details.
-
-### Authentication Flow
-* **Method:** Anonymous Authentication (`firebase.auth().signInAnonymously()`).
-* **Validation:**
-    1.  User enters Booking Reference on `LoginScreen`.
-    2.  App checks `bookings/{ref}` in Firebase Realtime DB.
-    3.  If valid, the app retrieves the associated `tourId` and signs the user in anonymously to Firebase (to handle Security Rules).
-    4.  The session is persisted using `AsyncStorage`.
-
-## 3. Tech Stack
-* **Framework:** React Native (Expo SDK 53).
-* **Language:** JavaScript (React).
+## 3. Tech Stack & Environment
+* **Framework:** React Native (Expo SDK 54).
+* **Environment:** GitHub Codespaces (Cloud).
+* **Client:** Expo Go (via `--tunnel`).
 * **Backend:** Google Firebase (v9+ Compat SDK).
-    * **Realtime Database:** Primary data source for bookings, tours, and chat.
-    * **Firestore:** Used for specific tour code validations (legacy/secondary).
-    * **Storage:** Used for photo uploads.
-    * **Auth:** Anonymous handling.
-* **UI Library:** Native styles, `react-native-vector-icons` (via Expo), Linear Gradient.
+    * **Realtime DB:** Primary data (bookings, chats, locations).
+    * **Firestore:** Secondary/Legacy (tour code validation).
+    * **Storage:** Photo uploads.
+    * **Auth:** Anonymous Authentication.
 
-## 4. Core Features & Implementation Details
+## 4. 🚨 CURRENT CRITICAL ISSUES (READ FIRST)
+**Issue:** App Crash on Launch (Anonymous Auth).
+**Error:** `[TypeError: Cannot read property 'setItem' of undefined]`
+**Root Cause:** `AsyncStorage` native module is missing or failing to load in the standard Expo Go client (SDK 54), causing `firebase.js` and `loggerService.js` to crash when attempting to persist data.
+
+### **Current Fix Strategy (In Progress)**
+We are applying a **"Mock Block" Strategy** to bypass storage temporarily so we can resume UI development.
+1.  **Action:** In `firebase.js` and `loggerService.js`, we are replacing the real `AsyncStorage` import with a dummy object:
+    ```javascript
+    const AsyncStorage = {
+      getItem: async () => null,
+      setItem: async () => {},
+      removeItem: async () => {},
+      multiRemove: async () => {},
+      clear: async () => {},
+    };
+    ```
+2.  **Goal:** Allow the app to launch and user to sign in (without "Remember Me" functionality) to unblock development.
+3.  **Long Term Plan:** Migrate to `expo-secure-store` for production persistence.
+
+## 5. Core Features
 
 ### A. Dashboard (`TourHomeScreen`)
-Displays dynamic data fetched based on the login reference:
-* **Passenger Info:** Names, Seat numbers.
-* **Logistics:** Pickup location and time.
-* **Driver:** Driver's name.
+* **Dynamic Data:** Displays Passenger names, Seat numbers, Pickup time/location.
+* **Driver Info:** Shows Driver name.
 
 ### B. Communication (`ChatScreen`)
-* **Scope:** Group chat exclusive to passengers (and potentially the driver) on the specific tour.
-* **Backend:** Firebase Realtime Database (`chats/{tourId}/messages`).
-* **Logic:** Messages are stored with `senderId` (UID) and `senderName` (from booking data).
+* **Scope:** Tour-specific group chat.
+* **Tech:** Firebase Realtime Database (`chats/{tourId}/messages`).
+* **Logic:** Messages tagged with `senderName` and `isDriver`.
 
 ### C. Photo Sharing
-The app supports two distinct photo albums:
-1.  **Private Album (`PhotobookScreen`):** Photos only the specific user can see.
-    * *Storage Path:* `private_tour_photos/{tourId}/{userId}/`
-2.  **Group Album (`GroupPhotobookScreen`):** Photos shared with the entire bus.
-    * *Storage Path:* `group_tour_photos/{tourId}/`
+1.  **Private Album (`PhotobookScreen`):** User-private storage (`private_tour_photos/{tourId}/{userId}/`).
+2.  **Group Album (`GroupPhotobookScreen`):** Shared bus storage (`group_tour_photos/{tourId}/`).
 
 ### D. Itinerary (`ItineraryScreen`)
-* Displays a timeline of the tour.
-* **Logic:** Fetches itinerary data from Firebase. If data is missing or fails to load, it currently falls back to a hardcoded `MOCK_ITINERARY` (Loch Lomond/Highland data).
+* **Logic:** Fetches itinerary from Firebase. Falls back to `MOCK_ITINERARY` if data is missing.
 
-### E. Map / Driver Tracking (`MapScreen`)
-* **Current Status:** **PLACEHOLDER / TEST ONLY**.
-* **Intent:** To show the live location of the coach/driver.
-* **Current State:** Displays a static UI with dummy text. No real geolocation logic is currently implemented.
+### E. Live Map (`MapScreen`)
+* **Status:** **PLACEHOLDER / MOCK UI**.
+* **Current State:** Displays static dummy text. No real geolocation logic is currently active.
 
-## 5. Key Files Map
-* `App.js`: Main entry point, handles Auth state, Navigation logic, and Session restoration.
-* `firebase.js`: Centralized Firebase config and "AuthPersistence" logic.
-* `services/bookingServiceRealtime.js`: **Critical**. Handles the logic for validating the booking ref and fetching the associated Tour Object from Realtime DB.
-* `services/chatService.js`: Methods for subscribing to and sending chat messages.
-* `screens/LoginScreen.js`: Handles the UI for entry and validates inputs.
+## 6. Key Files Map
+* `App.js`: Entry point. Handles Session restoration (currently crashing due to storage) and Navigation.
+* `firebase.js`: **CRITICAL**. Handles Auth config and Persistence. **Currently needs the Mock Block fix applied.**
+* `services/loggerService.js`: Custom logger. **Needs `Platform` import added and Storage mocked.**
+* `services/bookingServiceRealtime.js`: Validates booking refs against Realtime DB.
+* `services/chatService.js`: Chat subscription logic.
 
-## 6. Known Issues & Cleanup Notes
-1.  **Map Screen:** Is purely visual right now. Do not assume it tracks real location.
-2.  **Test Files:**
-    * `test-firebase.js`: A standalone script for testing connections. **Safe to delete/ignore**.
-    * `testFirestore.js`: A standalone script for testing Firestore. **Safe to delete/ignore**.
-3.  **Data Handling:** The app must handle cases where `pickupPoints` is an array (new format) vs single `pickupLocation` fields (legacy format). This is handled in `bookingServiceRealtime.js`.
+## 7. Development Notes
+* **Expo Go:** Must use `npx expo start --tunnel` in Codespaces.
+* **Git:** `.gitignore` has been reset. `node_modules` should no longer be tracked.
+* **Ports:** `19000` is forwarded, but Tunneling is preferred for stability.
