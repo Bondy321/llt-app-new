@@ -1,7 +1,21 @@
 // services/loggerService.js
-import { Platform } from 'react-native'; // <--- ADD THIS LINE
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native'; // <--- FIXED: Added Platform import
 import { realtimeDb } from '../firebase';
+
+// TEMP: Mock AsyncStorage to bypass Expo Go crash
+// This tricks the app into thinking storage works, but it just does nothing.
+const AsyncStorage = {
+  getItem: async () => null,
+  setItem: async () => {},
+  removeItem: async () => {},
+  multiGet: async () => [[null, null], [null, null], [null, null]],
+  multiSet: async () => {},
+  multiRemove: async () => {},
+  clear: async () => {},
+};
+
+// COMMENTED OUT: The real storage import that was crashing
+// import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const LOG_LEVELS = {
   DEBUG: 0,
@@ -38,7 +52,7 @@ class Logger {
 
   async initializeLogger() {
     try {
-      // Load stored logs
+      // Load stored logs (Will return null with Mock, preventing crash)
       const storedLogs = await AsyncStorage.getItem('app_logs');
       if (storedLogs) {
         this.logQueue = JSON.parse(storedLogs);
@@ -101,7 +115,7 @@ class Logger {
     // Add to queue
     this.logQueue.push(logEntry);
     
-    // Store locally
+    // Store locally (Will call Mock function and do nothing safely)
     await this.saveLogsLocally();
     
     // Send critical logs to server immediately

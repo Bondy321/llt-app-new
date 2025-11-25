@@ -4,7 +4,8 @@ import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
 import 'firebase/compat/storage';
 import 'firebase/compat/database';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store'; // <--- NEW IMPORT
+
 
 // Your Firebase config
 const firebaseConfig = {
@@ -18,11 +19,10 @@ const firebaseConfig = {
   measurementId: "G-D46EKN8EDZ"
 };
 
-// Custom Auth Persistence Handler
 class AuthPersistence {
   constructor() {
-    this.AUTH_KEY = '@LLT:authUser';
-    this.TOKEN_KEY = '@LLT:authToken';
+    this.AUTH_KEY = 'LLT_authUser'; 
+    this.TOKEN_KEY = 'LLT_authToken';
   }
 
   async saveAuthState(user) {
@@ -35,10 +35,11 @@ class AuthPersistence {
           lastSignIn: user.metadata.lastSignInTime,
           savedAt: new Date().toISOString()
         };
-        await AsyncStorage.setItem(this.AUTH_KEY, JSON.stringify(authData));
-        console.log('Auth state saved successfully');
+        // SecureStore uses setItemAsync
+        await SecureStore.setItemAsync(this.AUTH_KEY, JSON.stringify(authData));
+        console.log('Auth state saved successfully (SecureStore)');
       } else {
-        await AsyncStorage.removeItem(this.AUTH_KEY);
+        await SecureStore.deleteItemAsync(this.AUTH_KEY);
       }
     } catch (error) {
       console.error('Error saving auth state:', error);
@@ -47,7 +48,8 @@ class AuthPersistence {
 
   async getStoredAuthState() {
     try {
-      const stored = await AsyncStorage.getItem(this.AUTH_KEY);
+      // SecureStore uses getItemAsync
+      const stored = await SecureStore.getItemAsync(this.AUTH_KEY);
       return stored ? JSON.parse(stored) : null;
     } catch (error) {
       console.error('Error retrieving auth state:', error);
@@ -57,7 +59,8 @@ class AuthPersistence {
 
   async clearAuthState() {
     try {
-      await AsyncStorage.multiRemove([this.AUTH_KEY, this.TOKEN_KEY]);
+      await SecureStore.deleteItemAsync(this.AUTH_KEY);
+      await SecureStore.deleteItemAsync(this.TOKEN_KEY);
     } catch (error) {
       console.error('Error clearing auth state:', error);
     }

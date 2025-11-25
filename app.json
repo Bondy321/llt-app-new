@@ -58,7 +58,8 @@
             "deploymentTarget": "15.1"
           }
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "updates": {
       "fallbackToCacheTimeout": 0
