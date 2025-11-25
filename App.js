@@ -3,7 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, Text, StyleSheet, AppState } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 
 // Import Firebase services
 import { auth, authHelpers, updateNetworkState } from './firebase';
@@ -34,6 +34,78 @@ const SESSION_KEYS = {
   TOUR_DATA: '@LLT:tourData',
   BOOKING_DATA: '@LLT:bookingData',
   LAST_SCREEN: '@LLT:lastScreen',
+};
+
+const createSessionStorage = () => {
+  try {
+    const asyncStorageModule = require('@react-native-async-storage/async-storage').default;
+
+    if (!asyncStorageModule) {
+      throw new Error('AsyncStorage module is undefined');
+    }
+
+    return {
+      storage: asyncStorageModule,
+      mode: 'asyncStorage',
+      enabled: true
+    };
+  } catch (asyncStorageError) {
+    console.warn('AsyncStorage unavailable; attempting SecureStore fallback.', asyncStorageError);
+
+    if (SecureStore?.getItemAsync) {
+      const secureStoreAdapter = {
+        async multiGet(keys) {
+          const entries = await Promise.all(
+            keys.map(async (key) => [key, await SecureStore.getItemAsync(key)])
+          );
+
+          return entries;
+        },
+        async multiSet(entries) {
+          await Promise.all(entries.map(([key, value]) => SecureStore.setItemAsync(key, value)));
+        },
+        async multiRemove(keys) {
+          await Promise.all(keys.map((key) => SecureStore.deleteItemAsync(key)));
+        }
+      };
+
+      return {
+        storage: secureStoreAdapter,
+        mode: 'secureStore',
+        enabled: true
+      };
+    }
+
+    console.warn('SecureStore fallback unavailable; session persistence will be disabled.');
+
+    const mockStorage = {
+      async multiGet() {
+        return [];
+      },
+      async multiSet() {},
+      async multiRemove() {}
+    };
+
+    return {
+      storage: mockStorage,
+      mode: 'disabled',
+      enabled: false
+    };
+  }
+};
+
+const { storage: SessionStorage, mode: storageMode, enabled: isSessionPersistenceEnabled } = createSessionStorage();
+let persistenceWarningLogged = false;
+
+const logPersistenceWarning = (action) => {
+  if (isSessionPersistenceEnabled || persistenceWarningLogged) {
+    return;
+  }
+
+  const message = `Skipping session ${action}: persistent storage unavailable (${storageMode}).`;
+  console.warn(message);
+  logger.warn('Session', message, { storageMode });
+  persistenceWarningLogged = true;
 };
 
 export default function App() {
@@ -138,8 +210,13 @@ export default function App() {
   };
 
   const restoreSession = async () => {
+    if (!isSessionPersistenceEnabled) {
+      logPersistenceWarning('restore');
+      return;
+    }
+
     try {
-      const [savedTourData, savedBookingData, lastScreen] = await AsyncStorage.multiGet([
+      const [savedTourData, savedBookingData, lastScreen] = await SessionStorage.multiGet([
         SESSION_KEYS.TOUR_DATA,
         SESSION_KEYS.BOOKING_DATA,
         SESSION_KEYS.LAST_SCREEN
@@ -166,8 +243,13 @@ export default function App() {
   };
 
   const saveSession = async () => {
+    if (!isSessionPersistenceEnabled) {
+      logPersistenceWarning('save');
+      return;
+    }
+
     try {
-      await AsyncStorage.multiSet([
+      await SessionStorage.multiSet([
         [SESSION_KEYS.TOUR_DATA, JSON.stringify(tourData)],
         [SESSION_KEYS.BOOKING_DATA, JSON.stringify(bookingData)],
         [SESSION_KEYS.LAST_SCREEN, currentScreen]
@@ -223,10 +305,14 @@ export default function App() {
 
   const handleLogout = async () => {
     logger.info('Auth', 'User logging out');
-    
+
+    if (!isSessionPersistenceEnabled) {
+      logPersistenceWarning('logout');
+    }
+
     try {
       // Clear session data
-      await AsyncStorage.multiRemove([
+      await SessionStorage.multiRemove([
         SESSION_KEYS.TOUR_DATA,
         SESSION_KEYS.BOOKING_DATA,
         SESSION_KEYS.LAST_SCREEN
