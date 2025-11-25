@@ -1,4 +1,5 @@
 // services/loggerService.js
+import { Platform } from 'react-native'; // <--- ADD THIS LINE
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { realtimeDb } from '../firebase';
 
