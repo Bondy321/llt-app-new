@@ -18,6 +18,7 @@ import GroupPhotobookScreen from './screens/GroupPhotobookScreen';
 import ItineraryScreen from './screens/ItineraryScreen';
 import ChatScreen from './screens/ChatScreen';
 import MapScreen from './screens/MapScreen';
+import NotesScreen from './screens/NotesScreen';
 
 // Brand Colors
 const COLORS = {
@@ -426,6 +427,14 @@ export default function App() {
           <MapScreen
             {...screenProps}
             onBack={() => navigateTo('TourHome')}
+          />
+        );
+      case 'Notes':
+        return (
+          <NotesScreen
+            {...screenProps}
+            onBack={() => navigateTo('TourHome')}
+            tourId={tourData?.id}
           />
         );
       default:
