@@ -167,7 +167,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
               ]}
             >
               <Image
-                source={require('../assets/images/loch_lomond_logo (1).png')}
+                source={require('../assets/images/app-icon-llt.png')}
                 style={styles.logoImage}
                 resizeMode="contain"
               />
