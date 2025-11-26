@@ -2,15 +2,15 @@
 import { db, firebase } from '../firebase';
 
 // Validate tour code and get tour details
-export const validateTourCode = async (tourCode) => {
+// Added "firestore = db" for dependency injection (testing)
+export const validateTourCode = async (tourCode, firestore = db) => {
   try {
     console.log('Validating tour code:', tourCode);
     
-    // Convert to uppercase to be case-insensitive
     const upperCode = tourCode.toUpperCase();
     
-    // Query for the tour with this code
-    const snapshot = await db
+    // Use the injected 'firestore' instance
+    const snapshot = await firestore
       .collection('tours')
       .where('tourCode', '==', upperCode)
       .where('isActive', '==', true)
@@ -24,7 +24,6 @@ export const validateTourCode = async (tourCode) => {
       return { valid: false, error: 'Invalid tour code' };
     }
     
-    // Get the tour data
     const tourDoc = snapshot.docs[0];
     const tourData = tourDoc.data();
     
@@ -44,18 +43,16 @@ export const validateTourCode = async (tourCode) => {
 };
 
 // Add user to tour (increment participant count)
-export const joinTour = async (tourId, userId) => {
+export const joinTour = async (tourId, userId, firestore = db) => {
   try {
     console.log('Joining tour:', tourId, 'for user:', userId);
-    const tourRef = db.collection('tours').doc(tourId);
+    const tourRef = firestore.collection('tours').doc(tourId);
     
-    // Add user to participants subcollection
     await tourRef.collection('participants').doc(userId).set({
       joinedAt: firebase.firestore.FieldValue.serverTimestamp(),
       userId: userId
     });
     
-    // Increment participant count
     await tourRef.update({
       currentParticipants: firebase.firestore.FieldValue.increment(1)
     });
@@ -69,10 +66,10 @@ export const joinTour = async (tourId, userId) => {
 };
 
 // Get tour itinerary
-export const getTourItinerary = async (tourId) => {
+export const getTourItinerary = async (tourId, firestore = db) => {
   try {
     console.log('Getting itinerary for tour:', tourId);
-    const itineraryRef = db.collection('tours').doc(tourId).collection('itinerary');
+    const itineraryRef = firestore.collection('tours').doc(tourId).collection('itinerary');
     const snapshot = await itineraryRef.orderBy('order').get();
     
     console.log('Found', snapshot.size, 'days in itinerary');
@@ -82,7 +79,6 @@ export const getTourItinerary = async (tourId) => {
     for (const dayDoc of snapshot.docs) {
       const dayData = dayDoc.data();
       
-      // Get activities for this day
       const activitiesSnapshot = await dayDoc.ref
         .collection('activities')
         .orderBy('order')

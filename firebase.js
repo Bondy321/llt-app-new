@@ -4,10 +4,26 @@ import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
 import 'firebase/compat/storage';
 import 'firebase/compat/database';
-import * as SecureStore from 'expo-secure-store'; // <--- NEW IMPORT
 
+// --- MOCK BLOCK START ---
+// In Expo Go, native storage modules can sometimes crash or misbehave.
+// We use this in-memory mock to ensure the app always launches.
+const MockStorage = {
+  _data: {},
+  setItemAsync: async (key, value) => {
+    MockStorage._data[key] = value;
+    return Promise.resolve();
+  },
+  getItemAsync: async (key) => {
+    return Promise.resolve(MockStorage._data[key] || null);
+  },
+  deleteItemAsync: async (key) => {
+    delete MockStorage._data[key];
+    return Promise.resolve();
+  },
+};
+// --- MOCK BLOCK END ---
 
-// Your Firebase config
 const firebaseConfig = {
   apiKey: "AIzaSyCeQqCtbFEB9nrUvP_Pffrt2aelATf9i9o",
   authDomain: "loch-lomond-travel.firebaseapp.com",
@@ -35,11 +51,10 @@ class AuthPersistence {
           lastSignIn: user.metadata.lastSignInTime,
           savedAt: new Date().toISOString()
         };
-        // SecureStore uses setItemAsync
-        await SecureStore.setItemAsync(this.AUTH_KEY, JSON.stringify(authData));
-        console.log('Auth state saved successfully (SecureStore)');
+        await MockStorage.setItemAsync(this.AUTH_KEY, JSON.stringify(authData));
+        console.log('Auth state saved (Mock Storage)');
       } else {
-        await SecureStore.deleteItemAsync(this.AUTH_KEY);
+        await MockStorage.deleteItemAsync(this.AUTH_KEY);
       }
     } catch (error) {
       console.error('Error saving auth state:', error);
@@ -48,8 +63,7 @@ class AuthPersistence {
 
   async getStoredAuthState() {
     try {
-      // SecureStore uses getItemAsync
-      const stored = await SecureStore.getItemAsync(this.AUTH_KEY);
+      const stored = await MockStorage.getItemAsync(this.AUTH_KEY);
       return stored ? JSON.parse(stored) : null;
     } catch (error) {
       console.error('Error retrieving auth state:', error);
@@ -59,8 +73,8 @@ class AuthPersistence {
 
   async clearAuthState() {
     try {
-      await SecureStore.deleteItemAsync(this.AUTH_KEY);
-      await SecureStore.deleteItemAsync(this.TOKEN_KEY);
+      await MockStorage.deleteItemAsync(this.AUTH_KEY);
+      await MockStorage.deleteItemAsync(this.TOKEN_KEY);
     } catch (error) {
       console.error('Error clearing auth state:', error);
     }
@@ -90,6 +104,7 @@ try {
   realtimeDb = firebase.database();
 
   // Configure auth persistence
+  // We use LOCAL persistence for the session within the run
   auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
     .then(() => {
       console.log('Firebase persistence enabled');
@@ -184,10 +199,7 @@ const authHelpers = {
   },
 
   onAuthStateChanged(callback) {
-    // Add to local listeners
     authStateListeners.push(callback);
-    
-    // Return unsubscribe function
     return () => {
       authStateListeners = authStateListeners.filter(l => l !== callback);
     };
