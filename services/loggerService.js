@@ -1,21 +1,21 @@
 // services/loggerService.js
-import { Platform } from 'react-native'; // <--- FIXED: Added Platform import
+import { Platform } from 'react-native';
 import { realtimeDb } from '../firebase';
 
-// TEMP: Mock AsyncStorage to bypass Expo Go crash
-// This tricks the app into thinking storage works, but it just does nothing.
-const AsyncStorage = {
-  getItem: async () => null,
-  setItem: async () => {},
-  removeItem: async () => {},
-  multiGet: async () => [[null, null], [null, null], [null, null]],
-  multiSet: async () => {},
-  multiRemove: async () => {},
-  clear: async () => {},
+// --- MOCK BLOCK START ---
+// Safe in-memory mock to prevent AsyncStorage crashes
+const MockStorage = {
+  _logs: [],
+  getItem: async (key) => {
+    if (key === 'app_logs') return JSON.stringify(MockStorage._logs);
+    return null;
+  },
+  setItem: async (key, value) => {
+    if (key === 'app_logs') MockStorage._logs = JSON.parse(value);
+    return Promise.resolve();
+  },
 };
-
-// COMMENTED OUT: The real storage import that was crashing
-// import AsyncStorage from '@react-native-async-storage/async-storage';
+// --- MOCK BLOCK END ---
 
 const LOG_LEVELS = {
   DEBUG: 0,
@@ -52,17 +52,15 @@ class Logger {
 
   async initializeLogger() {
     try {
-      // Load stored logs (Will return null with Mock, preventing crash)
-      const storedLogs = await AsyncStorage.getItem('app_logs');
+      // Use MockStorage
+      const storedLogs = await MockStorage.getItem('app_logs');
       if (storedLogs) {
         this.logQueue = JSON.parse(storedLogs);
-        // Keep only recent logs
         if (this.logQueue.length > this.maxLocalLogs) {
           this.logQueue = this.logQueue.slice(-this.maxLocalLogs);
         }
       }
       
-      // Get device info
       this.deviceInfo = {
         platform: Platform.OS,
         version: Platform.Version,
@@ -83,10 +81,8 @@ class Logger {
     const color = LOG_COLORS[level];
     const reset = LOG_COLORS.RESET;
     
-    // Console formatting
     const consoleMessage = `${color}[${timestamp}] [${level}] [${component}]${reset} ${message}`;
     
-    // Structured log entry
     const logEntry = {
       timestamp,
       level,
@@ -104,7 +100,6 @@ class Logger {
   async log(level, component, message, data = {}) {
     const { consoleMessage, logEntry } = this.formatMessage(level, component, message, data);
     
-    // Always log to console in development
     if (!this.isProduction) {
       console.log(consoleMessage);
       if (data && Object.keys(data).length > 0) {
@@ -112,13 +107,10 @@ class Logger {
       }
     }
     
-    // Add to queue
     this.logQueue.push(logEntry);
     
-    // Store locally (Will call Mock function and do nothing safely)
     await this.saveLogsLocally();
     
-    // Send critical logs to server immediately
     if (LOG_LEVELS[level] >= LOG_LEVELS.ERROR) {
       await this.sendLogsToServer([logEntry]);
     }
@@ -126,12 +118,11 @@ class Logger {
 
   async saveLogsLocally() {
     try {
-      // Keep only recent logs
       if (this.logQueue.length > this.maxLocalLogs) {
         this.logQueue = this.logQueue.slice(-this.maxLocalLogs);
       }
-      
-      await AsyncStorage.setItem('app_logs', JSON.stringify(this.logQueue));
+      // Use MockStorage
+      await MockStorage.setItem('app_logs', JSON.stringify(this.logQueue));
     } catch (error) {
       console.error('Failed to save logs locally:', error);
     }
@@ -145,7 +136,6 @@ class Logger {
       
       if (logsToSend.length === 0) return;
       
-      // Send to Firebase
       const batch = {};
       logsToSend.forEach(log => {
         const key = `logs/${log.userId || 'anonymous'}/${log.sessionId}/${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -154,7 +144,6 @@ class Logger {
       
       await realtimeDb.ref().update(batch);
       
-      // Clear sent logs from queue
       if (!logs) {
         this.logQueue = this.logQueue.filter(log => 
           LOG_LEVELS[log.level] < LOG_LEVELS.WARN
@@ -166,28 +155,12 @@ class Logger {
     }
   }
 
-  // Convenience methods
-  debug(component, message, data) {
-    return this.log('DEBUG', component, message, data);
-  }
+  debug(component, message, data) { return this.log('DEBUG', component, message, data); }
+  info(component, message, data) { return this.log('INFO', component, message, data); }
+  warn(component, message, data) { return this.log('WARN', component, message, data); }
+  error(component, message, data) { return this.log('ERROR', component, message, data); }
+  fatal(component, message, data) { return this.log('FATAL', component, message, data); }
 
-  info(component, message, data) {
-    return this.log('INFO', component, message, data);
-  }
-
-  warn(component, message, data) {
-    return this.log('WARN', component, message, data);
-  }
-
-  error(component, message, data) {
-    return this.log('ERROR', component, message, data);
-  }
-
-  fatal(component, message, data) {
-    return this.log('FATAL', component, message, data);
-  }
-
-  // Track specific events
   async trackEvent(eventName, eventData = {}) {
     return this.info('Analytics', eventName, {
       ...eventData,
@@ -195,12 +168,10 @@ class Logger {
     });
   }
 
-  // Track screen views
   async trackScreen(screenName, params = {}) {
     return this.info('Navigation', `Screen viewed: ${screenName}`, params);
   }
 
-  // Track API calls
   async trackAPI(endpoint, method, status, duration) {
     const level = status >= 400 ? 'ERROR' : 'INFO';
     return this.log(level, 'API', `${method} ${endpoint}`, {
@@ -211,28 +182,18 @@ class Logger {
     });
   }
 
-  // Get logs for debugging
   async getStoredLogs(level = null) {
     if (!level) return this.logQueue;
-    
-    return this.logQueue.filter(log => 
-      LOG_LEVELS[log.level] >= LOG_LEVELS[level]
-    );
+    return this.logQueue.filter(log => LOG_LEVELS[log.level] >= LOG_LEVELS[level]);
   }
 
-  // Clear old logs
   async clearOldLogs(daysToKeep = 7) {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
-    
-    this.logQueue = this.logQueue.filter(log => 
-      new Date(log.timestamp) > cutoffDate
-    );
-    
+    this.logQueue = this.logQueue.filter(log => new Date(log.timestamp) > cutoffDate);
     await this.saveLogsLocally();
   }
 
-  // Export logs for support
   async exportLogs() {
     const logs = await this.getStoredLogs();
     return {
@@ -245,10 +206,8 @@ class Logger {
   }
 }
 
-// Create singleton instance
 const logger = new Logger();
 
-// Error boundary helper
 export const logErrorBoundary = (error, errorInfo) => {
   logger.fatal('ErrorBoundary', 'Unhandled error caught', {
     error: error.toString(),
@@ -257,7 +216,6 @@ export const logErrorBoundary = (error, errorInfo) => {
   });
 };
 
-// Global error handler
 if (!__DEV__) {
   const originalHandler = ErrorUtils.getGlobalHandler();
   ErrorUtils.setGlobalHandler((error, isFatal) => {
