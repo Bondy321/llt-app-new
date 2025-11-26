@@ -104,8 +104,8 @@ try {
   realtimeDb = firebase.database();
 
   // Configure auth persistence
-  // We use LOCAL persistence for the session within the run
-  auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+  // Use NONE because we manage persistence via MockStorage/AuthPersistence
+  auth.setPersistence(firebase.auth.Auth.Persistence.NONE)
     .then(() => {
       console.log('Firebase persistence enabled');
     })
