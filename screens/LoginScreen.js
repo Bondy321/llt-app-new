@@ -166,13 +166,11 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
                 },
               ]}
             >
-              <View style={styles.logoContainer}>
-                <MaterialCommunityIcons 
-                  name="bus-side" 
-                  size={80} 
-                  color={COLORS.white} 
-                />
-              </View>
+              <Image
+                source={require('../assets/images/loch_lomond_logo (1).png')}
+                style={styles.logoImage}
+                resizeMode="contain"
+              />
               <Text style={styles.appTitle}>Loch Lomond Travel</Text>
               <Text style={styles.appSubtitle}>Your Highland Adventure Companion</Text>
             </Animated.View>
@@ -318,17 +316,13 @@ const styles = StyleSheet.create({
     marginTop: height * 0.08,
     marginBottom: 30,
   },
-  logoContainer: {
-    width: 120,
-    height: 120,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: 60,
-    justifyContent: 'center',
-    alignItems: 'center',
+  logoImage: {
+    width: 250,
+    height: 100,
     marginBottom: 20,
   },
   appTitle: {
-    fontSize: 32,
+    fontSize: 34,
     fontWeight: 'bold',
     color: COLORS.white,
     marginBottom: 8,
@@ -356,7 +350,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: COLORS.darkText,
     textAlign: 'center',
-    marginBottom: 8,
+    marginBottom: 12,
   },
   instructionText: {
     fontSize: 16,
@@ -368,11 +362,19 @@ const styles = StyleSheet.create({
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.inputBackground,
+    backgroundColor: COLORS.white,
     borderRadius: 12,
     borderWidth: 2,
     borderColor: COLORS.lightBlueAccent,
     marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 4,
   },
   inputIcon: {
     marginLeft: 15,
