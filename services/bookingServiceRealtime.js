@@ -10,6 +10,99 @@ if (!isTestEnv) {
   }
 }
 
+// Harmonize legacy booking shapes (pickup points, passengers, seats)
+const ensureBookingSchemaConsistency = async (bookingRef, bookingData, dbInstance = realtimeDb) => {
+  const db = dbInstance || realtimeDb;
+
+  if (!db) {
+    throw new Error('Realtime database not initialized');
+  }
+
+  const updates = {};
+  const passengerNames = Array.isArray(bookingData.passengerNames)
+    ? bookingData.passengerNames
+    : Array.isArray(bookingData.passengers)
+      ? bookingData.passengers
+      : [];
+
+  const seatNumbers = Array.isArray(bookingData.seatNumbers) ? [...bookingData.seatNumbers] : [];
+
+  if (passengerNames.length > seatNumbers.length) {
+    const missingSeats = passengerNames.length - seatNumbers.length;
+    seatNumbers.push(...Array(missingSeats).fill('TBA'));
+    updates.seatNumbers = seatNumbers;
+  }
+
+  if (!bookingData.passengers && passengerNames.length > 0) {
+    updates.passengers = passengerNames;
+  }
+
+  const pickupPoints = (Array.isArray(bookingData.pickupPoints) && bookingData.pickupPoints.length > 0)
+    ? bookingData.pickupPoints
+    : [{
+        location: bookingData.pickupLocation || 'To be confirmed',
+        time: bookingData.pickupTime || 'TBA'
+      }];
+
+  const pickupLocation = bookingData.pickupLocation || pickupPoints?.[0]?.location || 'To be confirmed';
+  const pickupTime = bookingData.pickupTime || pickupPoints?.[0]?.time || 'TBA';
+
+  if (!bookingData.pickupPoints || bookingData.pickupPoints.length === 0) {
+    updates.pickupPoints = pickupPoints;
+  }
+
+  if (bookingData.pickupLocation !== pickupLocation) {
+    updates.pickupLocation = pickupLocation;
+  }
+
+  if (bookingData.pickupTime !== pickupTime) {
+    updates.pickupTime = pickupTime;
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await db.ref(`bookings/${bookingRef}`).update(updates);
+  }
+
+  return {
+    normalizedBooking: {
+      id: bookingRef,
+      ...bookingData,
+      passengerNames,
+      seatNumbers,
+      pickupPoints,
+      pickupTime,
+      pickupLocation
+    },
+    updated: Object.keys(updates).length > 0
+  };
+};
+
+// Reconcile participant counts with participant list
+const ensureTourParticipantCount = async (tourId, dbInstance = realtimeDb) => {
+  const db = dbInstance || realtimeDb;
+
+  if (!db) {
+    throw new Error('Realtime database not initialized');
+  }
+
+  const tourRef = db.ref(`tours/${tourId}`);
+  const [participantsSnapshot, countSnapshot] = await Promise.all([
+    tourRef.child('participants').once('value'),
+    tourRef.child('currentParticipants').once('value')
+  ]);
+
+  const participantMap = participantsSnapshot.val() || {};
+  const currentCount = countSnapshot.val();
+  const recalculatedCount = Object.keys(participantMap).length;
+
+  if (typeof currentCount !== 'number' || currentCount !== recalculatedCount) {
+    await tourRef.update({ currentParticipants: recalculatedCount });
+    return recalculatedCount;
+  }
+
+  return currentCount;
+};
+
 // Validate booking reference and get associated tour
 const validateBookingReference = async (bookingRef) => {
   try {
@@ -18,59 +111,51 @@ const validateBookingReference = async (bookingRef) => {
     if (!realtimeDb) {
       throw new Error('Realtime database not initialized');
     }
-    
+
     // Convert to uppercase to be case-insensitive
     const upperRef = bookingRef.toUpperCase().trim();
-    
+
     // Look up the booking in Realtime Database
     const bookingSnapshot = await realtimeDb
       .ref(`bookings/${upperRef}`)
       .once('value');
-    
+
     if (!bookingSnapshot.exists()) {
       console.log('No booking found with reference:', upperRef);
       return { valid: false, error: 'Booking reference not found' };
     }
-    
+
     const bookingData = bookingSnapshot.val();
     console.log('Booking found for tour:', bookingData.tourCode);
-    
+
+    const { normalizedBooking } = await ensureBookingSchemaConsistency(upperRef, bookingData, realtimeDb);
+
     // Now get the associated tour (tour codes with spaces are stored with underscores)
     const tourId = bookingData.tourCode.replace(/\s+/g, '_');
     const tourSnapshot = await realtimeDb
       .ref(`tours/${tourId}`)
       .once('value');
-    
+
     if (!tourSnapshot.exists()) {
       console.log('Associated tour not found');
       return { valid: false, error: 'Tour information not available' };
     }
-    
+
     const tourData = tourSnapshot.val();
-    
+    const reconciledParticipantCount = await ensureTourParticipantCount(tourId, realtimeDb);
+
     // Check if tour is active
     if (!tourData.isActive) {
       return { valid: false, error: 'This tour is no longer active' };
     }
-    
-    // Add pickup info and seat numbers to booking data
-    const enrichedBooking = {
-      id: upperRef,
-      ...bookingData,
-      passengerNames: bookingData.passengers || [],
-      seatNumbers: bookingData.seatNumbers || [],
-      pickupPoints: bookingData.pickupPoints || [], // Array of pickup points
-      // Legacy single pickup fields for backward compatibility
-      pickupTime: bookingData.pickupTime || (bookingData.pickupPoints?.[0]?.time) || 'TBA',
-      pickupLocation: bookingData.pickupLocation || (bookingData.pickupPoints?.[0]?.location) || 'To be confirmed'
-    };
-    
+
     return {
       valid: true,
-      booking: enrichedBooking,
+      booking: normalizedBooking,
       tour: {
         id: tourId,
-        ...tourData
+        ...tourData,
+        currentParticipants: reconciledParticipantCount
       }
     };
   } catch (error) {
@@ -181,6 +266,8 @@ const getTourItinerary = async (tourId) => {
 };
 
 module.exports = {
+  ensureBookingSchemaConsistency,
+  ensureTourParticipantCount,
   validateBookingReference,
   joinTour,
   getTourItinerary

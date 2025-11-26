@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { joinTour } = require('../services/bookingServiceRealtime');
+const { joinTour, ensureBookingSchemaConsistency, ensureTourParticipantCount } = require('../services/bookingServiceRealtime');
 
 const createMockRealtimeDb = () => {
   const state = { tours: {} };
@@ -21,10 +21,25 @@ const createMockRealtimeDb = () => {
     transactionError: null,
     state,
     ref(path) {
-      const segments = path.split('/');
-      return {
+      const segments = path.split('/').filter(Boolean);
+      const self = {
         async set(value) {
           setValue(segments, value);
+        },
+        async update(updates) {
+          Object.entries(updates).forEach(([key, value]) => {
+            setValue([...segments, key], value);
+          });
+        },
+        async once() {
+          const currentValue = getValue(segments);
+          return {
+            exists: () => currentValue !== undefined && currentValue !== null,
+            val: () => currentValue
+          };
+        },
+        child(childPath) {
+          return db.ref(`${path}/${childPath}`);
         },
         async transaction(updateFn) {
           if (db.transactionError) {
@@ -48,6 +63,8 @@ const createMockRealtimeDb = () => {
           };
         }
       };
+
+      return self;
     }
   };
 
@@ -83,4 +100,47 @@ test('surfaces transaction errors', async () => {
   mockDb.transactionError = new Error('transaction failed');
 
   await assert.rejects(joinTour('tour-2', 'user-3', mockDb), /transaction failed/);
+});
+
+test('normalizes legacy booking data into pickup points and seats', async () => {
+  const mockDb = createMockRealtimeDb();
+  mockDb.state.bookings = {
+    ABC123: {
+      passengers: ['Alice', 'Bob'],
+      pickupLocation: 'Glasgow Central',
+      pickupTime: '08:00',
+      seatNumbers: ['1']
+    }
+  };
+
+  const { normalizedBooking, updated } = await ensureBookingSchemaConsistency(
+    'ABC123',
+    mockDb.state.bookings.ABC123,
+    mockDb
+  );
+
+  assert.equal(updated, true);
+  assert.equal(normalizedBooking.pickupPoints[0].location, 'Glasgow Central');
+  assert.equal(normalizedBooking.pickupPoints[0].time, '08:00');
+  assert.deepEqual(mockDb.state.bookings.ABC123.pickupPoints[0], {
+    location: 'Glasgow Central',
+    time: '08:00'
+  });
+  assert.equal(normalizedBooking.seatNumbers.length, 2);
+  assert.equal(normalizedBooking.seatNumbers[1], 'TBA');
+});
+
+test('reconciles participant counts when missing currentParticipants', async () => {
+  const mockDb = createMockRealtimeDb();
+  mockDb.state.tours['tour-99'] = {
+    participants: {
+      'user-1': { joinedAt: 'ts' },
+      'user-2': { joinedAt: 'ts' }
+    }
+  };
+
+  const reconciled = await ensureTourParticipantCount('tour-99', mockDb);
+
+  assert.equal(reconciled, 2);
+  assert.equal(mockDb.state.tours['tour-99'].currentParticipants, 2);
 });
