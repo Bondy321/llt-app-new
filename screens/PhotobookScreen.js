@@ -1,5 +1,5 @@
 // screens/PhotobookScreen.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   Text,
@@ -12,12 +12,12 @@ import {
   Modal,
   Platform,
   ActivityIndicator,
-  Alert
+  Alert,
+  RefreshControl
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { ref as storageRef, uploadBytesResumable, getDownloadURL, listAll } from 'firebase/storage';
-import { storage } from '../firebase';
+import { uploadImage, loadTourPhotos } from '../services/photoService';
 
 const windowWidth = Dimensions.get('window').width;
 const windowHeight = Dimensions.get('window').height;
@@ -39,36 +39,27 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
   const [selectedImage, setSelectedImage] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [loadingPhotos, setLoadingPhotos] = useState(true);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadUserPhotos = useCallback(async () => {
+    try {
+      setLoadingPhotos(true);
+      const userPhotos = await loadTourPhotos(tourId, { userId, isPrivate: true });
+      setPhotos(userPhotos);
+    } catch (error) {
+      console.error('Error loading photos:', error);
+      Alert.alert('Could not load photos', 'Please check your connection and try again.');
+    } finally {
+      setLoadingPhotos(false);
+    }
+  }, [tourId, userId]);
 
   useEffect(() => {
     if (tourId && userId) {
       loadUserPhotos();
     }
-  }, [userId, tourId]);
-
-  const loadUserPhotos = async () => {
-    try {
-      setLoadingPhotos(true);
-      const userPhotosRef = storageRef(storage, `private_tour_photos/${tourId}/${userId}`);
-      const result = await listAll(userPhotosRef);
-      
-      const photoPromises = result.items.map(async (itemRef) => {
-        const url = await getDownloadURL(itemRef);
-        return {
-          id: itemRef.name,
-          url: url,
-          name: itemRef.name
-        };
-      });
-      
-      const userPhotos = await Promise.all(photoPromises);
-      setPhotos(userPhotos);
-    } catch (error) {
-      console.error("Error loading photos:", error);
-    } finally {
-      setLoadingPhotos(false);
-    }
-  };
+  }, [userId, tourId, loadUserPhotos]);
 
   const requestPermissions = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -91,53 +82,44 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     });
 
     if (!result.canceled) {
-      uploadImage(result.assets[0].uri);
+      handleUpload(result.assets[0].uri);
     }
   };
 
-  const uploadImage = async (imageUri) => {
+  const getUploadErrorMessage = (error) => {
+    switch (error?.code) {
+      case 'file-too-large':
+        return 'Please choose a photo smaller than 5MB to upload.';
+      case 'permission-denied':
+        return 'Please check your connection or permissions and try again.';
+      case 'network-error':
+        return 'Network error occurred while uploading. Please try again.';
+      case 'invalid-params':
+        return 'Something went wrong preparing your photo. Please try again.';
+      default:
+        return 'Could not upload your photo. Please try again.';
+    }
+  };
+
+  const handleUpload = async (imageUri) => {
     setUploading(true);
-    
+    setUploadProgress(0);
+
     try {
-      // Convert URI to blob
-      const response = await fetch(imageUri);
-      const blob = await response.blob();
-      
-      // Create unique filename
-      const fileName = `photo_${Date.now()}.jpg`;
-      const filePath = `private_tour_photos/${tourId}/${userId}/${fileName}`;
-      const fileRef = storageRef(storage, filePath);
-      
-      const uploadTask = uploadBytesResumable(fileRef, blob);
-      
-      uploadTask.on('state_changed',
-        (snapshot) => {
-          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-          console.log('Upload is ' + progress + '% done');
-        },
-        (error) => {
-          console.error("Upload failed:", error);
-          Alert.alert('Upload Failed', 'Could not upload your photo. Please try again.');
-          setUploading(false);
-        },
-        async () => {
-          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-          console.log('File available at', downloadURL);
-          
-          // Add to photos array
-          setPhotos(prevPhotos => [...prevPhotos, {
-            id: fileName,
-            url: downloadURL,
-            name: fileName
-          }]);
-          
-          setUploading(false);
-          Alert.alert('Success', 'Your photo has been uploaded!');
-        }
-      );
+      const newPhoto = await uploadImage({
+        imageUri,
+        userId,
+        tourId,
+        isPrivate: true,
+        onProgress: (progressFraction) => setUploadProgress(Math.round(progressFraction * 100)),
+      });
+
+      setPhotos((prevPhotos) => [...prevPhotos, newPhoto]);
+      Alert.alert('Success', 'Your photo has been uploaded!');
     } catch (error) {
-      console.error("Error preparing upload:", error);
-      Alert.alert('Upload Error', 'Could not prepare your photo for upload.');
+      const message = getUploadErrorMessage(error);
+      Alert.alert('Upload Failed', message);
+    } finally {
       setUploading(false);
     }
   };
@@ -152,6 +134,12 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     setTimeout(() => setSelectedImage(null), 300);
   };
 
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadUserPhotos();
+    setRefreshing(false);
+  }, [loadUserPhotos]);
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={[styles.header, { backgroundColor: COLORS.primaryBlue }]}>
@@ -161,12 +149,21 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
         <Text style={styles.headerTitle}>My Photos</Text>
         <TouchableOpacity onPress={pickImage} style={styles.headerButton} activeOpacity={0.7} disabled={uploading}>
           {uploading ? (
-            <ActivityIndicator size="small" color={COLORS.white} />
+            <MaterialCommunityIcons name="progress-upload" size={26} color={COLORS.white} />
           ) : (
             <MaterialCommunityIcons name="camera-plus" size={26} color={COLORS.white} />
           )}
         </TouchableOpacity>
       </View>
+
+      {uploading && (
+        <View style={styles.progressContainer}>
+          <View style={styles.progressBarBackground}>
+            <View style={[styles.progressBarFill, { width: `${uploadProgress}%` }]} />
+          </View>
+          <Text style={styles.progressText}>{uploadProgress}%</Text>
+        </View>
+      )}
 
       {loadingPhotos ? (
         <View style={styles.loadingContainer}>
@@ -174,12 +171,23 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
           <Text style={styles.loadingText}>Loading your photos...</Text>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.scrollContainer}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContainer}
+          refreshControl={(
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primaryBlue} />
+          )}
+        >
           {photos.length === 0 ? (
             <View style={styles.emptyContainer}>
-              <MaterialCommunityIcons name="image-off" size={60} color={COLORS.lightBlueAccent} />
+              <View style={styles.emptyIconWrapper}>
+                <MaterialCommunityIcons name="image-plus" size={68} color={COLORS.primaryBlue} />
+              </View>
               <Text style={styles.emptyText}>No photos yet</Text>
-              <Text style={styles.emptySubtext}>Tap the camera icon to add your first photo</Text>
+              <Text style={styles.emptySubtext}>Capture moments from your trip and keep them here.</Text>
+              <TouchableOpacity style={styles.emptyCtaButton} onPress={pickImage} activeOpacity={0.85} disabled={uploading}>
+                <MaterialCommunityIcons name="upload" size={22} color={COLORS.white} />
+                <Text style={styles.emptyCtaText}>Upload your first memory</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <View style={styles.grid}>
@@ -263,24 +271,50 @@ const styles = StyleSheet.create({
   },
   scrollContainer: {
     padding: 8,
+    flexGrow: 1,
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingTop: 100,
+    paddingTop: 80,
+    paddingHorizontal: 24,
+  },
+  emptyIconWrapper: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: '#EAF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   emptyText: {
-    fontSize: 20,
-    fontWeight: 'bold',
+    fontSize: 22,
+    fontWeight: '700',
     color: COLORS.darkText,
     marginTop: 20,
   },
   emptySubtext: {
     fontSize: 16,
     color: COLORS.darkText,
-    opacity: 0.6,
-    marginTop: 8,
+    opacity: 0.7,
+    marginTop: 10,
+    textAlign: 'center',
+  },
+  emptyCtaButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    backgroundColor: COLORS.primaryBlue,
+    borderRadius: 12,
+    marginTop: 20,
+  },
+  emptyCtaText: {
+    color: COLORS.white,
+    fontWeight: '600',
+    fontSize: 16,
   },
   grid: {
     flexDirection: 'row',
@@ -319,5 +353,31 @@ const styles = StyleSheet.create({
     padding: 10,
     backgroundColor: 'rgba(0,0,0,0.3)',
     borderRadius: 20,
+  },
+  progressContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: '#EAF6FF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  progressBarBackground: {
+    flex: 1,
+    height: 10,
+    backgroundColor: '#DCE7F3',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: COLORS.lightBlueAccent,
+    borderRadius: 8,
+  },
+  progressText: {
+    width: 50,
+    textAlign: 'right',
+    fontWeight: '700',
+    color: COLORS.darkText,
   },
 });
