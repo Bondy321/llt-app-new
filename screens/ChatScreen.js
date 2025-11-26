@@ -1,16 +1,17 @@
 // screens/ChatScreen.js
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  StyleSheet,
-  Text,
-  View,
-  TouchableOpacity,
-  SafeAreaView,
-  ScrollView,
-  TextInput,
+  ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
-  ActivityIndicator
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { subscribeToChatMessages, sendMessage } from '../services/chatService';
@@ -40,8 +41,15 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData }) {
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const scrollViewRef = useRef();
+  const [inputHeight, setInputHeight] = useState(44);
+  const scrollViewRef = useRef(null);
   const currentUser = auth.currentUser;
+
+  const scrollToBottom = (animated = true) => {
+    requestAnimationFrame(() => {
+      scrollViewRef.current?.scrollToEnd({ animated });
+    });
+  };
 
   useEffect(() => {
     if (!tourId) {
@@ -50,73 +58,113 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData }) {
       return;
     }
 
-    // Subscribe to chat messages
     const unsubscribe = subscribeToChatMessages(tourId, (newMessages) => {
       setMessages(newMessages);
       setLoading(false);
-      // Auto-scroll to bottom when new messages arrive
-      setTimeout(() => {
-        scrollViewRef.current?.scrollToEnd({ animated: true });
-      }, 100);
+      scrollToBottom(true);
     });
 
-    // Cleanup subscription on unmount
     return () => {
       unsubscribe();
     };
   }, [tourId]);
 
   useEffect(() => {
-    // Scroll to bottom when messages update
-    scrollViewRef.current?.scrollToEnd({ animated: true });
-  }, [messages]);
+    const showSub = Keyboard.addListener('keyboardDidShow', () => scrollToBottom(true));
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => scrollToBottom(true));
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const handleSendMessage = async () => {
-    if (inputText.trim() === '' || sending) return;
+    if (sending) return;
+
+    const trimmed = inputText.trim();
+
+    if (!trimmed) {
+      return;
+    }
 
     setSending(true);
-    const messageText = inputText.trim();
-    setInputText(''); // Clear input immediately for better UX
+    setInputText('');
+
+    const senderName = bookingData?.passengerNames?.[0] || 'Tour Participant';
+    const senderInfo = {
+      name: senderName,
+      userId: currentUser?.uid || 'anonymous',
+      isDriver: bookingData?.isDriver || false,
+    };
+
+    const optimisticTimestamp = new Date().toISOString();
+    const optimisticId = `local-${Date.now()}`;
+    const optimisticMessage = {
+      id: optimisticId,
+      text: trimmed,
+      senderName,
+      senderId: senderInfo.userId,
+      timestamp: optimisticTimestamp,
+      isDriver: senderInfo.isDriver,
+    };
+
+    setMessages((prev) => [...prev, optimisticMessage]);
+    scrollToBottom(true);
 
     try {
-      // Determine sender name
-      const senderName = bookingData?.passengerNames?.[0] || 'Tour Participant';
-      
-      const senderInfo = {
-        name: senderName,
-        userId: currentUser?.uid || 'anonymous',
-        isDriver: false // Set to true if implementing driver chat
-      };
+      const result = await sendMessage(tourId, trimmed, senderInfo);
 
-      const result = await sendMessage(tourId, messageText, senderInfo);
-      
-      if (!result.success) {
-        // If failed, restore the message
-        setInputText(messageText);
-        console.error('Failed to send message');
+      if (!result?.success || !result?.message) {
+        setMessages((prev) => prev.filter((msg) => msg.id !== optimisticId));
+        setInputText(trimmed);
+        setSending(false);
+        return;
+      }
+
+      const confirmedMessage = result.message;
+
+      setMessages((prev) => {
+        const filtered = prev.filter(
+          (msg) => msg.id !== optimisticId && msg.id !== confirmedMessage.id
+        );
+        return [...filtered, confirmedMessage];
+      });
+
+      if (result.serverPromise?.finally) {
+        result.serverPromise
+          .then(() => setSending(false))
+          .catch(() => {
+            setMessages((prev) => prev.filter((msg) => msg.id !== confirmedMessage.id));
+            setInputText(trimmed);
+            setSending(false);
+          });
+      } else {
+        setSending(false);
       }
     } catch (error) {
       console.error('Error sending message:', error);
-      setInputText(messageText); // Restore message on error
-    } finally {
+      setMessages((prev) => prev.filter((msg) => msg.id !== optimisticId));
+      setInputText(trimmed);
       setSending(false);
     }
   };
 
   const formatTime = (timestamp) => {
     if (!timestamp) return '';
-    
+
     const date = new Date(timestamp);
-    return date.toLocaleTimeString([], { 
-      hour: '2-digit', 
+    return date.toLocaleTimeString([], {
+      hour: '2-digit',
       minute: '2-digit',
-      hour12: true 
+      hour12: true,
     });
   };
 
   const renderMessage = (msg) => {
     const isSelf = msg.senderId === currentUser?.uid;
-    
+    const isDriver = !!msg.isDriver;
+
     return (
       <View
         key={msg.id}
@@ -125,16 +173,29 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData }) {
           isSelf ? styles.myMessageRow : styles.theirMessageRow,
         ]}
       >
-        <View style={[
-          styles.messageBubble,
-          isSelf ? styles.myMessageBubble : styles.theirMessageBubble,
-          msg.isDriver ? styles.driverMessageBubble : {}
-        ]}>
-          {!isSelf && (
-            <Text style={[styles.senderName, msg.isDriver ? styles.driverSenderName : {}]}>
-              {msg.isDriver ? `Driver ${msg.senderName}` : msg.senderName}
+        <View
+          style={[
+            styles.messageBubble,
+            isSelf ? styles.myMessageBubble : styles.theirMessageBubble,
+            isDriver && styles.driverMessageBubble,
+          ]}
+        >
+          <View style={styles.messageHeader}>
+            <Text
+              style={[
+                styles.senderName,
+                isSelf && styles.mySenderName,
+                isDriver && styles.driverSenderName,
+              ]}
+            >
+              {msg.senderName || 'Participant'}
             </Text>
-          )}
+            {isDriver && (
+              <View style={styles.driverBadge}>
+                <Text style={styles.driverBadgeText}>DRIVER</Text>
+              </View>
+            )}
+          </View>
           <Text style={[styles.messageText, isSelf ? styles.myMessageText : {}]}>
             {msg.text}
           </Text>
@@ -171,17 +232,15 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData }) {
         </TouchableOpacity>
         <View style={styles.headerTitleContainer}>
           <Text style={styles.headerTitle}>Group Chat</Text>
-          {tourData?.name && (
-            <Text style={styles.headerSubtitle}>{tourData.name}</Text>
-          )}
+          {tourData?.name && <Text style={styles.headerSubtitle}>{tourData.name}</Text>}
         </View>
         <View style={styles.headerButton} />
       </View>
 
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardAvoidingContainer}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 60 : 80}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 70 : 90}
       >
         {loading ? (
           <View style={styles.loadingContainer}>
@@ -192,7 +251,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData }) {
           <ScrollView
             ref={scrollViewRef}
             contentContainerStyle={styles.messagesScrollContainer}
-            onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: false })}
+            onContentSizeChange={() => scrollToBottom(false)}
             showsVerticalScrollIndicator={false}
           >
             {messages.length === 0 ? (
@@ -209,28 +268,33 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData }) {
 
         <View style={styles.inputArea}>
           <TextInput
-            style={styles.textInput}
+            style={[
+              styles.textInput,
+              { height: Math.min(Math.max(44, inputHeight), 160) },
+            ]}
             placeholder="Type your message here..."
             placeholderTextColor="#A0AEC0"
             value={inputText}
             onChangeText={setInputText}
             multiline
+            onContentSizeChange={(event) => setInputHeight(event.nativeEvent.contentSize.height)}
             selectionColor={COLORS.primaryBlue}
             editable={!sending}
+            blurOnSubmit={false}
           />
-          <TouchableOpacity 
-            style={[styles.sendButton, sending && styles.sendButtonDisabled]} 
-            onPress={handleSendMessage} 
+          <TouchableOpacity
+            style={[styles.sendButton, (sending || !inputText.trim()) && styles.sendButtonDisabled]}
+            onPress={handleSendMessage}
             activeOpacity={0.7}
-            disabled={sending || inputText.trim() === ''}
+            disabled={sending || !inputText.trim()}
           >
             {sending ? (
               <ActivityIndicator size="small" color={COLORS.sendButtonColor} />
             ) : (
-              <MaterialCommunityIcons 
-                name="send-circle" 
-                size={38} 
-                color={inputText.trim() === '' ? '#CBD5E0' : COLORS.sendButtonColor} 
+              <MaterialCommunityIcons
+                name="send-circle"
+                size={38}
+                color={inputText.trim() === '' ? '#CBD5E0' : COLORS.sendButtonColor}
               />
             )}
           </TouchableOpacity>
@@ -336,7 +400,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
   },
   messageBubble: {
-    maxWidth: '80%',
+    maxWidth: '85%',
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 20,
@@ -359,14 +423,35 @@ const styles = StyleSheet.create({
     borderColor: COLORS.driverMessageBorder,
     borderWidth: 1,
   },
+  messageHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
   senderName: {
     fontSize: 13,
     fontWeight: 'bold',
     color: COLORS.primaryBlue,
-    marginBottom: 4,
+  },
+  mySenderName: {
+    color: COLORS.lightBlueAccent,
   },
   driverSenderName: {
     color: COLORS.coralAccent,
+  },
+  driverBadge: {
+    marginLeft: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    backgroundColor: '#FFE1CE',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.driverMessageBorder,
+  },
+  driverBadgeText: {
+    color: COLORS.coralAccent,
+    fontSize: 11,
+    fontWeight: '700',
   },
   messageText: {
     fontSize: 15,
@@ -399,7 +484,7 @@ const styles = StyleSheet.create({
   textInput: {
     flex: 1,
     minHeight: 44,
-    maxHeight: 120,
+    maxHeight: 160,
     backgroundColor: '#F0F4F8',
     borderRadius: 22,
     paddingHorizontal: 18,
