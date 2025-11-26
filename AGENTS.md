@@ -42,9 +42,8 @@ To prevent native module crashes in Expo Go (specifically `AsyncStorage` and `Se
 * **Tech:** Real-time message syncing via Firebase.
 
 ### C. Photo Sharing (CURRENT FOCUS)
-1.  **Private Album (`PhotobookScreen`):** Functional but basic.
-2.  **Group Album (`GroupPhotobookScreen`):** Functional but basic.
-* **Goal:** Improve UX, add upload progress indicators, and ensure robust error handling.
+1.  **Group Album (`GroupPhotobookScreen`):** ✅ **Refactored & Professionalized.** Includes upload progress, pull-to-refresh, and service-layer abstraction.
+2.  **Private Album (`PhotobookScreen`):** 🚧 **Needs Improvement.** Currently functional but basic. needs parity with the Group Album improvements.
 
 ### D. Itinerary (`ItineraryScreen`)
 * **Status:** Functional. Fetches live data, falls back to `MOCK_ITINERARY` on error.
@@ -55,5 +54,5 @@ To prevent native module crashes in Expo Go (specifically `AsyncStorage` and `Se
 ## 6. Key Files Map
 * `App.js`: Entry point. manages session state (using Mock Storage).
 * `firebase.js`: **CRITICAL**. Configures Auth with `Persistence.NONE` to support the Mock Block.
-* `services/firestoreService.js`: Refactored with Dependency Injection for testing.
-* `services/loggerService.js`: Logging utility using in-memory storage.
+* `services/photoService.js`: Handles photo uploads and fetching (Abstracted logic).
+* `screens/GroupPhotobookScreen.js`: Reference implementation for photo features.
