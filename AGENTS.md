@@ -22,56 +22,38 @@
     * **Storage:** Photo uploads.
     * **Auth:** Anonymous Authentication.
 
-## 4. 🚨 CURRENT CRITICAL ISSUES (READ FIRST)
-**Issue:** App Crash on Launch (Anonymous Auth).
-**Error:** `[TypeError: Cannot read property 'setItem' of undefined]`
-**Root Cause:** `AsyncStorage` native module is missing or failing to load in the standard Expo Go client (SDK 54), causing `firebase.js` and `loggerService.js` to crash when attempting to persist data.
+## 4. ✅ RESOLVED & ACTIVE WORKAROUNDS
+**Status:** Stable in Expo Go.
 
-### **Current Fix Strategy (In Progress)**
-We are applying a **"Mock Block" Strategy** to bypass storage temporarily so we can resume UI development.
-1.  **Action:** In `firebase.js` and `loggerService.js`, we are replacing the real `AsyncStorage` import with a dummy object:
-    ```javascript
-    const AsyncStorage = {
-      getItem: async () => null,
-      setItem: async () => {},
-      removeItem: async () => {},
-      multiRemove: async () => {},
-      clear: async () => {},
-    };
-    ```
-2.  **Goal:** Allow the app to launch and user to sign in (without "Remember Me" functionality) to unblock development.
-3.  **Long Term Plan:** Migrate to `expo-secure-store` for production persistence.
+### The "Mock Block" Strategy (Active)
+To prevent native module crashes in Expo Go (specifically `AsyncStorage` and `SecureStore`), we have implemented a robust in-memory mock system.
+* **Implementation:** `firebase.js` and `services/loggerService.js` use a custom `MockStorage` object.
+* **Constraint:** Data **does not persist** across app reloads (hot reloads are fine, but full restarts clear the session).
+* **Rule:** Do **not** import `@react-native-async-storage/async-storage` or try to use `expo-secure-store` directly without checking for the Mock fallback first.
 
-## 5. Core Features
+## 5. Core Features & Development Status
 
 ### A. Dashboard (`TourHomeScreen`)
-* **Dynamic Data:** Displays Passenger names, Seat numbers, Pickup time/location.
-* **Driver Info:** Shows Driver name.
+* **Status:** Working.
+* **Data:** Displays dynamic passenger/booking info from Realtime DB.
 
 ### B. Communication (`ChatScreen`)
-* **Scope:** Tour-specific group chat.
-* **Tech:** Firebase Realtime Database (`chats/{tourId}/messages`).
-* **Logic:** Messages tagged with `senderName` and `isDriver`.
+* **Status:** Working.
+* **Tech:** Real-time message syncing via Firebase.
 
-### C. Photo Sharing
-1.  **Private Album (`PhotobookScreen`):** User-private storage (`private_tour_photos/{tourId}/{userId}/`).
-2.  **Group Album (`GroupPhotobookScreen`):** Shared bus storage (`group_tour_photos/{tourId}/`).
+### C. Photo Sharing (CURRENT FOCUS)
+1.  **Private Album (`PhotobookScreen`):** Functional but basic.
+2.  **Group Album (`GroupPhotobookScreen`):** Functional but basic.
+* **Goal:** Improve UX, add upload progress indicators, and ensure robust error handling.
 
 ### D. Itinerary (`ItineraryScreen`)
-* **Logic:** Fetches itinerary from Firebase. Falls back to `MOCK_ITINERARY` if data is missing.
+* **Status:** Functional. Fetches live data, falls back to `MOCK_ITINERARY` on error.
 
 ### E. Live Map (`MapScreen`)
-* **Status:** **PLACEHOLDER / MOCK UI**.
-* **Current State:** Displays static dummy text. No real geolocation logic is currently active.
+* **Status:** **PLACEHOLDER**. Displays dummy text. No geolocation logic active.
 
 ## 6. Key Files Map
-* `App.js`: Entry point. Handles Session restoration (currently crashing due to storage) and Navigation.
-* `firebase.js`: **CRITICAL**. Handles Auth config and Persistence. **Currently needs the Mock Block fix applied.**
-* `services/loggerService.js`: Custom logger. **Needs `Platform` import added and Storage mocked.**
-* `services/bookingServiceRealtime.js`: Validates booking refs against Realtime DB.
-* `services/chatService.js`: Chat subscription logic.
-
-## 7. Development Notes
-* **Expo Go:** Must use `npx expo start --tunnel` in Codespaces.
-* **Git:** `.gitignore` has been reset. `node_modules` should no longer be tracked.
-* **Ports:** `19000` is forwarded, but Tunneling is preferred for stability.
+* `App.js`: Entry point. manages session state (using Mock Storage).
+* `firebase.js`: **CRITICAL**. Configures Auth with `Persistence.NONE` to support the Mock Block.
+* `services/firestoreService.js`: Refactored with Dependency Injection for testing.
+* `services/loggerService.js`: Logging utility using in-memory storage.
