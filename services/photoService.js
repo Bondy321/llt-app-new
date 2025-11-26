@@ -21,9 +21,17 @@ const mapStorageErrorCode = (error) => {
   return error?.code || 'unknown-error';
 };
 
+const buildPhotoPath = ({ path, tourId, userId }) => {
+  if (path) return path;
+  if (userId) return `private_tour_photos/${tourId}/${userId}`;
+  return `group_tour_photos/${tourId}`;
+};
+
 const loadTourPhotos = async (
   tourId,
   {
+    userId,
+    path,
     storageInstance = storage,
     storageRefFn = storageRef,
     listAllFn = listAll,
@@ -31,7 +39,8 @@ const loadTourPhotos = async (
   } = {}
 ) => {
   try {
-    const tourPhotosRef = storageRefFn(storageInstance, `group_tour_photos/${tourId}`);
+    const resolvedPath = buildPhotoPath({ path, tourId, userId });
+    const tourPhotosRef = storageRefFn(storageInstance, resolvedPath);
     const result = await listAllFn(tourPhotosRef);
 
     const photoPromises = result.items.map(async (itemRef) => {
@@ -55,11 +64,13 @@ const uploadImage = async (
     imageUri,
     userId,
     tourId,
+    path,
     onProgress,
     storageInstance = storage,
     storageRefFn = storageRef,
     uploadBytesResumableFn = uploadBytesResumable,
     getDownloadURLFn = getDownloadURL,
+    fetchFn = fetch,
     maxFileSizeBytes = MAX_FILE_SIZE_BYTES
   }
 ) => {
@@ -70,7 +81,7 @@ const uploadImage = async (
   }
 
   try {
-    const response = await fetch(imageUri);
+    const response = await fetchFn(imageUri);
     const blob = await response.blob();
 
     if (blob.size > maxFileSizeBytes) {
@@ -80,7 +91,8 @@ const uploadImage = async (
     }
 
     const fileName = `photo_${Date.now()}_${userId}.jpg`;
-    const filePath = `group_tour_photos/${tourId}/${fileName}`;
+    const basePath = buildPhotoPath({ path, tourId, userId });
+    const filePath = `${basePath}/${fileName}`;
     const fileRef = storageRefFn(storageInstance, filePath);
 
     const uploadTask = uploadBytesResumableFn(fileRef, blob);
