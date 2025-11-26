@@ -174,30 +174,50 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
     }
 
     console.log('Joining tour:', tourId, 'for user:', userId);
+    const participantRef = db.ref(`tours/${tourId}/participants/${userId}`);
+    const participantSnapshot = await participantRef.once('value');
 
-    // Add user to participants
-    await db
-      .ref(`tours/${tourId}/participants/${userId}`)
-      .set({
-        joinedAt: new Date().toISOString(),
-        userId: userId
-      });
-
-    console.log('Incrementing participant count transactionally');
-    const transactionResult = await db
-      .ref(`tours/${tourId}/currentParticipants`)
-      .transaction((currentCount) => {
-        const safeCount = typeof currentCount === 'number' ? currentCount : 0;
-        const nextCount = safeCount + 1;
-        console.log('Participant count update', { currentCount: safeCount, nextCount });
-        return nextCount;
-      });
-
-    if (!transactionResult?.committed) {
-      throw new Error('Participant count transaction not committed');
+    if (participantSnapshot.exists()) {
+      const reconciledCount = await ensureTourParticipantCount(tourId, db);
+      console.log('User already joined tour; returning existing count', { reconciledCount });
+      return { success: true, currentParticipants: reconciledCount };
     }
 
-    const newCount = transactionResult?.snapshot?.val?.() ?? null;
+    console.log('Adding participant and incrementing count transactionally');
+    const tourRef = db.ref(`tours/${tourId}`);
+    const transactionResult = await tourRef.transaction((tourState) => {
+      const currentTour = tourState || {};
+      const participants = currentTour.participants || {};
+
+      if (participants[userId]) {
+        return currentTour;
+      }
+
+      const updatedParticipants = {
+        ...participants,
+        [userId]: {
+          joinedAt: new Date().toISOString(),
+          userId
+        }
+      };
+
+      const currentCount = typeof currentTour.currentParticipants === 'number'
+        ? currentTour.currentParticipants
+        : Object.keys(updatedParticipants).length - 1;
+
+      return {
+        ...currentTour,
+        participants: updatedParticipants,
+        currentParticipants: currentCount + 1
+      };
+    });
+
+    if (!transactionResult?.committed) {
+      throw new Error('Participant transaction not committed');
+    }
+
+    const newState = transactionResult?.snapshot?.val?.();
+    const newCount = newState?.currentParticipants ?? null;
     console.log('User joined tour successfully via transaction', { newCount });
     return { success: true, currentParticipants: newCount };
   } catch (error) {

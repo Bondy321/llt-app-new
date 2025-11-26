@@ -95,6 +95,31 @@ test('handles concurrent joins with reliable increments', async () => {
   );
 });
 
+test('returns existing count when user rejoins the same tour', async () => {
+  const mockDb = createMockRealtimeDb();
+
+  await joinTour('tour-rejoin', 'user-1', mockDb);
+  const repeatJoin = await joinTour('tour-rejoin', 'user-1', mockDb);
+
+  assert.equal(repeatJoin.success, true);
+  assert.equal(repeatJoin.currentParticipants, 1);
+  assert.equal(mockDb.state.tours['tour-rejoin'].currentParticipants, 1);
+  assert.equal(Object.keys(mockDb.state.tours['tour-rejoin'].participants).length, 1);
+});
+
+test('keeps participant counts stable across repeated joins for the same user', async () => {
+  const mockDb = createMockRealtimeDb();
+
+  await Promise.all([
+    joinTour('tour-repeat', 'user-99', mockDb),
+    joinTour('tour-repeat', 'user-99', mockDb),
+    joinTour('tour-repeat', 'user-99', mockDb)
+  ]);
+
+  assert.equal(mockDb.state.tours['tour-repeat'].currentParticipants, 1);
+  assert.deepEqual(Object.keys(mockDb.state.tours['tour-repeat'].participants), ['user-99']);
+});
+
 test('surfaces transaction errors', async () => {
   const mockDb = createMockRealtimeDb();
   mockDb.transactionError = new Error('transaction failed');
