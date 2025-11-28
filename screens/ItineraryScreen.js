@@ -1,5 +1,5 @@
 // screens/ItineraryScreen.js
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -37,6 +37,8 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
   const [refreshing, setRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [collapsedDays, setCollapsedDays] = useState({});
+  const [dayPositions, setDayPositions] = useState({});
+  const scrollViewRef = useRef(null);
 
   useEffect(() => {
     if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -59,6 +61,27 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
     return `${day}th`;
   };
 
+  const getParsedStartDate = useMemo(
+    () => (rawDate) => {
+      let parsedStartDate;
+      if (typeof rawDate === 'string' && rawDate.includes('/')) {
+        const [day, month, year] = rawDate.split('/').map(Number);
+        parsedStartDate = new Date(year, month - 1, day);
+      } else {
+        parsedStartDate = new Date(rawDate);
+      }
+
+      if (isNaN(parsedStartDate.getTime())) {
+        return null;
+      }
+
+      const normalizedDate = new Date(parsedStartDate);
+      normalizedDate.setHours(12, 0, 0, 0);
+      return normalizedDate;
+    },
+    []
+  );
+
   const formatDayLabel = useMemo(
     () => (dayNumber) => {
       if (!startDate) {
@@ -66,16 +89,9 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
       }
 
       // FIX: Manually parse "dd/MM/yyyy" to avoid Invalid Date errors on iOS/Android
-      let parsedStartDate;
-      if (typeof startDate === 'string' && startDate.includes('/')) {
-        const [day, month, year] = startDate.split('/').map(Number);
-        // Note: Month is 0-indexed in JS Date (0 = Jan, 11 = Dec)
-        parsedStartDate = new Date(year, month - 1, day);
-      } else {
-        parsedStartDate = new Date(startDate);
-      }
+      const parsedStartDate = getParsedStartDate(startDate);
 
-      if (isNaN(parsedStartDate.getTime())) {
+      if (!parsedStartDate) {
         return `Day ${dayNumber}`;
       }
 
@@ -88,8 +104,53 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
 
       return `Day ${dayNumber} - ${weekday} ${dayStr} ${monthStr}`;
     },
-    [startDate]
+    [getParsedStartDate, startDate]
   );
+
+  const todaysDayNumber = useMemo(() => {
+    if (!startDate || !itinerary?.days?.length) {
+      return null;
+    }
+
+    const parsedStartDate = getParsedStartDate(startDate);
+
+    if (!parsedStartDate) {
+      return null;
+    }
+
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    const diffTime = today.getTime() - parsedStartDate.getTime();
+    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
+
+    if (diffDays < 1 || diffDays > itinerary.days.length) {
+      return null;
+    }
+
+    return diffDays;
+  }, [getParsedStartDate, itinerary?.days?.length, startDate]);
+
+  useEffect(() => {
+    if (!itinerary?.days?.length) {
+      return;
+    }
+
+    setCollapsedDays((prev) => {
+      if (Object.keys(prev).length > 0) {
+        return prev;
+      }
+
+      const nextState = {};
+      itinerary.days.forEach((day) => {
+        nextState[day.day] = todaysDayNumber ? day.day !== todaysDayNumber : false;
+      });
+      return nextState;
+    });
+  }, [itinerary?.days, todaysDayNumber]);
+
+  useEffect(() => {
+    setDayPositions({});
+  }, [itinerary?.days]);
 
   // --- END MOVED HOOKS ---
 
@@ -230,6 +291,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
       <ScrollView
         contentContainerStyle={styles.scrollContainer}
         showsVerticalScrollIndicator={false}
+        ref={scrollViewRef}
         refreshControl={(
           <RefreshControl
             refreshing={refreshing}
@@ -243,9 +305,17 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
           const activities = Array.isArray(dayData.activities) ? dayData.activities : [];
           const isCollapsed = collapsedDays[dayData.day];
           const dayLabel = formatDayLabel(dayData.day);
-          
+          const isToday = todaysDayNumber === dayData.day;
+
           return (
-            <View key={index} style={styles.dayCard}>
+            <View
+              key={index}
+              style={[styles.dayCard, isToday && styles.todayCard]}
+              onLayout={(event) => {
+                const { y } = event.nativeEvent.layout;
+                setDayPositions((prev) => ({ ...prev, [dayData.day]: y }));
+              }}
+            >
               <LinearGradient colors={[COLORS.white, '#F7FAFF']} style={styles.dayCardInner}>
                 <TouchableOpacity onPress={() => toggleDay(dayData.day)} activeOpacity={0.9}>
                   <View style={styles.dayHeader}>
@@ -256,7 +326,9 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
                       <Text style={styles.dayTitleText}>{dayData.title}</Text>
                       <View style={styles.dayMetaRow}>
                         <MaterialCommunityIcons name="weather-sunny" size={16} color={COLORS.lightBlueAccent} />
-                        <Text style={styles.dayMetaText}>{activities.length} planned moments</Text>
+                        <Text style={styles.dayMetaText}>
+                          {activities.length} planned moments{isToday ? ' • Today' : ''}
+                        </Text>
                       </View>
                     </View>
                     <MaterialCommunityIcons
@@ -313,6 +385,21 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
         })}
         <View style={styles.footerSpacer} />
       </ScrollView>
+      {todaysDayNumber && (
+        <TouchableOpacity
+          style={styles.todayButton}
+          onPress={() => {
+            const y = dayPositions[todaysDayNumber];
+            if (typeof y === 'number' && scrollViewRef.current?.scrollTo) {
+              scrollViewRef.current.scrollTo({ y: Math.max(y - 12, 0), animated: true });
+            }
+          }}
+          activeOpacity={0.9}
+        >
+          <MaterialCommunityIcons name="calendar-today" size={18} color={COLORS.white} />
+          <Text style={styles.todayButtonText}>Jump to today</Text>
+        </TouchableOpacity>
+      )}
     </SafeAreaView>
   );
 }
@@ -395,6 +482,10 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     paddingHorizontal: 18,
     paddingVertical: 16,
+  },
+  todayCard: {
+    borderWidth: 1,
+    borderColor: `${COLORS.coralAccent}55`,
   },
   dayHeader: {
     flexDirection: 'row',
@@ -555,5 +646,27 @@ const styles = StyleSheet.create({
   },
   footerSpacer: {
     height: 20,
+  },
+  todayButton: {
+    position: 'absolute',
+    right: 16,
+    bottom: 24,
+    backgroundColor: COLORS.primaryBlue,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  todayButtonText: {
+    color: COLORS.white,
+    fontWeight: '800',
+    marginLeft: 8,
+    fontSize: 13,
   },
 });
