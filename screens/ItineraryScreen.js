@@ -35,6 +35,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
   const [itinerary, setItinerary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
   const [collapsedDays, setCollapsedDays] = useState({});
 
   useEffect(() => {
@@ -93,14 +94,15 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
   // --- END MOVED HOOKS ---
 
   const loadItinerary = async ({ showSkeleton = true } = {}) => {
-    if (!tourId) {
-      setItinerary(null);
-      setLoading(false);
-      setRefreshing(false);
-      return;
-    }
-
     try {
+      setErrorMessage('');
+      if (!tourId) {
+        setItinerary(null);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+
       if (showSkeleton) {
         setLoading(true);
       } else {
@@ -111,6 +113,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
     } catch (error) {
       console.error('Error loading itinerary:', error);
       setItinerary(null);
+      setErrorMessage('We could not load the itinerary right now. Please check your connection and try again.');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -143,7 +146,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
     return keywordMatch || index === 0 || index === activitiesLength - 1;
   };
 
-  const renderEmptyState = (message) => (
+  const renderEmptyState = (message, options = {}) => (
     <SafeAreaView style={styles.safeArea}>
       <LinearGradient colors={[COLORS.primaryBlue, COLORS.complementaryBlue]} style={styles.headerGradient}>
         <View style={styles.headerContent}>
@@ -159,9 +162,19 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
       </LinearGradient>
       <View style={styles.loadingContainer}>
         <Text style={styles.emptyText}>{message}</Text>
+        {options.onRetry && (
+          <TouchableOpacity style={styles.retryButton} onPress={options.onRetry} activeOpacity={0.85}>
+            <MaterialCommunityIcons name="refresh" size={18} color={COLORS.white} />
+            <Text style={styles.retryButtonText}>Try again</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </SafeAreaView>
   );
+
+  if (errorMessage) {
+    return renderEmptyState(errorMessage, { onRetry: () => loadItinerary({ showSkeleton: true }) });
+  }
 
   if (loading) {
     return (
@@ -519,6 +532,26 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: COLORS.secondaryText,
     textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.primaryBlue,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  retryButtonText: {
+    color: COLORS.white,
+    fontWeight: '700',
+    marginLeft: 8,
+    fontSize: 14,
   },
   footerSpacer: {
     height: 20,
