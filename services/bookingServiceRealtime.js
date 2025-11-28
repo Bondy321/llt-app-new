@@ -227,6 +227,7 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
 };
 
 // Get tour itinerary
+// Get tour itinerary
 const getTourItinerary = async (tourId) => {
   try {
     console.log('Getting itinerary for tour:', tourId);
@@ -244,13 +245,28 @@ const getTourItinerary = async (tourId) => {
     }
     
     const tourData = tourSnapshot.val();
+    const itineraryData = tourData.itinerary;
+
+    // --- NEW LOGIC START ---
+    // 1. Check if this is the new Structured Itinerary (Object) from the updated App Script
+    if (itineraryData && typeof itineraryData === 'object' && Array.isArray(itineraryData.days)) {
+      // It is already parsed. Return it directly.
+      // We ensure the title is present, defaulting to the Tour Name if the itinerary title is missing.
+      return {
+        ...itineraryData,
+        title: itineraryData.title || tourData.name
+      };
+    }
+    // --- NEW LOGIC END ---
     
-    // Parse the itinerary text to make it more readable
+    // 2. Legacy Fallback: Parse the old string format
     const parseItinerary = (text) => {
-      if (!text) return [{ time: '', description: 'Itinerary to be confirmed' }];
+      // Handle null or non-string inputs safely
+      if (!text || typeof text !== 'string') {
+         return [{ time: '', description: 'Itinerary to be confirmed' }];
+      }
       
       // For day trips, we'll format the text nicely but keep it as one block
-      // since the times are embedded within the activities
       const formattedText = text
         .replace(/\. /g, '.\n\n') // Add line breaks after periods
         .replace(/(\d{4}hrs)/g, (match) => {
@@ -269,7 +285,8 @@ const getTourItinerary = async (tourId) => {
       }];
     };
     
-    const activities = parseItinerary(tourData.itinerary);
+    // Ensure we are passing a string to the parser
+    const activities = parseItinerary(itineraryData);
     
     return {
       title: tourData.name,
