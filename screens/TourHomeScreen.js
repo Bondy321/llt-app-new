@@ -3,6 +3,7 @@ import React from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, ScrollView, Image } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import TodaysAgendaCard from '../components/TodaysAgendaCard';
 
 // Brand Colors
 const COLORS = {
@@ -128,6 +129,13 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
                 )}
               </View>
             </View>
+          )}
+
+          {tourData && (
+            <TodaysAgendaCard
+              tourData={tourData}
+              onNudge={() => onNavigate('Itinerary')}
+            />
           )}
 
           <Text style={styles.sectionTitle}>Tour Features</Text>
