@@ -45,74 +45,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
     loadItinerary();
   }, [tourId]);
 
-  const loadItinerary = async () => {
-    if (!tourId) {
-      setItinerary(null);
-      setLoading(false);
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const tourItinerary = await getTourItinerary(tourId);
-      setItinerary(tourItinerary || null);
-    } catch (error) {
-      console.error('Error loading itinerary:', error);
-      setItinerary(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <LinearGradient colors={[COLORS.primaryBlue, COLORS.complementaryBlue]} style={styles.headerGradient}>
-          <View style={styles.headerContent}>
-            <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7}>
-              <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
-            </TouchableOpacity>
-            <View style={styles.headerTitleContainer}>
-              <Text style={styles.headerLabel}>Itinerary</Text>
-              <Text style={styles.headerTitle}>Loading...</Text>
-            </View>
-            <View style={styles.headerButton} />
-          </View>
-        </LinearGradient>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.primaryBlue} />
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  const renderEmptyState = (message) => (
-    <SafeAreaView style={styles.safeArea}>
-      <LinearGradient colors={[COLORS.primaryBlue, COLORS.complementaryBlue]} style={styles.headerGradient}>
-        <View style={styles.headerContent}>
-          <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7}>
-            <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
-          </TouchableOpacity>
-          <View style={styles.headerTitleContainer}>
-            <Text style={styles.headerLabel}>Itinerary</Text>
-            <Text style={styles.headerTitle}>Tour Itinerary</Text>
-          </View>
-          <View style={styles.headerButton} />
-        </View>
-      </LinearGradient>
-      <View style={styles.loadingContainer}>
-        <Text style={styles.emptyText}>{message}</Text>
-      </View>
-    </SafeAreaView>
-  );
-
-  if (!itinerary || !itinerary.days) {
-    return renderEmptyState('No itinerary available for this tour.');
-  }
-
-  if (Array.isArray(itinerary.days) && itinerary.days.length === 0) {
-    return renderEmptyState('Itinerary details coming soon.');
-  }
+  // --- HOOKS MOVED TO TOP LEVEL (Fixes "Rendered more hooks" error) ---
 
   const getOrdinal = (day) => {
     const j = day % 10;
@@ -155,6 +88,27 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
     [startDate]
   );
 
+  // --- END MOVED HOOKS ---
+
+  const loadItinerary = async () => {
+    if (!tourId) {
+      setItinerary(null);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const tourItinerary = await getTourItinerary(tourId);
+      setItinerary(tourItinerary || null);
+    } catch (error) {
+      console.error('Error loading itinerary:', error);
+      setItinerary(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const toggleDay = (day) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setCollapsedDays((prev) => ({ ...prev, [day]: !prev[day] }));
@@ -180,6 +134,56 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
     const keywordMatch = keywords.some((word) => lowered.includes(word));
     return keywordMatch || index === 0 || index === activitiesLength - 1;
   };
+
+  const renderEmptyState = (message) => (
+    <SafeAreaView style={styles.safeArea}>
+      <LinearGradient colors={[COLORS.primaryBlue, COLORS.complementaryBlue]} style={styles.headerGradient}>
+        <View style={styles.headerContent}>
+          <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7}>
+            <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
+          </TouchableOpacity>
+          <View style={styles.headerTitleContainer}>
+            <Text style={styles.headerLabel}>Itinerary</Text>
+            <Text style={styles.headerTitle}>Tour Itinerary</Text>
+          </View>
+          <View style={styles.headerButton} />
+        </View>
+      </LinearGradient>
+      <View style={styles.loadingContainer}>
+        <Text style={styles.emptyText}>{message}</Text>
+      </View>
+    </SafeAreaView>
+  );
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <LinearGradient colors={[COLORS.primaryBlue, COLORS.complementaryBlue]} style={styles.headerGradient}>
+          <View style={styles.headerContent}>
+            <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7}>
+              <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
+            </TouchableOpacity>
+            <View style={styles.headerTitleContainer}>
+              <Text style={styles.headerLabel}>Itinerary</Text>
+              <Text style={styles.headerTitle}>Loading...</Text>
+            </View>
+            <View style={styles.headerButton} />
+          </View>
+        </LinearGradient>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={COLORS.primaryBlue} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!itinerary || !itinerary.days) {
+    return renderEmptyState('No itinerary available for this tour.');
+  }
+
+  if (Array.isArray(itinerary.days) && itinerary.days.length === 0) {
+    return renderEmptyState('Itinerary details coming soon.');
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -207,6 +211,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
           const activities = Array.isArray(dayData.activities) ? dayData.activities : [];
           const isCollapsed = collapsedDays[dayData.day];
           const dayLabel = formatDayLabel(dayData.day);
+          
           return (
             <View key={index} style={styles.dayCard}>
               <LinearGradient colors={[COLORS.white, '#F7FAFF']} style={styles.dayCardInner}>
@@ -236,6 +241,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
                       const major = isMajorEvent(activity.description, actIndex, activities.length);
                       const hasTime = Boolean(activity.time);
                       const showLine = actIndex < activities.length - 1;
+                      
                       return (
                         <View key={actIndex} style={styles.activityItem}>
                           <View style={styles.timelineColumn}>
