@@ -1,5 +1,5 @@
 // screens/ItineraryScreen.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   StyleSheet,
   Text,
@@ -30,38 +30,7 @@ const COLORS = {
   coralAccent: '#FF7757',
 };
 
-// Mock itinerary data
-const MOCK_ITINERARY = {
-  title: "Loch Lomond Adventure",
-  days: [
-    {
-      day: 1,
-      title: "Arrival & Loch Exploration",
-      activities: [
-        { time: "9:00 AM", description: "Pick-up from Glasgow Central Station" },
-        { time: "10:30 AM", description: "Scenic drive to Loch Lomond" },
-        { time: "12:00 PM", description: "Lunch at Luss Village" },
-        { time: "2:00 PM", description: "Boat tour on Loch Lomond" },
-        { time: "4:00 PM", description: "Check-in at hotel" },
-        { time: "7:00 PM", description: "Welcome dinner" }
-      ]
-    },
-    {
-      day: 2,
-      title: "Highland Adventure",
-      activities: [
-        { time: "8:00 AM", description: "Breakfast at hotel" },
-        { time: "9:00 AM", description: "Ben Lomond hiking expedition" },
-        { time: "1:00 PM", description: "Picnic lunch with scenic views" },
-        { time: "3:00 PM", description: "Visit to local distillery" },
-        { time: "5:00 PM", description: "Return to hotel" },
-        { time: "7:30 PM", description: "Traditional Scottish dinner" }
-      ]
-    }
-  ]
-};
-
-export default function ItineraryScreen({ onBack, tourId, tourName }) {
+export default function ItineraryScreen({ onBack, tourId, tourName, startDate }) {
   const [itinerary, setItinerary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [collapsedDays, setCollapsedDays] = useState({});
@@ -78,8 +47,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName }) {
 
   const loadItinerary = async () => {
     if (!tourId) {
-      // Fall back to mock data if no tourId
-      setItinerary(MOCK_ITINERARY);
+      setItinerary(null);
       setLoading(false);
       return;
     }
@@ -87,17 +55,10 @@ export default function ItineraryScreen({ onBack, tourId, tourName }) {
     try {
       setLoading(true);
       const tourItinerary = await getTourItinerary(tourId);
-      
-      if (tourItinerary && tourItinerary.days) {
-        setItinerary(tourItinerary);
-      } else {
-        // Use mock data if no itinerary in database
-        setItinerary(MOCK_ITINERARY);
-      }
+      setItinerary(tourItinerary || null);
     } catch (error) {
       console.error('Error loading itinerary:', error);
-      // Fall back to mock data on error
-      setItinerary(MOCK_ITINERARY);
+      setItinerary(null);
     } finally {
       setLoading(false);
     }
@@ -125,27 +86,74 @@ export default function ItineraryScreen({ onBack, tourId, tourName }) {
     );
   }
 
-  if (!itinerary || !itinerary.days) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <LinearGradient colors={[COLORS.primaryBlue, COLORS.complementaryBlue]} style={styles.headerGradient}>
-          <View style={styles.headerContent}>
-            <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7}>
-              <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
-            </TouchableOpacity>
-            <View style={styles.headerTitleContainer}>
-              <Text style={styles.headerLabel}>Itinerary</Text>
-              <Text style={styles.headerTitle}>Tour Itinerary</Text>
-            </View>
-            <View style={styles.headerButton} />
+  const renderEmptyState = (message) => (
+    <SafeAreaView style={styles.safeArea}>
+      <LinearGradient colors={[COLORS.primaryBlue, COLORS.complementaryBlue]} style={styles.headerGradient}>
+        <View style={styles.headerContent}>
+          <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7}>
+            <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
+          </TouchableOpacity>
+          <View style={styles.headerTitleContainer}>
+            <Text style={styles.headerLabel}>Itinerary</Text>
+            <Text style={styles.headerTitle}>Tour Itinerary</Text>
           </View>
-        </LinearGradient>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.emptyText}>No itinerary available for this tour.</Text>
+          <View style={styles.headerButton} />
         </View>
-      </SafeAreaView>
-    );
+      </LinearGradient>
+      <View style={styles.loadingContainer}>
+        <Text style={styles.emptyText}>{message}</Text>
+      </View>
+    </SafeAreaView>
+  );
+
+  if (!itinerary || !itinerary.days) {
+    return renderEmptyState('No itinerary available for this tour.');
   }
+
+  if (Array.isArray(itinerary.days) && itinerary.days.length === 0) {
+    return renderEmptyState('Itinerary details coming soon.');
+  }
+
+  const getOrdinal = (day) => {
+    const j = day % 10;
+    const k = day % 100;
+    if (j === 1 && k !== 11) return `${day}st`;
+    if (j === 2 && k !== 12) return `${day}nd`;
+    if (j === 3 && k !== 13) return `${day}rd`;
+    return `${day}th`;
+  };
+
+  const formatDayLabel = useMemo(
+    () => (dayNumber) => {
+      if (!startDate) {
+        return `Day ${dayNumber}`;
+      }
+
+      // FIX: Manually parse "dd/MM/yyyy" to avoid Invalid Date errors on iOS/Android
+      let parsedStartDate;
+      if (typeof startDate === 'string' && startDate.includes('/')) {
+        const [day, month, year] = startDate.split('/').map(Number);
+        // Note: Month is 0-indexed in JS Date (0 = Jan, 11 = Dec)
+        parsedStartDate = new Date(year, month - 1, day);
+      } else {
+        parsedStartDate = new Date(startDate);
+      }
+
+      if (isNaN(parsedStartDate.getTime())) {
+        return `Day ${dayNumber}`;
+      }
+
+      const dayDate = new Date(parsedStartDate);
+      dayDate.setDate(parsedStartDate.getDate() + (dayNumber - 1));
+
+      const weekday = dayDate.toLocaleDateString(undefined, { weekday: 'short' });
+      const monthStr = dayDate.toLocaleDateString(undefined, { month: 'long' });
+      const dayStr = getOrdinal(dayDate.getDate());
+
+      return `Day ${dayNumber} - ${weekday} ${dayStr} ${monthStr}`;
+    },
+    [startDate]
+  );
 
   const toggleDay = (day) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -153,7 +161,21 @@ export default function ItineraryScreen({ onBack, tourId, tourName }) {
   };
 
   const isMajorEvent = (description, index, activitiesLength) => {
-    const keywords = ['pick-up', 'pickup', 'drop-off', 'drop off', 'check-in', 'check in', 'departure', 'arrival'];
+    const keywords = [
+      'pick-up',
+      'pickup',
+      'drop-off',
+      'drop off',
+      'check-in',
+      'check in',
+      'departure',
+      'arrival',
+      'ferry',
+      'train',
+      'flight',
+      'cruise',
+      'museum',
+    ];
     const lowered = description.toLowerCase();
     const keywordMatch = keywords.some((word) => lowered.includes(word));
     return keywordMatch || index === 0 || index === activitiesLength - 1;
@@ -182,20 +204,22 @@ export default function ItineraryScreen({ onBack, tourId, tourName }) {
 
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         {itinerary.days.map((dayData, index) => {
+          const activities = Array.isArray(dayData.activities) ? dayData.activities : [];
           const isCollapsed = collapsedDays[dayData.day];
+          const dayLabel = formatDayLabel(dayData.day);
           return (
             <View key={index} style={styles.dayCard}>
               <LinearGradient colors={[COLORS.white, '#F7FAFF']} style={styles.dayCardInner}>
                 <TouchableOpacity onPress={() => toggleDay(dayData.day)} activeOpacity={0.9}>
                   <View style={styles.dayHeader}>
                     <View style={styles.dayBadge}>
-                      <Text style={styles.dayBadgeText}>Day {dayData.day}</Text>
+                      <Text style={styles.dayBadgeText}>{dayLabel}</Text>
                     </View>
                     <View style={styles.dayTitleWrapper}>
                       <Text style={styles.dayTitleText}>{dayData.title}</Text>
                       <View style={styles.dayMetaRow}>
                         <MaterialCommunityIcons name="weather-sunny" size={16} color={COLORS.lightBlueAccent} />
-                        <Text style={styles.dayMetaText}>{dayData.activities.length} planned moments</Text>
+                        <Text style={styles.dayMetaText}>{activities.length} planned moments</Text>
                       </View>
                     </View>
                     <MaterialCommunityIcons
@@ -208,18 +232,24 @@ export default function ItineraryScreen({ onBack, tourId, tourName }) {
 
                 {!isCollapsed && (
                   <View style={styles.activitiesContainer}>
-                    {dayData.activities.map((activity, actIndex) => {
-                      const major = isMajorEvent(activity.description, actIndex, dayData.activities.length);
-                      const showLine = actIndex < dayData.activities.length - 1;
+                    {activities.map((activity, actIndex) => {
+                      const major = isMajorEvent(activity.description, actIndex, activities.length);
+                      const hasTime = Boolean(activity.time);
+                      const showLine = actIndex < activities.length - 1;
                       return (
                         <View key={actIndex} style={styles.activityItem}>
                           <View style={styles.timelineColumn}>
                             <View style={[styles.timelineDot, major && styles.majorDot]} />
                             {showLine && <View style={[styles.timelineLine, major && styles.majorLine]} />}
                           </View>
-                          <View style={styles.activityContent}>
-                            <View style={styles.activityHeaderRow}>
-                              {activity.time && <Text style={styles.activityTime}>{activity.time}</Text>}
+                          <View style={[styles.activityContent, !hasTime && styles.activityContentNoTime]}>
+                            <View
+                              style={[
+                                styles.activityHeaderRow,
+                                !hasTime && styles.activityHeaderRowNoTime,
+                              ]}
+                            >
+                              {hasTime && <Text style={styles.activityTime}>{activity.time}</Text>}
                               <View style={[styles.activityTypePill, major ? styles.majorPill : styles.standardPill]}>
                                 <MaterialCommunityIcons
                                   name={major ? 'map-marker-path' : 'clock-outline'}
@@ -344,6 +374,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: COLORS.white,
     letterSpacing: 0.5,
+    flexShrink: 1,
   },
   dayTitleWrapper: {
     flex: 1,
@@ -405,10 +436,17 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingLeft: 6,
   },
+  activityContentNoTime: {
+    paddingLeft: 8,
+  },
   activityHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  activityHeaderRowNoTime: {
+    justifyContent: 'flex-start',
+    gap: 8,
   },
   activityTime: {
     fontSize: 15,

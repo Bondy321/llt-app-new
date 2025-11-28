@@ -265,7 +265,15 @@ export default function App() {
       case 'GroupPhotobook':
         return <GroupPhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} />;
       case 'Itinerary':
-        return <ItineraryScreen {...screenProps} onBack={() => navigateTo('TourHome')} tourId={tourData?.id} tourName={tourData?.name} />;
+        return (
+          <ItineraryScreen
+            {...screenProps}
+            onBack={() => navigateTo('TourHome')}
+            tourId={tourData?.id}
+            tourName={tourData?.name}
+            startDate={tourData?.startDate}
+          />
+        );
       case 'Chat':
         return <ChatScreen {...screenProps} onBack={() => navigateTo('TourHome')} tourId={tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_')} bookingData={bookingData} tourData={tourData} />;
       case 'Map':
