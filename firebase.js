@@ -4,6 +4,7 @@ import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
 import 'firebase/compat/database';
 import { getStorage } from 'firebase/storage';
+import { getDatabase } from 'firebase/database';
 
 // --- MOCK BLOCK START ---
 // In Expo Go, native storage modules can sometimes crash or misbehave.
@@ -87,6 +88,7 @@ let auth;
 let db;
 let storage;
 let realtimeDb;
+let realtimeDbModular;
 
 try {
   if (!firebase.apps.length) {
@@ -100,8 +102,10 @@ try {
   // Initialize services
   auth = firebase.auth();
   db = firebase.firestore();
-  storage = getStorage(app, 'gs://loch-lomond-travel.firebasestorage.app');
+  const modularApp = app._delegate || app;
+  storage = getStorage(modularApp, 'gs://loch-lomond-travel.firebasestorage.app');
   realtimeDb = firebase.database();
+  realtimeDbModular = getDatabase(modularApp);
 
   // Configure auth persistence
   // Use NONE because we manage persistence via MockStorage/AuthPersistence
@@ -232,10 +236,11 @@ const updateNetworkState = (online) => {
 // Export enhanced services
 export { 
   firebase, 
-  auth, 
-  db, 
-  storage, 
+  auth,
+  db,
+  storage,
   realtimeDb,
+  realtimeDbModular,
   authHelpers,
   updateNetworkState,
   isOnline
