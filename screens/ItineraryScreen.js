@@ -8,6 +8,7 @@ import {
   SafeAreaView,
   ScrollView,
   Platform,
+  RefreshControl,
   ActivityIndicator,
   LayoutAnimation,
   UIManager,
@@ -33,6 +34,7 @@ const COLORS = {
 export default function ItineraryScreen({ onBack, tourId, tourName, startDate }) {
   const [itinerary, setItinerary] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [collapsedDays, setCollapsedDays] = useState({});
 
   useEffect(() => {
@@ -90,15 +92,20 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
 
   // --- END MOVED HOOKS ---
 
-  const loadItinerary = async () => {
+  const loadItinerary = async ({ showSkeleton = true } = {}) => {
     if (!tourId) {
       setItinerary(null);
       setLoading(false);
+      setRefreshing(false);
       return;
     }
 
     try {
-      setLoading(true);
+      if (showSkeleton) {
+        setLoading(true);
+      } else {
+        setRefreshing(true);
+      }
       const tourItinerary = await getTourItinerary(tourId);
       setItinerary(tourItinerary || null);
     } catch (error) {
@@ -106,6 +113,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
       setItinerary(null);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -206,7 +214,18 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate })
         </View>
       </LinearGradient>
 
-      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContainer}
+        showsVerticalScrollIndicator={false}
+        refreshControl={(
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => loadItinerary({ showSkeleton: false })}
+            colors={[COLORS.primaryBlue]}
+            tintColor={COLORS.primaryBlue}
+          />
+        )}
+      >
         {itinerary.days.map((dayData, index) => {
           const activities = Array.isArray(dayData.activities) ? dayData.activities : [];
           const isCollapsed = collapsedDays[dayData.day];
