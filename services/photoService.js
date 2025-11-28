@@ -9,7 +9,7 @@ const {
   serverTimestamp,
   onValue,
 } = require('firebase/database');
-const { storage, realtimeDb } = require('../firebase');
+const { storage, realtimeDbModular } = require('../firebase');
 
 const createBlob = async (uri, fetchFn = fetch) => {
   const response = await fetchFn(uri);
@@ -24,7 +24,7 @@ const uploadPhoto = async (
   caption = '',
   {
     storageInstance = storage,
-    realtimeDbInstance = realtimeDb,
+    realtimeDbInstance = realtimeDbModular,
     storageRefFn = storageRef,
     uploadBytesFn = uploadBytes,
     getDownloadURLFn = getDownloadURL,
@@ -75,7 +75,7 @@ const subscribeToTourPhotos = (
   tourId,
   callback,
   {
-    realtimeDbInstance = realtimeDb,
+    realtimeDbInstance = realtimeDbModular,
     dbRefFn = databaseRef,
     onValueFn = onValue,
   } = {}
