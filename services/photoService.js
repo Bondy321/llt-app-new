@@ -1,143 +1,118 @@
 // services/photoService.js
-const {
-  ref: storageRef,
-  uploadBytesResumable,
-  getDownloadURL,
-  listAll
-} = require('firebase/storage');
-const { storage } = require('../firebase');
+// Production-ready photo service using Firebase Storage and Realtime Database
 
-const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB limit
+const { ref: storageRef, uploadBytes, getDownloadURL } = require('firebase/storage');
+const { firebase, storage, realtimeDb } = require('../firebase');
 
-const mapStorageErrorCode = (error) => {
-  if (error?.code === 'storage/unauthorized' || error?.code === 'storage/canceled') {
-    return 'permission-denied';
-  }
-
-  if (error?.code === 'storage/retry-limit-exceeded' || error?.message?.includes('network')) {
-    return 'network-error';
-  }
-
-  return error?.code || 'unknown-error';
-};
-
-const buildPhotoPath = ({ path, tourId, userId }) => {
-  if (path) return path;
-  if (userId) return `private_tour_photos/${tourId}/${userId}`;
-  return `group_tour_photos/${tourId}`;
-};
-
-const loadTourPhotos = async (
-  tourId,
-  {
-    userId,
-    path,
-    storageInstance = storage,
-    storageRefFn = storageRef,
-    listAllFn = listAll,
-    getDownloadURLFn = getDownloadURL
-  } = {}
-) => {
-  try {
-    const resolvedPath = buildPhotoPath({ path, tourId, userId });
-    const tourPhotosRef = storageRefFn(storageInstance, resolvedPath);
-    const result = await listAllFn(tourPhotosRef);
-
-    const photoPromises = result.items.map(async (itemRef) => {
-      const url = await getDownloadURLFn(itemRef);
-      return {
-        id: itemRef.name,
-        url,
-        name: itemRef.name
-      };
-    });
-
-    return Promise.all(photoPromises);
-  } catch (error) {
-    console.error('Error loading photos:', error);
+const createBlob = async (uri, fetchFn = fetch) => {
+  if (!uri) {
+    const error = new Error('No file URI provided');
+    error.code = 'invalid-params';
     throw error;
   }
+
+  const response = await fetchFn(uri);
+  const blob = await response.blob();
+  return blob;
 };
 
-const uploadImage = async (
+const uploadPhoto = async (
+  uri,
+  tourId,
+  userId,
+  caption = '',
   {
-    imageUri,
-    userId,
-    tourId,
-    path,
-    onProgress,
     storageInstance = storage,
+    realtimeDbInstance = realtimeDb,
     storageRefFn = storageRef,
-    uploadBytesResumableFn = uploadBytesResumable,
+    uploadBytesFn = uploadBytes,
     getDownloadURLFn = getDownloadURL,
+    dbRefFn = (db, path) => db.ref(path),
+    pushFn = (ref) => ref.push(),
+    setFn = (ref, data) => ref.set(data),
+    serverTimestampFn = () => firebase.database.ServerValue.TIMESTAMP,
     fetchFn = fetch,
-    maxFileSizeBytes = MAX_FILE_SIZE_BYTES
-  }
+    logFn = console.error,
+  } = {}
 ) => {
-  if (!imageUri || !userId || !tourId) {
-    const missingError = new Error('Missing upload information');
-    missingError.code = 'invalid-params';
-    throw missingError;
+  if (!uri || !tourId || !userId) {
+    const error = new Error('Missing upload parameters');
+    error.code = 'invalid-params';
+    throw error;
   }
+
+  const filename = `${Date.now()}_${userId}.jpg`;
+  const filePath = `tours/${tourId}/${filename}`;
+  const fileRef = storageRefFn(storageInstance, filePath);
+
+  const blob = await createBlob(uri, fetchFn);
 
   try {
-    const response = await fetchFn(imageUri);
-    const blob = await response.blob();
+    await uploadBytesFn(fileRef, blob);
+    const downloadURL = await getDownloadURLFn(fileRef);
 
-    if (blob.size > maxFileSizeBytes) {
-      const sizeError = new Error('File size exceeds limit');
-      sizeError.code = 'file-too-large';
-      throw sizeError;
-    }
-
-    const fileName = `photo_${Date.now()}_${userId}.jpg`;
-    const basePath = buildPhotoPath({ path, tourId, userId });
-    const filePath = `${basePath}/${fileName}`;
-    const fileRef = storageRefFn(storageInstance, filePath);
-
-    const uploadTask = uploadBytesResumableFn(fileRef, blob);
-
-    const uploadResult = await new Promise((resolve, reject) => {
-      uploadTask.on(
-        'state_changed',
-        (snapshot) => {
-          if (onProgress && snapshot.totalBytes > 0) {
-            const progress = snapshot.bytesTransferred / snapshot.totalBytes;
-            onProgress(progress);
-          }
-        },
-        (error) => {
-          const mappedCode = mapStorageErrorCode(error);
-          const wrappedError = new Error(error?.message || 'Upload failed');
-          wrappedError.code = mappedCode;
-          reject(wrappedError);
-        },
-        async () => {
-          try {
-            const downloadURL = await getDownloadURLFn(uploadTask.snapshot.ref);
-            resolve({ downloadURL, fileName });
-          } catch (err) {
-            reject(err);
-          }
-        }
-      );
+    const photosRef = dbRefFn(realtimeDbInstance, `photos/${tourId}`);
+    const newPhotoRef = pushFn(photosRef);
+    await setFn(newPhotoRef, {
+      url: downloadURL,
+      userId,
+      caption: caption || '',
+      timestamp: serverTimestampFn(),
     });
 
     return {
-      id: uploadResult.fileName,
-      url: uploadResult.downloadURL,
-      name: uploadResult.fileName
+      id: newPhotoRef.key,
+      url: downloadURL,
+      userId,
+      caption: caption || '',
     };
   } catch (error) {
-    const mappedCode = mapStorageErrorCode(error);
-    const wrappedError = new Error(error?.message || 'Upload failed');
-    wrappedError.code = mappedCode;
-    throw wrappedError;
+    logFn('Photo upload failed', { message: error?.message, code: error?.code });
+    throw error;
+  } finally {
+    if (blob && typeof blob.close === 'function') {
+      blob.close();
+    }
   }
 };
 
+const subscribeToTourPhotos = (
+  tourId,
+  callback,
+  {
+    realtimeDbInstance = realtimeDb,
+    dbRefFn = (db, path) => db.ref(path),
+    onValueFn = (ref, handler) => ref.on('value', handler),
+    offFn = (ref, handler) => {
+      if (ref && typeof ref.off === 'function') {
+        ref.off('value', handler);
+      }
+    },
+  } = {}
+) => {
+  if (!tourId || typeof callback !== 'function' || !realtimeDbInstance) {
+    return () => {};
+  }
+
+  const photosRef = dbRefFn(realtimeDbInstance, `photos/${tourId}`);
+  const handleSnapshot = (snapshot) => {
+    const data = snapshot.val() || {};
+    const photos = Object.entries(data).map(([key, value]) => ({
+      id: key,
+      ...value,
+    }));
+
+    photos.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    callback(photos);
+  };
+
+  onValueFn(photosRef, handleSnapshot);
+
+  return () => offFn(photosRef, handleSnapshot);
+};
+
 module.exports = {
-  loadTourPhotos,
-  uploadImage,
-  MAX_FILE_SIZE_BYTES
+  uploadPhoto,
+  subscribeToTourPhotos,
+  createBlob,
 };

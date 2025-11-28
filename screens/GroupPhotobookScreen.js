@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { uploadImage, loadTourPhotos } from '../services/photoService';
+import { uploadPhoto, subscribeToTourPhotos } from '../services/photoService';
 
 const windowWidth = Dimensions.get('window').width;
 const windowHeight = Dimensions.get('window').height;
@@ -40,28 +40,29 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
   const [loadingPhotos, setLoadingPhotos] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const fetchTourPhotos = useCallback(async () => {
-    try {
-      setLoadingPhotos(true);
-      const tourPhotos = await loadTourPhotos(tourId);
-      setPhotos(tourPhotos);
-    } catch (error) {
-      console.error('Error loading photos:', error);
-      Alert.alert('Could not load photos', 'Please check your connection and try again.');
-    } finally {
-      setLoadingPhotos(false);
-    }
-  }, [tourId]);
-
   useEffect(() => {
-    if (tourId) {
-      fetchTourPhotos();
+    if (!tourId) {
+      setPhotos([]);
+      setLoadingPhotos(false);
+      return undefined;
     }
-  }, [tourId, fetchTourPhotos]);
+
+    setLoadingPhotos(true);
+    const unsubscribe = subscribeToTourPhotos(tourId, (photoList) => {
+      setPhotos(photoList);
+      setLoadingPhotos(false);
+      setRefreshing(false);
+    });
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [tourId]);
 
   const requestPermissions = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -77,7 +78,7 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId }) {
     if (!hasPermission) return;
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: [ImagePicker.MediaType.IMAGE],
       allowsEditing: true,
       aspect: [4, 3],
       quality: 0.8,
@@ -105,19 +106,12 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId }) {
 
   const handleUpload = async (imageUri) => {
     setUploading(true);
-    setUploadProgress(0);
 
     try {
-      const newPhoto = await uploadImage({
-        imageUri,
-        userId,
-        tourId,
-        onProgress: (progressFraction) => setUploadProgress(Math.round(progressFraction * 100)),
-      });
-
-      setPhotos((prevPhotos) => [...prevPhotos, newPhoto]);
+      await uploadPhoto(imageUri, tourId, userId);
       Alert.alert('Success', 'Your photo has been uploaded!');
     } catch (error) {
+      console.error('Group photobook upload failed', error);
       const message = getUploadErrorMessage(error);
       Alert.alert('Upload Failed', message);
     } finally {
@@ -137,9 +131,8 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId }) {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await fetchTourPhotos();
-    setRefreshing(false);
-  }, [fetchTourPhotos]);
+    setTimeout(() => setRefreshing(false), 600);
+  }, []);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -159,10 +152,8 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId }) {
 
       {uploading && (
         <View style={styles.progressContainer}>
-          <View style={styles.progressBarBackground}>
-            <View style={[styles.progressBarFill, { width: `${uploadProgress}%` }]} />
-          </View>
-          <Text style={styles.progressText}>{uploadProgress}%</Text>
+          <ActivityIndicator size="small" color={COLORS.primaryBlue} />
+          <Text style={styles.progressText}>Uploading...</Text>
         </View>
       )}
 
@@ -362,18 +353,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-  },
-  progressBarBackground: {
-    flex: 1,
-    height: 10,
-    backgroundColor: '#DCE7F3',
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: COLORS.successGreen,
-    borderRadius: 8,
   },
   progressText: {
     width: 50,

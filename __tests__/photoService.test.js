@@ -1,105 +1,111 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { loadTourPhotos, uploadImage } = require('../services/photoService');
+const { uploadPhoto, subscribeToTourPhotos } = require('../services/photoService');
 
-test('loadTourPhotos transforms storage items into photo objects', async () => {
-  const mockStorage = {};
-  const mockStorageRefFn = (_storage, path) => ({ fullPath: path });
-  const mockListAllFn = async () => ({
-    items: [
-      { name: 'photo1.jpg' },
-      { name: 'photo2.jpg' }
-    ]
-  });
-  const mockGetDownloadURLFn = async (itemRef) => `https://example.com/${itemRef.name}`;
+const mockDbRef = (_db, path) => ({ path });
 
-  const photos = await loadTourPhotos('tour-123', {
-    storageInstance: mockStorage,
-    storageRefFn: mockStorageRefFn,
-    listAllFn: mockListAllFn,
-    getDownloadURLFn: mockGetDownloadURLFn
-  });
-
-  assert.equal(photos.length, 2);
-  assert.deepEqual(photos[0], {
-    id: 'photo1.jpg',
-    url: 'https://example.com/photo1.jpg',
-    name: 'photo1.jpg'
-  });
-  assert.deepEqual(photos[1], {
-    id: 'photo2.jpg',
-    url: 'https://example.com/photo2.jpg',
-    name: 'photo2.jpg'
-  });
+const mockSnapshot = (data) => ({
+  val: () => data,
 });
 
-test('loadTourPhotos handles empty lists gracefully', async () => {
-  const photos = await loadTourPhotos('tour-123', {
-    storageInstance: {},
-    storageRefFn: (_storage, path) => ({ fullPath: path }),
-    listAllFn: async () => ({ items: [] }),
-    getDownloadURLFn: async () => null
-  });
-
-  assert.deepEqual(photos, []);
-});
-
-test('loadTourPhotos uses private path when userId is provided', async () => {
-  let usedPath;
-  const mockStorageRefFn = (_storage, path) => {
-    usedPath = path;
-    return { fullPath: path };
-  };
-
-  await loadTourPhotos('tour-private', {
-    userId: 'user-1',
-    storageInstance: {},
-    storageRefFn: mockStorageRefFn,
-    listAllFn: async () => ({ items: [] }),
-    getDownloadURLFn: async () => null
-  });
-
-  assert.equal(usedPath, 'private_tour_photos/tour-private/user-1');
-});
-
-test('uploadImage builds a private file path when userId is provided', async () => {
+test('uploadPhoto uploads the blob, stores metadata, and returns the new entry', async () => {
   const originalNow = Date.now;
   Date.now = () => 1700000000000;
 
-  let usedPath;
-  const mockStorageRefFn = (_storage, path) => {
-    usedPath = path;
-    return { fullPath: path };
+  const mockBlob = { closed: false, close() { this.closed = true; } };
+  const fetchCalls = [];
+  const mockFetch = async (uri) => {
+    fetchCalls.push(uri);
+    return { blob: async () => mockBlob };
   };
 
-  const mockUploadBytesResumableFn = (fileRef, blob) => ({
-    snapshot: { ref: fileRef },
-    on: (_event, progressCallback, _errorCallback, successCallback) => {
-      progressCallback({ bytesTransferred: blob.size, totalBytes: blob.size });
-      successCallback();
+  let uploadTarget;
+  const mockStorageRef = (_storage, path) => ({ path });
+  const mockUploadBytes = async (ref, blob) => { uploadTarget = { ref, blob }; };
+  const mockGetDownloadURL = async (ref) => `https://example.com/${ref.path}`;
+
+  let setPayload;
+  const mockPush = () => ({ key: 'abc123' });
+  const mockSet = async (_ref, payload) => { setPayload = payload; };
+  const mockServerTimestamp = () => 1234567890;
+
+  const result = await uploadPhoto(
+    'file://photo.jpg',
+    'tour-77',
+    'user-9',
+    'Lovely day!',
+    {
+      storageInstance: {},
+      realtimeDbInstance: {},
+      storageRefFn: mockStorageRef,
+      uploadBytesFn: mockUploadBytes,
+      getDownloadURLFn: mockGetDownloadURL,
+      dbRefFn: mockDbRef,
+      pushFn: mockPush,
+      setFn: mockSet,
+      serverTimestampFn: mockServerTimestamp,
+      fetchFn: mockFetch,
     }
-  });
+  );
 
-  const result = await uploadImage({
-    imageUri: 'file://photo.jpg',
-    userId: 'user-9',
-    tourId: 'tour-77',
-    fetchFn: async () => ({ blob: async () => ({ size: 1024 }) }),
-    storageInstance: {},
-    storageRefFn: mockStorageRefFn,
-    uploadBytesResumableFn: mockUploadBytesResumableFn,
-    getDownloadURLFn: async (ref) => `https://example.com/${ref.fullPath}`
-  });
+  const expectedPath = 'tours/tour-77/1700000000000_user-9.jpg';
+  assert.strictEqual(uploadTarget.ref.path, expectedPath);
+  assert.strictEqual(uploadTarget.blob, mockBlob);
+  assert.deepEqual(fetchCalls, ['file://photo.jpg']);
 
-  const expectedFileName = 'photo_1700000000000_user-9.jpg';
-  const expectedPath = `private_tour_photos/tour-77/user-9/${expectedFileName}`;
-
-  assert.equal(usedPath, expectedPath);
-  assert.deepEqual(result, {
-    id: expectedFileName,
+  assert.deepEqual(setPayload, {
     url: `https://example.com/${expectedPath}`,
-    name: expectedFileName
+    userId: 'user-9',
+    caption: 'Lovely day!',
+    timestamp: 1234567890,
   });
+
+  assert.deepEqual(result, {
+    id: 'abc123',
+    url: `https://example.com/${expectedPath}`,
+    userId: 'user-9',
+    caption: 'Lovely day!',
+  });
+  assert.strictEqual(mockBlob.closed, true);
 
   Date.now = originalNow;
+});
+
+test('subscribeToTourPhotos sorts photos in descending timestamp order', async () => {
+  let receivedPhotos;
+  let unsubscribeCalled = false;
+
+  const mockOnValue = (_ref, callback) => {
+    callback(
+      mockSnapshot({
+        first: { url: 'https://example.com/1', timestamp: 10, userId: 'u1' },
+        second: { url: 'https://example.com/2', timestamp: 20, userId: 'u2' },
+      })
+    );
+  };
+
+  const mockOff = () => {
+    unsubscribeCalled = true;
+  };
+
+  const unsubscribe = subscribeToTourPhotos(
+    'tour-1',
+    (photos) => {
+      receivedPhotos = photos;
+    },
+    {
+      realtimeDbInstance: {},
+      dbRefFn: mockDbRef,
+      onValueFn: mockOnValue,
+      offFn: mockOff,
+    }
+  );
+
+  assert.deepEqual(
+    receivedPhotos.map((photo) => photo.id),
+    ['second', 'first']
+  );
+
+  unsubscribe();
+  assert.strictEqual(unsubscribeCalled, true);
 });
