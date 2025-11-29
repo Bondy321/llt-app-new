@@ -44,7 +44,7 @@ const uploadPhoto = async (
   const filename = `${Date.now()}_${userId}.jpg`;
   const filePath = isPrivate
     ? `privatePhotos/${tourId}/${userId}/${filename}`
-    : `tours/${tourId}/${filename}`;
+    : `photos/${tourId}/${filename}`;
   const fileRef = storageRefFn(storageInstance, filePath);
 
   const blob = await createBlob(uri, fetchFn);

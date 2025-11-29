@@ -52,7 +52,7 @@ test('uploadPhoto uploads the blob, stores metadata, and returns the new entry',
     }
   );
 
-  const expectedPath = 'tours/tour-77/1700000000000_user-9.jpg';
+  const expectedPath = 'photos/tour-77/1700000000000_user-9.jpg';
   assert.strictEqual(uploadTarget.ref.path, expectedPath);
   assert.strictEqual(uploadTarget.blob, mockBlob);
   assert.deepEqual(fetchCalls, ['file://photo.jpg']);
