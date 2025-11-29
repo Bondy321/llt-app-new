@@ -23,6 +23,7 @@ const uploadPhoto = async (
   userId,
   caption = '',
   {
+    visibility = 'group',
     storageInstance = storage,
     realtimeDbInstance = realtimeDbModular,
     storageRefFn = storageRef,
@@ -39,8 +40,11 @@ const uploadPhoto = async (
     throw new Error('Missing upload parameters');
   }
 
+  const isPrivate = visibility === 'private';
   const filename = `${Date.now()}_${userId}.jpg`;
-  const filePath = `tours/${tourId}/${filename}`;
+  const filePath = isPrivate
+    ? `privatePhotos/${tourId}/${userId}/${filename}`
+    : `tours/${tourId}/${filename}`;
   const fileRef = storageRefFn(storageInstance, filePath);
 
   const blob = await createBlob(uri, fetchFn);
@@ -49,7 +53,10 @@ const uploadPhoto = async (
     await uploadBytesFn(fileRef, blob);
     const downloadURL = await getDownloadURLFn(fileRef);
 
-    const photosRef = dbRefFn(realtimeDbInstance, `photos/${tourId}`);
+    const databasePath = isPrivate
+      ? `privatePhotos/${tourId}/${userId}`
+      : `photos/${tourId}`;
+    const photosRef = dbRefFn(realtimeDbInstance, databasePath);
     const newPhotoRef = pushFn(photosRef);
     await setFn(newPhotoRef, {
       url: downloadURL,
@@ -100,8 +107,39 @@ const subscribeToTourPhotos = (
   return () => unsubscribe();
 };
 
+const subscribeToPrivatePhotos = (
+  tourId,
+  userId,
+  callback,
+  {
+    realtimeDbInstance = realtimeDbModular,
+    dbRefFn = databaseRef,
+    onValueFn = onValue,
+  } = {},
+) => {
+  if (!tourId || !userId || typeof callback !== 'function') {
+    return () => {};
+  }
+
+  const photosRef = dbRefFn(realtimeDbInstance, `privatePhotos/${tourId}/${userId}`);
+
+  const unsubscribe = onValueFn(photosRef, (snapshot) => {
+    const data = snapshot.val() || {};
+    const photos = Object.entries(data).map(([key, value]) => ({
+      id: key,
+      ...value,
+    }));
+
+    photos.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    callback(photos);
+  });
+
+  return () => unsubscribe();
+};
+
 module.exports = {
   uploadPhoto,
   subscribeToTourPhotos,
+  subscribeToPrivatePhotos,
   createBlob,
 };
