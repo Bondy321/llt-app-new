@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { uploadPhoto, subscribeToTourPhotos } from '../services/photoService';
+import { uploadPhoto, subscribeToPrivatePhotos } from '../services/photoService';
 
 const windowWidth = Dimensions.get('window').width;
 const windowHeight = Dimensions.get('window').height;
@@ -45,9 +45,8 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     if (!tourId || !userId) return undefined;
 
     setLoadingPhotos(true);
-    const unsubscribe = subscribeToTourPhotos(tourId, (photoList) => {
-      const userOnlyPhotos = photoList.filter((photo) => photo.userId === userId);
-      setPhotos(userOnlyPhotos);
+    const unsubscribe = subscribeToPrivatePhotos(tourId, userId, (photoList) => {
+      setPhotos(photoList);
       setLoadingPhotos(false);
       setRefreshing(false);
     });
@@ -73,7 +72,7 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     if (!hasPermission) return;
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaType.Images,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [4, 3],
       quality: 0.8,
@@ -103,7 +102,7 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     setUploading(true);
 
     try {
-      await uploadPhoto(imageUri, tourId, userId);
+      await uploadPhoto(imageUri, tourId, userId, '', { visibility: 'private' });
       Alert.alert('Success', 'Your photo has been uploaded!');
     } catch (error) {
       const message = getUploadErrorMessage(error);
@@ -166,7 +165,7 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
           {photos.length === 0 ? (
             <View style={styles.emptyContainer}>
               <View style={styles.emptyIconWrapper}>
-                <MaterialCommunityIcons name="lock-image" size={66} color={COLORS.primaryBlue} />
+                <MaterialCommunityIcons name="lock-outline" size={66} color={COLORS.primaryBlue} />
               </View>
               <Text style={styles.emptyText}>Your private album is empty</Text>
               <Text style={styles.emptySubtext}>

@@ -1,6 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { uploadPhoto, subscribeToTourPhotos } = require('../services/photoService');
+const {
+  uploadPhoto,
+  subscribeToTourPhotos,
+  subscribeToPrivatePhotos,
+} = require('../services/photoService');
 
 const mockDbRef = (_db, path) => ({ path });
 
@@ -71,6 +75,60 @@ test('uploadPhoto uploads the blob, stores metadata, and returns the new entry',
   Date.now = originalNow;
 });
 
+test('uploadPhoto stores private uploads in a user-specific path', async () => {
+  const originalNow = Date.now;
+  Date.now = () => 1700000000000;
+
+  const mockBlob = { closed: false, close() { this.closed = true; } };
+  const mockFetch = async () => ({ blob: async () => mockBlob });
+
+  let storagePath;
+  const mockStorageRef = (_storage, path) => {
+    storagePath = path;
+    return { path };
+  };
+  const mockUploadBytes = async () => {};
+  const mockGetDownloadURL = async (ref) => `https://example.com/${ref.path}`;
+
+  let databasePath;
+  const privateDbRef = (_db, path) => {
+    databasePath = path;
+    return { path };
+  };
+  const mockPush = () => ({ key: 'private123' });
+  const mockSet = async () => {};
+  const mockServerTimestamp = () => 987654321;
+
+  await uploadPhoto(
+    'file://secret.jpg',
+    'tour-55',
+    'user-private',
+    'Hidden gem',
+    {
+      visibility: 'private',
+      storageInstance: {},
+      realtimeDbInstance: {},
+      storageRefFn: mockStorageRef,
+      uploadBytesFn: mockUploadBytes,
+      getDownloadURLFn: mockGetDownloadURL,
+      dbRefFn: privateDbRef,
+      pushFn: mockPush,
+      setFn: mockSet,
+      serverTimestampFn: mockServerTimestamp,
+      fetchFn: mockFetch,
+    }
+  );
+
+  const expectedFilePath = 'privatePhotos/tour-55/user-private/1700000000000_user-private.jpg';
+  const expectedDbPath = 'privatePhotos/tour-55/user-private';
+
+  assert.strictEqual(storagePath, expectedFilePath);
+  assert.strictEqual(databasePath, expectedDbPath);
+  assert.strictEqual(mockBlob.closed, true);
+
+  Date.now = originalNow;
+});
+
 test('subscribeToTourPhotos sorts photos in descending timestamp order', async () => {
   let receivedPhotos;
   let unsubscribeCalled = false;
@@ -103,6 +161,45 @@ test('subscribeToTourPhotos sorts photos in descending timestamp order', async (
   assert.deepEqual(
     receivedPhotos.map((photo) => photo.id),
     ['second', 'first']
+  );
+
+  unsubscribe();
+  assert.strictEqual(unsubscribeCalled, true);
+});
+
+test('subscribeToPrivatePhotos scopes photos to the user and sorts them', async () => {
+  let receivedPhotos;
+  let unsubscribeCalled = false;
+
+  const mockOnValue = (_ref, callback) => {
+    callback(
+      mockSnapshot({
+        alpha: { url: 'https://example.com/1', timestamp: 100, userId: 'u1' },
+        beta: { url: 'https://example.com/2', timestamp: 200, userId: 'u1' },
+      })
+    );
+
+    return () => {
+      unsubscribeCalled = true;
+    };
+  };
+
+  const unsubscribe = subscribeToPrivatePhotos(
+    'tour-1',
+    'u1',
+    (photos) => {
+      receivedPhotos = photos;
+    },
+    {
+      realtimeDbInstance: {},
+      dbRefFn: mockDbRef,
+      onValueFn: mockOnValue,
+    }
+  );
+
+  assert.deepEqual(
+    receivedPhotos.map((photo) => photo.id),
+    ['beta', 'alpha']
   );
 
   unsubscribe();
