@@ -42,10 +42,10 @@ const uploadPhoto = async (
 
   const isPrivate = visibility === 'private';
   const filename = `${Date.now()}_${userId}.jpg`;
-  const filePath = isPrivate
-    ? `privatePhotos/${tourId}/${userId}/${filename}`
-    : `photos/${tourId}/${filename}`;
-  const fileRef = storageRefFn(storageInstance, filePath);
+  const storagePath = isPrivate
+    ? `private_tour_photos/${tourId}/${userId}/${filename}`
+    : `group_tour_photos/${tourId}/${filename}`;
+  const fileRef = storageRefFn(storageInstance, storagePath);
 
   const blob = await createBlob(uri, fetchFn);
 
@@ -54,8 +54,8 @@ const uploadPhoto = async (
     const downloadURL = await getDownloadURLFn(fileRef);
 
     const databasePath = isPrivate
-      ? `privatePhotos/${tourId}/${userId}`
-      : `photos/${tourId}`;
+      ? `private_tour_photos/${tourId}/${userId}`
+      : `group_tour_photos/${tourId}`;
     const photosRef = dbRefFn(realtimeDbInstance, databasePath);
     const newPhotoRef = pushFn(photosRef);
     await setFn(newPhotoRef, {
@@ -91,7 +91,7 @@ const subscribeToTourPhotos = (
     return () => {};
   }
 
-  const photosRef = dbRefFn(realtimeDbInstance, `photos/${tourId}`);
+  const photosRef = dbRefFn(realtimeDbInstance, `group_tour_photos/${tourId}`);
 
   const unsubscribe = onValueFn(photosRef, (snapshot) => {
     const data = snapshot.val() || {};
@@ -121,7 +121,7 @@ const subscribeToPrivatePhotos = (
     return () => {};
   }
 
-  const photosRef = dbRefFn(realtimeDbInstance, `privatePhotos/${tourId}/${userId}`);
+  const photosRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${userId}`);
 
   const unsubscribe = onValueFn(photosRef, (snapshot) => {
     const data = snapshot.val() || {};
