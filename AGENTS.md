@@ -1,149 +1,99 @@
-Loch Lomond Travel (LLT) App - Agent Onboarding & System Status
+# Loch Lomond Travel (LLT) App - Agent Onboarding & System Status
 
-Last Updated: 28th November 2025
+**Last Updated:** 30th November 2025
 
 Welcome, Agent. This document provides a comprehensive overview of the current state of the LLT App ecosystem. It details the architecture, recent critical updates, known issues, and the roadmap for upcoming features.
 
-1. System Architecture Overview
+## 1. System Architecture Overview
 
 The LLT App is a companion application for tour passengers, built with React Native (Expo) and backed by Firebase (Realtime Database & Authentication) and Google Sheets (as the CMS).
 
-Core Data Flow
-
-Google Sheets (The CMS):
-
-Master Sheet: Tour Master contains all tour definitions (codes, names, dates, durations).
-
-Itinerary Sheet: Itineraries contains raw text itineraries.
-
-Passenger Sheet: Pax contains passenger lists, pickup points, and booking references.
-
-Sync Engine: A Google Apps Script (syncToFirebase) parses this data and pushes it to Firebase.
-
-Firebase Realtime Database:
-
-Acts as the middleware between the Sheet and the App.
-
-Structure:
-
-/tours/{tourId}: Contains tour details, driver info, and the new structured itinerary object.
-
-/bookings/{bookingRef}: Links users to tours via their booking reference.
-
-/chats/{tourId}: Stores group chat messages.
-
-/photos/{tourId}: Stores metadata for the shared photo album.
-
-React Native App:
-
-Login: Users log in with a Booking Reference (e.g., T12345).
-
-Home: Displays a digital boarding pass, tour details, and the new "Today's Agenda" widget.
-
-Features: Itinerary view, Group Chat, Photo Sharing, and Driver Location (placeholder).
-
-2. Recent Critical Updates (The "Itinerary 2.0" Overhaul)
-
-We have just completed a major refactor of how itineraries are handled to move away from unstructured text blocks to a smart, JSON-based system.
-
-A. Backend (Google Apps Script)
-
-Old Behavior: Sent raw text strings to Firebase.
-
-New Behavior: The script now includes a parseRawItinerary function.
-
-It regex-matches "Day 1", "Day 2" etc.
-
-It extracts specific times (e.g., "09:00", "1430hrs") from text lines.
-
-It pushes a JSON object: { days: [{ day: 1, title: "...", activities: [...] }] }.
-
-Date Fix: We fixed a timezone bug where tour end dates were calculating incorrectly due to BST/GMT midnight offsets. It now forces UTC noon calculation.
-
-B. Frontend (React Native)
-
-screens/ItineraryScreen.js:
-
-Now expects a JSON object, not a string.
-
-Smart Rendering: Displays time in a dedicated column if available; collapses the column if no time is specified.
-
-Major Events: Automatically highlights key events (Ferries, Flights, Museums) with a distinct visual style.
-
-Date Awareness: Uses tourData.startDate to convert "Day 1" into "Day 1 - Mon 12th July".
-
-Hook Safety: Fixed a "Rendered more hooks" crash by ensuring useMemo is called unconditionally at the top level.
-
-services/bookingServiceRealtime.js:
-
-Hybrid Support: The getTourItinerary function now checks if the data is an Object (new format) or a String (old format).
-
-If Object: Returns it directly.
-
-If String: Falls back to the old regex parser (legacy support).
-
-screens/TourHomeScreen.js:
-
-New Widget: Added TodaysAgendaCard.
-
-Functionality: Calculates the current day of the tour based on startDate vs new Date().
-
-States:
-
-Future: Shows a countdown ("5 days to go!").
-
-Active: Shows specific agenda for "Today".
-
-Completed: Hides the widget.
-
-3. Current Codebase Status
-
-Tech Stack: React Native (Expo SDK 52), Firebase JS SDK (Modular), Google Apps Script.
-
-Auth: Anonymous Auth + Custom Claims (via Edge Function concepts, currently simulated or direct).
-
-Styling: Custom StyleSheet objects using a consistent COLORS palette.
-
-Navigation: React Navigation (Stack).
-
-Key Files
-
-App.js: Main entry, auth loading, navigation routing.
-
-screens/ItineraryScreen.js: The new smart itinerary viewer.
-
-screens/TourHomeScreen.js: The dashboard with the new Agenda Widget.
-
-components/TodaysAgendaCard.js: [NEW] The logic for the home screen widget.
-
-services/bookingServiceRealtime.js: The data layer for fetching/parsing tour data.
-
-4. Known Issues & "Watch List"
-
-Date Parsing (UK vs US):
-
-We use UK dates (dd/MM/yyyy) in the backend.
-
-JS Date() often defaults to US format (MM/dd/yyyy).
-
-Status: We have implemented manual parsing logic (split('/').map(Number)) in ItineraryScreen and TodaysAgendaCard to prevent Invalid Date crashes on Android/iOS. Always ensure any new date logic uses this manual parsing.
-
-Driver Map:
-
-The MapScreen.js is currently a placeholder.
-
-Constraint: This feature is "No Go" for now until the app is production-ready. Do not attempt to implement live tracking yet.
-
-Legacy Itineraries:
-
-Tours synced before the App Script update still have string-based itineraries. The app supports them via fallback logic, but they won't look as good as the new ones.
-
-5. Upcoming Roadmap
-
-Production Polish: Continue refining UI/UX.
-
-Driver App/Tracking: Once the Passenger App is stable, we will build the Driver side to feed coordinates to MapScreen.
-
-Photo Uploads: Ensure the PhotoService is robust (currently using base64/storage mock concepts; needs firming up for production Firebase Storage).
-
-Agent Directive: When working on this repo, always assume the itinerary data structure is the new JSON format, but respect the legacy fallback in the service layer. Prioritize "UK Date" compatibility in all new date-related features.
+### Core Data Flow
+
+**Google Sheets (The CMS):**
+* **Master Sheet:** `Tour Master` contains all tour definitions (codes, names, dates, durations).
+* **Itinerary Sheet:** `Itineraries` contains raw text itineraries.
+* **Passenger Sheet:** `Pax` contains passenger lists, pickup points, and booking references.
+* **Sync Engine:** A Google Apps Script (`syncToFirebase`) parses this data and pushes it to Firebase.
+
+**Firebase Realtime Database:**
+* Acts as the middleware between the Sheet and the App.
+* **Structure:**
+    * `/tours/{tourId}`: Tour details, driver info, and itinerary.
+    * `/bookings/{bookingRef}`: Links users to tours.
+    * `/chats/{tourId}`: Group chat messages.
+    * `/logs/{userId}`: User-specific app logs.
+    * `/group_tour_photos/{tourId}`: Metadata for shared group photos.
+    * `/private_tour_photos/{tourId}/{userId}`: Metadata for private user photos.
+
+**Firebase Storage:**
+* Stores the actual image files for the photobook features, mirroring the database structure.
+
+**React Native App:**
+* **Login:** Booking Reference (e.g., T12345).
+* **Home:** Digital boarding pass, tour details, "Today's Agenda" widget.
+* **Features:** Itinerary view, Group Chat, Photo Sharing (Public/Private), Driver Location.
+
+---
+
+## 2. Recent Critical Updates
+
+### A. The "Itinerary 2.0" Overhaul
+We transitioned from unstructured text itineraries to a smart, JSON-based system.
+* **Backend:** App Script now regex-matches days and extracts specific times, pushing a JSON object.
+* **Frontend:** `ItineraryScreen.js` parses this JSON to display structured timelines, distinct visual styles for major events, and collapsed/expanded views.
+
+### B. Photo System Stabilization (Nov 2025)
+We have fully stabilized the Photo Upload feature.
+* **Path Alignment:** Fixed a critical mismatch between code and security rules.
+    * **Group Photos:** Now stored in `group_tour_photos/{tourId}` (Storage & DB).
+    * **Private Photos:** Now stored in `private_tour_photos/{tourId}/{userId}` (Storage & DB).
+* **Security Rules:** Implemented strict Realtime Database rules to prevent "Permission Denied" errors while ensuring data isolation.
+* **Deprecation Fixes:** Updated `Expo ImagePicker` to use the modern `mediaTypes: ['images']` syntax, resolving build warnings.
+
+---
+
+## 3. Current Codebase Status
+
+* **Tech Stack:** React Native (Expo SDK 52), Firebase JS SDK (Modular), Google Apps Script.
+* **Auth:** Anonymous Auth + Custom Claims logic.
+* **Navigation:** React Navigation (Stack).
+
+### Key Files
+* `App.js`: Entry point, auth loading, navigation routing.
+* `services/photoService.js`: **[CRITICAL]** Handles upload logic and path generation. Do not modify paths without updating Firebase Rules.
+* `services/bookingServiceRealtime.js`: Data layer for fetching/parsing tour data.
+* `screens/ItineraryScreen.js`: The smart itinerary viewer.
+* `screens/TourHomeScreen.js`: Dashboard with the Agenda Widget.
+
+---
+
+## 4. Known Issues & "Watch List"
+
+### Date Parsing (UK vs US)
+* **Issue:** JS `Date()` defaults to US format (MM/dd/yyyy), but backend data is UK (dd/MM/yyyy).
+* **Status:** Manual parsing logic (`split('/').map(Number)`) is implemented in `ItineraryScreen` and `TodaysAgendaCard`.
+* **Directive:** Always ensure any new date logic uses manual parsing to prevent `Invalid Date` crashes on Android.
+
+### Driver Map
+* **Status:** `MapScreen.js` is currently a placeholder.
+* **Constraint:** Feature is "No Go" until the Driver App is built to feed live coordinates.
+
+### Legacy Itineraries
+* **Status:** Older tours still use string-based itineraries. The app includes fallback logic to render these as simple text blocks.
+
+---
+
+## 5. Upcoming Roadmap
+
+1.  **Production Polish:** Continue refining UI/UX and error boundaries.
+2.  **Driver App/Tracking:** Build the driver-side application to feed real-time coordinates to `MapScreen`.
+3.  **Push Notifications:** Implement logic to notify users of new chat messages or itinerary changes.
+
+---
+
+### Agent Directive
+When working on this repo:
+1.  **Respect the Paths:** The path names `group_tour_photos` and `private_tour_photos` are hardcoded in Security Rules. Changing them in code breaks uploads.
+2.  **UK Dates:** Always parse dates manually (`dd/MM/yyyy`).
+3.  **Itinerary Format:** Assume JSON format first, but maintain the legacy string fallback in `bookingServiceRealtime.js`.
