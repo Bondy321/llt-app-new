@@ -25,6 +25,7 @@ The LLT App is a companion application for tour passengers, built with React Nat
     * `/logs/{userId}`: User-specific app logs.
     * `/group_tour_photos/{tourId}`: Metadata for shared group photos.
     * `/private_tour_photos/{tourId}/{userId}`: Metadata for private user photos.
+    * `/users/{userId}`: **[NEW]** Stores Expo Push Tokens and user notification preferences.
 
 **Firebase Storage:**
 * Stores the actual image files for the photobook features, mirroring the database structure.
@@ -32,7 +33,7 @@ The LLT App is a companion application for tour passengers, built with React Nat
 **React Native App:**
 * **Login:** Booking Reference (e.g., T12345).
 * **Home:** Digital boarding pass, tour details, "Today's Agenda" widget.
-* **Features:** Itinerary view, Group Chat, Photo Sharing (Public/Private), Driver Location.
+* **Features:** Itinerary view, Group Chat, Photo Sharing (Public/Private), Driver Location, Notification Settings.
 
 ---
 
@@ -49,51 +50,133 @@ We have fully stabilized the Photo Upload feature.
     * **Group Photos:** Now stored in `group_tour_photos/{tourId}` (Storage & DB).
     * **Private Photos:** Now stored in `private_tour_photos/{tourId}/{userId}` (Storage & DB).
 * **Security Rules:** Implemented strict Realtime Database rules to prevent "Permission Denied" errors while ensuring data isolation.
-* **Deprecation Fixes:** Updated `Expo ImagePicker` to use the modern `mediaTypes: ['images']` syntax, resolving build warnings.
+
+### C. Push Notification Infrastructure (Nov 2025)
+We have implemented the foundation for Push Notifications using `expo-notifications`.
+* **Preferences:** Users can now toggle specific alert types (Driver Updates, Itinerary Changes, Marketing interests) in `NotificationPreferencesScreen`.
+* **Token Storage:** Upon saving preferences, the device's Expo Push Token is generated and stored in `/users/{userId}`.
+* **Testing:** A "Test Notification" button has been added to the preferences screen to verify device permissions and local alert display without a backend trigger.
 
 ---
 
-## 3. Current Codebase Status
+## 3. Firebase Security Rules (Reference)
 
-* **Tech Stack:** React Native (Expo SDK 52), Firebase JS SDK (Modular), Google Apps Script.
-* **Auth:** Anonymous Auth + Custom Claims logic.
-* **Navigation:** React Navigation (Stack).
+The Realtime Database rules are strictly configured to enforce data isolation and secure the new features. **Do not modify paths in the frontend code without ensuring they match these rules.**
 
-### Key Files
-* `App.js`: Entry point, auth loading, navigation routing.
-* `services/photoService.js`: **[CRITICAL]** Handles upload logic and path generation. Do not modify paths without updating Firebase Rules.
-* `services/bookingServiceRealtime.js`: Data layer for fetching/parsing tour data.
-* `screens/ItineraryScreen.js`: The smart itinerary viewer.
-* `screens/TourHomeScreen.js`: Dashboard with the Agenda Widget.
+{
+  "rules": {
+    // 1. BOOKINGS
+    // The app reads booking details to log you in.
+    "bookings": {
+      "$bookingId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
 
----
+    // 2. TOURS
+    // The app reads tour details and updates participant counts/lists when you join.
+    "tours": {
+      "$tourId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
 
-## 4. Known Issues & "Watch List"
+    // 3. CHAT
+    // Allows reading and posting messages to the tour chat.
+    "chats": {
+      "$tourId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
 
-### Date Parsing (UK vs US)
-* **Issue:** JS `Date()` defaults to US format (MM/dd/yyyy), but backend data is UK (dd/MM/yyyy).
-* **Status:** Manual parsing logic (`split('/').map(Number)`) is implemented in `ItineraryScreen` and `TodaysAgendaCard`.
-* **Directive:** Always ensure any new date logic uses manual parsing to prevent `Invalid Date` crashes on Android.
+    // 4. LOGS
+    // The app sends debug logs to /logs/{userId}/...
+    "logs": {
+      "$userId": {
+        ".read": false, 
+        ".write": "auth != null || $userId === 'anonymous'" 
+      }
+    },
 
-### Driver Map
-* **Status:** `MapScreen.js` is currently a placeholder.
-* **Constraint:** Feature is "No Go" until the Driver App is built to feed live coordinates.
+    // 5. PUBLIC/GROUP PHOTOS
+    // Matches the path used in your updated photoService.js
+    "group_tour_photos": {
+      "$tourId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
 
-### Legacy Itineraries
-* **Status:** Older tours still use string-based itineraries. The app includes fallback logic to render these as simple text blocks.
+    // 6. PRIVATE PHOTOS
+    // Matches the path used in your updated photoService.js
+    "private_tour_photos": {
+      "$tourId": {
+        "$userId": {
+          ".read": "auth != null && auth.uid === $userId",
+          ".write": "auth != null && auth.uid === $userId"
+        }
+      }
+    },
 
----
+    // 7. USERS (NEW - For Push Notifications)
+    // Allows users to save their push token and notification preferences.
+    "users": {
+      "$userId": {
+        // Only the user themselves can read/write their own data
+        ".read": "auth != null && auth.uid === $userId",
+        ".write": "auth != null && auth.uid === $userId"
+      }
+    }
+  }
+}
+4. Current Codebase Status
+Tech Stack: React Native (Expo SDK 52), Firebase JS SDK (Modular), Google Apps Script.
 
-## 5. Upcoming Roadmap
+Auth: Anonymous Auth + Custom Claims logic.
 
-1.  **Production Polish:** Continue refining UI/UX and error boundaries.
-2.  **Driver App/Tracking:** Build the driver-side application to feed real-time coordinates to `MapScreen`.
-3.  **Push Notifications:** Implement logic to notify users of new chat messages or itinerary changes.
+Navigation: React Navigation (Stack).
 
----
+Key Files
+App.js: Entry point, auth loading, navigation routing.
 
-### Agent Directive
+services/photoService.js: [CRITICAL] Handles upload logic and path generation. Matches Security Rules #5 & #6.
+
+services/notificationService.js: [NEW] Handles permission requests, token generation, and saving user preferences to /users.
+
+services/bookingServiceRealtime.js: Data layer for fetching/parsing tour data.
+
+screens/ItineraryScreen.js: The smart itinerary viewer.
+
+screens/NotificationPreferencesScreen.js: UI for managing alerts and testing push notifications.
+
+5. Known Issues & "Watch List"
+Date Parsing (UK vs US)
+Issue: JS Date() defaults to US format (MM/dd/yyyy), but backend data is UK (dd/MM/yyyy).
+
+Status: Manual parsing logic (split('/').map(Number)) is implemented in ItineraryScreen and TodaysAgendaCard.
+
+Directive: Always ensure any new date logic uses manual parsing to prevent Invalid Date crashes on Android.
+
+Driver Map
+Status: MapScreen.js is currently a placeholder.
+
+Constraint: Feature is "No Go" until the Driver App is built to feed live coordinates.
+
+6. Upcoming Roadmap
+Backend Notification Trigger: Create the backend logic (likely Cloud Functions) to listen for database changes (e.g., new chat messages) and send push notifications to the tokens stored in /users.
+
+Driver App/Tracking: Build the driver-side application to feed real-time coordinates to MapScreen.
+
+Production Polish: Final UI/UX refinements before store submission.
+
+Agent Directive
 When working on this repo:
-1.  **Respect the Paths:** The path names `group_tour_photos` and `private_tour_photos` are hardcoded in Security Rules. Changing them in code breaks uploads.
-2.  **UK Dates:** Always parse dates manually (`dd/MM/yyyy`).
-3.  **Itinerary Format:** Assume JSON format first, but maintain the legacy string fallback in `bookingServiceRealtime.js`.
+
+Respect the Paths: The path names group_tour_photos, private_tour_photos, and users are hardcoded in Security Rules. Changing them in code breaks the app.
+
+UK Dates: Always parse dates manually (dd/MM/yyyy).
+
+Itinerary Format: Assume JSON format first, but maintain the legacy string fallback in bookingServiceRealtime.js.

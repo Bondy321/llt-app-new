@@ -1,4 +1,3 @@
-// screens/NotificationPreferencesScreen.js
 import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
@@ -13,7 +12,10 @@ import {
   Platform
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { saveUserPreferences, getUserPreferences } from '../services/notificationService';
+// 1. Import Notifications from Expo
+import * as Notifications from 'expo-notifications';
+// 2. Import registerForPushNotificationsAsync to verify permissions/token generation
+import { saveUserPreferences, getUserPreferences, registerForPushNotificationsAsync } from '../services/notificationService';
 
 // Reusing your brand colors
 const COLORS = {
@@ -110,6 +112,43 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
       );
     } else {
       Alert.alert("Error", "Could not save settings. Please check your internet connection.");
+    }
+  };
+
+  // --- NEW TEST FUNCTION ---
+  const handleTestNotification = async () => {
+    try {
+      setSaving(true); // Reusing saving state to show activity indicator
+      
+      // 1. Verify we can get a token (checks permissions)
+      const token = await registerForPushNotificationsAsync();
+      
+      if (!token) {
+        Alert.alert(
+          "Permission Issue", 
+          "Could not verify notification permissions. Please check your device settings."
+        );
+        setSaving(false);
+        return;
+      }
+
+      // 2. Schedule a local notification immediately
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: "System Check Passed! ✅",
+          body: "Your device is correctly configured to receive Loch Lomond Travel updates.",
+          sound: true,
+        },
+        trigger: null, // null means trigger immediately
+      });
+
+      // Optional: Log the token to console if you need to copy it for backend testing later
+      console.log('Test Notification Triggered. Token:', token);
+      
+    } catch (error) {
+      Alert.alert("Test Failed", error.message);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -219,6 +258,16 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
           )}
         </TouchableOpacity>
         
+        {/* --- NEW DIAGNOSTICS BUTTON --- */}
+        <TouchableOpacity
+          style={styles.testButton}
+          onPress={handleTestNotification}
+          disabled={saving}
+        >
+          <MaterialCommunityIcons name="bell-check-outline" size={20} color={COLORS.secondaryText} />
+          <Text style={styles.testButtonText}>Test Notification System</Text>
+        </TouchableOpacity>
+
         <Text style={styles.privacyNote}>
           You can change these settings at any time.
         </Text>
@@ -333,6 +382,21 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontSize: 18,
     fontWeight: '700',
+  },
+  // New Styles for Test Button
+  testButton: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 20,
+    padding: 10,
+    gap: 8,
+  },
+  testButtonText: {
+    color: COLORS.secondaryText,
+    fontSize: 14,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
   },
   privacyNote: {
     textAlign: 'center',
