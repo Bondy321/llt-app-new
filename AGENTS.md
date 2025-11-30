@@ -6,7 +6,7 @@ Welcome, Agent. This document provides a comprehensive overview of the current s
 
 ## 1. System Architecture Overview
 
-The LLT App is a companion application for tour passengers, built with React Native (Expo) and backed by Firebase (Realtime Database & Authentication) and Google Sheets (as the CMS).
+The LLT ecosystem has expanded to include a mobile app for passengers/drivers, a web dashboard for operations, and a serverless backend for automation.
 
 ### Core Data Flow
 
@@ -17,56 +17,69 @@ The LLT App is a companion application for tour passengers, built with React Nat
 * **Sync Engine:** A Google Apps Script (`syncToFirebase`) parses this data and pushes it to Firebase.
 
 **Firebase Realtime Database:**
-* Acts as the middleware between the Sheet and the App.
+* The central nervous system.
 * **Structure:**
     * `/tours/{tourId}`: Tour details, driver info, and itinerary.
     * `/bookings/{bookingRef}`: Links users to tours.
+    * `/drivers/{driverId}`: **[NEW]** Driver profiles, phone numbers, and assigned tours.
     * `/chats/{tourId}`: Group chat messages.
     * `/logs/{userId}`: User-specific app logs.
+    * `/users/{userId}`: Expo Push Tokens and notification preferences.
     * `/group_tour_photos/{tourId}`: Metadata for shared group photos.
     * `/private_tour_photos/{tourId}/{userId}`: Metadata for private user photos.
-    * `/users/{userId}`: **[NEW]** Stores Expo Push Tokens and user notification preferences.
 
-**Firebase Storage:**
-* Stores the actual image files for the photobook features, mirroring the database structure.
+**Firebase Cloud Functions (Gen 2):**
+* **Triggers:** Listens for database events (new chat messages, itinerary updates) and sends Push Notifications via Expo.
+
+**Web Admin Dashboard:**
+* A React-based Operations Console (`web-admin/`) for managing drivers and sending system-wide broadcasts.
 
 **React Native App:**
-* **Login:** Booking Reference (e.g., T12345).
-* **Home:** Digital boarding pass, tour details, "Today's Agenda" widget.
-* **Features:** Itinerary view, Group Chat, Photo Sharing (Public/Private), Driver Location, Notification Settings.
+* **Single Binary Strategy:** One app for both Passengers and Drivers.
+* **Passenger Mode:** Login via Booking Ref (e.g., T12345).
+* **Driver Mode:** Hidden login via Driver Code (e.g., D-BONDY).
+* **Features:** Itinerary, Chat, Photo Sharing, Driver Console.
 
 ---
 
 ## 2. Recent Critical Updates
 
 ### A. The "Itinerary 2.0" Overhaul
-We transitioned from unstructured text itineraries to a smart, JSON-based system.
-* **Backend:** App Script now regex-matches days and extracts specific times, pushing a JSON object.
-* **Frontend:** `ItineraryScreen.js` parses this JSON to display structured timelines, distinct visual styles for major events, and collapsed/expanded views.
+We transitioned from unstructured text itineraries to a smart, JSON-based system supported by the frontend `ItineraryScreen.js`.
 
-### B. Photo System Stabilization (Nov 2025)
-We have fully stabilized the Photo Upload feature.
-* **Path Alignment:** Fixed a critical mismatch between code and security rules.
-    * **Group Photos:** Now stored in `group_tour_photos/{tourId}` (Storage & DB).
-    * **Private Photos:** Now stored in `private_tour_photos/{tourId}/{userId}` (Storage & DB).
-* **Security Rules:** Implemented strict Realtime Database rules to prevent "Permission Denied" errors while ensuring data isolation.
+### B. Notification Infrastructure (Full Pipeline)
+We have a complete end-to-end notification system.
+* **Frontend:** Users save preferences and push tokens to `/users/{userId}`.
+* **Backend:** Cloud Functions (`sendChatNotification`, `sendItineraryNotification`) listen to DB changes and dispatch alerts via Expo.
+* **Broadcasts:** Admins can trigger "Driver Announcements" via the Web Admin, which appear as high-priority alerts.
 
-### C. Push Notification Infrastructure (Nov 2025)
-We have implemented the foundation for Push Notifications using `expo-notifications`.
-* **Preferences:** Users can now toggle specific alert types (Driver Updates, Itinerary Changes, Marketing interests) in `NotificationPreferencesScreen`.
-* **Token Storage:** Upon saving preferences, the device's Expo Push Token is generated and stored in `/users/{userId}`.
-* **Testing:** A "Test Notification" button has been added to the preferences screen to verify device permissions and local alert display without a backend trigger.
+### C. The Driver Ecosystem
+We implemented a "Hidden Driver Mode" to avoid managing two separate apps.
+* **Login:** Inputting a code starting with `D-` (e.g., `D-BONDY`) routes the user to `DriverHomeScreen`.
+* **Management:** A new Web Admin Panel allows operations staff to create drivers and assign them to multiple tours.
+* **Data Sync:** Assigning a tour to a driver automatically updates the public `/tours` node so passengers see the correct Driver Name.
 
 ---
 
 ## 3. Firebase Security Rules (Reference)
 
-The Realtime Database rules are strictly configured to enforce data isolation and secure the new features. **Do not modify paths in the frontend code without ensuring they match these rules.**
+**CRITICAL:** These rules enforce the separation of powers between Passengers, Drivers, and Admins.
 
+```json
 {
   "rules": {
-    // 1. BOOKINGS
-    // The app reads booking details to log you in.
+    // Helper: Check if user is the specific Admin UID
+    ".read": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+    ".write": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+
+    // 1. DRIVERS
+    // App needs to read to verify login. ONLY Admin can write/create drivers.
+    "drivers": {
+      ".read": "auth != null",
+      ".write": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
+    },
+
+    // 2. BOOKINGS
     "bookings": {
       "$bookingId": {
         ".read": "auth != null",
@@ -74,8 +87,7 @@ The Realtime Database rules are strictly configured to enforce data isolation an
       }
     },
 
-    // 2. TOURS
-    // The app reads tour details and updates participant counts/lists when you join.
+    // 3. TOURS
     "tours": {
       "$tourId": {
         ".read": "auth != null",
@@ -83,8 +95,7 @@ The Realtime Database rules are strictly configured to enforce data isolation an
       }
     },
 
-    // 3. CHAT
-    // Allows reading and posting messages to the tour chat.
+    // 4. CHAT
     "chats": {
       "$tourId": {
         ".read": "auth != null",
@@ -92,8 +103,7 @@ The Realtime Database rules are strictly configured to enforce data isolation an
       }
     },
 
-    // 4. LOGS
-    // The app sends debug logs to /logs/{userId}/...
+    // 5. LOGS
     "logs": {
       "$userId": {
         ".read": false, 
@@ -101,17 +111,13 @@ The Realtime Database rules are strictly configured to enforce data isolation an
       }
     },
 
-    // 5. PUBLIC/GROUP PHOTOS
-    // Matches the path used in your updated photoService.js
+    // 6. PHOTOS (Public/Private)
     "group_tour_photos": {
       "$tourId": {
         ".read": "auth != null",
         ".write": "auth != null"
       }
     },
-
-    // 6. PRIVATE PHOTOS
-    // Matches the path used in your updated photoService.js
     "private_tour_photos": {
       "$tourId": {
         "$userId": {
@@ -121,62 +127,41 @@ The Realtime Database rules are strictly configured to enforce data isolation an
       }
     },
 
-    // 7. USERS (NEW - For Push Notifications)
-    // Allows users to save their push token and notification preferences.
+    // 7. USERS (Push Tokens)
     "users": {
       "$userId": {
-        // Only the user themselves can read/write their own data
-        ".read": "auth != null && auth.uid === $userId",
-        ".write": "auth != null && auth.uid === $userId"
+        ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
+        ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')"
       }
     }
   }
 }
 4. Current Codebase Status
-Tech Stack: React Native (Expo SDK 52), Firebase JS SDK (Modular), Google Apps Script.
+Tech Stack: React Native (Expo SDK 52), Firebase Cloud Functions (Gen 2), React (Vite) for Admin.
 
-Auth: Anonymous Auth + Custom Claims logic.
+Directory Structure
+App.js: Main entry point, handles routing between Passenger/Driver modes.
 
-Navigation: React Navigation (Stack).
+functions/: [Backend] Cloud Functions triggers.
 
-Key Files
-App.js: Entry point, auth loading, navigation routing.
+web-admin/: [Backend UI] The React dashboard for Ops.
 
-services/photoService.js: [CRITICAL] Handles upload logic and path generation. Matches Security Rules #5 & #6.
+services/bookingServiceRealtime.js: Handles logic for validating generic login codes (Passenger vs Driver).
 
-services/notificationService.js: [NEW] Handles permission requests, token generation, and saving user preferences to /users.
+screens/DriverHomeScreen.js: The dedicated dashboard for drivers.
 
-services/bookingServiceRealtime.js: Data layer for fetching/parsing tour data.
+5. Upcoming Roadmap
+Live Driver Tracking: Now that we have a Driver Console, we need to implement expo-location background tasks to feed live coordinates to the database.
 
-screens/ItineraryScreen.js: The smart itinerary viewer.
+Production Persistence: Replace the MockStorage in firebase.js with expo-secure-store or AsyncStorage for production builds.
 
-screens/NotificationPreferencesScreen.js: UI for managing alerts and testing push notifications.
-
-5. Known Issues & "Watch List"
-Date Parsing (UK vs US)
-Issue: JS Date() defaults to US format (MM/dd/yyyy), but backend data is UK (dd/MM/yyyy).
-
-Status: Manual parsing logic (split('/').map(Number)) is implemented in ItineraryScreen and TodaysAgendaCard.
-
-Directive: Always ensure any new date logic uses manual parsing to prevent Invalid Date crashes on Android.
-
-Driver Map
-Status: MapScreen.js is currently a placeholder.
-
-Constraint: Feature is "No Go" until the Driver App is built to feed live coordinates.
-
-6. Upcoming Roadmap
-Backend Notification Trigger: Create the backend logic (likely Cloud Functions) to listen for database changes (e.g., new chat messages) and send push notifications to the tokens stored in /users.
-
-Driver App/Tracking: Build the driver-side application to feed real-time coordinates to MapScreen.
-
-Production Polish: Final UI/UX refinements before store submission.
+Chat Photos: Allow users to upload images directly in the chat (reusing photoService.js).
 
 Agent Directive
 When working on this repo:
 
-Respect the Paths: The path names group_tour_photos, private_tour_photos, and users are hardcoded in Security Rules. Changing them in code breaks the app.
+Respect the Paths: The path names drivers, tours, and users are hardcoded in Security Rules. Changing them in code breaks the app.
 
-UK Dates: Always parse dates manually (dd/MM/yyyy).
+Multi-Path Updates: When modifying Driver assignments, ALWAYS use multi-path updates (updating /drivers and /tours simultaneously) to keep data consistent.
 
-Itinerary Format: Assume JSON format first, but maintain the legacy string fallback in bookingServiceRealtime.js.
+Gen 2 Functions: All new backend logic must use Firebase Functions Gen 2 syntax (onValueCreated, etc.).
