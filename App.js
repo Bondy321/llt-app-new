@@ -18,6 +18,7 @@ import GroupPhotobookScreen from './screens/GroupPhotobookScreen';
 import ItineraryScreen from './screens/ItineraryScreen';
 import ChatScreen from './screens/ChatScreen';
 import MapScreen from './screens/MapScreen';
+import NotificationPreferencesScreen from './screens/NotificationPreferencesScreen';
 
 const COLORS = {
   primaryBlue: '#007DC3',
@@ -278,6 +279,13 @@ export default function App() {
         return <ChatScreen {...screenProps} onBack={() => navigateTo('TourHome')} tourId={tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_')} bookingData={bookingData} tourData={tourData} />;
       case 'Map':
         return <MapScreen {...screenProps} onBack={() => navigateTo('TourHome')} />;
+      case 'NotificationPreferences':
+        return (
+          <NotificationPreferencesScreen
+            onBack={() => navigateTo('TourHome')}
+            userId={user?.uid}
+          />
+        );
       default:
         return <LoginScreen {...screenProps} onLoginSuccess={handleLoginSuccess} />;
     }

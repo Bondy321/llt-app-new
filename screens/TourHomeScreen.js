@@ -36,9 +36,20 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
               <Text style={styles.greeting}>{tourData?.name || 'Active Tour'}</Text>
               <Text style={styles.tourCodeDisplay}>{tourCode}</Text>
             </View>
-            <TouchableOpacity style={styles.logoutButton} onPress={onLogout} activeOpacity={0.7}>
-              <MaterialCommunityIcons name="logout-variant" size={22} color={COLORS.primaryBlue} />
-            </TouchableOpacity>
+            <View style={{flexDirection: 'row', gap: 10}}>
+              {/* Notification Button */}
+              <TouchableOpacity 
+                 style={styles.logoutButton} 
+                 onPress={() => onNavigate('NotificationPreferences')}
+              >
+                 <MaterialCommunityIcons name="bell-ring-outline" size={22} color={COLORS.primaryBlue} />
+              </TouchableOpacity>
+
+              {/* Logout Button */}
+              <TouchableOpacity style={styles.logoutButton} onPress={onLogout} activeOpacity={0.7}>
+                <MaterialCommunityIcons name="logout-variant" size={22} color={COLORS.primaryBlue} />
+              </TouchableOpacity>
+            </View>
           </View>
 
           {tourData && (
