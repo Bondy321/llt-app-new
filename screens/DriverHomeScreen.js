@@ -1,4 +1,3 @@
-// screens/DriverHomeScreen.js
 import React, { useState } from 'react';
 import {
   StyleSheet,
@@ -6,7 +5,8 @@ import {
   View,
   TouchableOpacity,
   SafeAreaView,
-  Alert
+  Alert,
+  ScrollView
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
@@ -16,17 +16,18 @@ const COLORS = {
   white: '#FFFFFF',
   bg: '#F5F6FA',
   success: '#27AE60',
-  danger: '#C0392B'
+  danger: '#C0392B',
+  info: '#3498DB'
 };
 
-export default function DriverHomeScreen({ driverData, onLogout }) {
+export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
   const [isBroadcasting, setIsBroadcasting] = useState(false);
-  const [activeTourId, setActiveTourId] = useState(driverData?.assignedTourId || '');
+  const activeTourId = driverData?.assignedTourId || '';
 
   // Simple toggle to simulate "Going Live"
   const toggleBroadcast = async () => {
     if (!activeTourId) {
-      Alert.alert("No Tour Selected", "Please assign a Tour ID to start broadcasting.");
+      Alert.alert("No Tour Selected", "Please contact operations to assign a Tour ID.");
       return;
     }
 
@@ -42,6 +43,19 @@ export default function DriverHomeScreen({ driverData, onLogout }) {
     }
   };
 
+  const handleOpenChat = () => {
+    if (!activeTourId) {
+      Alert.alert("No Tour", "You need an active tour to access the chat.");
+      return;
+    }
+    // Navigate to ChatScreen with specific driver params
+    onNavigate('Chat', {
+      tourId: activeTourId,
+      isDriver: true, // IMPORTANT FLAG
+      driverName: driverData?.name || 'Driver'
+    });
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       {/* Driver Header */}
@@ -55,7 +69,7 @@ export default function DriverHomeScreen({ driverData, onLogout }) {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.content}>
+      <ScrollView contentContainerStyle={styles.content}>
         {/* Status Card */}
         <View style={[styles.card, isBroadcasting ? styles.cardActive : styles.cardInactive]}>
           <Text style={styles.statusLabel}>STATUS</Text>
@@ -71,23 +85,47 @@ export default function DriverHomeScreen({ driverData, onLogout }) {
           </View>
         </View>
 
-        {/* Action Button */}
-        <TouchableOpacity 
-          style={[styles.bigButton, { backgroundColor: isBroadcasting ? COLORS.danger : COLORS.success }]}
-          onPress={toggleBroadcast}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.bigButtonText}>
-            {isBroadcasting ? "STOP TRACKING" : "START TOUR"}
-          </Text>
-        </TouchableOpacity>
+        {/* Action Buttons Grid */}
+        <View style={styles.grid}>
+            {/* Toggle Tracking */}
+            <TouchableOpacity 
+            style={[styles.bigButton, { backgroundColor: isBroadcasting ? COLORS.danger : COLORS.success }]}
+            onPress={toggleBroadcast}
+            activeOpacity={0.8}
+            >
+            <MaterialCommunityIcons 
+                name={isBroadcasting ? "stop-circle-outline" : "play-circle-outline"} 
+                size={32} 
+                color={COLORS.white} 
+                style={{marginBottom: 8}}
+            />
+            <Text style={styles.bigButtonText}>
+                {isBroadcasting ? "STOP TRACKING" : "START TOUR"}
+            </Text>
+            </TouchableOpacity>
 
-        {/* Debug Info */}
+            {/* Open Chat */}
+            <TouchableOpacity 
+            style={[styles.bigButton, { backgroundColor: COLORS.info }]}
+            onPress={handleOpenChat}
+            activeOpacity={0.8}
+            >
+            <MaterialCommunityIcons 
+                name="chat-processing" 
+                size={32} 
+                color={COLORS.white} 
+                style={{marginBottom: 8}}
+            />
+            <Text style={styles.bigButtonText}>GROUP CHAT</Text>
+            </TouchableOpacity>
+        </View>
+
+        {/* Info */}
         <View style={styles.infoBox}>
           <Text style={styles.infoLabel}>Active Tour ID:</Text>
           <Text style={styles.infoValue}>{activeTourId || 'None Assigned'}</Text>
         </View>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -122,18 +160,24 @@ const styles = StyleSheet.create({
   statusLabel: { color: '#7F8C8D', fontSize: 12, fontWeight: '700', marginBottom: 8 },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   statusText: { fontSize: 20, fontWeight: '800', color: '#2C3E50' },
+  
+  grid: { flexDirection: 'row', gap: 15, marginBottom: 30 },
   bigButton: {
+    flex: 1,
     paddingVertical: 20,
     borderRadius: 12,
     alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 6,
+    aspectRatio: 1, // Make them square-ish
   },
-  bigButtonText: { color: COLORS.white, fontSize: 18, fontWeight: '900', letterSpacing: 1 },
-  infoBox: { marginTop: 30, alignItems: 'center' },
+  bigButtonText: { color: COLORS.white, fontSize: 16, fontWeight: '900', letterSpacing: 0.5, textAlign: 'center' },
+  
+  infoBox: { marginTop: 10, alignItems: 'center' },
   infoLabel: { color: '#95A5A6', fontSize: 14 },
   infoValue: { color: COLORS.primary, fontSize: 16, fontWeight: '600', marginTop: 4 },
 });

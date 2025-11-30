@@ -92,10 +92,14 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData }) {
     setInputText('');
 
     const senderName = bookingData?.passengerNames?.[0] || 'Tour Participant';
+    
+    // Explicitly check for driver flag from bookingData props (passed from App.js)
+    const isDriver = bookingData?.isDriver === true;
+
     const senderInfo = {
       name: senderName,
       userId: currentUser?.uid || 'anonymous',
-      isDriver: bookingData?.isDriver || false,
+      isDriver: isDriver, // CRITICAL: Ensure this is true for drivers
     };
 
     const optimisticTimestamp = new Date().toISOString();
@@ -223,6 +227,10 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData }) {
       </SafeAreaView>
     );
   }
+
+  // --- Dynamic Styling for Header based on User Type ---
+  // If it's a driver viewing, maybe make the header slightly different or just standard green?
+  // Currently keeping it consistent green for "Chat" vibes.
 
   return (
     <SafeAreaView style={styles.safeArea}>

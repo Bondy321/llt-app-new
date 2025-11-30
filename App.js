@@ -19,7 +19,7 @@ import ItineraryScreen from './screens/ItineraryScreen';
 import ChatScreen from './screens/ChatScreen';
 import MapScreen from './screens/MapScreen';
 import NotificationPreferencesScreen from './screens/NotificationPreferencesScreen';
-import DriverHomeScreen from './screens/DriverHomeScreen'; // New Import
+import DriverHomeScreen from './screens/DriverHomeScreen'; 
 
 const COLORS = {
   primaryBlue: '#007DC3',
@@ -38,7 +38,6 @@ const SESSION_KEYS = {
 
 // --- MOCK STORAGE SETUP ---
 const createSessionStorage = () => {
-  // In Expo Go, force the mock storage to avoid native module crashes
   const mockStorage = {
     _data: {},
     multiGet: async (keys) => {
@@ -74,6 +73,9 @@ export default function App() {
   const [tourCode, setTourCode] = useState('');
   const [tourData, setTourData] = useState(null);
   const [bookingData, setBookingData] = useState(null);
+  
+  // State for passing params between screens manually (since we aren't using React Navigation stack)
+  const [screenParams, setScreenParams] = useState({});
 
   const [appState, setAppState] = useState(AppState.currentState);
   const [isConnected, setIsConnected] = useState(true);
@@ -150,7 +152,6 @@ export default function App() {
         setTourData(tourData);
         if (tourData) setTourCode(tourData.tourCode);
         
-        // If they were on DriverHome, restore that, otherwise default to TourHome or Login
         setCurrentScreen(screen === 'Login' ? (bookingData.id && bookingData.id.startsWith('D-') ? 'DriverHome' : 'TourHome') : screen);
       }
     } catch (error) {
@@ -175,15 +176,11 @@ export default function App() {
   };
 
   const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger') => {
-    // If it's a driver, we handle state differently
     if (userType === 'driver') {
       logger.info('Auth', 'Driver Logged In', { driverId: bookingOrDriverData.id });
-      setBookingData(bookingOrDriverData); // Re-using this state for driver object
-      // We explicitly DO NOT set tourData here as the driver might not have selected one yet
-      // or we handle assignment inside the driver screen
+      setBookingData(bookingOrDriverData);
       setCurrentScreen('DriverHome');
     } else {
-      // existing passenger logic
       logger.info('Navigation', 'Passenger Login', { bookingRef: reference });
       setTourCode(tourDetails.tourCode);
       setTourData(tourDetails);
@@ -203,8 +200,10 @@ export default function App() {
     await saveSession();
   };
 
-  const navigateTo = (screen) => {
-    logger.trackScreen(screen, { from: currentScreen });
+  // Updated navigation to accept params
+  const navigateTo = (screen, params = {}) => {
+    logger.trackScreen(screen, { from: currentScreen, ...params });
+    setScreenParams(params); // Store params for the next screen to use
     setCurrentScreen(screen);
     saveSession();
   };
@@ -219,6 +218,7 @@ export default function App() {
       setTourCode('');
       setTourData(null);
       setBookingData(null);
+      setScreenParams({});
       setCurrentScreen('Login');
     } catch (error) {
       logger.error('Auth', 'Logout error', { error: error.message });
@@ -260,11 +260,12 @@ export default function App() {
     switch (currentScreen) {
       case 'Login':
         return <LoginScreen {...screenProps} onLoginSuccess={handleLoginSuccess} />;
-      case 'DriverHome': // New Case
+      case 'DriverHome':
         return (
           <DriverHomeScreen 
-            driverData={bookingData} // We stored driver info in bookingData state
+            driverData={bookingData} 
             onLogout={handleLogout}
+            onNavigate={navigateTo} // Pass navigation prop
           />
         );
       case 'TourHome':
@@ -293,7 +294,27 @@ export default function App() {
           />
         );
       case 'Chat':
-        return <ChatScreen {...screenProps} onBack={() => navigateTo('TourHome')} tourId={tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_')} bookingData={bookingData} tourData={tourData} />;
+        // Determine back destination based on user type
+        const isDriver = screenParams.isDriver || (bookingData?.id && bookingData.id.startsWith('D-'));
+        const backScreen = isDriver ? 'DriverHome' : 'TourHome';
+        
+        // Use params if passed (from DriverHome), otherwise fall back to standard state
+        const chatTourId = screenParams.tourId || tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
+        
+        // Construct booking data for chat if we are in driver mode (since driver doesn't have standard bookingData)
+        const effectiveBookingData = isDriver 
+          ? { isDriver: true, passengerNames: [screenParams.driverName || bookingData?.name || 'Driver'] }
+          : bookingData;
+
+        return (
+          <ChatScreen 
+            {...screenProps} 
+            onBack={() => navigateTo(backScreen)} 
+            tourId={chatTourId} 
+            bookingData={effectiveBookingData} 
+            tourData={tourData || { name: 'Tour Chat' }} 
+          />
+        );
       case 'Map':
         return <MapScreen {...screenProps} onBack={() => navigateTo('TourHome')} />;
       case 'NotificationPreferences':
