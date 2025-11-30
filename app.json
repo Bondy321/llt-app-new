@@ -47,22 +47,23 @@
     },
     "extra": {
       "eas": {
-        "projectId": "YOUR-PROJECT-ID"
+        "projectId": "1b1ae41f-9096-4e7d-887c-b617613cf603"
       }
     },
-    "plugins": [
-      [
-        "expo-build-properties",
-        {
-          "ios": {
-            "deploymentTarget": "15.1"
-          }
+    "owner": "lochlomondtravel"
+  },
+  "plugins": [
+    [
+      "expo-build-properties",
+      {
+        "ios": {
+          "deploymentTarget": "15.1"
         }
-      ],
-      "expo-secure-store"
+      }
     ],
-    "updates": {
-      "fallbackToCacheTimeout": 0
-    }
+    "expo-secure-store"
+  ],
+  "updates": {
+    "fallbackToCacheTimeout": 0
   }
 }

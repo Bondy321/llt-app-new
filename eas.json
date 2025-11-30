@@ -8,8 +8,7 @@
       "developmentClient": true,
       "distribution": "internal",
       "ios": {
-        "simulator": true,
-        "buildNumber": "1.0.0"
+        "simulator": true
       },
       "android": {
         "buildType": "apk"
@@ -17,17 +16,13 @@
     },
     "preview": {
       "distribution": "internal",
-      "ios": {
-        "buildNumber": "1.0.0"
-      },
+      "ios": {},
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
-      "ios": {
-        "buildNumber": "1.0.0"
-      },
+      "ios": {},
       "android": {
         "buildType": "app-bundle"
       }
