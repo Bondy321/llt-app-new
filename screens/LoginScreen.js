@@ -105,16 +105,20 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
       logger?.trackAPI('/validateBooking', 'POST', result.valid ? 200 : 404, duration);
       
       if (result.valid) {
+        // Pass either booking data OR driver data, and the login type
+        const loginData = result.type === 'driver' ? result.driver : result.booking;
+        
         logger?.info('Login', 'Login successful', {
-          bookingRef: bookingReference.trim().toUpperCase(),
-          tourCode: result.tour.tourCode,
+          ref: bookingReference.trim().toUpperCase(),
+          type: result.type,
           duration
         });
         
         await onLoginSuccess(
           bookingReference.trim().toUpperCase(), 
           result.tour, 
-          result.booking
+          loginData,
+          result.type // Pass 'passenger' or 'driver'
         );
       } else {
         logger?.warn('Login', 'Invalid booking reference', {
@@ -209,7 +213,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
                     setBookingReference(text);
                     if (error) setError('');
                   }}
-                  placeholder="e.g. T114737"
+                  placeholder="Ref (e.g. T114737 or Driver ID)"
                   placeholderTextColor={COLORS.placeholderText}
                   autoCapitalize="characters"
                   autoCorrect={false}

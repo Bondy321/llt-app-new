@@ -103,19 +103,35 @@ const ensureTourParticipantCount = async (tourId, dbInstance = realtimeDb) => {
   return currentCount;
 };
 
-// Validate booking reference and get associated tour
-const validateBookingReference = async (bookingRef) => {
+// Validate booking reference OR driver code
+const validateBookingReference = async (reference) => {
   try {
-    console.log('Validating booking reference:', bookingRef);
-
     if (!realtimeDb) {
       throw new Error('Realtime database not initialized');
     }
 
-    // Convert to uppercase to be case-insensitive
-    const upperRef = bookingRef.toUpperCase().trim();
+    const upperRef = reference.toUpperCase().trim();
+    console.log('Validating reference:', upperRef);
 
-    // Look up the booking in Realtime Database
+    // --- 1. CHECK: Is it a Driver? ---
+    const driverSnapshot = await realtimeDb.ref(`drivers/${upperRef}`).once('value');
+
+    if (driverSnapshot.exists()) {
+      const driverData = driverSnapshot.val();
+      console.log('Driver login verified:', driverData.name);
+      
+      return {
+        valid: true,
+        type: 'driver', // New Flag
+        driver: {
+          id: upperRef,
+          name: driverData.name,
+          assignedTourId: driverData.currentTourId || null
+        }
+      };
+    }
+
+    // --- 2. CHECK: Is it a Passenger Booking? ---
     const bookingSnapshot = await realtimeDb
       .ref(`bookings/${upperRef}`)
       .once('value');
@@ -130,7 +146,6 @@ const validateBookingReference = async (bookingRef) => {
 
     const { normalizedBooking } = await ensureBookingSchemaConsistency(upperRef, bookingData, realtimeDb);
 
-    // Now get the associated tour (tour codes with spaces are stored with underscores)
     const tourId = bookingData.tourCode.replace(/\s+/g, '_');
     const tourSnapshot = await realtimeDb
       .ref(`tours/${tourId}`)
@@ -144,13 +159,13 @@ const validateBookingReference = async (bookingRef) => {
     const tourData = tourSnapshot.val();
     const reconciledParticipantCount = await ensureTourParticipantCount(tourId, realtimeDb);
 
-    // Check if tour is active
     if (!tourData.isActive) {
       return { valid: false, error: 'This tour is no longer active' };
     }
 
     return {
       valid: true,
+      type: 'passenger', // New Flag
       booking: normalizedBooking,
       tour: {
         id: tourId,
@@ -227,7 +242,6 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
 };
 
 // Get tour itinerary
-// Get tour itinerary
 const getTourItinerary = async (tourId) => {
   try {
     console.log('Getting itinerary for tour:', tourId);
@@ -247,30 +261,21 @@ const getTourItinerary = async (tourId) => {
     const tourData = tourSnapshot.val();
     const itineraryData = tourData.itinerary;
 
-    // --- NEW LOGIC START ---
-    // 1. Check if this is the new Structured Itinerary (Object) from the updated App Script
     if (itineraryData && typeof itineraryData === 'object' && Array.isArray(itineraryData.days)) {
-      // It is already parsed. Return it directly.
-      // We ensure the title is present, defaulting to the Tour Name if the itinerary title is missing.
       return {
         ...itineraryData,
         title: itineraryData.title || tourData.name
       };
     }
-    // --- NEW LOGIC END ---
     
-    // 2. Legacy Fallback: Parse the old string format
     const parseItinerary = (text) => {
-      // Handle null or non-string inputs safely
       if (!text || typeof text !== 'string') {
          return [{ time: '', description: 'Itinerary to be confirmed' }];
       }
       
-      // For day trips, we'll format the text nicely but keep it as one block
       const formattedText = text
-        .replace(/\. /g, '.\n\n') // Add line breaks after periods
+        .replace(/\. /g, '.\n\n')
         .replace(/(\d{4}hrs)/g, (match) => {
-          // Convert military time to readable format
           const hour = parseInt(match.substring(0, 2));
           const min = match.substring(2, 4);
           const ampm = hour >= 12 ? 'PM' : 'AM';
@@ -285,7 +290,6 @@ const getTourItinerary = async (tourId) => {
       }];
     };
     
-    // Ensure we are passing a string to the parser
     const activities = parseItinerary(itineraryData);
     
     return {

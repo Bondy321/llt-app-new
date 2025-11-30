@@ -19,6 +19,7 @@ import ItineraryScreen from './screens/ItineraryScreen';
 import ChatScreen from './screens/ChatScreen';
 import MapScreen from './screens/MapScreen';
 import NotificationPreferencesScreen from './screens/NotificationPreferencesScreen';
+import DriverHomeScreen from './screens/DriverHomeScreen'; // New Import
 
 const COLORS = {
   primaryBlue: '#007DC3',
@@ -140,15 +141,17 @@ export default function App() {
         SESSION_KEYS.LAST_SCREEN
       ]);
       
-      if (savedTourData[1]) {
-        const tourData = JSON.parse(savedTourData[1]);
+      if (savedBookingData[1]) {
         const bookingData = JSON.parse(savedBookingData[1]);
+        const tourData = savedTourData[1] ? JSON.parse(savedTourData[1]) : null;
         const screen = lastScreen[1] || 'Login';
         
-        setTourData(tourData);
         setBookingData(bookingData);
-        setTourCode(tourData.tourCode);
-        setCurrentScreen(screen === 'Login' ? 'TourHome' : screen);
+        setTourData(tourData);
+        if (tourData) setTourCode(tourData.tourCode);
+        
+        // If they were on DriverHome, restore that, otherwise default to TourHome or Login
+        setCurrentScreen(screen === 'Login' ? (bookingData.id && bookingData.id.startsWith('D-') ? 'DriverHome' : 'TourHome') : screen);
       }
     } catch (error) {
       logger.warn('Session', 'Failed to restore session', { error: error.message });
@@ -171,25 +174,32 @@ export default function App() {
     logger.info('App', 'Refreshing app data');
   };
 
-  const handleLoginSuccess = async (bookingReference, tourDetails, bookingDetails) => {
-    logger.info('Navigation', 'Login successful', { 
-      bookingRef: bookingReference,
-      tourCode: tourDetails.tourCode 
-    });
-    
-    setTourCode(tourDetails.tourCode);
-    setTourData(tourDetails);
-    setBookingData(bookingDetails);
-    
-    if (user && tourDetails?.id) {
-      try {
-        await joinTour(tourDetails.id, user.uid);
-      } catch (error) {
-        logger.error('Tour', 'Error joining tour', { error: error.message });
+  const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger') => {
+    // If it's a driver, we handle state differently
+    if (userType === 'driver') {
+      logger.info('Auth', 'Driver Logged In', { driverId: bookingOrDriverData.id });
+      setBookingData(bookingOrDriverData); // Re-using this state for driver object
+      // We explicitly DO NOT set tourData here as the driver might not have selected one yet
+      // or we handle assignment inside the driver screen
+      setCurrentScreen('DriverHome');
+    } else {
+      // existing passenger logic
+      logger.info('Navigation', 'Passenger Login', { bookingRef: reference });
+      setTourCode(tourDetails.tourCode);
+      setTourData(tourDetails);
+      setBookingData(bookingOrDriverData);
+      
+      if (user && tourDetails?.id) {
+        try {
+          await joinTour(tourDetails.id, user.uid);
+        } catch (error) {
+          logger.error('Tour', 'Error joining tour', { error: error.message });
+        }
       }
+      
+      setCurrentScreen('TourHome');
     }
     
-    setCurrentScreen('TourHome');
     await saveSession();
   };
 
@@ -250,6 +260,13 @@ export default function App() {
     switch (currentScreen) {
       case 'Login':
         return <LoginScreen {...screenProps} onLoginSuccess={handleLoginSuccess} />;
+      case 'DriverHome': // New Case
+        return (
+          <DriverHomeScreen 
+            driverData={bookingData} // We stored driver info in bookingData state
+            onLogout={handleLogout}
+          />
+        );
       case 'TourHome':
         return (
           <TourHomeScreen
