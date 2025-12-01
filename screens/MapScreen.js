@@ -25,6 +25,7 @@ const COLORS = {
   secondaryText: '#4A5568',
   appBackground: '#F0F4F8',
   mapHeaderColor: '#FF7757',
+  errorRed: '#E53E3E',
 };
 
 export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
@@ -39,6 +40,7 @@ export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         setErrorMsg('Permission to access location was denied');
+        setLoading(false);
         return;
       }
 
@@ -86,8 +88,11 @@ export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
   const formatTime = (isoString) => {
     if (!isoString) return '';
     const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return '';
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
+
+  const formattedDriverTime = driverLocation ? formatTime(driverLocation.timestamp) : '';
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -121,7 +126,7 @@ export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
                     longitude: driverLocation.longitude,
                   }}
                   title="Bus Pickup Point"
-                  description={`Updated at ${formatTime(driverLocation.timestamp)}`}
+                  description={`Updated at ${formattedDriverTime || 'Not available'}`}
                 >
                   <View style={styles.customMarker}>
                     <MaterialCommunityIcons name="bus" size={24} color={COLORS.white} />
@@ -132,7 +137,12 @@ export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
 
             {/* Info Card Overlay */}
             <View style={styles.infoCard}>
-              {driverLocation ? (
+              {errorMsg ? (
+                <View style={styles.infoContent}>
+                  <MaterialCommunityIcons name="alert-circle" size={28} color={COLORS.errorRed} style={{ marginRight: 10 }} />
+                  <Text style={styles.infoDetail}>{errorMsg}</Text>
+                </View>
+              ) : driverLocation ? (
                 <View style={styles.infoContent}>
                   <View style={styles.infoIcon}>
                     <MaterialCommunityIcons name="map-marker-check" size={28} color={COLORS.primaryBlue} />
@@ -140,7 +150,7 @@ export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
                   <View>
                     <Text style={styles.infoTitle}>Bus Location Set</Text>
                     <Text style={styles.infoSubtitle}>
-                      Last update: {formatTime(driverLocation.timestamp)}
+                      Last update: {formattedDriverTime || 'Not available'}
                     </Text>
                     <Text style={styles.infoDetail}>
                       Head to the marker on the map for pickup.
