@@ -283,14 +283,22 @@ export default function App() {
         return <PhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} />;
       case 'GroupPhotobook':
         return <GroupPhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} />;
-      case 'Itinerary':
+case 'Itinerary':
+        // CHECK: Is the user a driver?
+        const isDriverUser = screenParams.isDriver || (bookingData?.id && bookingData.id.startsWith('D-'));
+        // If driver, back goes to DriverHome
+        const backDest = isDriverUser ? 'DriverHome' : 'TourHome';
+        // Use active tour ID if passed, else fall back to session data
+        const itinTourId = screenParams.tourId || tourData?.id;
+
         return (
           <ItineraryScreen
             {...screenProps}
-            onBack={() => navigateTo('TourHome')}
-            tourId={tourData?.id}
+            onBack={() => navigateTo(backDest)}
+            tourId={itinTourId}
             tourName={tourData?.name}
             startDate={tourData?.startDate}
+            isDriver={isDriverUser} // NEW PROP
           />
         );
       case 'Chat':

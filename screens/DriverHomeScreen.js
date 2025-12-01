@@ -118,6 +118,23 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
             />
             <Text style={styles.bigButtonText}>GROUP CHAT</Text>
             </TouchableOpacity>
+            {/* Edit Itinerary */}
+            <TouchableOpacity 
+            style={[styles.bigButton, { backgroundColor: '#8E44AD' }]} // Purple
+            onPress={() => onNavigate('Itinerary', { 
+                tourId: activeTourId, 
+                isDriver: true 
+            })}
+            activeOpacity={0.8}
+            >
+            <MaterialCommunityIcons 
+                name="calendar-edit" 
+                size={32} 
+                color={COLORS.white} 
+                style={{marginBottom: 8}}
+            />
+            <Text style={styles.bigButtonText}>ITINERARY</Text>
+            </TouchableOpacity>
         </View>
 
         {/* Info */}
