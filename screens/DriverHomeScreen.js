@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -6,40 +6,72 @@ import {
   TouchableOpacity,
   SafeAreaView,
   Alert,
-  ScrollView
+  ScrollView,
+  ActivityIndicator
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
+import { realtimeDb } from '../firebase'; // Import your DB instance
 
 const COLORS = {
-  primary: '#2C3E50', // Darker, professional color for drivers
-  accent: '#E67E22', // Orange for actions
+  primary: '#2C3E50',
+  accent: '#E67E22',
   white: '#FFFFFF',
   bg: '#F5F6FA',
   success: '#27AE60',
   danger: '#C0392B',
-  info: '#3498DB'
+  info: '#3498DB',
+  location: '#2980B9' // Blue for location
 };
 
 export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
-  const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [updatingLocation, setUpdatingLocation] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
   const activeTourId = driverData?.assignedTourId || '';
 
-  // Simple toggle to simulate "Going Live"
-  const toggleBroadcast = async () => {
+  // Function to capture and save location
+  const handleUpdateLocation = async () => {
     if (!activeTourId) {
-      Alert.alert("No Tour Selected", "Please contact operations to assign a Tour ID.");
+      Alert.alert("No Tour", "You must have an assigned tour to share location.");
       return;
     }
 
-    const newState = !isBroadcasting;
-    setIsBroadcasting(newState);
+    setUpdatingLocation(true);
 
-    if (newState) {
-      // Logic to start expo-location background task would go here
-      Alert.alert("Live Tracking Started", "Passengers can now see your location.");
-    } else {
-      // Logic to stop task
-      Alert.alert("Tracking Stopped", "You are off the grid.");
+    try {
+      // 1. Request Permission
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Allow location access to share your pickup point.');
+        setUpdatingLocation(false);
+        return;
+      }
+
+      // 2. Get Coordinates
+      let location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High
+      });
+
+      const { latitude, longitude } = location.coords;
+      const timestamp = new Date().toISOString();
+
+      // 3. Write to Firebase
+      // We write to a specific 'driverLocation' node under the tour
+      await realtimeDb.ref(`tours/${activeTourId}/driverLocation`).set({
+        latitude,
+        longitude,
+        timestamp,
+        updatedBy: driverData.name
+      });
+
+      setLastUpdate(new Date());
+      Alert.alert("Location Updated", "Passengers can now see your current position on the map.");
+
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Error", "Could not update location. Please try again.");
+    } finally {
+      setUpdatingLocation(false);
     }
   };
 
@@ -48,17 +80,15 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
       Alert.alert("No Tour", "You need an active tour to access the chat.");
       return;
     }
-    // Navigate to ChatScreen with specific driver params
     onNavigate('Chat', {
       tourId: activeTourId,
-      isDriver: true, // IMPORTANT FLAG
+      isDriver: true,
       driverName: driverData?.name || 'Driver'
     });
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Driver Header */}
       <View style={styles.header}>
         <View>
           <Text style={styles.greeting}>Driver Console</Text>
@@ -70,74 +100,70 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        {/* Status Card */}
-        <View style={[styles.card, isBroadcasting ? styles.cardActive : styles.cardInactive]}>
-          <Text style={styles.statusLabel}>STATUS</Text>
-          <View style={styles.statusRow}>
-            <MaterialCommunityIcons 
-              name={isBroadcasting ? "broadcast" : "broadcast-off"} 
-              size={32} 
-              color={isBroadcasting ? COLORS.success : COLORS.danger} 
-            />
-            <Text style={styles.statusText}>
-              {isBroadcasting ? "LIVE BROADCASTING" : "OFFLINE"}
-            </Text>
-          </View>
-        </View>
-
-        {/* Action Buttons Grid */}
+        
+        {/* ACTION GRID */}
         <View style={styles.grid}>
-            {/* Toggle Tracking */}
+            {/* Update Location Button */}
             <TouchableOpacity 
-            style={[styles.bigButton, { backgroundColor: isBroadcasting ? COLORS.danger : COLORS.success }]}
-            onPress={toggleBroadcast}
-            activeOpacity={0.8}
+              style={[styles.bigButton, { backgroundColor: COLORS.location }]}
+              onPress={handleUpdateLocation}
+              activeOpacity={0.8}
+              disabled={updatingLocation}
             >
-            <MaterialCommunityIcons 
-                name={isBroadcasting ? "stop-circle-outline" : "play-circle-outline"} 
-                size={32} 
-                color={COLORS.white} 
-                style={{marginBottom: 8}}
-            />
-            <Text style={styles.bigButtonText}>
-                {isBroadcasting ? "STOP TRACKING" : "START TOUR"}
-            </Text>
+              {updatingLocation ? (
+                <ActivityIndicator color={COLORS.white} size="large" />
+              ) : (
+                <MaterialCommunityIcons 
+                    name="map-marker-radius" 
+                    size={40} 
+                    color={COLORS.white} 
+                    style={{marginBottom: 8}}
+                />
+              )}
+              <Text style={styles.bigButtonText}>
+                {updatingLocation ? "UPDATING..." : "SET PICKUP POINT"}
+              </Text>
+              {lastUpdate && (
+                <Text style={styles.lastUpdateText}>
+                  Last: {lastUpdate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                </Text>
+              )}
             </TouchableOpacity>
 
             {/* Open Chat */}
             <TouchableOpacity 
-            style={[styles.bigButton, { backgroundColor: COLORS.info }]}
-            onPress={handleOpenChat}
-            activeOpacity={0.8}
+              style={[styles.bigButton, { backgroundColor: COLORS.info }]}
+              onPress={handleOpenChat}
+              activeOpacity={0.8}
             >
-            <MaterialCommunityIcons 
-                name="chat-processing" 
-                size={32} 
-                color={COLORS.white} 
-                style={{marginBottom: 8}}
-            />
-            <Text style={styles.bigButtonText}>GROUP CHAT</Text>
+              <MaterialCommunityIcons 
+                  name="chat-processing" 
+                  size={40} 
+                  color={COLORS.white} 
+                  style={{marginBottom: 8}}
+              />
+              <Text style={styles.bigButtonText}>GROUP CHAT</Text>
             </TouchableOpacity>
-            {/* Edit Itinerary */}
-            <TouchableOpacity 
-            style={[styles.bigButton, { backgroundColor: '#8E44AD' }]} // Purple
+        </View>
+
+        {/* Edit Itinerary Button (Full Width) */}
+        <TouchableOpacity 
+            style={[styles.wideButton, { backgroundColor: '#8E44AD' }]}
             onPress={() => onNavigate('Itinerary', { 
                 tourId: activeTourId, 
                 isDriver: true 
             })}
             activeOpacity={0.8}
-            >
+        >
             <MaterialCommunityIcons 
                 name="calendar-edit" 
-                size={32} 
+                size={28} 
                 color={COLORS.white} 
-                style={{marginBottom: 8}}
+                style={{marginRight: 10}}
             />
-            <Text style={styles.bigButtonText}>ITINERARY</Text>
-            </TouchableOpacity>
-        </View>
+            <Text style={styles.wideButtonText}>EDIT ITINERARY</Text>
+        </TouchableOpacity>
 
-        {/* Info */}
         <View style={styles.infoBox}>
           <Text style={styles.infoLabel}>Active Tour ID:</Text>
           <Text style={styles.infoValue}>{activeTourId || 'None Assigned'}</Text>
@@ -160,39 +186,39 @@ const styles = StyleSheet.create({
   driverName: { color: COLORS.white, fontSize: 20, fontWeight: 'bold' },
   logoutBtn: { padding: 8 },
   content: { padding: 20 },
-  card: {
-    backgroundColor: COLORS.white,
-    borderRadius: 12,
-    padding: 24,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-    borderLeftWidth: 6,
-  },
-  cardActive: { borderLeftColor: COLORS.success },
-  cardInactive: { borderLeftColor: COLORS.danger },
-  statusLabel: { color: '#7F8C8D', fontSize: 12, fontWeight: '700', marginBottom: 8 },
-  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  statusText: { fontSize: 20, fontWeight: '800', color: '#2C3E50' },
   
-  grid: { flexDirection: 'row', gap: 15, marginBottom: 30 },
+  grid: { flexDirection: 'row', gap: 15, marginBottom: 15 },
   bigButton: {
     flex: 1,
-    paddingVertical: 20,
+    paddingVertical: 25,
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.15,
     shadowRadius: 8,
-    elevation: 6,
-    aspectRatio: 1, // Make them square-ish
+    elevation: 5,
+    aspectRatio: 0.9,
   },
-  bigButtonText: { color: COLORS.white, fontSize: 16, fontWeight: '900', letterSpacing: 0.5, textAlign: 'center' },
+  bigButtonText: { color: COLORS.white, fontSize: 14, fontWeight: '800', letterSpacing: 0.5, textAlign: 'center', marginTop: 5 },
+  lastUpdateText: { color: 'rgba(255,255,255,0.8)', fontSize: 11, marginTop: 4 },
+
+  wideButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.white,
+    paddingVertical: 18,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+    marginBottom: 20,
+  },
+  wideButtonText: { fontSize: 16, fontWeight: '800', color: COLORS.white, letterSpacing: 0.5 },
   
   infoBox: { marginTop: 10, alignItems: 'center' },
   infoLabel: { color: '#95A5A6', fontSize: 14 },
