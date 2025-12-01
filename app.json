@@ -21,7 +21,7 @@
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Loch Lomond Travel needs access to your photo library to save and share tour memories.",
         "NSCameraUsageDescription": "Loch Lomond Travel needs camera access to capture tour moments.",
-        "NSLocationWhenInUseUsageDescription": "Loch Lomond Travel uses your location to show nearby tour points."
+        "NSLocationWhenInUseUsageDescription": "Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points."
       },
       "config": {
         "usesNonExemptEncryption": false

@@ -324,7 +324,9 @@ case 'Itinerary':
           />
         );
       case 'Map':
-        return <MapScreen {...screenProps} onBack={() => navigateTo('TourHome')} />;
+        // Use active tour ID if passed, else fall back to session data
+        const mapTourId = screenParams.tourId || tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
+        return <MapScreen {...screenProps} onBack={() => navigateTo('TourHome')} tourId={mapTourId} />;
       case 'NotificationPreferences':
         return (
           <NotificationPreferencesScreen
