@@ -155,16 +155,20 @@ const notifyAuthStateListeners = (user) => {
   });
 };
 
-// Set up global auth state observer
-auth.onAuthStateChanged(async (user) => {
-  console.log('Global auth state changed:', user ? user.uid : 'null');
-  
-  // Save auth state
-  await authPersistence.saveAuthState(user);
-  
-  // Notify all listeners
-  notifyAuthStateListeners(user);
-});
+// Set up global auth state observer (guarded to avoid crashing when Firebase fails to init)
+if (auth?.onAuthStateChanged) {
+  auth.onAuthStateChanged(async (user) => {
+    console.log('Global auth state changed:', user ? user.uid : 'null');
+
+    // Save auth state
+    await authPersistence.saveAuthState(user);
+
+    // Notify all listeners
+    notifyAuthStateListeners(user);
+  });
+} else {
+  console.error('Firebase auth is not available; skipping auth state listener setup');
+}
 
 // Enhanced auth functions
 const authHelpers = {
@@ -224,6 +228,11 @@ let isOnline = true;
 
 const updateNetworkState = (online) => {
   isOnline = online;
+  if (!realtimeDb) {
+    console.warn('Realtime Database is not available; skipping network state sync');
+    return;
+  }
+
   if (online) {
     console.log('Network connected - syncing data');
     realtimeDb.goOnline();
