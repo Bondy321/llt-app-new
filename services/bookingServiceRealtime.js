@@ -23,6 +23,35 @@ const sanitizeTourId = (tourCode) => {
   return tourCode ? tourCode.replace(/\s+/g, '_') : null;
 };
 
+// --- HELPERS: Manifest Status Derivation ---
+const deriveParentStatusFromPassengers = (passengerStatuses = []) => {
+  if (!Array.isArray(passengerStatuses) || passengerStatuses.length === 0) return MANIFEST_STATUS.PENDING;
+
+  const normalized = passengerStatuses.map((status) => status || MANIFEST_STATUS.PENDING);
+  const allBoarded = normalized.every((status) => status === MANIFEST_STATUS.BOARDED);
+  const allNoShow = normalized.every((status) => status === MANIFEST_STATUS.NO_SHOW);
+  const allPending = normalized.every((status) => status === MANIFEST_STATUS.PENDING);
+
+  if (allBoarded) return MANIFEST_STATUS.BOARDED;
+  if (allNoShow) return MANIFEST_STATUS.NO_SHOW;
+  if (allPending) return MANIFEST_STATUS.PENDING;
+  return MANIFEST_STATUS.PARTIAL;
+};
+
+const normalizePassengerStatuses = (passengerStatuses, totalPax) => {
+  const baseStatuses = Array.isArray(passengerStatuses) ? passengerStatuses : [];
+  const padded = [...baseStatuses];
+
+  if (typeof totalPax === 'number' && totalPax > padded.length) {
+    const missing = totalPax - padded.length;
+    padded.push(...Array(missing).fill(MANIFEST_STATUS.PENDING));
+  } else if (typeof totalPax === 'number' && totalPax > 0 && padded.length > totalPax) {
+    padded.length = totalPax;
+  }
+
+  return padded.map((status) => status || MANIFEST_STATUS.PENDING);
+};
+
 // --- EXISTING: Harmonize legacy booking shapes ---
 const ensureBookingSchemaConsistency = async (bookingRef, bookingData, dbInstance = realtimeDb) => {
   const db = dbInstance || realtimeDb;
@@ -125,12 +154,16 @@ const getTourManifest = async (tourCodeOriginal) => {
         const { normalizedBooking } = await ensureBookingSchemaConsistency(bookingRef, data);
         const liveStatus = bookingStatuses[bookingRef] || {};
         const totalPax = normalizedBooking.passengerNames.length;
-        const currentStatus = liveStatus.status || MANIFEST_STATUS.PENDING;
+        const hasPassengerStatuses = Array.isArray(liveStatus.passengers);
+        const passengerStatus = normalizePassengerStatuses(liveStatus.passengers, totalPax);
+        const derivedStatus = hasPassengerStatuses ? deriveParentStatusFromPassengers(passengerStatus) : null;
+        const currentStatus = derivedStatus || liveStatus.status || MANIFEST_STATUS.PENDING;
 
         bookings.push({
           ...normalizedBooking,
           status: currentStatus,
-          passengerStatus: liveStatus.passengers || Array(totalPax).fill(MANIFEST_STATUS.PENDING),
+          hasPassengerStatuses,
+          passengerStatus,
           notes: liveStatus.notes || ''
         });
       }
@@ -140,10 +173,17 @@ const getTourManifest = async (tourCodeOriginal) => {
       const paxCount = b.passengerNames.length;
       acc.totalPax += paxCount;
 
-      if (b.status === MANIFEST_STATUS.BOARDED) {
-        acc.checkedIn += paxCount;
-      } else if (b.status === MANIFEST_STATUS.NO_SHOW) {
-        acc.noShows += paxCount;
+      if (b.hasPassengerStatuses && Array.isArray(b.passengerStatus) && b.passengerStatus.length > 0) {
+        b.passengerStatus.forEach((status) => {
+          if (status === MANIFEST_STATUS.BOARDED) acc.checkedIn += 1;
+          if (status === MANIFEST_STATUS.NO_SHOW) acc.noShows += 1;
+        });
+      } else {
+        if (b.status === MANIFEST_STATUS.BOARDED) {
+          acc.checkedIn += paxCount;
+        } else if (b.status === MANIFEST_STATUS.NO_SHOW) {
+          acc.noShows += paxCount;
+        }
       }
       return acc;
     }, { totalBookings: bookings.length, totalPax: 0, checkedIn: 0, noShows: 0 });
@@ -160,45 +200,21 @@ const getTourManifest = async (tourCodeOriginal) => {
   }
 };
 
-// --- NEW: Update Booking Status (All Here, No Show, or Individual) ---
-const updateManifestBooking = async (tourCode, bookingRef, updateType, payload = {}) => {
-  // updateType: 'ALL_HERE' | 'NO_SHOW' | 'UPDATE_PAX'
+// --- UPDATED: Update Booking Status with Passenger-Level granularity ---
+const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = []) => {
   try {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
     const tourId = sanitizeTourId(tourCode);
     const bookingManifestRef = realtimeDb.ref(`tour_manifests/${tourId}/bookings/${bookingRef}`);
-    
-    let updates = {
+
+    const normalizedStatuses = normalizePassengerStatuses(passengerStatuses);
+    const parentStatus = deriveParentStatusFromPassengers(normalizedStatuses);
+
+    const updates = {
+      status: parentStatus,
+      passengers: normalizedStatuses,
       lastUpdated: new Date().toISOString()
     };
-
-    if (updateType === 'ALL_HERE') {
-      // Mark main status and all passengers
-      updates.status = MANIFEST_STATUS.BOARDED;
-      // We don't strictly need to list every passenger as boarded if the parent is boarded,
-      // but it helps consistency if we switch back to partial view.
-      // We would need the pax count to do this perfectly, but simply setting status is often enough.
-      updates.passengers = null; // Clear individual overrides to fallback to parent status
-    } 
-    else if (updateType === 'NO_SHOW') {
-      updates.status = MANIFEST_STATUS.NO_SHOW;
-      updates.passengers = null;
-    } 
-    else if (updateType === 'UPDATE_PAX') {
-      // Payload should contain { index: 0, status: 'BOARDED' }
-      // This requires fetching current state to merge, or we assume payload has full array
-      // Better: Update specific index.
-      if (typeof payload.index !== 'number' || !payload.status) {
-        throw new Error('Invalid payload for UPDATE_PAX');
-      }
-      
-      // We need to read the current array to determine if "PARTIAL" or "BOARDED"
-      // For efficiency, we just update the specific child node
-      await bookingManifestRef.child(`passengers/${payload.index}`).set(payload.status);
-      
-      // Determine overall status (Client side usually calculates this, but we can do a quick check or set to PARTIAL)
-      updates.status = MANIFEST_STATUS.PARTIAL; 
-    }
 
     await bookingManifestRef.update(updates);
     return { success: true };

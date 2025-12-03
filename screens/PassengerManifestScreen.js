@@ -23,11 +23,13 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [manifestData, setManifestData] = useState({ bookings: [], stats: {} });
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   // Modal State
   const [selectedBooking, setSelectedBooking] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
-  const [partialCheckState, setPartialCheckState] = useState({}); // { 0: true, 1: false }
+  const [partialMode, setPartialMode] = useState(false);
+  const [partialStatuses, setPartialStatuses] = useState([]);
+  const [actionLoading, setActionLoading] = useState(false);
 
   const loadManifest = async () => {
     try {
@@ -78,30 +80,48 @@ export default function PassengerManifestScreen({ route, navigation }) {
   // --- Actions ---
   const handleOpenBooking = (booking) => {
     setSelectedBooking(booking);
-    // Initialize partial state based on existing status
-    const initialPartial = {};
-    booking.passengerNames.forEach((_, idx) => {
-        // If whole booking is boarded, everyone is checked. 
-        // If partial, check individual status (logic can be expanded if we stored individual status strictly)
-        initialPartial[idx] = booking.status === MANIFEST_STATUS.BOARDED;
-    });
-    setPartialCheckState(initialPartial);
+    const existingStatuses = Array.isArray(booking.passengerStatus) ? booking.passengerStatus : [];
+    const normalized = booking.passengerNames.map((_, idx) => existingStatuses[idx] || MANIFEST_STATUS.PENDING);
+    setPartialStatuses(normalized);
+    setPartialMode(false);
     setModalVisible(true);
   };
 
-  const submitUpdate = async (type) => {
+  const submitUpdate = async (passengerStatuses) => {
     if (!selectedBooking) return;
 
-    let payload = {};
-    // If partial, we iterate through checks. 
-    // Note: For this MVP, 'PARTIAL' simply marks status as PARTIAL. 
-    // A full implementation would save individual indices to DB.
-    
-    setLoading(true); // temporary UI lock
-    await updateManifestBooking(tourId, selectedBooking.id, type, payload);
-    setModalVisible(false);
-    setSelectedBooking(null);
-    loadManifest(); // Refresh data
+    try {
+      setActionLoading(true);
+      const statusesToPersist = passengerStatuses && passengerStatuses.length > 0
+        ? passengerStatuses
+        : selectedBooking.passengerNames.map(() => MANIFEST_STATUS.PENDING);
+
+      await updateManifestBooking(tourId, selectedBooking.id, statusesToPersist);
+      setModalVisible(false);
+      setSelectedBooking(null);
+      setPartialMode(false);
+      await loadManifest();
+    } catch (error) {
+      Alert.alert('Error', 'Failed to update manifest: ' + error.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleSetAll = (status) => {
+    if (!selectedBooking) return;
+    const statuses = selectedBooking.passengerNames.map(() => status);
+    submitUpdate(statuses);
+  };
+
+  const handleConfirmPartial = () => submitUpdate(partialStatuses);
+
+  const updatePassengerStatus = (index, status) => {
+    setPartialStatuses((prev) => {
+      const next = [...prev];
+      next[index] = status;
+      return next;
+    });
   };
 
   // --- Render Functions ---
@@ -229,40 +249,104 @@ export default function PassengerManifestScreen({ route, navigation }) {
                   <Text style={styles.modalSubtitle}>Ref: {selectedBooking.id} • {selectedBooking.passengerNames.length} Pax</Text>
                 </View>
 
-                <Text style={styles.modalSectionLabel}>Actions</Text>
-                
-                <View style={styles.actionRow}>
-                  <TouchableOpacity 
-                    style={[styles.actionBtn, { backgroundColor: COLORS.success }]}
-                    onPress={() => submitUpdate('ALL_HERE')}
-                  >
-                    <MaterialCommunityIcons name="check-all" size={28} color="white" />
-                    <Text style={styles.actionBtnText}>All Here</Text>
-                  </TouchableOpacity>
+                {partialMode ? (
+                  <>
+                    <Text style={styles.modalSectionLabel}>Select Passengers</Text>
+                    <View style={styles.passengerList}>
+                      {selectedBooking.passengerNames.map((name, idx) => {
+                        const status = partialStatuses[idx] || MANIFEST_STATUS.PENDING;
+                        return (
+                          <View key={`${selectedBooking.id}-${idx}`} style={styles.passengerRow}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.passengerName}>{name}</Text>
+                              <Text style={styles.passengerSeat}>Passenger {idx + 1}</Text>
+                            </View>
+                            <View style={styles.passengerActions}>
+                              <TouchableOpacity
+                                style={[styles.statusPill, status === MANIFEST_STATUS.BOARDED && styles.statusPillActiveSuccess]}
+                                onPress={() => updatePassengerStatus(idx, MANIFEST_STATUS.BOARDED)}
+                                disabled={actionLoading}
+                              >
+                                <Text style={[styles.statusPillText, status === MANIFEST_STATUS.BOARDED && styles.statusPillTextActive]}>Boarded</Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={[styles.statusPill, status === MANIFEST_STATUS.NO_SHOW && styles.statusPillActiveDanger]}
+                                onPress={() => updatePassengerStatus(idx, MANIFEST_STATUS.NO_SHOW)}
+                                disabled={actionLoading}
+                              >
+                                <Text style={[styles.statusPillText, status === MANIFEST_STATUS.NO_SHOW && styles.statusPillTextActive]}>No Show</Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={[styles.statusPill, status === MANIFEST_STATUS.PENDING && styles.statusPillActivePending]}
+                                onPress={() => updatePassengerStatus(idx, MANIFEST_STATUS.PENDING)}
+                                disabled={actionLoading}
+                              >
+                                <Text style={[styles.statusPillText, status === MANIFEST_STATUS.PENDING && styles.statusPillTextActive]}>Pending</Text>
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                        );
+                      })}
+                    </View>
 
-                  <TouchableOpacity 
-                    style={[styles.actionBtn, { backgroundColor: COLORS.danger }]}
-                    onPress={() => submitUpdate('NO_SHOW')}
-                  >
-                    <MaterialCommunityIcons name="close-circle-outline" size={28} color="white" />
-                    <Text style={styles.actionBtnText}>No Show</Text>
-                  </TouchableOpacity>
-                </View>
+                    <View style={styles.partialFooter}>
+                      <TouchableOpacity
+                        style={[styles.partialFooterBtn, styles.partialFooterCancel]}
+                        onPress={() => setPartialMode(false)}
+                        disabled={actionLoading}
+                      >
+                        <Text style={[styles.partialFooterText, { color: COLORS.info }]}>Back</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.partialFooterBtn, styles.partialFooterConfirm]}
+                        onPress={handleConfirmPartial}
+                        disabled={actionLoading}
+                      >
+                        <Text style={[styles.partialFooterText, { color: 'white' }]}>Confirm</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.modalSectionLabel}>Actions</Text>
 
-                {/* 'Some Here' Logic (Simplified for MVP) */}
-                <TouchableOpacity 
-                  style={[styles.secondaryActionBtn, { borderColor: COLORS.info }]}
-                  onPress={() => Alert.alert("Coming Soon", "Detailed individual selection will be available in the next update.")}
-                >
-                    <Text style={{ color: COLORS.info, fontWeight: 'bold' }}>Some Here (Select Individuals)</Text>
-                </TouchableOpacity>
+                    <View style={styles.actionRow}>
+                      <TouchableOpacity
+                        style={[styles.actionBtn, { backgroundColor: COLORS.success }]}
+                        onPress={() => handleSetAll(MANIFEST_STATUS.BOARDED)}
+                        disabled={actionLoading}
+                      >
+                        <MaterialCommunityIcons name="check-all" size={28} color="white" />
+                        <Text style={styles.actionBtnText}>All Here</Text>
+                      </TouchableOpacity>
 
-                <TouchableOpacity 
-                  style={styles.closeBtn}
-                  onPress={() => setModalVisible(false)}
-                >
-                  <Text style={styles.closeBtnText}>Cancel</Text>
-                </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.actionBtn, { backgroundColor: COLORS.danger }]}
+                        onPress={() => handleSetAll(MANIFEST_STATUS.NO_SHOW)}
+                        disabled={actionLoading}
+                      >
+                        <MaterialCommunityIcons name="close-circle-outline" size={28} color="white" />
+                        <Text style={styles.actionBtnText}>No Show</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <TouchableOpacity
+                      style={[styles.secondaryActionBtn, { borderColor: COLORS.info }]}
+                      onPress={() => setPartialMode(true)}
+                      disabled={actionLoading}
+                    >
+                        <Text style={{ color: COLORS.info, fontWeight: 'bold' }}>Some Here (Select Individuals)</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.closeBtn}
+                      onPress={() => setModalVisible(false)}
+                      disabled={actionLoading}
+                    >
+                      <Text style={styles.closeBtnText}>Cancel</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
               </>
             )}
           </View>
@@ -386,5 +470,48 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed'
   },
   closeBtn: { padding: 15, alignItems: 'center' },
-  closeBtnText: { color: '#95A5A6', fontWeight: 'bold', fontSize: 16 }
+  closeBtnText: { color: '#95A5A6', fontWeight: 'bold', fontSize: 16 },
+
+  passengerList: { gap: 10, marginBottom: 15 },
+  passengerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8F9F9',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#ECF0F1'
+  },
+  passengerName: { fontWeight: 'bold', color: COLORS.primary },
+  passengerSeat: { color: '#7F8C8D', marginTop: 4 },
+  passengerActions: { flexDirection: 'row', gap: 8 },
+  statusPill: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#D0D3D4',
+    backgroundColor: 'white'
+  },
+  statusPillText: { fontSize: 12, fontWeight: '600', color: COLORS.primary },
+  statusPillActiveSuccess: { backgroundColor: '#E8F8F5', borderColor: '#ABEBC6' },
+  statusPillActiveDanger: { backgroundColor: '#FDEDEC', borderColor: '#F5B7B1' },
+  statusPillActivePending: { backgroundColor: '#EBF5FB', borderColor: '#AED6F1' },
+  statusPillTextActive: { color: COLORS.primary },
+  partialFooter: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
+  partialFooterBtn: {
+    flex: 1,
+    padding: 14,
+    borderRadius: 12,
+    alignItems: 'center'
+  },
+  partialFooterCancel: {
+    borderWidth: 1,
+    borderColor: COLORS.info,
+    backgroundColor: 'white'
+  },
+  partialFooterConfirm: {
+    backgroundColor: COLORS.info
+  },
+  partialFooterText: { fontWeight: 'bold' }
 });
