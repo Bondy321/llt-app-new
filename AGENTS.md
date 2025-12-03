@@ -1,6 +1,6 @@
 Loch Lomond Travel (LLT) App - Agent Onboarding & System Status
 
-Last Updated: 1st December 2025
+Last Updated: 17 March 2026
 
 Welcome, Agent. This document provides a comprehensive overview of the current state of the LLT App ecosystem. It details the architecture, recent critical updates, known issues, and the roadmap for upcoming features.
 
@@ -26,13 +26,17 @@ The central source of truth.
 
 Structure:
 
-/tours/{tourId}: Tour details, driver info, itinerary, and live location.
+/tours/{tourId}: Tour details, driver info, itinerary, live location, and tourCode normalization.
 
-/bookings/{bookingRef}: Links users to tours.
+/bookings/{bookingRef}: Links users to tours. Includes pickup points, seats, and manifests-backed status.
 
-/drivers/{driverId}: [NEW] Driver profiles, phone numbers, and assigned tours.
+/drivers/{driverId}: Driver profiles, phone numbers, assigned tours, and join-to-tour metadata.
+
+/tour_manifests/{tourId}: Passenger manifests with booking statuses (BOARDED/NO_SHOW/PARTIAL), per-tour assigned drivers, and driver codes to unlock internal chat.
 
 /chats/{tourId}: Group chat messages.
+
+/internal_chats/{tourId}: Driver-only chat gated by assigned_drivers.
 
 /logs/{userId}: User-specific app logs.
 
@@ -76,6 +80,10 @@ Edit Itinerary: Drivers can modify timelines directly in the app. Changes trigge
 
 Driver Chat: Drivers can participate in group chats with a distinct "DRIVER" badge.
 
+Passenger Manifest Console: Drivers can open PassengerManifestScreen to tick off bookings as All Here, No Show, or Partial, with pickup-location grouping and stats (total/boarded/no-show). Statuses are stored under /tour_manifests/{tourId}/bookings and power the dashboard tiles.
+
+Driver Assignment & Join Flow: Drivers can self-assign to a tour via code entry (assignDriverToTour in services/bookingServiceRealtime.js) which writes assigned_drivers/assigned_driver_codes and currentTourId. Internal driver chat relies on this assignment list.
+
 B. Live Map (Pickup Points)
 
 Driver Side: "Set Pickup Point" button writes static coordinates to Firebase.
@@ -86,7 +94,7 @@ C. Web Admin Dashboard
 
 We have deployed a React/Vite web app for operations staff (web-admin/).
 
-Driver Management: Create driver accounts and assign them to multiple tours.
+Driver Management: Create driver accounts and assign them to multiple tours. Manifest assignments use multi-path updates to keep /drivers, /tours, and /tour_manifests/assigned_drivers in sync.
 
 Broadcast System: Send "HQ Announcements" that appear in tour chats as high-priority messages.
 
@@ -106,51 +114,53 @@ CRITICAL: These rules enforce the separation of powers between Passengers, Drive
 
 {
   "rules": {
-    // Helper: Check if user is the specific Admin UID
-    // REPLACE 'YOUR_ADMIN_UID_HERE' with the actual UID from Firebase Auth
-    // In production, use a custom claim or list of admin UIDs
-    
-    // 1. DRIVERS
-    // App needs to read to verify login. ONLY Admin can write/create drivers.
     "drivers": {
       ".read": "auth != null",
-      ".write": "auth.uid === 'YOUR_ADMIN_UID_HERE'"
+      ".write": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
     },
-
-    // 2. BOOKINGS
     "bookings": {
+      // FIX 1: Allow reading the list to support orderByChild queries
+      ".read": "auth != null",
+      ".indexOn": ["tourCode"],
       "$bookingId": {
+        ".write": "auth != null"
+      }
+    },
+    // FIX 2: Add rules for tour_manifests so drivers can be assigned and statuses updated
+    "tour_manifests": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      "$tourId": {
+        "assigned_drivers": {
+           ".indexOn": [".value"]
+        }
+      }
+    },
+    "tours": {
+      "$tourId": {
         ".read": "auth != null",
         ".write": "auth != null"
       }
     },
-
-    // 3. TOURS
-    // Passengers read. Drivers/Admins can write (for location/itinerary updates).
-    "tours": {
-      "$tourId": {
-        ".read": "auth != null",
-        ".write": "auth != null" 
-      }
-    },
-
-    // 4. CHAT
     "chats": {
       "$tourId": {
         ".read": "auth != null",
         ".write": "auth != null"
       }
     },
-
-    // 5. LOGS
-    "logs": {
-      "$userId": {
-        ".read": false, 
-        ".write": "auth != null || $userId === 'anonymous'" 
+    "internal_chats": {
+      "$tourId": {
+        // This will now work because the driver assignment write will succeed
+        ".read": "auth != null && root.child('tour_manifests').child($tourId).child('assigned_drivers').child(auth.uid).val() === true",
+        ".write": "auth != null && root.child('tour_manifests').child($tourId).child('assigned_drivers').child(auth.uid).val() === true"
       }
     },
-
-    // 6. PHOTOS (Public/Private)
+    "logs": {
+      "$userId": {
+        ".read": false,
+        ".write": "auth != null || $userId === 'anonymous'"
+      }
+    },
     "group_tour_photos": {
       "$tourId": {
         ".read": "auth != null",
@@ -165,12 +175,10 @@ CRITICAL: These rules enforce the separation of powers between Passengers, Drive
         }
       }
     },
-
-    // 7. USERS (Push Tokens)
     "users": {
       "$userId": {
-        ".read": "auth != null && (auth.uid === $userId || auth.uid === 'YOUR_ADMIN_UID_HERE')",
-        ".write": "auth != null && (auth.uid === $userId || auth.uid === 'YOUR_ADMIN_UID_HERE')"
+        ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
+        ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')"
       }
     }
   }
@@ -190,6 +198,10 @@ functions/index.js: [Backend] Cloud Functions triggers for Chat and Itinerary no
 web-admin/src/components/DriversManager.jsx: [Backend UI] Logic for managing driver assignments.
 
 screens/DriverHomeScreen.js: The dedicated dashboard for drivers.
+
+screens/PassengerManifestScreen.js: Driver-facing manifest console for boarding, no-show, and partial updates.
+
+screens/TourHomeScreen.js: Passenger-side manifest indicator that reads /tour_manifests bookings to show status chips.
 
 screens/MapScreen.js: Displays the driver's set pickup location.
 
