@@ -24,6 +24,23 @@ const buildMessagePayload = (messageText, senderInfo, messageId) => {
   };
 };
 
+const buildMessagesFromSnapshot = (snapshot) => {
+  const messages = [];
+
+  if (snapshot.exists()) {
+    snapshot.forEach((childSnapshot) => {
+      messages.push({
+        id: childSnapshot.key,
+        ...childSnapshot.val(),
+      });
+    });
+  }
+
+  messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  return messages;
+};
+
 // Send a message to the tour chat with optimistic response
 const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb) => {
   try {
@@ -58,6 +75,39 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb)
   }
 };
 
+// Send a message to the internal driver chat for a tour
+const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb) => {
+  try {
+    const trimmed = (message || '').trim();
+
+    if (!trimmed) {
+      return { success: false, error: 'Message cannot be empty' };
+    }
+
+    const db = dbInstance || realtimeDb;
+
+    if (!db) {
+      return { success: false, error: 'Realtime database unavailable' };
+    }
+
+    const messagesRef = db.ref(`internal_chats/${tourId}/messages`);
+    const newMessageRef = messagesRef.push();
+    const optimisticMessage = buildMessagePayload(trimmed, senderInfo, newMessageRef.key);
+
+    const { id, ...payloadForDb } = optimisticMessage;
+    const serverPromise = newMessageRef.set(payloadForDb);
+
+    serverPromise.catch((error) => {
+      console.error('Error sending internal driver message:', error);
+    });
+
+    return { success: true, message: optimisticMessage, serverPromise };
+  } catch (error) {
+    console.error('Error sending internal driver message:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // Subscribe to chat messages for a tour
 const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtimeDb) => {
   const db = dbInstance || realtimeDb;
@@ -70,21 +120,7 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtime
   const messagesRef = db.ref(`chats/${tourId}/messages`);
 
   const listener = messagesRef.on('value', (snapshot) => {
-    const messages = [];
-
-    if (snapshot.exists()) {
-      snapshot.forEach((childSnapshot) => {
-        messages.push({
-          id: childSnapshot.key,
-          ...childSnapshot.val(),
-        });
-      });
-    }
-
-    // Sort messages by timestamp
-    messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-    onMessagesUpdate(messages);
+    onMessagesUpdate(buildMessagesFromSnapshot(snapshot));
   });
 
   // Return unsubscribe function
@@ -93,6 +129,30 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtime
       messagesRef.off('value', listener);
     } catch (error) {
       console.warn('Error unsubscribing from chat messages', error);
+    }
+  };
+};
+
+// Subscribe to internal driver chat messages for a tour
+const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance = realtimeDb) => {
+  const db = dbInstance || realtimeDb;
+
+  if (!db || !tourId || typeof onMessagesUpdate !== 'function') {
+    console.warn('subscribeToInternalDriverChat called without required params');
+    return () => {};
+  }
+
+  const messagesRef = db.ref(`internal_chats/${tourId}/messages`);
+
+  const listener = messagesRef.on('value', (snapshot) => {
+    onMessagesUpdate(buildMessagesFromSnapshot(snapshot));
+  });
+
+  return () => {
+    try {
+      messagesRef.off('value', listener);
+    } catch (error) {
+      console.warn('Error unsubscribing from internal driver chat messages', error);
     }
   };
 };
@@ -141,6 +201,8 @@ const getChatMessages = async (tourId, limit = 50) => {
 module.exports = {
   sendMessage,
   subscribeToChatMessages,
+  subscribeToInternalDriverChat,
+  sendInternalDriverMessage,
   markChatAsRead,
   getChatMessages,
 };

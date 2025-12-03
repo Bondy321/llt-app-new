@@ -14,7 +14,12 @@ import {
   View,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { subscribeToChatMessages, sendMessage } from '../services/chatService';
+import {
+  sendInternalDriverMessage,
+  sendMessage,
+  subscribeToChatMessages,
+  subscribeToInternalDriverChat,
+} from '../services/chatService';
 import { auth } from '../firebase';
 
 // Brand Colors
@@ -36,7 +41,7 @@ const COLORS = {
   chatHeaderColor: '#2ECC71',
 };
 
-export default function ChatScreen({ onBack, tourId, bookingData, tourData }) {
+export default function ChatScreen({ onBack, tourId, bookingData, tourData, internalDriverChat = false }) {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
@@ -58,7 +63,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData }) {
       return;
     }
 
-    const unsubscribe = subscribeToChatMessages(tourId, (newMessages) => {
+    const unsubscribe = (internalDriverChat ? subscribeToInternalDriverChat : subscribeToChatMessages)(tourId, (newMessages) => {
       setMessages(newMessages);
       setLoading(false);
       scrollToBottom(true);
@@ -67,7 +72,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData }) {
     return () => {
       unsubscribe();
     };
-  }, [tourId]);
+  }, [tourId, internalDriverChat]);
 
   useEffect(() => {
     const showSub = Keyboard.addListener('keyboardDidShow', () => scrollToBottom(true));
@@ -117,7 +122,8 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData }) {
     scrollToBottom(true);
 
     try {
-      const result = await sendMessage(tourId, trimmed, senderInfo);
+      const sendFn = internalDriverChat ? sendInternalDriverMessage : sendMessage;
+      const result = await sendFn(tourId, trimmed, senderInfo);
 
       if (!result?.success || !result?.message) {
         setMessages((prev) => prev.filter((msg) => msg.id !== optimisticId));

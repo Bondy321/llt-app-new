@@ -98,6 +98,20 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
     });
   };
 
+  const handleOpenDriverChat = () => {
+    if (!activeTourId) {
+      Alert.alert("No Tour", "You need an active tour to access the driver chat.");
+      return;
+    }
+
+    onNavigate('Chat', {
+      tourId: activeTourId,
+      isDriver: true,
+      driverName: driverData?.name || 'Driver',
+      internalDriverChat: true,
+    });
+  };
+
   // --- NEW: Join Tour Logic ---
   const handleJoinTour = async () => {
     if (!inputTourCode.trim()) {
@@ -167,7 +181,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
             </TouchableOpacity>
 
             {/* Group Chat */}
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.bigButton, { backgroundColor: COLORS.info }]}
               onPress={handleOpenChat}
             >
@@ -177,6 +191,15 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
         </View>
 
         {/* --- FULL WIDTH BUTTONS --- */}
+
+        {/* Driver Chat */}
+        <TouchableOpacity
+            style={[styles.wideButton, { backgroundColor: COLORS.primary }]}
+            onPress={handleOpenDriverChat}
+        >
+            <MaterialCommunityIcons name="walkie-talkie" size={28} color="white" style={{marginRight: 10}}/>
+            <Text style={styles.wideButtonText}>DRIVER CHAT</Text>
+        </TouchableOpacity>
         
         {/* Manifest Button */}
         <TouchableOpacity 
