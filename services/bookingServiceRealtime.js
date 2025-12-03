@@ -90,9 +90,22 @@ const getTourManifest = async (tourCodeOriginal) => {
 
     const tourId = sanitizeTourId(tourCodeOriginal);
 
+    // Resolve the real tourCode for booking lookups (some tourIds are sanitized with underscores)
+    let tourCodeForSearch = tourCodeOriginal;
+    if (tourId) {
+      const tourCodeSnapshot = await realtimeDb.ref(`tours/${tourId}/tourCode`).once('value');
+      if (tourCodeSnapshot.exists() && tourCodeSnapshot.val()) {
+        tourCodeForSearch = tourCodeSnapshot.val();
+      } else if (tourCodeOriginal && tourCodeOriginal.includes('_')) {
+        tourCodeForSearch = tourCodeOriginal.replace(/_/g, ' ');
+      }
+    } else if (tourCodeOriginal && tourCodeOriginal.includes('_')) {
+      tourCodeForSearch = tourCodeOriginal.replace(/_/g, ' ');
+    }
+
     const bookingsQuery = realtimeDb.ref('bookings')
       .orderByChild('tourCode')
-      .equalTo(tourCodeOriginal);
+      .equalTo(tourCodeForSearch);
 
     const manifestRef = realtimeDb.ref(`tour_manifests/${tourId}`);
 
@@ -203,13 +216,18 @@ const assignDriverToTour = async (driverId, tourCode) => {
     const tourId = sanitizeTourId(tourCode);
 
     const updates = {};
-    
+
     // 1. Update Driver's Profile
     updates[`drivers/${driverId}/currentTourId`] = tourId;
+    updates[`drivers/${driverId}/currentTourCode`] = tourCode;
     updates[`drivers/${driverId}/lastActive`] = new Date().toISOString();
-    
+
     // 2. Add to Tour Manifest's assigned drivers list
     updates[`tour_manifests/${tourId}/assigned_drivers/${driverId}`] = true;
+    updates[`tour_manifests/${tourId}/assigned_driver_codes/${driverId}`] = {
+      tourId,
+      tourCode,
+    };
 
     await realtimeDb.ref().update(updates);
     console.log(`Driver ${driverId} assigned to tour ${tourId}`);
