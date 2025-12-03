@@ -1,6 +1,7 @@
 // services/bookingServiceRealtime.js
 const isTestEnv = process.env.NODE_ENV === 'test';
 let realtimeDb;
+let auth;
 
 // Status Enums for the Manifest
 export const MANIFEST_STATUS = {
@@ -12,7 +13,7 @@ export const MANIFEST_STATUS = {
 
 if (!isTestEnv) {
   try {
-    ({ realtimeDb } = require('../firebase'));
+    ({ realtimeDb, auth } = require('../firebase'));
   } catch (error) {
     console.warn('Realtime database module not initialized during load:', error.message);
   }
@@ -230,6 +231,7 @@ const assignDriverToTour = async (driverId, tourCode) => {
   try {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
     const tourId = sanitizeTourId(tourCode);
+    const currentUid = auth?.currentUser?.uid || null;
 
     const updates = {};
 
@@ -237,6 +239,9 @@ const assignDriverToTour = async (driverId, tourCode) => {
     updates[`drivers/${driverId}/currentTourId`] = tourId;
     updates[`drivers/${driverId}/currentTourCode`] = tourCode;
     updates[`drivers/${driverId}/lastActive`] = new Date().toISOString();
+    if (currentUid) {
+      updates[`drivers/${driverId}/authUid`] = currentUid;
+    }
 
     // 2. Add to Tour Manifest's assigned drivers list
     updates[`tour_manifests/${tourId}/assigned_drivers/${driverId}`] = true;
@@ -244,6 +249,14 @@ const assignDriverToTour = async (driverId, tourCode) => {
       tourId,
       tourCode,
     };
+    if (currentUid) {
+      updates[`tour_manifests/${tourId}/assigned_drivers/${currentUid}`] = true;
+      updates[`tour_manifests/${tourId}/assigned_driver_codes/${currentUid}`] = {
+        tourId,
+        tourCode,
+        driverCode: driverId,
+      };
+    }
 
     await realtimeDb.ref().update(updates);
     console.log(`Driver ${driverId} assigned to tour ${tourId}`);

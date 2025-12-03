@@ -76,8 +76,8 @@ export function DriversManager() {
     // OPTIONAL: If you want name changes to propagate to all assigned tours instantly:
     const currentAssignments = drivers[selectedDriverId]?.assignments || {};
     Object.keys(currentAssignments).forEach(tourId => {
-       updates[`tours/${tourId}/driverName`] = editName;
-       updates[`tours/${tourId}/driverPhone`] = editPhone;
+      updates[`tours/${tourId}/driverName`] = editName;
+      updates[`tours/${tourId}/driverPhone`] = editPhone;
     });
 
     try {
@@ -93,16 +93,32 @@ export function DriversManager() {
     if (!newAssignment || !selectedDriverId) return;
     const tourId = newAssignment.trim();
     const driver = drivers[selectedDriverId];
+    const authUid = driver?.authUid;
 
     // Use multi-path updates to ensure consistency
     const updates = {};
-    
+
     // Path 1: Add to Driver's list
     updates[`drivers/${selectedDriverId}/assignments/${tourId}`] = true;
-    
+
     // Path 2: Update the Tour with Driver info
     updates[`tours/${tourId}/driverName`] = driver.name;
-    updates[`tours/${tourId}/driverPhone`] = driver.phone || ""; 
+    updates[`tours/${tourId}/driverPhone`] = driver.phone || "";
+
+    // Path 3: Sync manifest assigned drivers for chat access
+    updates[`tour_manifests/${tourId}/assigned_drivers/${selectedDriverId}`] = true;
+    updates[`tour_manifests/${tourId}/assigned_driver_codes/${selectedDriverId}`] = {
+      tourId,
+      tourCode: tourId,
+    };
+    if (authUid) {
+      updates[`tour_manifests/${tourId}/assigned_drivers/${authUid}`] = true;
+      updates[`tour_manifests/${tourId}/assigned_driver_codes/${authUid}`] = {
+        tourId,
+        tourCode: tourId,
+        driverCode: selectedDriverId,
+      };
+    }
 
     try {
       await update(ref(db), updates);
@@ -115,15 +131,24 @@ export function DriversManager() {
   // 6. Remove Tour Assignment (AND reset /tours node)
   const handleRemoveAssignment = async (tourId) => {
     if (!window.confirm(`Unassign ${tourId} from this driver? This will reset the tour driver to 'TBA'.`)) return;
-    
+
     const updates = {};
-    
+    const authUid = drivers[selectedDriverId]?.authUid;
+
     // Path 1: Remove from Driver's list
     updates[`drivers/${selectedDriverId}/assignments/${tourId}`] = null;
-    
+
     // Path 2: Reset the Tour details
     updates[`tours/${tourId}/driverName`] = "TBA";
     updates[`tours/${tourId}/driverPhone`] = "";
+
+    // Path 3: Remove manifest driver assignments
+    updates[`tour_manifests/${tourId}/assigned_drivers/${selectedDriverId}`] = null;
+    updates[`tour_manifests/${tourId}/assigned_driver_codes/${selectedDriverId}`] = null;
+    if (authUid) {
+      updates[`tour_manifests/${tourId}/assigned_drivers/${authUid}`] = null;
+      updates[`tour_manifests/${tourId}/assigned_driver_codes/${authUid}`] = null;
+    }
 
     try {
       await update(ref(db), updates);
