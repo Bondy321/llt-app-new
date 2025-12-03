@@ -329,12 +329,13 @@ case 'Itinerary':
           : bookingData;
 
         return (
-          <ChatScreen 
-            {...screenProps} 
-            onBack={() => navigateTo(backScreen)} 
-            tourId={chatTourId} 
-            bookingData={effectiveBookingData} 
-            tourData={tourData || { name: 'Tour Chat' }} 
+          <ChatScreen
+            {...screenProps}
+            onBack={() => navigateTo(backScreen)}
+            tourId={chatTourId}
+            bookingData={effectiveBookingData}
+            tourData={tourData || { name: 'Tour Chat' }}
+            internalDriverChat={screenParams.internalDriverChat === true}
           />
         );
       case 'Map':

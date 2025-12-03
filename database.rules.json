@@ -1,0 +1,58 @@
+{
+  "rules": {
+    "drivers": {
+      ".read": "auth != null",
+      ".write": "auth.uid === 'YOUR_ADMIN_UID_HERE'"
+    },
+    "bookings": {
+      "$bookingId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "tours": {
+      "$tourId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "chats": {
+      "$tourId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "internal_chats": {
+      "$tourId": {
+        ".read": "auth != null && root.child('tour_manifests').child($tourId).child('assigned_drivers').child(auth.uid).val() === true",
+        ".write": "auth != null && root.child('tour_manifests').child($tourId).child('assigned_drivers').child(auth.uid).val() === true"
+      }
+    },
+    "logs": {
+      "$userId": {
+        ".read": false,
+        ".write": "auth != null || $userId === 'anonymous'"
+      }
+    },
+    "group_tour_photos": {
+      "$tourId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "private_tour_photos": {
+      "$tourId": {
+        "$userId": {
+          ".read": "auth != null && auth.uid === $userId",
+          ".write": "auth != null && auth.uid === $userId"
+        }
+      }
+    },
+    "users": {
+      "$userId": {
+        ".read": "auth != null && (auth.uid === $userId || auth.uid === 'YOUR_ADMIN_UID_HERE')",
+        ".write": "auth != null && (auth.uid === $userId || auth.uid === 'YOUR_ADMIN_UID_HERE')"
+      }
+    }
+  }
+}
