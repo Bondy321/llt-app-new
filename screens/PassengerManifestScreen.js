@@ -107,19 +107,49 @@ export default function PassengerManifestScreen({ route, navigation }) {
   // --- Render Functions ---
   const renderHeader = () => (
     <View style={styles.header}>
-      <View style={styles.statsRow}>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Total Pax</Text>
-          <Text style={styles.statValue}>{manifestData.stats.totalPax || 0}</Text>
+      {/* Back Button (Added from Phase 4 fix) */}
+      <TouchableOpacity 
+        onPress={() => navigation.goBack()} 
+        style={styles.backButton}
+      >
+        <MaterialCommunityIcons name="arrow-left" size={24} color="white" />
+        <Text style={styles.backText}>Console</Text>
+      </TouchableOpacity>
+
+      {/* --- NEW: DASHBOARD METRICS --- */}
+      <View style={styles.dashboardContainer}>
+        
+        {/* Total Expected */}
+        <View style={styles.dashboardItem}>
+          <Text style={styles.dashLabel}>TOTAL</Text>
+          <Text style={styles.dashValue}>{manifestData.stats.totalPax || 0}</Text>
         </View>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Boarded</Text>
-          <Text style={[styles.statValue, { color: COLORS.success }]}>
+
+        {/* Vertical Divider */}
+        <View style={styles.dashDivider} />
+
+        {/* Boarded (Green) */}
+        <View style={styles.dashboardItem}>
+          <Text style={[styles.dashLabel, { color: '#ABEBC6' }]}>BOARDED</Text>
+          <Text style={[styles.dashValue, { color: COLORS.success }]}>
             {manifestData.stats.checkedIn || 0}
           </Text>
         </View>
+
+        {/* Vertical Divider */}
+        <View style={styles.dashDivider} />
+
+        {/* No Shows (Red) */}
+        <View style={styles.dashboardItem}>
+          <Text style={[styles.dashLabel, { color: '#F1948A' }]}>NO SHOW</Text>
+          <Text style={[styles.dashValue, { color: COLORS.danger }]}>
+            {manifestData.stats.noShows || 0}
+          </Text>
+        </View>
+
       </View>
 
+      {/* Search Bar (Existing) */}
       <View style={styles.searchContainer}>
         <MaterialCommunityIcons name="magnify" size={24} color="#BDC3C7" />
         <TextInput 
@@ -249,16 +279,47 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary,
     padding: 15,
     paddingTop: 10,
+    paddingBottom: 20,
   },
-  statsRow: {
+  backButton: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
+  backText: { color: 'white', fontSize: 16, fontWeight: 'bold', marginLeft: 5 },
+
+  dashboardContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    backgroundColor: '#34495E',
+    borderRadius: 12,
+    padding: 15,
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  statItem: { alignItems: 'center' },
-  statLabel: { color: '#BDC3C7', fontSize: 12, fontWeight: 'bold' },
-  statValue: { color: 'white', fontSize: 24, fontWeight: 'bold' },
-  
+  dashboardItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  dashDivider: {
+    width: 1,
+    height: '70%',
+    backgroundColor: '#5D6D7E',
+  },
+  dashLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#BDC3C7',
+    marginBottom: 4,
+    letterSpacing: 0.5,
+  },
+  dashValue: {
+    fontSize: 26,
+    fontWeight: 'bold',
+    color: 'white',
+  },
+
   searchContainer: {
     flexDirection: 'row',
     backgroundColor: 'white',
