@@ -83,23 +83,19 @@ const ensureBookingSchemaConsistency = async (bookingRef, bookingData, dbInstanc
   };
 };
 
-// --- NEW: Fetch Full Manifest (Bookings + Live Status) ---
+// --- UPDATED: Fetch Full Manifest with NO SHOW stats ---
 const getTourManifest = async (tourCodeOriginal) => {
   try {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
-    
-    // 1. Sanitize ID for the manifest node
+
     const tourId = sanitizeTourId(tourCodeOriginal);
-    
-    // 2. Fetch all bookings for this tour (Requires .indexOn: ["tourCode"] in rules)
-    // We search using the original tour code string found in booking records
+
     const bookingsQuery = realtimeDb.ref('bookings')
       .orderByChild('tourCode')
       .equalTo(tourCodeOriginal);
-      
-    // 3. Fetch the live manifest status (check-ins)
+
     const manifestRef = realtimeDb.ref(`tour_manifests/${tourId}`);
-    
+
     const [bookingsSnapshot, manifestSnapshot] = await Promise.all([
       bookingsQuery.once('value'),
       manifestRef.once('value')
@@ -111,20 +107,13 @@ const getTourManifest = async (tourCodeOriginal) => {
 
     if (bookingsSnapshot.exists()) {
       const rawBookings = bookingsSnapshot.val();
-      
-      // Process each booking
+
       for (const [bookingRef, data] of Object.entries(rawBookings)) {
-        // Ensure data consistency
         const { normalizedBooking } = await ensureBookingSchemaConsistency(bookingRef, data);
-        
-        // Get live status
         const liveStatus = bookingStatuses[bookingRef] || {};
-        
-        // Calculate derived state
         const totalPax = normalizedBooking.passengerNames.length;
         const currentStatus = liveStatus.status || MANIFEST_STATUS.PENDING;
-        
-        // Attach operational data to the booking object
+
         bookings.push({
           ...normalizedBooking,
           status: currentStatus,
@@ -134,14 +123,22 @@ const getTourManifest = async (tourCodeOriginal) => {
       }
     }
 
+    const stats = bookings.reduce((acc, b) => {
+      const paxCount = b.passengerNames.length;
+      acc.totalPax += paxCount;
+
+      if (b.status === MANIFEST_STATUS.BOARDED) {
+        acc.checkedIn += paxCount;
+      } else if (b.status === MANIFEST_STATUS.NO_SHOW) {
+        acc.noShows += paxCount;
+      }
+      return acc;
+    }, { totalBookings: bookings.length, totalPax: 0, checkedIn: 0, noShows: 0 });
+
     return {
       tourId,
       bookings,
-      stats: {
-        totalBookings: bookings.length,
-        totalPax: bookings.reduce((sum, b) => sum + b.passengerNames.length, 0),
-        checkedIn: bookings.filter(b => b.status === MANIFEST_STATUS.BOARDED).reduce((sum, b) => sum + b.passengerNames.length, 0) // Approximation
-      }
+      stats
     };
 
   } catch (error) {
