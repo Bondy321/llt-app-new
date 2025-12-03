@@ -100,68 +100,84 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        
+
         {/* ACTION GRID */}
         <View style={styles.grid}>
-            {/* Update Location Button */}
-            <TouchableOpacity 
-              style={[styles.bigButton, { backgroundColor: COLORS.location }]}
-              onPress={handleUpdateLocation}
-              activeOpacity={0.8}
-              disabled={updatingLocation}
-            >
-              {updatingLocation ? (
-                <ActivityIndicator color={COLORS.white} size="large" />
-              ) : (
-                <MaterialCommunityIcons 
-                    name="map-marker-radius" 
-                    size={40} 
-                    color={COLORS.white} 
-                    style={{marginBottom: 8}}
-                />
-              )}
-              <Text style={styles.bigButtonText}>
-                {updatingLocation ? "UPDATING..." : "SET PICKUP POINT"}
-              </Text>
-              {lastUpdate && (
-                <Text style={styles.lastUpdateText}>
-                  Last: {lastUpdate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                </Text>
-              )}
-            </TouchableOpacity>
-
-            {/* Open Chat */}
-            <TouchableOpacity 
-              style={[styles.bigButton, { backgroundColor: COLORS.info }]}
-              onPress={handleOpenChat}
-              activeOpacity={0.8}
-            >
-              <MaterialCommunityIcons 
-                  name="chat-processing" 
-                  size={40} 
-                  color={COLORS.white} 
-                  style={{marginBottom: 8}}
+          {/* Update Location Button */}
+          <TouchableOpacity
+            style={[styles.bigButton, { backgroundColor: COLORS.location }]}
+            onPress={handleUpdateLocation}
+            activeOpacity={0.8}
+            disabled={updatingLocation}
+          >
+            {updatingLocation ? (
+              <ActivityIndicator color={COLORS.white} size="large" />
+            ) : (
+              <MaterialCommunityIcons
+                name="map-marker-radius"
+                size={40}
+                color={COLORS.white}
+                style={{ marginBottom: 8 }}
               />
-              <Text style={styles.bigButtonText}>GROUP CHAT</Text>
-            </TouchableOpacity>
+            )}
+            <Text style={styles.bigButtonText}>
+              {updatingLocation ? "UPDATING..." : "SET PICKUP POINT"}
+            </Text>
+            {lastUpdate && (
+              <Text style={styles.lastUpdateText}>
+                Last: {lastUpdate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          {/* Open Chat */}
+          <TouchableOpacity
+            style={[styles.bigButton, { backgroundColor: COLORS.info }]}
+            onPress={handleOpenChat}
+            activeOpacity={0.8}
+          >
+            <MaterialCommunityIcons
+              name="chat-processing"
+              size={40}
+              color={COLORS.white}
+              style={{ marginBottom: 8 }}
+            />
+            <Text style={styles.bigButtonText}>GROUP CHAT</Text>
+          </TouchableOpacity>
         </View>
+        {/* NEW MANIFEST BUTTON */}
+        <TouchableOpacity
+          style={[styles.wideButton, { backgroundColor: '#2980B9' }]} // Strong Blue
+          onPress={() => onNavigate('PassengerManifest', {
+            tourId: activeTourId
+          })}
+          activeOpacity={0.8}
+        >
+          <MaterialCommunityIcons
+            name="clipboard-list-outline"
+            size={28}
+            color={COLORS.white}
+            style={{ marginRight: 10 }}
+          />
+          <Text style={styles.wideButtonText}>PASSENGER MANIFEST</Text>
+        </TouchableOpacity>
 
         {/* Edit Itinerary Button (Full Width) */}
-        <TouchableOpacity 
-            style={[styles.wideButton, { backgroundColor: '#8E44AD' }]}
-            onPress={() => onNavigate('Itinerary', { 
-                tourId: activeTourId, 
-                isDriver: true 
-            })}
-            activeOpacity={0.8}
+        <TouchableOpacity
+          style={[styles.wideButton, { backgroundColor: '#8E44AD' }]}
+          onPress={() => onNavigate('Itinerary', {
+            tourId: activeTourId,
+            isDriver: true
+          })}
+          activeOpacity={0.8}
         >
-            <MaterialCommunityIcons 
-                name="calendar-edit" 
-                size={28} 
-                color={COLORS.white} 
-                style={{marginRight: 10}}
-            />
-            <Text style={styles.wideButtonText}>EDIT ITINERARY</Text>
+          <MaterialCommunityIcons
+            name="calendar-edit"
+            size={28}
+            color={COLORS.white}
+            style={{ marginRight: 10 }}
+          />
+          <Text style={styles.wideButtonText}>EDIT ITINERARY</Text>
         </TouchableOpacity>
 
         <View style={styles.infoBox}>
@@ -186,7 +202,7 @@ const styles = StyleSheet.create({
   driverName: { color: COLORS.white, fontSize: 20, fontWeight: 'bold' },
   logoutBtn: { padding: 8 },
   content: { padding: 20 },
-  
+
   grid: { flexDirection: 'row', gap: 15, marginBottom: 15 },
   bigButton: {
     flex: 1,
@@ -219,7 +235,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   wideButtonText: { fontSize: 16, fontWeight: '800', color: COLORS.white, letterSpacing: 0.5 },
-  
+
   infoBox: { marginTop: 10, alignItems: 'center' },
   infoLabel: { color: '#95A5A6', fontSize: 14 },
   infoValue: { color: COLORS.primary, fontSize: 16, fontWeight: '600', marginTop: 4 },

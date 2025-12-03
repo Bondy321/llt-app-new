@@ -1,0 +1,329 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  StyleSheet, Text, View, SectionList, FlatList, TextInput,
+  TouchableOpacity, ActivityIndicator, Modal, Alert, SafeAreaView
+} from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { getTourManifest, updateManifestBooking, MANIFEST_STATUS } from '../services/bookingServiceRealtime';
+import ManifestBookingCard from '../components/ManifestBookingCard';
+
+const COLORS = {
+  primary: '#2C3E50',
+  bg: '#F5F6FA',
+  border: '#DCDCDC',
+  searchBg: '#fff',
+  success: '#27AE60',
+  danger: '#C0392B',
+  info: '#3498DB',
+};
+
+export default function PassengerManifestScreen({ route, navigation }) {
+  const { tourId } = route.params;
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [manifestData, setManifestData] = useState({ bookings: [], stats: {} });
+  const [searchQuery, setSearchQuery] = useState('');
+  
+  // Modal State
+  const [selectedBooking, setSelectedBooking] = useState(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [partialCheckState, setPartialCheckState] = useState({}); // { 0: true, 1: false }
+
+  const loadManifest = async () => {
+    try {
+      const data = await getTourManifest(tourId);
+      setManifestData(data);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load manifest: ' + error.message);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    loadManifest();
+  }, [tourId]);
+
+  // --- Derived Data: Search & Grouping ---
+  const { listData, isSearching } = useMemo(() => {
+    const query = searchQuery.toLowerCase().trim();
+    
+    if (!query) {
+      // DEFAULT VIEW: Group by Pickup Location
+      const groups = {};
+      manifestData.bookings.forEach(booking => {
+        const loc = booking.pickupLocation || 'Unknown Location';
+        if (!groups[loc]) groups[loc] = [];
+        groups[loc].push(booking);
+      });
+
+      const sections = Object.keys(groups).sort().map(loc => ({
+        title: loc,
+        data: groups[loc]
+      }));
+      
+      return { listData: sections, isSearching: false };
+    } 
+    else {
+      // SEARCH VIEW: Flat list filtered by Ref or Name
+      const filtered = manifestData.bookings.filter(b => 
+        b.id.toLowerCase().includes(query) ||
+        b.passengerNames.some(name => name.toLowerCase().includes(query))
+      );
+      return { listData: filtered, isSearching: true };
+    }
+  }, [searchQuery, manifestData.bookings]);
+
+  // --- Actions ---
+  const handleOpenBooking = (booking) => {
+    setSelectedBooking(booking);
+    // Initialize partial state based on existing status
+    const initialPartial = {};
+    booking.passengerNames.forEach((_, idx) => {
+        // If whole booking is boarded, everyone is checked. 
+        // If partial, check individual status (logic can be expanded if we stored individual status strictly)
+        initialPartial[idx] = booking.status === MANIFEST_STATUS.BOARDED;
+    });
+    setPartialCheckState(initialPartial);
+    setModalVisible(true);
+  };
+
+  const submitUpdate = async (type) => {
+    if (!selectedBooking) return;
+
+    let payload = {};
+    // If partial, we iterate through checks. 
+    // Note: For this MVP, 'PARTIAL' simply marks status as PARTIAL. 
+    // A full implementation would save individual indices to DB.
+    
+    setLoading(true); // temporary UI lock
+    await updateManifestBooking(tourId, selectedBooking.id, type, payload);
+    setModalVisible(false);
+    setSelectedBooking(null);
+    loadManifest(); // Refresh data
+  };
+
+  // --- Render Functions ---
+  const renderHeader = () => (
+    <View style={styles.header}>
+      <View style={styles.statsRow}>
+        <View style={styles.statItem}>
+          <Text style={styles.statLabel}>Total Pax</Text>
+          <Text style={styles.statValue}>{manifestData.stats.totalPax || 0}</Text>
+        </View>
+        <View style={styles.statItem}>
+          <Text style={styles.statLabel}>Boarded</Text>
+          <Text style={[styles.statValue, { color: COLORS.success }]}>
+            {manifestData.stats.checkedIn || 0}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.searchContainer}>
+        <MaterialCommunityIcons name="magnify" size={24} color="#BDC3C7" />
+        <TextInput 
+          style={styles.searchInput}
+          placeholder="Search Surname or Booking Ref..."
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          autoCapitalize="characters"
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchQuery('')}>
+            <MaterialCommunityIcons name="close-circle" size={20} color="#BDC3C7" />
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+
+  return (
+    <SafeAreaView style={styles.container}>
+      {renderHeader()}
+
+      {loading && !refreshing ? (
+        <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 20 }} />
+      ) : (
+        isSearching ? (
+          <FlatList
+            data={listData}
+            keyExtractor={item => item.id}
+            renderItem={({ item }) => (
+              <ManifestBookingCard 
+                booking={item} 
+                onPress={() => handleOpenBooking(item)} 
+                isSearchResult={true} 
+              />
+            )}
+            contentContainerStyle={styles.listContent}
+            refreshing={refreshing}
+            onRefresh={loadManifest}
+          />
+        ) : (
+          <SectionList
+            sections={listData}
+            keyExtractor={item => item.id}
+            renderItem={({ item }) => (
+              <ManifestBookingCard 
+                booking={item} 
+                onPress={() => handleOpenBooking(item)} 
+                isSearchResult={false} 
+              />
+            )}
+            renderSectionHeader={({ section: { title } }) => (
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{title}</Text>
+              </View>
+            )}
+            contentContainerStyle={styles.listContent}
+            refreshing={refreshing}
+            onRefresh={loadManifest}
+          />
+        )
+      )}
+
+      {/* --- CHECK IN MODAL --- */}
+      <Modal
+        visible={modalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            {selectedBooking && (
+              <>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>{selectedBooking.passengerNames[0]}</Text>
+                  <Text style={styles.modalSubtitle}>Ref: {selectedBooking.id} • {selectedBooking.passengerNames.length} Pax</Text>
+                </View>
+
+                <Text style={styles.modalSectionLabel}>Actions</Text>
+                
+                <View style={styles.actionRow}>
+                  <TouchableOpacity 
+                    style={[styles.actionBtn, { backgroundColor: COLORS.success }]}
+                    onPress={() => submitUpdate('ALL_HERE')}
+                  >
+                    <MaterialCommunityIcons name="check-all" size={28} color="white" />
+                    <Text style={styles.actionBtnText}>All Here</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity 
+                    style={[styles.actionBtn, { backgroundColor: COLORS.danger }]}
+                    onPress={() => submitUpdate('NO_SHOW')}
+                  >
+                    <MaterialCommunityIcons name="close-circle-outline" size={28} color="white" />
+                    <Text style={styles.actionBtnText}>No Show</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* 'Some Here' Logic (Simplified for MVP) */}
+                <TouchableOpacity 
+                  style={[styles.secondaryActionBtn, { borderColor: COLORS.info }]}
+                  onPress={() => Alert.alert("Coming Soon", "Detailed individual selection will be available in the next update.")}
+                >
+                    <Text style={{ color: COLORS.info, fontWeight: 'bold' }}>Some Here (Select Individuals)</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                  style={styles.closeBtn}
+                  onPress={() => setModalVisible(false)}
+                >
+                  <Text style={styles.closeBtnText}>Cancel</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.bg },
+  header: {
+    backgroundColor: COLORS.primary,
+    padding: 15,
+    paddingTop: 10,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginBottom: 15,
+  },
+  statItem: { alignItems: 'center' },
+  statLabel: { color: '#BDC3C7', fontSize: 12, fontWeight: 'bold' },
+  statValue: { color: 'white', fontSize: 24, fontWeight: 'bold' },
+  
+  searchContainer: {
+    flexDirection: 'row',
+    backgroundColor: 'white',
+    borderRadius: 8,
+    padding: 10,
+    alignItems: 'center',
+  },
+  searchInput: {
+    flex: 1,
+    marginLeft: 10,
+    fontSize: 16,
+    color: COLORS.primary,
+  },
+  
+  listContent: { padding: 15 },
+  sectionHeader: {
+    backgroundColor: '#E5E8E8',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    marginBottom: 10,
+    marginTop: 5,
+  },
+  sectionTitle: {
+    fontWeight: 'bold',
+    color: '#7F8C8D',
+    fontSize: 14,
+  },
+
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    minHeight: 350,
+  },
+  modalHeader: { marginBottom: 20, borderBottomWidth: 1, borderBottomColor: '#eee', paddingBottom: 15 },
+  modalTitle: { fontSize: 22, fontWeight: 'bold', color: COLORS.primary },
+  modalSubtitle: { fontSize: 16, color: '#7F8C8D', marginTop: 5 },
+  
+  modalSectionLabel: { fontSize: 14, fontWeight: 'bold', color: '#95A5A6', marginBottom: 10, textTransform: 'uppercase' },
+  actionRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 15, marginBottom: 15 },
+  actionBtn: {
+    flex: 1,
+    paddingVertical: 20,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionBtnText: { color: 'white', fontSize: 16, fontWeight: 'bold', marginTop: 5 },
+  
+  secondaryActionBtn: {
+    padding: 15,
+    borderRadius: 12,
+    borderWidth: 2,
+    alignItems: 'center',
+    marginBottom: 20,
+    borderStyle: 'dashed'
+  },
+  closeBtn: { padding: 15, alignItems: 'center' },
+  closeBtnText: { color: '#95A5A6', fontWeight: 'bold', fontSize: 16 }
+});

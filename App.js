@@ -20,6 +20,7 @@ import ChatScreen from './screens/ChatScreen';
 import MapScreen from './screens/MapScreen';
 import NotificationPreferencesScreen from './screens/NotificationPreferencesScreen';
 import DriverHomeScreen from './screens/DriverHomeScreen'; 
+import PassengerManifestScreen from './screens/PassengerManifestScreen';
 
 const COLORS = {
   primaryBlue: '#007DC3',
@@ -266,6 +267,19 @@ export default function App() {
             driverData={bookingData} 
             onLogout={handleLogout}
             onNavigate={navigateTo} // Pass navigation prop
+          />
+        );
+        case 'PassengerManifest':
+        return (
+          <PassengerManifestScreen 
+            // 1. Pass the global 'screenParams' as 'route.params' so the screen can read 'tourId'
+            route={{ params: screenParams }}
+            
+            // 2. Mock the 'navigation' object so the screen's logic works without changing it
+            navigation={{
+              navigate: navigateTo,
+              goBack: () => navigateTo('DriverHome') // Ensure back button returns to Driver Console
+            }}
           />
         );
       case 'TourHome':
