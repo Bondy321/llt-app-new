@@ -1,9 +1,22 @@
 // screens/TourHomeScreen.js
-import React from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, ScrollView, Image } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  StyleSheet,
+  Text,
+  View,
+  TouchableOpacity,
+  SafeAreaView,
+  ScrollView,
+  Image,
+  Modal,
+  Linking,
+  Alert,
+} from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import TodaysAgendaCard from '../components/TodaysAgendaCard';
+import { MANIFEST_STATUS } from '../services/bookingServiceRealtime';
+import { realtimeDb } from '../firebase';
 
 // Brand Colors
 const COLORS = {
@@ -18,6 +31,50 @@ const COLORS = {
 };
 
 export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavigate, onLogout }) {
+  const [manifestStatus, setManifestStatus] = useState(null);
+
+  const bookingRef = useMemo(() => bookingData?.id, [bookingData?.id]);
+
+  useEffect(() => {
+    if (!realtimeDb || !tourCode || !bookingRef) return undefined;
+
+    const sanitizedTourId = tourCode.replace(/\s+/g, '_');
+    const manifestRef = realtimeDb.ref(`tour_manifests/${sanitizedTourId}/bookings/${bookingRef}`);
+
+    const handleSnapshot = (snapshot) => {
+      const value = snapshot.val();
+      setManifestStatus(value?.status || null);
+    };
+
+    manifestRef.on('value', handleSnapshot);
+
+    return () => {
+      manifestRef.off('value', handleSnapshot);
+    };
+  }, [tourCode, bookingRef]);
+
+  const isNoShow = manifestStatus === MANIFEST_STATUS.NO_SHOW;
+
+  const handleCallDriver = () => {
+    if (!tourData?.driverPhone) {
+      Alert.alert('Driver contact unavailable', 'Please reach out to your operator.');
+      return;
+    }
+
+    const phone = tourData.driverPhone.replace(/[^+\d]/g, '');
+    Linking.openURL(`tel:${phone}`);
+  };
+
+  const handleMessageDriver = () => {
+    if (!tourData?.driverPhone) {
+      Alert.alert('Driver contact unavailable', 'Please reach out to your operator.');
+      return;
+    }
+
+    const phone = tourData.driverPhone.replace(/[^+\d]/g, '');
+    Linking.openURL(`sms:${phone}`);
+  };
+
   const menuItems = [
     { id: 'Photobook', title: 'My Photos', icon: 'image-album', color: COLORS.primaryBlue },
     { id: 'GroupPhotobook', title: 'Group Photo Album', icon: 'image-multiple', color: '#16a085' },
@@ -167,6 +224,30 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
           </View>
         </ScrollView>
       </LinearGradient>
+
+      <Modal visible={isNoShow} transparent animationType="fade" presentationStyle="overFullScreen">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <MaterialCommunityIcons name="alert-circle" size={32} color={COLORS.coralAccent} />
+              <Text style={styles.modalTitle}>No Show Alert</Text>
+            </View>
+            <Text style={styles.modalMessage}>
+              You have been marked as a No Show. Please contact your driver.
+            </Text>
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={[styles.modalButton, styles.callButton]} onPress={handleCallDriver}>
+                <MaterialCommunityIcons name="phone" size={20} color={COLORS.white} />
+                <Text style={styles.modalButtonText}>Call Driver</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalButton, styles.messageButton]} onPress={handleMessageDriver}>
+                <MaterialCommunityIcons name="message-text" size={20} color={COLORS.white} />
+                <Text style={styles.modalButtonText}>Message Driver</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -430,5 +511,66 @@ const styles = StyleSheet.create({
     backgroundColor: `${COLORS.primaryBlue}1A`,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 480,
+    backgroundColor: COLORS.white,
+    borderRadius: 18,
+    padding: 22,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: COLORS.darkText,
+  },
+  modalMessage: {
+    fontSize: 16,
+    color: COLORS.darkText,
+    marginBottom: 18,
+    lineHeight: 22,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 12,
+    gap: 8,
+  },
+  callButton: {
+    backgroundColor: COLORS.coralAccent,
+  },
+  messageButton: {
+    backgroundColor: COLORS.primaryBlue,
+  },
+  modalButtonText: {
+    color: COLORS.white,
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
