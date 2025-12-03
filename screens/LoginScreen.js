@@ -176,7 +176,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
                 resizeMode="contain"
               />
               <Text style={styles.appTitle}>Loch Lomond Travel</Text>
-              <Text style={styles.appSubtitle}>Your Highland Adventure Companion</Text>
+              <Text style={styles.appSubtitle}>The UK's Fastest Growing Coach Tour Operator</Text>
             </Animated.View>
 
             {/* Form Section */}
