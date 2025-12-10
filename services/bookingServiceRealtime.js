@@ -1,6 +1,8 @@
 // services/bookingServiceRealtime.js
 const isTestEnv = process.env.NODE_ENV === 'test';
 let realtimeDb;
+let auth;
+let authHelpers;
 
 // Status Enums for the Manifest
 export const MANIFEST_STATUS = {
@@ -12,7 +14,7 @@ export const MANIFEST_STATUS = {
 
 if (!isTestEnv) {
   try {
-    ({ realtimeDb } = require('../firebase'));
+    ({ realtimeDb, auth, authHelpers } = require('../firebase'));
   } catch (error) {
     console.warn('Realtime database module not initialized during load:', error.message);
   }
@@ -226,28 +228,61 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
 };
 
 // --- NEW: Assign Driver to Tour (Feeder Driver Logic) ---
-const assignDriverToTour = async (driverId, tourCode) => {
+const assignDriverToTour = async (driverId, tourCode, options = {}) => {
   try {
-    if (!realtimeDb) throw new Error('Realtime database not initialized');
+    const dbInstance = options.dbInstance || realtimeDb;
+    const authInstance = options.authInstance || auth;
+    const authHelper = options.authHelper || authHelpers;
+
+    if (!dbInstance) throw new Error('Realtime database not initialized');
     const tourId = sanitizeTourId(tourCode);
 
+    let authUser = authInstance?.currentUser;
+    if (!authUser && authHelper?.ensureAuthenticated) {
+      authUser = await authHelper.ensureAuthenticated();
+    }
+
+    if (!authUser) {
+      throw new Error('No authenticated user available to complete driver assignment');
+    }
+
+    const authUid = authUser.uid;
+    const timestamp = new Date().toISOString();
     const updates = {};
 
     // 1. Update Driver's Profile
     updates[`drivers/${driverId}/currentTourId`] = tourId;
     updates[`drivers/${driverId}/currentTourCode`] = tourCode;
-    updates[`drivers/${driverId}/lastActive`] = new Date().toISOString();
+    updates[`drivers/${driverId}/lastActive`] = timestamp;
+    updates[`drivers/${driverId}/lastAuthUid`] = authUid;
 
-    // 2. Add to Tour Manifest's assigned drivers list
-    updates[`tour_manifests/${tourId}/assigned_drivers/${driverId}`] = true;
+    // 2. Add to Tour Manifest's assigned drivers list (by auth UID for rules)
+    updates[`tour_manifests/${tourId}/assigned_drivers/${authUid}`] = true;
+
+    // Preserve legacy driverId-based assignment for compatibility
+    if (driverId !== authUid) {
+      updates[`tour_manifests/${tourId}/assigned_drivers/${driverId}`] = true;
+    }
+
+    // Store mapping for auditing and rule checks
     updates[`tour_manifests/${tourId}/assigned_driver_codes/${driverId}`] = {
       tourId,
       tourCode,
+      authUid,
+      driverId,
+      assignedAt: timestamp
     };
 
-    await realtimeDb.ref().update(updates);
-    console.log(`Driver ${driverId} assigned to tour ${tourId}`);
-    return { success: true, tourId };
+    updates[`tour_manifests/${tourId}/assigned_driver_auth/${authUid}`] = {
+      driverId,
+      tourId,
+      tourCode,
+      assignedAt: timestamp
+    };
+
+    await dbInstance.ref().update(updates);
+    console.log(`Driver ${driverId} (auth ${authUid}) assigned to tour ${tourId}`);
+    return { success: true, tourId, authUid };
 
   } catch (error) {
     console.error('Error assigning driver to tour:', error);
