@@ -1,6 +1,7 @@
 // services/bookingServiceRealtime.js
 const isTestEnv = process.env.NODE_ENV === 'test';
 let realtimeDb;
+let auth;
 
 // Status Enums for the Manifest
 export const MANIFEST_STATUS = {
@@ -12,7 +13,7 @@ export const MANIFEST_STATUS = {
 
 if (!isTestEnv) {
   try {
-    ({ realtimeDb } = require('../firebase'));
+    ({ realtimeDb, auth } = require('../firebase'));
   } catch (error) {
     console.warn('Realtime database module not initialized during load:', error.message);
   }
@@ -229,11 +230,14 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
 const assignDriverToTour = async (driverId, tourCode) => {
   try {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
+    const userId = auth?.currentUser?.uid;
+    if (!userId) throw new Error('User not authenticated');
     const tourId = sanitizeTourId(tourCode);
 
     const updates = {};
 
     // 1. Update Driver's Profile
+    updates[`drivers/${driverId}/authUid`] = userId;
     updates[`drivers/${driverId}/currentTourId`] = tourId;
     updates[`drivers/${driverId}/currentTourCode`] = tourCode;
     updates[`drivers/${driverId}/lastActive`] = new Date().toISOString();
