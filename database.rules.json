@@ -1,13 +1,25 @@
 {
   "rules": {
-    "drivers": {
-      ".read": "auth != null",
-      ".write": "auth.uid === 'YOUR_ADMIN_UID_HERE'"
-    },
+"drivers": {
+  ".read": "auth != null",
+  "$driverCode": {
+    ".write": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || data.child('authUid').val() === auth.uid || newData.child('authUid').val() === auth.uid"
+  }
+},
     "bookings": {
+      ".read": "auth != null",
+      ".indexOn": ["tourCode"],
       "$bookingId": {
-        ".read": "auth != null",
         ".write": "auth != null"
+      }
+    },
+    "tour_manifests": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      "$tourId": {
+        "assigned_drivers": {
+           ".indexOn": [".value"]
+        }
       }
     },
     "tours": {
@@ -50,8 +62,8 @@
     },
     "users": {
       "$userId": {
-        ".read": "auth != null && (auth.uid === $userId || auth.uid === 'YOUR_ADMIN_UID_HERE')",
-        ".write": "auth != null && (auth.uid === $userId || auth.uid === 'YOUR_ADMIN_UID_HERE')"
+        ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
+        ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')"
       }
     }
   }
