@@ -81,6 +81,7 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
     { id: 'Itinerary', title: 'Tour Itinerary', icon: 'map-legend', color: '#3498DB' },
     { id: 'Chat', title: 'Group Chat', icon: 'chat-processing-outline', color: '#2ECC71' },
     { id: 'Map', title: 'Driver Location', icon: 'map-marker-radius-outline', color: COLORS.coralAccent },
+    { id: 'SafetySupport', title: 'Safety & Support', icon: 'shield-check', color: '#8e44ad' },
   ];
 
   return (
@@ -212,7 +213,14 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
               <TouchableOpacity
                 key={item.id}
                 style={styles.box}
-                onPress={() => onNavigate(item.id)}
+                onPress={() =>
+                  onNavigate(
+                    item.id,
+                    item.id === 'SafetySupport'
+                      ? { from: 'TourHome', mode: 'passenger' }
+                      : {}
+                  )
+                }
                 activeOpacity={0.85}
               >
                 <View style={[styles.iconCircle, { backgroundColor: `${item.color}1A` }]}> 

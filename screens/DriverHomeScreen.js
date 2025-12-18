@@ -200,9 +200,18 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
             <MaterialCommunityIcons name="radio-handheld" size={28} color="white" style={{marginRight: 10}}/>
             <Text style={styles.wideButtonText}>DRIVER CHAT</Text>
         </TouchableOpacity>
-        
+
+        {/* Safety & Support */}
+        <TouchableOpacity
+            style={[styles.wideButton, { backgroundColor: COLORS.danger }]}
+            onPress={() => onNavigate('SafetySupport', { from: 'DriverHome', mode: 'driver' })}
+        >
+            <MaterialCommunityIcons name="shield-check" size={28} color="white" style={{marginRight: 10}}/>
+            <Text style={styles.wideButtonText}>SAFETY & SUPPORT</Text>
+        </TouchableOpacity>
+
         {/* Manifest Button */}
-        <TouchableOpacity 
+        <TouchableOpacity
             style={[styles.wideButton, { backgroundColor: '#2980B9' }]}
             onPress={() => {
                 if(!activeTourId) { Alert.alert("No Tour", "Please Join a Tour first."); return;}

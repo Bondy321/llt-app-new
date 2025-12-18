@@ -20,8 +20,9 @@ import ItineraryScreen from './screens/ItineraryScreen';
 import ChatScreen from './screens/ChatScreen';
 import MapScreen from './screens/MapScreen';
 import NotificationPreferencesScreen from './screens/NotificationPreferencesScreen';
-import DriverHomeScreen from './screens/DriverHomeScreen'; 
+import DriverHomeScreen from './screens/DriverHomeScreen';
 import PassengerManifestScreen from './screens/PassengerManifestScreen';
+import SafetySupportScreen from './screens/SafetySupportScreen';
 
 const COLORS = {
   primaryBlue: '#007DC3',
@@ -275,15 +276,25 @@ export default function App() {
         return <LoginScreen {...screenProps} onLoginSuccess={handleLoginSuccess} />;
       case 'DriverHome':
         return (
-          <DriverHomeScreen 
-            driverData={bookingData} 
+          <DriverHomeScreen
+            driverData={bookingData}
             onLogout={handleLogout}
             onNavigate={navigateTo} // Pass navigation prop
           />
         );
-        case 'PassengerManifest':
+      case 'SafetySupport':
         return (
-          <PassengerManifestScreen 
+          <SafetySupportScreen
+            onBack={() => navigateTo(screenParams?.from || 'TourHome')}
+            tourData={tourData}
+            bookingData={bookingData}
+            userId={user?.uid}
+            mode={screenParams?.mode || 'passenger'}
+          />
+        );
+      case 'PassengerManifest':
+        return (
+          <PassengerManifestScreen
             // 1. Pass the global 'screenParams' as 'route.params' so the screen can read 'tourId'
             route={{ params: screenParams }}
             
