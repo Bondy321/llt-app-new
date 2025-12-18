@@ -1,21 +1,10 @@
 // services/loggerService.js
 import { Platform } from 'react-native';
 import { realtimeDb } from '../firebase';
+import { createPersistenceProvider } from './persistenceProvider';
 
-// --- MOCK BLOCK START ---
-// Safe in-memory mock to prevent AsyncStorage crashes
-const MockStorage = {
-  _logs: [],
-  getItem: async (key) => {
-    if (key === 'app_logs') return JSON.stringify(MockStorage._logs);
-    return null;
-  },
-  setItem: async (key, value) => {
-    if (key === 'app_logs') MockStorage._logs = JSON.parse(value);
-    return Promise.resolve();
-  },
-};
-// --- MOCK BLOCK END ---
+// Centralized persistence with SecureStore/AsyncStorage fallback for durable logs.
+const logStorage = createPersistenceProvider({ namespace: 'LLT_LOGS' });
 
 const LOG_LEVELS = {
   DEBUG: 0,
@@ -42,7 +31,8 @@ class Logger {
     this.sessionId = this.generateSessionId();
     this.deviceInfo = null;
     this.maxLocalLogs = 1000;
-    
+    this.storageMode = logStorage.mode;
+
     this.initializeLogger();
   }
 
@@ -52,15 +42,19 @@ class Logger {
 
   async initializeLogger() {
     try {
-      // Use MockStorage
-      const storedLogs = await MockStorage.getItem('app_logs');
+      const storedLogs = await logStorage.getItemAsync('app_logs');
       if (storedLogs) {
         this.logQueue = JSON.parse(storedLogs);
         if (this.logQueue.length > this.maxLocalLogs) {
           this.logQueue = this.logQueue.slice(-this.maxLocalLogs);
         }
       }
-      
+
+      if (!this.isProduction) {
+        console.log(`[Logger] Initialized with storage mode: ${this.storageMode}`);
+        console.log(`[Logger] Restored ${this.logQueue.length} persisted logs`);
+      }
+
       this.deviceInfo = {
         platform: Platform.OS,
         version: Platform.Version,
@@ -121,10 +115,9 @@ class Logger {
       if (this.logQueue.length > this.maxLocalLogs) {
         this.logQueue = this.logQueue.slice(-this.maxLocalLogs);
       }
-      // Use MockStorage
-      await MockStorage.setItem('app_logs', JSON.stringify(this.logQueue));
+      await logStorage.setItemAsync('app_logs', JSON.stringify(this.logQueue));
     } catch (error) {
-      console.error('Failed to save logs locally:', error);
+      console.error(`Failed to save logs locally via ${this.storageMode}:`, error);
     }
   }
 

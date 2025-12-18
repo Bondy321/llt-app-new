@@ -5,25 +5,10 @@ import 'firebase/compat/firestore';
 import 'firebase/compat/database';
 import { getStorage } from 'firebase/storage';
 import { getDatabase } from 'firebase/database';
+import { createPersistenceProvider } from './services/persistenceProvider';
 
-// --- MOCK BLOCK START ---
-// In Expo Go, native storage modules can sometimes crash or misbehave.
-// We use this in-memory mock to ensure the app always launches.
-const MockStorage = {
-  _data: {},
-  setItemAsync: async (key, value) => {
-    MockStorage._data[key] = value;
-    return Promise.resolve();
-  },
-  getItemAsync: async (key) => {
-    return Promise.resolve(MockStorage._data[key] || null);
-  },
-  deleteItemAsync: async (key) => {
-    delete MockStorage._data[key];
-    return Promise.resolve();
-  },
-};
-// --- MOCK BLOCK END ---
+// Initialize a resilient persistence layer for auth/session state.
+const authStorage = createPersistenceProvider({ namespace: 'LLT_AUTH' });
 
 const firebaseConfig = {
   apiKey: "AIzaSyCeQqCtbFEB9nrUvP_Pffrt2aelATf9i9o",
@@ -38,8 +23,9 @@ const firebaseConfig = {
 
 class AuthPersistence {
   constructor() {
-    this.AUTH_KEY = 'LLT_authUser'; 
+    this.AUTH_KEY = 'LLT_authUser';
     this.TOKEN_KEY = 'LLT_authToken';
+    console.log(`[AuthPersistence] Using storage mode: ${authStorage.mode}`);
   }
 
   async saveAuthState(user) {
@@ -52,32 +38,32 @@ class AuthPersistence {
           lastSignIn: user.metadata.lastSignInTime,
           savedAt: new Date().toISOString()
         };
-        await MockStorage.setItemAsync(this.AUTH_KEY, JSON.stringify(authData));
-        console.log('Auth state saved (Mock Storage)');
+        await authStorage.setItemAsync(this.AUTH_KEY, JSON.stringify(authData));
+        console.log(`[AuthPersistence] Auth state saved (${authStorage.mode})`);
       } else {
-        await MockStorage.deleteItemAsync(this.AUTH_KEY);
+        await authStorage.deleteItemAsync(this.AUTH_KEY);
       }
     } catch (error) {
-      console.error('Error saving auth state:', error);
+      console.error(`[AuthPersistence] Error saving auth state via ${authStorage.mode}:`, error);
     }
   }
 
   async getStoredAuthState() {
     try {
-      const stored = await MockStorage.getItemAsync(this.AUTH_KEY);
+      const stored = await authStorage.getItemAsync(this.AUTH_KEY);
       return stored ? JSON.parse(stored) : null;
     } catch (error) {
-      console.error('Error retrieving auth state:', error);
+      console.error(`[AuthPersistence] Error retrieving auth state via ${authStorage.mode}:`, error);
       return null;
     }
   }
 
   async clearAuthState() {
     try {
-      await MockStorage.deleteItemAsync(this.AUTH_KEY);
-      await MockStorage.deleteItemAsync(this.TOKEN_KEY);
+      await authStorage.deleteItemAsync(this.AUTH_KEY);
+      await authStorage.deleteItemAsync(this.TOKEN_KEY);
     } catch (error) {
-      console.error('Error clearing auth state:', error);
+      console.error(`[AuthPersistence] Error clearing auth state via ${authStorage.mode}:`, error);
     }
   }
 }
@@ -108,7 +94,7 @@ try {
   realtimeDbModular = getDatabase(modularApp);
 
   // Configure auth persistence
-  // Use NONE because we manage persistence via MockStorage/AuthPersistence
+  // Use NONE because we manage persistence via custom authStorage/AuthPersistence
   auth.setPersistence(firebase.auth.Auth.Persistence.NONE)
     .then(() => {
       console.log('Firebase persistence enabled');
