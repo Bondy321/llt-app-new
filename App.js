@@ -1,15 +1,15 @@
 // App.js
 import React, { useState, useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, Text, StyleSheet, AppState } from 'react-native';
+import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Import Firebase services
-import { auth, authHelpers, updateNetworkState } from './firebase';
+import { auth, authHelpers } from './firebase';
 import { joinTour } from './services/bookingServiceRealtime';
 import logger from './services/loggerService';
+import useDiagnostics from './hooks/useDiagnostics';
 
 // Import Screens
 import LoginScreen from './screens/LoginScreen';
@@ -81,23 +81,30 @@ export default function App() {
   // State for passing params between screens manually (since we aren't using React Navigation stack)
   const [screenParams, setScreenParams] = useState({});
 
-  const [appState, setAppState] = useState(AppState.currentState);
-  const [isConnected, setIsConnected] = useState(true);
+  const refreshAppData = async () => {
+    logger.info('App', 'Refreshing app data');
+  };
+
+  const { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs } = useDiagnostics({
+    onForeground: refreshAppData
+  });
 
   useEffect(() => {
-    logger.info('App', 'Application starting', { 
+    logger.info('App', 'Application starting', {
       environment: __DEV__ ? 'development' : 'production',
-      storageMode 
+      storageMode
     });
-    
-    initializeApp();
-    
-    const appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
-    const unsubscribeNetInfo = NetInfo.addEventListener(handleNetworkChange);
-    
+
+    let authUnsubscribe = null;
+
+    const bootstrap = async () => {
+      authUnsubscribe = await initializeApp();
+    };
+
+    bootstrap().catch((error) => logger.error('App', 'Bootstrap failure', { error: error.message }));
+
     return () => {
-      appStateSubscription.remove();
-      unsubscribeNetInfo();
+      if (typeof authUnsubscribe === 'function') authUnsubscribe();
     };
   }, []);
 
@@ -105,19 +112,20 @@ export default function App() {
     try {
       await restoreSession();
       const unsubscribe = authHelpers.onAuthStateChanged(handleAuthStateChange);
-      
+
       const currentUser = await authHelpers.ensureAuthenticated();
       if (currentUser) {
         logger.setUserId(currentUser.uid);
         logger.info('Auth', 'User authenticated', { uid: currentUser.uid });
       }
-      
+
       setInitializing(false);
-      return () => unsubscribe();
+      return unsubscribe;
     } catch (error) {
       logger.error('App', 'Initialization error', { error: error.message });
       setAuthError(error.message);
       setInitializing(false);
+      return null;
     }
   };
 
@@ -125,18 +133,6 @@ export default function App() {
     setUser(currentUser);
     if (currentUser) logger.setUserId(currentUser.uid);
     if (initializing) setInitializing(false);
-  };
-
-  const handleAppStateChange = (nextAppState) => {
-    if (appState.match(/inactive|background/) && nextAppState === 'active') {
-      refreshAppData();
-    }
-    setAppState(nextAppState);
-  };
-
-  const handleNetworkChange = (state) => {
-    setIsConnected(state.isConnected);
-    updateNetworkState(state.isConnected);
   };
 
   const restoreSession = async () => {
@@ -173,10 +169,6 @@ export default function App() {
     } catch (error) {
       logger.error('Session', 'Failed to save session', { error: error.message });
     }
-  };
-
-  const refreshAppData = async () => {
-    logger.info('App', 'Refreshing app data');
   };
 
   const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger') => {
@@ -254,6 +246,23 @@ export default function App() {
       <View style={styles.offlineBanner}>
         <MaterialCommunityIcons name="wifi-off" size={20} color={COLORS.white} />
         <Text style={styles.offlineText}>No internet connection</Text>
+      </View>
+    )
+  );
+
+  const SyncIssueBanner = () => (
+    isConnected && (!firebaseConnected || lastFirebaseError) && (
+      <View style={styles.syncBanner}>
+        <MaterialCommunityIcons name="database-alert" size={20} color={COLORS.white} />
+        <View style={{ marginLeft: 8 }}>
+          <Text style={styles.offlineText}>Reconnecting to tour services…</Text>
+          {lastProbeDurationMs !== null && (
+            <Text style={styles.syncDetail}>Last check: {lastProbeDurationMs}ms</Text>
+          )}
+          {lastFirebaseError && (
+            <Text style={styles.syncDetail}>Last error: {lastFirebaseError}</Text>
+          )}
+        </View>
       </View>
     )
   );
@@ -361,6 +370,7 @@ case 'Itinerary':
     <>
       <StatusBar style="light" backgroundColor={COLORS.primaryBlue} />
       <OfflineBanner />
+      <SyncIssueBanner />
       {renderScreen()}
     </>
   );
@@ -374,4 +384,6 @@ const styles = StyleSheet.create({
   errorDetail: { fontSize: 14, color: COLORS.darkText, opacity: 0.6, textAlign: 'center', marginTop: 15 },
   offlineBanner: { backgroundColor: COLORS.errorRed, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000 },
   offlineText: { color: COLORS.white, fontSize: 14, marginLeft: 8, fontWeight: '500' },
+  syncBanner: { backgroundColor: COLORS.primaryBlue, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', paddingVertical: 8, paddingHorizontal: 12, position: 'absolute', top: 40, left: 0, right: 0, zIndex: 900 },
+  syncDetail: { color: COLORS.white, fontSize: 12, opacity: 0.8 },
 });
