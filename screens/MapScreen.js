@@ -103,6 +103,13 @@ export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
     return diffDays === 1 ? '1 day ago' : `${diffDays} days ago`;
   };
 
+  const formatTime = (isoString) => {
+    if (!isoString) return '';
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
   const estimateEtaMinutes = (distanceKm) => {
     if (!distanceKm) return null;
     const averageSpeedKmh = 35; // Highland roads are slower; keep ETA conservative
@@ -157,13 +164,6 @@ export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
       latitudeDelta: 0.0922,
       longitudeDelta: 0.0421,
     };
-  };
-
-  const formatTime = (isoString) => {
-    if (!isoString) return '';
-    const date = new Date(isoString);
-    if (Number.isNaN(date.getTime())) return '';
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
   const handleRecenter = () => {
