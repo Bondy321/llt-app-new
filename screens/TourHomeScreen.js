@@ -53,6 +53,42 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
     };
   }, [tourCode, bookingRef]);
 
+  const manifestStatusMeta = useMemo(() => {
+    switch (manifestStatus) {
+      case MANIFEST_STATUS.BOARDED:
+        return {
+          title: 'Boarding confirmed',
+          message: 'You are checked in for today\'s tour. If your plans change, let the driver know.',
+          tone: '#2ECC71',
+          badge: 'On board'
+        };
+      case MANIFEST_STATUS.NO_SHOW:
+        return {
+          title: 'Marked as no-show',
+          message:
+            'The driver has you marked as missing. Call the driver or operations immediately so they can wait or guide you to the pickup.',
+          tone: COLORS.coralAccent,
+          badge: 'Action needed'
+        };
+      case MANIFEST_STATUS.PARTIAL:
+        return {
+          title: 'Partially boarded',
+          message:
+            'Some passengers on your booking are still missing. Check everyone is at the pickup point before departure.',
+          tone: '#F5A524',
+          badge: 'Almost ready'
+        };
+      case MANIFEST_STATUS.PENDING:
+      default:
+        return {
+          title: 'Awaiting check-in',
+          message: 'Stay close to your pickup spot. The driver will mark you on board when you meet.',
+          tone: COLORS.primaryBlue,
+          badge: 'Stand by'
+        };
+    }
+  }, [manifestStatus]);
+
   const isNoShow = manifestStatus === MANIFEST_STATUS.NO_SHOW;
 
   const handleCallDriver = () => {
@@ -106,6 +142,29 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
               {/* Logout Button */}
               <TouchableOpacity style={styles.logoutButton} onPress={onLogout} activeOpacity={0.7}>
                 <MaterialCommunityIcons name="logout-variant" size={22} color={COLORS.primaryBlue} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.statusCard}>
+            <View style={styles.statusHeader}>
+              <View style={[styles.statusBadge, { backgroundColor: `${manifestStatusMeta.tone}1A` }]}> 
+                <Text style={[styles.statusBadgeText, { color: manifestStatusMeta.tone }]}>{manifestStatusMeta.badge}</Text>
+              </View>
+              <Text style={styles.statusTitle}>{manifestStatusMeta.title}</Text>
+            </View>
+            <Text style={styles.statusMessage}>{manifestStatusMeta.message}</Text>
+            <View style={styles.statusActions}>
+              <TouchableOpacity style={styles.actionButton} onPress={handleCallDriver}>
+                <MaterialCommunityIcons name="phone" size={18} color={COLORS.white} />
+                <Text style={styles.actionButtonText}>Call driver</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionButton, styles.secondaryActionButton]}
+                onPress={() => onNavigate('SafetySupport')}
+              >
+                <MaterialCommunityIcons name="shield-check" size={18} color={COLORS.primaryBlue} />
+                <Text style={[styles.actionButtonText, { color: COLORS.primaryBlue }]}>Safety & support</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -311,6 +370,74 @@ const styles = StyleSheet.create({
   },
   logoutButton: {
     padding: 6,
+  },
+  statusCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 18,
+    padding: 18,
+    marginBottom: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}12`,
+  },
+  statusHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  statusBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    marginRight: 10,
+  },
+  statusBadgeText: {
+    fontWeight: '800',
+    fontSize: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  statusTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: COLORS.darkText,
+    flex: 1,
+  },
+  statusMessage: {
+    fontSize: 14,
+    color: COLORS.darkText,
+    opacity: 0.85,
+    lineHeight: 20,
+    marginBottom: 14,
+  },
+  statusActions: {
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'flex-start',
+    flexWrap: 'wrap',
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: COLORS.primaryBlue,
+  },
+  secondaryActionButton: {
+    backgroundColor: `${COLORS.primaryBlue}12`,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}40`,
+  },
+  actionButtonText: {
+    color: COLORS.white,
+    fontWeight: '700',
+    fontSize: 14,
   },
   welcomeCard: {
     backgroundColor: COLORS.white,
