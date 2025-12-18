@@ -84,6 +84,8 @@ Passenger Manifest Console: Drivers can open PassengerManifestScreen to tick off
 
 Driver Assignment & Join Flow: Drivers can self-assign to a tour via code entry (assignDriverToTour in services/bookingServiceRealtime.js) which writes assigned_drivers/assigned_driver_codes and currentTourId. Internal driver chat relies on this assignment list.
 
+Driver Reassignment (Live Ops): assignDriverToTour now supports changing a driver's active tour without manual clean-up. It performs a single multi-path update that (1) rewrites drivers/{driverId}/currentTourId & currentTourCode, (2) appends the driver to tour_manifests/{tourId}/assigned_drivers, and (3) mirrors the assignment under assigned_driver_codes for UI lookups. Always call this helper for reassignments so driver logins and internal chat stay in sync.
+
 B. Live Map (Pickup Points)
 
 Driver Side: "Set Pickup Point" button writes static coordinates to Firebase.
