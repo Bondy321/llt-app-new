@@ -1,6 +1,7 @@
 // services/bookingServiceRealtime.js
 const isTestEnv = process.env.NODE_ENV === 'test';
 let realtimeDb;
+let auth; // <--- Restored this variable
 
 // Status Enums for the Manifest
 export const MANIFEST_STATUS = {
@@ -12,7 +13,8 @@ export const MANIFEST_STATUS = {
 
 if (!isTestEnv) {
   try {
-    ({ realtimeDb } = require('../firebase'));
+    // <--- Restored 'auth' here so we can access current user
+    ({ realtimeDb, auth } = require('../firebase'));
   } catch (error) {
     console.warn('Realtime database module not initialized during load:', error.message);
   }
@@ -225,11 +227,21 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
   }
 };
 
-// --- NEW: Assign Driver to Tour (Feeder Driver Logic) ---
+// --- UPDATED: Assign Driver to Tour (Uses existing Auth) ---
 const assignDriverToTour = async (driverId, tourCode) => {
   try {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
+    
+    // Ensure we have a sanitized ID
     const tourId = sanitizeTourId(tourCode);
+    
+    // <--- Added Auth Check logic
+    if (!auth) throw new Error("Auth module not initialized");
+    const currentUser = auth.currentUser;
+
+    if (!currentUser) {
+        throw new Error("You must be logged in to assign a tour.");
+    }
 
     const updates = {};
 
@@ -237,6 +249,9 @@ const assignDriverToTour = async (driverId, tourCode) => {
     updates[`drivers/${driverId}/currentTourId`] = tourId;
     updates[`drivers/${driverId}/currentTourCode`] = tourCode;
     updates[`drivers/${driverId}/lastActive`] = new Date().toISOString();
+    
+    // CRITICAL FIX: Write the Auth UID to satisfy the 'claiming' security rule
+    updates[`drivers/${driverId}/authUid`] = currentUser.uid; 
 
     // 2. Add to Tour Manifest's assigned drivers list
     updates[`tour_manifests/${tourId}/assigned_drivers/${driverId}`] = true;
@@ -246,6 +261,7 @@ const assignDriverToTour = async (driverId, tourCode) => {
     };
 
     await realtimeDb.ref().update(updates);
+    
     console.log(`Driver ${driverId} assigned to tour ${tourId}`);
     return { success: true, tourId };
 
@@ -255,7 +271,7 @@ const assignDriverToTour = async (driverId, tourCode) => {
   }
 };
 
-// --- EXISTING: Validate Reference (Updated for Driver Assignment) ---
+// --- EXISTING: Validate Reference ---
 const validateBookingReference = async (reference) => {
   try {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
