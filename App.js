@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, Text, StyleSheet, AppState } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Import Firebase services
 import { auth, authHelpers, updateNetworkState } from './firebase';
@@ -37,30 +38,32 @@ const SESSION_KEYS = {
   LAST_SCREEN: '@LLT:lastScreen',
 };
 
-// --- MOCK STORAGE SETUP ---
+// --- SESSION STORAGE SETUP (AsyncStorage fallback to mock for tests/web) ---
 const createSessionStorage = () => {
   const mockStorage = {
     _data: {},
-    multiGet: async (keys) => {
-      return keys.map(key => [key, mockStorage._data[key] || null]);
-    },
+    multiGet: async (keys) => keys.map((key) => [key, mockStorage._data[key] || null]),
     multiSet: async (entries) => {
       entries.forEach(([key, value]) => {
         mockStorage._data[key] = value;
       });
     },
     multiRemove: async (keys) => {
-      keys.forEach(key => {
+      keys.forEach((key) => {
         delete mockStorage._data[key];
       });
-    }
+    },
   };
 
-  return {
-    storage: mockStorage,
-    mode: 'mock',
-    enabled: true
-  };
+  try {
+    if (AsyncStorage?.multiGet && AsyncStorage?.multiSet && AsyncStorage?.multiRemove) {
+      return { storage: AsyncStorage, mode: 'async-storage', enabled: true };
+    }
+  } catch (error) {
+    logger.warn('SessionStorage', 'AsyncStorage unavailable, falling back to mock', { error: error.message });
+  }
+
+  return { storage: mockStorage, mode: 'mock', enabled: true };
 };
 
 const { storage: SessionStorage, mode: storageMode } = createSessionStorage();
