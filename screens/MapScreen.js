@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -33,6 +33,7 @@ export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
   const [userLocation, setUserLocation] = useState(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState(null);
+  const mapRef = useRef(null);
 
   // 1. Get User's Own Location
   useEffect(() => {
@@ -66,6 +67,79 @@ export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
     return () => locationRef.off('value', unsubscribe);
   }, [tourId]);
 
+  const calculateDistanceKm = (pointA, pointB) => {
+    const toRad = (value) => (value * Math.PI) / 180;
+    const earthRadiusKm = 6371;
+
+    const dLat = toRad(pointB.latitude - pointA.latitude);
+    const dLon = toRad(pointB.longitude - pointA.longitude);
+
+    const lat1 = toRad(pointA.latitude);
+    const lat2 = toRad(pointB.latitude);
+
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1) * Math.cos(lat2) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return earthRadiusKm * c;
+  };
+
+  const formatRelativeTime = (isoString) => {
+    if (!isoString) return '';
+    const timestamp = new Date(isoString).getTime();
+    if (Number.isNaN(timestamp)) return '';
+
+    const diffMinutes = Math.floor((Date.now() - timestamp) / 60000);
+    if (diffMinutes < 1) return 'Just now';
+    if (diffMinutes === 1) return '1 min ago';
+    if (diffMinutes < 60) return `${diffMinutes} mins ago`;
+
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours === 1) return '1 hour ago';
+    if (diffHours < 24) return `${diffHours} hours ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    return diffDays === 1 ? '1 day ago' : `${diffDays} days ago`;
+  };
+
+  const estimateEtaMinutes = (distanceKm) => {
+    if (!distanceKm) return null;
+    const averageSpeedKmh = 35; // Highland roads are slower; keep ETA conservative
+    const minutes = Math.round((distanceKm / averageSpeedKmh) * 60);
+    return Math.max(minutes, 2); // Never show zero-minute arrivals
+  };
+
+  const driverHasLocation = Boolean(driverLocation);
+  const formattedDriverTime = driverLocation ? formatTime(driverLocation.timestamp) : '';
+  const relativeUpdateTime = driverLocation ? formatRelativeTime(driverLocation.timestamp) : '';
+  const isStale = driverLocation
+    ? (Date.now() - new Date(driverLocation.timestamp).getTime()) / 60000 > 10
+    : false;
+  const distanceKm = driverLocation && userLocation
+    ? calculateDistanceKm(driverLocation, userLocation)
+    : null;
+  const etaMinutes = distanceKm ? estimateEtaMinutes(distanceKm) : null;
+
+  useEffect(() => {
+    if (mapRef.current && (driverLocation || userLocation)) {
+      const coordinates = [];
+      if (driverLocation) {
+        coordinates.push({ latitude: driverLocation.latitude, longitude: driverLocation.longitude });
+      }
+      if (userLocation) {
+        coordinates.push({ latitude: userLocation.latitude, longitude: userLocation.longitude });
+      }
+
+      if (coordinates.length > 0) {
+        mapRef.current.fitToCoordinates(coordinates, {
+          edgePadding: { top: 80, right: 80, bottom: 200, left: 80 },
+          animated: true,
+        });
+      }
+    }
+  }, [driverLocation, userLocation]);
+
   // Determine initial region
   const getInitialRegion = () => {
     if (driverLocation) {
@@ -92,7 +166,23 @@ export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  const formattedDriverTime = driverLocation ? formatTime(driverLocation.timestamp) : '';
+  const handleRecenter = () => {
+    if (!mapRef.current) return;
+
+    if (driverLocation && userLocation) {
+      mapRef.current.fitToCoordinates([
+        { latitude: driverLocation.latitude, longitude: driverLocation.longitude },
+        { latitude: userLocation.latitude, longitude: userLocation.longitude },
+      ], {
+        edgePadding: { top: 80, right: 80, bottom: 200, left: 80 },
+        animated: true,
+      });
+      return;
+    }
+
+    const region = getInitialRegion();
+    mapRef.current.animateToRegion(region, 750);
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -118,6 +208,7 @@ export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
               initialRegion={getInitialRegion()}
               showsUserLocation={true}
               showsMyLocationButton={true}
+              ref={mapRef}
             >
               {driverLocation && (
                 <Marker
@@ -135,6 +226,10 @@ export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
               )}
             </MapView>
 
+            <TouchableOpacity style={styles.recenterButton} onPress={handleRecenter} activeOpacity={0.85}>
+              <MaterialCommunityIcons name="crosshairs-gps" size={24} color={COLORS.white} />
+            </TouchableOpacity>
+
             {/* Info Card Overlay */}
             <View style={styles.infoCard}>
               {errorMsg ? (
@@ -142,21 +237,49 @@ export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
                   <MaterialCommunityIcons name="alert-circle" size={28} color={COLORS.errorRed} style={{ marginRight: 10 }} />
                   <Text style={styles.infoDetail}>{errorMsg}</Text>
                 </View>
-              ) : driverLocation ? (
-                <View style={styles.infoContent}>
-                  <View style={styles.infoIcon}>
-                    <MaterialCommunityIcons name="map-marker-check" size={28} color={COLORS.primaryBlue} />
+              ) : driverHasLocation ? (
+                <>
+                  <View style={styles.infoContent}>
+                    <View style={styles.infoIcon}>
+                      <MaterialCommunityIcons name="map-marker-check" size={28} color={COLORS.primaryBlue} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.infoTitle}>Bus Location Set</Text>
+                      <Text style={styles.infoSubtitle}>
+                        Last update: {formattedDriverTime || 'Not available'} ({relativeUpdateTime})
+                      </Text>
+                      <Text style={styles.infoDetail}>
+                        Head to the marker on the map for pickup.
+                      </Text>
+                    </View>
                   </View>
-                  <View>
-                    <Text style={styles.infoTitle}>Bus Location Set</Text>
-                    <Text style={styles.infoSubtitle}>
-                      Last update: {formattedDriverTime || 'Not available'}
-                    </Text>
-                    <Text style={styles.infoDetail}>
-                      Head to the marker on the map for pickup.
-                    </Text>
-                  </View>
-                </View>
+
+                  {(distanceKm || etaMinutes) && (
+                    <View style={styles.metricRow}>
+                      {distanceKm && (
+                        <View style={styles.metricPill}>
+                          <MaterialCommunityIcons name="map-marker-distance" size={20} color={COLORS.primaryBlue} />
+                          <Text style={styles.metricText}>{distanceKm.toFixed(1)} km from you</Text>
+                        </View>
+                      )}
+                      {etaMinutes && (
+                        <View style={[styles.metricPill, styles.etaPill]}>
+                          <MaterialCommunityIcons name="clock-fast" size={20} color={COLORS.white} />
+                          <Text style={[styles.metricText, { color: COLORS.white }]}>~{etaMinutes} min drive</Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
+
+                  {isStale && (
+                    <View style={styles.staleBox}>
+                      <MaterialCommunityIcons name="alert" size={22} color={COLORS.errorRed} />
+                      <Text style={styles.staleText}>
+                        The last update is over 10 minutes old. Please call dispatch to confirm pickup status.
+                      </Text>
+                    </View>
+                  )}
+                </>
               ) : (
                 <View style={styles.infoContent}>
                   <MaterialCommunityIcons name="bus-clock" size={28} color={COLORS.secondaryText} style={{marginRight: 10}} />
@@ -189,7 +312,21 @@ const styles = StyleSheet.create({
   container: { flex: 1, position: 'relative' },
   map: { width: width, height: '100%' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  
+
+  recenterButton: {
+    position: 'absolute',
+    right: 20,
+    top: 80,
+    backgroundColor: COLORS.primaryBlue,
+    padding: 12,
+    borderRadius: 24,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+
   customMarker: {
     backgroundColor: COLORS.primaryBlue,
     padding: 8,
@@ -230,4 +367,41 @@ const styles = StyleSheet.create({
   infoTitle: { fontSize: 16, fontWeight: 'bold', color: COLORS.darkText },
   infoSubtitle: { fontSize: 13, color: COLORS.secondaryText, marginTop: 2, fontWeight: '600' },
   infoDetail: { fontSize: 13, color: COLORS.secondaryText, marginTop: 4, flex: 1 },
+  metricRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 15,
+  },
+  metricPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: '#E1F0FF',
+  },
+  etaPill: {
+    backgroundColor: COLORS.coralAccent,
+  },
+  metricText: {
+    color: COLORS.darkText,
+    fontWeight: '600',
+  },
+  staleBox: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: '#FFF5F5',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  staleText: {
+    color: COLORS.errorRed,
+    flex: 1,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
 });
