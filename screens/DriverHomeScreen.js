@@ -197,7 +197,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
             style={[styles.wideButton, { backgroundColor: COLORS.primary }]}
             onPress={handleOpenDriverChat}
         >
-            <MaterialCommunityIcons name="walkie-talkie" size={28} color="white" style={{marginRight: 10}}/>
+            <MaterialCommunityIcons name="radio-handheld" size={28} color="white" style={{marginRight: 10}}/>
             <Text style={styles.wideButtonText}>DRIVER CHAT</Text>
         </TouchableOpacity>
         
