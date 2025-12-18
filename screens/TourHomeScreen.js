@@ -89,6 +89,8 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
     }
   }, [manifestStatus]);
 
+  const isNoShow = manifestStatus === MANIFEST_STATUS.NO_SHOW;
+
   const handleCallDriver = () => {
     if (!tourData?.driverPhone) {
       Alert.alert('Driver contact unavailable', 'Please reach out to your operator.');
