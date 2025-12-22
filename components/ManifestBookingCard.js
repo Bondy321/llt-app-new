@@ -3,10 +3,10 @@ import { StyleSheet, Text, View, TouchableOpacity } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 const STATUS_COLORS = {
-  PENDING: '#95A5A6',
-  BOARDED: '#27AE60',
-  NO_SHOW: '#C0392B',
-  PARTIAL: '#E67E22'
+  PENDING: '#94A3B8',
+  BOARDED: '#22C55E',
+  NO_SHOW: '#EF4444',
+  PARTIAL: '#F59E0B'
 };
 
 const STATUS_ICONS = {
@@ -35,8 +35,8 @@ export default function ManifestBookingCard({ booking, onPress, isSearchResult }
         <View style={styles.refContainer}>
           <Text style={styles.refText}>{booking.id}</Text>
         </View>
-        <View style={[styles.badge, { backgroundColor: color }]}>
-          <Text style={styles.badgeText}>{status.replace('_', ' ')}</Text>
+        <View style={[styles.badge, { backgroundColor: `${color}1A`, borderColor: `${color}60` }]}>
+          <Text style={[styles.badgeText, { color }]}>{status.replace('_', ' ')}</Text>
         </View>
       </View>
 
@@ -70,15 +70,17 @@ export default function ManifestBookingCard({ booking, onPress, isSearchResult }
 const styles = StyleSheet.create({
   card: {
     backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 10,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
     borderLeftWidth: 5,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   headerRow: {
     flexDirection: 'row',
@@ -86,25 +88,25 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   refContainer: {
-    backgroundColor: '#ECF0F1',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
   },
   refText: {
     fontSize: 12,
     fontWeight: 'bold',
-    color: '#7F8C8D',
+    color: '#475569',
   },
   badge: {
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 12,
+    borderWidth: 1,
   },
   badgeText: {
-    color: 'white',
-    fontSize: 10,
-    fontWeight: 'bold',
+    fontSize: 11,
+    fontWeight: '800',
     textTransform: 'uppercase',
   },
   mainContent: {
@@ -113,13 +115,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   leadName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#2C3E50',
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0F172A',
   },
   subNames: {
     fontSize: 13,
-    color: '#7F8C8D',
+    color: '#475569',
     marginTop: 2,
   },
   locationContainer: {
@@ -129,21 +131,23 @@ const styles = StyleSheet.create({
   },
   locationText: {
     fontSize: 12,
-    color: '#7F8C8D',
+    color: '#475569',
     marginLeft: 4,
     maxWidth: 200,
   },
   paxCounter: {
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#F5F6FA',
-    padding: 8,
-    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    padding: 10,
+    borderRadius: 12,
     minWidth: 40,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   paxCountText: {
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#2C3E50',
+    fontWeight: '800',
+    color: '#0F172A',
   }
 });

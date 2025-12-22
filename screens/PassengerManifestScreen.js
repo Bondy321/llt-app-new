@@ -8,13 +8,15 @@ import { getTourManifest, updateManifestBooking, MANIFEST_STATUS } from '../serv
 import ManifestBookingCard from '../components/ManifestBookingCard';
 
 const COLORS = {
-  primary: '#2C3E50',
-  bg: '#F5F6FA',
-  border: '#DCDCDC',
-  searchBg: '#fff',
-  success: '#27AE60',
-  danger: '#C0392B',
-  info: '#3498DB',
+  primary: '#0B5ED7',
+  bg: '#F6F8FC',
+  border: '#E2E8F0',
+  searchBg: '#FFFFFF',
+  success: '#22C55E',
+  danger: '#EF4444',
+  info: '#2563EB',
+  muted: '#475569',
+  panel: '#0F172A',
 };
 
 export default function PassengerManifestScreen({ route, navigation }) {
@@ -360,26 +362,26 @@ export default function PassengerManifestScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
   header: {
-    backgroundColor: COLORS.primary,
-    padding: 15,
-    paddingTop: 10,
-    paddingBottom: 20,
+    backgroundColor: COLORS.panel,
+    padding: 16,
+    paddingTop: 12,
+    paddingBottom: 22,
   },
   backButton: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
   backText: { color: 'white', fontSize: 16, fontWeight: 'bold', marginLeft: 5 },
 
   dashboardContainer: {
     flexDirection: 'row',
-    backgroundColor: '#34495E',
-    borderRadius: 12,
-    padding: 15,
+    backgroundColor: '#111827',
+    borderRadius: 14,
+    padding: 14,
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 15,
+    marginBottom: 14,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
     elevation: 3,
   },
   dashboardItem: {
@@ -389,12 +391,12 @@ const styles = StyleSheet.create({
   dashDivider: {
     width: 1,
     height: '70%',
-    backgroundColor: '#5D6D7E',
+    backgroundColor: '#1F2937',
   },
   dashLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#BDC3C7',
+    color: '#CBD5E1',
     marginBottom: 4,
     letterSpacing: 0.5,
   },
@@ -407,9 +409,11 @@ const styles = StyleSheet.create({
   searchContainer: {
     flexDirection: 'row',
     backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 10,
+    borderRadius: 12,
+    padding: 12,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   searchInput: {
     flex: 1,
@@ -420,7 +424,7 @@ const styles = StyleSheet.create({
   
   listContent: { padding: 15 },
   sectionHeader: {
-    backgroundColor: '#E5E8E8',
+    backgroundColor: '#EEF2FF',
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 6,
@@ -429,7 +433,7 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontWeight: 'bold',
-    color: '#7F8C8D',
+    color: COLORS.muted,
     fontSize: 14,
   },
 
@@ -448,9 +452,9 @@ const styles = StyleSheet.create({
   },
   modalHeader: { marginBottom: 20, borderBottomWidth: 1, borderBottomColor: '#eee', paddingBottom: 15 },
   modalTitle: { fontSize: 22, fontWeight: 'bold', color: COLORS.primary },
-  modalSubtitle: { fontSize: 16, color: '#7F8C8D', marginTop: 5 },
+  modalSubtitle: { fontSize: 16, color: COLORS.muted, marginTop: 5 },
   
-  modalSectionLabel: { fontSize: 14, fontWeight: 'bold', color: '#95A5A6', marginBottom: 10, textTransform: 'uppercase' },
+  modalSectionLabel: { fontSize: 14, fontWeight: 'bold', color: COLORS.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.4 },
   actionRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 15, marginBottom: 15 },
   actionBtn: {
     flex: 1,
@@ -470,33 +474,33 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed'
   },
   closeBtn: { padding: 15, alignItems: 'center' },
-  closeBtnText: { color: '#95A5A6', fontWeight: 'bold', fontSize: 16 },
+  closeBtnText: { color: COLORS.muted, fontWeight: 'bold', fontSize: 16 },
 
   passengerList: { gap: 10, marginBottom: 15 },
   passengerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8F9F9',
+    backgroundColor: '#F8FAFC',
     borderRadius: 12,
     padding: 12,
     borderWidth: 1,
-    borderColor: '#ECF0F1'
+    borderColor: COLORS.border
   },
   passengerName: { fontWeight: 'bold', color: COLORS.primary },
-  passengerSeat: { color: '#7F8C8D', marginTop: 4 },
+  passengerSeat: { color: COLORS.muted, marginTop: 4 },
   passengerActions: { flexDirection: 'row', gap: 8 },
   statusPill: {
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#D0D3D4',
+    borderColor: COLORS.border,
     backgroundColor: 'white'
   },
   statusPillText: { fontSize: 12, fontWeight: '600', color: COLORS.primary },
-  statusPillActiveSuccess: { backgroundColor: '#E8F8F5', borderColor: '#ABEBC6' },
-  statusPillActiveDanger: { backgroundColor: '#FDEDEC', borderColor: '#F5B7B1' },
-  statusPillActivePending: { backgroundColor: '#EBF5FB', borderColor: '#AED6F1' },
+  statusPillActiveSuccess: { backgroundColor: '#ECFDF3', borderColor: '#BBF7D0' },
+  statusPillActiveDanger: { backgroundColor: '#FEF2F2', borderColor: '#FECACA' },
+  statusPillActivePending: { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' },
   statusPillTextActive: { color: COLORS.primary },
   partialFooter: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
   partialFooterBtn: {
