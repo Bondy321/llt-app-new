@@ -18,18 +18,19 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { uploadPhoto, subscribeToPrivatePhotos } from '../services/photoService';
+import { palette, shadow, radii } from '../styles/theme';
 
 const windowWidth = Dimensions.get('window').width;
 const windowHeight = Dimensions.get('window').height;
 
 // Brand Colors
 const COLORS = {
-  primaryBlue: '#007DC3',
-  lightBlueAccent: '#AECAEC',
-  coralAccent: '#FF7757',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  appBackground: '#F0F4F8',
+  primaryBlue: palette.primary,
+  lightBlueAccent: '#C6D8F5',
+  coralAccent: palette.coral,
+  white: palette.surface,
+  darkText: palette.text,
+  appBackground: palette.background,
   modalBackground: 'rgba(0, 20, 40, 0.9)',
 };
 
@@ -228,12 +229,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 15,
-    paddingVertical: Platform.OS === 'ios' ? 12 : 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    paddingVertical: Platform.OS === 'ios' ? 13 : 15,
+    ...shadow.soft,
   },
   headerButton: {
     padding: 5,
@@ -315,7 +312,7 @@ const styles = StyleSheet.create({
   imageThumbnail: {
     width: '100%',
     height: '100%',
-    borderRadius: 12,
+    borderRadius: radii.lg,
     backgroundColor: '#E2E8F0',
   },
   modalOverlay: {

@@ -6,15 +6,16 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getTourManifest, updateManifestBooking, MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import ManifestBookingCard from '../components/ManifestBookingCard';
+import { palette, shadow, radii } from '../styles/theme';
 
 const COLORS = {
-  primary: '#2C3E50',
-  bg: '#F5F6FA',
-  border: '#DCDCDC',
-  searchBg: '#fff',
-  success: '#27AE60',
-  danger: '#C0392B',
-  info: '#3498DB',
+  primary: palette.primary,
+  bg: palette.background,
+  border: '#DCE5F2',
+  searchBg: palette.surface,
+  success: palette.success,
+  danger: palette.danger,
+  info: palette.secondary,
 };
 
 export default function PassengerManifestScreen({ route, navigation }) {
@@ -361,26 +362,26 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
   header: {
     backgroundColor: COLORS.primary,
-    padding: 15,
-    paddingTop: 10,
-    paddingBottom: 20,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 22,
+    borderBottomLeftRadius: radii.lg,
+    borderBottomRightRadius: radii.lg,
+    ...shadow.soft,
   },
   backButton: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
   backText: { color: 'white', fontSize: 16, fontWeight: 'bold', marginLeft: 5 },
 
   dashboardContainer: {
     flexDirection: 'row',
-    backgroundColor: '#34495E',
-    borderRadius: 12,
-    padding: 15,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: radii.lg,
+    padding: 16,
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
   },
   dashboardItem: {
     flex: 1,
@@ -389,12 +390,12 @@ const styles = StyleSheet.create({
   dashDivider: {
     width: 1,
     height: '70%',
-    backgroundColor: '#5D6D7E',
+    backgroundColor: 'rgba(255,255,255,0.25)',
   },
   dashLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#BDC3C7',
+    color: '#E6ECF8',
     marginBottom: 4,
     letterSpacing: 0.5,
   },
@@ -406,10 +407,12 @@ const styles = StyleSheet.create({
 
   searchContainer: {
     flexDirection: 'row',
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 10,
+    backgroundColor: COLORS.searchBg,
+    borderRadius: radii.lg,
+    padding: 12,
     alignItems: 'center',
+    marginTop: 8,
+    ...shadow.soft,
   },
   searchInput: {
     flex: 1,
@@ -418,19 +421,19 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
   },
   
-  listContent: { padding: 15 },
+  listContent: { padding: 15, gap: 10 },
   sectionHeader: {
-    backgroundColor: '#E5E8E8',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 6,
+    backgroundColor: '#E8F1FF',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: radii.md,
     marginBottom: 10,
     marginTop: 5,
   },
   sectionTitle: {
     fontWeight: 'bold',
-    color: '#7F8C8D',
-    fontSize: 14,
+    color: COLORS.primary,
+    fontSize: 15,
   },
 
   // Modal Styles
@@ -440,13 +443,14 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: 'white',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: COLORS.searchBg,
+    borderTopLeftRadius: radii.xl,
+    borderTopRightRadius: radii.xl,
     padding: 20,
-    minHeight: 350,
+    minHeight: 360,
+    ...shadow.card,
   },
-  modalHeader: { marginBottom: 20, borderBottomWidth: 1, borderBottomColor: '#eee', paddingBottom: 15 },
+  modalHeader: { marginBottom: 20, borderBottomWidth: 1, borderBottomColor: '#E5E7EB', paddingBottom: 15 },
   modalTitle: { fontSize: 22, fontWeight: 'bold', color: COLORS.primary },
   modalSubtitle: { fontSize: 16, color: '#7F8C8D', marginTop: 5 },
   
@@ -455,15 +459,16 @@ const styles = StyleSheet.create({
   actionBtn: {
     flex: 1,
     paddingVertical: 20,
-    borderRadius: 12,
+    borderRadius: radii.lg,
     alignItems: 'center',
     justifyContent: 'center',
+    ...shadow.soft,
   },
   actionBtnText: { color: 'white', fontSize: 16, fontWeight: 'bold', marginTop: 5 },
   
   secondaryActionBtn: {
     padding: 15,
-    borderRadius: 12,
+    borderRadius: radii.lg,
     borderWidth: 2,
     alignItems: 'center',
     marginBottom: 20,
@@ -476,11 +481,11 @@ const styles = StyleSheet.create({
   passengerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8F9F9',
-    borderRadius: 12,
+    backgroundColor: '#F7FAFF',
+    borderRadius: radii.lg,
     padding: 12,
     borderWidth: 1,
-    borderColor: '#ECF0F1'
+    borderColor: '#E2E8F0'
   },
   passengerName: { fontWeight: 'bold', color: COLORS.primary },
   passengerSeat: { color: '#7F8C8D', marginTop: 4 },
@@ -488,10 +493,10 @@ const styles = StyleSheet.create({
   statusPill: {
     paddingVertical: 6,
     paddingHorizontal: 10,
-    borderRadius: 20,
+    borderRadius: radii.pill,
     borderWidth: 1,
     borderColor: '#D0D3D4',
-    backgroundColor: 'white'
+    backgroundColor: COLORS.searchBg,
   },
   statusPillText: { fontSize: 12, fontWeight: '600', color: COLORS.primary },
   statusPillActiveSuccess: { backgroundColor: '#E8F8F5', borderColor: '#ABEBC6' },

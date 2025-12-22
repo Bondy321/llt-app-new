@@ -18,19 +18,20 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { palette, gradients, shadow, radii } from '../styles/theme';
 
 const { width, height } = Dimensions.get('window');
 
 const COLORS = {
-  primaryBlue: '#007DC3',
-  secondaryBlue: '#005a8f',
-  lightBlue: '#E8F2FF',
-  white: '#FFFFFF',
-  errorRed: '#FF4444',
-  darkText: '#333333',
-  lightBlueAccent: '#B8D4FF',
+  primaryBlue: palette.primary,
+  secondaryBlue: palette.primaryDeep,
+  lightBlue: palette.mutedSurface,
+  white: palette.surface,
+  errorRed: palette.danger,
+  darkText: palette.text,
+  lightBlueAccent: '#C6D8F5',
   inputBackground: '#F7FAFC',
-  placeholderText: '#A0AEC0',
+  placeholderText: palette.subtleText,
 };
 
 export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
@@ -141,10 +142,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
   };
 
   return (
-    <LinearGradient
-      colors={[COLORS.primaryBlue, COLORS.secondaryBlue]}
-      style={styles.gradient}
-    >
+    <LinearGradient colors={gradients.hero} style={styles.gradient}>
       <SafeAreaView style={styles.safeArea}>
         <ScrollView 
           contentContainerStyle={styles.scrollContainer}
@@ -175,8 +173,10 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
                 style={styles.logoImage}
                 resizeMode="contain"
               />
-              <Text style={styles.appTitle}>Loch Lomond Travel</Text>
-              <Text style={styles.appSubtitle}>The UK's Fastest Growing Coach Tour Operator</Text>
+              <View style={styles.brandingText}>
+                <Text style={styles.appTitle}>Loch Lomond Travel</Text>
+                <Text style={styles.appSubtitle}>The UK's Fastest Growing Coach Tour Operator</Text>
+              </View>
             </Animated.View>
 
             {/* Form Section */}
@@ -194,6 +194,16 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
                 },
               ]}
             >
+              <View style={styles.badgeRow}>
+                <View style={styles.badge}>
+                  <MaterialCommunityIcons name="shield-check" size={16} color={COLORS.primaryBlue} />
+                  <Text style={styles.badgeText}>Secure access</Text>
+                </View>
+                <View style={styles.badge}>
+                  <MaterialCommunityIcons name="clock-outline" size={16} color={COLORS.primaryBlue} />
+                  <Text style={styles.badgeText}>Instant check-in</Text>
+                </View>
+              </View>
               <Text style={styles.welcomeText}>Welcome Aboard!</Text>
               <Text style={styles.instructionText}>
                 Enter your booking reference to access your tour
@@ -236,10 +246,10 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
               ) : null}
               
               <Animated.View style={{ transform: [{ scale: buttonAnimation }] }}>
-                <TouchableOpacity 
-                  style={[styles.button, loading && styles.buttonDisabled]} 
-                  onPress={handleLogin} 
-                  activeOpacity={0.8}
+                <TouchableOpacity
+                  style={[styles.button, loading && styles.buttonDisabled]}
+                  onPress={handleLogin}
+                  activeOpacity={0.85}
                   disabled={loading}
                 >
                   {loading ? (
@@ -319,11 +329,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: height * 0.08,
     marginBottom: 30,
+    padding: 12,
   },
   logoImage: {
     width: 250,
     height: 100,
     marginBottom: 20,
+  },
+  brandingText: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: radii.lg,
   },
   appTitle: {
     fontSize: 34,
@@ -338,16 +356,32 @@ const styles = StyleSheet.create({
   },
   formCard: {
     backgroundColor: COLORS.white,
-    borderRadius: 20,
+    borderRadius: radii.xl,
     padding: 30,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 10,
-    },
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    elevation: 10,
+    ...shadow.card,
+    borderWidth: 1,
+    borderColor: '#E4EAF5',
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  badge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#EEF3FF',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: radii.pill,
+  },
+  badgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.primaryBlue,
+    letterSpacing: 0.2,
   },
   welcomeText: {
     fontSize: 24,
@@ -366,19 +400,12 @@ const styles = StyleSheet.create({
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.white,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: COLORS.lightBlueAccent,
+    backgroundColor: '#F7FAFF',
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: '#D9E6FA',
     marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 4,
+    ...shadow.soft,
   },
   inputIcon: {
     marginLeft: 15,
@@ -405,20 +432,13 @@ const styles = StyleSheet.create({
   },
   button: {
     backgroundColor: COLORS.primaryBlue,
-    borderRadius: 12,
+    borderRadius: radii.pill,
     paddingVertical: 16,
     paddingHorizontal: 32,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: COLORS.primaryBlue,
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
+    ...shadow.soft,
   },
   buttonDisabled: {
     opacity: 0.7,

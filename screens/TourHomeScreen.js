@@ -17,17 +17,18 @@ import { LinearGradient } from 'expo-linear-gradient';
 import TodaysAgendaCard from '../components/TodaysAgendaCard';
 import { MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import { realtimeDb } from '../firebase';
+import { palette, gradients, shadow, radii } from '../styles/theme';
 
 // Brand Colors
 const COLORS = {
-  primaryBlue: '#007DC3',
-  lightBlueAccent: '#AECAEC',
-  lightBlue: '#E8F2FF',
-  coralAccent: '#FF7757',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  cardBackground: '#FFFFFF',
-  appBackground: '#F0F4F8',
+  primaryBlue: palette.primary,
+  lightBlueAccent: '#C6D8F5',
+  lightBlue: palette.mutedSurface,
+  coralAccent: palette.coral,
+  white: palette.surface,
+  darkText: palette.text,
+  cardBackground: palette.surface,
+  appBackground: palette.background,
 };
 
 export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavigate, onLogout }) {
@@ -112,17 +113,17 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
   };
 
   const menuItems = [
-    { id: 'Photobook', title: 'My Photos', icon: 'image-album', color: COLORS.primaryBlue },
-    { id: 'GroupPhotobook', title: 'Group Photo Album', icon: 'image-multiple', color: '#16a085' },
-    { id: 'Itinerary', title: 'Tour Itinerary', icon: 'map-legend', color: '#3498DB' },
-    { id: 'Chat', title: 'Group Chat', icon: 'chat-processing-outline', color: '#2ECC71' },
-    { id: 'Map', title: 'Driver Location', icon: 'map-marker-radius-outline', color: COLORS.coralAccent },
-    { id: 'SafetySupport', title: 'Safety & Support', icon: 'shield-check', color: '#8e44ad' },
+    { id: 'Photobook', title: 'My Photos', icon: 'image-album', color: palette.primary },
+    { id: 'GroupPhotobook', title: 'Group Photo Album', icon: 'image-multiple', color: palette.secondary },
+    { id: 'Itinerary', title: 'Tour Itinerary', icon: 'map-legend', color: palette.primaryDeep },
+    { id: 'Chat', title: 'Group Chat', icon: 'chat-processing-outline', color: palette.success },
+    { id: 'Map', title: 'Driver Location', icon: 'map-marker-radius-outline', color: palette.coral },
+    { id: 'SafetySupport', title: 'Safety & Support', icon: 'shield-check', color: palette.highlight },
   ];
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <LinearGradient colors={[`${COLORS.primaryBlue}0D`, COLORS.white]} style={styles.gradient}>
+      <LinearGradient colors={gradients.calm} style={styles.gradient}>
         <ScrollView contentContainerStyle={styles.container}>
           <View style={styles.header}>
             <Image source={require('../assets/images/app-icon-llt.png')} style={styles.logoImage} />
@@ -338,14 +339,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 30,
     backgroundColor: COLORS.white,
-    borderRadius: 18,
+    borderRadius: radii.lg,
     paddingHorizontal: 16,
     paddingVertical: 14,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.07,
-    shadowRadius: 8,
-    elevation: 5,
+    ...shadow.soft,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}15`,
   },
   logoImage: {
     width: 46,
@@ -370,19 +369,17 @@ const styles = StyleSheet.create({
   },
   logoutButton: {
     padding: 6,
+    borderRadius: 12,
+    backgroundColor: `${COLORS.primaryBlue}0D`,
   },
   statusCard: {
     backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 18,
+    borderRadius: radii.lg,
+    padding: 20,
     marginBottom: 18,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 6,
+    ...shadow.soft,
     borderWidth: 1,
-    borderColor: `${COLORS.primaryBlue}12`,
+    borderColor: `${COLORS.primaryBlue}18`,
   },
   statusHeader: {
     flexDirection: 'row',
@@ -441,16 +438,12 @@ const styles = StyleSheet.create({
   },
   welcomeCard: {
     backgroundColor: COLORS.white,
-    padding: 22,
-    borderRadius: 20,
+    padding: 24,
+    borderRadius: radii.xl,
     marginBottom: 28,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 8,
+    ...shadow.card,
     borderWidth: 1,
-    borderColor: COLORS.lightBlue,
+    borderColor: `${COLORS.lightBlue}80`,
   },
   welcomeText: {
     fontSize: 26,
@@ -534,7 +527,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 14,
-    backgroundColor: '#FFF5F1',
+    backgroundColor: '#FFF6F1',
     padding: 12,
     borderRadius: 12,
   },
@@ -616,14 +609,12 @@ const styles = StyleSheet.create({
     aspectRatio: 1.05,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 18,
+    borderRadius: radii.lg,
     padding: 16,
     backgroundColor: COLORS.white,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 6,
+    ...shadow.soft,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}10`,
   },
   iconCircle: {
     width: 50,
@@ -658,13 +649,9 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 480,
     backgroundColor: COLORS.white,
-    borderRadius: 18,
+    borderRadius: radii.lg,
     padding: 22,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 20,
-    elevation: 10,
+    ...shadow.card,
   },
   modalHeader: {
     flexDirection: 'row',

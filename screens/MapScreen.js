@@ -13,19 +13,20 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { realtimeDb } from '../firebase'; // Ensure this import is correct
+import { palette, shadow, radii } from '../styles/theme';
 
 const { width, height } = Dimensions.get('window');
 
 // Brand Colors
 const COLORS = {
-  primaryBlue: '#007DC3',
-  coralAccent: '#FF7757',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  secondaryText: '#4A5568',
-  appBackground: '#F0F4F8',
-  mapHeaderColor: '#FF7757',
-  errorRed: '#E53E3E',
+  primaryBlue: palette.primary,
+  coralAccent: palette.coral,
+  white: palette.surface,
+  darkText: palette.text,
+  secondaryText: palette.secondaryText,
+  appBackground: palette.background,
+  mapHeaderColor: palette.accent,
+  errorRed: palette.danger,
 };
 
 export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
@@ -303,8 +304,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 15,
-    paddingVertical: Platform.OS === 'ios' ? 12 : 15,
+    paddingVertical: Platform.OS === 'ios' ? 14 : 16,
     zIndex: 10,
+    ...shadow.soft,
   },
   headerButton: { padding: 5, minWidth: 40 },
   headerTitle: { fontSize: 20, fontWeight: '600', color: COLORS.white },
@@ -320,11 +322,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primaryBlue,
     padding: 12,
     borderRadius: 24,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
+    ...shadow.soft,
   },
 
   customMarker: {
@@ -346,13 +344,11 @@ const styles = StyleSheet.create({
     left: 20,
     right: 20,
     backgroundColor: COLORS.white,
-    borderRadius: 15,
+    borderRadius: radii.lg,
     padding: 20,
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    ...shadow.card,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}12`,
   },
   infoContent: { flexDirection: 'row', alignItems: 'center' },
   infoIcon: {

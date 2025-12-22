@@ -23,14 +23,15 @@ import NotificationPreferencesScreen from './screens/NotificationPreferencesScre
 import DriverHomeScreen from './screens/DriverHomeScreen';
 import PassengerManifestScreen from './screens/PassengerManifestScreen';
 import SafetySupportScreen from './screens/SafetySupportScreen';
+import { palette } from './styles/theme';
 
 const COLORS = {
-  primaryBlue: '#007DC3',
-  lightBlueAccent: '#AECAEC',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  errorRed: '#E53E3E',
-  appBackground: '#F0F4F8',
+  primaryBlue: palette.primary,
+  lightBlueAccent: '#C6D8F5',
+  white: palette.surface,
+  darkText: palette.text,
+  errorRed: palette.danger,
+  appBackground: palette.background,
 };
 
 const SESSION_KEYS = {

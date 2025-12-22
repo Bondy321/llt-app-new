@@ -21,24 +21,25 @@ import {
   subscribeToInternalDriverChat,
 } from '../services/chatService';
 import { auth } from '../firebase';
+import { palette, shadow, radii } from '../styles/theme';
 
 // Brand Colors
 const COLORS = {
-  primaryBlue: '#007DC3',
-  lightBlueAccent: '#AECAEC',
-  coralAccent: '#FF7757',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  secondaryText: '#4A5568',
-  appBackground: '#F0F4F8',
-  chatScreenBackground: '#E6F3F8',
-  myMessageBackground: '#007DC3',
-  theirMessageBackground: '#FFFFFF',
-  driverMessageBackground: '#FFF2E0',
-  driverMessageBorder: '#FFCAA8',
+  primaryBlue: palette.primary,
+  lightBlueAccent: '#C6D8F5',
+  coralAccent: palette.coral,
+  white: palette.surface,
+  darkText: palette.text,
+  secondaryText: palette.secondaryText,
+  appBackground: palette.background,
+  chatScreenBackground: '#E7F2FF',
+  myMessageBackground: palette.primary,
+  theirMessageBackground: palette.surface,
+  driverMessageBackground: '#FFF4E9',
+  driverMessageBorder: '#FFD6B8',
   inputBackground: '#FFFFFF',
-  sendButtonColor: '#FF7757',
-  chatHeaderColor: '#2ECC71',
+  sendButtonColor: palette.accent,
+  chatHeaderColor: palette.secondary,
 };
 
 export default function ChatScreen({ onBack, tourId, bookingData, tourData, internalDriverChat = false }) {
@@ -328,12 +329,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 15,
-    paddingVertical: Platform.OS === 'ios' ? 12 : 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    paddingVertical: Platform.OS === 'ios' ? 13 : 16,
+    ...shadow.soft,
   },
   headerButton: {
     padding: 5,
@@ -417,20 +414,16 @@ const styles = StyleSheet.create({
     maxWidth: '85%',
     paddingVertical: 10,
     paddingHorizontal: 16,
-    borderRadius: 20,
+    borderRadius: radii.lg,
   },
   myMessageBubble: {
     backgroundColor: COLORS.myMessageBackground,
-    borderBottomRightRadius: 5,
+    borderBottomRightRadius: 8,
   },
   theirMessageBubble: {
     backgroundColor: COLORS.theirMessageBackground,
-    borderBottomLeftRadius: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 2,
-    elevation: 1,
+    borderBottomLeftRadius: 8,
+    ...shadow.soft,
   },
   driverMessageBubble: {
     backgroundColor: COLORS.driverMessageBackground,
@@ -494,6 +487,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#D1D9E6',
     backgroundColor: COLORS.inputBackground,
+    ...shadow.soft,
   },
   textInput: {
     flex: 1,
