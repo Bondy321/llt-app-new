@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { colors } from './theme';
 
 // Import Firebase services
 import { auth, authHelpers } from './firebase';
@@ -25,12 +26,12 @@ import PassengerManifestScreen from './screens/PassengerManifestScreen';
 import SafetySupportScreen from './screens/SafetySupportScreen';
 
 const COLORS = {
-  primaryBlue: '#007DC3',
-  lightBlueAccent: '#AECAEC',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  errorRed: '#E53E3E',
-  appBackground: '#F0F4F8',
+  primaryBlue: colors.primary,
+  lightBlueAccent: colors.primaryMuted,
+  white: colors.surface,
+  darkText: colors.ink,
+  errorRed: colors.danger,
+  appBackground: colors.background,
 };
 
 const SESSION_KEYS = {
@@ -388,13 +389,43 @@ case 'Itinerary':
 }
 
 const styles = StyleSheet.create({
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.appBackground, padding: 30 },
-  loadingText: { marginTop: 15, fontSize: 16, color: COLORS.darkText, opacity: 0.8 },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: COLORS.appBackground,
+    padding: 30,
+  },
+  loadingText: { marginTop: 15, fontSize: 16, color: COLORS.darkText, opacity: 0.7, letterSpacing: 0.2 },
   errorTitle: { fontSize: 22, fontWeight: 'bold', color: COLORS.errorRed, marginTop: 20, marginBottom: 10, textAlign: 'center' },
   errorText: { fontSize: 16, color: COLORS.darkText, textAlign: 'center', marginBottom: 5 },
   errorDetail: { fontSize: 14, color: COLORS.darkText, opacity: 0.6, textAlign: 'center', marginTop: 15 },
-  offlineBanner: { backgroundColor: COLORS.errorRed, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000 },
-  offlineText: { color: COLORS.white, fontSize: 14, marginLeft: 8, fontWeight: '500' },
-  syncBanner: { backgroundColor: COLORS.primaryBlue, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', paddingVertical: 8, paddingHorizontal: 12, position: 'absolute', top: 40, left: 0, right: 0, zIndex: 900 },
+  offlineBanner: {
+    backgroundColor: COLORS.errorRed,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 1000,
+  },
+  offlineText: { color: COLORS.white, fontSize: 14, marginLeft: 8, fontWeight: '600' },
+  syncBanner: {
+    backgroundColor: COLORS.primaryBlue,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    position: 'absolute',
+    top: 42,
+    left: 0,
+    right: 0,
+    zIndex: 900,
+  },
   syncDetail: { color: COLORS.white, fontSize: 12, opacity: 0.8 },
 });

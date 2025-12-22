@@ -2,15 +2,9 @@ import React, { useMemo } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { colors, spacing, radius, shadows, text as textStyles } from '../theme';
 
-const COLORS = {
-  primaryBlue: '#007DC3',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  secondaryText: '#4A5568',
-  coralAccent: '#FF7757',
-  lightBg: '#F7FAFF',
-};
+const palette = colors;
 
 export default function TodaysAgendaCard({ tourData, onNudge }) {
   const currentDayData = useMemo(() => {
@@ -58,9 +52,9 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
   if (currentDayData.status === 'FUTURE') {
     return (
       <View style={styles.card}>
-        <LinearGradient colors={[COLORS.primaryBlue, '#005A8D']} style={styles.headerFuture}>
-          <MaterialCommunityIcons name="airplane-takeoff" size={24} color={COLORS.white} />
-          <View style={{marginLeft: 12}}>
+        <LinearGradient colors={[palette.primary, '#0F3FBF']} style={styles.headerFuture}>
+          <MaterialCommunityIcons name="airplane-takeoff" size={24} color={palette.surface} />
+          <View style={{marginLeft: spacing.sm}}>
             <Text style={styles.headerTitleFuture}>Countdown to Tour</Text>
             <Text style={styles.headerSubtitleFuture}>{currentDayData.daysToGo} days to go!</Text>
           </View>
@@ -82,7 +76,7 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
     <View style={styles.container}>
       <Text style={styles.sectionTitle}>Happening Today</Text>
       <TouchableOpacity activeOpacity={0.9} onPress={onNudge} style={styles.card}>
-        <LinearGradient colors={[COLORS.white, COLORS.lightBg]} style={styles.cardInner}>
+        <LinearGradient colors={[palette.surface, palette.cardSoft]} style={styles.cardInner}>
           
           {/* Header */}
           <View style={styles.rowBetween}>
@@ -91,7 +85,7 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
             </View>
             <TouchableOpacity onPress={onNudge} style={styles.viewAllBtn}>
               <Text style={styles.viewAllText}>View Full Day</Text>
-              <MaterialCommunityIcons name="chevron-right" size={16} color={COLORS.primaryBlue} />
+              <MaterialCommunityIcons name="chevron-right" size={16} color={palette.primary} />
             </TouchableOpacity>
           </View>
 
@@ -124,40 +118,36 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
 }
 
 const styles = StyleSheet.create({
-  container: { marginBottom: 24 },
-  sectionTitle: { fontSize: 20, fontWeight: '700', color: COLORS.darkText, marginBottom: 12, marginLeft: 4 },
+  container: { marginBottom: spacing.lg },
+  sectionTitle: { ...textStyles.title, marginBottom: spacing.sm, marginLeft: 4 },
   card: {
-    borderRadius: 18,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 4,
-    backgroundColor: COLORS.white,
+    borderRadius: radius.lg,
+    backgroundColor: palette.surface,
+    ...shadows.subtle,
   },
-  cardInner: { borderRadius: 18, padding: 16 },
-  headerFuture: { flexDirection: 'row', alignItems: 'center', padding: 20, borderRadius: 18 },
-  headerTitleFuture: { color: COLORS.white, fontWeight: '700', fontSize: 16 },
-  headerSubtitleFuture: { color: COLORS.white, opacity: 0.9, fontSize: 14 },
+  cardInner: { borderRadius: radius.lg, padding: spacing.md },
+  headerFuture: { flexDirection: 'row', alignItems: 'center', padding: spacing.lg, borderRadius: radius.lg },
+  headerTitleFuture: { ...textStyles.title, color: palette.surface },
+  headerSubtitleFuture: { ...textStyles.body, color: palette.surface, opacity: 0.9 },
   
-  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  badge: { backgroundColor: '#E1F0FF', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
-  badgeText: { color: COLORS.primaryBlue, fontWeight: '700', fontSize: 12 },
+  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs },
+  badge: { backgroundColor: palette.primaryMuted, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: radius.md },
+  badgeText: { color: palette.primary, fontWeight: '800', fontSize: 12 },
   viewAllBtn: { flexDirection: 'row', alignItems: 'center' },
-  viewAllText: { color: COLORS.primaryBlue, fontSize: 13, fontWeight: '600', marginRight: 2 },
+  viewAllText: { color: palette.primary, fontSize: 13, fontWeight: '700', marginRight: 2 },
   
-  dayTitle: { fontSize: 18, fontWeight: '800', color: COLORS.darkText, marginBottom: 12 },
+  dayTitle: { ...textStyles.heading, fontSize: 18, marginBottom: spacing.sm },
   
   listContainer: { marginTop: 4 },
   activityRow: { flexDirection: 'row', marginBottom: 0, height: 32 }, 
-  dotLine: { alignItems: 'center', width: 20, marginRight: 8 },
+  dotLine: { alignItems: 'center', width: 20, marginRight: spacing.xs },
   dot: { width: 8, height: 8, borderRadius: 4, marginTop: 5, zIndex: 1 },
-  dotTime: { backgroundColor: COLORS.coralAccent },
-  dotStandard: { backgroundColor: '#CBD5E0' },
-  line: { width: 1, backgroundColor: '#E2E8F0', flex: 1, position: 'absolute', top: 10, bottom: -10 },
+  dotTime: { backgroundColor: palette.accent },
+  dotStandard: { backgroundColor: palette.muted },
+  line: { width: 1, backgroundColor: palette.border, flex: 1, position: 'absolute', top: 10, bottom: -10 },
   
   content: { flex: 1, flexDirection: 'row', alignItems: 'flex-start' },
-  timeText: { fontWeight: '700', fontSize: 13, color: COLORS.darkText, marginRight: 8, width: 60 },
-  descText: { fontSize: 13, color: COLORS.secondaryText, flex: 1 },
-  moreText: { marginLeft: 28, fontSize: 12, color: COLORS.primaryBlue, fontStyle: 'italic', marginTop: 4 },
+  timeText: { fontWeight: '700', fontSize: 13, color: palette.graphite, marginRight: spacing.sm, width: 60 },
+  descText: { fontSize: 13, color: palette.steel, flex: 1 },
+  moreText: { marginLeft: 28, fontSize: 12, color: palette.primary, fontStyle: 'italic', marginTop: 4 },
 });

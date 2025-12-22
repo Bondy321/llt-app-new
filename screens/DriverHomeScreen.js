@@ -17,17 +17,20 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { realtimeDb } from '../firebase'; // Import your DB instance
 import { assignDriverToTour } from '../services/bookingServiceRealtime';
+import { colors, spacing, radius, shadows, text as textStyles } from '../theme';
+
+const palette = colors;
 
 const COLORS = {
-  primary: '#2C3E50',
-  accent: '#E67E22',
-  white: '#FFFFFF',
-  bg: '#F5F6FA',
-  success: '#27AE60',
-  danger: '#C0392B',
-  info: '#3498DB',
-  location: '#2980B9', // Blue for location
-  purple: '#8E44AD'
+  primary: palette.primary,
+  accent: palette.accent,
+  white: palette.surface,
+  bg: palette.background,
+  success: palette.success,
+  danger: palette.danger,
+  info: palette.primary,
+  location: palette.primary,
+  purple: '#6B5AED',
 };
 
 export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
@@ -150,8 +153,8 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
           <Text style={styles.greeting}>Driver Console</Text>
           <Text style={styles.driverName}>{driverData?.name || 'Unknown Driver'}</Text>
         </View>
-        <TouchableOpacity onPress={onLogout} style={styles.logoutBtn}>
-          <MaterialCommunityIcons name="logout" size={24} color={COLORS.white} />
+    <TouchableOpacity onPress={onLogout} style={styles.logoutBtn}>
+      <MaterialCommunityIcons name="logout" size={24} color={COLORS.white} />
         </TouchableOpacity>
       </View>
 
@@ -286,87 +289,94 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
   header: {
-    backgroundColor: COLORS.primary,
-    padding: 20,
+    backgroundColor: COLORS.white,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.md,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    borderBottomLeftRadius: radius.lg,
+    borderBottomRightRadius: radius.lg,
+    borderBottomWidth: 1,
+    borderColor: palette.border,
+    ...shadows.soft,
   },
-  greeting: { color: '#BDC3C7', fontSize: 12, fontWeight: '700', letterSpacing: 1 },
-  driverName: { color: COLORS.white, fontSize: 20, fontWeight: 'bold' },
-  logoutBtn: { padding: 8 },
-  content: { padding: 20 },
+  greeting: { ...textStyles.caption, color: palette.steel, letterSpacing: 0.8 },
+  driverName: { ...textStyles.heading, fontSize: 22 },
+  logoutBtn: { padding: spacing.sm, backgroundColor: palette.primary, borderRadius: radius.sm },
+  content: { padding: spacing.lg },
 
-  grid: { flexDirection: 'row', gap: 15, marginBottom: 15 },
+  grid: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
   bigButton: {
     flex: 1,
-    paddingVertical: 25,
-    borderRadius: 12,
+    paddingVertical: spacing.lg,
+    borderRadius: radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: COLORS.info,
-    elevation: 3,
-    shadowOpacity: 0.2,
-    shadowOffset: {width:0, height:2}
+    ...shadows.soft,
   },
-  bigButtonText: { color: COLORS.white, fontSize: 13, fontWeight: '800', marginTop: 5 },
+  bigButtonText: { color: COLORS.white, fontSize: 14, fontWeight: '800', marginTop: spacing.xs, letterSpacing: 0.5 },
 
   wideButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 18,
-    borderRadius: 12,
-    marginBottom: 15,
-    elevation: 2,
-    shadowOpacity: 0.1,
-    shadowOffset: {width:0, height:2}
+    paddingVertical: spacing.lg,
+    borderRadius: radius.lg,
+    marginBottom: spacing.md,
+    ...shadows.subtle,
   },
-  wideButtonText: { fontSize: 16, fontWeight: '800', color: COLORS.white, letterSpacing: 0.5 },
+  wideButtonText: { fontSize: 16, fontWeight: '800', color: COLORS.white, letterSpacing: 0.3 },
   
   // Info Box Styles
   infoBox: { 
-    backgroundColor: 'white', 
-    padding: 15, 
-    borderRadius: 10, 
-    marginBottom: 20,
-    borderLeftWidth: 5,
-    borderLeftColor: COLORS.primary
+    backgroundColor: COLORS.white, 
+    padding: spacing.md, 
+    borderRadius: radius.lg, 
+    marginBottom: spacing.lg,
+    borderLeftWidth: 4,
+    borderLeftColor: COLORS.primary,
+    borderWidth: 1,
+    borderColor: palette.border,
+    ...shadows.subtle,
   },
-  infoLabel: { color: '#95A5A6', fontSize: 12, fontWeight: 'bold', textTransform: 'uppercase' },
-  tourIdRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 },
-  infoValue: { color: COLORS.primary, fontSize: 18, fontWeight: 'bold' },
-  changeLink: { color: COLORS.info, fontWeight: 'bold', fontSize: 14 },
+  infoLabel: { ...textStyles.caption, color: palette.steel },
+  tourIdRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing.xs },
+  infoValue: { ...textStyles.title, color: palette.ink },
+  changeLink: { color: COLORS.info, fontWeight: '700', fontSize: 14 },
 
   // Modal Styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
-    padding: 20
+    padding: spacing.lg,
   },
   modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 15,
-    padding: 20,
-    elevation: 5
+    backgroundColor: COLORS.white,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    ...shadows.soft,
   },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
-  modalTitle: { fontSize: 20, fontWeight: 'bold', color: COLORS.primary },
-  modalDesc: { color: '#7F8C8D', marginBottom: 20, lineHeight: 20 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.md },
+  modalTitle: { ...textStyles.title, color: COLORS.primary },
+  modalDesc: { color: palette.steel, marginBottom: spacing.md, lineHeight: 20 },
   input: {
-    backgroundColor: '#F5F6FA',
-    padding: 15,
-    borderRadius: 8,
+    backgroundColor: palette.cardSoft,
+    padding: spacing.md,
+    borderRadius: radius.md,
     fontSize: 18,
     borderWidth: 1,
-    borderColor: '#DCDCDC',
-    marginBottom: 20
+    borderColor: palette.border,
+    marginBottom: spacing.md,
+    color: palette.ink,
   },
   modalBtn: {
-    padding: 18,
-    borderRadius: 10,
+    padding: spacing.md,
+    borderRadius: radius.md,
     alignItems: 'center'
   },
-  modalBtnText: { color: 'white', fontWeight: 'bold', fontSize: 16 }
+  modalBtnText: { color: COLORS.white, fontWeight: 'bold', fontSize: 16 }
 });

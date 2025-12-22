@@ -18,20 +18,11 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { colors, spacing, radius, shadows, text as textStyles } from '../theme';
 
 const { width, height } = Dimensions.get('window');
 
-const COLORS = {
-  primaryBlue: '#007DC3',
-  secondaryBlue: '#005a8f',
-  lightBlue: '#E8F2FF',
-  white: '#FFFFFF',
-  errorRed: '#FF4444',
-  darkText: '#333333',
-  lightBlueAccent: '#B8D4FF',
-  inputBackground: '#F7FAFC',
-  placeholderText: '#A0AEC0',
-};
+const palette = colors;
 
 export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
   const [bookingReference, setBookingReference] = useState('');
@@ -142,7 +133,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
 
   return (
     <LinearGradient
-      colors={[COLORS.primaryBlue, COLORS.secondaryBlue]}
+      colors={[palette.primary, '#0F3FBF']}
       style={styles.gradient}
     >
       <SafeAreaView style={styles.safeArea}>
@@ -203,7 +194,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
                 <MaterialCommunityIcons 
                   name="ticket-confirmation-outline" 
                   size={24} 
-                  color={COLORS.primaryBlue} 
+                  color={palette.primary} 
                   style={styles.inputIcon}
                 />
                 <TextInput
@@ -214,7 +205,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
                     if (error) setError('');
                   }}
                   placeholder="Ref (e.g. T114737 or Driver ID)"
-                  placeholderTextColor={COLORS.placeholderText}
+                  placeholderTextColor={palette.muted}
                   autoCapitalize="characters"
                   autoCorrect={false}
                   maxLength={20}
@@ -229,7 +220,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
                   <MaterialCommunityIcons 
                     name="alert-circle" 
                     size={16} 
-                    color={COLORS.errorRed} 
+                    color={palette.danger} 
                   />
                   <Text style={styles.errorText}>{error}</Text>
                 </View>
@@ -243,14 +234,14 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
                   disabled={loading}
                 >
                   {loading ? (
-                    <ActivityIndicator size="small" color={COLORS.white} />
+                    <ActivityIndicator size="small" color={palette.surface} />
                   ) : (
                     <>
                       <Text style={styles.buttonText}>Access My Tour</Text>
                       <MaterialCommunityIcons 
                         name="arrow-right" 
                         size={20} 
-                        color={COLORS.white} 
+                        color={palette.surface} 
                         style={styles.buttonIcon}
                       />
                     </>
@@ -262,7 +253,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
                 <MaterialCommunityIcons 
                   name="help-circle-outline" 
                   size={16} 
-                  color={COLORS.darkText} 
+                  color={palette.steel} 
                   style={styles.helpIcon}
                 />
                 <Text style={styles.helpText}>
@@ -287,7 +278,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
                     <MaterialCommunityIcons 
                       name={feature.icon} 
                       size={20} 
-                      color={COLORS.white} 
+                      color={palette.surface} 
                     />
                     <Text style={styles.featureText}>{feature.text}</Text>
                   </View>
@@ -310,157 +301,139 @@ const styles = StyleSheet.create({
   },
   scrollContainer: {
     flexGrow: 1,
+    paddingBottom: spacing.xl,
   },
   container: {
     flex: 1,
-    paddingHorizontal: 20,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
   },
   logoSection: {
     alignItems: 'center',
-    marginTop: height * 0.08,
-    marginBottom: 30,
+    marginTop: height * 0.06,
+    marginBottom: spacing.lg,
   },
   logoImage: {
-    width: 250,
-    height: 100,
-    marginBottom: 20,
+    width: 200,
+    height: 90,
+    marginBottom: spacing.sm,
   },
   appTitle: {
-    fontSize: 34,
-    fontWeight: 'bold',
-    color: COLORS.white,
-    marginBottom: 8,
+    ...textStyles.heading,
+    color: palette.surface,
+    letterSpacing: 0.3,
   },
   appSubtitle: {
-    fontSize: 16,
-    color: COLORS.white,
+    ...textStyles.body,
+    color: palette.surface,
     opacity: 0.9,
   },
   formCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 20,
-    padding: 30,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 10,
-    },
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    elevation: 10,
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
+    padding: spacing.xl,
+    borderWidth: 1,
+    borderColor: palette.primaryMuted,
+    ...shadows.soft,
   },
   welcomeText: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: COLORS.darkText,
+    ...textStyles.heading,
     textAlign: 'center',
-    marginBottom: 12,
+    marginBottom: spacing.sm,
   },
   instructionText: {
-    fontSize: 16,
-    color: COLORS.darkText,
-    opacity: 0.7,
+    ...textStyles.body,
     textAlign: 'center',
-    marginBottom: 30,
+    marginBottom: spacing.lg,
+    color: palette.steel,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.white,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: COLORS.lightBlueAccent,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 4,
+    backgroundColor: palette.cardSoft,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: palette.border,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    marginBottom: spacing.md,
+    ...shadows.subtle,
   },
   inputIcon: {
-    marginLeft: 15,
+    marginLeft: spacing.xs,
+    color: palette.primary,
   },
   input: {
     flex: 1,
-    height: 56,
-    paddingHorizontal: 15,
+    height: 52,
+    paddingHorizontal: spacing.sm,
     fontSize: 18,
-    color: COLORS.darkText,
-    fontWeight: '600',
+    color: palette.ink,
+    fontWeight: '700',
   },
   errorContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 15,
-    paddingHorizontal: 5,
+    marginBottom: spacing.sm,
   },
   errorText: {
-    color: COLORS.errorRed,
+    color: palette.danger,
     fontSize: 14,
-    marginLeft: 5,
+    marginLeft: spacing.xs,
     flex: 1,
   },
   button: {
-    backgroundColor: COLORS.primaryBlue,
-    borderRadius: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 32,
+    backgroundColor: palette.primary,
+    borderRadius: radius.md,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: COLORS.primaryBlue,
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
+    gap: spacing.xs,
+    ...shadows.soft,
   },
   buttonDisabled: {
     opacity: 0.7,
   },
   buttonText: {
-    color: COLORS.white,
-    fontSize: 18,
-    fontWeight: 'bold',
+    color: palette.surface,
+    fontSize: 17,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   buttonIcon: {
-    marginLeft: 8,
+    marginLeft: spacing.xs,
   },
   helpSection: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    marginTop: 25,
-    paddingTop: 25,
+    marginTop: spacing.lg,
+    paddingTop: spacing.lg,
     borderTopWidth: 1,
-    borderTopColor: '#E2E8F0',
+    borderTopColor: palette.border,
   },
   helpIcon: {
     marginTop: 2,
+    color: palette.steel,
   },
   helpText: {
-    fontSize: 13,
-    color: COLORS.darkText,
-    opacity: 0.6,
-    marginLeft: 8,
+    ...textStyles.caption,
+    color: palette.steel,
+    marginLeft: spacing.xs,
     flex: 1,
     lineHeight: 18,
     textAlign: 'center',
   },
   featuresContainer: {
-    marginTop: 40,
-    marginBottom: 30,
+    marginTop: spacing.xl,
+    marginBottom: spacing.lg,
   },
   featuresTitle: {
-    fontSize: 14,
-    color: COLORS.white,
-    opacity: 0.9,
+    ...textStyles.body,
+    color: palette.surface,
     textAlign: 'center',
-    marginBottom: 15,
+    marginBottom: spacing.sm,
   },
   featuresList: {
     flexDirection: 'row',
@@ -470,15 +443,15 @@ const styles = StyleSheet.create({
   featureItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 20,
-    margin: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.pill,
+    margin: 6,
   },
   featureText: {
-    color: COLORS.white,
+    color: palette.surface,
     fontSize: 14,
-    marginLeft: 6,
+    marginLeft: spacing.xs,
   },
 });

@@ -1,12 +1,15 @@
 import React from 'react';
 import { StyleSheet, Text, View, TouchableOpacity } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { colors, spacing, radius, shadows, text as textStyles } from '../theme';
+
+const palette = colors;
 
 const STATUS_COLORS = {
-  PENDING: '#95A5A6',
-  BOARDED: '#27AE60',
-  NO_SHOW: '#C0392B',
-  PARTIAL: '#E67E22'
+  PENDING: palette.muted,
+  BOARDED: palette.success,
+  NO_SHOW: palette.danger,
+  PARTIAL: palette.accent
 };
 
 const STATUS_ICONS = {
@@ -69,42 +72,40 @@ export default function ManifestBookingCard({ booking, onPress, isSearchResult }
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 10,
+    backgroundColor: palette.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
     borderLeftWidth: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    borderWidth: 1,
+    borderColor: palette.border,
+    ...shadows.subtle,
   },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: spacing.xs,
   },
   refContainer: {
-    backgroundColor: '#ECF0F1',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
+    backgroundColor: palette.primaryMuted,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.sm,
   },
   refText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#7F8C8D',
+    ...textStyles.caption,
+    fontWeight: '800',
+    color: palette.graphite,
   },
   badge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.pill,
   },
   badgeText: {
-    color: 'white',
-    fontSize: 10,
-    fontWeight: 'bold',
+    color: palette.surface,
+    fontSize: 11,
+    fontWeight: '700',
     textTransform: 'uppercase',
   },
   mainContent: {
@@ -113,37 +114,36 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   leadName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#2C3E50',
+    ...textStyles.title,
+    color: palette.ink,
   },
   subNames: {
     fontSize: 13,
-    color: '#7F8C8D',
+    color: palette.steel,
     marginTop: 2,
   },
   locationContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 4,
+    marginTop: spacing.xs,
   },
   locationText: {
     fontSize: 12,
-    color: '#7F8C8D',
+    color: palette.steel,
     marginLeft: 4,
     maxWidth: 200,
   },
   paxCounter: {
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#F5F6FA',
-    padding: 8,
-    borderRadius: 8,
-    minWidth: 40,
+    backgroundColor: palette.cardSoft,
+    padding: spacing.sm,
+    borderRadius: radius.md,
+    minWidth: 44,
   },
   paxCountText: {
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#2C3E50',
+    fontWeight: '800',
+    color: palette.ink,
   }
 });
