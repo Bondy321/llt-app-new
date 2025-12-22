@@ -17,17 +17,18 @@ import { LinearGradient } from 'expo-linear-gradient';
 import TodaysAgendaCard from '../components/TodaysAgendaCard';
 import { MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import { realtimeDb } from '../firebase';
+import { gradients, palette, radii, shadow } from '../styles/designSystem';
 
 // Brand Colors
 const COLORS = {
-  primaryBlue: '#007DC3',
-  lightBlueAccent: '#AECAEC',
-  lightBlue: '#E8F2FF',
-  coralAccent: '#FF7757',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  cardBackground: '#FFFFFF',
-  appBackground: '#F0F4F8',
+  primaryBlue: palette.primary,
+  lightBlueAccent: '#BFD8FF',
+  lightBlue: palette.surfaceAlt,
+  coralAccent: palette.warning,
+  white: palette.surface,
+  darkText: palette.text,
+  cardBackground: palette.surface,
+  appBackground: palette.background,
 };
 
 export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavigate, onLogout }) {
@@ -122,51 +123,68 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <LinearGradient colors={[`${COLORS.primaryBlue}0D`, COLORS.white]} style={styles.gradient}>
+      <LinearGradient colors={gradients.softHero} style={styles.gradient}>
         <ScrollView contentContainerStyle={styles.container}>
-          <View style={styles.header}>
-            <Image source={require('../assets/images/app-icon-llt.png')} style={styles.logoImage} />
-            <View style={styles.headerTextContainer}>
-              <Text style={styles.greeting}>{tourData?.name || 'Active Tour'}</Text>
-              <Text style={styles.tourCodeDisplay}>{tourCode}</Text>
-            </View>
-            <View style={{flexDirection: 'row', gap: 10}}>
-              {/* Notification Button */}
-              <TouchableOpacity 
-                 style={styles.logoutButton} 
-                 onPress={() => onNavigate('NotificationPreferences')}
-              >
-                 <MaterialCommunityIcons name="bell-ring-outline" size={22} color={COLORS.primaryBlue} />
-              </TouchableOpacity>
-
-              {/* Logout Button */}
-              <TouchableOpacity style={styles.logoutButton} onPress={onLogout} activeOpacity={0.7}>
-                <MaterialCommunityIcons name="logout-variant" size={22} color={COLORS.primaryBlue} />
-              </TouchableOpacity>
-            </View>
+          <View style={styles.headerCard}>
+            <LinearGradient colors={[`${COLORS.primaryBlue}18`, COLORS.white]} style={styles.headerGradient}>
+              <View style={styles.logoStack}>
+                <Image source={require('../assets/images/app-icon-llt.png')} style={styles.logoImage} />
+                <View style={styles.headerTextContainer}>
+                  <Text style={styles.greeting}>{tourData?.name || 'Active Tour'}</Text>
+                  <Text style={styles.tourCodeDisplay}>{tourCode}</Text>
+                  <View style={styles.badgeRow}>
+                    <View style={styles.smallBadge}>
+                      <MaterialCommunityIcons name="shield-check" color={COLORS.primaryBlue} size={14} />
+                      <Text style={styles.badgeText}>Verified Booking</Text>
+                    </View>
+                    {tourData?.startDate ? (
+                      <View style={[styles.smallBadge, styles.badgeMuted]}>
+                        <MaterialCommunityIcons name="calendar" color={COLORS.darkText} size={14} />
+                        <Text style={[styles.badgeText, { color: COLORS.darkText }]}>{tourData.startDate}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              </View>
+              <View style={styles.headerActions}>
+                <TouchableOpacity style={styles.roundButton} onPress={() => onNavigate('NotificationPreferences')}>
+                  <MaterialCommunityIcons name="bell-ring-outline" size={22} color={COLORS.primaryBlue} />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.roundButton} onPress={onLogout} activeOpacity={0.7}>
+                  <MaterialCommunityIcons name="logout-variant" size={22} color={COLORS.primaryBlue} />
+                </TouchableOpacity>
+              </View>
+            </LinearGradient>
           </View>
 
-          <View style={styles.statusCard}>
-            <View style={styles.statusHeader}>
-              <View style={[styles.statusBadge, { backgroundColor: `${manifestStatusMeta.tone}1A` }]}> 
-                <Text style={[styles.statusBadgeText, { color: manifestStatusMeta.tone }]}>{manifestStatusMeta.badge}</Text>
+          <View style={[styles.statusCard, { borderColor: `${manifestStatusMeta.tone}2A` }]}>
+            <LinearGradient
+              colors={[`${manifestStatusMeta.tone}14`, COLORS.white]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.statusGradient}
+            >
+              <View style={styles.statusHeader}>
+                <View style={[styles.statusBadge, { backgroundColor: `${manifestStatusMeta.tone}1A` }]}> 
+                  <Text style={[styles.statusBadgeText, { color: manifestStatusMeta.tone }]}>{manifestStatusMeta.badge}</Text>
+                </View>
+                <Text style={styles.statusTitle}>{manifestStatusMeta.title}</Text>
               </View>
-              <Text style={styles.statusTitle}>{manifestStatusMeta.title}</Text>
-            </View>
-            <Text style={styles.statusMessage}>{manifestStatusMeta.message}</Text>
-            <View style={styles.statusActions}>
-              <TouchableOpacity style={styles.actionButton} onPress={handleCallDriver}>
-                <MaterialCommunityIcons name="phone" size={18} color={COLORS.white} />
-                <Text style={styles.actionButtonText}>Call driver</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.actionButton, styles.secondaryActionButton]}
-                onPress={() => onNavigate('SafetySupport')}
-              >
-                <MaterialCommunityIcons name="shield-check" size={18} color={COLORS.primaryBlue} />
-                <Text style={[styles.actionButtonText, { color: COLORS.primaryBlue }]}>Safety & support</Text>
-              </TouchableOpacity>
-            </View>
+              <Text style={styles.statusMessage}>{manifestStatusMeta.message}</Text>
+              <View style={styles.statusActions}>
+                <TouchableOpacity style={styles.actionButton} onPress={handleCallDriver}>
+                  <MaterialCommunityIcons name="phone" size={18} color={COLORS.white} />
+                  <Text style={styles.actionButtonText}>Call driver</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.secondaryActionButton]}
+                  onPress={() => onNavigate('SafetySupport')}
+                >
+                  <MaterialCommunityIcons name="shield-check" size={18} color={COLORS.primaryBlue} />
+                  <Text style={[styles.actionButtonText, { color: COLORS.primaryBlue }]}>Safety & support</Text>
+                </TouchableOpacity>
+              </View>
+            </LinearGradient>
           </View>
 
           {tourData && (
@@ -322,7 +340,7 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: COLORS.white,
+    backgroundColor: COLORS.appBackground,
   },
   gradient: {
     flex: 1,
@@ -330,27 +348,30 @@ const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
     paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 30,
+    paddingTop: 18,
+    paddingBottom: 34,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 30,
+  headerCard: {
+    borderRadius: radii.xl,
+    overflow: 'hidden',
     backgroundColor: COLORS.white,
-    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.6)',
+    ...shadow.soft,
+    marginBottom: 20,
+  },
+  headerGradient: {
     paddingHorizontal: 16,
     paddingVertical: 14,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.07,
-    shadowRadius: 8,
-    elevation: 5,
+  },
+  logoStack: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   logoImage: {
-    width: 46,
-    height: 46,
-    borderRadius: 12,
+    width: 50,
+    height: 50,
+    borderRadius: 14,
     marginRight: 12,
   },
   headerTextContainer: {
@@ -360,29 +381,60 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: COLORS.darkText,
     opacity: 0.75,
-    fontWeight: '500',
+    fontWeight: '600',
+    letterSpacing: 0.3,
   },
   tourCodeDisplay: {
     fontSize: 22,
-    fontWeight: '700',
+    fontWeight: '800',
     color: COLORS.primaryBlue,
     marginTop: 2,
   },
-  logoutButton: {
-    padding: 6,
+  badgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  smallBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${COLORS.primaryBlue}12`,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  badgeMuted: {
+    backgroundColor: COLORS.lightBlue,
+  },
+  badgeText: {
+    marginLeft: 6,
+    fontWeight: '700',
+    fontSize: 12,
+    color: COLORS.primaryBlue,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+    justifyContent: 'flex-end',
+  },
+  roundButton: {
+    padding: 10,
+    borderRadius: 14,
+    backgroundColor: `${COLORS.primaryBlue}12`,
+    ...shadow.subtle,
   },
   statusCard: {
     backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 18,
+    borderRadius: radii.xl,
     marginBottom: 18,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 6,
     borderWidth: 1,
-    borderColor: `${COLORS.primaryBlue}12`,
+    ...shadow.soft,
+  },
+  statusGradient: {
+    borderRadius: radii.xl,
+    padding: 18,
   },
   statusHeader: {
     flexDirection: 'row',
@@ -425,7 +477,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderRadius: 12,
     backgroundColor: COLORS.primaryBlue,
   },
@@ -444,17 +496,13 @@ const styles = StyleSheet.create({
     padding: 22,
     borderRadius: 20,
     marginBottom: 28,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 8,
+    ...shadow.card,
     borderWidth: 1,
     borderColor: COLORS.lightBlue,
   },
   welcomeText: {
     fontSize: 26,
-    fontWeight: '700',
+    fontWeight: '800',
     color: COLORS.darkText,
     marginBottom: 6,
   },
@@ -505,7 +553,7 @@ const styles = StyleSheet.create({
   },
   pickupTime: {
     fontSize: 18,
-    fontWeight: '700',
+    fontWeight: '800',
     color: COLORS.coralAccent,
   },
   pickupLocation: {
@@ -527,8 +575,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.darkText,
     marginBottom: 8,
-    fontWeight: '600',
-    opacity: 0.8,
+    fontWeight: '700',
+    opacity: 0.85,
   },
   seatInfo: {
     flexDirection: 'row',
@@ -579,7 +627,7 @@ const styles = StyleSheet.create({
   bookingRefText: {
     fontSize: 16,
     color: COLORS.darkText,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   footerBadge: {
     backgroundColor: `${COLORS.primaryBlue}12`,
@@ -591,18 +639,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: COLORS.darkText,
     opacity: 0.7,
-    fontWeight: '500',
+    fontWeight: '600',
   },
   footerValue: {
     fontSize: 16,
     color: COLORS.coralAccent,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   sectionTitle: {
     fontSize: 22,
-    fontWeight: '700',
+    fontWeight: '800',
     color: COLORS.darkText,
-    marginBottom: 18,
+    marginBottom: 16,
     paddingLeft: 5,
   },
   grid: {
@@ -619,23 +667,22 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     padding: 16,
     backgroundColor: COLORS.white,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 6,
+    borderWidth: 1,
+    borderColor: COLORS.lightBlueAccent,
+    ...shadow.soft,
   },
   iconCircle: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 12,
+    backgroundColor: `${COLORS.primaryBlue}0F`,
   },
   boxText: {
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: '800',
     color: COLORS.darkText,
     textAlign: 'center',
   },
@@ -660,11 +707,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
     borderRadius: 18,
     padding: 22,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 20,
-    elevation: 10,
+    ...shadow.card,
   },
   modalHeader: {
     flexDirection: 'row',

@@ -14,20 +14,23 @@ import {
   Platform
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { realtimeDb } from '../firebase'; // Import your DB instance
 import { assignDriverToTour } from '../services/bookingServiceRealtime';
+import { gradients, palette, radii, shadow } from '../styles/designSystem';
 
 const COLORS = {
-  primary: '#2C3E50',
-  accent: '#E67E22',
-  white: '#FFFFFF',
-  bg: '#F5F6FA',
-  success: '#27AE60',
-  danger: '#C0392B',
-  info: '#3498DB',
-  location: '#2980B9', // Blue for location
-  purple: '#8E44AD'
+  primary: palette.primary,
+  accent: palette.warning,
+  white: palette.surface,
+  bg: palette.background,
+  success: palette.accent,
+  danger: palette.danger,
+  info: palette.info,
+  location: palette.primaryDark,
+  purple: palette.secondary,
+  muted: palette.muted,
 };
 
 export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
@@ -145,15 +148,27 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
+      <LinearGradient colors={gradients.hero} style={styles.header}>
         <View>
           <Text style={styles.greeting}>Driver Console</Text>
           <Text style={styles.driverName}>{driverData?.name || 'Unknown Driver'}</Text>
+          <View style={styles.pillRow}>
+            <View style={styles.pill}>
+              <MaterialCommunityIcons name="shield-check" size={14} color={COLORS.white} />
+              <Text style={styles.pillText}>Live ops ready</Text>
+            </View>
+            {activeTourId ? (
+              <View style={[styles.pill, styles.pillSoft]}>
+                <MaterialCommunityIcons name="map-marker" size={14} color={COLORS.white} />
+                <Text style={styles.pillText}>Tour {activeTourId}</Text>
+              </View>
+            ) : null}
+          </View>
         </View>
         <TouchableOpacity onPress={onLogout} style={styles.logoutBtn}>
           <MaterialCommunityIcons name="logout" size={24} color={COLORS.white} />
         </TouchableOpacity>
-      </View>
+      </LinearGradient>
 
       <ScrollView contentContainerStyle={styles.content}>
         
@@ -286,57 +301,67 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
   header: {
-    backgroundColor: COLORS.primary,
     padding: 20,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    borderBottomLeftRadius: 26,
+    borderBottomRightRadius: 26,
   },
-  greeting: { color: '#BDC3C7', fontSize: 12, fontWeight: '700', letterSpacing: 1 },
-  driverName: { color: COLORS.white, fontSize: 20, fontWeight: 'bold' },
+  greeting: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontWeight: '800', letterSpacing: 1 },
+  driverName: { color: COLORS.white, fontSize: 22, fontWeight: '800', marginTop: 6 },
+  pillRow: { flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  pillSoft: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  pillText: { color: COLORS.white, fontWeight: '700', marginLeft: 6, fontSize: 12 },
   logoutBtn: { padding: 8 },
-  content: { padding: 20 },
+  content: { padding: 20, gap: 18 },
 
-  grid: { flexDirection: 'row', gap: 15, marginBottom: 15 },
+  grid: { flexDirection: 'row', gap: 15 },
   bigButton: {
     flex: 1,
-    paddingVertical: 25,
-    borderRadius: 12,
+    paddingVertical: 24,
+    borderRadius: radii.lg,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: COLORS.info,
-    elevation: 3,
-    shadowOpacity: 0.2,
-    shadowOffset: {width:0, height:2}
+    ...shadow.soft,
   },
-  bigButtonText: { color: COLORS.white, fontSize: 13, fontWeight: '800', marginTop: 5 },
+  bigButtonText: { color: COLORS.white, fontSize: 14, fontWeight: '800', marginTop: 6, letterSpacing: 0.4 },
 
   wideButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 18,
-    borderRadius: 12,
-    marginBottom: 15,
-    elevation: 2,
-    shadowOpacity: 0.1,
-    shadowOffset: {width:0, height:2}
+    borderRadius: radii.lg,
+    marginBottom: 10,
+    ...shadow.subtle,
   },
   wideButtonText: { fontSize: 16, fontWeight: '800', color: COLORS.white, letterSpacing: 0.5 },
   
   // Info Box Styles
   infoBox: { 
-    backgroundColor: 'white', 
-    padding: 15, 
-    borderRadius: 10, 
-    marginBottom: 20,
-    borderLeftWidth: 5,
-    borderLeftColor: COLORS.primary
+    backgroundColor: COLORS.white, 
+    padding: 18, 
+    borderRadius: radii.xl, 
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(12, 52, 90, 0.08)',
+    ...shadow.soft,
   },
-  infoLabel: { color: '#95A5A6', fontSize: 12, fontWeight: 'bold', textTransform: 'uppercase' },
-  tourIdRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 },
-  infoValue: { color: COLORS.primary, fontSize: 18, fontWeight: 'bold' },
-  changeLink: { color: COLORS.info, fontWeight: 'bold', fontSize: 14 },
+  infoLabel: { color: COLORS.muted, fontSize: 12, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 },
+  tourIdRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 },
+  infoValue: { color: COLORS.primary, fontSize: 20, fontWeight: '800' },
+  changeLink: { color: COLORS.info, fontWeight: '800', fontSize: 14 },
 
   // Modal Styles
   modalOverlay: {
@@ -346,18 +371,18 @@ const styles = StyleSheet.create({
     padding: 20
   },
   modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 15,
+    backgroundColor: COLORS.white,
+    borderRadius: 18,
     padding: 20,
-    elevation: 5
+    ...shadow.card,
   },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
-  modalTitle: { fontSize: 20, fontWeight: 'bold', color: COLORS.primary },
-  modalDesc: { color: '#7F8C8D', marginBottom: 20, lineHeight: 20 },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: COLORS.primary },
+  modalDesc: { color: COLORS.muted, marginBottom: 20, lineHeight: 20, fontWeight: '600' },
   input: {
     backgroundColor: '#F5F6FA',
     padding: 15,
-    borderRadius: 8,
+    borderRadius: 10,
     fontSize: 18,
     borderWidth: 1,
     borderColor: '#DCDCDC',
@@ -365,8 +390,8 @@ const styles = StyleSheet.create({
   },
   modalBtn: {
     padding: 18,
-    borderRadius: 10,
+    borderRadius: 12,
     alignItems: 'center'
   },
-  modalBtnText: { color: 'white', fontWeight: 'bold', fontSize: 16 }
+  modalBtnText: { color: 'white', fontWeight: '800', fontSize: 16 }
 });

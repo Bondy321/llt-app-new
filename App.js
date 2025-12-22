@@ -10,6 +10,7 @@ import { auth, authHelpers } from './firebase';
 import { joinTour } from './services/bookingServiceRealtime';
 import logger from './services/loggerService';
 import useDiagnostics from './hooks/useDiagnostics';
+import { palette } from './styles/designSystem';
 
 // Import Screens
 import LoginScreen from './screens/LoginScreen';
@@ -25,12 +26,13 @@ import PassengerManifestScreen from './screens/PassengerManifestScreen';
 import SafetySupportScreen from './screens/SafetySupportScreen';
 
 const COLORS = {
-  primaryBlue: '#007DC3',
-  lightBlueAccent: '#AECAEC',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  errorRed: '#E53E3E',
-  appBackground: '#F0F4F8',
+  ...palette,
+  primaryBlue: palette.primary,
+  lightBlueAccent: '#B7D5FF',
+  white: palette.surface,
+  darkText: palette.text,
+  errorRed: palette.danger,
+  appBackground: palette.background,
 };
 
 const SESSION_KEYS = {
@@ -242,31 +244,31 @@ export default function App() {
     );
   }
 
-  const OfflineBanner = () => (
+  const OfflineBanner = () =>
     !isConnected && (
       <View style={styles.offlineBanner}>
         <MaterialCommunityIcons name="wifi-off" size={20} color={COLORS.white} />
-        <Text style={styles.offlineText}>No internet connection</Text>
+        <View style={{ marginLeft: 10 }}>
+          <Text style={styles.offlineTitle}>Offline mode</Text>
+          <Text style={styles.offlineText}>Reconnect to keep your tour in sync.</Text>
+        </View>
       </View>
-    )
-  );
+    );
 
-  const SyncIssueBanner = () => (
-    isConnected && (!firebaseConnected || lastFirebaseError) && (
+  const SyncIssueBanner = () =>
+    isConnected &&
+    (!firebaseConnected || lastFirebaseError) && (
       <View style={styles.syncBanner}>
         <MaterialCommunityIcons name="database-alert" size={20} color={COLORS.white} />
-        <View style={{ marginLeft: 8 }}>
-          <Text style={styles.offlineText}>Reconnecting to tour services…</Text>
+        <View style={{ marginLeft: 10 }}>
+          <Text style={styles.offlineTitle}>Reconnecting to tour services…</Text>
           {lastProbeDurationMs !== null && (
             <Text style={styles.syncDetail}>Last check: {lastProbeDurationMs}ms</Text>
           )}
-          {lastFirebaseError && (
-            <Text style={styles.syncDetail}>Last error: {lastFirebaseError}</Text>
-          )}
+          {lastFirebaseError && <Text style={styles.syncDetail}>Last error: {lastFirebaseError}</Text>}
         </View>
       </View>
-    )
-  );
+    );
 
   const renderScreen = () => {
     const screenProps = { isConnected, logger };
@@ -393,8 +395,33 @@ const styles = StyleSheet.create({
   errorTitle: { fontSize: 22, fontWeight: 'bold', color: COLORS.errorRed, marginTop: 20, marginBottom: 10, textAlign: 'center' },
   errorText: { fontSize: 16, color: COLORS.darkText, textAlign: 'center', marginBottom: 5 },
   errorDetail: { fontSize: 14, color: COLORS.darkText, opacity: 0.6, textAlign: 'center', marginTop: 15 },
-  offlineBanner: { backgroundColor: COLORS.errorRed, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000 },
-  offlineText: { color: COLORS.white, fontSize: 14, marginLeft: 8, fontWeight: '500' },
-  syncBanner: { backgroundColor: COLORS.primaryBlue, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', paddingVertical: 8, paddingHorizontal: 12, position: 'absolute', top: 40, left: 0, right: 0, zIndex: 900 },
-  syncDetail: { color: COLORS.white, fontSize: 12, opacity: 0.8 },
+  offlineBanner: {
+    backgroundColor: '#0F172A',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 1000,
+  },
+  offlineTitle: { color: COLORS.white, fontSize: 14, fontWeight: '800' },
+  offlineText: { color: COLORS.white, fontSize: 12, opacity: 0.85, marginTop: 2 },
+  syncBanner: {
+    backgroundColor: COLORS.primaryBlue,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    position: 'absolute',
+    top: 44,
+    left: 0,
+    right: 0,
+    zIndex: 900,
+  },
+  syncDetail: { color: COLORS.white, fontSize: 12, opacity: 0.8, marginTop: 2 },
 });

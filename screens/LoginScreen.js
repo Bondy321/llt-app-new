@@ -18,19 +18,20 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { gradients, palette, radii, shadow } from '../styles/designSystem';
 
 const { width, height } = Dimensions.get('window');
 
 const COLORS = {
-  primaryBlue: '#007DC3',
-  secondaryBlue: '#005a8f',
-  lightBlue: '#E8F2FF',
-  white: '#FFFFFF',
-  errorRed: '#FF4444',
-  darkText: '#333333',
-  lightBlueAccent: '#B8D4FF',
-  inputBackground: '#F7FAFC',
-  placeholderText: '#A0AEC0',
+  primaryBlue: palette.primary,
+  secondaryBlue: palette.secondary,
+  lightBlue: palette.surfaceAlt,
+  white: palette.surface,
+  errorRed: palette.danger,
+  darkText: palette.text,
+  lightBlueAccent: '#CFE4FF',
+  inputBackground: '#F8FAFF',
+  placeholderText: palette.subtle,
 };
 
 export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
@@ -142,7 +143,9 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
 
   return (
     <LinearGradient
-      colors={[COLORS.primaryBlue, COLORS.secondaryBlue]}
+      colors={gradients.hero}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
       style={styles.gradient}
     >
       <SafeAreaView style={styles.safeArea}>
@@ -307,6 +310,7 @@ const styles = StyleSheet.create({
   },
   safeArea: {
     flex: 1,
+    paddingTop: Platform.OS === 'android' ? 24 : 0,
   },
   scrollContainer: {
     flexGrow: 1,
@@ -314,44 +318,43 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     paddingHorizontal: 20,
+    paddingBottom: 24,
   },
   logoSection: {
     alignItems: 'center',
-    marginTop: height * 0.08,
-    marginBottom: 30,
+    marginTop: height * 0.07,
+    marginBottom: 32,
   },
   logoImage: {
     width: 250,
     height: 100,
-    marginBottom: 20,
+    marginBottom: 16,
   },
   appTitle: {
     fontSize: 34,
     fontWeight: 'bold',
     color: COLORS.white,
-    marginBottom: 8,
+    marginBottom: 6,
+    letterSpacing: 0.5,
   },
   appSubtitle: {
     fontSize: 16,
     color: COLORS.white,
     opacity: 0.9,
+    textAlign: 'center',
+    maxWidth: 320,
   },
   formCard: {
     backgroundColor: COLORS.white,
-    borderRadius: 20,
-    padding: 30,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 10,
-    },
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    elevation: 10,
+    borderRadius: radii.xl,
+    padding: 28,
+    ...shadow.card,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.6)',
   },
   welcomeText: {
-    fontSize: 24,
-    fontWeight: 'bold',
+    fontSize: 26,
+    fontWeight: '800',
     color: COLORS.darkText,
     textAlign: 'center',
     marginBottom: 12,
@@ -359,37 +362,30 @@ const styles = StyleSheet.create({
   instructionText: {
     fontSize: 16,
     color: COLORS.darkText,
-    opacity: 0.7,
+    opacity: 0.65,
     textAlign: 'center',
-    marginBottom: 30,
+    marginBottom: 24,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.white,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: COLORS.lightBlueAccent,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 4,
+    backgroundColor: COLORS.inputBackground,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 18,
+    ...shadow.subtle,
   },
   inputIcon: {
-    marginLeft: 15,
+    marginLeft: 14,
   },
   input: {
     flex: 1,
-    height: 56,
-    paddingHorizontal: 15,
-    fontSize: 18,
+    height: 58,
+    paddingHorizontal: 14,
+    fontSize: 17,
     color: COLORS.darkText,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   errorContainer: {
     flexDirection: 'row',
@@ -405,20 +401,13 @@ const styles = StyleSheet.create({
   },
   button: {
     backgroundColor: COLORS.primaryBlue,
-    borderRadius: 12,
+    borderRadius: radii.lg,
     paddingVertical: 16,
     paddingHorizontal: 32,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: COLORS.primaryBlue,
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
+    ...shadow.soft,
   },
   buttonDisabled: {
     opacity: 0.7,
@@ -434,8 +423,8 @@ const styles = StyleSheet.create({
   helpSection: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    marginTop: 25,
-    paddingTop: 25,
+    marginTop: 26,
+    paddingTop: 22,
     borderTopWidth: 1,
     borderTopColor: '#E2E8F0',
   },
@@ -452,15 +441,21 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   featuresContainer: {
-    marginTop: 40,
-    marginBottom: 30,
+    marginTop: 36,
+    marginBottom: 24,
+    padding: 16,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
   },
   featuresTitle: {
     fontSize: 14,
     color: COLORS.white,
-    opacity: 0.9,
+    opacity: 0.96,
     textAlign: 'center',
-    marginBottom: 15,
+    marginBottom: 14,
+    letterSpacing: 0.2,
   },
   featuresList: {
     flexDirection: 'row',
@@ -470,15 +465,18 @@ const styles = StyleSheet.create({
   featureItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 20,
-    margin: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 18,
+    margin: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
   },
   featureText: {
     color: COLORS.white,
     fontSize: 14,
-    marginLeft: 6,
+    marginLeft: 7,
+    fontWeight: '700',
   },
 });

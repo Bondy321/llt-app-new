@@ -2,14 +2,15 @@ import React, { useMemo } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { gradients, palette, radii, shadow } from '../styles/designSystem';
 
 const COLORS = {
-  primaryBlue: '#007DC3',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  secondaryText: '#4A5568',
-  coralAccent: '#FF7757',
-  lightBg: '#F7FAFF',
+  primaryBlue: palette.primary,
+  white: palette.surface,
+  darkText: palette.text,
+  secondaryText: palette.muted,
+  coralAccent: palette.warning,
+  lightBg: palette.surfaceAlt,
 };
 
 export default function TodaysAgendaCard({ tourData, onNudge }) {
@@ -58,7 +59,7 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
   if (currentDayData.status === 'FUTURE') {
     return (
       <View style={styles.card}>
-        <LinearGradient colors={[COLORS.primaryBlue, '#005A8D']} style={styles.headerFuture}>
+        <LinearGradient colors={gradients.hero} style={styles.headerFuture}>
           <MaterialCommunityIcons name="airplane-takeoff" size={24} color={COLORS.white} />
           <View style={{marginLeft: 12}}>
             <Text style={styles.headerTitleFuture}>Countdown to Tour</Text>
@@ -127,22 +128,25 @@ const styles = StyleSheet.create({
   container: { marginBottom: 24 },
   sectionTitle: { fontSize: 20, fontWeight: '700', color: COLORS.darkText, marginBottom: 12, marginLeft: 4 },
   card: {
-    borderRadius: 18,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 4,
+    borderRadius: radii.xl,
+    ...shadow.soft,
     backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: 'rgba(12, 52, 90, 0.06)',
   },
-  cardInner: { borderRadius: 18, padding: 16 },
-  headerFuture: { flexDirection: 'row', alignItems: 'center', padding: 20, borderRadius: 18 },
+  cardInner: { borderRadius: radii.xl, padding: 16 },
+  headerFuture: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 20,
+    borderRadius: radii.xl,
+  },
   headerTitleFuture: { color: COLORS.white, fontWeight: '700', fontSize: 16 },
   headerSubtitleFuture: { color: COLORS.white, opacity: 0.9, fontSize: 14 },
   
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  badge: { backgroundColor: '#E1F0FF', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
-  badgeText: { color: COLORS.primaryBlue, fontWeight: '700', fontSize: 12 },
+  badge: { backgroundColor: '#E1F0FF', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
+  badgeText: { color: COLORS.primaryBlue, fontWeight: '800', fontSize: 12, letterSpacing: 0.3 },
   viewAllBtn: { flexDirection: 'row', alignItems: 'center' },
   viewAllText: { color: COLORS.primaryBlue, fontSize: 13, fontWeight: '600', marginRight: 2 },
   

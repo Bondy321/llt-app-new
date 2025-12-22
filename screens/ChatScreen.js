@@ -14,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import {
   sendInternalDriverMessage,
   sendMessage,
@@ -21,24 +22,25 @@ import {
   subscribeToInternalDriverChat,
 } from '../services/chatService';
 import { auth } from '../firebase';
+import { palette, shadow } from '../styles/designSystem';
 
 // Brand Colors
 const COLORS = {
-  primaryBlue: '#007DC3',
-  lightBlueAccent: '#AECAEC',
-  coralAccent: '#FF7757',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  secondaryText: '#4A5568',
-  appBackground: '#F0F4F8',
+  primaryBlue: palette.primary,
+  lightBlueAccent: '#BFD8FF',
+  coralAccent: palette.warning,
+  white: palette.surface,
+  darkText: palette.text,
+  secondaryText: palette.muted,
+  appBackground: palette.background,
   chatScreenBackground: '#E6F3F8',
-  myMessageBackground: '#007DC3',
-  theirMessageBackground: '#FFFFFF',
+  myMessageBackground: palette.primary,
+  theirMessageBackground: palette.surface,
   driverMessageBackground: '#FFF2E0',
   driverMessageBorder: '#FFCAA8',
-  inputBackground: '#FFFFFF',
-  sendButtonColor: '#FF7757',
-  chatHeaderColor: '#2ECC71',
+  inputBackground: palette.surface,
+  sendButtonColor: palette.warning,
+  chatHeaderColor: palette.accent,
 };
 
 export default function ChatScreen({ onBack, tourId, bookingData, tourData, internalDriverChat = false }) {
@@ -220,13 +222,13 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   if (!tourId) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <View style={[styles.header, { backgroundColor: COLORS.chatHeaderColor }]}>
+        <LinearGradient colors={[COLORS.chatHeaderColor, COLORS.primaryBlue]} style={styles.header}>
           <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7}>
             <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Group Chat</Text>
           <View style={styles.headerButton} />
-        </View>
+        </LinearGradient>
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>Chat is not available</Text>
         </View>
@@ -240,7 +242,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={[styles.header, { backgroundColor: COLORS.chatHeaderColor }]}>
+      <LinearGradient colors={[COLORS.chatHeaderColor, COLORS.primaryBlue]} style={styles.header}>
         <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7}>
           <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
         </TouchableOpacity>
@@ -249,7 +251,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
           {tourData?.name && <Text style={styles.headerSubtitle}>{tourData.name}</Text>}
         </View>
         <View style={styles.headerButton} />
-      </View>
+      </LinearGradient>
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -328,12 +330,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 15,
-    paddingVertical: Platform.OS === 'ios' ? 12 : 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    paddingVertical: Platform.OS === 'ios' ? 12 : 16,
+    ...shadow.soft,
+    borderBottomLeftRadius: 18,
+    borderBottomRightRadius: 18,
   },
   headerButton: {
     padding: 5,
@@ -426,11 +426,7 @@ const styles = StyleSheet.create({
   theirMessageBubble: {
     backgroundColor: COLORS.theirMessageBackground,
     borderBottomLeftRadius: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 2,
-    elevation: 1,
+    ...shadow.subtle,
   },
   driverMessageBubble: {
     backgroundColor: COLORS.driverMessageBackground,
