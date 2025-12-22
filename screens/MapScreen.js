@@ -18,14 +18,16 @@ const { width, height } = Dimensions.get('window');
 
 // Brand Colors
 const COLORS = {
-  primaryBlue: '#007DC3',
-  coralAccent: '#FF7757',
+  primaryBlue: '#0B5ED7',
+  coralAccent: '#F97316',
   white: '#FFFFFF',
-  darkText: '#1A202C',
-  secondaryText: '#4A5568',
-  appBackground: '#F0F4F8',
-  mapHeaderColor: '#FF7757',
-  errorRed: '#E53E3E',
+  darkText: '#0F172A',
+  secondaryText: '#475569',
+  appBackground: '#F6F8FC',
+  mapHeaderColor: '#0B5ED7',
+  errorRed: '#EF4444',
+  border: '#E2E8F0',
+  softBlue: '#E6F0FF',
 };
 
 export default function MapScreen({ onBack, tourId }) { // Expect tourId prop
@@ -307,7 +309,7 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   headerButton: { padding: 5, minWidth: 40 },
-  headerTitle: { fontSize: 20, fontWeight: '600', color: COLORS.white },
+  headerTitle: { fontSize: 20, fontWeight: '700', color: COLORS.white },
   
   container: { flex: 1, position: 'relative' },
   map: { width: width, height: '100%' },
@@ -353,18 +355,20 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   infoContent: { flexDirection: 'row', alignItems: 'center' },
   infoIcon: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#E1F0FF',
+    backgroundColor: COLORS.softBlue,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 15,
   },
-  infoTitle: { fontSize: 16, fontWeight: 'bold', color: COLORS.darkText },
+  infoTitle: { fontSize: 16, fontWeight: '800', color: COLORS.darkText },
   infoSubtitle: { fontSize: 13, color: COLORS.secondaryText, marginTop: 2, fontWeight: '600' },
   infoDetail: { fontSize: 13, color: COLORS.secondaryText, marginTop: 4, flex: 1 },
   metricRow: {
