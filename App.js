@@ -320,7 +320,7 @@ export default function App() {
       case 'Photobook':
         return <PhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} />;
       case 'GroupPhotobook':
-        return <GroupPhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} />;
+        return <GroupPhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} userName={bookingData?.passengerNames?.[0] || 'Tour Member'} />;
 case 'Itinerary':
         // CHECK: Is the user a driver?
         const isDriverUser = screenParams.isDriver || (bookingData?.id && bookingData.id.startsWith('D-'));
