@@ -1,12 +1,13 @@
 import React from 'react';
 import { StyleSheet, Text, View, TouchableOpacity } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { COLORS as THEME, STATUS_COLORS as THEME_STATUS } from '../theme';
 
 const STATUS_COLORS = {
-  PENDING: '#94A3B8',
-  BOARDED: '#22C55E',
-  NO_SHOW: '#EF4444',
-  PARTIAL: '#F59E0B'
+  PENDING: THEME_STATUS.pending.main,
+  BOARDED: THEME_STATUS.boarded.main,
+  NO_SHOW: THEME_STATUS.noShow.main,
+  PARTIAL: THEME_STATUS.partial.main
 };
 
 const STATUS_ICONS = {

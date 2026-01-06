@@ -18,21 +18,22 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { uploadPhoto, subscribeToTourPhotos } from '../services/photoService';
+import { COLORS as THEME } from '../theme';
 
 const windowWidth = Dimensions.get('window').width;
 const windowHeight = Dimensions.get('window').height;
 
-// Brand Colors
+// Brand Colors - FIXED: was using teal #16a085, now using brand blue
 const COLORS = {
-  primaryBlue: '#16a085',
-  lightBlueAccent: '#AECAEC',
-  coralAccent: '#FF7757',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  appBackground: '#F0F4F8',
-  modalBackground: 'rgba(0, 20, 40, 0.9)',
-  successGreen: '#2ecc71',
-  warningYellow: '#f1c40f',
+  primaryBlue: THEME.primary,
+  lightBlueAccent: '#93C5FD',
+  coralAccent: THEME.accent,
+  white: THEME.white,
+  darkText: THEME.textPrimary,
+  appBackground: THEME.background,
+  modalBackground: THEME.overlay,
+  successGreen: THEME.success,
+  warningYellow: THEME.warning,
 };
 
 export default function GroupPhotobookScreen({ onBack, userId, tourId }) {

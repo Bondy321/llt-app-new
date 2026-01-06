@@ -2,14 +2,15 @@ import React, { useMemo } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { COLORS as THEME } from '../theme';
 
 const COLORS = {
-  primaryBlue: '#007DC3',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  secondaryText: '#4A5568',
-  coralAccent: '#FF7757',
-  lightBg: '#F7FAFF',
+  primaryBlue: THEME.primary,
+  white: THEME.white,
+  darkText: THEME.textPrimary,
+  secondaryText: THEME.textSecondary,
+  coralAccent: THEME.accent,
+  lightBg: '#F8FAFC',
 };
 
 export default function TodaysAgendaCard({ tourData, onNudge }) {

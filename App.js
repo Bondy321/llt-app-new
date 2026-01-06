@@ -10,6 +10,7 @@ import { auth, authHelpers } from './firebase';
 import { joinTour } from './services/bookingServiceRealtime';
 import logger from './services/loggerService';
 import useDiagnostics from './hooks/useDiagnostics';
+import { COLORS as THEME } from './theme';
 
 // Import Screens
 import LoginScreen from './screens/LoginScreen';
@@ -25,12 +26,12 @@ import PassengerManifestScreen from './screens/PassengerManifestScreen';
 import SafetySupportScreen from './screens/SafetySupportScreen';
 
 const COLORS = {
-  primaryBlue: '#007DC3',
-  lightBlueAccent: '#AECAEC',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  errorRed: '#E53E3E',
-  appBackground: '#F0F4F8',
+  primaryBlue: THEME.primary,
+  lightBlueAccent: '#93C5FD',
+  white: THEME.white,
+  darkText: THEME.textPrimary,
+  errorRed: THEME.error,
+  appBackground: THEME.background,
 };
 
 const SESSION_KEYS = {

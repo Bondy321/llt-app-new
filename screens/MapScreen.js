@@ -12,22 +12,23 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
-import { realtimeDb } from '../firebase'; // Ensure this import is correct
+import { realtimeDb } from '../firebase';
+import { COLORS as THEME } from '../theme';
 
 const { width, height } = Dimensions.get('window');
 
 // Brand Colors
 const COLORS = {
-  primaryBlue: '#0B5ED7',
-  coralAccent: '#F97316',
-  white: '#FFFFFF',
-  darkText: '#0F172A',
-  secondaryText: '#475569',
-  appBackground: '#F6F8FC',
-  mapHeaderColor: '#0B5ED7',
-  errorRed: '#EF4444',
-  border: '#E2E8F0',
-  softBlue: '#E6F0FF',
+  primaryBlue: THEME.primary,
+  coralAccent: THEME.accent,
+  white: THEME.white,
+  darkText: THEME.textPrimary,
+  secondaryText: THEME.textSecondary,
+  appBackground: THEME.background,
+  mapHeaderColor: THEME.primary,
+  errorRed: THEME.error,
+  border: THEME.border,
+  softBlue: THEME.primaryMuted,
 };
 
 export default function MapScreen({ onBack, tourId }) { // Expect tourId prop

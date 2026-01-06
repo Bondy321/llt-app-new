@@ -6,17 +6,18 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getTourManifest, updateManifestBooking, MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import ManifestBookingCard from '../components/ManifestBookingCard';
+import { COLORS as THEME } from '../theme';
 
 const COLORS = {
-  primary: '#0B5ED7',
-  bg: '#F6F8FC',
-  border: '#E2E8F0',
-  searchBg: '#FFFFFF',
-  success: '#22C55E',
-  danger: '#EF4444',
-  info: '#2563EB',
-  muted: '#475569',
-  panel: '#0F172A',
+  primary: THEME.primary,
+  bg: THEME.background,
+  border: THEME.border,
+  searchBg: THEME.white,
+  success: THEME.success,
+  danger: THEME.error,
+  info: THEME.primaryLight,
+  muted: THEME.textSecondary,
+  panel: THEME.textPrimary,
 };
 
 export default function PassengerManifestScreen({ route, navigation }) {
