@@ -50,7 +50,10 @@
         "projectId": "1b1ae41f-9096-4e7d-887c-b617613cf603"
       }
     },
-    "owner": "lochlomondtravel"
+    "owner": "lochlomondtravel",
+    "plugins": [
+      "expo-font"
+    ]
   },
   "plugins": [
     [
