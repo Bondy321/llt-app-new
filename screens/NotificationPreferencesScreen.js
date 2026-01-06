@@ -12,21 +12,20 @@ import {
   Platform
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-// 1. Import Notifications from Expo
 import * as Notifications from 'expo-notifications';
-// 2. Import registerForPushNotificationsAsync to verify permissions/token generation
 import { saveUserPreferences, getUserPreferences, registerForPushNotificationsAsync } from '../services/notificationService';
+import { COLORS as THEME } from '../theme';
 
-// Reusing your brand colors
+// Brand Colors
 const COLORS = {
-  primaryBlue: '#007DC3',
-  lightBlueAccent: '#AECAEC',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  secondaryText: '#4A5568',
-  appBackground: '#F0F4F8',
-  successGreen: '#2ECC71',
-  headerBg: '#FFFFFF',
+  primaryBlue: THEME.primary,
+  lightBlueAccent: '#93C5FD',
+  white: THEME.white,
+  darkText: THEME.textPrimary,
+  secondaryText: THEME.textSecondary,
+  appBackground: THEME.background,
+  successGreen: THEME.success,
+  headerBg: THEME.white,
 };
 
 const PreferenceSection = ({ title, children }) => (

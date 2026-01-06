@@ -17,19 +17,20 @@ import { LinearGradient } from 'expo-linear-gradient';
 import TodaysAgendaCard from '../components/TodaysAgendaCard';
 import { MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import { realtimeDb } from '../firebase';
+import { COLORS as THEME } from '../theme';
 
 // Brand Colors
 const COLORS = {
-  primaryBlue: '#0B5ED7',
-  lightBlueAccent: '#C7DBFF',
-  lightBlue: '#E6F0FF',
-  coralAccent: '#F97316',
-  white: '#FFFFFF',
-  darkText: '#0F172A',
-  cardBackground: '#FFFFFF',
-  appBackground: '#F6F8FC',
-  border: '#E2E8F0',
-  subtleText: '#475569',
+  primaryBlue: THEME.primary,
+  lightBlueAccent: '#93C5FD',
+  lightBlue: THEME.primaryMuted,
+  coralAccent: THEME.accent,
+  white: THEME.white,
+  darkText: THEME.textPrimary,
+  cardBackground: THEME.surface,
+  appBackground: THEME.background,
+  border: THEME.border,
+  subtleText: THEME.textSecondary,
 };
 
 export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavigate, onLogout }) {

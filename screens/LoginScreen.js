@@ -18,21 +18,22 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { COLORS as THEME_COLORS } from '../theme';
 
 const { width, height } = Dimensions.get('window');
 
 const COLORS = {
-  primaryBlue: '#0B5ED7',
-  secondaryBlue: '#0A3E8C',
-  lightBlue: '#E6F0FF',
-  white: '#FFFFFF',
-  errorRed: '#EF4444',
-  darkText: '#0F172A',
-  lightBlueAccent: '#C7DBFF',
-  inputBackground: '#F8FAFC',
-  placeholderText: '#94A3B8',
-  border: '#E2E8F0',
-  subtleText: '#475569',
+  primaryBlue: THEME_COLORS.primary,
+  secondaryBlue: THEME_COLORS.primaryDark,
+  lightBlue: THEME_COLORS.primaryMuted,
+  white: THEME_COLORS.white,
+  errorRed: THEME_COLORS.error,
+  darkText: THEME_COLORS.textPrimary,
+  lightBlueAccent: '#93C5FD',
+  inputBackground: THEME_COLORS.background,
+  placeholderText: THEME_COLORS.textMuted,
+  border: THEME_COLORS.border,
+  subtleText: THEME_COLORS.textSecondary,
 };
 
 export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
@@ -310,7 +311,7 @@ const styles = StyleSheet.create({
   },
   safeArea: {
     flex: 1,
-    backgroundColor: COLORS.lightBlue,
+    backgroundColor: 'transparent',
   },
   scrollContainer: {
     flexGrow: 1,

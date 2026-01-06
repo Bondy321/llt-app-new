@@ -15,14 +15,15 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { logSafetyEvent, SAFETY_CATEGORIES } from '../services/safetyService';
+import { COLORS as THEME } from '../theme';
 
 const COLORS = {
-  primaryBlue: '#007DC3',
-  coralAccent: '#FF7757',
-  green: '#2ECC71',
-  paleBlue: '#E8F2FF',
-  softGrey: '#F7F8FA',
-  text: '#1A202C',
+  primaryBlue: THEME.primary,
+  coralAccent: THEME.accent,
+  green: THEME.success,
+  paleBlue: THEME.primaryMuted,
+  softGrey: THEME.background,
+  text: THEME.textPrimary,
 };
 
 const ISSUE_PRESETS = [

@@ -19,23 +19,24 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getTourItinerary } from '../services/bookingServiceRealtime';
-import { realtimeDb } from '../firebase'; // Import DB directly for writes
+import { realtimeDb } from '../firebase';
+import { COLORS as THEME } from '../theme';
 
 // Brand Colors
 const COLORS = {
-  primaryBlue: '#007DC3',
-  complementaryBlue: '#3498DB',
-  lightBlueAccent: '#AECAEC',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  secondaryText: '#4A5568',
-  appBackground: '#F0F4F8',
-  cardBackground: '#FFFFFF',
+  primaryBlue: THEME.primary,
+  complementaryBlue: THEME.primaryLight,
+  lightBlueAccent: '#93C5FD',
+  white: THEME.white,
+  darkText: THEME.textPrimary,
+  secondaryText: THEME.textSecondary,
+  appBackground: THEME.background,
+  cardBackground: THEME.surface,
   timelineColor: '#CBD5E0',
-  coralAccent: '#FF7757',
-  successGreen: '#2ECC71',
-  editBg: '#FFF8E1', // Light yellow for edit mode
-  danger: '#E53E3E'
+  coralAccent: THEME.accent,
+  successGreen: THEME.success,
+  editBg: THEME.warningLight,
+  danger: THEME.error
 };
 
 export default function ItineraryScreen({ onBack, tourId, tourName, startDate, isDriver }) {

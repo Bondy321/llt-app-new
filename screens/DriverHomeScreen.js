@@ -16,23 +16,24 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
-import { realtimeDb } from '../firebase'; // Import your DB instance
+import { realtimeDb } from '../firebase';
 import { assignDriverToTour } from '../services/bookingServiceRealtime';
+import { COLORS as THEME } from '../theme';
 
 const COLORS = {
-  primary: '#0B5ED7',
-  midnight: '#0F172A',
+  primary: THEME.primary,
+  midnight: THEME.textPrimary,
   slate: '#1F2937',
-  white: '#FFFFFF',
-  bg: '#F4F7FB',
-  success: '#22C55E',
-  danger: '#EF4444',
-  info: '#2563EB',
+  white: THEME.white,
+  bg: THEME.background,
+  success: THEME.success,
+  danger: THEME.error,
+  info: THEME.primaryLight,
   location: '#0EA5E9',
   purple: '#7C3AED',
-  border: '#E2E8F0',
-  text: '#111827',
-  muted: '#6B7280',
+  border: THEME.border,
+  text: THEME.textPrimary,
+  muted: THEME.textSecondary,
 };
 
 export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {

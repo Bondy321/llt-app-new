@@ -21,24 +21,25 @@ import {
   subscribeToInternalDriverChat,
 } from '../services/chatService';
 import { auth } from '../firebase';
+import { COLORS as THEME } from '../theme';
 
 // Brand Colors
 const COLORS = {
-  primaryBlue: '#007DC3',
-  lightBlueAccent: '#AECAEC',
-  coralAccent: '#FF7757',
-  white: '#FFFFFF',
-  darkText: '#1A202C',
-  secondaryText: '#4A5568',
-  appBackground: '#F0F4F8',
-  chatScreenBackground: '#E6F3F8',
-  myMessageBackground: '#007DC3',
-  theirMessageBackground: '#FFFFFF',
-  driverMessageBackground: '#FFF2E0',
-  driverMessageBorder: '#FFCAA8',
-  inputBackground: '#FFFFFF',
-  sendButtonColor: '#FF7757',
-  chatHeaderColor: '#2ECC71',
+  primaryBlue: THEME.primary,
+  lightBlueAccent: '#93C5FD',
+  coralAccent: THEME.accent,
+  white: THEME.white,
+  darkText: THEME.textPrimary,
+  secondaryText: THEME.textSecondary,
+  appBackground: THEME.background,
+  chatScreenBackground: '#EFF6FF',
+  myMessageBackground: THEME.primary,
+  theirMessageBackground: THEME.white,
+  driverMessageBackground: THEME.accentLight,
+  driverMessageBorder: '#FDBA74',
+  inputBackground: THEME.white,
+  sendButtonColor: THEME.accent,
+  chatHeaderColor: THEME.success,
 };
 
 export default function ChatScreen({ onBack, tourId, bookingData, tourData, internalDriverChat = false }) {
