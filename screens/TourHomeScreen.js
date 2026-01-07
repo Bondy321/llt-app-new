@@ -119,7 +119,6 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
     { id: 'GroupPhotobook', title: 'Group Photo Album', icon: 'image-multiple', color: '#16a085' },
     { id: 'Itinerary', title: 'Tour Itinerary', icon: 'map-legend', color: '#3498DB' },
     { id: 'Chat', title: 'Group Chat', icon: 'chat-processing-outline', color: '#2ECC71' },
-    { id: 'Map', title: 'Driver Location', icon: 'map-marker-radius-outline', color: COLORS.coralAccent },
     { id: 'SafetySupport', title: 'Safety & Support', icon: 'shield-check', color: '#8e44ad' },
   ];
 
@@ -268,6 +267,28 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
               onNudge={() => onNavigate('Itinerary')}
             />
           )}
+
+          {/* Find My Bus - Prominent Feature Card */}
+          <TouchableOpacity
+            style={styles.findBusCard}
+            onPress={() => onNavigate('Map')}
+            activeOpacity={0.9}
+          >
+            <View style={styles.findBusGradient}>
+              <View style={styles.findBusContent}>
+                <View style={styles.findBusIconContainer}>
+                  <MaterialCommunityIcons name="bus-marker" size={32} color={COLORS.coralAccent} />
+                </View>
+                <View style={styles.findBusTextContainer}>
+                  <Text style={styles.findBusTitle}>Find My Bus</Text>
+                  <Text style={styles.findBusSubtitle}>See where your driver is on the map</Text>
+                </View>
+                <View style={styles.findBusArrow}>
+                  <MaterialCommunityIcons name="arrow-right-circle" size={28} color={COLORS.coralAccent} />
+                </View>
+              </View>
+            </View>
+          </TouchableOpacity>
 
           <Text style={styles.sectionTitle}>Tour Features</Text>
           <View style={styles.grid}>
@@ -713,5 +734,53 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontSize: 15,
     fontWeight: '700',
+  },
+  // Find My Bus Card Styles
+  findBusCard: {
+    marginBottom: 20,
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: COLORS.white,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: `${COLORS.coralAccent}30`,
+  },
+  findBusGradient: {
+    backgroundColor: `${COLORS.coralAccent}08`,
+    padding: 18,
+  },
+  findBusContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  findBusIconContainer: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    backgroundColor: `${COLORS.coralAccent}15`,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
+  findBusTextContainer: {
+    flex: 1,
+  },
+  findBusTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: COLORS.darkText,
+    marginBottom: 4,
+  },
+  findBusSubtitle: {
+    fontSize: 14,
+    color: COLORS.subtleText,
+    fontWeight: '500',
+  },
+  findBusArrow: {
+    marginLeft: 8,
   },
 });
