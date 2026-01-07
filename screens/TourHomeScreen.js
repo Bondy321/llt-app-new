@@ -119,7 +119,7 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
     { id: 'GroupPhotobook', title: 'Group Photo Album', icon: 'image-multiple', color: '#16a085' },
     { id: 'Itinerary', title: 'Tour Itinerary', icon: 'map-legend', color: '#3498DB' },
     { id: 'Chat', title: 'Group Chat', icon: 'chat-processing-outline', color: '#2ECC71' },
-    { id: 'SafetySupport', title: 'Safety & Support', icon: 'shield-check', color: '#8e44ad' },
+    { id: 'SafetySupport', title: 'Safety & SOS', icon: 'shield-alert', color: '#DC2626' },
   ];
 
   return (
@@ -163,10 +163,10 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.actionButton, styles.secondaryActionButton]}
-                onPress={() => onNavigate('SafetySupport')}
+                onPress={() => onNavigate('SafetySupport', { from: 'TourHome', mode: 'passenger' })}
               >
-                <MaterialCommunityIcons name="shield-check" size={18} color={COLORS.primaryBlue} />
-                <Text style={[styles.actionButtonText, { color: COLORS.primaryBlue }]}>Safety & support</Text>
+                <MaterialCommunityIcons name="shield-alert" size={18} color="#DC2626" />
+                <Text style={[styles.actionButtonText, { color: '#DC2626' }]}>SOS & Safety</Text>
               </TouchableOpacity>
             </View>
           </View>

@@ -291,6 +291,7 @@ export default function App() {
             bookingData={bookingData}
             userId={user?.uid}
             mode={screenParams?.mode || 'passenger'}
+            isConnected={isConnected}
           />
         );
       case 'PassengerManifest':
