@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   Text,
@@ -11,14 +11,20 @@ import {
   Modal,
   TextInput,
   KeyboardAvoidingView,
-  Platform
+  Platform,
+  Animated,
+  Dimensions,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import MapView, { Marker, PROVIDER_GOOGLE, Circle } from 'react-native-maps';
 import * as Location from 'expo-location';
+import * as Haptics from 'expo-haptics';
 import { realtimeDb } from '../firebase';
 import { assignDriverToTour } from '../services/bookingServiceRealtime';
 import { COLORS as THEME } from '../theme';
+
+const { width } = Dimensions.get('window');
 
 const COLORS = {
   primary: THEME.primary,
@@ -34,24 +40,123 @@ const COLORS = {
   border: THEME.border,
   text: THEME.textPrimary,
   muted: THEME.textSecondary,
+  warning: '#F59E0B',
 };
+
+// Minimal map style for preview
+const minimalMapStyle = [
+  { elementType: 'geometry', stylers: [{ color: '#f5f5f5' }] },
+  { elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#616161' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#ffffff' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#c9c9c9' }] },
+];
 
 export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
   const [updatingLocation, setUpdatingLocation] = useState(false);
-  
+  const [lastLocationUpdate, setLastLocationUpdate] = useState(null);
+  const [locationAccuracy, setLocationAccuracy] = useState(null);
+
+  // Location Preview Modal State
+  const [previewModalVisible, setPreviewModalVisible] = useState(false);
+  const [previewLocation, setPreviewLocation] = useState(null);
+  const [addressLoading, setAddressLoading] = useState(false);
+  const [addressText, setAddressText] = useState('');
+  const [confirmingLocation, setConfirmingLocation] = useState(false);
+
   // Modal State for Joining Tour
   const [joinModalVisible, setJoinModalVisible] = useState(false);
   const [inputTourCode, setInputTourCode] = useState('');
   const [joining, setJoining] = useState(false);
 
+  // Animations
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const successAnim = useRef(new Animated.Value(0)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
   // Derive active tour from props (updates when driverData changes)
   const activeTourId = driverData?.assignedTourId || '';
 
-  // Function to capture and save location
-  const handleUpdateLocation = async () => {
+  // Start pulse animation
+  useEffect(() => {
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.2,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, []);
+
+  // Entry animation
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 400,
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
+  // Fetch existing location data on mount
+  useEffect(() => {
+    if (!activeTourId) return;
+
+    const locationRef = realtimeDb.ref(`tours/${activeTourId}/driverLocation`);
+    locationRef.once('value').then((snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        setLastLocationUpdate(data);
+      }
+    });
+  }, [activeTourId]);
+
+  // Reverse geocode to get address
+  const getAddressFromCoords = async (latitude, longitude) => {
+    try {
+      setAddressLoading(true);
+      const result = await Location.reverseGeocodeAsync({
+        latitude,
+        longitude,
+      });
+
+      if (result && result.length > 0) {
+        const addr = result[0];
+        const parts = [];
+        if (addr.name && addr.name !== addr.street) parts.push(addr.name);
+        if (addr.street) parts.push(addr.street);
+        if (addr.city) parts.push(addr.city);
+        if (addr.region) parts.push(addr.region);
+
+        setAddressText(parts.join(', ') || 'Address unavailable');
+      } else {
+        setAddressText('Address unavailable');
+      }
+    } catch (error) {
+      console.error('Geocoding error:', error);
+      setAddressText('Could not determine address');
+    } finally {
+      setAddressLoading(false);
+    }
+  };
+
+  // Function to capture location and show preview
+  const handleCaptureLocation = async () => {
     if (!activeTourId) {
       Alert.alert("No Tour", "You must have an assigned tour to share location.");
       return;
+    }
+
+    if (Platform.OS === 'ios') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
 
     setUpdatingLocation(true);
@@ -65,28 +170,132 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
         return;
       }
 
-      // 2. Get Coordinates
+      // 2. Get Coordinates with high accuracy
       let location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High
+        accuracy: Location.Accuracy.High,
       });
 
-      const { latitude, longitude } = location.coords;
-      const timestamp = new Date().toISOString();
+      const { latitude, longitude, accuracy } = location.coords;
 
-      // 3. Write to Firebase
-      // We write to a specific 'driverLocation' node under the tour
+      setPreviewLocation({
+        latitude,
+        longitude,
+        accuracy,
+        timestamp: new Date().toISOString(),
+      });
+      setLocationAccuracy(accuracy);
+
+      // 3. Get address
+      await getAddressFromCoords(latitude, longitude);
+
+      // 4. Show preview modal
+      setPreviewModalVisible(true);
+
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Error", "Could not get your location. Please try again.");
+    } finally {
+      setUpdatingLocation(false);
+    }
+  };
+
+  // Function to confirm and save location to Firebase
+  const handleConfirmLocation = async () => {
+    if (!previewLocation) return;
+
+    if (Platform.OS === 'ios') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    }
+
+    setConfirmingLocation(true);
+
+    try {
+      const { latitude, longitude, timestamp } = previewLocation;
+
+      // Write to Firebase
       await realtimeDb.ref(`tours/${activeTourId}/driverLocation`).set({
         latitude,
         longitude,
         timestamp,
-        updatedBy: driverData.name
+        updatedBy: driverData.name,
+        address: addressText,
+        accuracy: locationAccuracy,
       });
 
-      Alert.alert("Location Updated", "Passengers can now see your current position on the map.");
+      // Update local state
+      setLastLocationUpdate({
+        latitude,
+        longitude,
+        timestamp,
+        updatedBy: driverData.name,
+        address: addressText,
+      });
+
+      // Success animation
+      Animated.sequence([
+        Animated.timing(successAnim, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+        Animated.delay(1500),
+        Animated.timing(successAnim, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      if (Platform.OS === 'ios') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+
+      setPreviewModalVisible(false);
+      Alert.alert(
+        "Location Shared",
+        "Passengers can now see your pickup point on the map. They'll receive the updated location in real-time.",
+        [{ text: "Great!", style: "default" }]
+      );
 
     } catch (error) {
       console.error(error);
-      Alert.alert("Error", "Could not update location. Please try again.");
+      if (Platform.OS === 'ios') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      }
+      Alert.alert("Error", "Could not share location. Please try again.");
+    } finally {
+      setConfirmingLocation(false);
+    }
+  };
+
+  // Refetch location in preview modal
+  const handleRefetchLocation = async () => {
+    if (Platform.OS === 'ios') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+
+    setUpdatingLocation(true);
+
+    try {
+      let location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      const { latitude, longitude, accuracy } = location.coords;
+
+      setPreviewLocation({
+        latitude,
+        longitude,
+        accuracy,
+        timestamp: new Date().toISOString(),
+      });
+      setLocationAccuracy(accuracy);
+
+      await getAddressFromCoords(latitude, longitude);
+
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Error", "Could not refresh location.");
     } finally {
       setUpdatingLocation(false);
     }
@@ -96,6 +305,9 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
     if (!activeTourId) {
       Alert.alert("No Tour", "You need an active tour to access the chat.");
       return;
+    }
+    if (Platform.OS === 'ios') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
     onNavigate('Chat', {
       tourId: activeTourId,
@@ -109,7 +321,9 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
       Alert.alert("No Tour", "You need an active tour to access the driver chat.");
       return;
     }
-
+    if (Platform.OS === 'ios') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
     onNavigate('Chat', {
       tourId: activeTourId,
       isDriver: true,
@@ -118,36 +332,62 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
     });
   };
 
-  // --- NEW: Join Tour Logic ---
+  // --- Join Tour Logic ---
   const handleJoinTour = async () => {
     if (!inputTourCode.trim()) {
       Alert.alert("Required", "Please enter a valid Tour Code (e.g., 5112D 8)");
       return;
     }
 
+    if (Platform.OS === 'ios') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+
     setJoining(true);
     try {
-      // 1. Call Service
-      // NOTE: Ensure driverData.id exists. If using 'driver' login type, it should be in driverData.id
-      const driverId = driverData.id; 
-      
+      const driverId = driverData.id;
+
       await assignDriverToTour(driverId, inputTourCode);
-      
+
+      if (Platform.OS === 'ios') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+
       Alert.alert("Success", `You are now assigned to tour: ${inputTourCode}`);
       setJoinModalVisible(false);
       setInputTourCode('');
-      
-      // Note: The parent App.js usually manages 'bookingData' (driverData). 
-      // Ideally, we should reload the driver profile here or trigger an app refresh.
-      // For now, the user might need to pull-to-refresh or re-login to see the "Active Tour ID" text update 
-      // unless App.js listens to the driver node changes. 
-      
+
     } catch (error) {
+      if (Platform.OS === 'ios') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      }
       Alert.alert("Error", "Could not join tour. Check the code and try again.\n" + error.message);
     } finally {
       setJoining(false);
     }
   };
+
+  const getAccuracyConfig = (accuracy) => {
+    if (!accuracy) return { label: 'Unknown', color: COLORS.muted, icon: 'crosshairs-question' };
+    if (accuracy <= 10) return { label: 'Excellent', color: COLORS.success, icon: 'crosshairs-gps' };
+    if (accuracy <= 30) return { label: 'Good', color: COLORS.primary, icon: 'crosshairs' };
+    if (accuracy <= 100) return { label: 'Fair', color: COLORS.warning, icon: 'crosshairs' };
+    return { label: 'Poor', color: COLORS.danger, icon: 'crosshairs-off' };
+  };
+
+  const formatTimeAgo = (isoString) => {
+    if (!isoString) return 'Never';
+    const diffMinutes = Math.floor((Date.now() - new Date(isoString).getTime()) / 60000);
+    if (diffMinutes < 1) return 'Just now';
+    if (diffMinutes === 1) return '1 min ago';
+    if (diffMinutes < 60) return `${diffMinutes} mins ago`;
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours === 1) return '1 hour ago';
+    if (diffHours < 24) return `${diffHours} hours ago`;
+    return 'Over a day ago';
+  };
+
+  const accuracyConfig = getAccuracyConfig(locationAccuracy);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -155,138 +395,385 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
         colors={[`${COLORS.primary}0D`, COLORS.bg]}
         style={{ flex: 1 }}
       >
-        <View style={styles.headerCard}>
-          <View style={styles.headerLeft}>
-            <View style={styles.avatar}>
-              <MaterialCommunityIcons name="steering" size={24} color={COLORS.primary} />
+        <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+          <View style={styles.headerCard}>
+            <View style={styles.headerLeft}>
+              <View style={styles.avatar}>
+                <MaterialCommunityIcons name="steering" size={24} color={COLORS.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.greeting}>Driver Console</Text>
+                <Text style={styles.driverName} numberOfLines={1}>{driverData?.name || 'Unknown Driver'}</Text>
+              </View>
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.greeting}>Driver Console</Text>
-              <Text style={styles.driverName} numberOfLines={1}>{driverData?.name || 'Unknown Driver'}</Text>
-            </View>
-          </View>
-          <TouchableOpacity onPress={onLogout} style={styles.iconButton}>
-            <MaterialCommunityIcons name="logout" size={22} color={COLORS.primary} />
-          </TouchableOpacity>
-        </View>
-
-        <ScrollView contentContainerStyle={styles.content}>
-          <View style={styles.assignCard}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardLabel}>Active tour</Text>
-              <Text style={styles.cardValue}>{activeTourId || 'No tour assigned'}</Text>
-              <Text style={styles.cardHint}>Stay assigned to keep chat and manifests in sync.</Text>
-            </View>
-            <TouchableOpacity style={styles.pillButton} onPress={() => setJoinModalVisible(true)}>
-              <MaterialCommunityIcons name="swap-horizontal" size={18} color={COLORS.white} />
-              <Text style={styles.pillButtonText}>Change</Text>
+            <TouchableOpacity
+              onPress={() => {
+                if (Platform.OS === 'ios') {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                }
+                onLogout();
+              }}
+              style={styles.iconButton}
+              accessibilityLabel="Logout"
+              accessibilityRole="button"
+            >
+              <MaterialCommunityIcons name="logout" size={22} color={COLORS.primary} />
             </TouchableOpacity>
           </View>
 
-          <View style={styles.grid}>
-            <TouchableOpacity 
-              style={[styles.bigButton, styles.primaryTile]}
-              onPress={handleUpdateLocation}
-              disabled={updatingLocation}
-              activeOpacity={0.9}
-            >
-              <View style={styles.tileIconCircle}>
-                {updatingLocation ? (
-                  <ActivityIndicator color={COLORS.white}/>
-                ) : (
-                  <MaterialCommunityIcons name="map-marker-radius" size={30} color={COLORS.white} />
+          <ScrollView contentContainerStyle={styles.content}>
+            {/* Tour Assignment Card */}
+            <View style={styles.assignCard}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardLabel}>Active tour</Text>
+                <Text style={styles.cardValue}>{activeTourId || 'No tour assigned'}</Text>
+                <Text style={styles.cardHint}>Stay assigned to keep chat and manifests in sync.</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.pillButton}
+                onPress={() => {
+                  if (Platform.OS === 'ios') {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }
+                  setJoinModalVisible(true);
+                }}
+                accessibilityLabel="Change tour assignment"
+                accessibilityRole="button"
+              >
+                <MaterialCommunityIcons name="swap-horizontal" size={18} color={COLORS.white} />
+                <Text style={styles.pillButtonText}>Change</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Last Location Update Card */}
+            {lastLocationUpdate && (
+              <View style={styles.lastUpdateCard}>
+                <View style={styles.lastUpdateHeader}>
+                  <View style={styles.lastUpdateIcon}>
+                    <MaterialCommunityIcons name="map-marker-check" size={20} color={COLORS.success} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.lastUpdateTitle}>Last Shared Location</Text>
+                    <Text style={styles.lastUpdateTime}>{formatTimeAgo(lastLocationUpdate.timestamp)}</Text>
+                  </View>
+                  <Animated.View style={[styles.liveBadge, { transform: [{ scale: pulseAnim }] }]}>
+                    <View style={styles.liveIndicator} />
+                    <Text style={styles.liveText}>Active</Text>
+                  </Animated.View>
+                </View>
+                {lastLocationUpdate.address && (
+                  <Text style={styles.lastUpdateAddress} numberOfLines={2}>
+                    {lastLocationUpdate.address}
+                  </Text>
                 )}
               </View>
-              <Text style={styles.bigButtonTitle}>Set pickup</Text>
-              <Text style={styles.bigButtonSubtitle}>Drop a pin for passengers</Text>
-            </TouchableOpacity>
+            )}
 
-            <TouchableOpacity
-              style={[styles.bigButton, styles.chatTile]}
-              onPress={handleOpenChat}
-              activeOpacity={0.9}
-            >
-              <View style={[styles.tileIconCircle, { backgroundColor: '#EEF2FF' }]}>
-                <MaterialCommunityIcons name="chat-processing" size={30} color={COLORS.info} />
-              </View>
-              <Text style={[styles.bigButtonTitle, { color: COLORS.text }]}>Group chat</Text>
-              <Text style={[styles.bigButtonSubtitle, { color: COLORS.muted }]}>Message passengers</Text>
-            </TouchableOpacity>
-          </View>
+            {/* Primary Action Grid */}
+            <View style={styles.grid}>
+              <TouchableOpacity
+                style={[styles.bigButton, styles.primaryTile]}
+                onPress={handleCaptureLocation}
+                disabled={updatingLocation}
+                activeOpacity={0.9}
+                accessibilityLabel="Set pickup location"
+                accessibilityRole="button"
+              >
+                <View style={styles.tileIconCircle}>
+                  {updatingLocation ? (
+                    <ActivityIndicator color={COLORS.white}/>
+                  ) : (
+                    <MaterialCommunityIcons name="map-marker-radius" size={30} color={COLORS.white} />
+                  )}
+                </View>
+                <Text style={styles.bigButtonTitle}>Set pickup</Text>
+                <Text style={styles.bigButtonSubtitle}>Drop a pin for passengers</Text>
+                {lastLocationUpdate && (
+                  <View style={styles.tileBadge}>
+                    <MaterialCommunityIcons name="check-circle" size={14} color={COLORS.success} />
+                    <Text style={styles.tileBadgeText}>Location active</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
 
-          <View style={styles.stackButtons}>
-            <TouchableOpacity
-              style={[styles.wideButton, styles.outlineButton]}
-              onPress={handleOpenDriverChat}
-              activeOpacity={0.9}
-            >
-              <MaterialCommunityIcons name="radio-handheld" size={22} color={COLORS.primary} style={{ marginRight: 10 }} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.wideTitle}>Driver chat</Text>
-                <Text style={styles.wideSubtitle}>For assigned drivers only</Text>
-              </View>
-              <MaterialCommunityIcons name="chevron-right" size={20} color={COLORS.primary} />
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.bigButton, styles.chatTile]}
+                onPress={handleOpenChat}
+                activeOpacity={0.9}
+                accessibilityLabel="Open group chat"
+                accessibilityRole="button"
+              >
+                <View style={[styles.tileIconCircle, { backgroundColor: '#EEF2FF' }]}>
+                  <MaterialCommunityIcons name="chat-processing" size={30} color={COLORS.info} />
+                </View>
+                <Text style={[styles.bigButtonTitle, { color: COLORS.text }]}>Group chat</Text>
+                <Text style={[styles.bigButtonSubtitle, { color: COLORS.muted }]}>Message passengers</Text>
+              </TouchableOpacity>
+            </View>
 
-            <TouchableOpacity
-              style={[styles.wideButton, styles.dangerButton]}
-              onPress={() => onNavigate('SafetySupport', { from: 'DriverHome', mode: 'driver' })}
-              activeOpacity={0.9}
-            >
-              <MaterialCommunityIcons name="shield-check" size={22} color={COLORS.white} style={{ marginRight: 10 }} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.wideTitle, { color: COLORS.white }]}>Safety & support</Text>
-                <Text style={[styles.wideSubtitle, { color: '#F8FAFC' }]}>Escalate issues fast</Text>
-              </View>
-              <MaterialCommunityIcons name="chevron-right" size={20} color={COLORS.white} />
-            </TouchableOpacity>
+            {/* Secondary Actions */}
+            <View style={styles.stackButtons}>
+              <TouchableOpacity
+                style={[styles.wideButton, styles.outlineButton]}
+                onPress={handleOpenDriverChat}
+                activeOpacity={0.9}
+                accessibilityLabel="Open driver chat"
+                accessibilityRole="button"
+              >
+                <MaterialCommunityIcons name="radio-handheld" size={22} color={COLORS.primary} style={{ marginRight: 10 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.wideTitle}>Driver chat</Text>
+                  <Text style={styles.wideSubtitle}>For assigned drivers only</Text>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={20} color={COLORS.primary} />
+              </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[styles.wideButton, styles.infoButton]}
-              onPress={() => {
-                if(!activeTourId) { Alert.alert("No Tour", "Please Join a Tour first."); return;}
-                onNavigate('PassengerManifest', { tourId: activeTourId });
-              }}
-              activeOpacity={0.9}
-            >
-              <MaterialCommunityIcons name="clipboard-list-outline" size={22} color={COLORS.white} style={{ marginRight: 10 }} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.wideTitle, { color: COLORS.white }]}>Passenger manifest</Text>
-                <Text style={[styles.wideSubtitle, { color: '#E0F2FE' }]}>Check-in, no-shows, stats</Text>
-              </View>
-              <MaterialCommunityIcons name="chevron-right" size={20} color={COLORS.white} />
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.wideButton, styles.dangerButton]}
+                onPress={() => {
+                  if (Platform.OS === 'ios') {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }
+                  onNavigate('SafetySupport', { from: 'DriverHome', mode: 'driver' });
+                }}
+                activeOpacity={0.9}
+                accessibilityLabel="Safety and support"
+                accessibilityRole="button"
+              >
+                <MaterialCommunityIcons name="shield-check" size={22} color={COLORS.white} style={{ marginRight: 10 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.wideTitle, { color: COLORS.white }]}>Safety & support</Text>
+                  <Text style={[styles.wideSubtitle, { color: '#F8FAFC' }]}>Escalate issues fast</Text>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={20} color={COLORS.white} />
+              </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={[styles.wideButton, styles.purpleButton]}
-              onPress={() => onNavigate('Itinerary', { tourId: activeTourId, isDriver: true })}
-              activeOpacity={0.9}
-            >
-              <MaterialCommunityIcons name="calendar-edit" size={22} color={COLORS.white} style={{ marginRight: 10 }} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.wideTitle, { color: COLORS.white }]}>Edit itinerary</Text>
-                <Text style={[styles.wideSubtitle, { color: '#EDE9FE' }]}>Keep passengers up to date</Text>
-              </View>
-              <MaterialCommunityIcons name="chevron-right" size={20} color={COLORS.white} />
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
+              <TouchableOpacity
+                style={[styles.wideButton, styles.infoButton]}
+                onPress={() => {
+                  if(!activeTourId) {
+                    Alert.alert("No Tour", "Please Join a Tour first.");
+                    return;
+                  }
+                  if (Platform.OS === 'ios') {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }
+                  onNavigate('PassengerManifest', { tourId: activeTourId });
+                }}
+                activeOpacity={0.9}
+                accessibilityLabel="View passenger manifest"
+                accessibilityRole="button"
+              >
+                <MaterialCommunityIcons name="clipboard-list-outline" size={22} color={COLORS.white} style={{ marginRight: 10 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.wideTitle, { color: COLORS.white }]}>Passenger manifest</Text>
+                  <Text style={[styles.wideSubtitle, { color: '#E0F2FE' }]}>Check-in, no-shows, stats</Text>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={20} color={COLORS.white} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.wideButton, styles.purpleButton]}
+                onPress={() => {
+                  if (Platform.OS === 'ios') {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }
+                  onNavigate('Itinerary', { tourId: activeTourId, isDriver: true });
+                }}
+                activeOpacity={0.9}
+                accessibilityLabel="Edit itinerary"
+                accessibilityRole="button"
+              >
+                <MaterialCommunityIcons name="calendar-edit" size={22} color={COLORS.white} style={{ marginRight: 10 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.wideTitle, { color: COLORS.white }]}>Edit itinerary</Text>
+                  <Text style={[styles.wideSubtitle, { color: '#EDE9FE' }]}>Keep passengers up to date</Text>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={20} color={COLORS.white} />
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </Animated.View>
       </LinearGradient>
-      {/* --- JOIN TOUR MODAL --- */}
+
+      {/* Location Preview Modal */}
+      <Modal
+        visible={previewModalVisible}
+        transparent={false}
+        animationType="slide"
+        onRequestClose={() => setPreviewModalVisible(false)}
+      >
+        <SafeAreaView style={styles.previewModalContainer}>
+          <View style={styles.previewHeader}>
+            <TouchableOpacity
+              onPress={() => {
+                if (Platform.OS === 'ios') {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                }
+                setPreviewModalVisible(false);
+              }}
+              style={styles.previewCloseButton}
+              accessibilityLabel="Close preview"
+              accessibilityRole="button"
+            >
+              <MaterialCommunityIcons name="close" size={24} color={COLORS.text} />
+            </TouchableOpacity>
+            <Text style={styles.previewTitle}>Confirm Pickup Location</Text>
+            <View style={styles.previewCloseButton} />
+          </View>
+
+          {/* Map Preview */}
+          {previewLocation && (
+            <View style={styles.mapPreviewContainer}>
+              <MapView
+                style={styles.mapPreview}
+                provider={PROVIDER_GOOGLE}
+                customMapStyle={minimalMapStyle}
+                region={{
+                  latitude: previewLocation.latitude,
+                  longitude: previewLocation.longitude,
+                  latitudeDelta: 0.005,
+                  longitudeDelta: 0.005,
+                }}
+                scrollEnabled={false}
+                zoomEnabled={false}
+                pitchEnabled={false}
+                rotateEnabled={false}
+              >
+                <Circle
+                  center={{
+                    latitude: previewLocation.latitude,
+                    longitude: previewLocation.longitude,
+                  }}
+                  radius={locationAccuracy || 20}
+                  fillColor={`${COLORS.primary}20`}
+                  strokeColor={`${COLORS.primary}60`}
+                  strokeWidth={2}
+                />
+                <Marker
+                  coordinate={{
+                    latitude: previewLocation.latitude,
+                    longitude: previewLocation.longitude,
+                  }}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                >
+                  <View style={styles.previewMarker}>
+                    <MaterialCommunityIcons name="bus" size={24} color={COLORS.white} />
+                  </View>
+                </Marker>
+              </MapView>
+
+              {/* Accuracy Badge */}
+              <View style={[styles.accuracyBadge, { backgroundColor: `${accuracyConfig.color}15` }]}>
+                <MaterialCommunityIcons name={accuracyConfig.icon} size={16} color={accuracyConfig.color} />
+                <Text style={[styles.accuracyText, { color: accuracyConfig.color }]}>
+                  {accuracyConfig.label} accuracy ({Math.round(locationAccuracy || 0)}m)
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {/* Location Details */}
+          <View style={styles.previewDetails}>
+            <View style={styles.previewDetailRow}>
+              <View style={styles.previewDetailIcon}>
+                <MaterialCommunityIcons name="map-marker" size={24} color={COLORS.primary} />
+              </View>
+              <View style={styles.previewDetailText}>
+                <Text style={styles.previewDetailLabel}>Address</Text>
+                {addressLoading ? (
+                  <ActivityIndicator size="small" color={COLORS.primary} style={{ marginTop: 4 }} />
+                ) : (
+                  <Text style={styles.previewDetailValue}>{addressText || 'Loading...'}</Text>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.previewDetailRow}>
+              <View style={styles.previewDetailIcon}>
+                <MaterialCommunityIcons name="crosshairs-gps" size={24} color={COLORS.primary} />
+              </View>
+              <View style={styles.previewDetailText}>
+                <Text style={styles.previewDetailLabel}>Coordinates</Text>
+                <Text style={styles.previewDetailValue}>
+                  {previewLocation ? `${previewLocation.latitude.toFixed(6)}, ${previewLocation.longitude.toFixed(6)}` : 'N/A'}
+                </Text>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.refetchButton}
+              onPress={handleRefetchLocation}
+              disabled={updatingLocation}
+              accessibilityLabel="Refresh location"
+              accessibilityRole="button"
+            >
+              {updatingLocation ? (
+                <ActivityIndicator size="small" color={COLORS.primary} />
+              ) : (
+                <>
+                  <MaterialCommunityIcons name="refresh" size={18} color={COLORS.primary} />
+                  <Text style={styles.refetchText}>Refresh Location</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* Action Buttons */}
+          <View style={styles.previewActions}>
+            <TouchableOpacity
+              style={styles.cancelPreviewButton}
+              onPress={() => {
+                if (Platform.OS === 'ios') {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                }
+                setPreviewModalVisible(false);
+              }}
+              accessibilityLabel="Cancel"
+              accessibilityRole="button"
+            >
+              <Text style={styles.cancelPreviewText}>Cancel</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.confirmPreviewButton}
+              onPress={handleConfirmLocation}
+              disabled={confirmingLocation || addressLoading}
+              accessibilityLabel="Share location with passengers"
+              accessibilityRole="button"
+            >
+              {confirmingLocation ? (
+                <ActivityIndicator color={COLORS.white} />
+              ) : (
+                <>
+                  <MaterialCommunityIcons name="send" size={20} color={COLORS.white} />
+                  <Text style={styles.confirmPreviewText}>Share with Passengers</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </Modal>
+
+      {/* JOIN TOUR MODAL */}
       <Modal
         visible={joinModalVisible}
         transparent={true}
         animationType="slide"
         onRequestClose={() => setJoinModalVisible(false)}
       >
-        <KeyboardAvoidingView 
+        <KeyboardAvoidingView
             behavior={Platform.OS === "ios" ? "padding" : "height"}
             style={styles.modalOverlay}
         >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Join Tour / Route</Text>
-                <TouchableOpacity onPress={() => setJoinModalVisible(false)}>
+                <TouchableOpacity
+                  onPress={() => setJoinModalVisible(false)}
+                  accessibilityLabel="Close modal"
+                  accessibilityRole="button"
+                >
                     <MaterialCommunityIcons name="close" size={24} color="#BDC3C7" />
                 </TouchableOpacity>
             </View>
@@ -296,19 +783,22 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
                 This will link you to the passenger manifest.
             </Text>
 
-            <TextInput 
+            <TextInput
                 style={styles.input}
                 placeholder="Tour Code (e.g. 5112D 8)"
                 value={inputTourCode}
                 onChangeText={setInputTourCode}
                 autoCapitalize="characters"
                 autoCorrect={false}
+                accessibilityLabel="Tour code input"
             />
 
-            <TouchableOpacity 
+            <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: COLORS.success }]}
                 onPress={handleJoinTour}
                 disabled={joining}
+                accessibilityLabel="Confirm tour assignment"
+                accessibilityRole="button"
             >
                 {joining ? (
                     <ActivityIndicator color="white" />
@@ -320,6 +810,21 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* Success Overlay */}
+      <Animated.View
+        style={[
+          styles.successOverlay,
+          {
+            opacity: successAnim,
+            pointerEvents: 'none',
+          }
+        ]}
+      >
+        <View style={styles.successContent}>
+          <MaterialCommunityIcons name="check-circle" size={60} color={COLORS.success} />
+          <Text style={styles.successText}>Location Shared!</Text>
+        </View>
+      </Animated.View>
     </SafeAreaView>
   );
 }
@@ -363,11 +868,13 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
   },
   content: { padding: 20, paddingBottom: 28 },
+
+  // Tour Assignment Card
   assignCard: {
     backgroundColor: COLORS.white,
     borderRadius: 16,
     padding: 16,
-    marginBottom: 20,
+    marginBottom: 16,
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
@@ -391,6 +898,68 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   pillButtonText: { color: COLORS.white, fontWeight: '700' },
+
+  // Last Update Card
+  lastUpdateCard: {
+    backgroundColor: `${COLORS.success}08`,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: `${COLORS.success}30`,
+  },
+  lastUpdateHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  lastUpdateIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: `${COLORS.success}15`,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  lastUpdateTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  lastUpdateTime: {
+    fontSize: 12,
+    color: COLORS.muted,
+    marginTop: 2,
+  },
+  lastUpdateAddress: {
+    fontSize: 13,
+    color: COLORS.muted,
+    marginTop: 10,
+    lineHeight: 18,
+  },
+  liveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${COLORS.success}15`,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    gap: 5,
+  },
+  liveIndicator: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: COLORS.success,
+  },
+  liveText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.success,
+    textTransform: 'uppercase',
+  },
+
+  // Grid and Buttons
   grid: { flexDirection: 'row', gap: 12, marginBottom: 16 },
   bigButton: {
     flex: 1,
@@ -423,6 +992,18 @@ const styles = StyleSheet.create({
   },
   bigButtonTitle: { fontSize: 16, fontWeight: '800', color: COLORS.white },
   bigButtonSubtitle: { fontSize: 13, color: '#E2E8F0', marginTop: 2 },
+  tileBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    gap: 4,
+  },
+  tileBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.success,
+  },
+
   stackButtons: { gap: 12 },
   wideButton: {
     flexDirection: 'row',
@@ -457,6 +1038,158 @@ const styles = StyleSheet.create({
   },
   wideTitle: { fontSize: 16, fontWeight: '800', color: COLORS.text },
   wideSubtitle: { fontSize: 13, color: COLORS.muted },
+
+  // Preview Modal
+  previewModalContainer: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
+  },
+  previewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    backgroundColor: COLORS.white,
+  },
+  previewCloseButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  mapPreviewContainer: {
+    height: 280,
+    position: 'relative',
+  },
+  mapPreview: {
+    flex: 1,
+  },
+  previewMarker: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: COLORS.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: COLORS.white,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  accuracyBadge: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    gap: 5,
+  },
+  accuracyText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  previewDetails: {
+    flex: 1,
+    padding: 20,
+  },
+  previewDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 20,
+  },
+  previewDetailIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: `${COLORS.primary}12`,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
+  previewDetailText: {
+    flex: 1,
+  },
+  previewDetailLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  previewDetailValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: COLORS.text,
+    marginTop: 4,
+    lineHeight: 22,
+  },
+  refetchButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    backgroundColor: `${COLORS.primary}12`,
+    borderRadius: 12,
+    gap: 8,
+    alignSelf: 'center',
+    marginTop: 10,
+  },
+  refetchText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.primary,
+  },
+  previewActions: {
+    flexDirection: 'row',
+    gap: 12,
+    padding: 20,
+    paddingTop: 0,
+  },
+  cancelPreviewButton: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 14,
+    backgroundColor: `${COLORS.muted}15`,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelPreviewText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.muted,
+  },
+  confirmPreviewButton: {
+    flex: 2,
+    flexDirection: 'row',
+    paddingVertical: 16,
+    borderRadius: 14,
+    backgroundColor: COLORS.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  confirmPreviewText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.white,
+  },
+
+  // Join Tour Modal
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.55)',
@@ -493,5 +1226,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: COLORS.success,
   },
-  modalBtnText: { color: COLORS.white, fontWeight: '800', fontSize: 15 }
+  modalBtnText: { color: COLORS.white, fontWeight: '800', fontSize: 15 },
+
+  // Success Overlay
+  successOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  successContent: {
+    alignItems: 'center',
+  },
+  successText: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: COLORS.success,
+    marginTop: 16,
+  },
 });
