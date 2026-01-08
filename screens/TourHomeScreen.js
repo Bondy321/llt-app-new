@@ -682,9 +682,7 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
             <View style={styles.headerTextContainer}>
               <View style={styles.greetingRow}>
                 <MaterialCommunityIcons name={greeting.icon} size={16} color={greeting.color} />
-                <Text style={styles.greetingText}>
-                  {greeting.text}{passengerName ? `, ${passengerName}` : ''}!
-                </Text>
+                <Text style={styles.greetingText}>{`${greeting.text}${passengerName ? `, ${passengerName}` : ''}!`}</Text>
               </View>
               <Text style={styles.tourCodeDisplay}>{tourCode}</Text>
               <Text style={styles.tourName} numberOfLines={1}>{tourData?.name || 'Active Tour'}</Text>
@@ -875,9 +873,9 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
                           </Text>
                         </View>
                         <Text style={styles.passengerName}>{name}</Text>
-                        {bookingData.seatNumbers?.[index] && (
-                          <Text style={styles.passengerSeat}>Seat {bookingData.seatNumbers[index]}</Text>
-                        )}
+                        {bookingData.seatNumbers?.[index] != null ? (
+                          <Text style={styles.passengerSeat}>{`Seat ${bookingData.seatNumbers[index]}`}</Text>
+                        ) : null}
                       </View>
                     ))}
                   </View>
