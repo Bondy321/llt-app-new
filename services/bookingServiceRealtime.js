@@ -1,10 +1,11 @@
 // services/bookingServiceRealtime.js
+// Enhanced with comprehensive validation, transaction safety, and error handling
 const isTestEnv = process.env.NODE_ENV === 'test';
 let realtimeDb;
-let auth; // <--- Restored this variable
+let auth;
 
 // Status Enums for the Manifest
-export const MANIFEST_STATUS = {
+const MANIFEST_STATUS = {
   PENDING: 'PENDING',
   BOARDED: 'BOARDED',
   NO_SHOW: 'NO_SHOW',
@@ -13,12 +14,71 @@ export const MANIFEST_STATUS = {
 
 if (!isTestEnv) {
   try {
-    // <--- Restored 'auth' here so we can access current user
     ({ realtimeDb, auth } = require('../firebase'));
   } catch (error) {
     console.warn('Realtime database module not initialized during load:', error.message);
   }
 }
+
+// ==================== VALIDATION HELPERS ====================
+
+/**
+ * Validates tour code/ID
+ */
+const validateTourCode = (tourCode) => {
+  if (!tourCode || typeof tourCode !== 'string' || tourCode.trim().length === 0) {
+    throw new Error('Invalid tour code');
+  }
+  return tourCode.trim();
+};
+
+/**
+ * Validates booking reference
+ */
+const validateBookingRef = (bookingRef) => {
+  if (!bookingRef || typeof bookingRef !== 'string' || bookingRef.trim().length === 0) {
+    throw new Error('Invalid booking reference');
+  }
+  return bookingRef.trim().toUpperCase();
+};
+
+/**
+ * Validates driver ID
+ */
+const validateDriverId = (driverId) => {
+  if (!driverId || typeof driverId !== 'string' || driverId.trim().length === 0) {
+    throw new Error('Invalid driver ID');
+  }
+  return driverId.trim().toUpperCase();
+};
+
+/**
+ * Validates user ID
+ */
+const validateUserId = (userId) => {
+  if (!userId || typeof userId !== 'string' || userId.trim().length === 0) {
+    throw new Error('Invalid user ID');
+  }
+  return userId.trim();
+};
+
+/**
+ * Validates passenger statuses array
+ */
+const validatePassengerStatuses = (statuses) => {
+  if (!Array.isArray(statuses)) {
+    throw new Error('Passenger statuses must be an array');
+  }
+
+  const validStatuses = Object.values(MANIFEST_STATUS);
+  for (const status of statuses) {
+    if (status && !validStatuses.includes(status)) {
+      throw new Error(`Invalid passenger status: ${status}`);
+    }
+  }
+
+  return statuses;
+};
 
 // --- HELPER: Sanitize Tour IDs (e.g., "5112D 8" -> "5112D_8") ---
 const sanitizeTourId = (tourCode) => {
@@ -117,9 +177,14 @@ const ensureBookingSchemaConsistency = async (bookingRef, bookingData, dbInstanc
 // --- UPDATED: Fetch Full Manifest with NO SHOW stats ---
 const getTourManifest = async (tourCodeOriginal) => {
   try {
-    if (!realtimeDb) throw new Error('Realtime database not initialized');
+    // Validate inputs
+    const validatedTourCode = validateTourCode(tourCodeOriginal);
 
-    const tourId = sanitizeTourId(tourCodeOriginal);
+    if (!realtimeDb) {
+      throw new Error('Realtime database not initialized');
+    }
+
+    const tourId = sanitizeTourId(validatedTourCode);
 
     // Resolve the real tourCode for booking lookups (some tourIds are sanitized with underscores)
     let tourCodeForSearch = tourCodeOriginal;
@@ -205,11 +270,25 @@ const getTourManifest = async (tourCodeOriginal) => {
 // --- UPDATED: Update Booking Status with Passenger-Level granularity ---
 const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = []) => {
   try {
-    if (!realtimeDb) throw new Error('Realtime database not initialized');
-    const tourId = sanitizeTourId(tourCode);
-    const bookingManifestRef = realtimeDb.ref(`tour_manifests/${tourId}/bookings/${bookingRef}`);
+    // Validate inputs
+    const validatedTourCode = validateTourCode(tourCode);
+    const validatedBookingRef = validateBookingRef(bookingRef);
+    const validatedStatuses = validatePassengerStatuses(passengerStatuses);
 
-    const normalizedStatuses = normalizePassengerStatuses(passengerStatuses);
+    if (!realtimeDb) {
+      throw new Error('Realtime database not initialized');
+    }
+
+    const tourId = sanitizeTourId(validatedTourCode);
+    const bookingManifestRef = realtimeDb.ref(`tour_manifests/${tourId}/bookings/${validatedBookingRef}`);
+
+    // Verify booking exists first
+    const bookingSnapshot = await realtimeDb.ref(`bookings/${validatedBookingRef}`).once('value');
+    if (!bookingSnapshot.exists()) {
+      return { success: false, error: 'Booking not found' };
+    }
+
+    const normalizedStatuses = normalizePassengerStatuses(validatedStatuses);
     const parentStatus = deriveParentStatusFromPassengers(normalizedStatuses);
 
     const updates = {
@@ -218,7 +297,14 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
       lastUpdated: new Date().toISOString()
     };
 
-    await bookingManifestRef.update(updates);
+    // Use timeout protection
+    await Promise.race([
+      bookingManifestRef.update(updates),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Manifest update timeout')), 10000)
+      )
+    ]);
+
     return { success: true };
 
   } catch (error) {
@@ -230,39 +316,64 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
 // --- UPDATED: Assign Driver to Tour (Uses existing Auth) ---
 const assignDriverToTour = async (driverId, tourCode) => {
   try {
-    if (!realtimeDb) throw new Error('Realtime database not initialized');
-    
-    // Ensure we have a sanitized ID
-    const tourId = sanitizeTourId(tourCode);
-    
-    // <--- Added Auth Check logic
-    if (!auth) throw new Error("Auth module not initialized");
-    const currentUser = auth.currentUser;
+    // Validate inputs
+    const validatedDriverId = validateDriverId(driverId);
+    const validatedTourCode = validateTourCode(tourCode);
 
+    if (!realtimeDb) {
+      throw new Error('Realtime database not initialized');
+    }
+
+    if (!auth) {
+      throw new Error('Auth module not initialized');
+    }
+
+    const currentUser = auth.currentUser;
     if (!currentUser) {
-        throw new Error("You must be logged in to assign a tour.");
+      throw new Error('You must be logged in to assign a tour');
+    }
+
+    // Ensure we have a sanitized ID
+    const tourId = sanitizeTourId(validatedTourCode);
+
+    // Verify tour exists
+    const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
+    if (!tourSnapshot.exists()) {
+      throw new Error('Tour not found');
+    }
+
+    // Verify driver exists
+    const driverSnapshot = await realtimeDb.ref(`drivers/${validatedDriverId}`).once('value');
+    if (!driverSnapshot.exists()) {
+      throw new Error('Driver not found');
     }
 
     const updates = {};
 
     // 1. Update Driver's Profile
-    updates[`drivers/${driverId}/currentTourId`] = tourId;
-    updates[`drivers/${driverId}/currentTourCode`] = tourCode;
-    updates[`drivers/${driverId}/lastActive`] = new Date().toISOString();
-    
-    // CRITICAL FIX: Write the Auth UID to satisfy the 'claiming' security rule
-    updates[`drivers/${driverId}/authUid`] = currentUser.uid; 
+    updates[`drivers/${validatedDriverId}/currentTourId`] = tourId;
+    updates[`drivers/${validatedDriverId}/currentTourCode`] = validatedTourCode;
+    updates[`drivers/${validatedDriverId}/lastActive`] = new Date().toISOString();
+    updates[`drivers/${validatedDriverId}/authUid`] = currentUser.uid;
 
     // 2. Add to Tour Manifest's assigned drivers list
-    updates[`tour_manifests/${tourId}/assigned_drivers/${driverId}`] = true;
-    updates[`tour_manifests/${tourId}/assigned_driver_codes/${driverId}`] = {
+    updates[`tour_manifests/${tourId}/assigned_drivers/${validatedDriverId}`] = true;
+    updates[`tour_manifests/${tourId}/assigned_driver_codes/${validatedDriverId}`] = {
       tourId,
-      tourCode,
+      tourCode: validatedTourCode,
+      assignedAt: new Date().toISOString(),
+      assignedBy: currentUser.uid,
     };
 
-    await realtimeDb.ref().update(updates);
-    
-    console.log(`Driver ${driverId} assigned to tour ${tourId}`);
+    // Use timeout protection
+    await Promise.race([
+      realtimeDb.ref().update(updates),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Driver assignment timeout')), 10000)
+      )
+    ]);
+
+    console.log(`Driver ${validatedDriverId} assigned to tour ${tourId}`);
     return { success: true, tourId };
 
   } catch (error) {
@@ -363,42 +474,78 @@ const ensureTourParticipantCount = async (tourId, dbInstance = realtimeDb) => {
 // --- EXISTING: Join tour (Passenger View) ---
 const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
   try {
+    // Validate inputs
+    const validatedTourId = validateTourCode(tourId); // tourId follows same validation as tourCode
+    const validatedUserId = validateUserId(userId);
+
     const db = dbInstance || realtimeDb;
-    if (!db) throw new Error('Realtime database not initialized');
-
-    const participantRef = db.ref(`tours/${tourId}/participants/${userId}`);
-    const participantSnapshot = await participantRef.once('value');
-
-    if (participantSnapshot.exists()) {
-      const reconciledCount = await ensureTourParticipantCount(tourId, db);
-      return { success: true, currentParticipants: reconciledCount };
+    if (!db) {
+      throw new Error('Realtime database not initialized');
     }
 
-    const tourRef = db.ref(`tours/${tourId}`);
+    // Verify tour exists and is active
+    const tourSnapshot = await db.ref(`tours/${validatedTourId}`).once('value');
+    if (!tourSnapshot.exists()) {
+      throw new Error('Tour not found');
+    }
+
+    const tourData = tourSnapshot.val();
+    if (tourData.isActive === false) {
+      throw new Error('Tour is no longer active');
+    }
+
+    const participantRef = db.ref(`tours/${validatedTourId}/participants/${validatedUserId}`);
+    const participantSnapshot = await participantRef.once('value');
+
+    // User already joined - return current count
+    if (participantSnapshot.exists()) {
+      const reconciledCount = await ensureTourParticipantCount(validatedTourId, db);
+      return { success: true, currentParticipants: reconciledCount, alreadyJoined: true };
+    }
+
+    // Join tour using transaction for safety
+    const tourRef = db.ref(`tours/${validatedTourId}`);
     const transactionResult = await tourRef.transaction((tourState) => {
       const currentTour = tourState || {};
       const participants = currentTour.participants || {};
 
-      if (participants[userId]) return currentTour;
+      // Double-check user hasn't joined during transaction
+      if (participants[validatedUserId]) {
+        return undefined; // Abort transaction
+      }
 
       const updatedParticipants = {
         ...participants,
-        [userId]: { joinedAt: new Date().toISOString(), userId }
+        [validatedUserId]: {
+          joinedAt: new Date().toISOString(),
+          userId: validatedUserId
+        }
       };
 
       const currentCount = typeof currentTour.currentParticipants === 'number'
         ? currentTour.currentParticipants
-        : Object.keys(updatedParticipants).length - 1;
+        : Object.keys(participants).length;
 
       return {
         ...currentTour,
         participants: updatedParticipants,
-        currentParticipants: currentCount + 1
+        currentParticipants: currentCount + 1,
+        lastUpdated: new Date().toISOString()
       };
     });
 
-    if (!transactionResult?.committed) throw new Error('Participant transaction not committed');
-    return { success: true, currentParticipants: transactionResult.snapshot.val().currentParticipants };
+    if (!transactionResult?.committed) {
+      // Transaction aborted - likely user already joined
+      const reconciledCount = await ensureTourParticipantCount(validatedTourId, db);
+      return { success: true, currentParticipants: reconciledCount, alreadyJoined: true };
+    }
+
+    const finalSnapshot = transactionResult.snapshot.val();
+    return {
+      success: true,
+      currentParticipants: finalSnapshot.currentParticipants,
+      alreadyJoined: false
+    };
   } catch (error) {
     console.error('Error joining tour:', error);
     throw error;
