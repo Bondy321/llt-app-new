@@ -2,6 +2,7 @@
  * functions/index.js
  * Backend logic for Loch Lomond Travel App
  * Updated for Cloud Functions Gen 2 (v2) - Region Fix
+ * Enhanced with comprehensive error handling, validation, and performance improvements
  */
 
 const { onValueCreated, onValueUpdated } = require("firebase-functions/v2/database");
@@ -14,133 +15,304 @@ admin.initializeApp();
 // Initialize Expo SDK
 const expo = new Expo();
 
+// ==================== UTILITY FUNCTIONS ====================
+
+/**
+ * Structured logger for better debugging and monitoring
+ */
+const log = {
+  info: (message, data = {}) => console.log(JSON.stringify({ level: 'info', message, ...data, timestamp: new Date().toISOString() })),
+  error: (message, error = {}, data = {}) => console.error(JSON.stringify({ level: 'error', message, error: error.message || error, stack: error.stack, ...data, timestamp: new Date().toISOString() })),
+  warn: (message, data = {}) => console.warn(JSON.stringify({ level: 'warn', message, ...data, timestamp: new Date().toISOString() })),
+};
+
+/**
+ * Validates message data
+ */
+const validateMessageData = (messageData) => {
+  const errors = [];
+
+  if (!messageData) {
+    errors.push('Message data is null or undefined');
+    return { valid: false, errors };
+  }
+
+  if (!messageData.senderId || typeof messageData.senderId !== 'string') {
+    errors.push('Invalid or missing senderId');
+  }
+
+  if (!messageData.senderName || typeof messageData.senderName !== 'string') {
+    errors.push('Invalid or missing senderName');
+  }
+
+  if (!messageData.text || typeof messageData.text !== 'string') {
+    errors.push('Invalid or missing message text');
+  } else if (messageData.text.length > 10000) {
+    errors.push('Message text exceeds maximum length (10000 characters)');
+  }
+
+  return { valid: errors.length === 0, errors };
+};
+
+/**
+ * Validates and sanitizes push token
+ */
+const isValidPushToken = (token) => {
+  return token && typeof token === 'string' && Expo.isExpoPushToken(token);
+};
+
+/**
+ * Safely removes invalid push tokens from user profiles
+ */
+const removeInvalidToken = async (userId, token) => {
+  try {
+    await admin.database().ref(`users/${userId}/pushToken`).remove();
+    log.info('Removed invalid token', { userId, token: token.substring(0, 20) + '...' });
+  } catch (error) {
+    log.error('Failed to remove invalid token', error, { userId });
+  }
+};
+
+/**
+ * Verifies user is a participant of the tour
+ */
+const verifyParticipant = async (tourId, userId) => {
+  try {
+    const participantSnapshot = await admin.database()
+      .ref(`tours/${tourId}/participants/${userId}`)
+      .once('value');
+    return participantSnapshot.exists();
+  } catch (error) {
+    log.error('Error verifying participant', error, { tourId, userId });
+    return false;
+  }
+};
+
+/**
+ * Rate limiting check (simple implementation)
+ */
+const rateLimitCache = new Map();
+const checkRateLimit = (key, maxRequests = 10, windowMs = 60000) => {
+  const now = Date.now();
+  const record = rateLimitCache.get(key) || { count: 0, resetTime: now + windowMs };
+
+  // Reset if window expired
+  if (now > record.resetTime) {
+    rateLimitCache.set(key, { count: 1, resetTime: now + windowMs });
+    return true;
+  }
+
+  // Check limit
+  if (record.count >= maxRequests) {
+    return false;
+  }
+
+  // Increment
+  record.count++;
+  rateLimitCache.set(key, record);
+  return true;
+};
+
+/**
+ * Cleanup old rate limit entries (called periodically)
+ */
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, record] of rateLimitCache.entries()) {
+    if (now > record.resetTime) {
+      rateLimitCache.delete(key);
+    }
+  }
+}, 300000); // Clean up every 5 minutes
+
 /**
  * Trigger: When a new message is added to /chats/{tourId}/messages/{messageId}
+ * Enhanced with validation, security checks, and better error handling
  */
 exports.sendChatNotification = onValueCreated(
   {
-    // 1. Configuration Object
     ref: "/chats/{tourId}/messages/{messageId}",
-    
-    // FIX: Match the region of your Realtime Database (Belgium)
-    region: "europe-west1", 
-    
-    // FIX: Explicitly target your specific database instance 
-    // (This matches the ID found in your firebase.js config)
+    region: "europe-west1",
     instance: "loch-lomond-travel-default-rtdb",
-    
     maxInstances: 10,
   },
   async (event) => {
-    // 2. Data Access
-    const snapshot = event.data;
-    if (!snapshot) {
-        console.log("No data associated with the event");
-        return;
-    }
-    
-    const messageData = snapshot.val();
-    
-    // 3. Params Access
+    const startTime = Date.now();
     const tourId = event.params.tourId;
-    
-    const senderId = messageData.senderId;
-    const messageText = messageData.text;
-    const senderName = messageData.senderName;
-
-    console.log(`New message in tour ${tourId} from ${senderName} (Gen 2)`);
+    const messageId = event.params.messageId;
 
     try {
-      // 1. Get Tour Details
-      const tourSnapshot = await admin.database().ref(`/tours/${tourId}`).once("value");
-      const tourData = tourSnapshot.val();
-      const tourName = tourData?.name || "Tour Chat";
+      // 1. Validate event data
+      const snapshot = event.data;
+      if (!snapshot) {
+        log.warn("No data associated with event", { tourId, messageId });
+        return null;
+      }
 
-      // 2. Get Participants
-      const participantsSnapshot = await admin.database()
-        .ref(`/tours/${tourId}/participants`)
-        .once("value");
+      const messageData = snapshot.val();
+
+      // 2. Validate message data
+      const validation = validateMessageData(messageData);
+      if (!validation.valid) {
+        log.error("Invalid message data", { errors: validation.errors }, { tourId, messageId });
+        return null;
+      }
+
+      const { senderId, text: messageText, senderName } = messageData;
+
+      // 3. Rate limiting check (prevent spam)
+      const rateLimitKey = `chat_notify_${tourId}_${senderId}`;
+      if (!checkRateLimit(rateLimitKey, 20, 60000)) {
+        log.warn("Rate limit exceeded", { tourId, senderId });
+        return null;
+      }
+
+      // 4. Security: Verify sender is actually a participant (prevent spoofing)
+      const isParticipant = await verifyParticipant(tourId, senderId);
+      if (!isParticipant) {
+        log.error("Sender is not a participant of the tour", null, { tourId, senderId });
+        return null;
+      }
+
+      log.info("Processing chat notification", { tourId, senderId, senderName });
+
+      // 5. Get tour details and participants in parallel
+      const [tourSnapshot, participantsSnapshot] = await Promise.all([
+        admin.database().ref(`tours/${tourId}`).once("value"),
+        admin.database().ref(`tours/${tourId}/participants`).once("value")
+      ]);
+
+      const tourData = tourSnapshot.val();
+      if (!tourData) {
+        log.error("Tour not found", null, { tourId });
+        return null;
+      }
+
+      const tourName = tourData.name || "Tour Chat";
 
       if (!participantsSnapshot.exists()) {
-        console.log("No participants found for this tour.");
+        log.info("No participants found", { tourId });
         return null;
       }
 
       const participants = participantsSnapshot.val();
-      const pushMessages = [];
-
-      // 3. Loop through participants
       const participantIds = Object.keys(participants);
-      
+      const pushMessages = [];
+      const invalidTokens = [];
+
+      // 6. Fetch user data and build notification messages
       const userFetchPromises = participantIds.map(async (userId) => {
-        // A. Don't notify sender
+        // Don't notify sender
         if (userId === senderId) return;
 
-        // B. Fetch User Profile
-        const userSnapshot = await admin.database().ref(`/users/${userId}`).once("value");
-        const userData = userSnapshot.val();
+        try {
+          const userSnapshot = await admin.database().ref(`users/${userId}`).once("value");
+          const userData = userSnapshot.val();
 
-        if (!userData || !userData.pushToken) {
-          console.log(`No token for user ${userId}`);
-          return;
+          // Skip if no user data or token
+          if (!userData || !userData.pushToken) {
+            log.info("No token for user", { userId, tourId });
+            return;
+          }
+
+          // Check notification preferences
+          const wantsChatUpdates = userData.preferences?.ops?.group_chat ?? true;
+          if (!wantsChatUpdates) {
+            log.info("User has muted chat notifications", { userId, tourId });
+            return;
+          }
+
+          // Validate token
+          if (!isValidPushToken(userData.pushToken)) {
+            log.warn("Invalid push token", { userId, token: userData.pushToken.substring(0, 20) + '...' });
+            invalidTokens.push({ userId, token: userData.pushToken });
+            return;
+          }
+
+          // Truncate message for notification if too long
+          const truncatedMessage = messageText.length > 200
+            ? messageText.substring(0, 197) + '...'
+            : messageText;
+
+          pushMessages.push({
+            to: userData.pushToken,
+            sound: "default",
+            title: `New message in ${tourName}`,
+            body: `${senderName}: ${truncatedMessage}`,
+            data: {
+              tourId: tourId,
+              screen: "Chat",
+              messageId: messageId,
+            },
+            priority: "high",
+            channelId: "default",
+          });
+        } catch (userError) {
+          log.error("Error processing user", userError, { userId, tourId });
         }
-
-        // C. Check Preferences
-        const wantsChatUpdates = userData.preferences?.ops?.group_chat ?? true;
-
-        if (!wantsChatUpdates) {
-          console.log(`User ${userId} has muted chat notifications.`);
-          return;
-        }
-
-        // D. Validate Token
-        if (!Expo.isExpoPushToken(userData.pushToken)) {
-          console.error(`Push token ${userData.pushToken} is invalid`);
-          return;
-        }
-
-        pushMessages.push({
-          to: userData.pushToken,
-          sound: "default",
-          title: `New message in ${tourName}`,
-          body: `${senderName}: ${messageText}`,
-          data: { 
-            tourId: tourId,
-            screen: "Chat" 
-          },
-        });
       });
 
       await Promise.all(userFetchPromises);
 
-      // 4. Send via Expo
-      if (pushMessages.length > 0) {
-        const chunks = expo.chunkPushNotifications(pushMessages);
-        const tickets = [];
-
-        for (let chunk of chunks) {
-          try {
-            const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
-            tickets.push(...ticketChunk);
-          } catch (error) {
-            console.error("Error sending chunk", error);
-          }
-        }
-        console.log(`Sent ${tickets.length} notifications successfully.`);
-      } else {
-        console.log("No valid recipients found.");
+      // 7. Clean up invalid tokens (async, don't wait)
+      if (invalidTokens.length > 0) {
+        Promise.all(invalidTokens.map(({ userId, token }) => removeInvalidToken(userId, token)))
+          .catch(err => log.error("Error cleaning invalid tokens", err));
       }
-      
+
+      // 8. Send notifications via Expo
+      if (pushMessages.length === 0) {
+        log.info("No valid recipients found", { tourId });
+        return null;
+      }
+
+      const chunks = expo.chunkPushNotifications(pushMessages);
+      let successCount = 0;
+      let errorCount = 0;
+
+      for (const chunk of chunks) {
+        try {
+          const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+
+          // Check for errors in tickets
+          ticketChunk.forEach((ticket, index) => {
+            if (ticket.status === 'error') {
+              errorCount++;
+              log.error("Notification ticket error", {
+                error: ticket.message,
+                details: ticket.details
+              }, { tourId });
+            } else {
+              successCount++;
+            }
+          });
+        } catch (chunkError) {
+          errorCount += chunk.length;
+          log.error("Error sending notification chunk", chunkError, { tourId, chunkSize: chunk.length });
+        }
+      }
+
+      const duration = Date.now() - startTime;
+      log.info("Chat notification completed", {
+        tourId,
+        recipients: pushMessages.length,
+        successCount,
+        errorCount,
+        duration: `${duration}ms`
+      });
+
       return null;
 
     } catch (error) {
-      console.error("Error in sendChatNotification:", error);
+      const duration = Date.now() - startTime;
+      log.error("Fatal error in sendChatNotification", error, { tourId, messageId, duration: `${duration}ms` });
       return null;
     }
   }
 );
 /**
  * Trigger: When the itinerary is updated at /tours/{tourId}/itinerary
+ * Enhanced with validation, better error handling, and performance tracking
  */
 exports.sendItineraryNotification = onValueUpdated(
   {
@@ -150,89 +322,148 @@ exports.sendItineraryNotification = onValueUpdated(
     maxInstances: 10,
   },
   async (event) => {
-    // 1. Data Access
+    const startTime = Date.now();
     const tourId = event.params.tourId;
-    
-    // We don't necessarily need the full itinerary data for the alert, 
-    // just knowing it changed is enough.
-    console.log(`Itinerary updated for tour ${tourId}`);
 
     try {
-      // 2. Get Tour Name (for a nice alert title)
-      const nameSnapshot = await admin.database().ref(`/tours/${tourId}/name`).once("value");
+      log.info("Processing itinerary update notification", { tourId });
+
+      // 1. Rate limiting check (prevent notification spam on rapid updates)
+      const rateLimitKey = `itinerary_notify_${tourId}`;
+      if (!checkRateLimit(rateLimitKey, 5, 300000)) { // Max 5 updates per 5 minutes
+        log.warn("Itinerary update rate limit exceeded", { tourId });
+        return null;
+      }
+
+      // 2. Get tour details and participants in parallel
+      const [nameSnapshot, participantsSnapshot, tourSnapshot] = await Promise.all([
+        admin.database().ref(`tours/${tourId}/name`).once("value"),
+        admin.database().ref(`tours/${tourId}/participants`).once("value"),
+        admin.database().ref(`tours/${tourId}`).once("value")
+      ]);
+
+      const tourData = tourSnapshot.val();
+      if (!tourData) {
+        log.error("Tour not found", null, { tourId });
+        return null;
+      }
+
+      // Check if tour is active
+      if (tourData.isActive === false) {
+        log.info("Tour is inactive, skipping notification", { tourId });
+        return null;
+      }
+
       const tourName = nameSnapshot.val() || "Your Tour";
 
-      // 3. Get List of Participants
-      const participantsSnapshot = await admin.database()
-        .ref(`/tours/${tourId}/participants`)
-        .once("value");
-
       if (!participantsSnapshot.exists()) {
-        console.log("No participants found for this tour.");
+        log.info("No participants for itinerary update", { tourId });
         return null;
       }
 
       const participants = participantsSnapshot.val();
-      const pushMessages = [];
-
-      // 4. Loop through participants
       const participantIds = Object.keys(participants);
-      
+      const pushMessages = [];
+      const invalidTokens = [];
+
+      // 3. Fetch user data and build notification messages
       const userFetchPromises = participantIds.map(async (userId) => {
-        // A. Fetch User Profile
-        const userSnapshot = await admin.database().ref(`/users/${userId}`).once("value");
-        const userData = userSnapshot.val();
+        try {
+          const userSnapshot = await admin.database().ref(`users/${userId}`).once("value");
+          const userData = userSnapshot.val();
 
-        if (!userData || !userData.pushToken) return;
+          // Skip if no user data or token
+          if (!userData || !userData.pushToken) {
+            log.info("No token for user", { userId, tourId });
+            return;
+          }
 
-        // B. Check Preferences (Default to TRUE if not set)
-        // matches keys in NotificationPreferencesScreen.js
-        const wantsUpdates = userData.preferences?.ops?.itinerary_changes ?? true; 
+          // Check notification preferences
+          const wantsUpdates = userData.preferences?.ops?.itinerary_changes ?? true;
+          if (!wantsUpdates) {
+            log.info("User opted out of itinerary updates", { userId, tourId });
+            return;
+          }
 
-        if (!wantsUpdates) {
-          console.log(`User ${userId} opted out of itinerary updates.`);
-          return;
+          // Validate token
+          if (!isValidPushToken(userData.pushToken)) {
+            log.warn("Invalid push token", { userId, token: userData.pushToken.substring(0, 20) + '...' });
+            invalidTokens.push({ userId, token: userData.pushToken });
+            return;
+          }
+
+          pushMessages.push({
+            to: userData.pushToken,
+            sound: "default",
+            title: "📅 Itinerary Update",
+            body: `The schedule for ${tourName} has been updated. Tap to see the changes.`,
+            data: {
+              tourId: tourId,
+              screen: "Itinerary",
+              timestamp: Date.now(),
+            },
+            priority: "default",
+            channelId: "default",
+          });
+        } catch (userError) {
+          log.error("Error processing user", userError, { userId, tourId });
         }
-
-        // C. Validate Token
-        if (!Expo.isExpoPushToken(userData.pushToken)) {
-          console.error(`Invalid token for user ${userId}`);
-          return;
-        }
-
-        pushMessages.push({
-          to: userData.pushToken,
-          sound: "default",
-          title: "📅 Itinerary Update",
-          body: `The schedule for ${tourName} has been updated. Tap to see the changes.`,
-          data: { 
-            tourId: tourId,
-            screen: "Itinerary" // Direct navigation link
-          },
-        });
       });
 
       await Promise.all(userFetchPromises);
 
-      // 5. Send via Expo
-      if (pushMessages.length > 0) {
-        const chunks = expo.chunkPushNotifications(pushMessages);
-        const tickets = [];
-
-        for (let chunk of chunks) {
-          try {
-            await expo.sendPushNotificationsAsync(chunk);
-          } catch (error) {
-            console.error("Error sending chunk", error);
-          }
-        }
-        console.log(`Sent ${pushMessages.length} itinerary alerts.`);
+      // 4. Clean up invalid tokens (async, don't wait)
+      if (invalidTokens.length > 0) {
+        Promise.all(invalidTokens.map(({ userId, token }) => removeInvalidToken(userId, token)))
+          .catch(err => log.error("Error cleaning invalid tokens", err));
       }
-      
+
+      // 5. Send notifications via Expo
+      if (pushMessages.length === 0) {
+        log.info("No valid recipients for itinerary update", { tourId });
+        return null;
+      }
+
+      const chunks = expo.chunkPushNotifications(pushMessages);
+      let successCount = 0;
+      let errorCount = 0;
+
+      for (const chunk of chunks) {
+        try {
+          const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+
+          // Check for errors in tickets
+          ticketChunk.forEach((ticket) => {
+            if (ticket.status === 'error') {
+              errorCount++;
+              log.error("Notification ticket error", {
+                error: ticket.message,
+                details: ticket.details
+              }, { tourId });
+            } else {
+              successCount++;
+            }
+          });
+        } catch (chunkError) {
+          errorCount += chunk.length;
+          log.error("Error sending notification chunk", chunkError, { tourId, chunkSize: chunk.length });
+        }
+      }
+
+      const duration = Date.now() - startTime;
+      log.info("Itinerary notification completed", {
+        tourId,
+        recipients: pushMessages.length,
+        successCount,
+        errorCount,
+        duration: `${duration}ms`
+      });
+
       return null;
 
     } catch (error) {
-      console.error("Error in sendItineraryNotification:", error);
+      const duration = Date.now() - startTime;
+      log.error("Fatal error in sendItineraryNotification", error, { tourId, duration: `${duration}ms` });
       return null;
     }
   }
