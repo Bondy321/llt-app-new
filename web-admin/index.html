@@ -2,11 +2,45 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>web-admin</title>
+
+    <!-- Primary Meta Tags -->
+    <title>Loch Lomond Travel - Admin Portal</title>
+    <meta name="title" content="Loch Lomond Travel - Admin Portal" />
+    <meta name="description" content="Operations administration portal for Loch Lomond Travel. Manage drivers, tours, and broadcast announcements to passengers." />
+    <meta name="author" content="Loch Lomond Travel" />
+
+    <!-- Theme Color -->
+    <meta name="theme-color" content="#007DC3" />
+    <meta name="msapplication-TileColor" content="#007DC3" />
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/vite.svg" />
+
+    <!-- Security -->
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests" />
+
+    <!-- Preconnect to Firebase -->
+    <link rel="preconnect" href="https://loch-lomond-travel-default-rtdb.europe-west1.firebasedatabase.app" />
+    <link rel="preconnect" href="https://identitytoolkit.googleapis.com" />
+
+    <!-- Open Graph / Social -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Loch Lomond Travel - Admin Portal" />
+    <meta property="og:description" content="Operations administration portal for Loch Lomond Travel" />
+
+    <!-- Prevent indexing (admin panel) -->
+    <meta name="robots" content="noindex, nofollow" />
   </head>
   <body>
+    <noscript>
+      <div style="padding: 20px; text-align: center; font-family: sans-serif;">
+        <h1>JavaScript Required</h1>
+        <p>This application requires JavaScript to run. Please enable JavaScript in your browser settings.</p>
+      </div>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

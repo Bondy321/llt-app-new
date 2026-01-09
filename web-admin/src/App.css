@@ -1,355 +1,179 @@
-/* App.css - Loch Lomond Travel Admin Theme */
+/* Loch Lomond Travel - Admin Portal Component Styles */
+/* Note: Most styling is handled by Mantine UI components */
 
-:root {
-  --primary-blue: #007DC3;
-  --secondary-blue: #005a8f;
-  --accent-orange: #E67E22;
-  --light-bg: #F5F7FA;
-  --white: #FFFFFF;
-  --text-dark: #2C3E50;
-  --text-light: #7F8C8D;
-  --border-color: #E2E8F0;
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.1);
-  --shadow-md: 0 4px 6px rgba(0,0,0,0.1);
-  --radius: 8px;
-}
+/* Additional utility classes and component overrides */
 
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-  background-color: var(--light-bg);
-  color: var(--text-dark);
-  -webkit-font-smoothing: antialiased;
-}
-
-/* --- Layout Containers --- */
-
-.app-container {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.main-content {
-  flex: 1;
-  padding: 2rem;
-  max-width: 1200px;
-  width: 100%;
-  margin: 0 auto;
-  box-sizing: border-box;
-}
-
-/* --- Header --- */
-
-.header {
-  background: linear-gradient(135deg, var(--primary-blue), var(--secondary-blue));
-  color: var(--white);
-  padding: 1rem 2rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  box-shadow: var(--shadow-md);
-}
-
-.header h1 {
-  margin: 0;
-  font-size: 1.25rem;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-
-.logout-btn {
-  background: rgba(255, 255, 255, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  color: var(--white);
-  padding: 0.5rem 1rem;
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: all 0.2s ease;
-  font-size: 0.9rem;
-}
-
-.logout-btn:hover {
-  background: rgba(255, 255, 255, 0.3);
-}
-
-/* --- Tabs --- */
-
-.tabs {
-  background: var(--white);
-  border-bottom: 1px solid var(--border-color);
-  padding: 0 2rem;
-  display: flex;
-  gap: 2rem;
-}
-
-.tab {
-  padding: 1rem 0;
-  background: none;
-  border: none;
-  border-bottom: 3px solid transparent;
-  color: var(--text-light);
-  font-size: 1rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: color 0.2s ease;
-}
-
-.tab:hover {
-  color: var(--primary-blue);
-}
-
-.tab.active {
-  color: var(--primary-blue);
-  border-bottom-color: var(--primary-blue);
-}
-
-/* --- Cards & Panels --- */
-
-.card {
-  background: var(--white);
-  border-radius: var(--radius);
-  border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-sm);
-  padding: 1.5rem;
-  margin-bottom: 1.5rem;
-}
-
-.card h2, .card h3 {
-  margin-top: 0;
-  color: var(--text-dark);
-}
-
-/* --- Forms & Inputs --- */
-
-.form-group {
-  margin-bottom: 1rem;
-}
-
-.label {
-  display: block;
-  margin-bottom: 0.5rem;
-  font-weight: 600;
-  color: var(--text-dark);
-  font-size: 0.9rem;
-}
-
-input, textarea, select {
-  width: 100%;
-  padding: 0.75rem;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  font-size: 1rem;
-  transition: border-color 0.2s;
-  box-sizing: border-box;
-}
-
-input:focus, textarea:focus {
-  outline: none;
-  border-color: var(--primary-blue);
-  box-shadow: 0 0 0 3px rgba(0, 125, 195, 0.1);
-}
-
-button.primary {
-  background-color: var(--primary-blue);
-  color: var(--white);
-  border: none;
-  padding: 0.75rem 1.5rem;
-  border-radius: var(--radius);
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-button.primary:hover {
-  background-color: var(--secondary-blue);
-}
-
-button.secondary {
-  background-color: var(--white);
-  color: var(--text-dark);
-  border: 1px solid var(--border-color);
-  padding: 0.75rem 1.5rem;
-  border-radius: var(--radius);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-button.secondary:hover {
-  background-color: #F8FAFC;
-  border-color: #CBD5E0;
-}
-
-button.danger {
-  background-color: #FFF5F5;
-  color: #C53030;
-  border: 1px solid #FED7D7;
-}
-
-button.danger:hover {
-  background-color: #FED7D7;
-}
-
-/* --- Driver Manager Layout --- */
-
-.manager-container {
-  display: grid;
-  grid-template-columns: 300px 1fr;
-  gap: 1.5rem;
-  height: calc(100vh - 140px); /* Fill remaining space */
-}
-
-/* Sidebar List */
-.sidebar {
-  background: var(--white);
-  border-radius: var(--radius);
-  border: 1px solid var(--border-color);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.sidebar-header {
-  padding: 1rem;
-  border-bottom: 1px solid var(--border-color);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: #FAFAFA;
-}
-
-.search-container {
-  padding: 0.75rem;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.driver-list {
-  flex: 1;
-  overflow-y: auto;
-}
-
-.driver-item {
-  padding: 1rem;
-  border-bottom: 1px solid var(--border-color);
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.driver-item:hover {
-  background-color: #F7FAFC;
-}
-
-.driver-item.selected {
-  background-color: #EBF8FF;
-  border-left: 4px solid var(--primary-blue);
-}
-
-.driver-item strong {
-  display: block;
-  font-size: 1rem;
-}
-
-.driver-item small {
-  color: var(--text-light);
-}
-
-/* Main Panel */
-.details-panel {
-  overflow-y: auto;
-}
-
-.details-header {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  margin-bottom: 1.5rem;
-}
-
-.tag-badge {
-  background: var(--primary-blue);
-  color: var(--white);
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.85rem;
-  font-weight: 700;
-  font-family: monospace;
-}
-
-/* Tags/Assignments */
-.tags-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 1rem;
-}
-
-.tour-tag {
-  background: #EDF2F7;
-  color: var(--text-dark);
-  padding: 0.5rem 0.75rem;
-  border-radius: 20px;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.9rem;
-  border: 1px solid #E2E8F0;
-}
-
-.remove-tag-btn {
-  background: none;
-  border: none;
-  color: #A0AEC0;
-  cursor: pointer;
-  padding: 0;
-  font-size: 1.1rem;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-}
-
-.remove-tag-btn:hover {
-  color: #E53E3E;
-}
-
-/* --- Login Screen --- */
-
-.login-page {
-  height: 100vh;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-}
-
-.login-box {
-  background: var(--white);
-  padding: 3rem;
-  border-radius: var(--radius);
-  box-shadow: 0 10px 25px rgba(0,0,0,0.1);
-  width: 100%;
-  max-width: 400px;
-  text-align: center;
-}
-
-.login-box h1 {
-  color: var(--primary-blue);
-  margin-bottom: 2rem;
-}
-
-/* --- Responsive --- */
+/* Responsive adjustments for Mantine components */
 @media (max-width: 768px) {
-  .manager-container {
-    grid-template-columns: 1fr; /* Stack sidebar and detail on mobile */
-    height: auto;
+  .mantine-AppShell-main {
+    padding: 12px !important;
   }
-  
-  .sidebar {
-    height: 300px; /* Fixed height for list on mobile */
+}
+
+/* Custom transition for interactive elements */
+.interactive-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.interactive-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Status indicator animations */
+.status-online::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #40c057;
+  margin-right: 8px;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(64, 192, 87, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(64, 192, 87, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(64, 192, 87, 0);
+  }
+}
+
+/* Loading skeleton animation */
+.skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: skeleton-loading 1.5s infinite;
+}
+
+@keyframes skeleton-loading {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Tour tag styles */
+.tour-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background-color: #e7f5ff;
+  color: #1971c2;
+  border-radius: 20px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: 1px solid #a5d8ff;
+  transition: all 0.15s ease;
+}
+
+.tour-tag:hover {
+  background-color: #d0ebff;
+}
+
+/* Badge enhancements */
+.badge-active {
+  background: linear-gradient(135deg, #40c057, #2f9e44);
+}
+
+.badge-inactive {
+  background: linear-gradient(135deg, #868e96, #495057);
+}
+
+/* Table row hover effect */
+.table-row-clickable {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.table-row-clickable:hover {
+  background-color: rgba(0, 125, 195, 0.05);
+}
+
+/* Form field focus enhancements */
+.mantine-TextInput-input:focus,
+.mantine-PasswordInput-input:focus,
+.mantine-Textarea-input:focus,
+.mantine-Select-input:focus {
+  border-color: #007DC3;
+  box-shadow: 0 0 0 3px rgba(0, 125, 195, 0.15);
+}
+
+/* Button hover effects */
+.btn-gradient {
+  background: linear-gradient(135deg, #007DC3, #0066a8);
+  transition: all 0.2s ease;
+}
+
+.btn-gradient:hover {
+  background: linear-gradient(135deg, #0066a8, #005a8f);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 125, 195, 0.3);
+}
+
+/* Card header styles */
+.card-header {
+  border-bottom: 1px solid #e9ecef;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+}
+
+/* Empty state styling */
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+  color: #868e96;
+}
+
+.empty-state-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+/* Dashboard stat card hover */
+.stat-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+}
+
+/* Sidebar navigation active state enhancement */
+.nav-item-active {
+  background-color: rgba(0, 125, 195, 0.1);
+  border-left: 3px solid #007DC3;
+}
+
+/* Modal overlay */
+.modal-overlay {
+  backdrop-filter: blur(4px);
+}
+
+/* Toast notification positioning */
+.mantine-Notifications-root {
+  z-index: 9999;
+}
+
+/* Print optimization */
+@media print {
+  .mantine-AppShell-navbar,
+  .mantine-AppShell-header {
+    display: none;
+  }
+
+  .mantine-AppShell-main {
+    padding: 0 !important;
+    margin: 0 !important;
   }
 }
