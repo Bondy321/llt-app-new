@@ -2,30 +2,33 @@
  * Tours Manager Component
  *
  * A comprehensive tour management system that integrates with Firebase Realtime Database.
- * Provides full CRUD operations, templates, bulk operations, and real-time sync.
+ * Matches the existing Firebase tour data structure.
  *
- * FEATURES:
- * - Create new tours (manual or from templates)
- * - Edit existing tours
- * - Delete tours with confirmation
- * - Assign/unassign drivers
- * - View tour details
- * - Filter and search tours
- * - Grid and table view modes
- * - Bulk import/export (CSV)
- * - Real-time sync with Firebase
+ * FIREBASE DATA STRUCTURE:
+ * ========================
+ * tours/{tourId}:
+ *   - name: string
+ *   - tourCode: string (e.g., "5209L 16")
+ *   - days: number
+ *   - startDate: string (DD/MM/YYYY)
+ *   - endDate: string (DD/MM/YYYY)
+ *   - isActive: boolean
+ *   - driverName: string ("TBA" or driver name)
+ *   - driverPhone: string
+ *   - maxParticipants: number
+ *   - currentParticipants: number
+ *   - pickupPoints: [{location, time}]
+ *   - itinerary: {title, days: [{day, title, activities: [{description, time}]}]}
  *
  * HOW TO ADD A NEW TOUR:
  * =====================
  * Method 1: Click "Add Tour" button to open the creation modal
  * Method 2: Use "Quick Create" with pre-defined templates
  * Method 3: Import tours from CSV file
- *
- * All tours are stored in Firebase Realtime Database at path: /tours/{tourId}
  */
 
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { ref, onValue, update } from 'firebase/database';
+import { ref, onValue } from 'firebase/database';
 import { db } from '../firebase';
 import { notifications } from '@mantine/notifications';
 import {
@@ -63,11 +66,11 @@ import {
   Progress,
   Timeline,
   Collapse,
-  Accordion,
   CopyButton,
   Code,
   Indicator,
-  Kbd,
+  Switch,
+  Accordion,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
@@ -92,30 +95,20 @@ import {
   IconUpload,
   IconTemplate,
   IconClock,
-  IconCurrencyPound,
   IconRoute,
-  IconMountain,
-  IconCompass,
-  IconBuilding,
-  IconHistory,
   IconEye,
   IconAlertCircle,
   IconCircleCheck,
   IconPlayerPlay,
-  IconPlayerStop,
   IconInfoCircle,
   IconNotes,
-  IconClipboard,
   IconDatabaseExport,
-  IconDatabaseImport,
-  IconSparkles,
   IconChevronDown,
   IconChevronRight,
-  IconMapPinFilled,
+  IconCalendarEvent,
+  IconListDetails,
 } from '@tabler/icons-react';
 import {
-  TOUR_TYPES,
-  TOUR_STATUSES,
   DEFAULT_TOUR,
   TOUR_TEMPLATES,
   createTour,
@@ -128,34 +121,14 @@ import {
   exportToursToCSV,
   parseCSVToTours,
   bulkCreateTours,
+  ddmmyyyyToInputFormat,
+  inputFormatToDDMMYYYY,
 } from '../services/tourService';
 
-// Get icon for tour type
-const getTourTypeIcon = (type) => {
-  switch (type) {
-    case 'scenic': return IconMountain;
-    case 'adventure': return IconCompass;
-    case 'city': return IconBuilding;
-    case 'historical': return IconHistory;
-    case 'wildlife': return IconRoute;
-    default: return IconMap;
-  }
-};
-
-// Format duration from minutes
-const formatDuration = (minutes) => {
-  if (!minutes) return '-';
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  if (hours === 0) return `${mins}m`;
-  if (mins === 0) return `${hours}h`;
-  return `${hours}h ${mins}m`;
-};
-
-// Format price
-const formatPrice = (price) => {
-  if (!price) return 'Free';
-  return `£${price.toFixed(2)}`;
+// Format date from DD/MM/YYYY to readable format
+const formatDate = (dateStr) => {
+  if (!dateStr) return '-';
+  return dateStr; // Already in DD/MM/YYYY format
 };
 
 // Tour Card Component for grid view
@@ -195,7 +168,7 @@ function TourCard({ tourId, tour, drivers, onEdit, onDelete, onDuplicate, onView
 
   const handleUnassign = async () => {
     try {
-      await unassignDriver(tourId, tour.driverId);
+      await unassignDriver(tourId);
       notifications.show({
         title: 'Driver Unassigned',
         message: `Tour ${tourId} is now unassigned`,
@@ -211,20 +184,18 @@ function TourCard({ tourId, tour, drivers, onEdit, onDelete, onDuplicate, onView
   };
 
   const isAssigned = tour.driverName && tour.driverName !== 'TBA';
-  const TourTypeIcon = getTourTypeIcon(tour.tourType);
-  const tourType = TOUR_TYPES[tour.tourType] || TOUR_TYPES.custom;
-  const tourStatus = TOUR_STATUSES[tour.status] || TOUR_STATUSES.scheduled;
+  const capacityPercent = ((tour.currentParticipants || 0) / (tour.maxParticipants || 53)) * 100;
 
   return (
     <>
       <Card shadow="sm" padding="lg" radius="md" withBorder className="interactive-card">
         <Group justify="space-between" mb="xs">
           <Group gap="xs">
-            <Badge variant="light" color={tourType.color} leftSection={<TourTypeIcon size={12} />}>
-              {tourType.label}
+            <Badge variant="light" color={tour.isActive ? 'green' : 'gray'}>
+              {tour.isActive ? 'Active' : 'Inactive'}
             </Badge>
-            <Badge variant="light" color={tourStatus.color}>
-              {tourStatus.label}
+            <Badge variant="light" color="blue">
+              {tour.days || 1} Day{(tour.days || 1) > 1 ? 's' : ''}
             </Badge>
           </Group>
           <Menu shadow="md" width={200}>
@@ -278,28 +249,17 @@ function TourCard({ tourId, tour, drivers, onEdit, onDelete, onDuplicate, onView
             <Text fw={600} size="lg" truncate="end">
               {tour.name || tourId}
             </Text>
-            <Text size="xs" c="dimmed" truncate="end">{tourId}</Text>
+            <Text size="xs" c="dimmed" truncate="end">{tour.tourCode || tourId}</Text>
           </div>
         </Group>
 
         <Stack gap="xs" mb="md">
-          {tour.departureTime && (
-            <Group gap="xs">
-              <IconCalendar size={14} color="gray" />
-              <Text size="sm" c="dimmed">
-                {new Date(tour.departureTime).toLocaleString('en-GB', {
-                  dateStyle: 'short',
-                  timeStyle: 'short',
-                })}
-              </Text>
-            </Group>
-          )}
-          {tour.departureLocation && (
-            <Group gap="xs">
-              <IconMapPin size={14} color="gray" />
-              <Text size="sm" c="dimmed" truncate="end">{tour.departureLocation}</Text>
-            </Group>
-          )}
+          <Group gap="xs">
+            <IconCalendar size={14} color="gray" />
+            <Text size="sm" c="dimmed">
+              {tour.startDate || '-'} {tour.endDate && tour.startDate !== tour.endDate ? `- ${tour.endDate}` : ''}
+            </Text>
+          </Group>
           <Group gap="xs">
             <IconUser size={14} color="gray" />
             <Text size="sm" c={isAssigned ? 'dark' : 'dimmed'}>
@@ -307,28 +267,25 @@ function TourCard({ tourId, tour, drivers, onEdit, onDelete, onDuplicate, onView
             </Text>
             {isAssigned && <Badge size="xs" color="green">Assigned</Badge>}
           </Group>
-          <Group gap="md">
-            <Group gap="xs">
-              <IconClock size={14} color="gray" />
-              <Text size="sm" c="dimmed">{formatDuration(tour.estimatedDuration)}</Text>
-            </Group>
-            <Group gap="xs">
-              <IconUsers size={14} color="gray" />
-              <Text size="sm" c="dimmed">{tour.currentPassengers || 0}/{tour.maxPassengers || 45}</Text>
-            </Group>
-            <Group gap="xs">
-              <IconCurrencyPound size={14} color="gray" />
-              <Text size="sm" c="dimmed">{formatPrice(tour.price)}</Text>
-            </Group>
+          <Group gap="xs">
+            <IconUsers size={14} color="gray" />
+            <Text size="sm" c="dimmed">
+              {tour.currentParticipants || 0} / {tour.maxParticipants || 53} participants
+            </Text>
           </Group>
+          <Progress value={capacityPercent} color={capacityPercent > 90 ? 'red' : capacityPercent > 70 ? 'orange' : 'blue'} size="sm" />
+          {tour.pickupPoints && tour.pickupPoints.length > 0 && (
+            <Group gap="xs">
+              <IconMapPin size={14} color="gray" />
+              <Text size="sm" c="dimmed" truncate="end">
+                {tour.pickupPoints.length} pickup point{tour.pickupPoints.length > 1 ? 's' : ''}
+              </Text>
+            </Group>
+          )}
         </Stack>
 
         <Group grow>
-          <Button
-            variant="light"
-            size="sm"
-            onClick={() => onViewDetails(tourId)}
-          >
+          <Button variant="light" size="sm" onClick={() => onViewDetails(tourId)}>
             View Details
           </Button>
           <Button
@@ -386,11 +343,11 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
   const [activeTab, setActiveTab] = useState('manual');
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({ ...DEFAULT_TOUR });
-  const [stopsInput, setStopsInput] = useState('');
+  const [pickupPointsText, setPickupPointsText] = useState('');
 
   const resetForm = () => {
     setFormData({ ...DEFAULT_TOUR });
-    setStopsInput('');
+    setPickupPointsText('');
     setActiveTab('manual');
   };
 
@@ -414,12 +371,40 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
       return;
     }
 
+    if (!formData.tourCode.trim()) {
+      notifications.show({
+        title: 'Missing Information',
+        message: 'Please enter a tour code',
+        color: 'red',
+      });
+      return;
+    }
+
     setLoading(true);
     try {
+      // Parse pickup points from text
+      const pickupPoints = pickupPointsText
+        .split('\n')
+        .filter(line => line.trim())
+        .map(line => {
+          const match = line.match(/^(\d{1,2}:\d{2})\s*[-–]\s*(.+)$/);
+          if (match) {
+            return { time: match[1], location: match[2].trim() };
+          }
+          return { time: '', location: line.trim() };
+        });
+
       const tourData = {
         ...formData,
-        stops: stopsInput ? stopsInput.split(',').map(s => s.trim()).filter(Boolean) : [],
+        startDate: inputFormatToDDMMYYYY(formData.startDate),
+        endDate: inputFormatToDDMMYYYY(formData.endDate),
+        pickupPoints,
+        itinerary: {
+          title: formData.name,
+          days: []
+        }
       };
+
       const result = await createTour(tourData, userEmail);
       notifications.show({
         title: 'Tour Created',
@@ -489,89 +474,24 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
         <Tabs.Panel value="manual">
           <form onSubmit={handleCreateManual}>
             <Stack gap="md">
-              <TextInput
-                label="Tour Name"
-                placeholder="e.g., Loch Lomond Scenic Tour"
-                value={formData.name}
-                onChange={(e) => handleInputChange('name', e.target.value)}
-                leftSection={<IconMap size={16} />}
-                required
-              />
-
-              <Textarea
-                label="Description"
-                placeholder="Describe the tour experience..."
-                value={formData.description}
-                onChange={(e) => handleInputChange('description', e.target.value)}
-                minRows={2}
-              />
-
               <Grid>
-                <Grid.Col span={6}>
-                  <Select
-                    label="Tour Type"
-                    data={Object.entries(TOUR_TYPES).map(([key, val]) => ({
-                      value: key,
-                      label: val.label,
-                    }))}
-                    value={formData.tourType}
-                    onChange={(val) => handleInputChange('tourType', val)}
-                    leftSection={<IconCompass size={16} />}
-                  />
-                </Grid.Col>
-                <Grid.Col span={6}>
-                  <Select
-                    label="Status"
-                    data={Object.entries(TOUR_STATUSES).map(([key, val]) => ({
-                      value: key,
-                      label: val.label,
-                    }))}
-                    value={formData.status}
-                    onChange={(val) => handleInputChange('status', val)}
-                  />
-                </Grid.Col>
-              </Grid>
-
-              <Grid>
-                <Grid.Col span={6}>
+                <Grid.Col span={8}>
                   <TextInput
-                    label="Departure Time"
-                    type="datetime-local"
-                    value={formData.departureTime}
-                    onChange={(e) => handleInputChange('departureTime', e.target.value)}
-                    leftSection={<IconCalendar size={16} />}
+                    label="Tour Name"
+                    placeholder="e.g., Coronation Street Experience"
+                    value={formData.name}
+                    onChange={(e) => handleInputChange('name', e.target.value)}
+                    leftSection={<IconMap size={16} />}
+                    required
                   />
                 </Grid.Col>
-                <Grid.Col span={6}>
-                  <NumberInput
-                    label="Duration (minutes)"
-                    placeholder="120"
-                    value={formData.estimatedDuration}
-                    onChange={(val) => handleInputChange('estimatedDuration', val)}
-                    min={15}
-                    max={1440}
-                    leftSection={<IconClock size={16} />}
-                  />
-                </Grid.Col>
-              </Grid>
-
-              <Grid>
-                <Grid.Col span={6}>
+                <Grid.Col span={4}>
                   <TextInput
-                    label="Departure Location"
-                    placeholder="e.g., Glasgow Central Station"
-                    value={formData.departureLocation}
-                    onChange={(e) => handleInputChange('departureLocation', e.target.value)}
-                    leftSection={<IconMapPin size={16} />}
-                  />
-                </Grid.Col>
-                <Grid.Col span={6}>
-                  <TextInput
-                    label="Arrival Location"
-                    placeholder="e.g., Glasgow Central Station"
-                    value={formData.arrivalLocation}
-                    onChange={(e) => handleInputChange('arrivalLocation', e.target.value)}
-                    leftSection={<IconMapPinFilled size={16} />}
+                    label="Tour Code"
+                    placeholder="e.g., 5209L 16"
+                    value={formData.tourCode}
+                    onChange={(e) => handleInputChange('tourCode', e.target.value)}
+                    required
                   />
                 </Grid.Col>
               </Grid>
@@ -579,55 +499,73 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
               <Grid>
                 <Grid.Col span={4}>
                   <NumberInput
-                    label="Max Passengers"
-                    value={formData.maxPassengers}
-                    onChange={(val) => handleInputChange('maxPassengers', val)}
+                    label="Days"
+                    value={formData.days}
+                    onChange={(val) => handleInputChange('days', val)}
+                    min={1}
+                    max={30}
+                  />
+                </Grid.Col>
+                <Grid.Col span={4}>
+                  <TextInput
+                    label="Start Date"
+                    type="date"
+                    value={ddmmyyyyToInputFormat(formData.startDate)}
+                    onChange={(e) => handleInputChange('startDate', e.target.value)}
+                    leftSection={<IconCalendar size={16} />}
+                  />
+                </Grid.Col>
+                <Grid.Col span={4}>
+                  <TextInput
+                    label="End Date"
+                    type="date"
+                    value={ddmmyyyyToInputFormat(formData.endDate)}
+                    onChange={(e) => handleInputChange('endDate', e.target.value)}
+                    leftSection={<IconCalendar size={16} />}
+                  />
+                </Grid.Col>
+              </Grid>
+
+              <Grid>
+                <Grid.Col span={6}>
+                  <NumberInput
+                    label="Max Participants"
+                    value={formData.maxParticipants}
+                    onChange={(val) => handleInputChange('maxParticipants', val)}
                     min={1}
                     max={100}
                     leftSection={<IconUsers size={16} />}
                   />
                 </Grid.Col>
-                <Grid.Col span={4}>
+                <Grid.Col span={6}>
                   <NumberInput
-                    label="Current Passengers"
-                    value={formData.currentPassengers}
-                    onChange={(val) => handleInputChange('currentPassengers', val)}
+                    label="Current Participants"
+                    value={formData.currentParticipants}
+                    onChange={(val) => handleInputChange('currentParticipants', val)}
                     min={0}
-                    max={formData.maxPassengers}
-                  />
-                </Grid.Col>
-                <Grid.Col span={4}>
-                  <NumberInput
-                    label="Price (£)"
-                    value={formData.price}
-                    onChange={(val) => handleInputChange('price', val)}
-                    min={0}
-                    decimalScale={2}
-                    leftSection={<IconCurrencyPound size={16} />}
+                    max={formData.maxParticipants}
                   />
                 </Grid.Col>
               </Grid>
 
-              <TextInput
-                label="Tour Stops"
-                placeholder="Stop 1, Stop 2, Stop 3 (comma separated)"
-                value={stopsInput}
-                onChange={(e) => setStopsInput(e.target.value)}
-                leftSection={<IconRoute size={16} />}
-                description="Enter stops separated by commas"
+              <Switch
+                label="Tour is Active"
+                checked={formData.isActive}
+                onChange={(e) => handleInputChange('isActive', e.currentTarget.checked)}
               />
 
               <Textarea
-                label="Notes"
-                placeholder="Additional notes or special instructions..."
-                value={formData.notes}
-                onChange={(e) => handleInputChange('notes', e.target.value)}
-                minRows={2}
+                label="Pickup Points"
+                placeholder="Enter one per line in format: HH:MM - Location&#10;e.g., 06:30 - Dundee - Seagate Bus Station"
+                value={pickupPointsText}
+                onChange={(e) => setPickupPointsText(e.target.value)}
+                minRows={4}
+                description="Format: TIME - LOCATION (one per line)"
               />
 
               <Alert icon={<IconInfoCircle size={16} />} color="blue" variant="light">
-                The tour will be created with status "Scheduled" and no driver assigned.
-                You can assign a driver after creation.
+                The tour will be created with driver set to "TBA". You can assign a driver after creation.
+                Itinerary details can be edited after the tour is created.
               </Alert>
 
               <Group justify="flex-end" mt="md">
@@ -648,49 +586,41 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
             </Text>
 
             <SimpleGrid cols={1} spacing="md">
-              {Object.entries(TOUR_TEMPLATES).map(([key, template]) => {
-                const TourTypeIcon = getTourTypeIcon(template.tourType);
-                const tourType = TOUR_TYPES[template.tourType];
-
-                return (
-                  <Paper
-                    key={key}
-                    p="md"
-                    radius="md"
-                    withBorder
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => handleCreateFromTemplate(key)}
-                  >
-                    <Group justify="space-between">
-                      <Group gap="md">
-                        <ThemeIcon color={tourType.color} variant="light" size="xl" radius="md">
-                          <TourTypeIcon size={24} />
-                        </ThemeIcon>
-                        <div>
-                          <Text fw={600}>{template.name}</Text>
-                          <Text size="xs" c="dimmed" lineClamp={1}>
-                            {template.description}
-                          </Text>
-                          <Group gap="xs" mt={4}>
-                            <Badge size="xs" variant="light" color={tourType.color}>
-                              {tourType.label}
-                            </Badge>
-                            <Badge size="xs" variant="light">
-                              {formatDuration(template.estimatedDuration)}
-                            </Badge>
-                            <Badge size="xs" variant="light" color="green">
-                              {formatPrice(template.price)}
-                            </Badge>
-                          </Group>
-                        </div>
-                      </Group>
-                      <ActionIcon variant="light" size="lg" color="brand">
-                        <IconChevronRight size={18} />
-                      </ActionIcon>
+              {Object.entries(TOUR_TEMPLATES).map(([key, template]) => (
+                <Paper
+                  key={key}
+                  p="md"
+                  radius="md"
+                  withBorder
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => handleCreateFromTemplate(key)}
+                >
+                  <Group justify="space-between">
+                    <Group gap="md">
+                      <ThemeIcon color="brand" variant="light" size="xl" radius="md">
+                        <IconMap size={24} />
+                      </ThemeIcon>
+                      <div>
+                        <Text fw={600}>{template.name}</Text>
+                        <Group gap="xs" mt={4}>
+                          <Badge size="xs" variant="light">
+                            {template.days} Day{template.days > 1 ? 's' : ''}
+                          </Badge>
+                          <Badge size="xs" variant="light" color="blue">
+                            {template.maxParticipants} max
+                          </Badge>
+                          <Badge size="xs" variant="light" color="green">
+                            {template.pickupPoints?.length || 0} pickups
+                          </Badge>
+                        </Group>
+                      </div>
                     </Group>
-                  </Paper>
-                );
-              })}
+                    <ActionIcon variant="light" size="lg" color="brand">
+                      <IconChevronRight size={18} />
+                    </ActionIcon>
+                  </Group>
+                </Paper>
+              ))}
             </SimpleGrid>
 
             {loading && (
@@ -709,12 +639,16 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
 function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({ ...DEFAULT_TOUR });
-  const [stopsInput, setStopsInput] = useState('');
+  const [pickupPointsText, setPickupPointsText] = useState('');
 
   useEffect(() => {
     if (tour) {
       setFormData({ ...DEFAULT_TOUR, ...tour });
-      setStopsInput(tour.stops?.join(', ') || '');
+      // Convert pickup points to text format
+      const ppText = (tour.pickupPoints || [])
+        .map(pp => `${pp.time} - ${pp.location}`)
+        .join('\n');
+      setPickupPointsText(ppText);
     }
   }, [tour]);
 
@@ -735,13 +669,29 @@ function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
 
     setLoading(true);
     try {
+      // Parse pickup points from text
+      const pickupPoints = pickupPointsText
+        .split('\n')
+        .filter(line => line.trim())
+        .map(line => {
+          const match = line.match(/^(\d{1,2}:\d{2})\s*[-–]\s*(.+)$/);
+          if (match) {
+            return { time: match[1], location: match[2].trim() };
+          }
+          return { time: '', location: line.trim() };
+        });
+
       const updateData = {
-        ...formData,
-        stops: stopsInput ? stopsInput.split(',').map(s => s.trim()).filter(Boolean) : [],
+        name: formData.name,
+        tourCode: formData.tourCode,
+        days: formData.days,
+        startDate: formData.startDate?.includes('-') ? inputFormatToDDMMYYYY(formData.startDate) : formData.startDate,
+        endDate: formData.endDate?.includes('-') ? inputFormatToDDMMYYYY(formData.endDate) : formData.endDate,
+        isActive: formData.isActive,
+        maxParticipants: formData.maxParticipants,
+        currentParticipants: formData.currentParticipants,
+        pickupPoints,
       };
-      // Remove fields that shouldn't be updated
-      delete updateData.createdAt;
-      delete updateData.createdBy;
 
       await updateTour(tourId, updateData);
       notifications.show({
@@ -795,89 +745,23 @@ function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
             </Group>
           </Paper>
 
-          <TextInput
-            label="Tour Name"
-            placeholder="e.g., Loch Lomond Scenic Tour"
-            value={formData.name}
-            onChange={(e) => handleInputChange('name', e.target.value)}
-            leftSection={<IconMap size={16} />}
-            required
-          />
-
-          <Textarea
-            label="Description"
-            placeholder="Describe the tour experience..."
-            value={formData.description}
-            onChange={(e) => handleInputChange('description', e.target.value)}
-            minRows={2}
-          />
-
           <Grid>
-            <Grid.Col span={6}>
-              <Select
-                label="Tour Type"
-                data={Object.entries(TOUR_TYPES).map(([key, val]) => ({
-                  value: key,
-                  label: val.label,
-                }))}
-                value={formData.tourType}
-                onChange={(val) => handleInputChange('tourType', val)}
-                leftSection={<IconCompass size={16} />}
-              />
-            </Grid.Col>
-            <Grid.Col span={6}>
-              <Select
-                label="Status"
-                data={Object.entries(TOUR_STATUSES).map(([key, val]) => ({
-                  value: key,
-                  label: val.label,
-                }))}
-                value={formData.status}
-                onChange={(val) => handleInputChange('status', val)}
-              />
-            </Grid.Col>
-          </Grid>
-
-          <Grid>
-            <Grid.Col span={6}>
+            <Grid.Col span={8}>
               <TextInput
-                label="Departure Time"
-                type="datetime-local"
-                value={formData.departureTime}
-                onChange={(e) => handleInputChange('departureTime', e.target.value)}
-                leftSection={<IconCalendar size={16} />}
+                label="Tour Name"
+                placeholder="e.g., Coronation Street Experience"
+                value={formData.name}
+                onChange={(e) => handleInputChange('name', e.target.value)}
+                leftSection={<IconMap size={16} />}
+                required
               />
             </Grid.Col>
-            <Grid.Col span={6}>
-              <NumberInput
-                label="Duration (minutes)"
-                placeholder="120"
-                value={formData.estimatedDuration}
-                onChange={(val) => handleInputChange('estimatedDuration', val)}
-                min={15}
-                max={1440}
-                leftSection={<IconClock size={16} />}
-              />
-            </Grid.Col>
-          </Grid>
-
-          <Grid>
-            <Grid.Col span={6}>
+            <Grid.Col span={4}>
               <TextInput
-                label="Departure Location"
-                placeholder="e.g., Glasgow Central Station"
-                value={formData.departureLocation}
-                onChange={(e) => handleInputChange('departureLocation', e.target.value)}
-                leftSection={<IconMapPin size={16} />}
-              />
-            </Grid.Col>
-            <Grid.Col span={6}>
-              <TextInput
-                label="Arrival Location"
-                placeholder="e.g., Glasgow Central Station"
-                value={formData.arrivalLocation}
-                onChange={(e) => handleInputChange('arrivalLocation', e.target.value)}
-                leftSection={<IconMapPinFilled size={16} />}
+                label="Tour Code"
+                placeholder="e.g., 5209L 16"
+                value={formData.tourCode}
+                onChange={(e) => handleInputChange('tourCode', e.target.value)}
               />
             </Grid.Col>
           </Grid>
@@ -885,50 +769,68 @@ function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
           <Grid>
             <Grid.Col span={4}>
               <NumberInput
-                label="Max Passengers"
-                value={formData.maxPassengers}
-                onChange={(val) => handleInputChange('maxPassengers', val)}
+                label="Days"
+                value={formData.days}
+                onChange={(val) => handleInputChange('days', val)}
+                min={1}
+                max={30}
+              />
+            </Grid.Col>
+            <Grid.Col span={4}>
+              <TextInput
+                label="Start Date"
+                type="date"
+                value={ddmmyyyyToInputFormat(formData.startDate)}
+                onChange={(e) => handleInputChange('startDate', e.target.value)}
+                leftSection={<IconCalendar size={16} />}
+              />
+            </Grid.Col>
+            <Grid.Col span={4}>
+              <TextInput
+                label="End Date"
+                type="date"
+                value={ddmmyyyyToInputFormat(formData.endDate)}
+                onChange={(e) => handleInputChange('endDate', e.target.value)}
+                leftSection={<IconCalendar size={16} />}
+              />
+            </Grid.Col>
+          </Grid>
+
+          <Grid>
+            <Grid.Col span={6}>
+              <NumberInput
+                label="Max Participants"
+                value={formData.maxParticipants}
+                onChange={(val) => handleInputChange('maxParticipants', val)}
                 min={1}
                 max={100}
                 leftSection={<IconUsers size={16} />}
               />
             </Grid.Col>
-            <Grid.Col span={4}>
+            <Grid.Col span={6}>
               <NumberInput
-                label="Current Passengers"
-                value={formData.currentPassengers}
-                onChange={(val) => handleInputChange('currentPassengers', val)}
+                label="Current Participants"
+                value={formData.currentParticipants}
+                onChange={(val) => handleInputChange('currentParticipants', val)}
                 min={0}
-                max={formData.maxPassengers}
-              />
-            </Grid.Col>
-            <Grid.Col span={4}>
-              <NumberInput
-                label="Price (£)"
-                value={formData.price}
-                onChange={(val) => handleInputChange('price', val)}
-                min={0}
-                decimalScale={2}
-                leftSection={<IconCurrencyPound size={16} />}
+                max={formData.maxParticipants}
               />
             </Grid.Col>
           </Grid>
 
-          <TextInput
-            label="Tour Stops"
-            placeholder="Stop 1, Stop 2, Stop 3 (comma separated)"
-            value={stopsInput}
-            onChange={(e) => setStopsInput(e.target.value)}
-            leftSection={<IconRoute size={16} />}
-            description="Enter stops separated by commas"
+          <Switch
+            label="Tour is Active"
+            checked={formData.isActive}
+            onChange={(e) => handleInputChange('isActive', e.currentTarget.checked)}
           />
 
           <Textarea
-            label="Notes"
-            placeholder="Additional notes or special instructions..."
-            value={formData.notes}
-            onChange={(e) => handleInputChange('notes', e.target.value)}
-            minRows={2}
+            label="Pickup Points"
+            placeholder="Enter one per line in format: HH:MM - Location"
+            value={pickupPointsText}
+            onChange={(e) => setPickupPointsText(e.target.value)}
+            minRows={4}
+            description="Format: TIME - LOCATION (one per line)"
           />
 
           <Group justify="flex-end" mt="md">
@@ -988,10 +890,6 @@ function DeleteTourModal({ opened, onClose, tourId, tourName, onConfirm }) {
           </Group>
         </Paper>
 
-        <Text size="sm">
-          Are you sure you want to delete this tour? This will also remove any driver assignments.
-        </Text>
-
         <Group justify="flex-end" mt="md">
           <Button variant="light" onClick={onClose}>Cancel</Button>
           <Button color="red" loading={loading} onClick={handleDelete} leftSection={<IconTrash size={16} />}>
@@ -1008,27 +906,9 @@ function TourDetailsModal({ opened, onClose, tourId, tour, drivers }) {
   if (!tour) return null;
 
   const isAssigned = tour.driverName && tour.driverName !== 'TBA';
-  const TourTypeIcon = getTourTypeIcon(tour.tourType);
-  const tourType = TOUR_TYPES[tour.tourType] || TOUR_TYPES.custom;
-  const tourStatus = TOUR_STATUSES[tour.status] || TOUR_STATUSES.scheduled;
-  const stops = tour.stops || [];
-
-  const createdDate = tour.createdAt
-    ? new Date(tour.createdAt).toLocaleString('en-GB')
-    : 'Unknown';
-  const updatedDate = tour.updatedAt
-    ? new Date(tour.updatedAt).toLocaleString('en-GB')
-    : 'Never';
-  const departureDate = tour.departureTime
-    ? new Date(tour.departureTime).toLocaleString('en-GB', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    : 'Not scheduled';
+  const pickupPoints = tour.pickupPoints || [];
+  const itinerary = tour.itinerary || { title: '', days: [] };
+  const capacityPercent = ((tour.currentParticipants || 0) / (tour.maxParticipants || 53)) * 100;
 
   return (
     <Modal
@@ -1036,8 +916,8 @@ function TourDetailsModal({ opened, onClose, tourId, tour, drivers }) {
       onClose={onClose}
       title={
         <Group gap="xs">
-          <ThemeIcon color={tourType.color} variant="light" size="md">
-            <TourTypeIcon size={16} />
+          <ThemeIcon color="brand" variant="light" size="md">
+            <IconMap size={16} />
           </ThemeIcon>
           <Text fw={600}>Tour Details</Text>
         </Group>
@@ -1052,7 +932,7 @@ function TourDetailsModal({ opened, onClose, tourId, tour, drivers }) {
             <div>
               <Title order={3}>{tour.name || tourId}</Title>
               <Group gap="xs" mt={4}>
-                <Code>{tourId}</Code>
+                <Code>{tour.tourCode || tourId}</Code>
                 <CopyButton value={tourId}>
                   {({ copied, copy }) => (
                     <Tooltip label={copied ? 'Copied!' : 'Copy ID'}>
@@ -1065,83 +945,33 @@ function TourDetailsModal({ opened, onClose, tourId, tour, drivers }) {
               </Group>
             </div>
             <Stack gap="xs" align="flex-end">
-              <Badge variant="filled" color={tourType.color} leftSection={<TourTypeIcon size={12} />}>
-                {tourType.label}
+              <Badge variant="filled" color={tour.isActive ? 'green' : 'gray'}>
+                {tour.isActive ? 'Active' : 'Inactive'}
               </Badge>
-              <Badge variant="light" color={tourStatus.color}>
-                {tourStatus.label}
+              <Badge variant="light" color="blue">
+                {tour.days || 1} Day{(tour.days || 1) > 1 ? 's' : ''}
               </Badge>
             </Stack>
           </Group>
-
-          {tour.description && (
-            <Text size="sm" c="dimmed">{tour.description}</Text>
-          )}
         </Paper>
 
-        {/* Schedule & Location */}
-        <Paper p="md" radius="md" withBorder>
-          <Text fw={500} mb="sm">Schedule & Location</Text>
-          <SimpleGrid cols={2} spacing="md">
-            <div>
-              <Text size="xs" c="dimmed" tt="uppercase">Departure</Text>
-              <Text size="sm" fw={500}>{departureDate}</Text>
-              <Text size="sm" c="dimmed">{tour.departureLocation || 'Not specified'}</Text>
-            </div>
-            <div>
-              <Text size="xs" c="dimmed" tt="uppercase">Arrival</Text>
-              <Text size="sm" fw={500}>{formatDuration(tour.estimatedDuration)} duration</Text>
-              <Text size="sm" c="dimmed">{tour.arrivalLocation || 'Not specified'}</Text>
-            </div>
-          </SimpleGrid>
-        </Paper>
-
-        {/* Tour Stops */}
-        {stops.length > 0 && (
+        {/* Dates & Capacity */}
+        <SimpleGrid cols={2} spacing="md">
           <Paper p="md" radius="md" withBorder>
-            <Text fw={500} mb="sm">Tour Stops ({stops.length})</Text>
-            <Timeline active={-1} bulletSize={20}>
-              {stops.map((stop, index) => (
-                <Timeline.Item
-                  key={index}
-                  bullet={<IconMapPin size={12} />}
-                  title={stop}
-                >
-                  <Text size="xs" c="dimmed">Stop {index + 1}</Text>
-                </Timeline.Item>
-              ))}
-            </Timeline>
+            <Group gap="xs" mb="xs">
+              <IconCalendarEvent size={16} color="gray" />
+              <Text fw={500}>Dates</Text>
+            </Group>
+            <Text size="sm">Start: {tour.startDate || '-'}</Text>
+            <Text size="sm">End: {tour.endDate || '-'}</Text>
           </Paper>
-        )}
-
-        {/* Capacity & Pricing */}
-        <SimpleGrid cols={3} spacing="md">
-          <Paper p="md" radius="md" withBorder ta="center">
-            <ThemeIcon color="blue" variant="light" size="lg" radius="md" mx="auto" mb="xs">
-              <IconUsers size={20} />
-            </ThemeIcon>
-            <Text size="xl" fw={700}>{tour.currentPassengers || 0}/{tour.maxPassengers || 45}</Text>
-            <Text size="xs" c="dimmed">Passengers</Text>
-            <Progress
-              value={((tour.currentPassengers || 0) / (tour.maxPassengers || 45)) * 100}
-              color="blue"
-              size="sm"
-              mt="xs"
-            />
-          </Paper>
-          <Paper p="md" radius="md" withBorder ta="center">
-            <ThemeIcon color="green" variant="light" size="lg" radius="md" mx="auto" mb="xs">
-              <IconCurrencyPound size={20} />
-            </ThemeIcon>
-            <Text size="xl" fw={700}>{formatPrice(tour.price)}</Text>
-            <Text size="xs" c="dimmed">Per Person</Text>
-          </Paper>
-          <Paper p="md" radius="md" withBorder ta="center">
-            <ThemeIcon color="orange" variant="light" size="lg" radius="md" mx="auto" mb="xs">
-              <IconClock size={20} />
-            </ThemeIcon>
-            <Text size="xl" fw={700}>{formatDuration(tour.estimatedDuration)}</Text>
-            <Text size="xs" c="dimmed">Duration</Text>
+          <Paper p="md" radius="md" withBorder>
+            <Group gap="xs" mb="xs">
+              <IconUsers size={16} color="gray" />
+              <Text fw={500}>Capacity</Text>
+            </Group>
+            <Text size="xl" fw={700}>{tour.currentParticipants || 0} / {tour.maxParticipants || 53}</Text>
+            <Progress value={capacityPercent} color={capacityPercent > 90 ? 'red' : capacityPercent > 70 ? 'orange' : 'blue'} size="sm" mt="xs" />
           </Paper>
         </SimpleGrid>
 
@@ -1160,9 +990,6 @@ function TourDetailsModal({ opened, onClose, tourId, tour, drivers }) {
                   <Text size="sm" c="dimmed">{tour.driverPhone}</Text>
                 </Group>
               )}
-              {tour.driverId && (
-                <Badge size="xs" variant="light" mt={4}>{tour.driverId}</Badge>
-              )}
             </div>
             <Badge variant="dot" color={isAssigned ? 'green' : 'orange'}>
               {isAssigned ? 'Assigned' : 'Unassigned'}
@@ -1170,25 +997,59 @@ function TourDetailsModal({ opened, onClose, tourId, tour, drivers }) {
           </Group>
         </Paper>
 
-        {/* Notes */}
-        {tour.notes && (
+        {/* Pickup Points */}
+        {pickupPoints.length > 0 && (
           <Paper p="md" radius="md" withBorder>
-            <Group gap="xs" mb="sm">
-              <IconNotes size={16} />
-              <Text fw={500}>Notes</Text>
-            </Group>
-            <Text size="sm" c="dimmed">{tour.notes}</Text>
+            <Text fw={500} mb="sm">Pickup Points ({pickupPoints.length})</Text>
+            <Timeline active={-1} bulletSize={20}>
+              {pickupPoints.map((pp, index) => (
+                <Timeline.Item
+                  key={index}
+                  bullet={<IconMapPin size={12} />}
+                  title={
+                    <Group gap="xs">
+                      {pp.time && <Badge size="xs" variant="light">{pp.time}</Badge>}
+                      <Text size="sm">{pp.location}</Text>
+                    </Group>
+                  }
+                />
+              ))}
+            </Timeline>
           </Paper>
         )}
 
-        {/* Metadata */}
-        <Paper p="sm" radius="md" bg="gray.0">
-          <Group justify="space-between">
-            <Text size="xs" c="dimmed">Created: {createdDate}</Text>
-            <Text size="xs" c="dimmed">Updated: {updatedDate}</Text>
-            {tour.createdBy && <Text size="xs" c="dimmed">By: {tour.createdBy}</Text>}
-          </Group>
-        </Paper>
+        {/* Itinerary */}
+        {itinerary.days && itinerary.days.length > 0 && (
+          <Paper p="md" radius="md" withBorder>
+            <Text fw={500} mb="sm">Itinerary: {itinerary.title || tour.name}</Text>
+            <Accordion variant="separated">
+              {itinerary.days.map((day, dayIndex) => (
+                <Accordion.Item key={dayIndex} value={`day-${day.day || dayIndex + 1}`}>
+                  <Accordion.Control>
+                    <Group gap="xs">
+                      <Badge size="sm" variant="light">Day {day.day || dayIndex + 1}</Badge>
+                      <Text size="sm">{day.title || `Day ${day.day || dayIndex + 1} Activities`}</Text>
+                    </Group>
+                  </Accordion.Control>
+                  <Accordion.Panel>
+                    <Stack gap="xs">
+                      {(day.activities || []).map((activity, actIndex) => (
+                        <Group key={actIndex} gap="xs" align="flex-start">
+                          {activity.time && (
+                            <Badge size="xs" variant="light" style={{ minWidth: 50 }}>
+                              {activity.time}
+                            </Badge>
+                          )}
+                          <Text size="sm" style={{ flex: 1 }}>{activity.description}</Text>
+                        </Group>
+                      ))}
+                    </Stack>
+                  </Accordion.Panel>
+                </Accordion.Item>
+              ))}
+            </Accordion>
+          </Paper>
+        )}
 
         <Button variant="light" onClick={onClose} fullWidth>
           Close
@@ -1203,7 +1064,6 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
   const [activeTab, setActiveTab] = useState('export');
   const [importing, setImporting] = useState(false);
   const [importPreview, setImportPreview] = useState([]);
-  const fileInputRef = useRef(null);
 
   const handleExport = () => {
     const csv = exportToursToCSV(tours);
@@ -1328,7 +1188,7 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
         <Tabs.Panel value="import">
           <Stack gap="md">
             <Alert icon={<IconInfoCircle size={16} />} color="orange" variant="light">
-              Import tours from a CSV file. The file should have columns: Name, Type, Status, Departure Time, etc.
+              Import tours from a CSV file. Required columns: Tour Code, Name, Days, Start Date, End Date.
             </Alert>
 
             <FileButton onChange={handleFileSelect} accept=".csv">
@@ -1360,21 +1220,19 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
                     <Table striped highlightOnHover size="sm">
                       <Table.Thead>
                         <Table.Tr>
+                          <Table.Th>Tour Code</Table.Th>
                           <Table.Th>Name</Table.Th>
-                          <Table.Th>Type</Table.Th>
-                          <Table.Th>Location</Table.Th>
+                          <Table.Th>Days</Table.Th>
+                          <Table.Th>Dates</Table.Th>
                         </Table.Tr>
                       </Table.Thead>
                       <Table.Tbody>
                         {importPreview.slice(0, 10).map((tour, index) => (
                           <Table.Tr key={index}>
+                            <Table.Td><Code>{tour.tourCode}</Code></Table.Td>
                             <Table.Td>{tour.name}</Table.Td>
-                            <Table.Td>
-                              <Badge size="xs" variant="light">
-                                {TOUR_TYPES[tour.tourType]?.label || tour.tourType}
-                              </Badge>
-                            </Table.Td>
-                            <Table.Td>{tour.departureLocation || '-'}</Table.Td>
+                            <Table.Td>{tour.days}</Table.Td>
+                            <Table.Td>{tour.startDate}</Table.Td>
                           </Table.Tr>
                         ))}
                       </Table.Tbody>
@@ -1411,7 +1269,6 @@ export default function ToursManager() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
-  const [filterType, setFilterType] = useState('all');
   const [viewMode, setViewMode] = useState('grid');
   const [currentPage, setCurrentPage] = useState(1);
   const [syncStatus, setSyncStatus] = useState('connected');
@@ -1459,21 +1316,20 @@ export default function ToursManager() {
       const matchesSearch =
         id.toLowerCase().includes(searchTerm.toLowerCase()) ||
         (tour.name && tour.name.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (tour.driverName && tour.driverName.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (tour.departureLocation && tour.departureLocation.toLowerCase().includes(searchTerm.toLowerCase()));
+        (tour.tourCode && tour.tourCode.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        (tour.driverName && tour.driverName.toLowerCase().includes(searchTerm.toLowerCase()));
 
       const isAssigned = tour.driverName && tour.driverName !== 'TBA';
       const matchesStatus =
         filterStatus === 'all' ||
         (filterStatus === 'assigned' && isAssigned) ||
         (filterStatus === 'unassigned' && !isAssigned) ||
-        (filterStatus === tour.status);
+        (filterStatus === 'active' && tour.isActive) ||
+        (filterStatus === 'inactive' && !tour.isActive);
 
-      const matchesType = filterType === 'all' || filterType === tour.tourType;
-
-      return matchesSearch && matchesStatus && matchesType;
+      return matchesSearch && matchesStatus;
     });
-  }, [tours, searchTerm, filterStatus, filterType]);
+  }, [tours, searchTerm, filterStatus]);
 
   // Pagination
   const totalPages = Math.ceil(filteredTours.length / itemsPerPage);
@@ -1486,8 +1342,8 @@ export default function ToursManager() {
   const totalTours = Object.keys(tours).length;
   const assignedTours = Object.values(tours).filter(t => t.driverName && t.driverName !== 'TBA').length;
   const unassignedTours = totalTours - assignedTours;
-  const scheduledTours = Object.values(tours).filter(t => t.status === 'scheduled').length;
-  const inProgressTours = Object.values(tours).filter(t => t.status === 'in_progress').length;
+  const activeTours = Object.values(tours).filter(t => t.isActive).length;
+  const totalParticipants = Object.values(tours).reduce((sum, t) => sum + (t.currentParticipants || 0), 0);
 
   // Modal handlers
   const handleEdit = (tourId) => {
@@ -1594,15 +1450,22 @@ export default function ToursManager() {
                 <Text fw={600}>Method 1: Manual Entry</Text>
               </Group>
               <Text size="sm" c="dimmed" mb="sm">
-                Click "Add Tour" button and fill in the tour details manually. All fields are optional except the name.
+                Click "Add Tour" and fill in tour details. Tour Code becomes the Firebase ID.
               </Text>
               <Code block>
-                {`// Firebase path: /tours/{tourId}
+{`// Firebase path: /tours/{tourCode}
 {
   "name": "Tour Name",
-  "tourType": "scenic",
-  "status": "scheduled",
-  "driverName": "TBA"
+  "tourCode": "5209L 16",
+  "days": 2,
+  "startDate": "09/10/2025",
+  "endDate": "10/10/2025",
+  "isActive": true,
+  "driverName": "TBA",
+  "maxParticipants": 53,
+  "currentParticipants": 0,
+  "pickupPoints": [...],
+  "itinerary": {...}
 }`}
               </Code>
             </Paper>
@@ -1615,10 +1478,10 @@ export default function ToursManager() {
                 <Text fw={600}>Method 2: Templates</Text>
               </Group>
               <Text size="sm" c="dimmed" mb="sm">
-                Use pre-configured templates for common tour types. Templates include all stops and pricing.
+                Use pre-configured templates with pickup points and itineraries already set up.
               </Text>
               <Text size="xs" c="dimmed">
-                Available: Loch Lomond, Highlands, Edinburgh, Stirling, Wildlife
+                Available: Loch Lomond, Highlands, Edinburgh
               </Text>
             </Paper>
 
@@ -1630,10 +1493,10 @@ export default function ToursManager() {
                 <Text fw={600}>Method 3: CSV Import</Text>
               </Group>
               <Text size="sm" c="dimmed" mb="sm">
-                Import multiple tours at once from a CSV file. Great for bulk operations.
+                Import multiple tours from CSV. Columns: Tour Code, Name, Days, Start Date, End Date, etc.
               </Text>
               <Text size="xs" c="dimmed">
-                Use Import/Export button to download template
+                Use Export to get a template CSV
               </Text>
             </Paper>
           </SimpleGrid>
@@ -1678,22 +1541,22 @@ export default function ToursManager() {
         <Paper p="md" radius="md" withBorder className="stat-card">
           <Group justify="space-between">
             <div>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Scheduled</Text>
-              <Text size="xl" fw={700} c="blue">{scheduledTours}</Text>
+              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Active</Text>
+              <Text size="xl" fw={700} c="blue">{activeTours}</Text>
             </div>
             <ThemeIcon color="blue" variant="light" size="xl" radius="md">
-              <IconCalendar size={24} />
+              <IconPlayerPlay size={24} />
             </ThemeIcon>
           </Group>
         </Paper>
         <Paper p="md" radius="md" withBorder className="stat-card">
           <Group justify="space-between">
             <div>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed">In Progress</Text>
-              <Text size="xl" fw={700} c="grape">{inProgressTours}</Text>
+              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Participants</Text>
+              <Text size="xl" fw={700} c="grape">{totalParticipants}</Text>
             </div>
             <ThemeIcon color="grape" variant="light" size="xl" radius="md">
-              <IconPlayerPlay size={24} />
+              <IconUsers size={24} />
             </ThemeIcon>
           </Group>
         </Paper>
@@ -1704,7 +1567,7 @@ export default function ToursManager() {
         <Group justify="space-between" wrap="wrap" gap="md">
           <Group gap="md" wrap="wrap">
             <TextInput
-              placeholder="Search tours, drivers, locations..."
+              placeholder="Search tours, codes, drivers..."
               leftSection={<IconSearch size={16} />}
               value={searchTerm}
               onChange={(e) => {
@@ -1717,13 +1580,11 @@ export default function ToursManager() {
               placeholder="Filter by status"
               leftSection={<IconFilter size={16} />}
               data={[
-                { value: 'all', label: 'All Statuses' },
+                { value: 'all', label: 'All Tours' },
                 { value: 'assigned', label: 'Assigned' },
                 { value: 'unassigned', label: 'Unassigned (TBA)' },
-                { value: 'scheduled', label: 'Scheduled' },
-                { value: 'in_progress', label: 'In Progress' },
-                { value: 'completed', label: 'Completed' },
-                { value: 'cancelled', label: 'Cancelled' },
+                { value: 'active', label: 'Active' },
+                { value: 'inactive', label: 'Inactive' },
               ]}
               value={filterStatus}
               onChange={(value) => {
@@ -1731,24 +1592,6 @@ export default function ToursManager() {
                 setCurrentPage(1);
               }}
               style={{ width: 180 }}
-              clearable={false}
-            />
-            <Select
-              placeholder="Filter by type"
-              leftSection={<IconCompass size={16} />}
-              data={[
-                { value: 'all', label: 'All Types' },
-                ...Object.entries(TOUR_TYPES).map(([key, val]) => ({
-                  value: key,
-                  label: val.label,
-                })),
-              ]}
-              value={filterType}
-              onChange={(value) => {
-                setFilterType(value || 'all');
-                setCurrentPage(1);
-              }}
-              style={{ width: 160 }}
               clearable={false}
             />
           </Group>
@@ -1811,21 +1654,18 @@ export default function ToursManager() {
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Tour</Table.Th>
-                  <Table.Th>Type</Table.Th>
-                  <Table.Th>Status</Table.Th>
+                  <Table.Th>Code</Table.Th>
+                  <Table.Th>Days</Table.Th>
+                  <Table.Th>Dates</Table.Th>
                   <Table.Th>Driver</Table.Th>
-                  <Table.Th>Departure</Table.Th>
                   <Table.Th>Capacity</Table.Th>
-                  <Table.Th>Price</Table.Th>
+                  <Table.Th>Status</Table.Th>
                   <Table.Th>Actions</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
                 {paginatedTours.map(([id, tour]) => {
                   const isAssigned = tour.driverName && tour.driverName !== 'TBA';
-                  const tourType = TOUR_TYPES[tour.tourType] || TOUR_TYPES.custom;
-                  const tourStatus = TOUR_STATUSES[tour.status] || TOUR_STATUSES.scheduled;
-                  const TourTypeIcon = getTourTypeIcon(tour.tourType);
 
                   return (
                     <Table.Tr key={id} className="table-row-clickable" onClick={() => handleViewDetails(id)}>
@@ -1834,21 +1674,21 @@ export default function ToursManager() {
                           <ThemeIcon color="brand" variant="light" size="sm">
                             <IconMap size={12} />
                           </ThemeIcon>
-                          <div>
-                            <Text fw={500} size="sm">{tour.name || id}</Text>
-                            <Text size="xs" c="dimmed">{id}</Text>
-                          </div>
+                          <Text fw={500} size="sm" truncate="end" style={{ maxWidth: 200 }}>
+                            {tour.name || id}
+                          </Text>
                         </Group>
                       </Table.Td>
                       <Table.Td>
-                        <Badge variant="light" color={tourType.color} size="sm" leftSection={<TourTypeIcon size={10} />}>
-                          {tourType.label}
+                        <Code>{tour.tourCode || id}</Code>
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge variant="light" size="sm">
+                          {tour.days || 1} day{(tour.days || 1) > 1 ? 's' : ''}
                         </Badge>
                       </Table.Td>
                       <Table.Td>
-                        <Badge variant="light" color={tourStatus.color} size="sm">
-                          {tourStatus.label}
-                        </Badge>
+                        <Text size="sm" c="dimmed">{tour.startDate || '-'}</Text>
                       </Table.Td>
                       <Table.Td>
                         <Group gap="xs">
@@ -1859,17 +1699,12 @@ export default function ToursManager() {
                         </Group>
                       </Table.Td>
                       <Table.Td>
-                        <Text size="sm" c="dimmed">
-                          {tour.departureTime
-                            ? new Date(tour.departureTime).toLocaleDateString('en-GB')
-                            : '-'}
-                        </Text>
+                        <Text size="sm">{tour.currentParticipants || 0}/{tour.maxParticipants || 53}</Text>
                       </Table.Td>
                       <Table.Td>
-                        <Text size="sm">{tour.currentPassengers || 0}/{tour.maxPassengers || 45}</Text>
-                      </Table.Td>
-                      <Table.Td>
-                        <Text size="sm" fw={500}>{formatPrice(tour.price)}</Text>
+                        <Badge variant="light" color={tour.isActive ? 'green' : 'gray'} size="sm">
+                          {tour.isActive ? 'Active' : 'Inactive'}
+                        </Badge>
                       </Table.Td>
                       <Table.Td onClick={(e) => e.stopPropagation()}>
                         <Group gap="xs">

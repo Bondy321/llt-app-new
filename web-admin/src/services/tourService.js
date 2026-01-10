@@ -7,151 +7,240 @@
  * FIREBASE DATABASE STRUCTURE:
  * ============================
  * tours/
- * ├── {tourId}/                    # Unique tour identifier (e.g., "5100D_138")
+ * ├── {tourId}/                    # Unique tour identifier (e.g., "5100D_138", "5209L_16")
  * │   ├── name                     # Tour display name
- * │   ├── description              # Tour description
- * │   ├── tourType                 # Type: 'scenic', 'adventure', 'city', 'custom'
- * │   ├── status                   # Status: 'scheduled', 'in_progress', 'completed', 'cancelled'
+ * │   ├── tourCode                 # Tour code (e.g., "5209L 16")
+ * │   ├── days                     # Number of days for the tour
+ * │   ├── startDate                # Start date (DD/MM/YYYY format)
+ * │   ├── endDate                  # End date (DD/MM/YYYY format)
+ * │   ├── isActive                 # Whether tour is currently active
  * │   ├── driverName               # Assigned driver name or 'TBA'
  * │   ├── driverPhone              # Driver contact number
- * │   ├── driverId                 # Driver ID reference
- * │   ├── departureTime            # Scheduled departure time
- * │   ├── departureLocation        # Starting point
- * │   ├── arrivalLocation          # End point
- * │   ├── estimatedDuration        # Duration in minutes
- * │   ├── maxPassengers            # Maximum passenger capacity
- * │   ├── currentPassengers        # Current passenger count
- * │   ├── price                    # Tour price
- * │   ├── notes                    # Additional notes
- * │   ├── stops                    # Array of tour stops
- * │   ├── createdAt                # Creation timestamp
- * │   ├── updatedAt                # Last update timestamp
- * │   └── createdBy                # Admin who created the tour
+ * │   ├── maxParticipants          # Maximum passenger capacity
+ * │   ├── currentParticipants      # Current passenger count
+ * │   ├── pickupPoints             # Array of pickup locations
+ * │   │   └── [{location, time}]
+ * │   └── itinerary                # Tour itinerary
+ * │       ├── title                # Itinerary title
+ * │       └── days                 # Array of day activities
+ * │           └── [{day, title, activities: [{description, time}]}]
  *
  * HOW TO ADD A NEW TOUR:
  * ======================
  * 1. Use createTour() function with tour data object
- * 2. The function generates a unique ID and writes to Firebase
+ * 2. The function uses the tourCode as the ID (with underscore replacing space)
  * 3. All connected clients receive the update in real-time
  *
  * Example:
  *   await createTour({
  *     name: 'Loch Lomond Scenic Tour',
- *     tourType: 'scenic',
- *     departureTime: '2024-01-15T09:00',
- *     departureLocation: 'Glasgow Central',
- *     maxPassengers: 45
+ *     tourCode: '5500L 1',
+ *     days: 1,
+ *     startDate: '15/01/2025',
+ *     endDate: '15/01/2025',
+ *     maxParticipants: 53
  *   });
  */
 
 import { ref, push, set, update, remove, get, onValue } from 'firebase/database';
 import { db } from '../firebase';
 
-// Tour type definitions for reference
-export const TOUR_TYPES = {
-  scenic: { label: 'Scenic Tour', color: 'green', icon: 'mountain' },
-  adventure: { label: 'Adventure Tour', color: 'orange', icon: 'compass' },
-  city: { label: 'City Tour', color: 'blue', icon: 'building' },
-  historical: { label: 'Historical Tour', color: 'purple', icon: 'landmark' },
-  wildlife: { label: 'Wildlife Tour', color: 'teal', icon: 'deer' },
-  custom: { label: 'Custom Tour', color: 'gray', icon: 'map' },
-};
-
-// Tour status definitions
-export const TOUR_STATUSES = {
-  scheduled: { label: 'Scheduled', color: 'blue' },
-  in_progress: { label: 'In Progress', color: 'orange' },
-  completed: { label: 'Completed', color: 'green' },
-  cancelled: { label: 'Cancelled', color: 'red' },
-};
-
-// Default tour template
+// Default tour template matching the existing Firebase structure
 export const DEFAULT_TOUR = {
   name: '',
-  description: '',
-  tourType: 'scenic',
-  status: 'scheduled',
+  tourCode: '',
+  days: 1,
+  startDate: '',
+  endDate: '',
+  isActive: true,
   driverName: 'TBA',
   driverPhone: '',
-  driverId: null,
-  departureTime: '',
-  departureLocation: '',
-  arrivalLocation: '',
-  estimatedDuration: 120, // 2 hours default
-  maxPassengers: 45,
-  currentPassengers: 0,
-  price: 0,
-  notes: '',
-  stops: [],
+  maxParticipants: 53,
+  currentParticipants: 0,
+  pickupPoints: [],
+  itinerary: {
+    title: '',
+    days: []
+  }
+};
+
+// Default pickup point structure
+export const DEFAULT_PICKUP_POINT = {
+  location: '',
+  time: ''
+};
+
+// Default activity structure
+export const DEFAULT_ACTIVITY = {
+  description: '',
+  time: ''
+};
+
+// Default day structure for itinerary
+export const DEFAULT_ITINERARY_DAY = {
+  day: 1,
+  title: '',
+  activities: []
 };
 
 // Pre-defined tour templates for quick creation
 export const TOUR_TEMPLATES = {
   lochLomond: {
     name: 'Loch Lomond Explorer',
-    description: 'Discover the breathtaking beauty of Loch Lomond and the Trossachs National Park.',
-    tourType: 'scenic',
-    departureLocation: 'Glasgow Central Station',
-    arrivalLocation: 'Glasgow Central Station',
-    estimatedDuration: 480, // 8 hours
-    maxPassengers: 45,
-    price: 59,
-    stops: ['Balloch', 'Luss Village', 'Tarbet', 'The Drovers Inn', 'Aberfoyle'],
+    tourCode: 'LL01',
+    days: 1,
+    maxParticipants: 53,
+    isActive: true,
+    pickupPoints: [
+      { location: 'Glasgow - Buchanan Bus Station, Stances 23-32', time: '08:00' },
+      { location: 'Balloch - Tourist Information Centre', time: '09:00' }
+    ],
+    itinerary: {
+      title: 'Loch Lomond Explorer',
+      days: [
+        {
+          day: 1,
+          title: 'Loch Lomond Day Trip',
+          activities: [
+            { description: 'Depart Glasgow and travel to Balloch', time: '08:00' },
+            { description: 'Visit Loch Lomond Shores - allow 1.5 hours free time', time: '09:30' },
+            { description: 'Travel to Luss Village - allow 1 hour', time: '11:30' },
+            { description: 'Scenic drive along the loch to Tarbet', time: '13:00' },
+            { description: 'Stop at The Drovers Inn for refreshments', time: '14:00' },
+            { description: 'Return journey to Glasgow', time: '16:00' }
+          ]
+        }
+      ]
+    }
   },
   highlands: {
-    name: 'Scottish Highlands Day Trip',
-    description: 'Journey through the stunning Scottish Highlands, visiting historic castles and scenic viewpoints.',
-    tourType: 'adventure',
-    departureLocation: 'Edinburgh Waverley',
-    arrivalLocation: 'Edinburgh Waverley',
-    estimatedDuration: 600, // 10 hours
-    maxPassengers: 45,
-    price: 75,
-    stops: ['Stirling Castle', 'Glencoe', 'Fort William', 'Loch Ness', 'Pitlochry'],
+    name: 'Scottish Highlands Adventure',
+    tourCode: 'HL02',
+    days: 2,
+    maxParticipants: 53,
+    isActive: true,
+    pickupPoints: [
+      { location: 'Edinburgh - Waterloo Place', time: '07:30' },
+      { location: 'Glasgow - Buchanan Bus Station', time: '09:00' }
+    ],
+    itinerary: {
+      title: 'Scottish Highlands Adventure',
+      days: [
+        {
+          day: 1,
+          title: 'Journey to the Highlands',
+          activities: [
+            { description: 'Depart and travel north via Stirling', time: '08:00' },
+            { description: 'Photo stop at Stirling Castle viewpoint', time: '09:30' },
+            { description: 'Continue through Glencoe - comfort stop', time: '12:00' },
+            { description: 'Arrive Fort William - free time for lunch', time: '13:30' },
+            { description: 'Check in to hotel', time: '16:00' },
+            { description: 'Dinner at hotel', time: '18:30' }
+          ]
+        },
+        {
+          day: 2,
+          title: 'Loch Ness & Return',
+          activities: [
+            { description: 'Breakfast at hotel', time: '08:00' },
+            { description: 'Depart for Loch Ness', time: '09:30' },
+            { description: 'Visit Urquhart Castle - allow 1.5 hours', time: '10:30' },
+            { description: 'Free time in Inverness for lunch', time: '13:00' },
+            { description: 'Begin return journey south', time: '15:00' },
+            { description: 'Arrive back at pickup points', time: '19:00' }
+          ]
+        }
+      ]
+    }
   },
   edinburghCity: {
     name: 'Edinburgh City Tour',
-    description: 'Explore the historic and cultural highlights of Scotland\'s capital city.',
-    tourType: 'city',
-    departureLocation: 'Royal Mile',
-    arrivalLocation: 'Royal Mile',
-    estimatedDuration: 180, // 3 hours
-    maxPassengers: 20,
-    price: 35,
-    stops: ['Edinburgh Castle', 'Holyrood Palace', 'Arthur\'s Seat', 'Old Town', 'New Town'],
-  },
-  stirlingHistoric: {
-    name: 'Stirling & Braveheart Country',
-    description: 'Step back in time and explore the historic heart of Scotland.',
-    tourType: 'historical',
-    departureLocation: 'Glasgow Queen Street',
-    arrivalLocation: 'Glasgow Queen Street',
-    estimatedDuration: 360, // 6 hours
-    maxPassengers: 45,
-    price: 49,
-    stops: ['Stirling Castle', 'Wallace Monument', 'Bannockburn', 'Doune Castle'],
-  },
-  wildlife: {
-    name: 'Highland Wildlife Safari',
-    description: 'Spot red deer, golden eagles, and other Scottish wildlife in their natural habitat.',
-    tourType: 'wildlife',
-    departureLocation: 'Inverness Bus Station',
-    arrivalLocation: 'Inverness Bus Station',
-    estimatedDuration: 420, // 7 hours
-    maxPassengers: 16, // Smaller group for wildlife
-    price: 85,
-    stops: ['Cairngorms', 'Glen Affric', 'Black Isle', 'Loch Maree'],
-  },
+    tourCode: 'ED01',
+    days: 1,
+    maxParticipants: 45,
+    isActive: true,
+    pickupPoints: [
+      { location: 'Glasgow - Buchanan Bus Station', time: '09:00' },
+      { location: 'Falkirk - Behind the Steeple', time: '09:45' }
+    ],
+    itinerary: {
+      title: 'Edinburgh City Tour',
+      days: [
+        {
+          day: 1,
+          title: 'Discover Edinburgh',
+          activities: [
+            { description: 'Arrive Edinburgh and drop off at Royal Mile', time: '10:30' },
+            { description: 'Free time to explore Old Town, Edinburgh Castle (entry not included)', time: '10:30' },
+            { description: 'Lunch break - various options available', time: '13:00' },
+            { description: 'Optional walk to Holyrood Palace', time: '14:30' },
+            { description: 'Meet at bus for departure', time: '17:00' },
+            { description: 'Return to pickup points', time: '18:30' }
+          ]
+        }
+      ]
+    }
+  }
 };
 
 /**
- * Generate a unique tour ID
- * Format: {prefix}_{timestamp}_{random}
+ * Generate a tour ID from tour code
+ * Replaces spaces with underscores
  */
-export const generateTourId = (prefix = 'TOUR') => {
-  const timestamp = Date.now().toString(36).toUpperCase();
-  const random = Math.random().toString(36).substring(2, 6).toUpperCase();
-  return `${prefix}_${timestamp}_${random}`;
+export const generateTourId = (tourCode) => {
+  if (!tourCode) {
+    // Generate a random ID if no tour code provided
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `TOUR_${timestamp}_${random}`;
+  }
+  return tourCode.replace(/\s+/g, '_');
+};
+
+/**
+ * Format date to DD/MM/YYYY
+ */
+export const formatDateToDDMMYYYY = (date) => {
+  if (!date) return '';
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return date; // Return as-is if already formatted
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}/${month}/${year}`;
+};
+
+/**
+ * Parse DD/MM/YYYY to Date object
+ */
+export const parseDDMMYYYY = (dateStr) => {
+  if (!dateStr) return null;
+  const parts = dateStr.split('/');
+  if (parts.length !== 3) return null;
+  const [day, month, year] = parts;
+  return new Date(year, parseInt(month) - 1, parseInt(day));
+};
+
+/**
+ * Convert DD/MM/YYYY to YYYY-MM-DD for input fields
+ */
+export const ddmmyyyyToInputFormat = (dateStr) => {
+  if (!dateStr) return '';
+  const parts = dateStr.split('/');
+  if (parts.length !== 3) return dateStr;
+  const [day, month, year] = parts;
+  return `${year}-${month}-${day}`;
+};
+
+/**
+ * Convert YYYY-MM-DD to DD/MM/YYYY
+ */
+export const inputFormatToDDMMYYYY = (dateStr) => {
+  if (!dateStr) return '';
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+  const [year, month, day] = parts;
+  return `${day}/${month}/${year}`;
 };
 
 /**
@@ -161,19 +250,17 @@ export const generateTourId = (prefix = 'TOUR') => {
  * @returns {Promise<{id: string, tour: Object}>} - Created tour with ID
  */
 export const createTour = async (tourData, createdBy = 'admin') => {
-  const tourId = tourData.id || generateTourId();
-  const now = new Date().toISOString();
+  const tourId = generateTourId(tourData.tourCode);
 
   const newTour = {
     ...DEFAULT_TOUR,
     ...tourData,
-    createdAt: now,
-    updatedAt: now,
-    createdBy,
+    // Ensure itinerary structure is correct
+    itinerary: tourData.itinerary || {
+      title: tourData.name || '',
+      days: []
+    }
   };
-
-  // Remove the id field from tour data if it was included
-  delete newTour.id;
 
   const tourRef = ref(db, `tours/${tourId}`);
   await set(tourRef, newTour);
@@ -193,7 +280,25 @@ export const createTourFromTemplate = async (templateKey, overrides = {}, create
     throw new Error(`Template "${templateKey}" not found`);
   }
 
-  return createTour({ ...template, ...overrides }, createdBy);
+  // Generate dates if not provided
+  const today = new Date();
+  const startDate = overrides.startDate || formatDateToDDMMYYYY(today);
+
+  // Calculate end date based on days
+  const endDateObj = new Date(today);
+  endDateObj.setDate(endDateObj.getDate() + (template.days - 1));
+  const endDate = overrides.endDate || formatDateToDDMMYYYY(endDateObj);
+
+  // Generate unique tour code
+  const uniqueCode = `${template.tourCode}_${Date.now().toString(36).toUpperCase()}`;
+
+  return createTour({
+    ...template,
+    ...overrides,
+    tourCode: overrides.tourCode || uniqueCode,
+    startDate,
+    endDate
+  }, createdBy);
 };
 
 /**
@@ -202,15 +307,10 @@ export const createTourFromTemplate = async (templateKey, overrides = {}, create
  * @param {Object} updates - Fields to update
  */
 export const updateTour = async (tourId, updates) => {
-  const updateData = {
-    ...updates,
-    updatedAt: new Date().toISOString(),
-  };
-
   const tourRef = ref(db, `tours/${tourId}`);
-  await update(tourRef, updateData);
+  await update(tourRef, updates);
 
-  return { id: tourId, updates: updateData };
+  return { id: tourId, updates };
 };
 
 /**
@@ -218,16 +318,13 @@ export const updateTour = async (tourId, updates) => {
  * @param {string} tourId - Tour ID to delete
  */
 export const deleteTour = async (tourId) => {
-  // First, remove any driver assignments
+  // First, get the tour to check for driver assignments
   const tourRef = ref(db, `tours/${tourId}`);
   const snapshot = await get(tourRef);
   const tour = snapshot.val();
 
-  if (tour?.driverId) {
-    // Remove the tour from driver's assignments
-    const driverAssignmentRef = ref(db, `drivers/${tour.driverId}/assignments/${tourId}`);
-    await remove(driverAssignmentRef);
-  }
+  // If there's a driver assigned, we might want to clean up references
+  // (depending on your data model)
 
   // Delete the tour
   await remove(tourRef);
@@ -245,10 +342,12 @@ export const assignDriver = async (tourId, driverId, driverInfo) => {
   const updates = {
     [`tours/${tourId}/driverName`]: driverInfo.name,
     [`tours/${tourId}/driverPhone`]: driverInfo.phone || '',
-    [`tours/${tourId}/driverId`]: driverId,
-    [`tours/${tourId}/updatedAt`]: new Date().toISOString(),
-    [`drivers/${driverId}/assignments/${tourId}`]: true,
   };
+
+  // Also update driver's assignments if that structure exists
+  if (driverId) {
+    updates[`drivers/${driverId}/assignments/${tourId}`] = true;
+  }
 
   await update(ref(db), updates);
 
@@ -258,22 +357,12 @@ export const assignDriver = async (tourId, driverId, driverInfo) => {
 /**
  * Unassign driver from a tour
  * @param {string} tourId - Tour ID
- * @param {string} driverId - Driver ID (optional, will find if not provided)
+ * @param {string} driverId - Driver ID (optional)
  */
 export const unassignDriver = async (tourId, driverId = null) => {
-  // Get the tour to find the driver if not provided
-  if (!driverId) {
-    const tourRef = ref(db, `tours/${tourId}`);
-    const snapshot = await get(tourRef);
-    const tour = snapshot.val();
-    driverId = tour?.driverId;
-  }
-
   const updates = {
     [`tours/${tourId}/driverName`]: 'TBA',
     [`tours/${tourId}/driverPhone`]: '',
-    [`tours/${tourId}/driverId`]: null,
-    [`tours/${tourId}/updatedAt`]: new Date().toISOString(),
   };
 
   if (driverId) {
@@ -286,20 +375,51 @@ export const unassignDriver = async (tourId, driverId = null) => {
 };
 
 /**
- * Update tour status
+ * Update tour active status
  * @param {string} tourId - Tour ID
- * @param {string} status - New status
+ * @param {boolean} isActive - Active status
  */
-export const updateTourStatus = async (tourId, status) => {
-  if (!TOUR_STATUSES[status]) {
-    throw new Error(`Invalid status "${status}"`);
-  }
-
-  return updateTour(tourId, { status });
+export const updateTourStatus = async (tourId, isActive) => {
+  return updateTour(tourId, { isActive });
 };
 
 /**
- * Bulk create tours from CSV data
+ * Add a pickup point to a tour
+ * @param {string} tourId - Tour ID
+ * @param {Object} pickupPoint - {location, time}
+ */
+export const addPickupPoint = async (tourId, pickupPoint) => {
+  const tourRef = ref(db, `tours/${tourId}`);
+  const snapshot = await get(tourRef);
+  const tour = snapshot.val();
+
+  const pickupPoints = tour.pickupPoints || [];
+  pickupPoints.push(pickupPoint);
+
+  await update(tourRef, { pickupPoints });
+  return { tourId, pickupPoints };
+};
+
+/**
+ * Update pickup points for a tour
+ * @param {string} tourId - Tour ID
+ * @param {Array} pickupPoints - Array of pickup points
+ */
+export const updatePickupPoints = async (tourId, pickupPoints) => {
+  return updateTour(tourId, { pickupPoints });
+};
+
+/**
+ * Update itinerary for a tour
+ * @param {string} tourId - Tour ID
+ * @param {Object} itinerary - Itinerary object
+ */
+export const updateItinerary = async (tourId, itinerary) => {
+  return updateTour(tourId, { itinerary });
+};
+
+/**
+ * Bulk create tours from data
  * @param {Array<Object>} toursData - Array of tour objects
  * @param {string} createdBy - Email/ID of admin
  */
@@ -327,34 +447,32 @@ export const bulkCreateTours = async (toursData, createdBy = 'admin') => {
 export const exportToursToCSV = (tours) => {
   const headers = [
     'ID',
+    'Tour Code',
     'Name',
-    'Type',
-    'Status',
+    'Days',
+    'Start Date',
+    'End Date',
+    'Active',
     'Driver',
-    'Departure Time',
-    'Departure Location',
-    'Arrival Location',
-    'Duration (min)',
-    'Max Passengers',
-    'Current Passengers',
-    'Price',
-    'Notes',
+    'Driver Phone',
+    'Max Participants',
+    'Current Participants',
+    'Pickup Points',
   ];
 
   const rows = Object.entries(tours).map(([id, tour]) => [
     id,
+    tour.tourCode || '',
     tour.name || '',
-    tour.tourType || '',
-    tour.status || '',
+    tour.days || 1,
+    tour.startDate || '',
+    tour.endDate || '',
+    tour.isActive ? 'Yes' : 'No',
     tour.driverName || 'TBA',
-    tour.departureTime || '',
-    tour.departureLocation || '',
-    tour.arrivalLocation || '',
-    tour.estimatedDuration || '',
-    tour.maxPassengers || '',
-    tour.currentPassengers || '',
-    tour.price || '',
-    tour.notes || '',
+    tour.driverPhone || '',
+    tour.maxParticipants || 53,
+    tour.currentParticipants || 0,
+    (tour.pickupPoints || []).map(p => `${p.time} - ${p.location}`).join('; '),
   ]);
 
   const csvContent = [
@@ -380,62 +498,53 @@ export const parseCSVToTours = (csvContent) => {
   for (let i = 1; i < lines.length; i++) {
     const values = lines[i].match(/("([^"]*)"|[^,]*)/g)?.map(v => v.replace(/^"|"$/g, '').replace(/""/g, '"')) || [];
 
-    const tour = {};
+    const tour = { ...DEFAULT_TOUR };
     headers.forEach((header, index) => {
       const value = values[index] || '';
       switch (header) {
-        case 'id':
-          if (value) tour.id = value;
+        case 'tour code':
+        case 'tourcode':
+          tour.tourCode = value;
           break;
         case 'name':
           tour.name = value;
+          tour.itinerary = { title: value, days: [] };
           break;
-        case 'type':
-        case 'tourtype':
-          tour.tourType = value || 'custom';
+        case 'days':
+          tour.days = parseInt(value) || 1;
           break;
-        case 'status':
-          tour.status = value || 'scheduled';
+        case 'start date':
+        case 'startdate':
+          tour.startDate = value;
+          break;
+        case 'end date':
+        case 'enddate':
+          tour.endDate = value;
+          break;
+        case 'active':
+        case 'isactive':
+          tour.isActive = value.toLowerCase() === 'yes' || value === 'true';
           break;
         case 'driver':
         case 'drivername':
           tour.driverName = value || 'TBA';
           break;
-        case 'departure time':
-        case 'departuretime':
-          tour.departureTime = value;
+        case 'driver phone':
+        case 'driverphone':
+          tour.driverPhone = value;
           break;
-        case 'departure location':
-        case 'departurelocation':
-          tour.departureLocation = value;
+        case 'max participants':
+        case 'maxparticipants':
+          tour.maxParticipants = parseInt(value) || 53;
           break;
-        case 'arrival location':
-        case 'arrivallocation':
-          tour.arrivalLocation = value;
-          break;
-        case 'duration (min)':
-        case 'duration':
-        case 'estimatedduration':
-          tour.estimatedDuration = parseInt(value) || 120;
-          break;
-        case 'max passengers':
-        case 'maxpassengers':
-          tour.maxPassengers = parseInt(value) || 45;
-          break;
-        case 'current passengers':
-        case 'currentpassengers':
-          tour.currentPassengers = parseInt(value) || 0;
-          break;
-        case 'price':
-          tour.price = parseFloat(value) || 0;
-          break;
-        case 'notes':
-          tour.notes = value;
+        case 'current participants':
+        case 'currentparticipants':
+          tour.currentParticipants = parseInt(value) || 0;
           break;
       }
     });
 
-    if (tour.name) {
+    if (tour.name || tour.tourCode) {
       tours.push(tour);
     }
   }
@@ -477,20 +586,17 @@ export const duplicateTour = async (tourId, createdBy = 'admin') => {
     throw new Error(`Tour "${tourId}" not found`);
   }
 
+  // Generate new tour code
+  const newTourCode = `${existingTour.tourCode || tourId}_COPY`;
+
   const newTour = {
     ...existingTour,
     name: `${existingTour.name} (Copy)`,
-    status: 'scheduled',
+    tourCode: newTourCode,
     driverName: 'TBA',
     driverPhone: '',
-    driverId: null,
-    currentPassengers: 0,
+    currentParticipants: 0,
   };
-
-  // Remove timestamps to get fresh ones
-  delete newTour.createdAt;
-  delete newTour.updatedAt;
-  delete newTour.createdBy;
 
   return createTour(newTour, createdBy);
 };
