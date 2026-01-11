@@ -10,15 +10,17 @@ import { createPersistenceProvider } from './services/persistenceProvider';
 // Initialize a resilient persistence layer for auth/session state.
 const authStorage = createPersistenceProvider({ namespace: 'LLT_AUTH' });
 
+// Firebase configuration - credentials loaded from environment variables
+// See .env.example for required environment variables
 const firebaseConfig = {
-  apiKey: "AIzaSyCeQqCtbFEB9nrUvP_Pffrt2aelATf9i9o",
-  authDomain: "loch-lomond-travel.firebaseapp.com",
-  databaseURL: "https://loch-lomond-travel-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "loch-lomond-travel",
-  storageBucket: "loch-lomond-travel.firebasestorage.app",
-  messagingSenderId: "500767842880",
-  appId: "1:500767842880:web:b27b5630eed50e6ea4f5a5",
-  measurementId: "G-D46EKN8EDZ"
+  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  databaseURL: process.env.EXPO_PUBLIC_FIREBASE_DATABASE_URL,
+  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
+  measurementId: process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID
 };
 
 class AuthPersistence {
