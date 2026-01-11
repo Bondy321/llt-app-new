@@ -10,6 +10,12 @@ import { createPersistenceProvider } from './services/persistenceProvider';
 // Initialize a resilient persistence layer for auth/session state.
 const authStorage = createPersistenceProvider({ namespace: 'LLT_AUTH' });
 
+// Production-safe logging - only logs in development mode
+const IS_PRODUCTION = process.env.EXPO_PUBLIC_APP_ENV === 'production';
+const devLog = (...args) => { if (!IS_PRODUCTION) console.log(...args); };
+const devWarn = (...args) => { if (!IS_PRODUCTION) console.warn(...args); };
+const devError = (...args) => { if (!IS_PRODUCTION) console.error(...args); };
+
 // Firebase configuration - credentials loaded from environment variables
 // See .env.example for required environment variables
 const firebaseConfig = {
@@ -27,7 +33,7 @@ class AuthPersistence {
   constructor() {
     this.AUTH_KEY = 'LLT_authUser';
     this.TOKEN_KEY = 'LLT_authToken';
-    console.log(`[AuthPersistence] Using storage mode: ${authStorage.mode}`);
+    devLog(`[AuthPersistence] Using storage mode: ${authStorage.mode}`);
   }
 
   async saveAuthState(user) {
@@ -41,12 +47,12 @@ class AuthPersistence {
           savedAt: new Date().toISOString()
         };
         await authStorage.setItemAsync(this.AUTH_KEY, JSON.stringify(authData));
-        console.log(`[AuthPersistence] Auth state saved (${authStorage.mode})`);
+        devLog(`[AuthPersistence] Auth state saved (${authStorage.mode})`);
       } else {
         await authStorage.deleteItemAsync(this.AUTH_KEY);
       }
     } catch (error) {
-      console.error(`[AuthPersistence] Error saving auth state via ${authStorage.mode}:`, error);
+      devError(`[AuthPersistence] Error saving auth state via ${authStorage.mode}:`, error);
     }
   }
 
@@ -55,7 +61,7 @@ class AuthPersistence {
       const stored = await authStorage.getItemAsync(this.AUTH_KEY);
       return stored ? JSON.parse(stored) : null;
     } catch (error) {
-      console.error(`[AuthPersistence] Error retrieving auth state via ${authStorage.mode}:`, error);
+      devError(`[AuthPersistence] Error retrieving auth state via ${authStorage.mode}:`, error);
       return null;
     }
   }
@@ -65,7 +71,7 @@ class AuthPersistence {
       await authStorage.deleteItemAsync(this.AUTH_KEY);
       await authStorage.deleteItemAsync(this.TOKEN_KEY);
     } catch (error) {
-      console.error(`[AuthPersistence] Error clearing auth state via ${authStorage.mode}:`, error);
+      devError(`[AuthPersistence] Error clearing auth state via ${authStorage.mode}:`, error);
     }
   }
 }
@@ -81,10 +87,10 @@ let realtimeDbModular;
 try {
   if (!firebase.apps.length) {
     app = firebase.initializeApp(firebaseConfig);
-    console.log('Firebase initialized successfully');
+    devLog('Firebase initialized successfully');
   } else {
     app = firebase.app();
-    console.log('Firebase already initialized');
+    devLog('Firebase already initialized');
   }
 
   // Initialize services
@@ -99,32 +105,32 @@ try {
   // Use NONE because we manage persistence via custom authStorage/AuthPersistence
   auth.setPersistence(firebase.auth.Auth.Persistence.NONE)
     .then(() => {
-      console.log('Firebase persistence enabled');
+      devLog('Firebase persistence enabled');
     })
     .catch((error) => {
-      console.error('Error setting persistence:', error);
+      devError('Error setting persistence:', error);
     });
 
   // Enable Firestore offline persistence
   db.enablePersistence({ synchronizeTabs: true })
     .then(() => {
-      console.log('Firestore offline persistence enabled');
+      devLog('Firestore offline persistence enabled');
     })
     .catch((err) => {
       if (err.code === 'unimplemented') {
-        console.log('Firestore persistence not available in this environment');
+        devLog('Firestore persistence not available in this environment');
       } else {
-        console.error('Firestore persistence error:', err);
+        devError('Firestore persistence error:', err);
       }
     });
 
   // Enable Realtime Database offline persistence
   realtimeDb.goOffline();
   realtimeDb.goOnline();
-  console.log('Realtime Database configured');
+  devLog('Realtime Database configured');
 
 } catch (error) {
-  console.error('Firebase initialization error:', error);
+  devError('Firebase initialization error:', error);
 }
 
 // Create auth persistence instance
@@ -138,7 +144,7 @@ const notifyAuthStateListeners = (user) => {
     try {
       listener(user);
     } catch (error) {
-      console.error('Error in auth state listener:', error);
+      devError('Error in auth state listener:', error);
     }
   });
 };
@@ -146,7 +152,7 @@ const notifyAuthStateListeners = (user) => {
 // Set up global auth state observer (guarded to avoid crashing when Firebase fails to init)
 if (auth?.onAuthStateChanged) {
   auth.onAuthStateChanged(async (user) => {
-    console.log('Global auth state changed:', user ? user.uid : 'null');
+    devLog('Global auth state changed:', user ? 'authenticated' : 'null');
 
     // Save auth state
     await authPersistence.saveAuthState(user);
@@ -155,33 +161,33 @@ if (auth?.onAuthStateChanged) {
     notifyAuthStateListeners(user);
   });
 } else {
-  console.error('Firebase auth is not available; skipping auth state listener setup');
+  devError('Firebase auth is not available; skipping auth state listener setup');
 }
 
 // Enhanced auth functions
 const authHelpers = {
   async signInAnonymouslyPersistent() {
     try {
-      console.log('Attempting anonymous sign in...');
+      devLog('Attempting anonymous sign in...');
       
       // Check if we have a stored auth state
       const storedAuth = await authPersistence.getStoredAuthState();
       
       if (storedAuth && auth.currentUser) {
-        console.log('Using existing auth session:', storedAuth.uid);
+        devLog('Using existing auth session');
         return auth.currentUser;
       }
       
       // Sign in anonymously
       const result = await auth.signInAnonymously();
-      console.log('Anonymous sign in successful:', result.user.uid);
+      devLog('Anonymous sign in successful');
       
       // Save the auth state
       await authPersistence.saveAuthState(result.user);
       
       return result.user;
     } catch (error) {
-      console.error('Anonymous sign in error:', error);
+      devError('Anonymous sign in error:', error.code || 'unknown');
       throw error;
     }
   },
@@ -217,15 +223,15 @@ let isOnline = true;
 const updateNetworkState = (online) => {
   isOnline = online;
   if (!realtimeDb) {
-    console.warn('Realtime Database is not available; skipping network state sync');
+    devWarn('Realtime Database is not available; skipping network state sync');
     return;
   }
 
   if (online) {
-    console.log('Network connected - syncing data');
+    devLog('Network connected - syncing data');
     realtimeDb.goOnline();
   } else {
-    console.log('Network disconnected - using offline mode');
+    devLog('Network disconnected - using offline mode');
     realtimeDb.goOffline();
   }
 };

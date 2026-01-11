@@ -1,9 +1,13 @@
 {
   "rules": {
+    "admins": {
+      ".read": "auth != null && root.child('admins').child(auth.uid).exists()",
+      ".write": false
+    },
     "drivers": {
       ".read": "auth != null",
       "$driverCode": {
-        ".write": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || data.child('authUid').val() === auth.uid || newData.child('authUid').val() === auth.uid",
+        ".write": "auth != null && (root.child('admins').child(auth.uid).exists() || data.child('authUid').val() === auth.uid || newData.child('authUid').val() === auth.uid)",
         ".validate": "newData.hasChildren(['name', 'phone']) && newData.child('name').isString() && newData.child('phone').isString()"
       }
     },
@@ -11,14 +15,14 @@
       ".read": "auth != null",
       ".indexOn": ["tourCode"],
       "$bookingId": {
-        ".write": "auth != null",
+        ".write": "auth != null && (root.child('admins').child(auth.uid).exists() || root.child('tour_manifests').hasChild(newData.child('tourCode').val() + '/assigned_drivers/' + auth.uid))",
         ".validate": "newData.hasChild('tourCode') && newData.child('tourCode').isString()"
       }
     },
     "tour_manifests": {
       ".read": "auth != null",
-      ".write": "auth != null",
       "$tourId": {
+        ".write": "auth != null && (root.child('admins').child(auth.uid).exists() || root.child('tour_manifests').child($tourId).child('assigned_drivers').child(auth.uid).exists())",
         "assigned_drivers": {
           ".indexOn": [".value"]
         },
@@ -32,10 +36,11 @@
     "tours": {
       "$tourId": {
         ".read": "auth != null",
-        ".write": "auth != null",
+        ".write": "auth != null && root.child('admins').child(auth.uid).exists()",
         ".validate": "newData.hasChildren(['name', 'tourCode', 'isActive']) && newData.child('name').isString() && newData.child('tourCode').isString() && newData.child('isActive').isBoolean()",
         "participants": {
           "$userId": {
+            ".write": "auth != null && auth.uid === $userId",
             ".validate": "newData.hasChildren(['joinedAt', 'userId']) && newData.child('userId').val() === $userId"
           }
         }
@@ -46,8 +51,8 @@
         ".read": "auth != null",
         "messages": {
           "$messageId": {
-            ".write": "auth != null",
-            ".validate": "newData.hasChildren(['text', 'senderName', 'senderId', 'timestamp', 'isDriver', 'type', 'status']) && newData.child('text').isString() && newData.child('text').val().length <= 10000 && newData.child('senderName').isString() && newData.child('senderId').isString() && newData.child('timestamp').isString() && newData.child('isDriver').isBoolean() && ['text', 'image', 'system'].indexOf(newData.child('type').val()) >= 0 && ['sending', 'sent', 'delivered', 'failed'].indexOf(newData.child('status').val()) >= 0"
+            ".write": "auth != null && newData.child('senderId').val() === auth.uid",
+            ".validate": "newData.hasChildren(['text', 'senderName', 'senderId', 'timestamp', 'isDriver', 'type', 'status']) && newData.child('text').isString() && newData.child('text').val().length <= 10000 && newData.child('senderName').isString() && newData.child('senderId').val() === auth.uid && newData.child('timestamp').isString() && newData.child('isDriver').isBoolean() && ['text', 'image', 'system'].indexOf(newData.child('type').val()) >= 0 && ['sending', 'sent', 'delivered', 'failed'].indexOf(newData.child('status').val()) >= 0"
           }
         },
         "typing": {
@@ -83,8 +88,8 @@
     },
     "logs": {
       "$userId": {
-        ".read": false,
-        ".write": "auth != null || $userId === 'anonymous'",
+        ".read": "auth != null && root.child('admins').child(auth.uid).exists()",
+        ".write": "auth != null && auth.uid === $userId",
         "safety": {
           "$eventId": {
             ".validate": "newData.hasChildren(['category', 'severity', 'message', 'timestamp']) && newData.child('category').isString() && newData.child('severity').isString() && newData.child('message').isString() && newData.child('timestamp').isString()"
@@ -96,8 +101,8 @@
       "$tourId": {
         ".read": "auth != null",
         "$photoId": {
-          ".write": "auth != null",
-          ".validate": "newData.hasChildren(['url', 'userId', 'caption', 'timestamp', 'storagePath']) && newData.child('url').isString() && newData.child('userId').isString() && newData.child('caption').isString() && newData.child('caption').val().length <= 500 && newData.child('timestamp').exists() && newData.child('storagePath').isString()"
+          ".write": "auth != null && (!data.exists() || data.child('userId').val() === auth.uid || root.child('admins').child(auth.uid).exists())",
+          ".validate": "newData.hasChildren(['url', 'userId', 'caption', 'timestamp', 'storagePath']) && newData.child('url').isString() && newData.child('userId').val() === auth.uid && newData.child('caption').isString() && newData.child('caption').val().length <= 500 && newData.child('timestamp').exists() && newData.child('storagePath').isString()"
         }
       }
     },
@@ -114,8 +119,8 @@
     },
     "users": {
       "$userId": {
-        ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
-        ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
+        ".read": "auth != null && (auth.uid === $userId || root.child('admins').child(auth.uid).exists())",
+        ".write": "auth != null && (auth.uid === $userId || root.child('admins').child(auth.uid).exists())",
         "pushToken": {
           ".validate": "newData.isString() || newData.val() === null"
         },
@@ -131,7 +136,7 @@
       }
     },
     "globalSafetyAlerts": {
-      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".read": "auth != null && root.child('admins').child(auth.uid).exists()",
       ".write": "auth != null",
       "$eventId": {
         ".validate": "newData.hasChildren(['category', 'severity', 'message', 'timestamp', 'userId']) && newData.child('severity').val() === 'CRITICAL'"
