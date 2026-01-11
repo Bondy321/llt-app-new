@@ -1,16 +1,18 @@
 /* Loch Lomond Travel - Admin Portal Component Styles */
-/* Note: Most styling is handled by Mantine UI components */
+/* Enhanced styles for Tour Management System */
 
-/* Additional utility classes and component overrides */
-
-/* Responsive adjustments for Mantine components */
+/* ===========================================
+   RESPONSIVE ADJUSTMENTS
+   =========================================== */
 @media (max-width: 768px) {
   .mantine-AppShell-main {
     padding: 12px !important;
   }
 }
 
-/* Custom transition for interactive elements */
+/* ===========================================
+   INTERACTIVE CARDS
+   =========================================== */
 .interactive-card {
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
@@ -20,7 +22,9 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-/* Status indicator animations */
+/* ===========================================
+   STATUS INDICATORS
+   =========================================== */
 .status-online::before {
   content: '';
   display: inline-block;
@@ -44,7 +48,23 @@
   }
 }
 
-/* Loading skeleton animation */
+/* Firebase sync indicator animation */
+@keyframes sync-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.syncing-indicator {
+  animation: sync-spin 1s linear infinite;
+}
+
+/* ===========================================
+   LOADING SKELETON
+   =========================================== */
 .skeleton {
   background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
   background-size: 200% 100%;
@@ -60,7 +80,9 @@
   }
 }
 
-/* Tour tag styles */
+/* ===========================================
+   TOUR TAG STYLES
+   =========================================== */
 .tour-tag {
   display: inline-flex;
   align-items: center;
@@ -79,7 +101,40 @@
   background-color: #d0ebff;
 }
 
-/* Badge enhancements */
+/* Tour type specific colors */
+.tour-tag--scenic {
+  background-color: #d3f9d8;
+  color: #2f9e44;
+  border-color: #8ce99a;
+}
+
+.tour-tag--adventure {
+  background-color: #fff4e6;
+  color: #e67e22;
+  border-color: #ffc078;
+}
+
+.tour-tag--city {
+  background-color: #e7f5ff;
+  color: #1971c2;
+  border-color: #a5d8ff;
+}
+
+.tour-tag--historical {
+  background-color: #f3d9fa;
+  color: #9c36b5;
+  border-color: #e599f7;
+}
+
+.tour-tag--wildlife {
+  background-color: #c3fae8;
+  color: #0ca678;
+  border-color: #63e6be;
+}
+
+/* ===========================================
+   BADGE ENHANCEMENTS
+   =========================================== */
 .badge-active {
   background: linear-gradient(135deg, #40c057, #2f9e44);
 }
@@ -88,7 +143,22 @@
   background: linear-gradient(135deg, #868e96, #495057);
 }
 
-/* Table row hover effect */
+.badge-pulse {
+  animation: badge-pulse 2s infinite;
+}
+
+@keyframes badge-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* ===========================================
+   TABLE STYLES
+   =========================================== */
 .table-row-clickable {
   cursor: pointer;
   transition: background-color 0.15s ease;
@@ -98,16 +168,26 @@
   background-color: rgba(0, 125, 195, 0.05);
 }
 
-/* Form field focus enhancements */
+/* Tour table specific */
+.tour-table-row:hover {
+  background-color: rgba(0, 125, 195, 0.08) !important;
+}
+
+/* ===========================================
+   FORM FIELD ENHANCEMENTS
+   =========================================== */
 .mantine-TextInput-input:focus,
 .mantine-PasswordInput-input:focus,
 .mantine-Textarea-input:focus,
-.mantine-Select-input:focus {
+.mantine-Select-input:focus,
+.mantine-NumberInput-input:focus {
   border-color: #007DC3;
   box-shadow: 0 0 0 3px rgba(0, 125, 195, 0.15);
 }
 
-/* Button hover effects */
+/* ===========================================
+   BUTTON HOVER EFFECTS
+   =========================================== */
 .btn-gradient {
   background: linear-gradient(135deg, #007DC3, #0066a8);
   transition: all 0.2s ease;
@@ -119,14 +199,41 @@
   box-shadow: 0 4px 12px rgba(0, 125, 195, 0.3);
 }
 
-/* Card header styles */
+/* ===========================================
+   CARD STYLES
+   =========================================== */
 .card-header {
   border-bottom: 1px solid #e9ecef;
   padding-bottom: 12px;
   margin-bottom: 16px;
 }
 
-/* Empty state styling */
+/* Tour card specific */
+.tour-card {
+  transition: all 0.2s ease;
+  border: 1px solid #e9ecef;
+}
+
+.tour-card:hover {
+  border-color: #007DC3;
+  box-shadow: 0 4px 12px rgba(0, 125, 195, 0.15);
+}
+
+.tour-card--assigned {
+  border-left: 3px solid #40c057;
+}
+
+.tour-card--unassigned {
+  border-left: 3px solid #fd7e14;
+}
+
+.tour-card--in-progress {
+  border-left: 3px solid #228be6;
+}
+
+/* ===========================================
+   EMPTY STATE STYLING
+   =========================================== */
 .empty-state {
   text-align: center;
   padding: 48px 24px;
@@ -139,7 +246,9 @@
   opacity: 0.5;
 }
 
-/* Dashboard stat card hover */
+/* ===========================================
+   STAT CARD STYLES
+   =========================================== */
 .stat-card {
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
@@ -149,23 +258,289 @@
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
 }
 
-/* Sidebar navigation active state enhancement */
+/* Stat card value animation */
+.stat-value {
+  transition: transform 0.3s ease;
+}
+
+.stat-card:hover .stat-value {
+  transform: scale(1.05);
+}
+
+/* ===========================================
+   NAVIGATION STYLES
+   =========================================== */
 .nav-item-active {
   background-color: rgba(0, 125, 195, 0.1);
   border-left: 3px solid #007DC3;
 }
 
-/* Modal overlay */
+/* ===========================================
+   MODAL STYLES
+   =========================================== */
 .modal-overlay {
   backdrop-filter: blur(4px);
 }
 
-/* Toast notification positioning */
+/* Tour modal specific */
+.tour-modal-header {
+  background: linear-gradient(135deg, #007DC3 0%, #0066a8 100%);
+  color: white;
+  padding: 16px;
+  border-radius: 8px 8px 0 0;
+  margin: -16px -16px 16px -16px;
+}
+
+/* ===========================================
+   TOAST NOTIFICATIONS
+   =========================================== */
 .mantine-Notifications-root {
   z-index: 9999;
 }
 
-/* Print optimization */
+/* ===========================================
+   TEMPLATE SELECTOR STYLES
+   =========================================== */
+.template-card {
+  transition: all 0.2s ease;
+  cursor: pointer;
+  border: 2px solid transparent;
+}
+
+.template-card:hover {
+  border-color: #007DC3;
+  background-color: rgba(0, 125, 195, 0.05);
+  transform: translateY(-2px);
+}
+
+.template-card--selected {
+  border-color: #007DC3;
+  background-color: rgba(0, 125, 195, 0.1);
+}
+
+/* ===========================================
+   TIMELINE STYLES (Tour Stops)
+   =========================================== */
+.tour-timeline {
+  --timeline-color: #007DC3;
+}
+
+.tour-stop-item {
+  transition: background-color 0.2s ease;
+  padding: 8px;
+  border-radius: 4px;
+}
+
+.tour-stop-item:hover {
+  background-color: rgba(0, 125, 195, 0.05);
+}
+
+/* ===========================================
+   IMPORT/EXPORT STYLES
+   =========================================== */
+.dropzone {
+  border: 2px dashed #dee2e6;
+  border-radius: 8px;
+  padding: 40px;
+  text-align: center;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.dropzone:hover {
+  border-color: #007DC3;
+  background-color: rgba(0, 125, 195, 0.05);
+}
+
+.dropzone--active {
+  border-color: #007DC3;
+  background-color: rgba(0, 125, 195, 0.1);
+}
+
+/* ===========================================
+   HELP SECTION STYLES
+   =========================================== */
+.help-section {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.help-card {
+  background: white;
+  border-radius: 8px;
+  padding: 16px;
+  height: 100%;
+  transition: all 0.2s ease;
+}
+
+.help-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* ===========================================
+   FILTER BAR STYLES
+   =========================================== */
+.filter-bar {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.filter-chip {
+  transition: all 0.15s ease;
+}
+
+.filter-chip:hover {
+  transform: scale(1.02);
+}
+
+.filter-chip--active {
+  background-color: #007DC3 !important;
+  color: white !important;
+}
+
+/* ===========================================
+   PROGRESS INDICATORS
+   =========================================== */
+.capacity-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: #e9ecef;
+  overflow: hidden;
+}
+
+.capacity-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.capacity-bar-fill--low {
+  background: linear-gradient(90deg, #40c057, #51cf66);
+}
+
+.capacity-bar-fill--medium {
+  background: linear-gradient(90deg, #fab005, #fcc419);
+}
+
+.capacity-bar-fill--high {
+  background: linear-gradient(90deg, #fa5252, #ff6b6b);
+}
+
+/* ===========================================
+   ANIMATIONS
+   =========================================== */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fade-in 0.3s ease forwards;
+}
+
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.slide-in-right {
+  animation: slide-in-right 0.3s ease forwards;
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.scale-in {
+  animation: scale-in 0.2s ease forwards;
+}
+
+/* Staggered animation for tour cards */
+.tour-grid > * {
+  animation: fade-in 0.3s ease forwards;
+}
+
+.tour-grid > *:nth-child(1) { animation-delay: 0ms; }
+.tour-grid > *:nth-child(2) { animation-delay: 50ms; }
+.tour-grid > *:nth-child(3) { animation-delay: 100ms; }
+.tour-grid > *:nth-child(4) { animation-delay: 150ms; }
+.tour-grid > *:nth-child(5) { animation-delay: 200ms; }
+.tour-grid > *:nth-child(6) { animation-delay: 250ms; }
+.tour-grid > *:nth-child(7) { animation-delay: 300ms; }
+.tour-grid > *:nth-child(8) { animation-delay: 350ms; }
+
+/* ===========================================
+   CODE BLOCK STYLES
+   =========================================== */
+.code-block {
+  background: #2d2d2d;
+  color: #f8f8f2;
+  padding: 16px;
+  border-radius: 8px;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  overflow-x: auto;
+}
+
+.code-block-light {
+  background: #f8f9fa;
+  color: #495057;
+  border: 1px solid #e9ecef;
+}
+
+/* ===========================================
+   FIREBASE CONNECTION STATUS
+   =========================================== */
+.firebase-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.firebase-status--connected {
+  background: #d3f9d8;
+  color: #2f9e44;
+}
+
+.firebase-status--syncing {
+  background: #fff3bf;
+  color: #f59f00;
+}
+
+.firebase-status--error {
+  background: #ffe3e3;
+  color: #fa5252;
+}
+
+/* ===========================================
+   PRINT OPTIMIZATION
+   =========================================== */
 @media print {
   .mantine-AppShell-navbar,
   .mantine-AppShell-header {
@@ -175,5 +550,48 @@
   .mantine-AppShell-main {
     padding: 0 !important;
     margin: 0 !important;
+  }
+
+  .interactive-card:hover,
+  .stat-card:hover,
+  .template-card:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}
+
+/* ===========================================
+   ACCESSIBILITY
+   =========================================== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Focus visible styles */
+*:focus-visible {
+  outline: 2px solid #007DC3;
+  outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .tour-card {
+    border-width: 2px;
+  }
+
+  .badge-active,
+  .badge-inactive {
+    background: none;
+    border: 2px solid currentColor;
   }
 }
