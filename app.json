@@ -21,7 +21,9 @@
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Loch Lomond Travel needs access to your photo library to save and share tour memories.",
         "NSCameraUsageDescription": "Loch Lomond Travel needs camera access to capture tour moments.",
-        "NSLocationWhenInUseUsageDescription": "Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points."
+        "NSLocationWhenInUseUsageDescription": "Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.",
+        "UIBackgroundModes": ["location", "fetch", "remote-notification"]
       },
       "config": {
         "usesNonExemptEncryption": false
@@ -39,34 +41,59 @@
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE",
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
       ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-font",
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "15.1"
+          }
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.",
+          "locationWhenInUsePermission": "Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Loch Lomond Travel needs access to your photo library to save and share tour memories.",
+          "cameraPermission": "Loch Lomond Travel needs camera access to capture tour moments."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#007DC3"
+        }
+      ]
+    ],
+    "updates": {
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/1b1ae41f-9096-4e7d-887c-b617613cf603"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
     },
     "extra": {
       "eas": {
         "projectId": "1b1ae41f-9096-4e7d-887c-b617613cf603"
       }
     },
-    "owner": "lochlomondtravel",
-    "plugins": [
-      "expo-font"
-    ]
-  },
-  "plugins": [
-    [
-      "expo-build-properties",
-      {
-        "ios": {
-          "deploymentTarget": "15.1"
-        }
-      }
-    ],
-    "expo-secure-store"
-  ],
-  "updates": {
-    "fallbackToCacheTimeout": 0
+    "owner": "lochlomondtravel"
   }
 }

@@ -4,12 +4,21 @@
   "main": "index.js",
   "scripts": {
     "start": "expo start",
+    "start:dev": "expo start --dev-client",
     "android": "expo start --android",
+    "android:dev": "expo start --dev-client --android",
     "ios": "expo start --ios",
+    "ios:dev": "expo start --dev-client --ios",
     "web": "expo start --web",
-    "test": "NODE_ENV=test node --test tests/joinTour.test.js"
+    "test": "NODE_ENV=test node --test tests/joinTour.test.js",
+    "build:dev:ios": "eas build --profile development --platform ios",
+    "build:dev:android": "eas build --profile development --platform android",
+    "build:dev:ios-device": "eas build --profile development-device --platform ios",
+    "build:preview": "eas build --profile preview --platform all",
+    "build:production": "eas build --profile production --platform all"
   },
   "dependencies": {
+    "expo-dev-client": "~6.0.11",
     "@expo/vector-icons": "^14.1.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/netinfo": "11.4.1",
