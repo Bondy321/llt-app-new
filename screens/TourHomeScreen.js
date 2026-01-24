@@ -1042,6 +1042,17 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
                 <MaterialCommunityIcons name="shield-alert" size={18} color={COLORS.error} />
                 <Text style={styles.modalEmergencyButtonText}>Emergency Assistance</Text>
               </TouchableOpacity>
+
+              <View style={styles.modalLogoutDivider} />
+
+              <TouchableOpacity
+                style={styles.modalLogoutButton}
+                onPress={onLogout}
+                activeOpacity={0.8}
+              >
+                <MaterialCommunityIcons name="logout-variant" size={18} color={COLORS.subtleText} />
+                <Text style={styles.modalLogoutButtonText}>Log Out</Text>
+              </TouchableOpacity>
             </LinearGradient>
           </Animated.View>
         </View>
@@ -1791,5 +1802,23 @@ const styles = StyleSheet.create({
     color: COLORS.error,
     fontSize: 14,
     fontWeight: '700',
+  },
+  modalLogoutDivider: {
+    height: 1,
+    backgroundColor: COLORS.border,
+    marginVertical: 12,
+    marginHorizontal: 20,
+  },
+  modalLogoutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    gap: 8,
+  },
+  modalLogoutButtonText: {
+    color: COLORS.subtleText,
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
