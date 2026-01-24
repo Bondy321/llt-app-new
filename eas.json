@@ -4,25 +4,58 @@
     "promptToConfigurePushNotifications": false
   },
   "build": {
+    "base": {
+      "env": {
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "@firebase_api_key",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "@firebase_auth_domain",
+        "EXPO_PUBLIC_FIREBASE_DATABASE_URL": "@firebase_database_url",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "@firebase_project_id",
+        "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "@firebase_storage_bucket",
+        "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "@firebase_messaging_sender_id",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "@firebase_app_id",
+        "EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID": "@firebase_measurement_id"
+      }
+    },
     "development": {
+      "extends": "base",
       "developmentClient": true,
       "distribution": "internal",
       "ios": {
         "simulator": true
       },
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleDebug"
+      }
+    },
+    "development-device": {
+      "extends": "base",
+      "developmentClient": true,
+      "distribution": "internal",
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleDebug"
       }
     },
     "preview": {
+      "extends": "base",
       "distribution": "internal",
-      "ios": {},
+      "ios": {
+        "resourceClass": "m-medium"
+      },
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
-      "ios": {},
+      "extends": "base",
+      "autoIncrement": true,
+      "ios": {
+        "resourceClass": "m-medium"
+      },
       "android": {
         "buildType": "app-bundle"
       }
@@ -31,9 +64,13 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId": "your-apple-id@email.com",
-        "ascAppId": "YOUR-APP-STORE-CONNECT-APP-ID",
-        "appleTeamId": "YOUR-TEAM-ID"
+        "appleId": "REPLACE_WITH_YOUR_APPLE_ID",
+        "ascAppId": "REPLACE_WITH_APP_STORE_CONNECT_APP_ID",
+        "appleTeamId": "REPLACE_WITH_APPLE_TEAM_ID"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./google-service-account.json",
+        "track": "internal"
       }
     }
   }
