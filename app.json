@@ -45,7 +45,12 @@
         "ACCESS_BACKGROUND_LOCATION",
         "RECEIVE_BOOT_COMPLETED",
         "VIBRATE"
-      ]
+      ],
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDdk0F-wiotr0K3Yl0C_n0BrzdYiZ6dtF4"
+        }
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"

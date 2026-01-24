@@ -14,7 +14,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import MapView, { Marker, PROVIDER_GOOGLE, Polyline, Circle } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE, PROVIDER_DEFAULT, Polyline, Circle } from 'react-native-maps';
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -556,13 +556,13 @@ export default function MapScreen({ onBack, tourId, tourData }) {
           <Animated.View style={[styles.mapContainer, { opacity: fadeAnim }]}>
             <MapView
               style={styles.map}
-              provider={PROVIDER_GOOGLE}
+              provider={Platform.OS === 'ios' ? PROVIDER_DEFAULT : PROVIDER_GOOGLE}
               initialRegion={getInitialRegion()}
               showsUserLocation={true}
               showsMyLocationButton={false}
               showsCompass={false}
               mapType={mapType}
-              customMapStyle={mapType === 'standard' ? mapStyle : undefined}
+              customMapStyle={Platform.OS === 'android' && mapType === 'standard' ? mapStyle : undefined}
               ref={mapRef}
               accessibilityLabel="Map showing bus location"
             >

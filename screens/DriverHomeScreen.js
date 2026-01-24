@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import MapView, { Marker, PROVIDER_GOOGLE, Circle } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE, PROVIDER_DEFAULT, Circle } from 'react-native-maps';
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
 import { realtimeDb } from '../firebase';
@@ -627,8 +627,8 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
             <View style={styles.mapPreviewContainer}>
               <MapView
                 style={styles.mapPreview}
-                provider={PROVIDER_GOOGLE}
-                customMapStyle={minimalMapStyle}
+                provider={Platform.OS === 'ios' ? PROVIDER_DEFAULT : PROVIDER_GOOGLE}
+                customMapStyle={Platform.OS === 'android' ? minimalMapStyle : undefined}
                 region={{
                   latitude: previewLocation.latitude,
                   longitude: previewLocation.longitude,
