@@ -16,7 +16,9 @@ const createStorageCandidate = (name, handlers) => ({
 });
 
 export const createPersistenceProvider = ({ namespace = 'LLT', logger = defaultLogger } = {}) => {
-  const namespacedKey = (key) => `${namespace}:${key}`;
+  // SecureStore keys must only contain alphanumeric characters, ".", "-", and "_"
+  // Using underscore as separator instead of colon to comply with SecureStore requirements
+  const namespacedKey = (key) => `${namespace}_${key}`;
 
   const candidates = [
     createStorageCandidate('secure-store', {

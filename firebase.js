@@ -105,18 +105,15 @@ try {
       console.error('Error setting persistence:', error);
     });
 
-  // Enable Firestore offline persistence
-  db.enablePersistence({ synchronizeTabs: true })
-    .then(() => {
-      console.log('Firestore offline persistence enabled');
-    })
-    .catch((err) => {
-      if (err.code === 'unimplemented') {
-        console.log('Firestore persistence not available in this environment');
-      } else {
-        console.error('Firestore persistence error:', err);
-      }
-    });
+  // Configure Firestore settings
+  // Note: IndexedDB persistence is not supported in React Native
+  // Firestore will use memory cache which is appropriate for mobile apps
+  // where data synchronization happens automatically when online
+  db.settings({
+    cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED,
+    merge: true
+  });
+  console.log('Firestore configured with memory cache (persistence not available in React Native)');
 
   // Enable Realtime Database offline persistence
   realtimeDb.goOffline();

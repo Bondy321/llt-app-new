@@ -3,7 +3,6 @@ import {
   StyleSheet,
   Text,
   View,
-  SafeAreaView,
   ScrollView,
   Switch,
   TouchableOpacity,
@@ -11,6 +10,7 @@ import {
   Alert,
   Platform
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
 import { saveUserPreferences, getUserPreferences, registerForPushNotificationsAsync } from '../services/notificationService';
