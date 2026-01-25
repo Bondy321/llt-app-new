@@ -5,7 +5,6 @@ import {
   Text,
   View,
   TouchableOpacity,
-  SafeAreaView,
   ScrollView,
   Platform,
   RefreshControl,
@@ -20,6 +19,7 @@ import {
   Linking,
   Share
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getTourItinerary } from '../services/bookingServiceRealtime';

@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   StyleSheet, Text, View, SectionList, FlatList, TextInput,
-  TouchableOpacity, ActivityIndicator, Modal, Alert, SafeAreaView
+  TouchableOpacity, ActivityIndicator, Modal, Alert
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getTourManifest, updateManifestBooking, MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import ManifestBookingCard from '../components/ManifestBookingCard';

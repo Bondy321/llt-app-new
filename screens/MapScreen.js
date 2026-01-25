@@ -4,7 +4,6 @@ import {
   Text,
   View,
   TouchableOpacity,
-  SafeAreaView,
   Platform,
   ActivityIndicator,
   Dimensions,
@@ -13,6 +12,7 @@ import {
   Alert,
   ScrollView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import MapView, { Marker, PROVIDER_GOOGLE, PROVIDER_DEFAULT, Polyline, Circle } from 'react-native-maps';
 import * as Location from 'expo-location';
