@@ -89,6 +89,17 @@ const verifyParticipant = async (tourId, userId) => {
 };
 
 /**
+ * Checks if the sender is an admin/HQ broadcast
+ */
+const isAdminBroadcast = (senderId) => {
+  return senderId && (
+    senderId === 'admin_hq_broadcast' ||
+    senderId.startsWith('admin_') ||
+    senderId.startsWith('hq_')
+  );
+};
+
+/**
  * Rate limiting check (simple implementation)
  */
 const rateLimitCache = new Map();
@@ -168,13 +179,17 @@ exports.sendChatNotification = onValueCreated(
       }
 
       // 4. Security: Verify sender is actually a participant (prevent spoofing)
-      const isParticipant = await verifyParticipant(tourId, senderId);
-      if (!isParticipant) {
-        log.error("Sender is not a participant of the tour", null, { tourId, senderId });
-        return null;
+      // Admin broadcasts are exempt from participant check
+      const isAdmin = isAdminBroadcast(senderId);
+      if (!isAdmin) {
+        const isParticipant = await verifyParticipant(tourId, senderId);
+        if (!isParticipant) {
+          log.error("Sender is not a participant of the tour", null, { tourId, senderId });
+          return null;
+        }
       }
 
-      log.info("Processing chat notification", { tourId, senderId, senderName });
+      log.info("Processing chat notification", { tourId, senderId, senderName, isAdmin });
 
       // 5. Get tour details and participants in parallel
       const [tourSnapshot, participantsSnapshot] = await Promise.all([
@@ -216,9 +231,12 @@ exports.sendChatNotification = onValueCreated(
           }
 
           // Check notification preferences
-          const wantsChatUpdates = userData.preferences?.ops?.group_chat ?? true;
-          if (!wantsChatUpdates) {
-            log.info("User has muted chat notifications", { userId, tourId });
+          // Admin broadcasts use driver_updates preference (operational announcements)
+          // Regular chat messages use group_chat preference
+          const prefKey = isAdmin ? 'driver_updates' : 'group_chat';
+          const wantsUpdates = userData.preferences?.ops?.[prefKey] ?? true;
+          if (!wantsUpdates) {
+            log.info(`User has muted ${prefKey} notifications`, { userId, tourId, prefKey });
             return;
           }
 
@@ -234,17 +252,26 @@ exports.sendChatNotification = onValueCreated(
             ? messageText.substring(0, 197) + '...'
             : messageText;
 
+          // Admin broadcasts get distinctive formatting
+          const notificationTitle = isAdmin
+            ? `📢 ${tourName} Announcement`
+            : `New message in ${tourName}`;
+          const notificationBody = isAdmin
+            ? truncatedMessage.replace(/^ANNOUNCEMENT:\s*/i, '')  // Remove prefix if present
+            : `${senderName}: ${truncatedMessage}`;
+
           pushMessages.push({
             to: userData.pushToken,
             sound: "default",
-            title: `New message in ${tourName}`,
-            body: `${senderName}: ${truncatedMessage}`,
+            title: notificationTitle,
+            body: notificationBody,
             data: {
               tourId: tourId,
               screen: "Chat",
               messageId: messageId,
+              isAdminBroadcast: isAdmin,
             },
-            priority: "high",
+            priority: isAdmin ? "high" : "default",  // Admin broadcasts are high priority
             channelId: "default",
           });
         } catch (userError) {
@@ -298,6 +325,7 @@ exports.sendChatNotification = onValueCreated(
         recipients: pushMessages.length,
         successCount,
         errorCount,
+        isAdminBroadcast: isAdmin,
         duration: `${duration}ms`
       });
 
