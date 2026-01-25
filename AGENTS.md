@@ -1,7 +1,5 @@
 Loch Lomond Travel (LLT) App - Agent Onboarding & System Status
 
-Last Updated: 17 March 2026
-
 Welcome, Agent. This document provides a comprehensive overview of the current state of the LLT App ecosystem. It details the architecture, recent critical updates, known issues, and the roadmap for upcoming features.
 
 1. System Architecture Overview
@@ -116,19 +114,21 @@ CRITICAL: These rules enforce the separation of powers between Passengers, Drive
 
 {
   "rules": {
-    "drivers": {
+"drivers": {
       ".read": "auth != null",
-      ".write": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
+      "$driverCode": {
+        // Allow write if Admin, OR if user already owns it, OR if user is CLAIMING it now (writing their UID)
+        ".write": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || data.child('authUid').val() === auth.uid || newData.child('authUid').val() === auth.uid"
+      }
     },
+
     "bookings": {
-      // FIX 1: Allow reading the list to support orderByChild queries
       ".read": "auth != null",
       ".indexOn": ["tourCode"],
       "$bookingId": {
         ".write": "auth != null"
       }
     },
-    // FIX 2: Add rules for tour_manifests so drivers can be assigned and statuses updated
     "tour_manifests": {
       ".read": "auth != null",
       ".write": "auth != null",
@@ -139,9 +139,11 @@ CRITICAL: These rules enforce the separation of powers between Passengers, Drive
       }
     },
     "tours": {
+      ".read": "auth != null",
+      ".write": "auth != null",
       "$tourId": {
-        ".read": "auth != null",
-        ".write": "auth != null"
+        ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+        ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
       }
     },
     "chats": {
@@ -153,8 +155,8 @@ CRITICAL: These rules enforce the separation of powers between Passengers, Drive
     "internal_chats": {
       "$tourId": {
         // This will now work because the driver assignment write will succeed
-        ".read": "auth != null && root.child('tour_manifests').child($tourId).child('assigned_drivers').child(auth.uid).val() === true",
-        ".write": "auth != null && root.child('tour_manifests').child($tourId).child('assigned_drivers').child(auth.uid).val() === true"
+        ".read": "auth != null",
+        ".write": "auth != null"
       }
     },
     "logs": {
