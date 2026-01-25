@@ -4,7 +4,7 @@
     "slug": "loch-lomond-travel",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/images/outward_app_icon.png",
     "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/splash.png",
@@ -31,7 +31,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/images/outward_app_icon.png",
         "backgroundColor": "#007DC3"
       },
       "package": "com.lochlomondtravel.tourapp",
