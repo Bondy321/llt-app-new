@@ -24,6 +24,7 @@ import NotificationPreferencesScreen from './screens/NotificationPreferencesScre
 import DriverHomeScreen from './screens/DriverHomeScreen';
 import PassengerManifestScreen from './screens/PassengerManifestScreen';
 import SafetySupportScreen from './screens/SafetySupportScreen';
+import DriverItineraryScreen from './screens/DriverItineraryScreen';
 
 const COLORS = {
   primaryBlue: THEME.primary,
@@ -322,7 +323,16 @@ export default function App() {
         return <PhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} />;
       case 'GroupPhotobook':
         return <GroupPhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} userName={bookingData?.passengerNames?.[0] || 'Tour Member'} />;
-case 'Itinerary':
+case 'DriverItinerary':
+        return (
+          <DriverItineraryScreen
+            {...screenProps}
+            onBack={() => navigateTo('DriverHome')}
+            tourId={screenParams.tourId || tourData?.id}
+            tourName={tourData?.name}
+          />
+        );
+      case 'Itinerary':
         // CHECK: Is the user a driver?
         const isDriverUser = screenParams.isDriver || (bookingData?.id && bookingData.id.startsWith('D-'));
         // If driver, back goes to DriverHome
@@ -337,7 +347,7 @@ case 'Itinerary':
             tourId={itinTourId}
             tourName={tourData?.name}
             startDate={tourData?.startDate}
-            isDriver={isDriverUser} // NEW PROP
+            isDriver={isDriverUser}
           />
         );
       case 'Chat':

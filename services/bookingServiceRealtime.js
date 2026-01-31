@@ -552,42 +552,52 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
   }
 };
 
-// --- EXISTING: Get Itinerary ---
+// --- EXISTING: Get Itinerary (updated for day-by-day content format) ---
 const getTourItinerary = async (tourId) => {
   try {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
-    
+
     const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
     if (!tourSnapshot.exists()) return null;
-    
+
     const tourData = tourSnapshot.val();
     const itineraryData = tourData.itinerary;
 
+    // New format: { title, days: [{ day, content }] }
     if (itineraryData && typeof itineraryData === 'object' && Array.isArray(itineraryData.days)) {
       return { ...itineraryData, title: itineraryData.title || tourData.name };
     }
-    
-    const parseItinerary = (text) => {
-      if (!text || typeof text !== 'string') return [{ time: '', description: 'Itinerary to be confirmed' }];
-      const formattedText = text
-        .replace(/\. /g, '.\n\n')
-        .replace(/(\d{4}hrs)/g, (match) => {
-          const hour = parseInt(match.substring(0, 2));
-          const min = match.substring(2, 4);
-          const ampm = hour >= 12 ? 'PM' : 'AM';
-          const displayHour = hour > 12 ? hour - 12 : (hour === 0 ? 12 : hour);
-          return `${displayHour}:${min} ${ampm}`;
-        })
-        .trim();
-      return [{ time: '', description: formattedText }];
-    };
-    
+
+    // Fallback: no itinerary data at all
     return {
       title: tourData.name,
-      days: [{ day: 1, title: tourData.days === 1 ? 'Day Trip' : 'Day 1', activities: parseItinerary(itineraryData) }]
+      days: [{ day: 1, content: 'Itinerary to be confirmed' }]
     };
   } catch (error) {
     console.error('Error getting itinerary:', error);
+    return null;
+  }
+};
+
+// --- NEW: Get Driver Itinerary (unredacted) ---
+const getDriverItinerary = async (tourId) => {
+  try {
+    if (!realtimeDb) throw new Error('Realtime database not initialized');
+
+    const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
+    if (!tourSnapshot.exists()) return null;
+
+    const tourData = tourSnapshot.val();
+    return {
+      title: tourData.name || 'Tour',
+      driverItinerary: tourData.driver_itinerary || 'No driver itinerary available.',
+      startDate: tourData.startDate || null,
+      endDate: tourData.endDate || null,
+      days: tourData.days || 0,
+      tourCode: tourData.tourCode || '',
+    };
+  } catch (error) {
+    console.error('Error getting driver itinerary:', error);
     return null;
   }
 };
@@ -599,6 +609,7 @@ module.exports = {
   validateBookingReference,
   joinTour,
   getTourItinerary,
+  getDriverItinerary,
   getTourManifest,
   updateManifestBooking,
   assignDriverToTour
