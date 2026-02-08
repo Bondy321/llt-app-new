@@ -24,6 +24,7 @@ import NotificationPreferencesScreen from './screens/NotificationPreferencesScre
 import DriverHomeScreen from './screens/DriverHomeScreen';
 import PassengerManifestScreen from './screens/PassengerManifestScreen';
 import SafetySupportScreen from './screens/SafetySupportScreen';
+import DriverItineraryScreen from './screens/DriverItineraryScreen';
 
 const COLORS = {
   primaryBlue: THEME.primary,
@@ -338,6 +339,15 @@ case 'Itinerary':
             tourName={tourData?.name}
             startDate={tourData?.startDate}
             isDriver={isDriverUser} // NEW PROP
+          />
+        );
+      case 'DriverItinerary':
+        return (
+          <DriverItineraryScreen
+            {...screenProps}
+            onBack={() => navigateTo('DriverHome')}
+            tourId={screenParams.tourId || tourData?.id}
+            tourName={tourData?.name}
           />
         );
       case 'Chat':

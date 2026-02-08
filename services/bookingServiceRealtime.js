@@ -552,42 +552,48 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
   }
 };
 
-// --- EXISTING: Get Itinerary ---
+// --- Get Itinerary (day-by-day content format) ---
 const getTourItinerary = async (tourId) => {
   try {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
-    
+
     const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
     if (!tourSnapshot.exists()) return null;
-    
+
     const tourData = tourSnapshot.val();
     const itineraryData = tourData.itinerary;
 
     if (itineraryData && typeof itineraryData === 'object' && Array.isArray(itineraryData.days)) {
       return { ...itineraryData, title: itineraryData.title || tourData.name };
     }
-    
-    const parseItinerary = (text) => {
-      if (!text || typeof text !== 'string') return [{ time: '', description: 'Itinerary to be confirmed' }];
-      const formattedText = text
-        .replace(/\. /g, '.\n\n')
-        .replace(/(\d{4}hrs)/g, (match) => {
-          const hour = parseInt(match.substring(0, 2));
-          const min = match.substring(2, 4);
-          const ampm = hour >= 12 ? 'PM' : 'AM';
-          const displayHour = hour > 12 ? hour - 12 : (hour === 0 ? 12 : hour);
-          return `${displayHour}:${min} ${ampm}`;
-        })
-        .trim();
-      return [{ time: '', description: formattedText }];
-    };
-    
+
     return {
       title: tourData.name,
-      days: [{ day: 1, title: tourData.days === 1 ? 'Day Trip' : 'Day 1', activities: parseItinerary(itineraryData) }]
+      days: [{ day: 1, content: 'Itinerary to be confirmed' }]
     };
   } catch (error) {
     console.error('Error getting itinerary:', error);
+    return null;
+  }
+};
+
+// --- Get Driver Itinerary (unredacted text) ---
+const getDriverItinerary = async (tourId) => {
+  try {
+    if (!realtimeDb) throw new Error('Realtime database not initialized');
+
+    const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
+    if (!tourSnapshot.exists()) return null;
+
+    const tourData = tourSnapshot.val();
+    return {
+      driverItinerary: tourData.driver_itinerary || null,
+      tourName: tourData.name || 'Tour',
+      startDate: tourData.startDate || null,
+      days: tourData.days || null,
+    };
+  } catch (error) {
+    console.error('Error getting driver itinerary:', error);
     return null;
   }
 };
@@ -599,6 +605,7 @@ module.exports = {
   validateBookingReference,
   joinTour,
   getTourItinerary,
+  getDriverItinerary,
   getTourManifest,
   updateManifestBooking,
   assignDriverToTour

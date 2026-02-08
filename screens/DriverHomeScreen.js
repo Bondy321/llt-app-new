@@ -581,13 +581,37 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
                   onNavigate('Itinerary', { tourId: activeTourId, isDriver: true });
                 }}
                 activeOpacity={0.9}
-                accessibilityLabel="Edit itinerary"
+                accessibilityLabel="Edit client itinerary"
                 accessibilityRole="button"
               >
                 <MaterialCommunityIcons name="calendar-edit" size={22} color={COLORS.white} style={{ marginRight: 10 }} />
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.wideTitle, { color: COLORS.white }]}>Edit itinerary</Text>
-                  <Text style={[styles.wideSubtitle, { color: '#EDE9FE' }]}>Keep passengers up to date</Text>
+                  <Text style={[styles.wideTitle, { color: COLORS.white }]}>Client itinerary</Text>
+                  <Text style={[styles.wideSubtitle, { color: '#EDE9FE' }]}>View & edit what passengers see</Text>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={20} color={COLORS.white} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.wideButton, styles.amberButton]}
+                onPress={() => {
+                  if(!activeTourId) {
+                    Alert.alert("No Tour", "Please join a tour first.");
+                    return;
+                  }
+                  if (Platform.OS === 'ios') {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }
+                  onNavigate('DriverItinerary', { tourId: activeTourId, isDriver: true });
+                }}
+                activeOpacity={0.9}
+                accessibilityLabel="View driver itinerary"
+                accessibilityRole="button"
+              >
+                <MaterialCommunityIcons name="file-eye" size={22} color={COLORS.white} style={{ marginRight: 10 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.wideTitle, { color: COLORS.white }]}>Driver itinerary</Text>
+                  <Text style={[styles.wideSubtitle, { color: '#FEF3C7' }]}>Full unredacted instructions</Text>
                 </View>
                 <MaterialCommunityIcons name="chevron-right" size={20} color={COLORS.white} />
               </TouchableOpacity>
@@ -1035,6 +1059,10 @@ const styles = StyleSheet.create({
   purpleButton: {
     backgroundColor: COLORS.purple,
     borderColor: `${COLORS.purple}80`,
+  },
+  amberButton: {
+    backgroundColor: '#D97706',
+    borderColor: '#B4570980',
   },
   wideTitle: { fontSize: 16, fontWeight: '800', color: COLORS.text },
   wideSubtitle: { fontSize: 13, color: COLORS.muted },
