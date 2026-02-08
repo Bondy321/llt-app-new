@@ -13,10 +13,8 @@ import {
   UIManager,
   TextInput,
   Alert,
-  Modal,
   Animated,
   Dimensions,
-  Linking,
   Share
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -62,17 +60,15 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   const [editedItinerary, setEditedItinerary] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  // --- NEW: ENHANCED FEATURES STATE ---
+  // --- SEARCH ---
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
-  const [timePickerVisible, setTimePickerVisible] = useState(false);
-  const [selectedTime, setSelectedTime] = useState({ dayIndex: null, actIndex: null, value: '' });
-  const [showQuickActions, setShowQuickActions] = useState(null); // {dayIndex, actIndex}
+
+  // --- UI STATE ---
   const [cachedItinerary, setCachedItinerary] = useState(null);
   const [isOnline, setIsOnline] = useState(true);
   const [lastSync, setLastSync] = useState(null);
   const [expandAll, setExpandAll] = useState(false);
-  const [showJumpToDay, setShowJumpToDay] = useState(false);
 
   const scrollViewRef = useRef(null);
   const searchAnimation = useRef(new Animated.Value(0)).current;
@@ -98,7 +94,6 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
           setItinerary(data);
           setEditedItinerary(JSON.parse(JSON.stringify(data)));
           setLastSync(new Date());
-          // Cache the data
           cacheItinerary(data);
         }
       };
@@ -137,7 +132,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
     return null;
   };
 
-  // ... (Keep existing date helper functions: getOrdinal, getParsedStartDate, formatDayLabel, todaysDayNumber) ...
+  // --- DATE HELPERS ---
   const getOrdinal = (day) => {
     const j = day % 10;
     const k = day % 100;
@@ -235,11 +230,10 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
       const tourItinerary = await getTourItinerary(tourId);
       setItinerary(tourItinerary || null);
-      setEditedItinerary(JSON.parse(JSON.stringify(tourItinerary || {}))); // Deep copy for editing
+      setEditedItinerary(JSON.parse(JSON.stringify(tourItinerary || {})));
       setIsOnline(true);
       setLastSync(new Date());
 
-      // Cache the fresh data
       if (tourItinerary) {
         await cacheItinerary(tourItinerary);
       }
@@ -248,16 +242,14 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
     } catch (error) {
       console.error('Error loading itinerary:', error);
 
-      // Retry logic with exponential backoff
       if (retry < 3) {
-        const delay = Math.pow(2, retry) * 1000; // 1s, 2s, 4s
+        const delay = Math.pow(2, retry) * 1000;
         setTimeout(() => {
           loadItinerary({ showSkeleton: false, retry: retry + 1 });
         }, delay);
         setRetryCount(retry + 1);
         setErrorMessage(`Connection issue. Retrying (${retry + 1}/3)...`);
       } else {
-        // Use cached data if available
         if (cachedItinerary) {
           setItinerary(cachedItinerary);
           setEditedItinerary(JSON.parse(JSON.stringify(cachedItinerary)));
@@ -275,7 +267,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   };
 
   const toggleDay = (day) => {
-    if (isEditing) return; // Disable collapsing while editing to avoid confusion
+    if (isEditing) return;
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setCollapsedDays((prev) => ({ ...prev, [day]: !prev[day] }));
   };
@@ -292,15 +284,10 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
     const query = searchQuery.toLowerCase();
     const filtered = {
       ...itinerary,
-      days: itinerary.days.map(day => ({
-        ...day,
-        activities: day.activities.filter(activity =>
-          activity.description?.toLowerCase().includes(query) ||
-          activity.time?.toLowerCase().includes(query) ||
-          activity.location?.toLowerCase().includes(query) ||
-          activity.notes?.toLowerCase().includes(query)
-        )
-      })).filter(day => day.activities.length > 0)
+      days: itinerary.days.filter(day => {
+        const content = day.content || '';
+        return content.toLowerCase().includes(query);
+      })
     };
 
     return filtered;
@@ -320,74 +307,10 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   };
 
   // --- EDITING LOGIC ---
-  const handleEditActivity = (dayIndex, activityIndex, field, value) => {
+  const handleEditDayContent = (dayIndex, value) => {
     const newItinerary = JSON.parse(JSON.stringify(editedItinerary));
-    newItinerary.days[dayIndex].activities[activityIndex][field] = value;
+    newItinerary.days[dayIndex].content = value;
     setEditedItinerary(newItinerary);
-  };
-
-  const handleAddActivity = (dayIndex) => {
-    const newItinerary = JSON.parse(JSON.stringify(editedItinerary));
-    newItinerary.days[dayIndex].activities.push({
-      time: '',
-      description: 'New Activity',
-      location: '',
-      notes: ''
-    });
-    setEditedItinerary(newItinerary);
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-  };
-
-  const handleRemoveActivity = (dayIndex, activityIndex) => {
-    Alert.alert(
-      "Delete Activity",
-      "Are you sure you want to remove this?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => {
-            const newItinerary = JSON.parse(JSON.stringify(editedItinerary));
-            newItinerary.days[dayIndex].activities.splice(activityIndex, 1);
-            setEditedItinerary(newItinerary);
-            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-          }
-        }
-      ]
-    );
-  };
-
-  // --- NEW: QUICK ACTIONS ---
-  const handleDuplicateActivity = (dayIndex, activityIndex) => {
-    const newItinerary = JSON.parse(JSON.stringify(editedItinerary));
-    const activityToCopy = { ...newItinerary.days[dayIndex].activities[activityIndex] };
-    newItinerary.days[dayIndex].activities.splice(activityIndex + 1, 0, activityToCopy);
-    setEditedItinerary(newItinerary);
-    setShowQuickActions(null);
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-  };
-
-  const handleDuplicateDay = (dayIndex) => {
-    Alert.alert(
-      "Duplicate Day",
-      "Create a copy of this day?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Duplicate",
-          onPress: () => {
-            const newItinerary = JSON.parse(JSON.stringify(editedItinerary));
-            const dayToCopy = JSON.parse(JSON.stringify(newItinerary.days[dayIndex]));
-            dayToCopy.day = newItinerary.days.length + 1;
-            dayToCopy.title = `${dayToCopy.title} (Copy)`;
-            newItinerary.days.push(dayToCopy);
-            setEditedItinerary(newItinerary);
-            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-          }
-        }
-      ]
-    );
   };
 
   const handleAddDay = () => {
@@ -400,10 +323,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
     newItinerary.days.push({
       day: newDayNumber,
-      title: `Day ${newDayNumber}`,
-      activities: [
-        { time: '', description: 'New Activity', location: '', notes: '' }
-      ]
+      content: ''
     });
 
     setEditedItinerary(newItinerary);
@@ -434,39 +354,38 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
     );
   };
 
-  // --- DRAG AND DROP ---
-  const handleActivityReorder = (dayIndex, newOrder) => {
-    const newItinerary = JSON.parse(JSON.stringify(editedItinerary));
-    newItinerary.days[dayIndex].activities = newOrder;
-    setEditedItinerary(newItinerary);
-  };
-
-  // --- TIME PICKER ---
-  const showTimePicker = (dayIndex, actIndex, currentValue) => {
-    setSelectedTime({ dayIndex, actIndex, value: currentValue || '' });
-    setTimePickerVisible(true);
-  };
-
-  const handleTimeSelect = (time) => {
-    if (selectedTime.dayIndex !== null && selectedTime.actIndex !== null) {
-      handleEditActivity(selectedTime.dayIndex, selectedTime.actIndex, 'time', time);
-    }
-    setTimePickerVisible(false);
+  const handleDuplicateDay = (dayIndex) => {
+    Alert.alert(
+      "Duplicate Day",
+      "Create a copy of this day?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Duplicate",
+          onPress: () => {
+            const newItinerary = JSON.parse(JSON.stringify(editedItinerary));
+            const dayToCopy = JSON.parse(JSON.stringify(newItinerary.days[dayIndex]));
+            dayToCopy.day = newItinerary.days.length + 1;
+            newItinerary.days.push(dayToCopy);
+            setEditedItinerary(newItinerary);
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+          }
+        }
+      ]
+    );
   };
 
   // --- SAVE WITH RETRY ---
   const handleSaveChanges = async (retryAttempt = 0) => {
     setSaving(true);
     try {
-      // Direct write to Firebase Realtime Database
       await realtimeDb.ref(`tours/${tourId}/itinerary`).update(editedItinerary);
 
-      // Update local state to match saved data
       setItinerary(editedItinerary);
       await cacheItinerary(editedItinerary);
       setIsEditing(false);
       setLastSync(new Date());
-      Alert.alert("✓ Success", "Itinerary updated. Passengers will be notified shortly.");
+      Alert.alert("Success", "Itinerary updated. Passengers will be notified shortly.");
     } catch (error) {
       console.error('Save failed:', error);
 
@@ -500,7 +419,6 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
           text: "Discard",
           style: "destructive",
           onPress: () => {
-            // Revert changes
             setEditedItinerary(JSON.parse(JSON.stringify(itinerary)));
             setIsEditing(false);
           }
@@ -525,28 +443,19 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
         dayDate.setDate(parsedStart.getDate() + dayIndex);
         const dateStr = dayDate.toISOString().split('T')[0].replace(/-/g, '');
 
-        day.activities.forEach((activity, actIndex) => {
-          const eventTime = activity.time || '09:00';
-          const [hours, minutes] = eventTime.split(':');
-          const eventDate = new Date(dayDate);
-          eventDate.setHours(parseInt(hours) || 9, parseInt(minutes) || 0);
-
+        const content = day.content || '';
+        if (content) {
           icsContent += `BEGIN:VEVENT\n`;
-          icsContent += `DTSTART:${dateStr}T${eventTime.replace(':', '')}00\n`;
-          icsContent += `SUMMARY:${activity.description}\n`;
-          if (activity.location) {
-            icsContent += `LOCATION:${activity.location}\n`;
-          }
-          if (activity.notes) {
-            icsContent += `DESCRIPTION:${activity.notes}\n`;
-          }
+          icsContent += `DTSTART;VALUE=DATE:${dateStr}\n`;
+          icsContent += `DTEND;VALUE=DATE:${dateStr}\n`;
+          icsContent += `SUMMARY:Day ${day.day} - ${itinerary.title || tourName || 'Tour'}\n`;
+          icsContent += `DESCRIPTION:${content.replace(/\n/g, '\\n')}\n`;
           icsContent += `END:VEVENT\n`;
-        });
+        }
       });
 
       icsContent += "END:VCALENDAR";
 
-      // Share the ICS file
       await Share.share({
         message: icsContent,
         title: `${tourName || 'Tour'} Itinerary`
@@ -562,17 +471,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
     const position = dayPositions[dayNumber];
     if (position !== undefined && scrollViewRef.current) {
       scrollViewRef.current.scrollTo({ y: position, animated: true });
-      setShowJumpToDay(false);
     }
-  };
-
-  // --- RENDERING ---
-  const isMajorEvent = (description = '', index, activitiesLength) => {
-    if (!description) return false;
-    const keywords = ['pick-up','pickup','drop-off','drop off','check-in','check in','departure','arrival','ferry','train','flight','cruise','museum'];
-    const lowered = description.toLowerCase();
-    const keywordMatch = keywords.some((word) => lowered.includes(word));
-    return keywordMatch || index === 0 || index === activitiesLength - 1;
   };
 
   // --- LOADING SKELETON ---
@@ -609,8 +508,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
               days: [
                 {
                   day: 1,
-                  title: 'Day 1',
-                  activities: [{ time: '', description: 'New Activity', location: '', notes: '' }]
+                  content: ''
                 }
               ]
             };
@@ -727,7 +625,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
             <MaterialCommunityIcons name="magnify" size={20} color={COLORS.secondaryText} />
             <TextInput
               style={styles.searchInput}
-              placeholder="Search activities, times, locations..."
+              placeholder="Search itinerary..."
               placeholderTextColor={COLORS.secondaryText}
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -802,10 +700,10 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
         ) : (
           <>
             {dataToRender.days.map((dayData, dayIndex) => {
-              const activities = Array.isArray(dayData.activities) ? dayData.activities : [];
               const isCollapsed = !isEditing && collapsedDays[dayData.day];
               const dayLabel = formatDayLabel(dayData.day);
               const isToday = todaysDayNumber === dayData.day;
+              const content = dayData.content || '';
 
               return (
                 <View
@@ -825,31 +723,21 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
                       onPress={() => toggleDay(dayData.day)}
                       activeOpacity={isEditing ? 1 : 0.9}
                       accessible={true}
-                      accessibilityLabel={`${dayLabel}, ${dayData.title}`}
+                      accessibilityLabel={dayLabel}
                       accessibilityRole="button"
                       accessibilityHint={isCollapsed ? "Double tap to expand" : "Double tap to collapse"}
                     >
                       <View style={styles.dayHeader}>
-                        <View style={styles.dayBadge}>
+                        <View style={[styles.dayBadge, isToday && styles.todayBadge]}>
+                          <MaterialCommunityIcons
+                            name={isToday ? "calendar-today" : "calendar-blank"}
+                            size={14}
+                            color={COLORS.white}
+                            style={{ marginRight: 6 }}
+                          />
                           <Text style={styles.dayBadgeText}>{dayLabel}</Text>
                         </View>
-                        <View style={styles.dayTitleWrapper}>
-                          {isEditing ? (
-                            <TextInput
-                              style={styles.editTitleInput}
-                              value={dayData.title}
-                              onChangeText={(text) => {
-                                const newItinerary = JSON.parse(JSON.stringify(editedItinerary));
-                                newItinerary.days[dayIndex].title = text;
-                                setEditedItinerary(newItinerary);
-                              }}
-                              accessible={true}
-                              accessibilityLabel="Day title"
-                            />
-                          ) : (
-                            <Text style={styles.dayTitleText}>{dayData.title}</Text>
-                          )}
-                        </View>
+                        <View style={{ flex: 1 }} />
                         {isEditing ? (
                           <View style={styles.dayEditActions}>
                             <TouchableOpacity
@@ -880,146 +768,23 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
                     </TouchableOpacity>
 
                     {!isCollapsed && (
-                      <View style={styles.activitiesContainer}>
-                        {activities.map((activity, actIndex) => {
-                          const major = isMajorEvent(activity.description, actIndex, activities.length);
-
-                          if (isEditing) {
-                            // --- EDIT ROW ---
-                            return (
-                              <View key={actIndex} style={styles.editRow}>
-                                <View style={styles.editMainRow}>
-                                  <TouchableOpacity
-                                    style={styles.editTimeContainer}
-                                    onPress={() => showTimePicker(dayIndex, actIndex, activity.time)}
-                                  >
-                                    <TextInput
-                                      style={styles.editTimeInput}
-                                      value={activity.time}
-                                      placeholder="09:00"
-                                      onChangeText={(text) => handleEditActivity(dayIndex, actIndex, 'time', text)}
-                                      editable={false}
-                                    />
-                                    <MaterialCommunityIcons
-                                      name="clock-outline"
-                                      size={16}
-                                      color={COLORS.secondaryText}
-                                      style={styles.timeIcon}
-                                    />
-                                  </TouchableOpacity>
-                                  <View style={styles.editDescContainer}>
-                                    <TextInput
-                                      style={styles.editDescInput}
-                                      value={activity.description}
-                                      placeholder="Activity description"
-                                      multiline
-                                      onChangeText={(text) => handleEditActivity(dayIndex, actIndex, 'description', text)}
-                                    />
-                                  </View>
-                                  <View style={styles.editActionsRow}>
-                                    <TouchableOpacity
-                                      onPress={() => handleDuplicateActivity(dayIndex, actIndex)}
-                                      style={styles.actionBtn}
-                                    >
-                                      <MaterialCommunityIcons name="content-copy" size={18} color={COLORS.primaryBlue} />
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                      onPress={() => handleRemoveActivity(dayIndex, actIndex)}
-                                      style={styles.actionBtn}
-                                    >
-                                      <MaterialCommunityIcons name="delete" size={18} color={COLORS.danger} />
-                                    </TouchableOpacity>
-                                  </View>
-                                </View>
-                                {/* Location Field */}
-                                <View style={styles.editExtraRow}>
-                                  <MaterialCommunityIcons name="map-marker" size={16} color={COLORS.secondaryText} />
-                                  <TextInput
-                                    style={styles.editExtraInput}
-                                    value={activity.location || ''}
-                                    placeholder="Location (optional)"
-                                    onChangeText={(text) => handleEditActivity(dayIndex, actIndex, 'location', text)}
-                                  />
-                                </View>
-                                {/* Notes Field */}
-                                <View style={styles.editExtraRow}>
-                                  <MaterialCommunityIcons name="note-text" size={16} color={COLORS.secondaryText} />
-                                  <TextInput
-                                    style={styles.editExtraInput}
-                                    value={activity.notes || ''}
-                                    placeholder="Notes (optional)"
-                                    multiline
-                                    onChangeText={(text) => handleEditActivity(dayIndex, actIndex, 'notes', text)}
-                                  />
-                                </View>
-                              </View>
-                            );
-                          }
-
-                          // --- VIEW ROW ---
-                          const hasTime = Boolean(activity.time);
-                          const showLine = actIndex < activities.length - 1;
-
-                          return (
-                            <View
-                              key={actIndex}
-                              style={styles.activityItem}
-                              accessible={true}
-                              accessibilityLabel={`${activity.time ? activity.time + ', ' : ''}${activity.description}${activity.location ? ', at ' + activity.location : ''}`}
-                            >
-                              <View style={styles.timelineColumn}>
-                                <View style={[styles.timelineDot, major && styles.majorDot]} />
-                                {showLine && <View style={[styles.timelineLine, major && styles.majorLine]} />}
-                              </View>
-                              <View style={[styles.activityContent, !hasTime && styles.activityContentNoTime]}>
-                                <View style={[styles.activityHeaderRow, !hasTime && styles.activityHeaderRowNoTime]}>
-                                  {hasTime && <Text style={styles.activityTime}>{activity.time}</Text>}
-                                  <View style={[styles.activityTypePill, major ? styles.majorPill : styles.standardPill]}>
-                                    <Text style={[styles.pillText, major && styles.majorPillText]}>
-                                      {major ? 'Major' : 'Activity'}
-                                    </Text>
-                                  </View>
-                                </View>
-                                <Text style={styles.activityDescription}>{activity.description}</Text>
-
-                                {/* Location Display */}
-                                {activity.location && (
-                                  <TouchableOpacity
-                                    style={styles.locationRow}
-                                    onPress={() => {
-                                      const query = encodeURIComponent(activity.location);
-                                      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`);
-                                    }}
-                                  >
-                                    <MaterialCommunityIcons name="map-marker" size={14} color={COLORS.coralAccent} />
-                                    <Text style={styles.locationText}>{activity.location}</Text>
-                                    <MaterialCommunityIcons name="open-in-new" size={12} color={COLORS.primaryBlue} />
-                                  </TouchableOpacity>
-                                )}
-
-                                {/* Notes Display */}
-                                {activity.notes && (
-                                  <View style={styles.notesRow}>
-                                    <MaterialCommunityIcons name="note-text-outline" size={14} color={COLORS.secondaryText} />
-                                    <Text style={styles.notesText}>{activity.notes}</Text>
-                                  </View>
-                                )}
-                              </View>
-                            </View>
-                          );
-                        })}
-
-                        {isEditing && (
-                          <TouchableOpacity
-                            onPress={() => handleAddActivity(dayIndex)}
-                            style={styles.addActivityBtn}
+                      <View style={styles.contentContainer}>
+                        {isEditing ? (
+                          <TextInput
+                            style={styles.editContentInput}
+                            value={content}
+                            onChangeText={(text) => handleEditDayContent(dayIndex, text)}
+                            placeholder="Enter the itinerary for this day..."
+                            placeholderTextColor={COLORS.secondaryText}
+                            multiline
+                            textAlignVertical="top"
                             accessible={true}
-                            accessibilityLabel="Add activity"
-                            accessibilityRole="button"
-                          >
-                            <MaterialCommunityIcons name="plus" size={20} color={COLORS.primaryBlue} />
-                            <Text style={styles.addActivityText}>Add Activity</Text>
-                          </TouchableOpacity>
+                            accessibilityLabel={`Day ${dayData.day} content`}
+                          />
+                        ) : (
+                          <Text style={styles.dayContentText}>
+                            {content || 'No details available for this day.'}
+                          </Text>
                         )}
                       </View>
                     )}
@@ -1044,55 +809,12 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
         )}
         <View style={styles.footerSpacer} />
       </ScrollView>
-
-      {/* TIME PICKER MODAL */}
-      <Modal
-        visible={timePickerVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setTimePickerVisible(false)}
-      >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setTimePickerVisible(false)}
-        >
-          <View style={styles.timePickerContainer}>
-            <View style={styles.timePickerHeader}>
-              <Text style={styles.timePickerTitle}>Select Time</Text>
-              <TouchableOpacity onPress={() => setTimePickerVisible(false)}>
-                <MaterialCommunityIcons name="close" size={24} color={COLORS.darkText} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.timePickerScroll}>
-              {Array.from({ length: 24 }, (_, hour) =>
-                ['00', '30'].map(minute => {
-                  const time = `${String(hour).padStart(2, '0')}:${minute}`;
-                  return (
-                    <TouchableOpacity
-                      key={time}
-                      style={styles.timeOption}
-                      onPress={() => handleTimeSelect(time)}
-                    >
-                      <Text style={styles.timeOptionText}>{time}</Text>
-                      {selectedTime.value === time && (
-                        <MaterialCommunityIcons name="check" size={20} color={COLORS.successGreen} />
-                      )}
-                    </TouchableOpacity>
-                  );
-                })
-              ).flat()}
-            </ScrollView>
-          </View>
-        </TouchableOpacity>
-      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.appBackground },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
   headerGradient: {
     paddingTop: Platform.OS === 'ios' ? 18 : 10,
@@ -1154,68 +876,33 @@ const styles = StyleSheet.create({
   todayCard: { borderWidth: 2, borderColor: COLORS.coralAccent, shadowColor: COLORS.coralAccent, shadowOpacity: 0.15 },
   dayCardInner: { borderRadius: 20, paddingHorizontal: 18, paddingVertical: 16 },
 
-  dayHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-  dayBadge: { backgroundColor: COLORS.lightBlueAccent, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12 },
-  dayBadgeText: { fontSize: 12, fontWeight: '800', color: COLORS.white, letterSpacing: 0.5 },
-  dayTitleWrapper: { flex: 1, marginLeft: 12 },
-  dayTitleText: { fontSize: 18, fontWeight: '800', color: COLORS.darkText },
+  dayHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  dayBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.primaryBlue, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 12 },
+  todayBadge: { backgroundColor: COLORS.coralAccent },
+  dayBadgeText: { fontSize: 13, fontWeight: '800', color: COLORS.white, letterSpacing: 0.3 },
   dayEditActions: { flexDirection: 'row', gap: 8 },
   dayActionButton: { padding: 8 },
 
-  activitiesContainer: { marginTop: 8 },
-  activityItem: { flexDirection: 'row', paddingVertical: 12, alignItems: 'flex-start' },
-  timelineColumn: { width: 28, alignItems: 'center' },
-  timelineDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: COLORS.timelineColor, zIndex: 2 },
-  majorDot: { width: 16, height: 16, borderRadius: 8, backgroundColor: COLORS.coralAccent },
-  timelineLine: { position: 'absolute', top: 12, width: 2, height: '100%', backgroundColor: COLORS.timelineColor, opacity: 0.7 },
-  majorLine: { backgroundColor: COLORS.coralAccent, opacity: 0.5 },
+  // Day content
+  contentContainer: { marginTop: 8, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#F1F5F9' },
+  dayContentText: { fontSize: 15, color: COLORS.darkText, lineHeight: 24, letterSpacing: 0.1 },
 
-  activityContent: { flex: 1, paddingLeft: 6 },
-  activityContentNoTime: { paddingLeft: 8 },
-  activityHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
-  activityHeaderRowNoTime: { justifyContent: 'flex-start', gap: 8 },
-  activityTime: { fontSize: 15, fontWeight: '800', color: COLORS.primaryBlue, marginRight: 8 },
-  activityTypePill: { flexDirection: 'row', alignItems: 'center', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4, backgroundColor: '#F2F6FC' },
-  pillText: { fontSize: 11, color: COLORS.secondaryText, fontWeight: '700' },
-  majorPill: { backgroundColor: COLORS.coralAccent },
-  majorPillText: { color: COLORS.white },
-  standardPill: { backgroundColor: '#E8EEF7' },
-  activityDescription: { fontSize: 15, color: COLORS.darkText, lineHeight: 22, marginBottom: 4 },
-
-  // Location & Notes
-  locationRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: '#F1F5F9' },
-  locationText: { fontSize: 13, color: COLORS.primaryBlue, marginLeft: 6, flex: 1, fontWeight: '600' },
-  notesRow: { flexDirection: 'row', alignItems: 'flex-start', marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: '#F1F5F9' },
-  notesText: { fontSize: 13, color: COLORS.secondaryText, marginLeft: 6, flex: 1, fontStyle: 'italic', lineHeight: 18 },
-
-  // Edit Styles
-  editRow: { marginBottom: 16, backgroundColor: '#fff', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
-  editMainRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 },
-  editTimeContainer: { width: 70, marginRight: 10, position: 'relative' },
-  editTimeInput: { borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 8, padding: 10, fontSize: 13, fontWeight: '700', textAlign: 'center', backgroundColor: '#F9FAFB' },
-  timeIcon: { position: 'absolute', bottom: 6, right: 6 },
-  editDescContainer: { flex: 1 },
-  editDescInput: { borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 8, padding: 10, fontSize: 14, minHeight: 44, backgroundColor: '#F9FAFB' },
-  editActionsRow: { flexDirection: 'row', gap: 4, marginLeft: 6 },
-  actionBtn: { padding: 6 },
-  editExtraRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#F3F4F6' },
-  editExtraInput: { flex: 1, marginLeft: 8, fontSize: 13, color: COLORS.darkText, paddingVertical: 6 },
-  editTitleInput: { fontSize: 18, fontWeight: '800', color: COLORS.darkText, borderBottomWidth: 2, borderBottomColor: COLORS.primaryBlue, paddingBottom: 4 },
-
-  addActivityBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 14, marginTop: 12, borderWidth: 2, borderColor: COLORS.primaryBlue, borderRadius: 12, borderStyle: 'dashed', backgroundColor: '#F0F9FF' },
-  addActivityText: { color: COLORS.primaryBlue, fontWeight: '700', marginLeft: 8, fontSize: 15 },
+  // Edit mode
+  editContentInput: {
+    fontSize: 15,
+    color: COLORS.darkText,
+    lineHeight: 24,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 12,
+    padding: 14,
+    minHeight: 100,
+    backgroundColor: '#F9FAFB',
+    textAlignVertical: 'top',
+  },
 
   addDayBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 18, marginTop: 12, marginBottom: 20, backgroundColor: COLORS.primaryBlue, borderRadius: 16, shadowColor: COLORS.primaryBlue, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 6 },
   addDayText: { color: COLORS.white, fontWeight: '800', marginLeft: 10, fontSize: 16 },
 
   footerSpacer: { height: 20 },
-
-  // Time Picker Modal
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  timePickerContainer: { backgroundColor: COLORS.white, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingBottom: Platform.OS === 'ios' ? 34 : 20, maxHeight: '70%' },
-  timePickerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
-  timePickerTitle: { fontSize: 18, fontWeight: '800', color: COLORS.darkText },
-  timePickerScroll: { maxHeight: 400 },
-  timeOption: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  timeOptionText: { fontSize: 16, color: COLORS.darkText, fontWeight: '600' },
 });
