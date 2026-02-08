@@ -12,3 +12,7 @@
 - Ensure CI/EAS build secrets include `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` and document in deployment runbooks.
 - Consider auditing all usage of `console.log` for tokens in production builds (e.g., push token logging) to avoid accidental exposure in device logs.
 - Add a pre-commit or CI secret-scanning step (e.g., gitleaks) to prevent regressions.
+
+## 2026-02-08 15:16:17 UTC
+- Removed push token logging from client notification flows and diagnostics, plus stripped token snippets from Cloud Function logs to reduce sensitive data exposure.
+- Reduced auth-related console logging of user identifiers in Firebase initialization flows to limit PII in device logs.

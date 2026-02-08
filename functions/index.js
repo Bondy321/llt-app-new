@@ -67,7 +67,7 @@ const isValidPushToken = (token) => {
 const removeInvalidToken = async (userId, token) => {
   try {
     await admin.database().ref(`users/${userId}/pushToken`).remove();
-    log.info('Removed invalid token', { userId, token: token.substring(0, 20) + '...' });
+    log.info('Removed invalid token', { userId });
   } catch (error) {
     log.error('Failed to remove invalid token', error, { userId });
   }
@@ -242,7 +242,7 @@ exports.sendChatNotification = onValueCreated(
 
           // Validate token
           if (!isValidPushToken(userData.pushToken)) {
-            log.warn("Invalid push token", { userId, token: userData.pushToken.substring(0, 20) + '...' });
+            log.warn("Invalid push token", { userId });
             invalidTokens.push({ userId, token: userData.pushToken });
             return;
           }
@@ -415,7 +415,7 @@ exports.sendItineraryNotification = onValueUpdated(
 
           // Validate token
           if (!isValidPushToken(userData.pushToken)) {
-            log.warn("Invalid push token", { userId, token: userData.pushToken.substring(0, 20) + '...' });
+            log.warn("Invalid push token", { userId });
             invalidTokens.push({ userId, token: userData.pushToken });
             return;
           }
