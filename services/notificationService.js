@@ -96,7 +96,6 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
           )
         ]);
         token = tokenData.data;
-        console.log('Expo Push Token obtained:', token);
         break;
       } catch (tokenError) {
         console.error(`Error getting push token (attempt ${attempt}/${retries}):`, tokenError);

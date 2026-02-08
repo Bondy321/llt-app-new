@@ -143,7 +143,9 @@ const notifyAuthStateListeners = (user) => {
 // Set up global auth state observer (guarded to avoid crashing when Firebase fails to init)
 if (auth?.onAuthStateChanged) {
   auth.onAuthStateChanged(async (user) => {
-    console.log('Global auth state changed:', user ? user.uid : 'null');
+    if (__DEV__) {
+      console.log('Global auth state changed');
+    }
 
     // Save auth state
     await authPersistence.saveAuthState(user);
@@ -159,19 +161,25 @@ if (auth?.onAuthStateChanged) {
 const authHelpers = {
   async signInAnonymouslyPersistent() {
     try {
-      console.log('Attempting anonymous sign in...');
+      if (__DEV__) {
+        console.log('Attempting anonymous sign in...');
+      }
       
       // Check if we have a stored auth state
       const storedAuth = await authPersistence.getStoredAuthState();
       
       if (storedAuth && auth.currentUser) {
-        console.log('Using existing auth session:', storedAuth.uid);
+        if (__DEV__) {
+          console.log('Using existing auth session');
+        }
         return auth.currentUser;
       }
       
       // Sign in anonymously
       const result = await auth.signInAnonymously();
-      console.log('Anonymous sign in successful:', result.user.uid);
+      if (__DEV__) {
+        console.log('Anonymous sign in successful');
+      }
       
       // Save the auth state
       await authPersistence.saveAuthState(result.user);

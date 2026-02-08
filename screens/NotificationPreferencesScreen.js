@@ -141,9 +141,6 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
         trigger: null, // null means trigger immediately
       });
 
-      // Optional: Log the token to console if you need to copy it for backend testing later
-      console.log('Test Notification Triggered. Token:', token);
-      
     } catch (error) {
       Alert.alert("Test Failed", error.message);
     } finally {
