@@ -109,6 +109,17 @@ const sanitizeInput = (input) => {
   return input.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
 };
 
+/**
+ * Validates a string for use as a Firebase Realtime Database key.
+ * Firebase keys cannot contain '.', '$', '#', '[', ']', or '/'.
+ */
+const isValidFirebaseKey = (key) => {
+  if (!key || typeof key !== 'string' || key.trim().length === 0) {
+    return false;
+  }
+  return !/[./$#\[\]]/.test(key);
+};
+
 // ==================== MESSAGE BUILDING ====================
 
 const buildMessagePayload = (messageText, senderInfo, messageId, messageType = 'text') => {
@@ -257,11 +268,10 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
 // Send a message to the internal driver chat for a tour
 const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb) => {
   try {
-    const trimmed = (message || '').trim();
-
-    if (!trimmed) {
-      return { success: false, error: 'Message cannot be empty' };
-    }
+    // Validate inputs (matching sendMessage validation)
+    const validatedTourId = validateTourId(tourId);
+    const validatedMessage = validateMessageText(message);
+    const validatedSender = validateSenderInfo(senderInfo);
 
     const db = dbInstance || realtimeDb;
 
@@ -269,9 +279,9 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
       return { success: false, error: 'Realtime database unavailable' };
     }
 
-    const messagesRef = db.ref(`internal_chats/${tourId}/messages`);
+    const messagesRef = db.ref(`internal_chats/${validatedTourId}/messages`);
     const newMessageRef = messagesRef.push();
-    const optimisticMessage = buildMessagePayload(trimmed, senderInfo, newMessageRef.key);
+    const optimisticMessage = buildMessagePayload(validatedMessage, validatedSender, newMessageRef.key);
 
     const { id, status, ...payloadForDb } = optimisticMessage;
     payloadForDb.status = 'sent';
@@ -293,6 +303,10 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
 // Add a reaction to a message
 const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb) => {
   try {
+    if (!isValidFirebaseKey(emoji)) {
+      return { success: false, error: 'Invalid emoji character' };
+    }
+
     const db = dbInstance || realtimeDb;
     if (!db) {
       return { success: false, error: 'Database unavailable' };
@@ -319,6 +333,10 @@ const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realti
 // Remove a reaction from a message
 const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb) => {
   try {
+    if (!isValidFirebaseKey(emoji)) {
+      return { success: false, error: 'Invalid emoji character' };
+    }
+
     const db = dbInstance || realtimeDb;
     if (!db) {
       return { success: false, error: 'Database unavailable' };
@@ -357,12 +375,17 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       return { success: false, error: 'Invalid emoji' };
     }
 
+    const sanitizedEmoji = emoji.trim();
+    if (!isValidFirebaseKey(sanitizedEmoji)) {
+      return { success: false, error: 'Invalid emoji character for database key' };
+    }
+
     const db = dbInstance || realtimeDb;
     if (!db) {
       return { success: false, error: 'Database unavailable' };
     }
 
-    const reactionRef = db.ref(`chats/${validatedTourId}/messages/${validatedMessageId}/reactions/${emoji.trim()}`);
+    const reactionRef = db.ref(`chats/${validatedTourId}/messages/${validatedMessageId}/reactions/${sanitizedEmoji}`);
 
     // Use transaction to avoid race conditions
     const transactionResult = await reactionRef.transaction((currentUsers) => {
@@ -713,18 +736,38 @@ const getMessageTextForCopy = (message) => {
 };
 
 // Delete a message (only for message owner or driver)
-const deleteMessage = async (tourId, messageId, dbInstance = realtimeDb) => {
+const deleteMessage = async (tourId, messageId, requestingUserId, isDriver = false, dbInstance = realtimeDb) => {
   try {
+    // Validate inputs
+    const validatedTourId = validateTourId(tourId);
+    const validatedMessageId = validateMessageId(messageId);
+
+    if (!requestingUserId || typeof requestingUserId !== 'string') {
+      return { success: false, error: 'User ID is required to delete a message' };
+    }
+
     const db = dbInstance || realtimeDb;
     if (!db) return { success: false, error: 'Database unavailable' };
 
-    const messageRef = db.ref(`chats/${tourId}/messages/${messageId}`);
+    const messageRef = db.ref(`chats/${validatedTourId}/messages/${validatedMessageId}`);
+
+    // Verify the requesting user owns the message or is a driver
+    const snapshot = await messageRef.once('value');
+    if (!snapshot.exists()) {
+      return { success: false, error: 'Message not found' };
+    }
+
+    const messageData = snapshot.val();
+    if (messageData.senderId !== requestingUserId && !isDriver) {
+      return { success: false, error: 'You can only delete your own messages' };
+    }
 
     // Instead of deleting, mark as deleted (for better UX)
     await messageRef.update({
       deleted: true,
       text: '',
       deletedAt: new Date().toISOString(),
+      deletedBy: requestingUserId,
     });
 
     return { success: true };

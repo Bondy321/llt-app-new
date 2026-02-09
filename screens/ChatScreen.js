@@ -770,12 +770,14 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Handle delete message
   const handleDeleteMessage = useCallback(async () => {
     if (selectedMessage) {
-      await deleteMessage(tourId, selectedMessage.id);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      const result = await deleteMessage(tourId, selectedMessage.id, currentUser?.uid, isDriver);
+      if (result.success) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
     }
     setShowActionMenu(false);
     setSelectedMessage(null);
-  }, [tourId, selectedMessage]);
+  }, [tourId, selectedMessage, currentUser?.uid, isDriver]);
 
   // Handle refresh
   const handleRefresh = useCallback(() => {

@@ -127,9 +127,15 @@ function LoginPage() {
       setResetModalOpen(false);
       setResetEmail('');
     } catch (err) {
+      let message = 'Unable to send reset email. Please try again later.';
+      if (err.code === 'auth/invalid-email') {
+        message = 'Please enter a valid email address.';
+      } else if (err.code === 'auth/too-many-requests') {
+        message = 'Too many attempts. Please try again later.';
+      }
       notifications.show({
         title: 'Reset Failed',
-        message: err.message,
+        message,
         color: 'red',
       });
     } finally {

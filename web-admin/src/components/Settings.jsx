@@ -85,10 +85,10 @@ export default function Settings() {
       return;
     }
 
-    if (newPassword.length < 6) {
+    if (newPassword.length < 8) {
       notifications.show({
         title: 'Weak Password',
-        message: 'Password must be at least 6 characters long',
+        message: 'Password must be at least 8 characters long',
         color: 'red',
       });
       return;
@@ -329,7 +329,7 @@ export default function Settings() {
               placeholder="Enter new password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              description="Must be at least 6 characters"
+              description="Must be at least 8 characters"
               required
             />
 
