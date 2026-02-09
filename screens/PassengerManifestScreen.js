@@ -7,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getTourManifest, updateManifestBooking, MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import ManifestBookingCard from '../components/ManifestBookingCard';
-import { COLORS as THEME } from '../theme';
+import { COLORS as THEME, SPACING } from '../theme';
 
 const COLORS = {
   primary: THEME.primary,
@@ -369,7 +369,12 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 22,
   },
-  backButton: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: SPACING.lg,
+    marginBottom: 15
+  },
   backText: { color: 'white', fontSize: 16, fontWeight: 'bold', marginLeft: 5 },
 
   dashboardContainer: {
