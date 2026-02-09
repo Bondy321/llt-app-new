@@ -234,11 +234,14 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
   const handleDeletePhoto = async (photo) => {
     try {
       if (typeof deleteGroupPhoto === 'function') {
-        await deleteGroupPhoto(tourId, photo.id);
+        await deleteGroupPhoto(tourId, photo.id, userId);
       }
     } catch (error) {
       console.error('Delete error:', error);
-      Alert.alert('Error', 'Could not delete the photo. Please try again.');
+      const msg = error.message === 'You can only delete your own photos'
+        ? 'You can only delete photos you uploaded.'
+        : 'Could not delete the photo. Please try again.';
+      Alert.alert('Error', msg);
     }
   };
 

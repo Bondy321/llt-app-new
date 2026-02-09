@@ -373,7 +373,6 @@ const assignDriverToTour = async (driverId, tourCode) => {
       )
     ]);
 
-    console.log(`Driver ${validatedDriverId} assigned to tour ${tourId}`);
     return { success: true, tourId };
 
   } catch (error) {
@@ -388,14 +387,12 @@ const validateBookingReference = async (reference) => {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
 
     const upperRef = reference.toUpperCase().trim();
-    console.log('Validating reference:', upperRef);
 
     // --- 1. CHECK: Is it a Driver? ---
     const driverSnapshot = await realtimeDb.ref(`drivers/${upperRef}`).once('value');
 
     if (driverSnapshot.exists()) {
       const driverData = driverSnapshot.val();
-      console.log('Driver login verified:', driverData.name);
       
       return {
         valid: true,

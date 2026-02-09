@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ref, push, set, onValue } from 'firebase/database';
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
 import { notifications } from '@mantine/notifications';
 import {
   Card,
@@ -144,6 +144,7 @@ export function BroadcastPanel() {
         text: `ANNOUNCEMENT: ${message}`,
         senderName: 'Loch Lomond Travel HQ',
         senderId: 'admin_hq_broadcast',
+        senderUid: auth.currentUser?.uid || null,
         timestamp: new Date().toISOString(),
         isDriver: true,
       });

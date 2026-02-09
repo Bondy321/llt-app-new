@@ -332,10 +332,15 @@ const subscribeToPrivatePhotos = (
 /**
  * Delete a photo from a group album
  * Only the photo owner can delete their photos
+ * @param {string} tourId - Tour ID
+ * @param {string} photoId - Photo ID
+ * @param {string} requestingUserId - UID of the user requesting the deletion (for ownership verification)
+ * @param {Object} options - Optional dependency injection for testing
  */
 const deleteGroupPhoto = async (
   tourId,
   photoId,
+  requestingUserId,
   {
     storageInstance = storage,
     realtimeDbInstance = realtimeDbModular,
@@ -350,6 +355,10 @@ const deleteGroupPhoto = async (
     // Validate inputs
     const validatedTourId = validateTourId(tourId);
     const validatedPhotoId = validatePhotoId(photoId);
+
+    if (!requestingUserId || typeof requestingUserId !== 'string') {
+      throw new Error('User ID is required to delete a photo');
+    }
 
     if (!storageInstance) {
       throw new Error('Storage instance not initialized');
@@ -366,6 +375,11 @@ const deleteGroupPhoto = async (
 
     if (!photoData) {
       throw new Error('Photo not found');
+    }
+
+    // Verify ownership: only the photo uploader can delete it
+    if (photoData.userId && photoData.userId !== requestingUserId) {
+      throw new Error('You can only delete your own photos');
     }
 
     // Delete from storage if path exists (with timeout)

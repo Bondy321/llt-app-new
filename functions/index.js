@@ -89,7 +89,9 @@ const verifyParticipant = async (tourId, userId) => {
 };
 
 /**
- * Checks if the sender is an admin/HQ broadcast
+ * Checks if the sender claims to be an admin/HQ broadcast.
+ * Returns true only if the senderId uses an admin prefix.
+ * IMPORTANT: Must be paired with verifyAdminBroadcast() to prevent spoofing.
  */
 const isAdminBroadcast = (senderId) => {
   return senderId && (
@@ -97,6 +99,50 @@ const isAdminBroadcast = (senderId) => {
     senderId.startsWith('admin_') ||
     senderId.startsWith('hq_')
   );
+};
+
+/**
+ * Verifies that an admin broadcast is legitimate by checking the senderUid.
+ * Rejects messages that claim admin status without a verified non-anonymous auth UID.
+ */
+const verifyAdminBroadcast = async (messageData) => {
+  const { senderUid } = messageData;
+
+  // Admin broadcasts must include a senderUid for verification
+  if (!senderUid || typeof senderUid !== 'string') {
+    return false;
+  }
+
+  try {
+    // Verify the UID belongs to a real, non-anonymous user (admins use email/password auth)
+    const userRecord = await admin.auth().getUser(senderUid);
+    if (!userRecord || userRecord.disabled) {
+      return false;
+    }
+
+    // Admin users authenticate with email/password, not anonymously
+    const isAnonymous = userRecord.providerData.length === 0;
+    if (isAnonymous) {
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    log.error('Admin broadcast verification failed', error, { senderUid });
+    return false;
+  }
+};
+
+/**
+ * Validates a Firebase path segment to prevent path traversal attacks.
+ * Firebase keys cannot contain '.', '$', '#', '[', ']', or '/'.
+ */
+const isValidFirebaseKey = (key) => {
+  if (!key || typeof key !== 'string' || key.trim().length === 0) {
+    return false;
+  }
+  // Firebase keys cannot contain these characters
+  return !/[./$#\[\]]/.test(key);
 };
 
 /**
@@ -153,6 +199,12 @@ exports.sendChatNotification = onValueCreated(
     const messageId = event.params.messageId;
 
     try {
+      // 0. Validate path parameters
+      if (!isValidFirebaseKey(tourId) || !isValidFirebaseKey(messageId)) {
+        log.error("Invalid path parameters", null, { tourId, messageId });
+        return null;
+      }
+
       // 1. Validate event data
       const snapshot = event.data;
       if (!snapshot) {
@@ -179,9 +231,16 @@ exports.sendChatNotification = onValueCreated(
       }
 
       // 4. Security: Verify sender is actually a participant (prevent spoofing)
-      // Admin broadcasts are exempt from participant check
-      const isAdmin = isAdminBroadcast(senderId);
-      if (!isAdmin) {
+      // Admin broadcasts require verified admin UID; regular messages require participant membership
+      let isAdmin = isAdminBroadcast(senderId);
+      if (isAdmin) {
+        // Verify the admin broadcast is legitimate (not spoofed by a regular user)
+        const isVerifiedAdmin = await verifyAdminBroadcast(messageData);
+        if (!isVerifiedAdmin) {
+          log.error("Spoofed admin broadcast rejected - invalid or missing senderUid", null, { tourId, senderId });
+          return null;
+        }
+      } else {
         const isParticipant = await verifyParticipant(tourId, senderId);
         if (!isParticipant) {
           log.error("Sender is not a participant of the tour", null, { tourId, senderId });
@@ -354,6 +413,12 @@ exports.sendItineraryNotification = onValueUpdated(
     const tourId = event.params.tourId;
 
     try {
+      // 0. Validate path parameters
+      if (!isValidFirebaseKey(tourId)) {
+        log.error("Invalid tourId path parameter", null, { tourId });
+        return null;
+      }
+
       log.info("Processing itinerary update notification", { tourId });
 
       // 1. Rate limiting check (prevent notification spam on rapid updates)
