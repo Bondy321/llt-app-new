@@ -11,6 +11,10 @@ import { joinTour } from './services/bookingServiceRealtime';
 import logger from './services/loggerService';
 import useDiagnostics from './hooks/useDiagnostics';
 import { COLORS as THEME } from './theme';
+import { saveTourPack, getTourPack, replayQueue, subscribeQueueState, getQueueStats, getStalenessLabel } from './services/offlineSyncService';
+import { updateManifestBooking } from './services/bookingServiceRealtime';
+import { sendMessage, sendInternalDriverMessage } from './services/chatService';
+import { AppState } from 'react-native';
 
 // Import Screens
 import LoginScreen from './screens/LoginScreen';
@@ -86,11 +90,50 @@ export default function App() {
 
   const refreshAppData = async () => {
     logger.info('App', 'Refreshing app data');
+    if (isConnected) {
+      await triggerReplay();
+    }
+  };
+
+  const triggerReplay = async () => {
+    const executors = {
+      MANIFEST_UPDATE: async (action) => {
+        const { tourId, bookingId, updates } = action.payload;
+        try {
+          const result = await updateManifestBooking(tourId, bookingId, updates);
+          return { success: !!result?.success };
+        } catch (error) {
+          return { success: false, error: error.message };
+        }
+      },
+      CHAT_MESSAGE: async (action) => {
+        const { tourId, text, senderInfo } = action.payload;
+        try {
+          const result = await sendMessage(tourId, text, senderInfo);
+          return { success: !!result?.success };
+        } catch (error) {
+          return { success: false, error: error.message };
+        }
+      },
+      INTERNAL_CHAT_MESSAGE: async (action) => {
+        const { tourId, text, senderInfo } = action.payload;
+        try {
+          const result = await sendInternalDriverMessage(tourId, text, senderInfo);
+          return { success: !!result?.success };
+        } catch (error) {
+          return { success: false, error: error.message };
+        }
+      },
+    };
+    await replayQueue({ executors });
   };
 
   const { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs } = useDiagnostics({
     onForeground: refreshAppData
   });
+
+  const [queueStats, setQueueStats] = useState({ pending: 0, failed: 0, syncing: 0, total: 0 });
+  const [lastSyncLabel, setLastSyncLabel] = useState('');
 
   useEffect(() => {
     logger.info('App', 'Application starting', {
@@ -110,6 +153,29 @@ export default function App() {
       if (typeof authUnsubscribe === 'function') authUnsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    const unsubscribe = subscribeQueueState((stats) => {
+      setQueueStats(stats);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (isConnected && firebaseConnected) {
+      triggerReplay();
+    }
+  }, [isConnected, firebaseConnected]);
+
+  useEffect(() => {
+    if (tourData && bookingData) {
+      const role = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
+      const tourId = tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
+      if (tourId) {
+        saveTourPack(tourId, role, { tour: tourData, booking: bookingData });
+      }
+    }
+  }, [tourData, bookingData]);
 
   const initializeApp = async () => {
     try {
@@ -184,7 +250,7 @@ export default function App() {
       setTourCode(tourDetails.tourCode);
       setTourData(tourDetails);
       setBookingData(bookingOrDriverData);
-      
+
       if (user && tourDetails?.id) {
         try {
           await joinTour(tourDetails.id, user.uid);
@@ -192,11 +258,20 @@ export default function App() {
           logger.error('Tour', 'Error joining tour', { error: error.message });
         }
       }
-      
+
       setCurrentScreen('TourHome');
     }
-    
+
     await saveSession();
+
+    // Save Tour Pack for offline access
+    if (tourDetails && bookingOrDriverData) {
+      const role = userType === 'driver' ? 'driver' : 'passenger';
+      const tourId = tourDetails?.id || tourDetails?.tourCode?.replace(/\s+/g, '_');
+      if (tourId) {
+        saveTourPack(tourId, role, { tour: tourDetails, booking: bookingOrDriverData });
+      }
+    }
   };
 
   // Updated navigation to accept params
@@ -244,14 +319,27 @@ export default function App() {
     );
   }
 
-  const OfflineBanner = () => (
-    !isConnected && (
+  const OfflineBanner = () => {
+    if (isConnected && queueStats.total === 0) return null;
+    return (
       <View style={styles.offlineBanner}>
-        <MaterialCommunityIcons name="wifi-off" size={20} color={COLORS.white} />
-        <Text style={styles.offlineText}>No internet connection</Text>
+        {!isConnected && (
+          <>
+            <MaterialCommunityIcons name="wifi-off" size={20} color={COLORS.white} />
+            <Text style={styles.offlineText}>No internet connection</Text>
+          </>
+        )}
+        {queueStats.pending > 0 && (
+          <View style={!isConnected ? { marginLeft: 12 } : { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+            <MaterialCommunityIcons name="cloud-upload-outline" size={18} color={COLORS.white} />
+            <Text style={[styles.offlineText, { marginLeft: 6 }]}>
+              {queueStats.pending} pending action{queueStats.pending !== 1 ? 's' : ''}
+            </Text>
+          </View>
+        )}
       </View>
-    )
-  );
+    );
+  };
 
   const SyncIssueBanner = () => (
     isConnected && (!firebaseConnected || lastFirebaseError) && (
