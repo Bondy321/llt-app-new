@@ -23,6 +23,7 @@ import * as Haptics from 'expo-haptics';
 import { realtimeDb } from '../firebase';
 import { assignDriverToTour } from '../services/bookingServiceRealtime';
 import { COLORS as THEME } from '../theme';
+import { getTourPack, saveTourPack, getStalenessLabel, getTourPackMeta, getQueueStats } from '../services/offlineSyncService';
 
 const { width } = Dimensions.get('window');
 
@@ -63,6 +64,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
   const [addressLoading, setAddressLoading] = useState(false);
   const [addressText, setAddressText] = useState('');
   const [confirmingLocation, setConfirmingLocation] = useState(false);
+
+  // Offline Tour Pack State
+  const [cacheLabel, setCacheLabel] = useState('');
+  const [pendingActions, setPendingActions] = useState(0);
 
   // Modal State for Joining Tour
   const [joinModalVisible, setJoinModalVisible] = useState(false);
@@ -118,6 +123,30 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
       }
     });
   }, [activeTourId]);
+
+  // Offline Tour Pack sync
+  useEffect(() => {
+    const syncCache = async () => {
+      if (!driverData?.activeTourId && !driverData?.currentTourId) return;
+      const tourId = driverData.activeTourId || driverData.currentTourId;
+
+      // Save current data as cache
+      await saveTourPack(tourId, 'driver', { tour: driverData, booking: driverData });
+
+      // Load meta for staleness label
+      const meta = await getTourPackMeta(tourId, 'driver');
+      if (meta.success && meta.data) {
+        setCacheLabel(getStalenessLabel(meta.data.lastSyncedAt));
+      }
+
+      // Get queue stats
+      const stats = await getQueueStats();
+      if (stats.success) {
+        setPendingActions(stats.data.pending + stats.data.failed);
+      }
+    };
+    syncCache();
+  }, [driverData]);
 
   // Reverse geocode to get address
   const getAddressFromCoords = async (latitude, longitude) => {
@@ -420,6 +449,25 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
               <MaterialCommunityIcons name="logout" size={22} color={COLORS.primary} />
             </TouchableOpacity>
           </View>
+
+          {pendingActions > 0 && (
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: '#FEF3C7',
+              paddingHorizontal: 14,
+              paddingVertical: 8,
+              borderRadius: 10,
+              marginBottom: 12,
+              marginHorizontal: 16,
+              gap: 8,
+            }}>
+              <MaterialCommunityIcons name="cloud-sync-outline" size={16} color="#92400E" />
+              <Text style={{ fontSize: 13, color: '#92400E', fontWeight: '600' }}>
+                {pendingActions} pending sync action{pendingActions !== 1 ? 's' : ''}
+              </Text>
+            </View>
+          )}
 
           <ScrollView contentContainerStyle={styles.content}>
             {/* Tour Assignment Card */}

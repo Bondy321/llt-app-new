@@ -23,6 +23,7 @@ import TodaysAgendaCard from '../components/TodaysAgendaCard';
 import { MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import { realtimeDb } from '../firebase';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
+import { getTourPack, saveTourPack, getStalenessLabel, getTourPackMeta } from '../services/offlineSyncService';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -463,24 +464,62 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
   const [refreshing, setRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [driverLocationActive, setDriverLocationActive] = useState(false);
+  const [cachedTourData, setCachedTourData] = useState(null);
+  const [cachedBookingData, setCachedBookingData] = useState(null);
+  const [cacheLabel, setCacheLabel] = useState('');
+  const [usingCache, setUsingCache] = useState(false);
   const scrollViewRef = useRef(null);
 
   const greeting = useMemo(() => getTimeBasedGreeting(), []);
-  const bookingRef = useMemo(() => bookingData?.id, [bookingData?.id]);
+  const bookingRef = useMemo(() => (bookingData || cachedBookingData)?.id, [bookingData?.id, cachedBookingData?.id]);
   const passengerName = useMemo(() => {
-    if (bookingData?.passengerNames?.length > 0) {
-      return bookingData.passengerNames[0].split(' ')[0]; // First name only
+    const bd = bookingData || cachedBookingData;
+    if (bd?.passengerNames?.length > 0) {
+      return bd.passengerNames[0].split(' ')[0]; // First name only
     }
     return null;
-  }, [bookingData?.passengerNames]);
+  }, [bookingData?.passengerNames, cachedBookingData?.passengerNames]);
 
   // Get primary pickup time for countdown
   const primaryPickupTime = useMemo(() => {
-    if (bookingData?.pickupPoints?.length > 0) {
-      return bookingData.pickupPoints[0].time;
+    const bd = bookingData || cachedBookingData;
+    if (bd?.pickupPoints?.length > 0) {
+      return bd.pickupPoints[0].time;
     }
-    return bookingData?.pickupTime || null;
-  }, [bookingData]);
+    return bd?.pickupTime || null;
+  }, [bookingData, cachedBookingData]);
+
+  useEffect(() => {
+    const loadCache = async () => {
+      const tourId = tourData?.id || tourCode?.replace(/\s+/g, '_');
+      if (!tourId) return;
+      const role = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
+
+      // If we have live data, save it to cache
+      if (tourData && bookingData) {
+        await saveTourPack(tourId, role, { tour: tourData, booking: bookingData });
+        setUsingCache(false);
+        setCacheLabel('');
+        return;
+      }
+
+      // Try loading from cache
+      const cached = await getTourPack(tourId, role);
+      if (cached.success && cached.data) {
+        setCachedTourData(cached.data.tour || null);
+        setCachedBookingData(cached.data.booking || null);
+        setUsingCache(true);
+        const meta = await getTourPackMeta(tourId, role);
+        if (meta.success && meta.data) {
+          setCacheLabel(getStalenessLabel(meta.data.lastSyncedAt));
+        }
+      }
+    };
+    loadCache();
+  }, [tourData, bookingData, tourCode]);
+
+  const effectiveTourData = tourData || cachedTourData;
+  const effectiveBookingData = bookingData || cachedBookingData;
 
   useEffect(() => {
     // Simulate initial loading
@@ -520,8 +559,17 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
     triggerHaptic('light');
     // Simulate refresh delay
     await new Promise(resolve => setTimeout(resolve, 1000));
+    if (tourData && bookingData) {
+      const tourId = tourData?.id || tourCode?.replace(/\s+/g, '_');
+      const role = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
+      if (tourId) {
+        await saveTourPack(tourId, role, { tour: tourData, booking: bookingData });
+        setUsingCache(false);
+        setCacheLabel('');
+      }
+    }
     setRefreshing(false);
-  }, []);
+  }, [tourData, bookingData, tourCode]);
 
   const manifestStatusMeta = useMemo(() => {
     switch (manifestStatus) {

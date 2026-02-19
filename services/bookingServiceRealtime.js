@@ -1,5 +1,8 @@
 // services/bookingServiceRealtime.js
 // Enhanced with comprehensive validation, transaction safety, and error handling
+import { enqueueAction, generateActionId } from './offlineSyncService';
+import NetInfo from '@react-native-community/netinfo';
+
 const isTestEnv = process.env.NODE_ENV === 'test';
 let realtimeDb;
 let auth;
@@ -268,18 +271,49 @@ const getTourManifest = async (tourCodeOriginal) => {
 };
 
 // --- UPDATED: Update Booking Status with Passenger-Level granularity ---
+// Enhanced with offline queueing support via offlineSyncService
 const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = []) => {
-  try {
-    // Validate inputs
-    const validatedTourCode = validateTourCode(tourCode);
-    const validatedBookingRef = validateBookingRef(bookingRef);
-    const validatedStatuses = validatePassengerStatuses(passengerStatuses);
+  // Validate inputs (always, regardless of connectivity)
+  const validatedTourCode = validateTourCode(tourCode);
+  const validatedBookingRef = validateBookingRef(bookingRef);
+  const validatedStatuses = validatePassengerStatuses(passengerStatuses);
 
+  const tourId = sanitizeTourId(validatedTourCode);
+
+  const normalizedStatuses = normalizePassengerStatuses(validatedStatuses);
+  const parentStatus = deriveParentStatusFromPassengers(normalizedStatuses);
+
+  const updates = {
+    status: parentStatus,
+    passengers: normalizedStatuses,
+    lastUpdated: new Date().toISOString()
+  };
+
+  // Check connectivity
+  let isOnline = true;
+  try {
+    const netState = await NetInfo.fetch();
+    isOnline = Boolean(netState.isConnected);
+  } catch (e) {
+    isOnline = false;
+  }
+
+  if (!isOnline) {
+    const actionId = generateActionId();
+    await enqueueAction({
+      id: actionId,
+      type: 'MANIFEST_UPDATE',
+      tourId,
+      payload: { tourId, bookingId: validatedBookingRef, updates },
+    });
+    return { success: true, queued: true, localStatus: updates, actionId };
+  }
+
+  try {
     if (!realtimeDb) {
       throw new Error('Realtime database not initialized');
     }
 
-    const tourId = sanitizeTourId(validatedTourCode);
     const bookingManifestRef = realtimeDb.ref(`tour_manifests/${tourId}/bookings/${validatedBookingRef}`);
 
     // Verify booking exists first
@@ -287,15 +321,6 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
     if (!bookingSnapshot.exists()) {
       return { success: false, error: 'Booking not found' };
     }
-
-    const normalizedStatuses = normalizePassengerStatuses(validatedStatuses);
-    const parentStatus = deriveParentStatusFromPassengers(normalizedStatuses);
-
-    const updates = {
-      status: parentStatus,
-      passengers: normalizedStatuses,
-      lastUpdated: new Date().toISOString()
-    };
 
     // Use timeout protection
     await Promise.race([
@@ -308,6 +333,17 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
     return { success: true };
 
   } catch (error) {
+    // If network error, enqueue instead of failing
+    if (error.message && (error.message.includes('network') || error.message.includes('timeout') || error.message.includes('client is offline'))) {
+      const actionId = generateActionId();
+      await enqueueAction({
+        id: actionId,
+        type: 'MANIFEST_UPDATE',
+        tourId,
+        payload: { tourId, bookingId: validatedBookingRef, updates },
+      });
+      return { success: true, queued: true, localStatus: updates, actionId };
+    }
     console.error('Error updating manifest:', error);
     return { success: false, error: error.message };
   }
