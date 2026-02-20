@@ -22,6 +22,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import TodaysAgendaCard from '../components/TodaysAgendaCard';
 import { MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import { realtimeDb } from '../firebase';
+import offlineSyncService from '../services/offlineSyncService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -464,6 +465,7 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
   const [isLoading, setIsLoading] = useState(true);
   const [driverLocationActive, setDriverLocationActive] = useState(false);
   const scrollViewRef = useRef(null);
+  const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
 
   const greeting = useMemo(() => getTimeBasedGreeting(), []);
   const bookingRef = useMemo(() => bookingData?.id, [bookingData?.id]);
@@ -481,6 +483,17 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
     }
     return bookingData?.pickupTime || null;
   }, [bookingData]);
+
+
+  useEffect(() => {
+    const activeTourId = tourData?.id || tourCode?.replace(/\s+/g, '_');
+    if (!activeTourId) return;
+    offlineSyncService.getTourPackMeta(activeTourId, 'passenger').then((res) => {
+      if (res.success) {
+        setCacheStatusLabel(offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label);
+      }
+    });
+  }, [tourData?.id, tourCode]);
 
   useEffect(() => {
     // Simulate initial loading
@@ -685,7 +698,7 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
                 <Text style={styles.greetingText}>{`${greeting.text}${passengerName ? `, ${passengerName}` : ''}!`}</Text>
               </View>
               <Text style={styles.tourCodeDisplay}>{tourCode}</Text>
-              <Text style={styles.tourName} numberOfLines={1}>{tourData?.name || 'Active Tour'}</Text>
+              <Text style={styles.tourName} numberOfLines={1}>{tourData?.name || 'Active Tour'}</Text><Text style={styles.cacheLabel}>{cacheStatusLabel}</Text>
             </View>
             <View style={styles.headerActions}>
               <TouchableOpacity
@@ -1115,6 +1128,7 @@ const styles = StyleSheet.create({
     color: COLORS.primaryBlue,
     letterSpacing: 0.5,
   },
+  cacheLabel: { fontSize: 12, color: COLORS.subtleText, marginTop: 4 },
   tourName: {
     fontSize: 12,
     color: COLORS.subtleText,

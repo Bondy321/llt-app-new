@@ -1,7 +1,19 @@
 // services/persistenceProvider.js
 // Centralized, crash-safe persistence layer with SecureStore -> AsyncStorage -> in-memory fallback.
-import * as SecureStore from 'expo-secure-store';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+let SecureStore;
+let AsyncStorage;
+
+try {
+  SecureStore = require('expo-secure-store');
+} catch (error) {
+  SecureStore = null;
+}
+
+try {
+  AsyncStorage = require('@react-native-async-storage/async-storage').default;
+} catch (error) {
+  AsyncStorage = null;
+}
 
 const defaultLogger = {
   debug: (msg, data) => console.log(`[Persistence][debug] ${msg}`, data || ''),
@@ -15,9 +27,7 @@ const createStorageCandidate = (name, handlers) => ({
   ...handlers,
 });
 
-export const createPersistenceProvider = ({ namespace = 'LLT', logger = defaultLogger } = {}) => {
-  // SecureStore keys must only contain alphanumeric characters, ".", "-", and "_"
-  // Using underscore as separator instead of colon to comply with SecureStore requirements
+const createPersistenceProvider = ({ namespace = 'LLT', logger = defaultLogger } = {}) => {
   const namespacedKey = (key) => `${namespace}_${key}`;
 
   const candidates = [
@@ -99,8 +109,42 @@ export const createPersistenceProvider = ({ namespace = 'LLT', logger = defaultL
     },
     async deleteItemAsync(key) {
       return safeCall('deleteItemAsync', key);
+    },
+    async multiGetAsync(keys = []) {
+      try {
+        const entries = await Promise.all(
+          (Array.isArray(keys) ? keys : []).map(async (key) => [key, await safeCall('getItemAsync', key)])
+        );
+        return entries;
+      } catch (error) {
+        logger.error('Persistence provider failed for multiGetAsync', { error: error?.message });
+        return [];
+      }
+    },
+    async multiSetAsync(entries = []) {
+      try {
+        await Promise.all(
+          (Array.isArray(entries) ? entries : []).map(([key, value]) => safeCall('setItemAsync', key, value))
+        );
+        return true;
+      } catch (error) {
+        logger.error('Persistence provider failed for multiSetAsync', { error: error?.message });
+        return false;
+      }
+    },
+    async multiDeleteAsync(keys = []) {
+      try {
+        await Promise.all((Array.isArray(keys) ? keys : []).map((key) => safeCall('deleteItemAsync', key)));
+        return true;
+      } catch (error) {
+        logger.error('Persistence provider failed for multiDeleteAsync', { error: error?.message });
+        return false;
+      }
     }
   };
 };
 
-export default createPersistenceProvider;
+module.exports = {
+  createPersistenceProvider,
+  default: createPersistenceProvider,
+};

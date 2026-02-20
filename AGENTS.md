@@ -1067,6 +1067,25 @@ Never commit secrets. Use EAS Secrets for environment variables in builds.
 
 ---
 
+
+### Offline Tour Pack (January 2026)
+
+- `services/offlineSyncService.js` now manages Tour Pack cache and an offline action queue.
+- Queue action types:
+  - `MANIFEST_UPDATE`
+  - `CHAT_MESSAGE`
+  - `INTERNAL_CHAT_MESSAGE`
+- Replay policy:
+  - FIFO execution by `createdAt`
+  - single-run lock (no parallel replay)
+  - retry-bounded (max 5 attempts)
+  - local processed action IDs prevent duplicate replay after restart
+- Manifest conflict policy:
+  - compare local `lastUpdated` with server `lastUpdated`
+  - prefer most recent timestamp
+  - if server wins, reconcile and log event
+  - user note: "One update was reconciled with newer server data."
+
 ## Quick Reference
 
 ### Common Commands

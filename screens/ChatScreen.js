@@ -41,6 +41,9 @@ import {
   getMessageTextForCopy,
 } from '../services/chatService';
 import { uploadPhoto } from '../services/photoService';
+import offlineSyncService from '../services/offlineSyncService';
+import * as bookingService from '../services/bookingServiceRealtime';
+import * as chatService from '../services/chatService';
 import { auth } from '../firebase';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 
@@ -419,6 +422,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [sending, setSending] = useState(false);
+  const [queueStats, setQueueStats] = useState({ pending: 0, syncing: 0, failed: 0, total: 0 });
   const [inputHeight, setInputHeight] = useState(44);
 
   // Feature state
@@ -607,7 +611,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         setInputText(trimmed);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       } else {
-        const confirmedMessage = { ...result.message, status: 'sent' };
+        const confirmedMessage = { ...result.message, status: result.queued ? 'queued' : 'sent' };
         setMessages((prev) => {
           const filtered = prev.filter(
             (msg) => msg.id !== optimisticId && msg.id !== confirmedMessage.id
@@ -615,7 +619,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
           return [...filtered, confirmedMessage];
         });
 
-        if (result.serverPromise?.finally) {
+        if (!result.queued && result.serverPromise?.finally) {
           result.serverPromise
             .then(() => {
               setMessages((prev) =>
@@ -1005,6 +1009,9 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
               {presenceInfo.onlineCount} online
             </Text>
           </View>
+          <TouchableOpacity style={styles.syncNowBtn} onPress={async () => { await offlineSyncService.replayQueue({ services: { bookingService, chatService } }); }}>
+            <Text style={styles.syncNowText}>Pending {queueStats.pending}</Text>
+          </TouchableOpacity>
         </View>
       </LinearGradient>
 

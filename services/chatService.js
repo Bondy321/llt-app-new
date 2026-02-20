@@ -11,6 +11,13 @@ if (!isTestEnv) {
   }
 }
 
+let offlineSyncService;
+try {
+  offlineSyncService = require('./offlineSyncService');
+} catch (error) {
+  console.warn('Offline sync service unavailable:', error.message);
+}
+
 // ==================== CONSTANTS & CONFIGURATION ====================
 
 const MAX_MESSAGE_LENGTH = 10000;
@@ -168,45 +175,130 @@ const buildMessagesFromSnapshot = (snapshot) => {
 
 // ==================== SEND MESSAGES ====================
 
-// Send a text message to the tour chat with optimistic response
-const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb) => {
+const sendMessageDirect = async (payload, dbInstance = realtimeDb) => {
   try {
-    // Validate inputs
+    const db = dbInstance || realtimeDb;
+    if (!db) return { success: false, error: 'Realtime database unavailable' };
+
+    const validatedTourId = validateTourId(payload.tourId);
+    const validatedMessage = validateMessageText(payload.text);
+    const validatedSender = validateSenderInfo(payload.senderInfo || {});
+
+    const messagesRef = db.ref(`chats/${validatedTourId}/messages`);
+    const pushedRef = typeof messagesRef?.push === 'function' && !payload.messageId ? messagesRef.push() : null;
+    const messageId = payload.messageId || pushedRef?.key || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const payloadForDb = {
+      text: validatedMessage,
+      senderName: validatedSender.name,
+      senderId: validatedSender.userId,
+      timestamp: payload.timestamp || new Date().toISOString(),
+      isDriver: validatedSender.isDriver,
+      status: 'sent',
+      idempotencyKey: payload.idempotencyKey || messageId,
+    };
+
+    if (pushedRef?.set) {
+      await pushedRef.set(payloadForDb);
+    } else {
+      await db.ref(`chats/${validatedTourId}/messages/${messageId}`).set(payloadForDb);
+    }
+    return { success: true, message: { id: messageId, ...payloadForDb } };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+};
+
+const sendInternalMessageDirect = async (payload, dbInstance = realtimeDb) => {
+  try {
+    const db = dbInstance || realtimeDb;
+    if (!db) return { success: false, error: 'Realtime database unavailable' };
+
+    const validatedTourId = validateTourId(payload.tourId);
+    const validatedMessage = validateMessageText(payload.text);
+    const validatedSender = validateSenderInfo(payload.senderInfo || {});
+
+    const messagesRef = db.ref(`internal_chats/${validatedTourId}/messages`);
+    const pushedRef = typeof messagesRef?.push === 'function' && !payload.messageId ? messagesRef.push() : null;
+    const messageId = payload.messageId || pushedRef?.key || `int_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const payloadForDb = {
+      text: validatedMessage,
+      senderName: validatedSender.name,
+      senderId: validatedSender.userId,
+      timestamp: payload.timestamp || new Date().toISOString(),
+      isDriver: true,
+      status: 'sent',
+      idempotencyKey: payload.idempotencyKey || messageId,
+    };
+
+    if (pushedRef?.set) {
+      await pushedRef.set(payloadForDb);
+    } else {
+      await db.ref(`internal_chats/${validatedTourId}/messages/${messageId}`).set(payloadForDb);
+    }
+    return { success: true, message: { id: messageId, ...payloadForDb } };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+};
+
+// Send a text message to the tour chat with optimistic response
+const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb, options = {}) => {
+  try {
     const validatedTourId = validateTourId(tourId);
     const validatedMessage = validateMessageText(message);
     const validatedSender = validateSenderInfo(senderInfo);
-
     const db = dbInstance || realtimeDb;
 
-    if (!db) {
-      return { success: false, error: 'Realtime database unavailable' };
+    const localMessageId = options.messageId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const idempotencyKey = options.idempotencyKey || localMessageId;
+    const payload = {
+      tourId: validatedTourId,
+      messageId: options.messageId || null,
+      text: validatedMessage,
+      senderInfo: validatedSender,
+      timestamp: new Date().toISOString(),
+      idempotencyKey,
+    };
+
+    const directResult = await sendMessageDirect(payload, db);
+    if (directResult.success) {
+      const optimisticMessage = { ...directResult.message, status: 'sent' };
+      return { success: true, message: optimisticMessage, queued: false, serverPromise: Promise.resolve(directResult) };
     }
 
-    const messagesRef = db.ref(`chats/${validatedTourId}/messages`);
-    const newMessageRef = messagesRef.push();
-    const optimisticMessage = buildMessagePayload(validatedMessage, validatedSender, newMessageRef.key);
+    const shouldQueue = !options.online || /timeout|network|unavailable/i.test(directResult.error || '');
+    if (!shouldQueue || !offlineSyncService?.enqueueAction) {
+      return { success: false, error: directResult.error || 'Failed to send message' };
+    }
 
-    // Persist message (without id since key is stored separately)
-    const { id, status, ...payloadForDb } = optimisticMessage;
-    payloadForDb.status = 'sent';
+    const optimisticMessage = {
+      id: localMessageId,
+      text: validatedMessage,
+      senderName: validatedSender.name,
+      senderId: validatedSender.userId,
+      timestamp: payload.timestamp,
+      isDriver: validatedSender.isDriver,
+      status: 'queued',
+      type: 'text',
+      idempotencyKey,
+    };
 
-    // Send to database with timeout protection
-    const serverPromise = Promise.race([
-      newMessageRef.set(payloadForDb),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Message send timeout')), 30000)
-      )
-    ]);
-
-    serverPromise.catch((error) => {
-      console.error('Error sending message:', error);
-      // Update local message status to failed
-      if (optimisticMessage) {
-        optimisticMessage.status = 'failed';
-      }
+    const queued = await offlineSyncService.enqueueAction({
+      id: idempotencyKey,
+      type: 'CHAT_MESSAGE',
+      tourId: validatedTourId,
+      createdAt: payload.timestamp,
+      payload,
+      attempts: 0,
+      status: 'queued',
+      lastError: directResult.error || null,
     });
 
-    return { success: true, message: optimisticMessage, serverPromise };
+    if (!queued.success) {
+      return { success: false, error: queued.error || 'Failed to queue message' };
+    }
+
+    return { success: true, queued: true, message: optimisticMessage };
   } catch (error) {
     console.error('Error sending message:', error);
     return { success: false, error: error.message };
@@ -266,32 +358,63 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
 };
 
 // Send a message to the internal driver chat for a tour
-const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb) => {
+const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb, options = {}) => {
   try {
-    // Validate inputs (matching sendMessage validation)
     const validatedTourId = validateTourId(tourId);
     const validatedMessage = validateMessageText(message);
     const validatedSender = validateSenderInfo(senderInfo);
 
     const db = dbInstance || realtimeDb;
 
-    if (!db) {
-      return { success: false, error: 'Realtime database unavailable' };
+    const localMessageId = options.messageId || `int_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const idempotencyKey = options.idempotencyKey || localMessageId;
+    const payload = {
+      tourId: validatedTourId,
+      messageId: options.messageId || null,
+      text: validatedMessage,
+      senderInfo: { ...validatedSender, isDriver: true },
+      timestamp: new Date().toISOString(),
+      idempotencyKey,
+    };
+
+    const directResult = await sendInternalMessageDirect(payload, db);
+    if (directResult.success) {
+      return { success: true, message: { ...directResult.message, status: 'sent' }, queued: false, serverPromise: Promise.resolve(directResult) };
     }
 
-    const messagesRef = db.ref(`internal_chats/${validatedTourId}/messages`);
-    const newMessageRef = messagesRef.push();
-    const optimisticMessage = buildMessagePayload(validatedMessage, validatedSender, newMessageRef.key);
+    const shouldQueue = !options.online || /timeout|network|unavailable/i.test(directResult.error || '');
+    if (!shouldQueue || !offlineSyncService?.enqueueAction) {
+      return { success: false, error: directResult.error || 'Failed to send internal message' };
+    }
 
-    const { id, status, ...payloadForDb } = optimisticMessage;
-    payloadForDb.status = 'sent';
-    const serverPromise = newMessageRef.set(payloadForDb);
+    const optimisticMessage = {
+      id: localMessageId,
+      text: validatedMessage,
+      senderName: validatedSender.name,
+      senderId: validatedSender.userId,
+      timestamp: payload.timestamp,
+      isDriver: true,
+      status: 'queued',
+      type: 'text',
+      idempotencyKey,
+    };
 
-    serverPromise.catch((error) => {
-      console.error('Error sending internal driver message:', error);
+    const queued = await offlineSyncService.enqueueAction({
+      id: idempotencyKey,
+      type: 'INTERNAL_CHAT_MESSAGE',
+      tourId: validatedTourId,
+      createdAt: payload.timestamp,
+      payload,
+      attempts: 0,
+      status: 'queued',
+      lastError: directResult.error || null,
     });
 
-    return { success: true, message: optimisticMessage, serverPromise };
+    if (!queued.success) {
+      return { success: false, error: queued.error || 'Failed to queue internal message' };
+    }
+
+    return { success: true, queued: true, message: optimisticMessage };
   } catch (error) {
     console.error('Error sending internal driver message:', error);
     return { success: false, error: error.message };
@@ -782,6 +905,8 @@ module.exports = {
   sendMessage,
   sendImageMessage,
   sendInternalDriverMessage,
+  sendMessageDirect,
+  sendInternalMessageDirect,
 
   // Subscriptions
   subscribeToChatMessages,

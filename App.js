@@ -10,6 +10,9 @@ import { auth, authHelpers } from './firebase';
 import { joinTour } from './services/bookingServiceRealtime';
 import logger from './services/loggerService';
 import useDiagnostics from './hooks/useDiagnostics';
+import offlineSyncService from './services/offlineSyncService';
+import * as bookingService from './services/bookingServiceRealtime';
+import * as chatService from './services/chatService';
 import { COLORS as THEME } from './theme';
 
 // Import Screens
@@ -86,10 +89,16 @@ export default function App() {
 
   const refreshAppData = async () => {
     logger.info('App', 'Refreshing app data');
+    if (!isConnected) return;
+    await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
   };
 
-  const { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs } = useDiagnostics({
-    onForeground: refreshAppData
+  const diagnosticsTourId = tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
+  const diagnosticsRole = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
+  const { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs, lastSyncAt, queueStats, syncHealth } = useDiagnostics({
+    onForeground: refreshAppData,
+    activeTourId: diagnosticsTourId,
+    role: diagnosticsRole,
   });
 
   useEffect(() => {
@@ -179,6 +188,13 @@ export default function App() {
       logger.info('Auth', 'Driver Logged In', { driverId: bookingOrDriverData.id });
       setBookingData(bookingOrDriverData);
       setCurrentScreen('DriverHome');
+      if (tourDetails?.id) {
+        await offlineSyncService.saveTourPack(tourDetails.id, 'driver', {
+          tour: tourDetails,
+          driver: bookingOrDriverData,
+        });
+        await offlineSyncService.setTourPackMeta(tourDetails.id, 'driver', { lastSyncedAt: new Date().toISOString() });
+      }
     } else {
       logger.info('Navigation', 'Passenger Login', { bookingRef: reference });
       setTourCode(tourDetails.tourCode);
@@ -194,6 +210,14 @@ export default function App() {
       }
       
       setCurrentScreen('TourHome');
+      if (tourDetails?.id) {
+        await offlineSyncService.saveTourPack(tourDetails.id, 'passenger', {
+          tour: tourDetails,
+          booking: bookingOrDriverData,
+          safety: { emergencyPhone: tourDetails?.driverPhone || null },
+        });
+        await offlineSyncService.setTourPackMeta(tourDetails.id, 'passenger', { lastSyncedAt: new Date().toISOString() });
+      }
     }
     
     await saveSession();
@@ -233,6 +257,11 @@ export default function App() {
     );
   }
 
+  useEffect(() => {
+    if (!isConnected || !firebaseConnected) return;
+    offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+  }, [isConnected, firebaseConnected, user?.uid]);
+
   if (authError) {
     return (
       <View style={styles.loadingContainer}>
@@ -251,6 +280,16 @@ export default function App() {
         <Text style={styles.offlineText}>No internet connection</Text>
       </View>
     )
+  );
+
+
+  const stalenessLabel = offlineSyncService.getStalenessLabel(lastSyncAt);
+
+  const QueueBanner = () => (
+    <View style={styles.queueBanner}>
+      <MaterialCommunityIcons name={isConnected ? 'sync' : 'cloud-off-outline'} size={18} color={COLORS.white} />
+      <Text style={styles.offlineText}>{`${syncHealth.toUpperCase()} • ${stalenessLabel.label} • Pending ${queueStats.pending}`}</Text>
+    </View>
   );
 
   const SyncIssueBanner = () => (
@@ -394,6 +433,7 @@ case 'Itinerary':
       <StatusBar style="light" backgroundColor={COLORS.primaryBlue} />
       <OfflineBanner />
       <SyncIssueBanner />
+      <QueueBanner />
       {renderScreen()}
     </>
   );
@@ -408,5 +448,6 @@ const styles = StyleSheet.create({
   offlineBanner: { backgroundColor: COLORS.errorRed, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000 },
   offlineText: { color: COLORS.white, fontSize: 14, marginLeft: 8, fontWeight: '500' },
   syncBanner: { backgroundColor: COLORS.primaryBlue, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', paddingVertical: 8, paddingHorizontal: 12, position: 'absolute', top: 40, left: 0, right: 0, zIndex: 900 },
+  queueBanner: { backgroundColor: '#0F766E', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 6, paddingHorizontal: 12, position: 'absolute', top: 72, left: 0, right: 0, zIndex: 850 },
   syncDetail: { color: COLORS.white, fontSize: 12, opacity: 0.8 },
 });

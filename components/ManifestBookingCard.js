@@ -17,7 +17,7 @@ const STATUS_ICONS = {
   PARTIAL: 'minus-circle'
 };
 
-export default function ManifestBookingCard({ booking, onPress, isSearchResult }) {
+export default function ManifestBookingCard({ booking, onPress, isSearchResult, syncState = 'synced' }) {
   const status = booking.status || 'PENDING';
   const color = STATUS_COLORS[status];
   const passengerCount = booking.passengerNames?.length || 0;
@@ -36,8 +36,11 @@ export default function ManifestBookingCard({ booking, onPress, isSearchResult }
         <View style={styles.refContainer}>
           <Text style={styles.refText}>{booking.id}</Text>
         </View>
-        <View style={[styles.badge, { backgroundColor: `${color}1A`, borderColor: `${color}60` }]}>
-          <Text style={[styles.badgeText, { color }]}>{status.replace('_', ' ')}</Text>
+        <View style={styles.badgeStack}>
+          <View style={[styles.badge, { backgroundColor: `${color}1A`, borderColor: `${color}60` }]}>
+            <Text style={[styles.badgeText, { color }]}>{status.replace('_', ' ')}</Text>
+          </View>
+          <Text style={styles.syncText}>{syncState}</Text>
         </View>
       </View>
 
@@ -99,12 +102,14 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#475569',
   },
+  badgeStack: { alignItems: 'flex-end' },
   badge: {
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 12,
     borderWidth: 1,
   },
+  syncText: { fontSize: 10, color: '#64748B', marginTop: 2, textTransform: 'uppercase' },
   badgeText: {
     fontSize: 11,
     fontWeight: '800',

@@ -22,6 +22,7 @@ import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
 import { realtimeDb } from '../firebase';
 import { assignDriverToTour } from '../services/bookingServiceRealtime';
+import offlineSyncService from '../services/offlineSyncService';
 import { COLORS as THEME } from '../theme';
 
 const { width } = Dimensions.get('window');
@@ -63,6 +64,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
   const [addressLoading, setAddressLoading] = useState(false);
   const [addressText, setAddressText] = useState('');
   const [confirmingLocation, setConfirmingLocation] = useState(false);
+  const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
 
   // Modal State for Joining Tour
   const [joinModalVisible, setJoinModalVisible] = useState(false);
@@ -76,6 +78,13 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
 
   // Derive active tour from props (updates when driverData changes)
   const activeTourId = driverData?.assignedTourId || '';
+
+  useEffect(() => {
+    if (!activeTourId) return;
+    offlineSyncService.getTourPackMeta(activeTourId, 'driver').then((res) => {
+      if (res.success) setCacheStatusLabel(offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label);
+    });
+  }, [activeTourId]);
 
   // Start pulse animation
   useEffect(() => {
@@ -428,6 +437,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
                 <Text style={styles.cardLabel}>Active tour</Text>
                 <Text style={styles.cardValue}>{activeTourId || 'No tour assigned'}</Text>
                 <Text style={styles.cardHint}>Stay assigned to keep chat and manifests in sync.</Text>
+                <Text style={styles.cardHint}>{cacheStatusLabel}</Text>
               </View>
               <TouchableOpacity
                 style={styles.pillButton}

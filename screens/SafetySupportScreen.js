@@ -38,6 +38,7 @@ import {
   processOfflineQueue,
   getOfflineQueueCount,
 } from '../services/safetyService';
+import offlineSyncService from '../services/offlineSyncService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -322,7 +323,7 @@ const LiveLocationCard = ({
           {lastUpdate && (
             <View style={styles.liveLocationStatusItem}>
               <MaterialCommunityIcons name="clock-outline" size={14} color={COLORS.textMuted} />
-              <Text style={styles.statusText}>Updated just now</Text>
+              <Text style={styles.statusText}>{cacheStatusLabel}</Text>
             </View>
           )}
         </View>
@@ -448,6 +449,17 @@ export default function SafetySupportScreen({
   // History state
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [safetyHistory, setSafetyHistory] = useState([]);
+  const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
+
+  useEffect(() => {
+    if (!tourData?.id) return;
+    const role = mode === 'driver' ? 'driver' : 'passenger';
+    offlineSyncService.getTourPackMeta(tourData.id, role).then((res) => {
+      if (res.success) {
+        setCacheStatusLabel(offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label);
+      }
+    });
+  }, [tourData?.id, mode]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Tips expanded state
