@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { sendMessage } = require('../services/chatService');
+const { sendMessage, markChatAsRead, markInternalChatAsRead } = require('../services/chatService');
 
 const createMockRealtimeDb = () => {
   const refCalls = [];
@@ -9,6 +9,11 @@ const createMockRealtimeDb = () => {
     refCalls,
     ref(path) {
       const context = { path, setCalls: [], pushCalls: [] };
+
+      context.set = async (value) => {
+        context.setCalls.push(value);
+        return value;
+      };
 
       context.push = () => {
         const key = `msg-${context.pushCalls.length + 1}`;
@@ -60,4 +65,27 @@ test('sendMessage rejects empty content', async () => {
 
   assert.equal(result.success, false);
   assert.ok(mockDb.refCalls.length === 0);
+});
+
+
+test('markChatAsRead writes timestamp to chat lastRead path', async () => {
+  const mockDb = createMockRealtimeDb();
+
+  const result = await markChatAsRead('tour-77', 'user-22', mockDb);
+
+  assert.equal(result.success, true);
+  const refCall = mockDb.refCalls[0];
+  assert.equal(refCall.path, 'chats/tour-77/lastRead/user-22');
+  assert.ok(new Date(refCall.setCalls[0]).getTime());
+});
+
+test('markInternalChatAsRead writes timestamp to internal chat lastRead path', async () => {
+  const mockDb = createMockRealtimeDb();
+
+  const result = await markInternalChatAsRead('tour-88', 'driver-3', mockDb);
+
+  assert.equal(result.success, true);
+  const refCall = mockDb.refCalls[0];
+  assert.equal(refCall.path, 'internal_chats/tour-88/lastRead/driver-3');
+  assert.ok(new Date(refCall.setCalls[0]).getTime());
 });
