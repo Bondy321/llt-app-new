@@ -326,6 +326,10 @@ const replayQueue = async ({ db, services = {} } = {}) => {
         continue;
       }
 
+      if (action.status === 'failed') {
+        continue;
+      }
+
       const now = Date.now();
       const nextAttemptAt = action.nextAttemptAt ? new Date(action.nextAttemptAt).getTime() : 0;
       if (nextAttemptAt && nextAttemptAt > now) {

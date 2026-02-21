@@ -65,6 +65,24 @@ test('replayQueue caps retries and marks action failed', async () => {
   const queued = await offlineSyncService.getQueuedActions();
   assert.equal(queued.data[0].status, 'failed');
   assert.equal(queued.data[0].attempts >= 5, true);
+
+  const attemptsBefore = queued.data[0].attempts;
+  await offlineSyncService.replayQueue({ services: { chatService: { sendMessageDirect: async () => ({ success: false, error: 'network' }) } } });
+
+  const stillFailed = await offlineSyncService.getQueuedActions();
+  assert.equal(stillFailed.data[0].status, 'failed');
+  assert.equal(stillFailed.data[0].attempts, attemptsBefore);
+
+  await offlineSyncService.updateAction('retry-1', { status: 'queued', nextAttemptAt: null });
+  await offlineSyncService.replayQueue({ services: { chatService: { sendMessageDirect: async () => ({ success: false, error: 'network' }) } } });
+
+  const retried = await offlineSyncService.getQueuedActions();
+  assert.equal(retried.data[0].attempts, attemptsBefore + 1);
+
+  const stats = await offlineSyncService.getQueueStats();
+  assert.equal(stats.success, true);
+  assert.equal(stats.data.failed, 1);
+  assert.equal(stats.data.pending, 0);
 });
 
 test('staleness label buckets are derived correctly', async () => {
