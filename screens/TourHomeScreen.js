@@ -515,10 +515,21 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
     manifestRef.on('value', handleSnapshot);
 
     // Also listen for driver location status
-    const driverRef = realtimeDb.ref(`driver_locations/${sanitizedTourId}`);
+    const driverRef = realtimeDb.ref(`tours/${sanitizedTourId}/driverLocation`);
     const handleDriverSnapshot = (snapshot) => {
       const value = snapshot.val();
-      setDriverLocationActive(!!value?.lastUpdated);
+      if (!value) {
+        setDriverLocationActive(false);
+        return;
+      }
+
+      const lastUpdatedValue = value.timestamp ?? value.lastUpdated;
+      const lastUpdatedMs =
+        typeof lastUpdatedValue === 'number' ? lastUpdatedValue : new Date(lastUpdatedValue).getTime();
+      const isFreshLocation =
+        Number.isFinite(lastUpdatedMs) && Date.now() - lastUpdatedMs <= 10 * 60 * 1000;
+
+      setDriverLocationActive(isFreshLocation);
     };
     driverRef.on('value', handleDriverSnapshot);
 
