@@ -26,6 +26,7 @@ import * as chatService from '../services/chatService';
 import { realtimeDb } from '../firebase';
 import offlineSyncService from '../services/offlineSyncService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
+import { getPickupCountdownState } from '../services/pickupTimeParser';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -163,29 +164,21 @@ const SkeletonLoader = ({ width, height, borderRadius = 8, style }) => {
 };
 
 // Countdown timer component
-const PickupCountdown = ({ pickupTime }) => {
+const PickupCountdown = ({ pickupTime, pickupDate }) => {
   const [timeLeft, setTimeLeft] = useState(null);
 
   useEffect(() => {
-    if (!pickupTime) return;
+    if (!pickupTime) {
+      setTimeLeft({ mode: 'invalid' });
+      return;
+    }
 
     const calculateTimeLeft = () => {
-      const now = new Date();
-      const [hours, minutes] = pickupTime.split(':').map(Number);
-      const pickup = new Date();
-      pickup.setHours(hours, minutes, 0, 0);
-
-      // If pickup time has passed, show as past
-      if (pickup < now) {
-        return { passed: true };
-      }
-
-      const diff = pickup - now;
-      const hoursLeft = Math.floor(diff / (1000 * 60 * 60));
-      const minutesLeft = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-      const secondsLeft = Math.floor((diff % (1000 * 60)) / 1000);
-
-      return { hoursLeft, minutesLeft, secondsLeft, passed: false };
+      return getPickupCountdownState({
+        pickupTime,
+        pickupDate,
+        now: new Date(),
+      });
     };
 
     setTimeLeft(calculateTimeLeft());
@@ -194,9 +187,20 @@ const PickupCountdown = ({ pickupTime }) => {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [pickupTime]);
+  }, [pickupDate, pickupTime]);
 
-  if (!timeLeft || timeLeft.passed) return null;
+  if (!timeLeft || timeLeft.mode === 'passed') return null;
+
+  if (timeLeft.mode === 'invalid') {
+    return (
+      <View style={styles.countdownFallbackContainer}>
+        <MaterialCommunityIcons name="clock-alert-outline" size={16} color={COLORS.subtleText} />
+        <Text style={styles.countdownFallbackText}>
+          Pickup time shown above — countdown unavailable for this format
+        </Text>
+      </View>
+    );
+  }
 
   const isUrgent = timeLeft.hoursLeft === 0 && timeLeft.minutesLeft < 30;
   const isVeryUrgent = timeLeft.hoursLeft === 0 && timeLeft.minutesLeft < 10;
@@ -486,6 +490,15 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
     }
     return bookingData?.pickupTime || null;
   }, [bookingData]);
+
+  const primaryPickupDate = useMemo(() => {
+    if (bookingData?.pickupPoints?.length > 0) {
+      const pickupPointDate = bookingData.pickupPoints[0]?.date;
+      if (pickupPointDate) return pickupPointDate;
+    }
+
+    return bookingData?.pickupDate || tourData?.startDate || null;
+  }, [bookingData, tourData?.startDate]);
 
 
   useEffect(() => {
@@ -820,7 +833,7 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
           {/* Pickup countdown timer */}
           {primaryPickupTime && manifestStatus !== MANIFEST_STATUS.BOARDED && (
             <AnimatedCard delay={50}>
-              <PickupCountdown pickupTime={primaryPickupTime} />
+              <PickupCountdown pickupTime={primaryPickupTime} pickupDate={primaryPickupDate} />
             </AnimatedCard>
           )}
 
@@ -1262,6 +1275,24 @@ const styles = StyleSheet.create({
   },
   countdownTextUrgent: {
     color: COLORS.error,
+  },
+  countdownFallbackContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.cardBackground,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    marginBottom: 12,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  countdownFallbackText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.subtleText,
   },
 
   // Status card styles
