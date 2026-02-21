@@ -4,6 +4,7 @@ import {
   Text,
   View,
   TouchableOpacity,
+  Switch,
   Alert,
   ScrollView,
   ActivityIndicator,
@@ -23,6 +24,7 @@ import * as Haptics from 'expo-haptics';
 import { realtimeDb } from '../firebase';
 import { assignDriverToTour } from '../services/bookingServiceRealtime';
 import offlineSyncService from '../services/offlineSyncService';
+import { createPersistenceProvider } from '../services/persistenceProvider';
 import { COLORS as THEME } from '../theme';
 
 const { width } = Dimensions.get('window');
@@ -53,6 +55,9 @@ const minimalMapStyle = [
   { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#c9c9c9' }] },
 ];
 
+const LOCATION_STALE_THRESHOLD_MINUTES = 12;
+const AUTO_SHARE_INTERVAL_MS = 3 * 60 * 1000;
+
 export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onDriverAssignmentChange }) {
   const [updatingLocation, setUpdatingLocation] = useState(false);
   const [lastLocationUpdate, setLastLocationUpdate] = useState(null);
@@ -65,6 +70,9 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const [addressText, setAddressText] = useState('');
   const [confirmingLocation, setConfirmingLocation] = useState(false);
   const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
+  const [autoShareEnabled, setAutoShareEnabled] = useState(false);
+  const [autoShareStatus, setAutoShareStatus] = useState('Auto-share is off');
+  const [autoShareLastRunAt, setAutoShareLastRunAt] = useState(null);
 
   // Modal State for Joining Tour
   const [joinModalVisible, setJoinModalVisible] = useState(false);
@@ -75,11 +83,48 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const successAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const persistenceRef = useRef(createPersistenceProvider({ namespace: 'LLT_DRIVER_HOME' }));
 
   // Derive active tour from props (updates when driverData changes)
   const activeTourId = driverData?.assignedTourId || '';
 
   const sanitizeTourId = useCallback((tourCode) => (tourCode ? tourCode.replace(/\s+/g, '_') : null), []);
+  const autoSharePreferenceKey = `AUTO_SHARE_${driverData?.id || 'unknown'}`;
+
+  const getLastUpdateAgeMinutes = useCallback((timestamp) => {
+    if (!timestamp) return Number.POSITIVE_INFINITY;
+    const parsed = new Date(timestamp).getTime();
+    if (Number.isNaN(parsed)) return Number.POSITIVE_INFINITY;
+    return Math.floor((Date.now() - parsed) / 60000);
+  }, []);
+
+  const isLocationStale = Boolean(lastLocationUpdate?.timestamp)
+    && getLastUpdateAgeMinutes(lastLocationUpdate.timestamp) >= LOCATION_STALE_THRESHOLD_MINUTES;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadAutoSharePreference = async () => {
+      try {
+        const stored = await persistenceRef.current.getItemAsync(autoSharePreferenceKey);
+        if (cancelled) return;
+        const enabled = stored === 'true';
+        setAutoShareEnabled(enabled);
+        setAutoShareStatus(enabled ? 'Waiting for next background location share' : 'Auto-share is off');
+      } catch (error) {
+        if (!cancelled) {
+          setAutoShareEnabled(false);
+          setAutoShareStatus('Auto-share is off');
+        }
+      }
+    };
+
+    loadAutoSharePreference();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [autoSharePreferenceKey]);
 
   useEffect(() => {
     if (!activeTourId) return;
@@ -159,6 +204,45 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     }
   };
 
+  const captureCurrentLocationWithPermission = async (accuracy = Location.Accuracy.High) => {
+    const existingPermission = await Location.getForegroundPermissionsAsync();
+    let permissionStatus = existingPermission?.status;
+
+    if (permissionStatus !== 'granted') {
+      const requestedPermission = await Location.requestForegroundPermissionsAsync();
+      permissionStatus = requestedPermission?.status;
+    }
+
+    if (permissionStatus !== 'granted') {
+      return { success: false, error: 'permission-denied' };
+    }
+
+    const location = await Location.getCurrentPositionAsync({ accuracy });
+    return { success: true, location };
+  };
+
+  const uploadLocationUpdate = async ({ latitude, longitude, accuracy, timestamp, address }, source = 'manual') => {
+    await realtimeDb.ref(`tours/${activeTourId}/driverLocation`).set({
+      latitude,
+      longitude,
+      timestamp,
+      updatedBy: driverData.name,
+      address: address || 'Address unavailable',
+      accuracy,
+      source,
+    });
+
+    setLastLocationUpdate({
+      latitude,
+      longitude,
+      timestamp,
+      updatedBy: driverData.name,
+      address: address || 'Address unavailable',
+      accuracy,
+      source,
+    });
+  };
+
   // Function to capture location and show preview
   const handleCaptureLocation = async () => {
     if (!activeTourId) {
@@ -174,17 +258,15 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
     try {
       // 1. Request Permission
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
+      const captureResult = await captureCurrentLocationWithPermission(Location.Accuracy.High);
+      if (!captureResult.success) {
         Alert.alert('Permission Denied', 'Allow location access to share your pickup point.');
         setUpdatingLocation(false);
         return;
       }
 
       // 2. Get Coordinates with high accuracy
-      let location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
+      const location = captureResult.location;
 
       const { latitude, longitude, accuracy } = location.coords;
 
@@ -223,24 +305,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     try {
       const { latitude, longitude, timestamp } = previewLocation;
 
-      // Write to Firebase
-      await realtimeDb.ref(`tours/${activeTourId}/driverLocation`).set({
-        latitude,
-        longitude,
-        timestamp,
-        updatedBy: driverData.name,
-        address: addressText,
-        accuracy: locationAccuracy,
-      });
-
-      // Update local state
-      setLastLocationUpdate({
-        latitude,
-        longitude,
-        timestamp,
-        updatedBy: driverData.name,
-        address: addressText,
-      });
+      await uploadLocationUpdate({ latitude, longitude, timestamp, address: addressText, accuracy: locationAccuracy }, 'manual');
 
       // Success animation
       Animated.sequence([
@@ -278,6 +343,79 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       setConfirmingLocation(false);
     }
   };
+
+  const handleToggleAutoShare = async (enabled) => {
+    if (enabled && !activeTourId) {
+      Alert.alert('No Tour', 'Join a tour before turning on auto-share.');
+      return;
+    }
+
+    setAutoShareEnabled(enabled);
+    setAutoShareStatus(enabled ? 'Waiting for next background location share' : 'Auto-share is off');
+
+    await persistenceRef.current.setItemAsync(autoSharePreferenceKey, enabled ? 'true' : 'false');
+  };
+
+  useEffect(() => {
+    if (!autoShareEnabled) return undefined;
+    if (!activeTourId) {
+      setAutoShareStatus('Paused: join a tour to resume auto-share');
+      return undefined;
+    }
+
+    let cancelled = false;
+    let intervalId;
+
+    const runAutoShare = async () => {
+      if (cancelled || updatingLocation || confirmingLocation) return;
+
+      try {
+        setAutoShareStatus('Auto-share running (battery-aware mode)');
+        const captureResult = await captureCurrentLocationWithPermission(Location.Accuracy.Balanced);
+
+        if (!captureResult.success) {
+          setAutoShareStatus('Paused: location permission required');
+          return;
+        }
+
+        const location = captureResult.location;
+        const timestamp = new Date().toISOString();
+        const { latitude, longitude, accuracy } = location.coords;
+
+        await uploadLocationUpdate({
+          latitude,
+          longitude,
+          accuracy,
+          timestamp,
+          address: lastLocationUpdate?.address,
+        }, 'auto');
+
+        if (!cancelled) {
+          setAutoShareLastRunAt(timestamp);
+          setLocationAccuracy(accuracy);
+          setAutoShareStatus('Live: periodic updates every 3 minutes');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAutoShareStatus('Paused: network issue, will retry automatically');
+        }
+      }
+    };
+
+    runAutoShare();
+    intervalId = setInterval(runAutoShare, AUTO_SHARE_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [
+    autoShareEnabled,
+    activeTourId,
+    updatingLocation,
+    confirmingLocation,
+    lastLocationUpdate?.address,
+  ]);
 
   // Refetch location in preview modal
   const handleRefetchLocation = async () => {
@@ -503,6 +641,36 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                   </Text>
                 )}
               </View>
+            )}
+
+            {isLocationStale && (
+              <View style={styles.staleNudgeCard}>
+                <View style={styles.staleNudgeIconWrap}>
+                  <MaterialCommunityIcons name="alert-circle" size={20} color={COLORS.warning} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.staleNudgeTitle}>Passengers are seeing an old location — update now.</Text>
+                  <Text style={styles.staleNudgeSubtitle}>Last shared {formatTimeAgo(lastLocationUpdate?.timestamp)}. Tap “Set pickup” to refresh immediately.</Text>
+                </View>
+              </View>
+            )}
+
+            <View style={styles.autoShareCard}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={styles.autoShareTitle}>Auto-share location</Text>
+                <Text style={styles.autoShareSubtitle}>When enabled, this screen shares every 3 minutes while active and tour-assigned.</Text>
+              </View>
+              <Switch
+                value={autoShareEnabled}
+                onValueChange={handleToggleAutoShare}
+                trackColor={{ false: `${COLORS.muted}50`, true: `${COLORS.primary}80` }}
+                thumbColor={autoShareEnabled ? COLORS.white : '#F4F4F5'}
+                accessibilityLabel="Toggle automatic location sharing"
+              />
+            </View>
+            <Text style={styles.autoShareStatus}>{autoShareStatus}</Text>
+            {autoShareLastRunAt && (
+              <Text style={styles.autoShareLastRun}>Last auto-share: {formatTimeAgo(autoShareLastRunAt)}</Text>
             )}
 
             {/* Primary Action Grid */}
@@ -1019,6 +1187,69 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
 
+
+  staleNudgeCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: `${COLORS.warning}12`,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: `${COLORS.warning}4D`,
+  },
+  staleNudgeIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: `${COLORS.warning}22`,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  staleNudgeTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.text,
+    marginBottom: 4,
+  },
+  staleNudgeSubtitle: {
+    fontSize: 12,
+    color: COLORS.muted,
+    lineHeight: 17,
+  },
+  autoShareCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.white,
+    marginBottom: 6,
+  },
+  autoShareTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.text,
+    marginBottom: 3,
+  },
+  autoShareSubtitle: {
+    fontSize: 12,
+    color: COLORS.muted,
+    lineHeight: 16,
+  },
+  autoShareStatus: {
+    fontSize: 12,
+    color: COLORS.primary,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  autoShareLastRun: {
+    fontSize: 12,
+    color: COLORS.muted,
+    marginBottom: 14,
+  },
   // Grid and Buttons
   grid: { flexDirection: 'row', gap: 12, marginBottom: 16 },
   bigButton: {
