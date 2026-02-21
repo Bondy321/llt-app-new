@@ -183,6 +183,28 @@ export default function App() {
     }
   };
 
+  const handleDriverAssignmentChange = async ({ assignedTourId }) => {
+    if (!assignedTourId) return;
+
+    const updatedBookingData = {
+      ...(bookingData || {}),
+      assignedTourId,
+    };
+
+    setBookingData((previous) => ({
+      ...(previous || {}),
+      assignedTourId,
+    }));
+
+    try {
+      await SessionStorage.multiSet([
+        [SESSION_KEYS.BOOKING_DATA, JSON.stringify(updatedBookingData)],
+      ]);
+    } catch (error) {
+      logger.error('Session', 'Failed to persist driver assignment', { error: error.message, assignedTourId });
+    }
+  };
+
   const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger') => {
     if (userType === 'driver') {
       logger.info('Auth', 'Driver Logged In', { driverId: bookingOrDriverData.id });
@@ -321,6 +343,7 @@ export default function App() {
             driverData={bookingData}
             onLogout={handleLogout}
             onNavigate={navigateTo} // Pass navigation prop
+            onDriverAssignmentChange={handleDriverAssignmentChange}
           />
         );
       case 'SafetySupport':

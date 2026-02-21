@@ -53,7 +53,7 @@ const minimalMapStyle = [
   { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#c9c9c9' }] },
 ];
 
-export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
+export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onDriverAssignmentChange }) {
   const [updatingLocation, setUpdatingLocation] = useState(false);
   const [lastLocationUpdate, setLastLocationUpdate] = useState(null);
   const [locationAccuracy, setLocationAccuracy] = useState(null);
@@ -78,6 +78,8 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
 
   // Derive active tour from props (updates when driverData changes)
   const activeTourId = driverData?.assignedTourId || '';
+
+  const sanitizeTourId = useCallback((tourCode) => (tourCode ? tourCode.replace(/\s+/g, '_') : null), []);
 
   useEffect(() => {
     if (!activeTourId) return;
@@ -356,7 +358,31 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
     try {
       const driverId = driverData.id;
 
-      await assignDriverToTour(driverId, inputTourCode);
+      const result = await assignDriverToTour(driverId, inputTourCode);
+      const sanitizedTourId = result?.tourId || sanitizeTourId(inputTourCode.trim());
+
+      if (onDriverAssignmentChange && sanitizedTourId) {
+        await onDriverAssignmentChange({ assignedTourId: sanitizedTourId });
+      }
+
+      if (sanitizedTourId) {
+        const [locationSnapshot, metaResult] = await Promise.all([
+          realtimeDb.ref(`tours/${sanitizedTourId}/driverLocation`).once('value'),
+          offlineSyncService.getTourPackMeta(sanitizedTourId, 'driver'),
+        ]);
+
+        if (locationSnapshot.exists()) {
+          setLastLocationUpdate(locationSnapshot.val());
+        } else {
+          setLastLocationUpdate(null);
+        }
+
+        if (metaResult.success) {
+          setCacheStatusLabel(offlineSyncService.getStalenessLabel(metaResult.data?.lastSyncedAt).label);
+        } else {
+          setCacheStatusLabel('Not synced yet');
+        }
+      }
 
       if (Platform.OS === 'ios') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
