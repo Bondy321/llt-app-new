@@ -7,7 +7,6 @@ import {
   Switch,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   Platform
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -58,6 +57,9 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [emptyStateMessage, setEmptyStateMessage] = useState('');
+  const [statusBanner, setStatusBanner] = useState(null);
+  const [lastSavedAt, setLastSavedAt] = useState('');
+  const [testStatus, setTestStatus] = useState({ type: '', message: '' });
 
   // 1. Operational Alerts (During the tour)
   const [opsPrefs, setOpsPrefs] = useState({
@@ -75,11 +77,32 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
     vip_experiences: false,
     hiking_nature: false,
   });
+  const [initialOpsPrefs, setInitialOpsPrefs] = useState(null);
+  const [initialMarketingPrefs, setInitialMarketingPrefs] = useState(null);
+
+  const hasChanges =
+    initialOpsPrefs !== null &&
+    initialMarketingPrefs !== null &&
+    (JSON.stringify(opsPrefs) !== JSON.stringify(initialOpsPrefs) ||
+      JSON.stringify(marketingPrefs) !== JSON.stringify(initialMarketingPrefs));
+
+  const formatTimestamp = (isoDate) => {
+    const date = new Date(isoDate);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
 
   const loadPreferences = async () => {
     setLoading(true);
     setLoadError('');
     setEmptyStateMessage('');
+    setStatusBanner(null);
 
     if (!userId) {
       setEmptyStateMessage('Sign in to manage notifications.');
@@ -89,11 +112,15 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
 
     try {
       const saved = await getUserPreferences(userId);
+      const nextOpsPrefs = saved?.ops ? { ...opsPrefs, ...saved.ops } : { ...opsPrefs };
+      const nextMarketingPrefs = saved?.marketing ? { ...marketingPrefs, ...saved.marketing } : { ...marketingPrefs };
+
       if (saved) {
-        // Merge saved preferences with defaults (handles new keys added later)
-        if (saved.ops) setOpsPrefs(prev => ({ ...prev, ...saved.ops }));
-        if (saved.marketing) setMarketingPrefs(prev => ({ ...prev, ...saved.marketing }));
+        if (saved.ops) setOpsPrefs(nextOpsPrefs);
+        if (saved.marketing) setMarketingPrefs(nextMarketingPrefs);
       }
+      setInitialOpsPrefs(nextOpsPrefs);
+      setInitialMarketingPrefs(nextMarketingPrefs);
     } catch (error) {
       setLoadError('We could not load your notification settings. Please try again.');
     } finally {
@@ -107,6 +134,7 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
 
   const handleSave = async () => {
     setSaving(true);
+    setStatusBanner(null);
     
     // Combine all preferences into a clean object structure
     const fullPreferences = {
@@ -120,34 +148,38 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
     setSaving(false);
 
     if (result.success) {
-      Alert.alert(
-        "Preferences Saved",
-        "We'll only send you notifications based on your choices.",
-        [{ text: "OK", onPress: onBack }]
-      );
+      setInitialOpsPrefs({ ...opsPrefs });
+      setInitialMarketingPrefs({ ...marketingPrefs });
+      const savedAt = new Date().toISOString();
+      setLastSavedAt(savedAt);
+      setStatusBanner({
+        type: 'success',
+        message: result.warning || "Preferences saved. We'll only send notifications based on your choices.",
+      });
     } else {
-      Alert.alert("Error", "Could not save settings. Please check your internet connection.");
+      setStatusBanner({
+        type: 'error',
+        message: 'Could not save settings. Please check your internet connection and try again.',
+      });
     }
   };
 
-  // --- NEW TEST FUNCTION ---
   const handleTestNotification = async () => {
     try {
-      setSaving(true); // Reusing saving state to show activity indicator
+      setTestStatus({ type: 'progress', message: 'Checking notification permissions…' });
       
-      // 1. Verify we can get a token (checks permissions)
       const token = await registerForPushNotificationsAsync();
       
       if (!token) {
-        Alert.alert(
-          "Permission Issue", 
-          "Could not verify notification permissions. Please check your device settings."
-        );
-        setSaving(false);
+        setTestStatus({
+          type: 'error',
+          message: 'Permission check failed. Enable notifications in device settings and retry.',
+        });
         return;
       }
 
-      // 2. Schedule a local notification immediately
+      setTestStatus({ type: 'progress', message: 'Sending a local test notification…' });
+
       await Notifications.scheduleNotificationAsync({
         content: {
           title: "System Check Passed! ✅",
@@ -157,10 +189,16 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
         trigger: null, // null means trigger immediately
       });
 
+      setTestStatus({
+        type: 'success',
+        message: 'Test notification sent successfully. If you did not see it, check OS notification settings.',
+      });
+
     } catch (error) {
-      Alert.alert("Test Failed", error.message);
-    } finally {
-      setSaving(false);
+      setTestStatus({
+        type: 'error',
+        message: `Test failed: ${error.message || 'Unknown error'}`,
+      });
     }
   };
 
@@ -219,6 +257,21 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContainer}>
+        {statusBanner ? (
+          <View style={[styles.statusBanner, statusBanner.type === 'error' ? styles.errorBanner : styles.successBanner]}>
+            <Text style={styles.statusBannerText}>{statusBanner.message}</Text>
+            {statusBanner.type === 'error' ? (
+              <TouchableOpacity style={styles.inlineActionButton} onPress={handleSave} disabled={saving}>
+                <Text style={styles.inlineActionButtonText}>{saving ? 'Retrying…' : 'Retry save'}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
+
+        {lastSavedAt ? (
+          <Text style={styles.lastSavedText}>Last saved at {formatTimestamp(lastSavedAt)}</Text>
+        ) : null}
+
         <Text style={styles.introText}>
           Customize your alerts. We promise not to spam you.
         </Text>
@@ -294,19 +347,25 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
           />
         </PreferenceSection>
 
-        <TouchableOpacity
-          style={[styles.saveButton, saving && styles.disabledButton]}
-          onPress={handleSave}
-          disabled={saving}
-        >
-          {saving ? (
-            <ActivityIndicator color={COLORS.white} />
-          ) : (
-            <Text style={styles.saveButtonText}>Save Preferences</Text>
-          )}
-        </TouchableOpacity>
+        {hasChanges ? (
+          <TouchableOpacity
+            style={[styles.saveButton, saving && styles.disabledButton]}
+            onPress={handleSave}
+            disabled={saving}
+          >
+            {saving ? (
+              <ActivityIndicator color={COLORS.white} />
+            ) : (
+              <Text style={styles.saveButtonText}>Save Preferences</Text>
+            )}
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.noChangesCard}>
+            <MaterialCommunityIcons name="check-circle-outline" size={16} color={COLORS.secondaryText} />
+            <Text style={styles.noChangesText}>No unsaved changes</Text>
+          </View>
+        )}
         
-        {/* --- NEW DIAGNOSTICS BUTTON --- */}
         <TouchableOpacity
           style={styles.testButton}
           onPress={handleTestNotification}
@@ -315,6 +374,24 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
           <MaterialCommunityIcons name="bell-check-outline" size={20} color={COLORS.secondaryText} />
           <Text style={styles.testButtonText}>Test Notification System</Text>
         </TouchableOpacity>
+
+        {testStatus.type ? (
+          <View style={[
+            styles.statusBanner,
+            testStatus.type === 'error'
+              ? styles.errorBanner
+              : testStatus.type === 'success'
+                ? styles.successBanner
+                : styles.infoBanner,
+          ]}>
+            <Text style={styles.statusBannerText}>{testStatus.message}</Text>
+            {testStatus.type === 'error' ? (
+              <TouchableOpacity style={styles.inlineActionButton} onPress={handleTestNotification}>
+                <Text style={styles.inlineActionButtonText}>Retry test</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
 
         <Text style={styles.privacyNote}>
           You can change these settings at any time.
@@ -369,6 +446,49 @@ const styles = StyleSheet.create({
     color: COLORS.secondaryText,
     marginBottom: 20,
     textAlign: 'center',
+  },
+  statusBanner: {
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+  },
+  successBanner: {
+    backgroundColor: `${COLORS.successGreen}12`,
+    borderColor: `${COLORS.successGreen}55`,
+  },
+  errorBanner: {
+    backgroundColor: '#FEE2E2',
+    borderColor: '#FCA5A5',
+  },
+  infoBanner: {
+    backgroundColor: `${COLORS.primaryBlue}12`,
+    borderColor: `${COLORS.primaryBlue}55`,
+  },
+  statusBannerText: {
+    color: COLORS.darkText,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '500',
+  },
+  inlineActionButton: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    backgroundColor: COLORS.primaryBlue,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  inlineActionButtonText: {
+    color: COLORS.white,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  lastSavedText: {
+    fontSize: 13,
+    color: COLORS.secondaryText,
+    textAlign: 'center',
+    marginBottom: 8,
   },
   section: {
     backgroundColor: COLORS.white,
@@ -432,6 +552,24 @@ const styles = StyleSheet.create({
   },
   disabledButton: {
     opacity: 0.7,
+  },
+  noChangesCard: {
+    marginTop: 10,
+    backgroundColor: COLORS.white,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  noChangesText: {
+    color: COLORS.secondaryText,
+    fontSize: 14,
+    fontWeight: '600',
   },
   saveButtonText: {
     color: COLORS.white,
