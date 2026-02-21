@@ -2,7 +2,7 @@
 
 Welcome, Agent. This document provides a comprehensive overview of the current state of the LLT App ecosystem. It details the architecture, technologies, patterns, known issues, and guidelines for contributing.
 
-**Last Updated:** January 2026
+**Last Updated:** January 2026 (Pre-Production UX QA refresh)
 
 ---
 
@@ -1085,6 +1085,13 @@ Never commit secrets. Use EAS Secrets for environment variables in builds.
   - prefer most recent timestamp
   - if server wins, reconcile and log event
   - user note: "One update was reconciled with newer server data."
+
+### UX Reliability Updates (Pre-Production QA, January 2026)
+
+- **Passenger live bus indicator path alignment:** passenger dashboard listener now reads from `tours/{tourId}/driverLocation` (same path used by driver updates and map screen).
+- **Driver assignment instant context update:** after assigning a driver to a new tour, the app updates in-memory and persisted session state immediately so Driver Home actions work without re-login.
+- **Meaningful pull-to-refresh:** Tour Home and Chat refresh now run actual offline queue replay and report queue outcomes (synced/failed/pending) with user-facing status feedback.
+- **Clipboard compatibility fix:** chat message copy now uses `@react-native-clipboard/clipboard` to avoid deprecated `react-native` Clipboard behavior in production builds.
 
 ## Quick Reference
 

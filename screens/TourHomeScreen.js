@@ -581,8 +581,22 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
           .once('value');
         setManifestStatus(manifestSnapshot.val()?.status || null);
 
-        const driverSnapshot = await realtimeDb.ref(`driver_locations/${sanitizedTourId}`).once('value');
-        setDriverLocationActive(!!driverSnapshot.val()?.lastUpdated);
+        const driverSnapshot = await realtimeDb
+          .ref(`tours/${sanitizedTourId}/driverLocation`)
+          .once('value');
+        const driverValue = driverSnapshot.val();
+        if (driverValue) {
+          const lastUpdatedValue = driverValue.timestamp ?? driverValue.lastUpdated;
+          const lastUpdatedMs =
+            typeof lastUpdatedValue === 'number'
+              ? lastUpdatedValue
+              : new Date(lastUpdatedValue).getTime();
+          const isFreshLocation =
+            Number.isFinite(lastUpdatedMs) && Date.now() - lastUpdatedMs <= 10 * 60 * 1000;
+          setDriverLocationActive(isFreshLocation);
+        } else {
+          setDriverLocationActive(false);
+        }
 
         const metaResult = await offlineSyncService.getTourPackMeta(sanitizedTourId, 'passenger');
         const metaLabel = offlineSyncService.getStalenessLabel(metaResult?.data?.lastSyncedAt).label;
