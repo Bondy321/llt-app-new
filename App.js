@@ -86,6 +86,7 @@ export default function App() {
   
   // State for passing params between screens manually (since we aren't using React Navigation stack)
   const [screenParams, setScreenParams] = useState({});
+  const [offlineModeActive, setOfflineModeActive] = useState(false);
 
   const refreshAppData = async () => {
     logger.info('App', 'Refreshing app data');
@@ -205,7 +206,80 @@ export default function App() {
     }
   };
 
-  const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger') => {
+  const resolveOfflineLogin = async (reference) => {
+    const normalizedReference = (reference || '').trim().toUpperCase();
+    if (!normalizedReference) {
+      return { success: false, error: 'Please enter your Booking Reference.' };
+    }
+
+    try {
+      const [savedTourData, savedBookingData] = await SessionStorage.multiGet([
+        SESSION_KEYS.TOUR_DATA,
+        SESSION_KEYS.BOOKING_DATA,
+      ]);
+
+      const cachedTourData = savedTourData?.[1] ? JSON.parse(savedTourData[1]) : null;
+      const cachedBookingData = savedBookingData?.[1] ? JSON.parse(savedBookingData[1]) : null;
+
+      const cachedSessionId = (cachedBookingData?.id || '').toUpperCase();
+      const isDriverCode = normalizedReference.startsWith('D-');
+      const expectedRole = isDriverCode ? 'driver' : 'passenger';
+      const cachedTourId = cachedTourData?.id || cachedBookingData?.assignedTourId || null;
+
+      if (cachedSessionId && cachedSessionId === normalizedReference) {
+        return {
+          success: true,
+          source: 'session',
+          type: expectedRole,
+          tour: cachedTourData,
+          identity: cachedBookingData,
+        };
+      }
+
+      if (!cachedTourId) {
+        return {
+          success: false,
+          error: 'No cached trip found for this code; reconnect once to verify.',
+        };
+      }
+
+      const cachedPackResult = await offlineSyncService.getTourPack(cachedTourId, expectedRole);
+      if (cachedPackResult?.success && cachedPackResult?.data) {
+        const packIdentity = expectedRole === 'driver'
+          ? cachedPackResult.data.driver
+          : cachedPackResult.data.booking;
+        const packIdentityId = (packIdentity?.id || '').toUpperCase();
+        if (packIdentityId && packIdentityId === normalizedReference) {
+          return {
+            success: true,
+            source: 'tour-pack',
+            type: expectedRole,
+            tour: cachedPackResult.data.tour || cachedTourData,
+            identity: packIdentity,
+          };
+        }
+      }
+
+      return {
+        success: false,
+        error: 'No cached trip found for this code; reconnect once to verify.',
+      };
+    } catch (error) {
+      logger.warn('Auth', 'Offline login check failed', {
+        error: error.message,
+        reference: normalizedReference,
+      });
+      return {
+        success: false,
+        error: 'No cached trip found for this code; reconnect once to verify.',
+      };
+    }
+  };
+
+  const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger', options = {}) => {
+    const isOfflineLogin = Boolean(options?.offlineMode);
+    setOfflineModeActive(isOfflineLogin);
+
     if (userType === 'driver') {
       logger.info('Auth', 'Driver Logged In', { driverId: bookingOrDriverData.id });
       setBookingData(bookingOrDriverData);
@@ -219,8 +293,8 @@ export default function App() {
       }
     } else {
       logger.info('Navigation', 'Passenger Login', { bookingRef: reference });
-      setTourCode(tourDetails.tourCode);
-      setTourData(tourDetails);
+      setTourCode(tourDetails?.tourCode || '');
+      setTourData(tourDetails || null);
       setBookingData(bookingOrDriverData);
       
       if (user && tourDetails?.id) {
@@ -263,6 +337,7 @@ export default function App() {
       setTourCode('');
       setTourData(null);
       setBookingData(null);
+      setOfflineModeActive(false);
       setScreenParams({});
       setCurrentScreen('Login');
     } catch (error) {
@@ -299,7 +374,11 @@ export default function App() {
     !isConnected && (
       <View style={styles.offlineBanner}>
         <MaterialCommunityIcons name="wifi-off" size={20} color={COLORS.white} />
-        <Text style={styles.offlineText}>No internet connection</Text>
+        <Text style={styles.offlineText}>
+          {offlineModeActive
+            ? 'Offline mode: limited features until your tour syncs again.'
+            : 'No internet connection'}
+        </Text>
       </View>
     )
   );
@@ -336,7 +415,7 @@ export default function App() {
 
     switch (currentScreen) {
       case 'Login':
-        return <LoginScreen {...screenProps} onLoginSuccess={handleLoginSuccess} />;
+        return <LoginScreen {...screenProps} onLoginSuccess={handleLoginSuccess} resolveOfflineLogin={resolveOfflineLogin} />;
       case 'DriverHome':
         return (
           <DriverHomeScreen
@@ -447,7 +526,7 @@ case 'Itinerary':
           />
         );
       default:
-        return <LoginScreen {...screenProps} onLoginSuccess={handleLoginSuccess} />;
+        return <LoginScreen {...screenProps} onLoginSuccess={handleLoginSuccess} resolveOfflineLogin={resolveOfflineLogin} />;
     }
   };
 

@@ -36,7 +36,7 @@ const COLORS = {
   subtleText: THEME_COLORS.textSecondary,
 };
 
-export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
+export default function LoginScreen({ onLoginSuccess, logger, isConnected, resolveOfflineLogin }) {
   const [bookingReference, setBookingReference] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -85,14 +85,35 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
       isConnected 
     });
     
-    if (!isConnected) {
-      setError('No internet connection. Please check your network and try again.');
-      return;
-    }
-    
     if (bookingReference.trim() === '') {
       setError('Please enter your Booking Reference.');
       logger?.warn('Login', 'Empty booking reference submitted');
+      return;
+    }
+
+    if (!isConnected) {
+      const offlineCheck = await resolveOfflineLogin?.(bookingReference.trim());
+      if (offlineCheck?.success) {
+        logger?.info('Login', 'Offline login fallback accepted', {
+          ref: bookingReference.trim().toUpperCase(),
+          type: offlineCheck.type,
+          source: offlineCheck.source,
+        });
+        await onLoginSuccess(
+          bookingReference.trim().toUpperCase(),
+          offlineCheck.tour,
+          offlineCheck.identity,
+          offlineCheck.type,
+          { offlineMode: true }
+        );
+        return;
+      }
+
+      logger?.warn('Login', 'Offline login fallback rejected', {
+        ref: bookingReference.trim().toUpperCase(),
+        reason: offlineCheck?.error,
+      });
+      setError(offlineCheck?.error || 'No cached trip found for this code; reconnect once to verify.');
       return;
     }
 
@@ -199,7 +220,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
             >
               <Text style={styles.welcomeText}>Welcome Aboard</Text>
               <Text style={styles.instructionText}>
-                Enter your booking reference or driver code to access your tour.
+                Enter your booking reference or driver code to access your tour. Returning travellers can continue offline using previously synced trip data.
               </Text>
               
               <View style={styles.inputContainer}>
@@ -261,6 +282,17 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected }) {
                 </TouchableOpacity>
               </Animated.View>
               
+              <View style={styles.offlineInfoContainer}>
+                <MaterialCommunityIcons
+                  name="cloud-sync-outline"
+                  size={16}
+                  color={COLORS.subtleText}
+                />
+                <Text style={styles.offlineInfoText}>
+                  If you're offline, we'll let you in when this code matches your cached trip. First-time codes still require one online check.
+                </Text>
+              </View>
+
               <View style={styles.helpSection}>
                 <MaterialCommunityIcons 
                   name="information-outline" 
@@ -429,6 +461,19 @@ const styles = StyleSheet.create({
   },
   buttonIcon: {
     marginLeft: 8,
+  },
+  offlineInfoContainer: {
+    marginTop: 14,
+    marginBottom: 2,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  offlineInfoText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
+    color: COLORS.subtleText,
   },
   helpSection: {
     flexDirection: 'row',
