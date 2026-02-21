@@ -404,13 +404,13 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   const getFreshnessConfig = (freshness) => {
     switch (freshness) {
       case 'live':
-        return { color: COLORS.success, label: 'LIVE', icon: 'broadcast' };
+        return { color: COLORS.success, label: 'LIVE NOW', icon: 'broadcast' };
       case 'recent':
-        return { color: COLORS.primaryBlue, label: 'RECENT', icon: 'clock-check-outline' };
+        return { color: COLORS.primaryBlue, label: 'LIVE (RECENT)', icon: 'clock-check-outline' };
       case 'stale':
-        return { color: COLORS.warning, label: 'OUTDATED', icon: 'clock-alert-outline' };
+        return { color: COLORS.warning, label: 'STALE', icon: 'clock-alert-outline' };
       case 'old':
-        return { color: COLORS.errorRed, label: 'OLD', icon: 'clock-remove-outline' };
+        return { color: COLORS.errorRed, label: 'VERY STALE', icon: 'clock-remove-outline' };
       default:
         return { color: COLORS.secondaryText, label: 'UNKNOWN', icon: 'help-circle-outline' };
     }
@@ -700,7 +700,7 @@ export default function MapScreen({ onBack, tourId, tourData }) {
                       <View style={styles.staleWarning}>
                         <MaterialCommunityIcons name="alert" size={20} color={COLORS.warning} />
                         <Text style={styles.staleText}>
-                          Location may be outdated. Please contact the driver to confirm.
+                          This location is getting stale. The driver may still be moving — refresh shortly or contact them for a live update.
                         </Text>
                       </View>
                     )}
@@ -739,7 +739,7 @@ export default function MapScreen({ onBack, tourId, tourData }) {
                     <View style={styles.waitingTextContainer}>
                       <Text style={styles.waitingTitle}>Awaiting Location</Text>
                       <Text style={styles.waitingMessage}>
-                        The driver hasn't set a pickup location yet. This will update automatically when they do.
+                        No pickup point is live yet. As soon as the driver shares one, this map will switch to live tracking automatically.
                       </Text>
                     </View>
                     <TouchableOpacity
