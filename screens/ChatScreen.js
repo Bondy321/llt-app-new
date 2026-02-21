@@ -508,6 +508,27 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     return () => unsubscribe();
   }, [tourId]);
 
+  const refreshQueueStats = useCallback(async () => {
+    const statsResult = await offlineSyncService.getQueueStats();
+    if (statsResult?.success && statsResult?.data) {
+      setQueueStats(statsResult.data);
+    }
+  }, []);
+
+  // Subscribe to offline queue state updates
+  useEffect(() => {
+    if (!tourId) {
+      setQueueStats({ pending: 0, syncing: 0, failed: 0, total: 0 });
+      return;
+    }
+
+    const unsubscribe = offlineSyncService.subscribeQueueState((stats) => {
+      setQueueStats(stats || { pending: 0, syncing: 0, failed: 0, total: 0 });
+    });
+
+    return () => unsubscribe();
+  }, [tourId]);
+
   // Set online presence on mount/unmount
   useEffect(() => {
     if (!tourId || !currentUser?.uid) return;
@@ -636,12 +657,18 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
               );
             });
         }
+
+        if (result.queued) {
+          await refreshQueueStats();
+        }
       }
     } catch (error) {
       console.error('Error sending message:', error);
       setMessages((prev) => prev.filter((msg) => msg.id !== optimisticId));
       setInputText(trimmed);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      await refreshQueueStats();
     }
 
     setSending(false);
@@ -653,8 +680,14 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     userName,
     isDriver,
     internalDriverChat,
+    refreshQueueStats,
     scrollToBottom,
   ]);
+
+  const handleManualSync = useCallback(async () => {
+    await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+    await refreshQueueStats();
+  }, [refreshQueueStats]);
 
   // Image picker handler
   const handlePickImage = useCallback(async () => {
@@ -1009,7 +1042,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
               {presenceInfo.onlineCount} online
             </Text>
           </View>
-          <TouchableOpacity style={styles.syncNowBtn} onPress={async () => { await offlineSyncService.replayQueue({ services: { bookingService, chatService } }); }}>
+          <TouchableOpacity style={styles.syncNowBtn} onPress={handleManualSync}>
             <Text style={styles.syncNowText}>Pending {queueStats.pending}</Text>
           </TouchableOpacity>
         </View>

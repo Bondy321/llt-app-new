@@ -119,3 +119,33 @@ test('saveTourPack merges partial payloads without losing existing keys', async 
   assert.equal(typeof cached.data.fetchedAt, 'string');
   assert.equal(typeof cached.data.sourceVersion, 'number');
 });
+
+
+test('subscribeQueueState emits queue stats that drive Pending badge text', async () => {
+  await clearQueue();
+
+  const seenBadgeTexts = [];
+  const unsubscribe = offlineSyncService.subscribeQueueState((stats) => {
+    seenBadgeTexts.push(`Pending ${stats.pending}`);
+  });
+
+  await offlineSyncService.enqueueAction({
+    id: 'badge-1',
+    type: 'CHAT_MESSAGE',
+    tourId: 'tour-badge',
+    payload: { text: 'queued message' },
+  });
+
+  await offlineSyncService.replayQueue({
+    services: {
+      chatService: {
+        sendMessageDirect: async () => ({ success: true }),
+      },
+    },
+  });
+
+  unsubscribe();
+
+  assert.equal(seenBadgeTexts.includes('Pending 1'), true);
+  assert.equal(seenBadgeTexts.at(-1), 'Pending 0');
+});
