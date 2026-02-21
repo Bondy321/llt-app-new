@@ -129,10 +129,15 @@ const getStalenessLabel = (lastSyncedAt) => {
 const saveTourPack = async (tourId, role, payload) => {
   try {
     if (!tourId || !role) return RESPONSE.fail('tourId and role are required');
+    const rawExistingPack = await storage.getItemAsync(cacheKey(tourId, role));
+    const existingPack = safeJsonParse(rawExistingPack, {});
+    const fetchedAt = payload?.fetchedAt || new Date().toISOString();
+    const sourceVersion = payload?.sourceVersion || SCHEMA_VERSION;
     const nextPayload = {
+      ...(existingPack && typeof existingPack === 'object' ? existingPack : {}),
       ...payload,
-      fetchedAt: payload?.fetchedAt || new Date().toISOString(),
-      sourceVersion: payload?.sourceVersion || SCHEMA_VERSION,
+      fetchedAt,
+      sourceVersion,
     };
     await storage.setItemAsync(cacheKey(tourId, role), JSON.stringify(nextPayload));
     return RESPONSE.ok(nextPayload);
