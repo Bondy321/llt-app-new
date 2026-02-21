@@ -193,9 +193,15 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
             />
             <Text style={styles.emptyPanelTitle}>{loadError ? 'Something went wrong' : 'Not signed in'}</Text>
             <Text style={styles.emptyPanelMessage}>{loadError || emptyStateMessage}</Text>
-            <TouchableOpacity style={styles.retryButton} onPress={loadPreferences}>
-              <Text style={styles.retryButtonText}>Retry</Text>
-            </TouchableOpacity>
+            {loadError ? (
+              <TouchableOpacity style={styles.retryButton} onPress={loadPreferences}>
+                <Text style={styles.retryButtonText}>Retry</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={styles.retryButton} onPress={onBack}>
+                <Text style={styles.retryButtonText}>Back</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </SafeAreaView>
