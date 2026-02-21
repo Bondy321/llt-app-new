@@ -56,6 +56,8 @@ const ToggleRow = ({ label, icon, value, onValueChange, color = COLORS.primaryBl
 export default function NotificationPreferencesScreen({ onBack, userId }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [emptyStateMessage, setEmptyStateMessage] = useState('');
 
   // 1. Operational Alerts (During the tour)
   const [opsPrefs, setOpsPrefs] = useState({
@@ -74,20 +76,34 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
     hiking_nature: false,
   });
 
+  const loadPreferences = async () => {
+    setLoading(true);
+    setLoadError('');
+    setEmptyStateMessage('');
+
+    if (!userId) {
+      setEmptyStateMessage('Sign in to manage notifications.');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const saved = await getUserPreferences(userId);
+      if (saved) {
+        // Merge saved preferences with defaults (handles new keys added later)
+        if (saved.ops) setOpsPrefs(prev => ({ ...prev, ...saved.ops }));
+        if (saved.marketing) setMarketingPrefs(prev => ({ ...prev, ...saved.marketing }));
+      }
+    } catch (error) {
+      setLoadError('We could not load your notification settings. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadPreferences();
-  }, []);
-
-  const loadPreferences = async () => {
-    if (!userId) return;
-    const saved = await getUserPreferences(userId);
-    if (saved) {
-      // Merge saved preferences with defaults (handles new keys added later)
-      if (saved.ops) setOpsPrefs(prev => ({ ...prev, ...saved.ops }));
-      if (saved.marketing) setMarketingPrefs(prev => ({ ...prev, ...saved.marketing }));
-    }
-    setLoading(false);
-  };
+  }, [userId]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -152,7 +168,37 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={COLORS.primaryBlue} />
+        <Text style={styles.loadingText}>Loading notification preferences...</Text>
       </View>
+    );
+  }
+
+  if (loadError || emptyStateMessage) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={onBack} style={styles.headerButton}>
+            <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.darkText} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Notifications</Text>
+          <View style={styles.headerButton} />
+        </View>
+
+        <View style={styles.emptyPanelContainer}>
+          <View style={styles.emptyPanel}>
+            <MaterialCommunityIcons
+              name={loadError ? 'alert-circle-outline' : 'account-circle-outline'}
+              size={34}
+              color={loadError ? '#E53E3E' : COLORS.primaryBlue}
+            />
+            <Text style={styles.emptyPanelTitle}>{loadError ? 'Something went wrong' : 'Not signed in'}</Text>
+            <Text style={styles.emptyPanelMessage}>{loadError || emptyStateMessage}</Text>
+            <TouchableOpacity style={styles.retryButton} onPress={loadPreferences}>
+              <Text style={styles.retryButtonText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </SafeAreaView>
     );
   }
 
@@ -281,6 +327,13 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 15,
+    color: COLORS.secondaryText,
+    textAlign: 'center',
   },
   header: {
     flexDirection: 'row',
@@ -399,5 +452,48 @@ const styles = StyleSheet.create({
     marginTop: 20,
     fontSize: 13,
     color: '#A0AEC0',
+  },
+  emptyPanelContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  emptyPanel: {
+    width: '100%',
+    backgroundColor: COLORS.white,
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  emptyPanelTitle: {
+    marginTop: 12,
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.darkText,
+  },
+  emptyPanelMessage: {
+    marginTop: 8,
+    fontSize: 14,
+    color: COLORS.secondaryText,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  retryButton: {
+    marginTop: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: COLORS.primaryBlue,
+  },
+  retryButtonText: {
+    color: COLORS.white,
+    fontWeight: '700',
+    fontSize: 14,
   },
 });
