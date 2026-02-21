@@ -425,6 +425,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [sending, setSending] = useState(false);
   const [queueStats, setQueueStats] = useState({ pending: 0, syncing: 0, failed: 0, total: 0 });
   const [refreshStatusText, setRefreshStatusText] = useState('');
+  const [syncBannerState, setSyncBannerState] = useState(null);
   const [inputHeight, setInputHeight] = useState(44);
 
   // Feature state
@@ -444,6 +445,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Refs
   const scrollViewRef = useRef(null);
   const typingTimeoutRef = useRef(null);
+  const syncBannerTimeoutRef = useRef(null);
   const lastMessageCountRef = useRef(0);
 
   const currentUser = auth.currentUser;
@@ -516,6 +518,35 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       setQueueStats(statsResult.data);
     }
   }, []);
+
+  const clearSyncBannerTimeout = useCallback(() => {
+    if (syncBannerTimeoutRef.current) {
+      clearTimeout(syncBannerTimeoutRef.current);
+      syncBannerTimeoutRef.current = null;
+    }
+  }, []);
+
+  const showSyncBanner = useCallback(
+    ({ message, tone = 'info', actionText = '', autoDismissMs = 4500 }) => {
+      clearSyncBannerTimeout();
+      setSyncBannerState({ message, tone, actionText });
+      setRefreshStatusText(message);
+
+      if (autoDismissMs > 0) {
+        syncBannerTimeoutRef.current = setTimeout(() => {
+          setSyncBannerState(null);
+          setRefreshStatusText('');
+        }, autoDismissMs);
+      }
+    },
+    [clearSyncBannerTimeout]
+  );
+
+  useEffect(() => {
+    return () => {
+      clearSyncBannerTimeout();
+    };
+  }, [clearSyncBannerTimeout]);
 
   // Subscribe to offline queue state updates
   useEffect(() => {
@@ -687,9 +718,29 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   ]);
 
   const handleManualSync = useCallback(async () => {
-    await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
-    await refreshQueueStats();
-  }, [refreshQueueStats]);
+    try {
+      const replayResult = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+      await refreshQueueStats();
+
+      if (!replayResult?.success) {
+        showSyncBanner({
+          message: 'Sync failed. Tap to retry failed actions.',
+          tone: 'error',
+          actionText: 'Tap to retry failed actions',
+          autoDismissMs: 7000,
+        });
+        Alert.alert('Sync failed', replayResult?.error || 'Unable to flush queued chat actions.');
+      }
+    } catch (error) {
+      showSyncBanner({
+        message: 'Sync failed. Tap to retry failed actions.',
+        tone: 'error',
+        actionText: 'Tap to retry failed actions',
+        autoDismissMs: 7000,
+      });
+      Alert.alert('Sync failed', 'Unable to flush queued chat actions.');
+    }
+  }, [refreshQueueStats, showSyncBanner]);
 
   // Image picker handler
   const handlePickImage = useCallback(async () => {
@@ -840,34 +891,62 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         const { processed = 0, failed = 0, skipped = false } = replayResult.data || {};
 
         if (skipped) {
-          setRefreshStatusText('Sync already in progress.');
-        } else if (processed > 0 || failed > 0) {
-          setRefreshStatusText(
-            `Synced ${processed} action${processed === 1 ? '' : 's'}${failed > 0 ? `, ${failed} failed` : ''}.`
-          );
-        } else if (beforeStats.total > 0 || afterStats.total > 0) {
-          setRefreshStatusText('Queue checked. Pending actions were not ready to sync yet.');
+          showSyncBanner({
+            message: 'Sync already in progress. Pending actions will retry shortly.',
+            tone: 'warning',
+            actionText: 'Tap to retry failed actions',
+            autoDismissMs: 4500,
+          });
+        } else if (afterStats.failed > 0) {
+          const partialLabel = processed > 0 ? 'Partially synced' : 'Sync failed';
+          showSyncBanner({
+            message: `${partialLabel}: ${processed} synced, ${afterStats.failed} failed, ${afterStats.pending} pending.`,
+            tone: 'error',
+            actionText: 'Tap to retry failed actions',
+            autoDismissMs: 7000,
+          });
+        } else if (afterStats.pending > 0) {
+          const statePrefix = processed > 0 ? 'Partially synced' : 'Pending retry';
+          showSyncBanner({
+            message: `${statePrefix}: ${afterStats.pending} action${afterStats.pending === 1 ? '' : 's'} still queued.`,
+            tone: 'warning',
+            actionText: 'Tap to retry failed actions',
+            autoDismissMs: 5500,
+          });
+        } else if (processed > 0 || failed > 0 || beforeStats.total > 0 || afterStats.total > 0) {
+          showSyncBanner({
+            message: `Synced ${processed} action${processed === 1 ? '' : 's'}.`,
+            tone: 'success',
+            autoDismissMs: 3000,
+          });
         } else {
-          setRefreshStatusText('Messages are up to date.');
-        }
-
-        if (afterStats.pending > 0 || afterStats.failed > 0) {
-          Alert.alert(
-            'Offline queue status',
-            `${afterStats.pending} pending and ${afterStats.failed} failed action${afterStats.pending + afterStats.failed === 1 ? '' : 's'} remain in queue.`
-          );
+          showSyncBanner({
+            message: 'Messages are up to date.',
+            tone: 'success',
+            autoDismissMs: 2500,
+          });
         }
       } else {
-        setRefreshStatusText('Queue sync failed.');
+        showSyncBanner({
+          message: 'Queue sync failed. Tap to retry failed actions.',
+          tone: 'error',
+          actionText: 'Tap to retry failed actions',
+          autoDismissMs: 7000,
+        });
         Alert.alert('Sync failed', replayResult?.error || 'Unable to flush queued chat actions.');
       }
     } catch (error) {
-      setRefreshStatusText('Refresh failed. Please try again.');
+      showSyncBanner({
+        message: 'Refresh failed. Tap to retry failed actions.',
+        tone: 'error',
+        actionText: 'Tap to retry failed actions',
+        autoDismissMs: 7000,
+      });
       Alert.alert('Refresh failed', 'Unable to refresh chat right now.');
     } finally {
       setRefreshing(false);
     }
-  }, [refreshQueueStats]);
+  }, [refreshQueueStats, showSyncBanner]);
 
   // Format time helper
   const formatTime = useCallback((timestamp) => {
@@ -1095,9 +1174,22 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       </LinearGradient>
 
       {!!refreshStatusText && (
-        <View style={styles.refreshStatusContainer}>
+        <TouchableOpacity
+          style={[
+            styles.refreshStatusContainer,
+            syncBannerState?.tone === 'success' && styles.refreshStatusSuccess,
+            syncBannerState?.tone === 'warning' && styles.refreshStatusWarning,
+            syncBannerState?.tone === 'error' && styles.refreshStatusError,
+          ]}
+          activeOpacity={syncBannerState?.actionText ? 0.8 : 1}
+          onPress={syncBannerState?.actionText ? handleManualSync : undefined}
+          disabled={!syncBannerState?.actionText}
+        >
           <Text style={styles.refreshStatusText}>{refreshStatusText}</Text>
-        </View>
+          {!!syncBannerState?.actionText && (
+            <Text style={styles.refreshStatusActionText}>{syncBannerState.actionText}</Text>
+          )}
+        </TouchableOpacity>
       )}
 
       <KeyboardAvoidingView
@@ -1350,15 +1442,32 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   refreshStatusContainer: {
-    backgroundColor: '#ECFDF5',
     borderBottomWidth: 1,
-    borderBottomColor: '#A7F3D0',
     paddingHorizontal: 14,
-    paddingVertical: 6,
+    paddingVertical: 8,
+  },
+  refreshStatusSuccess: {
+    backgroundColor: '#ECFDF5',
+    borderBottomColor: '#A7F3D0',
+  },
+  refreshStatusWarning: {
+    backgroundColor: '#FFFBEB',
+    borderBottomColor: '#FDE68A',
+  },
+  refreshStatusError: {
+    backgroundColor: '#FEF2F2',
+    borderBottomColor: '#FECACA',
   },
   refreshStatusText: {
-    color: '#065F46',
+    color: '#1F2937',
     fontSize: 12,
+    fontWeight: '600',
+  },
+  refreshStatusActionText: {
+    marginTop: 2,
+    fontSize: 11,
+    color: '#1D4ED8',
+    fontWeight: '700',
   },
   keyboardAvoidingContainer: {
     flex: 1,
