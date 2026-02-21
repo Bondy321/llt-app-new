@@ -1092,6 +1092,11 @@ Never commit secrets. Use EAS Secrets for environment variables in builds.
 - **Driver assignment instant context update:** after assigning a driver to a new tour, the app updates in-memory and persisted session state immediately so Driver Home actions work without re-login.
 - **Meaningful pull-to-refresh:** Tour Home and Chat refresh now run actual offline queue replay and report queue outcomes (synced/failed/pending) with user-facing status feedback.
 - **Clipboard compatibility fix:** chat message copy now uses `@react-native-clipboard/clipboard` to avoid deprecated `react-native` Clipboard behavior in production builds.
+- **Notification settings load resilience:** Notification Preferences now exits spinner states safely (missing `userId` or fetch errors), shows actionable empty/error cards, and supports retry/recover without app restart.
+- **Chat read-state reliability:** opening chat and returning to the bottom of the thread now marks chat as read (tour + internal driver chat), reducing stale unread counters.
+- **Non-blocking chat sync UX:** pull-to-refresh sync outcomes are surfaced via in-screen banners with optional “retry failed actions” affordance instead of disruptive modal alerts.
+- **Pickup countdown parsing hardening:** pickup countdown now supports `HH:mm` and `h:mm AM/PM` variants, handles explicit UK/ISO date context, and shows a fallback status when format is unsupported.
+- **Itinerary date parsing guardrails:** itinerary start-date handling now accepts only explicit UK (`dd/MM/yyyy`) or ISO (`yyyy-MM-dd`) formats, warns drivers on unsupported formats, and avoids locale-dependent parsing drift.
 
 ## Quick Reference
 
