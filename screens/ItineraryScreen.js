@@ -24,6 +24,7 @@ import { getTourItinerary } from '../services/bookingServiceRealtime';
 import { realtimeDb } from '../firebase';
 import { COLORS as THEME } from '../theme';
 import offlineSyncService from '../services/offlineSyncService';
+const { parseSupportedStartDate } = require('../services/itineraryDateParser');
 
 // Brand Colors
 const COLORS = {
@@ -144,56 +145,37 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   };
 
   const getParsedStartDate = useMemo(
-    () => (rawDate) => {
-      let parsedStartDate;
-      if (typeof rawDate === 'string' && rawDate.includes('/')) {
-        const [day, month, year] = rawDate.split('/').map(Number);
-        parsedStartDate = new Date(year, month - 1, day);
-      } else {
-        parsedStartDate = new Date(rawDate);
-      }
-
-      if (isNaN(parsedStartDate.getTime())) {
-        return null;
-      }
-
-      const normalizedDate = new Date(parsedStartDate);
-      normalizedDate.setHours(12, 0, 0, 0);
-      return normalizedDate;
-    },
+    () => (rawDate) => parseSupportedStartDate(rawDate),
     []
   );
 
+  const parsedTourStartDate = useMemo(() => getParsedStartDate(startDate), [getParsedStartDate, startDate]);
+  const hasUnsupportedStartDate = Boolean(startDate) && !parsedTourStartDate;
+
   const formatDayLabel = useMemo(
     () => (dayNumber) => {
-      if (!startDate) {
+      if (!parsedTourStartDate) {
         return `Day ${dayNumber}`;
       }
-      const parsedStartDate = getParsedStartDate(startDate);
-      if (!parsedStartDate) {
-        return `Day ${dayNumber}`;
-      }
-      const dayDate = new Date(parsedStartDate);
-      dayDate.setDate(parsedStartDate.getDate() + (dayNumber - 1));
+      const dayDate = new Date(parsedTourStartDate);
+      dayDate.setDate(parsedTourStartDate.getDate() + (dayNumber - 1));
       const weekday = dayDate.toLocaleDateString(undefined, { weekday: 'short' });
       const monthStr = dayDate.toLocaleDateString(undefined, { month: 'long' });
       const dayStr = getOrdinal(dayDate.getDate());
       return `Day ${dayNumber} - ${weekday} ${dayStr} ${monthStr}`;
     },
-    [getParsedStartDate, startDate]
+    [parsedTourStartDate]
   );
 
   const todaysDayNumber = useMemo(() => {
-    if (!startDate || !itinerary?.days?.length) return null;
-    const parsedStartDate = getParsedStartDate(startDate);
-    if (!parsedStartDate) return null;
+    if (!parsedTourStartDate || !itinerary?.days?.length) return null;
     const today = new Date();
     today.setHours(12, 0, 0, 0);
-    const diffTime = today.getTime() - parsedStartDate.getTime();
+    const diffTime = today.getTime() - parsedTourStartDate.getTime();
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
     if (diffDays < 1 || diffDays > itinerary.days.length) return null;
     return diffDays;
-  }, [getParsedStartDate, itinerary?.days?.length, startDate]);
+  }, [itinerary?.days?.length, parsedTourStartDate]);
 
   useEffect(() => {
     if (!itinerary?.days?.length) return;
@@ -436,7 +418,11 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
     }
 
     try {
-      const parsedStart = getParsedStartDate(startDate);
+      const parsedStart = parsedTourStartDate;
+      if (!parsedStart) {
+        Alert.alert("Unsupported start date", "Calendar export supports dd/MM/yyyy or yyyy-MM-dd dates.");
+        return;
+      }
       let icsContent = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//LLT Tours//Itinerary//EN\n";
 
       itinerary.days.forEach((day, dayIndex) => {
@@ -697,6 +683,15 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
           </Text>
         )}
 
+        {isDriver && isEditing && hasUnsupportedStartDate && (
+          <View style={styles.dateWarningBanner}>
+            <MaterialCommunityIcons name="alert-outline" size={14} color={COLORS.secondaryText} />
+            <Text style={styles.dateWarningText}>
+              Start date format not supported. Showing Day numbers only.
+            </Text>
+          </View>
+        )}
+
         {(!dataToRender?.days || dataToRender.days.length === 0) ? (
           renderEmptyState()
         ) : (
@@ -871,6 +866,24 @@ const styles = StyleSheet.create({
   emptySubtitle: { fontSize: 15, color: COLORS.secondaryText, textAlign: 'center', lineHeight: 22 },
   emptyButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.primaryBlue, paddingHorizontal: 24, paddingVertical: 14, borderRadius: 12, marginTop: 24, shadowColor: COLORS.primaryBlue, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
   emptyButtonText: { color: COLORS.white, fontSize: 16, fontWeight: '700', marginLeft: 8 },
+
+
+  dateWarningBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: COLORS.appBackground,
+  },
+  dateWarningText: {
+    color: COLORS.secondaryText,
+    fontSize: 12,
+  },
 
   // Day Cards
   dayCard: { backgroundColor: 'transparent', borderRadius: 20, marginBottom: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.08, shadowRadius: 16, elevation: 6 },
