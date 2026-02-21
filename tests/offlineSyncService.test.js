@@ -76,3 +76,28 @@ test('staleness label buckets are derived correctly', async () => {
   assert.equal(stale.bucket, 'stale');
   assert.equal(old.bucket, 'old');
 });
+
+
+test('saveTourPack merges partial payloads without losing existing keys', async () => {
+  const tourId = 'tour-merge-1';
+  const role = 'passenger';
+
+  const firstWrite = await offlineSyncService.saveTourPack(tourId, role, {
+    tour: { id: tourId, name: 'Loch Tour' },
+    booking: { reference: 'ABC123' },
+  });
+  assert.equal(firstWrite.success, true);
+
+  const secondWrite = await offlineSyncService.saveTourPack(tourId, role, {
+    itinerary: { stops: [{ name: 'Luss' }] },
+  });
+  assert.equal(secondWrite.success, true);
+
+  const cached = await offlineSyncService.getTourPack(tourId, role);
+  assert.equal(cached.success, true);
+  assert.deepEqual(cached.data.tour, { id: tourId, name: 'Loch Tour' });
+  assert.deepEqual(cached.data.booking, { reference: 'ABC123' });
+  assert.deepEqual(cached.data.itinerary, { stops: [{ name: 'Luss' }] });
+  assert.equal(typeof cached.data.fetchedAt, 'string');
+  assert.equal(typeof cached.data.sourceVersion, 'number');
+});
