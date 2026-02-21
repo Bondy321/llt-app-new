@@ -8,6 +8,7 @@ import logger from '../services/loggerService';
 import offlineSyncService from '../services/offlineSyncService';
 
 const FIREBASE_PROBE_PATH = '.info/serverTimeOffset';
+const OFFLINE_QUEUE_DEGRADED_WARNING_MS = 15 * 60 * 1000;
 
 const deriveSyncHealth = ({ isConnected, firebaseConnected, queueStats, lastSyncAt }) => {
   if (!isConnected || !firebaseConnected) return 'offline';
@@ -24,6 +25,7 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {})
   const [lastProbeDurationMs, setLastProbeDurationMs] = useState(null);
   const [lastSyncAt, setLastSyncAt] = useState(null);
   const [queueStats, setQueueStats] = useState({ pending: 0, syncing: 0, failed: 0, total: 0 });
+  const [queueDegradedSince, setQueueDegradedSince] = useState(null);
 
   const appState = useRef(AppState.currentState);
   const firebaseListenerRef = useRef(null);
@@ -65,6 +67,12 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {})
   useEffect(() => {
     const unsubscribeQueue = offlineSyncService.subscribeQueueState((stats) => {
       setQueueStats(stats);
+
+      if (stats?.health === 'degraded') {
+        setQueueDegradedSince((current) => current || Date.now());
+      } else {
+        setQueueDegradedSince(null);
+      }
     });
 
     const unsubscribeNetInfo = NetInfo.addEventListener((state) => {
@@ -124,8 +132,20 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {})
   }, [activeTourId, role]);
 
   const syncHealth = deriveSyncHealth({ isConnected, firebaseConnected, queueStats, lastSyncAt });
+  const queueWarningActive = Boolean(queueDegradedSince && Date.now() - queueDegradedSince >= OFFLINE_QUEUE_DEGRADED_WARNING_MS);
 
-  return { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs, lastSyncAt, queueStats, syncHealth };
+  return {
+    isConnected,
+    firebaseConnected,
+    lastFirebaseError,
+    lastProbeDurationMs,
+    lastSyncAt,
+    queueStats,
+    syncHealth,
+    queueDegradedSince,
+    queueWarningActive,
+    queueDegradedWarningWindowMs: OFFLINE_QUEUE_DEGRADED_WARNING_MS,
+  };
 };
 
 export default useDiagnostics;

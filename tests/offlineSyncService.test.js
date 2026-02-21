@@ -119,3 +119,41 @@ test('saveTourPack merges partial payloads without losing existing keys', async 
   assert.equal(typeof cached.data.fetchedAt, 'string');
   assert.equal(typeof cached.data.sourceVersion, 'number');
 });
+
+test('queue stats include degraded health warnings for stale pending and failed backlogs', async () => {
+  await clearQueue();
+  const oldCreatedAt = new Date(Date.now() - (3 * 60 * 60 * 1000)).toISOString();
+
+  await offlineSyncService.enqueueAction({ id: 'health-pending-1', type: 'CHAT_MESSAGE', tourId: 'tour-1', createdAt: oldCreatedAt, payload: { text: 'old pending' } });
+
+  for (let i = 0; i < 4; i += 1) {
+    await offlineSyncService.enqueueAction({ id: `health-failed-${i}`, type: 'CHAT_MESSAGE', tourId: 'tour-1', payload: { text: `failed-${i}` }, status: 'failed' });
+  }
+
+  const stats = await offlineSyncService.getQueueStats();
+  assert.equal(stats.success, true);
+  assert.equal(stats.data.health, 'degraded');
+  assert.equal(stats.data.failed, 4);
+  assert.equal(stats.data.skippedFailedActions, 4);
+  assert.equal(stats.data.healthWarnings.includes('failed_actions_threshold'), true);
+  assert.equal(stats.data.healthWarnings.includes('pending_age_threshold'), true);
+});
+
+test('replayQueue returns skippedFailedActionsCount telemetry', async () => {
+  await clearQueue();
+  await offlineSyncService.enqueueAction({ id: 'replay-skip-failed', type: 'CHAT_MESSAGE', tourId: 'tour-1', payload: { text: 'failed entry' }, status: 'failed' });
+  await offlineSyncService.enqueueAction({ id: 'replay-ok', type: 'CHAT_MESSAGE', tourId: 'tour-1', payload: { text: 'ok entry' } });
+
+  const replay = await offlineSyncService.replayQueue({
+    services: {
+      chatService: {
+        sendMessageDirect: async () => ({ success: true }),
+      },
+    },
+  });
+
+  assert.equal(replay.success, true);
+  assert.equal(replay.data.processed >= 1, true);
+  assert.equal(replay.data.failed, 0);
+  assert.equal(replay.data.skippedFailedActionsCount >= 1, true);
+});

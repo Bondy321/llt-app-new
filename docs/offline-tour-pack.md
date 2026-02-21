@@ -52,3 +52,36 @@ Tour/Driver screens
 3. Driver updates manifest offline; verify queued badge.
 4. Send chat offline; verify queued message state.
 5. Re-enable network; verify queue replays and statuses become synced/sent.
+
+## Queue telemetry and operator alerting
+
+`offlineSyncService` now emits structured telemetry via `loggerService` for replay lifecycle:
+
+- `Offline replay started` with queue length, skipped failed actions count, and oldest queued action age.
+- `Offline replay ended` with processed/failed totals and skipped failed actions count.
+- Queue stats now include:
+  - `oldestPendingAgeHours`
+  - `skippedFailedActions`
+  - `health` (`healthy`/`degraded`)
+  - `healthWarnings` (`failed_actions_threshold`, `pending_age_threshold`, `skipped_failed_threshold`)
+
+### Suggested dashboard widgets
+
+- **Offline queue health (current):** show `health` and active `healthWarnings`.
+- **Replay outcome trend:** sum of `processed` and `failed` per hour/day from replay-end logs.
+- **Queue age monitor:** chart `oldestPendingAgeHours` over time.
+- **Failed backlog monitor:** chart `failed` and `skippedFailedActions` counts.
+
+### Suggested alert conditions for operations
+
+Trigger warning alerts when any condition persists for 15+ minutes:
+
+1. `health = degraded` for a driver session.
+2. `failed > 3` actions in queue.
+3. `oldestPendingAgeHours > 2`.
+4. `skippedFailedActions > 5`.
+
+Operational response:
+
+- Ask driver/operator to open a connected screen and trigger replay.
+- If failure count keeps growing, check Firebase connectivity + rules and inspect replay failure errors in logs.

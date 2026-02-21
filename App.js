@@ -95,7 +95,7 @@ export default function App() {
 
   const diagnosticsTourId = tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
   const diagnosticsRole = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
-  const { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs, lastSyncAt, queueStats, syncHealth } = useDiagnostics({
+  const { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs, lastSyncAt, queueStats, syncHealth, queueWarningActive } = useDiagnostics({
     onForeground: refreshAppData,
     activeTourId: diagnosticsTourId,
     role: diagnosticsRole,
@@ -262,6 +262,16 @@ export default function App() {
     offlineSyncService.replayQueue({ services: { bookingService, chatService } });
   }, [isConnected, firebaseConnected, user?.uid]);
 
+  useEffect(() => {
+    if (!queueWarningActive || !bookingData?.id?.startsWith('D-')) return;
+    logger.warn('OfflineSync', 'Operator queue health warning active', {
+      pending: queueStats.pending,
+      failed: queueStats.failed,
+      healthWarnings: queueStats.healthWarnings || [],
+      oldestPendingAgeHours: queueStats.oldestPendingAgeHours || 0,
+    });
+  }, [queueWarningActive, bookingData?.id, queueStats.pending, queueStats.failed, queueStats.oldestPendingAgeHours]);
+
   if (authError) {
     return (
       <View style={styles.loadingContainer}>
@@ -290,6 +300,15 @@ export default function App() {
       <MaterialCommunityIcons name={isConnected ? 'sync' : 'cloud-off-outline'} size={18} color={COLORS.white} />
       <Text style={styles.offlineText}>{`${syncHealth.toUpperCase()} • ${stalenessLabel.label} • Pending ${queueStats.pending}`}</Text>
     </View>
+  );
+
+  const QueueHealthWarningBanner = () => (
+    queueWarningActive && bookingData?.id?.startsWith('D-') && (
+      <View style={styles.queueHealthWarningBanner}>
+        <MaterialCommunityIcons name="alert-outline" size={18} color={COLORS.white} />
+        <Text style={styles.offlineText}>Offline queue degraded. Review pending/failed actions when safe.</Text>
+      </View>
+    )
   );
 
   const SyncIssueBanner = () => (
@@ -434,6 +453,7 @@ case 'Itinerary':
       <OfflineBanner />
       <SyncIssueBanner />
       <QueueBanner />
+      <QueueHealthWarningBanner />
       {renderScreen()}
     </>
   );
@@ -448,6 +468,7 @@ const styles = StyleSheet.create({
   offlineBanner: { backgroundColor: COLORS.errorRed, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000 },
   offlineText: { color: COLORS.white, fontSize: 14, marginLeft: 8, fontWeight: '500' },
   syncBanner: { backgroundColor: COLORS.primaryBlue, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', paddingVertical: 8, paddingHorizontal: 12, position: 'absolute', top: 40, left: 0, right: 0, zIndex: 900 },
-  queueBanner: { backgroundColor: '#0F766E', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 6, paddingHorizontal: 12, position: 'absolute', top: 72, left: 0, right: 0, zIndex: 850 },
+  queueBanner: { backgroundColor: THEME.success, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 6, paddingHorizontal: 12, position: 'absolute', top: 72, left: 0, right: 0, zIndex: 850 },
+  queueHealthWarningBanner: { backgroundColor: THEME.warning, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 6, paddingHorizontal: 12, position: 'absolute', top: 104, left: 0, right: 0, zIndex: 840 },
   syncDetail: { color: COLORS.white, fontSize: 12, opacity: 0.8 },
 });
