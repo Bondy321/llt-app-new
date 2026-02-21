@@ -523,9 +523,12 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     let active = true;
 
     if (!draftStorageKey) {
+      setInputText('');
       setDraftRestored(false);
       return;
     }
+
+    setDraftRestored(false);
 
     const restoreDraft = async () => {
       try {
@@ -536,9 +539,11 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
           setInputText(savedDraft);
           setDraftRestored(true);
         } else {
+          setInputText('');
           setDraftRestored(false);
         }
       } catch (error) {
+        setInputText('');
         setDraftRestored(false);
       }
     };
