@@ -11,6 +11,7 @@ import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
 import ManifestBookingCard from '../components/ManifestBookingCard';
 import { COLORS as THEME, SPACING } from '../theme';
+const { getBookingSyncState, normalizeSyncState } = require('../utils/manifestSyncState');
 
 const COLORS = {
   primary: THEME.primary,
@@ -70,7 +71,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
         if (action.type !== 'MANIFEST_UPDATE') return;
         const bookingRef = action.payload?.bookingRef;
         if (!bookingRef) return;
-        map[bookingRef] = action.status;
+        map[bookingRef] = normalizeSyncState(action.status);
       });
       setBookingSyncState(map);
     });
@@ -130,9 +131,9 @@ export default function PassengerManifestScreen({ route, navigation }) {
         setConflictNote(result.conflictMessage);
       }
       if (result?.queued) {
-        setBookingSyncState((prev) => ({ ...prev, [selectedBooking.id]: 'queued' }));
+        setBookingSyncState((prev) => ({ ...prev, [selectedBooking.id]: normalizeSyncState('queued') }));
       } else {
-        setBookingSyncState((prev) => ({ ...prev, [selectedBooking.id]: 'synced' }));
+        setBookingSyncState((prev) => ({ ...prev, [selectedBooking.id]: normalizeSyncState('synced') }));
       }
       setModalVisible(false);
       setSelectedBooking(null);
@@ -261,6 +262,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
                 booking={item} 
                 onPress={() => handleOpenBooking(item)} 
                 isSearchResult={true} 
+                syncState={getBookingSyncState(bookingSyncState, item.id) || 'synced'}
               />
             )}
             contentContainerStyle={styles.listContent}
@@ -276,6 +278,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
                 booking={item} 
                 onPress={() => handleOpenBooking(item)} 
                 isSearchResult={false} 
+                syncState={getBookingSyncState(bookingSyncState, item.id) || 'synced'}
               />
             )}
             renderSectionHeader={({ section: { title } }) => (
