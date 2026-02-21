@@ -1098,6 +1098,15 @@ Never commit secrets. Use EAS Secrets for environment variables in builds.
 - **Pickup countdown parsing hardening:** pickup countdown now supports `HH:mm` and `h:mm AM/PM` variants, handles explicit UK/ISO date context, and shows a fallback status when format is unsupported.
 - **Itinerary date parsing guardrails:** itinerary start-date handling now accepts only explicit UK (`dd/MM/yyyy`) or ISO (`yyyy-MM-dd`) formats, warns drivers on unsupported formats, and avoids locale-dependent parsing drift.
 
+### UX QA Refresh Additions (Production Readiness, February 2026)
+
+- **Offline-aware login for returning users:** Login now allows cached-trip entry when offline if the entered booking/driver code matches persisted session or Tour Pack identity. Unknown first-time codes remain blocked offline with actionable guidance.
+- **Chat queue sync consistency:** chat manual sync and pull-to-refresh now share a single queue-outcome helper and use non-blocking in-screen banners (including retry affordances) instead of disruptive modal failure alerts.
+- **Driver location trust improvements:** Driver Home now shows a stale-location nudge when the published pickup point is old and includes an optional persisted auto-share toggle (3-minute cadence while the screen is active and a tour is assigned).
+- **Passenger map freshness messaging:** Map experience now provides clearer stale-data copy so passengers understand when location updates are aging and when to refresh or contact the driver.
+- **Manifest speed workflow:** Passenger Manifest now supports boarding-priority workflows (status filtering + pickup-time-first grouping) while keeping location grouping available for fallback operational views.
+- **Notification preferences confidence UX:** Notification settings now include dirty-state save controls, inline success/error banners, explicit “last saved” feedback, and in-screen test-notification status with retry.
+
 ## Quick Reference
 
 ### Common Commands
