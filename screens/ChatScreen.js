@@ -2,7 +2,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Animated,
   Dimensions,
   Image,
@@ -621,6 +620,74 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     [clearSyncBannerTimeout]
   );
 
+  const showQueueSyncOutcome = useCallback(
+    ({ replayResult, beforeStats = {}, afterStats = {}, fallbackErrorMessage = 'Unable to flush queued chat actions.' }) => {
+      const safeBeforeStats = {
+        pending: beforeStats?.pending || 0,
+        failed: beforeStats?.failed || 0,
+        syncing: beforeStats?.syncing || 0,
+        total: beforeStats?.total || 0,
+      };
+      const safeAfterStats = {
+        pending: afterStats?.pending || 0,
+        failed: afterStats?.failed || 0,
+        syncing: afterStats?.syncing || 0,
+        total: afterStats?.total || 0,
+      };
+
+      if (!replayResult?.success) {
+        const detail = replayResult?.error || fallbackErrorMessage;
+        showSyncBanner({
+          message: `Queue sync failed: ${detail} ${safeAfterStats.failed} failed, ${safeAfterStats.pending} pending.`,
+          tone: 'error',
+          actionText: 'Tap to retry failed actions',
+          autoDismissMs: 7000,
+        });
+        return;
+      }
+
+      const { processed = 0, failed = 0, skipped = false } = replayResult.data || {};
+
+      if (skipped) {
+        showSyncBanner({
+          message: 'Sync already in progress. Pending actions will retry shortly.',
+          tone: 'warning',
+          actionText: 'Tap to retry failed actions',
+          autoDismissMs: 4500,
+        });
+      } else if (safeAfterStats.failed > 0) {
+        const partialLabel = processed > 0 ? 'Partially synced' : 'Sync failed';
+        showSyncBanner({
+          message: `${partialLabel}: ${processed} synced, ${safeAfterStats.failed} failed, ${safeAfterStats.pending} pending.`,
+          tone: 'error',
+          actionText: 'Tap to retry failed actions',
+          autoDismissMs: 7000,
+        });
+      } else if (safeAfterStats.pending > 0) {
+        const statePrefix = processed > 0 ? 'Partially synced' : 'Pending retry';
+        showSyncBanner({
+          message: `${statePrefix}: ${safeAfterStats.pending} action${safeAfterStats.pending === 1 ? '' : 's'} still queued.`,
+          tone: 'warning',
+          actionText: 'Tap to retry failed actions',
+          autoDismissMs: 5500,
+        });
+      } else if (processed > 0 || failed > 0 || safeBeforeStats.total > 0 || safeAfterStats.total > 0) {
+        showSyncBanner({
+          message: `Synced ${processed} action${processed === 1 ? '' : 's'}.`,
+          tone: 'success',
+          autoDismissMs: 3000,
+        });
+      } else {
+        showSyncBanner({
+          message: 'Messages are up to date.',
+          tone: 'success',
+          autoDismissMs: 2500,
+        });
+      }
+    },
+    [showSyncBanner]
+  );
+
   useEffect(() => {
     return () => {
       clearSyncBannerTimeout();
@@ -802,28 +869,26 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
   const handleManualSync = useCallback(async () => {
     try {
+      const beforeStatsResult = await offlineSyncService.getQueueStats();
+      const beforeStats = beforeStatsResult?.success
+        ? beforeStatsResult.data
+        : { pending: 0, failed: 0, syncing: 0, total: 0 };
+
       const replayResult = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
       await refreshQueueStats();
+      const afterStatsResult = await offlineSyncService.getQueueStats();
+      const afterStats = afterStatsResult?.success
+        ? afterStatsResult.data
+        : { pending: 0, failed: 0, syncing: 0, total: 0 };
 
-      if (!replayResult?.success) {
-        showSyncBanner({
-          message: 'Sync failed. Tap to retry failed actions.',
-          tone: 'error',
-          actionText: 'Tap to retry failed actions',
-          autoDismissMs: 7000,
-        });
-        Alert.alert('Sync failed', replayResult?.error || 'Unable to flush queued chat actions.');
-      }
+      showQueueSyncOutcome({ replayResult, beforeStats, afterStats });
     } catch (error) {
-      showSyncBanner({
-        message: 'Sync failed. Tap to retry failed actions.',
-        tone: 'error',
-        actionText: 'Tap to retry failed actions',
-        autoDismissMs: 7000,
+      showQueueSyncOutcome({
+        replayResult: { success: false, error: error?.message || 'Unable to flush queued chat actions.' },
+        fallbackErrorMessage: 'Unable to flush queued chat actions.',
       });
-      Alert.alert('Sync failed', 'Unable to flush queued chat actions.');
     }
-  }, [refreshQueueStats, showSyncBanner]);
+  }, [refreshQueueStats, showQueueSyncOutcome]);
 
   // Image picker handler
   const handlePickImage = useCallback(async () => {
@@ -970,66 +1035,16 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         ? afterStatsResult.data
         : { pending: 0, failed: 0, syncing: 0, total: 0 };
 
-      if (replayResult?.success) {
-        const { processed = 0, failed = 0, skipped = false } = replayResult.data || {};
-
-        if (skipped) {
-          showSyncBanner({
-            message: 'Sync already in progress. Pending actions will retry shortly.',
-            tone: 'warning',
-            actionText: 'Tap to retry failed actions',
-            autoDismissMs: 4500,
-          });
-        } else if (afterStats.failed > 0) {
-          const partialLabel = processed > 0 ? 'Partially synced' : 'Sync failed';
-          showSyncBanner({
-            message: `${partialLabel}: ${processed} synced, ${afterStats.failed} failed, ${afterStats.pending} pending.`,
-            tone: 'error',
-            actionText: 'Tap to retry failed actions',
-            autoDismissMs: 7000,
-          });
-        } else if (afterStats.pending > 0) {
-          const statePrefix = processed > 0 ? 'Partially synced' : 'Pending retry';
-          showSyncBanner({
-            message: `${statePrefix}: ${afterStats.pending} action${afterStats.pending === 1 ? '' : 's'} still queued.`,
-            tone: 'warning',
-            actionText: 'Tap to retry failed actions',
-            autoDismissMs: 5500,
-          });
-        } else if (processed > 0 || failed > 0 || beforeStats.total > 0 || afterStats.total > 0) {
-          showSyncBanner({
-            message: `Synced ${processed} action${processed === 1 ? '' : 's'}.`,
-            tone: 'success',
-            autoDismissMs: 3000,
-          });
-        } else {
-          showSyncBanner({
-            message: 'Messages are up to date.',
-            tone: 'success',
-            autoDismissMs: 2500,
-          });
-        }
-      } else {
-        showSyncBanner({
-          message: 'Queue sync failed. Tap to retry failed actions.',
-          tone: 'error',
-          actionText: 'Tap to retry failed actions',
-          autoDismissMs: 7000,
-        });
-        Alert.alert('Sync failed', replayResult?.error || 'Unable to flush queued chat actions.');
-      }
+      showQueueSyncOutcome({ replayResult, beforeStats, afterStats });
     } catch (error) {
-      showSyncBanner({
-        message: 'Refresh failed. Tap to retry failed actions.',
-        tone: 'error',
-        actionText: 'Tap to retry failed actions',
-        autoDismissMs: 7000,
+      showQueueSyncOutcome({
+        replayResult: { success: false, error: error?.message || 'Unable to refresh chat right now.' },
+        fallbackErrorMessage: 'Unable to refresh chat right now.',
       });
-      Alert.alert('Refresh failed', 'Unable to refresh chat right now.');
     } finally {
       setRefreshing(false);
     }
-  }, [refreshQueueStats, showSyncBanner]);
+  }, [refreshQueueStats, showQueueSyncOutcome]);
 
   // Format time helper
   const formatTime = useCallback((timestamp) => {
