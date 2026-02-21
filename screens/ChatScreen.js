@@ -43,6 +43,7 @@ import {
   getMessageTextForCopy,
 } from '../services/chatService';
 import { uploadPhoto } from '../services/photoService';
+import { createPersistenceProvider } from '../services/persistenceProvider';
 import offlineSyncService from '../services/offlineSyncService';
 import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
@@ -428,6 +429,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [refreshStatusText, setRefreshStatusText] = useState('');
   const [syncBannerState, setSyncBannerState] = useState(null);
   const [inputHeight, setInputHeight] = useState(44);
+  const [draftRestored, setDraftRestored] = useState(false);
 
   // Feature state
   const [typingUsers, setTypingUsers] = useState([]);
@@ -446,6 +448,12 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const currentUser = auth.currentUser;
   const isDriver = bookingData?.isDriver === true;
   const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
+  const draftStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_DRAFTS' }), []);
+  const draftStorageKey = useMemo(() => {
+    if (!tourId) return null;
+    const chatType = internalDriverChat ? 'internal' : 'group';
+    return `draft_${chatType}_${tourId}_${currentUser?.uid || 'anonymous'}`;
+  }, [tourId, internalDriverChat, currentUser?.uid]);
 
   // Refs
   const scrollViewRef = useRef(null);
@@ -509,6 +517,58 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
     return () => unsubscribe();
   }, [tourId, internalDriverChat, isAtBottom, scrollToBottom]);
+
+  // Restore persisted chat draft for this tour/user context
+  useEffect(() => {
+    let active = true;
+
+    if (!draftStorageKey) {
+      setInputText('');
+      setDraftRestored(false);
+      return;
+    }
+
+    setDraftRestored(false);
+
+    const restoreDraft = async () => {
+      try {
+        const savedDraft = await draftStorage.getItemAsync(draftStorageKey);
+        if (!active || typeof savedDraft !== 'string') return;
+
+        if (savedDraft.trim().length > 0) {
+          setInputText(savedDraft);
+          setDraftRestored(true);
+        } else {
+          setInputText('');
+          setDraftRestored(false);
+        }
+      } catch (error) {
+        setInputText('');
+        setDraftRestored(false);
+      }
+    };
+
+    restoreDraft();
+
+    return () => {
+      active = false;
+    };
+  }, [draftStorage, draftStorageKey]);
+
+  // Persist draft while the user is typing
+  useEffect(() => {
+    if (!draftStorageKey) return;
+
+    const timeout = setTimeout(() => {
+      if (inputText.trim().length === 0) {
+        draftStorage.deleteItemAsync(draftStorageKey);
+      } else {
+        draftStorage.setItemAsync(draftStorageKey, inputText);
+      }
+    }, 200);
+
+    return () => clearTimeout(timeout);
+  }, [draftStorage, draftStorageKey, inputText]);
 
   // Mark chat as read when screen opens with a valid user/tour context
   useEffect(() => {
@@ -611,6 +671,10 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Handle typing indicator
   const handleTextChange = useCallback(
     (text) => {
+      if (draftRestored && text !== inputText) {
+        setDraftRestored(false);
+      }
+
       setInputText(text);
 
       if (!tourId || !currentUser?.uid) return;
@@ -632,7 +696,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         setTypingStatus(tourId, currentUser.uid, userName, false, isDriver);
       }
     },
-    [tourId, currentUser?.uid, userName, isDriver]
+    [draftRestored, inputText, tourId, currentUser?.uid, userName, isDriver]
   );
 
   // Send message handler
@@ -1305,6 +1369,13 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
             {/* Input Area */}
             <View style={styles.inputArea}>
+              {draftRestored && (
+                <View style={styles.draftBadge}>
+                  <MaterialCommunityIcons name="content-save-edit-outline" size={14} color={COLORS.primaryBlue} />
+                  <Text style={styles.draftBadgeText}>Draft restored</Text>
+                </View>
+              )}
+
               <TouchableOpacity
                 style={styles.attachButton}
                 onPress={() => {
@@ -1845,12 +1916,26 @@ const styles = StyleSheet.create({
   // Input Area
   inputArea: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'flex-end',
     paddingHorizontal: 10,
     paddingVertical: 10,
     borderTopWidth: 1,
     borderTopColor: '#E2E8F0',
     backgroundColor: COLORS.white,
+  },
+  draftBadge: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+    paddingHorizontal: 10,
+  },
+  draftBadgeText: {
+    color: COLORS.primaryBlue,
+    fontSize: 12,
+    fontWeight: '600',
   },
   attachButton: {
     padding: 6,
