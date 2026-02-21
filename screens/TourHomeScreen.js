@@ -21,6 +21,8 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import TodaysAgendaCard from '../components/TodaysAgendaCard';
 import { MANIFEST_STATUS } from '../services/bookingServiceRealtime';
+import * as bookingService from '../services/bookingServiceRealtime';
+import * as chatService from '../services/chatService';
 import { realtimeDb } from '../firebase';
 import offlineSyncService from '../services/offlineSyncService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
@@ -466,6 +468,7 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
   const [driverLocationActive, setDriverLocationActive] = useState(false);
   const scrollViewRef = useRef(null);
   const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
+  const [refreshStatusText, setRefreshStatusText] = useState('');
 
   const greeting = useMemo(() => getTimeBasedGreeting(), []);
   const bookingRef = useMemo(() => bookingData?.id, [bookingData?.id]);
@@ -531,10 +534,69 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     triggerHaptic('light');
-    // Simulate refresh delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    setRefreshing(false);
-  }, []);
+
+    const sanitizedTourId = tourData?.id || tourCode?.replace(/\s+/g, '_');
+    const feedbackParts = [];
+
+    try {
+      const beforeStatsResult = await offlineSyncService.getQueueStats();
+      const beforeStats = beforeStatsResult?.success
+        ? beforeStatsResult.data
+        : { pending: 0, failed: 0, syncing: 0, total: 0 };
+
+      const replayResult = await offlineSyncService.replayQueue({
+        services: { bookingService, chatService },
+      });
+
+      if (replayResult?.success) {
+        const { processed = 0, failed = 0, skipped = false } = replayResult.data || {};
+        if (skipped) {
+          feedbackParts.push('Sync already in progress.');
+        } else if (processed > 0 || failed > 0) {
+          feedbackParts.push(`Synced ${processed} queued action${processed === 1 ? '' : 's'}.`);
+          if (failed > 0) {
+            feedbackParts.push(`${failed} action${failed === 1 ? '' : 's'} still pending retry.`);
+          }
+        } else if (beforeStats.total > 0) {
+          feedbackParts.push('Checked offline queue. No actions were ready to sync yet.');
+        }
+      } else {
+        feedbackParts.push('Queue sync failed.');
+      }
+
+      if (sanitizedTourId && bookingRef && realtimeDb) {
+        const manifestSnapshot = await realtimeDb
+          .ref(`tour_manifests/${sanitizedTourId}/bookings/${bookingRef}`)
+          .once('value');
+        setManifestStatus(manifestSnapshot.val()?.status || null);
+
+        const driverSnapshot = await realtimeDb.ref(`driver_locations/${sanitizedTourId}`).once('value');
+        setDriverLocationActive(!!driverSnapshot.val()?.lastUpdated);
+
+        const metaResult = await offlineSyncService.getTourPackMeta(sanitizedTourId, 'passenger');
+        const metaLabel = offlineSyncService.getStalenessLabel(metaResult?.data?.lastSyncedAt).label;
+        setCacheStatusLabel(metaLabel);
+      }
+
+      const afterStatsResult = await offlineSyncService.getQueueStats();
+      const afterStats = afterStatsResult?.success
+        ? afterStatsResult.data
+        : { pending: 0, failed: 0, syncing: 0, total: 0 };
+
+      if (afterStats.pending > 0 || afterStats.failed > 0) {
+        feedbackParts.push(
+          `Queue: ${afterStats.pending} pending, ${afterStats.failed} failed.`
+        );
+      }
+
+      setRefreshStatusText(feedbackParts.length > 0 ? feedbackParts.join(' ') : 'Up to date.');
+    } catch (error) {
+      setRefreshStatusText('Refresh failed. Please try again.');
+      Alert.alert('Refresh failed', 'Unable to refresh your tour details right now.');
+    } finally {
+      setRefreshing(false);
+    }
+  }, [tourData?.id, tourCode, bookingRef]);
 
   const manifestStatusMeta = useMemo(() => {
     switch (manifestStatus) {
@@ -699,6 +761,7 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
               </View>
               <Text style={styles.tourCodeDisplay}>{tourCode}</Text>
               <Text style={styles.tourName} numberOfLines={1}>{tourData?.name || 'Active Tour'}</Text><Text style={styles.cacheLabel}>{cacheStatusLabel}</Text>
+              {!!refreshStatusText && <Text style={styles.refreshStatusText}>{refreshStatusText}</Text>}
             </View>
             <View style={styles.headerActions}>
               <TouchableOpacity
@@ -1129,6 +1192,11 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   cacheLabel: { fontSize: 12, color: COLORS.subtleText, marginTop: 4 },
+  refreshStatusText: {
+    fontSize: 12,
+    color: COLORS.primaryBlue,
+    marginTop: 4,
+  },
   tourName: {
     fontSize: 12,
     color: COLORS.subtleText,
