@@ -23,7 +23,25 @@ const COLORS = {
   info: THEME.primaryLight,
   muted: THEME.textSecondary,
   panel: THEME.textPrimary,
+  chipBg: THEME.surfaceSecondary,
+  chipActiveBg: THEME.primary,
+  chipText: THEME.textSecondary,
+  chipActiveText: THEME.white,
 };
+
+const VIEW_MODE = {
+  PRIORITY: 'PRIORITY',
+  LOCATION: 'LOCATION',
+  SEARCH: 'SEARCH'
+};
+
+const STATUS_FILTERS = [
+  { key: 'ALL', label: 'All' },
+  { key: MANIFEST_STATUS.PENDING, label: 'Pending' },
+  { key: MANIFEST_STATUS.PARTIAL, label: 'Partial' },
+  { key: MANIFEST_STATUS.BOARDED, label: 'Boarded' },
+  { key: MANIFEST_STATUS.NO_SHOW, label: 'No-show' }
+];
 
 export default function PassengerManifestScreen({ route, navigation }) {
   const { tourId } = route.params;
@@ -31,6 +49,8 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [manifestData, setManifestData] = useState({ bookings: [], stats: {} });
   const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState(VIEW_MODE.PRIORITY);
+  const [statusFilter, setStatusFilter] = useState('ALL');
 
   // Modal State
   const [selectedBooking, setSelectedBooking] = useState(null);
@@ -77,35 +97,128 @@ export default function PassengerManifestScreen({ route, navigation }) {
     });
   }, [manifestData.bookings.length, queueStats.pending, queueStats.failed, queueStats.syncing]);
 
-  // --- Derived Data: Search & Grouping ---
-  const { listData, isSearching } = useMemo(() => {
-    const query = searchQuery.toLowerCase().trim();
-    
-    if (!query) {
-      // DEFAULT VIEW: Group by Pickup Location
-      const groups = {};
-      manifestData.bookings.forEach(booking => {
-        const loc = booking.pickupLocation || 'Unknown Location';
-        if (!groups[loc]) groups[loc] = [];
-        groups[loc].push(booking);
-      });
+  const computeStats = (bookings = []) => bookings.reduce((acc, booking) => {
+    const paxCount = booking.passengerNames?.length || 0;
+    acc.totalBookings += 1;
+    acc.totalPax += paxCount;
 
-      const sections = Object.keys(groups).sort().map(loc => ({
-        title: loc,
-        data: groups[loc]
-      }));
-      
-      return { listData: sections, isSearching: false };
-    } 
-    else {
-      // SEARCH VIEW: Flat list filtered by Ref or Name
-      const filtered = manifestData.bookings.filter(b => 
-        b.id.toLowerCase().includes(query) ||
-        b.passengerNames.some(name => name.toLowerCase().includes(query))
-      );
-      return { listData: filtered, isSearching: true };
+    if (booking.hasPassengerStatuses && Array.isArray(booking.passengerStatus) && booking.passengerStatus.length > 0) {
+      booking.passengerStatus.forEach((status) => {
+        if (status === MANIFEST_STATUS.BOARDED) acc.checkedIn += 1;
+        if (status === MANIFEST_STATUS.NO_SHOW) acc.noShows += 1;
+      });
+    } else {
+      if (booking.status === MANIFEST_STATUS.BOARDED) acc.checkedIn += paxCount;
+      if (booking.status === MANIFEST_STATUS.NO_SHOW) acc.noShows += paxCount;
     }
-  }, [searchQuery, manifestData.bookings]);
+
+    return acc;
+  }, { totalBookings: 0, totalPax: 0, checkedIn: 0, noShows: 0 });
+
+  const toPickupTimeSortValue = (pickupTime) => {
+    const rawValue = String(pickupTime || '').trim();
+    if (!rawValue || rawValue.toUpperCase() === 'TBA') return Number.MAX_SAFE_INTEGER;
+
+    const hhmmMatch = rawValue.match(/^(\d{1,2}):(\d{2})$/);
+    if (hhmmMatch) {
+      const hours = Number(hhmmMatch[1]);
+      const minutes = Number(hhmmMatch[2]);
+      if (hours <= 23 && minutes <= 59) return (hours * 60) + minutes;
+    }
+
+    const ampmMatch = rawValue.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (ampmMatch) {
+      let hours = Number(ampmMatch[1]);
+      const minutes = Number(ampmMatch[2]);
+      const period = ampmMatch[3].toUpperCase();
+      if (hours >= 1 && hours <= 12 && minutes <= 59) {
+        if (period === 'PM' && hours !== 12) hours += 12;
+        if (period === 'AM' && hours === 12) hours = 0;
+        return (hours * 60) + minutes;
+      }
+    }
+
+    return Number.MAX_SAFE_INTEGER;
+  };
+
+  const priorityRank = (status) => {
+    if (status === MANIFEST_STATUS.PENDING || status === MANIFEST_STATUS.PARTIAL) return 0;
+    if (status === MANIFEST_STATUS.BOARDED) return 1;
+    return 2;
+  };
+
+  const matchesSearch = (booking, query) => {
+    if (!query) return true;
+    const queryValue = query.toLowerCase();
+    const names = (booking.passengerNames || []).join(' ').toLowerCase();
+    const location = String(booking.pickupLocation || '').toLowerCase();
+    return booking.id.toLowerCase().includes(queryValue)
+      || names.includes(queryValue)
+      || location.includes(queryValue);
+  };
+
+  const filteredBookings = useMemo(() => {
+    const query = searchQuery.trim();
+    return manifestData.bookings.filter((booking) => {
+      const statusPass = statusFilter === 'ALL' || booking.status === statusFilter;
+      return statusPass && matchesSearch(booking, query);
+    });
+  }, [manifestData.bookings, searchQuery, statusFilter]);
+
+  const sortedFilteredBookings = useMemo(() => [...filteredBookings].sort((a, b) => {
+    const priorityDelta = priorityRank(a.status) - priorityRank(b.status);
+    if (priorityDelta !== 0) return priorityDelta;
+
+    const pickupDelta = toPickupTimeSortValue(a.pickupTime) - toPickupTimeSortValue(b.pickupTime);
+    if (pickupDelta !== 0) return pickupDelta;
+
+    return a.id.localeCompare(b.id);
+  }), [filteredBookings]);
+
+  const sectionedPriorityBookings = useMemo(() => {
+    const groups = {};
+    sortedFilteredBookings.forEach((booking) => {
+      const unresolved = priorityRank(booking.status) === 0;
+      const bucket = unresolved ? 'Unresolved' : 'Resolved';
+      const pickupLabel = booking.pickupTime || 'TBA';
+      const key = `${bucket}__${pickupLabel}`;
+      if (!groups[key]) {
+        groups[key] = { title: `${bucket} • ${pickupLabel}`, data: [], unresolved, pickupLabel };
+      }
+      groups[key].data.push(booking);
+    });
+
+    return Object.values(groups).sort((a, b) => {
+      if (a.unresolved !== b.unresolved) return a.unresolved ? -1 : 1;
+      return toPickupTimeSortValue(a.pickupLabel) - toPickupTimeSortValue(b.pickupLabel);
+    });
+  }, [sortedFilteredBookings]);
+
+  const sectionedLocationBookings = useMemo(() => {
+    const groups = {};
+    filteredBookings.forEach((booking) => {
+      const location = booking.pickupLocation || 'Unknown Location';
+      if (!groups[location]) groups[location] = [];
+      groups[location].push(booking);
+    });
+
+    return Object.entries(groups)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([title, data]) => ({
+        title,
+        data: data.sort((a, b) => {
+          const priorityDelta = priorityRank(a.status) - priorityRank(b.status);
+          if (priorityDelta !== 0) return priorityDelta;
+          return toPickupTimeSortValue(a.pickupTime) - toPickupTimeSortValue(b.pickupTime);
+        })
+      }));
+  }, [filteredBookings]);
+
+  const totalStats = useMemo(() => computeStats(manifestData.bookings), [manifestData.bookings]);
+  const filteredStats = useMemo(() => computeStats(filteredBookings), [filteredBookings]);
+
+  const isSearchView = viewMode === VIEW_MODE.SEARCH;
+  const sectionListData = viewMode === VIEW_MODE.LOCATION ? sectionedLocationBookings : sectionedPriorityBookings;
 
   // --- Actions ---
   const handleOpenBooking = (booking) => {
@@ -200,7 +313,8 @@ export default function PassengerManifestScreen({ route, navigation }) {
         {/* Total Expected */}
         <View style={styles.dashboardItem}>
           <Text style={styles.dashLabel}>TOTAL</Text>
-          <Text style={styles.dashValue}>{manifestData.stats.totalPax || 0}</Text>
+          <Text style={styles.dashValue}>{filteredStats.totalPax}</Text>
+          <Text style={styles.dashSubValue}>of {totalStats.totalPax}</Text>
         </View>
 
         {/* Vertical Divider */}
@@ -210,8 +324,9 @@ export default function PassengerManifestScreen({ route, navigation }) {
         <View style={styles.dashboardItem}>
           <Text style={[styles.dashLabel, { color: '#ABEBC6' }]}>BOARDED</Text>
           <Text style={[styles.dashValue, { color: COLORS.success }]}>
-            {manifestData.stats.checkedIn || 0}
+            {filteredStats.checkedIn}
           </Text>
+          <Text style={styles.dashSubValue}>of {totalStats.checkedIn}</Text>
         </View>
 
         {/* Vertical Divider */}
@@ -221,8 +336,9 @@ export default function PassengerManifestScreen({ route, navigation }) {
         <View style={styles.dashboardItem}>
           <Text style={[styles.dashLabel, { color: '#F1948A' }]}>NO SHOW</Text>
           <Text style={[styles.dashValue, { color: COLORS.danger }]}>
-            {manifestData.stats.noShows || 0}
+            {filteredStats.noShows}
           </Text>
+          <Text style={styles.dashSubValue}>of {totalStats.noShows}</Text>
         </View>
 
       </View>
@@ -232,7 +348,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
         <MaterialCommunityIcons name="magnify" size={24} color="#BDC3C7" />
         <TextInput 
           style={styles.searchInput}
-          placeholder="Search Surname or Booking Ref..."
+          placeholder="Search booking, passenger, or pickup..."
           value={searchQuery}
           onChangeText={setSearchQuery}
           autoCapitalize="characters"
@@ -243,6 +359,39 @@ export default function PassengerManifestScreen({ route, navigation }) {
           </TouchableOpacity>
         )}
       </View>
+
+      <View style={styles.segmentedControl}>
+        {Object.values(VIEW_MODE).map((mode) => (
+          <TouchableOpacity
+            key={mode}
+            style={[styles.segmentBtn, viewMode === mode && styles.segmentBtnActive]}
+            onPress={() => setViewMode(mode)}
+          >
+            <Text style={[styles.segmentBtnText, viewMode === mode && styles.segmentBtnTextActive]}>
+              {mode === VIEW_MODE.PRIORITY ? 'Priority' : mode === VIEW_MODE.LOCATION ? 'Location' : 'Search'}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <FlatList
+        horizontal
+        data={STATUS_FILTERS}
+        keyExtractor={(item) => item.key}
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.filterChipRow}
+        renderItem={({ item }) => {
+          const isActive = statusFilter === item.key;
+          return (
+            <TouchableOpacity
+              style={[styles.filterChip, isActive && styles.filterChipActive]}
+              onPress={() => setStatusFilter(item.key)}
+            >
+              <Text style={[styles.filterChipText, isActive && styles.filterChipTextActive]}>{item.label}</Text>
+            </TouchableOpacity>
+          );
+        }}
+      />
     </View>
   );
 
@@ -253,9 +402,9 @@ export default function PassengerManifestScreen({ route, navigation }) {
       {loading && !refreshing ? (
         <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 20 }} />
       ) : (
-        isSearching ? (
+        isSearchView ? (
           <FlatList
-            data={listData}
+            data={sortedFilteredBookings}
             keyExtractor={item => item.id}
             renderItem={({ item }) => (
               <ManifestBookingCard 
@@ -271,7 +420,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
           />
         ) : (
           <SectionList
-            sections={listData}
+            sections={sectionListData}
             keyExtractor={item => item.id}
             renderItem={({ item }) => (
               <ManifestBookingCard 
@@ -467,6 +616,62 @@ const styles = StyleSheet.create({
     fontSize: 26,
     fontWeight: 'bold',
     color: 'white',
+  },
+  dashSubValue: {
+    marginTop: 2,
+    fontSize: 11,
+    color: '#CBD5E1',
+    fontWeight: '600'
+  },
+
+  segmentedControl: {
+    flexDirection: 'row',
+    backgroundColor: '#1F2937',
+    borderRadius: 10,
+    padding: 4,
+    marginTop: 12,
+  },
+  segmentBtn: {
+    flex: 1,
+    borderRadius: 8,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  segmentBtnActive: {
+    backgroundColor: '#374151',
+  },
+  segmentBtnText: {
+    color: '#D1D5DB',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  segmentBtnTextActive: {
+    color: 'white',
+  },
+  filterChipRow: {
+    gap: 8,
+    marginTop: 12,
+    paddingBottom: 4,
+  },
+  filterChip: {
+    backgroundColor: COLORS.chipBg,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  filterChipActive: {
+    backgroundColor: COLORS.chipActiveBg,
+    borderColor: COLORS.chipActiveBg,
+  },
+  filterChipText: {
+    color: COLORS.chipText,
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  filterChipTextActive: {
+    color: COLORS.chipActiveText,
   },
 
   syncRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8 },
