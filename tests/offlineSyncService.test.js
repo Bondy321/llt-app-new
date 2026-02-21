@@ -85,6 +85,58 @@ test('replayQueue caps retries and marks action failed', async () => {
   assert.equal(stats.data.pending, 0);
 });
 
+test('replayQueue skips max-attempt failed action and replays once when re-queued', async () => {
+  await clearQueue();
+  const MAX_ATTEMPTS = 5;
+  const actionId = 'skip-failed-1';
+
+  await offlineSyncService.enqueueAction({
+    id: actionId,
+    type: 'CHAT_MESSAGE',
+    tourId: 'tour-1',
+    payload: { text: 'skip-me' },
+    status: 'failed',
+    attempts: MAX_ATTEMPTS,
+    nextAttemptAt: null,
+  });
+
+  let handlerCalls = 0;
+  const replayHandler = async () => {
+    handlerCalls += 1;
+    assert.fail('sendMessageDirect should not be called for failed max-attempt action');
+  };
+
+  await offlineSyncService.replayQueue({
+    services: {
+      chatService: {
+        sendMessageDirect: replayHandler,
+      },
+    },
+  });
+
+  const afterSkip = await offlineSyncService.getQueuedActions();
+  assert.equal(handlerCalls, 0);
+  assert.equal(afterSkip.data[0].attempts, MAX_ATTEMPTS);
+  assert.equal(afterSkip.data[0].status, 'failed');
+
+  await offlineSyncService.updateAction(actionId, { status: 'queued', nextAttemptAt: null });
+
+  await offlineSyncService.replayQueue({
+    services: {
+      chatService: {
+        sendMessageDirect: async () => {
+          handlerCalls += 1;
+          return { success: true };
+        },
+      },
+    },
+  });
+
+  assert.equal(handlerCalls, 1);
+  const afterReplay = await offlineSyncService.getQueuedActions();
+  assert.equal(afterReplay.data.length, 0);
+});
+
 test('staleness label buckets are derived correctly', async () => {
   const fresh = offlineSyncService.getStalenessLabel(new Date().toISOString());
   const stale = offlineSyncService.getStalenessLabel(new Date(Date.now() - 20 * 60 * 1000).toISOString());
