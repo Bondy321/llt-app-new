@@ -5,17 +5,36 @@ import { AppState } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { realtimeDb, updateNetworkState } from '../firebase';
 import logger from '../services/loggerService';
+import offlineSyncService from '../services/offlineSyncService';
 
 const FIREBASE_PROBE_PATH = '.info/serverTimeOffset';
 
-const useDiagnostics = ({ onForeground } = {}) => {
+const deriveSyncHealth = ({ isConnected, firebaseConnected, queueStats, lastSyncAt }) => {
+  if (!isConnected || !firebaseConnected) return 'offline';
+  if ((queueStats?.failed || 0) > 0) return 'degraded';
+  const bucket = offlineSyncService.getStalenessBucket(lastSyncAt);
+  if (bucket === 'old') return 'stale';
+  return 'healthy';
+};
+
+const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {}) => {
   const [isConnected, setIsConnected] = useState(true);
   const [firebaseConnected, setFirebaseConnected] = useState(true);
   const [lastFirebaseError, setLastFirebaseError] = useState(null);
   const [lastProbeDurationMs, setLastProbeDurationMs] = useState(null);
+  const [lastSyncAt, setLastSyncAt] = useState(null);
+  const [queueStats, setQueueStats] = useState({ pending: 0, syncing: 0, failed: 0, total: 0 });
 
   const appState = useRef(AppState.currentState);
   const firebaseListenerRef = useRef(null);
+
+  const refreshSyncMeta = async () => {
+    if (!activeTourId) return;
+    const metaResult = await offlineSyncService.getTourPackMeta(activeTourId, role);
+    if (metaResult.success) {
+      setLastSyncAt(metaResult.data?.lastSyncedAt || null);
+    }
+  };
 
   const probeFirebase = async (reason = 'manual') => {
     if (!realtimeDb?.ref) {
@@ -44,6 +63,10 @@ const useDiagnostics = ({ onForeground } = {}) => {
   };
 
   useEffect(() => {
+    const unsubscribeQueue = offlineSyncService.subscribeQueueState((stats) => {
+      setQueueStats(stats);
+    });
+
     const unsubscribeNetInfo = NetInfo.addEventListener((state) => {
       const online = Boolean(state.isConnected);
       setIsConnected(online);
@@ -66,6 +89,7 @@ const useDiagnostics = ({ onForeground } = {}) => {
 
       if (prevState.match(/inactive|background/) && nextAppState === 'active') {
         probeFirebase('app_foreground');
+        refreshSyncMeta();
         if (typeof onForeground === 'function') {
           onForeground();
         }
@@ -87,17 +111,21 @@ const useDiagnostics = ({ onForeground } = {}) => {
     }
 
     probeFirebase('startup');
+    refreshSyncMeta();
 
     return () => {
+      unsubscribeQueue?.();
       unsubscribeNetInfo?.();
       appStateSubscription?.remove();
       if (firebaseListenerRef.current) {
         firebaseListenerRef.current.off();
       }
     };
-  }, []);
+  }, [activeTourId, role]);
 
-  return { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs };
+  const syncHealth = deriveSyncHealth({ isConnected, firebaseConnected, queueStats, lastSyncAt });
+
+  return { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs, lastSyncAt, queueStats, syncHealth };
 };
 
 export default useDiagnostics;

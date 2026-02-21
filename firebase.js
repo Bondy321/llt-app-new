@@ -5,7 +5,7 @@ import 'firebase/compat/firestore';
 import 'firebase/compat/database';
 import { getStorage } from 'firebase/storage';
 import { getDatabase } from 'firebase/database';
-import { createPersistenceProvider } from './services/persistenceProvider';
+import { createPersistenceProvider } from './services/persistenceProvider.js';
 
 // Initialize a resilient persistence layer for auth/session state.
 const authStorage = createPersistenceProvider({ namespace: 'LLT_AUTH' });

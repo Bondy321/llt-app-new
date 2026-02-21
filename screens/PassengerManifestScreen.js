@@ -6,8 +6,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getTourManifest, updateManifestBooking, MANIFEST_STATUS } from '../services/bookingServiceRealtime';
+import offlineSyncService from '../services/offlineSyncService';
+import * as bookingService from '../services/bookingServiceRealtime';
+import * as chatService from '../services/chatService';
 import ManifestBookingCard from '../components/ManifestBookingCard';
 import { COLORS as THEME, SPACING } from '../theme';
+const { getBookingSyncState, normalizeSyncState } = require('../utils/manifestSyncState');
 
 const COLORS = {
   primary: THEME.primary,
@@ -34,6 +38,9 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const [partialMode, setPartialMode] = useState(false);
   const [partialStatuses, setPartialStatuses] = useState([]);
   const [actionLoading, setActionLoading] = useState(false);
+  const [queueStats, setQueueStats] = useState({ pending: 0, syncing: 0, failed: 0, total: 0 });
+  const [bookingSyncState, setBookingSyncState] = useState({});
+  const [conflictNote, setConflictNote] = useState('');
 
   const loadManifest = async () => {
     try {
@@ -50,6 +57,25 @@ export default function PassengerManifestScreen({ route, navigation }) {
   useEffect(() => {
     loadManifest();
   }, [tourId]);
+
+  useEffect(() => {
+    const unsubscribe = offlineSyncService.subscribeQueueState((stats) => setQueueStats(stats));
+    return () => unsubscribe?.();
+  }, []);
+
+  useEffect(() => {
+    const map = {};
+    offlineSyncService.getQueuedActions().then((res) => {
+      if (!res.success) return;
+      res.data.forEach((action) => {
+        if (action.type !== 'MANIFEST_UPDATE') return;
+        const bookingRef = action.payload?.bookingRef;
+        if (!bookingRef) return;
+        map[bookingRef] = normalizeSyncState(action.status);
+      });
+      setBookingSyncState(map);
+    });
+  }, [manifestData.bookings.length, queueStats.pending, queueStats.failed, queueStats.syncing]);
 
   // --- Derived Data: Search & Grouping ---
   const { listData, isSearching } = useMemo(() => {
@@ -100,7 +126,15 @@ export default function PassengerManifestScreen({ route, navigation }) {
         ? passengerStatuses
         : selectedBooking.passengerNames.map(() => MANIFEST_STATUS.PENDING);
 
-      await updateManifestBooking(tourId, selectedBooking.id, statusesToPersist);
+      const result = await updateManifestBooking(tourId, selectedBooking.id, statusesToPersist, { online: true });
+      if (result?.conflictMessage) {
+        setConflictNote(result.conflictMessage);
+      }
+      if (result?.queued) {
+        setBookingSyncState((prev) => ({ ...prev, [selectedBooking.id]: normalizeSyncState('queued') }));
+      } else {
+        setBookingSyncState((prev) => ({ ...prev, [selectedBooking.id]: normalizeSyncState('synced') }));
+      }
       setModalVisible(false);
       setSelectedBooking(null);
       setPartialMode(false);
@@ -126,6 +160,26 @@ export default function PassengerManifestScreen({ route, navigation }) {
       next[index] = status;
       return next;
     });
+  };
+
+
+  const handleSyncNow = async () => {
+    const replay = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+    if (!replay.success) {
+      Alert.alert('Sync issue', replay.error || 'Could not sync now.');
+    }
+    await loadManifest();
+  };
+
+  const handleRetryFailed = async () => {
+    const queued = await offlineSyncService.getQueuedActions();
+    if (!queued.success) return;
+    await Promise.all(
+      queued.data
+        .filter((action) => action.type === 'MANIFEST_UPDATE' && action.status === 'failed')
+        .map((action) => offlineSyncService.updateAction(action.id, { status: 'queued', nextAttemptAt: null }))
+    );
+    await handleSyncNow();
   };
 
   // --- Render Functions ---
@@ -208,6 +262,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
                 booking={item} 
                 onPress={() => handleOpenBooking(item)} 
                 isSearchResult={true} 
+                syncState={getBookingSyncState(bookingSyncState, item.id) || 'synced'}
               />
             )}
             contentContainerStyle={styles.listContent}
@@ -223,6 +278,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
                 booking={item} 
                 onPress={() => handleOpenBooking(item)} 
                 isSearchResult={false} 
+                syncState={getBookingSyncState(bookingSyncState, item.id) || 'synced'}
               />
             )}
             renderSectionHeader={({ section: { title } }) => (
@@ -413,6 +469,12 @@ const styles = StyleSheet.create({
     color: 'white',
   },
 
+  syncRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8 },
+  syncText: { color: 'white', flex: 1, fontWeight: '600' },
+  syncBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: '#2563EB' },
+  retryBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: '#B45309' },
+  syncBtnText: { color: 'white', fontWeight: '700', fontSize: 12 },
+  conflictText: { color: '#FDE68A', marginBottom: 8, fontSize: 12 },
   searchContainer: {
     flexDirection: 'row',
     backgroundColor: 'white',

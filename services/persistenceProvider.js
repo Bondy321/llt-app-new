@@ -1,7 +1,19 @@
 // services/persistenceProvider.js
 // Centralized, crash-safe persistence layer with SecureStore -> AsyncStorage -> in-memory fallback.
-import * as SecureStore from 'expo-secure-store';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+let SecureStore;
+let AsyncStorage;
+
+try {
+  SecureStore = require('expo-secure-store');
+} catch (error) {
+  SecureStore = null;
+}
+
+try {
+  AsyncStorage = require('@react-native-async-storage/async-storage').default;
+} catch (error) {
+  AsyncStorage = null;
+}
 
 const defaultLogger = {
   debug: (msg, data) => console.log(`[Persistence][debug] ${msg}`, data || ''),
@@ -15,34 +27,71 @@ const createStorageCandidate = (name, handlers) => ({
   ...handlers,
 });
 
-export const createPersistenceProvider = ({ namespace = 'LLT', logger = defaultLogger } = {}) => {
-  // SecureStore keys must only contain alphanumeric characters, ".", "-", and "_"
-  // Using underscore as separator instead of colon to comply with SecureStore requirements
+const isReactNativeRuntime = (runtime = {}) => {
+  if (typeof runtime.isReactNative === 'boolean') {
+    return runtime.isReactNative;
+  }
+
+  const globalObj = runtime.globalObject || globalThis;
+  const navigatorObj = runtime.navigatorObject || (typeof navigator !== 'undefined' ? navigator : undefined);
+
+  return Boolean(
+    navigatorObj?.product === 'ReactNative'
+    || globalObj?.nativeCallSyncHook
+    || globalObj?.__fbBatchedBridgeConfig
+    || globalObj?.HermesInternal
+  );
+};
+
+const createPersistenceProvider = ({
+  namespace = 'LLT',
+  logger = defaultLogger,
+  secureStoreAdapter,
+  asyncStorageAdapter,
+  runtime = {},
+} = {}) => {
   const namespacedKey = (key) => `${namespace}_${key}`;
+  const secureStore = secureStoreAdapter || SecureStore;
+  const asyncStorage = asyncStorageAdapter || AsyncStorage;
+  const hasInjectedStorageAdapter = Boolean(secureStoreAdapter || asyncStorageAdapter);
+  const inTestEnv = (runtime.nodeEnv || process?.env?.NODE_ENV) === 'test';
+  const nativeRuntime = isReactNativeRuntime(runtime);
 
   const candidates = [
     createStorageCandidate('secure-store', {
-      isAvailable: () => Boolean(SecureStore?.setItemAsync && SecureStore?.getItemAsync && SecureStore?.deleteItemAsync),
+      isAvailable: () => {
+        if (!nativeRuntime && !secureStoreAdapter) {
+          return false;
+        }
+
+        return Boolean(secureStore?.setItemAsync && secureStore?.getItemAsync && secureStore?.deleteItemAsync);
+      },
       async setItemAsync(key, value) {
-        return SecureStore.setItemAsync(namespacedKey(key), value, { keychainAccessible: SecureStore.ALWAYS_THIS_DEVICE_ONLY });
+        return secureStore.setItemAsync(namespacedKey(key), value, { keychainAccessible: secureStore.ALWAYS_THIS_DEVICE_ONLY });
       },
       async getItemAsync(key) {
-        return SecureStore.getItemAsync(namespacedKey(key));
+        return secureStore.getItemAsync(namespacedKey(key));
       },
       async deleteItemAsync(key) {
-        return SecureStore.deleteItemAsync(namespacedKey(key));
+        return secureStore.deleteItemAsync(namespacedKey(key));
       }
     }),
     createStorageCandidate('async-storage', {
-      isAvailable: () => Boolean(AsyncStorage?.setItem && AsyncStorage?.getItem && AsyncStorage?.removeItem),
+      isAvailable: () => {
+        if (!nativeRuntime && !asyncStorageAdapter) {
+          return false;
+        }
+
+        return Boolean(asyncStorage?.setItem && asyncStorage?.getItem && asyncStorage?.removeItem);
+      },
       async setItemAsync(key, value) {
-        return AsyncStorage.setItem(namespacedKey(key), value);
+        return asyncStorage.setItem(namespacedKey(key), value);
       },
       async getItemAsync(key) {
-        return AsyncStorage.getItem(namespacedKey(key));
+        return asyncStorage.getItem(namespacedKey(key));
       },
       async deleteItemAsync(key) {
-        return AsyncStorage.removeItem(namespacedKey(key));
+        return asyncStorage.removeItem(namespacedKey(key));
       }
     }),
     createStorageCandidate('memory-mock', {
@@ -60,14 +109,20 @@ export const createPersistenceProvider = ({ namespace = 'LLT', logger = defaultL
     })
   ];
 
-  let active = candidates.find((candidate) => {
-    try {
-      return candidate.isAvailable();
-    } catch (error) {
-      logger.warn(`Storage candidate ${candidate.name} failed availability check`, { error: error?.message });
-      return false;
-    }
-  });
+  let active;
+  if (inTestEnv && !hasInjectedStorageAdapter) {
+    active = candidates[candidates.length - 1];
+    logger.debug('Persistence provider forced to memory in test environment');
+  } else {
+    active = candidates.find((candidate) => {
+      try {
+        return candidate.isAvailable();
+      } catch (error) {
+        logger.debug(`Storage candidate ${candidate.name} failed availability check`, { error: error?.message });
+        return false;
+      }
+    });
+  }
 
   if (!active) {
     active = candidates[candidates.length - 1];
@@ -79,9 +134,11 @@ export const createPersistenceProvider = ({ namespace = 'LLT', logger = defaultL
     try {
       return await active[fnName](key, value);
     } catch (error) {
-      logger.error(`Persistence provider ${active.name} failed for ${fnName}`, { key: namespacedKey(key), error: error?.message });
-      if (active.name !== 'memory-mock') {
-        logger.warn('Falling back to in-memory persistence after failure', { previousMode: active.name });
+      if (active.name === 'memory-mock') {
+        logger.error(`Persistence provider ${active.name} failed for ${fnName}`, { key: namespacedKey(key), error: error?.message });
+      } else {
+        logger.warn(`Persistence provider ${active.name} failed for ${fnName}`, { key: namespacedKey(key), error: error?.message });
+        logger.info('Falling back to in-memory persistence after failure', { previousMode: active.name });
         active = candidates[candidates.length - 1];
       }
     }
@@ -99,8 +156,42 @@ export const createPersistenceProvider = ({ namespace = 'LLT', logger = defaultL
     },
     async deleteItemAsync(key) {
       return safeCall('deleteItemAsync', key);
+    },
+    async multiGetAsync(keys = []) {
+      try {
+        const entries = await Promise.all(
+          (Array.isArray(keys) ? keys : []).map(async (key) => [key, await safeCall('getItemAsync', key)])
+        );
+        return entries;
+      } catch (error) {
+        logger.error('Persistence provider failed for multiGetAsync', { error: error?.message });
+        return [];
+      }
+    },
+    async multiSetAsync(entries = []) {
+      try {
+        await Promise.all(
+          (Array.isArray(entries) ? entries : []).map(([key, value]) => safeCall('setItemAsync', key, value))
+        );
+        return true;
+      } catch (error) {
+        logger.error('Persistence provider failed for multiSetAsync', { error: error?.message });
+        return false;
+      }
+    },
+    async multiDeleteAsync(keys = []) {
+      try {
+        await Promise.all((Array.isArray(keys) ? keys : []).map((key) => safeCall('deleteItemAsync', key)));
+        return true;
+      } catch (error) {
+        logger.error('Persistence provider failed for multiDeleteAsync', { error: error?.message });
+        return false;
+      }
     }
   };
 };
 
-export default createPersistenceProvider;
+module.exports = {
+  createPersistenceProvider,
+  default: createPersistenceProvider,
+};

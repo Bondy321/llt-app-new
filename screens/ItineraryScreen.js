@@ -23,7 +23,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getTourItinerary } from '../services/bookingServiceRealtime';
 import { realtimeDb } from '../firebase';
 import { COLORS as THEME } from '../theme';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import offlineSyncService from '../services/offlineSyncService';
 
 // Brand Colors
 const COLORS = {
@@ -112,7 +112,8 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   // --- OFFLINE CACHING ---
   const cacheItinerary = async (data) => {
     try {
-      await AsyncStorage.setItem(`itinerary_${tourId}`, JSON.stringify(data));
+      await offlineSyncService.saveTourPack(tourId, isDriver ? 'driver' : 'passenger', { itinerary: data });
+      await offlineSyncService.setTourPackMeta(tourId, isDriver ? 'driver' : 'passenger', { lastSyncedAt: new Date().toISOString() });
     } catch (error) {
       console.log('Cache save failed:', error);
     }
@@ -120,9 +121,9 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
   const loadCachedItinerary = async () => {
     try {
-      const cached = await AsyncStorage.getItem(`itinerary_${tourId}`);
-      if (cached) {
-        const data = JSON.parse(cached);
+      const cached = await offlineSyncService.getTourPack(tourId, isDriver ? 'driver' : 'passenger');
+      const data = cached?.success ? cached.data?.itinerary : null;
+      if (data) {
         setCachedItinerary(data);
         return data;
       }
@@ -679,7 +680,8 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
           ) : null
         }
       >
-        {errorMessage ? (
+        <View style={styles.cacheMetaRow}><Text style={styles.cacheMetaText}>{offlineSyncService.getStalenessLabel(lastSync).label}</Text></View>
+      {errorMessage ? (
           <View style={styles.errorBanner}>
             <MaterialCommunityIcons name="alert-circle" size={20} color={COLORS.white} />
             <Text style={styles.errorText}>{errorMessage}</Text>

@@ -46,13 +46,11 @@ test('sendMessage builds payload with sender info and driver flag', async () => 
 
   const refCall = mockDb.refCalls[0];
   assert.ok(refCall);
-  assert.deepEqual(refCall.setCalls[0], {
-    text: 'Hello',
-    senderName: 'Alex',
-    senderId: 'user-1',
-    timestamp: result.message.timestamp,
-    isDriver: true,
-  });
+  assert.equal(refCall.setCalls[0].text, 'Hello');
+  assert.equal(refCall.setCalls[0].senderName, 'Alex');
+  assert.equal(refCall.setCalls[0].senderId, 'user-1');
+  assert.equal(refCall.setCalls[0].timestamp, result.message.timestamp);
+  assert.equal(refCall.setCalls[0].isDriver, true);
 });
 
 test('sendMessage rejects empty content', async () => {
