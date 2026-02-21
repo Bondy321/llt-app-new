@@ -787,6 +787,21 @@ const markChatAsRead = async (tourId, userId, dbInstance = realtimeDb) => {
   }
 };
 
+// Mark internal driver chat as read
+const markInternalChatAsRead = async (tourId, userId, dbInstance = realtimeDb) => {
+  try {
+    const db = dbInstance || realtimeDb;
+    if (!db) return { success: false };
+
+    const lastReadRef = db.ref(`internal_chats/${tourId}/lastRead/${userId}`);
+    await lastReadRef.set(new Date().toISOString());
+    return { success: true };
+  } catch (error) {
+    console.error('Error marking internal chat as read:', error);
+    return { success: false };
+  }
+};
+
 // Subscribe to read receipts
 const subscribeToReadReceipts = (tourId, onReadUpdate, dbInstance = realtimeDb) => {
   const db = dbInstance || realtimeDb;
@@ -926,6 +941,7 @@ module.exports = {
 
   // Read receipts
   markChatAsRead,
+  markInternalChatAsRead,
 
   // Utilities
   getChatMessages,

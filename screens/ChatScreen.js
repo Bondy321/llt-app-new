@@ -38,6 +38,7 @@ import {
   setOnlinePresence,
   toggleReaction,
   markChatAsRead,
+  markInternalChatAsRead,
   deleteMessage,
   getMessageTextForCopy,
 } from '../services/chatService';
@@ -441,14 +442,26 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [viewingImage, setViewingImage] = useState(null);
 
+  const currentUser = auth.currentUser;
+  const isDriver = bookingData?.isDriver === true;
+  const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
+
   // Refs
   const scrollViewRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const lastMessageCountRef = useRef(0);
+  const lastReadMarkAtRef = useRef(0);
 
-  const currentUser = auth.currentUser;
-  const isDriver = bookingData?.isDriver === true;
-  const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
+  const markActiveChatRead = useCallback(() => {
+    if (!tourId || !currentUser?.uid) return;
+
+    const now = Date.now();
+    if (now - lastReadMarkAtRef.current < 3000) return;
+    lastReadMarkAtRef.current = now;
+
+    const markReadFn = internalDriverChat ? markInternalChatAsRead : markChatAsRead;
+    markReadFn(tourId, currentUser.uid);
+  }, [tourId, currentUser?.uid, internalDriverChat]);
 
   // Scroll to bottom helper
   const scrollToBottom = useCallback((animated = true) => {
@@ -464,8 +477,9 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     setIsAtBottom(isBottom);
     if (isBottom) {
       setNewMessagesCount(0);
+      markActiveChatRead();
     }
-  }, []);
+  }, [markActiveChatRead]);
 
   // Subscribe to messages
   useEffect(() => {
@@ -493,6 +507,11 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
     return () => unsubscribe();
   }, [tourId, internalDriverChat, isAtBottom, scrollToBottom]);
+
+  // Mark chat as read when screen opens with a valid user/tour context
+  useEffect(() => {
+    markActiveChatRead();
+  }, [markActiveChatRead]);
 
   // Subscribe to typing indicators
   useEffect(() => {
