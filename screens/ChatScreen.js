@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Clipboard,
   Dimensions,
@@ -423,6 +424,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [refreshing, setRefreshing] = useState(false);
   const [sending, setSending] = useState(false);
   const [queueStats, setQueueStats] = useState({ pending: 0, syncing: 0, failed: 0, total: 0 });
+  const [refreshStatusText, setRefreshStatusText] = useState('');
   const [inputHeight, setInputHeight] = useState(44);
 
   // Feature state
@@ -817,11 +819,55 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   }, [tourId, selectedMessage, currentUser?.uid, isDriver]);
 
   // Handle refresh
-  const handleRefresh = useCallback(() => {
+  const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    // The subscription will automatically update
-    setTimeout(() => setRefreshing(false), 1000);
-  }, []);
+
+    try {
+      const beforeStatsResult = await offlineSyncService.getQueueStats();
+      const beforeStats = beforeStatsResult?.success
+        ? beforeStatsResult.data
+        : { pending: 0, failed: 0, syncing: 0, total: 0 };
+
+      const replayResult = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+      await refreshQueueStats();
+
+      const afterStatsResult = await offlineSyncService.getQueueStats();
+      const afterStats = afterStatsResult?.success
+        ? afterStatsResult.data
+        : { pending: 0, failed: 0, syncing: 0, total: 0 };
+
+      if (replayResult?.success) {
+        const { processed = 0, failed = 0, skipped = false } = replayResult.data || {};
+
+        if (skipped) {
+          setRefreshStatusText('Sync already in progress.');
+        } else if (processed > 0 || failed > 0) {
+          setRefreshStatusText(
+            `Synced ${processed} action${processed === 1 ? '' : 's'}${failed > 0 ? `, ${failed} failed` : ''}.`
+          );
+        } else if (beforeStats.total > 0 || afterStats.total > 0) {
+          setRefreshStatusText('Queue checked. Pending actions were not ready to sync yet.');
+        } else {
+          setRefreshStatusText('Messages are up to date.');
+        }
+
+        if (afterStats.pending > 0 || afterStats.failed > 0) {
+          Alert.alert(
+            'Offline queue status',
+            `${afterStats.pending} pending and ${afterStats.failed} failed action${afterStats.pending + afterStats.failed === 1 ? '' : 's'} remain in queue.`
+          );
+        }
+      } else {
+        setRefreshStatusText('Queue sync failed.');
+        Alert.alert('Sync failed', replayResult?.error || 'Unable to flush queued chat actions.');
+      }
+    } catch (error) {
+      setRefreshStatusText('Refresh failed. Please try again.');
+      Alert.alert('Refresh failed', 'Unable to refresh chat right now.');
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshQueueStats]);
 
   // Format time helper
   const formatTime = useCallback((timestamp) => {
@@ -1047,6 +1093,12 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
           </TouchableOpacity>
         </View>
       </LinearGradient>
+
+      {!!refreshStatusText && (
+        <View style={styles.refreshStatusContainer}>
+          <Text style={styles.refreshStatusText}>{refreshStatusText}</Text>
+        </View>
+      )}
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -1296,6 +1348,17 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontSize: 12,
     fontWeight: '600',
+  },
+  refreshStatusContainer: {
+    backgroundColor: '#ECFDF5',
+    borderBottomWidth: 1,
+    borderBottomColor: '#A7F3D0',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  refreshStatusText: {
+    color: '#065F46',
+    fontSize: 12,
   },
   keyboardAvoidingContainer: {
     flex: 1,
