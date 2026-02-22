@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet, Text, View, SectionList, FlatList, TextInput,
   TouchableOpacity, ActivityIndicator, Modal, Alert
@@ -21,6 +21,7 @@ const COLORS = {
   success: THEME.success,
   danger: THEME.error,
   info: THEME.primaryLight,
+  warning: THEME.warning,
   muted: THEME.textSecondary,
   panel: THEME.textPrimary,
   chipBg: THEME.surfaceSecondary,
@@ -62,6 +63,26 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const [bookingSyncState, setBookingSyncState] = useState({});
   const [conflictNote, setConflictNote] = useState('');
   const [statusFeedback, setStatusFeedback] = useState(null);
+  const feedbackTimeoutRef = useRef(null);
+
+  const clearFeedbackTimeout = () => {
+    if (feedbackTimeoutRef.current) {
+      clearTimeout(feedbackTimeoutRef.current);
+      feedbackTimeoutRef.current = null;
+    }
+  };
+
+  const showStatusFeedback = (feedback) => {
+    clearFeedbackTimeout();
+    setStatusFeedback(feedback);
+
+    if (feedback?.autoDismissMs) {
+      feedbackTimeoutRef.current = setTimeout(() => {
+        setStatusFeedback((current) => (current === feedback ? null : current));
+        feedbackTimeoutRef.current = null;
+      }, feedback.autoDismissMs);
+    }
+  };
 
   const loadManifest = async () => {
     try {
@@ -85,6 +106,8 @@ export default function PassengerManifestScreen({ route, navigation }) {
     const unsubscribe = offlineSyncService.subscribeQueueState((stats) => setQueueStats(stats));
     return () => unsubscribe?.();
   }, []);
+
+  useEffect(() => () => clearFeedbackTimeout(), []);
 
   useEffect(() => {
     const map = {};
@@ -285,15 +308,22 @@ export default function PassengerManifestScreen({ route, navigation }) {
           ? 'All bookings resolved.'
           : `${unresolvedCount} unresolved booking${unresolvedCount === 1 ? '' : 's'} remaining.`;
 
-        setStatusFeedback({
+        showStatusFeedback({
+          variant: 'success',
           message: `${parts.join(' • ')}. ${unresolvedSummary} (${syncStateLabel})`,
           nextBooking,
           unresolvedDelta,
           syncStateLabel,
+          autoDismissMs: 4000,
         });
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to update manifest: ' + error.message);
+      showStatusFeedback({
+        variant: 'error',
+        message: 'Save failed. Retry now.',
+        ctaLabel: 'Retry now',
+        onCtaPress: () => submitUpdate(passengerStatuses),
+      });
     } finally {
       setActionLoading(false);
     }
@@ -319,8 +349,44 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const handleSyncNow = async () => {
     const replay = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
     if (!replay.success) {
-      Alert.alert('Sync issue', replay.error || 'Could not sync now.');
+      showStatusFeedback({
+        variant: 'error',
+        message: replay.error ? `Sync failed: ${replay.error}` : 'Sync failed. Retry now.',
+        ctaLabel: 'Retry now',
+        onCtaPress: handleSyncNow,
+      });
+      await loadManifest();
+      return;
     }
+    const queued = await offlineSyncService.getQueuedActions();
+    if (queued.success) {
+      const pendingActions = queued.data.filter((action) => action.status === 'queued').length;
+      const failedActions = queued.data.filter((action) => action.status === 'failed').length;
+
+      if (failedActions > 0) {
+        showStatusFeedback({
+          variant: 'warning',
+          message: `${failedActions} failed action${failedActions === 1 ? '' : 's'}.`,
+          ctaLabel: 'Retry failed',
+          onCtaPress: handleRetryFailed,
+        });
+      } else if (pendingActions > 0) {
+        showStatusFeedback({
+          variant: 'warning',
+          message: `${pendingActions} action${pendingActions === 1 ? '' : 's'} still queued.`,
+          ctaLabel: 'View pending',
+          onCtaPress: () => setStatusFilter(MANIFEST_STATUS.PENDING),
+          autoDismissMs: 5000,
+        });
+      } else {
+        showStatusFeedback({
+          variant: 'success',
+          message: 'Sync complete. All clear.',
+          autoDismissMs: 3500,
+        });
+      }
+    }
+
     await loadManifest();
   };
 
@@ -453,24 +519,36 @@ export default function PassengerManifestScreen({ route, navigation }) {
       />
 
       {statusFeedback && (
-        <View style={styles.statusBanner}>
+        <View style={[styles.statusBanner, styles[`statusBanner_${statusFeedback.variant || 'success'}`]]}>
           <View style={styles.statusBannerTextWrap}>
-            <Text style={styles.statusBannerText}>{statusFeedback.message}</Text>
+            <Text style={[styles.statusBannerText, styles[`statusBannerText_${statusFeedback.variant || 'success'}`]]}>
+              {statusFeedback.message}
+            </Text>
           </View>
           {statusFeedback.nextBooking && (
             <TouchableOpacity
-              style={styles.statusBannerBtn}
+              style={[styles.statusBannerBtn, styles[`statusBannerBtn_${statusFeedback.variant || 'success'}`]]}
               onPress={() => {
                 handleOpenBooking(statusFeedback.nextBooking);
-                setStatusFeedback(null);
+                showStatusFeedback(null);
               }}
             >
               <Text style={styles.statusBannerBtnText}>Open next</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity onPress={() => setStatusFeedback(null)} style={styles.statusBannerDismiss}>
-            <MaterialCommunityIcons name="close" size={16} color={COLORS.info} />
-          </TouchableOpacity>
+          {statusFeedback.ctaLabel && statusFeedback.onCtaPress && (
+            <TouchableOpacity
+              style={[styles.statusBannerBtn, styles[`statusBannerBtn_${statusFeedback.variant || 'success'}`]]}
+              onPress={statusFeedback.onCtaPress}
+            >
+              <Text style={styles.statusBannerBtnText}>{statusFeedback.ctaLabel}</Text>
+            </TouchableOpacity>
+          )}
+          {!statusFeedback.autoDismissMs && (
+            <TouchableOpacity onPress={() => showStatusFeedback(null)} style={styles.statusBannerDismiss}>
+              <MaterialCommunityIcons name="close" size={16} color={COLORS.info} />
+            </TouchableOpacity>
+          )}
         </View>
       )}
     </View>
@@ -795,33 +873,59 @@ const styles = StyleSheet.create({
     color: COLORS.chipActiveText,
   },
   statusBanner: {
-    marginTop: 10,
-    borderRadius: 10,
+    marginTop: SPACING.sm,
+    borderRadius: SPACING.sm,
     borderWidth: 1,
-    borderColor: '#BFDBFE',
-    backgroundColor: '#EFF6FF',
-    paddingVertical: 8,
-    paddingHorizontal: 10,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.sm,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: SPACING.sm,
+  },
+  statusBanner_success: {
+    borderColor: COLORS.success,
+    backgroundColor: COLORS.searchBg,
+  },
+  statusBanner_warning: {
+    borderColor: COLORS.warning,
+    backgroundColor: COLORS.searchBg,
+  },
+  statusBanner_error: {
+    borderColor: COLORS.danger,
+    backgroundColor: COLORS.searchBg,
   },
   statusBannerTextWrap: {
     flex: 1,
   },
   statusBannerText: {
-    color: '#1E3A8A',
     fontSize: 12,
     fontWeight: '700',
   },
+  statusBannerText_success: {
+    color: COLORS.success,
+  },
+  statusBannerText_warning: {
+    color: COLORS.warning,
+  },
+  statusBannerText_error: {
+    color: COLORS.danger,
+  },
   statusBannerBtn: {
-    backgroundColor: COLORS.info,
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+  },
+  statusBannerBtn_success: {
+    backgroundColor: COLORS.success,
+  },
+  statusBannerBtn_warning: {
+    backgroundColor: COLORS.warning,
+  },
+  statusBannerBtn_error: {
+    backgroundColor: COLORS.danger,
   },
   statusBannerBtnText: {
-    color: 'white',
+    color: COLORS.chipActiveText,
     fontSize: 11,
     fontWeight: '700',
   },
