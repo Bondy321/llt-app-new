@@ -61,13 +61,16 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const [queueStats, setQueueStats] = useState({ pending: 0, syncing: 0, failed: 0, total: 0 });
   const [bookingSyncState, setBookingSyncState] = useState({});
   const [conflictNote, setConflictNote] = useState('');
+  const [statusFeedback, setStatusFeedback] = useState(null);
 
   const loadManifest = async () => {
     try {
       const data = await getTourManifest(tourId);
       setManifestData(data);
+      return data;
     } catch (error) {
       Alert.alert('Error', 'Failed to load manifest: ' + error.message);
+      return null;
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -114,6 +117,10 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
     return acc;
   }, { totalBookings: 0, totalPax: 0, checkedIn: 0, noShows: 0 });
+
+  const getUnresolvedBookingCount = (bookings = []) => bookings
+    .filter((booking) => priorityRank(booking.status) === 0)
+    .length;
 
   const toPickupTimeSortValue = (pickupTime) => {
     const rawValue = String(pickupTime || '').trim();
@@ -239,6 +246,8 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
     try {
       setActionLoading(true);
+      const beforeStats = computeStats(manifestData.bookings);
+      const beforeUnresolved = getUnresolvedBookingCount(manifestData.bookings);
       const statusesToPersist = passengerStatuses && passengerStatuses.length > 0
         ? passengerStatuses
         : selectedBooking.passengerNames.map(() => MANIFEST_STATUS.PENDING);
@@ -252,10 +261,37 @@ export default function PassengerManifestScreen({ route, navigation }) {
       } else {
         setBookingSyncState((prev) => ({ ...prev, [selectedBooking.id]: normalizeSyncState('synced') }));
       }
+
+      const syncStateLabel = result?.queued ? 'queued for sync' : 'synced';
       setModalVisible(false);
       setSelectedBooking(null);
       setPartialMode(false);
-      await loadManifest();
+
+      const refreshedManifest = await loadManifest();
+      if (refreshedManifest) {
+        const afterStats = computeStats(refreshedManifest.bookings || []);
+        const unresolvedCount = getUnresolvedBookingCount(refreshedManifest.bookings || []);
+        const boardedDelta = Math.max(0, afterStats.checkedIn - beforeStats.checkedIn);
+        const noShowDelta = Math.max(0, afterStats.noShows - beforeStats.noShows);
+        const unresolvedDelta = beforeUnresolved - unresolvedCount;
+        const nextBooking = (refreshedManifest.bookings || []).find((booking) => priorityRank(booking.status) === 0) || null;
+
+        const parts = [];
+        if (boardedDelta > 0) parts.push(`${boardedDelta} passenger${boardedDelta === 1 ? '' : 's'} boarded`);
+        if (noShowDelta > 0) parts.push(`${noShowDelta} marked no-show`);
+        if (parts.length === 0) parts.push('Status updated');
+
+        const unresolvedSummary = unresolvedCount === 0
+          ? 'All bookings resolved.'
+          : `${unresolvedCount} unresolved booking${unresolvedCount === 1 ? '' : 's'} remaining.`;
+
+        setStatusFeedback({
+          message: `${parts.join(' • ')}. ${unresolvedSummary} (${syncStateLabel})`,
+          nextBooking,
+          unresolvedDelta,
+          syncStateLabel,
+        });
+      }
     } catch (error) {
       Alert.alert('Error', 'Failed to update manifest: ' + error.message);
     } finally {
@@ -415,6 +451,28 @@ export default function PassengerManifestScreen({ route, navigation }) {
           );
         }}
       />
+
+      {statusFeedback && (
+        <View style={styles.statusBanner}>
+          <View style={styles.statusBannerTextWrap}>
+            <Text style={styles.statusBannerText}>{statusFeedback.message}</Text>
+          </View>
+          {statusFeedback.nextBooking && (
+            <TouchableOpacity
+              style={styles.statusBannerBtn}
+              onPress={() => {
+                handleOpenBooking(statusFeedback.nextBooking);
+                setStatusFeedback(null);
+              }}
+            >
+              <Text style={styles.statusBannerBtnText}>Open next</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity onPress={() => setStatusFeedback(null)} style={styles.statusBannerDismiss}>
+            <MaterialCommunityIcons name="close" size={16} color={COLORS.info} />
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 
@@ -735,6 +793,40 @@ const styles = StyleSheet.create({
   },
   filterChipTextActive: {
     color: COLORS.chipActiveText,
+  },
+  statusBanner: {
+    marginTop: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  statusBannerTextWrap: {
+    flex: 1,
+  },
+  statusBannerText: {
+    color: '#1E3A8A',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  statusBannerBtn: {
+    backgroundColor: COLORS.info,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  statusBannerBtnText: {
+    color: 'white',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  statusBannerDismiss: {
+    padding: 2,
   },
 
   syncRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8 },
