@@ -19,6 +19,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import Clipboard from '@react-native-clipboard/clipboard';
 import TodaysAgendaCard from '../components/TodaysAgendaCard';
 import { MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import * as bookingService from '../services/bookingServiceRealtime';
@@ -475,6 +476,7 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
   const scrollViewRef = useRef(null);
   const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
   const [refreshStatusText, setRefreshStatusText] = useState('');
+  const [contactFallback, setContactFallback] = useState({ visible: false, phone: '', copied: false });
 
   const greeting = useMemo(() => getTimeBasedGreeting(), []);
   const bookingRef = useMemo(() => bookingData?.id, [bookingData?.id]);
@@ -712,24 +714,47 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
 
   const isNoShow = manifestStatus === MANIFEST_STATUS.NO_SHOW;
 
-  const handleCallDriver = () => {
-    triggerHaptic('medium');
+  const showContactFallbackBanner = useCallback((phone) => {
+    setContactFallback({ visible: true, phone, copied: false });
+  }, []);
+
+  const copyDriverNumber = useCallback(() => {
+    if (!contactFallback.phone) return;
+    Clipboard.setString(contactFallback.phone);
+    setContactFallback((prev) => ({ ...prev, copied: true }));
+  }, [contactFallback.phone]);
+
+  const handleContactAction = useCallback(async (scheme) => {
     if (!tourData?.driverPhone) {
       Alert.alert('Driver contact unavailable', 'Please reach out to your operator.');
       return;
     }
+
     const phone = tourData.driverPhone.replace(/[^+\d]/g, '');
-    Linking.openURL(`tel:${phone}`);
+    const url = `${scheme}:${phone}`;
+
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        showContactFallbackBanner(phone);
+        return;
+      }
+
+      await Linking.openURL(url);
+      setContactFallback({ visible: false, phone: '', copied: false });
+    } catch (error) {
+      showContactFallbackBanner(phone);
+    }
+  }, [showContactFallbackBanner, tourData?.driverPhone]);
+
+  const handleCallDriver = () => {
+    triggerHaptic('medium');
+    void handleContactAction('tel');
   };
 
   const handleMessageDriver = () => {
     triggerHaptic('light');
-    if (!tourData?.driverPhone) {
-      Alert.alert('Driver contact unavailable', 'Please reach out to your operator.');
-      return;
-    }
-    const phone = tourData.driverPhone.replace(/[^+\d]/g, '');
-    Linking.openURL(`sms:${phone}`);
+    void handleContactAction('sms');
   };
 
   const menuItems = [
@@ -830,6 +855,23 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
               <Text style={styles.tourCodeDisplay}>{tourCode}</Text>
               <Text style={styles.tourName} numberOfLines={1}>{tourData?.name || 'Active Tour'}</Text><Text style={styles.cacheLabel}>{cacheStatusLabel}</Text>
               {!!refreshStatusText && <Text style={styles.refreshStatusText}>{refreshStatusText}</Text>}
+              {contactFallback.visible && (
+                <View style={styles.contactFallbackBanner}>
+                  <Text style={styles.contactFallbackText}>Calling is not available on this device.</Text>
+                  <View style={styles.contactFallbackActions}>
+                    <Text style={styles.contactFallbackPhone}>{contactFallback.phone}</Text>
+                    <TouchableOpacity
+                      style={styles.contactFallbackCopyButton}
+                      onPress={copyDriverNumber}
+                      accessibilityRole="button"
+                      accessibilityLabel="Copy driver phone number"
+                    >
+                      <MaterialCommunityIcons name="content-copy" size={14} color={COLORS.primaryBlue} />
+                      <Text style={styles.contactFallbackCopyText}>{contactFallback.copied ? 'Copied' : 'Copy'}</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
             </View>
             <View style={styles.headerActions}>
               <TouchableOpacity
@@ -1988,5 +2030,45 @@ const styles = StyleSheet.create({
     color: COLORS.subtleText,
     fontSize: 14,
     fontWeight: '600',
+  },
+  contactFallbackBanner: {
+    marginTop: 8,
+    backgroundColor: `${COLORS.warning}20`,
+    borderColor: `${COLORS.warning}55`,
+    borderWidth: 1,
+    borderRadius: RADIUS.md,
+    padding: SPACING.sm,
+  },
+  contactFallbackText: {
+    color: COLORS.darkText,
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  contactFallbackActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  contactFallbackPhone: {
+    color: COLORS.subtleText,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  contactFallbackCopyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderColor: `${COLORS.primaryBlue}45`,
+    borderWidth: 1,
+    borderRadius: RADIUS.full,
+    backgroundColor: COLORS.white,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 6,
+  },
+  contactFallbackCopyText: {
+    color: COLORS.primaryBlue,
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

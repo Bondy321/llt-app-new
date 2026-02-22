@@ -18,6 +18,7 @@ import MapView, { Marker, PROVIDER_GOOGLE, PROVIDER_DEFAULT, Polyline, Circle } 
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
+import Clipboard from '@react-native-clipboard/clipboard';
 import { realtimeDb } from '../firebase';
 import { COLORS as THEME } from '../theme';
 
@@ -72,6 +73,7 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showDetailCard, setShowDetailCard] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
+  const [contactFallback, setContactFallback] = useState({ visible: false, phone: '', copied: false });
 
   const mapRef = useRef(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -396,7 +398,17 @@ export default function MapScreen({ onBack, tourId, tourData }) {
     });
   }, [driverLocation]);
 
-  const handleCallDriver = useCallback(() => {
+  const showContactFallbackBanner = useCallback((phone) => {
+    setContactFallback({ visible: true, phone, copied: false });
+  }, []);
+
+  const copyDriverNumber = useCallback(() => {
+    if (!contactFallback.phone) return;
+    Clipboard.setString(contactFallback.phone);
+    setContactFallback((prev) => ({ ...prev, copied: true }));
+  }, [contactFallback.phone]);
+
+  const handleCallDriver = useCallback(async () => {
     if (Platform.OS === 'ios') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
@@ -407,8 +419,21 @@ export default function MapScreen({ onBack, tourId, tourData }) {
     }
 
     const phone = tourData.driverPhone.replace(/[^+\d]/g, '');
-    Linking.openURL(`tel:${phone}`);
-  }, [tourData]);
+    const url = `tel:${phone}`;
+
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        showContactFallbackBanner(phone);
+        return;
+      }
+
+      await Linking.openURL(url);
+      setContactFallback({ visible: false, phone: '', copied: false });
+    } catch (_error) {
+      showContactFallbackBanner(phone);
+    }
+  }, [showContactFallbackBanner, tourData]);
 
   const getFreshnessConfig = (freshness) => {
     switch (freshness) {
@@ -714,6 +739,24 @@ export default function MapScreen({ onBack, tourId, tourData }) {
                       </View>
                     )}
 
+                    {contactFallback.visible && (
+                      <View style={styles.contactFallbackBanner}>
+                        <Text style={styles.contactFallbackText}>Calling is not available on this device.</Text>
+                        <View style={styles.contactFallbackActions}>
+                          <Text style={styles.contactFallbackPhone}>{contactFallback.phone}</Text>
+                          <TouchableOpacity
+                            style={styles.contactFallbackCopyButton}
+                            onPress={copyDriverNumber}
+                            accessibilityRole="button"
+                            accessibilityLabel="Copy driver phone number"
+                          >
+                            <MaterialCommunityIcons name="content-copy" size={14} color={COLORS.primaryBlue} />
+                            <Text style={styles.contactFallbackCopyText}>{contactFallback.copied ? 'Copied' : 'Copy'}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    )}
+
                     {/* Action Buttons */}
                     <View style={styles.actionButtons}>
                       <TouchableOpacity
@@ -755,10 +798,29 @@ export default function MapScreen({ onBack, tourId, tourData }) {
                       style={styles.contactButton}
                       onPress={handleCallDriver}
                       activeOpacity={0.85}
+                      accessibilityRole="button"
+                      accessibilityLabel="Call driver"
                     >
                       <MaterialCommunityIcons name="phone" size={18} color={COLORS.primaryBlue} />
                       <Text style={styles.contactButtonText}>Contact Driver</Text>
                     </TouchableOpacity>
+                    {contactFallback.visible && (
+                      <View style={styles.contactFallbackBanner}>
+                        <Text style={styles.contactFallbackText}>Calling is not available on this device.</Text>
+                        <View style={styles.contactFallbackActions}>
+                          <Text style={styles.contactFallbackPhone}>{contactFallback.phone}</Text>
+                          <TouchableOpacity
+                            style={styles.contactFallbackCopyButton}
+                            onPress={copyDriverNumber}
+                            accessibilityRole="button"
+                            accessibilityLabel="Copy driver phone number"
+                          >
+                            <MaterialCommunityIcons name="content-copy" size={14} color={COLORS.primaryBlue} />
+                            <Text style={styles.contactFallbackCopyText}>{contactFallback.copied ? 'Copied' : 'Copy'}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    )}
                   </View>
                 )}
               </View>
@@ -1170,5 +1232,46 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: COLORS.primaryBlue,
+  },
+  contactFallbackBanner: {
+    width: '100%',
+    backgroundColor: `${COLORS.warning}20`,
+    borderWidth: 1,
+    borderColor: `${COLORS.warning}55`,
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 12,
+  },
+  contactFallbackText: {
+    color: COLORS.darkText,
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  contactFallbackActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  contactFallbackPhone: {
+    color: COLORS.secondaryText,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  contactFallbackCopyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: COLORS.white,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}40`,
+  },
+  contactFallbackCopyText: {
+    color: COLORS.primaryBlue,
+    fontSize: 12,
+    fontWeight: '700',
   },
 });
