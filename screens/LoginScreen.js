@@ -13,7 +13,9 @@ import {
   Dimensions,
   ActivityIndicator,
   Animated,
-  Image
+  Image,
+  Alert,
+  Linking
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -37,16 +39,96 @@ const COLORS = {
 };
 
 const OFFLINE_LOGIN_REASON_COPY = {
-  NO_CACHED_SESSION: 'This code is valid online but hasn’t been used on this device yet. Reconnect briefly once to verify, then offline mode will work next time.',
-  CODE_MISMATCH: 'This code is valid online but hasn’t been used on this device yet. Reconnect briefly once to verify, then offline mode will work next time.',
+  NO_CACHED_SESSION: 'This device has no verified offline trip for this code yet. Connect once to verify this booking/driver code on this device, then offline login will work next time.',
+  CODE_MISMATCH: 'The code you entered does not match the trip cached on this device. Check for typing errors, or reconnect so we can verify the correct code online.',
   CACHE_EXPIRED: 'Your offline trip cache has expired. Reconnect briefly once to verify, then offline mode will work next time.',
 };
 
+const SUPPORT_PHONE = process.env.EXPO_PUBLIC_SUPPORT_PHONE?.trim();
+const SUPPORT_SMS = process.env.EXPO_PUBLIC_SUPPORT_SMS?.trim();
+
+const createErrorState = (message, options = {}) => ({
+  title: options.title || 'Login issue',
+  message,
+  reason: options.reason || null,
+  showOfflineActions: options.showOfflineActions || false,
+});
+
 export default function LoginScreen({ onLoginSuccess, logger, isConnected, resolveOfflineLogin }) {
   const [bookingReference, setBookingReference] = useState('');
-  const [error, setError] = useState('');
+  const [errorState, setErrorState] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showOfflineHelp, setShowOfflineHelp] = useState(false);
+
+  const clearErrorState = () => setErrorState(null);
+
+  const setSimpleError = (message) => setErrorState(createErrorState(message));
+
+  const handleContactSupport = async () => {
+    const trimmedCode = bookingReference.trim().toUpperCase();
+    const supportMessage = `Hi LLT Support, I need help logging in${trimmedCode ? ` with code ${trimmedCode}` : ''}.`;
+
+    logger?.trackEvent('offline_login_cta_clicked', {
+      cta: 'contact_support',
+      reason: errorState?.reason,
+      isConnected,
+      hasPhone: Boolean(SUPPORT_PHONE),
+      hasSms: Boolean(SUPPORT_SMS),
+    });
+
+    if (SUPPORT_SMS) {
+      const smsUrl = `sms:${SUPPORT_SMS}?body=${encodeURIComponent(supportMessage)}`;
+      const supported = await Linking.canOpenURL(smsUrl);
+      if (supported) {
+        Linking.openURL(smsUrl);
+        return;
+      }
+    }
+
+    if (SUPPORT_PHONE) {
+      const telUrl = `tel:${SUPPORT_PHONE}`;
+      const supported = await Linking.canOpenURL(telUrl);
+      if (supported) {
+        Linking.openURL(telUrl);
+        return;
+      }
+    }
+
+    Alert.alert(
+      'Support contact unavailable',
+      'Support contact details are not configured on this build. Please email support@lochlomondtravel.com for assistance.'
+    );
+  };
+
+  const handleOfflineCtaPress = async (cta) => {
+    logger?.trackEvent('offline_login_cta_clicked', {
+      cta,
+      reason: errorState?.reason,
+      isConnected,
+    });
+
+    if (cta === 'retry_now') {
+      await handleLogin();
+      return;
+    }
+
+    if (cta === 'verify_online') {
+      if (!isConnected) {
+        setErrorState(createErrorState('No internet connection detected yet. Connect to mobile data or Wi-Fi, then tap “I’m connected, verify this code”.', {
+          title: 'Still offline',
+          reason: errorState?.reason,
+          showOfflineActions: true,
+        }));
+        return;
+      }
+      await handleLogin();
+      return;
+    }
+
+    if (cta === 'contact_support') {
+      await handleContactSupport();
+    }
+  };
   
   // Animations
   const [logoAnimation] = useState(new Animated.Value(0));
@@ -93,7 +175,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     });
     
     if (bookingReference.trim() === '') {
-      setError('Please enter your Booking Reference.');
+      setSimpleError('Please enter your Booking Reference.');
       logger?.warn('Login', 'Empty booking reference submitted');
       return;
     }
@@ -121,13 +203,20 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         reason: offlineCheck?.reason || offlineCheck?.error,
       });
       const reason = offlineCheck?.reason;
-      setError(OFFLINE_LOGIN_REASON_COPY[reason] || offlineCheck?.error || 'No cached trip found for this code; reconnect once to verify.');
+      setErrorState(createErrorState(
+        OFFLINE_LOGIN_REASON_COPY[reason] || offlineCheck?.error || 'No cached trip found for this code; reconnect once to verify.',
+        {
+          title: 'Offline login unavailable',
+          reason,
+          showOfflineActions: ['NO_CACHED_SESSION', 'CODE_MISMATCH', 'CACHE_EXPIRED'].includes(reason),
+        }
+      ));
       return;
     }
 
     animateButton();
     setLoading(true);
-    setError('');
+    clearErrorState();
 
     try {
       const startTime = Date.now();
@@ -158,7 +247,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
           error: result.error
         });
         
-        setError(result.error || 'Invalid booking reference. Please try again.');
+        setSimpleError(result.error || 'Invalid booking reference. Please try again.');
       }
     } catch (error) {
       logger?.error('Login', 'Login error', {
@@ -166,7 +255,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         bookingRef: bookingReference.trim()
       });
       
-      setError('Unable to verify booking. Please check your connection.');
+      setSimpleError('Unable to verify booking. Please check your connection.');
     } finally {
       setLoading(false);
     }
@@ -243,7 +332,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                   value={bookingReference}
                   onChangeText={(text) => {
                     setBookingReference(text);
-                    if (error) setError('');
+                    if (errorState) clearErrorState();
                   }}
                   placeholder="Ref (e.g. T114737 or Driver ID)"
                   placeholderTextColor={COLORS.placeholderText}
@@ -256,14 +345,42 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                 />
               </View>
               
-              {error ? (
+              {errorState ? (
                 <View style={styles.errorContainer}>
                   <MaterialCommunityIcons 
                     name="alert-circle" 
                     size={16} 
                     color={COLORS.errorRed} 
                   />
-                  <Text style={styles.errorText}>{error}</Text>
+                  <View style={styles.errorBody}>
+                    <Text style={styles.errorTitle}>{errorState.title}</Text>
+                    <Text style={styles.errorText}>{errorState.message}</Text>
+                    {errorState.showOfflineActions ? (
+                      <View style={styles.errorActionsContainer}>
+                        <TouchableOpacity
+                          style={styles.errorActionButton}
+                          onPress={() => handleOfflineCtaPress('retry_now')}
+                          disabled={loading}
+                        >
+                          <Text style={styles.errorActionText}>Retry now</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.errorActionButton}
+                          onPress={() => handleOfflineCtaPress('verify_online')}
+                          disabled={loading}
+                        >
+                          <Text style={styles.errorActionText}>I’m connected, verify this code</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.errorActionButton}
+                          onPress={() => handleOfflineCtaPress('contact_support')}
+                          disabled={loading}
+                        >
+                          <Text style={styles.errorActionText}>Contact support</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
+                  </View>
                 </View>
               ) : null}
               
@@ -459,15 +576,41 @@ const styles = StyleSheet.create({
   },
   errorContainer: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 12,
     paddingHorizontal: 5,
+    gap: 6,
+  },
+  errorBody: {
+    flex: 1,
+  },
+  errorTitle: {
+    color: COLORS.errorRed,
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 2,
   },
   errorText: {
     color: COLORS.errorRed,
-    fontSize: 14,
-    marginLeft: 5,
-    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  errorActionsContainer: {
+    marginTop: 10,
+    gap: 8,
+  },
+  errorActionButton: {
+    borderWidth: 1,
+    borderColor: COLORS.errorRed,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: `${COLORS.errorRed}0D`,
+  },
+  errorActionText: {
+    color: COLORS.errorRed,
+    fontSize: 13,
+    fontWeight: '600',
   },
   button: {
     backgroundColor: COLORS.primaryBlue,
