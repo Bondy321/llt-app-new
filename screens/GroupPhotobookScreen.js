@@ -30,6 +30,7 @@ const { width: windowWidth } = Dimensions.get('window');
 const THUMBNAIL_SIZE = (windowWidth - SPACING.lg * 2 - SPACING.sm * 2) / 3;
 
 export default function GroupPhotobookScreen({ onBack, userId, tourId, userName }) {
+  const MIN_REFRESH_SPINNER_MS = 120;
   const [photos, setPhotos] = useState([]);
   const [loadingPhotos, setLoadingPhotos] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -245,10 +246,52 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
     }
   };
 
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 600);
-  }, []);
+    const refreshStartedAt = Date.now();
+
+    try {
+      if (!tourId) {
+        setPhotos([]);
+        return;
+      }
+
+      await new Promise((resolve) => {
+        let didResolve = false;
+        let unsubscribe = null;
+
+        const completeRefresh = (photoList = []) => {
+          if (didResolve) return;
+          didResolve = true;
+
+          const photosWithNames = photoList.map(photo => ({
+            ...photo,
+            uploaderName: photo.uploaderName || 'Tour Member',
+          }));
+
+          setPhotos(photosWithNames);
+          if (typeof unsubscribe === 'function') {
+            unsubscribe();
+          }
+          resolve();
+        };
+
+        const handleSnapshot = (photoList) => {
+          completeRefresh(photoList);
+        };
+
+        unsubscribe = subscribeToTourPhotos(tourId, handleSnapshot);
+      });
+    } catch (error) {
+      Alert.alert('Refresh Failed', 'Unable to refresh photos right now.');
+    } finally {
+      const elapsed = Date.now() - refreshStartedAt;
+      if (elapsed < MIN_REFRESH_SPINNER_MS) {
+        await new Promise(resolve => setTimeout(resolve, MIN_REFRESH_SPINNER_MS - elapsed));
+      }
+      setRefreshing(false);
+    }
+  }, [tourId]);
 
   const handleImageLoad = (photoId) => {
     setLoadedImages(prev => ({ ...prev, [photoId]: true }));

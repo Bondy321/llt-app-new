@@ -63,6 +63,7 @@ const mapStyle = [
 ];
 
 export default function MapScreen({ onBack, tourId, tourData }) {
+  const MIN_REFRESH_SPINNER_MS = 120;
   const [driverLocation, setDriverLocation] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -276,7 +277,7 @@ export default function MapScreen({ onBack, tourId, tourData }) {
             edgePadding: { top: 120, right: 60, bottom: 320, left: 60 },
             animated: true,
           });
-        }, 500);
+        }, 120);
       }
     }
   }, [driverLocation, userLocation]);
@@ -328,15 +329,17 @@ export default function MapScreen({ onBack, tourId, tourData }) {
     }
 
     setIsRefreshing(true);
+    const refreshStartedAt = Date.now();
 
     // Rotation animation
-    Animated.loop(
+    const rotationLoop = Animated.loop(
       Animated.timing(refreshRotation, {
         toValue: 1,
         duration: 1000,
         useNativeDriver: true,
       })
-    ).start();
+    );
+    rotationLoop.start();
 
     try {
       let location = await Location.getCurrentPositionAsync({
@@ -345,13 +348,19 @@ export default function MapScreen({ onBack, tourId, tourData }) {
       setUserLocation(location.coords);
     } catch (err) {
       console.error('Refresh error:', err);
-    }
+    } finally {
+      const elapsed = Date.now() - refreshStartedAt;
+      if (elapsed < MIN_REFRESH_SPINNER_MS) {
+        await new Promise(resolve => setTimeout(resolve, MIN_REFRESH_SPINNER_MS - elapsed));
+      }
 
-    setTimeout(() => {
+      rotationLoop.stop();
       setIsRefreshing(false);
-      refreshRotation.setValue(0);
-    }, 1000);
-  }, []);
+      refreshRotation.stopAnimation(() => {
+        refreshRotation.setValue(0);
+      });
+    }
+  }, [refreshRotation]);
 
   const handleToggleMapType = useCallback(() => {
     if (Platform.OS === 'ios') {

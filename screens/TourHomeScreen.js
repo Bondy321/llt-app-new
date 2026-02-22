@@ -469,6 +469,8 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
   const [manifestStatus, setManifestStatus] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [manifestReady, setManifestReady] = useState(false);
+  const [driverReady, setDriverReady] = useState(false);
   const [driverLocationActive, setDriverLocationActive] = useState(false);
   const scrollViewRef = useRef(null);
   const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
@@ -512,10 +514,25 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
   }, [tourData?.id, tourCode]);
 
   useEffect(() => {
-    // Simulate initial loading
-    const timer = setTimeout(() => setIsLoading(false), 800);
+    if (!realtimeDb || !tourCode || !bookingRef) {
+      setManifestReady(true);
+      setDriverReady(true);
+      return;
+    }
+
+    setManifestReady(false);
+    setDriverReady(false);
+  }, [tourCode, bookingRef]);
+
+  useEffect(() => {
+    if (!manifestReady || !driverReady) {
+      setIsLoading(true);
+      return;
+    }
+
+    const timer = setTimeout(() => setIsLoading(false), 120);
     return () => clearTimeout(timer);
-  }, []);
+  }, [manifestReady, driverReady]);
 
   useEffect(() => {
     if (!realtimeDb || !tourCode || !bookingRef) return undefined;
@@ -526,9 +543,14 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
     const handleSnapshot = (snapshot) => {
       const value = snapshot.val();
       setManifestStatus(value?.status || null);
+      setManifestReady(true);
     };
 
-    manifestRef.on('value', handleSnapshot);
+    const handleManifestError = () => {
+      setManifestReady(true);
+    };
+
+    manifestRef.on('value', handleSnapshot, handleManifestError);
 
     // Also listen for driver location status
     const driverRef = realtimeDb.ref(`tours/${sanitizedTourId}/driverLocation`);
@@ -536,6 +558,7 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
       const value = snapshot.val();
       if (!value) {
         setDriverLocationActive(false);
+        setDriverReady(true);
         return;
       }
 
@@ -546,8 +569,15 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
         Number.isFinite(lastUpdatedMs) && Date.now() - lastUpdatedMs <= 10 * 60 * 1000;
 
       setDriverLocationActive(isFreshLocation);
+      setDriverReady(true);
     };
-    driverRef.on('value', handleDriverSnapshot);
+
+    const handleDriverError = () => {
+      setDriverReady(true);
+      setDriverLocationActive(false);
+    };
+
+    driverRef.on('value', handleDriverSnapshot, handleDriverError);
 
     return () => {
       manifestRef.off('value', handleSnapshot);
