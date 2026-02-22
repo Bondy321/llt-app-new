@@ -21,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS as THEME_COLORS } from '../theme';
+import loggerService, { maskIdentifier } from '../services/loggerService';
 
 const { width, height } = Dimensions.get('window');
 
@@ -59,6 +60,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
   const [errorState, setErrorState] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showOfflineHelp, setShowOfflineHelp] = useState(false);
+  const activeLogger = logger || loggerService;
 
   const clearErrorState = () => setErrorState(null);
 
@@ -68,7 +70,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     const trimmedCode = bookingReference.trim().toUpperCase();
     const supportMessage = `Hi LLT Support, I need help logging in${trimmedCode ? ` with code ${trimmedCode}` : ''}.`;
 
-    logger?.trackEvent('offline_login_cta_clicked', {
+    activeLogger?.trackEvent('offline_login_cta_clicked', {
       cta: 'contact_support',
       reason: errorState?.reason,
       isConnected,
@@ -101,7 +103,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
   };
 
   const handleOfflineCtaPress = async (cta) => {
-    logger?.trackEvent('offline_login_cta_clicked', {
+    activeLogger?.trackEvent('offline_login_cta_clicked', {
       cta,
       reason: errorState?.reason,
       isConnected,
@@ -150,7 +152,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       }),
     ]).start();
     
-    logger?.trackScreen('Login');
+    activeLogger?.trackScreen('Login');
   }, []);
 
   const animateButton = () => {
@@ -169,22 +171,22 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
   };
 
   const handleLogin = async () => {
-    logger?.info('Login', 'Login attempt started', { 
+    activeLogger?.info('Login', 'Login attempt started', { 
       hasBookingRef: !!bookingReference,
       isConnected 
     });
     
     if (bookingReference.trim() === '') {
       setSimpleError('Please enter your Booking Reference.');
-      logger?.warn('Login', 'Empty booking reference submitted');
+      activeLogger?.warn('Login', 'Empty booking reference submitted');
       return;
     }
 
     if (!isConnected) {
       const offlineCheck = await resolveOfflineLogin?.(bookingReference.trim());
       if (offlineCheck?.success) {
-        logger?.info('Login', 'Offline login fallback accepted', {
-          ref: bookingReference.trim().toUpperCase(),
+        activeLogger?.info('Login', 'Offline login fallback accepted', {
+          ref: maskIdentifier(bookingReference.trim().toUpperCase()),
           type: offlineCheck.type,
           source: offlineCheck.source,
         });
@@ -198,8 +200,8 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         return;
       }
 
-      logger?.warn('Login', 'Offline login fallback rejected', {
-        ref: bookingReference.trim().toUpperCase(),
+      activeLogger?.warn('Login', 'Offline login fallback rejected', {
+        ref: maskIdentifier(bookingReference.trim().toUpperCase()),
         reason: offlineCheck?.reason || offlineCheck?.error,
       });
       const reason = offlineCheck?.reason;
@@ -223,14 +225,14 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       const result = await validateBookingReference(bookingReference.trim());
       const duration = Date.now() - startTime;
       
-      logger?.trackAPI('/validateBooking', 'POST', result.valid ? 200 : 404, duration);
+      activeLogger?.trackAPI('/validateBooking', 'POST', result.valid ? 200 : 404, duration);
       
       if (result.valid) {
         // Pass either booking data OR driver data, and the login type
         const loginData = result.type === 'driver' ? result.driver : result.booking;
         
-        logger?.info('Login', 'Login successful', {
-          ref: bookingReference.trim().toUpperCase(),
+        activeLogger?.info('Login', 'Login successful', {
+          ref: maskIdentifier(bookingReference.trim().toUpperCase()),
           type: result.type,
           duration
         });
@@ -242,17 +244,17 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
           result.type // Pass 'passenger' or 'driver'
         );
       } else {
-        logger?.warn('Login', 'Invalid booking reference', {
-          bookingRef: bookingReference.trim(),
+        activeLogger?.warn('Login', 'Invalid booking reference', {
+          bookingRef: maskIdentifier(bookingReference.trim()),
           error: result.error
         });
         
         setSimpleError(result.error || 'Invalid booking reference. Please try again.');
       }
     } catch (error) {
-      logger?.error('Login', 'Login error', {
+      activeLogger?.error('Login', 'Login error', {
         error: error.message,
-        bookingRef: bookingReference.trim()
+        bookingRef: maskIdentifier(bookingReference.trim())
       });
       
       setSimpleError('Unable to verify booking. Please check your connection.');

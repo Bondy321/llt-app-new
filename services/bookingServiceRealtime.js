@@ -4,6 +4,7 @@ const isTestEnv = process.env.NODE_ENV === 'test';
 let realtimeDb;
 let auth;
 let logger;
+let maskIdentifier = (value) => value;
 
 // Status Enums for the Manifest
 const MANIFEST_STATUS = {
@@ -15,7 +16,11 @@ const MANIFEST_STATUS = {
 
 if (!isTestEnv) {
   try {
-    logger = require('./loggerService').default;
+    const loggerModule = require('./loggerService');
+    logger = loggerModule.default;
+    if (typeof loggerModule.maskIdentifier === 'function') {
+      maskIdentifier = loggerModule.maskIdentifier;
+    }
   } catch (error) {
     logger = null;
   }
@@ -23,7 +28,11 @@ if (!isTestEnv) {
   try {
     ({ realtimeDb, auth } = require('../firebase'));
   } catch (error) {
-    console.warn('Realtime database module not initialized during load:', error.message);
+    if (logger?.warn) {
+      logger.warn('BookingService', 'Realtime database module not initialized during load', { error: error.message });
+    } else if (isTestEnv || process.env.NODE_ENV !== 'production') {
+      console.warn('Realtime database module not initialized during load:', error.message);
+    }
   }
 }
 
@@ -32,7 +41,11 @@ let offlineSyncService;
 try {
   offlineSyncService = require('./offlineSyncService');
 } catch (error) {
-  console.warn('Offline sync service unavailable:', error.message);
+  if (logger?.warn) {
+    logger.warn('BookingService', 'Offline sync service unavailable', { error: error.message });
+  } else if (isTestEnv || process.env.NODE_ENV !== 'production') {
+    console.warn('Offline sync service unavailable:', error.message);
+  }
 }
 
 // ==================== VALIDATION HELPERS ====================
@@ -277,7 +290,7 @@ const getTourManifest = async (tourCodeOriginal) => {
     };
 
   } catch (error) {
-    console.error('Error fetching tour manifest:', error);
+    logger?.error?.('Manifest', 'Error fetching tour manifest', { tourCode, error: error?.message || String(error) });
     throw error;
   }
 };
@@ -303,7 +316,7 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
 
     if (serverUpdatedAt > localUpdatedAt) {
       logger?.warn?.('Manifest', 'Queued update reconciled to newer server data', {
-        bookingRef: validatedBookingRef,
+        bookingRef: maskIdentifier(validatedBookingRef),
         tourId,
         localUpdatedAt: payload.lastUpdated,
         serverUpdatedAt: existing.lastUpdated,
@@ -397,7 +410,11 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
       idempotencyKey,
     };
   } catch (error) {
-    console.error('Error updating manifest:', error);
+    logger?.error?.('Manifest', 'Error updating manifest', {
+      tourCode,
+      bookingRef: maskIdentifier(bookingRef),
+      error: error?.message || String(error),
+    });
     throw error;
   }
 };
@@ -465,7 +482,11 @@ const assignDriverToTour = async (driverId, tourCode) => {
     return { success: true, tourId };
 
   } catch (error) {
-    console.error('Error assigning driver to tour:', error);
+    logger?.error?.('Auth', 'Error assigning driver to tour', {
+      driverId: maskIdentifier(driverId),
+      tourCode,
+      error: error?.message || String(error),
+    });
     throw error;
   }
 };
@@ -530,7 +551,7 @@ const validateBookingReference = async (reference) => {
       }
     };
   } catch (error) {
-    console.error('Error validating booking reference:', error);
+    logger?.error?.('Auth', 'Error validating booking reference', { error: error?.message || String(error) });
     return { valid: false, error: 'Error checking booking reference' };
   }
 };
@@ -633,7 +654,7 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
       alreadyJoined: false
     };
   } catch (error) {
-    console.error('Error joining tour:', error);
+    logger?.error?.('Tour', 'Error joining tour', { tourId, userId: maskIdentifier(userId), error: error?.message || String(error) });
     throw error;
   }
 };
@@ -658,7 +679,7 @@ const getTourItinerary = async (tourId) => {
       days: [{ day: 1, content: 'Itinerary to be confirmed' }]
     };
   } catch (error) {
-    console.error('Error getting itinerary:', error);
+    logger?.error?.('Itinerary', 'Error getting itinerary', { tourId, error: error?.message || String(error) });
     return null;
   }
 };
@@ -679,7 +700,7 @@ const getDriverItinerary = async (tourId) => {
       days: tourData.days || null,
     };
   } catch (error) {
-    console.error('Error getting driver itinerary:', error);
+    logger?.error?.('Itinerary', 'Error getting driver itinerary', { tourId, error: error?.message || String(error) });
     return null;
   }
 };

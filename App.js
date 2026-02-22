@@ -8,7 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // Import Firebase services
 import { auth, authHelpers } from './firebase';
 import { joinTour } from './services/bookingServiceRealtime';
-import logger from './services/loggerService';
+import logger, { maskIdentifier } from './services/loggerService';
 import useDiagnostics from './hooks/useDiagnostics';
 import offlineSyncService from './services/offlineSyncService';
 import * as bookingService from './services/bookingServiceRealtime';
@@ -137,7 +137,7 @@ export default function App() {
       const currentUser = await authHelpers.ensureAuthenticated();
       if (currentUser) {
         logger.setUserId(currentUser.uid);
-        logger.info('Auth', 'User authenticated', { uid: currentUser.uid });
+        logger.info('Auth', 'User authenticated', { uid: maskIdentifier(currentUser.uid) });
       }
 
       setInitializing(false);
@@ -290,7 +290,7 @@ export default function App() {
     } catch (error) {
       logger.warn('Auth', 'Offline login check failed', {
         error: error.message,
-        reference: normalizedReference,
+        reference: maskIdentifier(normalizedReference),
       });
       return {
         success: false,
@@ -305,7 +305,7 @@ export default function App() {
     setOfflineModeActive(isOfflineLogin);
 
     if (userType === 'driver') {
-      logger.info('Auth', 'Driver Logged In', { driverId: bookingOrDriverData.id });
+      logger.info('Auth', 'Driver Logged In', { driverId: maskIdentifier(bookingOrDriverData.id) });
       setBookingData(bookingOrDriverData);
       setCurrentScreen('DriverHome');
       if (tourDetails?.id) {
@@ -316,7 +316,7 @@ export default function App() {
         await offlineSyncService.setTourPackMeta(tourDetails.id, 'driver', { lastSyncedAt: new Date().toISOString() });
       }
     } else {
-      logger.info('Navigation', 'Passenger Login', { bookingRef: reference });
+      logger.info('Navigation', 'Passenger Login', { bookingRef: maskIdentifier(reference) });
       setTourCode(tourDetails?.tourCode || '');
       setTourData(tourDetails || null);
       setBookingData(bookingOrDriverData);
