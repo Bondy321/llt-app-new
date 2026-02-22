@@ -78,6 +78,7 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   const slideAnim = useRef(new Animated.Value(100)).current;
   const markerScaleAnim = useRef(new Animated.Value(0)).current;
   const refreshRotation = useRef(new Animated.Value(0)).current;
+  const refreshAnimationRef = useRef(null);
 
   // Pulse animation for live indicator
   useEffect(() => {
@@ -115,6 +116,16 @@ export default function MapScreen({ onBack, tourId, tourData }) {
       }),
     ]).start();
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (refreshAnimationRef.current) {
+        refreshAnimationRef.current.stop();
+        refreshAnimationRef.current = null;
+      }
+      refreshRotation.setValue(0);
+    };
+  }, [refreshRotation]);
 
   // Marker scale animation when location updates
   useEffect(() => {
@@ -323,20 +334,28 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   }, [driverLocation, userLocation]);
 
   const handleRefresh = useCallback(async () => {
+    if (isRefreshing) return;
+
     if (Platform.OS === 'ios') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
 
     setIsRefreshing(true);
 
-    // Rotation animation
-    Animated.loop(
+    if (refreshAnimationRef.current) {
+      refreshAnimationRef.current.stop();
+      refreshAnimationRef.current = null;
+    }
+
+    refreshRotation.setValue(0);
+    refreshAnimationRef.current = Animated.loop(
       Animated.timing(refreshRotation, {
         toValue: 1,
         duration: 1000,
         useNativeDriver: true,
       })
-    ).start();
+    );
+    refreshAnimationRef.current.start();
 
     try {
       let location = await Location.getCurrentPositionAsync({
@@ -345,13 +364,15 @@ export default function MapScreen({ onBack, tourId, tourData }) {
       setUserLocation(location.coords);
     } catch (err) {
       console.error('Refresh error:', err);
-    }
-
-    setTimeout(() => {
-      setIsRefreshing(false);
+    } finally {
+      if (refreshAnimationRef.current) {
+        refreshAnimationRef.current.stop();
+        refreshAnimationRef.current = null;
+      }
       refreshRotation.setValue(0);
-    }, 1000);
-  }, []);
+      setIsRefreshing(false);
+    }
+  }, [isRefreshing, refreshRotation]);
 
   const handleToggleMapType = useCallback(() => {
     if (Platform.OS === 'ios') {
