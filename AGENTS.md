@@ -1109,6 +1109,10 @@ Never commit secrets. Use EAS Secrets for environment variables in builds.
 - **Manifest speed workflow:** Passenger Manifest now supports boarding-priority workflows (status filtering + pickup-time-first grouping) while keeping location grouping available for fallback operational views.
 - **Manifest action feedback UX:** after manifest updates, drivers now get in-screen progress feedback (boarded/no-show delta + unresolved remaining) and a one-tap "Open next" action for the next unresolved booking.
 - **Operational non-blocking status UX:** manifest sync/status flows now prioritize in-screen banners and retry affordances for routine operational outcomes to reduce modal interruption during fast driver workflows.
+- **Manifest error-recovery UX:** manifest save/sync failures now surface in-banner recovery CTAs (for example “Retry now” and “Retry failed”) instead of disruptive blocking modals during boarding.
+- **Chat unread catch-up UX:** chat now persists per-tour/per-chat-type read anchors and renders an “Unread messages” separator plus a “Jump to unread” floating action to help users return to context faster.
+- **Login recovery CTA UX:** offline login rejection states now provide immediate recovery actions (“Retry now”, “I’m connected, verify this code”, and “Contact support”) and clearer reason-specific guidance for mismatch vs no-cache scenarios.
+- **Passenger home refresh non-blocking UX:** Tour Home refresh outcomes now use in-screen tone-aware status banners with inline retry affordances, removing modal refresh-error interruptions.
 - **Notification preferences confidence UX:** Notification settings now include dirty-state save controls, inline success/error banners, explicit “last saved” feedback, and in-screen test-notification status with retry.
 
 ## Quick Reference
