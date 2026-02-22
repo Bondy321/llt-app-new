@@ -26,6 +26,27 @@ const MAX_TYPING_INDICATOR_AGE_MS = 10000;
 const MAX_PRESENCE_AGE_MS = 300000; // 5 minutes
 const CLEANUP_TYPING_DELAY_MS = 10000;
 
+const parseTimestampToMillis = (timestamp) => {
+  if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
+    return timestamp;
+  }
+
+  if (typeof timestamp === 'string') {
+    const parsed = Date.parse(timestamp);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+};
+
+const normalizeMessageTimestamp = (message = {}) => {
+  const timestampMs = parseTimestampToMillis(message.timestamp);
+  return {
+    ...message,
+    timestampMs,
+  };
+};
+
 // ==================== VALIDATION HELPERS ====================
 
 /**
@@ -161,14 +182,18 @@ const buildMessagesFromSnapshot = (snapshot) => {
 
   if (snapshot.exists()) {
     snapshot.forEach((childSnapshot) => {
-      messages.push({
+      messages.push(normalizeMessageTimestamp({
         id: childSnapshot.key,
         ...childSnapshot.val(),
-      });
+      }));
     });
   }
 
-  messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  messages.sort((a, b) => {
+    const aTs = a.timestampMs ?? parseTimestampToMillis(a.timestamp) ?? 0;
+    const bTs = b.timestampMs ?? parseTimestampToMillis(b.timestamp) ?? 0;
+    return aTs - bTs;
+  });
 
   return messages;
 };
@@ -850,15 +875,19 @@ const getChatMessages = async (tourId, limit = 50, dbInstance = realtimeDb) => {
     const messages = [];
     if (snapshot.exists()) {
       snapshot.forEach((childSnapshot) => {
-        messages.push({
+        messages.push(normalizeMessageTimestamp({
           id: childSnapshot.key,
           ...childSnapshot.val(),
-        });
+        }));
       });
     }
 
     // Sort messages by timestamp
-    messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    messages.sort((a, b) => {
+      const aTs = a.timestampMs ?? parseTimestampToMillis(a.timestamp) ?? 0;
+      const bTs = b.timestampMs ?? parseTimestampToMillis(b.timestamp) ?? 0;
+      return aTs - bTs;
+    });
 
     return messages;
   } catch (error) {
