@@ -25,6 +25,7 @@ import { realtimeDb } from '../firebase';
 import { assignDriverToTour } from '../services/bookingServiceRealtime';
 import offlineSyncService from '../services/offlineSyncService';
 import { createPersistenceProvider } from '../services/persistenceProvider';
+import logger from '../services/loggerService';
 import { COLORS as THEME } from '../theme';
 
 const { width } = Dimensions.get('window');
@@ -73,6 +74,11 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const [autoShareEnabled, setAutoShareEnabled] = useState(false);
   const [autoShareStatus, setAutoShareStatus] = useState('Auto-share is off');
   const [autoShareLastRunAt, setAutoShareLastRunAt] = useState(null);
+  const [bannerVisible, setBannerVisible] = useState(false);
+  const [bannerType, setBannerType] = useState('info');
+  const [bannerMessage, setBannerMessage] = useState('');
+  const [bannerActionLabel, setBannerActionLabel] = useState(null);
+  const [bannerActionHandler, setBannerActionHandler] = useState(null);
 
   // Modal State for Joining Tour
   const [joinModalVisible, setJoinModalVisible] = useState(false);
@@ -84,6 +90,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const successAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const persistenceRef = useRef(createPersistenceProvider({ namespace: 'LLT_DRIVER_HOME' }));
+  const bannerTimerRef = useRef(null);
 
   // Derive active tour from props (updates when driverData changes)
   const activeTourId = driverData?.assignedTourId || '';
@@ -100,6 +107,50 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
   const isLocationStale = Boolean(lastLocationUpdate?.timestamp)
     && getLastUpdateAgeMinutes(lastLocationUpdate.timestamp) >= LOCATION_STALE_THRESHOLD_MINUTES;
+
+  const showBanner = useCallback(({ type = 'info', message, actionLabel, actionHandler, autoHideMs = 4000 }) => {
+    if (bannerTimerRef.current) {
+      clearTimeout(bannerTimerRef.current);
+      bannerTimerRef.current = null;
+    }
+
+    setBannerType(type);
+    setBannerMessage(message);
+    setBannerActionLabel(actionLabel || null);
+    setBannerActionHandler(actionHandler || null);
+    setBannerVisible(true);
+
+    if (type === 'warning') {
+      logger.warn('DriverHomeScreen', 'Showing warning banner', { message, hasAction: Boolean(actionLabel) });
+    }
+    if (type === 'error') {
+      logger.error('DriverHomeScreen', 'Showing error banner', { message, hasAction: Boolean(actionLabel) });
+    }
+
+    if (autoHideMs > 0) {
+      bannerTimerRef.current = setTimeout(() => {
+        setBannerVisible(false);
+        setBannerActionLabel(null);
+        setBannerActionHandler(null);
+      }, autoHideMs);
+    }
+  }, []);
+
+  const dismissBanner = useCallback(() => {
+    if (bannerTimerRef.current) {
+      clearTimeout(bannerTimerRef.current);
+      bannerTimerRef.current = null;
+    }
+    setBannerVisible(false);
+    setBannerActionLabel(null);
+    setBannerActionHandler(null);
+  }, []);
+
+  useEffect(() => () => {
+    if (bannerTimerRef.current) {
+      clearTimeout(bannerTimerRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -246,7 +297,12 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   // Function to capture location and show preview
   const handleCaptureLocation = async () => {
     if (!activeTourId) {
-      Alert.alert("No Tour", "You must have an assigned tour to share location.");
+      showBanner({
+        type: 'warning',
+        message: 'Join a tour to share your pickup location.',
+        actionLabel: 'Join Tour',
+        actionHandler: () => setJoinModalVisible(true),
+      });
       return;
     }
 
@@ -286,7 +342,12 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
     } catch (error) {
       console.error(error);
-      Alert.alert("Error", "Could not get your location. Please try again.");
+      showBanner({
+        type: 'error',
+        message: 'Couldn’t get your location. Retry.',
+        actionLabel: 'Retry',
+        actionHandler: handleCaptureLocation,
+      });
     } finally {
       setUpdatingLocation(false);
     }
@@ -327,18 +388,22 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       }
 
       setPreviewModalVisible(false);
-      Alert.alert(
-        "Location Shared",
-        "Passengers can now see your pickup point on the map. They'll receive the updated location in real-time.",
-        [{ text: "Great!", style: "default" }]
-      );
+      showBanner({
+        type: 'success',
+        message: 'Location shared. Passengers can now see your pickup point.',
+      });
 
     } catch (error) {
       console.error(error);
       if (Platform.OS === 'ios') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
-      Alert.alert("Error", "Could not share location. Please try again.");
+      showBanner({
+        type: 'error',
+        message: 'Couldn’t share location. Retry.',
+        actionLabel: 'Retry',
+        actionHandler: handleConfirmLocation,
+      });
     } finally {
       setConfirmingLocation(false);
     }
@@ -346,7 +411,12 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
   const handleToggleAutoShare = async (enabled) => {
     if (enabled && !activeTourId) {
-      Alert.alert('No Tour', 'Join a tour before turning on auto-share.');
+      showBanner({
+        type: 'warning',
+        message: 'Join a tour before enabling auto-share.',
+        actionLabel: 'Join Tour',
+        actionHandler: () => setJoinModalVisible(true),
+      });
       return;
     }
 
@@ -444,7 +514,12 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
     } catch (error) {
       console.error(error);
-      Alert.alert("Error", "Could not refresh location.");
+      showBanner({
+        type: 'error',
+        message: 'Couldn’t refresh location. Retry.',
+        actionLabel: 'Retry',
+        actionHandler: handleRefetchLocation,
+      });
     } finally {
       setUpdatingLocation(false);
     }
@@ -452,7 +527,12 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
   const handleOpenChat = () => {
     if (!activeTourId) {
-      Alert.alert("No Tour", "You need an active tour to access the chat.");
+      showBanner({
+        type: 'warning',
+        message: 'Join a tour to open group chat.',
+        actionLabel: 'Join Tour',
+        actionHandler: () => setJoinModalVisible(true),
+      });
       return;
     }
     if (Platform.OS === 'ios') {
@@ -467,7 +547,12 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
   const handleOpenDriverChat = () => {
     if (!activeTourId) {
-      Alert.alert("No Tour", "You need an active tour to access the driver chat.");
+      showBanner({
+        type: 'warning',
+        message: 'Join a tour to open driver chat.',
+        actionLabel: 'Join Tour',
+        actionHandler: () => setJoinModalVisible(true),
+      });
       return;
     }
     if (Platform.OS === 'ios') {
@@ -484,7 +569,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   // --- Join Tour Logic ---
   const handleJoinTour = async () => {
     if (!inputTourCode.trim()) {
-      Alert.alert("Required", "Please enter a valid Tour Code (e.g., 5112D 8)");
+      showBanner({ type: 'warning', message: 'Enter a valid tour code to continue.' });
       return;
     }
 
@@ -526,7 +611,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
 
-      Alert.alert("Success", `You are now assigned to tour: ${inputTourCode}`);
+      showBanner({ type: 'success', message: `Assigned to tour ${inputTourCode}.` });
       setJoinModalVisible(false);
       setInputTourCode('');
 
@@ -534,7 +619,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       if (Platform.OS === 'ios') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
-      Alert.alert("Error", "Could not join tour. Check the code and try again.\n" + error.message);
+      showBanner({
+        type: 'error',
+        message: `Couldn’t join tour. Check the code and retry. ${error.message}`,
+      });
     } finally {
       setJoining(false);
     }
@@ -561,6 +649,13 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   };
 
   const accuracyConfig = getAccuracyConfig(locationAccuracy);
+  const bannerConfigByType = {
+    info: { icon: 'information-outline', bg: THEME.primaryMuted, accent: THEME.primary, text: THEME.textPrimary },
+    success: { icon: 'check-circle-outline', bg: THEME.successLight, accent: THEME.success, text: THEME.textPrimary },
+    warning: { icon: 'alert-outline', bg: THEME.warningLight, accent: THEME.warning, text: THEME.textPrimary },
+    error: { icon: 'alert-circle-outline', bg: THEME.errorLight, accent: THEME.error, text: THEME.textPrimary },
+  };
+  const currentBannerConfig = bannerConfigByType[bannerType] || bannerConfigByType.info;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -595,6 +690,28 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
           </View>
 
           <ScrollView contentContainerStyle={styles.content}>
+            {bannerVisible && (
+              <View style={[styles.inlineBanner, { backgroundColor: currentBannerConfig.bg, borderColor: `${currentBannerConfig.accent}66` }]}>
+                <MaterialCommunityIcons name={currentBannerConfig.icon} size={20} color={currentBannerConfig.accent} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.inlineBannerText, { color: currentBannerConfig.text }]}>{bannerMessage}</Text>
+                  {bannerActionLabel && bannerActionHandler && (
+                    <TouchableOpacity
+                      style={[styles.inlineBannerAction, { borderColor: `${currentBannerConfig.accent}55` }]}
+                      onPress={bannerActionHandler}
+                      accessibilityRole="button"
+                      accessibilityLabel={bannerActionLabel}
+                    >
+                      <Text style={[styles.inlineBannerActionText, { color: currentBannerConfig.accent }]}>{bannerActionLabel}</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <TouchableOpacity onPress={dismissBanner} style={styles.inlineBannerDismiss} accessibilityRole="button" accessibilityLabel="Dismiss status message">
+                  <MaterialCommunityIcons name="close" size={18} color={currentBannerConfig.accent} />
+                </TouchableOpacity>
+              </View>
+            )}
+
             {/* Tour Assignment Card */}
             <View style={styles.assignCard}>
               <View style={{ flex: 1 }}>
@@ -755,8 +872,13 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
               <TouchableOpacity
                 style={[styles.wideButton, styles.infoButton]}
                 onPress={() => {
-                  if(!activeTourId) {
-                    Alert.alert("No Tour", "Please Join a Tour first.");
+                  if (!activeTourId) {
+                    showBanner({
+                      type: 'warning',
+                      message: 'Join a tour to view the passenger manifest.',
+                      actionLabel: 'Join Tour',
+                      actionHandler: () => setJoinModalVisible(true),
+                    });
                     return;
                   }
                   if (Platform.OS === 'ios') {
@@ -779,6 +901,15 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
               <TouchableOpacity
                 style={[styles.wideButton, styles.purpleButton]}
                 onPress={() => {
+                  if (!activeTourId) {
+                    showBanner({
+                      type: 'warning',
+                      message: 'Join a tour to open the client itinerary.',
+                      actionLabel: 'Join Tour',
+                      actionHandler: () => setJoinModalVisible(true),
+                    });
+                    return;
+                  }
                   if (Platform.OS === 'ios') {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   }
@@ -799,8 +930,13 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
               <TouchableOpacity
                 style={[styles.wideButton, styles.amberButton]}
                 onPress={() => {
-                  if(!activeTourId) {
-                    Alert.alert("No Tour", "Please join a tour first.");
+                  if (!activeTourId) {
+                    showBanner({
+                      type: 'warning',
+                      message: 'Join a tour to open the driver itinerary.',
+                      actionLabel: 'Join Tour',
+                      actionHandler: () => setJoinModalVisible(true),
+                    });
                     return;
                   }
                   if (Platform.OS === 'ios') {
@@ -1096,6 +1232,35 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
   },
   content: { padding: 20, paddingBottom: 28 },
+  inlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  inlineBannerText: {
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 20,
+  },
+  inlineBannerAction: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  inlineBannerActionText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  inlineBannerDismiss: {
+    padding: 2,
+  },
 
   // Tour Assignment Card
   assignCard: {
