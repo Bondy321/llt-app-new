@@ -465,7 +465,14 @@ const FeatureCard = ({ item, onPress, index, isLarge = false }) => {
   );
 };
 
-export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavigate, onLogout }) {
+export default function TourHomeScreen({
+  tourCode,
+  tourData,
+  bookingData,
+  onNavigate,
+  onLogout,
+  isConnected = true,
+}) {
   const [manifestStatus, setManifestStatus] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -475,6 +482,9 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
   const scrollViewRef = useRef(null);
   const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
   const [refreshStatusText, setRefreshStatusText] = useState('');
+  const [refreshStatusTone, setRefreshStatusTone] = useState('info');
+  const [refreshStatusCanRetry, setRefreshStatusCanRetry] = useState(false);
+  const refreshStatusTimeoutRef = useRef(null);
 
   const greeting = useMemo(() => getTimeBasedGreeting(), []);
   const bookingRef = useMemo(() => bookingData?.id, [bookingData?.id]);
@@ -585,6 +595,35 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
     };
   }, [tourCode, bookingRef]);
 
+  const clearRefreshStatusTimeout = useCallback(() => {
+    if (refreshStatusTimeoutRef.current) {
+      clearTimeout(refreshStatusTimeoutRef.current);
+      refreshStatusTimeoutRef.current = null;
+    }
+  }, []);
+
+  const showRefreshStatus = useCallback(
+    ({ message, tone = 'info', canRetry = false, autoDismissMs = 5000 }) => {
+      clearRefreshStatusTimeout();
+      setRefreshStatusText(message);
+      setRefreshStatusTone(tone);
+      setRefreshStatusCanRetry(canRetry);
+
+      if (autoDismissMs > 0) {
+        refreshStatusTimeoutRef.current = setTimeout(() => {
+          setRefreshStatusText('');
+          setRefreshStatusTone('info');
+          setRefreshStatusCanRetry(false);
+        }, autoDismissMs);
+      }
+    },
+    [clearRefreshStatusTimeout]
+  );
+
+  useEffect(() => {
+    return () => clearRefreshStatusTimeout();
+  }, [clearRefreshStatusTimeout]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     triggerHaptic('light');
@@ -651,20 +690,42 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
         ? afterStatsResult.data
         : { pending: 0, failed: 0, syncing: 0, total: 0 };
 
-      if (afterStats.pending > 0 || afterStats.failed > 0) {
-        feedbackParts.push(
-          `Queue: ${afterStats.pending} pending, ${afterStats.failed} failed.`
-        );
+      if (afterStats.failed > 0) {
+        const message = `Sync failed: ${afterStats.failed} failed, ${afterStats.pending} pending.`;
+        showRefreshStatus({
+          message,
+          tone: 'error',
+          canRetry: Boolean(isConnected),
+          autoDismissMs: 8000,
+        });
+      } else if (afterStats.pending > 0) {
+        const message = `Pending retry: ${afterStats.pending} action${afterStats.pending === 1 ? '' : 's'} still queued.`;
+        showRefreshStatus({
+          message,
+          tone: 'warning',
+          canRetry: false,
+          autoDismissMs: 6500,
+        });
+      } else {
+        const message = feedbackParts.length > 0 ? feedbackParts.join(' ') : 'Up to date.';
+        showRefreshStatus({
+          message,
+          tone: 'success',
+          canRetry: false,
+          autoDismissMs: 4000,
+        });
       }
-
-      setRefreshStatusText(feedbackParts.length > 0 ? feedbackParts.join(' ') : 'Up to date.');
     } catch (error) {
-      setRefreshStatusText('Refresh failed. Please try again.');
-      Alert.alert('Refresh failed', 'Unable to refresh your tour details right now.');
+      showRefreshStatus({
+        message: 'Refresh failed. Please try again.',
+        tone: 'error',
+        canRetry: Boolean(isConnected),
+        autoDismissMs: 8000,
+      });
     } finally {
       setRefreshing(false);
     }
-  }, [tourData?.id, tourCode, bookingRef]);
+  }, [tourData?.id, tourCode, bookingRef, showRefreshStatus, isConnected]);
 
   const manifestStatusMeta = useMemo(() => {
     switch (manifestStatus) {
@@ -829,7 +890,28 @@ export default function TourHomeScreen({ tourCode, tourData, bookingData, onNavi
               </View>
               <Text style={styles.tourCodeDisplay}>{tourCode}</Text>
               <Text style={styles.tourName} numberOfLines={1}>{tourData?.name || 'Active Tour'}</Text><Text style={styles.cacheLabel}>{cacheStatusLabel}</Text>
-              {!!refreshStatusText && <Text style={styles.refreshStatusText}>{refreshStatusText}</Text>}
+              {!!refreshStatusText && (
+                <View
+                  style={[
+                    styles.refreshStatusContainer,
+                    refreshStatusTone === 'success' && styles.refreshStatusSuccess,
+                    refreshStatusTone === 'warning' && styles.refreshStatusWarning,
+                    refreshStatusTone === 'error' && styles.refreshStatusError,
+                  ]}
+                >
+                  <Text style={styles.refreshStatusText}>{refreshStatusText}</Text>
+                  {refreshStatusCanRetry && (
+                    <TouchableOpacity
+                      onPress={onRefresh}
+                      style={styles.refreshRetryButton}
+                      accessibilityRole="button"
+                      accessibilityLabel="Retry refresh"
+                    >
+                      <Text style={styles.refreshRetryText}>Retry now</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
             </View>
             <View style={styles.headerActions}>
               <TouchableOpacity
@@ -1260,10 +1342,44 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   cacheLabel: { fontSize: 12, color: COLORS.subtleText, marginTop: 4 },
+  refreshStatusContainer: {
+    marginTop: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}30`,
+    backgroundColor: `${COLORS.primaryBlue}10`,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  refreshStatusSuccess: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+  },
+  refreshStatusWarning: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  refreshStatusError: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
   refreshStatusText: {
     fontSize: 12,
+    color: COLORS.darkText,
+    fontWeight: '600',
+  },
+  refreshRetryButton: {
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    borderRadius: 999,
+    backgroundColor: `${COLORS.primaryBlue}12`,
+  },
+  refreshRetryText: {
+    fontSize: 11,
+    fontWeight: '700',
     color: COLORS.primaryBlue,
-    marginTop: 4,
   },
   tourName: {
     fontSize: 12,
