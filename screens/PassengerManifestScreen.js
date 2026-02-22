@@ -216,6 +216,10 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
   const totalStats = useMemo(() => computeStats(manifestData.bookings), [manifestData.bookings]);
   const filteredStats = useMemo(() => computeStats(filteredBookings), [filteredBookings]);
+  const nextPriorityBooking = useMemo(
+    () => sortedFilteredBookings.find((booking) => priorityRank(booking.status) === 0) || null,
+    [sortedFilteredBookings]
+  );
 
   const isSearchView = viewMode === VIEW_MODE.SEARCH;
   const sectionListData = viewMode === VIEW_MODE.LOCATION ? sectionedLocationBookings : sectionedPriorityBookings;
@@ -342,6 +346,25 @@ export default function PassengerManifestScreen({ route, navigation }) {
         </View>
 
       </View>
+
+      {nextPriorityBooking && (
+        <TouchableOpacity
+          style={styles.nextActionCard}
+          onPress={() => handleOpenBooking(nextPriorityBooking)}
+          activeOpacity={0.9}
+        >
+          <View style={styles.nextActionMeta}>
+            <Text style={styles.nextActionEyebrow}>NEXT ACTION</Text>
+            <Text style={styles.nextActionTitle}>{nextPriorityBooking.id}</Text>
+            <Text style={styles.nextActionDetail} numberOfLines={1}>
+              {(nextPriorityBooking.pickupTime || 'TBA')} • {nextPriorityBooking.pickupLocation || 'Unknown pickup'}
+            </Text>
+          </View>
+          <View style={styles.nextActionButton}>
+            <MaterialCommunityIcons name="arrow-right" size={18} color={COLORS.white} />
+          </View>
+        </TouchableOpacity>
+      )}
 
       {/* Search Bar (Existing) */}
       <View style={styles.searchContainer}>
@@ -595,6 +618,46 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.18,
     shadowRadius: 6,
     elevation: 3,
+  },
+  nextActionCard: {
+    marginBottom: 14,
+    backgroundColor: COLORS.searchBg,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  nextActionMeta: {
+    flex: 1,
+    paddingRight: 10,
+  },
+  nextActionEyebrow: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.info,
+    marginBottom: 2,
+  },
+  nextActionTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: COLORS.panel,
+  },
+  nextActionDetail: {
+    marginTop: 2,
+    fontSize: 13,
+    color: COLORS.muted,
+  },
+  nextActionButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: COLORS.info,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   dashboardItem: {
     flex: 1,
