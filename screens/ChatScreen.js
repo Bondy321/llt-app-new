@@ -126,6 +126,9 @@ const TypingIndicator = ({ typingUsers }) => {
 const normalizeTimestamp = (timestamp) => {
   if (typeof timestamp === 'number' && Number.isFinite(timestamp)) return timestamp;
   if (typeof timestamp === 'string') {
+    const numericTimestamp = Number(timestamp);
+    if (Number.isFinite(numericTimestamp)) return numericTimestamp;
+
     const parsed = Date.parse(timestamp);
     return Number.isFinite(parsed) ? parsed : null;
   }

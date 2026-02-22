@@ -32,6 +32,11 @@ const parseTimestampToMillis = (timestamp) => {
   }
 
   if (typeof timestamp === 'string') {
+    const numericTimestamp = Number(timestamp);
+    if (Number.isFinite(numericTimestamp)) {
+      return numericTimestamp;
+    }
+
     const parsed = Date.parse(timestamp);
     return Number.isFinite(parsed) ? parsed : null;
   }
@@ -43,6 +48,7 @@ const normalizeMessageTimestamp = (message = {}) => {
   const timestampMs = parseTimestampToMillis(message.timestamp);
   return {
     ...message,
+    timestamp: timestampMs ?? message.timestamp ?? null,
     timestampMs,
   };
 };
