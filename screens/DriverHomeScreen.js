@@ -73,6 +73,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const [autoShareEnabled, setAutoShareEnabled] = useState(false);
   const [autoShareStatus, setAutoShareStatus] = useState('Auto-share is off');
   const [autoShareLastRunAt, setAutoShareLastRunAt] = useState(null);
+  const [statusBanner, setStatusBanner] = useState(null);
 
   // Modal State for Joining Tour
   const [joinModalVisible, setJoinModalVisible] = useState(false);
@@ -246,7 +247,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   // Function to capture location and show preview
   const handleCaptureLocation = async () => {
     if (!activeTourId) {
-      Alert.alert("No Tour", "You must have an assigned tour to share location.");
+      showBanner('warning', 'No active tour yet. Join a tour to set pickup.');
       return;
     }
 
@@ -286,7 +287,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
     } catch (error) {
       console.error(error);
-      Alert.alert("Error", "Could not get your location. Please try again.");
+      showBanner('error', "Couldn't get location now. Retry.");
     } finally {
       setUpdatingLocation(false);
     }
@@ -327,18 +328,14 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       }
 
       setPreviewModalVisible(false);
-      Alert.alert(
-        "Location Shared",
-        "Passengers can now see your pickup point on the map. They'll receive the updated location in real-time.",
-        [{ text: "Great!", style: "default" }]
-      );
+      showBanner('success', 'Pickup shared. Passengers can see it now.');
 
     } catch (error) {
       console.error(error);
       if (Platform.OS === 'ios') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
-      Alert.alert("Error", "Could not share location. Please try again.");
+      showBanner('error', "Couldn't share pickup now. Retry.");
     } finally {
       setConfirmingLocation(false);
     }
@@ -346,7 +343,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
   const handleToggleAutoShare = async (enabled) => {
     if (enabled && !activeTourId) {
-      Alert.alert('No Tour', 'Join a tour before turning on auto-share.');
+      showBanner('warning', 'No active tour yet. Join a tour, then enable auto-share.');
       return;
     }
 
@@ -444,7 +441,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
     } catch (error) {
       console.error(error);
-      Alert.alert("Error", "Could not refresh location.");
+      showBanner('error', "Couldn't refresh location now. Retry.");
     } finally {
       setUpdatingLocation(false);
     }
@@ -452,7 +449,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
   const handleOpenChat = () => {
     if (!activeTourId) {
-      Alert.alert("No Tour", "You need an active tour to access the chat.");
+      showBanner('warning', 'No active tour yet. Join a tour to open group chat.');
       return;
     }
     if (Platform.OS === 'ios') {
@@ -467,7 +464,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
   const handleOpenDriverChat = () => {
     if (!activeTourId) {
-      Alert.alert("No Tour", "You need an active tour to access the driver chat.");
+      showBanner('warning', 'No active tour yet. Join a tour to open driver chat.');
       return;
     }
     if (Platform.OS === 'ios') {
@@ -484,7 +481,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   // --- Join Tour Logic ---
   const handleJoinTour = async () => {
     if (!inputTourCode.trim()) {
-      Alert.alert("Required", "Please enter a valid Tour Code (e.g., 5112D 8)");
+      showBanner('warning', 'Enter a tour code first (example: 5112D 8).');
       return;
     }
 
@@ -526,7 +523,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
 
-      Alert.alert("Success", `You are now assigned to tour: ${inputTourCode}`);
+      showBanner('success', `Tour assigned: ${inputTourCode}.`);
       setJoinModalVisible(false);
       setInputTourCode('');
 
@@ -534,7 +531,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       if (Platform.OS === 'ios') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
-      Alert.alert("Error", "Could not join tour. Check the code and try again.\n" + error.message);
+      showBanner('error', `Couldn\'t join tour now. Retry. ${error.message}`);
     } finally {
       setJoining(false);
     }
@@ -559,6 +556,16 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     if (diffHours < 24) return `${diffHours} hours ago`;
     return 'Over a day ago';
   };
+
+
+  const showBanner = useCallback((type, message, options = {}) => {
+    setStatusBanner({
+      type,
+      message,
+      actionLabel: options.actionLabel,
+      onAction: options.onAction,
+    });
+  }, []);
 
   const accuracyConfig = getAccuracyConfig(locationAccuracy);
 
@@ -593,6 +600,31 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
               <MaterialCommunityIcons name="logout" size={22} color={COLORS.primary} />
             </TouchableOpacity>
           </View>
+
+
+
+          {!!statusBanner?.message && (
+            <View
+              style={[
+                styles.inlineBanner,
+                statusBanner.type === 'success' && styles.inlineBannerSuccess,
+                statusBanner.type === 'warning' && styles.inlineBannerWarning,
+                statusBanner.type === 'error' && styles.inlineBannerError,
+              ]}
+            >
+              <Text style={styles.inlineBannerText}>{statusBanner.message}</Text>
+              <View style={styles.inlineBannerActions}>
+                {!!statusBanner?.actionLabel && (
+                  <TouchableOpacity onPress={statusBanner.onAction}>
+                    <Text style={styles.inlineBannerActionText}>{statusBanner.actionLabel}</Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity onPress={() => setStatusBanner(null)}>
+                  <MaterialCommunityIcons name="close" size={18} color={COLORS.text} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
 
           <ScrollView contentContainerStyle={styles.content}>
             {/* Tour Assignment Card */}
@@ -756,7 +788,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                 style={[styles.wideButton, styles.infoButton]}
                 onPress={() => {
                   if(!activeTourId) {
-                    Alert.alert("No Tour", "Please Join a Tour first.");
+                    showBanner('warning', 'No active tour yet. Join a tour to open manifest.');
                     return;
                   }
                   if (Platform.OS === 'ios') {
@@ -800,7 +832,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                 style={[styles.wideButton, styles.amberButton]}
                 onPress={() => {
                   if(!activeTourId) {
-                    Alert.alert("No Tour", "Please join a tour first.");
+                    showBanner('warning', 'No active tour yet. Join a tour to open driver itinerary.');
                     return;
                   }
                   if (Platform.OS === 'ios') {
@@ -1335,6 +1367,34 @@ const styles = StyleSheet.create({
   wideSubtitle: { fontSize: 13, color: COLORS.muted },
 
   // Preview Modal
+
+  inlineBanner: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#EFF6FF',
+  },
+  inlineBannerSuccess: { backgroundColor: '#ECFDF5', borderColor: '#6EE7B7' },
+  inlineBannerWarning: { backgroundColor: '#FFFBEB', borderColor: '#FCD34D' },
+  inlineBannerError: { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' },
+  inlineBannerText: {
+    flex: 1,
+    color: COLORS.text,
+    fontSize: 13,
+    fontWeight: '600',
+    marginRight: 10,
+  },
+  inlineBannerActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  inlineBannerActionText: { color: COLORS.primary, fontWeight: '700', fontSize: 13 },
+
   previewModalContainer: {
     flex: 1,
     backgroundColor: COLORS.bg,

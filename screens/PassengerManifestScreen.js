@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   StyleSheet, Text, View, SectionList, FlatList, TextInput,
-  TouchableOpacity, ActivityIndicator, Modal, Alert
+  TouchableOpacity, ActivityIndicator, Modal
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -60,14 +60,14 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const [actionLoading, setActionLoading] = useState(false);
   const [queueStats, setQueueStats] = useState({ pending: 0, syncing: 0, failed: 0, total: 0 });
   const [bookingSyncState, setBookingSyncState] = useState({});
-  const [conflictNote, setConflictNote] = useState('');
+  const [statusBanner, setStatusBanner] = useState(null);
 
   const loadManifest = async () => {
     try {
       const data = await getTourManifest(tourId);
       setManifestData(data);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load manifest: ' + error.message);
+      setStatusBanner({ type: 'error', message: `Couldn\'t load manifest now. Retry. ${error.message}` });
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -245,7 +245,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
       const result = await updateManifestBooking(tourId, selectedBooking.id, statusesToPersist, { online: true });
       if (result?.conflictMessage) {
-        setConflictNote(result.conflictMessage);
+        setStatusBanner({ type: 'warning', message: result.conflictMessage });
       }
       if (result?.queued) {
         setBookingSyncState((prev) => ({ ...prev, [selectedBooking.id]: normalizeSyncState('queued') }));
@@ -257,7 +257,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
       setPartialMode(false);
       await loadManifest();
     } catch (error) {
-      Alert.alert('Error', 'Failed to update manifest: ' + error.message);
+      setStatusBanner({ type: 'error', message: `Couldn\'t save update now. Retry. ${error.message}` });
     } finally {
       setActionLoading(false);
     }
@@ -281,10 +281,51 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
 
   const handleSyncNow = async () => {
+    const beforeStats = queueStats || { pending: 0, failed: 0, syncing: 0, total: 0 };
     const replay = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+    const statsResult = await offlineSyncService.getQueueStats();
+    const afterStats = statsResult?.success && statsResult.data
+      ? statsResult.data
+      : beforeStats;
+    setQueueStats(afterStats);
+
     if (!replay.success) {
-      Alert.alert('Sync issue', replay.error || 'Could not sync now.');
+      setStatusBanner({
+        type: 'error',
+        message: `Couldn\'t sync now. Retry. ${afterStats.failed || 0} failed, ${afterStats.pending || 0} pending.`,
+        actionLabel: 'Retry failed actions',
+        onAction: handleRetryFailed,
+      });
+      await loadManifest();
+      return;
     }
+
+    const { processed = 0, skipped = false } = replay.data || {};
+    if (skipped) {
+      setStatusBanner({
+        type: 'warning',
+        message: 'Sync already running. Retry failed actions if needed.',
+        actionLabel: 'Retry failed actions',
+        onAction: handleRetryFailed,
+      });
+    } else if ((afterStats.failed || 0) > 0) {
+      setStatusBanner({
+        type: 'error',
+        message: `Couldn\'t finish sync. Retry failed actions. ${processed} synced, ${afterStats.failed} failed, ${afterStats.pending} pending.`,
+        actionLabel: 'Retry failed actions',
+        onAction: handleRetryFailed,
+      });
+    } else if ((afterStats.pending || 0) > 0) {
+      setStatusBanner({
+        type: 'warning',
+        message: `Synced some actions. ${afterStats.pending} still pending.`,
+        actionLabel: 'Retry failed actions',
+        onAction: handleRetryFailed,
+      });
+    } else {
+      setStatusBanner({ type: 'success', message: processed > 0 ? `Sync complete. ${processed} action${processed === 1 ? '' : 's'} synced.` : 'Manifest is up to date.' });
+    }
+
     await loadManifest();
   };
 
@@ -421,6 +462,29 @@ export default function PassengerManifestScreen({ route, navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       {renderHeader()}
+
+      {!!statusBanner?.message && (
+        <View
+          style={[
+            styles.inlineBanner,
+            statusBanner.type === 'success' && styles.inlineBannerSuccess,
+            statusBanner.type === 'warning' && styles.inlineBannerWarning,
+            statusBanner.type === 'error' && styles.inlineBannerError,
+          ]}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={styles.inlineBannerText}>{statusBanner.message}</Text>
+            {!!statusBanner?.actionLabel && (
+              <TouchableOpacity onPress={statusBanner.onAction}>
+                <Text style={styles.inlineBannerActionText}>{statusBanner.actionLabel}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          <TouchableOpacity onPress={() => setStatusBanner(null)}>
+            <MaterialCommunityIcons name="close" size={18} color={COLORS.panel} />
+          </TouchableOpacity>
+        </View>
+      )}
 
       {loading && !refreshing ? (
         <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 20 }} />
@@ -591,6 +655,27 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
+
+  inlineBanner: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 2,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#EFF6FF',
+  },
+  inlineBannerSuccess: { backgroundColor: '#ECFDF5', borderColor: '#6EE7B7' },
+  inlineBannerWarning: { backgroundColor: '#FFFBEB', borderColor: '#FCD34D' },
+  inlineBannerError: { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' },
+  inlineBannerText: { color: COLORS.panel, fontSize: 13, fontWeight: '600' },
+  inlineBannerActionText: { color: COLORS.info, fontSize: 13, fontWeight: '700', marginTop: 4 },
+
   header: {
     backgroundColor: COLORS.panel,
     padding: 16,
