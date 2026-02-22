@@ -10,7 +10,7 @@
     "ios": "expo start --ios",
     "ios:dev": "expo start --dev-client --ios",
     "web": "expo start --web",
-    "test": "NODE_ENV=test node --test tests/joinTour.test.js",
+    "test": "NODE_ENV=test node --test tests __tests__",
     "build:dev:ios": "eas build --profile development --platform ios",
     "build:dev:android": "eas build --profile development --platform android",
     "build:dev:ios-device": "eas build --profile development-device --platform ios",
