@@ -54,7 +54,18 @@ const messageTemplates = [
 ];
 
 // Recent Broadcast Item Component
+function normalizeBroadcastTimestamp(timestamp) {
+  if (typeof timestamp === 'number' && Number.isFinite(timestamp)) return timestamp;
+  if (typeof timestamp === 'string') {
+    const parsed = Date.parse(timestamp);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 function BroadcastHistoryItem({ broadcast }) {
+  const timestampMs = normalizeBroadcastTimestamp(broadcast.timestamp);
+
   return (
     <Paper p="sm" radius="md" withBorder>
       <Group justify="space-between" mb="xs">
@@ -65,10 +76,12 @@ function BroadcastHistoryItem({ broadcast }) {
           <Badge size="sm" variant="light">{broadcast.tourId}</Badge>
         </Group>
         <Text size="xs" c="dimmed">
-          {new Date(broadcast.timestamp).toLocaleTimeString('en-GB', {
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
+          {timestampMs
+            ? new Date(timestampMs).toLocaleTimeString('en-GB', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            : 'Unknown time'}
         </Text>
       </Group>
       <Text size="sm" lineClamp={2}>{broadcast.message}</Text>
@@ -140,12 +153,16 @@ export function BroadcastPanel() {
       const messagesRef = ref(db, `chats/${tourId}/messages`);
       const newMessageRef = push(messagesRef);
 
+      const timestamp = Date.now();
+
       await set(newMessageRef, {
         text: `ANNOUNCEMENT: ${message}`,
         senderName: 'Loch Lomond Travel HQ',
         senderId: 'admin_hq_broadcast',
         senderUid: auth.currentUser?.uid || null,
-        timestamp: new Date().toISOString(),
+        timestamp,
+        messageType: 'ADMIN_BROADCAST',
+        source: 'web_admin',
         isDriver: true,
       });
 
@@ -154,7 +171,7 @@ export function BroadcastPanel() {
         {
           tourId,
           message,
-          timestamp: new Date().toISOString(),
+          timestamp,
         },
         ...prev.slice(0, 9), // Keep last 10
       ]);

@@ -123,9 +123,21 @@ const TypingIndicator = ({ typingUsers }) => {
 };
 
 // ==================== DATE SEPARATOR COMPONENT ====================
+const normalizeTimestamp = (timestamp) => {
+  if (typeof timestamp === 'number' && Number.isFinite(timestamp)) return timestamp;
+  if (typeof timestamp === 'string') {
+    const parsed = Date.parse(timestamp);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
 const DateSeparator = ({ date }) => {
   const formatDateLabel = (dateStr) => {
-    const msgDate = new Date(dateStr);
+    const normalized = normalizeTimestamp(dateStr);
+    if (!normalized) return 'Unknown date';
+
+    const msgDate = new Date(normalized);
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
@@ -482,9 +494,8 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const messageOffsetsRef = useRef({});
 
   const getMessageTimestamp = useCallback((message) => {
-    if (!message?.timestamp) return null;
-    const parsed = new Date(message.timestamp).getTime();
-    return Number.isFinite(parsed) ? parsed : null;
+    if (!message) return null;
+    return normalizeTimestamp(message.timestamp);
   }, []);
 
   const markActiveChatRead = useCallback(async ({ force = false } = {}) => {
@@ -1118,8 +1129,9 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
   // Format time helper
   const formatTime = useCallback((timestamp) => {
-    if (!timestamp) return '';
-    const date = new Date(timestamp);
+    const normalized = normalizeTimestamp(timestamp);
+    if (!normalized) return '';
+    const date = new Date(normalized);
     return date.toLocaleTimeString([], {
       hour: '2-digit',
       minute: '2-digit',
@@ -1169,10 +1181,11 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     let unreadInjected = false;
 
     messages.forEach((msg) => {
-      const msgDate = new Date(msg.timestamp).toDateString();
+      const msgTimestamp = getMessageTimestamp(msg);
+      const msgDate = msgTimestamp ? new Date(msgTimestamp).toDateString() : 'Unknown date';
 
       if (msgDate !== currentDate) {
-        groups.push({ type: 'date', date: msg.timestamp });
+        groups.push({ type: 'date', date: msgTimestamp ?? msg.timestamp });
         currentDate = msgDate;
       }
 

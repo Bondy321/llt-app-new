@@ -6,6 +6,7 @@
  */
 
 const { onValueCreated, onValueUpdated } = require("firebase-functions/v2/database");
+const { onRequest } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const { Expo } = require("expo-server-sdk");
 
@@ -181,6 +182,79 @@ setInterval(() => {
     }
   }
 }, 300000); // Clean up every 5 minutes
+
+
+
+const parseTimestampToMillis = (timestamp) => {
+  if (typeof timestamp === 'number' && Number.isFinite(timestamp)) return timestamp;
+  if (typeof timestamp === 'string') {
+    const parsed = Date.parse(timestamp);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+/**
+ * One-time migration helper:
+ * Normalizes legacy broadcast timestamps (ISO strings) into numeric epoch milliseconds.
+ * Usage: deploy, invoke once, then delete/disable if no longer needed.
+ */
+exports.normalizeRecentBroadcastTimestamps = onRequest(
+  {
+    region: "europe-west1",
+    maxInstances: 1,
+  },
+  async (req, res) => {
+    const days = Number(req.query.days || req.body?.days || 14);
+    const dryRun = String(req.query.dryRun || req.body?.dryRun || 'true') === 'true';
+    const cutoffMs = Date.now() - Math.max(days, 1) * 24 * 60 * 60 * 1000;
+
+    try {
+      const snapshot = await admin.database().ref('chats').once('value');
+      const updates = {};
+      let scanned = 0;
+      let normalized = 0;
+
+      snapshot.forEach((tourSnap) => {
+        const tourId = tourSnap.key;
+        const messagesSnap = tourSnap.child('messages');
+        if (!messagesSnap.exists()) return;
+
+        messagesSnap.forEach((messageSnap) => {
+          scanned += 1;
+          const value = messageSnap.val() || {};
+
+          if (value?.messageType !== 'ADMIN_BROADCAST' && value?.source !== 'web_admin') {
+            return;
+          }
+
+          const parsed = parseTimestampToMillis(value.timestamp);
+          if (!parsed || parsed < cutoffMs) return;
+
+          if (typeof value.timestamp !== 'number') {
+            normalized += 1;
+            updates[`chats/${tourId}/messages/${messageSnap.key}/timestamp`] = parsed;
+          }
+        });
+      });
+
+      if (!dryRun && Object.keys(updates).length > 0) {
+        await admin.database().ref().update(updates);
+      }
+
+      return res.status(200).json({
+        success: true,
+        dryRun,
+        days,
+        scanned,
+        normalized,
+      });
+    } catch (error) {
+      log.error('Failed to normalize broadcast timestamps', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  }
+);
 
 /**
  * Trigger: When a new message is added to /chats/{tourId}/messages/{messageId}
