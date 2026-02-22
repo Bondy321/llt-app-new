@@ -44,6 +44,14 @@ const SESSION_KEYS = {
   LAST_SCREEN: '@LLT:lastScreen',
 };
 
+const OFFLINE_LOGIN_REASONS = {
+  NO_CACHED_SESSION: 'NO_CACHED_SESSION',
+  CODE_MISMATCH: 'CODE_MISMATCH',
+  CACHE_EXPIRED: 'CACHE_EXPIRED',
+};
+
+const OFFLINE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
+
 // --- SESSION STORAGE SETUP (AsyncStorage fallback to mock for tests/web) ---
 const createSessionStorage = () => {
   const mockStorage = {
@@ -239,8 +247,22 @@ export default function App() {
       if (!cachedTourId) {
         return {
           success: false,
+          reason: OFFLINE_LOGIN_REASONS.NO_CACHED_SESSION,
           error: 'No cached trip found for this code; reconnect once to verify.',
         };
+      }
+
+      const cachedPackMetaResult = await offlineSyncService.getTourPackMeta(cachedTourId, expectedRole);
+      const lastSyncedAt = cachedPackMetaResult?.success ? cachedPackMetaResult?.data?.lastSyncedAt : null;
+      if (lastSyncedAt) {
+        const lastSyncedTime = new Date(lastSyncedAt).getTime();
+        if (Number.isFinite(lastSyncedTime) && Date.now() - lastSyncedTime > OFFLINE_CACHE_TTL_MS) {
+          return {
+            success: false,
+            reason: OFFLINE_LOGIN_REASONS.CACHE_EXPIRED,
+            error: 'Offline cache expired; reconnect once to refresh your trip.',
+          };
+        }
       }
 
       const cachedPackResult = await offlineSyncService.getTourPack(cachedTourId, expectedRole);
@@ -262,6 +284,7 @@ export default function App() {
 
       return {
         success: false,
+        reason: OFFLINE_LOGIN_REASONS.CODE_MISMATCH,
         error: 'No cached trip found for this code; reconnect once to verify.',
       };
     } catch (error) {
@@ -271,6 +294,7 @@ export default function App() {
       });
       return {
         success: false,
+        reason: OFFLINE_LOGIN_REASONS.NO_CACHED_SESSION,
         error: 'No cached trip found for this code; reconnect once to verify.',
       };
     }

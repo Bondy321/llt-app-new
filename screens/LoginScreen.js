@@ -36,10 +36,17 @@ const COLORS = {
   subtleText: THEME_COLORS.textSecondary,
 };
 
+const OFFLINE_LOGIN_REASON_COPY = {
+  NO_CACHED_SESSION: 'This code is valid online but hasn’t been used on this device yet. Reconnect briefly once to verify, then offline mode will work next time.',
+  CODE_MISMATCH: 'This code is valid online but hasn’t been used on this device yet. Reconnect briefly once to verify, then offline mode will work next time.',
+  CACHE_EXPIRED: 'Your offline trip cache has expired. Reconnect briefly once to verify, then offline mode will work next time.',
+};
+
 export default function LoginScreen({ onLoginSuccess, logger, isConnected, resolveOfflineLogin }) {
   const [bookingReference, setBookingReference] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showOfflineHelp, setShowOfflineHelp] = useState(false);
   
   // Animations
   const [logoAnimation] = useState(new Animated.Value(0));
@@ -111,9 +118,10 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
 
       logger?.warn('Login', 'Offline login fallback rejected', {
         ref: bookingReference.trim().toUpperCase(),
-        reason: offlineCheck?.error,
+        reason: offlineCheck?.reason || offlineCheck?.error,
       });
-      setError(offlineCheck?.error || 'No cached trip found for this code; reconnect once to verify.');
+      const reason = offlineCheck?.reason;
+      setError(OFFLINE_LOGIN_REASON_COPY[reason] || offlineCheck?.error || 'No cached trip found for this code; reconnect once to verify.');
       return;
     }
 
@@ -292,6 +300,33 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                   If you're offline, we'll let you in when this code matches your cached trip. First-time codes still require one online check.
                 </Text>
               </View>
+
+              <TouchableOpacity
+                style={styles.offlineHelpLink}
+                onPress={() => setShowOfflineHelp((current) => !current)}
+                activeOpacity={0.8}
+              >
+                <MaterialCommunityIcons
+                  name={showOfflineHelp ? 'chevron-up' : 'chevron-down'}
+                  size={16}
+                  color={COLORS.primaryBlue}
+                />
+                <Text style={styles.offlineHelpLinkText}>Why can’t I log in offline?</Text>
+              </TouchableOpacity>
+
+              {showOfflineHelp ? (
+                <View style={styles.offlineHelpPanel}>
+                  <Text style={styles.offlineHelpText}>
+                    Offline login only works after this exact code has been verified online on this device.
+                  </Text>
+                  <Text style={styles.offlineHelpText}>
+                    This code is valid online but hasn’t been used on this device yet.
+                  </Text>
+                  <Text style={styles.offlineHelpText}>
+                    Reconnect briefly once to verify, then offline mode will work next time.
+                  </Text>
+                </View>
+              ) : null}
 
               <View style={styles.helpSection}>
                 <MaterialCommunityIcons 
@@ -474,6 +509,32 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
     color: COLORS.subtleText,
+  },
+  offlineHelpLink: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  offlineHelpLinkText: {
+    color: COLORS.primaryBlue,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  offlineHelpPanel: {
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: COLORS.inputBackground,
+  },
+  offlineHelpText: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: COLORS.subtleText,
+    marginBottom: 4,
   },
   helpSection: {
     flexDirection: 'row',
