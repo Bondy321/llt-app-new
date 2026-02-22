@@ -56,11 +56,32 @@ const messageTemplates = [
 // Recent Broadcast Item Component
 function normalizeBroadcastTimestamp(timestamp) {
   if (typeof timestamp === 'number' && Number.isFinite(timestamp)) return timestamp;
+
   if (typeof timestamp === 'string') {
+    const numericTimestamp = Number(timestamp);
+    if (Number.isFinite(numericTimestamp)) return numericTimestamp;
+
     const parsed = Date.parse(timestamp);
     return Number.isFinite(parsed) ? parsed : null;
   }
+
   return null;
+}
+
+function normalizeBroadcastMessage(tourId, messageId, payload = {}) {
+  const text = typeof payload.text === 'string' ? payload.text : '';
+  const normalizedTimestamp = normalizeBroadcastTimestamp(payload.timestamp);
+
+  return {
+    id: messageId,
+    tourId,
+    text,
+    message: text.replace(/^ANNOUNCEMENT:\s*/i, ''),
+    timestamp: normalizedTimestamp ?? payload.timestamp ?? null,
+    timestampMs: normalizedTimestamp,
+    messageType: payload.messageType || null,
+    source: payload.source || null,
+  };
 }
 
 function BroadcastHistoryItem({ broadcast }) {
@@ -106,6 +127,37 @@ export function BroadcastPanel() {
       setTours(snapshot.val() || {});
       setLoadingTours(false);
     });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const chatsRef = ref(db, 'chats');
+
+    const unsubscribe = onValue(chatsRef, (snapshot) => {
+      const chats = snapshot.val() || {};
+      const history = [];
+
+      Object.entries(chats).forEach(([currentTourId, chatPayload]) => {
+        const messageEntries = Object.entries(chatPayload?.messages || {});
+
+        messageEntries.forEach(([messageId, messagePayload]) => {
+          const isTaggedBroadcast =
+            messagePayload?.messageType === 'ADMIN_BROADCAST' ||
+            messagePayload?.source === 'web_admin';
+          const isLegacyBroadcast =
+            typeof messagePayload?.text === 'string' &&
+            messagePayload.text.toUpperCase().startsWith('ANNOUNCEMENT:');
+
+          if (!isTaggedBroadcast && !isLegacyBroadcast) return;
+
+          history.push(normalizeBroadcastMessage(currentTourId, messageId, messagePayload));
+        });
+      });
+
+      history.sort((a, b) => (b.timestampMs ?? 0) - (a.timestampMs ?? 0));
+      setBroadcastHistory(history.slice(0, 25));
+    });
+
     return () => unsubscribe();
   }, []);
 
@@ -165,16 +217,6 @@ export function BroadcastPanel() {
         source: 'web_admin',
         isDriver: true,
       });
-
-      // Add to local history
-      setBroadcastHistory(prev => [
-        {
-          tourId,
-          message,
-          timestamp,
-        },
-        ...prev.slice(0, 9), // Keep last 10
-      ]);
 
       notifications.show({
         title: 'Broadcast Sent!',
