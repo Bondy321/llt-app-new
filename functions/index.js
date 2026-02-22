@@ -561,3 +561,77 @@ exports.sendItineraryNotification = onValueUpdated(
     }
   }
 );
+
+
+/**
+ * Trigger: Verifies and audits admin broadcast delivery records.
+ * Runs when /admin_broadcasts/{broadcastId} changes.
+ */
+exports.verifyAdminBroadcastDelivery = onValueUpdated(
+  {
+    ref: "/admin_broadcasts/{broadcastId}",
+    region: "europe-west1",
+    instance: "loch-lomond-travel-default-rtdb",
+    maxInstances: 5,
+  },
+  async (event) => {
+    const broadcastId = event.params.broadcastId;
+
+    try {
+      if (!isValidFirebaseKey(broadcastId)) {
+        log.error("Invalid broadcastId path parameter", null, { broadcastId });
+        return null;
+      }
+
+      const afterData = event.data.after.val();
+      if (!afterData) {
+        return null;
+      }
+
+      const { status, tourId, chatMessageId, deliveryVerified } = afterData;
+
+      // Guard to avoid redundant verification loops.
+      if (deliveryVerified === true || status !== 'sent' || !tourId || !chatMessageId) {
+        return null;
+      }
+
+      const chatMessageSnapshot = await admin
+        .database()
+        .ref(`chats/${tourId}/messages/${chatMessageId}`)
+        .once('value');
+
+      if (chatMessageSnapshot.exists()) {
+        await admin.database().ref(`admin_broadcasts/${broadcastId}`).update({
+          deliveryVerified: true,
+          deliveryCheckedAt: new Date().toISOString(),
+          verifier: 'verifyAdminBroadcastDelivery',
+        });
+
+        log.info('Admin broadcast delivery verified', {
+          broadcastId,
+          tourId,
+          chatMessageId,
+        });
+      } else {
+        await admin.database().ref(`admin_broadcasts/${broadcastId}`).update({
+          status: 'failed',
+          deliveryVerified: false,
+          deliveryCheckedAt: new Date().toISOString(),
+          lastError: 'Chat message missing during delivery verification',
+          verifier: 'verifyAdminBroadcastDelivery',
+        });
+
+        log.warn('Admin broadcast verification failed', {
+          broadcastId,
+          tourId,
+          chatMessageId,
+        });
+      }
+
+      return null;
+    } catch (error) {
+      log.error('Fatal error in verifyAdminBroadcastDelivery', error, { broadcastId });
+      return null;
+    }
+  }
+);

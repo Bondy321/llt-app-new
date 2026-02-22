@@ -1,15 +1,16 @@
 {
   "rules": {
-"drivers": {
+    "drivers": {
       ".read": "auth != null",
       "$driverCode": {
         ".write": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || data.child('authUid').val() === auth.uid || newData.child('authUid').val() === auth.uid"
       }
     },
-
     "bookings": {
       ".read": "auth != null",
-      ".indexOn": ["tourCode"],
+      ".indexOn": [
+        "tourCode"
+      ],
       "$bookingId": {
         ".write": "auth != null"
       }
@@ -19,7 +20,9 @@
       ".write": "auth != null",
       "$tourId": {
         "assigned_drivers": {
-           ".indexOn": [".value"]
+          ".indexOn": [
+            ".value"
+          ]
         }
       }
     },
@@ -68,6 +71,10 @@
         ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
         ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')"
       }
+    },
+    "admin_broadcasts": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
     }
   }
 }

@@ -1,5 +1,14 @@
 import { useState, useEffect } from 'react';
-import { ref, push, set, onValue } from 'firebase/database';
+import {
+  ref,
+  push,
+  set,
+  onValue,
+  update,
+  query,
+  limitToLast,
+  orderByChild,
+} from 'firebase/database';
 import { db, auth } from '../firebase';
 import { notifications } from '@mantine/notifications';
 import {
@@ -19,28 +28,22 @@ import {
   Select,
   Divider,
   Alert,
-  Timeline,
   ScrollArea,
-  Avatar,
-  Center,
-  Loader,
-  Tabs,
-  ActionIcon,
-  Tooltip,
+  Drawer,
 } from '@mantine/core';
 import {
   IconSpeakerphone,
   IconSend,
   IconMap,
   IconUsers,
-  IconClock,
   IconCheck,
-  IconAlertCircle,
   IconMessage,
   IconBroadcast,
   IconHistory,
   IconInfoCircle,
   IconRefresh,
+  IconX,
+  IconChevronRight,
 } from '@tabler/icons-react';
 
 // Message Templates
@@ -54,7 +57,27 @@ const messageTemplates = [
 ];
 
 // Recent Broadcast Item Component
-function BroadcastHistoryItem({ broadcast }) {
+const MAX_HISTORY = 100;
+
+function statusColor(status) {
+  if (status === 'sent') return 'green';
+  if (status === 'failed') return 'red';
+  return 'yellow';
+}
+
+function formatDateTime(value) {
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return 'Unknown time';
+  return new Date(parsed).toLocaleString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+}
+
+function BroadcastHistoryItem({ broadcast, onViewDetails, onRetry }) {
   return (
     <Paper p="sm" radius="md" withBorder>
       <Group justify="space-between" mb="xs">
@@ -63,15 +86,25 @@ function BroadcastHistoryItem({ broadcast }) {
             <IconSpeakerphone size={12} />
           </ThemeIcon>
           <Badge size="sm" variant="light">{broadcast.tourId}</Badge>
+          <Badge size="sm" color={statusColor(broadcast.status)} variant="light">
+            {broadcast.status || 'queued'}
+          </Badge>
         </Group>
         <Text size="xs" c="dimmed">
-          {new Date(broadcast.timestamp).toLocaleTimeString('en-GB', {
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
+          {formatDateTime(broadcast.createdAt)}
         </Text>
       </Group>
-      <Text size="sm" lineClamp={2}>{broadcast.message}</Text>
+      <Text size="sm" lineClamp={2} mb="xs">{broadcast.message}</Text>
+      <Group justify="space-between">
+        <Button size="xs" variant="subtle" rightSection={<IconChevronRight size={14} />} onClick={() => onViewDetails(broadcast)}>
+          Details
+        </Button>
+        {broadcast.status === 'failed' && (
+          <Button size="xs" color="orange" leftSection={<IconRefresh size={14} />} onClick={() => onRetry(broadcast)}>
+            Retry
+          </Button>
+        )}
+      </Group>
     </Paper>
   );
 }
@@ -85,6 +118,10 @@ export function BroadcastPanel() {
   const [tours, setTours] = useState({});
   const [loadingTours, setLoadingTours] = useState(true);
   const [broadcastHistory, setBroadcastHistory] = useState([]);
+  const [selectedBroadcast, setSelectedBroadcast] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [tourFilter, setTourFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState('');
 
   // Fetch tours for the dropdown
   useEffect(() => {
@@ -93,6 +130,24 @@ export function BroadcastPanel() {
       setTours(snapshot.val() || {});
       setLoadingTours(false);
     });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const broadcastsQuery = query(
+      ref(db, 'admin_broadcasts'),
+      orderByChild('createdAt'),
+      limitToLast(MAX_HISTORY),
+    );
+
+    const unsubscribe = onValue(broadcastsQuery, (snapshot) => {
+      const data = snapshot.val() || {};
+      const records = Object.entries(data)
+        .map(([id, value]) => ({ id, ...value }))
+        .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+      setBroadcastHistory(records);
+    });
+
     return () => unsubscribe();
   }, []);
 
@@ -112,6 +167,49 @@ export function BroadcastPanel() {
   };
 
   // Handle send broadcast
+  const sendBroadcast = async ({ broadcastId, targetTourId, text }) => {
+    const nowIso = new Date().toISOString();
+
+    const broadcastRef = ref(db, `admin_broadcasts/${broadcastId}`);
+    await update(broadcastRef, {
+      status: 'queued',
+      updatedAt: nowIso,
+      lastError: null,
+    });
+
+    try {
+      const messagesRef = ref(db, `chats/${targetTourId}/messages`);
+      const newMessageRef = push(messagesRef);
+
+      await set(newMessageRef, {
+        text: `ANNOUNCEMENT: ${text}`,
+        senderName: 'Loch Lomond Travel HQ',
+        senderId: 'admin_hq_broadcast',
+        senderUid: auth.currentUser?.uid || null,
+        timestamp: nowIso,
+        isDriver: true,
+      });
+
+      await update(broadcastRef, {
+        status: 'sent',
+        chatMessageId: newMessageRef.key,
+        sentAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        lastError: null,
+      });
+
+      return { success: true };
+    } catch (error) {
+      await update(broadcastRef, {
+        status: 'failed',
+        lastError: error.message || 'Unknown send error',
+        updatedAt: new Date().toISOString(),
+      });
+
+      return { success: false, error };
+    }
+  };
+
   const handleSend = async (e) => {
     e.preventDefault();
 
@@ -136,28 +234,27 @@ export function BroadcastPanel() {
     setLoading(true);
 
     try {
-      // Create message in chat
-      const messagesRef = ref(db, `chats/${tourId}/messages`);
-      const newMessageRef = push(messagesRef);
-
-      await set(newMessageRef, {
-        text: `ANNOUNCEMENT: ${message}`,
-        senderName: 'Loch Lomond Travel HQ',
-        senderId: 'admin_hq_broadcast',
-        senderUid: auth.currentUser?.uid || null,
-        timestamp: new Date().toISOString(),
-        isDriver: true,
+      const createdAt = new Date().toISOString();
+      const broadcastRef = push(ref(db, 'admin_broadcasts'));
+      await set(broadcastRef, {
+        tourId,
+        message,
+        createdAt,
+        createdBy: auth.currentUser?.email || auth.currentUser?.uid || 'unknown_admin',
+        chatMessageId: null,
+        status: 'queued',
+        updatedAt: createdAt,
       });
 
-      // Add to local history
-      setBroadcastHistory(prev => [
-        {
-          tourId,
-          message,
-          timestamp: new Date().toISOString(),
-        },
-        ...prev.slice(0, 9), // Keep last 10
-      ]);
+      const sendResult = await sendBroadcast({
+        broadcastId: broadcastRef.key,
+        targetTourId: tourId,
+        text: message,
+      });
+
+      if (!sendResult.success) {
+        throw sendResult.error;
+      }
 
       notifications.show({
         title: 'Broadcast Sent!',
@@ -179,6 +276,52 @@ export function BroadcastPanel() {
       setLoading(false);
     }
   };
+
+  const handleRetry = async (broadcast) => {
+    setLoading(true);
+    const retryCount = (broadcast.retryCount || 0) + 1;
+
+    await update(ref(db, `admin_broadcasts/${broadcast.id}`), {
+      retryCount,
+      updatedAt: new Date().toISOString(),
+    });
+
+    const sendResult = await sendBroadcast({
+      broadcastId: broadcast.id,
+      targetTourId: broadcast.tourId,
+      text: broadcast.message,
+    });
+
+    if (sendResult.success) {
+      notifications.show({
+        title: 'Retry Succeeded',
+        message: `Broadcast ${broadcast.id} sent successfully.`,
+        color: 'green',
+      });
+    } else {
+      notifications.show({
+        title: 'Retry Failed',
+        message: sendResult.error?.message || 'Unknown retry error',
+        color: 'red',
+      });
+    }
+
+    setLoading(false);
+  };
+
+  const filteredHistory = broadcastHistory.filter((broadcast) => {
+    const matchesStatus = statusFilter === 'all' || broadcast.status === statusFilter;
+    const matchesTour = tourFilter === 'all' || broadcast.tourId === tourFilter;
+
+    let matchesDate = true;
+    if (dateFilter) {
+      const parsed = Date.parse(broadcast.createdAt || '');
+      matchesDate = !Number.isNaN(parsed)
+        && new Date(parsed).toISOString().slice(0, 10) === dateFilter;
+    }
+
+    return matchesStatus && matchesTour && matchesDate;
+  });
 
   // Stats
   const totalTours = Object.keys(tours).length;
@@ -347,14 +490,45 @@ export function BroadcastPanel() {
                 </ThemeIcon>
                 <Text fw={600}>Recent Broadcasts</Text>
               </Group>
-              <Badge variant="light" color="gray">{broadcastHistory.length}</Badge>
+              <Badge variant="light" color="gray">{filteredHistory.length}</Badge>
             </Group>
 
-            {broadcastHistory.length > 0 ? (
+            <Stack gap="xs" mb="md">
+              <Select
+                label="Status filter"
+                data={[
+                  { value: 'all', label: 'All' },
+                  { value: 'queued', label: 'Queued' },
+                  { value: 'sent', label: 'Sent' },
+                  { value: 'failed', label: 'Failed' },
+                ]}
+                value={statusFilter}
+                onChange={(value) => setStatusFilter(value || 'all')}
+              />
+              <Select
+                label="Tour filter"
+                data={[{ value: 'all', label: 'All tours' }, ...tourOptions]}
+                value={tourFilter}
+                onChange={(value) => setTourFilter(value || 'all')}
+              />
+              <TextInput
+                label="Date filter"
+                type="date"
+                value={dateFilter}
+                onChange={(event) => setDateFilter(event.currentTarget.value)}
+              />
+            </Stack>
+
+            {filteredHistory.length > 0 ? (
               <ScrollArea h={250}>
                 <Stack gap="xs">
-                  {broadcastHistory.map((broadcast, index) => (
-                    <BroadcastHistoryItem key={index} broadcast={broadcast} />
+                  {filteredHistory.map((broadcast) => (
+                    <BroadcastHistoryItem
+                      key={broadcast.id}
+                      broadcast={broadcast}
+                      onViewDetails={setSelectedBroadcast}
+                      onRetry={handleRetry}
+                    />
                   ))}
                 </Stack>
               </ScrollArea>
@@ -369,6 +543,32 @@ export function BroadcastPanel() {
           </Card>
         </Stack>
       </SimpleGrid>
+
+      <Drawer
+        opened={Boolean(selectedBroadcast)}
+        onClose={() => setSelectedBroadcast(null)}
+        title="Broadcast details"
+        position="right"
+      >
+        {selectedBroadcast && (
+          <Stack gap="xs">
+            <Text><strong>ID:</strong> {selectedBroadcast.id}</Text>
+            <Text><strong>Tour:</strong> {selectedBroadcast.tourId}</Text>
+            <Text><strong>Status:</strong> {selectedBroadcast.status || 'queued'}</Text>
+            <Text><strong>Created:</strong> {formatDateTime(selectedBroadcast.createdAt)}</Text>
+            <Text><strong>Created by:</strong> {selectedBroadcast.createdBy || 'Unknown'}</Text>
+            <Text><strong>Chat message ID:</strong> {selectedBroadcast.chatMessageId || 'Not yet linked'}</Text>
+            {selectedBroadcast.lastError && (
+              <Alert color="red" icon={<IconX size={16} />}>Last error: {selectedBroadcast.lastError}</Alert>
+            )}
+            <Divider />
+            <Text size="sm" fw={600}>Message</Text>
+            <Paper withBorder p="sm" radius="md">
+              <Text size="sm">{selectedBroadcast.message}</Text>
+            </Paper>
+          </Stack>
+        )}
+      </Drawer>
     </Box>
   );
 }
