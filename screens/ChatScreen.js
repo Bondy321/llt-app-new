@@ -154,6 +154,16 @@ const DateSeparator = ({ date }) => {
   );
 };
 
+const UnreadSeparator = () => (
+  <View style={styles.unreadSeparator}>
+    <View style={styles.unreadSeparatorLine} />
+    <View style={styles.unreadSeparatorBadge}>
+      <Text style={styles.unreadSeparatorText}>Unread messages</Text>
+    </View>
+    <View style={styles.unreadSeparatorLine} />
+  </View>
+);
+
 // ==================== MESSAGE REACTIONS COMPONENT ====================
 const MessageReactions = ({ reactions, onReactionPress, messageId }) => {
   if (!reactions || Object.keys(reactions).length === 0) return null;
@@ -437,6 +447,9 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [lastSeenTimestamp, setLastSeenTimestamp] = useState(null);
+  const [currentScrollY, setCurrentScrollY] = useState(0);
+  const [unreadAnchorY, setUnreadAnchorY] = useState(null);
 
   // Modal state
   const [selectedMessage, setSelectedMessage] = useState(null);
@@ -448,10 +461,16 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const isDriver = bookingData?.isDriver === true;
   const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
   const draftStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_DRAFTS' }), []);
+  const readStateStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_READ_STATE' }), []);
   const draftStorageKey = useMemo(() => {
     if (!tourId) return null;
     const chatType = internalDriverChat ? 'internal' : 'group';
     return `draft_${chatType}_${tourId}_${currentUser?.uid || 'anonymous'}`;
+  }, [tourId, internalDriverChat, currentUser?.uid]);
+  const readStateStorageKey = useMemo(() => {
+    if (!tourId) return null;
+    const chatType = internalDriverChat ? 'internal' : 'group';
+    return `last_seen_${chatType}_${tourId}_${currentUser?.uid || 'anonymous'}`;
   }, [tourId, internalDriverChat, currentUser?.uid]);
 
   // Refs
@@ -460,17 +479,40 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const syncBannerTimeoutRef = useRef(null);
   const lastMessageCountRef = useRef(0);
   const lastReadMarkAtRef = useRef(0);
+  const messageOffsetsRef = useRef({});
 
-  const markActiveChatRead = useCallback(() => {
+  const getMessageTimestamp = useCallback((message) => {
+    if (!message?.timestamp) return null;
+    const parsed = new Date(message.timestamp).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
+  }, []);
+
+  const markActiveChatRead = useCallback(async ({ force = false } = {}) => {
     if (!tourId || !currentUser?.uid) return;
 
     const now = Date.now();
-    if (now - lastReadMarkAtRef.current < 3000) return;
+    if (!force && now - lastReadMarkAtRef.current < 3000) return;
     lastReadMarkAtRef.current = now;
 
     const markReadFn = internalDriverChat ? markInternalChatAsRead : markChatAsRead;
-    markReadFn(tourId, currentUser.uid);
-  }, [tourId, currentUser?.uid, internalDriverChat]);
+    const latestMessage = messages[messages.length - 1];
+    const latestTimestamp = getMessageTimestamp(latestMessage);
+    const result = await markReadFn(tourId, currentUser.uid);
+
+    if (result?.success && latestTimestamp && readStateStorageKey) {
+      setLastSeenTimestamp(latestTimestamp);
+      setUnreadAnchorY(null);
+      await readStateStorage.setItemAsync(readStateStorageKey, String(latestTimestamp));
+    }
+  }, [
+    tourId,
+    currentUser?.uid,
+    internalDriverChat,
+    messages,
+    getMessageTimestamp,
+    readStateStorage,
+    readStateStorageKey,
+  ]);
 
   // Scroll to bottom helper
   const scrollToBottom = useCallback((animated = true) => {
@@ -482,13 +524,41 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Handle scroll position tracking
   const handleScroll = useCallback((event) => {
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    setCurrentScrollY(contentOffset.y);
     const isBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - 50;
     setIsAtBottom(isBottom);
     if (isBottom) {
       setNewMessagesCount(0);
-      markActiveChatRead();
+      markActiveChatRead({ force: true });
     }
   }, [markActiveChatRead]);
+
+
+  useEffect(() => {
+    let active = true;
+
+    if (!readStateStorageKey) {
+      setLastSeenTimestamp(null);
+      return;
+    }
+
+    const restoreReadState = async () => {
+      try {
+        const storedTimestamp = await readStateStorage.getItemAsync(readStateStorageKey);
+        if (!active) return;
+        const parsed = Number(storedTimestamp);
+        setLastSeenTimestamp(Number.isFinite(parsed) && parsed > 0 ? parsed : null);
+      } catch (error) {
+        if (active) setLastSeenTimestamp(null);
+      }
+    };
+
+    restoreReadState();
+
+    return () => {
+      active = false;
+    };
+  }, [readStateStorage, readStateStorageKey]);
 
   // Subscribe to messages
   useEffect(() => {
@@ -1081,10 +1151,22 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     return parts.length > 0 ? parts : [{ type: 'text', content: text }];
   }, []);
 
+  const unreadAnchorMessageId = useMemo(() => {
+    if (!lastSeenTimestamp) return null;
+
+    const unreadMessage = messages.find((message) => {
+      const timestamp = getMessageTimestamp(message);
+      return timestamp && timestamp > lastSeenTimestamp;
+    });
+
+    return unreadMessage?.id || null;
+  }, [messages, lastSeenTimestamp, getMessageTimestamp]);
+
   // Group messages by date
   const groupedMessages = useMemo(() => {
     const groups = [];
     let currentDate = null;
+    let unreadInjected = false;
 
     messages.forEach((msg) => {
       const msgDate = new Date(msg.timestamp).toDateString();
@@ -1094,11 +1176,26 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         currentDate = msgDate;
       }
 
+      if (!unreadInjected && unreadAnchorMessageId && msg.id === unreadAnchorMessageId) {
+        groups.push({ type: 'unread-separator', id: `unread-${msg.id}` });
+        unreadInjected = true;
+      }
+
       groups.push({ type: 'message', data: msg });
     });
 
     return groups;
-  }, [messages]);
+  }, [messages, unreadAnchorMessageId]);
+
+  const showJumpToUnread = useMemo(() => {
+    if (!unreadAnchorMessageId || unreadAnchorY == null) return false;
+    return Math.abs(currentScrollY - unreadAnchorY) > 180;
+  }, [unreadAnchorMessageId, unreadAnchorY, currentScrollY]);
+
+  const jumpToUnread = useCallback(() => {
+    if (unreadAnchorY == null) return;
+    scrollViewRef.current?.scrollTo({ y: Math.max(unreadAnchorY - 80, 0), animated: true });
+  }, [unreadAnchorY]);
 
   // Render a single message
   const renderMessage = useCallback(
@@ -1351,13 +1448,32 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
                 </View>
               ) : (
                 <>
-                  {groupedMessages.map((item, index) =>
-                    item.type === 'date' ? (
-                      <DateSeparator key={`date-${index}`} date={item.date} />
-                    ) : (
-                      renderMessage(item.data)
-                    )
-                  )}
+                  {groupedMessages.map((item, index) => {
+                    if (item.type === 'date') {
+                      return <DateSeparator key={`date-${index}`} date={item.date} />;
+                    }
+
+                    if (item.type === 'unread-separator') {
+                      return <UnreadSeparator key={item.id} />;
+                    }
+
+                    const messageId = item.data?.id;
+                    return (
+                      <View
+                        key={messageId || `message-${index}`}
+                        onLayout={(event) => {
+                          if (!messageId) return;
+                          const y = event.nativeEvent.layout.y;
+                          messageOffsetsRef.current[messageId] = y;
+                          if (messageId === unreadAnchorMessageId) {
+                            setUnreadAnchorY(y);
+                          }
+                        }}
+                      >
+                        {renderMessage(item.data)}
+                      </View>
+                    );
+                  })}
                 </>
               )}
             </ScrollView>
@@ -1373,6 +1489,13 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
                 setNewMessagesCount(0);
               }}
             />
+
+            {showJumpToUnread && (
+              <TouchableOpacity style={styles.jumpToUnreadFab} onPress={jumpToUnread} activeOpacity={0.85}>
+                <MaterialCommunityIcons name="message-badge" size={20} color={COLORS.white} />
+                <Text style={styles.jumpToUnreadFabText}>Jump to unread</Text>
+              </TouchableOpacity>
+            )}
 
             {/* Attachment Menu */}
             <AttachmentMenu
@@ -1876,6 +1999,35 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
+  // Unread Separator
+
+  unreadSeparator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+  },
+  unreadSeparatorLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: COLORS.coralAccent,
+    opacity: 0.5,
+  },
+  unreadSeparatorBadge: {
+    backgroundColor: '#FFF7ED',
+    borderWidth: 1,
+    borderColor: '#FDBA74',
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 4,
+    borderRadius: RADIUS.full,
+    marginHorizontal: SPACING.sm,
+  },
+  unreadSeparatorText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#9A3412',
+  },
+
   // Typing Indicator
   typingContainer: {
     paddingHorizontal: 16,
@@ -1926,6 +2078,26 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontSize: 14,
     fontWeight: '600',
+  },
+
+
+  jumpToUnreadFab: {
+    position: 'absolute',
+    bottom: 132,
+    right: SPACING.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    backgroundColor: COLORS.primaryBlue,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    ...SHADOWS.md,
+  },
+  jumpToUnreadFabText: {
+    color: COLORS.white,
+    fontSize: 13,
+    fontWeight: '700',
   },
 
   // Input Area
