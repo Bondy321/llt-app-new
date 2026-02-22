@@ -10,7 +10,6 @@ import {
   Animated,
   Linking,
   Alert,
-  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -69,7 +68,6 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   const [errorMsg, setErrorMsg] = useState(null);
   const [mapType, setMapType] = useState('standard');
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [showDetailCard, setShowDetailCard] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
 
   const mapRef = useRef(null);
@@ -261,10 +259,8 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   };
 
   const driverHasLocation = Boolean(driverLocation);
-  const formattedDriverTime = driverLocation ? formatTime(driverLocation.timestamp) : '';
   const relativeUpdateTime = driverLocation ? formatRelativeTime(driverLocation.timestamp) : '';
   const locationFreshness = driverLocation ? getLocationFreshness(driverLocation.timestamp) : 'unknown';
-  const isStale = locationFreshness === 'stale' || locationFreshness === 'old';
   const distanceKm = driverLocation && userLocation
     ? calculateDistanceKm(driverLocation, userLocation)
     : null;
@@ -389,7 +385,6 @@ export default function MapScreen({ onBack, tourId, tourData }) {
     }
 
     const { latitude, longitude } = driverLocation;
-    const label = 'Bus Pickup Point';
     const url = Platform.select({
       ios: `maps://app?daddr=${latitude},${longitude}&dirflg=d`,
       android: `google.navigation:q=${latitude},${longitude}`,
