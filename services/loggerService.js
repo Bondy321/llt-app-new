@@ -15,12 +15,78 @@ const LOG_LEVELS = {
 };
 
 const LOG_COLORS = {
-  DEBUG: '\x1b[36m', // Cyan
-  INFO: '\x1b[32m',  // Green
-  WARN: '\x1b[33m',  // Yellow
-  ERROR: '\x1b[31m', // Red
-  FATAL: '\x1b[35m', // Magenta
+  DEBUG: '\x1b[36m',
+  INFO: '\x1b[32m',
+  WARN: '\x1b[33m',
+  ERROR: '\x1b[31m',
+  FATAL: '\x1b[35m',
   RESET: '\x1b[0m'
+};
+
+const SENSITIVE_KEYS = new Set([
+  'bookingref',
+  'reference',
+  'drivercode',
+  'authuid',
+  'token',
+  'pushtoken',
+  'uid',
+  'userid',
+  'sessionid',
+  'authorization',
+  'password',
+]);
+
+const hasSensitiveKeyFragment = (key = '') => {
+  const normalizedKey = String(key || '').toLowerCase();
+  if (SENSITIVE_KEYS.has(normalizedKey)) return true;
+  return ['token', 'secret', 'session', 'auth', 'booking', 'reference', 'drivercode'].some((fragment) => normalizedKey.includes(fragment));
+};
+
+export const maskIdentifier = (value) => {
+  if (value === null || value === undefined) return value;
+  const asString = String(value).trim();
+  if (!asString) return asString;
+  if (asString.length <= 4) return `${asString[0] || ''}***`;
+  return `${asString.slice(0, 2)}***${asString.slice(-2)}`;
+};
+
+const redactValueForKey = (key, value) => {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return maskIdentifier(value);
+  }
+  return '[REDACTED]';
+};
+
+export const redactSensitiveData = (input, contextKey = '', seen = new WeakSet()) => {
+  if (input === null || input === undefined) return input;
+
+  if (typeof input !== 'object') {
+    if (hasSensitiveKeyFragment(contextKey)) {
+      return redactValueForKey(contextKey, input);
+    }
+    return input;
+  }
+
+  if (seen.has(input)) return '[Circular]';
+  seen.add(input);
+
+  if (Array.isArray(input)) {
+    return input.map((item) => redactSensitiveData(item, contextKey, seen));
+  }
+
+  const output = {};
+  Object.entries(input).forEach(([key, value]) => {
+    if (hasSensitiveKeyFragment(key)) {
+      output[key] = redactValueForKey(key, value);
+      return;
+    }
+
+    output[key] = redactSensitiveData(value, key, seen);
+  });
+
+  return output;
 };
 
 class Logger {
@@ -61,7 +127,9 @@ class Logger {
         model: Platform.constants?.Model || 'Unknown',
       };
     } catch (error) {
-      console.error('Failed to initialize logger:', error);
+      if (!this.isProduction) {
+        console.error('Failed to initialize logger:', redactSensitiveData({ error: error?.message || 'Unknown error' }));
+      }
     }
   }
 
@@ -74,37 +142,38 @@ class Logger {
     const timestamp = new Date().toISOString();
     const color = LOG_COLORS[level];
     const reset = LOG_COLORS.RESET;
-    
+    const sanitizedData = redactSensitiveData(data || {});
+
     const consoleMessage = `${color}[${timestamp}] [${level}] [${component}]${reset} ${message}`;
-    
+
     const logEntry = {
       timestamp,
       level,
       component,
       message,
-      data,
-      userId: this.userId,
-      sessionId: this.sessionId,
+      data: sanitizedData,
+      userId: maskIdentifier(this.userId),
+      sessionId: maskIdentifier(this.sessionId),
       deviceInfo: this.deviceInfo
     };
-    
-    return { consoleMessage, logEntry };
+
+    return { consoleMessage, logEntry, sanitizedData };
   }
 
   async log(level, component, message, data = {}) {
-    const { consoleMessage, logEntry } = this.formatMessage(level, component, message, data);
-    
+    const { consoleMessage, logEntry, sanitizedData } = this.formatMessage(level, component, message, data);
+
     if (!this.isProduction) {
       console.log(consoleMessage);
-      if (data && Object.keys(data).length > 0) {
-        console.log('Data:', data);
+      if (sanitizedData && Object.keys(sanitizedData).length > 0) {
+        console.log('Data:', sanitizedData);
       }
     }
-    
+
     this.logQueue.push(logEntry);
-    
+
     await this.saveLogsLocally();
-    
+
     if (LOG_LEVELS[level] >= LOG_LEVELS.ERROR) {
       await this.sendLogsToServer([logEntry]);
     }
@@ -117,34 +186,38 @@ class Logger {
       }
       await logStorage.setItemAsync('app_logs', JSON.stringify(this.logQueue));
     } catch (error) {
-      console.error(`Failed to save logs locally via ${this.storageMode}:`, error);
+      if (!this.isProduction) {
+        console.error(`Failed to save logs locally via ${this.storageMode}:`, redactSensitiveData({ error: error?.message || 'Unknown error' }));
+      }
     }
   }
 
   async sendLogsToServer(logs = null) {
     try {
-      const logsToSend = logs || this.logQueue.filter(log => 
+      const logsToSend = logs || this.logQueue.filter(log =>
         LOG_LEVELS[log.level] >= LOG_LEVELS.WARN
       );
-      
+
       if (logsToSend.length === 0) return;
-      
+
       const batch = {};
       logsToSend.forEach(log => {
         const key = `logs/${log.userId || 'anonymous'}/${log.sessionId}/${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        batch[key] = log;
+        batch[key] = redactSensitiveData(log);
       });
-      
+
       await realtimeDb.ref().update(batch);
-      
+
       if (!logs) {
-        this.logQueue = this.logQueue.filter(log => 
+        this.logQueue = this.logQueue.filter(log =>
           LOG_LEVELS[log.level] < LOG_LEVELS.WARN
         );
         await this.saveLogsLocally();
       }
     } catch (error) {
-      console.error('Failed to send logs to server:', error);
+      if (!this.isProduction) {
+        console.error('Failed to send logs to server:', redactSensitiveData({ error: error?.message || 'Unknown error' }));
+      }
     }
   }
 
@@ -190,11 +263,11 @@ class Logger {
   async exportLogs() {
     const logs = await this.getStoredLogs();
     return {
-      sessionId: this.sessionId,
-      userId: this.userId,
+      sessionId: maskIdentifier(this.sessionId),
+      userId: maskIdentifier(this.userId),
       deviceInfo: this.deviceInfo,
       logCount: logs.length,
-      logs: logs
+      logs
     };
   }
 }
