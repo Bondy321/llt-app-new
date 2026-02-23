@@ -44,6 +44,7 @@
 
 import { ref, push, set, update, remove, get, onValue } from 'firebase/database';
 import { db } from '../firebase';
+import { validateTourCsvRows } from './tourCsvService';
 
 // Default tour template matching the existing Firebase structure
 export const DEFAULT_TOUR = {
@@ -483,73 +484,80 @@ export const exportToursToCSV = (tours) => {
   return csvContent;
 };
 
+const getExistingTourCodeIndex = (tours = {}) => {
+  const existingTourCodes = new Set();
+  const existingTourCodeToId = new Map();
+
+  Object.entries(tours || {}).forEach(([id, tour]) => {
+    const normalizedCode = (tour?.tourCode || '').trim().toUpperCase();
+    if (!normalizedCode) return;
+    existingTourCodes.add(normalizedCode);
+    existingTourCodeToId.set(normalizedCode, id);
+  });
+
+  return { existingTourCodes, existingTourCodeToId };
+};
+
 /**
  * Parse CSV content to tour objects
  * @param {string} csvContent - CSV string
  * @returns {Array<Object>} - Array of tour objects
  */
 export const parseCSVToTours = (csvContent) => {
-  const lines = csvContent.trim().split('\n');
-  if (lines.length < 2) return [];
+  const result = validateTourCsvRows(csvContent, { mode: 'upsert' });
+  return result.rows.filter((row) => row.isValid).map((row) => row.tour);
+};
 
-  const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase());
-  const tours = [];
+export const previewTourCSVImport = async (csvContent, { mode = 'upsert' } = {}) => {
+  const snapshot = await get(ref(db, 'tours'));
+  const tours = snapshot.exists() ? snapshot.val() : {};
+  const existingIndex = getExistingTourCodeIndex(tours);
 
-  for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].match(/("([^"]*)"|[^,]*)/g)?.map(v => v.replace(/^"|"$/g, '').replace(/""/g, '"')) || [];
+  return validateTourCsvRows(csvContent, {
+    mode,
+    ...existingIndex,
+  });
+};
 
-    const tour = { ...DEFAULT_TOUR };
-    headers.forEach((header, index) => {
-      const value = values[index] || '';
-      switch (header) {
-        case 'tour code':
-        case 'tourcode':
-          tour.tourCode = value;
-          break;
-        case 'name':
-          tour.name = value;
-          tour.itinerary = { title: value, days: [] };
-          break;
-        case 'days':
-          tour.days = parseInt(value) || 1;
-          break;
-        case 'start date':
-        case 'startdate':
-          tour.startDate = value;
-          break;
-        case 'end date':
-        case 'enddate':
-          tour.endDate = value;
-          break;
-        case 'active':
-        case 'isactive':
-          tour.isActive = value.toLowerCase() === 'yes' || value === 'true';
-          break;
-        case 'driver':
-        case 'drivername':
-          tour.driverName = value || 'TBA';
-          break;
-        case 'driver phone':
-        case 'driverphone':
-          tour.driverPhone = value;
-          break;
-        case 'max participants':
-        case 'maxparticipants':
-          tour.maxParticipants = parseInt(value) || 53;
-          break;
-        case 'current participants':
-        case 'currentparticipants':
-          tour.currentParticipants = parseInt(value) || 0;
-          break;
+export const executeTourCSVImport = async (previewRows, options = {}) => {
+  const {
+    mode = 'upsert',
+    importValidOnly = true,
+    createdBy = 'import',
+  } = options;
+
+  const rowsToImport = importValidOnly
+    ? previewRows.filter((row) => row.isValid)
+    : previewRows;
+
+  const created = [];
+  const updated = [];
+  const errors = [];
+
+  for (const row of rowsToImport) {
+    if (!row.isValid) {
+      errors.push({ rowNumber: row.rowNumber, error: row.errors.join(' ') });
+      continue;
+    }
+
+    try {
+      if (mode === 'create-only' || row.action === 'create') {
+        const createdTour = await createTour(row.tour, createdBy);
+        created.push(createdTour);
+        continue;
       }
-    });
 
-    if (tour.name || tour.tourCode) {
-      tours.push(tour);
+      if (mode === 'update-existing' || row.action === 'update') {
+        const tourId = row.existingTourId || generateTourId(row.tour.tourCode);
+        await updateTour(tourId, row.tour);
+        updated.push({ id: tourId, tour: row.tour });
+      }
+    } catch (error) {
+      errors.push({ rowNumber: row.rowNumber, error: error.message });
     }
   }
 
-  return tours;
+  return { created, updated, errors, attempted: rowsToImport.length };
 };
 
 /**
