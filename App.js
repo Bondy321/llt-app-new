@@ -306,6 +306,8 @@ export default function App() {
 
     if (userType === 'driver') {
       logger.info('Auth', 'Driver Logged In', { driverId: maskIdentifier(bookingOrDriverData.id) });
+      setTourCode(tourDetails?.tourCode || '');
+      setTourData(tourDetails || null);
       setBookingData(bookingOrDriverData);
       setCurrentScreen('DriverHome');
       if (tourDetails?.id) {

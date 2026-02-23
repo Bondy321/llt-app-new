@@ -503,6 +503,18 @@ const validateBookingReference = async (reference) => {
 
     if (driverSnapshot.exists()) {
       const driverData = driverSnapshot.val();
+      const assignedTourId = sanitizeTourId(driverData.currentTourId) || null;
+      let resolvedTour = null;
+
+      if (assignedTourId) {
+        const driverTourSnapshot = await realtimeDb.ref(`tours/${assignedTourId}`).once('value');
+        if (driverTourSnapshot.exists()) {
+          resolvedTour = {
+            id: assignedTourId,
+            ...driverTourSnapshot.val(),
+          };
+        }
+      }
       
       return {
         valid: true,
@@ -510,8 +522,11 @@ const validateBookingReference = async (reference) => {
         driver: {
           id: upperRef,
           name: driverData.name,
-          assignedTourId: sanitizeTourId(driverData.currentTourId) || null
-        }
+          assignedTourId,
+          hasAssignedTour: Boolean(assignedTourId),
+        },
+        tour: resolvedTour,
+        assignmentStatus: assignedTourId ? (resolvedTour ? 'ASSIGNED' : 'ASSIGNED_TOUR_NOT_FOUND') : 'UNASSIGNED',
       };
     }
 
