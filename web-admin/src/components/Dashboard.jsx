@@ -162,8 +162,8 @@ export default function Dashboard() {
   const totalDrivers = Object.keys(drivers).length;
   const totalTours = Object.keys(tours).length;
 
-  // Count active drivers (those with activeTourId set)
-  const activeDrivers = Object.values(drivers).filter(d => d.activeTourId).length;
+  // Count active drivers (currentTourId canonical, with activeTourId legacy read fallback)
+  const activeDrivers = Object.values(drivers).filter((d) => d.currentTourId || d.activeTourId).length;
 
   // Count assigned tours (those with a driver other than TBA)
   const assignedTours = Object.values(tours).filter(t => t.driverName && t.driverName !== 'TBA').length;
@@ -367,10 +367,10 @@ export default function Dashboard() {
                     <Table.Td>
                       <Badge
                         variant="dot"
-                        color={driver.activeTourId ? 'green' : 'gray'}
+                        color={(driver.currentTourId || driver.activeTourId) ? 'green' : 'gray'}
                         size="sm"
                       >
-                        {driver.activeTourId ? 'Active' : 'Available'}
+                        {(driver.currentTourId || driver.activeTourId) ? 'Active' : 'Available'}
                       </Badge>
                     </Table.Td>
                   </Table.Tr>
