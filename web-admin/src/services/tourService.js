@@ -417,7 +417,6 @@ export const buildDriverAssignmentUpdates = ({
 
   updates[`drivers/${driverId}/currentTourId`] = isAssigned ? tourId : null;
   updates[`drivers/${driverId}/currentTourCode`] = isAssigned ? (tourCode || tourId) : null;
-  updates[`drivers/${driverId}/activeTourId`] = isAssigned ? tourId : null;
   updates[`drivers/${driverId}/assignments/${tourId}`] = isAssigned ? true : null;
 
   const manifestCode = driverCode || driverId;
