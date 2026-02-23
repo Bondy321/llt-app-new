@@ -124,11 +124,16 @@ import {
   ddmmyyyyToInputFormat,
   inputFormatToDDMMYYYY,
 } from '../services/tourService';
+import {
+  parseISODateStrict,
+  formatDateForDisplay,
+  formatDateRangeForDisplay,
+} from '../utils/dateUtils';
 
-// Format date from DD/MM/YYYY to readable format
-const formatDate = (dateStr) => {
-  if (!dateStr) return '-';
-  return dateStr; // Already in DD/MM/YYYY format
+const getIsoDateFieldError = (value, fieldLabel) => {
+  const parsed = parseISODateStrict(value);
+  if (parsed.success) return null;
+  return `${fieldLabel} must be a valid date (yyyy-MM-dd).`;
 };
 
 // Tour Card Component for grid view
@@ -257,7 +262,7 @@ function TourCard({ tourId, tour, drivers, onEdit, onDelete, onDuplicate, onView
           <Group gap="xs">
             <IconCalendar size={14} color="gray" />
             <Text size="sm" c="dimmed">
-              {tour.startDate || '-'} {tour.endDate && tour.startDate !== tour.endDate ? `- ${tour.endDate}` : ''}
+              {formatDateRangeForDisplay(tour.startDate, tour.endDate)}
             </Text>
           </Group>
           <Group gap="xs">
@@ -375,6 +380,17 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
       notifications.show({
         title: 'Missing Information',
         message: 'Please enter a tour code',
+        color: 'red',
+      });
+      return;
+    }
+
+    const startDateError = getIsoDateFieldError(formData.startDate, 'Start date');
+    const endDateError = getIsoDateFieldError(formData.endDate, 'End date');
+    if (startDateError || endDateError) {
+      notifications.show({
+        title: 'Invalid Date',
+        message: startDateError || endDateError,
         color: 'red',
       });
       return;
@@ -513,6 +529,8 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
                     value={ddmmyyyyToInputFormat(formData.startDate)}
                     onChange={(e) => handleInputChange('startDate', e.target.value)}
                     leftSection={<IconCalendar size={16} />}
+                    error={getIsoDateFieldError(ddmmyyyyToInputFormat(formData.startDate), 'Start date')}
+                    required
                   />
                 </Grid.Col>
                 <Grid.Col span={4}>
@@ -522,6 +540,8 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
                     value={ddmmyyyyToInputFormat(formData.endDate)}
                     onChange={(e) => handleInputChange('endDate', e.target.value)}
                     leftSection={<IconCalendar size={16} />}
+                    error={getIsoDateFieldError(ddmmyyyyToInputFormat(formData.endDate), 'End date')}
+                    required
                   />
                 </Grid.Col>
               </Grid>
@@ -667,6 +687,20 @@ function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
       return;
     }
 
+    const startDateIso = formData.startDate?.includes('-') ? formData.startDate : ddmmyyyyToInputFormat(formData.startDate);
+    const endDateIso = formData.endDate?.includes('-') ? formData.endDate : ddmmyyyyToInputFormat(formData.endDate);
+
+    const startDateError = getIsoDateFieldError(startDateIso, 'Start date');
+    const endDateError = getIsoDateFieldError(endDateIso, 'End date');
+    if (startDateError || endDateError) {
+      notifications.show({
+        title: 'Invalid Date',
+        message: startDateError || endDateError,
+        color: 'red',
+      });
+      return;
+    }
+
     setLoading(true);
     try {
       // Parse pickup points from text
@@ -685,8 +719,8 @@ function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
         name: formData.name,
         tourCode: formData.tourCode,
         days: formData.days,
-        startDate: formData.startDate?.includes('-') ? inputFormatToDDMMYYYY(formData.startDate) : formData.startDate,
-        endDate: formData.endDate?.includes('-') ? inputFormatToDDMMYYYY(formData.endDate) : formData.endDate,
+        startDate: inputFormatToDDMMYYYY(startDateIso),
+        endDate: inputFormatToDDMMYYYY(endDateIso),
         isActive: formData.isActive,
         maxParticipants: formData.maxParticipants,
         currentParticipants: formData.currentParticipants,
@@ -783,6 +817,8 @@ function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
                 value={ddmmyyyyToInputFormat(formData.startDate)}
                 onChange={(e) => handleInputChange('startDate', e.target.value)}
                 leftSection={<IconCalendar size={16} />}
+                error={getIsoDateFieldError(ddmmyyyyToInputFormat(formData.startDate), 'Start date')}
+                required
               />
             </Grid.Col>
             <Grid.Col span={4}>
@@ -792,6 +828,8 @@ function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
                 value={ddmmyyyyToInputFormat(formData.endDate)}
                 onChange={(e) => handleInputChange('endDate', e.target.value)}
                 leftSection={<IconCalendar size={16} />}
+                error={getIsoDateFieldError(ddmmyyyyToInputFormat(formData.endDate), 'End date')}
+                required
               />
             </Grid.Col>
           </Grid>
@@ -962,8 +1000,8 @@ function TourDetailsModal({ opened, onClose, tourId, tour, drivers }) {
               <IconCalendarEvent size={16} color="gray" />
               <Text fw={500}>Dates</Text>
             </Group>
-            <Text size="sm">Start: {tour.startDate || '-'}</Text>
-            <Text size="sm">End: {tour.endDate || '-'}</Text>
+            <Text size="sm">Start: {formatDateForDisplay(tour.startDate)}</Text>
+            <Text size="sm">End: {formatDateForDisplay(tour.endDate)}</Text>
           </Paper>
           <Paper p="md" radius="md" withBorder>
             <Group gap="xs" mb="xs">
@@ -1752,7 +1790,7 @@ export default function ToursManager() {
                         </Badge>
                       </Table.Td>
                       <Table.Td>
-                        <Text size="sm" c="dimmed">{tour.startDate || '-'}</Text>
+                        <Text size="sm" c="dimmed">{formatDateForDisplay(tour.startDate)}</Text>
                       </Table.Td>
                       <Table.Td>
                         <Group gap="xs">

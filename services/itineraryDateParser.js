@@ -1,3 +1,4 @@
+// Date contract: see docs/date-contract.md for accepted formats and guardrails.
 const normalizeToNoon = (date) => {
   const normalized = new Date(date);
   normalized.setHours(12, 0, 0, 0);

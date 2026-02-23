@@ -45,6 +45,13 @@
 import { ref, push, set, update, remove, get, onValue } from 'firebase/database';
 import { db } from '../firebase';
 import { validateTourCsvRows } from './tourCsvService';
+import {
+  parseUKDateStrict,
+  parseISODateStrict,
+  formatDateToUK,
+  formatDateToISO,
+} from '../utils/dateUtils';
+export { parseUKDateStrict, parseISODateStrict } from '../utils/dateUtils';
 
 // Default tour template matching the existing Firebase structure
 export const DEFAULT_TOUR = {
@@ -203,23 +210,26 @@ export const generateTourId = (tourCode) => {
  */
 export const formatDateToDDMMYYYY = (date) => {
   if (!date) return '';
-  const d = new Date(date);
-  if (isNaN(d.getTime())) return date; // Return as-is if already formatted
-  const day = String(d.getDate()).padStart(2, '0');
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const year = d.getFullYear();
-  return `${day}/${month}/${year}`;
+
+  if (date instanceof Date) {
+    return formatDateToUK(date);
+  }
+
+  const ukParsed = parseUKDateStrict(date);
+  if (ukParsed.success) return formatDateToUK(ukParsed.date);
+
+  const isoParsed = parseISODateStrict(date);
+  if (isoParsed.success) return formatDateToUK(isoParsed.date);
+
+  return '';
 };
 
 /**
  * Parse DD/MM/YYYY to Date object
  */
 export const parseDDMMYYYY = (dateStr) => {
-  if (!dateStr) return null;
-  const parts = dateStr.split('/');
-  if (parts.length !== 3) return null;
-  const [day, month, year] = parts;
-  return new Date(year, parseInt(month) - 1, parseInt(day));
+  const parsed = parseUKDateStrict(dateStr);
+  return parsed.success ? parsed.date : null;
 };
 
 /**
@@ -227,10 +237,9 @@ export const parseDDMMYYYY = (dateStr) => {
  */
 export const ddmmyyyyToInputFormat = (dateStr) => {
   if (!dateStr) return '';
-  const parts = dateStr.split('/');
-  if (parts.length !== 3) return dateStr;
-  const [day, month, year] = parts;
-  return `${year}-${month}-${day}`;
+  const parsed = parseUKDateStrict(dateStr);
+  if (!parsed.success) return '';
+  return formatDateToISO(parsed.date);
 };
 
 /**
@@ -238,10 +247,9 @@ export const ddmmyyyyToInputFormat = (dateStr) => {
  */
 export const inputFormatToDDMMYYYY = (dateStr) => {
   if (!dateStr) return '';
-  const parts = dateStr.split('-');
-  if (parts.length !== 3) return dateStr;
-  const [year, month, day] = parts;
-  return `${day}/${month}/${year}`;
+  const parsed = parseISODateStrict(dateStr);
+  if (!parsed.success) return '';
+  return formatDateToUK(parsed.date);
 };
 
 /**
