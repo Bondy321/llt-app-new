@@ -1114,6 +1114,8 @@ Never commit secrets. Use EAS Secrets for environment variables in builds.
 - **Login recovery CTA UX:** offline login rejection states now provide immediate recovery actions (“Retry now”, “I’m connected, verify this code”, and “Contact support”) and clearer reason-specific guidance for mismatch vs no-cache scenarios.
 - **Passenger home refresh non-blocking UX:** Tour Home refresh outcomes now use in-screen tone-aware status banners with inline retry affordances, removing modal refresh-error interruptions.
 - **Notification preferences confidence UX:** Notification settings now include dirty-state save controls, inline success/error banners, explicit “last saved” feedback, and in-screen test-notification status with retry.
+- **Driver assignment contract alignment (web + mobile):** web-admin now treats `drivers/{driverId}/currentTourId` as the canonical active-tour field (with `activeTourId` as read-only legacy fallback) and clears the legacy key on write to keep admin mutations compatible with mobile runtime expectations.
+- **Driver login payload enrichment:** `validateBookingReference()` now resolves and returns the driver’s assigned tour payload (`tour`) plus an explicit `assignmentStatus` (`ASSIGNED`, `ASSIGNED_TOUR_NOT_FOUND`, `UNASSIGNED`) so App login can hydrate Driver Home context immediately after authentication.
 
 ## Quick Reference
 
