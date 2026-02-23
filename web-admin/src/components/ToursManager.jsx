@@ -119,8 +119,8 @@ import {
   unassignDriver,
   duplicateTour,
   exportToursToCSV,
-  parseCSVToTours,
-  bulkCreateTours,
+  previewTourCSVImport,
+  executeTourCSVImport,
   ddmmyyyyToInputFormat,
   inputFormatToDDMMYYYY,
 } from '../services/tourService';
@@ -1063,7 +1063,10 @@ function TourDetailsModal({ opened, onClose, tourId, tour, drivers }) {
 function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
   const [activeTab, setActiveTab] = useState('export');
   const [importing, setImporting] = useState(false);
-  const [importPreview, setImportPreview] = useState([]);
+  const [importMode, setImportMode] = useState('upsert');
+  const [importValidOnly, setImportValidOnly] = useState(true);
+  const [importPreview, setImportPreview] = useState({ rows: [], parseErrors: [], summary: { total: 0, valid: 0, invalid: 0 } });
+  const [rawCsvContent, setRawCsvContent] = useState('');
 
   const handleExport = () => {
     const csv = exportToursToCSV(tours);
@@ -1076,6 +1079,7 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
 
     notifications.show({
       title: 'Export Complete',
@@ -1088,15 +1092,16 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
-        const content = e.target.result;
-        const parsedTours = parseCSVToTours(content);
-        setImportPreview(parsedTours);
+        const content = String(e.target?.result || '');
+        setRawCsvContent(content);
+        const preview = await previewTourCSVImport(content, { mode: importMode });
+        setImportPreview(preview);
       } catch (error) {
         notifications.show({
           title: 'Parse Error',
-          message: 'Could not parse the CSV file. Please check the format.',
+          message: error.message || 'Could not parse the CSV file. Please check the format.',
           color: 'red',
         });
       }
@@ -1105,7 +1110,7 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
   };
 
   const handleImport = async () => {
-    if (importPreview.length === 0) {
+    if (importPreview.summary.total === 0) {
       notifications.show({
         title: 'No Data',
         message: 'Please select a CSV file with tour data',
@@ -1114,16 +1119,32 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
       return;
     }
 
+    if (importValidOnly && importPreview.summary.valid === 0) {
+      notifications.show({
+        title: 'No Valid Rows',
+        message: 'No valid rows available to import.',
+        color: 'red',
+      });
+      return;
+    }
+
     setImporting(true);
     try {
-      const result = await bulkCreateTours(importPreview, 'import');
+      const result = await executeTourCSVImport(importPreview.rows, {
+        mode: importMode,
+        importValidOnly,
+        createdBy: 'import',
+      });
+
       notifications.show({
         title: 'Import Complete',
-        message: `${result.created.length} tours imported successfully${result.errors.length > 0 ? `, ${result.errors.length} failed` : ''}`,
+        message: `Created ${result.created.length}, updated ${result.updated.length}, failed ${result.errors.length}`,
         color: result.errors.length > 0 ? 'orange' : 'green',
       });
+
       onImportSuccess();
-      setImportPreview([]);
+      setImportPreview({ rows: [], parseErrors: [], summary: { total: 0, valid: 0, invalid: 0 } });
+      setRawCsvContent('');
       onClose();
     } catch (error) {
       notifications.show({
@@ -1135,6 +1156,15 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
       setImporting(false);
     }
   };
+
+  const handleModeChange = async (mode) => {
+    setImportMode(mode);
+    if (!rawCsvContent) return;
+    const preview = await previewTourCSVImport(rawCsvContent, { mode });
+    setImportPreview(preview);
+  };
+
+  const rowsToShow = importPreview.rows.slice(0, 25);
 
   return (
     <Modal
@@ -1148,7 +1178,7 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
           <Text fw={600}>Import / Export Tours</Text>
         </Group>
       }
-      size="lg"
+      size="xl"
       centered
     >
       <Tabs value={activeTab} onChange={setActiveTab}>
@@ -1188,8 +1218,19 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
         <Tabs.Panel value="import">
           <Stack gap="md">
             <Alert icon={<IconInfoCircle size={16} />} color="orange" variant="light">
-              Import tours from a CSV file. Required columns: Tour Code, Name, Days, Start Date, End Date.
+              Import tours from CSV with validation preview. Required columns: Tour Code and Name.
             </Alert>
+
+            <Select
+              label="Import mode"
+              value={importMode}
+              onChange={(value) => value && handleModeChange(value)}
+              data={[
+                { value: 'create-only', label: 'Create only (reject existing tour codes)' },
+                { value: 'update-existing', label: 'Update existing only (reject new tour codes)' },
+                { value: 'upsert', label: 'Upsert (create new and update existing)' },
+              ]}
+            />
 
             <FileButton onChange={handleFileSelect} accept=".csv">
               {(props) => (
@@ -1204,57 +1245,80 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
                     <IconUpload size={24} />
                   </ThemeIcon>
                   <Text fw={500}>Click to select CSV file</Text>
-                  <Text size="xs" c="dimmed">or drag and drop</Text>
+                  <Text size="xs" c="dimmed">Supports quoted multiline and escaped quote fields</Text>
                 </Paper>
               )}
             </FileButton>
 
-            {importPreview.length > 0 && (
-              <>
-                <Paper p="md" radius="md" withBorder>
-                  <Group justify="space-between" mb="sm">
-                    <Text fw={500}>Preview ({importPreview.length} tours)</Text>
-                    <Badge color="green">{importPreview.length} ready</Badge>
+            {(importPreview.parseErrors.length > 0 || importPreview.summary.total > 0) && (
+              <Paper p="md" radius="md" withBorder>
+                <Group justify="space-between" mb="sm">
+                  <Text fw={500}>Dry-run Preview</Text>
+                  <Group gap="xs">
+                    <Badge color="blue">{importPreview.summary.total} rows</Badge>
+                    <Badge color="green">{importPreview.summary.valid} valid</Badge>
+                    <Badge color="red">{importPreview.summary.invalid} invalid</Badge>
                   </Group>
-                  <ScrollArea h={200}>
-                    <Table striped highlightOnHover size="sm">
-                      <Table.Thead>
-                        <Table.Tr>
-                          <Table.Th>Tour Code</Table.Th>
-                          <Table.Th>Name</Table.Th>
-                          <Table.Th>Days</Table.Th>
-                          <Table.Th>Dates</Table.Th>
-                        </Table.Tr>
-                      </Table.Thead>
-                      <Table.Tbody>
-                        {importPreview.slice(0, 10).map((tour, index) => (
-                          <Table.Tr key={index}>
-                            <Table.Td><Code>{tour.tourCode}</Code></Table.Td>
-                            <Table.Td>{tour.name}</Table.Td>
-                            <Table.Td>{tour.days}</Table.Td>
-                            <Table.Td>{tour.startDate}</Table.Td>
-                          </Table.Tr>
-                        ))}
-                      </Table.Tbody>
-                    </Table>
-                    {importPreview.length > 10 && (
-                      <Text size="xs" c="dimmed" ta="center" mt="xs">
-                        And {importPreview.length - 10} more...
-                      </Text>
-                    )}
-                  </ScrollArea>
-                </Paper>
+                </Group>
 
-                <Button
-                  leftSection={<IconUpload size={16} />}
-                  onClick={handleImport}
-                  loading={importing}
-                  fullWidth
-                >
-                  Import {importPreview.length} Tours
-                </Button>
-              </>
+                {importPreview.parseErrors.map((error, index) => (
+                  <Alert key={index} color="red" variant="light" mb="xs" icon={<IconAlertCircle size={16} />}>
+                    {error}
+                  </Alert>
+                ))}
+
+                <ScrollArea h={260}>
+                  <Table striped highlightOnHover size="sm">
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Row</Table.Th>
+                        <Table.Th>Mode</Table.Th>
+                        <Table.Th>Tour Code</Table.Th>
+                        <Table.Th>Name</Table.Th>
+                        <Table.Th>Status</Table.Th>
+                        <Table.Th>Errors</Table.Th>
+                      </Table.Tr>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {rowsToShow.map((row) => (
+                        <Table.Tr key={row.rowNumber}>
+                          <Table.Td>{row.rowNumber}</Table.Td>
+                          <Table.Td><Badge size="xs" variant="light">{row.action}</Badge></Table.Td>
+                          <Table.Td><Code>{row.tour.tourCode || '-'}</Code></Table.Td>
+                          <Table.Td>{row.tour.name || '-'}</Table.Td>
+                          <Table.Td>
+                            <Badge color={row.isValid ? 'green' : 'red'} size="xs">{row.isValid ? 'Valid' : 'Invalid'}</Badge>
+                          </Table.Td>
+                          <Table.Td>
+                            {row.errors.length === 0 ? '-' : row.errors.join(' ')}
+                          </Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                </ScrollArea>
+                {importPreview.rows.length > rowsToShow.length && (
+                  <Text size="xs" c="dimmed" mt="xs">Showing first {rowsToShow.length} of {importPreview.rows.length} rows.</Text>
+                )}
+              </Paper>
             )}
+
+            <Switch
+              checked={importValidOnly}
+              onChange={(event) => setImportValidOnly(event.currentTarget.checked)}
+              label="Import valid rows only"
+              description="When enabled, invalid rows are skipped."
+            />
+
+            <Button
+              leftSection={<IconUpload size={16} />}
+              onClick={handleImport}
+              loading={importing}
+              fullWidth
+              disabled={importPreview.summary.total === 0}
+            >
+              Run Import
+            </Button>
           </Stack>
         </Tabs.Panel>
       </Tabs>
