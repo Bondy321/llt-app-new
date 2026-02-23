@@ -195,7 +195,7 @@ function CreateDriverModal({ opened, onClose, onSuccess }) {
 function DriverDetailsPanel({ driverId, driver }) {
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
-  const [editActiveTour, setEditActiveTour] = useState('');
+  const [editCurrentTourId, setEditCurrentTourId] = useState('');
   const [newTourId, setNewTourId] = useState('');
   const [saving, setSaving] = useState(false);
   const [assigningTour, setAssigningTour] = useState(false);
@@ -205,7 +205,8 @@ function DriverDetailsPanel({ driverId, driver }) {
     if (driver) {
       setEditName(driver.name || '');
       setEditPhone(driver.phone || '');
-      setEditActiveTour(driver.currentTourId || driver.activeTourId || '');
+      // Legacy read fallback: display activeTourId if currentTourId is not populated yet.
+      setEditCurrentTourId(driver.currentTourId || driver.activeTourId || '');
     }
   }, [driver]);
 
@@ -217,8 +218,10 @@ function DriverDetailsPanel({ driverId, driver }) {
       const updates = {
         [`drivers/${driverId}/name`]: editName,
         [`drivers/${driverId}/phone`]: editPhone,
-        [`drivers/${driverId}/currentTourId`]: editActiveTour || null,
-        [`drivers/${driverId}/currentTourCode`]: editActiveTour || null,
+        [`drivers/${driverId}/currentTourId`]: editCurrentTourId || null,
+        [`drivers/${driverId}/currentTourCode`]: editCurrentTourId || null,
+        // Migration cleanup: canonicalize field name and remove legacy key on write.
+        [`drivers/${driverId}/activeTourId`]: null,
       };
 
       // Sync name/phone to all assigned tours
@@ -365,8 +368,8 @@ function DriverDetailsPanel({ driverId, driver }) {
                 label="Current Active Tour"
                 placeholder="Tour ID currently being driven"
                 description="This indicates which tour the driver is currently on"
-                value={editActiveTour}
-                onChange={(e) => setEditActiveTour(e.target.value)}
+                value={editCurrentTourId}
+                onChange={(e) => setEditCurrentTourId(e.target.value)}
                 leftSection={<IconBus size={16} />}
               />
 
@@ -470,6 +473,8 @@ export function DriversManager() {
     return () => unsubscribe();
   }, []);
 
+  const resolveCurrentTourId = (driver) => driver?.currentTourId || driver?.activeTourId || '';
+
   // Filter drivers by search term
   const filteredDrivers = useMemo(() => {
     return Object.entries(drivers).filter(([id, driver]) =>
@@ -480,7 +485,7 @@ export function DriversManager() {
 
   // Stats
   const totalDrivers = Object.keys(drivers).length;
-  const activeDrivers = Object.values(drivers).filter((d) => d.currentTourId || d.activeTourId).length;
+  const activeDrivers = Object.values(drivers).filter((d) => !!resolveCurrentTourId(d)).length;
 
   const handleDriverCreated = (newId) => {
     setSelectedDriverId(newId);
