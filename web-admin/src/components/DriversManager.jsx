@@ -48,7 +48,8 @@ import {
 function DriverCard({ driverId, driver, isSelected, onClick }) {
   const assignedTours = driver.assignedTours || (driver.assignments ? Object.keys(driver.assignments) : []);
   const assignmentCount = assignedTours.length;
-  const isActive = !!driver.currentTourId;
+  const resolvedCurrentTourId = driver.currentTourId || driver.activeTourId || '';
+  const isActive = !!resolvedCurrentTourId;
 
   return (
     <Paper
@@ -204,7 +205,7 @@ function DriverDetailsPanel({ driverId, driver }) {
     if (driver) {
       setEditName(driver.name || '');
       setEditPhone(driver.phone || '');
-      setEditActiveTour(driver.currentTourId || '');
+      setEditActiveTour(driver.currentTourId || driver.activeTourId || '');
     }
   }, [driver]);
 
@@ -309,6 +310,7 @@ function DriverDetailsPanel({ driverId, driver }) {
         year: 'numeric',
       })
     : 'Unknown';
+  const resolvedCurrentTourId = driver?.currentTourId || driver?.activeTourId || '';
 
   return (
     <Box>
@@ -322,7 +324,7 @@ function DriverDetailsPanel({ driverId, driver }) {
             <Title order={3}>{driver?.name}</Title>
             <Group gap="xs">
               <Badge variant="filled" color="brand">{driverId}</Badge>
-              {driver?.currentTourId && (
+              {resolvedCurrentTourId && (
                 <Badge variant="dot" color="green">On Tour</Badge>
               )}
             </Group>
@@ -478,7 +480,7 @@ export function DriversManager() {
 
   // Stats
   const totalDrivers = Object.keys(drivers).length;
-  const activeDrivers = Object.values(drivers).filter((d) => d.currentTourId).length;
+  const activeDrivers = Object.values(drivers).filter((d) => d.currentTourId || d.activeTourId).length;
 
   const handleDriverCreated = (newId) => {
     setSelectedDriverId(newId);
