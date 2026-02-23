@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { ref, onValue, update } from 'firebase/database';
 import { db } from '../firebase';
+import { applyDriverAssignmentMutation } from '../services/tourService';
 import { notifications } from '@mantine/notifications';
 import {
   Card,
@@ -45,8 +46,9 @@ import {
 
 // Driver Card Component for the sidebar
 function DriverCard({ driverId, driver, isSelected, onClick }) {
-  const assignmentCount = driver.assignments ? Object.keys(driver.assignments).length : 0;
-  const isActive = !!driver.activeTourId;
+  const assignedTours = driver.assignedTours || (driver.assignments ? Object.keys(driver.assignments) : []);
+  const assignmentCount = assignedTours.length;
+  const isActive = !!driver.currentTourId;
 
   return (
     <Paper
@@ -202,11 +204,11 @@ function DriverDetailsPanel({ driverId, driver }) {
     if (driver) {
       setEditName(driver.name || '');
       setEditPhone(driver.phone || '');
-      setEditActiveTour(driver.activeTourId || '');
+      setEditActiveTour(driver.currentTourId || '');
     }
   }, [driver]);
 
-  const assignments = driver?.assignments ? Object.keys(driver.assignments) : [];
+  const assignments = driver?.assignedTours || (driver?.assignments ? Object.keys(driver.assignments) : []);
 
   const handleSaveDetails = async () => {
     setSaving(true);
@@ -214,7 +216,8 @@ function DriverDetailsPanel({ driverId, driver }) {
       const updates = {
         [`drivers/${driverId}/name`]: editName,
         [`drivers/${driverId}/phone`]: editPhone,
-        [`drivers/${driverId}/activeTourId`]: editActiveTour,
+        [`drivers/${driverId}/currentTourId`]: editActiveTour || null,
+        [`drivers/${driverId}/currentTourCode`]: editActiveTour || null,
       };
 
       // Sync name/phone to all assigned tours
@@ -247,10 +250,15 @@ function DriverDetailsPanel({ driverId, driver }) {
     const tourId = newTourId.trim();
 
     try {
-      await update(ref(db), {
-        [`drivers/${driverId}/assignments/${tourId}`]: true,
-        [`tours/${tourId}/driverName`]: driver.name,
-        [`tours/${tourId}/driverPhone`]: driver.phone || '',
+      await applyDriverAssignmentMutation({
+        tourId,
+        driverId,
+        driverCode: driverId,
+        driverInfo: {
+          name: driver.name,
+          phone: driver.phone || '',
+        },
+        isAssigned: true,
       });
 
       notifications.show({
@@ -272,10 +280,12 @@ function DriverDetailsPanel({ driverId, driver }) {
 
   const handleRemoveTour = async (tourId) => {
     try {
-      await update(ref(db), {
-        [`drivers/${driverId}/assignments/${tourId}`]: null,
-        [`tours/${tourId}/driverName`]: 'TBA',
-        [`tours/${tourId}/driverPhone`]: '',
+      await applyDriverAssignmentMutation({
+        tourId,
+        driverId,
+        driverCode: driverId,
+        driverInfo: { name: 'TBA', phone: '' },
+        isAssigned: false,
       });
 
       notifications.show({
@@ -312,7 +322,7 @@ function DriverDetailsPanel({ driverId, driver }) {
             <Title order={3}>{driver?.name}</Title>
             <Group gap="xs">
               <Badge variant="filled" color="brand">{driverId}</Badge>
-              {driver?.activeTourId && (
+              {driver?.currentTourId && (
                 <Badge variant="dot" color="green">On Tour</Badge>
               )}
             </Group>
@@ -468,7 +478,7 @@ export function DriversManager() {
 
   // Stats
   const totalDrivers = Object.keys(drivers).length;
-  const activeDrivers = Object.values(drivers).filter(d => d.activeTourId).length;
+  const activeDrivers = Object.values(drivers).filter((d) => d.currentTourId).length;
 
   const handleDriverCreated = (newId) => {
     setSelectedDriverId(newId);

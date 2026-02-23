@@ -348,17 +348,13 @@ export const deleteTour = async (tourId) => {
  * @param {Object} driverInfo - Driver info {name, phone}
  */
 export const assignDriver = async (tourId, driverId, driverInfo) => {
-  const updates = {
-    [`tours/${tourId}/driverName`]: driverInfo.name,
-    [`tours/${tourId}/driverPhone`]: driverInfo.phone || '',
-  };
-
-  // Also update driver's assignments if that structure exists
-  if (driverId) {
-    updates[`drivers/${driverId}/assignments/${tourId}`] = true;
-  }
-
-  await update(ref(db), updates);
+  await applyDriverAssignmentMutation({
+    tourId,
+    driverId,
+    driverCode: driverId,
+    driverInfo,
+    isAssigned: true,
+  });
 
   return { tourId, driverId, assigned: true };
 };
@@ -369,18 +365,86 @@ export const assignDriver = async (tourId, driverId, driverInfo) => {
  * @param {string} driverId - Driver ID (optional)
  */
 export const unassignDriver = async (tourId, driverId = null) => {
-  const updates = {
-    [`tours/${tourId}/driverName`]: 'TBA',
-    [`tours/${tourId}/driverPhone`]: '',
-  };
-
-  if (driverId) {
-    updates[`drivers/${driverId}/assignments/${tourId}`] = null;
-  }
-
-  await update(ref(db), updates);
+  await applyDriverAssignmentMutation({
+    tourId,
+    driverId,
+    driverCode: driverId,
+    driverInfo: { name: 'TBA', phone: '' },
+    isAssigned: false,
+  });
 
   return { tourId, unassigned: true };
+};
+
+const getDriverAssignmentContext = async (tourId, explicitDriverId = null) => {
+  const [tourSnapshot, manifestSnapshot] = await Promise.all([
+    get(ref(db, `tours/${tourId}`)),
+    get(ref(db, `tour_manifests/${tourId}`)),
+  ]);
+
+  const tour = tourSnapshot.val() || {};
+  const manifest = manifestSnapshot.val() || {};
+  const manifestDrivers = manifest.assigned_drivers || {};
+  const resolvedDriverId = explicitDriverId || Object.keys(manifestDrivers)[0] || null;
+
+  return {
+    tourCode: tour.tourCode || tour.code || tourId,
+    driverId: resolvedDriverId,
+    driverCode: resolvedDriverId,
+  };
+};
+
+/**
+ * Build canonical multi-path updates for driver assignment mutations.
+ * Mirrors mobile assignDriverToTour() contract for cross-platform consistency.
+ */
+export const buildDriverAssignmentUpdates = ({
+  tourId,
+  driverId,
+  driverCode,
+  tourCode,
+  driverInfo,
+  isAssigned,
+}) => {
+  const updates = {
+    [`tours/${tourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',
+    [`tours/${tourId}/driverPhone`]: isAssigned ? (driverInfo.phone || '') : '',
+  };
+
+  if (!driverId) {
+    return updates;
+  }
+
+  updates[`drivers/${driverId}/currentTourId`] = isAssigned ? tourId : null;
+  updates[`drivers/${driverId}/currentTourCode`] = isAssigned ? (tourCode || tourId) : null;
+  updates[`drivers/${driverId}/activeTourId`] = isAssigned ? tourId : null;
+  updates[`drivers/${driverId}/assignments/${tourId}`] = isAssigned ? true : null;
+
+  const manifestCode = driverCode || driverId;
+  updates[`tour_manifests/${tourId}/assigned_drivers/${driverId}`] = isAssigned ? true : null;
+  updates[`tour_manifests/${tourId}/assigned_driver_codes/${driverId}`] = isAssigned ? manifestCode : null;
+
+  return updates;
+};
+
+export const applyDriverAssignmentMutation = async ({
+  tourId,
+  driverId,
+  driverCode,
+  driverInfo,
+  isAssigned,
+}) => {
+  const assignment = await getDriverAssignmentContext(tourId, driverId);
+  const updates = buildDriverAssignmentUpdates({
+    tourId,
+    driverId: driverId || assignment.driverId,
+    driverCode: driverCode || assignment.driverCode,
+    tourCode: assignment.tourCode,
+    driverInfo,
+    isAssigned,
+  });
+
+  await update(ref(db), updates);
 };
 
 /**
