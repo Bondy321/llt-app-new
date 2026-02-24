@@ -691,8 +691,12 @@ const validateBookingReference = async (reference, email) => {
       const reasonToMessage = {
         BOOKING_NOT_FOUND: 'Booking reference not found',
         EMAIL_MISMATCH: 'Email does not match this booking reference',
+        INVALID_CREDENTIALS: 'Login details could not be verified. Please check your details and try again.',
         IDENTITY_INCOMPLETE: 'Booking identity record is incomplete',
         INVALID_INPUT: 'Invalid login details provided',
+        TRY_AGAIN_LATER: 'Too many verification attempts. Please wait a moment and try again.',
+        INTERNAL_ERROR: 'Verification service is temporarily unavailable. Please try again shortly.',
+        METHOD_NOT_ALLOWED: 'Verification service is currently unavailable. Please update the app and try again shortly.',
         VERIFIER_NOT_CONFIGURED: 'Passenger verification service is not configured',
         VERIFIER_TIMEOUT: 'Verification is taking longer than expected. Please check your connection and try again.',
         VERIFIER_REQUEST_FAILED: 'Unable to reach the verification service. Please try again shortly.',

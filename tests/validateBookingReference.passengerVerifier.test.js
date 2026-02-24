@@ -250,6 +250,104 @@ test('validateBookingReference sends x-firebase-appcheck header when token is av
   }
 });
 
+
+test('validateBookingReference maps INVALID_CREDENTIALS to non-enumerating safe copy', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: false,
+      json: async () => ({
+        valid: false,
+        reason: 'INVALID_CREDENTIALS',
+      }),
+    });
+
+    const service = loadServiceWithDb({ drivers: {}, bookings: {}, tours: {} });
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, false);
+    assert.equal(result.error, 'Login details could not be verified. Please check your details and try again.');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference maps TRY_AGAIN_LATER to rate-limit retry guidance', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: false,
+      json: async () => ({
+        valid: false,
+        reason: 'TRY_AGAIN_LATER',
+      }),
+    });
+
+    const service = loadServiceWithDb({ drivers: {}, bookings: {}, tours: {} });
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, false);
+    assert.equal(result.error, 'Too many verification attempts. Please wait a moment and try again.');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference maps INTERNAL_ERROR to transient backend failure copy', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: false,
+      json: async () => ({
+        valid: false,
+        reason: 'INTERNAL_ERROR',
+      }),
+    });
+
+    const service = loadServiceWithDb({ drivers: {}, bookings: {}, tours: {} });
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, false);
+    assert.equal(result.error, 'Verification service is temporarily unavailable. Please try again shortly.');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference maps METHOD_NOT_ALLOWED defensively', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: false,
+      json: async () => ({
+        valid: false,
+        reason: 'METHOD_NOT_ALLOWED',
+      }),
+    });
+
+    const service = loadServiceWithDb({ drivers: {}, bookings: {}, tours: {} });
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, false);
+    assert.equal(result.error, 'Verification service is currently unavailable. Please update the app and try again shortly.');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+
 test('validateBookingReference maps missing App Check token to actionable copy when strict mode is enabled', async () => {
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK = 'true';
