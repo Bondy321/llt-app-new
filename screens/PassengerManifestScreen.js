@@ -98,6 +98,11 @@ export default function PassengerManifestScreen({ route, navigation }) {
     }
   };
 
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await handleSyncNow({ isManualRefresh: true });
+  };
+
   useEffect(() => {
     loadManifest();
   }, [tourId]);
@@ -346,48 +351,57 @@ export default function PassengerManifestScreen({ route, navigation }) {
   };
 
 
-  const handleSyncNow = async () => {
-    const replay = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
-    if (!replay.success) {
-      showStatusFeedback({
-        variant: 'error',
-        message: replay.error ? `Sync failed: ${replay.error}` : 'Sync failed. Retry now.',
-        ctaLabel: 'Retry now',
-        onCtaPress: handleSyncNow,
-      });
-      await loadManifest();
-      return;
+  const handleSyncNow = async ({ isManualRefresh = false } = {}) => {
+    if (!isManualRefresh) {
+      setRefreshing(true);
     }
-    const queued = await offlineSyncService.getQueuedActions();
-    if (queued.success) {
-      const pendingActions = queued.data.filter((action) => action.status === 'queued').length;
-      const failedActions = queued.data.filter((action) => action.status === 'failed').length;
 
-      if (failedActions > 0) {
+    try {
+      const replay = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+      if (!replay.success) {
         showStatusFeedback({
-          variant: 'warning',
-          message: `${failedActions} failed action${failedActions === 1 ? '' : 's'}.`,
-          ctaLabel: 'Retry failed',
-          onCtaPress: handleRetryFailed,
+          variant: 'error',
+          message: replay.error ? `Sync failed: ${replay.error}` : 'Sync failed. Retry now.',
+          ctaLabel: 'Retry now',
+          onCtaPress: () => handleSyncNow(),
         });
-      } else if (pendingActions > 0) {
-        showStatusFeedback({
-          variant: 'warning',
-          message: `${pendingActions} action${pendingActions === 1 ? '' : 's'} still queued.`,
-          ctaLabel: 'View pending',
-          onCtaPress: () => setStatusFilter(MANIFEST_STATUS.PENDING),
-          autoDismissMs: 5000,
-        });
-      } else {
-        showStatusFeedback({
-          variant: 'success',
-          message: 'Sync complete. All clear.',
-          autoDismissMs: 3500,
-        });
+        await loadManifest();
+        return;
       }
-    }
 
-    await loadManifest();
+      const queued = await offlineSyncService.getQueuedActions();
+      if (queued.success) {
+        const pendingActions = queued.data.filter((action) => action.status === 'queued').length;
+        const failedActions = queued.data.filter((action) => action.status === 'failed').length;
+
+        if (failedActions > 0) {
+          showStatusFeedback({
+            variant: 'warning',
+            message: `${failedActions} failed action${failedActions === 1 ? '' : 's'}.`,
+            ctaLabel: 'Retry failed',
+            onCtaPress: handleRetryFailed,
+          });
+        } else if (pendingActions > 0) {
+          showStatusFeedback({
+            variant: 'warning',
+            message: `${pendingActions} action${pendingActions === 1 ? '' : 's'} still queued.`,
+            ctaLabel: 'View pending',
+            onCtaPress: () => setStatusFilter(MANIFEST_STATUS.PENDING),
+            autoDismissMs: 5000,
+          });
+        } else {
+          showStatusFeedback({
+            variant: 'success',
+            message: 'Sync complete. All clear.',
+            autoDismissMs: 3500,
+          });
+        }
+      }
+
+      await loadManifest();
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const handleRetryFailed = async () => {
@@ -575,7 +589,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
             )}
             contentContainerStyle={styles.listContent}
             refreshing={refreshing}
-            onRefresh={loadManifest}
+            onRefresh={handleRefresh}
           />
         ) : (
           <SectionList
@@ -596,7 +610,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
             )}
             contentContainerStyle={styles.listContent}
             refreshing={refreshing}
-            onRefresh={loadManifest}
+            onRefresh={handleRefresh}
           />
         )
       )}

@@ -51,6 +51,9 @@ const mockQueueActions = [
   { id: '4', type: 'MANIFEST_UPDATE', status: 'bad-state-value', payload: { bookingRef: bookingRefs.malformed } },
 ];
 
+let replayQueueCalls = 0;
+let getTourManifestCalls = 0;
+
 const originalLoad = Module._load;
 Module._load = function mockLoader(request, parent, isMain) {
   if (request === 'react-native') {
@@ -59,9 +62,9 @@ Module._load = function mockLoader(request, parent, isMain) {
       StyleSheet: { create: (styles) => styles },
       Text,
       View: createHost('View'),
-      SectionList: ({ sections = [], renderItem, renderSectionHeader }) => React.createElement(
+      SectionList: ({ sections = [], renderItem, renderSectionHeader, ...props }) => React.createElement(
         'SectionList',
-        null,
+        props,
         sections.map((section) => React.createElement(
           React.Fragment,
           { key: section.title },
@@ -69,9 +72,9 @@ Module._load = function mockLoader(request, parent, isMain) {
           section.data.map((item) => React.createElement(React.Fragment, { key: item.id }, renderItem({ item })))
         ))
       ),
-      FlatList: ({ data = [], renderItem }) => React.createElement(
+      FlatList: ({ data = [], renderItem, ...props }) => React.createElement(
         'FlatList',
-        null,
+        props,
         data.map((item) => React.createElement(React.Fragment, { key: item.id }, renderItem({ item })))
       ),
       TextInput: createHost('TextInput'),
@@ -92,7 +95,10 @@ Module._load = function mockLoader(request, parent, isMain) {
 
   if (request.endsWith('/services/bookingServiceRealtime') || request === '../services/bookingServiceRealtime') {
     return {
-      getTourManifest: async () => mockManifest,
+      getTourManifest: async () => {
+        getTourManifestCalls += 1;
+        return mockManifest;
+      },
       updateManifestBooking: async () => ({ success: true }),
       MANIFEST_STATUS: {
         PENDING: 'PENDING',
@@ -108,12 +114,18 @@ Module._load = function mockLoader(request, parent, isMain) {
       default: {
         subscribeQueueState: () => () => {},
         getQueuedActions: async () => ({ success: true, data: mockQueueActions }),
-        replayQueue: async () => ({ success: true }),
+        replayQueue: async () => {
+          replayQueueCalls += 1;
+          return { success: true };
+        },
         updateAction: async () => ({ success: true }),
       },
       subscribeQueueState: () => () => {},
       getQueuedActions: async () => ({ success: true, data: mockQueueActions }),
-      replayQueue: async () => ({ success: true }),
+      replayQueue: async () => {
+        replayQueueCalls += 1;
+        return { success: true };
+      },
       updateAction: async () => ({ success: true }),
     };
   }
@@ -126,6 +138,8 @@ Module._load = function mockLoader(request, parent, isMain) {
 };
 
 test('PassengerManifestScreen wires booking sync states into ManifestBookingCard labels', async () => {
+  replayQueueCalls = 0;
+  getTourManifestCalls = 0;
   const PassengerManifestScreen = require('../screens/PassengerManifestScreen').default;
 
   let renderer;
@@ -151,4 +165,13 @@ test('PassengerManifestScreen wires booking sync states into ManifestBookingCard
   assert.ok(allText.includes('SYNCING'));
   assert.ok(allText.includes('FAILED'));
   assert.ok(allText.includes('SYNCED'));
+
+  const sectionList = renderer.root.findByType('SectionList');
+  const baselineManifestCalls = getTourManifestCalls;
+  await act(async () => {
+    await sectionList.props.onRefresh();
+  });
+
+  assert.equal(replayQueueCalls, 1);
+  assert.ok(getTourManifestCalls > baselineManifestCalls);
 });
