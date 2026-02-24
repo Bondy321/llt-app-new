@@ -57,6 +57,7 @@ const createErrorState = (message, options = {}) => ({
 
 export default function LoginScreen({ onLoginSuccess, logger, isConnected, resolveOfflineLogin }) {
   const [bookingReference, setBookingReference] = useState('');
+  const [email, setEmail] = useState('');
   const [errorState, setErrorState] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showOfflineHelp, setShowOfflineHelp] = useState(false);
@@ -182,6 +183,15 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       return;
     }
 
+    const normalizedReference = bookingReference.trim().toUpperCase();
+    const isDriverCode = normalizedReference.startsWith('D-');
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!isDriverCode && normalizedEmail.length === 0) {
+      setSimpleError('Please enter the booking email used for this reservation.');
+      return;
+    }
+
     if (!isConnected) {
       const offlineCheck = await resolveOfflineLogin?.(bookingReference.trim());
       if (offlineCheck?.success) {
@@ -222,7 +232,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
 
     try {
       const startTime = Date.now();
-      const result = await validateBookingReference(bookingReference.trim());
+      const result = await validateBookingReference(bookingReference.trim(), normalizedEmail);
       const duration = Date.now() - startTime;
       
       activeLogger?.trackAPI('/validateBooking', 'POST', result.valid ? 200 : 404, duration);
@@ -341,6 +351,31 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                   autoCapitalize="characters"
                   autoCorrect={false}
                   maxLength={20}
+                  returnKeyType="go"
+                  onSubmitEditing={handleLogin}
+                  editable={!loading}
+                />
+              </View>
+
+              <View style={styles.inputContainer}>
+                <MaterialCommunityIcons
+                  name="email-outline"
+                  size={24}
+                  color={COLORS.primaryBlue}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  style={styles.input}
+                  value={email}
+                  onChangeText={(text) => {
+                    setEmail(text);
+                    if (errorState) clearErrorState();
+                  }}
+                  placeholder="Booking email (passengers)"
+                  placeholderTextColor={COLORS.placeholderText}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  autoCorrect={false}
                   returnKeyType="go"
                   onSubmitEditing={handleLogin}
                   editable={!loading}

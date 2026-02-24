@@ -49,6 +49,43 @@ try {
 }
 const { parseTimestampMs } = require('./timeUtils');
 
+const buildPassengerLoginVerifierUrl = () => {
+  const explicitUrl = process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL?.trim();
+  if (explicitUrl) return explicitUrl;
+
+  const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID?.trim();
+  if (!projectId) return null;
+
+  return `https://europe-west1-${projectId}.cloudfunctions.net/verifyPassengerLogin`;
+};
+
+const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
+  const endpoint = buildPassengerLoginVerifierUrl();
+  if (!endpoint) {
+    return { valid: false, reason: 'VERIFIER_NOT_CONFIGURED' };
+  }
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookingRef, email }),
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      return { valid: false, reason: payload?.reason || 'VERIFIER_REQUEST_FAILED' };
+    }
+
+    return payload || { valid: false, reason: 'EMPTY_VERIFIER_RESPONSE' };
+  } catch (error) {
+    logger?.error?.('Auth', 'Passenger login verification request failed', {
+      error: error?.message || String(error),
+    });
+    return { valid: false, reason: 'VERIFIER_REQUEST_FAILED' };
+  }
+};
+
 // ==================== VALIDATION HELPERS ====================
 
 /**
@@ -493,7 +530,7 @@ const assignDriverToTour = async (driverId, tourCode) => {
 };
 
 // --- EXISTING: Validate Reference ---
-const validateBookingReference = async (reference) => {
+const validateBookingReference = async (reference, email) => {
   try {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
 
@@ -532,16 +569,42 @@ const validateBookingReference = async (reference) => {
     }
 
     // --- 2. CHECK: Is it a Passenger Booking? ---
-    const bookingSnapshot = await realtimeDb.ref(`bookings/${upperRef}`).once('value');
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    if (!normalizedEmail) {
+      return { valid: false, error: 'Email is required for passenger login verification' };
+    }
+
+    const passengerVerification = await verifyPassengerLoginIdentity({
+      bookingRef: upperRef,
+      email: normalizedEmail,
+    });
+
+    if (!passengerVerification?.valid) {
+      const reasonToMessage = {
+        BOOKING_NOT_FOUND: 'Booking reference not found',
+        EMAIL_MISMATCH: 'Email does not match this booking reference',
+        IDENTITY_INCOMPLETE: 'Booking identity record is incomplete',
+        INVALID_INPUT: 'Invalid login details provided',
+        VERIFIER_NOT_CONFIGURED: 'Passenger verification service is not configured',
+      };
+      return {
+        valid: false,
+        error: reasonToMessage[passengerVerification?.reason] || 'Unable to verify passenger login',
+      };
+    }
+
+    const resolvedBookingRef = validateBookingRef(passengerVerification.bookingRef || upperRef);
+
+    const bookingSnapshot = await realtimeDb.ref(`bookings/${resolvedBookingRef}`).once('value');
 
     if (!bookingSnapshot.exists()) {
       return { valid: false, error: 'Booking reference not found' };
     }
 
     const bookingData = bookingSnapshot.val();
-    const { normalizedBooking } = await ensureBookingSchemaConsistency(upperRef, bookingData, realtimeDb);
+    const { normalizedBooking } = await ensureBookingSchemaConsistency(resolvedBookingRef, bookingData, realtimeDb);
 
-    const tourId = sanitizeTourId(bookingData.tourCode);
+    const tourId = passengerVerification.tourId || sanitizeTourId(passengerVerification.tourCode || bookingData.tourCode);
     const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
 
     if (!tourSnapshot.exists()) {

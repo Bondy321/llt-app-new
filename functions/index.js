@@ -194,6 +194,70 @@ const parseTimestampToMillis = (timestamp) => {
   return null;
 };
 
+const normalizeBookingRef = (bookingRef) => {
+  if (typeof bookingRef !== 'string') return '';
+  return bookingRef.trim().toUpperCase();
+};
+
+const normalizeEmail = (email) => {
+  if (typeof email !== 'string') return '';
+  return email.trim().toLowerCase();
+};
+
+exports.verifyPassengerLogin = onRequest(
+  {
+    region: 'europe-west1',
+    maxInstances: 10,
+  },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ valid: false, reason: 'METHOD_NOT_ALLOWED' });
+    }
+
+    const bookingRef = normalizeBookingRef(req.body?.bookingRef);
+    const email = normalizeEmail(req.body?.email);
+
+    if (!bookingRef || !email) {
+      return res.status(400).json({ valid: false, reason: 'INVALID_INPUT' });
+    }
+
+    try {
+      const identitySnapshot = await admin.database().ref(`booking_identities/${bookingRef}`).once('value');
+
+      if (!identitySnapshot.exists()) {
+        return res.status(404).json({ valid: false, reason: 'BOOKING_NOT_FOUND' });
+      }
+
+      const identity = identitySnapshot.val() || {};
+      const storedEmail = normalizeEmail(identity.email);
+
+      if (!storedEmail || storedEmail !== email) {
+        return res.status(200).json({ valid: false, reason: 'EMAIL_MISMATCH' });
+      }
+
+      const resolvedBookingRef = normalizeBookingRef(identity.bookingRef || bookingRef);
+      const resolvedTourId = typeof identity.tourId === 'string' ? identity.tourId.trim() : '';
+      const resolvedTourCode = typeof identity.tourCode === 'string' ? identity.tourCode.trim() : '';
+
+      if (!resolvedBookingRef || (!resolvedTourId && !resolvedTourCode)) {
+        log.warn('Booking identity missing essential identifiers', { bookingRef });
+        return res.status(200).json({ valid: false, reason: 'IDENTITY_INCOMPLETE' });
+      }
+
+      return res.status(200).json({
+        valid: true,
+        reason: 'OK',
+        bookingRef: resolvedBookingRef,
+        tourId: resolvedTourId || null,
+        tourCode: resolvedTourCode || null,
+      });
+    } catch (error) {
+      log.error('Passenger login verification failed', error, { bookingRef });
+      return res.status(500).json({ valid: false, reason: 'INTERNAL_ERROR' });
+    }
+  }
+);
+
 /**
  * One-time migration helper:
  * Normalizes legacy broadcast timestamps (ISO strings) into numeric epoch milliseconds.
