@@ -3,6 +3,7 @@ import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS as THEME } from '../theme';
+import { getTourDayContext } from '../services/itineraryDateParser';
 
 const COLORS = {
   primaryBlue: THEME.primary,
@@ -16,42 +17,20 @@ const COLORS = {
 
 export default function TodaysAgendaCard({ tourData, onNudge }) {
   const currentDayData = useMemo(() => {
-    if (!tourData || !tourData.startDate || !tourData.itinerary || !tourData.itinerary.days) {
+    if (!tourData?.startDate || !tourData?.itinerary?.days) {
       return null;
     }
 
-    // 1. Parse Start Date (UK Format dd/MM/yyyy)
-    const [day, month, year] = tourData.startDate.split('/').map(Number);
-    const start = new Date(year, month - 1, day);
+    const dayContext = getTourDayContext({
+      startDate: tourData.startDate,
+      itineraryDays: tourData.itinerary.days,
+    });
 
-    // 2. Get "Today" (Reset time to midnight for fair comparison)
-    const today = new Date();
-    start.setHours(0, 0, 0, 0);
-    today.setHours(0, 0, 0, 0);
-
-    // 3. Calculate Difference in Days
-    const diffTime = today - start;
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    const dayIndex = diffDays; // Day 1 is index 0
-
-    // 4. Determine Status
-    if (dayIndex < 0) {
-      return { status: 'FUTURE', daysToGo: Math.abs(dayIndex) };
+    if (dayContext.status === 'INVALID_START_DATE' || dayContext.status === 'NO_ITINERARY_DAYS') {
+      return null;
     }
 
-    const itineraryDays = tourData.itinerary.days;
-
-    // If tour is finished
-    if (dayIndex >= itineraryDays.length) {
-      return { status: 'COMPLETED' };
-    }
-
-    // Return the actual data for today
-    return {
-      status: 'ACTIVE',
-      dayNumber: dayIndex + 1,
-      data: itineraryDays[dayIndex]
-    };
+    return dayContext;
   }, [tourData]);
 
   if (!currentDayData) return null;
