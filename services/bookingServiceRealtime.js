@@ -4,6 +4,7 @@ const isTestEnv = process.env.NODE_ENV === 'test';
 let realtimeDb;
 let auth;
 let logger;
+let getCurrentAppCheckToken;
 let maskIdentifier = (value) => value;
 
 // Status Enums for the Manifest
@@ -26,7 +27,7 @@ if (!isTestEnv) {
   }
 
   try {
-    ({ realtimeDb, auth } = require('../firebase'));
+    ({ realtimeDb, auth, getCurrentAppCheckToken } = require('../firebase'));
   } catch (error) {
     if (logger?.warn) {
       logger.warn('BookingService', 'Realtime database module not initialized during load', { error: error.message });
@@ -68,6 +69,33 @@ const getPassengerLoginVerifierTimeoutMs = () => {
   return 10000;
 };
 
+const shouldRequireAppCheckForPassengerVerifier = () => {
+  // Staged rollout default: best-effort App Check. Set EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK=true
+  // to fail fast on token retrieval issues before calling the verifier endpoint.
+  return process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK === 'true';
+};
+
+const getAppCheckHeaderValue = async () => {
+  if (typeof getCurrentAppCheckToken !== 'function') {
+    return { success: false, reason: 'APPCHECK_PROVIDER_UNAVAILABLE' };
+  }
+
+  try {
+    const token = await getCurrentAppCheckToken();
+    if (typeof token === 'string' && token.trim()) {
+      return { success: true, token: token.trim() };
+    }
+
+    return { success: false, reason: 'APPCHECK_TOKEN_UNAVAILABLE' };
+  } catch (error) {
+    return {
+      success: false,
+      reason: 'APPCHECK_TOKEN_FETCH_FAILED',
+      error: error?.message || String(error),
+    };
+  }
+};
+
 const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
   const endpoint = buildPassengerLoginVerifierUrl();
   if (!endpoint) {
@@ -83,9 +111,32 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
       controller.abort();
     }, timeoutMs);
 
+    const appCheckResult = await getAppCheckHeaderValue();
+    const strictAppCheck = shouldRequireAppCheckForPassengerVerifier();
+
+    if (!appCheckResult.success && strictAppCheck) {
+      return {
+        valid: false,
+        reason: 'VERIFIER_APPCHECK_UNAVAILABLE',
+        appCheckFailureReason: appCheckResult.reason,
+      };
+    }
+
+    if (!appCheckResult.success) {
+      logger?.warn?.('Auth', 'Passenger verifier App Check token unavailable; proceeding without header', {
+        reason: appCheckResult.reason,
+        error: appCheckResult.error,
+      });
+    }
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (appCheckResult.success) {
+      headers['x-firebase-appcheck'] = appCheckResult.token;
+    }
+
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ bookingRef, email }),
       signal: controller.signal,
     });
@@ -646,6 +697,7 @@ const validateBookingReference = async (reference, email) => {
         VERIFIER_TIMEOUT: 'Verification is taking longer than expected. Please check your connection and try again.',
         VERIFIER_REQUEST_FAILED: 'Unable to reach the verification service. Please try again shortly.',
         VERIFIER_INVALID_RESPONSE: 'Verification service returned an unexpected response. Please try again.',
+        VERIFIER_APPCHECK_UNAVAILABLE: 'App security check could not be completed. Update the app or reconnect and try again.',
       };
       return {
         valid: false,
