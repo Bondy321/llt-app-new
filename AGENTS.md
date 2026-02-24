@@ -2,7 +2,7 @@
 
 Welcome, Agent. This document provides a comprehensive overview of the current state of the LLT App ecosystem. It details the architecture, technologies, patterns, known issues, and guidelines for contributing.
 
-**Last Updated:** January 2026 (Pre-Production UX QA refresh)
+**Last Updated:** February 2026 (Production readiness + verifier hardening)
 
 ---
 
@@ -1116,6 +1116,8 @@ Never commit secrets. Use EAS Secrets for environment variables in builds.
 - **Notification preferences confidence UX:** Notification settings now include dirty-state save controls, inline success/error banners, explicit “last saved” feedback, and in-screen test-notification status with retry.
 - **Driver assignment contract alignment (web + mobile):** web-admin now treats `drivers/{driverId}/currentTourId` as the canonical active-tour field (with `activeTourId` as read-only legacy fallback) and clears the legacy key on write to keep admin mutations compatible with mobile runtime expectations.
 - **Driver login payload enrichment:** `validateBookingReference()` now resolves and returns the driver’s assigned tour payload (`tour`) plus an explicit `assignmentStatus` (`ASSIGNED`, `ASSIGNED_TOUR_NOT_FOUND`, `UNASSIGNED`) so App login can hydrate Driver Home context immediately after authentication.
+- **Passenger verifier explicit reason mapping:** `validateBookingReference()` now maps additional verifier reasons to clear passenger-safe copy for `INVALID_CREDENTIALS`, `TRY_AGAIN_LATER`, `INTERNAL_ERROR`, and `METHOD_NOT_ALLOWED`, improving deterministic login recovery guidance.
+- **Verifier mapping regression coverage:** `tests/validateBookingReference.passengerVerifier.test.js` includes dedicated assertions for each explicit reason mapping above to prevent drift in passenger-facing login error copy.
 
 ## Quick Reference
 
