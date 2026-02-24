@@ -5,10 +5,26 @@ const path = require('node:path');
 const SERVICE_PATH = path.resolve(__dirname, '../services/bookingServiceRealtime.js');
 const FIREBASE_PATH = path.resolve(__dirname, '../firebase.js');
 
-const createMockRealtimeDb = (state) => ({
-  ref(dbPath = '') {
+const createMockRealtimeDb = (state) => {
+  const buildRef = (dbPath = '') => {
     const segments = dbPath.split('/').filter(Boolean);
     const getValue = () => segments.reduce((node, key) => (node || {})[key], state);
+    const setValue = (pathSegments, value) => {
+      if (pathSegments.length === 0) {
+        return;
+      }
+
+      let cursor = state;
+      for (let index = 0; index < pathSegments.length - 1; index += 1) {
+        const key = pathSegments[index];
+        if (!cursor[key] || typeof cursor[key] !== 'object') {
+          cursor[key] = {};
+        }
+        cursor = cursor[key];
+      }
+
+      cursor[pathSegments[pathSegments.length - 1]] = value;
+    };
 
     return {
       async once() {
@@ -19,11 +35,22 @@ const createMockRealtimeDb = (state) => ({
         };
       },
       async update(updates) {
-        Object.assign(state, updates);
+        Object.entries(updates || {}).forEach(([pathKey, value]) => {
+          const pathSegments = [...segments, ...pathKey.split('/').filter(Boolean)];
+          setValue(pathSegments, value);
+        });
       },
+      child(childPath) {
+        const nextPath = [...segments, ...String(childPath).split('/').filter(Boolean)].join('/');
+        return buildRef(nextPath);
+      }
     };
-  },
-});
+  };
+
+  return {
+    ref: buildRef,
+  };
+};
 
 const loadServiceWithDb = (state) => {
   const previousNodeEnv = process.env.NODE_ENV;
@@ -90,6 +117,86 @@ test('validateBookingReference handles non-JSON verifier responses deterministic
 
     assert.equal(result.valid, false);
     assert.equal(result.error, 'Verification service returned an unexpected response. Please try again.');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference normalizes verifier tourId before tour lookup', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        valid: true,
+        bookingRef: 'ABC123',
+        tourId: ' 5112d 8 ',
+        tourCode: 'SHOULD_NOT_BE_USED',
+      }),
+    });
+
+    const service = loadServiceWithDb({
+      drivers: {},
+      bookings: {
+        ABC123: {
+          bookingRef: 'ABC123',
+          tourCode: '5112D 8',
+          passengerNames: ['Alex'],
+          pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+        },
+      },
+      tours: {
+        '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true, participants: {}, currentParticipants: 0 },
+      },
+    });
+
+    const result = await service.validateBookingReference('abc123', 'traveller@example.com');
+
+    assert.equal(result.valid, true);
+    assert.equal(result.tour.id, '5112D_8');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference derives tourId from verifier tourCode when tourId is invalid', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        valid: true,
+        bookingRef: 'ABC123',
+        tourId: '$$$',
+        tourCode: ' 5112d 8 ',
+      }),
+    });
+
+    const service = loadServiceWithDb({
+      drivers: {},
+      bookings: {
+        ABC123: {
+          bookingRef: 'ABC123',
+          tourCode: '5112D 8',
+          passengerNames: ['Alex'],
+          pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+        },
+      },
+      tours: {
+        '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true, participants: {}, currentParticipants: 0 },
+      },
+    });
+
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, true);
+    assert.equal(result.tour.id, '5112D_8');
   } finally {
     global.fetch = originalFetch;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
