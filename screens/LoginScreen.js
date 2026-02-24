@@ -43,6 +43,7 @@ const OFFLINE_LOGIN_REASON_COPY = {
   NO_CACHED_SESSION: 'This device has no verified offline trip for this code yet. Connect once to verify this booking/driver code on this device, then offline login will work next time.',
   CODE_MISMATCH: 'The code you entered does not match the trip cached on this device. Check for typing errors, or reconnect so we can verify the correct code online.',
   CACHE_EXPIRED: 'Your offline trip cache has expired. Reconnect briefly once to verify, then offline mode will work next time.',
+  EMAIL_MISMATCH: 'The booking email entered does not match the cached trip on this device. Use the original booking email or reconnect to verify online.',
 };
 
 const SUPPORT_PHONE = process.env.EXPO_PUBLIC_SUPPORT_PHONE?.trim();
@@ -193,7 +194,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     }
 
     if (!isConnected) {
-      const offlineCheck = await resolveOfflineLogin?.(bookingReference.trim());
+      const offlineCheck = await resolveOfflineLogin?.(bookingReference.trim(), normalizedEmail);
       if (offlineCheck?.success) {
         activeLogger?.info('Login', 'Offline login fallback accepted', {
           ref: maskIdentifier(bookingReference.trim().toUpperCase()),
@@ -220,7 +221,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         {
           title: 'Offline login unavailable',
           reason,
-          showOfflineActions: ['NO_CACHED_SESSION', 'CODE_MISMATCH', 'CACHE_EXPIRED'].includes(reason),
+          showOfflineActions: ['NO_CACHED_SESSION', 'CODE_MISMATCH', 'CACHE_EXPIRED', 'EMAIL_MISMATCH'].includes(reason),
         }
       ));
       return;
