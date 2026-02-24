@@ -59,30 +59,60 @@ const buildPassengerLoginVerifierUrl = () => {
   return `https://europe-west1-${projectId}.cloudfunctions.net/verifyPassengerLogin`;
 };
 
+const getPassengerLoginVerifierTimeoutMs = () => {
+  const configured = Number(process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS);
+  if (Number.isFinite(configured) && configured >= 1000) {
+    return configured;
+  }
+
+  return 10000;
+};
+
 const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
   const endpoint = buildPassengerLoginVerifierUrl();
   if (!endpoint) {
     return { valid: false, reason: 'VERIFIER_NOT_CONFIGURED' };
   }
 
+  const controller = new AbortController();
+  const timeoutMs = getPassengerLoginVerifierTimeoutMs();
+  let timeoutHandle;
+
   try {
+    timeoutHandle = setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
+
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ bookingRef, email }),
+      signal: controller.signal,
     });
 
     const payload = await response.json().catch(() => null);
+    if (!payload) {
+      return { valid: false, reason: 'VERIFIER_INVALID_RESPONSE' };
+    }
+
     if (!response.ok) {
       return { valid: false, reason: payload?.reason || 'VERIFIER_REQUEST_FAILED' };
     }
 
-    return payload || { valid: false, reason: 'EMPTY_VERIFIER_RESPONSE' };
+    return payload;
   } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { valid: false, reason: 'VERIFIER_TIMEOUT' };
+    }
+
     logger?.error?.('Auth', 'Passenger login verification request failed', {
       error: error?.message || String(error),
     });
     return { valid: false, reason: 'VERIFIER_REQUEST_FAILED' };
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
   }
 };
 
@@ -586,6 +616,9 @@ const validateBookingReference = async (reference, email) => {
         IDENTITY_INCOMPLETE: 'Booking identity record is incomplete',
         INVALID_INPUT: 'Invalid login details provided',
         VERIFIER_NOT_CONFIGURED: 'Passenger verification service is not configured',
+        VERIFIER_TIMEOUT: 'Verification is taking longer than expected. Please check your connection and try again.',
+        VERIFIER_REQUEST_FAILED: 'Unable to reach the verification service. Please try again shortly.',
+        VERIFIER_INVALID_RESPONSE: 'Verification service returned an unexpected response. Please try again.',
       };
       return {
         valid: false,
