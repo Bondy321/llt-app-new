@@ -47,6 +47,7 @@ try {
     console.warn('Offline sync service unavailable:', error.message);
   }
 }
+const { parseTimestampMs } = require('./timeUtils');
 
 // ==================== VALIDATION HELPERS ====================
 
@@ -311,8 +312,8 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
     const bookingManifestRef = db.ref(`tour_manifests/${tourId}/bookings/${validatedBookingRef}`);
     const snapshot = await bookingManifestRef.once('value');
     const existing = snapshot.exists() ? snapshot.val() : {};
-    const serverUpdatedAt = existing.lastUpdated ? new Date(existing.lastUpdated).getTime() : 0;
-    const localUpdatedAt = payload.lastUpdated ? new Date(payload.lastUpdated).getTime() : Date.now();
+    const serverUpdatedAt = parseTimestampMs(existing.lastUpdated) || 0;
+    const localUpdatedAt = parseTimestampMs(payload.lastUpdated) || Date.now();
 
     if (serverUpdatedAt > localUpdatedAt) {
       logger?.warn?.('Manifest', 'Queued update reconciled to newer server data', {
