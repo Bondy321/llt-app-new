@@ -4,6 +4,7 @@ const isTestEnv = process.env.NODE_ENV === 'test';
 let realtimeDb;
 let auth;
 let logger;
+let getCurrentAppCheckToken;
 let maskIdentifier = (value) => value;
 
 // Status Enums for the Manifest
@@ -26,7 +27,7 @@ if (!isTestEnv) {
   }
 
   try {
-    ({ realtimeDb, auth } = require('../firebase'));
+    ({ realtimeDb, auth, getCurrentAppCheckToken } = require('../firebase'));
   } catch (error) {
     if (logger?.warn) {
       logger.warn('BookingService', 'Realtime database module not initialized during load', { error: error.message });
@@ -48,6 +49,123 @@ try {
   }
 }
 const { parseTimestampMs } = require('./timeUtils');
+
+const buildPassengerLoginVerifierUrl = () => {
+  const explicitUrl = process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL?.trim();
+  if (explicitUrl) return explicitUrl;
+
+  const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID?.trim();
+  if (!projectId) return null;
+
+  return `https://europe-west1-${projectId}.cloudfunctions.net/verifyPassengerLogin`;
+};
+
+const getPassengerLoginVerifierTimeoutMs = () => {
+  const configured = Number(process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS);
+  if (Number.isFinite(configured) && configured >= 1000) {
+    return configured;
+  }
+
+  return 10000;
+};
+
+const shouldRequireAppCheckForPassengerVerifier = () => {
+  // Staged rollout default: best-effort App Check. Set EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK=true
+  // to fail fast on token retrieval issues before calling the verifier endpoint.
+  return process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK === 'true';
+};
+
+const getAppCheckHeaderValue = async () => {
+  if (typeof getCurrentAppCheckToken !== 'function') {
+    return { success: false, reason: 'APPCHECK_PROVIDER_UNAVAILABLE' };
+  }
+
+  try {
+    const token = await getCurrentAppCheckToken();
+    if (typeof token === 'string' && token.trim()) {
+      return { success: true, token: token.trim() };
+    }
+
+    return { success: false, reason: 'APPCHECK_TOKEN_UNAVAILABLE' };
+  } catch (error) {
+    return {
+      success: false,
+      reason: 'APPCHECK_TOKEN_FETCH_FAILED',
+      error: error?.message || String(error),
+    };
+  }
+};
+
+const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
+  const endpoint = buildPassengerLoginVerifierUrl();
+  if (!endpoint) {
+    return { valid: false, reason: 'VERIFIER_NOT_CONFIGURED' };
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = getPassengerLoginVerifierTimeoutMs();
+  let timeoutHandle;
+
+  try {
+    timeoutHandle = setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
+
+    const appCheckResult = await getAppCheckHeaderValue();
+    const strictAppCheck = shouldRequireAppCheckForPassengerVerifier();
+
+    if (!appCheckResult.success && strictAppCheck) {
+      return {
+        valid: false,
+        reason: 'VERIFIER_APPCHECK_UNAVAILABLE',
+        appCheckFailureReason: appCheckResult.reason,
+      };
+    }
+
+    if (!appCheckResult.success) {
+      logger?.warn?.('Auth', 'Passenger verifier App Check token unavailable; proceeding without header', {
+        reason: appCheckResult.reason,
+        error: appCheckResult.error,
+      });
+    }
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (appCheckResult.success) {
+      headers['x-firebase-appcheck'] = appCheckResult.token;
+    }
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ bookingRef, email }),
+      signal: controller.signal,
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!payload) {
+      return { valid: false, reason: 'VERIFIER_INVALID_RESPONSE' };
+    }
+
+    if (!response.ok) {
+      return { valid: false, reason: payload?.reason || 'VERIFIER_REQUEST_FAILED' };
+    }
+
+    return payload;
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { valid: false, reason: 'VERIFIER_TIMEOUT' };
+    }
+
+    logger?.error?.('Auth', 'Passenger login verification request failed', {
+      error: error?.message || String(error),
+    });
+    return { valid: false, reason: 'VERIFIER_REQUEST_FAILED' };
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+};
 
 // ==================== VALIDATION HELPERS ====================
 
@@ -112,6 +230,33 @@ const validatePassengerStatuses = (statuses) => {
 // --- HELPER: Sanitize Tour IDs (e.g., "5112D 8" -> "5112D_8") ---
 const sanitizeTourId = (tourCode) => {
   return tourCode ? tourCode.replace(/\s+/g, '_') : null;
+};
+
+const normalizeTourIdentifier = (candidate) => {
+  if (typeof candidate !== 'string') return null;
+
+  const trimmed = candidate.trim();
+  if (!trimmed) return null;
+
+  const sanitized = sanitizeTourId(trimmed.toUpperCase());
+  if (!sanitized) return null;
+
+  const keySafe = sanitized.replace(/[.#$\[\]/]/g, '');
+  return keySafe || null;
+};
+
+const isValidNormalizedTourId = (tourId) => {
+  return typeof tourId === 'string' && /^[A-Z0-9][A-Z0-9_-]*$/.test(tourId);
+};
+
+const resolveVerifierTourId = (passengerVerification = {}, bookingData = {}) => {
+  const verifierTourId = normalizeTourIdentifier(passengerVerification.tourId);
+  if (isValidNormalizedTourId(verifierTourId)) {
+    return verifierTourId;
+  }
+
+  const fallbackTourId = normalizeTourIdentifier(passengerVerification.tourCode || bookingData.tourCode);
+  return isValidNormalizedTourId(fallbackTourId) ? fallbackTourId : null;
 };
 
 // --- HELPERS: Manifest Status Derivation ---
@@ -493,7 +638,7 @@ const assignDriverToTour = async (driverId, tourCode) => {
 };
 
 // --- EXISTING: Validate Reference ---
-const validateBookingReference = async (reference) => {
+const validateBookingReference = async (reference, email) => {
   try {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
 
@@ -532,16 +677,54 @@ const validateBookingReference = async (reference) => {
     }
 
     // --- 2. CHECK: Is it a Passenger Booking? ---
-    const bookingSnapshot = await realtimeDb.ref(`bookings/${upperRef}`).once('value');
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    if (!normalizedEmail) {
+      return { valid: false, error: 'Email is required for passenger login verification' };
+    }
+
+    const passengerVerification = await verifyPassengerLoginIdentity({
+      bookingRef: upperRef,
+      email: normalizedEmail,
+    });
+
+    if (!passengerVerification?.valid) {
+      const reasonToMessage = {
+        BOOKING_NOT_FOUND: 'Booking reference not found',
+        EMAIL_MISMATCH: 'Email does not match this booking reference',
+        INVALID_CREDENTIALS: 'Login details could not be verified. Please check your details and try again.',
+        IDENTITY_INCOMPLETE: 'Booking identity record is incomplete',
+        INVALID_INPUT: 'Invalid login details provided',
+        TRY_AGAIN_LATER: 'Too many verification attempts. Please wait a moment and try again.',
+        INTERNAL_ERROR: 'Verification service is temporarily unavailable. Please try again shortly.',
+        METHOD_NOT_ALLOWED: 'Verification service is currently unavailable. Please update the app and try again shortly.',
+        VERIFIER_NOT_CONFIGURED: 'Passenger verification service is not configured',
+        VERIFIER_TIMEOUT: 'Verification is taking longer than expected. Please check your connection and try again.',
+        VERIFIER_REQUEST_FAILED: 'Unable to reach the verification service. Please try again shortly.',
+        VERIFIER_INVALID_RESPONSE: 'Verification service returned an unexpected response. Please try again.',
+        VERIFIER_APPCHECK_UNAVAILABLE: 'App security check could not be completed. Update the app or reconnect and try again.',
+      };
+      return {
+        valid: false,
+        error: reasonToMessage[passengerVerification?.reason] || 'Unable to verify passenger login',
+      };
+    }
+
+    const resolvedBookingRef = validateBookingRef(passengerVerification.bookingRef || upperRef);
+
+    const bookingSnapshot = await realtimeDb.ref(`bookings/${resolvedBookingRef}`).once('value');
 
     if (!bookingSnapshot.exists()) {
       return { valid: false, error: 'Booking reference not found' };
     }
 
     const bookingData = bookingSnapshot.val();
-    const { normalizedBooking } = await ensureBookingSchemaConsistency(upperRef, bookingData, realtimeDb);
+    const { normalizedBooking } = await ensureBookingSchemaConsistency(resolvedBookingRef, bookingData, realtimeDb);
 
-    const tourId = sanitizeTourId(bookingData.tourCode);
+    const tourId = resolveVerifierTourId(passengerVerification, bookingData);
+    if (!tourId) {
+      return { valid: false, error: 'Tour information not available' };
+    }
+
     const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
 
     if (!tourSnapshot.exists()) {
@@ -559,7 +742,10 @@ const validateBookingReference = async (reference) => {
     return {
       valid: true,
       type: 'passenger',
-      booking: normalizedBooking,
+      booking: {
+        ...normalizedBooking,
+        normalizedPassengerEmail: normalizedEmail,
+      },
       tour: {
         id: tourId,
         ...tourData,

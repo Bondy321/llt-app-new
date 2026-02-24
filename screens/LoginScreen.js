@@ -43,6 +43,7 @@ const OFFLINE_LOGIN_REASON_COPY = {
   NO_CACHED_SESSION: 'This device has no verified offline trip for this code yet. Connect once to verify this booking/driver code on this device, then offline login will work next time.',
   CODE_MISMATCH: 'The code you entered does not match the trip cached on this device. Check for typing errors, or reconnect so we can verify the correct code online.',
   CACHE_EXPIRED: 'Your offline trip cache has expired. Reconnect briefly once to verify, then offline mode will work next time.',
+  EMAIL_MISMATCH: 'The booking email entered does not match the cached trip on this device. Use the original booking email or reconnect to verify online.',
 };
 
 const SUPPORT_PHONE = process.env.EXPO_PUBLIC_SUPPORT_PHONE?.trim();
@@ -57,6 +58,7 @@ const createErrorState = (message, options = {}) => ({
 
 export default function LoginScreen({ onLoginSuccess, logger, isConnected, resolveOfflineLogin }) {
   const [bookingReference, setBookingReference] = useState('');
+  const [email, setEmail] = useState('');
   const [errorState, setErrorState] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showOfflineHelp, setShowOfflineHelp] = useState(false);
@@ -182,8 +184,17 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       return;
     }
 
+    const normalizedReference = bookingReference.trim().toUpperCase();
+    const isDriverCode = normalizedReference.startsWith('D-');
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!isDriverCode && normalizedEmail.length === 0) {
+      setSimpleError('Please enter the booking email used for this reservation.');
+      return;
+    }
+
     if (!isConnected) {
-      const offlineCheck = await resolveOfflineLogin?.(bookingReference.trim());
+      const offlineCheck = await resolveOfflineLogin?.(bookingReference.trim(), normalizedEmail);
       if (offlineCheck?.success) {
         activeLogger?.info('Login', 'Offline login fallback accepted', {
           ref: maskIdentifier(bookingReference.trim().toUpperCase()),
@@ -210,7 +221,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         {
           title: 'Offline login unavailable',
           reason,
-          showOfflineActions: ['NO_CACHED_SESSION', 'CODE_MISMATCH', 'CACHE_EXPIRED'].includes(reason),
+          showOfflineActions: ['NO_CACHED_SESSION', 'CODE_MISMATCH', 'CACHE_EXPIRED', 'EMAIL_MISMATCH'].includes(reason),
         }
       ));
       return;
@@ -222,7 +233,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
 
     try {
       const startTime = Date.now();
-      const result = await validateBookingReference(bookingReference.trim());
+      const result = await validateBookingReference(bookingReference.trim(), normalizedEmail);
       const duration = Date.now() - startTime;
       
       activeLogger?.trackAPI('/validateBooking', 'POST', result.valid ? 200 : 404, duration);
@@ -341,6 +352,31 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                   autoCapitalize="characters"
                   autoCorrect={false}
                   maxLength={20}
+                  returnKeyType="go"
+                  onSubmitEditing={handleLogin}
+                  editable={!loading}
+                />
+              </View>
+
+              <View style={styles.inputContainer}>
+                <MaterialCommunityIcons
+                  name="email-outline"
+                  size={24}
+                  color={COLORS.primaryBlue}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  style={styles.input}
+                  value={email}
+                  onChangeText={(text) => {
+                    setEmail(text);
+                    if (errorState) clearErrorState();
+                  }}
+                  placeholder="Booking email (passengers)"
+                  placeholderTextColor={COLORS.placeholderText}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  autoCorrect={false}
                   returnKeyType="go"
                   onSubmitEditing={handleLogin}
                   editable={!loading}
