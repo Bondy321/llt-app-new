@@ -13,6 +13,7 @@ import useDiagnostics from './hooks/useDiagnostics';
 import offlineSyncService from './services/offlineSyncService';
 import * as bookingService from './services/bookingServiceRealtime';
 import * as chatService from './services/chatService';
+import offlineLoginResolver from './services/offlineLoginResolver';
 import { COLORS as THEME } from './theme';
 
 // Import Screens
@@ -44,13 +45,7 @@ const SESSION_KEYS = {
   LAST_SCREEN: '@LLT:lastScreen',
 };
 
-const OFFLINE_LOGIN_REASONS = {
-  NO_CACHED_SESSION: 'NO_CACHED_SESSION',
-  CODE_MISMATCH: 'CODE_MISMATCH',
-  CACHE_EXPIRED: 'CACHE_EXPIRED',
-};
-
-const OFFLINE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
+const { normalizePassengerEmail, resolveOfflineLoginFromCache } = offlineLoginResolver;
 
 // --- SESSION STORAGE SETUP (AsyncStorage fallback to mock for tests/web) ---
 const createSessionStorage = () => {
@@ -180,12 +175,16 @@ export default function App() {
     }
   };
 
-  const saveSession = async () => {
+  const saveSession = async (overrides = {}) => {
     try {
+      const persistedTourData = Object.prototype.hasOwnProperty.call(overrides, 'tourData') ? overrides.tourData : tourData;
+      const persistedBookingData = Object.prototype.hasOwnProperty.call(overrides, 'bookingData') ? overrides.bookingData : bookingData;
+      const persistedScreen = Object.prototype.hasOwnProperty.call(overrides, 'currentScreen') ? overrides.currentScreen : currentScreen;
+
       await SessionStorage.multiSet([
-        [SESSION_KEYS.TOUR_DATA, JSON.stringify(tourData)],
-        [SESSION_KEYS.BOOKING_DATA, JSON.stringify(bookingData)],
-        [SESSION_KEYS.LAST_SCREEN, currentScreen]
+        [SESSION_KEYS.TOUR_DATA, JSON.stringify(persistedTourData)],
+        [SESSION_KEYS.BOOKING_DATA, JSON.stringify(persistedBookingData)],
+        [SESSION_KEYS.LAST_SCREEN, persistedScreen]
       ]);
     } catch (error) {
       logger.error('Session', 'Failed to save session', { error: error.message });
@@ -214,91 +213,15 @@ export default function App() {
     }
   };
 
-  const resolveOfflineLogin = async (reference) => {
-    const normalizedReference = (reference || '').trim().toUpperCase();
-    if (!normalizedReference) {
-      return { success: false, error: 'Please enter your Booking Reference.' };
-    }
-
-    try {
-      const [savedTourData, savedBookingData] = await SessionStorage.multiGet([
-        SESSION_KEYS.TOUR_DATA,
-        SESSION_KEYS.BOOKING_DATA,
-      ]);
-
-      const cachedTourData = savedTourData?.[1] ? JSON.parse(savedTourData[1]) : null;
-      const cachedBookingData = savedBookingData?.[1] ? JSON.parse(savedBookingData[1]) : null;
-
-      const cachedSessionId = (cachedBookingData?.id || '').toUpperCase();
-      const isDriverCode = normalizedReference.startsWith('D-');
-      const expectedRole = isDriverCode ? 'driver' : 'passenger';
-      const cachedTourId = cachedTourData?.id || cachedBookingData?.assignedTourId || null;
-
-      if (cachedSessionId && cachedSessionId === normalizedReference) {
-        return {
-          success: true,
-          source: 'session',
-          type: expectedRole,
-          tour: cachedTourData,
-          identity: cachedBookingData,
-        };
-      }
-
-      if (!cachedTourId) {
-        return {
-          success: false,
-          reason: OFFLINE_LOGIN_REASONS.NO_CACHED_SESSION,
-          error: 'No cached trip found for this code; reconnect once to verify.',
-        };
-      }
-
-      const cachedPackMetaResult = await offlineSyncService.getTourPackMeta(cachedTourId, expectedRole);
-      const lastSyncedAt = cachedPackMetaResult?.success ? cachedPackMetaResult?.data?.lastSyncedAt : null;
-      if (lastSyncedAt) {
-        const lastSyncedTime = new Date(lastSyncedAt).getTime();
-        if (Number.isFinite(lastSyncedTime) && Date.now() - lastSyncedTime > OFFLINE_CACHE_TTL_MS) {
-          return {
-            success: false,
-            reason: OFFLINE_LOGIN_REASONS.CACHE_EXPIRED,
-            error: 'Offline cache expired; reconnect once to refresh your trip.',
-          };
-        }
-      }
-
-      const cachedPackResult = await offlineSyncService.getTourPack(cachedTourId, expectedRole);
-      if (cachedPackResult?.success && cachedPackResult?.data) {
-        const packIdentity = expectedRole === 'driver'
-          ? cachedPackResult.data.driver
-          : cachedPackResult.data.booking;
-        const packIdentityId = (packIdentity?.id || '').toUpperCase();
-        if (packIdentityId && packIdentityId === normalizedReference) {
-          return {
-            success: true,
-            source: 'tour-pack',
-            type: expectedRole,
-            tour: cachedPackResult.data.tour || cachedTourData,
-            identity: packIdentity,
-          };
-        }
-      }
-
-      return {
-        success: false,
-        reason: OFFLINE_LOGIN_REASONS.CODE_MISMATCH,
-        error: 'No cached trip found for this code; reconnect once to verify.',
-      };
-    } catch (error) {
-      logger.warn('Auth', 'Offline login check failed', {
-        error: error.message,
-        reference: maskIdentifier(normalizedReference),
-      });
-      return {
-        success: false,
-        reason: OFFLINE_LOGIN_REASONS.NO_CACHED_SESSION,
-        error: 'No cached trip found for this code; reconnect once to verify.',
-      };
-    }
-  };
+  const resolveOfflineLogin = async (reference, normalizedEmail) => resolveOfflineLoginFromCache({
+    reference,
+    normalizedEmail,
+    sessionStorage: SessionStorage,
+    sessionKeys: SESSION_KEYS,
+    offlineSyncService,
+    maskIdentifier,
+    logger,
+  });
 
   const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger', options = {}) => {
     const isOfflineLogin = Boolean(options?.offlineMode);
@@ -317,32 +240,47 @@ export default function App() {
         });
         await offlineSyncService.setTourPackMeta(tourDetails.id, 'driver', { lastSyncedAt: new Date().toISOString() });
       }
-    } else {
-      logger.info('Navigation', 'Passenger Login', { bookingRef: maskIdentifier(reference) });
-      setTourCode(tourDetails?.tourCode || '');
-      setTourData(tourDetails || null);
-      setBookingData(bookingOrDriverData);
-      
-      if (user && tourDetails?.id) {
-        try {
-          await joinTour(tourDetails.id, user.uid);
-        } catch (error) {
-          logger.error('Tour', 'Error joining tour', { error: error.message });
-        }
-      }
-      
-      setCurrentScreen('TourHome');
-      if (tourDetails?.id) {
-        await offlineSyncService.saveTourPack(tourDetails.id, 'passenger', {
-          tour: tourDetails,
-          booking: bookingOrDriverData,
-          safety: { emergencyPhone: tourDetails?.driverPhone || null },
-        });
-        await offlineSyncService.setTourPackMeta(tourDetails.id, 'passenger', { lastSyncedAt: new Date().toISOString() });
+      await saveSession({
+        tourData: tourDetails || null,
+        bookingData: bookingOrDriverData,
+        currentScreen: 'DriverHome',
+      });
+      return;
+    }
+
+    const normalizedBookingData = {
+      ...bookingOrDriverData,
+      normalizedPassengerEmail: normalizePassengerEmail(bookingOrDriverData?.normalizedPassengerEmail),
+    };
+
+    logger.info('Navigation', 'Passenger Login', { bookingRef: maskIdentifier(reference) });
+    setTourCode(tourDetails?.tourCode || '');
+    setTourData(tourDetails || null);
+    setBookingData(normalizedBookingData);
+
+    if (user && tourDetails?.id) {
+      try {
+        await joinTour(tourDetails.id, user.uid);
+      } catch (error) {
+        logger.error('Tour', 'Error joining tour', { error: error.message });
       }
     }
-    
-    await saveSession();
+
+    setCurrentScreen('TourHome');
+    if (tourDetails?.id) {
+      await offlineSyncService.saveTourPack(tourDetails.id, 'passenger', {
+        tour: tourDetails,
+        booking: normalizedBookingData,
+        safety: { emergencyPhone: tourDetails?.driverPhone || null },
+      });
+      await offlineSyncService.setTourPackMeta(tourDetails.id, 'passenger', { lastSyncedAt: new Date().toISOString() });
+    }
+
+    await saveSession({
+      tourData: tourDetails || null,
+      bookingData: normalizedBookingData,
+      currentScreen: 'TourHome',
+    });
   };
 
   // Updated navigation to accept params

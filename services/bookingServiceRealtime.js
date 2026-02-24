@@ -655,7 +655,10 @@ const validateBookingReference = async (reference, email) => {
     return {
       valid: true,
       type: 'passenger',
-      booking: normalizedBooking,
+      booking: {
+        ...normalizedBooking,
+        normalizedPassengerEmail: normalizedEmail,
+      },
       tour: {
         id: tourId,
         ...tourData,
