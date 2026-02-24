@@ -6,6 +6,7 @@ try {
 } catch (error) {
   logger = console;
 }
+const { parseTimestampMs } = require('./timeUtils');
 const storage = createPersistenceProvider({ namespace: 'LLT_OFFLINE' });
 
 const SCHEMA_VERSION = 1;
@@ -94,7 +95,7 @@ const setProcessedActionIds = async (ids) => {
 
 const getStalenessBucket = (lastSyncedAt) => {
   if (!lastSyncedAt) return 'old';
-  const ts = new Date(lastSyncedAt).getTime();
+  const ts = parseTimestampMs(lastSyncedAt);
   if (!Number.isFinite(ts)) return 'old';
   const ageMs = Date.now() - ts;
   const ageMinutes = ageMs / (60 * 1000);
@@ -109,7 +110,7 @@ const getStalenessLabel = (lastSyncedAt) => {
     return { bucket, label: 'Not synced yet' };
   }
 
-  const ts = new Date(lastSyncedAt).getTime();
+  const ts = parseTimestampMs(lastSyncedAt);
   if (!Number.isFinite(ts)) {
     return { bucket: 'old', label: 'Not synced yet' };
   }
@@ -211,7 +212,7 @@ const enqueueAction = async (action) => {
     }
     const entry = buildAction(action);
     queue.push(entry);
-    queue.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    queue.sort((a, b) => (parseTimestampMs(a.createdAt) || 0) - (parseTimestampMs(b.createdAt) || 0));
     await setQueueRaw(queue);
     return RESPONSE.ok(entry);
   } catch (error) {
@@ -222,7 +223,7 @@ const enqueueAction = async (action) => {
 const getQueuedActions = async () => {
   try {
     const queue = await getQueueRaw();
-    return RESPONSE.ok(queue.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()));
+    return RESPONSE.ok(queue.sort((a, b) => (parseTimestampMs(a.createdAt) || 0) - (parseTimestampMs(b.createdAt) || 0)));
   } catch (error) {
     return RESPONSE.fail(error);
   }
@@ -320,7 +321,7 @@ const replayQueue = async ({ db, services = {} } = {}) => {
       return RESPONSE.ok({ processed: 0, failed: 0 });
     }
 
-    const sortedQueue = [...queue].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const sortedQueue = [...queue].sort((a, b) => (parseTimestampMs(a.createdAt) || 0) - (parseTimestampMs(b.createdAt) || 0));
     let processedActionIds = await getProcessedActionIds();
     let processed = 0;
     let failed = 0;
@@ -336,7 +337,7 @@ const replayQueue = async ({ db, services = {} } = {}) => {
       }
 
       const now = Date.now();
-      const nextAttemptAt = action.nextAttemptAt ? new Date(action.nextAttemptAt).getTime() : 0;
+      const nextAttemptAt = parseTimestampMs(action.nextAttemptAt) || 0;
       if (nextAttemptAt && nextAttemptAt > now) {
         continue;
       }

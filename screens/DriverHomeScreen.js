@@ -26,6 +26,7 @@ import { assignDriverToTour } from '../services/bookingServiceRealtime';
 import offlineSyncService from '../services/offlineSyncService';
 import { createPersistenceProvider } from '../services/persistenceProvider';
 import logger from '../services/loggerService';
+import { getMinutesAgo } from '../services/timeUtils';
 import { COLORS as THEME } from '../theme';
 
 const { width } = Dimensions.get('window');
@@ -99,10 +100,8 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const autoSharePreferenceKey = `AUTO_SHARE_${driverData?.id || 'unknown'}`;
 
   const getLastUpdateAgeMinutes = useCallback((timestamp) => {
-    if (!timestamp) return Number.POSITIVE_INFINITY;
-    const parsed = new Date(timestamp).getTime();
-    if (Number.isNaN(parsed)) return Number.POSITIVE_INFINITY;
-    return Math.floor((Date.now() - parsed) / 60000);
+    const minutesAgo = getMinutesAgo(timestamp);
+    return Number.isFinite(minutesAgo) ? minutesAgo : Number.POSITIVE_INFINITY;
   }, []);
 
   const isLocationStale = Boolean(lastLocationUpdate?.timestamp)
@@ -637,8 +636,8 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   };
 
   const formatTimeAgo = (isoString) => {
-    if (!isoString) return 'Never';
-    const diffMinutes = Math.floor((Date.now() - new Date(isoString).getTime()) / 60000);
+    const diffMinutes = getMinutesAgo(isoString);
+    if (!Number.isFinite(diffMinutes)) return 'Never';
     if (diffMinutes < 1) return 'Just now';
     if (diffMinutes === 1) return '1 min ago';
     if (diffMinutes < 60) return `${diffMinutes} mins ago`;

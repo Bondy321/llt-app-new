@@ -20,6 +20,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { realtimeDb } from '../firebase';
 import { COLORS as THEME } from '../theme';
+import { getMinutesAgo, parseTimestampMs } from '../services/timeUtils';
 
 const { width, height } = Dimensions.get('window');
 
@@ -211,11 +212,8 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   };
 
   const formatRelativeTime = (isoString) => {
-    if (!isoString) return '';
-    const timestamp = new Date(isoString).getTime();
-    if (Number.isNaN(timestamp)) return '';
-
-    const diffMinutes = Math.floor((Date.now() - timestamp) / 60000);
+    const diffMinutes = getMinutesAgo(isoString);
+    if (!Number.isFinite(diffMinutes)) return '';
     if (diffMinutes < 1) return 'Just now';
     if (diffMinutes === 1) return '1 min ago';
     if (diffMinutes < 60) return `${diffMinutes} mins ago`;
@@ -228,9 +226,9 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   };
 
   const formatTime = (isoString) => {
-    if (!isoString) return '';
-    const date = new Date(isoString);
-    if (Number.isNaN(date.getTime())) return '';
+    const parsedMs = parseTimestampMs(isoString);
+    if (!Number.isFinite(parsedMs)) return '';
+    const date = new Date(parsedMs);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
@@ -242,8 +240,8 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   };
 
   const getLocationFreshness = (isoString) => {
-    if (!isoString) return 'unknown';
-    const diffMinutes = Math.floor((Date.now() - new Date(isoString).getTime()) / 60000);
+    const diffMinutes = getMinutesAgo(isoString);
+    if (!Number.isFinite(diffMinutes)) return 'unknown';
     if (diffMinutes < 2) return 'live';
     if (diffMinutes < 10) return 'recent';
     if (diffMinutes < 30) return 'stale';
