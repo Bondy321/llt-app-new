@@ -52,7 +52,7 @@ const createMockRealtimeDb = (state) => {
   };
 };
 
-const loadServiceWithDb = (state) => {
+const loadServiceWithDb = (state, options = {}) => {
   const previousNodeEnv = process.env.NODE_ENV;
 
   delete require.cache[SERVICE_PATH];
@@ -66,6 +66,7 @@ const loadServiceWithDb = (state) => {
     exports: {
       realtimeDb: createMockRealtimeDb(state),
       auth: { currentUser: { uid: 'test-user' } },
+      getCurrentAppCheckToken: options.getCurrentAppCheckToken,
     },
   };
 
@@ -200,5 +201,79 @@ test('validateBookingReference derives tourId from verifier tourCode when tourId
   } finally {
     global.fetch = originalFetch;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+
+test('validateBookingReference sends x-firebase-appcheck header when token is available', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    let capturedHeaders;
+    global.fetch = async (_url, options) => {
+      capturedHeaders = options.headers;
+      return {
+        ok: true,
+        json: async () => ({
+          valid: true,
+          bookingRef: 'ABC123',
+          tourId: '5112D_8',
+        }),
+      };
+    };
+
+    const service = loadServiceWithDb({
+      drivers: {},
+      bookings: {
+        ABC123: {
+          bookingRef: 'ABC123',
+          tourCode: '5112D 8',
+          passengerNames: ['Alex'],
+          pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+        },
+      },
+      tours: {
+        '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true, participants: {}, currentParticipants: 0 },
+      },
+    }, {
+      getCurrentAppCheckToken: async () => 'mock-app-check-token',
+    });
+
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, true);
+    assert.equal(capturedHeaders['x-firebase-appcheck'], 'mock-app-check-token');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference maps missing App Check token to actionable copy when strict mode is enabled', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK = 'true';
+
+  const originalFetch = global.fetch;
+  try {
+    let fetchCalled = false;
+    global.fetch = async () => {
+      fetchCalled = true;
+      throw new Error('fetch should not be called when strict app check fails');
+    };
+
+    const service = loadServiceWithDb({ drivers: {}, bookings: {}, tours: {} }, {
+      getCurrentAppCheckToken: async () => null,
+    });
+
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, false);
+    assert.equal(result.error, 'App security check could not be completed. Update the app or reconnect and try again.');
+    assert.equal(fetchCalled, false);
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK;
   }
 });

@@ -216,6 +216,21 @@ const authHelpers = {
   }
 };
 
+const getCurrentAppCheckToken = async () => {
+  try {
+    const appCheckInstance = app?.appCheck?.();
+    if (!appCheckInstance?.getToken) {
+      return null;
+    }
+
+    const result = await appCheckInstance.getToken(false);
+    return typeof result?.token === 'string' ? result.token : null;
+  } catch (error) {
+    console.warn('Unable to retrieve App Check token:', error?.message || error);
+    throw error;
+  }
+};
+
 // Network state monitoring
 let isOnline = true;
 
@@ -245,5 +260,6 @@ export {
   realtimeDbModular,
   authHelpers,
   updateNetworkState,
-  isOnline
+  isOnline,
+  getCurrentAppCheckToken
 };
