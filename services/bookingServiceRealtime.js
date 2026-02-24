@@ -181,6 +181,33 @@ const sanitizeTourId = (tourCode) => {
   return tourCode ? tourCode.replace(/\s+/g, '_') : null;
 };
 
+const normalizeTourIdentifier = (candidate) => {
+  if (typeof candidate !== 'string') return null;
+
+  const trimmed = candidate.trim();
+  if (!trimmed) return null;
+
+  const sanitized = sanitizeTourId(trimmed.toUpperCase());
+  if (!sanitized) return null;
+
+  const keySafe = sanitized.replace(/[.#$\[\]/]/g, '');
+  return keySafe || null;
+};
+
+const isValidNormalizedTourId = (tourId) => {
+  return typeof tourId === 'string' && /^[A-Z0-9][A-Z0-9_-]*$/.test(tourId);
+};
+
+const resolveVerifierTourId = (passengerVerification = {}, bookingData = {}) => {
+  const verifierTourId = normalizeTourIdentifier(passengerVerification.tourId);
+  if (isValidNormalizedTourId(verifierTourId)) {
+    return verifierTourId;
+  }
+
+  const fallbackTourId = normalizeTourIdentifier(passengerVerification.tourCode || bookingData.tourCode);
+  return isValidNormalizedTourId(fallbackTourId) ? fallbackTourId : null;
+};
+
 // --- HELPERS: Manifest Status Derivation ---
 const deriveParentStatusFromPassengers = (passengerStatuses = []) => {
   if (!Array.isArray(passengerStatuses) || passengerStatuses.length === 0) return MANIFEST_STATUS.PENDING;
@@ -637,7 +664,11 @@ const validateBookingReference = async (reference, email) => {
     const bookingData = bookingSnapshot.val();
     const { normalizedBooking } = await ensureBookingSchemaConsistency(resolvedBookingRef, bookingData, realtimeDb);
 
-    const tourId = passengerVerification.tourId || sanitizeTourId(passengerVerification.tourCode || bookingData.tourCode);
+    const tourId = resolveVerifierTourId(passengerVerification, bookingData);
+    if (!tourId) {
+      return { valid: false, error: 'Tour information not available' };
+    }
+
     const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
 
     if (!tourSnapshot.exists()) {
