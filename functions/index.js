@@ -204,6 +204,23 @@ const normalizeEmail = (email) => {
   return email.trim().toLowerCase();
 };
 
+const getRequestClientKey = (req) => {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  const clientIp = Array.isArray(forwardedFor)
+    ? forwardedFor[0]
+    : typeof forwardedFor === 'string'
+      ? forwardedFor.split(',')[0].trim()
+      : req.ip || req.connection?.remoteAddress || 'unknown';
+
+  const explicitClientId = req.headers['x-client-id'];
+  const userAgent = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : 'unknown';
+  const normalizedClientId = typeof explicitClientId === 'string' && explicitClientId.trim()
+    ? explicitClientId.trim()
+    : userAgent;
+
+  return `${clientIp}:${normalizedClientId}`;
+};
+
 exports.verifyPassengerLogin = onRequest(
   {
     region: 'europe-west1',
@@ -214,6 +231,12 @@ exports.verifyPassengerLogin = onRequest(
       return res.status(405).json({ valid: false, reason: 'METHOD_NOT_ALLOWED' });
     }
 
+    const clientKey = getRequestClientKey(req);
+    if (!checkRateLimit(`verify_passenger_login_${clientKey}`, 12, 60000)) {
+      log.warn('Passenger login rate limit exceeded', { clientKey });
+      return res.status(429).json({ valid: false, reason: 'TRY_AGAIN_LATER' });
+    }
+
     const bookingRef = normalizeBookingRef(req.body?.bookingRef);
     const email = normalizeEmail(req.body?.email);
 
@@ -222,17 +245,40 @@ exports.verifyPassengerLogin = onRequest(
     }
 
     try {
+      const requireAppCheck = process.env.REQUIRE_APP_CHECK_FOR_LOGIN !== 'false';
+      const appCheckToken = req.headers['x-firebase-appcheck'];
+
+      if (requireAppCheck) {
+        if (typeof appCheckToken !== 'string' || !appCheckToken.trim()) {
+          log.warn('Passenger login rejected: missing App Check token', { clientKey, bookingRef });
+          return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
+        }
+
+        try {
+          await admin.appCheck().verifyToken(appCheckToken.trim());
+        } catch (appCheckError) {
+          log.warn('Passenger login rejected: invalid App Check token', {
+            clientKey,
+            bookingRef,
+            error: appCheckError.message,
+          });
+          return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
+        }
+      }
+
       const identitySnapshot = await admin.database().ref(`booking_identities/${bookingRef}`).once('value');
 
       if (!identitySnapshot.exists()) {
-        return res.status(404).json({ valid: false, reason: 'BOOKING_NOT_FOUND' });
+        log.warn('Passenger login verification failed', { bookingRef, clientKey, cause: 'BOOKING_NOT_FOUND' });
+        return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
       }
 
       const identity = identitySnapshot.val() || {};
       const storedEmail = normalizeEmail(identity.email);
 
       if (!storedEmail || storedEmail !== email) {
-        return res.status(200).json({ valid: false, reason: 'EMAIL_MISMATCH' });
+        log.warn('Passenger login verification failed', { bookingRef, clientKey, cause: 'EMAIL_MISMATCH' });
+        return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
       }
 
       const resolvedBookingRef = normalizeBookingRef(identity.bookingRef || bookingRef);
