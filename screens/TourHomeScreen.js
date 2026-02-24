@@ -25,6 +25,7 @@ import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
 import { realtimeDb } from '../firebase';
 import offlineSyncService from '../services/offlineSyncService';
+import { parseTimestampMs } from '../services/timeUtils';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import { getPickupCountdownState } from '../services/pickupTimeParser';
 
@@ -573,8 +574,7 @@ export default function TourHomeScreen({
       }
 
       const lastUpdatedValue = value.timestamp ?? value.lastUpdated;
-      const lastUpdatedMs =
-        typeof lastUpdatedValue === 'number' ? lastUpdatedValue : new Date(lastUpdatedValue).getTime();
+      const lastUpdatedMs = parseTimestampMs(lastUpdatedValue);
       const isFreshLocation =
         Number.isFinite(lastUpdatedMs) && Date.now() - lastUpdatedMs <= 10 * 60 * 1000;
 
@@ -669,10 +669,7 @@ export default function TourHomeScreen({
         const driverValue = driverSnapshot.val();
         if (driverValue) {
           const lastUpdatedValue = driverValue.timestamp ?? driverValue.lastUpdated;
-          const lastUpdatedMs =
-            typeof lastUpdatedValue === 'number'
-              ? lastUpdatedValue
-              : new Date(lastUpdatedValue).getTime();
+          const lastUpdatedMs = parseTimestampMs(lastUpdatedValue);
           const isFreshLocation =
             Number.isFinite(lastUpdatedMs) && Date.now() - lastUpdatedMs <= 10 * 60 * 1000;
           setDriverLocationActive(isFreshLocation);
