@@ -28,6 +28,7 @@
  */
 
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ref, onValue } from 'firebase/database';
 import { db } from '../firebase';
 import { notifications } from '@mantine/notifications';
@@ -1366,6 +1367,7 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
 
 // Main Tours Manager Component
 export default function ToursManager() {
+  const [searchParams] = useSearchParams();
   const [tours, setTours] = useState({});
   const [drivers, setDrivers] = useState({});
   const [loading, setLoading] = useState(true);
@@ -1386,6 +1388,16 @@ export default function ToursManager() {
 
   // Selected tour for modals
   const [selectedTourId, setSelectedTourId] = useState(null);
+
+  useEffect(() => {
+    const statusParam = searchParams.get('status');
+    const allowedStatusParams = new Set(['all', 'assigned', 'unassigned', 'active', 'inactive']);
+
+    if (statusParam && allowedStatusParams.has(statusParam) && statusParam !== filterStatus) {
+      setFilterStatus(statusParam);
+      setCurrentPage(1);
+    }
+  }, [searchParams, filterStatus]);
 
   // Load data from Firebase
   useEffect(() => {
