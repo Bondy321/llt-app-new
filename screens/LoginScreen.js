@@ -56,6 +56,12 @@ const createErrorState = (message, options = {}) => ({
   showOfflineActions: options.showOfflineActions || false,
 });
 
+const isLikelyEmailFormat = (value) => {
+  const atIndex = value.indexOf('@');
+  const dotAfterAt = value.indexOf('.', atIndex + 2);
+  return atIndex > 0 && dotAfterAt > atIndex + 1 && dotAfterAt < value.length - 1;
+};
+
 export default function LoginScreen({ onLoginSuccess, logger, isConnected, resolveOfflineLogin }) {
   const [bookingReference, setBookingReference] = useState('');
   const [email, setEmail] = useState('');
@@ -184,7 +190,8 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       return;
     }
 
-    const normalizedReference = bookingReference.trim().toUpperCase();
+    const trimmedReference = bookingReference.trim();
+    const normalizedReference = trimmedReference.toUpperCase();
     const isDriverCode = normalizedReference.startsWith('D-');
     const normalizedEmail = email.trim().toLowerCase();
 
@@ -193,16 +200,21 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       return;
     }
 
+    if (!isDriverCode && !isLikelyEmailFormat(normalizedEmail)) {
+      setSimpleError('Please enter a valid booking email (for example, name@example.com).');
+      return;
+    }
+
     if (!isConnected) {
-      const offlineCheck = await resolveOfflineLogin?.(bookingReference.trim(), normalizedEmail);
+      const offlineCheck = await resolveOfflineLogin?.(trimmedReference, normalizedEmail);
       if (offlineCheck?.success) {
         activeLogger?.info('Login', 'Offline login fallback accepted', {
-          ref: maskIdentifier(bookingReference.trim().toUpperCase()),
+          ref: maskIdentifier(normalizedReference),
           type: offlineCheck.type,
           source: offlineCheck.source,
         });
         await onLoginSuccess(
-          bookingReference.trim().toUpperCase(),
+          normalizedReference,
           offlineCheck.tour,
           offlineCheck.identity,
           offlineCheck.type,
@@ -212,7 +224,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       }
 
       activeLogger?.warn('Login', 'Offline login fallback rejected', {
-        ref: maskIdentifier(bookingReference.trim().toUpperCase()),
+        ref: maskIdentifier(normalizedReference),
         reason: offlineCheck?.reason || offlineCheck?.error,
       });
       const reason = offlineCheck?.reason;
@@ -233,7 +245,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
 
     try {
       const startTime = Date.now();
-      const result = await validateBookingReference(bookingReference.trim(), normalizedEmail);
+      const result = await validateBookingReference(trimmedReference, normalizedEmail);
       const duration = Date.now() - startTime;
       
       activeLogger?.trackAPI('/validateBooking', 'POST', result.valid ? 200 : 404, duration);
@@ -243,20 +255,20 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         const loginData = result.type === 'driver' ? result.driver : result.booking;
         
         activeLogger?.info('Login', 'Login successful', {
-          ref: maskIdentifier(bookingReference.trim().toUpperCase()),
+          ref: maskIdentifier(normalizedReference),
           type: result.type,
           duration
         });
         
         await onLoginSuccess(
-          bookingReference.trim().toUpperCase(), 
+          normalizedReference, 
           result.tour, 
           loginData,
           result.type // Pass 'passenger' or 'driver'
         );
       } else {
         activeLogger?.warn('Login', 'Invalid booking reference', {
-          bookingRef: maskIdentifier(bookingReference.trim()),
+          bookingRef: maskIdentifier(trimmedReference),
           error: result.error
         });
         
@@ -265,7 +277,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     } catch (error) {
       activeLogger?.error('Login', 'Login error', {
         error: error.message,
-        bookingRef: maskIdentifier(bookingReference.trim())
+        bookingRef: maskIdentifier(trimmedReference)
       });
       
       setSimpleError('Unable to verify booking. Please check your connection.');
@@ -377,6 +389,9 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                   autoCapitalize="none"
                   keyboardType="email-address"
                   autoCorrect={false}
+                  autoComplete="email"
+                  textContentType="emailAddress"
+                  importantForAutofill="yes"
                   returnKeyType="go"
                   onSubmitEditing={handleLogin}
                   editable={!loading}
