@@ -3,6 +3,7 @@ const OFFLINE_LOGIN_REASONS = {
   CODE_MISMATCH: 'CODE_MISMATCH',
   CACHE_EXPIRED: 'CACHE_EXPIRED',
   EMAIL_MISMATCH: 'EMAIL_MISMATCH',
+  EMAIL_NOT_CACHED: 'EMAIL_NOT_CACHED',
 };
 
 const OFFLINE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
@@ -37,17 +38,27 @@ const resolveOfflineLoginFromCache = async ({
     const expectedRole = isDriverCode ? 'driver' : 'passenger';
     const cachedTourId = cachedTourData?.id || cachedBookingData?.assignedTourId || null;
 
-    const isPassengerEmailMatch = (identity) => {
-      if (expectedRole === 'driver') return true;
+    const evaluatePassengerEmailMatch = (identity) => {
+      if (expectedRole === 'driver') return { matches: true, reason: null };
+
       const cachedNormalizedEmail = normalizePassengerEmail(identity?.normalizedPassengerEmail);
-      return cachedNormalizedEmail && cachedNormalizedEmail === normalizePassengerEmail(normalizedEmail);
+      if (!cachedNormalizedEmail) {
+        return { matches: false, reason: OFFLINE_LOGIN_REASONS.EMAIL_NOT_CACHED };
+      }
+
+      if (cachedNormalizedEmail !== normalizePassengerEmail(normalizedEmail)) {
+        return { matches: false, reason: OFFLINE_LOGIN_REASONS.EMAIL_MISMATCH };
+      }
+
+      return { matches: true, reason: null };
     };
 
     if (cachedSessionId && cachedSessionId === normalizedReference) {
-      if (!isPassengerEmailMatch(cachedBookingData)) {
+      const emailMatchResult = evaluatePassengerEmailMatch(cachedBookingData);
+      if (!emailMatchResult.matches) {
         return {
           success: false,
-          reason: OFFLINE_LOGIN_REASONS.EMAIL_MISMATCH,
+          reason: emailMatchResult.reason,
           error: 'Booking email does not match this cached trip.',
         };
       }
@@ -89,10 +100,11 @@ const resolveOfflineLoginFromCache = async ({
         : cachedPackResult.data.booking;
       const packIdentityId = (packIdentity?.id || '').toUpperCase();
       if (packIdentityId && packIdentityId === normalizedReference) {
-        if (!isPassengerEmailMatch(packIdentity)) {
+        const emailMatchResult = evaluatePassengerEmailMatch(packIdentity);
+        if (!emailMatchResult.matches) {
           return {
             success: false,
-            reason: OFFLINE_LOGIN_REASONS.EMAIL_MISMATCH,
+            reason: emailMatchResult.reason,
             error: 'Booking email does not match this cached trip.',
           };
         }

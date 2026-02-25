@@ -23,6 +23,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS as THEME_COLORS } from '../theme';
 import loggerService, { maskIdentifier } from '../services/loggerService';
 
+const {
+  normalizeLoginFields,
+  getLoginInputError,
+  createOfflineErrorState,
+  resolveLoginIdentity,
+} = require('./loginFlow');
+
 const { width, height } = Dimensions.get('window');
 
 const COLORS = {
@@ -37,13 +44,6 @@ const COLORS = {
   placeholderText: THEME_COLORS.textMuted,
   border: THEME_COLORS.border,
   subtleText: THEME_COLORS.textSecondary,
-};
-
-const OFFLINE_LOGIN_REASON_COPY = {
-  NO_CACHED_SESSION: 'This device has no verified offline trip for this code yet. Connect once to verify this booking/driver code on this device, then offline login will work next time.',
-  CODE_MISMATCH: 'The code you entered does not match the trip cached on this device. Check for typing errors, or reconnect so we can verify the correct code online.',
-  CACHE_EXPIRED: 'Your offline trip cache has expired. Reconnect briefly once to verify, then offline mode will work next time.',
-  EMAIL_MISMATCH: 'The booking email entered does not match the cached trip on this device. Use the original booking email or reconnect to verify online.',
 };
 
 const SUPPORT_PHONE = process.env.EXPO_PUBLIC_SUPPORT_PHONE?.trim();
@@ -184,25 +184,33 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       return;
     }
 
-    const normalizedReference = bookingReference.trim().toUpperCase();
-    const isDriverCode = normalizedReference.startsWith('D-');
-    const normalizedEmail = email.trim().toLowerCase();
+    const {
+      trimmedReference,
+      normalizedReference,
+      isDriverCode,
+      normalizedEmail,
+    } = normalizeLoginFields({ bookingReference, email });
 
-    if (!isDriverCode && normalizedEmail.length === 0) {
-      setSimpleError('Please enter the booking email used for this reservation.');
+    const inputError = getLoginInputError({
+      trimmedReference,
+      isDriverCode,
+      normalizedEmail,
+    });
+    if (inputError) {
+      setSimpleError(inputError);
       return;
     }
 
     if (!isConnected) {
-      const offlineCheck = await resolveOfflineLogin?.(bookingReference.trim(), normalizedEmail);
+      const offlineCheck = await resolveOfflineLogin?.(trimmedReference, normalizedEmail);
       if (offlineCheck?.success) {
         activeLogger?.info('Login', 'Offline login fallback accepted', {
-          ref: maskIdentifier(bookingReference.trim().toUpperCase()),
+          ref: maskIdentifier(normalizedReference),
           type: offlineCheck.type,
           source: offlineCheck.source,
         });
         await onLoginSuccess(
-          bookingReference.trim().toUpperCase(),
+          normalizedReference,
           offlineCheck.tour,
           offlineCheck.identity,
           offlineCheck.type,
@@ -212,18 +220,10 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       }
 
       activeLogger?.warn('Login', 'Offline login fallback rejected', {
-        ref: maskIdentifier(bookingReference.trim().toUpperCase()),
+        ref: maskIdentifier(normalizedReference),
         reason: offlineCheck?.reason || offlineCheck?.error,
       });
-      const reason = offlineCheck?.reason;
-      setErrorState(createErrorState(
-        OFFLINE_LOGIN_REASON_COPY[reason] || offlineCheck?.error || 'No cached trip found for this code; reconnect once to verify.',
-        {
-          title: 'Offline login unavailable',
-          reason,
-          showOfflineActions: ['NO_CACHED_SESSION', 'CODE_MISMATCH', 'CACHE_EXPIRED', 'EMAIL_MISMATCH'].includes(reason),
-        }
-      ));
+      setErrorState(createOfflineErrorState(offlineCheck, createErrorState));
       return;
     }
 
@@ -233,30 +233,30 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
 
     try {
       const startTime = Date.now();
-      const result = await validateBookingReference(bookingReference.trim(), normalizedEmail);
+      const result = await validateBookingReference(trimmedReference, normalizedEmail);
       const duration = Date.now() - startTime;
       
       activeLogger?.trackAPI('/validateBooking', 'POST', result.valid ? 200 : 404, duration);
       
       if (result.valid) {
         // Pass either booking data OR driver data, and the login type
-        const loginData = result.type === 'driver' ? result.driver : result.booking;
+        const loginData = resolveLoginIdentity(result);
         
         activeLogger?.info('Login', 'Login successful', {
-          ref: maskIdentifier(bookingReference.trim().toUpperCase()),
+          ref: maskIdentifier(normalizedReference),
           type: result.type,
           duration
         });
         
         await onLoginSuccess(
-          bookingReference.trim().toUpperCase(), 
+          normalizedReference, 
           result.tour, 
           loginData,
           result.type // Pass 'passenger' or 'driver'
         );
       } else {
         activeLogger?.warn('Login', 'Invalid booking reference', {
-          bookingRef: maskIdentifier(bookingReference.trim()),
+          bookingRef: maskIdentifier(trimmedReference),
           error: result.error
         });
         
@@ -265,7 +265,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     } catch (error) {
       activeLogger?.error('Login', 'Login error', {
         error: error.message,
-        bookingRef: maskIdentifier(bookingReference.trim())
+        bookingRef: maskIdentifier(trimmedReference)
       });
       
       setSimpleError('Unable to verify booking. Please check your connection.');
@@ -330,7 +330,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
             >
               <Text style={styles.welcomeText}>Welcome Aboard</Text>
               <Text style={styles.instructionText}>
-                Enter your booking reference or driver code to access your tour. Returning travellers can continue offline using previously synced trip data.
+                Passengers need both booking reference and booking email. Drivers only need a driver code.
               </Text>
               
               <View style={styles.inputContainer}>
@@ -347,7 +347,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                     setBookingReference(text);
                     if (errorState) clearErrorState();
                   }}
-                  placeholder="Ref (e.g. T114737 or Driver ID)"
+                  placeholder="Booking ref (passenger field 1 of 2) or driver code"
                   placeholderTextColor={COLORS.placeholderText}
                   autoCapitalize="characters"
                   autoCorrect={false}
@@ -377,6 +377,9 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                   autoCapitalize="none"
                   keyboardType="email-address"
                   autoCorrect={false}
+                  autoComplete="email"
+                  textContentType="emailAddress"
+                  importantForAutofill="yes"
                   returnKeyType="go"
                   onSubmitEditing={handleLogin}
                   editable={!loading}
@@ -452,7 +455,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                   color={COLORS.subtleText}
                 />
                 <Text style={styles.offlineInfoText}>
-                  If you're offline, we'll let you in when this code matches your cached trip. First-time codes still require one online check.
+                  If you're offline, we'll let you in when your cached identity matches (passengers: code + booking email; drivers: code). First-time codes still require one online check.
                 </Text>
               </View>
 
@@ -472,7 +475,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
               {showOfflineHelp ? (
                 <View style={styles.offlineHelpPanel}>
                   <Text style={styles.offlineHelpText}>
-                    Offline login only works after this exact code has been verified online on this device.
+                    Offline login only works after this exact identity has been verified online on this device (passengers: code + booking email; drivers: code).
                   </Text>
                   <Text style={styles.offlineHelpText}>
                     This code is valid online but hasn’t been used on this device yet.
