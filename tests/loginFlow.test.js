@@ -24,6 +24,25 @@ test('driver submit does not require email', () => {
   assert.equal(inputError, null);
 });
 
+test('passenger submit with malformed email is blocked with actionable copy', () => {
+  const normalized = normalizeLoginFields({ bookingReference: 'abc123', email: 'passenger@@example' });
+  const inputError = getLoginInputError(normalized);
+
+  assert.equal(inputError, 'Please enter a valid booking email (for example, name@example.com).');
+});
+
+test('normalizeLoginFields trims and lowercases passenger email before validation', () => {
+  const normalized = normalizeLoginFields({
+    bookingReference: ' abc123 ',
+    email: '  Passenger@Example.com  ',
+  });
+
+  assert.equal(normalized.trimmedReference, 'abc123');
+  assert.equal(normalized.normalizedReference, 'ABC123');
+  assert.equal(normalized.normalizedEmail, 'passenger@example.com');
+  assert.equal(getLoginInputError(normalized), null);
+});
+
 test('offline passenger login reason EMAIL_MISMATCH maps to inline error copy', () => {
   const state = createOfflineErrorState({ reason: 'EMAIL_MISMATCH' }, (message, options = {}) => ({ message, ...options }));
 
