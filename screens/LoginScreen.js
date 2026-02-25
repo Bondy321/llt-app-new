@@ -330,7 +330,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
             >
               <Text style={styles.welcomeText}>Welcome Aboard</Text>
               <Text style={styles.instructionText}>
-                Enter your booking reference or driver code to access your tour. Returning travellers can continue offline using previously synced trip data.
+                Passengers need both booking reference and booking email. Drivers only need a driver code.
               </Text>
               
               <View style={styles.inputContainer}>
@@ -347,7 +347,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                     setBookingReference(text);
                     if (errorState) clearErrorState();
                   }}
-                  placeholder="Ref (e.g. T114737 or Driver ID)"
+                  placeholder="Booking ref (passenger field 1 of 2) or driver code"
                   placeholderTextColor={COLORS.placeholderText}
                   autoCapitalize="characters"
                   autoCorrect={false}
@@ -452,7 +452,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                   color={COLORS.subtleText}
                 />
                 <Text style={styles.offlineInfoText}>
-                  If you're offline, we'll let you in when this code matches your cached trip. First-time codes still require one online check.
+                  If you're offline, we'll let you in when your cached identity matches (passengers: code + booking email; drivers: code). First-time codes still require one online check.
                 </Text>
               </View>
 
@@ -472,7 +472,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
               {showOfflineHelp ? (
                 <View style={styles.offlineHelpPanel}>
                   <Text style={styles.offlineHelpText}>
-                    Offline login only works after this exact code has been verified online on this device.
+                    Offline login only works after this exact identity has been verified online on this device (passengers: code + booking email; drivers: code).
                   </Text>
                   <Text style={styles.offlineHelpText}>
                     This code is valid online but hasn’t been used on this device yet.
