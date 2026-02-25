@@ -83,3 +83,48 @@ test('offline passenger login fails with EMAIL_MISMATCH when tour-pack email dif
   assert.equal(result.success, false);
   assert.equal(result.reason, OFFLINE_LOGIN_REASONS.EMAIL_MISMATCH);
 });
+
+
+test('offline passenger login fails with EMAIL_NOT_CACHED when cached session has no normalized email', async () => {
+  const result = await resolveOfflineLoginFromCache({
+    reference: 'ABC123',
+    normalizedEmail: 'passenger@example.com',
+    sessionStorage: createSessionStorage(
+      { id: 'T_1', tourCode: 'T1' },
+      { id: 'ABC123' }
+    ),
+    sessionKeys,
+    offlineSyncService: {
+      getTourPackMeta: async () => ({ success: true, data: { lastSyncedAt: new Date().toISOString() } }),
+      getTourPack: async () => ({ success: false }),
+    },
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.reason, OFFLINE_LOGIN_REASONS.EMAIL_NOT_CACHED);
+});
+
+test('offline passenger login fails with EMAIL_NOT_CACHED when tour-pack has no normalized email', async () => {
+  const result = await resolveOfflineLoginFromCache({
+    reference: 'ABC123',
+    normalizedEmail: 'passenger@example.com',
+    sessionStorage: createSessionStorage(
+      { id: 'T_1', tourCode: 'T1' },
+      { id: 'OLD123', normalizedPassengerEmail: 'passenger@example.com' }
+    ),
+    sessionKeys,
+    offlineSyncService: {
+      getTourPackMeta: async () => ({ success: true, data: { lastSyncedAt: new Date().toISOString() } }),
+      getTourPack: async () => ({
+        success: true,
+        data: {
+          tour: { id: 'T_1' },
+          booking: { id: 'ABC123' },
+        },
+      }),
+    },
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.reason, OFFLINE_LOGIN_REASONS.EMAIL_NOT_CACHED);
+});
