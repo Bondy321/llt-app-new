@@ -23,6 +23,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS as THEME_COLORS } from '../theme';
 import loggerService, { maskIdentifier } from '../services/loggerService';
 
+const {
+  normalizeLoginFields,
+  getLoginInputError,
+  createOfflineErrorState,
+  resolveLoginIdentity,
+} = require('./loginFlow');
+
 const { width, height } = Dimensions.get('window');
 
 const COLORS = {
@@ -39,14 +46,6 @@ const COLORS = {
   subtleText: THEME_COLORS.textSecondary,
 };
 
-const OFFLINE_LOGIN_REASON_COPY = {
-  NO_CACHED_SESSION: 'This device has no verified offline trip for this code yet. Connect once to verify this booking/driver code on this device, then offline login will work next time.',
-  CODE_MISMATCH: 'The code you entered does not match the trip cached on this device. Check for typing errors, or reconnect so we can verify the correct code online.',
-  CACHE_EXPIRED: 'Your offline trip cache has expired. Reconnect briefly once to verify, then offline mode will work next time.',
-  EMAIL_MISMATCH: 'The booking email entered does not match the cached trip on this device. Use the original booking email or reconnect to verify online.',
-  EMAIL_NOT_CACHED: 'This trip was cached before email verification was enabled. Reconnect once to refresh secure offline access.',
-};
-
 const SUPPORT_PHONE = process.env.EXPO_PUBLIC_SUPPORT_PHONE?.trim();
 const SUPPORT_SMS = process.env.EXPO_PUBLIC_SUPPORT_SMS?.trim();
 
@@ -56,12 +55,6 @@ const createErrorState = (message, options = {}) => ({
   reason: options.reason || null,
   showOfflineActions: options.showOfflineActions || false,
 });
-
-const isLikelyEmailFormat = (value) => {
-  const atIndex = value.indexOf('@');
-  const dotAfterAt = value.indexOf('.', atIndex + 2);
-  return atIndex > 0 && dotAfterAt > atIndex + 1 && dotAfterAt < value.length - 1;
-};
 
 export default function LoginScreen({ onLoginSuccess, logger, isConnected, resolveOfflineLogin }) {
   const [bookingReference, setBookingReference] = useState('');
@@ -191,18 +184,20 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       return;
     }
 
-    const trimmedReference = bookingReference.trim();
-    const normalizedReference = trimmedReference.toUpperCase();
-    const isDriverCode = normalizedReference.startsWith('D-');
-    const normalizedEmail = email.trim().toLowerCase();
+    const {
+      trimmedReference,
+      normalizedReference,
+      isDriverCode,
+      normalizedEmail,
+    } = normalizeLoginFields({ bookingReference, email });
 
-    if (!isDriverCode && normalizedEmail.length === 0) {
-      setSimpleError('Please enter the booking email used for this reservation.');
-      return;
-    }
-
-    if (!isDriverCode && !isLikelyEmailFormat(normalizedEmail)) {
-      setSimpleError('Please enter a valid booking email (for example, name@example.com).');
+    const inputError = getLoginInputError({
+      trimmedReference,
+      isDriverCode,
+      normalizedEmail,
+    });
+    if (inputError) {
+      setSimpleError(inputError);
       return;
     }
 
@@ -228,15 +223,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         ref: maskIdentifier(normalizedReference),
         reason: offlineCheck?.reason || offlineCheck?.error,
       });
-      const reason = offlineCheck?.reason;
-      setErrorState(createErrorState(
-        OFFLINE_LOGIN_REASON_COPY[reason] || offlineCheck?.error || 'No cached trip found for this code; reconnect once to verify.',
-        {
-          title: 'Offline login unavailable',
-          reason,
-          showOfflineActions: ['NO_CACHED_SESSION', 'CODE_MISMATCH', 'CACHE_EXPIRED', 'EMAIL_MISMATCH', 'EMAIL_NOT_CACHED'].includes(reason),
-        }
-      ));
+      setErrorState(createOfflineErrorState(offlineCheck, createErrorState));
       return;
     }
 
@@ -253,7 +240,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       
       if (result.valid) {
         // Pass either booking data OR driver data, and the login type
-        const loginData = result.type === 'driver' ? result.driver : result.booking;
+        const loginData = resolveLoginIdentity(result);
         
         activeLogger?.info('Login', 'Login successful', {
           ref: maskIdentifier(normalizedReference),
