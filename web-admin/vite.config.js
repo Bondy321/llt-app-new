@@ -12,4 +12,7 @@ export default defineConfig({
       'Referrer-Policy': 'strict-origin-when-cross-origin',
     },
   },
+  test: {
+    environment: 'jsdom',
+  },
 })
