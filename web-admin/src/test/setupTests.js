@@ -25,3 +25,11 @@ if (!window.matchMedia) {
 if (!window.scrollTo) {
   window.scrollTo = vi.fn()
 }
+
+if (!window.ResizeObserver) {
+  window.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+}
