@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ref, onValue } from 'firebase/database';
 import { db } from '../firebase';
-import { parseUKDateStrict, parseISODateStrict, formatDateForDisplay } from '../utils/dateUtils';
+import { formatDateForDisplay } from '../utils/dateUtils';
+import { buildUnassignedTourTriage } from '../regression/triageGaps';
 import {
   SimpleGrid,
   Card,
@@ -189,44 +190,10 @@ export default function Dashboard() {
     })
     .slice(0, 5);
 
-  const unassignedUpcomingTours = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const inSevenDays = new Date(today);
-    inSevenDays.setDate(today.getDate() + 7);
-
-    return Object.entries(tours)
-      .map(([id, tour]) => {
-        const isAssigned = tour.driverName && tour.driverName !== 'TBA';
-        if (isAssigned) return null;
-
-        const parsedUKDate = parseUKDateStrict(tour.startDate);
-        const parsedISODate = parseISODateStrict(tour.startDate);
-        const parsedDate = parsedUKDate.success
-          ? parsedUKDate.date
-          : parsedISODate.success
-            ? parsedISODate.date
-            : null;
-
-        if (!parsedDate) return null;
-        if (parsedDate > inSevenDays) return null;
-
-        const dayDelta = Math.ceil((parsedDate - today) / (1000 * 60 * 60 * 24));
-
-        return {
-          id,
-          name: tour.name || id,
-          startDate: tour.startDate,
-          participants: tour.currentParticipants || 0,
-          dayDelta,
-          parsedDate,
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => a.parsedDate - b.parsedDate)
-      .slice(0, 5);
-  }, [tours]);
+  const { actionable: unassignedUpcomingTours, warnings: unassignedWarningTours } = useMemo(
+    () => buildUnassignedTourTriage(tours),
+    [tours],
+  );
 
   const getUrgencyBadge = (dayDelta) => {
     if (dayDelta < 0) return { label: `${Math.abs(dayDelta)}d overdue`, color: 'red' };
@@ -396,7 +363,7 @@ export default function Dashboard() {
             </Badge>
           </Group>
 
-          {unassignedUpcomingTours.length > 0 ? (
+          {unassignedUpcomingTours.length > 0 || unassignedWarningTours.length > 0 ? (
             <Stack gap="xs">
               {unassignedUpcomingTours.map((tour) => {
                 const urgency = getUrgencyBadge(tour.dayDelta);
@@ -416,6 +383,15 @@ export default function Dashboard() {
                   </Paper>
                 );
               })}
+
+              {unassignedWarningTours.length > 0 && (
+                <Paper p="sm" radius="md" withBorder>
+                  <Text size="sm" fw={500} c="orange">Date warnings</Text>
+                  <Text size="xs" c="dimmed" mt={4}>
+                    {unassignedWarningTours.length} unassigned tours have invalid start dates and need triage.
+                  </Text>
+                </Paper>
+              )}
 
               <Button
                 mt="sm"

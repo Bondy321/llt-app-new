@@ -14,3 +14,8 @@ The React Compiler is not enabled on this template because of its impact on dev 
 ## Expanding the ESLint configuration
 
 If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+
+## Regression test suite
+
+- Run `npm test` to execute the web-admin regression suite.
+- `src/regression/triageGaps.test.js` is intended to be a **required CI gate** once web-admin tests are wired into CI workflows.

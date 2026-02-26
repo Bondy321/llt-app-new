@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test src/regression/triageGaps.test.js",
+    "test:ci": "npm run test"
   },
   "dependencies": {
     "@mantine/core": "^8.3.9",
