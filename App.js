@@ -309,6 +309,11 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    if (!isConnected || !firebaseConnected) return;
+    offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+  }, [isConnected, firebaseConnected, user?.uid]);
+
   if (initializing) {
     return (
       <View style={styles.loadingContainer}>
@@ -317,11 +322,6 @@ export default function App() {
       </View>
     );
   }
-
-  useEffect(() => {
-    if (!isConnected || !firebaseConnected) return;
-    offlineSyncService.replayQueue({ services: { bookingService, chatService } });
-  }, [isConnected, firebaseConnected, user?.uid]);
 
   if (authError) {
     return (
