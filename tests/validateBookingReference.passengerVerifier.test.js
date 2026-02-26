@@ -207,6 +207,7 @@ test('validateBookingReference derives tourId from verifier tourCode when tourId
 
 test('validateBookingReference sends x-firebase-appcheck header when token is available', async () => {
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK = 'true';
 
   const originalFetch = global.fetch;
   try {
@@ -247,6 +248,54 @@ test('validateBookingReference sends x-firebase-appcheck header when token is av
   } finally {
     global.fetch = originalFetch;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK;
+  }
+});
+
+
+test('validateBookingReference does not send x-firebase-appcheck header when App Check is disabled', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    let capturedHeaders;
+    global.fetch = async (_url, options) => {
+      capturedHeaders = options.headers;
+      return {
+        ok: true,
+        json: async () => ({
+          valid: true,
+          bookingRef: 'ABC123',
+          tourId: '5112D_8',
+        }),
+      };
+    };
+
+    const service = loadServiceWithDb({
+      drivers: {},
+      bookings: {
+        ABC123: {
+          bookingRef: 'ABC123',
+          tourCode: '5112D 8',
+          passengerNames: ['Alex'],
+          pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+        },
+      },
+      tours: {
+        '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true, participants: {}, currentParticipants: 0 },
+      },
+    }, {
+      getCurrentAppCheckToken: async () => 'mock-app-check-token',
+    });
+
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(capturedHeaders, 'x-firebase-appcheck'), false);
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK;
   }
 });
 
@@ -432,6 +481,7 @@ test('validateBookingReference maps verifier endpoint-not-found to actionable co
 
 test('validateBookingReference maps missing App Check token to actionable copy when strict mode is enabled', async () => {
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK = 'true';
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK = 'true';
 
   const originalFetch = global.fetch;
@@ -454,6 +504,7 @@ test('validateBookingReference maps missing App Check token to actionable copy w
   } finally {
     global.fetch = originalFetch;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK;
   }
 });

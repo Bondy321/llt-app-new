@@ -76,9 +76,13 @@ const getPassengerLoginVerifierTimeoutMs = () => {
   return 10000;
 };
 
+const shouldUseAppCheckForPassengerVerifier = () => {
+  // Disabled by default until App Check rollout is explicitly enabled.
+  return process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK === 'true';
+};
+
 const shouldRequireAppCheckForPassengerVerifier = () => {
-  // Staged rollout default: best-effort App Check. Set EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK=true
-  // to fail fast on token retrieval issues before calling the verifier endpoint.
+  // Strict mode is only relevant when App Check is enabled for verifier requests.
   return process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK === 'true';
 };
 
@@ -125,10 +129,13 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
       controller.abort();
     }, timeoutMs);
 
-    const appCheckResult = await getAppCheckHeaderValue();
+    const useAppCheck = shouldUseAppCheckForPassengerVerifier();
     const strictAppCheck = shouldRequireAppCheckForPassengerVerifier();
+    const appCheckResult = useAppCheck
+      ? await getAppCheckHeaderValue()
+      : { success: false, reason: 'APPCHECK_DISABLED' };
 
-    if (!appCheckResult.success && strictAppCheck) {
+    if (useAppCheck && !appCheckResult.success && strictAppCheck) {
       return {
         valid: false,
         reason: 'VERIFIER_APPCHECK_UNAVAILABLE',
@@ -136,7 +143,7 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
       };
     }
 
-    if (!appCheckResult.success) {
+    if (useAppCheck && !appCheckResult.success) {
       logger?.warn?.('Auth', 'Passenger verifier App Check token unavailable; proceeding without header', {
         reason: appCheckResult.reason,
         error: appCheckResult.error,
@@ -144,7 +151,7 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
     }
 
     const headers = { 'Content-Type': 'application/json' };
-    if (appCheckResult.success) {
+    if (useAppCheck && appCheckResult.success) {
       headers['x-firebase-appcheck'] = appCheckResult.token;
     }
 

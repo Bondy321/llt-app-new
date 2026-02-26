@@ -245,7 +245,7 @@ exports.verifyPassengerLogin = onRequest(
     }
 
     try {
-      const requireAppCheck = process.env.REQUIRE_APP_CHECK_FOR_LOGIN !== 'false';
+      const requireAppCheck = process.env.REQUIRE_APP_CHECK_FOR_LOGIN === 'true';
       const appCheckToken = req.headers['x-firebase-appcheck'];
 
       if (requireAppCheck) {
