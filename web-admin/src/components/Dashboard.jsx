@@ -1,6 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ref, onValue } from 'firebase/database';
 import { db } from '../firebase';
+import { formatDateForDisplay } from '../utils/dateUtils';
+import { getTriageMeta, getUrgencyBadge } from '../utils/triageUtils';
 import {
   SimpleGrid,
   Card,
@@ -22,6 +25,7 @@ import {
   Divider,
   ActionIcon,
   Tooltip,
+  Button,
 } from '@mantine/core';
 import {
   IconUsers,
@@ -128,6 +132,7 @@ function ActivityItem({ driver, tour, time, type }) {
 
 // Main Dashboard Component
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [drivers, setDrivers] = useState({});
   const [tours, setTours] = useState({});
   const [loading, setLoading] = useState(true);
@@ -184,6 +189,29 @@ export default function Dashboard() {
       return dateB - dateA;
     })
     .slice(0, 5);
+
+  const unassignedUpcomingTours = useMemo(() => {
+    return Object.entries(tours)
+      .map(([id, tour]) => {
+        const isAssigned = tour.driverName && tour.driverName !== 'TBA';
+        if (isAssigned) return null;
+
+        const triage = getTriageMeta(tour.startDate);
+        if (!triage) return null;
+
+        return {
+          id,
+          name: tour.name || id,
+          startDate: tour.startDate,
+          participants: tour.currentParticipants || 0,
+          dayDelta: triage.dayDelta,
+          parsedDate: triage.parsedDate,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.parsedDate - b.parsedDate)
+      .slice(0, 5);
+  }, [tours]);
 
   // Get today's date for display
   const today = new Date().toLocaleDateString('en-GB', {
@@ -337,6 +365,53 @@ export default function Dashboard() {
 
       {/* Recent Drivers & Quick Actions */}
       <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="lg">
+        {/* Priority Actions */}
+        <Card shadow="sm" padding="lg" radius="md" withBorder>
+          <Group justify="space-between" mb="md">
+            <Text fw={500}>Priority Actions</Text>
+            <Badge variant="light" color={unassignedUpcomingTours.length > 0 ? 'red' : 'green'}>
+              {unassignedUpcomingTours.length > 0 ? `${unassignedUpcomingTours.length} urgent` : 'No urgent items'}
+            </Badge>
+          </Group>
+
+          {unassignedUpcomingTours.length > 0 ? (
+            <Stack gap="xs">
+              {unassignedUpcomingTours.map((tour) => {
+                const urgency = getUrgencyBadge(tour.dayDelta);
+                return (
+                  <Paper key={tour.id} p="sm" radius="md" withBorder>
+                    <Group justify="space-between" align="center">
+                      <Box style={{ flex: 1, minWidth: 0 }}>
+                        <Text fw={500} size="sm" truncate="end">{tour.name}</Text>
+                        <Text size="xs" c="dimmed">
+                          Starts {formatDateForDisplay(tour.startDate)} • {tour.participants} passengers
+                        </Text>
+                      </Box>
+                      <Badge size="sm" color={urgency.color} variant="filled">
+                        {urgency.label}
+                      </Badge>
+                    </Group>
+                  </Paper>
+                );
+              })}
+
+              <Button
+                mt="sm"
+                variant="light"
+                color="red"
+                leftSection={<IconRoute size={16} />}
+                onClick={() => navigate('/tours?status=unassigned')}
+              >
+                Review unassigned tours
+              </Button>
+            </Stack>
+          ) : (
+            <Text c="dimmed" size="sm">
+              All tours starting within 7 days currently have drivers assigned.
+            </Text>
+          )}
+        </Card>
+
         {/* Recent Drivers */}
         <Card shadow="sm" padding="lg" radius="md" withBorder>
           <Group justify="space-between" mb="md">

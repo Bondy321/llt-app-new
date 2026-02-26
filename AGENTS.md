@@ -1118,6 +1118,10 @@ Never commit secrets. Use EAS Secrets for environment variables in builds.
 - **Driver login payload enrichment:** `validateBookingReference()` now resolves and returns the driver’s assigned tour payload (`tour`) plus an explicit `assignmentStatus` (`ASSIGNED`, `ASSIGNED_TOUR_NOT_FOUND`, `UNASSIGNED`) so App login can hydrate Driver Home context immediately after authentication.
 - **Passenger verifier explicit reason mapping:** `validateBookingReference()` now maps additional verifier reasons to clear passenger-safe copy for `INVALID_CREDENTIALS`, `TRY_AGAIN_LATER`, `INTERNAL_ERROR`, and `METHOD_NOT_ALLOWED`, improving deterministic login recovery guidance.
 - **Verifier mapping regression coverage:** `tests/validateBookingReference.passengerVerifier.test.js` includes dedicated assertions for each explicit reason mapping above to prevent drift in passenger-facing login error copy.
+- **Tours filter deep-link parity (web-admin):** `ToursManager` now keeps the status UI filter and `?status=` query param synchronized both ways (URL→UI on navigation/mount, UI→URL on interaction), enabling reliable dashboard deep links such as `/tours?status=unassigned`.
+- **Canonical all-status URL behavior:** selecting “All Tours” now removes the `status` query param rather than writing `status=all`, reducing duplicate URL shapes for the same state and keeping bookmarks/share links cleaner.
+- **Web-admin status-sync regression coverage:** `web-admin/src/components/ToursManager.test.jsx` now verifies hydration from URL, status-change URL writes, pagination reset to page 1, preservation of unrelated query params, and safe fallback for invalid status values.
+- **Web-admin test-runtime alignment:** `web-admin/src/utils/triageUtils.test.js` is now Vitest-native (instead of Node `node:test`) so `npm test` runs the entire web-admin suite in one pass without bundler failures.
 
 ## Quick Reference
 
