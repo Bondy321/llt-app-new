@@ -1393,9 +1393,10 @@ export default function ToursManager() {
     // URL is the source of truth on navigation/mount; hydrate UI filter state from valid params.
     const statusParam = searchParams.get('status');
     const allowedStatusParams = new Set(['all', 'assigned', 'unassigned', 'active', 'inactive']);
+    const nextHydratedStatus = statusParam && allowedStatusParams.has(statusParam) ? statusParam : 'all';
 
-    if (statusParam && allowedStatusParams.has(statusParam) && statusParam !== filterStatus) {
-      setFilterStatus(statusParam);
+    if (nextHydratedStatus !== filterStatus) {
+      setFilterStatus(nextHydratedStatus);
       setCurrentPage(1);
     }
   }, [searchParams, filterStatus]);
@@ -1413,7 +1414,13 @@ export default function ToursManager() {
     }
 
     const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('status', nextStatus);
+
+    if (nextStatus === 'all') {
+      nextParams.delete('status');
+    } else {
+      nextParams.set('status', nextStatus);
+    }
+
     setSearchParams(nextParams);
   };
 
