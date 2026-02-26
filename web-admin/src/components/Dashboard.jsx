@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ref, onValue } from 'firebase/database';
 import { db } from '../firebase';
-import { parseUKDateStrict, parseISODateStrict, formatDateForDisplay } from '../utils/dateUtils';
+import { formatDateForDisplay } from '../utils/dateUtils';
+import { getTriageMeta, getUrgencyBadge } from '../utils/triageUtils';
 import {
   SimpleGrid,
   Card,
@@ -190,50 +191,27 @@ export default function Dashboard() {
     .slice(0, 5);
 
   const unassignedUpcomingTours = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const inSevenDays = new Date(today);
-    inSevenDays.setDate(today.getDate() + 7);
-
     return Object.entries(tours)
       .map(([id, tour]) => {
         const isAssigned = tour.driverName && tour.driverName !== 'TBA';
         if (isAssigned) return null;
 
-        const parsedUKDate = parseUKDateStrict(tour.startDate);
-        const parsedISODate = parseISODateStrict(tour.startDate);
-        const parsedDate = parsedUKDate.success
-          ? parsedUKDate.date
-          : parsedISODate.success
-            ? parsedISODate.date
-            : null;
-
-        if (!parsedDate) return null;
-        if (parsedDate > inSevenDays) return null;
-
-        const dayDelta = Math.ceil((parsedDate - today) / (1000 * 60 * 60 * 24));
+        const triage = getTriageMeta(tour.startDate);
+        if (!triage) return null;
 
         return {
           id,
           name: tour.name || id,
           startDate: tour.startDate,
           participants: tour.currentParticipants || 0,
-          dayDelta,
-          parsedDate,
+          dayDelta: triage.dayDelta,
+          parsedDate: triage.parsedDate,
         };
       })
       .filter(Boolean)
       .sort((a, b) => a.parsedDate - b.parsedDate)
       .slice(0, 5);
   }, [tours]);
-
-  const getUrgencyBadge = (dayDelta) => {
-    if (dayDelta < 0) return { label: `${Math.abs(dayDelta)}d overdue`, color: 'red' };
-    if (dayDelta === 0) return { label: 'Today', color: 'red' };
-    if (dayDelta <= 2) return { label: `In ${dayDelta}d`, color: 'orange' };
-    return { label: `In ${dayDelta}d`, color: 'yellow' };
-  };
 
   // Get today's date for display
   const today = new Date().toLocaleDateString('en-GB', {
