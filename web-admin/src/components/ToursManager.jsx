@@ -1367,7 +1367,7 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
 
 // Main Tours Manager Component
 export default function ToursManager() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [tours, setTours] = useState({});
   const [drivers, setDrivers] = useState({});
   const [loading, setLoading] = useState(true);
@@ -1390,6 +1390,7 @@ export default function ToursManager() {
   const [selectedTourId, setSelectedTourId] = useState(null);
 
   useEffect(() => {
+    // URL is the source of truth on navigation/mount; hydrate UI filter state from valid params.
     const statusParam = searchParams.get('status');
     const allowedStatusParams = new Set(['all', 'assigned', 'unassigned', 'active', 'inactive']);
 
@@ -1398,6 +1399,23 @@ export default function ToursManager() {
       setCurrentPage(1);
     }
   }, [searchParams, filterStatus]);
+
+  const handleFilterStatusChange = (value) => {
+    // UI writes status changes back to URL, while preserving unrelated query params.
+    const nextStatus = value || 'all';
+    const currentStatusParam = searchParams.get('status') || 'all';
+
+    setFilterStatus(nextStatus);
+    setCurrentPage(1);
+
+    if (currentStatusParam === nextStatus) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('status', nextStatus);
+    setSearchParams(nextParams);
+  };
 
   // Load data from Firebase
   useEffect(() => {
@@ -1701,10 +1719,7 @@ export default function ToursManager() {
                 { value: 'inactive', label: 'Inactive' },
               ]}
               value={filterStatus}
-              onChange={(value) => {
-                setFilterStatus(value || 'all');
-                setCurrentPage(1);
-              }}
+              onChange={handleFilterStatusChange}
               style={{ width: 180 }}
               clearable={false}
             />
