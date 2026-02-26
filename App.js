@@ -351,7 +351,7 @@ export default function App() {
   const stalenessLabel = offlineSyncService.getStalenessLabel(lastSyncAt);
 
   const QueueBanner = () => (
-    <View style={styles.queueBanner}>
+    <View pointerEvents="none" style={styles.queueBanner}>
       <MaterialCommunityIcons name={isConnected ? 'sync' : 'cloud-off-outline'} size={18} color={COLORS.white} />
       <Text style={styles.offlineText}>{`${syncHealth.toUpperCase()} • ${stalenessLabel.label} • Pending ${queueStats.pending}`}</Text>
     </View>
@@ -514,6 +514,19 @@ const styles = StyleSheet.create({
   offlineBanner: { backgroundColor: COLORS.errorRed, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000 },
   offlineText: { color: COLORS.white, fontSize: 14, marginLeft: 8, fontWeight: '500' },
   syncBanner: { backgroundColor: COLORS.primaryBlue, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', paddingVertical: 8, paddingHorizontal: 12, position: 'absolute', top: 40, left: 0, right: 0, zIndex: 900 },
-  queueBanner: { backgroundColor: '#0F766E', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 6, paddingHorizontal: 12, position: 'absolute', top: 72, left: 0, right: 0, zIndex: 850 },
+  queueBanner: {
+    backgroundColor: 'rgba(15, 118, 110, 0.9)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    position: 'absolute',
+    bottom: 14,
+    left: 12,
+    right: 12,
+    borderRadius: 999,
+    zIndex: 850,
+  },
   syncDetail: { color: COLORS.white, fontSize: 12, opacity: 0.8 },
 });
