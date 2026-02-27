@@ -60,6 +60,13 @@ const buildPassengerLoginVerifierUrl = () => {
   return `https://europe-west1-${projectId}.cloudfunctions.net/verifyPassengerLogin`;
 };
 
+const buildDerivedPassengerLoginVerifierUrl = () => {
+  const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID?.trim();
+  if (!projectId) return null;
+
+  return `https://europe-west1-${projectId}.cloudfunctions.net/verifyPassengerLogin`;
+};
+
 const getPassengerLoginVerifierTimeoutMs = () => {
   const configured = Number(process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS);
   if (Number.isFinite(configured) && configured >= 1000) {
@@ -69,9 +76,13 @@ const getPassengerLoginVerifierTimeoutMs = () => {
   return 10000;
 };
 
+const shouldUseAppCheckForPassengerVerifier = () => {
+  // Disabled by default until App Check rollout is explicitly enabled.
+  return process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK === 'true';
+};
+
 const shouldRequireAppCheckForPassengerVerifier = () => {
-  // Staged rollout default: best-effort App Check. Set EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK=true
-  // to fail fast on token retrieval issues before calling the verifier endpoint.
+  // Strict mode is only relevant when App Check is enabled for verifier requests.
   return process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK === 'true';
 };
 
@@ -97,8 +108,15 @@ const getAppCheckHeaderValue = async () => {
 };
 
 const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
-  const endpoint = buildPassengerLoginVerifierUrl();
-  if (!endpoint) {
+  const configuredEndpoint = buildPassengerLoginVerifierUrl();
+  const derivedEndpoint = buildDerivedPassengerLoginVerifierUrl();
+
+  const endpointCandidates = [configuredEndpoint, derivedEndpoint].filter((value, index, list) => {
+    if (typeof value !== 'string' || !value.trim()) return false;
+    return list.indexOf(value) === index;
+  });
+
+  if (endpointCandidates.length === 0) {
     return { valid: false, reason: 'VERIFIER_NOT_CONFIGURED' };
   }
 
@@ -111,10 +129,13 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
       controller.abort();
     }, timeoutMs);
 
-    const appCheckResult = await getAppCheckHeaderValue();
+    const useAppCheck = shouldUseAppCheckForPassengerVerifier();
     const strictAppCheck = shouldRequireAppCheckForPassengerVerifier();
+    const appCheckResult = useAppCheck
+      ? await getAppCheckHeaderValue()
+      : { success: false, reason: 'APPCHECK_DISABLED' };
 
-    if (!appCheckResult.success && strictAppCheck) {
+    if (useAppCheck && !appCheckResult.success && strictAppCheck) {
       return {
         valid: false,
         reason: 'VERIFIER_APPCHECK_UNAVAILABLE',
@@ -122,7 +143,7 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
       };
     }
 
-    if (!appCheckResult.success) {
+    if (useAppCheck && !appCheckResult.success) {
       logger?.warn?.('Auth', 'Passenger verifier App Check token unavailable; proceeding without header', {
         reason: appCheckResult.reason,
         error: appCheckResult.error,
@@ -130,27 +151,45 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
     }
 
     const headers = { 'Content-Type': 'application/json' };
-    if (appCheckResult.success) {
+    if (useAppCheck && appCheckResult.success) {
       headers['x-firebase-appcheck'] = appCheckResult.token;
     }
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ bookingRef, email }),
-      signal: controller.signal,
-    });
+    for (const endpoint of endpointCandidates) {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ bookingRef, email }),
+        signal: controller.signal,
+      });
 
-    const payload = await response.json().catch(() => null);
-    if (!payload) {
-      return { valid: false, reason: 'VERIFIER_INVALID_RESPONSE' };
+      const payload = await response.json().catch(() => null);
+      if (!payload) {
+        if (response.status === 404) {
+          logger?.warn?.('Auth', 'Passenger verifier endpoint returned 404', {
+            endpoint,
+            status: response.status,
+          });
+          continue;
+        }
+        return { valid: false, reason: 'VERIFIER_INVALID_RESPONSE' };
+      }
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          logger?.warn?.('Auth', 'Passenger verifier endpoint returned 404', {
+            endpoint,
+            status: response.status,
+          });
+          continue;
+        }
+        return { valid: false, reason: payload?.reason || 'VERIFIER_REQUEST_FAILED' };
+      }
+
+      return payload;
     }
 
-    if (!response.ok) {
-      return { valid: false, reason: payload?.reason || 'VERIFIER_REQUEST_FAILED' };
-    }
-
-    return payload;
+    return { valid: false, reason: 'VERIFIER_NOT_FOUND' };
   } catch (error) {
     if (error?.name === 'AbortError') {
       return { valid: false, reason: 'VERIFIER_TIMEOUT' };
@@ -701,6 +740,7 @@ const validateBookingReference = async (reference, email) => {
         VERIFIER_TIMEOUT: 'Verification is taking longer than expected. Please check your connection and try again.',
         VERIFIER_REQUEST_FAILED: 'Unable to reach the verification service. Please try again shortly.',
         VERIFIER_INVALID_RESPONSE: 'Verification service returned an unexpected response. Please try again.',
+        VERIFIER_NOT_FOUND: 'Passenger verification service endpoint is unavailable. Please update app settings or try again later.',
         VERIFIER_APPCHECK_UNAVAILABLE: 'App security check could not be completed. Update the app or reconnect and try again.',
       };
       return {
