@@ -48,6 +48,7 @@ import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
 import { auth } from '../firebase';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
+import SyncStatusBanner from '../components/SyncStatusBanner';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -450,8 +451,9 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [refreshing, setRefreshing] = useState(false);
   const [sending, setSending] = useState(false);
   const [queueStats, setQueueStats] = useState({ pending: 0, syncing: 0, failed: 0, total: 0 });
-  const [refreshStatusText, setRefreshStatusText] = useState('');
-  const [syncBannerState, setSyncBannerState] = useState(null);
+  const [syncBannerContract, setSyncBannerContract] = useState(null);
+  const [syncBannerOutcomeText, setSyncBannerOutcomeText] = useState('');
+  const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(null);
   const [inputHeight, setInputHeight] = useState(44);
   const [draftRestored, setDraftRestored] = useState(false);
 
@@ -689,15 +691,15 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   }, []);
 
   const showSyncBanner = useCallback(
-    ({ message, tone = 'info', actionText = '', autoDismissMs = 4500 }) => {
+    ({ contract, outcomeText = '', autoDismissMs = 4500 }) => {
       clearSyncBannerTimeout();
-      setSyncBannerState({ message, tone, actionText });
-      setRefreshStatusText(message);
+      setSyncBannerContract(contract);
+      setSyncBannerOutcomeText(outcomeText);
 
       if (autoDismissMs > 0) {
         syncBannerTimeoutRef.current = setTimeout(() => {
-          setSyncBannerState(null);
-          setRefreshStatusText('');
+          setSyncBannerContract(null);
+          setSyncBannerOutcomeText('');
         }, autoDismissMs);
       }
     },
@@ -719,25 +721,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         total: afterStats?.total || 0,
       };
 
-      if (!replayResult?.success) {
-        const detail = replayResult?.error || fallbackErrorMessage;
-        const syncOutcome = offlineSyncService.formatSyncOutcome({
-          syncedCount: 0,
-          pendingCount: safeAfterStats.pending,
-          failedCount: safeAfterStats.failed,
-          source: 'manual-refresh',
-        });
-        showSyncBanner({
-          message: `Queue sync failed: ${detail} ${syncOutcome}.`,
-          tone: 'error',
-          actionText: 'Tap to retry failed actions',
-          autoDismissMs: 7000,
-        });
-        return;
-      }
-
-      const { processed = 0, failed = 0, skipped = false } = replayResult.data || {};
-
+      const processed = replayResult?.data?.processed || 0;
       const syncOutcome = offlineSyncService.formatSyncOutcome({
         syncedCount: processed,
         pendingCount: safeAfterStats.pending,
@@ -745,45 +729,65 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         source: 'manual-refresh',
       });
 
-      if (skipped) {
+      const unifiedStatus = offlineSyncService.deriveUnifiedSyncStatus({
+        network: { isOnline: true },
+        backend: { isReachable: replayResult?.success !== false, isDegraded: !replayResult?.success },
+        queue: safeAfterStats,
+        lastSyncAt: lastSuccessfulSyncAt,
+        syncSummary: {
+          syncedCount: processed,
+          pendingCount: safeAfterStats.pending,
+          failedCount: safeAfterStats.failed,
+          source: 'manual-refresh',
+        },
+      });
+
+      if (!replayResult?.success) {
         showSyncBanner({
-          message: `Sync already in progress. ${syncOutcome}.`,
-          tone: 'warning',
-          actionText: 'Tap to retry failed actions',
-          autoDismissMs: 4500,
-        });
-      } else if (safeAfterStats.failed > 0) {
-        const partialLabel = processed > 0 ? 'Partially synced' : 'Sync failed';
-        showSyncBanner({
-          message: `${partialLabel}: ${syncOutcome}.`,
-          tone: 'error',
-          actionText: 'Tap to retry failed actions',
+          contract: {
+            ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKEND_DEGRADED,
+            canRetry: true,
+            description: fallbackErrorMessage || replayResult?.error || offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKEND_DEGRADED.description,
+          },
+          outcomeText: syncOutcome,
           autoDismissMs: 7000,
         });
-      } else if (safeAfterStats.pending > 0) {
-        const statePrefix = processed > 0 ? 'Partially synced' : 'Pending retry';
-        showSyncBanner({
-          message: `${statePrefix}: ${syncOutcome}.`,
-          tone: 'warning',
-          actionText: 'Tap to retry failed actions',
-          autoDismissMs: 5500,
-        });
-      } else if (processed > 0 || failed > 0 || safeBeforeStats.total > 0 || safeAfterStats.total > 0) {
-        showSyncBanner({
-          message: `Synced ${processed} action${processed === 1 ? '' : 's'}.`,
-          tone: 'success',
-          autoDismissMs: 3000,
-        });
-      } else {
-        showSyncBanner({
-          message: 'Messages are up to date.',
-          tone: 'success',
-          autoDismissMs: 2500,
+        return;
+      }
+
+      showSyncBanner({
+        contract: {
+          label: unifiedStatus.label,
+          description: unifiedStatus.description,
+          icon: unifiedStatus.icon,
+          severity: unifiedStatus.severity,
+          canRetry: unifiedStatus.canRetry,
+          showLastSync: unifiedStatus.showLastSync,
+        },
+        outcomeText: syncOutcome,
+        autoDismissMs: safeAfterStats.failed > 0 ? 7000 : safeAfterStats.pending > 0 ? 5500 : 3000,
+      });
+
+      if (safeAfterStats.failed === 0 && (processed > 0 || safeBeforeStats.total > 0 || safeAfterStats.total > 0)) {
+        offlineSyncService.getLastSuccessAt().then((result) => {
+          if (result?.success) setLastSuccessfulSyncAt(result.data);
         });
       }
     },
-    [showSyncBanner]
+    [showSyncBanner, lastSuccessfulSyncAt]
   );
+
+  useEffect(() => {
+    let mounted = true;
+    offlineSyncService.getLastSuccessAt().then((result) => {
+      if (mounted && result?.success) {
+        setLastSuccessfulSyncAt(result.data);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -1397,24 +1401,13 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         </View>
       </LinearGradient>
 
-      {!!refreshStatusText && (
-        <TouchableOpacity
-          style={[
-            styles.refreshStatusContainer,
-            syncBannerState?.tone === 'success' && styles.refreshStatusSuccess,
-            syncBannerState?.tone === 'warning' && styles.refreshStatusWarning,
-            syncBannerState?.tone === 'error' && styles.refreshStatusError,
-          ]}
-          activeOpacity={syncBannerState?.actionText ? 0.8 : 1}
-          onPress={syncBannerState?.actionText ? handleManualSync : undefined}
-          disabled={!syncBannerState?.actionText}
-        >
-          <Text style={styles.refreshStatusText}>{refreshStatusText}</Text>
-          {!!syncBannerState?.actionText && (
-            <Text style={styles.refreshStatusActionText}>{syncBannerState.actionText}</Text>
-          )}
-        </TouchableOpacity>
-      )}
+      <SyncStatusBanner
+        state={syncBannerContract}
+        outcomeText={syncBannerOutcomeText}
+        lastSyncAt={lastSuccessfulSyncAt}
+        onRetry={handleManualSync}
+        retryLabel="Retry failed actions"
+      />
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}

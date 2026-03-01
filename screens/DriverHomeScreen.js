@@ -28,6 +28,7 @@ import { createPersistenceProvider } from '../services/persistenceProvider';
 import logger from '../services/loggerService';
 import { getMinutesAgo } from '../services/timeUtils';
 import { COLORS as THEME } from '../theme';
+import SyncStatusBanner from '../components/SyncStatusBanner';
 
 const { width } = Dimensions.get('window');
 
@@ -75,11 +76,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const [autoShareEnabled, setAutoShareEnabled] = useState(false);
   const [autoShareStatus, setAutoShareStatus] = useState('Auto-share is off');
   const [autoShareLastRunAt, setAutoShareLastRunAt] = useState(null);
-  const [bannerVisible, setBannerVisible] = useState(false);
-  const [bannerType, setBannerType] = useState('info');
-  const [bannerMessage, setBannerMessage] = useState('');
-  const [bannerActionLabel, setBannerActionLabel] = useState(null);
-  const [bannerActionHandler, setBannerActionHandler] = useState(null);
+  const [bannerContract, setBannerContract] = useState(null);
+  const [bannerOutcomeText, setBannerOutcomeText] = useState('');
+  const [bannerRetryHandler, setBannerRetryHandler] = useState(null);
+  const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(null);
 
   // Modal State for Joining Tour
   const [joinModalVisible, setJoinModalVisible] = useState(false);
@@ -107,30 +107,52 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const isLocationStale = Boolean(lastLocationUpdate?.timestamp)
     && getLastUpdateAgeMinutes(lastLocationUpdate.timestamp) >= LOCATION_STALE_THRESHOLD_MINUTES;
 
-  const showBanner = useCallback(({ type = 'info', message, actionLabel, actionHandler, autoHideMs = 4000 }) => {
+  const showBanner = useCallback(({
+    contract,
+    outcomeText = '',
+    autoHideMs = 4000,
+    type = 'info',
+    message,
+    actionLabel,
+    actionHandler,
+  }) => {
     if (bannerTimerRef.current) {
       clearTimeout(bannerTimerRef.current);
       bannerTimerRef.current = null;
     }
 
-    setBannerType(type);
-    setBannerMessage(message);
-    setBannerActionLabel(actionLabel || null);
-    setBannerActionHandler(actionHandler || null);
-    setBannerVisible(true);
+    const legacyToSeverity = {
+      success: 'success',
+      warning: 'warning',
+      error: 'critical',
+      info: 'info',
+    };
 
-    if (type === 'warning') {
-      logger.warn('DriverHomeScreen', 'Showing warning banner', { message, hasAction: Boolean(actionLabel) });
+    const resolvedContract = contract || {
+      label: type === 'success' ? 'Up to date' : type === 'warning' ? 'Attention needed' : type === 'error' ? 'Service issue' : 'Sync update',
+      description: message || '',
+      icon: type === 'success' ? 'check-circle-outline' : type === 'warning' ? 'alert-outline' : type === 'error' ? 'alert-circle-outline' : 'information-outline',
+      severity: legacyToSeverity[type] || 'info',
+      canRetry: Boolean(actionHandler),
+      showLastSync: true,
+    };
+
+    setBannerContract(resolvedContract);
+    setBannerOutcomeText(outcomeText);
+    setBannerRetryHandler(resolvedContract.canRetry ? (actionHandler || null) : null);
+
+    if (resolvedContract?.severity === 'warning') {
+      logger.warn('DriverHomeScreen', 'Showing warning banner', { message: resolvedContract?.description, hasAction: Boolean(resolvedContract?.canRetry) });
     }
-    if (type === 'error') {
-      logger.error('DriverHomeScreen', 'Showing error banner', { message, hasAction: Boolean(actionLabel) });
+    if (resolvedContract?.severity === 'error' || resolvedContract?.severity === 'critical') {
+      logger.error('DriverHomeScreen', 'Showing error banner', { message: resolvedContract?.description, hasAction: Boolean(resolvedContract?.canRetry) });
     }
 
     if (autoHideMs > 0) {
       bannerTimerRef.current = setTimeout(() => {
-        setBannerVisible(false);
-        setBannerActionLabel(null);
-        setBannerActionHandler(null);
+        setBannerContract(null);
+        setBannerOutcomeText('');
+        setBannerRetryHandler(null);
       }, autoHideMs);
     }
   }, []);
@@ -140,9 +162,9 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       clearTimeout(bannerTimerRef.current);
       bannerTimerRef.current = null;
     }
-    setBannerVisible(false);
-    setBannerActionLabel(null);
-    setBannerActionHandler(null);
+    setBannerContract(null);
+    setBannerOutcomeText('');
+    setBannerRetryHandler(null);
   }, []);
 
   useEffect(() => () => {
@@ -182,6 +204,18 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       if (res.success) setCacheStatusLabel(offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label);
     });
   }, [activeTourId]);
+
+  useEffect(() => {
+    let mounted = true;
+    offlineSyncService.getLastSuccessAt().then((result) => {
+      if (mounted && result?.success) {
+        setLastSuccessfulSyncAt(result.data);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // Start pulse animation
   useEffect(() => {
@@ -527,10 +561,15 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const handleOpenChat = () => {
     if (!activeTourId) {
       showBanner({
-        type: 'warning',
-        message: 'Join a tour to open group chat.',
-        actionLabel: 'Join Tour',
-        actionHandler: () => setJoinModalVisible(true),
+        contract: {
+          ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKLOG_PENDING,
+          label: 'Join a tour',
+          description: 'Join a tour to open group chat.',
+          canRetry: false,
+          showLastSync: false,
+          icon: 'bus',
+          severity: 'warning',
+        },
       });
       return;
     }
@@ -547,10 +586,15 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const handleOpenDriverChat = () => {
     if (!activeTourId) {
       showBanner({
-        type: 'warning',
-        message: 'Join a tour to open driver chat.',
-        actionLabel: 'Join Tour',
-        actionHandler: () => setJoinModalVisible(true),
+        contract: {
+          ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKLOG_PENDING,
+          label: 'Join a tour',
+          description: 'Join a tour to open driver chat.',
+          canRetry: false,
+          showLastSync: false,
+          icon: 'bus-clock',
+          severity: 'warning',
+        },
       });
       return;
     }
@@ -568,7 +612,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   // --- Join Tour Logic ---
   const handleJoinTour = async () => {
     if (!inputTourCode.trim()) {
-      showBanner({ type: 'warning', message: 'Enter a valid tour code to continue.' });
+      showBanner({ contract: { ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKLOG_PENDING, label: 'Tour code required', description: 'Enter a valid tour code to continue.', canRetry: false, showLastSync: false, severity: 'warning', icon: 'form-textbox' } });
       return;
     }
 
@@ -610,7 +654,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
 
-      showBanner({ type: 'success', message: `Assigned to tour ${inputTourCode}.` });
+      showBanner({ contract: offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_HEALTHY, outcomeText: offlineSyncService.formatSyncOutcome({ source: 'manual-refresh' }) });
       setJoinModalVisible(false);
       setInputTourCode('');
 
@@ -619,8 +663,8 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
       showBanner({
-        type: 'error',
-        message: `Couldn’t join tour. Check the code and retry. ${error.message}`,
+        contract: { ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKEND_DEGRADED, canRetry: true, description: `Couldn’t join tour. Check the code and retry. ${error.message}` },
+        outcomeText: offlineSyncService.formatSyncOutcome({ source: 'manual-refresh' }),
       });
     } finally {
       setJoining(false);
@@ -648,13 +692,6 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   };
 
   const accuracyConfig = getAccuracyConfig(locationAccuracy);
-  const bannerConfigByType = {
-    info: { icon: 'information-outline', bg: THEME.primaryMuted, accent: THEME.primary, text: THEME.textPrimary },
-    success: { icon: 'check-circle-outline', bg: THEME.successLight, accent: THEME.success, text: THEME.textPrimary },
-    warning: { icon: 'alert-outline', bg: THEME.warningLight, accent: THEME.warning, text: THEME.textPrimary },
-    error: { icon: 'alert-circle-outline', bg: THEME.errorLight, accent: THEME.error, text: THEME.textPrimary },
-  };
-  const currentBannerConfig = bannerConfigByType[bannerType] || bannerConfigByType.info;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -689,24 +726,17 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
           </View>
 
           <ScrollView contentContainerStyle={styles.content}>
-            {bannerVisible && (
-              <View style={[styles.inlineBanner, { backgroundColor: currentBannerConfig.bg, borderColor: `${currentBannerConfig.accent}66` }]}>
-                <MaterialCommunityIcons name={currentBannerConfig.icon} size={20} color={currentBannerConfig.accent} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.inlineBannerText, { color: currentBannerConfig.text }]}>{bannerMessage}</Text>
-                  {bannerActionLabel && bannerActionHandler && (
-                    <TouchableOpacity
-                      style={[styles.inlineBannerAction, { borderColor: `${currentBannerConfig.accent}55` }]}
-                      onPress={bannerActionHandler}
-                      accessibilityRole="button"
-                      accessibilityLabel={bannerActionLabel}
-                    >
-                      <Text style={[styles.inlineBannerActionText, { color: currentBannerConfig.accent }]}>{bannerActionLabel}</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
+            {bannerContract && (
+              <View style={styles.inlineBannerWrap}>
+                <SyncStatusBanner
+                  state={bannerContract}
+                  outcomeText={bannerOutcomeText}
+                  lastSyncAt={lastSuccessfulSyncAt}
+                  onRetry={bannerContract?.canRetry ? bannerRetryHandler : null}
+                  retryLabel="Retry now"
+                />
                 <TouchableOpacity onPress={dismissBanner} style={styles.inlineBannerDismiss} accessibilityRole="button" accessibilityLabel="Dismiss status message">
-                  <MaterialCommunityIcons name="close" size={18} color={currentBannerConfig.accent} />
+                  <MaterialCommunityIcons name="close" size={18} color={COLORS.muted} />
                 </TouchableOpacity>
               </View>
             )}
