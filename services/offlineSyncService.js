@@ -242,7 +242,13 @@ const getStalenessLabel = (lastSyncedAt) => {
   return { bucket: 'old', label: 'Cached data from yesterday' };
 };
 
-const deriveUnifiedSyncStatus = ({ network = {}, backend = {}, queue = {}, lastSyncAt = null } = {}) => {
+const deriveUnifiedSyncStatus = ({
+  network = {},
+  backend = {},
+  queue = {},
+  lastSyncAt = null,
+  syncSummary = {},
+} = {}) => {
   const networkOnline = Boolean(network.isOnline);
   const backendReachable = backend.isReachable !== false;
   const backendDegraded = Boolean(backend.isDegraded);
@@ -266,18 +272,12 @@ const deriveUnifiedSyncStatus = ({ network = {}, backend = {}, queue = {}, lastS
   return {
     stateKey,
     ...UNIFIED_SYNC_STATES[stateKey],
-    syncSummary: {
-      networkOnline,
-      backendHealthy,
-      backendReachable,
-      backendDegraded,
-      pending,
-      syncing,
-      failed,
-      total,
-      hasBacklog,
-      lastSyncAt,
-    },
+    syncSummary: buildSyncSummary({
+      pendingCount: pending,
+      failedCount: failed,
+      lastSuccessAt: lastSyncAt,
+      ...syncSummary,
+    }),
   };
 };
 
