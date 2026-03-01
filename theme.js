@@ -38,6 +38,34 @@ export const COLORS = {
   // Special Purpose
   overlay: 'rgba(15, 23, 42, 0.5)',  // Modal overlays
   shadow: '#000000',
+
+  // Sync Semantic Colors
+  sync: {
+    info: {
+      foreground: '#1E40AF',
+      foregroundMuted: '#1E3A8A',
+      background: '#DBEAFE',
+      border: '#93C5FD',
+    },
+    warning: {
+      foreground: '#B45309',
+      foregroundMuted: '#92400E',
+      background: '#FEF3C7',
+      border: '#FCD34D',
+    },
+    critical: {
+      foreground: '#B91C1C',
+      foregroundMuted: '#991B1B',
+      background: '#FEE2E2',
+      border: '#FCA5A5',
+    },
+    success: {
+      foreground: '#15803D',
+      foregroundMuted: '#166534',
+      background: '#DCFCE7',
+      border: '#86EFAC',
+    },
+  },
 };
 
 // Consistent spacing scale

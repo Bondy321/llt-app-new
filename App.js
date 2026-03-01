@@ -40,11 +40,36 @@ const COLORS = {
 };
 
 const SYNC_SEVERITY_TOKENS = {
-  critical: { backgroundColor: THEME.error, textColor: THEME.white, detailColor: 'rgba(255,255,255,0.85)' },
-  warning: { backgroundColor: THEME.warning, textColor: THEME.textPrimary, detailColor: 'rgba(15,23,42,0.75)' },
-  info: { backgroundColor: THEME.primary, textColor: THEME.white, detailColor: 'rgba(255,255,255,0.85)' },
-  success: { backgroundColor: THEME.success, textColor: THEME.white, detailColor: 'rgba(255,255,255,0.85)' },
-  default: { backgroundColor: THEME.primary, textColor: THEME.white, detailColor: 'rgba(255,255,255,0.85)' },
+  critical: {
+    backgroundColor: THEME.sync.critical.background,
+    borderColor: THEME.sync.critical.border,
+    textColor: THEME.sync.critical.foreground,
+    detailColor: THEME.sync.critical.foregroundMuted,
+  },
+  warning: {
+    backgroundColor: THEME.sync.warning.background,
+    borderColor: THEME.sync.warning.border,
+    textColor: THEME.sync.warning.foreground,
+    detailColor: THEME.sync.warning.foregroundMuted,
+  },
+  info: {
+    backgroundColor: THEME.sync.info.background,
+    borderColor: THEME.sync.info.border,
+    textColor: THEME.sync.info.foreground,
+    detailColor: THEME.sync.info.foregroundMuted,
+  },
+  success: {
+    backgroundColor: THEME.sync.success.background,
+    borderColor: THEME.sync.success.border,
+    textColor: THEME.sync.success.foreground,
+    detailColor: THEME.sync.success.foregroundMuted,
+  },
+  default: {
+    backgroundColor: THEME.sync.info.background,
+    borderColor: THEME.sync.info.border,
+    textColor: THEME.sync.info.foreground,
+    detailColor: THEME.sync.info.foregroundMuted,
+  },
 };
 
 const SESSION_KEYS = {
@@ -350,7 +375,7 @@ export default function App() {
     : null;
 
   const UnifiedSyncBanner = () => (
-    <View pointerEvents="none" style={[styles.syncBanner, { backgroundColor: syncTokens.backgroundColor }]}>
+    <View pointerEvents="none" style={[styles.syncBanner, { backgroundColor: syncTokens.backgroundColor, borderColor: syncTokens.borderColor }]}>
       <MaterialCommunityIcons name={unifiedSyncStatus?.icon || 'cloud-sync'} size={20} color={syncTokens.textColor} />
       <View style={styles.syncTextContainer}>
         {shouldShowOutcome && (
@@ -511,6 +536,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 1000,
+    borderBottomWidth: 1,
   },
   syncTextContainer: { marginLeft: 8, flex: 1 },
   syncPrimaryLine: { fontSize: 12, fontWeight: '700' },
