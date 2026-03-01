@@ -15,6 +15,41 @@ const QUEUE_KEY = 'queue_v1';
 const PROCESSED_ACTIONS_KEY = 'processed_action_ids_v1';
 const MAX_PROCESSED_IDS = 500;
 
+const UNIFIED_SYNC_STATES = {
+  OFFLINE_NO_NETWORK: {
+    label: 'Offline',
+    description: 'No network connection. Changes are saved and will sync when online.',
+    severity: 'critical',
+    icon: 'wifi-off',
+    canRetry: false,
+    showLastSync: true,
+  },
+  ONLINE_BACKEND_DEGRADED: {
+    label: 'Service issue',
+    description: 'Connected to network, but the sync service is temporarily unavailable.',
+    severity: 'warning',
+    icon: 'cloud-alert',
+    canRetry: true,
+    showLastSync: true,
+  },
+  ONLINE_BACKLOG_PENDING: {
+    label: 'Syncing backlog',
+    description: 'Connection restored. Pending updates are still being processed.',
+    severity: 'info',
+    icon: 'clock-sync',
+    canRetry: true,
+    showLastSync: true,
+  },
+  ONLINE_HEALTHY: {
+    label: 'Up to date',
+    description: 'Everything is synced and working normally.',
+    severity: 'success',
+    icon: 'cloud-check',
+    canRetry: false,
+    showLastSync: true,
+  },
+};
+
 const listeners = new Set();
 let replayLock = false;
 
@@ -125,6 +160,45 @@ const getStalenessLabel = (lastSyncedAt) => {
   }
 
   return { bucket: 'old', label: 'Cached data from yesterday' };
+};
+
+const deriveUnifiedSyncStatus = ({ network = {}, backend = {}, queue = {}, lastSyncAt = null } = {}) => {
+  const networkOnline = Boolean(network.isOnline);
+  const backendReachable = backend.isReachable !== false;
+  const backendDegraded = Boolean(backend.isDegraded);
+  const backendHealthy = networkOnline && backendReachable && !backendDegraded;
+
+  const pending = Math.max(0, Number(queue.pending) || 0);
+  const syncing = Math.max(0, Number(queue.syncing) || 0);
+  const failed = Math.max(0, Number(queue.failed) || 0);
+  const total = Math.max(0, Number(queue.total) || pending + syncing + failed);
+  const hasBacklog = pending > 0 || syncing > 0 || failed > 0;
+
+  let stateKey = 'ONLINE_HEALTHY';
+  if (!networkOnline) {
+    stateKey = 'OFFLINE_NO_NETWORK';
+  } else if (!backendHealthy) {
+    stateKey = 'ONLINE_BACKEND_DEGRADED';
+  } else if (hasBacklog) {
+    stateKey = 'ONLINE_BACKLOG_PENDING';
+  }
+
+  return {
+    stateKey,
+    ...UNIFIED_SYNC_STATES[stateKey],
+    syncSummary: {
+      networkOnline,
+      backendHealthy,
+      backendReachable,
+      backendDegraded,
+      pending,
+      syncing,
+      failed,
+      total,
+      hasBacklog,
+      lastSyncAt,
+    },
+  };
 };
 
 const saveTourPack = async (tourId, role, payload) => {
@@ -375,6 +449,8 @@ const replayQueue = async ({ db, services = {} } = {}) => {
 
 module.exports = {
   SCHEMA_VERSION,
+  UNIFIED_SYNC_STATES,
+  deriveUnifiedSyncStatus,
   saveTourPack,
   getTourPack,
   setTourPackMeta,
