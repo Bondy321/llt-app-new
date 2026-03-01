@@ -1,23 +1,33 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { normalizeSyncState, getBookingSyncState } = require('../utils/manifestSyncState');
+const offlineSyncService = require('../services/offlineSyncService');
 
-test('normalizes valid sync states and defaults unexpected values to synced', () => {
-  assert.equal(normalizeSyncState('queued'), 'queued');
-  assert.equal(normalizeSyncState('SYNCING'), 'syncing');
-  assert.equal(normalizeSyncState(' failed '), 'failed');
-  assert.equal(normalizeSyncState('weird-status'), 'synced');
-  assert.equal(normalizeSyncState(undefined), 'synced');
+test('pending queue with healthy backend derives ONLINE_BACKLOG_PENDING', () => {
+  const key = offlineSyncService.deriveSyncStateKey({
+    isConnected: true,
+    firebaseConnected: true,
+    queueStats: { pending: 2, failed: 0, syncing: 0 },
+  });
+
+  assert.equal(key, 'ONLINE_BACKLOG_PENDING');
 });
 
-test('returns queued sync state for queued booking ids and synced fallback for others', () => {
-  const bookingSyncState = {
-    ABC123: 'queued',
-    DEF456: 'syncing',
-  };
+test('backend degraded takes precedence over pending queue state', () => {
+  const key = offlineSyncService.deriveSyncStateKey({
+    isConnected: true,
+    firebaseConnected: false,
+    queueStats: { pending: 3, failed: 0, syncing: 1 },
+  });
 
-  assert.equal(getBookingSyncState(bookingSyncState, 'ABC123'), 'queued');
-  assert.notEqual(getBookingSyncState(bookingSyncState, 'ABC123'), 'synced');
-  assert.equal(getBookingSyncState(bookingSyncState, 'DEF456'), 'syncing');
-  assert.equal(getBookingSyncState(bookingSyncState, 'MISSING'), 'synced');
+  assert.equal(key, 'ONLINE_BACKEND_DEGRADED');
+});
+
+test('failed queue actions derive ONLINE_BACKEND_DEGRADED even when connected', () => {
+  const key = offlineSyncService.deriveSyncStateKey({
+    isConnected: true,
+    firebaseConnected: true,
+    queueStats: { pending: 0, failed: 2, syncing: 0 },
+  });
+
+  assert.equal(key, 'ONLINE_BACKEND_DEGRADED');
 });

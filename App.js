@@ -14,7 +14,7 @@ import offlineSyncService from './services/offlineSyncService';
 import * as bookingService from './services/bookingServiceRealtime';
 import * as chatService from './services/chatService';
 import offlineLoginResolver from './services/offlineLoginResolver';
-import { COLORS as THEME } from './theme';
+import { COLORS as THEME, SYNC_COLORS } from './theme';
 
 // Import Screens
 import LoginScreen from './screens/LoginScreen';
@@ -99,7 +99,7 @@ export default function App() {
 
   const diagnosticsTourId = tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
   const diagnosticsRole = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
-  const { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs, lastSyncAt, queueStats, syncHealth } = useDiagnostics({
+  const { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs, unifiedSyncStatus } = useDiagnostics({
     onForeground: refreshAppData,
     activeTourId: diagnosticsTourId,
     role: diagnosticsRole,
@@ -348,21 +348,22 @@ export default function App() {
   );
 
 
-  const stalenessLabel = offlineSyncService.getStalenessLabel(lastSyncAt);
-
   const QueueBanner = () => (
-    <View pointerEvents="none" style={styles.queueBanner}>
-      <MaterialCommunityIcons name={isConnected ? 'sync' : 'cloud-off-outline'} size={18} color={COLORS.white} />
-      <Text style={styles.offlineText}>{`${syncHealth.toUpperCase()} • ${stalenessLabel.label} • Pending ${queueStats.pending}`}</Text>
+    <View pointerEvents="none" style={[styles.queueBanner, styles[`severity_${unifiedSyncStatus?.severity || 'info'}`]]}>
+      <MaterialCommunityIcons name={unifiedSyncStatus?.icon || 'sync'} size={18} color={COLORS.white} />
+      <Text style={styles.offlineText}>{`${unifiedSyncStatus?.label || 'Sync status'} • ${unifiedSyncStatus?.description || ''}`}</Text>
+      {unifiedSyncStatus?.showLastSync && (
+        <Text style={styles.syncDetail}>Last sync: {unifiedSyncStatus?.lastSyncRelative || 'Never'}</Text>
+      )}
     </View>
   );
 
   const SyncIssueBanner = () => (
-    isConnected && (!firebaseConnected || lastFirebaseError) && (
-      <View style={styles.syncBanner}>
-        <MaterialCommunityIcons name="database-alert" size={20} color={COLORS.white} />
+    unifiedSyncStatus?.key === 'ONLINE_BACKEND_DEGRADED' && (
+      <View style={[styles.syncBanner, styles.severity_warning]}>
+        <MaterialCommunityIcons name={unifiedSyncStatus?.icon || 'database-alert'} size={20} color={COLORS.white} />
         <View style={{ marginLeft: 8 }}>
-          <Text style={styles.offlineText}>Reconnecting to tour services…</Text>
+          <Text style={styles.offlineText}>{unifiedSyncStatus?.description || 'Backend connectivity is degraded.'}</Text>
           {lastProbeDurationMs !== null && (
             <Text style={styles.syncDetail}>Last check: {lastProbeDurationMs}ms</Text>
           )}
@@ -385,6 +386,7 @@ export default function App() {
           <DriverHomeScreen
             driverData={bookingData}
             onLogout={handleLogout}
+            unifiedSyncStatus={unifiedSyncStatus}
             onNavigate={navigateTo} // Pass navigation prop
             onDriverAssignmentChange={handleDriverAssignmentChange}
           />
@@ -422,6 +424,7 @@ export default function App() {
             bookingData={bookingData}
             onNavigate={navigateTo}
             onLogout={handleLogout}
+            unifiedSyncStatus={unifiedSyncStatus}
           />
         );
       case 'Photobook':
@@ -476,6 +479,7 @@ case 'Itinerary':
             bookingData={effectiveBookingData}
             tourData={tourData || { name: 'Tour Chat' }}
             internalDriverChat={screenParams.internalDriverChat === true}
+            unifiedSyncStatus={unifiedSyncStatus}
           />
         );
       case 'Map':
@@ -515,7 +519,7 @@ const styles = StyleSheet.create({
   offlineText: { color: COLORS.white, fontSize: 14, marginLeft: 8, fontWeight: '500' },
   syncBanner: { backgroundColor: COLORS.primaryBlue, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', paddingVertical: 8, paddingHorizontal: 12, position: 'absolute', top: 40, left: 0, right: 0, zIndex: 900 },
   queueBanner: {
-    backgroundColor: 'rgba(15, 118, 110, 0.9)',
+    backgroundColor: THEME.primary,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -529,4 +533,8 @@ const styles = StyleSheet.create({
     zIndex: 850,
   },
   syncDetail: { color: COLORS.white, fontSize: 12, opacity: 0.8 },
+  severity_info: { backgroundColor: SYNC_COLORS.info },
+  severity_warning: { backgroundColor: SYNC_COLORS.warning },
+  severity_critical: { backgroundColor: SYNC_COLORS.critical },
+  severity_success: { backgroundColor: SYNC_COLORS.success },
 });

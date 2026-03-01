@@ -26,7 +26,7 @@ import * as chatService from '../services/chatService';
 import { realtimeDb } from '../firebase';
 import offlineSyncService from '../services/offlineSyncService';
 import { parseTimestampMs } from '../services/timeUtils';
-import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
+import { COLORS as THEME, SPACING, RADIUS, SHADOWS, SYNC_COLORS } from '../theme';
 import { getPickupCountdownState } from '../services/pickupTimeParser';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -473,6 +473,7 @@ export default function TourHomeScreen({
   onNavigate,
   onLogout,
   isConnected = true,
+  unifiedSyncStatus = null,
 }) {
   const [manifestStatus, setManifestStatus] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -481,7 +482,6 @@ export default function TourHomeScreen({
   const [driverReady, setDriverReady] = useState(false);
   const [driverLocationActive, setDriverLocationActive] = useState(false);
   const scrollViewRef = useRef(null);
-  const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
   const [refreshStatusText, setRefreshStatusText] = useState('');
   const [refreshStatusTone, setRefreshStatusTone] = useState('info');
   const [refreshStatusCanRetry, setRefreshStatusCanRetry] = useState(false);
@@ -513,16 +513,6 @@ export default function TourHomeScreen({
     return bookingData?.pickupDate || tourData?.startDate || null;
   }, [bookingData, tourData?.startDate]);
 
-
-  useEffect(() => {
-    const activeTourId = tourData?.id || tourCode?.replace(/\s+/g, '_');
-    if (!activeTourId) return;
-    offlineSyncService.getTourPackMeta(activeTourId, 'passenger').then((res) => {
-      if (res.success) {
-        setCacheStatusLabel(offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label);
-      }
-    });
-  }, [tourData?.id, tourCode]);
 
   useEffect(() => {
     if (!realtimeDb || !tourCode || !bookingRef) {
@@ -677,41 +667,22 @@ export default function TourHomeScreen({
           setDriverLocationActive(false);
         }
 
-        const metaResult = await offlineSyncService.getTourPackMeta(sanitizedTourId, 'passenger');
-        const metaLabel = offlineSyncService.getStalenessLabel(metaResult?.data?.lastSyncedAt).label;
-        setCacheStatusLabel(metaLabel);
       }
 
-      const afterStatsResult = await offlineSyncService.getQueueStats();
-      const afterStats = afterStatsResult?.success
-        ? afterStatsResult.data
-        : { pending: 0, failed: 0, syncing: 0, total: 0 };
-
-      if (afterStats.failed > 0) {
-        const message = `Sync failed: ${afterStats.failed} failed, ${afterStats.pending} pending.`;
-        showRefreshStatus({
-          message,
-          tone: 'error',
-          canRetry: Boolean(isConnected),
-          autoDismissMs: 8000,
-        });
-      } else if (afterStats.pending > 0) {
-        const message = `Pending retry: ${afterStats.pending} action${afterStats.pending === 1 ? '' : 's'} still queued.`;
-        showRefreshStatus({
-          message,
-          tone: 'warning',
-          canRetry: false,
-          autoDismissMs: 6500,
-        });
-      } else {
-        const message = feedbackParts.length > 0 ? feedbackParts.join(' ') : 'Up to date.';
-        showRefreshStatus({
-          message,
-          tone: 'success',
-          canRetry: false,
-          autoDismissMs: 4000,
-        });
-      }
+      const summary = replayResult?.data?.syncSummary || offlineSyncService.buildSyncSummary({
+        syncedCount: replayResult?.data?.processed || 0,
+        pendingCount: 0,
+        failedCount: replayResult?.data?.failed || 0,
+        source: 'tour_home_refresh',
+      });
+      const message = offlineSyncService.formatSyncOutcome(summary);
+      const tone = summary.failedCount > 0 ? 'error' : summary.pendingCount > 0 ? 'warning' : 'success';
+      showRefreshStatus({
+        message,
+        tone,
+        canRetry: Boolean(isConnected && (summary.failedCount > 0 || summary.pendingCount > 0)),
+        autoDismissMs: tone === 'success' ? 4000 : 7000,
+      });
     } catch (error) {
       showRefreshStatus({
         message: 'Refresh failed. Please try again.',
@@ -886,7 +857,14 @@ export default function TourHomeScreen({
                 <Text style={styles.greetingText}>{`${greeting.text}${passengerName ? `, ${passengerName}` : ''}!`}</Text>
               </View>
               <Text style={styles.tourCodeDisplay}>{tourCode}</Text>
-              <Text style={styles.tourName} numberOfLines={1}>{tourData?.name || 'Active Tour'}</Text><Text style={styles.cacheLabel}>{cacheStatusLabel}</Text>
+              <Text style={styles.tourName} numberOfLines={1}>{tourData?.name || 'Active Tour'}</Text>
+              {unifiedSyncStatus?.label && (
+                <View style={[styles.syncStateRow, styles[`syncSeverity_${unifiedSyncStatus?.severity || 'info'}`]]}>
+                  <MaterialCommunityIcons name={unifiedSyncStatus?.icon || 'sync'} size={12} color={THEME.white} />
+                  <Text style={styles.syncStateText}>{unifiedSyncStatus.label}</Text>
+                </View>
+              )}
+              <Text style={styles.cacheLabel}>{unifiedSyncStatus?.showLastSync ? `Last successful sync ${unifiedSyncStatus?.lastSyncRelative || 'Never'}` : ''}</Text>
               {!!refreshStatusText && (
                 <View
                   style={[
@@ -1349,16 +1327,16 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   refreshStatusSuccess: {
-    backgroundColor: '#ECFDF5',
-    borderColor: '#A7F3D0',
+    backgroundColor: `${SYNC_COLORS.success}1A`,
+    borderColor: `${SYNC_COLORS.success}66`,
   },
   refreshStatusWarning: {
-    backgroundColor: '#FFFBEB',
-    borderColor: '#FDE68A',
+    backgroundColor: `${SYNC_COLORS.warning}1A`,
+    borderColor: `${SYNC_COLORS.warning}66`,
   },
   refreshStatusError: {
-    backgroundColor: '#FEF2F2',
-    borderColor: '#FECACA',
+    backgroundColor: `${SYNC_COLORS.critical}1A`,
+    borderColor: `${SYNC_COLORS.critical}66`,
   },
   refreshStatusText: {
     fontSize: 12,

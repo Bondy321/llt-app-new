@@ -4,6 +4,14 @@ import { ref, onValue } from 'firebase/database';
 import { db } from '../firebase';
 import { formatDateForDisplay } from '../utils/dateUtils';
 import { getTriageMeta, getUrgencyBadge } from '../utils/triageUtils';
+
+// SYNC_TERMINOLOGY_PARITY ensures web admin language matches mobile sync taxonomy.
+const SYNC_TERMINOLOGY_PARITY = {
+  OFFLINE_NO_NETWORK: 'Offline',
+  ONLINE_BACKEND_DEGRADED: 'Backend degraded',
+  ONLINE_BACKLOG_PENDING: 'Sync pending',
+  ONLINE_HEALTHY: 'Sync healthy',
+};
 import {
   SimpleGrid,
   Card,
@@ -463,7 +471,7 @@ export default function Dashboard() {
         <Card shadow="sm" padding="lg" radius="md" withBorder>
           <Group justify="space-between" mb="md">
             <Text fw={500}>System Status</Text>
-            <Badge variant="light" color="green">Operational</Badge>
+            <Badge variant="light" color="green">{SYNC_TERMINOLOGY_PARITY.ONLINE_HEALTHY}</Badge>
           </Group>
           <Stack gap="md">
             <Paper p="sm" radius="md" bg="green.0">
@@ -475,7 +483,7 @@ export default function Dashboard() {
                   <Text size="sm" fw={500}>Database Connection</Text>
                   <Text size="xs" c="dimmed">Firebase Realtime Database</Text>
                 </div>
-                <Badge ml="auto" color="green" variant="filled" size="sm">Connected</Badge>
+                <Badge ml="auto" color="green" variant="filled" size="sm">{SYNC_TERMINOLOGY_PARITY.ONLINE_HEALTHY}</Badge>
               </Group>
             </Paper>
             <Paper p="sm" radius="md" bg="green.0">
@@ -487,7 +495,7 @@ export default function Dashboard() {
                   <Text size="sm" fw={500}>Real-time Sync</Text>
                   <Text size="xs" c="dimmed">Live data updates enabled</Text>
                 </div>
-                <Badge ml="auto" color="green" variant="filled" size="sm">Active</Badge>
+                <Badge ml="auto" color="yellow" variant="filled" size="sm">{SYNC_TERMINOLOGY_PARITY.ONLINE_BACKLOG_PENDING}</Badge>
               </Group>
             </Paper>
             <Paper p="sm" radius="md" bg="blue.0">
@@ -499,7 +507,7 @@ export default function Dashboard() {
                   <Text size="sm" fw={500}>Broadcast System</Text>
                   <Text size="xs" c="dimmed">Push notifications ready</Text>
                 </div>
-                <Badge ml="auto" color="blue" variant="filled" size="sm">Ready</Badge>
+                <Badge ml="auto" color="blue" variant="filled" size="sm">{SYNC_TERMINOLOGY_PARITY.ONLINE_HEALTHY}</Badge>
               </Group>
             </Paper>
             <Divider my="xs" />

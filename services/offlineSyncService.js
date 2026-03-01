@@ -13,7 +13,43 @@ const SCHEMA_VERSION = 1;
 const MAX_ATTEMPTS = 5;
 const QUEUE_KEY = 'queue_v1';
 const PROCESSED_ACTIONS_KEY = 'processed_action_ids_v1';
+const LAST_SUCCESS_AT_KEY = 'last_success_at_v1';
 const MAX_PROCESSED_IDS = 500;
+
+const SYNC_STATES = {
+  OFFLINE_NO_NETWORK: {
+    label: 'Offline',
+    description: 'No internet connection. Changes stay queued locally.',
+    severity: 'critical',
+    icon: 'wifi-off',
+    canRetry: false,
+    showLastSync: true,
+  },
+  ONLINE_BACKEND_DEGRADED: {
+    label: 'Backend degraded',
+    description: 'Connected to internet, but live backend sync is degraded.',
+    severity: 'warning',
+    icon: 'database-alert',
+    canRetry: true,
+    showLastSync: true,
+  },
+  ONLINE_BACKLOG_PENDING: {
+    label: 'Sync pending',
+    description: 'Connected. Offline actions are queued and will sync shortly.',
+    severity: 'info',
+    icon: 'sync',
+    canRetry: true,
+    showLastSync: true,
+  },
+  ONLINE_HEALTHY: {
+    label: 'Sync healthy',
+    description: 'Connected and fully synced.',
+    severity: 'success',
+    icon: 'check-decagram',
+    canRetry: false,
+    showLastSync: true,
+  },
+};
 
 const listeners = new Set();
 let replayLock = false;
@@ -127,6 +163,94 @@ const getStalenessLabel = (lastSyncedAt) => {
   return { bucket: 'old', label: 'Cached data from yesterday' };
 };
 
+const normalizeQueueStats = (stats = {}) => ({
+  pending: Number.isFinite(Number(stats.pending)) ? Number(stats.pending) : 0,
+  syncing: Number.isFinite(Number(stats.syncing)) ? Number(stats.syncing) : 0,
+  failed: Number.isFinite(Number(stats.failed)) ? Number(stats.failed) : 0,
+  total: Number.isFinite(Number(stats.total)) ? Number(stats.total) : 0,
+});
+
+const buildSyncSummary = ({ syncedCount = 0, pendingCount = 0, failedCount = 0, lastSuccessAt = null, source = 'unknown' } = {}) => ({
+  syncedCount: Number.isFinite(Number(syncedCount)) ? Number(syncedCount) : 0,
+  pendingCount: Number.isFinite(Number(pendingCount)) ? Number(pendingCount) : 0,
+  failedCount: Number.isFinite(Number(failedCount)) ? Number(failedCount) : 0,
+  lastSuccessAt: lastSuccessAt || null,
+  source: source || 'unknown',
+});
+
+const formatSyncOutcome = (summary = {}) => {
+  const normalized = buildSyncSummary(summary);
+  return `${normalized.syncedCount} synced / ${normalized.pendingCount} pending / ${normalized.failedCount} failed`;
+};
+
+const formatLastSyncRelative = (timestamp) => {
+  const ts = parseTimestampMs(timestamp);
+  if (!Number.isFinite(ts)) return 'Never';
+  const diffMs = Date.now() - ts;
+  const diffMinutes = Math.floor(diffMs / (60 * 1000));
+  if (diffMinutes < 1) return 'Just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffHours < 48) return 'Yesterday';
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+};
+
+const setLastSuccessAt = async (timestamp = new Date().toISOString()) => {
+  try {
+    await storage.setItemAsync(LAST_SUCCESS_AT_KEY, timestamp);
+    return RESPONSE.ok(timestamp);
+  } catch (error) {
+    return RESPONSE.fail(error);
+  }
+};
+
+const getLastSuccessAt = async () => {
+  try {
+    const value = await storage.getItemAsync(LAST_SUCCESS_AT_KEY);
+    return RESPONSE.ok(value || null);
+  } catch (error) {
+    return RESPONSE.fail(error);
+  }
+};
+
+const deriveSyncStateKey = ({ isConnected, firebaseConnected, queueStats }) => {
+  const stats = normalizeQueueStats(queueStats);
+  if (!isConnected) return 'OFFLINE_NO_NETWORK';
+  if (!firebaseConnected || stats.failed > 0) return 'ONLINE_BACKEND_DEGRADED';
+  if (stats.pending > 0 || stats.syncing > 0) return 'ONLINE_BACKLOG_PENDING';
+  return 'ONLINE_HEALTHY';
+};
+
+const deriveUnifiedSyncStatus = ({
+  isConnected = true,
+  firebaseConnected = true,
+  queueStats = {},
+  syncedCount = 0,
+  source = 'unknown',
+  lastSuccessAt = null,
+} = {}) => {
+  const stats = normalizeQueueStats(queueStats);
+  const key = deriveSyncStateKey({ isConnected, firebaseConnected, queueStats: stats });
+  const state = SYNC_STATES[key] || SYNC_STATES.ONLINE_HEALTHY;
+  const syncSummary = buildSyncSummary({
+    syncedCount,
+    pendingCount: stats.pending,
+    failedCount: stats.failed,
+    lastSuccessAt,
+    source,
+  });
+
+  return {
+    key,
+    ...state,
+    syncSummary,
+    outcomeText: formatSyncOutcome(syncSummary),
+    lastSyncRelative: formatLastSyncRelative(lastSuccessAt),
+  };
+};
+
 const saveTourPack = async (tourId, role, payload) => {
   try {
     if (!tourId || !role) return RESPONSE.fail('tourId and role are required');
@@ -168,6 +292,9 @@ const setTourPackMeta = async (tourId, role, meta = {}) => {
       ...meta,
     };
     await storage.setItemAsync(metaKey(tourId, role), JSON.stringify(payload));
+    if (payload.lastSyncedAt) {
+      await setLastSuccessAt(payload.lastSyncedAt);
+    }
     return RESPONSE.ok(payload);
   } catch (error) {
     return RESPONSE.fail(error);
@@ -318,7 +445,15 @@ const replayQueue = async ({ db, services = {} } = {}) => {
   try {
     const queue = await getQueueRaw();
     if (queue.length === 0) {
-      return RESPONSE.ok({ processed: 0, failed: 0 });
+      const lastSuccessResult = await getLastSuccessAt();
+      const summary = buildSyncSummary({
+        syncedCount: 0,
+        pendingCount: 0,
+        failedCount: 0,
+        lastSuccessAt: lastSuccessResult?.data || null,
+        source: 'replay_queue',
+      });
+      return RESPONSE.ok({ processed: 0, failed: 0, syncSummary: summary });
     }
 
     const sortedQueue = [...queue].sort((a, b) => (parseTimestampMs(a.createdAt) || 0) - (parseTimestampMs(b.createdAt) || 0));
@@ -364,7 +499,27 @@ const replayQueue = async ({ db, services = {} } = {}) => {
       }
     }
 
-    return RESPONSE.ok({ processed, failed });
+    let effectiveLastSuccessAt = null;
+    if (failed === 0) {
+      const nowIso = new Date().toISOString();
+      await setLastSuccessAt(nowIso);
+      effectiveLastSuccessAt = nowIso;
+    } else {
+      const lastSuccessResult = await getLastSuccessAt();
+      effectiveLastSuccessAt = lastSuccessResult?.data || null;
+    }
+
+    const postStatsResult = await getQueueStats();
+    const postStats = postStatsResult?.success ? postStatsResult.data : { pending: 0, syncing: 0, failed: 0, total: 0 };
+    const syncSummary = buildSyncSummary({
+      syncedCount: processed,
+      pendingCount: postStats.pending,
+      failedCount: postStats.failed,
+      lastSuccessAt: effectiveLastSuccessAt,
+      source: 'replay_queue',
+    });
+
+    return RESPONSE.ok({ processed, failed, syncSummary });
   } catch (error) {
     return RESPONSE.fail(error);
   } finally {
@@ -375,10 +530,13 @@ const replayQueue = async ({ db, services = {} } = {}) => {
 
 module.exports = {
   SCHEMA_VERSION,
+  SYNC_STATES,
   saveTourPack,
   getTourPack,
   setTourPackMeta,
   getTourPackMeta,
+  setLastSuccessAt,
+  getLastSuccessAt,
   enqueueAction,
   getQueuedActions,
   updateAction,
@@ -386,6 +544,12 @@ module.exports = {
   getQueueStats,
   replayQueue,
   subscribeQueueState,
+  normalizeQueueStats,
+  buildSyncSummary,
+  formatSyncOutcome,
+  formatLastSyncRelative,
+  deriveSyncStateKey,
+  deriveUnifiedSyncStatus,
   getStalenessBucket,
   getStalenessLabel,
 };

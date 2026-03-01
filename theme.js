@@ -40,6 +40,16 @@ export const COLORS = {
   shadow: '#000000',
 };
 
+
+
+// Sync severity tokens for unified sync-state UI
+export const SYNC_COLORS = {
+  info: '#0369A1',
+  warning: '#B45309',
+  critical: '#B91C1C',
+  success: '#15803D',
+};
+
 // Consistent spacing scale
 export const SPACING = {
   xs: 4,
@@ -109,4 +119,4 @@ export const STATUS_COLORS = {
   partial: { main: '#EAB308', light: '#FEF9C3' },
 };
 
-export default { COLORS, SPACING, RADIUS, FONT_WEIGHT, SHADOWS, STATUS_COLORS };
+export default { COLORS, SPACING, RADIUS, FONT_WEIGHT, SHADOWS, STATUS_COLORS, sync: SYNC_COLORS };
