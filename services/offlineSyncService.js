@@ -13,6 +13,7 @@ const SCHEMA_VERSION = 1;
 const MAX_ATTEMPTS = 5;
 const QUEUE_KEY = 'queue_v1';
 const PROCESSED_ACTIONS_KEY = 'processed_action_ids_v1';
+const LAST_SUCCESS_AT_KEY = 'last_success_at_v1';
 const MAX_PROCESSED_IDS = 500;
 
 const UNIFIED_SYNC_STATES = {
@@ -98,6 +99,56 @@ const buildSyncSummary = (input = {}) => {
 const formatSyncOutcome = (summaryInput) => {
   const summary = buildSyncSummary(summaryInput);
   return `${summary.syncedCount} synced / ${summary.pendingCount} pending / ${summary.failedCount} failed`;
+};
+
+const setLastSuccessAt = async (timestampOrNow = Date.now()) => {
+  try {
+    const parsed = parseTimestampMs(timestampOrNow);
+    const nextValue = Number.isFinite(parsed) ? parsed : Date.now();
+    await storage.setItemAsync(LAST_SUCCESS_AT_KEY, String(nextValue));
+    return RESPONSE.ok(nextValue);
+  } catch (error) {
+    logger.error('OfflineSync', 'Failed to persist last successful sync timestamp', { error: error?.message });
+    return RESPONSE.fail(error);
+  }
+};
+
+const getLastSuccessAt = async () => {
+  try {
+    const raw = await storage.getItemAsync(LAST_SUCCESS_AT_KEY);
+    const parsed = parseTimestampMs(raw);
+    return RESPONSE.ok(Number.isFinite(parsed) ? parsed : null);
+  } catch (error) {
+    logger.error('OfflineSync', 'Failed to read last successful sync timestamp', { error: error?.message });
+    return RESPONSE.ok(null);
+  }
+};
+
+const formatLastSyncRelative = (lastSuccessAt, now = Date.now()) => {
+  const nowMs = parseTimestampMs(now);
+  const successMs = parseTimestampMs(lastSuccessAt);
+
+  if (!Number.isFinite(nowMs) || !Number.isFinite(successMs) || successMs > nowMs) {
+    return 'Never';
+  }
+
+  const diffMinutes = Math.floor((nowMs - successMs) / (60 * 1000));
+  if (diffMinutes < 1) return 'Just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+
+  const nowDate = new Date(nowMs);
+  const successDate = new Date(successMs);
+  const nowDay = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate());
+  const successDay = new Date(successDate.getFullYear(), successDate.getMonth(), successDate.getDate());
+  const dayDiff = Math.floor((nowDay.getTime() - successDay.getTime()) / (24 * 60 * 60 * 1000));
+
+  if (dayDiff === 1) return 'Yesterday';
+  if (dayDiff > 1) return `${dayDiff}d ago`;
+
+  return 'Never';
 };
 
 const emitQueueState = async () => {
@@ -467,6 +518,15 @@ const replayQueue = async ({ db, services = {} } = {}) => {
       }
     }
 
+    if (failed === 0) {
+      const persistedLastSuccessAt = await setLastSuccessAt();
+      if (!persistedLastSuccessAt.success) {
+        logger.warn('OfflineSync', 'Replay succeeded but failed to persist last success timestamp', {
+          error: persistedLastSuccessAt.error,
+        });
+      }
+    }
+
     return RESPONSE.ok({ processed, failed });
   } catch (error) {
     return RESPONSE.fail(error);
@@ -480,6 +540,9 @@ module.exports = {
   SCHEMA_VERSION,
   buildSyncSummary,
   formatSyncOutcome,
+  setLastSuccessAt,
+  getLastSuccessAt,
+  formatLastSyncRelative,
   UNIFIED_SYNC_STATES,
   deriveUnifiedSyncStatus,
   saveTourPack,
