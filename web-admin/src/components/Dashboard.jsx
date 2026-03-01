@@ -42,6 +42,32 @@ import {
   IconRoute,
 } from '@tabler/icons-react';
 
+const DASHBOARD_STATUS_CHIPS = {
+  // Parity mapping note (mobile canonical state key -> web-admin chip label)
+  // OFFLINE_NO_NETWORK -> Offline
+  // ONLINE_BACKEND_DEGRADED -> Service issue
+  // ONLINE_BACKLOG_PENDING -> Syncing backlog
+  // ONLINE_HEALTHY -> Up to date
+  DATABASE_CONNECTION: {
+    mobileStateKey: 'ONLINE_HEALTHY',
+    label: 'Up to date',
+    description: 'Firebase Realtime Database',
+    color: 'green',
+  },
+  REALTIME_SYNC: {
+    mobileStateKey: 'ONLINE_HEALTHY',
+    label: 'Up to date',
+    description: 'Everything is synced and working normally.',
+    color: 'green',
+  },
+  BROADCAST_SYSTEM: {
+    mobileStateKey: 'ONLINE_HEALTHY',
+    label: 'Up to date',
+    description: 'Push notifications ready',
+    color: 'blue',
+  },
+};
+
 // Stat Card Component
 function StatCard({ title, value, icon, color, description, trend, trendValue }) {
   const Icon = icon;
@@ -137,6 +163,9 @@ export default function Dashboard() {
   const [tours, setTours] = useState({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const databaseConnectionStatus = DASHBOARD_STATUS_CHIPS.DATABASE_CONNECTION;
+  const realtimeSyncStatus = DASHBOARD_STATUS_CHIPS.REALTIME_SYNC;
+  const broadcastStatus = DASHBOARD_STATUS_CHIPS.BROADCAST_SYSTEM;
 
   useEffect(() => {
     // Subscribe to drivers
@@ -473,9 +502,11 @@ export default function Dashboard() {
                 </ThemeIcon>
                 <div>
                   <Text size="sm" fw={500}>Database Connection</Text>
-                  <Text size="xs" c="dimmed">Firebase Realtime Database</Text>
+                  <Text size="xs" c="dimmed">{databaseConnectionStatus.description}</Text>
                 </div>
-                <Badge ml="auto" color="green" variant="filled" size="sm">Connected</Badge>
+                <Badge ml="auto" color={databaseConnectionStatus.color} variant="filled" size="sm">
+                  {databaseConnectionStatus.label}
+                </Badge>
               </Group>
             </Paper>
             <Paper p="sm" radius="md" bg="green.0">
@@ -485,9 +516,11 @@ export default function Dashboard() {
                 </ThemeIcon>
                 <div>
                   <Text size="sm" fw={500}>Real-time Sync</Text>
-                  <Text size="xs" c="dimmed">Live data updates enabled</Text>
+                  <Text size="xs" c="dimmed">{realtimeSyncStatus.description}</Text>
                 </div>
-                <Badge ml="auto" color="green" variant="filled" size="sm">Active</Badge>
+                <Badge ml="auto" color={realtimeSyncStatus.color} variant="filled" size="sm">
+                  {realtimeSyncStatus.label}
+                </Badge>
               </Group>
             </Paper>
             <Paper p="sm" radius="md" bg="blue.0">
@@ -497,9 +530,11 @@ export default function Dashboard() {
                 </ThemeIcon>
                 <div>
                   <Text size="sm" fw={500}>Broadcast System</Text>
-                  <Text size="xs" c="dimmed">Push notifications ready</Text>
+                  <Text size="xs" c="dimmed">{broadcastStatus.description}</Text>
                 </div>
-                <Badge ml="auto" color="blue" variant="filled" size="sm">Ready</Badge>
+                <Badge ml="auto" color={broadcastStatus.color} variant="filled" size="sm">
+                  {broadcastStatus.label}
+                </Badge>
               </Group>
             </Paper>
             <Divider my="xs" />
