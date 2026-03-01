@@ -47,7 +47,7 @@ import offlineSyncService from '../services/offlineSyncService';
 import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
 import { auth } from '../firebase';
-import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
+import { COLORS as THEME, SPACING, RADIUS, SHADOWS, SYNC_COLORS } from '../theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -705,24 +705,18 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   );
 
   const showQueueSyncOutcome = useCallback(
-    ({ replayResult, beforeStats = {}, afterStats = {}, fallbackErrorMessage = 'Unable to flush queued chat actions.' }) => {
-      const safeBeforeStats = {
-        pending: beforeStats?.pending || 0,
-        failed: beforeStats?.failed || 0,
-        syncing: beforeStats?.syncing || 0,
-        total: beforeStats?.total || 0,
-      };
-      const safeAfterStats = {
-        pending: afterStats?.pending || 0,
-        failed: afterStats?.failed || 0,
-        syncing: afterStats?.syncing || 0,
-        total: afterStats?.total || 0,
-      };
+    ({ replayResult, afterStats = {}, fallbackErrorMessage = 'Unable to flush queued chat actions.' }) => {
+      const safeAfterStats = offlineSyncService.normalizeQueueStats(afterStats);
 
       if (!replayResult?.success) {
-        const detail = replayResult?.error || fallbackErrorMessage;
+        const summary = offlineSyncService.buildSyncSummary({
+          syncedCount: 0,
+          pendingCount: safeAfterStats.pending,
+          failedCount: safeAfterStats.failed || 1,
+          source: 'chat_manual_refresh',
+        });
         showSyncBanner({
-          message: `Queue sync failed: ${detail} ${safeAfterStats.failed} failed, ${safeAfterStats.pending} pending.`,
+          message: offlineSyncService.formatSyncOutcome(summary),
           tone: 'error',
           actionText: 'Tap to retry failed actions',
           autoDismissMs: 7000,
@@ -730,44 +724,18 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         return;
       }
 
-      const { processed = 0, failed = 0, skipped = false } = replayResult.data || {};
-
-      if (skipped) {
-        showSyncBanner({
-          message: 'Sync already in progress. Pending actions will retry shortly.',
-          tone: 'warning',
-          actionText: 'Tap to retry failed actions',
-          autoDismissMs: 4500,
-        });
-      } else if (safeAfterStats.failed > 0) {
-        const partialLabel = processed > 0 ? 'Partially synced' : 'Sync failed';
-        showSyncBanner({
-          message: `${partialLabel}: ${processed} synced, ${safeAfterStats.failed} failed, ${safeAfterStats.pending} pending.`,
-          tone: 'error',
-          actionText: 'Tap to retry failed actions',
-          autoDismissMs: 7000,
-        });
-      } else if (safeAfterStats.pending > 0) {
-        const statePrefix = processed > 0 ? 'Partially synced' : 'Pending retry';
-        showSyncBanner({
-          message: `${statePrefix}: ${safeAfterStats.pending} action${safeAfterStats.pending === 1 ? '' : 's'} still queued.`,
-          tone: 'warning',
-          actionText: 'Tap to retry failed actions',
-          autoDismissMs: 5500,
-        });
-      } else if (processed > 0 || failed > 0 || safeBeforeStats.total > 0 || safeAfterStats.total > 0) {
-        showSyncBanner({
-          message: `Synced ${processed} action${processed === 1 ? '' : 's'}.`,
-          tone: 'success',
-          autoDismissMs: 3000,
-        });
-      } else {
-        showSyncBanner({
-          message: 'Messages are up to date.',
-          tone: 'success',
-          autoDismissMs: 2500,
-        });
-      }
+      const summary = replayResult?.data?.syncSummary || offlineSyncService.buildSyncSummary({
+        syncedCount: replayResult?.data?.processed || 0,
+        pendingCount: safeAfterStats.pending,
+        failedCount: safeAfterStats.failed,
+        source: 'chat_manual_refresh',
+      });
+      showSyncBanner({
+        message: offlineSyncService.formatSyncOutcome(summary),
+        tone: summary.failedCount > 0 ? 'error' : summary.pendingCount > 0 ? 'warning' : 'success',
+        actionText: summary.failedCount > 0 ? 'Tap to retry failed actions' : '',
+        autoDismissMs: summary.failedCount > 0 ? 7000 : 4000,
+      });
     },
     [showSyncBanner]
   );
@@ -965,10 +933,11 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         ? afterStatsResult.data
         : { pending: 0, failed: 0, syncing: 0, total: 0 };
 
-      showQueueSyncOutcome({ replayResult, beforeStats, afterStats });
+      showQueueSyncOutcome({ replayResult, afterStats });
     } catch (error) {
       showQueueSyncOutcome({
         replayResult: { success: false, error: error?.message || 'Unable to flush queued chat actions.' },
+        afterStats: { pending: queueStats.pending, failed: queueStats.failed },
         fallbackErrorMessage: 'Unable to flush queued chat actions.',
       });
     }
@@ -1119,7 +1088,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         ? afterStatsResult.data
         : { pending: 0, failed: 0, syncing: 0, total: 0 };
 
-      showQueueSyncOutcome({ replayResult, beforeStats, afterStats });
+      showQueueSyncOutcome({ replayResult, afterStats });
     } catch (error) {
       showQueueSyncOutcome({
         replayResult: { success: false, error: error?.message || 'Unable to refresh chat right now.' },
@@ -1369,6 +1338,9 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
             {internalDriverChat ? 'Driver Chat' : 'Group Chat'}
           </Text>
           {tourData?.name && <Text style={styles.headerSubtitle}>{tourData.name}</Text>}
+          {!!unifiedSyncStatus?.label && (
+            <Text style={styles.headerSyncStatus}>{`${unifiedSyncStatus.label} · ${unifiedSyncStatus.description}`}</Text>
+          )}
         </View>
 
         <View style={styles.headerRight}>
@@ -1380,6 +1352,9 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
           </View>
           <TouchableOpacity style={styles.syncNowBtn} onPress={handleManualSync}>
             <Text style={styles.syncNowText}>Pending {queueStats.pending}</Text>
+            {unifiedSyncStatus?.showLastSync && (
+              <Text style={styles.syncNowSubText}>Last successful sync {unifiedSyncStatus?.lastSyncRelative || 'Never'}</Text>
+            )}
           </TouchableOpacity>
         </View>
       </LinearGradient>
@@ -1691,16 +1666,16 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   refreshStatusSuccess: {
-    backgroundColor: '#ECFDF5',
-    borderBottomColor: '#A7F3D0',
+    backgroundColor: `${SYNC_COLORS.success}1A`,
+    borderBottomColor: `${SYNC_COLORS.success}66`,
   },
   refreshStatusWarning: {
-    backgroundColor: '#FFFBEB',
-    borderBottomColor: '#FDE68A',
+    backgroundColor: `${SYNC_COLORS.warning}1A`,
+    borderBottomColor: `${SYNC_COLORS.warning}66`,
   },
   refreshStatusError: {
-    backgroundColor: '#FEF2F2',
-    borderBottomColor: '#FECACA',
+    backgroundColor: `${SYNC_COLORS.critical}1A`,
+    borderBottomColor: `${SYNC_COLORS.critical}66`,
   },
   refreshStatusText: {
     color: '#1F2937',

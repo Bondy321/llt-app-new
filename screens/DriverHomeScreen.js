@@ -27,7 +27,7 @@ import offlineSyncService from '../services/offlineSyncService';
 import { createPersistenceProvider } from '../services/persistenceProvider';
 import logger from '../services/loggerService';
 import { getMinutesAgo } from '../services/timeUtils';
-import { COLORS as THEME } from '../theme';
+import { COLORS as THEME, SYNC_COLORS } from '../theme';
 
 const { width } = Dimensions.get('window');
 
@@ -60,7 +60,7 @@ const minimalMapStyle = [
 const LOCATION_STALE_THRESHOLD_MINUTES = 12;
 const AUTO_SHARE_INTERVAL_MS = 3 * 60 * 1000;
 
-export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onDriverAssignmentChange }) {
+export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onDriverAssignmentChange, unifiedSyncStatus = null }) {
   const [updatingLocation, setUpdatingLocation] = useState(false);
   const [lastLocationUpdate, setLastLocationUpdate] = useState(null);
   const [locationAccuracy, setLocationAccuracy] = useState(null);
@@ -716,8 +716,17 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
               <View style={{ flex: 1 }}>
                 <Text style={styles.cardLabel}>Active tour</Text>
                 <Text style={styles.cardValue}>{activeTourId || 'No tour assigned'}</Text>
+                {unifiedSyncStatus?.label && (
+                  <View style={[styles.syncStatePill, styles[`syncSeverity_${unifiedSyncStatus?.severity || 'info'}`]]}>
+                    <MaterialCommunityIcons name={unifiedSyncStatus?.icon || 'sync'} size={14} color={THEME.white} />
+                    <Text style={styles.syncStatePillText}>{unifiedSyncStatus.label}</Text>
+                  </View>
+                )}
                 <Text style={styles.cardHint}>Stay assigned to keep chat and manifests in sync.</Text>
-                <Text style={styles.cardHint}>{cacheStatusLabel}</Text>
+                <Text style={styles.cardHint}>{unifiedSyncStatus?.description || cacheStatusLabel}</Text>
+                {unifiedSyncStatus?.showLastSync && (
+                  <Text style={styles.cardHint}>Last successful sync {unifiedSyncStatus?.lastSyncRelative || 'Never'}</Text>
+                )}
               </View>
               <TouchableOpacity
                 style={styles.pillButton}

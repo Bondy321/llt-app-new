@@ -9,30 +9,32 @@ import offlineSyncService from '../services/offlineSyncService';
 
 const FIREBASE_PROBE_PATH = '.info/serverTimeOffset';
 
-const deriveSyncHealth = ({ isConnected, firebaseConnected, queueStats, lastSyncAt }) => {
-  if (!isConnected || !firebaseConnected) return 'offline';
-  if ((queueStats?.failed || 0) > 0) return 'degraded';
-  const bucket = offlineSyncService.getStalenessBucket(lastSyncAt);
-  if (bucket === 'old') return 'stale';
-  return 'healthy';
-};
-
 const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {}) => {
   const [isConnected, setIsConnected] = useState(true);
   const [firebaseConnected, setFirebaseConnected] = useState(true);
   const [lastFirebaseError, setLastFirebaseError] = useState(null);
   const [lastProbeDurationMs, setLastProbeDurationMs] = useState(null);
   const [lastSyncAt, setLastSyncAt] = useState(null);
+  const [lastSuccessAt, setLastSuccessAt] = useState(null);
   const [queueStats, setQueueStats] = useState({ pending: 0, syncing: 0, failed: 0, total: 0 });
 
   const appState = useRef(AppState.currentState);
   const firebaseListenerRef = useRef(null);
 
   const refreshSyncMeta = async () => {
+    const lastSuccessResult = await offlineSyncService.getLastSuccessAt();
+    if (lastSuccessResult.success) {
+      setLastSuccessAt(lastSuccessResult.data || null);
+    }
+
     if (!activeTourId) return;
     const metaResult = await offlineSyncService.getTourPackMeta(activeTourId, role);
     if (metaResult.success) {
-      setLastSyncAt(metaResult.data?.lastSyncedAt || null);
+      const lastSyncedAt = metaResult.data?.lastSyncedAt || null;
+      setLastSyncAt(lastSyncedAt);
+      if (lastSyncedAt) {
+        setLastSuccessAt(lastSyncedAt);
+      }
     }
   };
 
@@ -123,9 +125,25 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {})
     };
   }, [activeTourId, role]);
 
-  const syncHealth = deriveSyncHealth({ isConnected, firebaseConnected, queueStats, lastSyncAt });
+  const unifiedSyncStatus = offlineSyncService.deriveUnifiedSyncStatus({
+    isConnected,
+    firebaseConnected,
+    queueStats,
+    syncedCount: 0,
+    source: 'diagnostics',
+    lastSuccessAt: lastSuccessAt || lastSyncAt || null,
+  });
 
-  return { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs, lastSyncAt, queueStats, syncHealth };
+  return {
+    isConnected,
+    firebaseConnected,
+    lastFirebaseError,
+    lastProbeDurationMs,
+    lastSyncAt,
+    lastSuccessAt,
+    queueStats,
+    unifiedSyncStatus,
+  };
 };
 
 export default useDiagnostics;
