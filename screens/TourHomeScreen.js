@@ -1339,20 +1339,20 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   refreshStatusSuccess: {
-    backgroundColor: '#ECFDF5',
-    borderColor: '#A7F3D0',
+    backgroundColor: THEME.sync.success.background,
+    borderColor: THEME.sync.success.border,
   },
   refreshStatusWarning: {
-    backgroundColor: '#FFFBEB',
-    borderColor: '#FDE68A',
+    backgroundColor: THEME.sync.warning.background,
+    borderColor: THEME.sync.warning.border,
   },
   refreshStatusError: {
-    backgroundColor: '#FEF2F2',
-    borderColor: '#FECACA',
+    backgroundColor: THEME.sync.critical.background,
+    borderColor: THEME.sync.critical.border,
   },
   refreshStatusText: {
     fontSize: 12,
-    color: COLORS.darkText,
+    color: THEME.sync.info.foregroundMuted,
     fontWeight: '600',
   },
   refreshRetryButton: {

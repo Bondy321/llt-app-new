@@ -1697,26 +1697,26 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   refreshStatusSuccess: {
-    backgroundColor: '#ECFDF5',
-    borderBottomColor: '#A7F3D0',
+    backgroundColor: THEME.sync.success.background,
+    borderBottomColor: THEME.sync.success.border,
   },
   refreshStatusWarning: {
-    backgroundColor: '#FFFBEB',
-    borderBottomColor: '#FDE68A',
+    backgroundColor: THEME.sync.warning.background,
+    borderBottomColor: THEME.sync.warning.border,
   },
   refreshStatusError: {
-    backgroundColor: '#FEF2F2',
-    borderBottomColor: '#FECACA',
+    backgroundColor: THEME.sync.critical.background,
+    borderBottomColor: THEME.sync.critical.border,
   },
   refreshStatusText: {
-    color: '#1F2937',
+    color: THEME.sync.info.foregroundMuted,
     fontSize: 12,
     fontWeight: '600',
   },
   refreshStatusActionText: {
     marginTop: 2,
     fontSize: 11,
-    color: '#1D4ED8',
+    color: THEME.sync.info.foreground,
     fontWeight: '700',
   },
   keyboardAvoidingContainer: {
