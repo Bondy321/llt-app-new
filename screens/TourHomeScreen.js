@@ -687,8 +687,15 @@ export default function TourHomeScreen({
         ? afterStatsResult.data
         : { pending: 0, failed: 0, syncing: 0, total: 0 };
 
+      const syncOutcome = offlineSyncService.formatSyncOutcome({
+        syncedCount: replayResult?.data?.processed,
+        pendingCount: afterStats.pending,
+        failedCount: afterStats.failed,
+        source: 'manual-refresh',
+      });
+
       if (afterStats.failed > 0) {
-        const message = `Sync failed: ${afterStats.failed} failed, ${afterStats.pending} pending.`;
+        const message = `Sync failed: ${syncOutcome}.`;
         showRefreshStatus({
           message,
           tone: 'error',
@@ -696,7 +703,7 @@ export default function TourHomeScreen({
           autoDismissMs: 8000,
         });
       } else if (afterStats.pending > 0) {
-        const message = `Pending retry: ${afterStats.pending} action${afterStats.pending === 1 ? '' : 's'} still queued.`;
+        const message = `Pending retry: ${syncOutcome}.`;
         showRefreshStatus({
           message,
           tone: 'warning',

@@ -71,6 +71,35 @@ const safeJsonParse = (raw, fallback) => {
 const cacheKey = (tourId, role) => `tour_pack_${role}_${tourId}`;
 const metaKey = (tourId, role) => `tour_pack_meta_${role}_${tourId}`;
 
+const SYNC_SUMMARY_SOURCES = new Set(['unknown', 'manual-refresh', 'auto-replay', 'startup']);
+
+const normalizeSyncCount = (value) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return 0;
+  return Math.max(0, Math.trunc(numericValue));
+};
+
+// Counts are normalized by truncating toward zero (e.g. 2.9 -> 2) and clamping negatives to 0.
+const buildSyncSummary = (input = {}) => {
+  const summary = input && typeof input === 'object' ? input : {};
+  const normalizedSource = typeof summary.source === 'string' && SYNC_SUMMARY_SOURCES.has(summary.source)
+    ? summary.source
+    : 'unknown';
+
+  return {
+    syncedCount: normalizeSyncCount(summary.syncedCount),
+    pendingCount: normalizeSyncCount(summary.pendingCount),
+    failedCount: normalizeSyncCount(summary.failedCount),
+    lastSuccessAt: summary.lastSuccessAt ?? null,
+    source: normalizedSource,
+  };
+};
+
+const formatSyncOutcome = (summaryInput) => {
+  const summary = buildSyncSummary(summaryInput);
+  return `${summary.syncedCount} synced / ${summary.pendingCount} pending / ${summary.failedCount} failed`;
+};
+
 const emitQueueState = async () => {
   const stats = await getQueueStats();
   listeners.forEach((listener) => {
@@ -449,6 +478,8 @@ const replayQueue = async ({ db, services = {} } = {}) => {
 
 module.exports = {
   SCHEMA_VERSION,
+  buildSyncSummary,
+  formatSyncOutcome,
   UNIFIED_SYNC_STATES,
   deriveUnifiedSyncStatus,
   saveTourPack,
