@@ -39,6 +39,14 @@ const COLORS = {
   appBackground: THEME.background,
 };
 
+const SYNC_SEVERITY_TOKENS = {
+  critical: { backgroundColor: THEME.error, textColor: THEME.white, detailColor: 'rgba(255,255,255,0.85)' },
+  warning: { backgroundColor: THEME.warning, textColor: THEME.textPrimary, detailColor: 'rgba(15,23,42,0.75)' },
+  info: { backgroundColor: THEME.primary, textColor: THEME.white, detailColor: 'rgba(255,255,255,0.85)' },
+  success: { backgroundColor: THEME.success, textColor: THEME.white, detailColor: 'rgba(255,255,255,0.85)' },
+  default: { backgroundColor: THEME.primary, textColor: THEME.white, detailColor: 'rgba(255,255,255,0.85)' },
+};
+
 const SESSION_KEYS = {
   TOUR_DATA: '@LLT:tourData',
   BOOKING_DATA: '@LLT:bookingData',
@@ -89,8 +97,6 @@ export default function App() {
   
   // State for passing params between screens manually (since we aren't using React Navigation stack)
   const [screenParams, setScreenParams] = useState({});
-  const [offlineModeActive, setOfflineModeActive] = useState(false);
-
   const refreshAppData = async () => {
     logger.info('App', 'Refreshing app data');
     if (!isConnected) return;
@@ -99,7 +105,7 @@ export default function App() {
 
   const diagnosticsTourId = tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
   const diagnosticsRole = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
-  const { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs, lastSyncAt, queueStats, syncHealth } = useDiagnostics({
+  const { isConnected, firebaseConnected, unifiedSyncStatus } = useDiagnostics({
     onForeground: refreshAppData,
     activeTourId: diagnosticsTourId,
     role: diagnosticsRole,
@@ -224,8 +230,6 @@ export default function App() {
   });
 
   const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger', options = {}) => {
-    const isOfflineLogin = Boolean(options?.offlineMode);
-    setOfflineModeActive(isOfflineLogin);
 
     if (userType === 'driver') {
       logger.info('Auth', 'Driver Logged In', { driverId: maskIdentifier(bookingOrDriverData.id) });
@@ -301,7 +305,6 @@ export default function App() {
       setTourCode('');
       setTourData(null);
       setBookingData(null);
-      setOfflineModeActive(false);
       setScreenParams({});
       setCurrentScreen('Login');
     } catch (error) {
@@ -334,44 +337,32 @@ export default function App() {
     );
   }
 
-  const OfflineBanner = () => (
-    !isConnected && (
-      <View style={styles.offlineBanner}>
-        <MaterialCommunityIcons name="wifi-off" size={20} color={COLORS.white} />
-        <Text style={styles.offlineText}>
-          {offlineModeActive
-            ? 'Offline mode: limited features until your tour syncs again.'
-            : 'No internet connection'}
-        </Text>
+  const syncTokens = SYNC_SEVERITY_TOKENS[unifiedSyncStatus?.severity] || SYNC_SEVERITY_TOKENS.default;
+  const syncSummary = unifiedSyncStatus?.syncSummary || null;
+  const syncOutcome = syncSummary ? offlineSyncService.formatSyncOutcome(syncSummary) : null;
+  const hasSyncCounts = syncSummary
+    ? [syncSummary.syncedCount, syncSummary.pendingCount, syncSummary.failedCount].some((count) => Number(count) > 0)
+    : false;
+  const shouldShowOutcome = Boolean(syncOutcome) && (hasSyncCounts || syncSummary?.source === 'manual-refresh');
+  const showLastSyncLine = unifiedSyncStatus?.showLastSync && syncSummary?.lastSuccessAt;
+  const lastSyncRelative = showLastSyncLine
+    ? offlineSyncService.formatLastSyncRelative(syncSummary.lastSuccessAt)
+    : null;
+
+  const UnifiedSyncBanner = () => (
+    <View pointerEvents="none" style={[styles.syncBanner, { backgroundColor: syncTokens.backgroundColor }]}>
+      <MaterialCommunityIcons name={unifiedSyncStatus?.icon || 'cloud-sync'} size={20} color={syncTokens.textColor} />
+      <View style={styles.syncTextContainer}>
+        {shouldShowOutcome && (
+          <Text style={[styles.syncPrimaryLine, { color: syncTokens.textColor }]}>{syncOutcome}</Text>
+        )}
+        <Text style={[styles.syncLabel, { color: syncTokens.textColor }]}>{unifiedSyncStatus?.label || 'Sync status'}</Text>
+        <Text style={[styles.syncDescription, { color: syncTokens.detailColor }]}>{unifiedSyncStatus?.description || ''}</Text>
+        {showLastSyncLine && (
+          <Text style={[styles.syncDetail, { color: syncTokens.detailColor }]}>Last synced: {lastSyncRelative}</Text>
+        )}
       </View>
-    )
-  );
-
-
-  const stalenessLabel = offlineSyncService.getStalenessLabel(lastSyncAt);
-
-  const QueueBanner = () => (
-    <View pointerEvents="none" style={styles.queueBanner}>
-      <MaterialCommunityIcons name={isConnected ? 'sync' : 'cloud-off-outline'} size={18} color={COLORS.white} />
-      <Text style={styles.offlineText}>{`${syncHealth.toUpperCase()} • ${stalenessLabel.label} • ${offlineSyncService.formatSyncOutcome({ syncedCount: 0, pendingCount: queueStats.pending, failedCount: queueStats.failed, source: 'auto-replay' })}`}</Text>
     </View>
-  );
-
-  const SyncIssueBanner = () => (
-    isConnected && (!firebaseConnected || lastFirebaseError) && (
-      <View style={styles.syncBanner}>
-        <MaterialCommunityIcons name="database-alert" size={20} color={COLORS.white} />
-        <View style={{ marginLeft: 8 }}>
-          <Text style={styles.offlineText}>Reconnecting to tour services…</Text>
-          {lastProbeDurationMs !== null && (
-            <Text style={styles.syncDetail}>Last check: {lastProbeDurationMs}ms</Text>
-          )}
-          {lastFirebaseError && (
-            <Text style={styles.syncDetail}>Last error: {lastFirebaseError}</Text>
-          )}
-        </View>
-      </View>
-    )
   );
 
   const renderScreen = () => {
@@ -497,9 +488,7 @@ case 'Itinerary':
   return (
     <>
       <StatusBar style="light" backgroundColor={COLORS.primaryBlue} />
-      <OfflineBanner />
-      <SyncIssueBanner />
-      <QueueBanner />
+      <UnifiedSyncBanner />
       {renderScreen()}
     </>
   );
@@ -511,22 +500,21 @@ const styles = StyleSheet.create({
   errorTitle: { fontSize: 22, fontWeight: 'bold', color: COLORS.errorRed, marginTop: 20, marginBottom: 10, textAlign: 'center' },
   errorText: { fontSize: 16, color: COLORS.darkText, textAlign: 'center', marginBottom: 5 },
   errorDetail: { fontSize: 14, color: COLORS.darkText, opacity: 0.6, textAlign: 'center', marginTop: 15 },
-  offlineBanner: { backgroundColor: COLORS.errorRed, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000 },
-  offlineText: { color: COLORS.white, fontSize: 14, marginLeft: 8, fontWeight: '500' },
-  syncBanner: { backgroundColor: COLORS.primaryBlue, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', paddingVertical: 8, paddingHorizontal: 12, position: 'absolute', top: 40, left: 0, right: 0, zIndex: 900 },
-  queueBanner: {
-    backgroundColor: 'rgba(15, 118, 110, 0.9)',
+  syncBanner: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
+    alignItems: 'flex-start',
+    justifyContent: 'flex-start',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     position: 'absolute',
-    bottom: 14,
-    left: 12,
-    right: 12,
-    borderRadius: 999,
-    zIndex: 850,
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 1000,
   },
-  syncDetail: { color: COLORS.white, fontSize: 12, opacity: 0.8 },
+  syncTextContainer: { marginLeft: 8, flex: 1 },
+  syncPrimaryLine: { fontSize: 12, fontWeight: '700' },
+  syncLabel: { fontSize: 14, fontWeight: '600' },
+  syncDescription: { fontSize: 12, marginTop: 1 },
+  syncDetail: { fontSize: 12, marginTop: 2 },
 });
