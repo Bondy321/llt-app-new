@@ -353,7 +353,7 @@ export default function App() {
   const QueueBanner = () => (
     <View pointerEvents="none" style={styles.queueBanner}>
       <MaterialCommunityIcons name={isConnected ? 'sync' : 'cloud-off-outline'} size={18} color={COLORS.white} />
-      <Text style={styles.offlineText}>{`${syncHealth.toUpperCase()} • ${stalenessLabel.label} • Pending ${queueStats.pending}`}</Text>
+      <Text style={styles.offlineText}>{`${syncHealth.toUpperCase()} • ${stalenessLabel.label} • ${offlineSyncService.formatSyncOutcome({ syncedCount: 0, pendingCount: queueStats.pending, failedCount: queueStats.failed, source: 'auto-replay' })}`}</Text>
     </View>
   );
 

@@ -721,8 +721,14 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
       if (!replayResult?.success) {
         const detail = replayResult?.error || fallbackErrorMessage;
+        const syncOutcome = offlineSyncService.formatSyncOutcome({
+          syncedCount: 0,
+          pendingCount: safeAfterStats.pending,
+          failedCount: safeAfterStats.failed,
+          source: 'manual-refresh',
+        });
         showSyncBanner({
-          message: `Queue sync failed: ${detail} ${safeAfterStats.failed} failed, ${safeAfterStats.pending} pending.`,
+          message: `Queue sync failed: ${detail} ${syncOutcome}.`,
           tone: 'error',
           actionText: 'Tap to retry failed actions',
           autoDismissMs: 7000,
@@ -732,9 +738,16 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
       const { processed = 0, failed = 0, skipped = false } = replayResult.data || {};
 
+      const syncOutcome = offlineSyncService.formatSyncOutcome({
+        syncedCount: processed,
+        pendingCount: safeAfterStats.pending,
+        failedCount: safeAfterStats.failed,
+        source: 'manual-refresh',
+      });
+
       if (skipped) {
         showSyncBanner({
-          message: 'Sync already in progress. Pending actions will retry shortly.',
+          message: `Sync already in progress. ${syncOutcome}.`,
           tone: 'warning',
           actionText: 'Tap to retry failed actions',
           autoDismissMs: 4500,
@@ -742,7 +755,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       } else if (safeAfterStats.failed > 0) {
         const partialLabel = processed > 0 ? 'Partially synced' : 'Sync failed';
         showSyncBanner({
-          message: `${partialLabel}: ${processed} synced, ${safeAfterStats.failed} failed, ${safeAfterStats.pending} pending.`,
+          message: `${partialLabel}: ${syncOutcome}.`,
           tone: 'error',
           actionText: 'Tap to retry failed actions',
           autoDismissMs: 7000,
@@ -750,7 +763,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       } else if (safeAfterStats.pending > 0) {
         const statePrefix = processed > 0 ? 'Partially synced' : 'Pending retry';
         showSyncBanner({
-          message: `${statePrefix}: ${safeAfterStats.pending} action${safeAfterStats.pending === 1 ? '' : 's'} still queued.`,
+          message: `${statePrefix}: ${syncOutcome}.`,
           tone: 'warning',
           actionText: 'Tap to retry failed actions',
           autoDismissMs: 5500,
