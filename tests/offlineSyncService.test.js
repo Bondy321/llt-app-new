@@ -201,3 +201,70 @@ test('subscribeQueueState emits queue stats that drive Pending badge text', asyn
   assert.equal(seenBadgeTexts.includes('Pending 1'), true);
   assert.equal(seenBadgeTexts.at(-1), 'Pending 0');
 });
+
+
+test('last success timestamp helpers persist and format friendly labels', async () => {
+  const save = await offlineSyncService.setLastSuccessAt(1735689600000);
+  assert.equal(save.success, true);
+  assert.equal(save.data, 1735689600000);
+
+  const loaded = await offlineSyncService.getLastSuccessAt();
+  assert.equal(loaded.success, true);
+  assert.equal(loaded.data, 1735689600000);
+
+  assert.equal(offlineSyncService.formatLastSyncRelative(null, 1735689600000), 'Never');
+  assert.equal(offlineSyncService.formatLastSyncRelative(1735689600000, 1735689600020), 'Just now');
+  assert.equal(offlineSyncService.formatLastSyncRelative(1735689540000, 1735689600000), '1m ago');
+  assert.equal(offlineSyncService.formatLastSyncRelative(1735686000000, 1735689600000), '1h ago');
+  assert.equal(offlineSyncService.formatLastSyncRelative('2025-01-01T00:00:00.000Z', '2025-01-02T10:00:00.000Z'), 'Yesterday');
+});
+
+test('replayQueue writes lastSuccessAt only when there are zero failures', async () => {
+  await clearQueue();
+  await offlineSyncService.setLastSuccessAt(1111);
+
+  await offlineSyncService.enqueueAction({
+    id: 'last-success-ok',
+    type: 'CHAT_MESSAGE',
+    tourId: 'tour-last-success',
+    payload: { text: 'success-only' },
+  });
+
+  const firstReplay = await offlineSyncService.replayQueue({
+    services: {
+      chatService: {
+        sendMessageDirect: async () => ({ success: true }),
+      },
+    },
+  });
+
+  assert.equal(firstReplay.success, true);
+  assert.equal(firstReplay.data.failed, 0);
+  const afterSuccess = await offlineSyncService.getLastSuccessAt();
+  assert.equal(afterSuccess.success, true);
+  assert.equal(typeof afterSuccess.data, 'number');
+  assert.equal(afterSuccess.data > 1111, true);
+
+  await offlineSyncService.enqueueAction({
+    id: 'last-success-fail',
+    type: 'CHAT_MESSAGE',
+    tourId: 'tour-last-success',
+    payload: { text: 'fails-once' },
+  });
+
+  const priorValue = afterSuccess.data;
+  const secondReplay = await offlineSyncService.replayQueue({
+    services: {
+      chatService: {
+        sendMessageDirect: async () => ({ success: false, error: 'network' }),
+      },
+    },
+  });
+
+  assert.equal(secondReplay.success, true);
+  assert.equal(secondReplay.data.failed, 1);
+
+  const afterFailure = await offlineSyncService.getLastSuccessAt();
+  assert.equal(afterFailure.success, true);
+  assert.equal(afterFailure.data, priorValue);
+});
