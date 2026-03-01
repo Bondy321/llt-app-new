@@ -29,6 +29,71 @@ test('queue enqueue/dequeue lifecycle works', async () => {
   assert.equal(after.data.length, 0);
 });
 
+test('unified sync taxonomy exposes exactly four canonical states with required metadata', () => {
+  const stateKeys = Object.keys(offlineSyncService.UNIFIED_SYNC_STATES).sort();
+  assert.deepEqual(stateKeys, [
+    'OFFLINE_NO_NETWORK',
+    'ONLINE_BACKEND_DEGRADED',
+    'ONLINE_BACKLOG_PENDING',
+    'ONLINE_HEALTHY',
+  ]);
+
+  stateKeys.forEach((stateKey) => {
+    const state = offlineSyncService.UNIFIED_SYNC_STATES[stateKey];
+    assert.equal(typeof state.label, 'string');
+    assert.equal(typeof state.description, 'string');
+    assert.equal(typeof state.severity, 'string');
+    assert.equal(typeof state.icon, 'string');
+    assert.equal(typeof state.canRetry, 'boolean');
+    assert.equal(typeof state.showLastSync, 'boolean');
+  });
+});
+
+test('formatSyncOutcome always emits canonical "X synced / Y pending / Z failed" text', () => {
+  const formatted = offlineSyncService.formatSyncOutcome({
+    syncedCount: '11.7',
+    pendingCount: NaN,
+    failedCount: null,
+  });
+  assert.match(formatted, /^\d+ synced \/ \d+ pending \/ \d+ failed$/);
+  assert.equal(formatted, '11 synced / 0 pending / 0 failed');
+});
+
+test('buildSyncSummary applies fallback normalization for missing and invalid values', () => {
+  const summary = offlineSyncService.buildSyncSummary({
+    syncedCount: -20,
+    pendingCount: 'not-a-number',
+    failedCount: 4.9,
+    source: 'totally-unsupported',
+  });
+
+  assert.deepEqual(summary, {
+    syncedCount: 0,
+    pendingCount: 0,
+    failedCount: 4,
+    lastSuccessAt: null,
+    source: 'unknown',
+  });
+});
+
+test('setLastSuccessAt/getLastSuccessAt persist and restore stored timestamps', async () => {
+  const persisted = await offlineSyncService.setLastSuccessAt(1735689600000);
+  assert.equal(persisted.success, true);
+  assert.equal(persisted.data, 1735689600000);
+
+  const loaded = await offlineSyncService.getLastSuccessAt();
+  assert.equal(loaded.success, true);
+  assert.equal(loaded.data, 1735689600000);
+});
+
+test('formatLastSyncRelative returns expected labels including fallback', () => {
+  assert.equal(offlineSyncService.formatLastSyncRelative(1735689600000, 1735689600020), 'Just now');
+  assert.equal(offlineSyncService.formatLastSyncRelative(1735689480000, 1735689600000), '2m ago');
+  assert.equal(offlineSyncService.formatLastSyncRelative(1735686000000, 1735689600000), '1h ago');
+  assert.equal(offlineSyncService.formatLastSyncRelative('2025-01-01T00:00:00.000Z', '2025-01-02T10:00:00.000Z'), 'Yesterday');
+  assert.equal(offlineSyncService.formatLastSyncRelative('invalid', 1735689600000), 'Never');
+});
+
 test('replayQueue processes in FIFO order', async () => {
   await clearQueue();
   const calls = [];
@@ -42,9 +107,9 @@ test('replayQueue processes in FIFO order', async () => {
         sendMessageDirect: async (payload) => {
           calls.push(payload.text);
           return { success: true };
-        }
-      }
-    }
+        },
+      },
+    },
   });
 
   assert.equal(result.success, true);
@@ -147,7 +212,6 @@ test('staleness label buckets are derived correctly', async () => {
   assert.equal(old.bucket, 'old');
 });
 
-
 test('saveTourPack merges partial payloads without losing existing keys', async () => {
   const tourId = 'tour-merge-1';
   const role = 'passenger';
@@ -171,7 +235,6 @@ test('saveTourPack merges partial payloads without losing existing keys', async 
   assert.equal(typeof cached.data.fetchedAt, 'string');
   assert.equal(typeof cached.data.sourceVersion, 'number');
 });
-
 
 test('subscribeQueueState emits queue stats that drive Pending badge text', async () => {
   await clearQueue();
@@ -200,23 +263,6 @@ test('subscribeQueueState emits queue stats that drive Pending badge text', asyn
 
   assert.equal(seenBadgeTexts.includes('Pending 1'), true);
   assert.equal(seenBadgeTexts.at(-1), 'Pending 0');
-});
-
-
-test('last success timestamp helpers persist and format friendly labels', async () => {
-  const save = await offlineSyncService.setLastSuccessAt(1735689600000);
-  assert.equal(save.success, true);
-  assert.equal(save.data, 1735689600000);
-
-  const loaded = await offlineSyncService.getLastSuccessAt();
-  assert.equal(loaded.success, true);
-  assert.equal(loaded.data, 1735689600000);
-
-  assert.equal(offlineSyncService.formatLastSyncRelative(null, 1735689600000), 'Never');
-  assert.equal(offlineSyncService.formatLastSyncRelative(1735689600000, 1735689600020), 'Just now');
-  assert.equal(offlineSyncService.formatLastSyncRelative(1735689540000, 1735689600000), '1m ago');
-  assert.equal(offlineSyncService.formatLastSyncRelative(1735686000000, 1735689600000), '1h ago');
-  assert.equal(offlineSyncService.formatLastSyncRelative('2025-01-01T00:00:00.000Z', '2025-01-02T10:00:00.000Z'), 'Yesterday');
 });
 
 test('replayQueue writes lastSuccessAt only when there are zero failures', async () => {
