@@ -57,3 +57,34 @@ test('formatSyncOutcome always returns normalized summary string pattern', () =>
 
   assert.equal(formatted, '11 synced / 0 pending / 0 failed');
 });
+
+test('deriveUnifiedSyncStatus returns state metadata with normalized syncSummary', () => {
+  const { deriveUnifiedSyncStatus } = require('../services/offlineSyncService');
+  const status = deriveUnifiedSyncStatus({
+    network: { isOnline: true },
+    backend: { isReachable: true, isDegraded: false },
+    queue: { pending: 2, failed: 1 },
+    lastSyncAt: 1700000000000,
+    syncSummary: { syncedCount: '7.9', source: 'manual-refresh' },
+  });
+
+  assert.equal(status.stateKey, 'ONLINE_BACKLOG_PENDING');
+  assert.equal(status.label, 'Syncing backlog');
+  assert.equal(status.syncSummary.syncedCount, 7);
+  assert.equal(status.syncSummary.pendingCount, 2);
+  assert.equal(status.syncSummary.failedCount, 1);
+  assert.equal(status.syncSummary.lastSuccessAt, 1700000000000);
+  assert.equal(status.syncSummary.source, 'manual-refresh');
+});
+
+test('deriveUnifiedSyncStatus reports offline state when network is unavailable', () => {
+  const { deriveUnifiedSyncStatus } = require('../services/offlineSyncService');
+  const status = deriveUnifiedSyncStatus({
+    network: { isOnline: false },
+    backend: { isReachable: true, isDegraded: false },
+    queue: { pending: 0, failed: 0 },
+  });
+
+  assert.equal(status.stateKey, 'OFFLINE_NO_NETWORK');
+  assert.equal(status.canRetry, false);
+});
