@@ -100,10 +100,10 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     ]).start();
   };
 
-  const applyValidation = (phase = 'submit') => {
+  const applyValidation = (phase = 'submit', options = {}) => {
     const inputError = getLoginInputError(normalizedInput, {
       phase,
-      emailTouched: fieldTouched.email,
+      emailTouched: options.emailTouched ?? fieldTouched.email,
     });
 
     if (inputError) {
@@ -131,7 +131,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
 
   const handleEmailBlur = () => {
     setFieldTouched((current) => ({ ...current, email: true }));
-    applyValidation('blur');
+    applyValidation('blur', { emailTouched: true });
   };
 
   const handleContactSupport = async () => {
