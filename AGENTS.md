@@ -1100,6 +1100,12 @@ Never commit secrets. Use EAS Secrets for environment variables in builds.
 
 ### UX QA Refresh Additions (Production Readiness, February 2026)
 
+- **Canonical sync-state contract (mobile + services):** offline sync now exposes a single four-state taxonomy (`OFFLINE_NO_NETWORK`, `ONLINE_BACKEND_DEGRADED`, `ONLINE_BACKLOG_PENDING`, `ONLINE_HEALTHY`) with normalized metadata (`label`, `description`, `severity`, `icon`, `canRetry`, `showLastSync`) so app-shell and screen messaging cannot drift.
+- **Manual refresh copy contract:** all refresh surfaces now use one formatter output (`"{X} synced / {Y} pending / {Z} failed"`) backed by normalized summary shaping (`buildSyncSummary`) so UI text is deterministic and never leaks `undefined` values.
+- **Last-known-good sync visibility:** successful zero-failure replays persist `lastSuccessAt`, and diagnostics/screens consume shared relative-time formatting (`Just now`, `2m ago`, `1h ago`, `Yesterday`) so users can trust freshness before/after first live sync.
+- **Unified diagnostics/app-shell rendering:** `useDiagnostics` now provides a unified sync status object consumed directly by `App.js` and key operational screens (Tour Home, Chat, Driver Home), while web-admin dashboard terminology is explicitly mapped to the same taxonomy for cross-platform language parity.
+- **Sync-contract regression coverage:** dedicated tests now lock taxonomy keys, derivation precedence, formatter/fallback behavior, and last-sync visibility rules to prevent wording/contract regressions.
+
 - **Offline-aware login for returning users:** Login now allows cached-trip entry when offline if the entered booking/driver code matches persisted session or Tour Pack identity. Unknown first-time codes remain blocked offline with actionable guidance.
 - **Offline login clarity UX:** offline login rejections now support explicit reason mapping (`NO_CACHED_SESSION`, `CODE_MISMATCH`, `CACHE_EXPIRED`) plus an in-screen "Why can't I log in offline?" helper so users understand exactly how to recover.
 - **Chat queue sync consistency:** chat manual sync and pull-to-refresh now share a single queue-outcome helper and use non-blocking in-screen banners (including retry affordances) instead of disruptive modal failure alerts.
