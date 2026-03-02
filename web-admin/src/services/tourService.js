@@ -405,6 +405,8 @@ export const buildDriverAssignmentUpdates = ({
   tourCode,
   driverInfo,
   isAssigned,
+  actorId = 'web-admin',
+  assignedAt = new Date().toISOString(),
 }) => {
   const updates = {
     [`tours/${tourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',
@@ -419,9 +421,15 @@ export const buildDriverAssignmentUpdates = ({
   updates[`drivers/${driverId}/currentTourCode`] = isAssigned ? (tourCode || tourId) : null;
   updates[`drivers/${driverId}/assignments/${tourId}`] = isAssigned ? true : null;
 
-  const manifestCode = driverCode || driverId;
   updates[`tour_manifests/${tourId}/assigned_drivers/${driverId}`] = isAssigned ? true : null;
-  updates[`tour_manifests/${tourId}/assigned_driver_codes/${driverId}`] = isAssigned ? manifestCode : null;
+  updates[`tour_manifests/${tourId}/assigned_driver_codes/${driverId}`] = isAssigned
+    ? {
+        tourId,
+        tourCode: tourCode || tourId,
+        assignedAt,
+        assignedBy: actorId,
+      }
+    : null;
 
   return updates;
 };
@@ -432,6 +440,7 @@ export const applyDriverAssignmentMutation = async ({
   driverCode,
   driverInfo,
   isAssigned,
+  actorId,
 }) => {
   const assignment = await getDriverAssignmentContext(tourId, driverId);
   const updates = buildDriverAssignmentUpdates({
@@ -441,6 +450,7 @@ export const applyDriverAssignmentMutation = async ({
     tourCode: assignment.tourCode,
     driverInfo,
     isAssigned,
+    actorId,
   });
 
   await update(ref(db), updates);
