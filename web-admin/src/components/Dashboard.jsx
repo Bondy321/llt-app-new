@@ -1,7 +1,14 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ref, onValue } from 'firebase/database';
+import { notifications } from '@mantine/notifications';
 import { db } from '../firebase';
+import {
+  HEALTH_STATE,
+  buildDashboardStatusChips,
+  buildHealthSnapshot,
+  revalidateDashboardData,
+} from '../services/healthService';
 import { formatDateForDisplay } from '../utils/dateUtils';
 import { getTriageMeta, getUrgencyBadge } from '../utils/triageUtils';
 import {
@@ -41,32 +48,6 @@ import {
   IconActivity,
   IconRoute,
 } from '@tabler/icons-react';
-
-const DASHBOARD_STATUS_CHIPS = {
-  // Parity mapping note (mobile canonical state key -> web-admin chip label)
-  // OFFLINE_NO_NETWORK -> Offline
-  // ONLINE_BACKEND_DEGRADED -> Service issue
-  // ONLINE_BACKLOG_PENDING -> Syncing backlog
-  // ONLINE_HEALTHY -> Up to date
-  DATABASE_CONNECTION: {
-    mobileStateKey: 'ONLINE_HEALTHY',
-    label: 'Up to date',
-    description: 'Firebase Realtime Database',
-    color: 'green',
-  },
-  REALTIME_SYNC: {
-    mobileStateKey: 'ONLINE_HEALTHY',
-    label: 'Up to date',
-    description: 'Everything is synced and working normally.',
-    color: 'green',
-  },
-  BROADCAST_SYSTEM: {
-    mobileStateKey: 'ONLINE_HEALTHY',
-    label: 'Up to date',
-    description: 'Push notifications ready',
-    color: 'blue',
-  },
-};
 
 // Stat Card Component
 function StatCard({ title, value, icon, color, description, trend, trendValue }) {
@@ -163,33 +144,117 @@ export default function Dashboard() {
   const [tours, setTours] = useState({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const databaseConnectionStatus = DASHBOARD_STATUS_CHIPS.DATABASE_CONNECTION;
-  const realtimeSyncStatus = DASHBOARD_STATUS_CHIPS.REALTIME_SYNC;
-  const broadcastStatus = DASHBOARD_STATUS_CHIPS.BROADCAST_SYSTEM;
+  const [healthSignals, setHealthSignals] = useState({
+    isOnline: typeof navigator === 'undefined' ? true : navigator.onLine,
+    listenerConnected: true,
+    listenerErrorCount: 0,
+    pendingFailedOperations: 0,
+    backlogPendingCount: 0,
+    lastSuccessfulSyncAt: null,
+  });
+
+  const healthSnapshot = useMemo(() => buildHealthSnapshot(healthSignals), [healthSignals]);
+  const statusChips = useMemo(() => buildDashboardStatusChips(healthSnapshot), [healthSnapshot]);
+  const databaseConnectionStatus = statusChips.DATABASE_CONNECTION;
+  const realtimeSyncStatus = statusChips.REALTIME_SYNC;
+  const broadcastStatus = statusChips.BROADCAST_SYSTEM;
 
   useEffect(() => {
+    const updateLastSync = () => {
+      setHealthSignals((current) => ({
+        ...current,
+        lastSuccessfulSyncAt: new Date().toISOString(),
+        listenerConnected: true,
+      }));
+    };
+
+    const registerListenerError = () => {
+      setHealthSignals((current) => ({
+        ...current,
+        listenerErrorCount: current.listenerErrorCount + 1,
+        listenerConnected: false,
+        pendingFailedOperations: current.pendingFailedOperations + 1,
+      }));
+    };
+
     // Subscribe to drivers
     const driversRef = ref(db, 'drivers');
-    const unsubDrivers = onValue(driversRef, (snapshot) => {
-      setDrivers(snapshot.val() || {});
-    });
+    const unsubDrivers = onValue(
+      driversRef,
+      (snapshot) => {
+        setDrivers(snapshot.val() || {});
+        updateLastSync();
+      },
+      registerListenerError,
+    );
 
     // Subscribe to tours
     const toursRef = ref(db, 'tours');
-    const unsubTours = onValue(toursRef, (snapshot) => {
-      setTours(snapshot.val() || {});
-      setLoading(false);
-    });
+    const unsubTours = onValue(
+      toursRef,
+      (snapshot) => {
+        setTours(snapshot.val() || {});
+        setLoading(false);
+        updateLastSync();
+      },
+      (error) => {
+        setLoading(false);
+        registerListenerError(error);
+      },
+    );
+
+    const handleOnline = () => {
+      setHealthSignals((current) => ({ ...current, isOnline: true, listenerConnected: true }));
+    };
+
+    const handleOffline = () => {
+      setHealthSignals((current) => ({ ...current, isOnline: false, listenerConnected: false }));
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
 
     return () => {
       unsubDrivers();
       unsubTours();
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
     };
   }, []);
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 1000);
+    try {
+      const result = await revalidateDashboardData(db);
+      setDrivers(result.drivers);
+      setTours(result.tours);
+      setHealthSignals((current) => ({
+        ...current,
+        isOnline: typeof navigator === 'undefined' ? true : navigator.onLine,
+        listenerConnected: true,
+        pendingFailedOperations: 0,
+        backlogPendingCount: 0,
+        lastSuccessfulSyncAt: result.revalidatedAt,
+      }));
+      notifications.show({
+        title: 'Dashboard refreshed',
+        message: 'Live data revalidated from Firebase successfully.',
+        color: 'green',
+      });
+    } catch {
+      setHealthSignals((current) => ({
+        ...current,
+        pendingFailedOperations: current.pendingFailedOperations + 1,
+        backlogPendingCount: current.backlogPendingCount + 1,
+      }));
+      notifications.show({
+        title: 'Refresh failed',
+        message: 'Unable to revalidate dashboard data from Firebase.',
+        color: 'red',
+      });
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const resolveCurrentTourId = (driver) => driver?.currentTourId || driver?.activeTourId || '';
@@ -492,12 +557,12 @@ export default function Dashboard() {
         <Card shadow="sm" padding="lg" radius="md" withBorder>
           <Group justify="space-between" mb="md">
             <Text fw={500}>System Status</Text>
-            <Badge variant="light" color="green">Operational</Badge>
+            <Badge variant="light" color={healthSnapshot.color}>{healthSnapshot.label}</Badge>
           </Group>
           <Stack gap="md">
-            <Paper p="sm" radius="md" bg="green.0">
+            <Paper p="sm" radius="md" bg={`${databaseConnectionStatus.color}.0`}>
               <Group gap="sm">
-                <ThemeIcon color="green" variant="light" size="md">
+                <ThemeIcon color={databaseConnectionStatus.color} variant="light" size="md">
                   <IconActivity size={16} />
                 </ThemeIcon>
                 <div>
@@ -509,9 +574,9 @@ export default function Dashboard() {
                 </Badge>
               </Group>
             </Paper>
-            <Paper p="sm" radius="md" bg="green.0">
+            <Paper p="sm" radius="md" bg={`${realtimeSyncStatus.color}.0`}>
               <Group gap="sm">
-                <ThemeIcon color="green" variant="light" size="md">
+                <ThemeIcon color={realtimeSyncStatus.color} variant="light" size="md">
                   <IconClock size={16} />
                 </ThemeIcon>
                 <div>
@@ -523,9 +588,9 @@ export default function Dashboard() {
                 </Badge>
               </Group>
             </Paper>
-            <Paper p="sm" radius="md" bg="blue.0">
+            <Paper p="sm" radius="md" bg={`${broadcastStatus.color}.0`}>
               <Group gap="sm">
-                <ThemeIcon color="blue" variant="light" size="md">
+                <ThemeIcon color={broadcastStatus.color} variant="light" size="md">
                   <IconMessageCircle size={16} />
                 </ThemeIcon>
                 <div>
@@ -541,9 +606,15 @@ export default function Dashboard() {
             <Group gap="xs">
               <IconCalendar size={14} color="gray" />
               <Text size="xs" c="dimmed">
-                Last updated: {new Date().toLocaleTimeString()}
+                Last updated: {healthSignals.lastSuccessfulSyncAt
+                  ? new Date(healthSignals.lastSuccessfulSyncAt).toLocaleTimeString()
+                  : 'Awaiting first sync'}
               </Text>
             </Group>
+            <Text size="xs" c="dimmed">
+              Sync taxonomy: {HEALTH_STATE.OFFLINE_NO_NETWORK}, {HEALTH_STATE.ONLINE_BACKEND_DEGRADED},{' '}
+              {HEALTH_STATE.ONLINE_BACKLOG_PENDING}, {HEALTH_STATE.ONLINE_HEALTHY}
+            </Text>
           </Stack>
         </Card>
       </SimpleGrid>
