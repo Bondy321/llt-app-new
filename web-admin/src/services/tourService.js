@@ -557,6 +557,7 @@ export const exportToursToCSV = (tours) => {
 
 const getExistingTourCodeIndex = (tours = {}) => {
   const existingTourCodes = new Set();
+  // Keep a single map for normalized tour code -> tour id lookups.
   const existingTourCodeToId = new Map();
 
   Object.entries(tours || {}).forEach(([id, tour]) => {
