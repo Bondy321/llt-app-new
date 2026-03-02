@@ -54,3 +54,43 @@ describe('tourService CSV preview integration', () => {
     expect(result.rows[1].existingTourId).toBeNull();
   });
 });
+
+
+describe('buildDriverAssignmentUpdates', () => {
+  it('writes canonical assigned_driver_codes payload on assignment', async () => {
+    const { buildDriverAssignmentUpdates } = await import('./tourService.js');
+
+    const updates = buildDriverAssignmentUpdates({
+      tourId: '5112D_8',
+      driverId: 'D-BONDY',
+      driverCode: 'D-BONDY',
+      tourCode: '5112D 8',
+      driverInfo: { name: 'James Bondy', phone: '+441234' },
+      isAssigned: true,
+      actorId: 'uid_web_admin_1',
+      assignedAt: '2026-02-01T10:15:00.000Z',
+    });
+
+    expect(updates['tour_manifests/5112D_8/assigned_driver_codes/D-BONDY']).toEqual({
+      tourId: '5112D_8',
+      tourCode: '5112D 8',
+      assignedAt: '2026-02-01T10:15:00.000Z',
+      assignedBy: 'uid_web_admin_1',
+    });
+  });
+
+  it('removes canonical payload on unassignment', async () => {
+    const { buildDriverAssignmentUpdates } = await import('./tourService.js');
+
+    const updates = buildDriverAssignmentUpdates({
+      tourId: '5112D_8',
+      driverId: 'D-BONDY',
+      driverCode: 'D-BONDY',
+      tourCode: '5112D 8',
+      driverInfo: { name: 'TBA', phone: '' },
+      isAssigned: false,
+    });
+
+    expect(updates['tour_manifests/5112D_8/assigned_driver_codes/D-BONDY']).toBeNull();
+  });
+});
