@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ref, push, set, onValue } from 'firebase/database';
+import { ref, push, set, onValue, query, orderByChild, limitToLast } from 'firebase/database';
 import { db, auth } from '../firebase';
 import { notifications } from '@mantine/notifications';
 import {
@@ -68,18 +68,17 @@ function normalizeBroadcastTimestamp(timestamp) {
   return null;
 }
 
-function normalizeBroadcastMessage(tourId, messageId, payload = {}) {
-  const text = typeof payload.text === 'string' ? payload.text : '';
-  const normalizedTimestamp = normalizeBroadcastTimestamp(payload.timestamp);
+function normalizeBroadcastMessage(tourId, broadcastId, payload = {}) {
+  const message = typeof payload.message === 'string' ? payload.message : '';
+  const normalizedTimestamp = normalizeBroadcastTimestamp(payload.createdAtMs);
 
   return {
-    id: messageId,
+    id: broadcastId,
     tourId,
-    text,
-    message: text.replace(/^ANNOUNCEMENT:\s*/i, ''),
-    timestamp: normalizedTimestamp ?? payload.timestamp ?? null,
+    message,
+    timestamp: normalizedTimestamp ?? payload.createdAtMs ?? null,
     timestampMs: normalizedTimestamp,
-    messageType: payload.messageType || null,
+    createdByUid: payload.createdByUid || null,
     source: payload.source || null,
   };
 }
@@ -131,35 +130,28 @@ export function BroadcastPanel() {
   }, []);
 
   useEffect(() => {
-    const chatsRef = ref(db, 'chats');
+    if (!tourId) {
+      setBroadcastHistory([]);
+      return undefined;
+    }
 
-    const unsubscribe = onValue(chatsRef, (snapshot) => {
-      const chats = snapshot.val() || {};
-      const history = [];
+    const historyQuery = query(
+      ref(db, `broadcasts/${tourId}`),
+      orderByChild('createdAtMs'),
+      limitToLast(25)
+    );
 
-      Object.entries(chats).forEach(([currentTourId, chatPayload]) => {
-        const messageEntries = Object.entries(chatPayload?.messages || {});
+    const unsubscribe = onValue(historyQuery, (snapshot) => {
+      const broadcasts = snapshot.val() || {};
+      const history = Object.entries(broadcasts)
+        .map(([broadcastId, broadcastPayload]) => normalizeBroadcastMessage(tourId, broadcastId, broadcastPayload))
+        .sort((a, b) => (b.timestampMs ?? 0) - (a.timestampMs ?? 0));
 
-        messageEntries.forEach(([messageId, messagePayload]) => {
-          const isTaggedBroadcast =
-            messagePayload?.messageType === 'ADMIN_BROADCAST' ||
-            messagePayload?.source === 'web_admin';
-          const isLegacyBroadcast =
-            typeof messagePayload?.text === 'string' &&
-            messagePayload.text.toUpperCase().startsWith('ANNOUNCEMENT:');
-
-          if (!isTaggedBroadcast && !isLegacyBroadcast) return;
-
-          history.push(normalizeBroadcastMessage(currentTourId, messageId, messagePayload));
-        });
-      });
-
-      history.sort((a, b) => (b.timestampMs ?? 0) - (a.timestampMs ?? 0));
-      setBroadcastHistory(history.slice(0, 25));
+      setBroadcastHistory(history);
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [tourId]);
 
   // Tour options for Select
   const tourOptions = Object.entries(tours).map(([id, tour]) => ({
@@ -201,21 +193,16 @@ export function BroadcastPanel() {
     setLoading(true);
 
     try {
-      // Create message in chat
-      const messagesRef = ref(db, `chats/${tourId}/messages`);
-      const newMessageRef = push(messagesRef);
+      const broadcastsRef = ref(db, `broadcasts/${tourId}`);
+      const newBroadcastRef = push(broadcastsRef);
 
-      const timestamp = Date.now();
+      const createdAtMs = Date.now();
 
-      await set(newMessageRef, {
-        text: `ANNOUNCEMENT: ${message}`,
-        senderName: 'Loch Lomond Travel HQ',
-        senderId: 'admin_hq_broadcast',
-        senderUid: auth.currentUser?.uid || null,
-        timestamp,
-        messageType: 'ADMIN_BROADCAST',
+      await set(newBroadcastRef, {
+        message: message.trim(),
+        createdAtMs,
+        createdByUid: auth.currentUser?.uid || null,
         source: 'web_admin',
-        isDriver: true,
       });
 
       notifications.show({
