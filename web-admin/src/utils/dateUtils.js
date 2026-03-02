@@ -1,5 +1,7 @@
 const UK_DATE_REGEX = /^(\d{2})\/(\d{2})\/(\d{4})$/;
 const ISO_DATE_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_DATETIME_REGEX = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)(Z|[+-]\d{2}:\d{2})$/;
+const NUMERIC_STRING_REGEX = /^\d+$/;
 
 const buildValidationError = (code, message, input, expectedFormat) => ({
   code,
@@ -9,7 +11,7 @@ const buildValidationError = (code, message, input, expectedFormat) => ({
 });
 
 const normalizeToNoon = (date) => {
-  const normalized = new Date(date);
+  const normalized = new Date(date.getTime());
   normalized.setHours(12, 0, 0, 0);
   return normalized;
 };
@@ -84,6 +86,28 @@ const parseWithPattern = (input, pattern, expectedFormat, formatName, yearIdx, m
   };
 };
 
+const parseNumericTimestamp = (value) => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return new Date(value);
+  }
+
+  if (typeof value === 'string' && NUMERIC_STRING_REGEX.test(value.trim())) {
+    return new Date(Number(value.trim()));
+  }
+
+  return null;
+};
+
+const parseIsoTimestamp = (value) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!ISO_DATETIME_REGEX.test(trimmed)) return null;
+
+  const parsedMs = Date.parse(trimmed);
+  if (!Number.isFinite(parsedMs)) return null;
+  return new Date(parsedMs);
+};
+
 export const parseUKDateStrict = (input) => (
   parseWithPattern(input, UK_DATE_REGEX, 'dd/MM/yyyy', 'UK', 3, 2, 1)
 );
@@ -91,6 +115,47 @@ export const parseUKDateStrict = (input) => (
 export const parseISODateStrict = (input) => (
   parseWithPattern(input, ISO_DATE_REGEX, 'yyyy-MM-dd', 'ISO', 1, 2, 3)
 );
+
+export const parseTimestampStrict = (input) => {
+  if (input === null || input === undefined || input === '') {
+    return {
+      success: false,
+      error: buildValidationError(
+        'REQUIRED',
+        'Timestamp value is required in ISO-8601 or epoch milliseconds format.',
+        input,
+        'ISO-8601 datetime or epoch milliseconds',
+      ),
+    };
+  }
+
+  const numericDate = parseNumericTimestamp(input);
+  if (numericDate && Number.isFinite(numericDate.getTime())) {
+    return { success: true, date: numericDate, format: 'EPOCH_MS' };
+  }
+
+  const isoDate = parseIsoTimestamp(input);
+  if (isoDate && Number.isFinite(isoDate.getTime())) {
+    return { success: true, date: isoDate, format: 'ISO_DATETIME' };
+  }
+
+  return {
+    success: false,
+    error: buildValidationError(
+      'INVALID_FORMAT',
+      'Timestamp must be an ISO-8601 datetime with timezone or epoch milliseconds.',
+      input,
+      'ISO-8601 datetime or epoch milliseconds',
+    ),
+  };
+};
+
+export const toEpochMsStrict = (input) => {
+  const parsed = parseTimestampStrict(input);
+  return parsed.success ? parsed.date.getTime() : null;
+};
+
+export const nowAsISOString = () => new Date().toISOString();
 
 export const formatDateToUK = (date) => {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
@@ -126,6 +191,48 @@ export const formatDateForDisplay = (value, fallback = '-') => {
   }
 
   return fallback;
+};
+
+
+export const getCurrentISODateStamp = () => nowAsISOString().split('T')[0];
+
+export const formatLongDateForDisplay = (value, fallback = '-') => {
+  const dateValue = value instanceof Date ? value : null;
+  const parsed = dateValue && Number.isFinite(dateValue.getTime())
+    ? { success: true, date: dateValue }
+    : parseTimestampStrict(value);
+
+  if (!parsed.success) return fallback;
+
+  return new Intl.DateTimeFormat('en-GB', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  }).format(parsed.date);
+};
+
+export const formatTimeForDisplay = (value, fallback = '-') => {
+  const parsed = parseTimestampStrict(value);
+  if (!parsed.success) return fallback;
+
+  return new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(parsed.date);
+};
+
+export const formatDateTimeForDisplay = (value, fallback = '-') => {
+  const parsed = parseTimestampStrict(value);
+  if (!parsed.success) return fallback;
+
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(parsed.date);
 };
 
 export const formatDateRangeForDisplay = (startDate, endDate, fallback = '-') => {

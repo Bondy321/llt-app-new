@@ -366,6 +366,152 @@ exports.normalizeRecentBroadcastTimestamps = onRequest(
   }
 );
 
+
+const validateBroadcastData = (broadcastData) => {
+  const errors = [];
+
+  if (!broadcastData || typeof broadcastData !== 'object') {
+    errors.push('Broadcast data is null or invalid');
+    return { valid: false, errors };
+  }
+
+  if (!broadcastData.message || typeof broadcastData.message !== 'string') {
+    errors.push('Missing broadcast message');
+  } else if (broadcastData.message.trim().length === 0 || broadcastData.message.length > 2000) {
+    errors.push('Broadcast message must be 1-2000 characters');
+  }
+
+  if (typeof broadcastData.createdAtMs !== 'number' || !Number.isFinite(broadcastData.createdAtMs)) {
+    errors.push('Missing or invalid createdAtMs');
+  }
+
+  if (!broadcastData.createdByUid || typeof broadcastData.createdByUid !== 'string') {
+    errors.push('Missing createdByUid');
+  }
+
+  if (broadcastData.source && typeof broadcastData.source !== 'string') {
+    errors.push('Invalid source');
+  }
+
+  return { valid: errors.length === 0, errors };
+};
+
+/**
+ * Trigger: When a new admin broadcast is written to /broadcasts/{tourId}/{broadcastId}
+ * Writes a normalized system chat message so existing chat notification flow can fan out push notifications.
+ */
+exports.processBroadcastWrite = onValueCreated(
+  {
+    ref: '/broadcasts/{tourId}/{broadcastId}',
+    region: 'europe-west1',
+    instance: 'loch-lomond-travel-default-rtdb',
+    maxInstances: 10,
+  },
+  async (event) => {
+    const { tourId, broadcastId } = event.params;
+
+    try {
+      if (!isValidFirebaseKey(tourId) || !isValidFirebaseKey(broadcastId)) {
+        log.warn('Invalid broadcast path parameters', { tourId, broadcastId });
+        return null;
+      }
+
+      const broadcastData = event.data?.val();
+      const validation = validateBroadcastData(broadcastData);
+      if (!validation.valid) {
+        log.warn('Invalid broadcast payload; skipping fanout', { tourId, broadcastId, errors: validation.errors });
+        return null;
+      }
+
+      const adminRecord = await admin.auth().getUser(broadcastData.createdByUid);
+      const isAnonymous = adminRecord.providerData.length === 0;
+      if (adminRecord.disabled || isAnonymous) {
+        log.warn('Broadcast author is not eligible for admin broadcast fanout', {
+          tourId,
+          broadcastId,
+          createdByUid: broadcastData.createdByUid,
+        });
+        return null;
+      }
+
+      await admin.database().ref(`chats/${tourId}/messages/${broadcastId}`).set({
+        text: `ANNOUNCEMENT: ${broadcastData.message.trim()}`,
+        senderName: 'Loch Lomond Travel HQ',
+        senderId: 'admin_hq_broadcast',
+        senderUid: broadcastData.createdByUid,
+        timestamp: broadcastData.createdAtMs,
+        messageType: 'ADMIN_BROADCAST',
+        source: broadcastData.source || 'web_admin',
+        isDriver: true,
+        broadcastId,
+      });
+
+      log.info('Broadcast fanout to chat completed', { tourId, broadcastId });
+      return null;
+    } catch (error) {
+      log.error('Failed to process broadcast write', error, { tourId, broadcastId });
+      return null;
+    }
+  }
+);
+
+/**
+ * One-time migration helper:
+ * Moves legacy ANNOUNCEMENT chat entries into /broadcasts/{tourId}/{broadcastId}.
+ */
+exports.migrateLegacyAnnouncementsToBroadcasts = onRequest(
+  {
+    region: 'europe-west1',
+    maxInstances: 1,
+  },
+  async (req, res) => {
+    const dryRun = String(req.query.dryRun || req.body?.dryRun || 'true') === 'true';
+
+    try {
+      const chatsSnapshot = await admin.database().ref('chats').once('value');
+      const updates = {};
+      let scanned = 0;
+      let migrated = 0;
+
+      chatsSnapshot.forEach((tourSnapshot) => {
+        const tourId = tourSnapshot.key;
+        const messagesSnapshot = tourSnapshot.child('messages');
+
+        messagesSnapshot.forEach((messageSnapshot) => {
+          scanned += 1;
+          const payload = messageSnapshot.val() || {};
+          const text = typeof payload.text === 'string' ? payload.text : '';
+          const isLegacy = text.toUpperCase().startsWith('ANNOUNCEMENT:');
+          const isTagged = payload.messageType === 'ADMIN_BROADCAST' || payload.source === 'web_admin';
+
+          if (!isLegacy && !isTagged) return;
+
+          const createdAtMs = parseTimestampToMillis(payload.timestamp) || Date.now();
+          const message = text.replace(/^ANNOUNCEMENT:\s*/i, '').trim();
+          if (!message) return;
+
+          migrated += 1;
+          updates[`broadcasts/${tourId}/${messageSnapshot.key}`] = {
+            message,
+            createdAtMs,
+            createdByUid: payload.senderUid || 'legacy_migration',
+            source: payload.source || 'legacy_chat_migration',
+          };
+        });
+      });
+
+      if (!dryRun && Object.keys(updates).length > 0) {
+        await admin.database().ref().update(updates);
+      }
+
+      return res.status(200).json({ success: true, dryRun, scanned, migrated });
+    } catch (error) {
+      log.error('Failed to migrate legacy broadcasts', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  }
+);
+
 /**
  * Trigger: When a new message is added to /chats/{tourId}/messages/{messageId}
  * Enhanced with validation, security checks, and better error handling

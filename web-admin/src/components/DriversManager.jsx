@@ -3,6 +3,7 @@ import { ref, onValue, update } from 'firebase/database';
 import { db } from '../firebase';
 import { applyDriverAssignmentMutation } from '../services/tourService';
 import { notifications } from '@mantine/notifications';
+import { formatDateTimeForDisplay, nowAsISOString } from '../utils/dateUtils';
 import {
   Card,
   Text,
@@ -117,7 +118,7 @@ function CreateDriverModal({ opened, onClose, onSuccess }) {
       await update(ref(db), {
         [`drivers/${id}`]: {
           name: name.trim(),
-          createdAt: new Date().toISOString(),
+          createdAt: nowAsISOString(),
           assignments: {},
         },
       });
@@ -306,13 +307,7 @@ function DriverDetailsPanel({ driverId, driver }) {
     }
   };
 
-  const createdDate = driver?.createdAt
-    ? new Date(driver.createdAt).toLocaleDateString('en-GB', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-      })
-    : 'Unknown';
+  const createdDate = formatDateTimeForDisplay(driver?.createdAt, 'Unknown');
   const resolvedCurrentTourId = driver?.currentTourId || driver?.activeTourId || '';
 
   return (

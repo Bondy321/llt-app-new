@@ -288,6 +288,47 @@ const isValidNormalizedTourId = (tourId) => {
   return typeof tourId === 'string' && /^[A-Z0-9][A-Z0-9_-]*$/.test(tourId);
 };
 
+const buildAssignedDriverCodePayload = ({ tourId, tourCode, assignedBy, assignedAt = new Date().toISOString() }) => ({
+  tourId,
+  tourCode,
+  assignedAt,
+  assignedBy,
+});
+
+const normalizeAssignedDriverCodeRecord = ({ value, driverId, fallbackTourId = null, fallbackTourCode = null }) => {
+  if (!value) return null;
+
+  if (typeof value === 'string') {
+    const normalizedTourId = normalizeTourIdentifier(value) || fallbackTourId;
+    return {
+      tourId: normalizedTourId,
+      tourCode: fallbackTourCode || (normalizedTourId ? normalizedTourId.replace(/_/g, ' ') : value),
+      assignedAt: null,
+      assignedBy: null,
+      driverId,
+      legacy: true,
+    };
+  }
+
+  if (typeof value !== 'object') return null;
+
+  const normalizedTourId = normalizeTourIdentifier(value.tourId) || fallbackTourId;
+  const normalizedTourCode = typeof value.tourCode === 'string' && value.tourCode.trim()
+    ? value.tourCode.trim()
+    : (fallbackTourCode || (normalizedTourId ? normalizedTourId.replace(/_/g, ' ') : null));
+
+  if (!normalizedTourId || !normalizedTourCode) return null;
+
+  return {
+    tourId: normalizedTourId,
+    tourCode: normalizedTourCode,
+    assignedAt: typeof value.assignedAt === 'string' ? value.assignedAt : null,
+    assignedBy: typeof value.assignedBy === 'string' ? value.assignedBy : null,
+    driverId,
+    legacy: false,
+  };
+};
+
 const resolveVerifierTourId = (passengerVerification = {}, bookingData = {}) => {
   const verifierTourId = normalizeTourIdentifier(passengerVerification.tourId);
   if (isValidNormalizedTourId(verifierTourId)) {
@@ -649,12 +690,12 @@ const assignDriverToTour = async (driverId, tourCode) => {
 
     // 2. Add to Tour Manifest's assigned drivers list
     updates[`tour_manifests/${tourId}/assigned_drivers/${validatedDriverId}`] = true;
-    updates[`tour_manifests/${tourId}/assigned_driver_codes/${validatedDriverId}`] = {
+    updates[`tour_manifests/${tourId}/assigned_driver_codes/${validatedDriverId}`] = buildAssignedDriverCodePayload({
       tourId,
       tourCode: validatedTourCode,
       assignedAt: new Date().toISOString(),
       assignedBy: currentUser.uid,
-    };
+    });
 
     // Use timeout protection
     await Promise.race([
@@ -688,7 +729,28 @@ const validateBookingReference = async (reference, email) => {
 
     if (driverSnapshot.exists()) {
       const driverData = driverSnapshot.val();
-      const assignedTourId = sanitizeTourId(driverData.currentTourId) || null;
+      let assignedTourId = sanitizeTourId(driverData.currentTourId) || null;
+      let assignedTourCode = driverData.currentTourCode || null;
+
+      if (!assignedTourId) {
+        const assignedCodeSnapshot = await realtimeDb.ref('tour_manifests').once('value');
+        const manifests = assignedCodeSnapshot.exists() ? assignedCodeSnapshot.val() : {};
+        for (const [manifestTourId, manifestData] of Object.entries(manifests || {})) {
+          const rawValue = manifestData?.assigned_driver_codes?.[upperRef];
+          const normalized = normalizeAssignedDriverCodeRecord({
+            value: rawValue,
+            driverId: upperRef,
+            fallbackTourId: manifestTourId,
+            fallbackTourCode: manifestData?.tourCode || manifestTourId?.replace?.(/_/g, ' '),
+          });
+          if (normalized?.tourId) {
+            assignedTourId = normalized.tourId;
+            assignedTourCode = normalized.tourCode;
+            break;
+          }
+        }
+      }
+
       let resolvedTour = null;
 
       if (assignedTourId) {
@@ -708,6 +770,7 @@ const validateBookingReference = async (reference, email) => {
           id: upperRef,
           name: driverData.name,
           assignedTourId,
+          assignedTourCode,
           hasAssignedTour: Boolean(assignedTourId),
         },
         tour: resolvedTour,
@@ -958,5 +1021,7 @@ module.exports = {
   getTourManifest,
   updateManifestBooking,
   applyManifestUpdateDirect,
-  assignDriverToTour
+  assignDriverToTour,
+  buildAssignedDriverCodePayload,
+  normalizeAssignedDriverCodeRecord
 };
