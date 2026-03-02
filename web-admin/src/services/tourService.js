@@ -385,12 +385,29 @@ const getDriverAssignmentContext = async (tourId, explicitDriverId = null) => {
   const tour = tourSnapshot.val() || {};
   const manifest = manifestSnapshot.val() || {};
   const manifestDrivers = manifest.assigned_drivers || {};
-  const resolvedDriverId = explicitDriverId || Object.keys(manifestDrivers)[0] || null;
+  const manifestDriverIds = Object.keys(manifestDrivers);
+  const resolvedDriverId = explicitDriverId || manifestDriverIds[0] || null;
+
+  const driverSnapshot = resolvedDriverId
+    ? await get(ref(db, `drivers/${resolvedDriverId}`))
+    : { val: () => ({}) };
+  const driver = driverSnapshot.val() || {};
+  const currentTourId = driver.currentTourId || null;
+  const assignments = driver.assignments || {};
+
+  const knownTourIds = new Set([
+    ...Object.keys(assignments),
+    ...(currentTourId ? [currentTourId] : []),
+  ]);
 
   return {
     tourCode: tour.tourCode || tour.code || tourId,
     driverId: resolvedDriverId,
     driverCode: resolvedDriverId,
+    manifestDriverIds,
+    currentTourId,
+    assignments,
+    knownTourIds,
   };
 };
 
@@ -443,15 +460,48 @@ export const applyDriverAssignmentMutation = async ({
   actorId,
 }) => {
   const assignment = await getDriverAssignmentContext(tourId, driverId);
-  const updates = buildDriverAssignmentUpdates({
-    tourId,
-    driverId: driverId || assignment.driverId,
-    driverCode: driverCode || assignment.driverCode,
-    tourCode: assignment.tourCode,
-    driverInfo,
-    isAssigned,
-    actorId,
-  });
+  const resolvedDriverId = driverId || assignment.driverId;
+  const resolvedDriverCode = driverCode || assignment.driverCode;
+
+  const updates = {
+    [`tours/${tourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',
+    [`tours/${tourId}/driverPhone`]: isAssigned ? (driverInfo.phone || '') : '',
+  };
+
+  if (!resolvedDriverId) {
+    await update(ref(db), updates);
+    return;
+  }
+
+  const cleanupTourIds = new Set(assignment.knownTourIds || []);
+  cleanupTourIds.delete(tourId);
+
+  for (const oldTourId of cleanupTourIds) {
+    updates[`drivers/${resolvedDriverId}/assignments/${oldTourId}`] = null;
+    updates[`tour_manifests/${oldTourId}/assigned_drivers/${resolvedDriverId}`] = null;
+    updates[`tour_manifests/${oldTourId}/assigned_driver_codes/${resolvedDriverId}`] = null;
+  }
+
+  // Explicit single-driver policy per tour: clear stale links for other drivers in target manifest.
+  for (const existingDriverId of assignment.manifestDriverIds || []) {
+    if (existingDriverId === resolvedDriverId) continue;
+    updates[`drivers/${existingDriverId}/assignments/${tourId}`] = null;
+    updates[`tour_manifests/${tourId}/assigned_drivers/${existingDriverId}`] = null;
+    updates[`tour_manifests/${tourId}/assigned_driver_codes/${existingDriverId}`] = null;
+  }
+
+  Object.assign(
+    updates,
+    buildDriverAssignmentUpdates({
+      tourId,
+      driverId: resolvedDriverId,
+      driverCode: resolvedDriverCode,
+      tourCode: assignment.tourCode,
+      driverInfo,
+      isAssigned,
+      actorId,
+    }),
+  );
 
   await update(ref(db), updates);
 };
