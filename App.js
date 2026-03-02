@@ -1,7 +1,7 @@
 // App.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, Text, StyleSheet, Animated, Easing } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -29,6 +29,7 @@ import DriverHomeScreen from './screens/DriverHomeScreen';
 import PassengerManifestScreen from './screens/PassengerManifestScreen';
 import SafetySupportScreen from './screens/SafetySupportScreen';
 import DriverItineraryScreen from './screens/DriverItineraryScreen';
+const { getLoginTransitionDurationMs } = require('./screens/loginFlow');
 
 const COLORS = {
   primaryBlue: THEME.primary,
@@ -122,6 +123,46 @@ export default function App() {
   
   // State for passing params between screens manually (since we aren't using React Navigation stack)
   const [screenParams, setScreenParams] = useState({});
+  const [loginTransition, setLoginTransition] = useState(null);
+  const loginTransitionTimerRef = useRef(null);
+  const loginTransitionAnimationRef = useRef(null);
+  const loginProgress = useRef(new Animated.Value(0)).current;
+
+  const clearLoginTransitionArtifacts = () => {
+    if (loginTransitionTimerRef.current) {
+      clearTimeout(loginTransitionTimerRef.current);
+      loginTransitionTimerRef.current = null;
+    }
+
+    if (loginTransitionAnimationRef.current) {
+      loginTransitionAnimationRef.current.stop();
+      loginTransitionAnimationRef.current = null;
+    }
+  };
+
+  const startLoginTransition = ({ targetScreen, durationMs }) => {
+    clearLoginTransitionArtifacts();
+    loginProgress.setValue(0);
+    setLoginTransition({
+      targetScreen,
+      message: 'Tour synced — entering dashboard',
+      durationMs,
+    });
+
+    loginTransitionAnimationRef.current = Animated.timing(loginProgress, {
+      toValue: 1,
+      duration: durationMs,
+      easing: Easing.linear,
+      useNativeDriver: false,
+    });
+    loginTransitionAnimationRef.current.start();
+
+    loginTransitionTimerRef.current = setTimeout(() => {
+      clearLoginTransitionArtifacts();
+      setLoginTransition(null);
+      loginProgress.setValue(0);
+    }, durationMs);
+  };
   const refreshAppData = async () => {
     logger.info('App', 'Refreshing app data');
     if (!isConnected) return;
@@ -151,6 +192,7 @@ export default function App() {
     bootstrap().catch((error) => logger.error('App', 'Bootstrap failure', { error: error.message }));
 
     return () => {
+      clearLoginTransitionArtifacts();
       if (typeof authUnsubscribe === 'function') authUnsubscribe();
     };
   }, []);
@@ -255,6 +297,12 @@ export default function App() {
   });
 
   const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger', options = {}) => {
+    const targetScreen = userType === 'driver' ? 'DriverHome' : 'TourHome';
+    const durationMs = getLoginTransitionDurationMs({ alreadyHydrated: options?.alreadyHydrated });
+    const showInterstitial = !options?.alreadyHydrated;
+    if (showInterstitial) {
+      startLoginTransition({ targetScreen, durationMs });
+    }
 
     if (userType === 'driver') {
       logger.info('Auth', 'Driver Logged In', { driverId: maskIdentifier(bookingOrDriverData.id) });
@@ -310,6 +358,7 @@ export default function App() {
       bookingData: normalizedBookingData,
       currentScreen: 'TourHome',
     });
+
   };
 
   // Updated navigation to accept params
@@ -514,6 +563,24 @@ case 'Itinerary':
     <>
       <StatusBar style="light" backgroundColor={COLORS.primaryBlue} />
       <UnifiedSyncBanner />
+      {loginTransition ? (
+        <View style={styles.loginTransitionOverlay}>
+          <Text style={styles.loginTransitionText}>{loginTransition.message}</Text>
+          <View style={styles.loginTransitionTrack}>
+            <Animated.View
+              style={[
+                styles.loginTransitionFill,
+                {
+                  width: loginProgress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ['0%', '100%'],
+                  }),
+                },
+              ]}
+            />
+          </View>
+        </View>
+      ) : null}
       {renderScreen()}
     </>
   );
@@ -543,4 +610,34 @@ const styles = StyleSheet.create({
   syncLabel: { fontSize: 14, fontWeight: '600' },
   syncDescription: { fontSize: 12, marginTop: 1 },
   syncDetail: { fontSize: 12, marginTop: 2 },
+  loginTransitionOverlay: {
+    position: 'absolute',
+    top: 52,
+    left: 12,
+    right: 12,
+    zIndex: 1001,
+    backgroundColor: THEME.sync.info.background,
+    borderWidth: 1,
+    borderColor: THEME.sync.info.border,
+    borderRadius: 10,
+    padding: 10,
+  },
+  loginTransitionText: {
+    color: THEME.sync.info.foreground,
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  loginTransitionTrack: {
+    height: 6,
+    borderRadius: 99,
+    backgroundColor: THEME.sync.info.background,
+    borderWidth: 1,
+    borderColor: THEME.sync.info.border,
+    overflow: 'hidden',
+  },
+  loginTransitionFill: {
+    height: '100%',
+    backgroundColor: THEME.sync.info.foreground,
+  },
 });

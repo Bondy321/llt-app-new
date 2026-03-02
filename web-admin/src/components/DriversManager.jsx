@@ -168,16 +168,16 @@ function CreateDriverModal({ opened, onClose, onSuccess }) {
             required
           />
           <TextInput
-            label="Login Code"
-            placeholder="e.g. JOHN"
-            description="Will be prefixed with 'D-' automatically"
+            label="Driver code"
+            placeholder="e.g. BONDY"
+            description="We add the D- prefix automatically"
             value={code}
             onChange={(e) => setCode(e.target.value.toUpperCase())}
             leftSection={<IconId size={16} />}
             required
           />
           <Alert icon={<IconInfoCircle size={16} />} color="blue" variant="light">
-            The login code is used by drivers to access the mobile app
+            Driver code is what the driver enters in the mobile app login screen.
           </Alert>
           <Group justify="flex-end" mt="md">
             <Button variant="light" onClick={onClose}>Cancel</Button>
@@ -365,9 +365,9 @@ function DriverDetailsPanel({ driverId, driver }) {
               />
 
               <TextInput
-                label="Current Active Tour"
-                placeholder="Tour ID currently being driven"
-                description="This indicates which tour the driver is currently on"
+                label="Assigned tour"
+                placeholder="Assigned tour ID (for example 5100D_138)"
+                description="Support note: ask the driver to reconnect once if assignment changes are not visible in app."
                 value={editCurrentTourId}
                 onChange={(e) => setEditCurrentTourId(e.target.value)}
                 leftSection={<IconBus size={16} />}
@@ -395,7 +395,7 @@ function DriverDetailsPanel({ driverId, driver }) {
           <Card shadow="sm" padding="lg" radius="md" withBorder>
             <Stack gap="md">
               <Text size="sm" c="dimmed">
-                Manage the tours assigned to this driver. Adding a tour will automatically update the tour's driver information.
+                Manage assigned tours for this driver. Adding a tour updates app assignment data used during reconnect flows.
               </Text>
 
               <Group gap="sm">
