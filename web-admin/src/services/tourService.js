@@ -50,6 +50,7 @@ import {
   parseISODateStrict,
   formatDateToUK,
   formatDateToISO,
+  nowAsISOString,
 } from '../utils/dateUtils';
 export { parseUKDateStrict, parseISODateStrict } from '../utils/dateUtils';
 
@@ -423,7 +424,7 @@ export const buildDriverAssignmentUpdates = ({
   driverInfo,
   isAssigned,
   actorId = 'web-admin',
-  assignedAt = new Date().toISOString(),
+  assignedAt = nowAsISOString(),
 }) => {
   const updates = {
     [`tours/${tourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',

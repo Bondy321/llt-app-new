@@ -1,4 +1,5 @@
 import { get, ref } from 'firebase/database';
+import { nowAsISOString, toEpochMsStrict } from '../utils/dateUtils';
 
 export const HEALTH_STATE = {
   OFFLINE_NO_NETWORK: 'OFFLINE_NO_NETWORK',
@@ -60,7 +61,7 @@ export function deriveHealthState(signals, options = {}) {
 
   const staleMs = options.staleMs ?? DEFAULT_STALE_MS;
   const now = options.now ?? Date.now();
-  const lastSyncTs = lastSuccessfulSyncAt ? Number(new Date(lastSuccessfulSyncAt)) : null;
+  const lastSyncTs = lastSuccessfulSyncAt ? toEpochMsStrict(lastSuccessfulSyncAt) : null;
   const hasFreshSync = Number.isFinite(lastSyncTs) && now - lastSyncTs <= staleMs;
 
   if (!isOnline || !listenerConnected) {
@@ -121,6 +122,6 @@ export async function revalidateDashboardData(database) {
   return {
     drivers: driversSnap.val() || {},
     tours: toursSnap.val() || {},
-    revalidatedAt: new Date().toISOString(),
+    revalidatedAt: nowAsISOString(),
   };
 }

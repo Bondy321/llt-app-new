@@ -28,6 +28,7 @@ import {
   ActionIcon,
   Tooltip,
 } from '@mantine/core';
+import { formatTimeForDisplay, toEpochMsStrict } from '../utils/dateUtils';
 import {
   IconSpeakerphone,
   IconSend,
@@ -55,17 +56,7 @@ const messageTemplates = [
 
 // Recent Broadcast Item Component
 function normalizeBroadcastTimestamp(timestamp) {
-  if (typeof timestamp === 'number' && Number.isFinite(timestamp)) return timestamp;
-
-  if (typeof timestamp === 'string') {
-    const numericTimestamp = Number(timestamp);
-    if (Number.isFinite(numericTimestamp)) return numericTimestamp;
-
-    const parsed = Date.parse(timestamp);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  return null;
+  return toEpochMsStrict(timestamp);
 }
 
 function normalizeBroadcastMessage(tourId, broadcastId, payload = {}) {
@@ -96,12 +87,7 @@ function BroadcastHistoryItem({ broadcast }) {
           <Badge size="sm" variant="light">{broadcast.tourId}</Badge>
         </Group>
         <Text size="xs" c="dimmed">
-          {timestampMs
-            ? new Date(timestampMs).toLocaleTimeString('en-GB', {
-                hour: '2-digit',
-                minute: '2-digit',
-              })
-            : 'Unknown time'}
+          {formatTimeForDisplay(timestampMs, 'Unknown time')}
         </Text>
       </Group>
       <Text size="sm" lineClamp={2}>{broadcast.message}</Text>

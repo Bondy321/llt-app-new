@@ -129,6 +129,7 @@ import {
   parseISODateStrict,
   formatDateForDisplay,
   formatDateRangeForDisplay,
+  getCurrentISODateStamp,
 } from '../utils/dateUtils';
 
 const getIsoDateFieldError = (value, fieldLabel) => {
@@ -1113,7 +1114,7 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
-    link.setAttribute('download', `tours_export_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute('download', `tours_export_${getCurrentISODateStamp()}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
