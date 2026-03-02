@@ -1,12 +1,11 @@
 {
   "rules": {
-"drivers": {
+    "drivers": {
       ".read": "auth != null",
       "$driverCode": {
         ".write": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || data.child('authUid').val() === auth.uid || newData.child('authUid').val() === auth.uid"
       }
     },
-
     "bookings": {
       ".read": "auth != null",
       ".indexOn": ["tourCode"],
@@ -19,7 +18,7 @@
       ".write": "auth != null",
       "$tourId": {
         "assigned_drivers": {
-           ".indexOn": [".value"]
+          ".indexOn": [".value"]
         }
       }
     },
@@ -35,6 +34,16 @@
       "$tourId": {
         ".read": "auth != null",
         ".write": "auth != null"
+      }
+    },
+    "broadcasts": {
+      ".read": "auth != null",
+      "$tourId": {
+        ".indexOn": ["createdAtMs"],
+        "$broadcastId": {
+          ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+          ".validate": "newData.hasChildren(['message','createdAtMs','createdByUid','source']) && newData.child('message').isString() && newData.child('message').val().length > 0 && newData.child('message').val().length <= 2000 && newData.child('createdAtMs').isNumber() && newData.child('createdByUid').isString() && newData.child('source').isString()"
+        }
       }
     },
     "internal_chats": {
