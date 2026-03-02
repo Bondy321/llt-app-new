@@ -1,7 +1,7 @@
 // App.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, Text, StyleSheet, Animated, Easing } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -124,6 +124,45 @@ export default function App() {
   // State for passing params between screens manually (since we aren't using React Navigation stack)
   const [screenParams, setScreenParams] = useState({});
   const [loginTransition, setLoginTransition] = useState(null);
+  const loginTransitionTimerRef = useRef(null);
+  const loginTransitionAnimationRef = useRef(null);
+  const loginProgress = useRef(new Animated.Value(0)).current;
+
+  const clearLoginTransitionArtifacts = () => {
+    if (loginTransitionTimerRef.current) {
+      clearTimeout(loginTransitionTimerRef.current);
+      loginTransitionTimerRef.current = null;
+    }
+
+    if (loginTransitionAnimationRef.current) {
+      loginTransitionAnimationRef.current.stop();
+      loginTransitionAnimationRef.current = null;
+    }
+  };
+
+  const startLoginTransition = ({ targetScreen, durationMs }) => {
+    clearLoginTransitionArtifacts();
+    loginProgress.setValue(0);
+    setLoginTransition({
+      targetScreen,
+      message: 'Tour synced — entering dashboard',
+      durationMs,
+    });
+
+    loginTransitionAnimationRef.current = Animated.timing(loginProgress, {
+      toValue: 1,
+      duration: durationMs,
+      easing: Easing.linear,
+      useNativeDriver: false,
+    });
+    loginTransitionAnimationRef.current.start();
+
+    loginTransitionTimerRef.current = setTimeout(() => {
+      clearLoginTransitionArtifacts();
+      setLoginTransition(null);
+      loginProgress.setValue(0);
+    }, durationMs);
+  };
   const refreshAppData = async () => {
     logger.info('App', 'Refreshing app data');
     if (!isConnected) return;
@@ -153,6 +192,7 @@ export default function App() {
     bootstrap().catch((error) => logger.error('App', 'Bootstrap failure', { error: error.message }));
 
     return () => {
+      clearLoginTransitionArtifacts();
       if (typeof authUnsubscribe === 'function') authUnsubscribe();
     };
   }, []);
@@ -261,11 +301,7 @@ export default function App() {
     const durationMs = getLoginTransitionDurationMs({ alreadyHydrated: options?.alreadyHydrated });
     const showInterstitial = !options?.alreadyHydrated;
     if (showInterstitial) {
-      setLoginTransition({
-        targetScreen,
-        message: 'Tour synced — entering dashboard',
-        durationMs,
-      });
+      startLoginTransition({ targetScreen, durationMs });
     }
 
     if (userType === 'driver') {
@@ -286,9 +322,6 @@ export default function App() {
         bookingData: bookingOrDriverData,
         currentScreen: 'DriverHome',
       });
-      if (showInterstitial) {
-        setTimeout(() => setLoginTransition(null), durationMs);
-      }
       return;
     }
 
@@ -326,9 +359,6 @@ export default function App() {
       currentScreen: 'TourHome',
     });
 
-    if (showInterstitial) {
-      setTimeout(() => setLoginTransition(null), durationMs);
-    }
   };
 
   // Updated navigation to accept params
@@ -537,7 +567,17 @@ case 'Itinerary':
         <View style={styles.loginTransitionOverlay}>
           <Text style={styles.loginTransitionText}>{loginTransition.message}</Text>
           <View style={styles.loginTransitionTrack}>
-            <View style={styles.loginTransitionFill} />
+            <Animated.View
+              style={[
+                styles.loginTransitionFill,
+                {
+                  width: loginProgress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ['0%', '100%'],
+                  }),
+                },
+              ]}
+            />
           </View>
         </View>
       ) : null}
@@ -597,7 +637,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   loginTransitionFill: {
-    width: '100%',
     height: '100%',
     backgroundColor: THEME.sync.info.foreground,
   },
