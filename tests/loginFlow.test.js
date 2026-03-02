@@ -83,3 +83,22 @@ test('login success resolves normalized booking reference and identity payload',
   assert.equal(normalized.normalizedReference, 'ABC123');
   assert.deepEqual(resolveLoginIdentity(result), { id: 'ABC123', name: 'Passenger One' });
 });
+
+
+test('app login interstitial progress animation uses transition duration contract', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const appSource = fs.readFileSync(path.join(__dirname, '..', 'App.js'), 'utf8');
+
+  assert.match(appSource, /Animated\.timing\(loginProgress,\s*\{[\s\S]*duration:\s*durationMs,[\s\S]*easing:\s*Easing\.linear,[\s\S]*useNativeDriver:\s*false,[\s\S]*\}\)/);
+  assert.match(appSource, /setTimeout\(\(\) => \{[\s\S]*setLoginTransition\(null\);[\s\S]*\},\s*durationMs\)/);
+});
+
+test('app login interstitial fill width interpolates from progress instead of static fill', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const appSource = fs.readFileSync(path.join(__dirname, '..', 'App.js'), 'utf8');
+
+  assert.match(appSource, /loginProgress\.interpolate\(\{[\s\S]*inputRange:\s*\[0,\s*1\],[\s\S]*outputRange:\s*\['0%',\s*'100%'\]/);
+  assert.doesNotMatch(appSource, /loginTransitionFill:\s*\{[\s\S]*width:\s*'100%'/);
+});
