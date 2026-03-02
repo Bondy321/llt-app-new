@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getMock = vi.fn();
-const refMock = vi.fn((_db, path) => ({ path }));
+const updateMock = vi.fn();
+const refMock = vi.fn((_db, path = '') => ({ path }));
 
 vi.mock('firebase/database', () => ({
   ref: refMock,
   push: vi.fn(),
   set: vi.fn(),
-  update: vi.fn(),
+  update: updateMock,
   remove: vi.fn(),
   get: getMock,
   onValue: vi.fn(),
@@ -16,6 +17,11 @@ vi.mock('firebase/database', () => ({
 vi.mock('../firebase', () => ({
   db: { __mock: true },
 }));
+
+const buildSnapshot = (value) => ({
+  exists: () => value !== null && value !== undefined,
+  val: () => value,
+});
 
 describe('tourService CSV preview integration', () => {
   beforeEach(() => {
@@ -92,5 +98,102 @@ describe('buildDriverAssignmentUpdates', () => {
     });
 
     expect(updates['tour_manifests/5112D_8/assigned_driver_codes/D-BONDY']).toBeNull();
+  });
+});
+
+describe('applyDriverAssignmentMutation integration snapshots', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    updateMock.mockResolvedValue(undefined);
+  });
+
+  const setupPathSnapshots = (pathMap) => {
+    getMock.mockImplementation(async ({ path }) => buildSnapshot(pathMap[path]));
+  };
+
+  it('assign fresh writes canonical driver/tour/manifest links', async () => {
+    setupPathSnapshots({
+      'tours/TOUR_A': { tourCode: '5100D 1' },
+      'tour_manifests/TOUR_A': { assigned_drivers: {} },
+      'drivers/D-ALICE': { assignments: {} },
+    });
+
+    const { assignDriver } = await import('./tourService.js');
+    await assignDriver('TOUR_A', 'D-ALICE', { name: 'Alice', phone: '+44' });
+
+    const [, updates] = updateMock.mock.calls[0];
+    expect(updates['drivers/D-ALICE/currentTourId']).toBe('TOUR_A');
+    expect(updates['drivers/D-ALICE/currentTourCode']).toBe('5100D 1');
+    expect(updates['drivers/D-ALICE/assignments/TOUR_A']).toBe(true);
+    expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-ALICE']).toBe(true);
+    expect(updates['tour_manifests/TOUR_A/assigned_driver_codes/D-ALICE']).toMatchObject({
+      tourId: 'TOUR_A',
+      tourCode: '5100D 1',
+    });
+  });
+
+  it('reassign old->new clears old manifest links in same multi-path update', async () => {
+    setupPathSnapshots({
+      'tours/TOUR_NEW': { tourCode: '5100D 2' },
+      'tour_manifests/TOUR_NEW': { assigned_drivers: {} },
+      'drivers/D-ALICE': {
+        currentTourId: 'TOUR_OLD',
+        assignments: { TOUR_OLD: true },
+      },
+    });
+
+    const { assignDriver } = await import('./tourService.js');
+    await assignDriver('TOUR_NEW', 'D-ALICE', { name: 'Alice', phone: '+44' });
+
+    const [, updates] = updateMock.mock.calls[0];
+    expect(updates['drivers/D-ALICE/assignments/TOUR_OLD']).toBeNull();
+    expect(updates['tour_manifests/TOUR_OLD/assigned_drivers/D-ALICE']).toBeNull();
+    expect(updates['tour_manifests/TOUR_OLD/assigned_driver_codes/D-ALICE']).toBeNull();
+    expect(updates['drivers/D-ALICE/currentTourId']).toBe('TOUR_NEW');
+  });
+
+  it('unassign removes all required paths and resets tour driver display', async () => {
+    setupPathSnapshots({
+      'tours/TOUR_A': { tourCode: '5100D 1' },
+      'tour_manifests/TOUR_A': { assigned_drivers: { 'D-ALICE': true } },
+      'drivers/D-ALICE': {
+        currentTourId: 'TOUR_A',
+        assignments: { TOUR_A: true },
+      },
+    });
+
+    const { unassignDriver } = await import('./tourService.js');
+    await unassignDriver('TOUR_A', 'D-ALICE');
+
+    const [, updates] = updateMock.mock.calls[0];
+    expect(updates['drivers/D-ALICE/currentTourId']).toBeNull();
+    expect(updates['drivers/D-ALICE/currentTourCode']).toBeNull();
+    expect(updates['drivers/D-ALICE/assignments/TOUR_A']).toBeNull();
+    expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-ALICE']).toBeNull();
+    expect(updates['tour_manifests/TOUR_A/assigned_driver_codes/D-ALICE']).toBeNull();
+    expect(updates['tours/TOUR_A/driverName']).toBe('TBA');
+    expect(updates['tours/TOUR_A/driverPhone']).toBe('');
+  });
+
+  it('stale manifest cleanup enforces single-driver policy on target tour', async () => {
+    setupPathSnapshots({
+      'tours/TOUR_A': { tourCode: '5100D 1' },
+      'tour_manifests/TOUR_A': {
+        assigned_drivers: { 'D-OLD': true, 'D-STALE': true },
+      },
+      'drivers/D-NEW': { assignments: {} },
+    });
+
+    const { assignDriver } = await import('./tourService.js');
+    await assignDriver('TOUR_A', 'D-NEW', { name: 'New Driver', phone: '' });
+
+    const [, updates] = updateMock.mock.calls[0];
+    expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-OLD']).toBeNull();
+    expect(updates['tour_manifests/TOUR_A/assigned_driver_codes/D-OLD']).toBeNull();
+    expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-STALE']).toBeNull();
+    expect(updates['tour_manifests/TOUR_A/assigned_driver_codes/D-STALE']).toBeNull();
+    expect(updates['drivers/D-OLD/assignments/TOUR_A']).toBeNull();
+    expect(updates['drivers/D-STALE/assignments/TOUR_A']).toBeNull();
+    expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-NEW']).toBe(true);
   });
 });
