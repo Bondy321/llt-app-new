@@ -9,7 +9,13 @@ import {
   buildHealthSnapshot,
   revalidateDashboardData,
 } from '../services/healthService';
-import { formatDateForDisplay } from '../utils/dateUtils';
+import {
+  formatDateForDisplay,
+  formatLongDateForDisplay,
+  formatTimeForDisplay,
+  nowAsISOString,
+  toEpochMsStrict,
+} from '../utils/dateUtils';
 import { getTriageMeta, getUrgencyBadge } from '../utils/triageUtils';
 import {
   SimpleGrid,
@@ -163,7 +169,7 @@ export default function Dashboard() {
     const updateLastSync = () => {
       setHealthSignals((current) => ({
         ...current,
-        lastSuccessfulSyncAt: new Date().toISOString(),
+        lastSuccessfulSyncAt: nowAsISOString(),
         listenerConnected: true,
       }));
     };
@@ -278,8 +284,8 @@ export default function Dashboard() {
   // Get recent drivers (newest first based on createdAt)
   const recentDrivers = Object.entries(drivers)
     .sort((a, b) => {
-      const dateA = a[1].createdAt ? new Date(a[1].createdAt) : new Date(0);
-      const dateB = b[1].createdAt ? new Date(b[1].createdAt) : new Date(0);
+      const dateA = toEpochMsStrict(a[1].createdAt) ?? 0;
+      const dateB = toEpochMsStrict(b[1].createdAt) ?? 0;
       return dateB - dateA;
     })
     .slice(0, 5);
@@ -308,12 +314,7 @@ export default function Dashboard() {
   }, [tours]);
 
   // Get today's date for display
-  const today = new Date().toLocaleDateString('en-GB', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric'
-  });
+  const today = formatLongDateForDisplay(new Date(), '-');
 
   if (loading) {
     return (
@@ -606,9 +607,7 @@ export default function Dashboard() {
             <Group gap="xs">
               <IconCalendar size={14} color="gray" />
               <Text size="xs" c="dimmed">
-                Last updated: {healthSignals.lastSuccessfulSyncAt
-                  ? new Date(healthSignals.lastSuccessfulSyncAt).toLocaleTimeString()
-                  : 'Awaiting first sync'}
+                Last updated: {formatTimeForDisplay(healthSignals.lastSuccessfulSyncAt, 'Awaiting first sync')}
               </Text>
             </Group>
             <Text size="xs" c="dimmed">
