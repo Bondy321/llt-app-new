@@ -13,7 +13,43 @@ const SCHEMA_VERSION = 1;
 const MAX_ATTEMPTS = 5;
 const QUEUE_KEY = 'queue_v1';
 const PROCESSED_ACTIONS_KEY = 'processed_action_ids_v1';
+const LAST_SUCCESS_AT_KEY = 'last_success_at_v1';
 const MAX_PROCESSED_IDS = 500;
+
+const UNIFIED_SYNC_STATES = {
+  OFFLINE_NO_NETWORK: {
+    label: 'Offline',
+    description: 'No network connection. Changes are saved and will sync when online.',
+    severity: 'critical',
+    icon: 'wifi-off',
+    canRetry: false,
+    showLastSync: true,
+  },
+  ONLINE_BACKEND_DEGRADED: {
+    label: 'Service issue',
+    description: 'Connected to network, but the sync service is temporarily unavailable.',
+    severity: 'warning',
+    icon: 'cloud-alert',
+    canRetry: true,
+    showLastSync: true,
+  },
+  ONLINE_BACKLOG_PENDING: {
+    label: 'Syncing backlog',
+    description: 'Connection restored. Pending updates are still being processed.',
+    severity: 'info',
+    icon: 'clock-sync',
+    canRetry: true,
+    showLastSync: true,
+  },
+  ONLINE_HEALTHY: {
+    label: 'Up to date',
+    description: 'Everything is synced and working normally.',
+    severity: 'success',
+    icon: 'cloud-check',
+    canRetry: false,
+    showLastSync: true,
+  },
+};
 
 const listeners = new Set();
 let replayLock = false;
@@ -35,6 +71,85 @@ const safeJsonParse = (raw, fallback) => {
 
 const cacheKey = (tourId, role) => `tour_pack_${role}_${tourId}`;
 const metaKey = (tourId, role) => `tour_pack_meta_${role}_${tourId}`;
+
+const SYNC_SUMMARY_SOURCES = new Set(['unknown', 'manual-refresh', 'auto-replay', 'startup']);
+
+const normalizeSyncCount = (value) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return 0;
+  return Math.max(0, Math.trunc(numericValue));
+};
+
+// Counts are normalized by truncating toward zero (e.g. 2.9 -> 2) and clamping negatives to 0.
+const buildSyncSummary = (input = {}) => {
+  const summary = input && typeof input === 'object' ? input : {};
+  const normalizedSource = typeof summary.source === 'string' && SYNC_SUMMARY_SOURCES.has(summary.source)
+    ? summary.source
+    : 'unknown';
+
+  return {
+    syncedCount: normalizeSyncCount(summary.syncedCount),
+    pendingCount: normalizeSyncCount(summary.pendingCount),
+    failedCount: normalizeSyncCount(summary.failedCount),
+    lastSuccessAt: summary.lastSuccessAt ?? null,
+    source: normalizedSource,
+  };
+};
+
+const formatSyncOutcome = (summaryInput) => {
+  const summary = buildSyncSummary(summaryInput);
+  return `${summary.syncedCount} synced / ${summary.pendingCount} pending / ${summary.failedCount} failed`;
+};
+
+const setLastSuccessAt = async (timestampOrNow = Date.now()) => {
+  try {
+    const parsed = parseTimestampMs(timestampOrNow);
+    const nextValue = Number.isFinite(parsed) ? parsed : Date.now();
+    await storage.setItemAsync(LAST_SUCCESS_AT_KEY, String(nextValue));
+    return RESPONSE.ok(nextValue);
+  } catch (error) {
+    logger.error('OfflineSync', 'Failed to persist last successful sync timestamp', { error: error?.message });
+    return RESPONSE.fail(error);
+  }
+};
+
+const getLastSuccessAt = async () => {
+  try {
+    const raw = await storage.getItemAsync(LAST_SUCCESS_AT_KEY);
+    const parsed = parseTimestampMs(raw);
+    return RESPONSE.ok(Number.isFinite(parsed) ? parsed : null);
+  } catch (error) {
+    logger.error('OfflineSync', 'Failed to read last successful sync timestamp', { error: error?.message });
+    return RESPONSE.ok(null);
+  }
+};
+
+const formatLastSyncRelative = (lastSuccessAt, now = Date.now()) => {
+  const nowMs = parseTimestampMs(now);
+  const successMs = parseTimestampMs(lastSuccessAt);
+
+  if (!Number.isFinite(nowMs) || !Number.isFinite(successMs) || successMs > nowMs) {
+    return 'Never';
+  }
+
+  const diffMinutes = Math.floor((nowMs - successMs) / (60 * 1000));
+  if (diffMinutes < 1) return 'Just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+
+  const nowDate = new Date(nowMs);
+  const successDate = new Date(successMs);
+  const nowDay = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate());
+  const successDay = new Date(successDate.getFullYear(), successDate.getMonth(), successDate.getDate());
+  const dayDiff = Math.floor((nowDay.getTime() - successDay.getTime()) / (24 * 60 * 60 * 1000));
+
+  if (dayDiff === 1) return 'Yesterday';
+  if (dayDiff > 1) return `${dayDiff}d ago`;
+
+  return 'Never';
+};
 
 const emitQueueState = async () => {
   const stats = await getQueueStats();
@@ -125,6 +240,45 @@ const getStalenessLabel = (lastSyncedAt) => {
   }
 
   return { bucket: 'old', label: 'Cached data from yesterday' };
+};
+
+const deriveUnifiedSyncStatus = ({
+  network = {},
+  backend = {},
+  queue = {},
+  lastSyncAt = null,
+  syncSummary = {},
+} = {}) => {
+  const networkOnline = Boolean(network.isOnline);
+  const backendReachable = backend.isReachable !== false;
+  const backendDegraded = Boolean(backend.isDegraded);
+  const backendHealthy = networkOnline && backendReachable && !backendDegraded;
+
+  const pending = Math.max(0, Number(queue.pending) || 0);
+  const syncing = Math.max(0, Number(queue.syncing) || 0);
+  const failed = Math.max(0, Number(queue.failed) || 0);
+  const total = Math.max(0, Number(queue.total) || pending + syncing + failed);
+  const hasBacklog = pending > 0 || syncing > 0 || failed > 0;
+
+  let stateKey = 'ONLINE_HEALTHY';
+  if (!networkOnline) {
+    stateKey = 'OFFLINE_NO_NETWORK';
+  } else if (!backendHealthy) {
+    stateKey = 'ONLINE_BACKEND_DEGRADED';
+  } else if (hasBacklog) {
+    stateKey = 'ONLINE_BACKLOG_PENDING';
+  }
+
+  return {
+    stateKey,
+    ...UNIFIED_SYNC_STATES[stateKey],
+    syncSummary: buildSyncSummary({
+      pendingCount: pending,
+      failedCount: failed,
+      lastSuccessAt: lastSyncAt,
+      ...syncSummary,
+    }),
+  };
 };
 
 const saveTourPack = async (tourId, role, payload) => {
@@ -364,6 +518,15 @@ const replayQueue = async ({ db, services = {} } = {}) => {
       }
     }
 
+    if (failed === 0) {
+      const persistedLastSuccessAt = await setLastSuccessAt();
+      if (!persistedLastSuccessAt.success) {
+        logger.warn('OfflineSync', 'Replay succeeded but failed to persist last success timestamp', {
+          error: persistedLastSuccessAt.error,
+        });
+      }
+    }
+
     return RESPONSE.ok({ processed, failed });
   } catch (error) {
     return RESPONSE.fail(error);
@@ -375,6 +538,13 @@ const replayQueue = async ({ db, services = {} } = {}) => {
 
 module.exports = {
   SCHEMA_VERSION,
+  buildSyncSummary,
+  formatSyncOutcome,
+  setLastSuccessAt,
+  getLastSuccessAt,
+  formatLastSyncRelative,
+  UNIFIED_SYNC_STATES,
+  deriveUnifiedSyncStatus,
   saveTourPack,
   getTourPack,
   setTourPackMeta,

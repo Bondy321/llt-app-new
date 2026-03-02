@@ -28,6 +28,7 @@ import offlineSyncService from '../services/offlineSyncService';
 import { parseTimestampMs } from '../services/timeUtils';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import { getPickupCountdownState } from '../services/pickupTimeParser';
+import SyncStatusBanner from '../components/SyncStatusBanner';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -482,9 +483,9 @@ export default function TourHomeScreen({
   const [driverLocationActive, setDriverLocationActive] = useState(false);
   const scrollViewRef = useRef(null);
   const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
-  const [refreshStatusText, setRefreshStatusText] = useState('');
-  const [refreshStatusTone, setRefreshStatusTone] = useState('info');
-  const [refreshStatusCanRetry, setRefreshStatusCanRetry] = useState(false);
+  const [refreshStatusContract, setRefreshStatusContract] = useState(null);
+  const [refreshStatusOutcomeText, setRefreshStatusOutcomeText] = useState('');
+  const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(null);
   const refreshStatusTimeoutRef = useRef(null);
 
   const greeting = useMemo(() => getTimeBasedGreeting(), []);
@@ -603,17 +604,15 @@ export default function TourHomeScreen({
   }, []);
 
   const showRefreshStatus = useCallback(
-    ({ message, tone = 'info', canRetry = false, autoDismissMs = 5000 }) => {
+    ({ contract, outcomeText = '', autoDismissMs = 5000 }) => {
       clearRefreshStatusTimeout();
-      setRefreshStatusText(message);
-      setRefreshStatusTone(tone);
-      setRefreshStatusCanRetry(canRetry);
+      setRefreshStatusContract(contract);
+      setRefreshStatusOutcomeText(outcomeText);
 
       if (autoDismissMs > 0) {
         refreshStatusTimeoutRef.current = setTimeout(() => {
-          setRefreshStatusText('');
-          setRefreshStatusTone('info');
-          setRefreshStatusCanRetry(false);
+          setRefreshStatusContract(null);
+          setRefreshStatusOutcomeText('');
         }, autoDismissMs);
       }
     },
@@ -629,33 +628,10 @@ export default function TourHomeScreen({
     triggerHaptic('light');
 
     const sanitizedTourId = tourData?.id || tourCode?.replace(/\s+/g, '_');
-    const feedbackParts = [];
-
     try {
-      const beforeStatsResult = await offlineSyncService.getQueueStats();
-      const beforeStats = beforeStatsResult?.success
-        ? beforeStatsResult.data
-        : { pending: 0, failed: 0, syncing: 0, total: 0 };
-
       const replayResult = await offlineSyncService.replayQueue({
         services: { bookingService, chatService },
       });
-
-      if (replayResult?.success) {
-        const { processed = 0, failed = 0, skipped = false } = replayResult.data || {};
-        if (skipped) {
-          feedbackParts.push('Sync already in progress.');
-        } else if (processed > 0 || failed > 0) {
-          feedbackParts.push(`Synced ${processed} queued action${processed === 1 ? '' : 's'}.`);
-          if (failed > 0) {
-            feedbackParts.push(`${failed} action${failed === 1 ? '' : 's'} still pending retry.`);
-          }
-        } else if (beforeStats.total > 0) {
-          feedbackParts.push('Checked offline queue. No actions were ready to sync yet.');
-        }
-      } else {
-        feedbackParts.push('Queue sync failed.');
-      }
 
       if (sanitizedTourId && bookingRef && realtimeDb) {
         const manifestSnapshot = await realtimeDb
@@ -687,42 +663,70 @@ export default function TourHomeScreen({
         ? afterStatsResult.data
         : { pending: 0, failed: 0, syncing: 0, total: 0 };
 
-      if (afterStats.failed > 0) {
-        const message = `Sync failed: ${afterStats.failed} failed, ${afterStats.pending} pending.`;
-        showRefreshStatus({
-          message,
-          tone: 'error',
-          canRetry: Boolean(isConnected),
-          autoDismissMs: 8000,
-        });
-      } else if (afterStats.pending > 0) {
-        const message = `Pending retry: ${afterStats.pending} action${afterStats.pending === 1 ? '' : 's'} still queued.`;
-        showRefreshStatus({
-          message,
-          tone: 'warning',
-          canRetry: false,
-          autoDismissMs: 6500,
-        });
-      } else {
-        const message = feedbackParts.length > 0 ? feedbackParts.join(' ') : 'Up to date.';
-        showRefreshStatus({
-          message,
-          tone: 'success',
-          canRetry: false,
-          autoDismissMs: 4000,
-        });
+      const syncOutcome = offlineSyncService.formatSyncOutcome({
+        syncedCount: replayResult?.data?.processed,
+        pendingCount: afterStats.pending,
+        failedCount: afterStats.failed,
+        source: 'manual-refresh',
+      });
+
+      const unifiedStatus = offlineSyncService.deriveUnifiedSyncStatus({
+        network: { isOnline: isConnected },
+        backend: { isReachable: replayResult?.success !== false, isDegraded: !replayResult?.success },
+        queue: afterStats,
+        lastSyncAt: lastSuccessfulSyncAt,
+        syncSummary: {
+          syncedCount: replayResult?.data?.processed,
+          pendingCount: afterStats.pending,
+          failedCount: afterStats.failed,
+          source: 'manual-refresh',
+        },
+      });
+
+      if (afterStats.failed === 0) {
+        const lastSyncResult = await offlineSyncService.getLastSuccessAt();
+        if (lastSyncResult?.success) {
+          setLastSuccessfulSyncAt(lastSyncResult.data);
+        }
       }
+
+      showRefreshStatus({
+        contract: {
+          label: unifiedStatus.label,
+          description: unifiedStatus.description,
+          icon: unifiedStatus.icon,
+          severity: unifiedStatus.severity,
+          canRetry: unifiedStatus.canRetry && Boolean(isConnected),
+          showLastSync: unifiedStatus.showLastSync,
+        },
+        outcomeText: syncOutcome,
+        autoDismissMs: afterStats.failed > 0 ? 8000 : afterStats.pending > 0 ? 6500 : 4000,
+      });
     } catch (error) {
       showRefreshStatus({
-        message: 'Refresh failed. Please try again.',
-        tone: 'error',
-        canRetry: Boolean(isConnected),
+        contract: {
+          ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKEND_DEGRADED,
+          canRetry: Boolean(isConnected),
+        },
+        outcomeText: offlineSyncService.formatSyncOutcome({ source: 'manual-refresh' }),
         autoDismissMs: 8000,
       });
     } finally {
       setRefreshing(false);
     }
-  }, [tourData?.id, tourCode, bookingRef, showRefreshStatus, isConnected]);
+  }, [tourData?.id, tourCode, bookingRef, showRefreshStatus, isConnected, lastSuccessfulSyncAt]);
+
+  useEffect(() => {
+    let mounted = true;
+    offlineSyncService.getLastSuccessAt().then((result) => {
+      if (mounted && result?.success) {
+        setLastSuccessfulSyncAt(result.data);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const manifestStatusMeta = useMemo(() => {
     switch (manifestStatus) {
@@ -887,28 +891,14 @@ export default function TourHomeScreen({
               </View>
               <Text style={styles.tourCodeDisplay}>{tourCode}</Text>
               <Text style={styles.tourName} numberOfLines={1}>{tourData?.name || 'Active Tour'}</Text><Text style={styles.cacheLabel}>{cacheStatusLabel}</Text>
-              {!!refreshStatusText && (
-                <View
-                  style={[
-                    styles.refreshStatusContainer,
-                    refreshStatusTone === 'success' && styles.refreshStatusSuccess,
-                    refreshStatusTone === 'warning' && styles.refreshStatusWarning,
-                    refreshStatusTone === 'error' && styles.refreshStatusError,
-                  ]}
-                >
-                  <Text style={styles.refreshStatusText}>{refreshStatusText}</Text>
-                  {refreshStatusCanRetry && (
-                    <TouchableOpacity
-                      onPress={onRefresh}
-                      style={styles.refreshRetryButton}
-                      accessibilityRole="button"
-                      accessibilityLabel="Retry refresh"
-                    >
-                      <Text style={styles.refreshRetryText}>Retry now</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              )}
+              <SyncStatusBanner
+                state={refreshStatusContract}
+                outcomeText={refreshStatusOutcomeText}
+                lastSyncAt={lastSuccessfulSyncAt}
+                onRetry={onRefresh}
+                retryLabel="Retry refresh"
+                compact
+              />
             </View>
             <View style={styles.headerActions}>
               <TouchableOpacity
@@ -1349,20 +1339,20 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   refreshStatusSuccess: {
-    backgroundColor: '#ECFDF5',
-    borderColor: '#A7F3D0',
+    backgroundColor: THEME.sync.success.background,
+    borderColor: THEME.sync.success.border,
   },
   refreshStatusWarning: {
-    backgroundColor: '#FFFBEB',
-    borderColor: '#FDE68A',
+    backgroundColor: THEME.sync.warning.background,
+    borderColor: THEME.sync.warning.border,
   },
   refreshStatusError: {
-    backgroundColor: '#FEF2F2',
-    borderColor: '#FECACA',
+    backgroundColor: THEME.sync.critical.background,
+    borderColor: THEME.sync.critical.border,
   },
   refreshStatusText: {
     fontSize: 12,
-    color: COLORS.darkText,
+    color: THEME.sync.info.foregroundMuted,
     fontWeight: '600',
   },
   refreshRetryButton: {

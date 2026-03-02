@@ -9,13 +9,7 @@ import offlineSyncService from '../services/offlineSyncService';
 
 const FIREBASE_PROBE_PATH = '.info/serverTimeOffset';
 
-const deriveSyncHealth = ({ isConnected, firebaseConnected, queueStats, lastSyncAt }) => {
-  if (!isConnected || !firebaseConnected) return 'offline';
-  if ((queueStats?.failed || 0) > 0) return 'degraded';
-  const bucket = offlineSyncService.getStalenessBucket(lastSyncAt);
-  if (bucket === 'old') return 'stale';
-  return 'healthy';
-};
+const { deriveUnifiedSyncStatus, buildSyncSummary, getLastSuccessAt } = offlineSyncService;
 
 const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {}) => {
   const [isConnected, setIsConnected] = useState(true);
@@ -29,10 +23,17 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {})
   const firebaseListenerRef = useRef(null);
 
   const refreshSyncMeta = async () => {
-    if (!activeTourId) return;
-    const metaResult = await offlineSyncService.getTourPackMeta(activeTourId, role);
-    if (metaResult.success) {
-      setLastSyncAt(metaResult.data?.lastSyncedAt || null);
+    if (activeTourId) {
+      const metaResult = await offlineSyncService.getTourPackMeta(activeTourId, role);
+      if (metaResult.success && metaResult.data?.lastSyncedAt) {
+        setLastSyncAt(metaResult.data.lastSyncedAt);
+        return;
+      }
+    }
+
+    const fallbackResult = await getLastSuccessAt();
+    if (fallbackResult.success) {
+      setLastSyncAt(fallbackResult.data || null);
     }
   };
 
@@ -123,9 +124,32 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {})
     };
   }, [activeTourId, role]);
 
-  const syncHealth = deriveSyncHealth({ isConnected, firebaseConnected, queueStats, lastSyncAt });
+  const unifiedSyncStatus = deriveUnifiedSyncStatus({
+    network: { isOnline: isConnected },
+    backend: {
+      isReachable: firebaseConnected,
+      isDegraded: Boolean(lastFirebaseError),
+    },
+    queue: queueStats,
+    lastSyncAt,
+    syncSummary: buildSyncSummary({
+      syncedCount: 0,
+      pendingCount: queueStats?.pending,
+      failedCount: queueStats?.failed,
+      lastSuccessAt: lastSyncAt,
+      source: 'unknown',
+    }),
+  });
 
-  return { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs, lastSyncAt, queueStats, syncHealth };
+  return {
+    isConnected,
+    firebaseConnected,
+    lastFirebaseError,
+    lastProbeDurationMs,
+    lastSyncAt,
+    queueStats,
+    unifiedSyncStatus,
+  };
 };
 
 export default useDiagnostics;
