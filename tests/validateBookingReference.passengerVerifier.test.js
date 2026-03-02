@@ -508,3 +508,29 @@ test('validateBookingReference maps missing App Check token to actionable copy w
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK;
   }
 });
+
+
+test('validateBookingReference keeps passenger flow for non D- codes', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({ valid: true, bookingRef: 'ABC123', tourId: '5112D_8' }),
+    });
+
+    const service = loadServiceWithDb({
+      drivers: {},
+      bookings: { ABC123: { bookingRef: 'ABC123', tourCode: '5112D 8' } },
+      tours: { '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true } },
+    });
+
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+    assert.equal(result.valid, true);
+    assert.equal(result.type, 'passenger');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});

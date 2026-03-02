@@ -29,6 +29,7 @@ import DriverHomeScreen from './screens/DriverHomeScreen';
 import PassengerManifestScreen from './screens/PassengerManifestScreen';
 import SafetySupportScreen from './screens/SafetySupportScreen';
 import DriverItineraryScreen from './screens/DriverItineraryScreen';
+const { getLoginTransitionDurationMs } = require('./screens/loginFlow');
 
 const COLORS = {
   primaryBlue: THEME.primary,
@@ -122,6 +123,7 @@ export default function App() {
   
   // State for passing params between screens manually (since we aren't using React Navigation stack)
   const [screenParams, setScreenParams] = useState({});
+  const [loginTransition, setLoginTransition] = useState(null);
   const refreshAppData = async () => {
     logger.info('App', 'Refreshing app data');
     if (!isConnected) return;
@@ -255,6 +257,16 @@ export default function App() {
   });
 
   const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger', options = {}) => {
+    const targetScreen = userType === 'driver' ? 'DriverHome' : 'TourHome';
+    const durationMs = getLoginTransitionDurationMs({ alreadyHydrated: options?.alreadyHydrated });
+    const showInterstitial = !options?.alreadyHydrated;
+    if (showInterstitial) {
+      setLoginTransition({
+        targetScreen,
+        message: 'Tour synced — entering dashboard',
+        durationMs,
+      });
+    }
 
     if (userType === 'driver') {
       logger.info('Auth', 'Driver Logged In', { driverId: maskIdentifier(bookingOrDriverData.id) });
@@ -274,6 +286,9 @@ export default function App() {
         bookingData: bookingOrDriverData,
         currentScreen: 'DriverHome',
       });
+      if (showInterstitial) {
+        setTimeout(() => setLoginTransition(null), durationMs);
+      }
       return;
     }
 
@@ -310,6 +325,10 @@ export default function App() {
       bookingData: normalizedBookingData,
       currentScreen: 'TourHome',
     });
+
+    if (showInterstitial) {
+      setTimeout(() => setLoginTransition(null), durationMs);
+    }
   };
 
   // Updated navigation to accept params
@@ -514,6 +533,14 @@ case 'Itinerary':
     <>
       <StatusBar style="light" backgroundColor={COLORS.primaryBlue} />
       <UnifiedSyncBanner />
+      {loginTransition ? (
+        <View style={styles.loginTransitionOverlay}>
+          <Text style={styles.loginTransitionText}>{loginTransition.message}</Text>
+          <View style={styles.loginTransitionTrack}>
+            <View style={styles.loginTransitionFill} />
+          </View>
+        </View>
+      ) : null}
       {renderScreen()}
     </>
   );
@@ -543,4 +570,35 @@ const styles = StyleSheet.create({
   syncLabel: { fontSize: 14, fontWeight: '600' },
   syncDescription: { fontSize: 12, marginTop: 1 },
   syncDetail: { fontSize: 12, marginTop: 2 },
+  loginTransitionOverlay: {
+    position: 'absolute',
+    top: 52,
+    left: 12,
+    right: 12,
+    zIndex: 1001,
+    backgroundColor: THEME.sync.info.background,
+    borderWidth: 1,
+    borderColor: THEME.sync.info.border,
+    borderRadius: 10,
+    padding: 10,
+  },
+  loginTransitionText: {
+    color: THEME.sync.info.foreground,
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  loginTransitionTrack: {
+    height: 6,
+    borderRadius: 99,
+    backgroundColor: THEME.sync.info.background,
+    borderWidth: 1,
+    borderColor: THEME.sync.info.border,
+    overflow: 'hidden',
+  },
+  loginTransitionFill: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: THEME.sync.info.foreground,
+  },
 });

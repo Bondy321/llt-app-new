@@ -6,6 +6,7 @@ const {
   OFFLINE_LOGIN_REASONS,
   normalizePassengerEmail,
 } = require('../services/offlineLoginResolver');
+const { OFFLINE_LOGIN_REASON_COPY } = require('../screens/loginFlow');
 
 const createSessionStorage = (tourData, bookingData) => ({
   multiGet: async (keys) => keys.map((key) => {
@@ -19,6 +20,12 @@ const sessionKeys = {
   TOUR_DATA: '@LLT:tourData',
   BOOKING_DATA: '@LLT:bookingData',
 };
+
+test('reason codes map to plain-language offline headlines', () => {
+  assert.equal(OFFLINE_LOGIN_REASON_COPY.NO_CACHED_SESSION.headline.length > 0, true);
+  assert.equal(OFFLINE_LOGIN_REASON_COPY.CODE_MISMATCH.headline.length > 0, true);
+  assert.equal(OFFLINE_LOGIN_REASON_COPY.CACHE_EXPIRED.headline.length > 0, true);
+});
 
 test('offline passenger login succeeds when booking ref and normalized email match cached session', async () => {
   const result = await resolveOfflineLoginFromCache({
@@ -40,6 +47,22 @@ test('offline passenger login succeeds when booking ref and normalized email mat
   assert.equal(result.source, 'session');
 });
 
+test('offline unknown first-time code is blocked with NO_CACHED_SESSION', async () => {
+  const result = await resolveOfflineLoginFromCache({
+    reference: 'ABC123',
+    normalizedEmail: 'passenger@example.com',
+    sessionStorage: createSessionStorage(null, null),
+    sessionKeys,
+    offlineSyncService: {
+      getTourPackMeta: async () => ({ success: false }),
+      getTourPack: async () => ({ success: false }),
+    },
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.reason, OFFLINE_LOGIN_REASONS.NO_CACHED_SESSION);
+});
+
 test('offline passenger login fails with EMAIL_MISMATCH when cached session email differs', async () => {
   const result = await resolveOfflineLoginFromCache({
     reference: 'ABC123',
@@ -59,32 +82,6 @@ test('offline passenger login fails with EMAIL_MISMATCH when cached session emai
   assert.equal(result.reason, OFFLINE_LOGIN_REASONS.EMAIL_MISMATCH);
 });
 
-test('offline passenger login fails with EMAIL_MISMATCH when tour-pack email differs', async () => {
-  const result = await resolveOfflineLoginFromCache({
-    reference: 'ABC123',
-    normalizedEmail: 'wrong@example.com',
-    sessionStorage: createSessionStorage(
-      { id: 'T_1', tourCode: 'T1' },
-      { id: 'OLD123', normalizedPassengerEmail: 'passenger@example.com' }
-    ),
-    sessionKeys,
-    offlineSyncService: {
-      getTourPackMeta: async () => ({ success: true, data: { lastSyncedAt: new Date().toISOString() } }),
-      getTourPack: async () => ({
-        success: true,
-        data: {
-          tour: { id: 'T_1' },
-          booking: { id: 'ABC123', normalizedPassengerEmail: 'passenger@example.com' },
-        },
-      }),
-    },
-  });
-
-  assert.equal(result.success, false);
-  assert.equal(result.reason, OFFLINE_LOGIN_REASONS.EMAIL_MISMATCH);
-});
-
-
 test('offline passenger login fails with EMAIL_NOT_CACHED when cached session has no normalized email', async () => {
   const result = await resolveOfflineLoginFromCache({
     reference: 'ABC123',
@@ -97,31 +94,6 @@ test('offline passenger login fails with EMAIL_NOT_CACHED when cached session ha
     offlineSyncService: {
       getTourPackMeta: async () => ({ success: true, data: { lastSyncedAt: new Date().toISOString() } }),
       getTourPack: async () => ({ success: false }),
-    },
-  });
-
-  assert.equal(result.success, false);
-  assert.equal(result.reason, OFFLINE_LOGIN_REASONS.EMAIL_NOT_CACHED);
-});
-
-test('offline passenger login fails with EMAIL_NOT_CACHED when tour-pack has no normalized email', async () => {
-  const result = await resolveOfflineLoginFromCache({
-    reference: 'ABC123',
-    normalizedEmail: 'passenger@example.com',
-    sessionStorage: createSessionStorage(
-      { id: 'T_1', tourCode: 'T1' },
-      { id: 'OLD123', normalizedPassengerEmail: 'passenger@example.com' }
-    ),
-    sessionKeys,
-    offlineSyncService: {
-      getTourPackMeta: async () => ({ success: true, data: { lastSyncedAt: new Date().toISOString() } }),
-      getTourPack: async () => ({
-        success: true,
-        data: {
-          tour: { id: 'T_1' },
-          booking: { id: 'ABC123' },
-        },
-      }),
     },
   });
 

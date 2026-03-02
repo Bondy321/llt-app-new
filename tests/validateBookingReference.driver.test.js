@@ -84,3 +84,19 @@ test('validateBookingReference returns null tour and UNASSIGNED for drivers with
   assert.equal(result.tour, null);
   assert.equal(result.assignmentStatus, 'UNASSIGNED');
 });
+
+
+test('validateBookingReference keeps driver auto-detect based on D- prefix', async () => {
+  const service = loadServiceWithDb({
+    drivers: {
+      'D-MACLEOD': { name: 'Macleod', currentTourId: null },
+    },
+    tours: {},
+  });
+
+  const result = await service.validateBookingReference('d-macleod');
+
+  assert.equal(result.valid, true);
+  assert.equal(result.type, 'driver');
+  assert.equal(result.driver.id, 'D-MACLEOD');
+});
