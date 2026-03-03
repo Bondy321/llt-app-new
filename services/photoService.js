@@ -2,7 +2,13 @@
 // Production-ready photo service using Firebase Storage and Realtime Database
 // Enhanced with comprehensive validation, file type checking, and size limits
 
-const { ref: storageRef, uploadBytes, getDownloadURL, deleteObject } = require('firebase/storage');
+const {
+  ref: storageRef,
+  uploadBytes,
+  uploadBytesResumable,
+  getDownloadURL,
+  deleteObject,
+} = require('firebase/storage');
 const {
   ref: databaseRef,
   push,
@@ -11,6 +17,7 @@ const {
   serverTimestamp,
   onValue,
   get,
+  update,
 } = require('firebase/database');
 const { storage, realtimeDbModular } = require('../firebase');
 
@@ -134,12 +141,14 @@ const uploadPhoto = async (
     realtimeDbInstance = realtimeDbModular,
     storageRefFn = storageRef,
     uploadBytesFn = uploadBytes,
+    uploadBytesResumableFn = uploadBytesResumable,
     getDownloadURLFn = getDownloadURL,
     dbRefFn = databaseRef,
     pushFn = push,
     setFn = set,
     serverTimestampFn = serverTimestamp,
     fetchFn = fetch,
+    onProgress = null,
   } = {}
 ) => {
   try {
@@ -181,18 +190,37 @@ const uploadPhoto = async (
     const fileRef = storageRefFn(storageInstance, storagePath);
 
     try {
-      // Upload to storage with timeout
+      const metadata = {
+        contentType: blob.type,
+        customMetadata: {
+          uploadedBy: validatedUserId,
+          uploadedAt: new Date().toISOString(),
+        },
+      };
+
+      const uploadWithProgress = () => new Promise((resolve, reject) => {
+        try {
+          if (typeof uploadBytesResumableFn !== 'function' || typeof onProgress !== 'function') {
+            resolve(uploadBytesFn(fileRef, blob, metadata));
+            return;
+          }
+
+          const uploadTask = uploadBytesResumableFn(fileRef, blob, metadata);
+          uploadTask.on('state_changed', (snapshot) => {
+            if (snapshot.totalBytes > 0) {
+              onProgress(snapshot.bytesTransferred / snapshot.totalBytes);
+            }
+          }, reject, () => resolve(uploadTask.snapshot));
+        } catch (error) {
+          reject(error);
+        }
+      });
+
       await Promise.race([
-        uploadBytesFn(fileRef, blob, {
-          contentType: blob.type,
-          customMetadata: {
-            uploadedBy: validatedUserId,
-            uploadedAt: new Date().toISOString(),
-          },
-        }),
+        uploadWithProgress(),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Photo upload timeout')), 60000)
-        )
+        ),
       ]);
 
       const downloadURL = await getDownloadURLFn(fileRef);
@@ -465,11 +493,41 @@ const deletePrivatePhoto = async (
   }
 };
 
+const updatePhotoCaption = async (
+  { tourId, photoId, userId, caption, visibility = 'group' },
+  {
+    realtimeDbInstance = realtimeDbModular,
+    dbRefFn = databaseRef,
+    updateFn = update,
+    serverTimestampFn = serverTimestamp,
+  } = {},
+) => {
+  const validatedTourId = validateTourId(tourId);
+  const validatedPhotoId = validatePhotoId(photoId);
+  const validatedUserId = validateUserId(userId);
+  const validatedCaption = validateCaption(caption);
+  const validatedVisibility = validateVisibility(visibility);
+
+  const basePath = validatedVisibility === 'private'
+    ? `private_tour_photos/${validatedTourId}/${validatedUserId}/${validatedPhotoId}`
+    : `group_tour_photos/${validatedTourId}/${validatedPhotoId}`;
+
+  const photoRef = dbRefFn(realtimeDbInstance, basePath);
+  await updateFn(photoRef, {
+    caption: validatedCaption,
+    captionUpdatedAt: serverTimestampFn(),
+    captionEditedBy: validatedUserId,
+  });
+
+  return { success: true };
+};
+
 module.exports = {
   uploadPhoto,
   subscribeToTourPhotos,
   subscribeToPrivatePhotos,
   deleteGroupPhoto,
   deletePrivatePhoto,
+  updatePhotoCaption,
   createBlob,
 };

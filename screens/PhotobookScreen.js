@@ -22,7 +22,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { uploadPhoto, subscribeToPrivatePhotos } from '../services/photoService';
+import { uploadPhoto, subscribeToPrivatePhotos, updatePhotoCaption } from '../services/photoService';
 import { deletePrivatePhoto } from '../services/photoService';
 import ImageViewer from '../components/ImageViewer';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
@@ -36,6 +36,9 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
   const [refreshing, setRefreshing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [pendingUploads, setPendingUploads] = useState([]);
+  const [sortMode, setSortMode] = useState('newest');
+  const [mineOnly, setMineOnly] = useState(false);
 
   // Image viewer state
   const [viewerVisible, setViewerVisible] = useState(false);
@@ -64,10 +67,20 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     };
   }, [tourId, userId]);
 
+  const visiblePhotos = useMemo(() => {
+    const scoped = mineOnly ? photos.filter((photo) => photo.userId === userId) : photos;
+    const sorted = [...scoped].sort((a, b) => {
+      const aTs = a.timestamp || 0;
+      const bTs = b.timestamp || 0;
+      return sortMode === 'oldest' ? aTs - bTs : bTs - aTs;
+    });
+    return sorted;
+  }, [photos, mineOnly, sortMode, userId]);
+
   // Group photos by date
   const groupedPhotos = useMemo(() => {
     const groups = {};
-    photos.forEach(photo => {
+    visiblePhotos.forEach(photo => {
       const date = photo.timestamp
         ? new Date(photo.timestamp).toLocaleDateString(undefined, {
             weekday: 'long',
@@ -82,13 +95,13 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
       groups[date].push(photo);
     });
     return groups;
-  }, [photos]);
+  }, [visiblePhotos]);
 
   const dateKeys = Object.keys(groupedPhotos);
 
   // Stats
-  const totalPhotos = photos.length;
-  const latestPhotoDate = photos[0]?.timestamp
+  const totalPhotos = visiblePhotos.length;
+  const latestPhotoDate = visiblePhotos[0]?.timestamp
     ? new Date(photos[0].timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
     : null;
 
@@ -171,37 +184,48 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     }
   };
 
+  const uploadPendingItem = async (pending) => {
+    setPendingUploads((prev) => prev.map((item) => item.id === pending.id ? { ...item, status: 'uploading', error: null, progress: 0 } : item));
+
+    try {
+      await uploadPhoto(pending.uri, tourId, userId, pending.caption.trim(), {
+        visibility: 'private',
+        onProgress: (ratio) => {
+          setPendingUploads((prev) => prev.map((item) => item.id === pending.id ? { ...item, progress: Math.round((ratio || 0) * 100) } : item));
+        },
+      });
+      setPendingUploads((prev) => prev.filter((item) => item.id !== pending.id));
+    } catch (error) {
+      setPendingUploads((prev) => prev.map((item) => item.id === pending.id ? { ...item, status: 'failed', error: getUploadErrorMessage(error), progress: 0 } : item));
+    }
+  };
+
   const handleUpload = async () => {
     if (!pendingImage) return;
+
+    const pending = {
+      id: `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      uri: pendingImage,
+      caption,
+      progress: 0,
+      status: 'queued',
+      error: null,
+    };
 
     setUploading(true);
     setUploadProgress(0);
     setShowUploadModal(false);
+    setPendingUploads((prev) => [pending, ...prev]);
+    setPendingImage(null);
+    setCaption('');
 
-    // Simulate progress for better UX
-    const progressInterval = setInterval(() => {
-      setUploadProgress(prev => Math.min(prev + 10, 90));
-    }, 200);
+    await uploadPendingItem(pending);
+    setUploading(false);
+    setUploadProgress(0);
+  };
 
-    try {
-      await uploadPhoto(pendingImage, tourId, userId, caption.trim(), { visibility: 'private' });
-      setUploadProgress(100);
-      clearInterval(progressInterval);
-
-      // Brief delay to show 100%
-      setTimeout(() => {
-        setUploading(false);
-        setUploadProgress(0);
-        setPendingImage(null);
-        setCaption('');
-      }, 500);
-    } catch (error) {
-      clearInterval(progressInterval);
-      setUploading(false);
-      setUploadProgress(0);
-      const message = getUploadErrorMessage(error);
-      Alert.alert('Upload Failed', message);
-    }
+  const retryUpload = async (pending) => {
+    await uploadPendingItem(pending);
   };
 
   const cancelUpload = () => {
@@ -295,7 +319,7 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
       )}
 
       {/* Stats Hero Section */}
-      {!loadingPhotos && photos.length > 0 && (
+      {!loadingPhotos && visiblePhotos.length > 0 && (
         <View style={styles.statsContainer}>
           <View style={styles.statItem}>
             <MaterialCommunityIcons name="image-multiple" size={22} color={COLORS.primary} />
@@ -321,6 +345,18 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
         </View>
       )}
 
+      <View style={styles.filterRow}>
+        <TouchableOpacity style={[styles.filterChip, sortMode === 'newest' && styles.filterChipActive]} onPress={() => setSortMode('newest')}>
+          <Text style={[styles.filterChipText, sortMode === 'newest' && styles.filterChipTextActive]}>Newest</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.filterChip, sortMode === 'oldest' && styles.filterChipActive]} onPress={() => setSortMode('oldest')}>
+          <Text style={[styles.filterChipText, sortMode === 'oldest' && styles.filterChipTextActive]}>Oldest</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.filterChip, mineOnly && styles.filterChipActive]} onPress={() => setMineOnly((v) => !v)}>
+          <Text style={[styles.filterChipText, mineOnly && styles.filterChipTextActive]}>Mine only</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Content */}
       {loadingPhotos ? (
         <View style={styles.loadingContainer}>
@@ -339,7 +375,32 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
             />
           }
         >
-          {photos.length === 0 ? (
+          {pendingUploads.length > 0 && (
+            <View style={styles.pendingSection}>
+              <Text style={styles.pendingTitle}>Uploads</Text>
+              <View style={styles.grid}>
+                {pendingUploads.map((item) => (
+                  <View key={item.id} style={styles.imageTouchable}>
+                    <Image source={{ uri: item.uri }} style={styles.imageThumbnail} />
+                    <View style={styles.pendingOverlay}>
+                      {item.status === 'failed' ? (
+                        <>
+                          <MaterialCommunityIcons name="alert-circle" size={16} color={COLORS.white} />
+                          <TouchableOpacity onPress={() => retryUpload(item)} style={styles.retryButton}>
+                            <Text style={styles.retryButtonText}>Retry</Text>
+                          </TouchableOpacity>
+                        </>
+                      ) : (
+                        <Text style={styles.pendingProgressText}>{item.progress}%</Text>
+                      )}
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {visiblePhotos.length === 0 && pendingUploads.length === 0 ? (
             <View style={styles.emptyContainer}>
               <View style={styles.emptyIconWrapper}>
                 <MaterialCommunityIcons name="lock-outline" size={60} color={COLORS.primary} />
@@ -415,7 +476,7 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
       )}
 
       {/* Floating Action Button */}
-      {!loadingPhotos && photos.length > 0 && (
+      {!loadingPhotos && visiblePhotos.length > 0 && (
         <TouchableOpacity
           style={styles.fab}
           onPress={showUploadOptions}
@@ -434,13 +495,14 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
       {/* Image Viewer */}
       <ImageViewer
         visible={viewerVisible}
-        photos={photos}
+        photos={visiblePhotos}
         initialIndex={viewerIndex}
         onClose={() => setViewerVisible(false)}
         onDelete={handleDeletePhoto}
         canDelete={true}
         currentUserId={userId}
         showUploaderInfo={false}
+        onEditCaption={async (photo, nextCaption) => updatePhotoCaption({ tourId, photoId: photo.id, userId, caption: nextCaption, visibility: 'private' })}
       />
 
       {/* Upload Modal with Caption */}
@@ -544,6 +606,32 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontWeight: '600',
   },
+  filterRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+  },
+  filterChip: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 6,
+    backgroundColor: COLORS.white,
+  },
+  filterChipActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primaryMuted,
+  },
+  filterChipText: { color: COLORS.textSecondary, fontSize: 12, fontWeight: '600' },
+  filterChipTextActive: { color: COLORS.primary },
+  pendingSection: { marginBottom: SPACING.lg },
+  pendingTitle: { marginHorizontal: SPACING.lg, marginBottom: SPACING.sm, fontSize: 14, fontWeight: '700', color: COLORS.textPrimary },
+  pendingOverlay: { position: 'absolute', left: 0, right:0, bottom:0, backgroundColor:'rgba(0,0,0,0.55)', alignItems:'center', paddingVertical: 6 },
+  pendingProgressText: { color: COLORS.white, fontWeight:'700', fontSize: 12 },
+  retryButton: { marginTop: 4, backgroundColor: COLORS.error, borderRadius: RADIUS.sm, paddingHorizontal: 8, paddingVertical: 2 },
+  retryButtonText: { color: COLORS.white, fontSize: 11, fontWeight: '700' },
   progressContainer: {
     backgroundColor: COLORS.primaryMuted,
     paddingHorizontal: SPACING.lg,
