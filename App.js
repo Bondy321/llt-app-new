@@ -1,7 +1,7 @@
 // App.js
 import React, { useState, useEffect, useRef } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, Text, StyleSheet, Animated, Easing } from 'react-native';
+import { View, ActivityIndicator, Text, StyleSheet, Animated, Easing, PanResponder } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -30,6 +30,7 @@ import PassengerManifestScreen from './screens/PassengerManifestScreen';
 import SafetySupportScreen from './screens/SafetySupportScreen';
 import DriverItineraryScreen from './screens/DriverItineraryScreen';
 const { getLoginTransitionDurationMs } = require('./screens/loginFlow');
+const { isEligibleEdgeSwipe, shouldCommitEdgeSwipeHome } = require('./services/swipeHomeNavigation');
 
 const COLORS = {
   primaryBlue: THEME.primary,
@@ -127,6 +128,10 @@ export default function App() {
   const loginTransitionTimerRef = useRef(null);
   const loginTransitionAnimationRef = useRef(null);
   const loginProgress = useRef(new Animated.Value(0)).current;
+
+  const isDriverSession = bookingData?.id && bookingData.id.startsWith('D-');
+  const homeScreen = isDriverSession ? 'DriverHome' : 'TourHome';
+  const canSwipeToHome = currentScreen !== 'Login' && currentScreen !== 'TourHome' && currentScreen !== 'DriverHome';
 
   const clearLoginTransitionArtifacts = () => {
     if (loginTransitionTimerRef.current) {
@@ -366,8 +371,29 @@ export default function App() {
     logger.trackScreen(screen, { from: currentScreen, ...params });
     setScreenParams(params); // Store params for the next screen to use
     setCurrentScreen(screen);
-    saveSession();
+    saveSession({ currentScreen: screen });
   };
+
+  const edgeSwipeResponder = PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_, gestureState) => {
+        if (!canSwipeToHome) return false;
+        return isEligibleEdgeSwipe(gestureState);
+      },
+    onPanResponderRelease: (_, gestureState) => {
+        if (!canSwipeToHome) return;
+        if (!shouldCommitEdgeSwipeHome(gestureState)) return;
+
+        logger.info('Navigation', 'Edge swipe home navigation triggered', {
+          from: currentScreen,
+          to: homeScreen,
+          dx: gestureState?.dx,
+          vx: gestureState?.vx,
+        });
+        navigateTo(homeScreen, { viaGesture: 'edge-swipe-home' });
+      },
+    onPanResponderTerminationRequest: () => true,
+    });
 
   const handleLogout = async () => {
     try {
@@ -581,7 +607,9 @@ case 'Itinerary':
           </View>
         </View>
       ) : null}
-      {renderScreen()}
+      <View style={styles.screenContainer} {...edgeSwipeResponder.panHandlers}>
+        {renderScreen()}
+      </View>
     </>
   );
 }
@@ -590,6 +618,7 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.appBackground, padding: 30 },
   loadingText: { marginTop: 15, fontSize: 16, color: COLORS.darkText, opacity: 0.8 },
   errorTitle: { fontSize: 22, fontWeight: 'bold', color: COLORS.errorRed, marginTop: 20, marginBottom: 10, textAlign: 'center' },
+  screenContainer: { flex: 1 },
   errorText: { fontSize: 16, color: COLORS.darkText, textAlign: 'center', marginBottom: 5 },
   errorDetail: { fontSize: 14, color: COLORS.darkText, opacity: 0.6, textAlign: 'center', marginTop: 15 },
   syncBanner: {
