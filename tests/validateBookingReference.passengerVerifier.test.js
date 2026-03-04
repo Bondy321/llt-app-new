@@ -5,6 +5,33 @@ const path = require('node:path');
 const SERVICE_PATH = path.resolve(__dirname, '../services/bookingServiceRealtime.js');
 const FIREBASE_PATH = path.resolve(__dirname, '../firebase.js');
 
+const BOOKING_FIXTURES = {
+  TOUR_ID_ONLY: {
+    bookingRef: 'BOOK_TOUR_ID_ONLY',
+    tourId: ' 5112d 8 ',
+    passengerNames: ['Alex'],
+    pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+  },
+  TOUR_CODE_ONLY: {
+    bookingRef: 'BOOK_TOUR_CODE_ONLY',
+    tourCode: '5112D 8',
+    passengerNames: ['Alex'],
+    pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+  },
+  BOTH_INCONSISTENT: {
+    bookingRef: 'BOOK_BOTH_INCONSISTENT',
+    tourId: '5134A_1',
+    tourCode: '5112D 8',
+    passengerNames: ['Alex'],
+    pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+  },
+  NO_TOUR_FIELDS: {
+    bookingRef: 'BOOK_NO_TOUR_FIELDS',
+    passengerNames: ['Alex'],
+    pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+  },
+};
+
 const createMockRealtimeDb = (state) => {
   const buildRef = (dbPath = '') => {
     const segments = dbPath.split('/').filter(Boolean);
@@ -124,7 +151,7 @@ test('validateBookingReference handles non-JSON verifier responses deterministic
   }
 });
 
-test('validateBookingReference resolves tour from canonical booking tourId (ignores verifier tour fields)', async () => {
+test('validateBookingReference allows login when verifier succeeds without tourId/tourCode (booking tourId only)', async () => {
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
 
   const originalFetch = global.fetch;
@@ -133,29 +160,21 @@ test('validateBookingReference resolves tour from canonical booking tourId (igno
       ok: true,
       json: async () => ({
         valid: true,
-        bookingRef: 'ABC123',
-        tourId: 'MISMATCHED_VERIFIER_TOUR',
-        tourCode: 'SHOULD_NOT_BE_USED',
+        bookingRef: BOOKING_FIXTURES.TOUR_ID_ONLY.bookingRef,
       }),
     });
 
     const service = loadServiceWithDb({
       drivers: {},
       bookings: {
-        ABC123: {
-          bookingRef: 'ABC123',
-          tourId: ' 5112d 8 ',
-          tourCode: '5112D 8',
-          passengerNames: ['Alex'],
-          pickupPoints: [{ location: 'Balloch', time: '08:00' }],
-        },
+        [BOOKING_FIXTURES.TOUR_ID_ONLY.bookingRef]: BOOKING_FIXTURES.TOUR_ID_ONLY,
       },
       tours: {
         '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true, participants: {}, currentParticipants: 0 },
       },
     });
 
-    const result = await service.validateBookingReference('abc123', 'traveller@example.com');
+    const result = await service.validateBookingReference(BOOKING_FIXTURES.TOUR_ID_ONLY.bookingRef, 'traveller@example.com');
 
     assert.equal(result.valid, true);
     assert.equal(result.tour.id, '5112D_8');
@@ -165,7 +184,7 @@ test('validateBookingReference resolves tour from canonical booking tourId (igno
   }
 });
 
-test('validateBookingReference resolves tour from booking tourCode when booking tourId is missing/invalid', async () => {
+test('validateBookingReference resolves tour from bookings.tourId when both booking fields are present but inconsistent', async () => {
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
 
   const originalFetch = global.fetch;
@@ -174,28 +193,64 @@ test('validateBookingReference resolves tour from booking tourCode when booking 
       ok: true,
       json: async () => ({
         valid: true,
-        bookingRef: 'ABC123',
-        tourId: '$$$',
-        tourCode: 'MISMATCHED_VERIFIER_CODE',
+        bookingRef: BOOKING_FIXTURES.BOTH_INCONSISTENT.bookingRef,
+        tourId: 'MALICIOUS_VERIFIER_TOUR',
+        tourCode: 'SHOULD_NOT_BE_USED',
       }),
     });
 
     const service = loadServiceWithDb({
       drivers: {},
       bookings: {
-        ABC123: {
-          bookingRef: 'ABC123',
-          tourCode: '5112D 8',
-          passengerNames: ['Alex'],
-          pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+        [BOOKING_FIXTURES.BOTH_INCONSISTENT.bookingRef]: BOOKING_FIXTURES.BOTH_INCONSISTENT,
+      },
+      tours: {
+        'MALICIOUS_VERIFIER_TOUR': { name: 'Incorrect tour', tourCode: 'VERIFIER', isActive: true, participants: {}, currentParticipants: 99 },
+        '5112D_8': { name: 'Code fallback tour', tourCode: '5112D 8', isActive: true, participants: {}, currentParticipants: 7 },
+        '5134A_1': { name: 'Canonical booking tour', tourCode: '5134A 1', isActive: true, participants: {}, currentParticipants: 0 },
+      },
+    });
+
+    const result = await service.validateBookingReference(BOOKING_FIXTURES.BOTH_INCONSISTENT.bookingRef, 'traveller@example.com');
+
+    assert.equal(result.valid, true);
+    assert.equal(result.tour.id, '5134A_1');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference resolves tour from sanitized bookings.tourCode when bookings.tourId is missing/invalid', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        valid: true,
+        bookingRef: BOOKING_FIXTURES.TOUR_CODE_ONLY.bookingRef,
+        tourId: 'MALICIOUS_VERIFIER_TOUR',
+        tourCode: 'MALICIOUS VERIFIER CODE',
+      }),
+    });
+
+    const service = loadServiceWithDb({
+      drivers: {},
+      bookings: {
+        [BOOKING_FIXTURES.TOUR_CODE_ONLY.bookingRef]: {
+          ...BOOKING_FIXTURES.TOUR_CODE_ONLY,
+          tourId: '###',
         },
       },
       tours: {
+        'MALICIOUS_VERIFIER_TOUR': { name: 'Incorrect verifier tour', tourCode: 'VERIFIER', isActive: true, participants: {}, currentParticipants: 999 },
         '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true, participants: {}, currentParticipants: 0 },
       },
     });
 
-    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+    const result = await service.validateBookingReference(BOOKING_FIXTURES.TOUR_CODE_ONLY.bookingRef, 'traveller@example.com');
 
     assert.equal(result.valid, true);
     assert.equal(result.tour.id, '5112D_8');
@@ -217,30 +272,64 @@ test('validateBookingReference rejects booking when canonical booking tour info 
       ok: true,
       json: async () => ({
         valid: true,
-        bookingRef: 'ABC123',
-        tourId: '5112D_8',
-        tourCode: '5112D 8',
+        bookingRef: BOOKING_FIXTURES.NO_TOUR_FIELDS.bookingRef,
+        tourId: 'MALICIOUS_VERIFIER_TOUR',
+        tourCode: 'MALICIOUS VERIFIER CODE',
       }),
     });
 
     const service = loadServiceWithDb({
       drivers: {},
       bookings: {
-        ABC123: {
-          bookingRef: 'ABC123',
-          passengerNames: ['Alex'],
-          pickupPoints: [{ location: 'Balloch', time: '08:00' }],
-        },
+        [BOOKING_FIXTURES.NO_TOUR_FIELDS.bookingRef]: BOOKING_FIXTURES.NO_TOUR_FIELDS,
       },
       tours: {
+        MALICIOUS_VERIFIER_TOUR: { name: 'Incorrect verifier tour', tourCode: 'VERIFIER', isActive: true, participants: {}, currentParticipants: 9 },
         '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true, participants: {}, currentParticipants: 0 },
       },
     });
 
-    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+    const result = await service.validateBookingReference(BOOKING_FIXTURES.NO_TOUR_FIELDS.bookingRef, 'traveller@example.com');
 
     assert.equal(result.valid, false);
     assert.equal(result.error, 'Tour information not available for this booking.');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference is tamper-resistant: conflicting verifier tourId never overrides booking canonical tour', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        valid: true,
+        bookingRef: BOOKING_FIXTURES.TOUR_ID_ONLY.bookingRef,
+        tourId: 'MALICIOUS_VERIFIER_TOUR',
+        tourCode: 'MALICIOUS VERIFIER CODE',
+      }),
+    });
+
+    const service = loadServiceWithDb({
+      drivers: {},
+      bookings: {
+        [BOOKING_FIXTURES.TOUR_ID_ONLY.bookingRef]: BOOKING_FIXTURES.TOUR_ID_ONLY,
+      },
+      tours: {
+        MALICIOUS_VERIFIER_TOUR: { name: 'Incorrect verifier tour', tourCode: 'VERIFIER', isActive: true, participants: {}, currentParticipants: 9 },
+        '5112D_8': { name: 'Canonical booking tour', tourCode: '5112D 8', isActive: true, participants: {}, currentParticipants: 0 },
+      },
+    });
+
+    const result = await service.validateBookingReference(BOOKING_FIXTURES.TOUR_ID_ONLY.bookingRef, 'traveller@example.com');
+
+    assert.equal(result.valid, true);
+    assert.equal(result.tour.id, '5112D_8');
+    assert.equal(result.tour.name, 'Canonical booking tour');
   } finally {
     global.fetch = originalFetch;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
