@@ -281,21 +281,19 @@ exports.verifyPassengerLogin = onRequest(
         return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
       }
 
+      // `booking_identities` is now an authentication index only (bookingRef + email).
+      // Tour resolution occurs from canonical bookings data after credential verification.
       const resolvedBookingRef = normalizeBookingRef(identity.bookingRef || bookingRef);
-      const resolvedTourId = typeof identity.tourId === 'string' ? identity.tourId.trim() : '';
-      const resolvedTourCode = typeof identity.tourCode === 'string' ? identity.tourCode.trim() : '';
 
-      if (!resolvedBookingRef || (!resolvedTourId && !resolvedTourCode)) {
-        log.warn('Booking identity missing essential identifiers', { bookingRef });
-        return res.status(200).json({ valid: false, reason: 'IDENTITY_INCOMPLETE' });
+      if (!resolvedBookingRef) {
+        log.warn('Booking identity missing bookingRef', { bookingRef });
+        return res.status(200).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
       }
 
       return res.status(200).json({
         valid: true,
         reason: 'OK',
         bookingRef: resolvedBookingRef,
-        tourId: resolvedTourId || null,
-        tourCode: resolvedTourCode || null,
       });
     } catch (error) {
       log.error('Passenger login verification failed', error, { bookingRef });
