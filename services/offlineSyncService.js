@@ -10,6 +10,7 @@ const { parseTimestampMs } = require('./timeUtils');
 const storage = createPersistenceProvider({ namespace: 'LLT_OFFLINE' });
 
 const SCHEMA_VERSION = 1;
+const SUPPORTED_QUEUE_TYPES = new Set(['MANIFEST_UPDATE', 'CHAT_MESSAGE', 'INTERNAL_CHAT_MESSAGE', 'PHOTO_UPLOAD']);
 const MAX_ATTEMPTS = 5;
 const QUEUE_KEY = 'queue_v1';
 const PROCESSED_ACTIONS_KEY = 'processed_action_ids_v1';
@@ -170,7 +171,7 @@ const getQueueRaw = async () => {
       await storage.setItemAsync(QUEUE_KEY, JSON.stringify([]));
       return [];
     }
-    return queue.filter((item) => item && typeof item === 'object' && item.id && item.type);
+    return queue.filter((item) => item && typeof item === 'object' && item.id && SUPPORTED_QUEUE_TYPES.has(item.type));
   } catch (error) {
     logger.error('OfflineSync', 'Failed to read queue', { error: error?.message });
     await storage.setItemAsync(QUEUE_KEY, JSON.stringify([]));
@@ -359,6 +360,9 @@ const enqueueAction = async (action) => {
     if (!action?.type || !action?.tourId) {
       return RESPONSE.fail('type and tourId are required');
     }
+    if (!SUPPORTED_QUEUE_TYPES.has(action.type)) {
+      return RESPONSE.fail(`Unsupported action type: ${action.type}`);
+    }
     const queue = await getQueueRaw();
     const exists = queue.find((entry) => entry.id === action.id);
     if (exists) {
@@ -445,7 +449,7 @@ const subscribeQueueState = (listener) => {
 };
 
 const applyReplayAction = async (action, services = {}) => {
-  const { bookingService, chatService, db } = services;
+  const { bookingService, chatService, photoService, db } = services;
 
   if (action.type === 'MANIFEST_UPDATE' && bookingService?.applyManifestUpdateDirect) {
     return bookingService.applyManifestUpdateDirect(action.payload, db);
@@ -457,6 +461,10 @@ const applyReplayAction = async (action, services = {}) => {
 
   if (action.type === 'INTERNAL_CHAT_MESSAGE' && chatService?.sendInternalMessageDirect) {
     return chatService.sendInternalMessageDirect(action.payload, db);
+  }
+
+  if (action.type === 'PHOTO_UPLOAD' && photoService?.uploadPhotoDirect) {
+    return photoService.uploadPhotoDirect(action.payload, db);
   }
 
   return RESPONSE.fail(`Unsupported replay action type: ${action.type}`);

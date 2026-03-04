@@ -42,7 +42,7 @@
  *   });
  */
 
-import { ref, push, set, update, remove, get, onValue } from 'firebase/database';
+import { ref, set, update, remove, get, onValue } from 'firebase/database';
 import { db } from '../firebase';
 import { validateTourCsvRows } from './tourCsvService';
 import {
@@ -259,7 +259,7 @@ export const inputFormatToDDMMYYYY = (dateStr) => {
  * @param {string} createdBy - Email/ID of admin creating the tour
  * @returns {Promise<{id: string, tour: Object}>} - Created tour with ID
  */
-export const createTour = async (tourData, createdBy = 'admin') => {
+export const createTour = async (tourData, _createdBy = 'admin') => {
   const tourId = generateTourId(tourData.tourCode);
 
   const newTour = {
@@ -328,15 +328,7 @@ export const updateTour = async (tourId, updates) => {
  * @param {string} tourId - Tour ID to delete
  */
 export const deleteTour = async (tourId) => {
-  // First, get the tour to check for driver assignments
   const tourRef = ref(db, `tours/${tourId}`);
-  const snapshot = await get(tourRef);
-  const tour = snapshot.val();
-
-  // If there's a driver assigned, we might want to clean up references
-  // (depending on your data model)
-
-  // Delete the tour
   await remove(tourRef);
 
   return { id: tourId, deleted: true };
@@ -419,7 +411,7 @@ const getDriverAssignmentContext = async (tourId, explicitDriverId = null) => {
 export const buildDriverAssignmentUpdates = ({
   tourId,
   driverId,
-  driverCode,
+  driverCode: _driverCode,
   tourCode,
   driverInfo,
   isAssigned,

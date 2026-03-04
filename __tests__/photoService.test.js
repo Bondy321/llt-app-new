@@ -7,6 +7,7 @@ const {
   subscribeToPrivatePhotos,
   deleteGroupPhoto,
   deletePrivatePhoto,
+  updatePhotoCaption,
 } = require('../services/photoService');
 
 const mockDbRef = (_db, path) => ({ path });
@@ -287,5 +288,66 @@ test('deletePrivatePhoto succeeds even when storage object deletion fails', asyn
   });
 
   assert.deepStrictEqual(deletedDbPaths, ['private_tour_photos/tour-2/user-2/photo-99']);
+  assert.deepStrictEqual(result, { success: true });
+});
+
+
+test('uploadPhoto reports progress updates when resumable upload is available', async () => {
+  const blob = createMockBlob();
+  const progress = [];
+
+  await uploadPhoto('file://progress.jpg', 'tour-p', 'user-p', 'Progress', {
+    storageInstance: {},
+    realtimeDbInstance: {},
+    fetchFn: async () => ({ ok: true, blob: async () => blob }),
+    storageRefFn: (_storage, path) => ({ path }),
+    uploadBytesFn: async () => {},
+    uploadBytesResumableFn: () => ({
+      snapshot: { bytesTransferred: 100, totalBytes: 100 },
+      on: (_event, onNext, _onError, onComplete) => {
+        onNext({ bytesTransferred: 25, totalBytes: 100 });
+        onNext({ bytesTransferred: 100, totalBytes: 100 });
+        onComplete();
+      },
+    }),
+    getDownloadURLFn: async () => 'https://example.com/progress.jpg',
+    dbRefFn: mockDbRef,
+    pushFn: () => ({ key: 'progress-photo' }),
+    setFn: async () => {},
+    serverTimestampFn: () => 1,
+    onProgress: (ratio) => progress.push(ratio),
+  });
+
+  assert.deepStrictEqual(progress, [0.25, 1]);
+});
+
+test('updatePhotoCaption writes caption edit metadata for group photo', async () => {
+  let targetPath;
+  let payload;
+
+  const result = await updatePhotoCaption({
+    tourId: 'tour-1',
+    photoId: 'photo-1',
+    userId: 'user-1',
+    caption: 'Updated caption',
+    visibility: 'group',
+  }, {
+    realtimeDbInstance: {},
+    dbRefFn: (_db, path) => {
+      targetPath = path;
+      return { path };
+    },
+    updateFn: async (_ref, values) => {
+      payload = values;
+    },
+    serverTimestampFn: () => 555,
+  });
+
+  assert.strictEqual(targetPath, 'group_tour_photos/tour-1/photo-1');
+  assert.deepStrictEqual(payload, {
+    caption: 'Updated caption',
+    captionUpdatedAt: 555,
+    captionEditedBy: 'user-1',
+  });
   assert.deepStrictEqual(result, { success: true });
 });

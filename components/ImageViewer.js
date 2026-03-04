@@ -16,6 +16,7 @@ import {
   Share,
   Alert,
   ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as MediaLibrary from 'expo-media-library';
@@ -35,11 +36,14 @@ export default function ImageViewer({
   showUploaderInfo = false,
   canDelete = false,
   currentUserId = null,
+  onEditCaption = null,
 }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [showInfo, setShowInfo] = useState(false);
   const [imageLoading, setImageLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [editingCaption, setEditingCaption] = useState(false);
+  const [draftCaption, setDraftCaption] = useState('');
 
   const translateX = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -71,6 +75,14 @@ export default function ImageViewer({
   }, [showInfo]);
 
   const currentPhoto = photos[currentIndex] || {};
+
+  useEffect(() => {
+    if (!visible || !photos.length) return;
+    [currentIndex - 1, currentIndex, currentIndex + 1].forEach((idx) => {
+      const uri = photos[idx]?.url;
+      if (uri) Image.prefetch(uri).catch(() => {});
+    });
+  }, [visible, currentIndex, photos]);
 
   const goToNext = useCallback(() => {
     if (currentIndex < photos.length - 1) {
@@ -220,6 +232,21 @@ export default function ImageViewer({
   };
 
   const canDeleteThis = canDelete && currentPhoto.userId === currentUserId;
+  const canEditCaption = typeof onEditCaption === 'function' && currentPhoto.userId === currentUserId;
+
+  const startEditCaption = () => {
+    setDraftCaption(currentPhoto.caption || '');
+    setEditingCaption(true);
+  };
+
+  const saveCaption = async () => {
+    try {
+      await onEditCaption(currentPhoto, draftCaption);
+      setEditingCaption(false);
+    } catch (error) {
+      Alert.alert('Caption update failed', 'Please try again.');
+    }
+  };
 
   const infoTranslateY = infoSlideAnim.interpolate({
     inputRange: [0, 1],
@@ -356,10 +383,15 @@ export default function ImageViewer({
             </View>
           )}
 
-          {currentPhoto.caption && (
+          {(currentPhoto.caption || canEditCaption) && (
             <View style={styles.captionContainer}>
               <MaterialCommunityIcons name="text" size={20} color={COLORS.textSecondary} />
-              <Text style={styles.captionText}>{currentPhoto.caption}</Text>
+              <Text style={styles.captionText}>{currentPhoto.caption || 'No caption yet'}</Text>
+              {canEditCaption && (
+                <TouchableOpacity onPress={startEditCaption} style={styles.captionEditBtn}>
+                  <MaterialCommunityIcons name="pencil" size={16} color={COLORS.primary} />
+                </TouchableOpacity>
+              )}
             </View>
           )}
         </Animated.View>
@@ -379,6 +411,36 @@ export default function ImageViewer({
           </View>
         )}
       </Animated.View>
+
+      <Modal
+        visible={editingCaption}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditingCaption(false)}
+      >
+        <View style={styles.editModalOverlay}>
+          <View style={styles.editModalCard}>
+            <Text style={styles.editModalTitle}>Edit caption</Text>
+            <TextInput
+              value={draftCaption}
+              onChangeText={setDraftCaption}
+              placeholder="Write a caption..."
+              style={styles.editModalInput}
+              multiline
+              maxLength={200}
+            />
+            <View style={styles.editModalActions}>
+              <TouchableOpacity onPress={() => setEditingCaption(false)} style={styles.editModalCancel}>
+                <Text style={styles.editModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={saveCaption} style={styles.editModalSave}>
+                <Text style={styles.editModalSaveText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </Modal>
   );
 }
@@ -537,5 +599,58 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     lineHeight: 22,
     flex: 1,
+  },
+  captionEditBtn: {
+    padding: SPACING.xs,
+  },
+  editModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    padding: SPACING.lg,
+  },
+  editModalCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+  },
+  editModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.textPrimary,
+    marginBottom: SPACING.md,
+  },
+  editModalInput: {
+    minHeight: 90,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADIUS.md,
+    padding: SPACING.md,
+    color: COLORS.textPrimary,
+    textAlignVertical: 'top',
+  },
+  editModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: SPACING.md,
+    gap: SPACING.sm,
+  },
+  editModalCancel: {
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+  },
+  editModalCancelText: {
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
+  editModalSave: {
+    backgroundColor: COLORS.primary,
+    borderRadius: RADIUS.md,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.lg,
+  },
+  editModalSaveText: {
+    color: COLORS.white,
+    fontWeight: '700',
   },
 });
