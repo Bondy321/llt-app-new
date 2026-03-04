@@ -27,7 +27,7 @@
  * Method 3: Import tours from CSV file
  */
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ref, onValue } from 'firebase/database';
 import { db } from '../firebase';
@@ -942,7 +942,7 @@ function DeleteTourModal({ opened, onClose, tourId, tourName, onConfirm }) {
 }
 
 // Tour Details Modal
-function TourDetailsModal({ opened, onClose, tourId, tour, drivers }) {
+function TourDetailsModal({ opened, onClose, tourId, tour }) {
   if (!tour) return null;
 
   const isAssigned = tour.driverName && tour.driverName !== 'TBA';
@@ -1373,11 +1373,13 @@ export default function ToursManager() {
   const [drivers, setDrivers] = useState({});
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterStatus, setFilterStatus] = useState('all');
   const [viewMode, setViewMode] = useState('grid');
   const [currentPage, setCurrentPage] = useState(1);
-  const [syncStatus, setSyncStatus] = useState('connected');
+  const [syncStatus, setSyncStatus] = useState('syncing');
   const itemsPerPage = 12;
+  const allowedStatusParams = useMemo(() => new Set(['all', 'assigned', 'unassigned', 'active', 'inactive']), []);
+  const statusParam = searchParams.get('status');
+  const filterStatus = statusParam && allowedStatusParams.has(statusParam) ? statusParam : 'all';
 
   // Modal states
   const [createModalOpened, { open: openCreateModal, close: closeCreateModal }] = useDisclosure(false);
@@ -1390,24 +1392,11 @@ export default function ToursManager() {
   // Selected tour for modals
   const [selectedTourId, setSelectedTourId] = useState(null);
 
-  useEffect(() => {
-    // URL is the source of truth on navigation/mount; hydrate UI filter state from valid params.
-    const statusParam = searchParams.get('status');
-    const allowedStatusParams = new Set(['all', 'assigned', 'unassigned', 'active', 'inactive']);
-    const nextHydratedStatus = statusParam && allowedStatusParams.has(statusParam) ? statusParam : 'all';
-
-    if (nextHydratedStatus !== filterStatus) {
-      setFilterStatus(nextHydratedStatus);
-      setCurrentPage(1);
-    }
-  }, [searchParams, filterStatus]);
-
   const handleFilterStatusChange = (value) => {
     // UI writes status changes back to URL, while preserving unrelated query params.
     const nextStatus = value || 'all';
     const currentStatusParam = searchParams.get('status') || 'all';
 
-    setFilterStatus(nextStatus);
     setCurrentPage(1);
 
     if (currentStatusParam === nextStatus) {
@@ -1427,7 +1416,6 @@ export default function ToursManager() {
 
   // Load data from Firebase
   useEffect(() => {
-    setSyncStatus('syncing');
     const toursRef = ref(db, 'tours');
     const driversRef = ref(db, 'drivers');
 
@@ -1518,7 +1506,7 @@ export default function ToursManager() {
     }
   };
 
-  const handleTourCreated = (tourId) => {
+  const handleTourCreated = (_tourId) => {
     setCurrentPage(1);
   };
 
@@ -1913,7 +1901,6 @@ export default function ToursManager() {
         onClose={closeDetailsModal}
         tourId={selectedTourId}
         tour={selectedTour}
-        drivers={drivers}
       />
 
       <ImportExportModal
