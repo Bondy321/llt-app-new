@@ -124,7 +124,7 @@ test('validateBookingReference handles non-JSON verifier responses deterministic
   }
 });
 
-test('validateBookingReference normalizes verifier tourId before tour lookup', async () => {
+test('validateBookingReference resolves tour from canonical booking tourId (ignores verifier tour fields)', async () => {
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
 
   const originalFetch = global.fetch;
@@ -134,7 +134,7 @@ test('validateBookingReference normalizes verifier tourId before tour lookup', a
       json: async () => ({
         valid: true,
         bookingRef: 'ABC123',
-        tourId: ' 5112d 8 ',
+        tourId: 'MISMATCHED_VERIFIER_TOUR',
         tourCode: 'SHOULD_NOT_BE_USED',
       }),
     });
@@ -144,6 +144,7 @@ test('validateBookingReference normalizes verifier tourId before tour lookup', a
       bookings: {
         ABC123: {
           bookingRef: 'ABC123',
+          tourId: ' 5112d 8 ',
           tourCode: '5112D 8',
           passengerNames: ['Alex'],
           pickupPoints: [{ location: 'Balloch', time: '08:00' }],
@@ -164,7 +165,7 @@ test('validateBookingReference normalizes verifier tourId before tour lookup', a
   }
 });
 
-test('validateBookingReference derives tourId from verifier tourCode when tourId is invalid', async () => {
+test('validateBookingReference resolves tour from booking tourCode when booking tourId is missing/invalid', async () => {
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
 
   const originalFetch = global.fetch;
@@ -175,7 +176,7 @@ test('validateBookingReference derives tourId from verifier tourCode when tourId
         valid: true,
         bookingRef: 'ABC123',
         tourId: '$$$',
-        tourCode: ' 5112d 8 ',
+        tourCode: 'MISMATCHED_VERIFIER_CODE',
       }),
     });
 
@@ -204,6 +205,47 @@ test('validateBookingReference derives tourId from verifier tourCode when tourId
   }
 });
 
+
+
+
+test('validateBookingReference rejects booking when canonical booking tour info is unavailable', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        valid: true,
+        bookingRef: 'ABC123',
+        tourId: '5112D_8',
+        tourCode: '5112D 8',
+      }),
+    });
+
+    const service = loadServiceWithDb({
+      drivers: {},
+      bookings: {
+        ABC123: {
+          bookingRef: 'ABC123',
+          passengerNames: ['Alex'],
+          pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+        },
+      },
+      tours: {
+        '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true, participants: {}, currentParticipants: 0 },
+      },
+    });
+
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, false);
+    assert.equal(result.error, 'Tour information not available for this booking.');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
 
 test('validateBookingReference sends x-firebase-appcheck header when token is available', async () => {
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
