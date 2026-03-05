@@ -891,7 +891,7 @@ export default function TourHomeScreen({
         >
           {/* Header with personalized greeting */}
           <AnimatedCard style={styles.header} delay={0}>
-            <Image source={require('../assets/images/app-icon-llt.png')} style={styles.logoImage} />
+            <Image source={require('../assets/images/logo (2).png')} style={styles.logoImage} />
             <View style={styles.headerTextContainer}>
               <View style={styles.greetingRow}>
                 <MaterialCommunityIcons name={greeting.icon} size={16} color={greeting.color} />
