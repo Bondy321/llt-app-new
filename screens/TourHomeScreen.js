@@ -207,6 +207,15 @@ const PickupCountdown = ({ pickupTime, pickupDate }) => {
   const isUrgent = timeLeft.hoursLeft === 0 && timeLeft.minutesLeft < 30;
   const isVeryUrgent = timeLeft.hoursLeft === 0 && timeLeft.minutesLeft < 10;
 
+  let countdownLabel = '';
+  if (timeLeft.hoursLeft >= 24) {
+    countdownLabel = `${timeLeft.daysLeft}d ${timeLeft.remainingHoursLeft}h until pickup`;
+  } else if (timeLeft.hoursLeft >= 1) {
+    countdownLabel = `${timeLeft.hoursLeft}h until pickup`;
+  } else {
+    countdownLabel = `${Math.max(timeLeft.totalMinutesLeft, 0)}m until pickup`;
+  }
+
   return (
     <View style={[
       styles.countdownContainer,
@@ -222,8 +231,7 @@ const PickupCountdown = ({ pickupTime, pickupDate }) => {
         styles.countdownText,
         isVeryUrgent && styles.countdownTextUrgent,
       ]}>
-        {timeLeft.hoursLeft > 0 && `${timeLeft.hoursLeft}h `}
-        {timeLeft.minutesLeft}m {timeLeft.secondsLeft}s until pickup
+        {countdownLabel}
       </Text>
     </View>
   );

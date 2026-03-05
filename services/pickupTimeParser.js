@@ -137,14 +137,20 @@ const getPickupCountdownState = ({ pickupTime, pickupDate, now = new Date() }) =
   }
 
   const hoursLeft = Math.floor(diff / (1000 * 60 * 60));
+  const daysLeft = Math.floor(hoursLeft / 24);
+  const remainingHoursLeft = hoursLeft % 24;
   const minutesLeft = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
   const secondsLeft = Math.floor((diff % (1000 * 60)) / 1000);
+  const totalMinutesLeft = Math.floor(diff / (1000 * 60));
 
   return {
     mode: 'countdown',
+    daysLeft,
     hoursLeft,
+    remainingHoursLeft,
     minutesLeft,
     secondsLeft,
+    totalMinutesLeft,
   };
 };
 
