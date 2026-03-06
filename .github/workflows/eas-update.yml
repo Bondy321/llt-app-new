@@ -29,5 +29,7 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Publish development channel update
-        run: eas update --channel development --message "CI update: $GITHUB_SHA" --non-interactive
+      - name: Publish development channel update (native only)
+        run: |
+          eas update --channel development --platform ios --message "CI update: ${{ github.sha }}"
+          eas update --channel development --platform android --message "CI update: ${{ github.sha }}"
