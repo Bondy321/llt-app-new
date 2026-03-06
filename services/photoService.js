@@ -149,6 +149,8 @@ const uploadPhoto = async (
     serverTimestampFn = serverTimestamp,
     fetchFn = fetch,
     onProgress = null,
+    thumbnailUri = null,
+    optimizationMetrics = null,
   } = {}
 ) => {
   try {
@@ -183,11 +185,16 @@ const uploadPhoto = async (
     };
     const extension = extensionMap[blob.type] || 'jpg';
 
-    const filename = `${Date.now()}_${validatedUserId}.${extension}`;
+    const uploadTimestamp = Date.now();
+    const filename = `${uploadTimestamp}_${validatedUserId}.${extension}`;
     const storagePath = isPrivate
       ? `private_tour_photos/${validatedTourId}/${validatedUserId}/${filename}`
       : `group_tour_photos/${validatedTourId}/${filename}`;
     const fileRef = storageRefFn(storageInstance, storagePath);
+
+    let thumbnailBlob = null;
+    let thumbnailPath = null;
+    let thumbnailDownloadURL = null;
 
     try {
       const metadata = {
@@ -225,6 +232,27 @@ const uploadPhoto = async (
 
       const downloadURL = await getDownloadURLFn(fileRef);
 
+      if (thumbnailUri && typeof thumbnailUri === 'string') {
+        thumbnailBlob = await createBlob(thumbnailUri, fetchFn);
+        validateBlob(thumbnailBlob);
+
+        const thumbnailFilename = `${uploadTimestamp}_${validatedUserId}_thumb.jpg`;
+        thumbnailPath = isPrivate
+          ? `private_tour_photos/${validatedTourId}/${validatedUserId}/thumbnails/${thumbnailFilename}`
+          : `group_tour_photos/${validatedTourId}/thumbnails/${thumbnailFilename}`;
+
+        const thumbnailRef = storageRefFn(storageInstance, thumbnailPath);
+        await uploadBytesFn(thumbnailRef, thumbnailBlob, {
+          contentType: 'image/jpeg',
+          customMetadata: {
+            uploadedBy: validatedUserId,
+            uploadedAt: new Date().toISOString(),
+            variant: 'thumbnail',
+          },
+        });
+        thumbnailDownloadURL = await getDownloadURLFn(thumbnailRef);
+      }
+
       const databasePath = isPrivate
         ? `private_tour_photos/${validatedTourId}/${validatedUserId}`
         : `group_tour_photos/${validatedTourId}`;
@@ -233,6 +261,7 @@ const uploadPhoto = async (
 
       const photoData = {
         url: downloadURL,
+        fullUrl: downloadURL,
         userId: validatedUserId,
         caption: validatedCaption,
         timestamp: serverTimestampFn(),
@@ -240,6 +269,20 @@ const uploadPhoto = async (
         fileSize: blob.size,
         fileType: blob.type,
       };
+
+      if (thumbnailDownloadURL) {
+        photoData.thumbnailUrl = thumbnailDownloadURL;
+        photoData.thumbnailStoragePath = thumbnailPath;
+      }
+
+      if (optimizationMetrics && typeof optimizationMetrics === 'object') {
+        photoData.optimization = {
+          originalSizeBytes: optimizationMetrics.originalSizeBytes || null,
+          optimizedSizeBytes: optimizationMetrics.optimizedSizeBytes || blob.size,
+          thumbnailSizeBytes: optimizationMetrics.thumbnailSizeBytes || (thumbnailBlob ? thumbnailBlob.size : null),
+          optimizationRatio: optimizationMetrics.optimizationRatio ?? null,
+        };
+      }
 
       // Add uploader name for group photos
       if (!isPrivate && uploaderName) {
@@ -262,6 +305,14 @@ const uploadPhoto = async (
           blob.close();
         } catch (error) {
           console.warn('Error closing blob:', error);
+        }
+      }
+
+      if (thumbnailBlob && typeof thumbnailBlob.close === 'function') {
+        try {
+          thumbnailBlob.close();
+        } catch (error) {
+          console.warn('Error closing thumbnail blob:', error);
         }
       }
     }
@@ -426,6 +477,20 @@ const deleteGroupPhoto = async (
       }
     }
 
+    if (photoData.thumbnailStoragePath) {
+      try {
+        const thumbnailRef = storageRefFn(storageInstance, photoData.thumbnailStoragePath);
+        await Promise.race([
+          deleteObjectFn(thumbnailRef),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Thumbnail deletion timeout')), 10000)
+          )
+        ]);
+      } catch (thumbnailError) {
+        console.warn('Could not delete thumbnail from storage:', thumbnailError);
+      }
+    }
+
     // Delete from database (with timeout)
     await Promise.race([
       removeFn(photoRef),
@@ -480,6 +545,15 @@ const deletePrivatePhoto = async (
       } catch (storageError) {
         // Log but don't fail if storage deletion fails
         console.warn('Could not delete photo from storage:', storageError);
+      }
+    }
+
+    if (photoData.thumbnailStoragePath) {
+      try {
+        const thumbnailRef = storageRefFn(storageInstance, photoData.thumbnailStoragePath);
+        await deleteObjectFn(thumbnailRef);
+      } catch (thumbnailError) {
+        console.warn('Could not delete thumbnail from storage:', thumbnailError);
       }
     }
 
