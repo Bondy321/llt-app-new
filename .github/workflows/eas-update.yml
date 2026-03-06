@@ -1,0 +1,33 @@
+name: EAS Update
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  publish-development-update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Expo and EAS CLI
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Publish development channel update
+        run: eas update --channel development --message "CI update: $GITHUB_SHA" --non-interactive
