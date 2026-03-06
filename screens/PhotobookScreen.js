@@ -23,6 +23,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { uploadPhoto, subscribeToPrivatePhotos, updatePhotoCaption } from '../services/photoService';
+import { optimizeImageForUpload, formatBytes } from '../services/imageOptimizationService';
 import { deletePrivatePhoto } from '../services/photoService';
 import ImageViewer from '../components/ImageViewer';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
@@ -135,7 +136,7 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     });
 
     if (!result.canceled && result.assets?.[0]) {
-      setPendingImage(result.assets[0].uri);
+      setPendingImage(result.assets[0]);
       setShowUploadModal(true);
     }
   };
@@ -152,7 +153,7 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     });
 
     if (!result.canceled && result.assets?.[0]) {
-      setPendingImage(result.assets[0].uri);
+      setPendingImage(result.assets[0]);
       setShowUploadModal(true);
     }
   };
@@ -190,8 +191,12 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     try {
       await uploadPhoto(pending.uri, tourId, userId, pending.caption.trim(), {
         visibility: 'private',
+        thumbnailUri: pending.thumbnailUri || null,
+        optimizationMetrics: pending.metrics || null,
         onProgress: (ratio) => {
-          setPendingUploads((prev) => prev.map((item) => item.id === pending.id ? { ...item, progress: Math.round((ratio || 0) * 100) } : item));
+          const percent = Math.round((ratio || 0) * 100);
+          setUploadProgress(percent);
+          setPendingUploads((prev) => prev.map((item) => item.id === pending.id ? { ...item, progress: percent } : item));
         },
       });
       setPendingUploads((prev) => prev.filter((item) => item.id !== pending.id));
@@ -201,27 +206,44 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
   };
 
   const handleUpload = async () => {
-    if (!pendingImage) return;
-
-    const pending = {
-      id: `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      uri: pendingImage,
-      caption,
-      progress: 0,
-      status: 'queued',
-      error: null,
-    };
+    if (!pendingImage?.uri) return;
 
     setUploading(true);
     setUploadProgress(0);
-    setShowUploadModal(false);
-    setPendingUploads((prev) => [pending, ...prev]);
-    setPendingImage(null);
-    setCaption('');
 
-    await uploadPendingItem(pending);
-    setUploading(false);
-    setUploadProgress(0);
+    try {
+      const optimized = await optimizeImageForUpload(pendingImage);
+      const pending = {
+        id: `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        uri: optimized.uploadUri,
+        thumbnailUri: optimized.thumbnailUri,
+        previewUri: pendingImage.uri,
+        caption,
+        progress: 0,
+        status: 'queued',
+        error: null,
+        metrics: optimized.metrics,
+      };
+
+      setShowUploadModal(false);
+      setPendingUploads((prev) => [pending, ...prev]);
+      setPendingImage(null);
+      setCaption('');
+
+      await uploadPendingItem(pending);
+
+      if (optimized.metrics?.originalSizeBytes && optimized.metrics?.optimizedSizeBytes) {
+        Alert.alert(
+          'Photo optimized',
+          `Saved ${formatBytes(optimized.metrics.originalSizeBytes - optimized.metrics.optimizedSizeBytes)} before upload.`
+        );
+      }
+    } catch (error) {
+      Alert.alert('Image preparation failed', 'Could not optimize this image. Please try a different photo.');
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+    }
   };
 
   const retryUpload = async (pending) => {
@@ -381,7 +403,7 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
               <View style={styles.grid}>
                 {pendingUploads.map((item) => (
                   <View key={item.id} style={styles.imageTouchable}>
-                    <Image source={{ uri: item.uri }} style={styles.imageThumbnail} />
+                    <Image source={{ uri: item.previewUri || item.uri }} style={styles.imageThumbnail} />
                     <View style={styles.pendingOverlay}>
                       {item.status === 'failed' ? (
                         <>
@@ -451,7 +473,7 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
                     >
                       {!loadedImages[photo.id] && renderSkeleton()}
                       <Image
-                        source={{ uri: photo.url }}
+                        source={{ uri: photo.thumbnailUrl || photo.url }}
                         style={[
                           styles.imageThumbnail,
                           !loadedImages[photo.id] && styles.imageHidden,
@@ -522,9 +544,9 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
             <Text style={styles.uploadModalTitle}>Add Caption</Text>
             <Text style={styles.uploadModalSubtitle}>Optional: describe this memory</Text>
 
-            {pendingImage && (
+            {pendingImage?.uri && (
               <Image
-                source={{ uri: pendingImage }}
+                source={{ uri: pendingImage.uri }}
                 style={styles.uploadPreview}
                 resizeMode="cover"
               />
