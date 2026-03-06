@@ -43,7 +43,7 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
         <Text style={styles.sectionTitle}>Tour Countdown</Text>
         <View style={styles.card}>
           <LinearGradient colors={[COLORS.primaryBlue, '#005A8D']} style={styles.headerFuture}>
-            <MaterialCommunityIcons name="airplane-takeoff" size={32} color={COLORS.white} />
+            <MaterialCommunityIcons name="bus" size={32} color={COLORS.white} />
             <View style={styles.countdownContent}>
               <Text style={styles.headerTitleFuture}>Your Adventure Starts Soon!</Text>
               <View style={styles.countdownBadge}>
