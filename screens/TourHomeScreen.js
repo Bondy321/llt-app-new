@@ -784,12 +784,7 @@ export default function TourHomeScreen({
 
   const handleCallDriver = () => {
     triggerHaptic('medium');
-    if (!tourData?.driverPhone) {
-      Alert.alert('Driver contact unavailable', 'Please reach out to your operator.');
-      return;
-    }
-    const phone = tourData.driverPhone.replace(/[^+\d]/g, '');
-    Linking.openURL(`tel:${phone}`);
+    Linking.openURL('tel:+441414876737');
   };
 
   const handleMessageDriver = () => {
@@ -843,7 +838,12 @@ export default function TourHomeScreen({
   // Quick actions for easier access
   const quickActions = [
     { icon: 'phone', label: 'Call', color: COLORS.success, onPress: handleCallDriver },
-    { icon: 'message-text', label: 'Message', color: COLORS.primaryBlue, onPress: handleMessageDriver },
+    {
+      icon: 'image-multiple',
+      label: 'Group Photos',
+      color: COLORS.primaryBlue,
+      onPress: () => onNavigate('GroupPhotobook'),
+    },
     { icon: 'bus-marker', label: 'Find Bus', color: COLORS.coralAccent, onPress: () => onNavigate('Map') },
     { icon: 'chat', label: 'Chat', color: '#2ECC71', onPress: () => onNavigate('Chat'), badge: null },
   ];
