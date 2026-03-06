@@ -560,8 +560,7 @@ exports.sendChatNotification = onValueCreated(
         return null;
       }
 
-      // 4. Security: Verify sender is actually a participant (prevent spoofing)
-      // Admin broadcasts require verified admin UID; regular messages require participant membership
+      // 4. Security: Verify admin broadcast authenticity up-front.
       let isAdmin = isAdminBroadcast(senderId);
       if (isAdmin) {
         // Verify the admin broadcast is legitimate (not spoofed by a regular user)
@@ -570,29 +569,17 @@ exports.sendChatNotification = onValueCreated(
           log.error("Spoofed admin broadcast rejected - invalid or missing senderUid", null, { tourId, senderId });
           return null;
         }
-      } else {
-        const isParticipant = await verifyParticipant(tourId, senderId);
-        if (!isParticipant) {
-          log.error("Sender is not a participant of the tour", null, { tourId, senderId });
-          return null;
-        }
       }
 
       log.info("Processing chat notification", { tourId, senderId, senderName, isAdmin });
 
-      // 5. Get tour details and participants in parallel
-      const [tourSnapshot, participantsSnapshot] = await Promise.all([
-        admin.database().ref(`tours/${tourId}`).once("value"),
+      // 5. Get only the fields needed for notifications.
+      const [tourNameSnapshot, participantsSnapshot] = await Promise.all([
+        admin.database().ref(`tours/${tourId}/name`).once("value"),
         admin.database().ref(`tours/${tourId}/participants`).once("value")
       ]);
 
-      const tourData = tourSnapshot.val();
-      if (!tourData) {
-        log.error("Tour not found", null, { tourId });
-        return null;
-      }
-
-      const tourName = tourData.name || "Tour Chat";
+      const tourName = tourNameSnapshot.val() || "Tour Chat";
 
       if (!participantsSnapshot.exists()) {
         log.info("No participants found", { tourId });
@@ -601,6 +588,13 @@ exports.sendChatNotification = onValueCreated(
 
       const participants = participantsSnapshot.val();
       const participantIds = Object.keys(participants);
+
+      // Security: regular chat messages must be sent by a participant.
+      if (!isAdmin && !participants[senderId]) {
+        log.error("Sender is not a participant of the tour", null, { tourId, senderId });
+        return null;
+      }
+
       const pushMessages = [];
       const invalidTokens = [];
 
@@ -758,21 +752,15 @@ exports.sendItineraryNotification = onValueUpdated(
         return null;
       }
 
-      // 2. Get tour details and participants in parallel
-      const [nameSnapshot, participantsSnapshot, tourSnapshot] = await Promise.all([
+      // 2. Get only fields required for itinerary notifications.
+      const [nameSnapshot, isActiveSnapshot, participantsSnapshot] = await Promise.all([
         admin.database().ref(`tours/${tourId}/name`).once("value"),
+        admin.database().ref(`tours/${tourId}/isActive`).once("value"),
         admin.database().ref(`tours/${tourId}/participants`).once("value"),
-        admin.database().ref(`tours/${tourId}`).once("value")
       ]);
 
-      const tourData = tourSnapshot.val();
-      if (!tourData) {
-        log.error("Tour not found", null, { tourId });
-        return null;
-      }
-
       // Check if tour is active
-      if (tourData.isActive === false) {
+      if (isActiveSnapshot.val() === false) {
         log.info("Tour is inactive, skipping notification", { tourId });
         return null;
       }
