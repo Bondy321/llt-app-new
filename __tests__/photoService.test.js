@@ -85,6 +85,7 @@ test('uploadPhoto stores group photo using group_tour_photos paths and rich meta
 
   assert.deepStrictEqual(setPayload, {
     url: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
+    fullUrl: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
     userId: 'user-9',
     caption: 'Lovely day!',
     timestamp: 1234567890,
@@ -139,6 +140,7 @@ test('uploadPhoto stores private photos in private_tour_photos namespaces', asyn
 
   assert.strictEqual(writePath, 'private_tour_photos/tour-55/user-private');
   assert.strictEqual(dbPayload.storagePath, 'private_tour_photos/tour-55/user-private/1700000000000_user-private.webp');
+  assert.strictEqual(dbPayload.fullUrl, 'https://example.com/private_tour_photos/tour-55/user-private/1700000000000_user-private.webp');
   assert.strictEqual(dbPayload.fileType, 'image/webp');
   assert.ok(!('uploaderName' in dbPayload));
   assert.strictEqual(blob.closed, true);
@@ -180,6 +182,64 @@ test('uploadPhoto surfaces fetch failures when response is not ok', async () => 
     }),
     /Failed to fetch file: Not Found/
   );
+});
+
+
+test('uploadPhoto stores thumbnail and optimization metadata when provided', async (t) => {
+  const originalNow = Date.now;
+  Date.now = () => 1700000000000;
+  t.after(() => {
+    Date.now = originalNow;
+  });
+
+  const mainBlob = createMockBlob({ size: 2048, type: 'image/jpeg' });
+  const thumbBlob = createMockBlob({ size: 512, type: 'image/jpeg' });
+
+  const mockFetch = async (uri) => ({
+    ok: true,
+    blob: async () => (uri.includes('thumb') ? thumbBlob : mainBlob),
+  });
+
+  const uploaded = [];
+  let payload;
+  await uploadPhoto('file://main.jpg', 'tour-thumb', 'user-thumb', 'Thumb test', {
+    thumbnailUri: 'file://thumb.jpg',
+    optimizationMetrics: {
+      originalSizeBytes: 4096,
+      optimizedSizeBytes: 2048,
+      thumbnailSizeBytes: 512,
+      optimizationRatio: 0.5,
+    },
+    storageInstance: {},
+    realtimeDbInstance: {},
+    storageRefFn: (_storage, path) => ({ path }),
+    uploadBytesFn: async (ref) => {
+      uploaded.push(ref.path);
+    },
+    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
+    dbRefFn: mockDbRef,
+    pushFn: () => ({ key: 'thumb-photo' }),
+    setFn: async (_ref, value) => {
+      payload = value;
+    },
+    serverTimestampFn: () => 42,
+    fetchFn: mockFetch,
+  });
+
+  assert.deepStrictEqual(uploaded, [
+    'group_tour_photos/tour-thumb/1700000000000_user-thumb.jpg',
+    'group_tour_photos/tour-thumb/thumbnails/1700000000000_user-thumb_thumb.jpg',
+  ]);
+  assert.strictEqual(payload.thumbnailUrl, 'https://example.com/group_tour_photos/tour-thumb/thumbnails/1700000000000_user-thumb_thumb.jpg');
+  assert.strictEqual(payload.thumbnailStoragePath, 'group_tour_photos/tour-thumb/thumbnails/1700000000000_user-thumb_thumb.jpg');
+  assert.deepStrictEqual(payload.optimization, {
+    originalSizeBytes: 4096,
+    optimizedSizeBytes: 2048,
+    thumbnailSizeBytes: 512,
+    optimizationRatio: 0.5,
+  });
+  assert.strictEqual(mainBlob.closed, true);
+  assert.strictEqual(thumbBlob.closed, true);
 });
 
 test('subscribeToTourPhotos sorts by descending timestamp and returns a safe fallback when mapping fails', async () => {
@@ -238,6 +298,7 @@ test('deleteGroupPhoto deletes owned photo from storage and database', async () 
     getFn: async () => mockSnapshot({
       userId: 'owner-1',
       storagePath: 'group_tour_photos/tour-1/file.jpg',
+      thumbnailStoragePath: 'group_tour_photos/tour-1/thumbnails/file_thumb.jpg',
     }),
     storageRefFn: (_storage, path) => ({ path }),
     deleteObjectFn: async (ref) => {
@@ -250,6 +311,7 @@ test('deleteGroupPhoto deletes owned photo from storage and database', async () 
 
   assert.deepStrictEqual(operations, [
     'delete-storage:group_tour_photos/tour-1/file.jpg',
+    'delete-storage:group_tour_photos/tour-1/thumbnails/file_thumb.jpg',
     'delete-db:group_tour_photos/tour-1/photo-1',
   ]);
   assert.deepStrictEqual(result, { success: true });
@@ -277,7 +339,7 @@ test('deletePrivatePhoto succeeds even when storage object deletion fails', asyn
     storageInstance: {},
     realtimeDbInstance: {},
     dbRefFn: (_db, path) => ({ path }),
-    getFn: async () => mockSnapshot({ storagePath: 'private_tour_photos/tour-2/user-2/file.jpg' }),
+    getFn: async () => mockSnapshot({ storagePath: 'private_tour_photos/tour-2/user-2/file.jpg', thumbnailStoragePath: 'private_tour_photos/tour-2/user-2/thumbnails/file_thumb.jpg' }),
     storageRefFn: (_storage, path) => ({ path }),
     deleteObjectFn: async () => {
       throw new Error('storage down');

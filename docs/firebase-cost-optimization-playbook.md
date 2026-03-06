@@ -398,6 +398,42 @@ Photo metadata currently stores rich fields useful for diagnostics; some may be 
 
 ---
 
+
+## Implemented Image Optimization Blueprint (Mobile Upload Path)
+
+The following image-cost controls are now implemented in the app upload path and should be treated as the baseline standard for all future media work:
+
+1. **Pre-upload downscaling and compression (client-side)**
+   - Full image variant is resized to max long edge 1600px and JPEG-compressed for gallery-grade quality.
+   - Thumbnail variant is resized to max long edge 420px and compressed separately for list/grid rendering.
+2. **Dual-variant storage strategy**
+   - Full image remains the canonical share/save asset.
+   - Thumbnail is persisted as a separate object under a `thumbnails/` prefix to reduce egress for gallery/list usage.
+3. **Thumbnail-first rendering policy**
+   - Grid/list surfaces should use `thumbnailUrl` whenever available.
+   - Fullscreen viewer and explicit save/share operations should continue using the full-resolution URL.
+4. **Upload telemetry for optimization ROI**
+   - `optimization` metadata is persisted alongside photo metadata:
+     - `originalSizeBytes`
+     - `optimizedSizeBytes`
+     - `thumbnailSizeBytes`
+     - `optimizationRatio`
+   - This enables after-the-fact reporting on storage and egress avoided.
+5. **Lifecycle-safe deletion**
+   - Deletion paths remove both full image object and thumbnail object (if present) to prevent orphaned storage growth.
+
+### Rollout/Backfill guidance
+
+- Existing records without thumbnails remain backward compatible because UI falls back to `url` when `thumbnailUrl` is absent.
+- Optional future backfill can generate thumbnails lazily (on first open) or in batch via controlled function jobs.
+
+### KPIs to track post-rollout
+
+- Average uploaded full-image size (bytes/object).
+- Thumbnail hit rate in gallery views (% of list requests served by thumbnail).
+- Storage growth delta (GB/day) before vs after rollout.
+- Photo egress per active user/session.
+
 ## Validation Checklist for Every Optimization PR
 
 - [ ] Baseline metric reference attached.
