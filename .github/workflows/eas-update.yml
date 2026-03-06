@@ -30,4 +30,5 @@ jobs:
           token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Publish development channel update
-        run: eas update --channel development --message "CI update: $GITHUB_SHA" --non-interactive
+        run: |
+          eas update --channel development --message "CI update: ${{ github.sha }}" --non-interactive
