@@ -15,7 +15,9 @@
     "build:dev:android": "eas build --profile development --platform android",
     "build:dev:ios-device": "eas build --profile development-device --platform ios",
     "build:preview": "eas build --profile preview --platform all",
-    "build:production": "eas build --profile production --platform all"
+    "build:production": "eas build --profile production --platform all",
+    "update:dev": "eas update --channel development",
+    "update:prod": "eas update --channel production"
   },
   "dependencies": {
     "@expo/vector-icons": "^14.1.0",
@@ -37,6 +39,7 @@
     "expo-notifications": "~0.32.13",
     "expo-secure-store": "~15.0.7",
     "expo-status-bar": "~3.0.8",
+    "expo-updates": "~29.0.16",
     "firebase": "^9.21.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
