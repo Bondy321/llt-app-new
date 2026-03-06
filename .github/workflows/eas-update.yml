@@ -31,5 +31,5 @@ jobs:
 
       - name: Publish development channel update (native only)
         run: |
-          eas update --channel development --platform ios --message "CI update: ${{ github.sha }}"
+          eas update --channel preview --platform ios --message "CI update: ${{ github.sha }}"
           eas update --channel development --platform android --message "CI update: ${{ github.sha }}"
