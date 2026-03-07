@@ -38,6 +38,7 @@ import {
   processOfflineQueue,
   getOfflineQueueCount,
 } from '../services/safetyService';
+import * as chatService from '../services/chatService';
 import offlineSyncService from '../services/offlineSyncService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 
@@ -450,6 +451,7 @@ export default function SafetySupportScreen({
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [safetyHistory, setSafetyHistory] = useState([]);
   const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
+  const [requestingDriverCall, setRequestingDriverCall] = useState(false);
 
   useEffect(() => {
     if (!tourData?.id) return;
@@ -474,8 +476,9 @@ export default function SafetySupportScreen({
 
   // Derived values
   const isDriver = mode === 'driver';
-  const driverPhone = tourData?.driverPhone;
-  const supportPhone = tourData?.operationsPhone || tourData?.supportPhone;
+  const emergencyNumber = '999';
+  const operationsNumber = '+441414876737';
+  const tourId = tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
   const userName = bookingData?.passengerNames?.[0] || (isDriver ? tourData?.driverName : 'Passenger');
 
   // Get visible categories based on mode
@@ -542,6 +545,54 @@ export default function SafetySupportScreen({
     }
     const sanitized = phone.replace(/[^+\d]/g, '');
     Linking.openURL(`tel:${sanitized}`);
+  };
+
+  const confirmEmergencyCall = () => {
+    Alert.alert(
+      'Call emergency services?',
+      'Only continue for an extreme emergency requiring immediate police, fire, or ambulance response.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: `Call ${emergencyNumber}`,
+          style: 'destructive',
+          onPress: () => openDialer(emergencyNumber),
+        },
+      ]
+    );
+  };
+
+  const handleRequestDriverCall = async () => {
+    if (!tourId) {
+      Alert.alert('Unavailable', 'We could not find your tour right now. Please contact operations.');
+      return;
+    }
+
+    const bookingRef = bookingData?.bookingRef || bookingData?.id || 'Not provided';
+    const callbackRequestMessage = `Driver callback request: ${userName} (${bookingRef}) has requested a call as soon as possible.`;
+
+    setRequestingDriverCall(true);
+    const result = await chatService.sendMessage(
+      tourId,
+      callbackRequestMessage,
+      { userId: userId || 'anonymous', name: userName || 'Passenger', isDriver: false },
+      undefined,
+      { online: isConnected }
+    );
+    setRequestingDriverCall(false);
+
+    if (result?.success) {
+      Alert.alert(
+        'Callback requested',
+        'Your request has been sent to the tour chat so the driver is notified. Please keep your phone nearby.'
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Could not send request',
+      'Please try again, or contact operations directly if this is urgent.'
+    );
   };
 
   const sendSMS = (phone, message) => {
@@ -627,13 +678,13 @@ export default function SafetySupportScreen({
         'Emergency services and tour operations have been notified of your location.',
         [
           {
-            text: 'Call 112 Now',
+            text: `Call ${emergencyNumber} Now`,
             style: 'destructive',
-            onPress: () => openDialer('112'),
+            onPress: () => confirmEmergencyCall(),
           },
           {
             text: 'Call Operations',
-            onPress: () => openDialer(supportPhone || driverPhone),
+            onPress: () => openDialer(operationsNumber),
           },
           { text: 'OK', style: 'cancel' },
         ]
@@ -664,9 +715,9 @@ export default function SafetySupportScreen({
         'Could not send alert to operations, but you can still call emergency services directly.',
         [
           {
-            text: 'Call 112',
+            text: `Call ${emergencyNumber}`,
             style: 'destructive',
-            onPress: () => openDialer('112'),
+            onPress: () => confirmEmergencyCall(),
           },
           { text: 'OK', style: 'cancel' },
         ]
@@ -959,23 +1010,23 @@ export default function SafetySupportScreen({
               <ContactButton
                 icon="hospital-box"
                 label="Emergency"
-                sublabel="112"
-                onPress={() => openDialer('112')}
+                sublabel={emergencyNumber}
+                onPress={confirmEmergencyCall}
                 color={COLORS.error}
               />
               <ContactButton
                 icon="headset"
                 label="Operations"
-                sublabel={supportPhone ? 'Call now' : 'Not available'}
-                onPress={() => openDialer(supportPhone || driverPhone)}
+                sublabel={operationsNumber}
+                onPress={() => openDialer(operationsNumber)}
                 color={COLORS.primary}
               />
               {!isDriver && (
                 <ContactButton
-                  icon="steering"
+                  icon="phone-in-talk"
                   label="Driver"
-                  sublabel={driverPhone ? 'Call now' : 'Not available'}
-                  onPress={() => openDialer(driverPhone)}
+                  sublabel={requestingDriverCall ? 'Requesting…' : 'Request callback'}
+                  onPress={handleRequestDriverCall}
                   color={COLORS.accent}
                 />
               )}
