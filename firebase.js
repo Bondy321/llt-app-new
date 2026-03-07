@@ -9,6 +9,7 @@ import { createPersistenceProvider } from './services/persistenceProvider.js';
 
 // Initialize a resilient persistence layer for auth/session state.
 const authStorage = createPersistenceProvider({ namespace: 'LLT_AUTH' });
+const IS_DEV = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
 
 // Firebase configuration - credentials loaded from environment variables
 // See .env.example for required environment variables
@@ -21,6 +22,32 @@ const firebaseConfig = {
   messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
   appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
   measurementId: process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID
+};
+
+const REQUIRED_FIREBASE_CONFIG_FIELDS = [
+  'apiKey',
+  'authDomain',
+  'databaseURL',
+  'projectId',
+  'storageBucket',
+  'messagingSenderId',
+  'appId',
+];
+
+const getMissingFirebaseConfigFields = (config) => {
+  return REQUIRED_FIREBASE_CONFIG_FIELDS.filter((field) => {
+    const value = config?.[field];
+    return typeof value !== 'string' || value.trim().length === 0;
+  });
+};
+
+const toStorageBucketUrl = (value) => {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return 'gs://loch-lomond-travel.firebasestorage.app';
+  }
+
+  const normalized = value.trim();
+  return normalized.startsWith('gs://') ? normalized : `gs://${normalized}`;
 };
 
 class AuthPersistence {
@@ -77,8 +104,24 @@ let db;
 let storage;
 let realtimeDb;
 let realtimeDbModular;
+let firebaseInitializationError = null;
 
 try {
+  const missingConfigFields = getMissingFirebaseConfigFields(firebaseConfig);
+  if (missingConfigFields.length > 0) {
+    firebaseInitializationError = new Error(
+      `Missing required Firebase config: ${missingConfigFields.join(', ')}`
+    );
+    console.warn(
+      '[Firebase] Initialization skipped because required configuration is missing.',
+      { missingConfigFields }
+    );
+  }
+
+  if (firebaseInitializationError) {
+    throw firebaseInitializationError;
+  }
+
   if (!firebase.apps.length) {
     app = firebase.initializeApp(firebaseConfig);
     console.log('Firebase initialized successfully');
@@ -91,7 +134,7 @@ try {
   auth = firebase.auth();
   db = firebase.firestore();
   const modularApp = app._delegate || app;
-  storage = getStorage(modularApp, 'gs://loch-lomond-travel.firebasestorage.app');
+  storage = getStorage(modularApp, toStorageBucketUrl(firebaseConfig.storageBucket));
   realtimeDb = firebase.database();
   realtimeDbModular = getDatabase(modularApp);
 
@@ -121,6 +164,7 @@ try {
   console.log('Realtime Database configured');
 
 } catch (error) {
+  firebaseInitializationError = error;
   console.error('Firebase initialization error:', error);
 }
 
@@ -143,7 +187,7 @@ const notifyAuthStateListeners = (user) => {
 // Set up global auth state observer (guarded to avoid crashing when Firebase fails to init)
 if (auth?.onAuthStateChanged) {
   auth.onAuthStateChanged(async (user) => {
-    if (__DEV__) {
+    if (IS_DEV) {
       console.log('Global auth state changed');
     }
 
@@ -157,11 +201,23 @@ if (auth?.onAuthStateChanged) {
   console.error('Firebase auth is not available; skipping auth state listener setup');
 }
 
+const assertAuthAvailable = (actionName) => {
+  if (auth) {
+    return;
+  }
+
+  const baseMessage = `Firebase auth is unavailable; cannot ${actionName}.`;
+  const reason = firebaseInitializationError?.message;
+  throw new Error(reason ? `${baseMessage} ${reason}` : baseMessage);
+};
+
 // Enhanced auth functions
 const authHelpers = {
   async signInAnonymouslyPersistent() {
     try {
-      if (__DEV__) {
+      assertAuthAvailable('sign in anonymously');
+
+      if (IS_DEV) {
         console.log('Attempting anonymous sign in...');
       }
       
@@ -169,7 +225,7 @@ const authHelpers = {
       const storedAuth = await authPersistence.getStoredAuthState();
       
       if (storedAuth && auth.currentUser) {
-        if (__DEV__) {
+        if (IS_DEV) {
           console.log('Using existing auth session');
         }
         return auth.currentUser;
@@ -177,7 +233,7 @@ const authHelpers = {
       
       // Sign in anonymously
       const result = await auth.signInAnonymously();
-      if (__DEV__) {
+      if (IS_DEV) {
         console.log('Anonymous sign in successful');
       }
       
@@ -192,6 +248,8 @@ const authHelpers = {
   },
 
   async ensureAuthenticated() {
+    assertAuthAvailable('ensure authentication');
+
     if (auth.currentUser) {
       return auth.currentUser;
     }
@@ -200,6 +258,11 @@ const authHelpers = {
   },
 
   onAuthStateChanged(callback) {
+    if (!auth) {
+      console.warn('Firebase auth is not available; auth state listener will be inert');
+      return () => {};
+    }
+
     authStateListeners.push(callback);
     return () => {
       authStateListeners = authStateListeners.filter(l => l !== callback);
