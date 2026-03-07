@@ -36,6 +36,62 @@ const validatePreferences = (preferences) => {
   return preferences;
 };
 
+const DEFAULT_NOTIFICATION_PREFERENCES = {
+  chatNotifications: true,
+  itineraryNotifications: true,
+};
+
+/**
+ * Normalizes legacy preference payloads into one stable schema.
+ */
+const normalizeNotificationPreferences = (preferences = {}) => {
+  if (!preferences || typeof preferences !== 'object') {
+    return { ...DEFAULT_NOTIFICATION_PREFERENCES };
+  }
+
+  const source =
+    preferences.preferences ||
+    preferences.notificationPreferences ||
+    preferences.notifications ||
+    preferences;
+
+  const toBoolean = (value, fallback) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === 'true' || normalized === 'enabled' || normalized === 'on') return true;
+      if (normalized === 'false' || normalized === 'disabled' || normalized === 'off') return false;
+    }
+    if (typeof value === 'number') {
+      if (value === 1) return true;
+      if (value === 0) return false;
+    }
+    return fallback;
+  };
+
+  const chatRaw =
+    source.chatNotifications ??
+    source.chatNotification ??
+    source.chat ??
+    source.messages ??
+    source.messageNotifications;
+
+  const itineraryRaw =
+    source.itineraryNotifications ??
+    source.itineraryNotification ??
+    source.itinerary ??
+    source.schedule ??
+    source.tripUpdates;
+
+  return {
+    chatNotifications: toBoolean(chatRaw, DEFAULT_NOTIFICATION_PREFERENCES.chatNotifications),
+    itineraryNotifications: toBoolean(
+      itineraryRaw,
+      DEFAULT_NOTIFICATION_PREFERENCES.itineraryNotifications
+    ),
+  };
+};
+
 /**
  * Registers the device for push notifications and returns the Expo Push Token.
  * Enhanced with better error handling and retry logic
@@ -130,19 +186,42 @@ export const saveUserPreferences = async (userId, preferences) => {
       throw new Error('Database not initialized');
     }
 
+    const userRef = realtimeDb.ref(`users/${validatedUserId}`);
+
+    const userSnapshot = await Promise.race([
+      userRef.once('value'),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Existing preferences fetch timeout')), 10000)
+      )
+    ]);
+
+    const existingUserData = userSnapshot.val() || {};
+    const existingRemotePreferences = normalizeNotificationPreferences(existingUserData.preferences);
+    const incomingPreferences = normalizeNotificationPreferences(validatedPreferences);
+    const mergedPreferences = {
+      ...DEFAULT_NOTIFICATION_PREFERENCES,
+      ...existingRemotePreferences,
+      ...incomingPreferences,
+    };
+
     // 1. Get the token (will ask for permission if not already granted)
     const token = await registerForPushNotificationsAsync();
+    const nowIso = new Date().toISOString();
 
     if (!token) {
-      // Save preferences without token (user may have denied permissions)
-      const userRef = realtimeDb.ref(`users/${validatedUserId}`);
+      // Preserve existing token details unless they are absent, while making status explicit
+      const tokenStatusPatch = {
+        pushTokenStatus: 'UNAVAILABLE',
+        pushTokenProvider: existingUserData.pushTokenProvider || 'expo',
+        pushTokenUpdatedAt: existingUserData.pushTokenUpdatedAt || nowIso,
+      };
 
       await Promise.race([
         userRef.update({
-          preferences: validatedPreferences,
-          lastUpdated: new Date().toISOString(),
+          preferences: mergedPreferences,
+          lastUpdated: nowIso,
           deviceOS: Platform.OS,
-          pushToken: null, // Explicitly set to null if no token
+          ...tokenStatusPatch,
         }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Preferences save timeout')), 10000)
@@ -156,12 +235,13 @@ export const saveUserPreferences = async (userId, preferences) => {
     }
 
     // 2. Save token and preferences
-    const userRef = realtimeDb.ref(`users/${validatedUserId}`);
-
     const updateData = {
       pushToken: token,
-      preferences: validatedPreferences,
-      lastUpdated: new Date().toISOString(),
+      pushTokenStatus: 'ACTIVE',
+      pushTokenUpdatedAt: nowIso,
+      pushTokenProvider: 'expo',
+      preferences: mergedPreferences,
+      lastUpdated: nowIso,
       deviceOS: Platform.OS,
       deviceModel: Device.modelName || 'Unknown',
       appVersion: Platform.Version,
