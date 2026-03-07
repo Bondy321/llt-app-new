@@ -50,9 +50,6 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
                 <Text style={styles.countdownNumber}>{daysToGo}</Text>
                 <Text style={styles.countdownLabel}>{daysToGo === 1 ? 'day' : 'days'} to go</Text>
               </View>
-              <Text style={styles.headerSubtitleFuture}>
-                {daysToGo <= 3 ? 'Pack your bags! ' : ''}Get ready for an amazing experience
-              </Text>
             </View>
           </LinearGradient>
         </View>
@@ -134,7 +131,6 @@ const styles = StyleSheet.create({
   countdownBadge: { backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, alignSelf: 'flex-start', marginBottom: 8 },
   countdownNumber: { color: COLORS.white, fontSize: 32, fontWeight: '800', textAlign: 'center' },
   countdownLabel: { color: COLORS.white, fontSize: 14, fontWeight: '600', textAlign: 'center', opacity: 0.9 },
-  headerSubtitleFuture: { color: COLORS.white, opacity: 0.9, fontSize: 14, fontStyle: 'italic' },
 
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
   badge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E1F0FF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, gap: 6 },
