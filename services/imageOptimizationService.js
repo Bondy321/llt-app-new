@@ -5,14 +5,35 @@ const OPTIMIZATION_PROFILES = {
   full: {
     maxLongEdge: 1600,
     compress: 0.68,
+    minCompress: 0.38,
+    compressStep: 0.1,
+    targetMaxBytes: 1400000,
+    maxIterations: 6,
     format: ImageManipulator.SaveFormat.JPEG,
   },
   thumbnail: {
     maxLongEdge: 420,
     compress: 0.55,
+    minCompress: 0.3,
+    compressStep: 0.1,
+    targetMaxBytes: 120000,
+    maxIterations: 6,
     format: ImageManipulator.SaveFormat.JPEG,
   },
 };
+
+const clampQuality = (quality, minCompress) => {
+  const value = Number.isFinite(quality) ? quality : 0.7;
+  const min = Number.isFinite(minCompress) ? minCompress : 0;
+  return Math.max(min, Math.min(1, Number(value.toFixed(2))));
+};
+
+const resolveProfile = (profile, overrides = {}) => ({
+  ...profile,
+  ...overrides,
+  // Keep final outputs in JPEG regardless of overrides.
+  format: ImageManipulator.SaveFormat.JPEG,
+});
 
 const safeFileSize = async (uri) => {
   if (!uri) return null;
@@ -40,22 +61,48 @@ const optimizeVariant = async (uri, profile, dimensions = {}) => {
   const resizeAction = buildResizeAction(dimensions.width, dimensions.height, profile.maxLongEdge);
   const actions = resizeAction ? [resizeAction] : [];
 
-  const result = await ImageManipulator.manipulateAsync(uri, actions, {
-    compress: profile.compress,
-    format: profile.format,
-    base64: false,
-  });
+  const maxIterations = Math.max(1, profile.maxIterations || 1);
+  const minCompress = Number.isFinite(profile.minCompress) ? profile.minCompress : profile.compress;
+  const compressStep = Number.isFinite(profile.compressStep) && profile.compressStep > 0
+    ? profile.compressStep
+    : 0.1;
+  const targetMaxBytes = Number.isFinite(profile.targetMaxBytes) ? profile.targetMaxBytes : null;
 
-  const sizeBytes = await safeFileSize(result.uri);
+  let currentQuality = clampQuality(profile.compress, minCompress);
+  let finalResult = null;
+  let sizeBytes = null;
+  let optimizationPasses = 0;
+
+  for (let pass = 1; pass <= maxIterations; pass += 1) {
+    finalResult = await ImageManipulator.manipulateAsync(uri, actions, {
+      compress: currentQuality,
+      format: ImageManipulator.SaveFormat.JPEG,
+      base64: false,
+    });
+
+    sizeBytes = await safeFileSize(finalResult.uri);
+    optimizationPasses = pass;
+
+    const withinBudget = !targetMaxBytes || (typeof sizeBytes === 'number' && sizeBytes <= targetMaxBytes);
+    if (withinBudget || pass >= maxIterations || currentQuality <= minCompress) {
+      break;
+    }
+
+    currentQuality = clampQuality(currentQuality - compressStep, minCompress);
+  }
+
   return {
-    uri: result.uri,
-    width: result.width,
-    height: result.height,
+    uri: finalResult.uri,
+    width: finalResult.width,
+    height: finalResult.height,
     sizeBytes,
+    optimizationPasses,
+    finalQualityUsed: currentQuality,
+    resizeApplied: Boolean(resizeAction),
   };
 };
 
-export const optimizeImageForUpload = async (asset) => {
+export const optimizeImageForUpload = async (asset, options = {}) => {
   if (!asset?.uri) {
     throw new Error('Missing image asset URI');
   }
@@ -63,8 +110,17 @@ export const optimizeImageForUpload = async (asset) => {
   const originalSizeBytes = typeof asset.fileSize === 'number' ? asset.fileSize : await safeFileSize(asset.uri);
   const dimensions = { width: asset.width, height: asset.height };
 
-  const full = await optimizeVariant(asset.uri, OPTIMIZATION_PROFILES.full, dimensions);
-  const thumbnail = await optimizeVariant(full.uri, OPTIMIZATION_PROFILES.thumbnail, {
+  const fullProfile = resolveProfile(OPTIMIZATION_PROFILES.full, {
+    targetMaxBytes: options.fullTargetMaxBytes ?? OPTIMIZATION_PROFILES.full.targetMaxBytes,
+    maxIterations: options.maxIterations ?? OPTIMIZATION_PROFILES.full.maxIterations,
+  });
+  const thumbnailProfile = resolveProfile(OPTIMIZATION_PROFILES.thumbnail, {
+    targetMaxBytes: options.thumbnailTargetMaxBytes ?? OPTIMIZATION_PROFILES.thumbnail.targetMaxBytes,
+    maxIterations: options.maxIterations ?? OPTIMIZATION_PROFILES.thumbnail.maxIterations,
+  });
+
+  const full = await optimizeVariant(asset.uri, fullProfile, dimensions);
+  const thumbnail = await optimizeVariant(full.uri, thumbnailProfile, {
     width: full.width,
     height: full.height,
   });
@@ -79,6 +135,12 @@ export const optimizeImageForUpload = async (asset) => {
       optimizationRatio: originalSizeBytes && full.sizeBytes
         ? Number((1 - (full.sizeBytes / originalSizeBytes)).toFixed(4))
         : null,
+      fullOptimizationPasses: full.optimizationPasses,
+      thumbnailOptimizationPasses: thumbnail.optimizationPasses,
+      fullFinalQualityUsed: full.finalQualityUsed,
+      thumbnailFinalQualityUsed: thumbnail.finalQualityUsed,
+      fullResizeApplied: full.resizeApplied,
+      thumbnailResizeApplied: thumbnail.resizeApplied,
     },
   };
 };
