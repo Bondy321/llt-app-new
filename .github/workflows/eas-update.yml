@@ -8,6 +8,20 @@ on:
 jobs:
   publish-development-update:
     runs-on: ubuntu-latest
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EXPO_PUBLIC_FIREBASE_API_KEY: ${{ secrets.EXPO_PUBLIC_FIREBASE_API_KEY }}
+      EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+      EXPO_PUBLIC_FIREBASE_DATABASE_URL: ${{ secrets.EXPO_PUBLIC_FIREBASE_DATABASE_URL }}
+      EXPO_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_PROJECT_ID }}
+      EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET: ${{ secrets.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET }}
+      EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID }}
+      EXPO_PUBLIC_FIREBASE_APP_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_APP_ID }}
+      EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID }}
+      EXPO_PUBLIC_SUPPORT_PHONE: ${{ secrets.EXPO_PUBLIC_SUPPORT_PHONE }}
+      EXPO_PUBLIC_SUPPORT_SMS: ${{ secrets.EXPO_PUBLIC_SUPPORT_SMS }}
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK }}
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK }}
 
     steps:
       - name: Checkout repository
@@ -27,9 +41,9 @@ jobs:
         with:
           expo-version: latest
           eas-version: latest
-          token: ${{ secrets.EXPO_TOKEN }}
+          token: ${{ env.EXPO_TOKEN }}
 
       - name: Publish development channel update (native only)
         run: |
-          eas update --channel preview --platform ios --message "CI update: ${{ github.sha }}"
-          eas update --channel preview --platform android --message "CI update: ${{ github.sha }}"
+          eas update --channel preview --platform ios --message "CI update: ${{ github.sha }}" --non-interactive
+          eas update --channel preview --platform android --message "CI update: ${{ github.sha }}" --non-interactive
