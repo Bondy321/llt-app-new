@@ -318,6 +318,21 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
       await new Promise((resolve) => {
         let didResolve = false;
         let unsubscribe = null;
+        let timeoutId = null;
+
+        const completeRefresh = (photoList = null) => {
+          if (didResolve) return;
+          didResolve = true;
+
+          if (Array.isArray(photoList)) {
+            setPhotos(photoList);
+          }
+
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+
 
         const completeRefresh = (photoList = []) => {
           if (didResolve) return;
@@ -328,6 +343,10 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
           }
           resolve();
         };
+
+        timeoutId = setTimeout(() => {
+          completeRefresh();
+        }, 5000);
 
         unsubscribe = subscribeToPrivatePhotos(tourId, userId, (photoList) => {
           completeRefresh(photoList);

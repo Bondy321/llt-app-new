@@ -17,6 +17,8 @@ test('PhotobookScreen keeps SectionList virtualization and stable viewer indexin
   assert.match(src, /SectionList/);
   assert.match(src, /photoIndexById/);
   assert.match(src, /const openViewer = useCallback\(\(photoId\)/);
+  assert.match(src, /setTimeout\(\(\) => \{/);
+  assert.match(src, /\}, 5000\);/);
   assert.match(src, /initialNumToRender=\{12\}/);
 });
 
