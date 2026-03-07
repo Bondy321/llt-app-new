@@ -18,6 +18,9 @@ const expo = new Expo();
 
 const NOTIFICATION_RECIPIENT_CAP = 1000;
 const RECIPIENT_CHUNK_SIZE = 200;
+const USER_PROFILE_FETCH_CHUNK_SIZE = 100;
+const USER_PROFILE_CACHE_TTL_MS = 2 * 60 * 1000;
+const userProfileCache = new Map();
 
 // ==================== UTILITY FUNCTIONS ====================
 
@@ -113,13 +116,61 @@ const applyRecipientCap = (participantIds, cap, context = {}) => {
   return selected;
 };
 
-const fetchUsersSnapshot = async (context = {}) => {
-  const usersSnapshot = await admin.database().ref('users').once('value');
-  const usersMap = usersSnapshot.exists() ? usersSnapshot.val() : {};
-  log.info('Fetched users snapshot for notifications', {
-    ...context,
-    userCount: Object.keys(usersMap).length,
+const getCachedUserProfile = (userId) => {
+  const cached = userProfileCache.get(userId);
+  if (!cached) return null;
+
+  if ((Date.now() - cached.cachedAt) > USER_PROFILE_CACHE_TTL_MS) {
+    userProfileCache.delete(userId);
+    return null;
+  }
+
+  return cached.profile;
+};
+
+const setCachedUserProfile = (userId, profile) => {
+  userProfileCache.set(userId, {
+    profile,
+    cachedAt: Date.now(),
   });
+};
+
+const fetchUsersSnapshot = async (participantIds = [], context = {}) => {
+  const usersMap = {};
+  const cacheMissIds = [];
+
+  participantIds.forEach((userId) => {
+    const cachedProfile = getCachedUserProfile(userId);
+    if (cachedProfile) {
+      usersMap[userId] = cachedProfile;
+    } else {
+      cacheMissIds.push(userId);
+    }
+  });
+
+  const missChunks = chunkArrayDeterministically(cacheMissIds, USER_PROFILE_FETCH_CHUNK_SIZE);
+  for (const chunk of missChunks) {
+    const snapshots = await Promise.all(
+      chunk.map((userId) => admin.database().ref(`users/${userId}`).once('value')),
+    );
+
+    snapshots.forEach((snapshot, index) => {
+      if (!snapshot.exists()) return;
+      const userId = chunk[index];
+      const profile = snapshot.val();
+      usersMap[userId] = profile;
+      setCachedUserProfile(userId, profile);
+    });
+  }
+
+  log.info('Fetched targeted users for notifications', {
+    ...context,
+    requestedUserCount: participantIds.length,
+    cacheMissCount: cacheMissIds.length,
+    resolvedUserCount: Object.keys(usersMap).length,
+    chunkCount: missChunks.length,
+  });
+
   return usersMap;
 };
 
@@ -694,7 +745,7 @@ exports.sendChatNotification = onValueCreated(
       });
 
       const fetchUsersStart = Date.now();
-      const usersMap = await fetchUsersSnapshot({ tourId, notificationType: 'chat' });
+      const usersMap = await fetchUsersSnapshot(cappedParticipantIds, { tourId, notificationType: 'chat' });
       const userFetchDurationMs = Date.now() - fetchUsersStart;
 
       const assemblyStart = Date.now();
@@ -872,7 +923,7 @@ exports.sendItineraryNotification = onValueUpdated(
       });
 
       const fetchUsersStart = Date.now();
-      const usersMap = await fetchUsersSnapshot({ tourId, notificationType: 'itinerary' });
+      const usersMap = await fetchUsersSnapshot(cappedParticipantIds, { tourId, notificationType: 'itinerary' });
       const userFetchDurationMs = Date.now() - fetchUsersStart;
 
       const assemblyStart = Date.now();
