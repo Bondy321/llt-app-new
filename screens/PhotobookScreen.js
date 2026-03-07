@@ -333,6 +333,11 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
             timeoutId = null;
           }
 
+
+        const completeRefresh = (photoList = []) => {
+          if (didResolve) return;
+          didResolve = true;
+          setPhotos(photoList);
           if (typeof unsubscribe === 'function') {
             unsubscribe();
           }
