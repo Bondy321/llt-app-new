@@ -31,10 +31,13 @@ test('ChatScreen keeps mixed-row timeline contract and unread-jump path', () => 
   assert.match(src, /keyExtractor = useCallback/);
 });
 
-test('Cloud function notification path keeps chunked send and avoids per-user user fetch pattern', () => {
+test('Cloud function notification path keeps chunked send and targeted profile fetch behavior', () => {
   const src = read('functions/index.js');
   assert.match(src, /fetchUsersSnapshot/);
-  assert.doesNotMatch(src, /ref\(`users\/\$\{userId\}`\)\.once\('value'\)/);
+  assert.match(src, /USER_PROFILE_CACHE_TTL_MS/);
+  assert.match(src, /cacheMissCount/);
+  assert.match(src, /requestedUserCount/);
+  assert.match(src, /ref\(`users\/\$\{userId\}`\)\.once\('value'\)/);
   assert.match(src, /chunkArrayDeterministically/);
   assert.match(src, /expo\.chunkPushNotifications/);
   assert.match(src, /invalidTokens/);

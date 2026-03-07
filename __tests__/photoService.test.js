@@ -3,6 +3,8 @@ const assert = require('node:assert');
 
 const {
   uploadPhoto,
+  fetchTourPhotosPage,
+  fetchPrivatePhotosPage,
   subscribeToTourPhotos,
   subscribeToPrivatePhotos,
   deleteGroupPhoto,
@@ -292,6 +294,66 @@ test('subscribeToPrivatePhotos scopes path to user and sorts newest first', asyn
   assert.strictEqual(seenPath, 'private_tour_photos/tour-A/user-5');
   assert.deepStrictEqual(received.map((p) => p.id), ['two', 'one']);
   unsubscribe();
+});
+
+test('fetchTourPhotosPage returns bounded page with cursor and hasMore contract', async () => {
+  const queryCalls = [];
+
+  const result = await fetchTourPhotosPage({ tourId: 'tour-1', limit: 2 }, {
+    realtimeDbInstance: {},
+    dbRefFn: mockDbRef,
+    queryFn: (...args) => {
+      queryCalls.push(args);
+      return { args };
+    },
+    orderByChildFn: () => 'timestamp',
+    limitToLastFn: (value) => value,
+    endAtFn: (value) => value,
+    getFn: async () => mockSnapshot({
+      alpha: { timestamp: 10 },
+      beta: { timestamp: 40 },
+      gamma: { timestamp: 30 },
+    }),
+  });
+
+  assert.strictEqual(queryCalls.length, 1);
+  assert.deepStrictEqual(result.items.map((item) => item.id), ['beta', 'gamma']);
+  assert.strictEqual(result.hasMore, true);
+  assert.deepStrictEqual(result.nextCursor, { timestamp: 30, id: 'gamma' });
+});
+
+test('fetchPrivatePhotosPage applies endBefore cursor and normalizes timestamps safely', async () => {
+  const queryCalls = [];
+
+  const result = await fetchPrivatePhotosPage({
+    tourId: 'tour-2',
+    userId: 'user-2',
+    limit: 3,
+    endBefore: { timestamp: '120', id: 'cursor-a' },
+  }, {
+    realtimeDbInstance: {},
+    dbRefFn: mockDbRef,
+    queryFn: (...args) => {
+      queryCalls.push(args);
+      return { args };
+    },
+    orderByChildFn: () => 'timestamp',
+    limitToLastFn: (value) => value,
+    endAtFn: (value) => value,
+    getFn: async () => mockSnapshot({
+      withDateObj: { timestamp: new Date('2026-01-01T00:00:00.000Z') },
+      withNumberString: { timestamp: '100' },
+      withInvalid: { timestamp: 'not-a-number' },
+    }),
+  });
+
+  assert.strictEqual(queryCalls.length, 1);
+  assert.strictEqual(queryCalls[0][2], 120);
+  assert.strictEqual(queryCalls[0][3], 4);
+  assert.deepStrictEqual(result.items.map((item) => item.id), ['withDateObj', 'withNumberString', 'withInvalid']);
+  assert.strictEqual(result.items[0].timestamp, Number(new Date('2026-01-01T00:00:00.000Z')));
+  assert.strictEqual(result.items[2].timestamp, 0);
+  assert.strictEqual(result.hasMore, false);
 });
 
 test('deleteGroupPhoto deletes owned photo from storage and database', async () => {
