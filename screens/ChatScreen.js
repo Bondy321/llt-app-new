@@ -11,8 +11,8 @@ import {
   Modal,
   Platform,
   Pressable,
+  FlatList,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -54,6 +54,9 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // Quick Reaction Emojis
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🎉'];
+const DATE_SEPARATOR_HEIGHT = 40;
+const UNREAD_SEPARATOR_HEIGHT = 36;
+const ESTIMATED_MESSAGE_ROW_HEIGHT = 120;
 
 // URL Detection Regex
 const URL_REGEX = /(https?:\/\/[^\s]+)/g;
@@ -491,12 +494,12 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   }, [tourId, internalDriverChat, currentUser?.uid]);
 
   // Refs
-  const scrollViewRef = useRef(null);
+  const messageListRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const syncBannerTimeoutRef = useRef(null);
   const lastMessageCountRef = useRef(0);
   const lastReadMarkAtRef = useRef(0);
-  const messageOffsetsRef = useRef({});
+  const rowOffsetsRef = useRef({});
 
   const getMessageTimestamp = useCallback((message) => {
     if (!message) return null;
@@ -533,7 +536,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Scroll to bottom helper
   const scrollToBottom = useCallback((animated = true) => {
     requestAnimationFrame(() => {
-      scrollViewRef.current?.scrollToEnd({ animated });
+      messageListRef.current?.scrollToEnd({ animated });
     });
   }, []);
 
@@ -1205,7 +1208,11 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       const msgDate = msgTimestamp ? new Date(msgTimestamp).toDateString() : 'Unknown date';
 
       if (msgDate !== currentDate) {
-        groups.push({ type: 'date', date: msgTimestamp ?? msg.timestamp });
+        groups.push({
+          type: 'date',
+          id: `date-${msgDate}-${msgTimestamp ?? msg.timestamp ?? msg.id}`,
+          date: msgTimestamp ?? msg.timestamp,
+        });
         currentDate = msgDate;
       }
 
@@ -1214,11 +1221,16 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         unreadInjected = true;
       }
 
-      groups.push({ type: 'message', data: msg });
+      groups.push({ type: 'message', id: `message-${msg.id}`, data: msg });
     });
 
     return groups;
   }, [messages, unreadAnchorMessageId]);
+
+  const unreadAnchorIndex = useMemo(() => {
+    if (!unreadAnchorMessageId) return -1;
+    return groupedMessages.findIndex((item) => item.type === 'message' && item.data?.id === unreadAnchorMessageId);
+  }, [groupedMessages, unreadAnchorMessageId]);
 
   const showJumpToUnread = useMemo(() => {
     if (!unreadAnchorMessageId || unreadAnchorY == null) return false;
@@ -1226,9 +1238,13 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   }, [unreadAnchorMessageId, unreadAnchorY, currentScrollY]);
 
   const jumpToUnread = useCallback(() => {
+    if (unreadAnchorIndex >= 0) {
+      messageListRef.current?.scrollToIndex({ index: unreadAnchorIndex, animated: true, viewOffset: 80 });
+      return;
+    }
     if (unreadAnchorY == null) return;
-    scrollViewRef.current?.scrollTo({ y: Math.max(unreadAnchorY - 80, 0), animated: true });
-  }, [unreadAnchorY]);
+    messageListRef.current?.scrollToOffset({ offset: Math.max(unreadAnchorY - 80, 0), animated: true });
+  }, [unreadAnchorIndex, unreadAnchorY]);
 
   // Render a single message
   const renderMessage = useCallback(
@@ -1348,6 +1364,88 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     [currentUser?.uid, formatTime, handleMessageLongPress, handleReaction, parseMessageText]
   );
 
+  const keyExtractor = useCallback((item) => {
+    if (item.type === 'message') return item.data?.id ? `message-${item.data.id}` : item.id;
+    return item.id;
+  }, []);
+
+  const getItemLayout = useCallback((data, index) => {
+    if (!data || index < 0 || index >= data.length) {
+      return { length: ESTIMATED_MESSAGE_ROW_HEIGHT, offset: 0, index };
+    }
+
+    let offset = 0;
+    for (let i = 0; i < index; i += 1) {
+      const row = data[i];
+      if (row.type === 'date') {
+        offset += DATE_SEPARATOR_HEIGHT;
+      } else if (row.type === 'unread-separator') {
+        offset += UNREAD_SEPARATOR_HEIGHT;
+      } else {
+        offset += rowOffsetsRef.current[row.data?.id] || ESTIMATED_MESSAGE_ROW_HEIGHT;
+      }
+    }
+
+    const row = data[index];
+    const length = row.type === 'date'
+      ? DATE_SEPARATOR_HEIGHT
+      : row.type === 'unread-separator'
+        ? UNREAD_SEPARATOR_HEIGHT
+        : rowOffsetsRef.current[row.data?.id] || ESTIMATED_MESSAGE_ROW_HEIGHT;
+
+    return { length, offset, index };
+  }, []);
+
+  const renderMessageRow = useCallback(({ item }) => {
+    if (item.type === 'date') return <DateSeparator date={item.date} />;
+    if (item.type === 'unread-separator') return <UnreadSeparator />;
+
+    const messageId = item.data?.id;
+    return (
+      <View
+        onLayout={(event) => {
+          if (!messageId) return;
+          const { y, height } = event.nativeEvent.layout;
+          rowOffsetsRef.current[messageId] = height;
+          if (messageId === unreadAnchorMessageId) {
+            setUnreadAnchorY(y);
+          }
+        }}
+      >
+        {renderMessage(item.data)}
+      </View>
+    );
+  }, [renderMessage, unreadAnchorMessageId]);
+
+  const renderEmptyMessages = useCallback(() => (
+    <View style={styles.emptyContainer}>
+      <LinearGradient
+        colors={['#DBEAFE', '#EFF6FF']}
+        style={styles.emptyIconContainer}
+      >
+        <MaterialCommunityIcons
+          name="chat-processing-outline"
+          size={60}
+          color={COLORS.primaryBlue}
+        />
+      </LinearGradient>
+      <Text style={styles.emptyText}>Start the Conversation!</Text>
+      <Text style={styles.emptySubtext}>
+        Say hello to your fellow travelers and tour guides
+      </Text>
+      <View style={styles.emptyTips}>
+        <View style={styles.emptyTip}>
+          <MaterialCommunityIcons name="image" size={20} color={COLORS.primaryBlue} />
+          <Text style={styles.emptyTipText}>Share photos</Text>
+        </View>
+        <View style={styles.emptyTip}>
+          <MaterialCommunityIcons name="emoticon" size={20} color={COLORS.coralAccent} />
+          <Text style={styles.emptyTipText}>React to messages</Text>
+        </View>
+      </View>
+    </View>
+  ), []);
+
   // Error state
   if (!tourId) {
     return (
@@ -1423,15 +1521,28 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         ) : (
           <>
             {/* Messages List */}
-            <ScrollView
-              ref={scrollViewRef}
+            <FlatList
+              ref={messageListRef}
               contentContainerStyle={styles.messagesScrollContainer}
+              data={groupedMessages}
+              keyExtractor={keyExtractor}
+              renderItem={renderMessageRow}
+              ListEmptyComponent={renderEmptyMessages}
+              getItemLayout={getItemLayout}
+              removeClippedSubviews
+              initialNumToRender={20}
+              maxToRenderPerBatch={20}
+              windowSize={10}
               onContentSizeChange={() => {
                 if (isAtBottom) scrollToBottom(false);
               }}
               onScroll={handleScroll}
               scrollEventThrottle={100}
               showsVerticalScrollIndicator={false}
+              onScrollToIndexFailed={({ index }) => {
+                const fallbackOffset = Math.max(index * ESTIMATED_MESSAGE_ROW_HEIGHT - 80, 0);
+                messageListRef.current?.scrollToOffset({ offset: fallbackOffset, animated: true });
+              }}
               refreshControl={
                 <RefreshControl
                   refreshing={refreshing}
@@ -1440,65 +1551,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
                   tintColor={COLORS.primaryBlue}
                 />
               }
-            >
-              {groupedMessages.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                  <LinearGradient
-                    colors={['#DBEAFE', '#EFF6FF']}
-                    style={styles.emptyIconContainer}
-                  >
-                    <MaterialCommunityIcons
-                      name="chat-processing-outline"
-                      size={60}
-                      color={COLORS.primaryBlue}
-                    />
-                  </LinearGradient>
-                  <Text style={styles.emptyText}>Start the Conversation!</Text>
-                  <Text style={styles.emptySubtext}>
-                    Say hello to your fellow travelers and tour guides
-                  </Text>
-                  <View style={styles.emptyTips}>
-                    <View style={styles.emptyTip}>
-                      <MaterialCommunityIcons name="image" size={20} color={COLORS.primaryBlue} />
-                      <Text style={styles.emptyTipText}>Share photos</Text>
-                    </View>
-                    <View style={styles.emptyTip}>
-                      <MaterialCommunityIcons name="emoticon" size={20} color={COLORS.coralAccent} />
-                      <Text style={styles.emptyTipText}>React to messages</Text>
-                    </View>
-                  </View>
-                </View>
-              ) : (
-                <>
-                  {groupedMessages.map((item, index) => {
-                    if (item.type === 'date') {
-                      return <DateSeparator key={`date-${index}`} date={item.date} />;
-                    }
-
-                    if (item.type === 'unread-separator') {
-                      return <UnreadSeparator key={item.id} />;
-                    }
-
-                    const messageId = item.data?.id;
-                    return (
-                      <View
-                        key={messageId || `message-${index}`}
-                        onLayout={(event) => {
-                          if (!messageId) return;
-                          const y = event.nativeEvent.layout.y;
-                          messageOffsetsRef.current[messageId] = y;
-                          if (messageId === unreadAnchorMessageId) {
-                            setUnreadAnchorY(y);
-                          }
-                        }}
-                      >
-                        {renderMessage(item.data)}
-                      </View>
-                    );
-                  })}
-                </>
-              )}
-            </ScrollView>
+            />
 
             {/* Typing Indicator */}
             <TypingIndicator typingUsers={typingUsers} />
