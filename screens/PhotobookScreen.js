@@ -306,11 +306,51 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     }
   };
 
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    // The subscription will update the state
-    setTimeout(() => setRefreshing(false), 600);
-  }, []);
+
+    try {
+      if (!tourId || !userId) {
+        setPhotos([]);
+        return;
+      }
+
+      await new Promise((resolve) => {
+        let didResolve = false;
+        let unsubscribe = null;
+        let timeoutId = null;
+
+        const completeRefresh = (photoList = null) => {
+          if (didResolve) return;
+          didResolve = true;
+
+          if (Array.isArray(photoList)) {
+            setPhotos(photoList);
+          }
+
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+
+          if (typeof unsubscribe === 'function') {
+            unsubscribe();
+          }
+          resolve();
+        };
+
+        timeoutId = setTimeout(() => {
+          completeRefresh();
+        }, 5000);
+
+        unsubscribe = subscribeToPrivatePhotos(tourId, userId, (photoList) => {
+          completeRefresh(photoList);
+        });
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  }, [tourId, userId]);
 
   const handleImageLoad = (photoId) => {
     setLoadedImages(prev => ({ ...prev, [photoId]: true }));

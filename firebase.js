@@ -335,11 +335,16 @@ const getCurrentAppCheckToken = async () => {
 
 // Network state monitoring
 let isOnline = true;
+let lastRealtimeDbOnlineState = null;
 
 const updateNetworkState = (online) => {
   isOnline = online;
   if (!realtimeDb) {
     console.warn('Realtime Database is not available; skipping network state sync');
+    return;
+  }
+
+  if (lastRealtimeDbOnlineState === online) {
     return;
   }
 
@@ -350,6 +355,8 @@ const updateNetworkState = (online) => {
     console.log('Network disconnected - using offline mode');
     realtimeDb.goOffline();
   }
+
+  lastRealtimeDbOnlineState = online;
 };
 
 // Export enhanced services
