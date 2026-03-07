@@ -330,6 +330,8 @@ const normalizeAssignedDriverCodeRecord = ({ value, driverId, fallbackTourId = n
 };
 
 const resolveVerifierTourId = (passengerVerification = {}, bookingData = {}) => {
+  // DEPRECATED: verifier-provided tour context is no longer used for passenger routing.
+  // Keep this helper for compatibility with legacy callsites/tests only.
   const verifierTourId = normalizeTourIdentifier(passengerVerification.tourId);
   if (isValidNormalizedTourId(verifierTourId)) {
     return verifierTourId;
@@ -337,6 +339,20 @@ const resolveVerifierTourId = (passengerVerification = {}, bookingData = {}) => 
 
   const fallbackTourId = normalizeTourIdentifier(passengerVerification.tourCode || bookingData.tourCode);
   return isValidNormalizedTourId(fallbackTourId) ? fallbackTourId : null;
+};
+
+const resolveBookingTourId = (bookingData = {}) => {
+  const bookingTourId = normalizeTourIdentifier(bookingData.tourId);
+  if (isValidNormalizedTourId(bookingTourId)) {
+    return bookingTourId;
+  }
+
+  const bookingTourCodeDerivedId = normalizeTourIdentifier(bookingData.tourCode);
+  if (isValidNormalizedTourId(bookingTourCodeDerivedId)) {
+    return bookingTourCodeDerivedId;
+  }
+
+  return null;
 };
 
 // --- HELPERS: Manifest Status Derivation ---
@@ -823,15 +839,15 @@ const validateBookingReference = async (reference, email) => {
     const bookingData = bookingSnapshot.val();
     const { normalizedBooking } = await ensureBookingSchemaConsistency(resolvedBookingRef, bookingData, realtimeDb);
 
-    const tourId = resolveVerifierTourId(passengerVerification, bookingData);
+    const tourId = resolveBookingTourId(normalizedBooking);
     if (!tourId) {
-      return { valid: false, error: 'Tour information not available' };
+      return { valid: false, error: 'Tour information not available for this booking.' };
     }
 
     const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
 
     if (!tourSnapshot.exists()) {
-      return { valid: false, error: 'Tour information not available' };
+      return { valid: false, error: 'Tour information not available for this booking.' };
     }
 
     const tourData = tourSnapshot.val();
