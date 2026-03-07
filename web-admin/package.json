@@ -8,7 +8,12 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "npm run test:sections",
+    "test:sections": "npm run test:components && npm run test:services && npm run test:utils",
+    "test:components": "vitest run src/components",
+    "test:services": "vitest run src/services",
+    "test:utils": "vitest run src/utils",
+    "test:all": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
