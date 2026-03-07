@@ -585,7 +585,7 @@ export default function SafetySupportScreen({
     const callbackRequestMessage = `Driver callback request: ${userName} (${bookingRef}) has requested a call as soon as possible.`;
 
     setRequestingDriverCall(true);
-    const result = await chatService.sendMessage(
+    const result = await chatService.sendInternalDriverMessage(
       tourId,
       callbackRequestMessage,
       { userId: userId || 'anonymous', name: userName || 'Passenger', isDriver: false },
@@ -597,7 +597,7 @@ export default function SafetySupportScreen({
     if (result?.success) {
       Alert.alert(
         'Callback requested',
-        'Your request has been sent to the tour chat so the driver is notified. Please keep your phone nearby.'
+        'Your request has been sent privately to the driver team. Please keep your phone nearby.'
       );
       return;
     }
