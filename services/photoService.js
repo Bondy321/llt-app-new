@@ -101,11 +101,18 @@ const normalizeCursor = (endBefore) => {
   }
 
   if (typeof endBefore === 'number' || typeof endBefore === 'string') {
-    return { timestamp: normalizeTimestamp(endBefore), id: null };
+    const timestamp = normalizeTimestamp(endBefore);
+    if (timestamp <= 0) {
+      return null;
+    }
+    return { timestamp, id: null };
   }
 
   if (typeof endBefore === 'object') {
     const timestamp = normalizeTimestamp(endBefore.timestamp);
+    if (timestamp <= 0) {
+      return null;
+    }
     const id = typeof endBefore.id === 'string' && endBefore.id.length > 0 ? endBefore.id : null;
     return { timestamp, id };
   }

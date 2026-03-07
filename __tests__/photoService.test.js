@@ -250,9 +250,12 @@ test('subscribeToTourPhotos sorts by descending timestamp and returns a safe fal
   }, {
     realtimeDbInstance: {},
     dbRefFn: mockDbRef,
-    onValueFn: (_ref, callback) => {
+    queryFn: (ref) => ref,
+    orderByChildFn: () => 'timestamp',
+    limitToLastFn: (limit) => limit,
+    onValueFn: (_ref, callback, onError) => {
       callback(mockSnapshot({ first: { timestamp: 1 }, second: { timestamp: 10 } }));
-      callback(mockSnapshot(null));
+      onError(new Error('listener failed'));
       return () => {};
     },
   });
@@ -274,6 +277,9 @@ test('subscribeToPrivatePhotos scopes path to user and sorts newest first', asyn
       seenPath = path;
       return { path };
     },
+    queryFn: (ref) => ref,
+    orderByChildFn: () => 'timestamp',
+    limitToLastFn: (limit) => limit,
     onValueFn: (_ref, callback) => {
       callback(mockSnapshot({
         one: { timestamp: 2 },
