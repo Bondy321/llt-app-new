@@ -1093,7 +1093,7 @@ export default function TourHomeScreen({
                 style={styles.boardingPassHeader}
               >
                 <View style={styles.boardingPassHeaderContent}>
-                  <View>
+                  <View style={styles.boardingPassHeaderTextContainer}>
                     <Text style={styles.boardingPassLabel}>DIGITAL BOARDING PASS</Text>
                     <Text style={styles.boardingPassTour}>{tourData.name || 'Scenic Tour'}</Text>
                   </View>
@@ -1700,6 +1700,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
   },
+  boardingPassHeaderTextContainer: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 12,
+  },
   boardingPassLabel: {
     fontSize: 10,
     fontWeight: '800',
@@ -1711,7 +1716,6 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '800',
     color: COLORS.white,
-    maxWidth: '70%',
   },
   boardingPassQR: {
     opacity: 0.9,
