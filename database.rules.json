@@ -33,7 +33,13 @@
     "chats": {
       "$tourId": {
         ".read": "auth != null",
-        ".write": "auth != null"
+        ".write": false,
+        "messages": {
+          "$messageId": {
+            ".write": "auth != null && ((!data.exists() && newData.exists() && newData.child('senderId').val() === auth.uid) || (data.exists() && newData.exists() && data.child('senderId').val() === auth.uid && newData.child('senderId').val() === data.child('senderId').val()) || (data.exists() && !newData.exists() && data.child('senderId').val() === auth.uid))",
+            ".validate": "!newData.exists() || (newData.hasChildren(['senderId','senderName','text','timestamp']) && newData.child('senderId').isString() && newData.child('senderId').val().length > 0 && newData.child('senderId').val().length <= 128 && newData.child('senderName').isString() && newData.child('senderName').val().length > 0 && newData.child('senderName').val().length <= 80 && newData.child('text').isString() && newData.child('text').val().length > 0 && newData.child('text').val().length <= 2000 && newData.child('timestamp').isNumber() && newData.child('timestamp').val() > 0 && (!newData.child('isDriver').exists() || newData.child('isDriver').isBoolean()))"
+          }
+        }
       }
     },
     "broadcasts": {
@@ -49,7 +55,13 @@
     "internal_chats": {
       "$tourId": {
         ".read": "auth != null",
-        ".write": "auth != null"
+        ".write": false,
+        "messages": {
+          "$messageId": {
+            ".write": "auth != null && ((!data.exists() && newData.exists() && newData.child('senderId').val() === auth.uid) || (data.exists() && newData.exists() && data.child('senderId').val() === auth.uid && newData.child('senderId').val() === data.child('senderId').val()) || (data.exists() && !newData.exists() && data.child('senderId').val() === auth.uid))",
+            ".validate": "!newData.exists() || (newData.hasChildren(['senderId','senderName','text','timestamp']) && newData.child('senderId').isString() && newData.child('senderId').val().length > 0 && newData.child('senderId').val().length <= 128 && newData.child('senderName').isString() && newData.child('senderName').val().length > 0 && newData.child('senderName').val().length <= 80 && newData.child('text').isString() && newData.child('text').val().length > 0 && newData.child('text').val().length <= 2000 && newData.child('timestamp').isNumber() && newData.child('timestamp').val() > 0)"
+          }
+        }
       }
     },
     "logs": {
@@ -61,7 +73,11 @@
     "group_tour_photos": {
       "$tourId": {
         ".read": "auth != null",
-        ".write": "auth != null"
+        ".write": false,
+        "$photoId": {
+          ".write": "auth != null && ((!data.exists() && newData.exists() && newData.child('userId').val() === auth.uid) || (data.exists() && newData.exists() && data.child('userId').val() === auth.uid && newData.child('userId').val() === data.child('userId').val()) || (data.exists() && !newData.exists() && data.child('userId').val() === auth.uid))",
+          ".validate": "!newData.exists() || (newData.hasChildren(['userId','url','timestamp','storagePath']) && newData.child('userId').isString() && newData.child('userId').val().length > 0 && newData.child('userId').val().length <= 128 && newData.child('url').isString() && newData.child('url').val().length > 0 && newData.child('url').val().length <= 2048 && newData.child('timestamp').isNumber() && newData.child('timestamp').val() > 0 && newData.child('storagePath').isString() && newData.child('storagePath').val().length > 0 && newData.child('storagePath').val().length <= 512 && (!newData.child('thumbnailUrl').exists() || (newData.child('thumbnailUrl').isString() && newData.child('thumbnailUrl').val().length > 0 && newData.child('thumbnailUrl').val().length <= 2048)) && (!newData.child('caption').exists() || (newData.child('caption').isString() && newData.child('caption').val().length <= 280)) && (!newData.child('uploaderName').exists() || (newData.child('uploaderName').isString() && newData.child('uploaderName').val().length > 0 && newData.child('uploaderName').val().length <= 80)))"
+        }
       }
     },
     "private_tour_photos": {
