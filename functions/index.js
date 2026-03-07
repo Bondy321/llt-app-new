@@ -16,6 +16,9 @@ admin.initializeApp();
 // Initialize Expo SDK
 const expo = new Expo();
 
+const NOTIFICATION_RECIPIENT_CAP = 1000;
+const RECIPIENT_CHUNK_SIZE = 200;
+
 // ==================== UTILITY FUNCTIONS ====================
 
 /**
@@ -72,6 +75,96 @@ const removeInvalidToken = async (userId, token) => {
   } catch (error) {
     log.error('Failed to remove invalid token', error, { userId });
   }
+};
+
+const getPreferenceValue = (userData, prefPath, defaultValue = true) => {
+  return prefPath.reduce((value, key) => {
+    if (value === null || value === undefined || typeof value !== 'object') return undefined;
+    return value[key];
+  }, userData) ?? defaultValue;
+};
+
+const chunkArrayDeterministically = (items, size) => {
+  const sortedItems = [...items].sort((a, b) => a.localeCompare(b));
+  const chunks = [];
+
+  for (let index = 0; index < sortedItems.length; index += size) {
+    chunks.push(sortedItems.slice(index, index + size));
+  }
+
+  return chunks;
+};
+
+const applyRecipientCap = (participantIds, cap, context = {}) => {
+  if (!Array.isArray(participantIds)) return [];
+  const sortedIds = [...participantIds].sort((a, b) => a.localeCompare(b));
+
+  if (sortedIds.length <= cap) {
+    return sortedIds;
+  }
+
+  const selected = sortedIds.slice(0, cap);
+  log.warn('Participant cap applied for notification run', {
+    ...context,
+    cap,
+    totalParticipants: sortedIds.length,
+    skippedParticipants: sortedIds.length - selected.length,
+  });
+  return selected;
+};
+
+const fetchUsersSnapshot = async (context = {}) => {
+  const usersSnapshot = await admin.database().ref('users').once('value');
+  const usersMap = usersSnapshot.exists() ? usersSnapshot.val() : {};
+  log.info('Fetched users snapshot for notifications', {
+    ...context,
+    userCount: Object.keys(usersMap).length,
+  });
+  return usersMap;
+};
+
+const selectNotificationRecipients = ({
+  participantIds,
+  usersMap,
+  preferencePath,
+  senderId,
+  excludeSender,
+  context,
+}) => {
+  const validRecipients = [];
+  const invalidTokens = [];
+
+  for (const userId of participantIds) {
+    if (excludeSender && senderId && userId === senderId) {
+      continue;
+    }
+
+    const userData = usersMap[userId];
+    if (!userData || !userData.pushToken) {
+      log.info('No token for user', { ...context, userId });
+      continue;
+    }
+
+    const wantsFeatureNotifications = getPreferenceValue(userData, preferencePath, true);
+    if (!wantsFeatureNotifications) {
+      log.info('User opted out of notification feature', {
+        ...context,
+        userId,
+        preferencePath: preferencePath.join('.'),
+      });
+      continue;
+    }
+
+    if (!isValidPushToken(userData.pushToken)) {
+      log.warn('Invalid push token', { ...context, userId });
+      invalidTokens.push({ userId, token: userData.pushToken });
+      continue;
+    }
+
+    validRecipients.push({ userId, userData });
+  }
+
+  return { validRecipients, invalidTokens };
 };
 
 /**
@@ -595,54 +688,51 @@ exports.sendChatNotification = onValueCreated(
         return null;
       }
 
+      const cappedParticipantIds = applyRecipientCap(participantIds, NOTIFICATION_RECIPIENT_CAP, {
+        tourId,
+        notificationType: 'chat',
+      });
+
+      const fetchUsersStart = Date.now();
+      const usersMap = await fetchUsersSnapshot({ tourId, notificationType: 'chat' });
+      const userFetchDurationMs = Date.now() - fetchUsersStart;
+
+      const assemblyStart = Date.now();
+      const prefKey = isAdmin ? 'driver_updates' : 'group_chat';
+      const preferencePath = ['preferences', 'ops', prefKey];
+      const { validRecipients, invalidTokens } = selectNotificationRecipients({
+        participantIds: cappedParticipantIds,
+        usersMap,
+        preferencePath,
+        senderId,
+        excludeSender: true,
+        context: { tourId, notificationType: 'chat' },
+      });
+
       const pushMessages = [];
-      const invalidTokens = [];
+      const truncatedMessage = messageText.length > 200
+        ? `${messageText.substring(0, 197)}...`
+        : messageText;
+      const notificationTitle = isAdmin
+        ? `📢 ${tourName} Announcement`
+        : `New message in ${tourName}`;
+      const notificationBody = isAdmin
+        ? truncatedMessage.replace(/^ANNOUNCEMENT:\s*/i, '')
+        : `${senderName}: ${truncatedMessage}`;
 
-      // 6. Fetch user data and build notification messages
-      const userFetchPromises = participantIds.map(async (userId) => {
-        // Don't notify sender
-        if (userId === senderId) return;
+      const recipientChunks = chunkArrayDeterministically(
+        validRecipients.map((recipient) => recipient.userId),
+        RECIPIENT_CHUNK_SIZE,
+      );
+      log.info('Using deterministic recipient chunking for chat notifications', {
+        tourId,
+        chunks: recipientChunks.length,
+        chunkSize: RECIPIENT_CHUNK_SIZE,
+      });
 
-        try {
-          const userSnapshot = await admin.database().ref(`users/${userId}`).once("value");
-          const userData = userSnapshot.val();
-
-          // Skip if no user data or token
-          if (!userData || !userData.pushToken) {
-            log.info("No token for user", { userId, tourId });
-            return;
-          }
-
-          // Check notification preferences
-          // Admin broadcasts use driver_updates preference (operational announcements)
-          // Regular chat messages use group_chat preference
-          const prefKey = isAdmin ? 'driver_updates' : 'group_chat';
-          const wantsUpdates = userData.preferences?.ops?.[prefKey] ?? true;
-          if (!wantsUpdates) {
-            log.info(`User has muted ${prefKey} notifications`, { userId, tourId, prefKey });
-            return;
-          }
-
-          // Validate token
-          if (!isValidPushToken(userData.pushToken)) {
-            log.warn("Invalid push token", { userId });
-            invalidTokens.push({ userId, token: userData.pushToken });
-            return;
-          }
-
-          // Truncate message for notification if too long
-          const truncatedMessage = messageText.length > 200
-            ? messageText.substring(0, 197) + '...'
-            : messageText;
-
-          // Admin broadcasts get distinctive formatting
-          const notificationTitle = isAdmin
-            ? `📢 ${tourName} Announcement`
-            : `New message in ${tourName}`;
-          const notificationBody = isAdmin
-            ? truncatedMessage.replace(/^ANNOUNCEMENT:\s*/i, '')  // Remove prefix if present
-            : `${senderName}: ${truncatedMessage}`;
-
+      for (const recipientChunk of recipientChunks) {
+        for (const userId of recipientChunk) {
+          const userData = usersMap[userId];
           pushMessages.push({
             to: userData.pushToken,
             sound: "default",
@@ -654,15 +744,12 @@ exports.sendChatNotification = onValueCreated(
               messageId: messageId,
               isAdminBroadcast: isAdmin,
             },
-            priority: isAdmin ? "high" : "default",  // Admin broadcasts are high priority
+            priority: isAdmin ? "high" : "default",
             channelId: "default",
           });
-        } catch (userError) {
-          log.error("Error processing user", userError, { userId, tourId });
         }
-      });
-
-      await Promise.all(userFetchPromises);
+      }
+      const payloadAssemblyDurationMs = Date.now() - assemblyStart;
 
       // 7. Clean up invalid tokens (async, don't wait)
       if (invalidTokens.length > 0) {
@@ -679,6 +766,7 @@ exports.sendChatNotification = onValueCreated(
       const chunks = expo.chunkPushNotifications(pushMessages);
       let successCount = 0;
       let errorCount = 0;
+      const pushSendStart = Date.now();
 
       for (const chunk of chunks) {
         try {
@@ -701,6 +789,7 @@ exports.sendChatNotification = onValueCreated(
           log.error("Error sending notification chunk", chunkError, { tourId, chunkSize: chunk.length });
         }
       }
+      const pushSendDurationMs = Date.now() - pushSendStart;
 
       const duration = Date.now() - startTime;
       log.info("Chat notification completed", {
@@ -709,6 +798,9 @@ exports.sendChatNotification = onValueCreated(
         successCount,
         errorCount,
         isAdminBroadcast: isAdmin,
+        userFetchDurationMs,
+        payloadAssemblyDurationMs,
+        pushSendDurationMs,
         duration: `${duration}ms`
       });
 
@@ -774,35 +866,39 @@ exports.sendItineraryNotification = onValueUpdated(
 
       const participants = participantsSnapshot.val();
       const participantIds = Object.keys(participants);
+      const cappedParticipantIds = applyRecipientCap(participantIds, NOTIFICATION_RECIPIENT_CAP, {
+        tourId,
+        notificationType: 'itinerary',
+      });
+
+      const fetchUsersStart = Date.now();
+      const usersMap = await fetchUsersSnapshot({ tourId, notificationType: 'itinerary' });
+      const userFetchDurationMs = Date.now() - fetchUsersStart;
+
+      const assemblyStart = Date.now();
+      const { validRecipients, invalidTokens } = selectNotificationRecipients({
+        participantIds: cappedParticipantIds,
+        usersMap,
+        preferencePath: ['preferences', 'ops', 'itinerary_changes'],
+        senderId: null,
+        excludeSender: false,
+        context: { tourId, notificationType: 'itinerary' },
+      });
+
       const pushMessages = [];
-      const invalidTokens = [];
+      const recipientChunks = chunkArrayDeterministically(
+        validRecipients.map((recipient) => recipient.userId),
+        RECIPIENT_CHUNK_SIZE,
+      );
+      log.info('Using deterministic recipient chunking for itinerary notifications', {
+        tourId,
+        chunks: recipientChunks.length,
+        chunkSize: RECIPIENT_CHUNK_SIZE,
+      });
 
-      // 3. Fetch user data and build notification messages
-      const userFetchPromises = participantIds.map(async (userId) => {
-        try {
-          const userSnapshot = await admin.database().ref(`users/${userId}`).once("value");
-          const userData = userSnapshot.val();
-
-          // Skip if no user data or token
-          if (!userData || !userData.pushToken) {
-            log.info("No token for user", { userId, tourId });
-            return;
-          }
-
-          // Check notification preferences
-          const wantsUpdates = userData.preferences?.ops?.itinerary_changes ?? true;
-          if (!wantsUpdates) {
-            log.info("User opted out of itinerary updates", { userId, tourId });
-            return;
-          }
-
-          // Validate token
-          if (!isValidPushToken(userData.pushToken)) {
-            log.warn("Invalid push token", { userId });
-            invalidTokens.push({ userId, token: userData.pushToken });
-            return;
-          }
-
+      for (const recipientChunk of recipientChunks) {
+        for (const userId of recipientChunk) {
+          const userData = usersMap[userId];
           pushMessages.push({
             to: userData.pushToken,
             sound: "default",
@@ -816,12 +912,9 @@ exports.sendItineraryNotification = onValueUpdated(
             priority: "default",
             channelId: "default",
           });
-        } catch (userError) {
-          log.error("Error processing user", userError, { userId, tourId });
         }
-      });
-
-      await Promise.all(userFetchPromises);
+      }
+      const payloadAssemblyDurationMs = Date.now() - assemblyStart;
 
       // 4. Clean up invalid tokens (async, don't wait)
       if (invalidTokens.length > 0) {
@@ -838,6 +931,7 @@ exports.sendItineraryNotification = onValueUpdated(
       const chunks = expo.chunkPushNotifications(pushMessages);
       let successCount = 0;
       let errorCount = 0;
+      const pushSendStart = Date.now();
 
       for (const chunk of chunks) {
         try {
@@ -860,6 +954,7 @@ exports.sendItineraryNotification = onValueUpdated(
           log.error("Error sending notification chunk", chunkError, { tourId, chunkSize: chunk.length });
         }
       }
+      const pushSendDurationMs = Date.now() - pushSendStart;
 
       const duration = Date.now() - startTime;
       log.info("Itinerary notification completed", {
@@ -867,6 +962,9 @@ exports.sendItineraryNotification = onValueUpdated(
         recipients: pushMessages.length,
         successCount,
         errorCount,
+        userFetchDurationMs,
+        payloadAssemblyDurationMs,
+        pushSendDurationMs,
         duration: `${duration}ms`
       });
 
