@@ -34,12 +34,30 @@ const REQUIRED_FIREBASE_CONFIG_FIELDS = [
   'appId',
 ];
 
+const FIREBASE_CONFIG_FIELD_ENV_MAP = {
+  apiKey: 'EXPO_PUBLIC_FIREBASE_API_KEY',
+  authDomain: 'EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN',
+  databaseURL: 'EXPO_PUBLIC_FIREBASE_DATABASE_URL',
+  projectId: 'EXPO_PUBLIC_FIREBASE_PROJECT_ID',
+  storageBucket: 'EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET',
+  messagingSenderId: 'EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID',
+  appId: 'EXPO_PUBLIC_FIREBASE_APP_ID',
+};
+
 const getMissingFirebaseConfigFields = (config) => {
   return REQUIRED_FIREBASE_CONFIG_FIELDS.filter((field) => {
     const value = config?.[field];
     return typeof value !== 'string' || value.trim().length === 0;
   });
 };
+
+const buildMissingConfigDetails = (missingFields) => ({
+  reason: 'MISSING_FIREBASE_CONFIG',
+  missingFields,
+  requiredEnvVars: missingFields.map((field) => FIREBASE_CONFIG_FIELD_ENV_MAP[field] || field),
+  action:
+    'Populate the missing EXPO_PUBLIC_FIREBASE_* variables before launching the app so Firebase can initialize.',
+});
 
 const toStorageBucketUrl = (value) => {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -105,16 +123,28 @@ let storage;
 let realtimeDb;
 let realtimeDbModular;
 let firebaseInitializationError = null;
+const firebaseInitHealth = {
+  attempted: false,
+  initialized: false,
+  hasError: false,
+  errorMessage: null,
+  missingConfig: null,
+};
 
 try {
+  firebaseInitHealth.attempted = true;
   const missingConfigFields = getMissingFirebaseConfigFields(firebaseConfig);
   if (missingConfigFields.length > 0) {
+    const missingConfig = buildMissingConfigDetails(missingConfigFields);
     firebaseInitializationError = new Error(
       `Missing required Firebase config: ${missingConfigFields.join(', ')}`
     );
+    firebaseInitHealth.missingConfig = missingConfig;
+    firebaseInitHealth.hasError = true;
+    firebaseInitHealth.errorMessage = firebaseInitializationError.message;
     console.warn(
       '[Firebase] Initialization skipped because required configuration is missing.',
-      { missingConfigFields }
+      missingConfig
     );
   }
 
@@ -133,6 +163,8 @@ try {
   // Initialize services
   auth = firebase.auth();
   db = firebase.firestore();
+  // Keep one compat app boundary while using modular SDK where RN benefits (storage/realtime typed access).
+  // This avoids creating two Firebase app instances and keeps auth/firestore callers stable.
   const modularApp = app._delegate || app;
   storage = getStorage(modularApp, toStorageBucketUrl(firebaseConfig.storageBucket));
   realtimeDb = firebase.database();
@@ -158,13 +190,20 @@ try {
   });
   console.log('Firestore configured with memory cache (persistence not available in React Native)');
 
-  // Enable Realtime Database offline persistence
-  realtimeDb.goOffline();
-  realtimeDb.goOnline();
+  // Realtime DB connectivity is controlled by updateNetworkState; do not force offline/online churn at startup.
   console.log('Realtime Database configured');
+  firebaseInitHealth.initialized = true;
 
 } catch (error) {
   firebaseInitializationError = error;
+  auth = null;
+  db = null;
+  storage = null;
+  realtimeDb = null;
+  realtimeDbModular = null;
+  firebaseInitHealth.initialized = false;
+  firebaseInitHealth.hasError = true;
+  firebaseInitHealth.errorMessage = error?.message || 'Unknown Firebase initialization error';
   console.error('Firebase initialization error:', error);
 }
 
@@ -296,11 +335,16 @@ const getCurrentAppCheckToken = async () => {
 
 // Network state monitoring
 let isOnline = true;
+let lastRealtimeDbOnlineState = null;
 
 const updateNetworkState = (online) => {
   isOnline = online;
   if (!realtimeDb) {
     console.warn('Realtime Database is not available; skipping network state sync');
+    return;
+  }
+
+  if (lastRealtimeDbOnlineState === online) {
     return;
   }
 
@@ -311,6 +355,8 @@ const updateNetworkState = (online) => {
     console.log('Network disconnected - using offline mode');
     realtimeDb.goOffline();
   }
+
+  lastRealtimeDbOnlineState = online;
 };
 
 // Export enhanced services
@@ -324,5 +370,6 @@ export {
   authHelpers,
   updateNetworkState,
   isOnline,
-  getCurrentAppCheckToken
+  getCurrentAppCheckToken,
+  firebaseInitHealth
 };

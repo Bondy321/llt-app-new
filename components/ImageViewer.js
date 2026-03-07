@@ -48,6 +48,8 @@ export default function ImageViewer({
   const translateX = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const infoSlideAnim = useRef(new Animated.Value(0)).current;
+  const fullImageOpacity = useRef(new Animated.Value(0)).current;
+  const imageLoadIdRef = useRef(0);
 
   useEffect(() => {
     setCurrentIndex(initialIndex);
@@ -75,14 +77,46 @@ export default function ImageViewer({
   }, [showInfo]);
 
   const currentPhoto = photos[currentIndex] || {};
+  const hasThumbnail = Boolean(currentPhoto.thumbnailUrl);
 
   useEffect(() => {
     if (!visible || !photos.length) return;
     [currentIndex - 1, currentIndex, currentIndex + 1].forEach((idx) => {
       const uri = photos[idx]?.url;
       if (uri) Image.prefetch(uri).catch(() => {});
+      const thumbnailUri = photos[idx]?.thumbnailUrl;
+      if (thumbnailUri) Image.prefetch(thumbnailUri).catch(() => {});
     });
   }, [visible, currentIndex, photos]);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    const nextLoadId = imageLoadIdRef.current + 1;
+    imageLoadIdRef.current = nextLoadId;
+    fullImageOpacity.setValue(0);
+    setImageLoading(Boolean(currentPhoto.url));
+  }, [visible, currentIndex, currentPhoto.url, fullImageOpacity]);
+
+  const handleFullImageLoaded = useCallback((loadId) => {
+    if (loadId !== imageLoadIdRef.current) return;
+
+    Animated.timing(fullImageOpacity, {
+      toValue: 1,
+      duration: 220,
+      useNativeDriver: true,
+    }).start(() => {
+      if (loadId === imageLoadIdRef.current) {
+        setImageLoading(false);
+      }
+    });
+  }, [fullImageOpacity]);
+
+  const handleFullImageError = useCallback((loadId) => {
+    if (loadId !== imageLoadIdRef.current) return;
+    setImageLoading(false);
+    fullImageOpacity.setValue(1);
+  }, [fullImageOpacity]);
 
   const goToNext = useCallback(() => {
     if (currentIndex < photos.length - 1) {
@@ -252,6 +286,7 @@ export default function ImageViewer({
     inputRange: [0, 1],
     outputRange: [200, 0],
   });
+  const currentLoadId = imageLoadIdRef.current;
 
   if (!visible) return null;
 
@@ -292,18 +327,28 @@ export default function ImageViewer({
           style={[styles.imageContainer, { transform: [{ translateX }] }]}
           {...panResponder.panHandlers}
         >
-          {imageLoading && (
+          {imageLoading && !hasThumbnail && (
             <View style={styles.loadingOverlay}>
               <ActivityIndicator size="large" color={COLORS.white} />
             </View>
           )}
-          <Image
-            source={{ uri: currentPhoto.url }}
-            style={styles.image}
-            resizeMode="contain"
-            onLoadStart={() => setImageLoading(true)}
-            onLoadEnd={() => setImageLoading(false)}
-          />
+          <View style={styles.imageLayerContainer}>
+            {hasThumbnail && (
+              <Image
+                source={{ uri: currentPhoto.thumbnailUrl }}
+                style={styles.image}
+                resizeMode="contain"
+              />
+            )}
+            <Animated.Image
+              source={{ uri: currentPhoto.url }}
+              style={[styles.image, styles.fullImageLayer, { opacity: fullImageOpacity }]}
+              resizeMode="contain"
+              onLoadStart={() => setImageLoading(true)}
+              onLoad={() => handleFullImageLoaded(currentLoadId)}
+              onError={() => handleFullImageError(currentLoadId)}
+            />
+          </View>
 
           {/* Navigation arrows for larger screens */}
           {currentIndex > 0 && (
@@ -474,9 +519,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  imageLayerContainer: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT * 0.65,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   image: {
     width: SCREEN_WIDTH,
     height: SCREEN_HEIGHT * 0.65,
+  },
+  fullImageLayer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,

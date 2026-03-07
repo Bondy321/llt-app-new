@@ -6,7 +6,7 @@ import {
   Text,
   View,
   TouchableOpacity,
-  ScrollView,
+  SectionList,
   Image,
   Dimensions,
   Platform,
@@ -78,11 +78,16 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     return sorted;
   }, [photos, mineOnly, sortMode, userId]);
 
-  // Group photos by date
-  const groupedPhotos = useMemo(() => {
-    const groups = {};
-    visiblePhotos.forEach(photo => {
-      const date = photo.timestamp
+  const albumSectionsData = useMemo(() => {
+    const grouped = {};
+    const photoIndexById = {};
+
+    visiblePhotos.forEach((photo, index) => {
+      if (photo?.id) {
+        photoIndexById[photo.id] = index;
+      }
+
+      const dateKey = photo.timestamp
         ? new Date(photo.timestamp).toLocaleDateString(undefined, {
             weekday: 'long',
             month: 'long',
@@ -90,21 +95,47 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
           })
         : 'Unknown Date';
 
-      if (!groups[date]) {
-        groups[date] = [];
+      if (!grouped[dateKey]) {
+        grouped[dateKey] = [];
       }
-      groups[date].push(photo);
+
+      grouped[dateKey].push(photo);
     });
-    return groups;
+
+    const dateKeys = Object.keys(grouped);
+    const sections = dateKeys.map((dateKey) => {
+      const photosForDate = grouped[dateKey];
+      const rows = [];
+
+      for (let i = 0; i < photosForDate.length; i += 3) {
+        rows.push(photosForDate.slice(i, i + 3));
+      }
+
+      return {
+        title: dateKey,
+        photoCount: photosForDate.length,
+        data: rows,
+      };
+    });
+
+    return {
+      sections,
+      dateKeys,
+      photoIndexById,
+      totalPhotos: visiblePhotos.length,
+      latestPhotoDate: visiblePhotos[0]?.timestamp
+        ? new Date(visiblePhotos[0].timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+        : null,
+    };
   }, [visiblePhotos]);
 
-  const dateKeys = Object.keys(groupedPhotos);
-
-  // Stats
-  const totalPhotos = visiblePhotos.length;
-  const latestPhotoDate = visiblePhotos[0]?.timestamp
-    ? new Date(photos[0].timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-    : null;
+  const {
+    sections: photoSections,
+    dateKeys,
+    photoIndexById,
+    totalPhotos,
+    latestPhotoDate,
+  } = albumSectionsData;
 
   const requestCameraPermission = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -256,17 +287,13 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     setCaption('');
   };
 
-  const openViewer = (groupIndex, photoIndexInGroup) => {
-    // Calculate the flat index across all photos
-    let flatIndex = 0;
-    for (let i = 0; i < groupIndex; i++) {
-      flatIndex += groupedPhotos[dateKeys[i]].length;
-    }
-    flatIndex += photoIndexInGroup;
+  const openViewer = useCallback((photoId) => {
+    const flatIndex = photoIndexById[photoId];
+    if (typeof flatIndex !== 'number') return;
 
     setViewerIndex(flatIndex);
     setViewerVisible(true);
-  };
+  }, [photoIndexById]);
 
   const handleDeletePhoto = async (photo) => {
     try {
@@ -279,11 +306,56 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
     }
   };
 
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    // The subscription will update the state
-    setTimeout(() => setRefreshing(false), 600);
-  }, []);
+
+    try {
+      if (!tourId || !userId) {
+        setPhotos([]);
+        return;
+      }
+
+      await new Promise((resolve) => {
+        let didResolve = false;
+        let unsubscribe = null;
+        let timeoutId = null;
+
+        const completeRefresh = (photoList = null) => {
+          if (didResolve) return;
+          didResolve = true;
+
+          if (Array.isArray(photoList)) {
+            setPhotos(photoList);
+          }
+
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+
+
+        const completeRefresh = (photoList = []) => {
+          if (didResolve) return;
+          didResolve = true;
+          setPhotos(photoList);
+          if (typeof unsubscribe === 'function') {
+            unsubscribe();
+          }
+          resolve();
+        };
+
+        timeoutId = setTimeout(() => {
+          completeRefresh();
+        }, 5000);
+
+        unsubscribe = subscribeToPrivatePhotos(tourId, userId, (photoList) => {
+          completeRefresh(photoList);
+        });
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  }, [tourId, userId]);
 
   const handleImageLoad = (photoId) => {
     setLoadedImages(prev => ({ ...prev, [photoId]: true }));
@@ -386,115 +458,119 @@ export default function PhotobookScreen({ onBack, userId, tourId }) {
           <Text style={styles.loadingText}>Loading your memories...</Text>
         </View>
       ) : (
-        <ScrollView
-          contentContainerStyle={styles.scrollContainer}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={COLORS.primary}
-            />
-          }
-        >
-          {pendingUploads.length > 0 && (
-            <View style={styles.pendingSection}>
-              <Text style={styles.pendingTitle}>Uploads</Text>
-              <View style={styles.grid}>
-                {pendingUploads.map((item) => (
-                  <View key={item.id} style={styles.imageTouchable}>
-                    <Image source={{ uri: item.previewUri || item.uri }} style={styles.imageThumbnail} />
-                    <View style={styles.pendingOverlay}>
-                      {item.status === 'failed' ? (
-                        <>
-                          <MaterialCommunityIcons name="alert-circle" size={16} color={COLORS.white} />
-                          <TouchableOpacity onPress={() => retryUpload(item)} style={styles.retryButton}>
-                            <Text style={styles.retryButtonText}>Retry</Text>
-                          </TouchableOpacity>
-                        </>
-                      ) : (
-                        <Text style={styles.pendingProgressText}>{item.progress}%</Text>
-                      )}
-                    </View>
-                  </View>
+        visiblePhotos.length === 0 && pendingUploads.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <View style={styles.emptyIconWrapper}>
+              <MaterialCommunityIcons name="lock-outline" size={60} color={COLORS.primary} />
+            </View>
+            <Text style={styles.emptyTitle}>Your Private Album</Text>
+            <Text style={styles.emptySubtext}>
+              Capture special moments from your tour. Only you can see these photos - they're your personal keepsakes.
+            </Text>
+
+            <View style={styles.emptyActions}>
+              <TouchableOpacity
+                style={styles.emptyCtaButton}
+                onPress={handleTakePhoto}
+                activeOpacity={0.85}
+              >
+                <MaterialCommunityIcons name="camera" size={22} color={COLORS.white} />
+                <Text style={styles.emptyCtaText}>Take Photo</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.emptySecondaryButton}
+                onPress={handlePickFromGallery}
+                activeOpacity={0.85}
+              >
+                <MaterialCommunityIcons name="image-plus" size={22} color={COLORS.primary} />
+                <Text style={styles.emptySecondaryText}>Choose from Gallery</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <SectionList
+            sections={photoSections}
+            keyExtractor={(item, index) => item.map((photo) => photo.id || photo.url).join('|') || `row-${index}`}
+            renderSectionHeader={({ section }) => (
+              <View style={styles.dateHeader}>
+                <MaterialCommunityIcons name="calendar" size={16} color={COLORS.textSecondary} />
+                <Text style={styles.dateHeaderText}>{section.title}</Text>
+                <Text style={styles.datePhotoCount}>
+                  {section.photoCount} {section.photoCount === 1 ? 'photo' : 'photos'}
+                </Text>
+              </View>
+            )}
+            renderItem={({ item }) => (
+              <View style={styles.gridRow}>
+                {item.map((photo) => (
+                  <TouchableOpacity
+                    key={photo.id}
+                    style={styles.imageTouchable}
+                    onPress={() => openViewer(photo.id)}
+                    activeOpacity={0.85}
+                  >
+                    {!loadedImages[photo.id] && renderSkeleton()}
+                    <Image
+                      source={{ uri: photo.thumbnailUrl || photo.url }}
+                      style={[
+                        styles.imageThumbnail,
+                        !loadedImages[photo.id] && styles.imageHidden,
+                      ]}
+                      onLoad={() => handleImageLoad(photo.id)}
+                    />
+                    {photo.caption && (
+                      <View style={styles.captionIndicator}>
+                        <MaterialCommunityIcons name="text" size={12} color={COLORS.white} />
+                      </View>
+                    )}
+                  </TouchableOpacity>
                 ))}
               </View>
-            </View>
-          )}
-
-          {visiblePhotos.length === 0 && pendingUploads.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <View style={styles.emptyIconWrapper}>
-                <MaterialCommunityIcons name="lock-outline" size={60} color={COLORS.primary} />
-              </View>
-              <Text style={styles.emptyTitle}>Your Private Album</Text>
-              <Text style={styles.emptySubtext}>
-                Capture special moments from your tour. Only you can see these photos - they're your personal keepsakes.
-              </Text>
-
-              <View style={styles.emptyActions}>
-                <TouchableOpacity
-                  style={styles.emptyCtaButton}
-                  onPress={handleTakePhoto}
-                  activeOpacity={0.85}
-                >
-                  <MaterialCommunityIcons name="camera" size={22} color={COLORS.white} />
-                  <Text style={styles.emptyCtaText}>Take Photo</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.emptySecondaryButton}
-                  onPress={handlePickFromGallery}
-                  activeOpacity={0.85}
-                >
-                  <MaterialCommunityIcons name="image-plus" size={22} color={COLORS.primary} />
-                  <Text style={styles.emptySecondaryText}>Choose from Gallery</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ) : (
-            dateKeys.map((dateKey, groupIndex) => (
-              <View key={dateKey} style={styles.dateGroup}>
-                <View style={styles.dateHeader}>
-                  <MaterialCommunityIcons name="calendar" size={16} color={COLORS.textSecondary} />
-                  <Text style={styles.dateHeaderText}>{dateKey}</Text>
-                  <Text style={styles.datePhotoCount}>
-                    {groupedPhotos[dateKey].length} {groupedPhotos[dateKey].length === 1 ? 'photo' : 'photos'}
-                  </Text>
-                </View>
-
+            )}
+            renderSectionFooter={() => <View style={styles.sectionSpacer} />}
+            ListHeaderComponent={pendingUploads.length > 0 ? (
+              <View style={styles.pendingSection}>
+                <Text style={styles.pendingTitle}>Uploads</Text>
                 <View style={styles.grid}>
-                  {groupedPhotos[dateKey].map((photo, photoIndex) => (
-                    <TouchableOpacity
-                      key={photo.id}
-                      style={styles.imageTouchable}
-                      onPress={() => openViewer(groupIndex, photoIndex)}
-                      activeOpacity={0.85}
-                    >
-                      {!loadedImages[photo.id] && renderSkeleton()}
-                      <Image
-                        source={{ uri: photo.thumbnailUrl || photo.url }}
-                        style={[
-                          styles.imageThumbnail,
-                          !loadedImages[photo.id] && styles.imageHidden,
-                        ]}
-                        onLoad={() => handleImageLoad(photo.id)}
-                      />
-                      {photo.caption && (
-                        <View style={styles.captionIndicator}>
-                          <MaterialCommunityIcons name="text" size={12} color={COLORS.white} />
-                        </View>
-                      )}
-                    </TouchableOpacity>
+                  {pendingUploads.map((item) => (
+                    <View key={item.id} style={styles.imageTouchable}>
+                      <Image source={{ uri: item.previewUri || item.uri }} style={styles.imageThumbnail} />
+                      <View style={styles.pendingOverlay}>
+                        {item.status === 'failed' ? (
+                          <>
+                            <MaterialCommunityIcons name="alert-circle" size={16} color={COLORS.white} />
+                            <TouchableOpacity onPress={() => retryUpload(item)} style={styles.retryButton}>
+                              <Text style={styles.retryButtonText}>Retry</Text>
+                            </TouchableOpacity>
+                          </>
+                        ) : (
+                          <Text style={styles.pendingProgressText}>{item.progress}%</Text>
+                        )}
+                      </View>
+                    </View>
                   ))}
                 </View>
               </View>
-            ))
-          )}
-
-          {/* Bottom padding */}
-          <View style={{ height: 40 }} />
-        </ScrollView>
+            ) : null}
+            ListFooterComponent={<View style={{ height: 40 }} />}
+            contentContainerStyle={styles.scrollContainer}
+            showsVerticalScrollIndicator={false}
+            stickySectionHeadersEnabled={false}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor={COLORS.primary}
+              />
+            }
+            removeClippedSubviews={Platform.OS === 'android'}
+            initialNumToRender={12}
+            maxToRenderPerBatch={9}
+            updateCellsBatchingPeriod={60}
+            windowSize={7}
+          />
+        )
       )}
 
       {/* Floating Action Button */}
@@ -820,6 +896,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: SPACING.sm,
+  },
+  gridRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    marginBottom: SPACING.sm,
+  },
+  sectionSpacer: {
+    height: SPACING.md,
   },
   imageTouchable: {
     width: THUMBNAIL_SIZE,

@@ -18,6 +18,10 @@ const {
   onValue,
   get,
   update,
+  query,
+  orderByChild,
+  limitToLast,
+  endAt,
 } = require('firebase/database');
 const { storage, realtimeDbModular } = require('../firebase');
 
@@ -26,6 +30,232 @@ const { storage, realtimeDbModular } = require('../firebase');
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic'];
 const MAX_CAPTION_LENGTH = 500;
+const LIVE_PHOTOS_WINDOW = 100;
+
+// ==================== PAGINATION HELPERS ====================
+
+/**
+ * Normalizes mixed timestamp values into a safe numeric millisecond value.
+ * Supports numbers, numeric strings, Date instances, and known timestamp-like objects.
+ * Missing/unsupported values are normalized to 0 so ordering remains deterministic.
+ * @param {unknown} rawTimestamp
+ * @returns {number}
+ */
+const normalizeTimestamp = (rawTimestamp) => {
+  if (typeof rawTimestamp === 'number' && Number.isFinite(rawTimestamp)) {
+    return rawTimestamp;
+  }
+
+  if (typeof rawTimestamp === 'string') {
+    const asNumber = Number(rawTimestamp);
+    if (Number.isFinite(asNumber)) {
+      return asNumber;
+    }
+  }
+
+  if (rawTimestamp instanceof Date && Number.isFinite(rawTimestamp.getTime())) {
+    return rawTimestamp.getTime();
+  }
+
+  if (rawTimestamp && typeof rawTimestamp === 'object') {
+    if (typeof rawTimestamp.toMillis === 'function') {
+      const millis = rawTimestamp.toMillis();
+      if (Number.isFinite(millis)) {
+        return millis;
+      }
+    }
+
+    if (typeof rawTimestamp.seconds === 'number') {
+      const millis = rawTimestamp.seconds * 1000;
+      if (Number.isFinite(millis)) {
+        return millis;
+      }
+    }
+
+    if (typeof rawTimestamp._seconds === 'number') {
+      const millis = rawTimestamp._seconds * 1000;
+      if (Number.isFinite(millis)) {
+        return millis;
+      }
+    }
+
+    if (typeof rawTimestamp.timestamp === 'number') {
+      return rawTimestamp.timestamp;
+    }
+  }
+
+  return 0;
+};
+
+const sanitizePageLimit = (limit) => {
+  const parsed = Number.parseInt(limit, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 30;
+  }
+  return Math.min(parsed, 100);
+};
+
+const normalizeCursor = (endBefore) => {
+  if (endBefore == null) {
+    return null;
+  }
+
+  if (typeof endBefore === 'number' || typeof endBefore === 'string') {
+    const timestamp = normalizeTimestamp(endBefore);
+    if (timestamp <= 0) {
+      return null;
+    }
+    return { timestamp, id: null };
+  }
+
+  if (typeof endBefore === 'object') {
+    const timestamp = normalizeTimestamp(endBefore.timestamp);
+    if (timestamp <= 0) {
+      return null;
+    }
+    const id = typeof endBefore.id === 'string' && endBefore.id.length > 0 ? endBefore.id : null;
+    return { timestamp, id };
+  }
+
+  return null;
+};
+
+const mapSnapshotToPhotos = (snapshot) => {
+  const data = snapshot.val() || {};
+  return Object.entries(data).map(([id, value]) => ({
+    id,
+    ...value,
+    timestamp: normalizeTimestamp(value?.timestamp),
+  }));
+};
+
+const sortPhotosDescending = (photos) => {
+  photos.sort((a, b) => {
+    if (b.timestamp !== a.timestamp) {
+      return b.timestamp - a.timestamp;
+    }
+
+    return b.id.localeCompare(a.id);
+  });
+};
+
+const buildPagedPhotoResult = (photos, limit) => {
+  sortPhotosDescending(photos);
+
+  const hasMore = photos.length > limit;
+  const items = hasMore ? photos.slice(0, limit) : photos;
+  const lastItem = items[items.length - 1] || null;
+
+  return {
+    items,
+    nextCursor: lastItem ? { timestamp: lastItem.timestamp, id: lastItem.id } : null,
+    hasMore,
+  };
+};
+
+/**
+ * Fetches a bounded page of group tour photos ordered by timestamp descending.
+ *
+ * Input contract:
+ * - tourId: required non-empty string
+ * - limit: optional positive integer (default 30, max 100)
+ * - endBefore: optional cursor ({ timestamp, id }) or timestamp value
+ *
+ * Output contract:
+ * - { items, nextCursor, hasMore }
+ * - empty datasets return { items: [], nextCursor: null, hasMore: false }
+ * - missing/invalid timestamps are normalized to 0 for deterministic ordering
+ *
+ * @param {{ tourId: string, limit?: number, endBefore?: ({ timestamp: unknown, id?: string }|number|string|null) }} params
+ * @param {Object} [deps]
+ * @returns {Promise<{ items: Array<Object>, nextCursor: ({ timestamp: number, id: string }|null), hasMore: boolean }>}
+ */
+const fetchTourPhotosPage = async (
+  { tourId, limit = 30, endBefore = null },
+  {
+    realtimeDbInstance = realtimeDbModular,
+    dbRefFn = databaseRef,
+    queryFn = query,
+    orderByChildFn = orderByChild,
+    limitToLastFn = limitToLast,
+    endAtFn = endAt,
+    getFn = get,
+  } = {},
+) => {
+  const validatedTourId = validateTourId(tourId);
+  const safeLimit = sanitizePageLimit(limit);
+  const cursor = normalizeCursor(endBefore);
+
+  const baseRef = dbRefFn(realtimeDbInstance, `group_tour_photos/${validatedTourId}`);
+  const constraints = [orderByChildFn('timestamp')];
+  if (cursor) {
+    constraints.push(endAtFn(cursor.timestamp, cursor.id || undefined));
+  }
+  constraints.push(limitToLastFn(safeLimit + 1));
+
+  const snapshot = await getFn(queryFn(baseRef, ...constraints));
+  const photos = mapSnapshotToPhotos(snapshot).filter((photo) => {
+    if (!cursor) {
+      return true;
+    }
+    return !(photo.timestamp === cursor.timestamp && (!cursor.id || photo.id === cursor.id));
+  });
+
+  return buildPagedPhotoResult(photos, safeLimit);
+};
+
+/**
+ * Fetches a bounded page of private photos for a user ordered by timestamp descending.
+ *
+ * Input contract:
+ * - tourId: required non-empty string
+ * - userId: required non-empty string
+ * - limit: optional positive integer (default 30, max 100)
+ * - endBefore: optional cursor ({ timestamp, id }) or timestamp value
+ *
+ * Output contract:
+ * - { items, nextCursor, hasMore }
+ * - empty datasets return { items: [], nextCursor: null, hasMore: false }
+ * - missing/invalid timestamps are normalized to 0 for deterministic ordering
+ *
+ * @param {{ tourId: string, userId: string, limit?: number, endBefore?: ({ timestamp: unknown, id?: string }|number|string|null) }} params
+ * @param {Object} [deps]
+ * @returns {Promise<{ items: Array<Object>, nextCursor: ({ timestamp: number, id: string }|null), hasMore: boolean }>}
+ */
+const fetchPrivatePhotosPage = async (
+  { tourId, userId, limit = 30, endBefore = null },
+  {
+    realtimeDbInstance = realtimeDbModular,
+    dbRefFn = databaseRef,
+    queryFn = query,
+    orderByChildFn = orderByChild,
+    limitToLastFn = limitToLast,
+    endAtFn = endAt,
+    getFn = get,
+  } = {},
+) => {
+  const validatedTourId = validateTourId(tourId);
+  const validatedUserId = validateUserId(userId);
+  const safeLimit = sanitizePageLimit(limit);
+  const cursor = normalizeCursor(endBefore);
+
+  const baseRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${validatedTourId}/${validatedUserId}`);
+  const constraints = [orderByChildFn('timestamp')];
+  if (cursor) {
+    constraints.push(endAtFn(cursor.timestamp, cursor.id || undefined));
+  }
+  constraints.push(limitToLastFn(safeLimit + 1));
+
+  const snapshot = await getFn(queryFn(baseRef, ...constraints));
+  const photos = mapSnapshotToPhotos(snapshot).filter((photo) => {
+    if (!cursor) {
+      return true;
+    }
+    return !(photo.timestamp === cursor.timestamp && (!cursor.id || photo.id === cursor.id));
+  });
+
+  return buildPagedPhotoResult(photos, safeLimit);
+};
 
 // ==================== VALIDATION HELPERS ====================
 
@@ -329,6 +559,9 @@ const subscribeToTourPhotos = (
     realtimeDbInstance = realtimeDbModular,
     dbRefFn = databaseRef,
     onValueFn = onValue,
+    queryFn = query,
+    orderByChildFn = orderByChild,
+    limitToLastFn = limitToLast,
   } = {}
 ) => {
   try {
@@ -345,16 +578,12 @@ const subscribeToTourPhotos = (
     }
 
     const photosRef = dbRefFn(realtimeDbInstance, `group_tour_photos/${validatedTourId}`);
+    const photosQuery = queryFn(photosRef, orderByChildFn('timestamp'), limitToLastFn(LIVE_PHOTOS_WINDOW));
 
-    const unsubscribe = onValueFn(photosRef, (snapshot) => {
+    const unsubscribe = onValueFn(photosQuery, (snapshot) => {
       try {
-        const data = snapshot.val() || {};
-        const photos = Object.entries(data).map(([key, value]) => ({
-          id: key,
-          ...value,
-        }));
-
-        photos.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        const photos = mapSnapshotToPhotos(snapshot);
+        sortPhotosDescending(photos);
         callback(photos);
       } catch (error) {
         console.error('Error processing photos snapshot:', error);
@@ -386,6 +615,9 @@ const subscribeToPrivatePhotos = (
     realtimeDbInstance = realtimeDbModular,
     dbRefFn = databaseRef,
     onValueFn = onValue,
+    queryFn = query,
+    orderByChildFn = orderByChild,
+    limitToLastFn = limitToLast,
   } = {},
 ) => {
   if (!tourId || !userId || typeof callback !== 'function') {
@@ -393,15 +625,11 @@ const subscribeToPrivatePhotos = (
   }
 
   const photosRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${userId}`);
+  const photosQuery = queryFn(photosRef, orderByChildFn('timestamp'), limitToLastFn(LIVE_PHOTOS_WINDOW));
 
-  const unsubscribe = onValueFn(photosRef, (snapshot) => {
-    const data = snapshot.val() || {};
-    const photos = Object.entries(data).map(([key, value]) => ({
-      id: key,
-      ...value,
-    }));
-
-    photos.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  const unsubscribe = onValueFn(photosQuery, (snapshot) => {
+    const photos = mapSnapshotToPhotos(snapshot);
+    sortPhotosDescending(photos);
     callback(photos);
   });
 
@@ -598,6 +826,8 @@ const updatePhotoCaption = async (
 
 module.exports = {
   uploadPhoto,
+  fetchTourPhotosPage,
+  fetchPrivatePhotosPage,
   subscribeToTourPhotos,
   subscribeToPrivatePhotos,
   deleteGroupPhoto,

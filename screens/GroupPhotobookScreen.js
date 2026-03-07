@@ -1,12 +1,12 @@
 // screens/GroupPhotobookScreen.js
 // Enhanced group photobook with contributor info, date grouping, and premium viewing experience
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   StyleSheet,
   Text,
   View,
   TouchableOpacity,
-  ScrollView,
+  SectionList,
   Image,
   Dimensions,
   Platform,
@@ -52,6 +52,7 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
 
   // Image loading states for skeleton
   const [loadedImages, setLoadedImages] = useState({});
+  const prefetchedUrisRef = useRef(new Set());
 
   useEffect(() => {
     if (!tourId) return undefined;
@@ -82,10 +83,10 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
     });
   }, [photos, mineOnly, sortMode, userId]);
 
-  // Group photos by date
-  const groupedPhotos = useMemo(() => {
-    const groups = {};
-    visiblePhotos.forEach(photo => {
+  const gallerySections = useMemo(() => {
+    const grouped = new Map();
+
+    visiblePhotos.forEach((photo) => {
       const date = photo.timestamp
         ? new Date(photo.timestamp).toLocaleDateString(undefined, {
             weekday: 'long',
@@ -94,15 +95,45 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
           })
         : 'Unknown Date';
 
-      if (!groups[date]) {
-        groups[date] = [];
+      if (!grouped.has(date)) {
+        grouped.set(date, []);
       }
-      groups[date].push(photo);
+      grouped.get(date).push(photo);
     });
-    return groups;
+
+    return Array.from(grouped.entries()).map(([title, sectionPhotos], sectionIndex) => {
+      const rows = [];
+      for (let i = 0; i < sectionPhotos.length; i += 3) {
+        rows.push(
+          sectionPhotos.slice(i, i + 3).map((photo, offset) => ({
+            photo,
+            photoIndexInSection: i + offset,
+          }))
+        );
+      }
+
+      return {
+        title,
+        sectionIndex,
+        photos: sectionPhotos,
+        data: rows,
+      };
+    });
   }, [visiblePhotos]);
 
-  const dateKeys = Object.keys(groupedPhotos);
+  const viewerFlatIndexMap = useMemo(() => {
+    const indexMap = {};
+    let flatIndex = 0;
+
+    gallerySections.forEach((section, groupIndex) => {
+      section.photos.forEach((_, photoIndexInGroup) => {
+        indexMap[`${groupIndex}:${photoIndexInGroup}`] = flatIndex;
+        flatIndex += 1;
+      });
+    });
+
+    return indexMap;
+  }, [gallerySections]);
 
   // Stats
   const totalPhotos = visiblePhotos.length;
@@ -111,13 +142,6 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
     return contributors.size;
   }, [visiblePhotos]);
   const myPhotos = visiblePhotos.filter(p => p.userId === userId).length;
-
-  useEffect(() => {
-    visiblePhotos.slice(0, 24).forEach((photo) => {
-      const previewUrl = photo?.thumbnailUrl || photo?.url;
-      if (previewUrl) Image.prefetch(previewUrl).catch(() => {});
-    });
-  }, [visiblePhotos]);
 
   const requestCameraPermission = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -270,15 +294,100 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
   };
 
   const openViewer = (groupIndex, photoIndexInGroup) => {
-    // Calculate the flat index across all photos
-    let flatIndex = 0;
-    for (let i = 0; i < groupIndex; i++) {
-      flatIndex += groupedPhotos[dateKeys[i]].length;
-    }
-    flatIndex += photoIndexInGroup;
+    const flatIndex = viewerFlatIndexMap[`${groupIndex}:${photoIndexInGroup}`] ?? 0;
 
     setViewerIndex(flatIndex);
     setViewerVisible(true);
+  };
+
+  const onViewableItemsChanged = useRef(({ viewableItems }) => {
+    viewableItems.forEach(({ item }) => {
+      if (!Array.isArray(item)) return;
+
+      item.forEach(({ photo }) => {
+        const previewUrl = photo?.thumbnailUrl || photo?.url;
+        if (!previewUrl || prefetchedUrisRef.current.has(previewUrl)) return;
+
+        prefetchedUrisRef.current.add(previewUrl);
+        Image.prefetch(previewUrl).catch(() => {});
+      });
+    });
+  });
+
+  const viewabilityConfig = useRef({
+    itemVisiblePercentThreshold: 40,
+  });
+
+  const renderPendingUploads = () => {
+    if (pendingUploads.length === 0) return null;
+
+    return (
+      <View style={styles.pendingSection}>
+        <Text style={styles.pendingTitle}>Uploads</Text>
+        <View style={styles.grid}>
+          {pendingUploads.map((item) => (
+            <View key={item.id} style={styles.imageTouchable}>
+              <Image source={{ uri: item.previewUri || item.uri }} style={styles.imageThumbnail} />
+              <View style={styles.pendingOverlay}>
+                {item.status === 'failed' ? (
+                  <>
+                    <MaterialCommunityIcons name="alert-circle" size={16} color={COLORS.white} />
+                    <TouchableOpacity onPress={() => retryUpload(item)} style={styles.retryButton}>
+                      <Text style={styles.retryButtonText}>Retry</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <Text style={styles.pendingProgressText}>{item.progress}%</Text>
+                )}
+              </View>
+            </View>
+          ))}
+        </View>
+      </View>
+    );
+  };
+
+  const renderEmptyState = () => {
+    if (pendingUploads.length > 0) return null;
+
+    return (
+      <View style={styles.emptyContainer}>
+        <View style={styles.emptyIconWrapper}>
+          <MaterialCommunityIcons name="image-multiple-outline" size={60} color={COLORS.success} />
+        </View>
+        <Text style={styles.emptyTitle}>Group Album</Text>
+        <Text style={styles.emptySubtext}>
+          Share the best moments from your tour with everyone! Photos added here are visible to all passengers.
+        </Text>
+
+        <View style={styles.emptyActions}>
+          <TouchableOpacity
+            style={styles.emptyCtaButton}
+            onPress={handleTakePhoto}
+            activeOpacity={0.85}
+          >
+            <MaterialCommunityIcons name="camera" size={22} color={COLORS.white} />
+            <Text style={styles.emptyCtaText}>Take Photo</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.emptySecondaryButton}
+            onPress={handlePickFromGallery}
+            activeOpacity={0.85}
+          >
+            <MaterialCommunityIcons name="image-plus" size={22} color={COLORS.success} />
+            <Text style={styles.emptySecondaryText}>Choose from Gallery</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.tipContainer}>
+          <MaterialCommunityIcons name="lightbulb-outline" size={18} color={COLORS.warning} />
+          <Text style={styles.tipText}>
+            Tip: Upload scenic views, group shots, and memorable moments!
+          </Text>
+        </View>
+      </View>
+    );
   };
 
   const handleDeletePhoto = async (photo) => {
@@ -439,7 +548,8 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
           <Text style={styles.loadingText}>Loading group memories...</Text>
         </View>
       ) : (
-        <ScrollView
+        <SectionList
+          sections={gallerySections}
           contentContainerStyle={styles.scrollContainer}
           showsVerticalScrollIndicator={false}
           refreshControl={
@@ -449,121 +559,66 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
               tintColor={COLORS.success}
             />
           }
-        >
-          {pendingUploads.length > 0 && (
-            <View style={styles.pendingSection}>
-              <Text style={styles.pendingTitle}>Uploads</Text>
-              <View style={styles.grid}>
-                {pendingUploads.map((item) => (
-                  <View key={item.id} style={styles.imageTouchable}>
-                    <Image source={{ uri: item.previewUri || item.uri }} style={styles.imageThumbnail} />
-                    <View style={styles.pendingOverlay}>
-                      {item.status === 'failed' ? (
-                        <>
-                          <MaterialCommunityIcons name="alert-circle" size={16} color={COLORS.white} />
-                          <TouchableOpacity onPress={() => retryUpload(item)} style={styles.retryButton}>
-                            <Text style={styles.retryButtonText}>Retry</Text>
-                          </TouchableOpacity>
-                        </>
-                      ) : (
-                        <Text style={styles.pendingProgressText}>{item.progress}%</Text>
-                      )}
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </View>
-          )}
-
-          {visiblePhotos.length === 0 && pendingUploads.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <View style={styles.emptyIconWrapper}>
-                <MaterialCommunityIcons name="image-multiple-outline" size={60} color={COLORS.success} />
-              </View>
-              <Text style={styles.emptyTitle}>Group Album</Text>
-              <Text style={styles.emptySubtext}>
-                Share the best moments from your tour with everyone! Photos added here are visible to all passengers.
-              </Text>
-
-              <View style={styles.emptyActions}>
-                <TouchableOpacity
-                  style={styles.emptyCtaButton}
-                  onPress={handleTakePhoto}
-                  activeOpacity={0.85}
-                >
-                  <MaterialCommunityIcons name="camera" size={22} color={COLORS.white} />
-                  <Text style={styles.emptyCtaText}>Take Photo</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.emptySecondaryButton}
-                  onPress={handlePickFromGallery}
-                  activeOpacity={0.85}
-                >
-                  <MaterialCommunityIcons name="image-plus" size={22} color={COLORS.success} />
-                  <Text style={styles.emptySecondaryText}>Choose from Gallery</Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.tipContainer}>
-                <MaterialCommunityIcons name="lightbulb-outline" size={18} color={COLORS.warning} />
-                <Text style={styles.tipText}>
-                  Tip: Upload scenic views, group shots, and memorable moments!
+          keyExtractor={(row, rowIndex) => {
+            const firstPhotoId = row?.[0]?.photo?.id || `row_${rowIndex}`;
+            return `${firstPhotoId}_${rowIndex}`;
+          }}
+          ListHeaderComponent={renderPendingUploads}
+          ListEmptyComponent={renderEmptyState}
+          ListFooterComponent={<View style={{ height: 40 }} />}
+          renderSectionHeader={({ section }) => (
+            <View style={styles.dateGroup}>
+              <View style={styles.dateHeader}>
+                <MaterialCommunityIcons name="calendar" size={16} color={COLORS.textSecondary} />
+                <Text style={styles.dateHeaderText}>{section.title}</Text>
+                <Text style={styles.datePhotoCount}>
+                  {section.photos.length} {section.photos.length === 1 ? 'photo' : 'photos'}
                 </Text>
               </View>
             </View>
-          ) : (
-            dateKeys.map((dateKey, groupIndex) => (
-              <View key={dateKey} style={styles.dateGroup}>
-                <View style={styles.dateHeader}>
-                  <MaterialCommunityIcons name="calendar" size={16} color={COLORS.textSecondary} />
-                  <Text style={styles.dateHeaderText}>{dateKey}</Text>
-                  <Text style={styles.datePhotoCount}>
-                    {groupedPhotos[dateKey].length} {groupedPhotos[dateKey].length === 1 ? 'photo' : 'photos'}
-                  </Text>
-                </View>
-
-                <View style={styles.grid}>
-                  {groupedPhotos[dateKey].map((photo, photoIndex) => (
-                    <TouchableOpacity
-                      key={photo.id}
-                      style={styles.imageTouchable}
-                      onPress={() => openViewer(groupIndex, photoIndex)}
-                      activeOpacity={0.85}
-                    >
-                      {!loadedImages[photo.id] && renderSkeleton()}
-                      <Image
-                        source={{ uri: photo.thumbnailUrl || photo.url }}
-                        style={[
-                          styles.imageThumbnail,
-                          !loadedImages[photo.id] && styles.imageHidden,
-                        ]}
-                        onLoad={() => handleImageLoad(photo.id)}
-                      />
-
-                      {/* Contributor badge */}
-                      {photo.userId === userId && (
-                        <View style={styles.myPhotoBadge}>
-                          <MaterialCommunityIcons name="account" size={10} color={COLORS.white} />
-                        </View>
-                      )}
-
-                      {/* Caption indicator */}
-                      {photo.caption && (
-                        <View style={styles.captionIndicator}>
-                          <MaterialCommunityIcons name="text" size={12} color={COLORS.white} />
-                        </View>
-                      )}
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-            ))
           )}
+          renderItem={({ item: row, section }) => (
+            <View style={styles.gridRow}>
+              {row.map(({ photo, photoIndexInSection }) => (
+                <TouchableOpacity
+                  key={photo.id}
+                  style={styles.imageTouchable}
+                  onPress={() => openViewer(section.sectionIndex, photoIndexInSection)}
+                  activeOpacity={0.85}
+                >
+                  {!loadedImages[photo.id] && renderSkeleton()}
+                  <Image
+                    source={{ uri: photo.thumbnailUrl || photo.url }}
+                    style={[
+                      styles.imageThumbnail,
+                      !loadedImages[photo.id] && styles.imageHidden,
+                    ]}
+                    onLoad={() => handleImageLoad(photo.id)}
+                  />
 
-          {/* Bottom padding */}
-          <View style={{ height: 40 }} />
-        </ScrollView>
+                  {photo.userId === userId && (
+                    <View style={styles.myPhotoBadge}>
+                      <MaterialCommunityIcons name="account" size={10} color={COLORS.white} />
+                    </View>
+                  )}
+
+                  {photo.caption && (
+                    <View style={styles.captionIndicator}>
+                      <MaterialCommunityIcons name="text" size={12} color={COLORS.white} />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+          onViewableItemsChanged={onViewableItemsChanged.current}
+          viewabilityConfig={viewabilityConfig.current}
+          initialNumToRender={9}
+          maxToRenderPerBatch={6}
+          windowSize={7}
+          removeClippedSubviews
+          stickySectionHeadersEnabled={false}
+        />
       )}
 
       {/* Floating Action Button */}
@@ -906,6 +961,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: SPACING.sm,
+  },
+  gridRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    marginBottom: SPACING.sm,
   },
   imageTouchable: {
     width: THUMBNAIL_SIZE,
