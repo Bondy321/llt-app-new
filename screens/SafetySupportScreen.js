@@ -156,7 +156,7 @@ const SOSButton = ({ onActivate, isActive, countdown, onCancel }) => {
       </Animated.View>
       {!isActive && (
         <Text style={styles.sosDisclaimer}>
-          Hold the button for emergency assistance. Your location will be shared.
+          Hold the button for emergency options. The app does not contact 999 automatically.
         </Text>
       )}
     </View>
@@ -671,68 +671,56 @@ export default function SafetySupportScreen({
     }
     Vibration.vibrate([0, 500, 200, 500]);
 
-    try {
-      // Log the SOS event
-      await logSafetyEvent({
-        userId,
-        bookingId: bookingData?.id,
-        tourId: tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_'),
-        role: mode,
-        category: SAFETY_CATEGORIES.SOS,
-        severity: SEVERITY_LEVELS.CRITICAL,
-        message: 'SOS Emergency Alert activated',
-        coords: currentCoords,
-        isSOS: true,
-      });
-
-      // Show success and options
-      Alert.alert(
-        'SOS Alert Sent',
-        'Emergency services and tour operations have been notified of your location.',
-        [
-          {
-            text: `Call ${emergencyNumber} Now`,
-            style: 'destructive',
-            onPress: () => confirmEmergencyCall(),
-          },
-          {
-            text: 'Call Operations',
-            onPress: () => openDialer(operationsNumber),
-          },
-          { text: 'OK', style: 'cancel' },
-        ]
-      );
-
-      // Send SMS to trusted contacts
-      if (trustedContacts.length > 0 && currentCoords) {
-        const smsMessage = generateEmergencySMS(currentCoords, tourData, userName);
-        Alert.alert(
-          'Notify Emergency Contacts?',
-          'Would you like to send your location to your trusted contacts?',
-          [
-            { text: 'No', style: 'cancel' },
-            {
-              text: 'Yes',
-              onPress: () => {
-                trustedContacts.forEach((contact) => {
-                  sendSMS(contact.phone, smsMessage);
-                });
-              },
-            },
-          ]
-        );
+    if (currentCoords) {
+      try {
+        await logSafetyEvent({
+          userId,
+          bookingId: bookingData?.id,
+          tourId: tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_'),
+          role: mode,
+          category: SAFETY_CATEGORIES.SOS,
+          severity: SEVERITY_LEVELS.CRITICAL,
+          message: 'SOS quick action opened by user (no emergency dispatch performed)',
+          coords: currentCoords,
+          isSOS: true,
+        });
+      } catch (error) {
+        // Keep emergency call flow non-blocking even if logging fails.
       }
-    } catch (error) {
+    }
+
+    Alert.alert(
+      'Emergency options',
+      `This app does not notify emergency services for you. If you need urgent help, call ${emergencyNumber} now.`,
+      [
+        {
+          text: `Call ${emergencyNumber}`,
+          style: 'destructive',
+          onPress: () => confirmEmergencyCall(),
+        },
+        {
+          text: 'Call Operations',
+          onPress: () => openDialer(operationsNumber),
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+
+    if (trustedContacts.length > 0 && currentCoords) {
+      const smsMessage = generateEmergencySMS(currentCoords, tourData, userName);
       Alert.alert(
-        'SOS Alert',
-        'Could not send alert to operations, but you can still call emergency services directly.',
+        'Notify Emergency Contacts?',
+        'Would you like to send your location to your trusted contacts?',
         [
+          { text: 'No', style: 'cancel' },
           {
-            text: `Call ${emergencyNumber}`,
-            style: 'destructive',
-            onPress: () => confirmEmergencyCall(),
+            text: 'Yes',
+            onPress: () => {
+              trustedContacts.forEach((contact) => {
+                sendSMS(contact.phone, smsMessage);
+              });
+            },
           },
-          { text: 'OK', style: 'cancel' },
         ]
       );
     }
