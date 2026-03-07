@@ -29,6 +29,7 @@ import { parseTimestampMs } from '../services/timeUtils';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import { getPickupCountdownState } from '../services/pickupTimeParser';
 import SyncStatusBanner from '../components/SyncStatusBanner';
+const { buildTourHomeActionPlan } = require('../utils/tourHomeActionPlanner');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -494,7 +495,10 @@ export default function TourHomeScreen({
   const [refreshStatusContract, setRefreshStatusContract] = useState(null);
   const [refreshStatusOutcomeText, setRefreshStatusOutcomeText] = useState('');
   const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(null);
+  const [recentChanges, setRecentChanges] = useState([]);
   const refreshStatusTimeoutRef = useRef(null);
+  const previousManifestStatusRef = useRef(null);
+  const previousDriverLocationRef = useRef(null);
 
   const greeting = useMemo(() => getTimeBasedGreeting(), []);
   const bookingRef = useMemo(() => bookingData?.id, [bookingData?.id]);
@@ -782,6 +786,63 @@ export default function TourHomeScreen({
 
   const isNoShow = manifestStatus === MANIFEST_STATUS.NO_SHOW;
 
+  const pickupCountdownState = useMemo(() => {
+    if (!primaryPickupTime) return null;
+    return getPickupCountdownState({
+      pickupTime: primaryPickupTime,
+      pickupDate: primaryPickupDate,
+      now: new Date(),
+    });
+  }, [primaryPickupDate, primaryPickupTime]);
+
+  const actionPlan = useMemo(
+    () =>
+      buildTourHomeActionPlan({
+        manifestStatus,
+        pickupCountdown: pickupCountdownState,
+        driverLocationActive,
+      }),
+    [driverLocationActive, manifestStatus, pickupCountdownState]
+  );
+
+  const appendRecentChange = useCallback((message) => {
+    if (!message) return;
+    setRecentChanges((current) => {
+      const next = [{ id: `${Date.now()}-${Math.random()}`, message }, ...current];
+      return next.slice(0, 3);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (previousManifestStatusRef.current === null) {
+      previousManifestStatusRef.current = manifestStatus;
+      return;
+    }
+
+    if (manifestStatus && previousManifestStatusRef.current !== manifestStatus) {
+      appendRecentChange(`Boarding status changed to ${manifestStatus.toLowerCase().replace('_', ' ')}.`);
+    }
+
+    previousManifestStatusRef.current = manifestStatus;
+  }, [appendRecentChange, manifestStatus]);
+
+  useEffect(() => {
+    if (previousDriverLocationRef.current === null) {
+      previousDriverLocationRef.current = driverLocationActive;
+      return;
+    }
+
+    if (previousDriverLocationRef.current !== driverLocationActive) {
+      appendRecentChange(
+        driverLocationActive
+          ? 'Driver location is now live on the map.'
+          : 'Driver live location paused; map may show the last known point.'
+      );
+    }
+
+    previousDriverLocationRef.current = driverLocationActive;
+  }, [appendRecentChange, driverLocationActive]);
+
   const handleCallDriver = () => {
     triggerHaptic('medium');
     Linking.openURL('tel:+441414876737');
@@ -848,6 +909,25 @@ export default function TourHomeScreen({
     { icon: 'chat', label: 'Chat', color: '#2ECC71', onPress: () => onNavigate('Chat'), badge: null },
   ];
 
+  const orderedQuickActions = useMemo(() => {
+    const byId = {
+      Map: quickActions.find((action) => action.label === 'Find Bus'),
+      Chat: quickActions.find((action) => action.label === 'Chat'),
+      Itinerary: {
+        icon: 'map-legend',
+        label: 'Itinerary',
+        color: '#3498DB',
+        onPress: () => onNavigate('Itinerary'),
+      },
+      GroupPhotobook: quickActions.find((action) => action.label === 'Group Photos'),
+    };
+
+    return actionPlan.orderedActionIds
+      .map((id) => byId[id])
+      .filter(Boolean)
+      .slice(0, 4);
+  }, [actionPlan.orderedActionIds, onNavigate, quickActions]);
+
   if (isLoading) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -907,6 +987,17 @@ export default function TourHomeScreen({
                 retryLabel="Retry refresh"
                 compact
               />
+              {recentChanges.length > 0 ? (
+                <View style={styles.recentChangesCard}>
+                  <Text style={styles.recentChangesTitle}>Since your last check</Text>
+                  {recentChanges.map((change) => (
+                    <View key={change.id} style={styles.recentChangeRow}>
+                      <MaterialCommunityIcons name="check-circle-outline" size={14} color={COLORS.primaryBlue} />
+                      <Text style={styles.recentChangeText}>{change.message}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
             </View>
             <View style={styles.headerActions}>
               <TouchableOpacity
@@ -977,11 +1068,12 @@ export default function TourHomeScreen({
           {/* Quick Actions Bar */}
           <AnimatedCard delay={150}>
             <View style={styles.quickActionsContainer}>
-              <Text style={styles.quickActionsTitle}>Quick Actions</Text>
+              <Text style={styles.quickActionsTitle}>{actionPlan.title}</Text>
+              <Text style={styles.quickActionsSubtitle}>{actionPlan.subtitle}</Text>
               <View style={styles.quickActionsRow}>
-                {quickActions.map((action, index) => (
+                {orderedQuickActions.map((action, index) => (
                   <QuickActionButton
-                    key={action.label}
+                    key={`${action.label}-${index}`}
                     {...action}
                     delay={200 + index * 50}
                   />
@@ -1382,6 +1474,35 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     marginTop: 2,
   },
+  recentChangesCard: {
+    marginTop: 10,
+    backgroundColor: `${COLORS.primaryBlue}08`,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}20`,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  recentChangesTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.primaryBlue,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  recentChangeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  recentChangeText: {
+    flex: 1,
+    fontSize: 12,
+    color: COLORS.darkText,
+    fontWeight: '500',
+    lineHeight: 16,
+  },
   headerActions: {
     flexDirection: 'row',
     gap: 10,
@@ -1511,6 +1632,13 @@ const styles = StyleSheet.create({
     marginLeft: 4,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  quickActionsSubtitle: {
+    fontSize: 13,
+    color: COLORS.subtleText,
+    marginBottom: 12,
+    marginHorizontal: 4,
+    lineHeight: 18,
   },
   quickActionsRow: {
     flexDirection: 'row',
