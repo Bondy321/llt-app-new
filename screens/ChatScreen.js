@@ -1493,8 +1493,16 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
               {presenceInfo.onlineCount} online
             </Text>
           </View>
-          <TouchableOpacity style={styles.syncNowBtn} onPress={handleManualSync}>
-            <Text style={styles.syncNowText}>Pending {queueStats.pending}</Text>
+          <TouchableOpacity
+            style={styles.syncNowBtn}
+            onPress={handleManualSync}
+            accessibilityLabel={queueStats.pending > 0 || queueStats.syncing > 0 ? 'Sync pending' : 'Messages sent'}
+          >
+            <MaterialCommunityIcons
+              name={queueStats.pending > 0 || queueStats.syncing > 0 ? 'check' : 'check-all'}
+              size={18}
+              color={COLORS.white}
+            />
           </TouchableOpacity>
         </View>
       </LinearGradient>
@@ -1702,9 +1710,10 @@ const styles = StyleSheet.create({
     ...SHADOWS.md,
   },
   headerButton: {
+    width: 108,
     padding: 5,
-    minWidth: 40,
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
   },
   headerTitleContainer: {
     flex: 1,
@@ -1722,12 +1731,21 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   headerRight: {
-    minWidth: 80,
-    alignItems: 'flex-end',
+    width: 108,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  syncNowBtn: {
+    width: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   onlineIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.2)',
     paddingHorizontal: 8,
     paddingVertical: 4,
