@@ -3,12 +3,22 @@ const assert = require('node:assert/strict');
 
 const { parseTimestampMs, getMinutesAgo } = require('../services/timeUtils');
 
-test('parseTimestampMs handles numbers, ISO strings, and rejects invalid values', () => {
+test('parseTimestampMs handles numbers, strict date formats, and rejects invalid values', () => {
   assert.equal(parseTimestampMs(1700000000000), 1700000000000);
   assert.equal(parseTimestampMs('1700000000000'), 1700000000000);
 
-  const isoMs = parseTimestampMs('2026-02-20T10:30:00.000Z');
-  assert.equal(Number.isFinite(isoMs), true);
+  const isoUtcMs = parseTimestampMs('2026-02-20T10:30:00.000Z');
+  assert.equal(Number.isFinite(isoUtcMs), true);
+
+  assert.equal(parseTimestampMs('2026-02-20'), new Date(2026, 1, 20, 0, 0, 0, 0).getTime());
+  assert.equal(parseTimestampMs('20/02/2026'), new Date(2026, 1, 20, 0, 0, 0, 0).getTime());
+  assert.equal(parseTimestampMs('2026-02-20 10:30:15.12'), new Date(2026, 1, 20, 10, 30, 15, 120).getTime());
+
+  assert.equal(parseTimestampMs('31/02/2026'), null);
+  assert.equal(parseTimestampMs('2026-02-31'), null);
+  assert.equal(parseTimestampMs('2026-13-01'), null);
+  assert.equal(parseTimestampMs('02/20/2026'), null);
+  assert.equal(parseTimestampMs('Thu, 20 Feb 2026 10:30:00 GMT'), null);
 
   assert.equal(parseTimestampMs('not-a-date'), null);
   assert.equal(parseTimestampMs(''), null);
