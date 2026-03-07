@@ -97,7 +97,14 @@ class Logger {
     this.sessionId = this.generateSessionId();
     this.deviceInfo = null;
     this.maxLocalLogs = 1000;
+    this.maxServerBatchSize = 100;
+    this.flushDebounceMs = 750;
+    this.maxRetryAttempts = 4;
+    this.baseRetryDelayMs = 400;
     this.storageMode = logStorage.mode;
+    this.flushTimer = null;
+    this.persistTimer = null;
+    this.isFlushing = false;
 
     this.initializeLogger();
   }
@@ -147,6 +154,7 @@ class Logger {
     const consoleMessage = `${color}[${timestamp}] [${level}] [${component}]${reset} ${message}`;
 
     const logEntry = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
       timestamp,
       level,
       component,
@@ -154,7 +162,9 @@ class Logger {
       data: sanitizedData,
       userId: maskIdentifier(this.userId),
       sessionId: maskIdentifier(this.sessionId),
-      deviceInfo: this.deviceInfo
+      deviceInfo: this.deviceInfo,
+      routeUserId: this.userId || 'anonymous',
+      routeSessionId: this.sessionId || 'session_unknown'
     };
 
     return { consoleMessage, logEntry, sanitizedData };
@@ -170,13 +180,47 @@ class Logger {
       }
     }
 
-    this.logQueue.push(logEntry);
-
-    await this.saveLogsLocally();
+    this.enqueueLog(logEntry);
 
     if (LOG_LEVELS[level] >= LOG_LEVELS.ERROR) {
-      await this.sendLogsToServer([logEntry]);
+      this.scheduleServerFlush(true);
+    } else if (LOG_LEVELS[level] >= LOG_LEVELS.WARN) {
+      this.scheduleServerFlush(false);
     }
+  }
+
+  enqueueLog(logEntry) {
+    this.logQueue.push(logEntry);
+    if (this.logQueue.length > this.maxLocalLogs) {
+      this.logQueue = this.logQueue.slice(-this.maxLocalLogs);
+    }
+
+    this.scheduleLocalPersist();
+  }
+
+  scheduleLocalPersist() {
+    if (this.persistTimer) return;
+
+    this.persistTimer = setTimeout(async () => {
+      this.persistTimer = null;
+      await this.saveLogsLocally();
+    }, this.flushDebounceMs);
+  }
+
+  scheduleServerFlush(priority = false) {
+    if (this.flushTimer) {
+      if (priority) {
+        clearTimeout(this.flushTimer);
+        this.flushTimer = null;
+      } else {
+        return;
+      }
+    }
+
+    this.flushTimer = setTimeout(async () => {
+      this.flushTimer = null;
+      await this.flushServerQueue();
+    }, priority ? 0 : this.flushDebounceMs);
   }
 
   async saveLogsLocally() {
@@ -192,27 +236,85 @@ class Logger {
     }
   }
 
+  async wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  buildServerPayload(log) {
+    return redactSensitiveData({
+      timestamp: log.timestamp,
+      level: log.level,
+      component: log.component,
+      message: log.message,
+      data: log.data,
+      userId: log.userId,
+      sessionId: log.sessionId,
+      deviceInfo: log.deviceInfo
+    });
+  }
+
+  async updateBatchWithRetry(batch, attempt = 1) {
+    try {
+      await realtimeDb.ref().update(batch);
+    } catch (error) {
+      if (attempt >= this.maxRetryAttempts) {
+        throw error;
+      }
+
+      const backoffMs = this.baseRetryDelayMs * (2 ** (attempt - 1));
+      await this.wait(backoffMs);
+      return this.updateBatchWithRetry(batch, attempt + 1);
+    }
+  }
+
+  async flushServerQueue() {
+    if (this.isFlushing) return;
+
+    this.isFlushing = true;
+    try {
+      const warnAndAbove = this.logQueue.filter((log) => LOG_LEVELS[log.level] >= LOG_LEVELS.WARN);
+      if (warnAndAbove.length === 0) return;
+
+      const sentLogIds = new Set();
+      for (let i = 0; i < warnAndAbove.length; i += this.maxServerBatchSize) {
+        const chunk = warnAndAbove.slice(i, i + this.maxServerBatchSize);
+        await this.sendLogsToServer(chunk);
+        chunk.forEach((log) => sentLogIds.add(log.id));
+      }
+
+      this.logQueue = this.logQueue.filter((log) => !sentLogIds.has(log.id));
+      await this.saveLogsLocally();
+    } catch (error) {
+      if (!this.isProduction) {
+        console.error('Failed to flush logs to server:', redactSensitiveData({ error: error?.message || 'Unknown error' }));
+      }
+    } finally {
+      this.isFlushing = false;
+    }
+  }
+
   async sendLogsToServer(logs = null) {
     try {
-      const logsToSend = logs || this.logQueue.filter(log =>
-        LOG_LEVELS[log.level] >= LOG_LEVELS.WARN
-      );
+      if (!logs) {
+        await this.flushServerQueue();
+        return;
+      }
+
+      const logsToSend = logs.filter((log) => LOG_LEVELS[log.level] >= LOG_LEVELS.WARN);
 
       if (logsToSend.length === 0) return;
 
-      const batch = {};
-      logsToSend.forEach(log => {
-        const key = `logs/${log.userId || 'anonymous'}/${log.sessionId}/${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        batch[key] = redactSensitiveData(log);
-      });
+      for (let i = 0; i < logsToSend.length; i += this.maxServerBatchSize) {
+        const chunk = logsToSend.slice(i, i + this.maxServerBatchSize);
+        const batch = {};
+        chunk.forEach((log) => {
+          const userKey = log.routeUserId || 'anonymous';
+          const sessionKey = log.routeSessionId || 'session_unknown';
+          const key = `logs/${userKey}/${sessionKey}/${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+          batch[key] = this.buildServerPayload(log);
+        });
 
-      await realtimeDb.ref().update(batch);
-
-      if (!logs) {
-        this.logQueue = this.logQueue.filter(log =>
-          LOG_LEVELS[log.level] < LOG_LEVELS.WARN
-        );
-        await this.saveLogsLocally();
+        await this.updateBatchWithRetry(batch);
       }
     } catch (error) {
       if (!this.isProduction) {
