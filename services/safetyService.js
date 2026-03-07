@@ -130,6 +130,46 @@ export const EVENT_STATUS = {
 // Offline queue storage key
 const OFFLINE_QUEUE_KEY = '@LLT:safetyOfflineQueue';
 
+const writeAuxiliarySafetyLogs = async (payload, eventId) => {
+  const auxiliaryWrites = [];
+
+  if (payload.tourId) {
+    const tourRef = realtimeDb.ref(`tours/${payload.tourId}/safetyAlerts`).push();
+    auxiliaryWrites.push(
+      tourRef.set({
+        ...payload,
+        eventId,
+      })
+    );
+  }
+
+  if (payload.isSOS || payload.severity === SEVERITY_LEVELS.CRITICAL) {
+    const globalRef = realtimeDb.ref('globalSafetyAlerts').push();
+    auxiliaryWrites.push(
+      globalRef.set({
+        ...payload,
+        eventId,
+        tourAlertId: payload.tourId ? `tours/${payload.tourId}/safetyAlerts` : null,
+      })
+    );
+  }
+
+  if (!auxiliaryWrites.length) return;
+
+  const results = await Promise.allSettled(auxiliaryWrites);
+  const rejectedCount = results.filter((result) => result.status === 'rejected').length;
+
+  if (rejectedCount > 0) {
+    await logger.warn('Safety', 'Safety event logged with partial visibility', {
+      eventId,
+      rejectedCount,
+      tourId: payload.tourId,
+      severity: payload.severity,
+      isSOS: payload.isSOS,
+    });
+  }
+};
+
 // Build standardized payload
 const buildPayload = ({
   userId,
@@ -205,24 +245,7 @@ export async function logSafetyEvent(params) {
     const userRef = realtimeDb.ref(`logs/${sanitizedUserId}/safety`).push();
     await userRef.set(payload);
 
-    // Also write to tour's safety log for operations visibility
-    if (tourId) {
-      const tourRef = realtimeDb.ref(`tours/${tourId}/safetyAlerts`).push();
-      await tourRef.set({
-        ...payload,
-        eventId: userRef.key,
-      });
-    }
-
-    // For SOS or critical events, write to global alerts for immediate visibility
-    if (isSOS || severity === SEVERITY_LEVELS.CRITICAL) {
-      const globalRef = realtimeDb.ref('globalSafetyAlerts').push();
-      await globalRef.set({
-        ...payload,
-        eventId: userRef.key,
-        tourAlertId: tourId ? `tours/${tourId}/safetyAlerts` : null,
-      });
-    }
+    await writeAuxiliarySafetyLogs(payload, userRef.key);
 
     await logger.warn('Safety', 'Safety event recorded', {
       category,
@@ -281,6 +304,8 @@ export async function processOfflineQueue(userId) {
           originalTimestamp: event.timestamp,
           timestamp: new Date().toISOString(),
         });
+
+        await writeAuxiliarySafetyLogs(event, ref.key);
         processed++;
       } catch (error) {
         failed++;
@@ -466,5 +491,27 @@ export async function getOfflineQueueCount() {
     return queue.length;
   } catch (error) {
     return 0;
+  }
+}
+
+export async function getOfflineQueuedSafetyEvents(limit = 20) {
+  try {
+    const existingQueue = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
+    if (!existingQueue) return [];
+
+    const queue = JSON.parse(existingQueue);
+    if (!Array.isArray(queue) || queue.length === 0) return [];
+
+    const mapped = queue.map((event, index) => ({
+      id: `queued_${index}_${event.queuedAt || event.timestamp || Date.now()}`,
+      ...event,
+      isQueued: true,
+    }));
+
+    return mapped
+      .sort((a, b) => new Date(b.timestamp || b.queuedAt) - new Date(a.timestamp || a.queuedAt))
+      .slice(0, limit);
+  } catch (error) {
+    return [];
   }
 }

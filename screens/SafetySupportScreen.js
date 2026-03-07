@@ -37,6 +37,7 @@ import {
   getSafetyHistory,
   processOfflineQueue,
   getOfflineQueueCount,
+  getOfflineQueuedSafetyEvents,
 } from '../services/safetyService';
 import * as chatService from '../services/chatService';
 import offlineSyncService from '../services/offlineSyncService';
@@ -268,6 +269,7 @@ const LiveLocationCard = ({
   lastUpdate,
   accuracy,
   isUpdating,
+  statusLabel,
 }) => {
   const getAccuracyLabel = () => {
     if (!accuracy) return { text: 'Unknown', color: COLORS.textMuted };
@@ -324,7 +326,7 @@ const LiveLocationCard = ({
           {lastUpdate && (
             <View style={styles.liveLocationStatusItem}>
               <MaterialCommunityIcons name="clock-outline" size={14} color={COLORS.textMuted} />
-              <Text style={styles.statusText}>{cacheStatusLabel}</Text>
+              <Text style={styles.statusText}>{statusLabel || 'Not synced yet'}</Text>
             </View>
           )}
         </View>
@@ -377,6 +379,7 @@ const SafetyTip = ({ icon, title, description, color = COLORS.primary }) => (
 const HistoryItem = ({ event }) => {
   const meta = CATEGORY_META[event.category] || {};
   const severityMeta = SEVERITY_META[event.severity] || {};
+  const isQueued = Boolean(event.isQueued);
 
   const formatDate = (timestamp) => {
     const date = new Date(timestamp);
@@ -399,11 +402,21 @@ const HistoryItem = ({ event }) => {
       </View>
       <View style={styles.historyContent}>
         <Text style={styles.historyTitle}>{meta.title || 'Report'}</Text>
-        <Text style={styles.historyDate}>{formatDate(event.timestamp)}</Text>
+        <Text style={styles.historyDate}>{formatDate(event.timestamp || event.queuedAt)}</Text>
       </View>
-      <View style={[styles.historyBadge, { backgroundColor: `${severityMeta.color || COLORS.textMuted}20` }]}>
-        <Text style={[styles.historyBadgeText, { color: severityMeta.color || COLORS.textMuted }]}>
-          {severityMeta.label || 'Unknown'}
+      <View
+        style={[
+          styles.historyBadge,
+          { backgroundColor: isQueued ? `${COLORS.warning}20` : `${severityMeta.color || COLORS.textMuted}20` },
+        ]}
+      >
+        <Text
+          style={[
+            styles.historyBadgeText,
+            { color: isQueued ? COLORS.warning : severityMeta.color || COLORS.textMuted },
+          ]}
+        >
+          {isQueued ? 'Queued' : severityMeta.label || 'Unknown'}
         </Text>
       </View>
     </View>
@@ -516,17 +529,17 @@ export default function SafetySupportScreen({
   // Process offline queue when connected
   useEffect(() => {
     if (isConnected && offlineQueueCount > 0) {
-      processOfflineQueue(userId).then(({ processed }) => {
+      processOfflineQueue(userId).then(({ processed, failed }) => {
         if (processed > 0) {
           Alert.alert(
             'Reports Synced',
             `${processed} pending safety report(s) have been submitted.`
           );
-          setOfflineQueueCount(0);
+          setOfflineQueueCount(failed || 0);
         }
       });
     }
-  }, [isConnected]);
+  }, [isConnected, offlineQueueCount, userId]);
 
   const loadTrustedContacts = async () => {
     const contacts = await getTrustedContacts();
@@ -922,8 +935,16 @@ export default function SafetySupportScreen({
   // ==================== HISTORY HANDLERS ====================
   const loadHistory = async () => {
     setLoadingHistory(true);
-    const history = await getSafetyHistory(userId);
-    setSafetyHistory(history);
+    const [history, queuedEvents] = await Promise.all([
+      getSafetyHistory(userId),
+      getOfflineQueuedSafetyEvents(),
+    ]);
+
+    const mergedHistory = [...queuedEvents, ...history].sort(
+      (a, b) => new Date(b.timestamp || b.queuedAt) - new Date(a.timestamp || a.queuedAt)
+    );
+
+    setSafetyHistory(mergedHistory);
     setLoadingHistory(false);
     setShowHistoryModal(true);
   };
@@ -1040,6 +1061,7 @@ export default function SafetySupportScreen({
             lastUpdate={currentCoords ? new Date().toISOString() : null}
             accuracy={locationAccuracy}
             isUpdating={liveLocationUpdating}
+            statusLabel={cacheStatusLabel}
           />
 
           {/* Report Issues Card */}
@@ -1485,15 +1507,15 @@ const styles = StyleSheet.create({
   },
   sosGlow: {
     position: 'absolute',
-    width: 160,
-    height: 160,
-    borderRadius: 80,
+    width: 204,
+    height: 204,
+    borderRadius: 102,
     backgroundColor: COLORS.sosRed,
   },
   sosButton: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
+    width: 178,
+    height: 178,
+    borderRadius: 89,
     ...SHADOWS.xl,
   },
   sosButtonActive: {
@@ -1501,29 +1523,33 @@ const styles = StyleSheet.create({
   },
   sosGradient: {
     flex: 1,
-    borderRadius: 70,
+    borderRadius: 89,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingVertical: SPACING.lg,
   },
   sosContent: {
     alignItems: 'center',
+    justifyContent: 'center',
   },
   sosText: {
     color: COLORS.white,
-    fontSize: 28,
+    fontSize: 52,
     fontWeight: '900',
-    letterSpacing: 2,
-    marginTop: 4,
+    letterSpacing: 3,
+    marginTop: 8,
+    lineHeight: 58,
   },
   sosHint: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 4,
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 8,
+    lineHeight: 18,
   },
   sosCountdown: {
     color: COLORS.white,
-    fontSize: 48,
+    fontSize: 56,
     fontWeight: '900',
   },
   sosCancelText: {
