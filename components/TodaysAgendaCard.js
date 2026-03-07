@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { COLORS as THEME } from '../theme';
+import { COLORS as THEME, SPACING } from '../theme';
 import { getTourDayContext } from '../services/itineraryDateParser';
 
 const COLORS = {
@@ -40,7 +40,7 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
     const daysToGo = currentDayData.daysToGo;
     return (
       <View style={styles.container}>
-        <Text style={styles.sectionTitle}>Tour Countdown</Text>
+        <Text style={[styles.sectionTitle, styles.countdownSectionTitle]}>Tour Countdown</Text>
         <View style={styles.card}>
           <LinearGradient colors={[COLORS.primaryBlue, '#005A8D']} style={styles.headerFuture}>
             <MaterialCommunityIcons name="bus" size={32} color={COLORS.white} />
@@ -112,6 +112,7 @@ const styles = StyleSheet.create({
   container: { marginBottom: 24 },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, marginLeft: 4 },
   sectionTitle: { fontSize: 20, fontWeight: '700', color: COLORS.darkText },
+  countdownSectionTitle: { marginBottom: SPACING.lg },
 
   card: {
     borderRadius: 18,
@@ -128,7 +129,7 @@ const styles = StyleSheet.create({
   headerFuture: { flexDirection: 'row', alignItems: 'center', padding: 24, borderRadius: 18 },
   countdownContent: { flex: 1, marginLeft: 16 },
   headerTitleFuture: { color: COLORS.white, fontWeight: '700', fontSize: 18, marginBottom: 12 },
-  countdownBadge: { backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, alignSelf: 'flex-start', marginBottom: 8 },
+  countdownBadge: { backgroundColor: 'rgba(255,255,255,0.2)', width: '100%', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, marginBottom: 8 },
   countdownNumber: { color: COLORS.white, fontSize: 32, fontWeight: '800', textAlign: 'center' },
   countdownLabel: { color: COLORS.white, fontSize: 14, fontWeight: '600', textAlign: 'center', opacity: 0.9 },
 
