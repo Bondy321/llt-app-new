@@ -31,7 +31,7 @@
         },
         "assigned_driver_codes": {
           "$driverId": {
-            ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || newData.val() === null || newData.root.child('drivers/' + $driverId + '/authUid').val() === auth.uid || data.child('assignedBy').val() === auth.uid || newData.child('assignedBy').val() === auth.uid)",
+            ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || newData.val() === null || root.child('drivers/' + $driverId + '/authUid').val() === auth.uid || data.child('assignedBy').val() === auth.uid || newData.child('assignedBy').val() === auth.uid)",
             ".validate": "!newData.exists() || (newData.hasChildren(['driverId', 'tourId', 'tourCode', 'assignedAt', 'assignedBy']) && newData.child('driverId').isString() && newData.child('tourId').isString() && newData.child('tourCode').isString() && newData.child('assignedAt').isString() && newData.child('assignedBy').isString())"
           }
         },
@@ -42,7 +42,7 @@
               ".validate": "!newData.exists() || newData.val() === 'PENDING' || newData.val() === 'BOARDED' || newData.val() === 'NO_SHOW' || newData.val() === 'PARTIAL'"
             },
             "passengerStatus": {
-              ".validate": "!newData.exists() || newData.isList()"
+              ".validate": "!newData.exists() || newData.hasChildren(['0'])"
             },
             "idempotencyKey": {
               ".validate": "!newData.exists() || newData.isString()"
