@@ -1,75 +1,226 @@
 {
   "rules": {
-"drivers": {
+    "drivers": {
       ".read": "auth != null",
-      "$driverCode": {
-        // Allow write if Admin, OR if user already owns it, OR if user is CLAIMING it now (writing their UID)
-        ".write": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || data.child('authUid').val() === auth.uid || newData.child('authUid').val() === auth.uid"
+      "$driverId": {
+        ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || data.child('authUid').val() === auth.uid || newData.child('authUid').val() === auth.uid)",
+        "authUid": {
+          ".validate": "newData.isString()"
+        }
       }
     },
-
     "bookings": {
       ".read": "auth != null",
       ".indexOn": ["tourCode"],
       "$bookingId": {
-        ".write": "auth != null"
+        ".write": "auth != null",
+        "status": {
+          ".validate": "!newData.exists() || newData.val() === 'PENDING' || newData.val() === 'BOARDED' || newData.val() === 'NO_SHOW' || newData.val() === 'PARTIAL'"
+        }
       }
     },
     "tour_manifests": {
       ".read": "auth != null",
-      ".write": "auth != null",
       "$tourId": {
+        ".write": "auth != null",
         "assigned_drivers": {
-           ".indexOn": [".value"]
+          ".indexOn": [".value"],
+          "$driverId": {
+            ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || newData.val() === null || newData.val() === true)"
+          }
+        },
+        "assigned_driver_codes": {
+          "$driverId": {
+            ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || newData.val() === null || root.child('drivers/' + $driverId + '/authUid').val() === auth.uid || data.child('assignedBy').val() === auth.uid || newData.child('assignedBy').val() === auth.uid)",
+            ".validate": "!newData.exists() || (newData.hasChildren(['driverId', 'tourId', 'tourCode', 'assignedAt', 'assignedBy']) && newData.child('driverId').isString() && newData.child('tourId').isString() && newData.child('tourCode').isString() && newData.child('assignedAt').isString() && newData.child('assignedBy').isString())"
+          }
+        },
+        "bookings": {
+          "$bookingRef": {
+            ".write": "auth != null",
+            "status": {
+              ".validate": "!newData.exists() || newData.val() === 'PENDING' || newData.val() === 'BOARDED' || newData.val() === 'NO_SHOW' || newData.val() === 'PARTIAL'"
+            },
+            "passengerStatus": {
+              ".validate": "!newData.exists() || newData.hasChildren(['0'])"
+            },
+            "idempotencyKey": {
+              ".validate": "!newData.exists() || newData.isString()"
+            },
+            "lastUpdated": {
+              ".validate": "!newData.exists() || newData.isString()"
+            }
+          }
         }
       }
     },
     "tours": {
       ".read": "auth != null",
-      ".write": "auth != null",
       "$tourId": {
-        ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
-        ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
+        ".write": "auth != null",
+        "name": {
+          ".validate": "newData.val() === data.val() || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
+        },
+        "tourCode": {
+          ".validate": "newData.val() === data.val() || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
+        },
+        "startDate": {
+          ".validate": "newData.val() === data.val() || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
+        },
+        "duration": {
+          ".validate": "newData.val() === data.val() || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
+        },
+        "maxParticipants": {
+          ".validate": "newData.val() === data.val() || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
+        },
+        "driverName": {
+          ".validate": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || newData.val() === data.val()"
+        },
+        "driverPhone": {
+          ".validate": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || newData.val() === data.val()"
+        },
+        "driverLocation": {
+          ".write": "auth != null",
+          ".validate": "newData.hasChildren(['latitude', 'longitude', 'timestamp']) && newData.child('latitude').isNumber() && newData.child('longitude').isNumber()"
+        },
+        "participants": {
+          "$userId": {
+            ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || auth.uid === $userId)",
+            ".validate": "!newData.exists() || (newData.child('userId').val() === $userId)"
+          }
+        },
+        "currentParticipants": {
+          ".write": "auth != null",
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+        "itinerary": {
+          ".write": "auth != null"
+        },
+        "safetyAlerts": {
+          ".read": "auth != null",
+          "$eventId": {
+            ".write": "auth != null"
+          }
+        },
+        "liveTracking": {
+          "$userId": {
+            ".read": "auth != null",
+            ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || auth.uid === $userId)"
+          }
+        }
       }
     },
     "chats": {
       "$tourId": {
         ".read": "auth != null",
-        ".write": "auth != null"
+        "messages": {
+          "$messageId": {
+            ".write": "auth != null && (!data.exists() || data.child('senderId').val() === auth.uid || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
+            "senderId": {
+              ".validate": "newData.isString() && (data.exists() ? newData.val() === data.val() : newData.val() === auth.uid || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')"
+            },
+            "senderName": {
+              ".validate": "newData.isString() && newData.val().length <= 100"
+            },
+            "text": {
+              ".validate": "newData.isString() && newData.val().length <= 10000"
+            },
+            "timestamp": {
+              ".validate": "newData.isString() || newData.isNumber()"
+            }
+          }
+        },
+        "lastRead": {
+          "$userId": {
+            ".write": "auth != null && auth.uid === $userId",
+            ".validate": "newData.isString() || newData.isNumber()"
+          }
+        },
+        "typing": {
+          "$userId": {
+            ".write": "auth != null && auth.uid === $userId"
+          }
+        },
+        "presence": {
+          "$userId": {
+            ".write": "auth != null && auth.uid === $userId"
+          }
+        }
       }
     },
     "internal_chats": {
       "$tourId": {
-        // This will now work because the driver assignment write will succeed
         ".read": "auth != null",
-        ".write": "auth != null"
+        "messages": {
+          "$messageId": {
+            ".write": "auth != null && (!data.exists() || data.child('senderId').val() === auth.uid || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
+            "senderId": {
+              ".validate": "newData.isString() && (data.exists() ? newData.val() === data.val() : newData.val() === auth.uid || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')"
+            },
+            "text": {
+              ".validate": "newData.isString() && newData.val().length <= 10000"
+            }
+          }
+        },
+        "lastRead": {
+          "$userId": {
+            ".write": "auth != null && auth.uid === $userId",
+            ".validate": "newData.isString() || newData.isNumber()"
+          }
+        }
       }
     },
     "logs": {
       "$userId": {
-        ".read": false,
-        ".write": "auth != null || $userId === 'anonymous'"
+        ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || auth.uid === $userId)",
+        ".write": "$userId === 'anonymous' || (auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || auth.uid === $userId))"
       }
     },
     "group_tour_photos": {
       "$tourId": {
         ".read": "auth != null",
-        ".write": "auth != null"
+        "$photoId": {
+          ".write": "auth != null"
+        }
       }
     },
     "private_tour_photos": {
       "$tourId": {
         "$userId": {
-          ".read": "auth != null && auth.uid === $userId",
-          ".write": "auth != null && auth.uid === $userId"
+          ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
+          ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')"
         }
       }
     },
     "users": {
       "$userId": {
         ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
-        ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')"
+        ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
+        "preferences": {
+          "chatNotifications": {
+            ".validate": "!newData.exists() || newData.isBoolean()"
+          },
+          "itineraryNotifications": {
+            ".validate": "!newData.exists() || newData.isBoolean()"
+          },
+          "driver_updates": {
+            ".validate": "!newData.exists() || newData.isBoolean()"
+          },
+          "group_chat": {
+            ".validate": "!newData.exists() || newData.isBoolean()"
+          }
+        }
       }
+    },
+    "globalSafetyAlerts": {
+      ".read": "auth != null",
+      "$eventId": {
+        ".write": "auth != null"
+      }
+    },
+    "booking_identities": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
     }
   }
 }
