@@ -180,7 +180,11 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   useEffect(() => {
     if (!itinerary?.days?.length) return;
     setCollapsedDays((prev) => {
-      if (Object.keys(prev).length > 0 && !expandAll) return prev;
+      if (Object.keys(prev).length > 0 && !expandAll) {
+        const hasAllDays = itinerary.days.every((day) => Object.prototype.hasOwnProperty.call(prev, day.day));
+        if (hasAllDays) return prev;
+      }
+
       const nextState = {};
       itinerary.days.forEach((day) => {
         nextState[day.day] = expandAll ? false : (todaysDayNumber ? day.day !== todaysDayNumber : false);
@@ -257,7 +261,15 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
   const toggleExpandAll = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExpandAll(!expandAll);
+    const nextExpandAll = !expandAll;
+    setExpandAll(nextExpandAll);
+    setCollapsedDays((prev) => {
+      const nextState = { ...prev };
+      itinerary?.days?.forEach((day) => {
+        nextState[day.day] = nextExpandAll ? false : true;
+      });
+      return nextState;
+    });
   };
 
   // --- SEARCH FUNCTIONALITY ---
