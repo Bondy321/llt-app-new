@@ -368,6 +368,21 @@ const enqueueAction = async (action) => {
     if (exists) {
       return RESPONSE.ok(exists);
     }
+
+    if (action.id) {
+      const processedActionIds = await getProcessedActionIds();
+      if (processedActionIds.includes(action.id)) {
+        const filteredProcessedIds = processedActionIds.filter((processedId) => processedId !== action.id);
+        const persistResult = await setProcessedActionIds(filteredProcessedIds);
+        if (!persistResult.success) {
+          logger.warn('OfflineSync', 'Failed to clear previously processed action id before re-enqueue', {
+            actionId: action.id,
+            error: persistResult.error,
+          });
+        }
+      }
+    }
+
     const entry = buildAction(action);
     queue.push(entry);
     queue.sort((a, b) => (parseTimestampMs(a.createdAt) || 0) - (parseTimestampMs(b.createdAt) || 0));
