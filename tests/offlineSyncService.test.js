@@ -116,6 +116,50 @@ test('replayQueue processes in FIFO order', async () => {
   assert.deepEqual(calls, ['first', 'second']);
 });
 
+
+
+test('enqueueAction clears processed id tombstone so intentional re-queue can replay', async () => {
+  await clearQueue();
+
+  await offlineSyncService.enqueueAction({
+    id: 'requeue-1',
+    type: 'CHAT_MESSAGE',
+    tourId: 'tour-1',
+    payload: { text: 'first attempt' },
+  });
+
+  const firstReplay = await offlineSyncService.replayQueue({
+    services: {
+      chatService: {
+        sendMessageDirect: async () => ({ success: true }),
+      },
+    },
+  });
+
+  assert.equal(firstReplay.success, true);
+
+  const replayCalls = [];
+  await offlineSyncService.enqueueAction({
+    id: 'requeue-1',
+    type: 'CHAT_MESSAGE',
+    tourId: 'tour-1',
+    payload: { text: 'second attempt' },
+  });
+
+  const secondReplay = await offlineSyncService.replayQueue({
+    services: {
+      chatService: {
+        sendMessageDirect: async (payload) => {
+          replayCalls.push(payload.text);
+          return { success: true };
+        },
+      },
+    },
+  });
+
+  assert.equal(secondReplay.success, true);
+  assert.deepEqual(replayCalls, ['second attempt']);
+});
 test('replayQueue caps retries and marks action failed', async () => {
   await clearQueue();
   await offlineSyncService.enqueueAction({ id: 'retry-1', type: 'CHAT_MESSAGE', tourId: 'tour-1', payload: { text: 'retry' } });
