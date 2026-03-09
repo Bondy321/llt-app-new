@@ -541,7 +541,7 @@ const replayQueue = async ({ db, services = {} } = {}) => {
       }
     }
 
-    if (failed === 0) {
+    if (processed > 0 && failed === 0) {
       const persistedLastSuccessAt = await setLastSuccessAt();
       if (!persistedLastSuccessAt.success) {
         logger.warn('OfflineSync', 'Replay succeeded but failed to persist last success timestamp', {
