@@ -57,6 +57,12 @@ const parsePickupTime = (pickupTimeRaw) => {
   return { success: false, error: 'UNSUPPORTED_TIME_FORMAT', normalized };
 };
 
+const pickupTimeToMinutes = (pickupTimeRaw, { fallback = Number.MAX_SAFE_INTEGER } = {}) => {
+  const parsed = parsePickupTime(pickupTimeRaw);
+  if (!parsed.success) return fallback;
+  return (parsed.parsed.hours * 60) + parsed.parsed.minutes;
+};
+
 const parseDateContext = (dateRaw) => {
   if (typeof dateRaw !== 'string' || !dateRaw.trim()) return null;
   const value = dateRaw.trim();
@@ -157,6 +163,7 @@ const getPickupCountdownState = ({ pickupTime, pickupDate, now = new Date() }) =
 module.exports = {
   normalizePickupTimeInput,
   parsePickupTime,
+  pickupTimeToMinutes,
   parsePickupDateTime,
   getPickupCountdownState,
 };
