@@ -244,6 +244,57 @@ test('uploadPhoto stores thumbnail and optimization metadata when provided', asy
   assert.strictEqual(thumbBlob.closed, true);
 });
 
+
+
+test('uploadPhoto continues when thumbnail upload fails and still writes full photo record', async (t) => {
+  const originalNow = Date.now;
+  Date.now = () => 1700000000000;
+  t.after(() => {
+    Date.now = originalNow;
+  });
+
+  const mainBlob = createMockBlob({ size: 2048, type: 'image/jpeg' });
+  const thumbBlob = createMockBlob({ size: 512, type: 'image/jpeg' });
+
+  const mockFetch = async (uri) => ({
+    ok: true,
+    blob: async () => (uri.includes('thumb') ? thumbBlob : mainBlob),
+  });
+
+  let payload;
+  const uploadedPaths = [];
+  await uploadPhoto('file://main.jpg', 'tour-thumb-fallback', 'user-thumb', 'Thumb optional', {
+    thumbnailUri: 'file://thumb.jpg',
+    storageInstance: {},
+    realtimeDbInstance: {},
+    storageRefFn: (_storage, path) => ({ path }),
+    uploadBytesFn: async (ref) => {
+      uploadedPaths.push(ref.path);
+      if (ref.path.includes('/thumbnails/')) {
+        throw new Error('thumbnail path denied');
+      }
+    },
+    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
+    dbRefFn: mockDbRef,
+    pushFn: () => ({ key: 'thumb-fallback-photo' }),
+    setFn: async (_ref, value) => {
+      payload = value;
+    },
+    serverTimestampFn: () => 42,
+    fetchFn: mockFetch,
+  });
+
+  assert.deepStrictEqual(uploadedPaths, [
+    'group_tour_photos/tour-thumb-fallback/1700000000000_user-thumb.jpg',
+    'group_tour_photos/tour-thumb-fallback/thumbnails/1700000000000_user-thumb_thumb.jpg',
+  ]);
+  assert.strictEqual(payload.url, 'https://example.com/group_tour_photos/tour-thumb-fallback/1700000000000_user-thumb.jpg');
+  assert.ok(!('thumbnailUrl' in payload));
+  assert.ok(!('thumbnailStoragePath' in payload));
+  assert.strictEqual(mainBlob.closed, true);
+  assert.strictEqual(thumbBlob.closed, true);
+});
+
 test('uploadPhoto retries getDownloadURL for transient storage errors before succeeding', async (t) => {
   const originalNow = Date.now;
   Date.now = () => 1700000000000;

@@ -496,24 +496,30 @@ const uploadPhoto = async (
       const downloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, fileRef);
 
       if (thumbnailUri && typeof thumbnailUri === 'string') {
-        thumbnailBlob = await createBlob(thumbnailUri, fetchFn);
-        validateBlob(thumbnailBlob);
+        try {
+          thumbnailBlob = await createBlob(thumbnailUri, fetchFn);
+          validateBlob(thumbnailBlob);
 
-        const thumbnailFilename = `${uploadTimestamp}_${validatedUserId}_thumb.jpg`;
-        thumbnailPath = isPrivate
-          ? `private_tour_photos/${validatedTourId}/${validatedUserId}/thumbnails/${thumbnailFilename}`
-          : `group_tour_photos/${validatedTourId}/thumbnails/${thumbnailFilename}`;
+          const thumbnailFilename = `${uploadTimestamp}_${validatedUserId}_thumb.jpg`;
+          thumbnailPath = isPrivate
+            ? `private_tour_photos/${validatedTourId}/${validatedUserId}/thumbnails/${thumbnailFilename}`
+            : `group_tour_photos/${validatedTourId}/thumbnails/${thumbnailFilename}`;
 
-        const thumbnailRef = storageRefFn(storageInstance, thumbnailPath);
-        await uploadBytesFn(thumbnailRef, thumbnailBlob, {
-          contentType: 'image/jpeg',
-          customMetadata: {
-            uploadedBy: validatedUserId,
-            uploadedAt: new Date().toISOString(),
-            variant: 'thumbnail',
-          },
-        });
-        thumbnailDownloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, thumbnailRef);
+          const thumbnailRef = storageRefFn(storageInstance, thumbnailPath);
+          await uploadBytesFn(thumbnailRef, thumbnailBlob, {
+            contentType: 'image/jpeg',
+            customMetadata: {
+              uploadedBy: validatedUserId,
+              uploadedAt: new Date().toISOString(),
+              variant: 'thumbnail',
+            },
+          });
+          thumbnailDownloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, thumbnailRef);
+        } catch (thumbnailError) {
+          thumbnailPath = null;
+          thumbnailDownloadURL = null;
+          console.warn('Thumbnail upload failed; continuing with full-size photo only.', thumbnailError);
+        }
       }
 
       const databasePath = isPrivate
