@@ -69,6 +69,39 @@ describe('healthService derivation', () => {
     expect(state).toBe(HEALTH_STATE.ONLINE_HEALTHY);
   });
 
+
+
+  it('uses canonical sync contract metadata across all health states', () => {
+    const offlineSnapshot = buildHealthSnapshot({
+      isOnline: false,
+      listenerConnected: true,
+    });
+
+    expect(offlineSnapshot.label).toBe('Offline');
+    expect(offlineSnapshot.description).toBe('No network connection. Changes are saved and will sync when online.');
+    expect(offlineSnapshot.severity).toBe('critical');
+    expect(offlineSnapshot.icon).toBe('wifi-off');
+    expect(offlineSnapshot.canRetry).toBe(false);
+    expect(offlineSnapshot.showLastSync).toBe(true);
+
+    const healthySnapshot = buildHealthSnapshot({
+      isOnline: true,
+      listenerConnected: true,
+      listenerErrorCount: 0,
+      pendingFailedOperations: 0,
+      backlogPendingCount: 0,
+      lastSuccessfulSyncAt: '2026-01-01T10:00:30.000Z',
+    }, {
+      now: Number(new Date('2026-01-01T10:01:00.000Z')),
+      staleMs: 5 * 60 * 1000,
+    });
+
+    expect(healthySnapshot.severity).toBe('success');
+    expect(healthySnapshot.icon).toBe('cloud-check');
+    expect(healthySnapshot.canRetry).toBe(false);
+    expect(healthySnapshot.color).toBe('green');
+  });
+
   it('maps snapshots to dashboard status chips using canonical mobile state key', () => {
     const snapshot = buildHealthSnapshot({
       isOnline: true,
