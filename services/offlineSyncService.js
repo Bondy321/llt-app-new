@@ -1,12 +1,12 @@
 const { createPersistenceProvider } = require('./persistenceProvider');
-let logger = console;
-try {
-  const loggerImport = require('./loggerService');
-  logger = loggerImport.default || loggerImport;
-} catch (error) {
-  logger = console;
-}
+const logger = process.env.NODE_ENV === 'test'
+  ? console
+  : (() => {
+      const loggerImport = require('./loggerService');
+      return loggerImport.default || loggerImport || console;
+    })();
 const { parseTimestampMs } = require('./timeUtils');
+const { HEALTH_STATE, UNIFIED_SYNC_STATES } = require('../utils/unifiedSyncContract');
 const storage = createPersistenceProvider({ namespace: 'LLT_OFFLINE' });
 
 const SCHEMA_VERSION = 1;
@@ -17,40 +17,6 @@ const PROCESSED_ACTIONS_KEY = 'processed_action_ids_v1';
 const LAST_SUCCESS_AT_KEY = 'last_success_at_v1';
 const MAX_PROCESSED_IDS = 500;
 
-const UNIFIED_SYNC_STATES = {
-  OFFLINE_NO_NETWORK: {
-    label: 'Offline',
-    description: 'No network connection. Changes are saved and will sync when online.',
-    severity: 'critical',
-    icon: 'wifi-off',
-    canRetry: false,
-    showLastSync: true,
-  },
-  ONLINE_BACKEND_DEGRADED: {
-    label: 'Service issue',
-    description: 'Connected to network, but the sync service is temporarily unavailable.',
-    severity: 'warning',
-    icon: 'cloud-alert',
-    canRetry: true,
-    showLastSync: true,
-  },
-  ONLINE_BACKLOG_PENDING: {
-    label: 'Syncing backlog',
-    description: 'Connection restored. Pending updates are still being processed.',
-    severity: 'info',
-    icon: 'clock-sync',
-    canRetry: true,
-    showLastSync: true,
-  },
-  ONLINE_HEALTHY: {
-    label: 'Up to date',
-    description: 'Everything is synced and working normally.',
-    severity: 'success',
-    icon: 'cloud-check',
-    canRetry: false,
-    showLastSync: true,
-  },
-};
 
 const listeners = new Set();
 let replayLock = false;
@@ -261,13 +227,13 @@ const deriveUnifiedSyncStatus = ({
   const total = Math.max(0, Number(queue.total) || pending + syncing + failed);
   const hasBacklog = pending > 0 || syncing > 0 || failed > 0;
 
-  let stateKey = 'ONLINE_HEALTHY';
+  let stateKey = HEALTH_STATE.ONLINE_HEALTHY;
   if (!networkOnline) {
-    stateKey = 'OFFLINE_NO_NETWORK';
+    stateKey = HEALTH_STATE.OFFLINE_NO_NETWORK;
   } else if (!backendHealthy) {
-    stateKey = 'ONLINE_BACKEND_DEGRADED';
+    stateKey = HEALTH_STATE.ONLINE_BACKEND_DEGRADED;
   } else if (hasBacklog) {
-    stateKey = 'ONLINE_BACKLOG_PENDING';
+    stateKey = HEALTH_STATE.ONLINE_BACKLOG_PENDING;
   }
 
   return {
