@@ -12,6 +12,7 @@ import * as chatService from '../services/chatService';
 import ManifestBookingCard from '../components/ManifestBookingCard';
 import { COLORS as THEME, SPACING } from '../theme';
 const { getBookingSyncState, normalizeSyncState } = require('../utils/manifestSyncState');
+const { pickupTimeToMinutes } = require('../services/pickupTimeParser');
 
 const COLORS = {
   primary: THEME.primary,
@@ -150,31 +151,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
     .filter((booking) => priorityRank(booking.status) === 0)
     .length;
 
-  const toPickupTimeSortValue = (pickupTime) => {
-    const rawValue = String(pickupTime || '').trim();
-    if (!rawValue || rawValue.toUpperCase() === 'TBA') return Number.MAX_SAFE_INTEGER;
-
-    const hhmmMatch = rawValue.match(/^(\d{1,2}):(\d{2})$/);
-    if (hhmmMatch) {
-      const hours = Number(hhmmMatch[1]);
-      const minutes = Number(hhmmMatch[2]);
-      if (hours <= 23 && minutes <= 59) return (hours * 60) + minutes;
-    }
-
-    const ampmMatch = rawValue.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-    if (ampmMatch) {
-      let hours = Number(ampmMatch[1]);
-      const minutes = Number(ampmMatch[2]);
-      const period = ampmMatch[3].toUpperCase();
-      if (hours >= 1 && hours <= 12 && minutes <= 59) {
-        if (period === 'PM' && hours !== 12) hours += 12;
-        if (period === 'AM' && hours === 12) hours = 0;
-        return (hours * 60) + minutes;
-      }
-    }
-
-    return Number.MAX_SAFE_INTEGER;
-  };
+  const toPickupTimeSortValue = (pickupTime) => pickupTimeToMinutes(pickupTime);
 
   const priorityRank = (status) => {
     if (status === MANIFEST_STATUS.PENDING || status === MANIFEST_STATUS.PARTIAL) return 0;

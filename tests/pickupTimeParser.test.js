@@ -3,6 +3,7 @@ const assert = require('node:assert');
 const {
   normalizePickupTimeInput,
   parsePickupTime,
+  pickupTimeToMinutes,
   getPickupCountdownState,
   parsePickupDateTime,
 } = require('../services/pickupTimeParser');
@@ -30,6 +31,13 @@ test('parses 12-hour pickup times with AM/PM', () => {
   assert.equal(pmResult.parsed.minutes, 45);
 });
 
+
+test('converts supported pickup time formats into sortable minute offsets', () => {
+  assert.equal(pickupTimeToMinutes('06:30'), 390);
+  assert.equal(pickupTimeToMinutes('1:45 P.M.'), 825);
+  assert.equal(pickupTimeToMinutes('TBA'), Number.MAX_SAFE_INTEGER);
+  assert.equal(pickupTimeToMinutes('not-a-time'), Number.MAX_SAFE_INTEGER);
+});
 test('rejects malformed or empty pickup times', () => {
   assert.equal(parsePickupTime('').success, false);
   assert.equal(parsePickupTime('25:99').success, false);
