@@ -244,6 +244,123 @@ test('uploadPhoto stores thumbnail and optimization metadata when provided', asy
   assert.strictEqual(thumbBlob.closed, true);
 });
 
+
+
+test('uploadPhoto continues when thumbnail upload fails and still writes full photo record', async (t) => {
+  const originalNow = Date.now;
+  Date.now = () => 1700000000000;
+  t.after(() => {
+    Date.now = originalNow;
+  });
+
+  const mainBlob = createMockBlob({ size: 2048, type: 'image/jpeg' });
+  const thumbBlob = createMockBlob({ size: 512, type: 'image/jpeg' });
+
+  const mockFetch = async (uri) => ({
+    ok: true,
+    blob: async () => (uri.includes('thumb') ? thumbBlob : mainBlob),
+  });
+
+  let payload;
+  const uploadedPaths = [];
+  await uploadPhoto('file://main.jpg', 'tour-thumb-fallback', 'user-thumb', 'Thumb optional', {
+    thumbnailUri: 'file://thumb.jpg',
+    storageInstance: {},
+    realtimeDbInstance: {},
+    storageRefFn: (_storage, path) => ({ path }),
+    uploadBytesFn: async (ref) => {
+      uploadedPaths.push(ref.path);
+      if (ref.path.includes('/thumbnails/')) {
+        throw new Error('thumbnail path denied');
+      }
+    },
+    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
+    dbRefFn: mockDbRef,
+    pushFn: () => ({ key: 'thumb-fallback-photo' }),
+    setFn: async (_ref, value) => {
+      payload = value;
+    },
+    serverTimestampFn: () => 42,
+    fetchFn: mockFetch,
+  });
+
+  assert.deepStrictEqual(uploadedPaths, [
+    'group_tour_photos/tour-thumb-fallback/1700000000000_user-thumb.jpg',
+    'group_tour_photos/tour-thumb-fallback/thumbnails/1700000000000_user-thumb_thumb.jpg',
+  ]);
+  assert.strictEqual(payload.url, 'https://example.com/group_tour_photos/tour-thumb-fallback/1700000000000_user-thumb.jpg');
+  assert.ok(!('thumbnailUrl' in payload));
+  assert.ok(!('thumbnailStoragePath' in payload));
+  assert.strictEqual(mainBlob.closed, true);
+  assert.strictEqual(thumbBlob.closed, true);
+});
+
+test('uploadPhoto retries getDownloadURL for transient storage errors before succeeding', async (t) => {
+  const originalNow = Date.now;
+  Date.now = () => 1700000000000;
+  t.after(() => {
+    Date.now = originalNow;
+  });
+
+  const blob = createMockBlob();
+  let attempts = 0;
+
+  let payload;
+  await uploadPhoto('file://group.jpg', 'tour-retry', 'user-retry', '', {
+    storageInstance: {},
+    realtimeDbInstance: {},
+    storageRefFn: (_storage, path) => ({ path }),
+    uploadBytesFn: async () => {},
+    getDownloadURLFn: async (ref) => {
+      attempts += 1;
+      if (attempts < 3) {
+        const error = new Error('object-not-found while edge cache catches up');
+        error.code = 'storage/object-not-found';
+        throw error;
+      }
+      return `https://example.com/${ref.path}`;
+    },
+    dbRefFn: mockDbRef,
+    pushFn: () => ({ key: 'photo-retry' }),
+    setFn: async (_ref, value) => {
+      payload = value;
+    },
+    serverTimestampFn: () => 123,
+    fetchFn: async () => ({ ok: true, blob: async () => blob }),
+  });
+
+  assert.strictEqual(attempts, 3);
+  assert.strictEqual(payload.url, 'https://example.com/group_tour_photos/tour-retry/1700000000000_user-retry.jpg');
+});
+
+test('uploadPhoto fails fast on non-retryable getDownloadURL errors', async () => {
+  const blob = createMockBlob();
+  let attempts = 0;
+
+  await assert.rejects(
+    uploadPhoto('file://group.jpg', 'tour-fail', 'user-fail', '', {
+      storageInstance: {},
+      realtimeDbInstance: {},
+      storageRefFn: (_storage, path) => ({ path }),
+      uploadBytesFn: async () => {},
+      getDownloadURLFn: async () => {
+        attempts += 1;
+        const error = new Error('permission denied');
+        error.code = 'storage/unauthorized';
+        throw error;
+      },
+      dbRefFn: mockDbRef,
+      pushFn: () => ({ key: 'photo-fail' }),
+      setFn: async () => {},
+      serverTimestampFn: () => 123,
+      fetchFn: async () => ({ ok: true, blob: async () => blob }),
+    }),
+    /permission denied/
+  );
+
+  assert.strictEqual(attempts, 1);
+});
+
 test('subscribeToTourPhotos sorts by descending timestamp and returns a safe fallback when mapping fails', async () => {
   const delivered = [];
 

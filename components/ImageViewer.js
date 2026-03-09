@@ -49,7 +49,7 @@ export default function ImageViewer({
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const infoSlideAnim = useRef(new Animated.Value(0)).current;
   const fullImageOpacity = useRef(new Animated.Value(0)).current;
-  const imageLoadIdRef = useRef(0);
+  const activeImageUrlRef = useRef(null);
 
   useEffect(() => {
     setCurrentIndex(initialIndex);
@@ -91,29 +91,27 @@ export default function ImageViewer({
 
   useEffect(() => {
     if (!visible) return;
-
-    const nextLoadId = imageLoadIdRef.current + 1;
-    imageLoadIdRef.current = nextLoadId;
+    activeImageUrlRef.current = currentPhoto.url || null;
     fullImageOpacity.setValue(0);
     setImageLoading(Boolean(currentPhoto.url));
   }, [visible, currentIndex, currentPhoto.url, fullImageOpacity]);
 
-  const handleFullImageLoaded = useCallback((loadId) => {
-    if (loadId !== imageLoadIdRef.current) return;
+  const handleFullImageLoaded = useCallback((imageUrl) => {
+    if (!imageUrl || imageUrl !== activeImageUrlRef.current) return;
 
     Animated.timing(fullImageOpacity, {
       toValue: 1,
       duration: 220,
       useNativeDriver: true,
     }).start(() => {
-      if (loadId === imageLoadIdRef.current) {
+      if (imageUrl === activeImageUrlRef.current) {
         setImageLoading(false);
       }
     });
   }, [fullImageOpacity]);
 
-  const handleFullImageError = useCallback((loadId) => {
-    if (loadId !== imageLoadIdRef.current) return;
+  const handleFullImageError = useCallback((imageUrl) => {
+    if (!imageUrl || imageUrl !== activeImageUrlRef.current) return;
     setImageLoading(false);
     fullImageOpacity.setValue(1);
   }, [fullImageOpacity]);
@@ -286,8 +284,6 @@ export default function ImageViewer({
     inputRange: [0, 1],
     outputRange: [200, 0],
   });
-  const currentLoadId = imageLoadIdRef.current;
-
   if (!visible) return null;
 
   return (
@@ -345,8 +341,8 @@ export default function ImageViewer({
               style={[styles.image, styles.fullImageLayer, { opacity: fullImageOpacity }]}
               resizeMode="contain"
               onLoadStart={() => setImageLoading(true)}
-              onLoad={() => handleFullImageLoaded(currentLoadId)}
-              onError={() => handleFullImageError(currentLoadId)}
+              onLoad={() => handleFullImageLoaded(currentPhoto.url)}
+              onError={() => handleFullImageError(currentPhoto.url)}
             />
           </View>
 

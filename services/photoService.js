@@ -31,6 +31,39 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic'];
 const MAX_CAPTION_LENGTH = 500;
 const LIVE_PHOTOS_WINDOW = 100;
+const DOWNLOAD_URL_RETRYABLE_CODES = new Set([
+  'storage/object-not-found',
+  'storage/retry-limit-exceeded',
+  'storage/unknown',
+]);
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const getDownloadUrlWithRetry = async (getDownloadURLFn, fileRef, { maxAttempts = 5, initialDelayMs = 200 } = {}) => {
+  let attempt = 0;
+  let lastError = null;
+
+  while (attempt < maxAttempts) {
+    try {
+      return await getDownloadURLFn(fileRef);
+    } catch (error) {
+      lastError = error;
+      const code = typeof error?.code === 'string' ? error.code : null;
+      const retryableByCode = code && DOWNLOAD_URL_RETRYABLE_CODES.has(code);
+      const retryableByMessage = typeof error?.message === 'string' && /network|timeout|timed out|object-not-found/i.test(error.message);
+
+      attempt += 1;
+      if (attempt >= maxAttempts || (!retryableByCode && !retryableByMessage)) {
+        break;
+      }
+
+      const delay = initialDelayMs * (2 ** (attempt - 1));
+      await sleep(Math.min(delay, 2000));
+    }
+  }
+
+  throw lastError || new Error('Failed to resolve photo URL');
+};
 
 // ==================== PAGINATION HELPERS ====================
 
@@ -460,27 +493,33 @@ const uploadPhoto = async (
         ),
       ]);
 
-      const downloadURL = await getDownloadURLFn(fileRef);
+      const downloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, fileRef);
 
       if (thumbnailUri && typeof thumbnailUri === 'string') {
-        thumbnailBlob = await createBlob(thumbnailUri, fetchFn);
-        validateBlob(thumbnailBlob);
+        try {
+          thumbnailBlob = await createBlob(thumbnailUri, fetchFn);
+          validateBlob(thumbnailBlob);
 
-        const thumbnailFilename = `${uploadTimestamp}_${validatedUserId}_thumb.jpg`;
-        thumbnailPath = isPrivate
-          ? `private_tour_photos/${validatedTourId}/${validatedUserId}/thumbnails/${thumbnailFilename}`
-          : `group_tour_photos/${validatedTourId}/thumbnails/${thumbnailFilename}`;
+          const thumbnailFilename = `${uploadTimestamp}_${validatedUserId}_thumb.jpg`;
+          thumbnailPath = isPrivate
+            ? `private_tour_photos/${validatedTourId}/${validatedUserId}/thumbnails/${thumbnailFilename}`
+            : `group_tour_photos/${validatedTourId}/thumbnails/${thumbnailFilename}`;
 
-        const thumbnailRef = storageRefFn(storageInstance, thumbnailPath);
-        await uploadBytesFn(thumbnailRef, thumbnailBlob, {
-          contentType: 'image/jpeg',
-          customMetadata: {
-            uploadedBy: validatedUserId,
-            uploadedAt: new Date().toISOString(),
-            variant: 'thumbnail',
-          },
-        });
-        thumbnailDownloadURL = await getDownloadURLFn(thumbnailRef);
+          const thumbnailRef = storageRefFn(storageInstance, thumbnailPath);
+          await uploadBytesFn(thumbnailRef, thumbnailBlob, {
+            contentType: 'image/jpeg',
+            customMetadata: {
+              uploadedBy: validatedUserId,
+              uploadedAt: new Date().toISOString(),
+              variant: 'thumbnail',
+            },
+          });
+          thumbnailDownloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, thumbnailRef);
+        } catch (thumbnailError) {
+          thumbnailPath = null;
+          thumbnailDownloadURL = null;
+          console.warn('Thumbnail upload failed; continuing with full-size photo only.', thumbnailError);
+        }
       }
 
       const databasePath = isPrivate
