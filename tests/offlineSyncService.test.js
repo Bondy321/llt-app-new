@@ -358,3 +358,24 @@ test('replayQueue writes lastSuccessAt only when there are zero failures', async
   assert.equal(afterFailure.success, true);
   assert.equal(afterFailure.data, priorValue);
 });
+
+test('replayQueue does not refresh lastSuccessAt when there is no work to process', async () => {
+  await clearQueue();
+  await offlineSyncService.setLastSuccessAt(123456789);
+
+  const replayResult = await offlineSyncService.replayQueue({
+    services: {
+      chatService: {
+        sendMessageDirect: async () => ({ success: true }),
+      },
+    },
+  });
+
+  assert.equal(replayResult.success, true);
+  assert.equal(replayResult.data.processed, 0);
+  assert.equal(replayResult.data.failed, 0);
+
+  const afterReplay = await offlineSyncService.getLastSuccessAt();
+  assert.equal(afterReplay.success, true);
+  assert.equal(afterReplay.data, 123456789);
+});
