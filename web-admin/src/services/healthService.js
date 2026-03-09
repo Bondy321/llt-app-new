@@ -11,40 +11,43 @@ export const HEALTH_STATE = {
 const HEALTH_META = {
   [HEALTH_STATE.OFFLINE_NO_NETWORK]: {
     label: 'Offline',
-    description: 'No network or listener connectivity detected.',
+    description: 'No network connection. Changes are saved and will sync when online.',
     severity: 'critical',
-    color: 'red',
-    icon: 'plug-off',
-    canRetry: true,
+    icon: 'wifi-off',
+    canRetry: false,
     showLastSync: true,
   },
   [HEALTH_STATE.ONLINE_BACKEND_DEGRADED]: {
     label: 'Service issue',
-    description: 'Backend is reachable but errors are affecting sync.',
-    severity: 'high',
-    color: 'orange',
-    icon: 'alert-triangle',
+    description: 'Connected to network, but the sync service is temporarily unavailable.',
+    severity: 'warning',
+    icon: 'cloud-alert',
     canRetry: true,
     showLastSync: true,
   },
   [HEALTH_STATE.ONLINE_BACKLOG_PENDING]: {
     label: 'Syncing backlog',
-    description: 'System is online with pending operations to flush.',
-    severity: 'medium',
-    color: 'yellow',
-    icon: 'clock',
+    description: 'Connection restored. Pending updates are still being processed.',
+    severity: 'info',
+    icon: 'clock-sync',
     canRetry: true,
     showLastSync: true,
   },
   [HEALTH_STATE.ONLINE_HEALTHY]: {
     label: 'Up to date',
     description: 'Everything is synced and working normally.',
-    severity: 'low',
-    color: 'green',
-    icon: 'circle-check',
+    severity: 'success',
+    icon: 'cloud-check',
     canRetry: false,
     showLastSync: true,
   },
+};
+
+const HEALTH_COLOR_BY_SEVERITY = {
+  critical: 'red',
+  warning: 'orange',
+  info: 'yellow',
+  success: 'green',
 };
 
 const DEFAULT_STALE_MS = 2 * 60 * 1000;
@@ -86,6 +89,7 @@ export function buildHealthSnapshot(signals, options = {}) {
   return {
     state,
     ...meta,
+    color: HEALTH_COLOR_BY_SEVERITY[meta.severity] || 'gray',
     lastSuccessfulSyncAt: signals?.lastSuccessfulSyncAt ?? null,
   };
 }
