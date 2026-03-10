@@ -17,7 +17,7 @@
     "test:mobile:auth": "NODE_ENV=test node --test tests/loginFlow.test.js tests/LoginScreen.behavior.test.js tests/offlineLoginResolver.test.js tests/validateBookingReference.driver.test.js tests/validateBookingReference.passengerVerifier.test.js",
     "test:mobile:sync": "NODE_ENV=test node --test tests/unifiedSyncStatus.test.js tests/manifestSyncState.test.js tests/passengerManifestSyncLabels.test.js tests/syncUiContract.test.js tests/offlineSyncService.test.js tests/tourHomeActionPlanner.test.js __tests__/offlineSyncService.test.js __tests__/offlineQueueing.test.js __tests__/persistenceProvider.test.js",
     "test:mobile:ui": "NODE_ENV=test node --test tests/swipeHomeNavigation.test.js tests/pickupTimeParser.test.js tests/itineraryDateParser.test.js tests/timeUtils.test.js",
-    "test:mobile:services": "NODE_ENV=test node --test tests/joinTour.test.js tests/driverAssignmentContract.test.js tests/tourCsvService.test.js __tests__/chatService.test.js",
+    "test:mobile:services": "NODE_ENV=test node --test tests/joinTour.test.js tests/driverAssignmentContract.test.js tests/assignDriverToTour.cleanup.test.js tests/tourCsvService.test.js __tests__/chatService.test.js",
     "test:mobile:photo": "NODE_ENV=test node --test __tests__/photoService.test.js",
     "test:web-admin": "npm --prefix web-admin run test",
     "build:dev:ios": "eas build --profile development --platform ios",

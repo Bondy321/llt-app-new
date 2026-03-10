@@ -677,6 +677,8 @@ const assignDriverToTour = async (driverId, tourCode) => {
       throw new Error('Driver not found');
     }
 
+    const driverData = driverSnapshot.val() || {};
+    const previousTourId = driverData.currentTourId ? sanitizeTourId(driverData.currentTourId) : null;
     const updates = {};
 
     // 1. Update Driver's Profile
@@ -693,6 +695,12 @@ const assignDriverToTour = async (driverId, tourCode) => {
       assignedAt: new Date().toISOString(),
       assignedBy: currentUser.uid,
     });
+
+    // 3. If driver is switching tours, clean previous manifest assignment atomically.
+    if (previousTourId && previousTourId !== tourId) {
+      updates[`tour_manifests/${previousTourId}/assigned_drivers/${validatedDriverId}`] = null;
+      updates[`tour_manifests/${previousTourId}/assigned_driver_codes/${validatedDriverId}`] = null;
+    }
 
     // Use timeout protection
     await Promise.race([
