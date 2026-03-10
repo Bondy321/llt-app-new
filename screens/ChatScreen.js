@@ -41,11 +41,11 @@ import {
   deleteMessage,
   getMessageTextForCopy,
 } from '../services/chatService';
-import { uploadPhoto } from '../services/photoService';
 import { createPersistenceProvider } from '../services/persistenceProvider';
 import offlineSyncService from '../services/offlineSyncService';
 import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
+import * as photoService from '../services/photoService';
 import { auth } from '../firebase';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import SyncStatusBanner from '../components/SyncStatusBanner';
@@ -986,7 +986,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         });
       }
 
-      const replayResult = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+      const replayResult = await offlineSyncService.replayQueue({ services: { bookingService, chatService, photoService } });
       await refreshQueueStats();
       const afterStatsResult = await offlineSyncService.getQueueStats();
       const afterStats = afterStatsResult?.success
@@ -1054,7 +1054,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
         // Upload to Firebase Storage using correct signature:
         // uploadPhoto(uri, tourId, userId, caption, options)
-        const uploadResult = await uploadPhoto(
+        const uploadResult = await photoService.uploadPhoto(
           imageUri,
           tourId,
           userId,
@@ -1139,7 +1139,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         ? beforeStatsResult.data
         : { pending: 0, failed: 0, syncing: 0, total: 0 };
 
-      const replayResult = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+      const replayResult = await offlineSyncService.replayQueue({ services: { bookingService, chatService, photoService } });
       await refreshQueueStats();
 
       const afterStatsResult = await offlineSyncService.getQueueStats();

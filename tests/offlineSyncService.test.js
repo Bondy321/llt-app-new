@@ -237,6 +237,44 @@ test('retryFailedActions re-queues only selected failed types and clears backoff
   assert.notEqual(manifest.nextAttemptAt, null);
 });
 
+
+test('replayQueue can process PHOTO_UPLOAD when photoService direct handler is provided', async () => {
+  await clearQueue();
+
+  await offlineSyncService.enqueueAction({
+    id: 'photo-replay-1',
+    type: 'PHOTO_UPLOAD',
+    tourId: 'tour-photo',
+    payload: {
+      uri: 'file:///tmp/test.jpg',
+      tourId: 'tour-photo',
+      userId: 'user-1',
+    },
+  });
+
+  let called = 0;
+  const replay = await offlineSyncService.replayQueue({
+    services: {
+      photoService: {
+        uploadPhotoDirect: async (payload) => {
+          called += 1;
+          assert.equal(payload.tourId, 'tour-photo');
+          return { success: true };
+        },
+      },
+    },
+  });
+
+  assert.equal(replay.success, true);
+  assert.equal(replay.data.processed, 1);
+  assert.equal(replay.data.failed, 0);
+  assert.equal(called, 1);
+
+  const remaining = await offlineSyncService.getQueuedActions();
+  assert.equal(remaining.success, true);
+  assert.equal(remaining.data.length, 0);
+});
+
 test('replayQueue skips max-attempt failed action and replays once when re-queued', async () => {
   await clearQueue();
   const MAX_ATTEMPTS = 5;

@@ -28,3 +28,10 @@ test('key surfaces use formatLastSyncRelative and state.showLastSync visibility 
   assert.match(syncBanner, /offlineSyncService\.formatLastSyncRelative\(/);
   assert.match(syncBanner, /Last successful sync/);
 });
+
+
+test('chat replay injects photoService so PHOTO_UPLOAD queue actions can replay', () => {
+  const chatScreen = read('screens/ChatScreen.js');
+
+  assert.match(chatScreen, /replayQueue\(\{ services: \{ bookingService, chatService, photoService \} \}\)/);
+});

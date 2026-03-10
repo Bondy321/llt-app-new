@@ -863,8 +863,38 @@ const updatePhotoCaption = async (
   return { success: true };
 };
 
+
+const uploadPhotoDirect = async (payload = {}) => {
+  try {
+    const {
+      uri,
+      tourId,
+      userId,
+      caption = '',
+      visibility = 'group',
+      uploaderName = 'Tour Member',
+      thumbnailUri = null,
+      optimizationMetrics = null,
+      onProgress = null,
+    } = payload;
+
+    const data = await uploadPhoto(uri, tourId, userId, caption, {
+      visibility,
+      uploaderName,
+      thumbnailUri,
+      optimizationMetrics,
+      onProgress,
+    });
+
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error?.message || 'Photo upload failed' };
+  }
+};
+
 module.exports = {
   uploadPhoto,
+  uploadPhotoDirect,
   fetchTourPhotosPage,
   fetchPrivatePhotosPage,
   subscribeToTourPhotos,
