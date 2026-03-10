@@ -2,6 +2,7 @@
 // Enhanced with better error handling, validation, and retry logic
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { realtimeDb } from '../firebase';
 
@@ -39,6 +40,19 @@ const validatePreferences = (preferences) => {
 const DEFAULT_NOTIFICATION_PREFERENCES = {
   chatNotifications: true,
   itineraryNotifications: true,
+};
+
+const resolveExpoProjectId = () => {
+  const envProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID?.trim();
+  if (envProjectId) return envProjectId;
+
+  const easProjectId = Constants?.easConfig?.projectId?.trim?.();
+  if (easProjectId) return easProjectId;
+
+  const expoConfigProjectId = Constants?.expoConfig?.extra?.eas?.projectId?.trim?.();
+  if (expoConfigProjectId) return expoConfigProjectId;
+
+  return null;
 };
 
 /**
@@ -143,10 +157,11 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
 
     // Get the Expo push token with retry logic
     let token;
+    const projectId = resolveExpoProjectId();
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
         const tokenData = await Promise.race([
-          Notifications.getExpoPushTokenAsync(),
+          Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined),
           new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Token fetch timeout')), 10000)
           )

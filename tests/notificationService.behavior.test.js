@@ -16,6 +16,13 @@ const buildNotificationService = ({ permission = 'granted', token = 'ExponentPus
   let permissionStatus = permission;
 
   Module._load = function mocked(request, parent, isMain) {
+    if (request === 'expo-constants') {
+      return {
+        easConfig: { projectId: 'test-eas-project-id' },
+        expoConfig: { extra: { eas: { projectId: 'test-eas-project-id' } } },
+      };
+    }
+
     if (request === 'expo-device') {
       return { isDevice: true, modelName: 'Test Device' };
     }
@@ -92,4 +99,59 @@ test('saveUserPreferences handles denied permission path without throwing and ma
   assert.equal(updates[0].pushTokenStatus, 'UNAVAILABLE');
   assert.equal(updates[0].preferences.chatNotifications, true);
   assert.equal(updates[0].preferences.itineraryNotifications, true);
+});
+
+test('registerForPushNotificationsAsync passes EAS projectId to Expo token API when available', async () => {
+  const tokenCalls = [];
+
+  Module._load = function mocked(request, parent, isMain) {
+    if (request === 'expo-constants') {
+      return {
+        easConfig: { projectId: 'test-eas-project-id' },
+        expoConfig: { extra: { eas: { projectId: 'fallback-project-id' } } },
+      };
+    }
+
+    if (request === 'expo-device') {
+      return { isDevice: true, modelName: 'Test Device' };
+    }
+
+    if (request === 'expo-notifications') {
+      return {
+        AndroidImportance: { MAX: 'MAX' },
+        setNotificationHandler: () => {},
+        setNotificationChannelAsync: async () => {},
+        getPermissionsAsync: async () => ({ status: 'granted' }),
+        requestPermissionsAsync: async () => ({ status: 'granted' }),
+        getExpoPushTokenAsync: async (options) => {
+          tokenCalls.push(options);
+          return { data: 'ExponentPushToken[test-token]' };
+        },
+      };
+    }
+
+    if (request === 'react-native') {
+      return { Platform: { OS: 'ios', Version: '18.0' } };
+    }
+
+    if (request.endsWith('/firebase') || request === '../firebase') {
+      return {
+        realtimeDb: {
+          ref: () => ({
+            once: async () => ({ val: () => ({}) }),
+            update: async () => {},
+          }),
+        },
+      };
+    }
+
+    return originalLoad(request, parent, isMain);
+  };
+
+  delete require.cache[require.resolve('../services/notificationService')];
+  const service = require('../services/notificationService');
+  const token = await service.registerForPushNotificationsAsync();
+
+  assert.equal(token, 'ExponentPushToken[test-token]');
+  assert.deepEqual(tokenCalls[0], { projectId: 'test-eas-project-id' });
 });
