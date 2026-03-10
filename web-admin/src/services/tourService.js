@@ -294,8 +294,16 @@ export const createTourFromTemplate = async (templateKey, overrides = {}, create
   const today = new Date();
   const startDate = overrides.startDate || formatDateToDDMMYYYY(today);
 
+  const parsedUkStartDate = parseUKDateStrict(startDate);
+  const parsedIsoStartDate = parsedUkStartDate.success ? null : parseISODateStrict(startDate);
+  const dateAnchor = parsedUkStartDate.success
+    ? parsedUkStartDate.date
+    : parsedIsoStartDate.success
+      ? parsedIsoStartDate.date
+      : today;
+
   // Calculate end date based on days
-  const endDateObj = new Date(today);
+  const endDateObj = new Date(dateAnchor);
   endDateObj.setDate(endDateObj.getDate() + (template.days - 1));
   const endDate = overrides.endDate || formatDateToDDMMYYYY(endDateObj);
 
