@@ -309,7 +309,7 @@ test('subscribeQueueState emits queue stats that drive Pending badge text', asyn
   assert.equal(seenBadgeTexts.at(-1), 'Pending 0');
 });
 
-test('replayQueue writes lastSuccessAt only when there are zero failures', async () => {
+test('replayQueue writes lastSuccessAt whenever at least one action is processed', async () => {
   await clearQueue();
   await offlineSyncService.setLastSuccessAt(1111);
 
@@ -336,27 +336,42 @@ test('replayQueue writes lastSuccessAt only when there are zero failures', async
   assert.equal(afterSuccess.data > 1111, true);
 
   await offlineSyncService.enqueueAction({
-    id: 'last-success-fail',
+    id: 'last-success-mixed-ok',
     type: 'CHAT_MESSAGE',
     tourId: 'tour-last-success',
-    payload: { text: 'fails-once' },
+    createdAt: '2026-01-01T00:00:01.000Z',
+    payload: { text: 'mixed-success' },
+  });
+
+  await offlineSyncService.enqueueAction({
+    id: 'last-success-mixed-fail',
+    type: 'CHAT_MESSAGE',
+    tourId: 'tour-last-success',
+    createdAt: '2026-01-01T00:00:02.000Z',
+    payload: { text: 'mixed-failure' },
   });
 
   const priorValue = afterSuccess.data;
   const secondReplay = await offlineSyncService.replayQueue({
     services: {
       chatService: {
-        sendMessageDirect: async () => ({ success: false, error: 'network' }),
+        sendMessageDirect: async (payload) => (
+          payload.text === 'mixed-success'
+            ? { success: true }
+            : { success: false, error: 'network' }
+        ),
       },
     },
   });
 
   assert.equal(secondReplay.success, true);
+  assert.equal(secondReplay.data.processed, 1);
   assert.equal(secondReplay.data.failed, 1);
 
   const afterFailure = await offlineSyncService.getLastSuccessAt();
   assert.equal(afterFailure.success, true);
-  assert.equal(afterFailure.data, priorValue);
+  assert.equal(typeof afterFailure.data, 'number');
+  assert.equal(afterFailure.data > priorValue, true);
 });
 
 test('replayQueue does not refresh lastSuccessAt when there is no work to process', async () => {
