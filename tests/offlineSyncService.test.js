@@ -5,7 +5,10 @@ const offlineSyncService = require('../services/offlineSyncService');
 const clearQueue = async () => {
   const queued = await offlineSyncService.getQueuedActions();
   if (!queued.success) return;
-  await Promise.all(queued.data.map((action) => offlineSyncService.removeAction(action.id)));
+
+  for (const action of queued.data) {
+    await offlineSyncService.removeAction(action.id);
+  }
 };
 
 test('queue enqueue/dequeue lifecycle works', async () => {
@@ -192,6 +195,46 @@ test('replayQueue caps retries and marks action failed', async () => {
   assert.equal(stats.success, true);
   assert.equal(stats.data.failed, 1);
   assert.equal(stats.data.pending, 0);
+});
+
+
+test('retryFailedActions re-queues only selected failed types and clears backoff window', async () => {
+  await clearQueue();
+
+  await offlineSyncService.enqueueAction({
+    id: 'retry-type-chat',
+    type: 'CHAT_MESSAGE',
+    tourId: 'tour-1',
+    payload: { text: 'retry chat' },
+    status: 'failed',
+    attempts: 3,
+    nextAttemptAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  });
+
+  await offlineSyncService.enqueueAction({
+    id: 'retry-type-manifest',
+    type: 'MANIFEST_UPDATE',
+    tourId: 'tour-1',
+    payload: { bookingRef: 'ABC123' },
+    status: 'failed',
+    attempts: 2,
+    nextAttemptAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  });
+
+  const retried = await offlineSyncService.retryFailedActions({ types: ['CHAT_MESSAGE'] });
+  assert.equal(retried.success, true);
+  assert.equal(retried.data.retriedCount, 1);
+
+  const queued = await offlineSyncService.getQueuedActions();
+  const chat = queued.data.find((action) => action.id === 'retry-type-chat');
+  const manifest = queued.data.find((action) => action.id === 'retry-type-manifest');
+
+  assert.equal(chat.status, 'queued');
+  assert.equal(chat.nextAttemptAt, null);
+  assert.equal(chat.attempts, 3);
+
+  assert.equal(manifest.status, 'failed');
+  assert.notEqual(manifest.nextAttemptAt, null);
 });
 
 test('replayQueue skips max-attempt failed action and replays once when re-queued', async () => {

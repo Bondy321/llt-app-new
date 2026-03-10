@@ -971,12 +971,20 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     scrollToBottom,
   ]);
 
-  const handleManualSync = useCallback(async () => {
+  const handleManualSync = useCallback(async ({ retryFailedOnly = false } = {}) => {
     try {
       const beforeStatsResult = await offlineSyncService.getQueueStats();
       const beforeStats = beforeStatsResult?.success
         ? beforeStatsResult.data
         : { pending: 0, failed: 0, syncing: 0, total: 0 };
+
+      if (retryFailedOnly) {
+        await offlineSyncService.retryFailedActions({
+          types: internalDriverChat
+            ? ['CHAT_MESSAGE', 'INTERNAL_CHAT_MESSAGE', 'PHOTO_UPLOAD']
+            : ['CHAT_MESSAGE', 'PHOTO_UPLOAD'],
+        });
+      }
 
       const replayResult = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
       await refreshQueueStats();
@@ -992,7 +1000,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         fallbackErrorMessage: 'Unable to flush queued chat actions.',
       });
     }
-  }, [refreshQueueStats, showQueueSyncOutcome]);
+  }, [internalDriverChat, refreshQueueStats, showQueueSyncOutcome]);
 
   // Image picker handler
   const handlePickImage = useCallback(async () => {
@@ -1511,7 +1519,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         state={syncBannerContract}
         outcomeText={syncBannerOutcomeText}
         lastSyncAt={lastSuccessfulSyncAt}
-        onRetry={handleManualSync}
+        onRetry={() => handleManualSync({ retryFailedOnly: true })}
         retryLabel="Retry failed actions"
       />
 
