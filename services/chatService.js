@@ -2,6 +2,7 @@
 // Improved with comprehensive validation, error handling, and security measures
 const isTestEnv = process.env.NODE_ENV === 'test';
 let realtimeDb;
+const { loadOptionalService } = require('./optionalServiceLoader');
 
 if (!isTestEnv) {
   try {
@@ -11,12 +12,11 @@ if (!isTestEnv) {
   }
 }
 
-let offlineSyncService;
-try {
-  offlineSyncService = require('./offlineSyncService');
-} catch (error) {
-  console.warn('Offline sync service unavailable:', error.message);
-}
+const offlineSyncService = loadOptionalService({
+  modulePath: './offlineSyncService',
+  serviceLabel: 'Offline sync service',
+  isTestEnv,
+});
 
 // ==================== CONSTANTS & CONFIGURATION ====================
 
