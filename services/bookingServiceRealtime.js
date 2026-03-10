@@ -6,6 +6,7 @@ let auth;
 let logger;
 let getCurrentAppCheckToken;
 let maskIdentifier = (value) => value;
+const { loadOptionalService } = require('./optionalServiceLoader');
 
 // Status Enums for the Manifest
 const MANIFEST_STATUS = {
@@ -38,16 +39,12 @@ if (!isTestEnv) {
 }
 
 
-let offlineSyncService;
-try {
-  offlineSyncService = require('./offlineSyncService');
-} catch (error) {
-  if (logger?.warn) {
-    logger.warn('BookingService', 'Offline sync service unavailable', { error: error.message });
-  } else if (isTestEnv || process.env.NODE_ENV !== 'production') {
-    console.warn('Offline sync service unavailable:', error.message);
-  }
-}
+const offlineSyncService = loadOptionalService({
+  modulePath: './offlineSyncService',
+  serviceLabel: 'BookingService',
+  logger,
+  isTestEnv,
+});
 const { parseTimestampMs } = require('./timeUtils');
 
 const buildPassengerLoginVerifierUrl = () => {
