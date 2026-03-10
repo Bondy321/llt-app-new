@@ -37,23 +37,55 @@ const validatePreferences = (preferences) => {
 };
 
 const DEFAULT_NOTIFICATION_PREFERENCES = {
+  ops: {
+    driver_updates: true,
+    itinerary_changes: true,
+    group_chat: true,
+    group_photos: false,
+  },
+  marketing: {
+    steam_trains: false,
+    mystery_tours: false,
+    scotland_classics: false,
+    vip_experiences: false,
+    hiking_nature: false,
+  },
+};
+
+const DEFAULT_LEGACY_NOTIFICATION_FLAGS = {
   chatNotifications: true,
   itineraryNotifications: true,
 };
+
+
+const extractPreferenceSource = (preferences = {}) => {
+  if (!preferences || typeof preferences !== 'object') {
+    return {};
+  }
+
+  return (
+    preferences.preferences ||
+    preferences.notificationPreferences ||
+    preferences.notifications ||
+    preferences
+  );
+};
+
+const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj || {}, key);
 
 /**
  * Normalizes legacy preference payloads into one stable schema.
  */
 const normalizeNotificationPreferences = (preferences = {}) => {
   if (!preferences || typeof preferences !== 'object') {
-    return { ...DEFAULT_NOTIFICATION_PREFERENCES };
+    return {
+      ...DEFAULT_LEGACY_NOTIFICATION_FLAGS,
+      ops: { ...DEFAULT_NOTIFICATION_PREFERENCES.ops },
+      marketing: { ...DEFAULT_NOTIFICATION_PREFERENCES.marketing },
+    };
   }
 
-  const source =
-    preferences.preferences ||
-    preferences.notificationPreferences ||
-    preferences.notifications ||
-    preferences;
+  const source = extractPreferenceSource(preferences);
 
   const toBoolean = (value, fallback) => {
     if (typeof value === 'boolean') return value;
@@ -83,12 +115,57 @@ const normalizeNotificationPreferences = (preferences = {}) => {
     source.schedule ??
     source.tripUpdates;
 
-  return {
-    chatNotifications: toBoolean(chatRaw, DEFAULT_NOTIFICATION_PREFERENCES.chatNotifications),
-    itineraryNotifications: toBoolean(
-      itineraryRaw,
-      DEFAULT_NOTIFICATION_PREFERENCES.itineraryNotifications
+  const normalizedOps = {
+    driver_updates: toBoolean(
+      source?.ops?.driver_updates,
+      DEFAULT_NOTIFICATION_PREFERENCES.ops.driver_updates
     ),
+    itinerary_changes: toBoolean(
+      source?.ops?.itinerary_changes ?? itineraryRaw,
+      DEFAULT_NOTIFICATION_PREFERENCES.ops.itinerary_changes
+    ),
+    group_chat: toBoolean(
+      source?.ops?.group_chat ?? chatRaw,
+      DEFAULT_NOTIFICATION_PREFERENCES.ops.group_chat
+    ),
+    group_photos: toBoolean(
+      source?.ops?.group_photos,
+      DEFAULT_NOTIFICATION_PREFERENCES.ops.group_photos
+    ),
+  };
+
+  const normalizedMarketing = {
+    steam_trains: toBoolean(
+      source?.marketing?.steam_trains,
+      DEFAULT_NOTIFICATION_PREFERENCES.marketing.steam_trains
+    ),
+    mystery_tours: toBoolean(
+      source?.marketing?.mystery_tours,
+      DEFAULT_NOTIFICATION_PREFERENCES.marketing.mystery_tours
+    ),
+    scotland_classics: toBoolean(
+      source?.marketing?.scotland_classics,
+      DEFAULT_NOTIFICATION_PREFERENCES.marketing.scotland_classics
+    ),
+    vip_experiences: toBoolean(
+      source?.marketing?.vip_experiences,
+      DEFAULT_NOTIFICATION_PREFERENCES.marketing.vip_experiences
+    ),
+    hiking_nature: toBoolean(
+      source?.marketing?.hiking_nature,
+      DEFAULT_NOTIFICATION_PREFERENCES.marketing.hiking_nature
+    ),
+  };
+
+  const normalizedLegacy = {
+    chatNotifications: normalizedOps.group_chat,
+    itineraryNotifications: normalizedOps.itinerary_changes,
+  };
+
+  return {
+    ...normalizedLegacy,
+    ops: normalizedOps,
+    marketing: normalizedMarketing,
   };
 };
 
@@ -198,10 +275,52 @@ export const saveUserPreferences = async (userId, preferences) => {
     const existingUserData = userSnapshot.val() || {};
     const existingRemotePreferences = normalizeNotificationPreferences(existingUserData.preferences);
     const incomingPreferences = normalizeNotificationPreferences(validatedPreferences);
+    const incomingSource = extractPreferenceSource(validatedPreferences);
+
+    const mergedOps = {
+      ...DEFAULT_NOTIFICATION_PREFERENCES.ops,
+      ...(existingRemotePreferences.ops || {}),
+    };
+
+    if (incomingSource?.ops && typeof incomingSource.ops === 'object') {
+      Object.keys(DEFAULT_NOTIFICATION_PREFERENCES.ops).forEach((key) => {
+        if (hasOwn(incomingSource.ops, key)) {
+          mergedOps[key] = incomingPreferences.ops[key];
+        }
+      });
+    }
+
+    const includesLegacyChatToggle = ['chatNotifications', 'chatNotification', 'chat', 'messages', 'messageNotifications']
+      .some((key) => hasOwn(incomingSource, key));
+    const includesLegacyItineraryToggle = ['itineraryNotifications', 'itineraryNotification', 'itinerary', 'schedule', 'tripUpdates']
+      .some((key) => hasOwn(incomingSource, key));
+
+    if (includesLegacyChatToggle) {
+      mergedOps.group_chat = incomingPreferences.chatNotifications;
+    }
+
+    if (includesLegacyItineraryToggle) {
+      mergedOps.itinerary_changes = incomingPreferences.itineraryNotifications;
+    }
+
+    const mergedMarketing = {
+      ...DEFAULT_NOTIFICATION_PREFERENCES.marketing,
+      ...(existingRemotePreferences.marketing || {}),
+    };
+
+    if (incomingSource?.marketing && typeof incomingSource.marketing === 'object') {
+      Object.keys(DEFAULT_NOTIFICATION_PREFERENCES.marketing).forEach((key) => {
+        if (hasOwn(incomingSource.marketing, key)) {
+          mergedMarketing[key] = incomingPreferences.marketing[key];
+        }
+      });
+    }
+
     const mergedPreferences = {
-      ...DEFAULT_NOTIFICATION_PREFERENCES,
-      ...existingRemotePreferences,
-      ...incomingPreferences,
+      chatNotifications: mergedOps.group_chat,
+      itineraryNotifications: mergedOps.itinerary_changes,
+      ops: mergedOps,
+      marketing: mergedMarketing,
     };
 
     // 1. Get the token (will ask for permission if not already granted)

@@ -39,7 +39,15 @@ const buildNotificationService = ({ permission = 'granted', token = 'ExponentPus
       return {
         realtimeDb: {
           ref: () => ({
-            once: async () => ({ val: () => ({ preferences: { chat: 'off' }, pushTokenProvider: 'expo' }) }),
+            once: async () => ({
+              val: () => ({
+                preferences: {
+                  ops: { group_photos: true },
+                  marketing: { mystery_tours: true },
+                },
+                pushTokenProvider: 'expo',
+              }),
+            }),
             update: async (payload) => {
               updates.push(payload);
             },
@@ -74,6 +82,19 @@ test('saveUserPreferences normalizes legacy preference shape and persists token 
   assert.deepEqual(updates[0].preferences, {
     chatNotifications: true,
     itineraryNotifications: false,
+    ops: {
+      driver_updates: true,
+      itinerary_changes: false,
+      group_chat: true,
+      group_photos: true,
+    },
+    marketing: {
+      steam_trains: false,
+      mystery_tours: true,
+      scotland_classics: false,
+      vip_experiences: false,
+      hiking_nature: false,
+    },
   });
 });
 
@@ -92,4 +113,7 @@ test('saveUserPreferences handles denied permission path without throwing and ma
   assert.equal(updates[0].pushTokenStatus, 'UNAVAILABLE');
   assert.equal(updates[0].preferences.chatNotifications, true);
   assert.equal(updates[0].preferences.itineraryNotifications, true);
+  assert.equal(updates[0].preferences.ops.group_chat, true);
+  assert.equal(updates[0].preferences.ops.itinerary_changes, true);
+  assert.equal(updates[0].preferences.marketing.mystery_tours, true);
 });
