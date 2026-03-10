@@ -382,13 +382,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
   };
 
   const handleRetryFailed = async () => {
-    const queued = await offlineSyncService.getQueuedActions();
-    if (!queued.success) return;
-    await Promise.all(
-      queued.data
-        .filter((action) => action.type === 'MANIFEST_UPDATE' && action.status === 'failed')
-        .map((action) => offlineSyncService.updateAction(action.id, { status: 'queued', nextAttemptAt: null }))
-    );
+    await offlineSyncService.retryFailedActions({ types: ['MANIFEST_UPDATE'] });
     await handleSyncNow();
   };
 

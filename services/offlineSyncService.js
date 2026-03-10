@@ -414,6 +414,37 @@ const getQueueStats = async () => {
   }
 };
 
+const retryFailedActions = async ({ types, resetAttempts = false } = {}) => {
+  try {
+    const queue = await getQueueRaw();
+    const allowedTypes = Array.isArray(types) && types.length > 0 ? new Set(types) : null;
+    let retriedCount = 0;
+
+    const nextQueue = queue.map((action) => {
+      const shouldRetryType = !allowedTypes || allowedTypes.has(action.type);
+      if (action.status !== 'failed' || !shouldRetryType) {
+        return action;
+      }
+
+      retriedCount += 1;
+      return {
+        ...action,
+        status: 'queued',
+        nextAttemptAt: null,
+        ...(resetAttempts ? { attempts: 0 } : null),
+      };
+    });
+
+    if (retriedCount > 0) {
+      await setQueueRaw(nextQueue);
+    }
+
+    return RESPONSE.ok({ retriedCount });
+  } catch (error) {
+    return RESPONSE.fail(error);
+  }
+};
+
 const subscribeQueueState = (listener) => {
   if (typeof listener !== 'function') {
     return () => {};
@@ -543,6 +574,7 @@ module.exports = {
   updateAction,
   removeAction,
   getQueueStats,
+  retryFailedActions,
   replayQueue,
   subscribeQueueState,
   getStalenessBucket,
