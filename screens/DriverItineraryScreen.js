@@ -42,9 +42,32 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName }) {
   const [isOnline, setIsOnline] = useState(true);
 
   const realtimeListener = useRef(null);
+  const retryTimeoutRef = useRef(null);
+  const mountedRef = useRef(false);
+  const activeRequestIdRef = useRef(0);
+
+  const clearRetryTimeout = () => {
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+  };
+
+  const isRequestActive = (requestId) => mountedRef.current && activeRequestIdRef.current === requestId;
+
+  const runIfRequestActive = (requestId, callback) => {
+    if (isRequestActive(requestId)) {
+      callback();
+      return true;
+    }
+
+    return false;
+  };
 
   // Real-time listener for driver_itinerary
   useEffect(() => {
+    mountedRef.current = true;
+    activeRequestIdRef.current += 1;
     loadDriverItinerary();
 
     if (tourId) {
@@ -63,11 +86,18 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName }) {
       realtimeListener.current = { ref: driverItinRef, listener: onUpdate };
 
       return () => {
+        mountedRef.current = false;
+        clearRetryTimeout();
         if (realtimeListener.current) {
           realtimeListener.current.ref.off('value', realtimeListener.current.listener);
         }
       };
     }
+
+    return () => {
+      mountedRef.current = false;
+      clearRetryTimeout();
+    };
   }, [tourId]);
 
   const cacheDriverItinerary = async (data) => {
@@ -91,26 +121,45 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName }) {
   };
 
   const loadDriverItinerary = async ({ showSkeleton = true, retry = 0 } = {}) => {
+    const requestId = activeRequestIdRef.current;
+
     try {
-      setErrorMessage('');
-      if (!tourId) {
-        setDriverItinerary(null);
-        setLoading(false);
-        setRefreshing(false);
+      clearRetryTimeout();
+
+      if (!runIfRequestActive(requestId, () => setErrorMessage(''))) {
         return;
       }
 
-      if (showSkeleton) setLoading(true);
-      else setRefreshing(true);
+      if (!tourId) {
+        runIfRequestActive(requestId, () => {
+          setDriverItinerary(null);
+          setTourInfo(null);
+          setLoading(false);
+          setRefreshing(false);
+          setErrorMessage('');
+        });
+        return;
+      }
+
+      runIfRequestActive(requestId, () => {
+        if (showSkeleton) setLoading(true);
+        else setRefreshing(true);
+      });
 
       // Load from cache first
       const cached = await loadCachedDriverItinerary();
-      if (cached && showSkeleton) {
-        setDriverItinerary(cached);
-        setLoading(false);
-      }
+      runIfRequestActive(requestId, () => {
+        if (cached && showSkeleton) {
+          setDriverItinerary(cached);
+          setLoading(false);
+        }
+      });
 
       const result = await getDriverItinerary(tourId);
+      if (!isRequestActive(requestId)) {
+        return;
+      }
+
       if (result) {
         setDriverItinerary(result.driverItinerary);
         setTourInfo(result);
@@ -130,23 +179,35 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName }) {
 
       if (retry < 3) {
         const delay = Math.pow(2, retry) * 1000;
-        setTimeout(() => {
+        retryTimeoutRef.current = setTimeout(() => {
+          if (!isRequestActive(requestId)) {
+            return;
+          }
+
           loadDriverItinerary({ showSkeleton: false, retry: retry + 1 });
+          retryTimeoutRef.current = null;
         }, delay);
-        setErrorMessage(`Connection issue. Retrying (${retry + 1}/3)...`);
+
+        runIfRequestActive(requestId, () => {
+          setErrorMessage(`Connection issue. Retrying (${retry + 1}/3)...`);
+        });
       } else {
         const cached = await loadCachedDriverItinerary();
-        if (cached) {
-          setDriverItinerary(cached);
-          setIsOnline(false);
-          setErrorMessage('Using offline data. Pull to refresh when online.');
-        } else {
-          setErrorMessage('Could not load driver itinerary. Please check your connection.');
-        }
+        runIfRequestActive(requestId, () => {
+          if (cached) {
+            setDriverItinerary(cached);
+            setIsOnline(false);
+            setErrorMessage('Using offline data. Pull to refresh when online.');
+          } else {
+            setErrorMessage('Could not load driver itinerary. Please check your connection.');
+          }
+        });
       }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      runIfRequestActive(requestId, () => {
+        setLoading(false);
+        setRefreshing(false);
+      });
     }
   };
 
