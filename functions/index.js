@@ -20,6 +20,7 @@ const NOTIFICATION_RECIPIENT_CAP = 1000;
 const RECIPIENT_CHUNK_SIZE = 200;
 const USER_PROFILE_FETCH_CHUNK_SIZE = 100;
 const USER_PROFILE_CACHE_TTL_MS = 2 * 60 * 1000;
+const USER_PROFILE_CACHE_MAX_ENTRIES = 5000;
 const userProfileCache = new Map();
 
 // ==================== UTILITY FUNCTIONS ====================
@@ -128,11 +129,52 @@ const getCachedUserProfile = (userId) => {
   return cached.profile;
 };
 
+const cleanupUserProfileCache = (now = Date.now()) => {
+  let removed = 0;
+  for (const [userId, cached] of userProfileCache.entries()) {
+    if ((now - cached.cachedAt) > USER_PROFILE_CACHE_TTL_MS) {
+      userProfileCache.delete(userId);
+      removed += 1;
+    }
+  }
+
+  return removed;
+};
+
+const enforceUserProfileCacheCap = () => {
+  if (userProfileCache.size <= USER_PROFILE_CACHE_MAX_ENTRIES) {
+    return 0;
+  }
+
+  const targetSize = Math.floor(USER_PROFILE_CACHE_MAX_ENTRIES * 0.9);
+  const entriesByAge = [...userProfileCache.entries()].sort(([, a], [, b]) => a.cachedAt - b.cachedAt);
+  const evictCount = Math.max(0, userProfileCache.size - targetSize);
+
+  for (let index = 0; index < evictCount; index += 1) {
+    const [userId] = entriesByAge[index];
+    userProfileCache.delete(userId);
+  }
+
+  if (evictCount > 0) {
+    log.warn('Evicted stale user profile cache entries to enforce memory cap', {
+      cacheSizeAfterEvict: userProfileCache.size,
+      cacheSizeCap: USER_PROFILE_CACHE_MAX_ENTRIES,
+      evictedEntries: evictCount,
+    });
+  }
+
+  return evictCount;
+};
+
 const setCachedUserProfile = (userId, profile) => {
+  cleanupUserProfileCache();
+
   userProfileCache.set(userId, {
     profile,
     cachedAt: Date.now(),
   });
+
+  enforceUserProfileCacheCap();
 };
 
 const fetchUsersSnapshot = async (participantIds = [], context = {}) => {
@@ -325,6 +367,8 @@ setInterval(() => {
       rateLimitCache.delete(key);
     }
   }
+
+  cleanupUserProfileCache(now);
 }, 300000); // Clean up every 5 minutes
 
 
