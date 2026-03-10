@@ -10,6 +10,25 @@ const OFFLINE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 
 const normalizePassengerEmail = (email) => (typeof email === 'string' ? email.trim().toLowerCase() : '');
 
+const resolveCachedPassengerEmail = (identity) => {
+  if (!identity || typeof identity !== 'object') return '';
+
+  const directCandidate =
+    identity.normalizedPassengerEmail
+    || identity.passengerEmail
+    || identity.bookingEmail
+    || identity.email
+    || '';
+
+  if (directCandidate) return normalizePassengerEmail(directCandidate);
+
+  if (identity.passenger && typeof identity.passenger === 'object') {
+    return normalizePassengerEmail(identity.passenger.email || identity.passenger.passengerEmail);
+  }
+
+  return '';
+};
+
 const resolveOfflineLoginFromCache = async ({
   reference,
   normalizedEmail,
@@ -41,7 +60,7 @@ const resolveOfflineLoginFromCache = async ({
     const evaluatePassengerEmailMatch = (identity) => {
       if (expectedRole === 'driver') return { matches: true, reason: null };
 
-      const cachedNormalizedEmail = normalizePassengerEmail(identity?.normalizedPassengerEmail);
+      const cachedNormalizedEmail = resolveCachedPassengerEmail(identity);
       if (!cachedNormalizedEmail) {
         return { matches: false, reason: OFFLINE_LOGIN_REASONS.EMAIL_NOT_CACHED };
       }
@@ -141,5 +160,6 @@ module.exports = {
   OFFLINE_LOGIN_REASONS,
   OFFLINE_CACHE_TTL_MS,
   normalizePassengerEmail,
+  resolveCachedPassengerEmail,
   resolveOfflineLoginFromCache,
 };

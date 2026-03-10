@@ -5,6 +5,7 @@ const {
   resolveOfflineLoginFromCache,
   OFFLINE_LOGIN_REASONS,
   normalizePassengerEmail,
+  resolveCachedPassengerEmail,
 } = require('../services/offlineLoginResolver');
 const { OFFLINE_LOGIN_REASON_COPY } = require('../screens/loginFlow');
 
@@ -99,4 +100,29 @@ test('offline passenger login fails with EMAIL_NOT_CACHED when cached session ha
 
   assert.equal(result.success, false);
   assert.equal(result.reason, OFFLINE_LOGIN_REASONS.EMAIL_NOT_CACHED);
+});
+
+test('resolveCachedPassengerEmail accepts legacy email fields', () => {
+  assert.equal(resolveCachedPassengerEmail({ email: 'Legacy@Example.com ' }), 'legacy@example.com');
+  assert.equal(resolveCachedPassengerEmail({ bookingEmail: 'booked@example.com' }), 'booked@example.com');
+  assert.equal(resolveCachedPassengerEmail({ passenger: { email: 'nested@example.com' } }), 'nested@example.com');
+});
+
+test('offline passenger login succeeds when cached session uses legacy email key', async () => {
+  const result = await resolveOfflineLoginFromCache({
+    reference: 'ABC123',
+    normalizedEmail: 'passenger@example.com',
+    sessionStorage: createSessionStorage(
+      { id: 'T_1', tourCode: 'T1' },
+      { id: 'ABC123', email: 'Passenger@example.com' }
+    ),
+    sessionKeys,
+    offlineSyncService: {
+      getTourPackMeta: async () => ({ success: true, data: { lastSyncedAt: new Date().toISOString() } }),
+      getTourPack: async () => ({ success: false }),
+    },
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.source, 'session');
 });
