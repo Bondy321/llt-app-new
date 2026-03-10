@@ -106,8 +106,13 @@ const parsePickupDateTime = ({ pickupTime, pickupDate, now = new Date() }) => {
     return { success: false, reason: 'TIME_PARSE_FAILED', timeError: timeResult.error };
   }
 
+  const hasExplicitDateInput = typeof pickupDate === 'string' && pickupDate.trim().length > 0;
   const pickup = new Date(now);
   const parsedDate = parseDateContext(pickupDate);
+
+  if (hasExplicitDateInput && !parsedDate) {
+    return { success: false, reason: 'DATE_PARSE_FAILED' };
+  }
 
   if (parsedDate) {
     pickup.setFullYear(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate());

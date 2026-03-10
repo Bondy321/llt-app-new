@@ -66,3 +66,28 @@ test('uses explicit UK date context for countdown calculations', () => {
   assert.equal(countdown.hoursLeft, 0);
   assert.equal(countdown.minutesLeft, 20);
 });
+
+test('uses explicit ISO date context for countdown calculations', () => {
+  const now = new Date(2026, 0, 10, 8, 0, 0);
+  const countdown = getPickupCountdownState({
+    pickupTime: '10:00',
+    pickupDate: '2026-01-10',
+    now,
+  });
+
+  assert.equal(countdown.mode, 'countdown');
+  assert.equal(countdown.hoursLeft, 2);
+  assert.equal(countdown.minutesLeft, 0);
+});
+
+test('rejects countdown when explicit pickup date format is unsupported', () => {
+  const now = new Date(2026, 0, 10, 8, 0, 0);
+  const countdown = getPickupCountdownState({
+    pickupTime: '10:00',
+    pickupDate: '10-01-2026',
+    now,
+  });
+
+  assert.equal(countdown.mode, 'invalid');
+  assert.equal(countdown.reason, 'DATE_PARSE_FAILED');
+});
