@@ -1,13 +1,30 @@
 // services/chatService.js - Enhanced Chat Service with Premium Features
 // Improved with comprehensive validation, error handling, and security measures
 const isTestEnv = process.env.NODE_ENV === 'test';
+const logWarn = (component, message, data = {}) => {
+  try {
+    const loggerModule = require('./loggerService');
+    const logger = loggerModule.default || loggerModule;
+    if (logger && typeof logger.warn === 'function') {
+      logger.warn(component, message, data);
+      return;
+    }
+  } catch {
+    // Ignore logger load errors and fallback to console in non-test environments.
+  }
+
+  if (process.env.NODE_ENV !== 'test') {
+    console.warn(`${component}: ${message}`, data);
+  }
+};
+
 let realtimeDb;
 
 if (!isTestEnv) {
   try {
     ({ realtimeDb } = require('../firebase'));
   } catch (error) {
-    console.warn('Realtime database module not initialized during load:', error.message);
+    logWarn('ChatService', 'Realtime database module not initialized during load', { error: error.message });
   }
 }
 
@@ -15,7 +32,7 @@ let offlineSyncService;
 try {
   offlineSyncService = require('./offlineSyncService');
 } catch (error) {
-  console.warn('Offline sync service unavailable:', error.message);
+  logWarn('ChatService', 'Offline sync service unavailable', { error: error.message });
 }
 
 // ==================== CONSTANTS & CONFIGURATION ====================

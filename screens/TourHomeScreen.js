@@ -33,6 +33,12 @@ const { buildTourHomeActionPlan } = require('../utils/tourHomeActionPlanner');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
+const normalizeTourId = (tourCode) => {
+  if (typeof tourCode !== 'string') return null;
+  const normalized = tourCode.trim().toUpperCase().replace(/\s+/g, '_').replace(/[.#$\[\]/]/g, '');
+  return normalized || null;
+};
+
 // Brand Colors
 const COLORS = {
   primaryBlue: THEME.primary,
@@ -528,7 +534,7 @@ export default function TourHomeScreen({
 
 
   useEffect(() => {
-    const activeTourId = tourData?.id || tourCode?.replace(/\s+/g, '_');
+    const activeTourId = normalizeTourId(tourData?.id) || normalizeTourId(tourCode);
     if (!activeTourId) return;
     offlineSyncService.getTourPackMeta(activeTourId, 'passenger').then((res) => {
       if (res.success) {
@@ -561,7 +567,7 @@ export default function TourHomeScreen({
   useEffect(() => {
     if (!realtimeDb || !tourCode || !bookingRef) return undefined;
 
-    const sanitizedTourId = tourCode.replace(/\s+/g, '_');
+    const sanitizedTourId = normalizeTourId(tourCode);
     const manifestRef = realtimeDb.ref(`tour_manifests/${sanitizedTourId}/bookings/${bookingRef}`);
 
     const handleSnapshot = (snapshot) => {
@@ -639,7 +645,7 @@ export default function TourHomeScreen({
     setRefreshing(true);
     triggerHaptic('light');
 
-    const sanitizedTourId = tourData?.id || tourCode?.replace(/\s+/g, '_');
+    const sanitizedTourId = normalizeTourId(tourData?.id) || normalizeTourId(tourCode);
     try {
       const replayResult = await offlineSyncService.replayQueue({
         services: { bookingService, chatService },
