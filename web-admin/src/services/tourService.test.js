@@ -2,12 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getMock = vi.fn();
 const updateMock = vi.fn();
+const setMock = vi.fn();
 const refMock = vi.fn((_db, path = '') => ({ path }));
 
 vi.mock('firebase/database', () => ({
   ref: refMock,
   push: vi.fn(),
-  set: vi.fn(),
+  set: setMock,
   update: updateMock,
   remove: vi.fn(),
   get: getMock,
@@ -195,5 +196,25 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
     expect(updates['drivers/D-OLD/assignments/TOUR_A']).toBeNull();
     expect(updates['drivers/D-STALE/assignments/TOUR_A']).toBeNull();
     expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-NEW']).toBe(true);
+  });
+});
+
+
+describe('createTourFromTemplate date anchoring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('derives endDate from override startDate instead of current date', async () => {
+    setMock.mockResolvedValue(undefined);
+    const { createTourFromTemplate } = await import('./tourService.js');
+    const result = await createTourFromTemplate('highlands', {
+      startDate: '10/02/2026',
+      tourCode: 'HL_TEST_1',
+    }, 'ops@llt');
+
+    expect(result.tour.startDate).toBe('10/02/2026');
+    expect(result.tour.endDate).toBe('11/02/2026');
+    expect(setMock).toHaveBeenCalledTimes(1);
   });
 });
