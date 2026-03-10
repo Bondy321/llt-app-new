@@ -32,6 +32,12 @@ import DriverItineraryScreen from './screens/DriverItineraryScreen';
 const { getLoginTransitionDurationMs } = require('./screens/loginFlow');
 const { isEligibleEdgeSwipe, shouldCommitEdgeSwipeHome } = require('./services/swipeHomeNavigation');
 
+const normalizeTourId = (tourCode) => {
+  if (typeof tourCode !== 'string') return null;
+  const normalized = tourCode.trim().toUpperCase().replace(/\s+/g, '_').replace(/[.#$\[\]/]/g, '');
+  return normalized || null;
+};
+
 const COLORS = {
   primaryBlue: THEME.primary,
   lightBlueAccent: '#93C5FD',
@@ -174,7 +180,7 @@ export default function App() {
     await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
   };
 
-  const diagnosticsTourId = tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
+  const diagnosticsTourId = normalizeTourId(tourData?.id) || normalizeTourId(tourData?.tourCode);
   const diagnosticsRole = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
   const { isConnected, firebaseConnected, unifiedSyncStatus } = useDiagnostics({
     onForeground: refreshAppData,
@@ -552,7 +558,7 @@ case 'Itinerary':
         const backScreen = isDriver ? 'DriverHome' : 'TourHome';
         
         // Use params if passed (from DriverHome), otherwise fall back to standard state
-        const chatTourId = screenParams.tourId || tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
+        const chatTourId = screenParams.tourId || normalizeTourId(tourData?.id) || normalizeTourId(tourData?.tourCode);
         
         // Construct booking data for chat if we are in driver mode (since driver doesn't have standard bookingData)
         const effectiveBookingData = isDriver 
@@ -571,7 +577,7 @@ case 'Itinerary':
         );
       case 'Map':
         // Use active tour ID if passed, else fall back to session data
-        const mapTourId = screenParams.tourId || tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
+        const mapTourId = screenParams.tourId || normalizeTourId(tourData?.id) || normalizeTourId(tourData?.tourCode);
         return <MapScreen {...screenProps} onBack={() => navigateTo('TourHome')} tourId={mapTourId} tourData={tourData} />;
       case 'NotificationPreferences':
         return (

@@ -60,6 +60,11 @@ const minimalMapStyle = [
 
 const LOCATION_STALE_THRESHOLD_MINUTES = 12;
 const AUTO_SHARE_INTERVAL_MS = 3 * 60 * 1000;
+const normalizeTourId = (tourCode) => {
+  if (typeof tourCode !== 'string') return null;
+  const normalized = tourCode.trim().toUpperCase().replace(/\s+/g, '_').replace(/[.#$\[\]/]/g, '');
+  return normalized || null;
+};
 
 export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onDriverAssignmentChange }) {
   const [updatingLocation, setUpdatingLocation] = useState(false);
@@ -96,7 +101,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   // Derive active tour from props (updates when driverData changes)
   const activeTourId = driverData?.assignedTourId || '';
 
-  const sanitizeTourId = useCallback((tourCode) => (tourCode ? tourCode.replace(/\s+/g, '_') : null), []);
+  const sanitizeTourId = useCallback((tourCode) => normalizeTourId(tourCode), []);
   const autoSharePreferenceKey = `AUTO_SHARE_${driverData?.id || 'unknown'}`;
 
   const getLastUpdateAgeMinutes = useCallback((timestamp) => {
