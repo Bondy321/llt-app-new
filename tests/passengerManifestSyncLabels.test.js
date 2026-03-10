@@ -62,20 +62,30 @@ Module._load = function mockLoader(request, parent, isMain) {
       StyleSheet: { create: (styles) => styles },
       Text,
       View: createHost('View'),
-      SectionList: ({ sections = [], renderItem, renderSectionHeader, ...props }) => React.createElement(
+      SectionList: ({ sections = [], renderItem, renderSectionHeader, keyExtractor, ...props }) => React.createElement(
         'SectionList',
         props,
         sections.map((section) => React.createElement(
           React.Fragment,
           { key: section.title },
           renderSectionHeader ? renderSectionHeader({ section }) : null,
-          section.data.map((item) => React.createElement(React.Fragment, { key: item.id }, renderItem({ item })))
+          section.data.map((item, index) => {
+            const extractedKey = typeof keyExtractor === 'function'
+              ? keyExtractor(item, index)
+              : item?.id;
+            const fallbackKey = extractedKey ?? `${section.title}-${index}`;
+            return React.createElement(React.Fragment, { key: String(fallbackKey) }, renderItem({ item, index }));
+          })
         ))
       ),
-      FlatList: ({ data = [], renderItem, ...props }) => React.createElement(
+      FlatList: ({ data = [], renderItem, keyExtractor, ...props }) => React.createElement(
         'FlatList',
         props,
-        data.map((item) => React.createElement(React.Fragment, { key: item.id }, renderItem({ item })))
+        data.map((item, index) => {
+          const extractedKey = typeof keyExtractor === 'function' ? keyExtractor(item, index) : item?.id;
+          const fallbackKey = extractedKey ?? `flat-item-${index}`;
+          return React.createElement(React.Fragment, { key: String(fallbackKey) }, renderItem({ item, index }));
+        })
       ),
       TextInput: createHost('TextInput'),
       TouchableOpacity: createHost('TouchableOpacity'),
