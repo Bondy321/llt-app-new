@@ -147,7 +147,9 @@ const createPersistenceProvider = ({
   };
 
   return {
-    mode: active.name,
+    get mode() {
+      return active.name;
+    },
     async setItemAsync(key, value) {
       return safeCall('setItemAsync', key, value);
     },
