@@ -68,6 +68,7 @@ test('falls back to memory-mock when selected adapter errors', async () => {
 
   assert.equal(provider.mode, 'async-storage');
   await provider.setItemAsync('a', '1');
+  assert.equal(provider.mode, 'memory-mock');
   await provider.setItemAsync('a', '2');
   assert.equal(await provider.getItemAsync('a'), '2');
 
