@@ -97,6 +97,32 @@ test('formatLastSyncRelative returns expected labels including fallback', () => 
   assert.equal(offlineSyncService.formatLastSyncRelative('invalid', 1735689600000), 'Never');
 });
 
+test('getQueuedActions sanitizes invalid status, attempts, and timestamps from queued actions', async () => {
+  await clearQueue();
+
+  await offlineSyncService.enqueueAction({
+    id: 'sanitize-1',
+    type: 'CHAT_MESSAGE',
+    tourId: 'tour-1',
+    createdAt: 'not-a-real-date',
+    nextAttemptAt: 'also-invalid',
+    attempts: -7.8,
+    status: 'unexpected-status',
+    payload: { text: 'sanitize' },
+  });
+
+  const queued = await offlineSyncService.getQueuedActions();
+  assert.equal(queued.success, true);
+  assert.equal(queued.data.length, 1);
+
+  const [action] = queued.data;
+  assert.equal(action.status, 'queued');
+  assert.equal(action.attempts, 0);
+  assert.equal(action.nextAttemptAt, null);
+  assert.match(action.createdAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.match(action.lastUpdatedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
 test('getStalenessLabel supports deterministic now injection and pluralized stale-day labels', () => {
   const now = '2026-01-05T10:00:00.000Z';
 
