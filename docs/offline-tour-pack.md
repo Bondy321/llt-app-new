@@ -1,15 +1,18 @@
-# Offline Tour Pack
+# Offline Tour Pack (Mobile)
 
-## Architecture (text diagram)
+## Scope
 
-```
-Tour/Driver screens
+`services/offlineSyncService.js` manages local Tour Pack cache + offline action queue for passenger and driver flows.
+
+## Architecture
+
+```text
+Screen actions
   -> offlineSyncService
       -> persistenceProvider (SecureStore -> AsyncStorage -> memory)
-      -> tour pack cache (per role + tour)
-      -> queue (MANIFEST_UPDATE, CHAT_MESSAGE, INTERNAL_CHAT_MESSAGE)
-  -> replay triggers (foreground, reconnect, manual sync, login restore)
-  -> realtime database write-through when online
+      -> Tour Pack cache (role + tour scoped)
+      -> action queue (manifest/chat/internal-chat)
+  -> replay triggers (foreground, reconnect, manual refresh, login restore)
 ```
 
 ## Cache keys
@@ -21,34 +24,51 @@ Tour/Driver screens
 - `queue_v1`
 - `processed_action_ids_v1`
 
-## Replay lifecycle
+## Queue action types
 
-1. Action is enqueued with idempotency key.
-2. Queue subscribers update UI badges (`queued`, `syncing`, `failed`).
-3. Replay starts with in-memory lock (no parallel runs).
-4. Actions execute FIFO by `createdAt`.
-5. Success removes action and records processed id.
-6. Failure increments attempts and schedules backoff metadata.
-7. After 5 attempts action becomes `failed`.
+- `MANIFEST_UPDATE`
+- `CHAT_MESSAGE`
+- `INTERNAL_CHAT_MESSAGE`
 
-## Conflict policy (manifest)
+## Replay policy
 
-- Compare queued payload `lastUpdated` with server `lastUpdated`.
-- If server is newer, keep server value and mark action reconciled.
-- If timestamps are missing/equal, prefer server and reconcile.
-- UI note: `One update was reconciled with newer server data.`
+1. FIFO execution by `createdAt`.
+2. In-process single-run lock (no parallel replay).
+3. Max retry attempts: 5 per action.
+4. Processed action IDs persisted locally to avoid duplicate replay after restart.
+5. Failed actions remain visible and retryable.
 
-## Troubleshooting
+## Manifest conflict policy
 
-- **Queue not draining:** verify network + Firebase connectivity banner.
-- **Messages stuck queued:** tap **Sync now** in Chat and verify pending count drops.
-- **Manifest failures:** use **Retry failed** then **Sync now** in manifest screen.
-- **No offline data:** open the tour once online to hydrate the Tour Pack.
+- Compare queued `lastUpdated` against server `lastUpdated`.
+- Newer server value wins and local action is reconciled.
+- Missing/equal timestamps default to server-preferred reconciliation.
+- User-facing note: `One update was reconciled with newer server data.`
 
-## Manual validation checklist
+## Canonical sync-state contract
 
-1. Login online and open Tour Home + Itinerary.
-2. Disable network; reopen app and verify cached content appears.
-3. Driver updates manifest offline; verify queued badge.
-4. Send chat offline; verify queued message state.
-5. Re-enable network; verify queue replays and statuses become synced/sent.
+All refresh surfaces should consume the same four states:
+
+- `OFFLINE_NO_NETWORK`
+- `ONLINE_BACKEND_DEGRADED`
+- `ONLINE_BACKLOG_PENDING`
+- `ONLINE_HEALTHY`
+
+Each state should include normalized metadata:
+`label`, `description`, `severity`, `icon`, `canRetry`, `showLastSync`.
+
+## Manual refresh copy contract
+
+Use one formatter output across screens:
+
+`"{X} synced / {Y} pending / {Z} failed"`
+
+Never build per-screen ad-hoc summary strings.
+
+## QA checklist
+
+1. Offline manifest update queues and then syncs on reconnect.
+2. Offline chat send shows queued state and clears after replay.
+3. Manual refresh reports canonical summary and state taxonomy.
+4. Retry failed actions only retries failed subset.
+5. Restart app mid-backlog and verify no duplicate replays.

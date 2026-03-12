@@ -1,43 +1,108 @@
-# Loch Lomond Travel App
+# Loch Lomond Travel (LLT) App
 
-## EAS Update setup
+Production-oriented monorepo for the LLT mobile passenger/driver app, web operations dashboard, and Firebase Cloud Functions.
 
-This project is configured for EAS Update with:
-- `updates.url` in `app.json`
-- `runtimeVersion` policy set to `appVersion`
-- `extra.eas.projectId` in `app.json`
+## Workspace layout
 
-### Build a new development build (once after native/runtime changes)
+- `App.js`, `screens/`, `components/`, `services/`: Expo React Native app (passenger + driver).
+- `web-admin/`: React + Vite operations dashboard.
+- `functions/`: Firebase Cloud Functions Gen 2 notification backend.
+- `docs/`: cross-platform contracts and operational runbooks.
 
-Your installed development build can receive OTA updates only when runtime-compatible.
-Create/update a dev build with:
+## Current architecture (high level)
+
+```text
+Google Sheets CMS
+   -> Apps Script sync
+      -> Firebase Realtime Database (source of truth)
+         -> Mobile app (passengers + drivers)
+         -> Web admin dashboard
+         -> Cloud Functions (Expo push notifications)
+```
+
+## Core engineering contracts
+
+1. **Firebase region:** all functions and backend resources run in `europe-west1`.
+2. **Date parsing:** only strict UK (`dd/MM/yyyy`) or ISO (`yyyy-MM-dd`) date strings are accepted.
+3. **Driver assignment writes:** must be multi-path and keep `drivers`, `tours`, and `tour_manifests` synchronized.
+4. **Sync UX contract:** use canonical sync states (`OFFLINE_NO_NETWORK`, `ONLINE_BACKEND_DEGRADED`, `ONLINE_BACKLOG_PENDING`, `ONLINE_HEALTHY`).
+5. **Logging safety:** avoid raw credential/session identifiers and use `loggerService` redaction helpers.
+
+See docs:
+- `docs/date-contract.md`
+- `docs/date-contract-web-admin.md`
+- `docs/data-contracts/driver-assignment.md`
+- `docs/offline-tour-pack.md`
+- `docs/safe-logging-conventions.md`
+
+## Local development
+
+### Mobile app (Expo)
+
+```bash
+npm install
+npm start
+```
+
+Useful variants:
+
+```bash
+npm run start:dev
+npm run ios
+npm run android
+```
+
+### Web admin
+
+```bash
+cd web-admin
+npm install
+npm run dev
+```
+
+### Functions
+
+```bash
+cd functions
+npm install
+npm run serve
+```
+
+## Test commands
+
+```bash
+npm test
+npm run test:mobile
+npm run test:web-admin
+```
+
+Sectioned suites:
+
+```bash
+npm run test:mobile:auth
+npm run test:mobile:sync
+npm run test:mobile:ui
+npm run test:mobile:services
+npm run test:mobile:photo
+```
+
+## Build + release
+
+### EAS builds
 
 ```bash
 npm run build:dev:ios
 npm run build:dev:android
+npm run build:dev:ios-device
+npm run build:preview
+npm run build:production
 ```
 
-### Publish updates manually
-
-Publish JavaScript/assets to development:
+### OTA updates
 
 ```bash
 npm run update:dev
-```
-
-Publish JavaScript/assets to production:
-
-```bash
 npm run update:prod
 ```
 
-### CI publishing with EXPO_TOKEN
-
-GitHub Actions workflow `.github/workflows/eas-update.yml` publishes to the `development` channel on every push to `main`.
-
-It authenticates with Expo using repository secret `EXPO_TOKEN`, passed into `expo/expo-github-action@v8`.
-
-### Important runtime compatibility note
-
-Because `runtimeVersion` uses the `appVersion` policy, only updates compatible with the installed native runtime will apply.
-Any native code/dependency/config changes still require shipping a new build before those changes are available on devices.
+> `runtimeVersion` uses Expo `appVersion` policy, so runtime-incompatible native changes still require shipping a new binary build.
