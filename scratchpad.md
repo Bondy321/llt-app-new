@@ -1,24 +1,23 @@
-# Engineering Scratchpad (Living Notes)
+# Scratchpad (agent notes)
 
-This file is intentionally lightweight and regularly rewritten.
+I focused on **offline queue replay resilience** in `services/offlineSyncService.js`.
 
-## Current snapshot
+## Why this mattered most
+- This app is explicitly optimizing for flaky connectivity and offline-first operation.
+- A single unexpected throw from one replay action could previously abort the full replay run and leave remaining queued actions unsynced.
+- For TestFlight readiness, graceful degradation is more valuable than perfection in one action; queue execution should continue even if one handler misbehaves.
 
-- Core app reliability work is focused on offline queue clarity, deterministic sync-state messaging, and safer date parsing.
-- Security hardening completed recently includes stricter delete authorization checks, sanitized error messaging, safer logging behavior, and dependency updates.
-- Web-admin and mobile now share stricter data contracts for dates and driver assignment payloads.
+## What I changed
+- Wrapped `applyReplayAction(...)` inside `replayQueue(...)` with a local `try/catch`.
+- If a replay handler throws, we now:
+  - log a structured error with `actionId` and `actionType`
+  - convert it to a normalized failure (`RESPONSE.fail(error)`)
+  - continue normal retry/backoff handling for that action
+  - continue processing remaining queued actions
 
-## Active watch list
+## Outcome
+- Replay loop is now fault-tolerant against thrown exceptions from service handlers.
+- Existing retry semantics, lock semantics, and queue stats behavior are preserved.
 
-1. **Offline stress testing:** prolonged bad-network sessions for replay/backlog behavior.
-2. **Notification quality:** invalid token churn and fanout efficiency.
-3. **Manifest reconciliation UX:** improve user confidence when server data wins conflicts.
-4. **Docs freshness:** keep runbooks and contracts aligned with shipped behavior each sprint.
-
-## Update discipline
-
-When adding a note here:
-
-- Include date and owning area (mobile/web-admin/functions).
-- Move durable guidance into `docs/` once stabilized.
-- Remove stale investigation notes after outcomes are documented elsewhere.
+## Personal note
+This felt like the highest leverage reliability fix: users don't care *why* sync got interrupted; they only feel that it stopped. Now one bad action no longer blocks the whole queue.

@@ -588,7 +588,18 @@ const replayQueue = async ({ db, services = {} } = {}) => {
       }
 
       await updateAction(action.id, { status: 'syncing', lastError: null }, { silent: true });
-      const result = await applyReplayAction(action, { ...services, db });
+
+      let result;
+      try {
+        result = await applyReplayAction(action, { ...services, db });
+      } catch (error) {
+        logger.error('OfflineSync', 'Replay action threw unexpectedly; queue processing will continue', {
+          actionId: action.id,
+          actionType: action.type,
+          error: error?.message,
+        });
+        result = RESPONSE.fail(error);
+      }
 
       if (result?.success) {
         processed += 1;

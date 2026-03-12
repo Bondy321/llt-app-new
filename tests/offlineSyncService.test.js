@@ -158,6 +158,52 @@ test('replayQueue processes in FIFO order', async () => {
   assert.deepEqual(calls, ['first', 'second']);
 });
 
+test('replayQueue continues processing when one action handler throws unexpectedly', async () => {
+  await clearQueue();
+  const calls = [];
+
+  await offlineSyncService.enqueueAction({
+    id: 'throw-1',
+    type: 'CHAT_MESSAGE',
+    tourId: 'tour-1',
+    createdAt: '2026-01-01T00:00:01.000Z',
+    payload: { text: 'explode' },
+  });
+  await offlineSyncService.enqueueAction({
+    id: 'throw-2',
+    type: 'CHAT_MESSAGE',
+    tourId: 'tour-1',
+    createdAt: '2026-01-01T00:00:02.000Z',
+    payload: { text: 'still-runs' },
+  });
+
+  const replay = await offlineSyncService.replayQueue({
+    services: {
+      chatService: {
+        sendMessageDirect: async (payload) => {
+          calls.push(payload.text);
+          if (payload.text === 'explode') {
+            throw new Error('boom');
+          }
+          return { success: true };
+        },
+      },
+    },
+  });
+
+  assert.equal(replay.success, true);
+  assert.equal(replay.data.processed, 1);
+  assert.equal(replay.data.failed, 1);
+  assert.deepEqual(calls, ['explode', 'still-runs']);
+
+  const queued = await offlineSyncService.getQueuedActions();
+  assert.equal(queued.success, true);
+  assert.equal(queued.data.length, 1);
+  assert.equal(queued.data[0].id, 'throw-1');
+  assert.equal(queued.data[0].status, 'queued');
+  assert.equal(queued.data[0].attempts, 1);
+});
+
 
 
 test('enqueueAction clears processed id tombstone so intentional re-queue can replay', async () => {
