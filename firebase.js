@@ -131,6 +131,10 @@ const firebaseInitHealth = {
   missingConfig: null,
 };
 
+const isMissingFirebaseConfigError = (error) => {
+  return error?.message?.startsWith('Missing required Firebase config:');
+};
+
 try {
   firebaseInitHealth.attempted = true;
   const missingConfigFields = getMissingFirebaseConfigFields(firebaseConfig);
@@ -204,7 +208,11 @@ try {
   firebaseInitHealth.initialized = false;
   firebaseInitHealth.hasError = true;
   firebaseInitHealth.errorMessage = error?.message || 'Unknown Firebase initialization error';
-  console.error('Firebase initialization error:', error);
+  if (isMissingFirebaseConfigError(error)) {
+    console.warn('[Firebase] Initialization remains disabled until required EXPO_PUBLIC_FIREBASE_* variables are provided.');
+  } else {
+    console.error('Firebase initialization error:', error);
+  }
 }
 
 // Create auth persistence instance
@@ -237,7 +245,11 @@ if (auth?.onAuthStateChanged) {
     notifyAuthStateListeners(user);
   });
 } else {
-  console.error('Firebase auth is not available; skipping auth state listener setup');
+  if (isMissingFirebaseConfigError(firebaseInitializationError)) {
+    console.warn('[Firebase] Auth listener setup skipped because Firebase initialization is disabled by missing config.');
+  } else {
+    console.error('Firebase auth is not available; skipping auth state listener setup');
+  }
 }
 
 const assertAuthAvailable = (actionName) => {

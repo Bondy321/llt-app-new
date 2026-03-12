@@ -2,23 +2,20 @@
 
 This file is intentionally lightweight and regularly rewritten.
 
-## Current snapshot
+## 2026-03-12 (mobile)
 
-- Core app reliability work is focused on offline queue clarity, deterministic sync-state messaging, and safer date parsing.
-- Security hardening completed recently includes stricter delete authorization checks, sanitized error messaging, safer logging behavior, and dependency updates.
-- Web-admin and mobile now share stricter data contracts for dates and driver assignment payloads.
+### What I changed
 
-## Active watch list
+- Reduced noisy Firebase startup error logging when environment variables are intentionally absent (common in local unit tests and CI).
+- Kept full error logging for real initialization failures, but downgraded the expected missing-config path to clear warning-level guidance.
+- Aligned the auth-listener fallback log with the same behavior so startup output is less alarming and easier to scan.
 
-1. **Offline stress testing:** prolonged bad-network sessions for replay/backlog behavior.
-2. **Notification quality:** invalid token churn and fanout efficiency.
-3. **Manifest reconciliation UX:** improve user confidence when server data wins conflicts.
-4. **Docs freshness:** keep runbooks and contracts aligned with shipped behavior each sprint.
+### Why this matters before TestFlight
 
-## Update discipline
+- Reliability work is not only runtime logic — observability quality matters too.
+- Teams triaging launch blockers need console output where true failures stand out instantly; expected config gaps should not look like production breakage.
+- Lower-noise logs make regression spotting faster during final QA and release candidate hardening.
 
-When adding a note here:
+### Personal note
 
-- Include date and owning area (mobile/web-admin/functions).
-- Move durable guidance into `docs/` once stabilized.
-- Remove stale investigation notes after outcomes are documented elsewhere.
+I picked this because it removes friction every single day: cleaner signal, less false panic, and safer focus on real issues.
