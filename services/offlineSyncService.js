@@ -188,27 +188,43 @@ const getStalenessBucket = (lastSyncedAt) => {
   return 'old';
 };
 
-const getStalenessLabel = (lastSyncedAt) => {
-  const bucket = getStalenessBucket(lastSyncedAt);
+const getStalenessLabel = (lastSyncedAt, now = Date.now()) => {
   if (!lastSyncedAt) {
-    return { bucket, label: 'Not synced yet' };
+    return { bucket: 'old', label: 'Not synced yet' };
   }
 
   const ts = parseTimestampMs(lastSyncedAt);
+  const nowMs = parseTimestampMs(now);
   if (!Number.isFinite(ts)) {
     return { bucket: 'old', label: 'Not synced yet' };
   }
 
-  const diffMinutes = Math.floor((Date.now() - ts) / (60 * 1000));
+  if (!Number.isFinite(nowMs)) {
+    return { bucket: 'old', label: 'Not synced yet' };
+  }
+
+  const diffMs = nowMs - ts;
+  const ageMinutes = diffMs / (60 * 1000);
+  const bucket = ageMinutes <= 15 ? 'fresh' : ageMinutes <= 24 * 60 ? 'stale' : 'old';
+  if (diffMs <= 0) {
+    return { bucket: 'fresh', label: 'Updated just now' };
+  }
+
+  const diffMinutes = Math.floor(diffMs / (60 * 1000));
   if (diffMinutes < 1) return { bucket: 'fresh', label: 'Updated just now' };
-  if (diffMinutes < 60) return { bucket: getStalenessBucket(lastSyncedAt), label: `Updated ${diffMinutes} min ago` };
+  if (diffMinutes < 60) return { bucket, label: `Updated ${diffMinutes} min ago` };
 
   const diffHours = Math.floor(diffMinutes / 60);
   if (diffHours < 24) {
-    return { bucket: getStalenessBucket(lastSyncedAt), label: `Updated ${diffHours}h ago` };
+    return { bucket, label: `Updated ${diffHours}h ago` };
   }
 
-  return { bucket: 'old', label: 'Cached data from yesterday' };
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays === 1) {
+    return { bucket: 'old', label: 'Cached data from yesterday' };
+  }
+
+  return { bucket: 'old', label: `Cached data from ${diffDays} days ago` };
 };
 
 const deriveUnifiedSyncStatus = ({
