@@ -145,10 +145,12 @@ const getQueueRaw = async () => {
   }
 };
 
-const setQueueRaw = async (queue) => {
+const setQueueRaw = async (queue, options = {}) => {
   try {
     await storage.setItemAsync(QUEUE_KEY, JSON.stringify(queue));
-    await emitQueueState();
+    if (!options.silent) {
+      await emitQueueState();
+    }
     return RESPONSE.ok(queue);
   } catch (error) {
     return RESPONSE.fail(error);
@@ -368,7 +370,7 @@ const getQueuedActions = async () => {
   }
 };
 
-const updateAction = async (id, patch = {}) => {
+const updateAction = async (id, patch = {}, options = {}) => {
   try {
     const queue = await getQueueRaw();
     const index = queue.findIndex((item) => item.id === id);
@@ -378,18 +380,18 @@ const updateAction = async (id, patch = {}) => {
       ...patch,
       lastUpdatedAt: new Date().toISOString(),
     };
-    await setQueueRaw(queue);
+    await setQueueRaw(queue, options);
     return RESPONSE.ok(queue[index]);
   } catch (error) {
     return RESPONSE.fail(error);
   }
 };
 
-const removeAction = async (id) => {
+const removeAction = async (id, options = {}) => {
   try {
     const queue = await getQueueRaw();
     const nextQueue = queue.filter((entry) => entry.id !== id);
-    await setQueueRaw(nextQueue);
+    await setQueueRaw(nextQueue, options);
     return RESPONSE.ok(true);
   } catch (error) {
     return RESPONSE.fail(error);
@@ -502,7 +504,7 @@ const replayQueue = async ({ db, services = {} } = {}) => {
 
     for (const action of sortedQueue) {
       if (processedActionIds.includes(action.id)) {
-        await removeAction(action.id);
+        await removeAction(action.id, { silent: true });
         continue;
       }
 
@@ -516,12 +518,12 @@ const replayQueue = async ({ db, services = {} } = {}) => {
         continue;
       }
 
-      await updateAction(action.id, { status: 'syncing', lastError: null });
+      await updateAction(action.id, { status: 'syncing', lastError: null }, { silent: true });
       const result = await applyReplayAction(action, { ...services, db });
 
       if (result?.success) {
         processed += 1;
-        await removeAction(action.id);
+        await removeAction(action.id, { silent: true });
         processedActionIds = [...processedActionIds, action.id];
         await setProcessedActionIds(processedActionIds);
       } else {
@@ -534,7 +536,7 @@ const replayQueue = async ({ db, services = {} } = {}) => {
           status: shouldFail ? 'failed' : 'queued',
           lastError: result?.error || 'Replay failed',
           nextAttemptAt: new Date(Date.now() + delayMinutes * 60 * 1000).toISOString(),
-        });
+        }, { silent: true });
       }
     }
 
