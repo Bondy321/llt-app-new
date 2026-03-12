@@ -8,7 +8,6 @@ import {
   ScrollView,
   Platform,
   RefreshControl,
-  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -17,6 +16,7 @@ import { getDriverItinerary } from '../services/bookingServiceRealtime';
 import { realtimeDb } from '../firebase';
 import { COLORS as THEME } from '../theme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { logger } from '../services/loggerService';
 
 const COLORS = {
   primaryBlue: THEME.primary,
@@ -75,11 +75,16 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName }) {
 
       const onUpdate = (snapshot) => {
         const data = snapshot.val();
-        if (data !== null && data !== undefined) {
+        if (typeof data === 'string' && data.trim().length > 0) {
           setDriverItinerary(data);
+          setIsOnline(true);
           setLastSync(new Date());
           cacheDriverItinerary(data);
+          return;
         }
+
+        setDriverItinerary(null);
+        clearCachedDriverItinerary();
       };
 
       driverItinRef.on('value', onUpdate);
@@ -104,7 +109,15 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName }) {
     try {
       await AsyncStorage.setItem(`driver_itinerary_${tourId}`, JSON.stringify(data));
     } catch (error) {
-      console.log('Cache save failed:', error);
+      logger.warn('DriverItineraryScreen', 'Cache save failed', { error: error?.message || String(error), tourId });
+    }
+  };
+
+  const clearCachedDriverItinerary = async () => {
+    try {
+      await AsyncStorage.removeItem(`driver_itinerary_${tourId}`);
+    } catch (error) {
+      logger.warn('DriverItineraryScreen', 'Cache clear failed', { error: error?.message || String(error), tourId });
     }
   };
 
@@ -115,7 +128,7 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName }) {
         return JSON.parse(cached);
       }
     } catch (error) {
-      console.log('Cache load failed:', error);
+      logger.warn('DriverItineraryScreen', 'Cache load failed', { error: error?.message || String(error), tourId });
     }
     return null;
   };
