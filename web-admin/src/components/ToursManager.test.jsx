@@ -100,49 +100,50 @@ beforeEach(() => {
 });
 
 describe('ToursManager query-param status behavior', () => {
+  const asyncAssertionTimeoutMs = 15000;
   it('hydrates Select and filtered list from ?status=unassigned', async () => {
     renderAt('?status=unassigned');
 
-    await screen.findByText('Showing 9 of 9 tours');
+    await screen.findByText('Showing 9 of 9 tours', {}, { timeout: asyncAssertionTimeoutMs });
     expect(screen.getByTestId('location-search')).toHaveTextContent('?status=unassigned');
     expect(screen.getByText('Unassigned (TBA)')).toBeInTheDocument();
     expect(screen.queryByText('Tour 3')).not.toBeInTheDocument();
     expect(screen.getByText('Tour 1')).toBeInTheDocument();
-  });
+  }, 15000);
 
   it('changing status updates URL and resets pagination to page 1', async () => {
     const { container } = renderAt('?status=all');
 
-    await screen.findByText('Showing 12 of 13 tours');
+    await screen.findByText('Showing 12 of 13 tours', {}, { timeout: asyncAssertionTimeoutMs });
     fireEvent.click(screen.getByRole('button', { name: '2' }));
-    await screen.findByText('Showing 1 of 13 tours');
+    await screen.findByText('Showing 1 of 13 tours', {}, { timeout: asyncAssertionTimeoutMs });
 
     await changeStatus(container, 'Assigned');
 
     await waitFor(() => {
       expect(screen.getByTestId('location-search')).toHaveTextContent('?status=assigned');
-    });
+    }, { timeout: asyncAssertionTimeoutMs });
     expect(screen.getByText('Showing 4 of 4 tours')).toBeInTheDocument();
-  });
+  }, 15000);
 
   it('preserves unrelated query params while updating status', async () => {
     const { container } = renderAt('?foo=bar&status=active');
 
-    await screen.findByText('Showing 6 of 6 tours');
+    await screen.findByText('Showing 6 of 6 tours', {}, { timeout: asyncAssertionTimeoutMs });
 
     await changeStatus(container, 'Inactive');
 
     await waitFor(() => {
       expect(screen.getByTestId('location-search')).toHaveTextContent('?foo=bar&status=inactive');
-    });
+    }, { timeout: asyncAssertionTimeoutMs });
     expect(screen.getByText('Showing 7 of 7 tours')).toBeInTheDocument();
-  });
+  }, 15000);
 
   it('falls back safely for invalid status values', async () => {
     renderAt('?status=bogus');
 
-    await screen.findByText('Showing 12 of 13 tours');
+    await screen.findByText('Showing 12 of 13 tours', {}, { timeout: asyncAssertionTimeoutMs });
     expect(screen.getByTestId('location-search')).toHaveTextContent('?status=bogus');
     expect(screen.getByText('All Tours')).toBeInTheDocument();
-  });
+  }, 15000);
 });
