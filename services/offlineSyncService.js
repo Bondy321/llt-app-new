@@ -11,6 +11,7 @@ const storage = createPersistenceProvider({ namespace: 'LLT_OFFLINE' });
 
 const SCHEMA_VERSION = 1;
 const SUPPORTED_QUEUE_TYPES = new Set(['MANIFEST_UPDATE', 'CHAT_MESSAGE', 'INTERNAL_CHAT_MESSAGE', 'PHOTO_UPLOAD']);
+const SUPPORTED_QUEUE_STATUSES = new Set(['queued', 'syncing', 'failed']);
 const MAX_ATTEMPTS = 5;
 const QUEUE_KEY = 'queue_v1';
 const PROCESSED_ACTIONS_KEY = 'processed_action_ids_v1';
@@ -34,6 +35,44 @@ const safeJsonParse = (raw, fallback) => {
   } catch {
     return fallback;
   }
+};
+
+const sanitizeActionRecord = (action) => {
+  if (!action || typeof action !== 'object') return null;
+
+  const id = typeof action.id === 'string' && action.id.trim() ? action.id.trim() : null;
+  const type = typeof action.type === 'string' ? action.type : null;
+  const tourId = typeof action.tourId === 'string' && action.tourId.trim() ? action.tourId.trim() : null;
+
+  if (!id || !type || !tourId || !SUPPORTED_QUEUE_TYPES.has(type)) {
+    return null;
+  }
+
+  const normalizedCreatedAt = parseTimestampMs(action.createdAt)
+    ? new Date(parseTimestampMs(action.createdAt)).toISOString()
+    : new Date().toISOString();
+  const normalizedStatus = SUPPORTED_QUEUE_STATUSES.has(action.status) ? action.status : 'queued';
+  const normalizedAttempts = Number.isFinite(action.attempts) ? Math.max(0, Math.trunc(action.attempts)) : 0;
+  const nextAttemptAtMs = parseTimestampMs(action.nextAttemptAt);
+  const normalizedNextAttemptAt = Number.isFinite(nextAttemptAtMs) ? new Date(nextAttemptAtMs).toISOString() : null;
+  const normalizedLastUpdatedAtMs = parseTimestampMs(action.lastUpdatedAt);
+  const normalizedLastUpdatedAt = Number.isFinite(normalizedLastUpdatedAtMs)
+    ? new Date(normalizedLastUpdatedAtMs).toISOString()
+    : new Date().toISOString();
+
+  return {
+    ...action,
+    id,
+    type,
+    tourId,
+    payload: action.payload && typeof action.payload === 'object' ? action.payload : {},
+    createdAt: normalizedCreatedAt,
+    status: normalizedStatus,
+    attempts: normalizedAttempts,
+    nextAttemptAt: normalizedNextAttemptAt,
+    lastUpdatedAt: normalizedLastUpdatedAt,
+    lastError: action.lastError || null,
+  };
 };
 
 const cacheKey = (tourId, role) => `tour_pack_${role}_${tourId}`;
@@ -137,7 +176,21 @@ const getQueueRaw = async () => {
       await storage.setItemAsync(QUEUE_KEY, JSON.stringify([]));
       return [];
     }
-    return queue.filter((item) => item && typeof item === 'object' && item.id && SUPPORTED_QUEUE_TYPES.has(item.type));
+
+    const sanitizedQueue = queue
+      .map((item) => sanitizeActionRecord(item))
+      .filter(Boolean)
+      .sort((a, b) => (parseTimestampMs(a.createdAt) || 0) - (parseTimestampMs(b.createdAt) || 0));
+
+    if (sanitizedQueue.length !== queue.length || JSON.stringify(sanitizedQueue) !== JSON.stringify(queue)) {
+      logger.warn('OfflineSync', 'Queue data was sanitized to remove or repair invalid entries', {
+        previousCount: queue.length,
+        sanitizedCount: sanitizedQueue.length,
+      });
+      await storage.setItemAsync(QUEUE_KEY, JSON.stringify(sanitizedQueue));
+    }
+
+    return sanitizedQueue;
   } catch (error) {
     logger.error('OfflineSync', 'Failed to read queue', { error: error?.message });
     await storage.setItemAsync(QUEUE_KEY, JSON.stringify([]));
