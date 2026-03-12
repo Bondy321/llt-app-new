@@ -27,7 +27,23 @@ const buildNotificationService = ({ permission = 'granted', token = 'ExponentPus
         setNotificationChannelAsync: async () => {},
         getPermissionsAsync: async () => ({ status: permissionStatus }),
         requestPermissionsAsync: async () => ({ status: permissionStatus }),
-        getExpoPushTokenAsync: async () => ({ data: token }),
+        getExpoPushTokenAsync: async (options) => {
+          updates.push({ __tokenRequestOptions: options ?? null });
+          return { data: token };
+        },
+      };
+    }
+
+    if (request === 'expo-constants') {
+      return {
+        expoConfig: {
+          extra: {
+            eas: {
+              projectId: 'test-project-id',
+            },
+          },
+        },
+        easConfig: null,
       };
     }
 
@@ -76,10 +92,11 @@ test('saveUserPreferences normalizes legacy preference shape and persists token 
   });
 
   assert.equal(result.success, true);
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0].pushTokenStatus, 'ACTIVE');
-  assert.equal(updates[0].pushTokenProvider, 'expo');
-  assert.deepEqual(updates[0].preferences, {
+  assert.equal(updates.length, 2);
+  assert.deepEqual(updates[0].__tokenRequestOptions, { projectId: 'test-project-id' });
+  assert.equal(updates[1].pushTokenStatus, 'ACTIVE');
+  assert.equal(updates[1].pushTokenProvider, 'expo');
+  assert.deepEqual(updates[1].preferences, {
     chatNotifications: true,
     itineraryNotifications: false,
     ops: {
