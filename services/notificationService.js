@@ -2,6 +2,7 @@
 // Enhanced with better error handling, validation, and retry logic
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { realtimeDb } from '../firebase';
 
@@ -72,6 +73,20 @@ const extractPreferenceSource = (preferences = {}) => {
 };
 
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj || {}, key);
+
+const resolveExpoProjectId = () => {
+  const fromExpoConfig = Constants?.expoConfig?.extra?.eas?.projectId;
+  if (typeof fromExpoConfig === 'string' && fromExpoConfig.trim().length > 0) {
+    return fromExpoConfig.trim();
+  }
+
+  const fromEasConfig = Constants?.easConfig?.projectId;
+  if (typeof fromEasConfig === 'string' && fromEasConfig.trim().length > 0) {
+    return fromEasConfig.trim();
+  }
+
+  return null;
+};
 
 /**
  * Normalizes legacy preference payloads into one stable schema.
@@ -220,10 +235,15 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
 
     // Get the Expo push token with retry logic
     let token;
+    const projectId = resolveExpoProjectId();
+    if (!projectId) {
+      console.warn('No Expo EAS project ID found while fetching push token; using legacy token fetch fallback');
+    }
+
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
         const tokenData = await Promise.race([
-          Notifications.getExpoPushTokenAsync(),
+          Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined),
           new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Token fetch timeout')), 10000)
           )
