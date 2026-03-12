@@ -97,6 +97,19 @@ test('formatLastSyncRelative returns expected labels including fallback', () => 
   assert.equal(offlineSyncService.formatLastSyncRelative('invalid', 1735689600000), 'Never');
 });
 
+test('getStalenessLabel supports deterministic now injection and pluralized stale-day labels', () => {
+  const now = '2026-01-05T10:00:00.000Z';
+
+  const futureOrNow = offlineSyncService.getStalenessLabel('2026-01-05T10:00:01.000Z', now);
+  assert.deepEqual(futureOrNow, { bucket: 'fresh', label: 'Updated just now' });
+
+  const minutesAgo = offlineSyncService.getStalenessLabel('2026-01-05T09:30:00.000Z', now);
+  assert.deepEqual(minutesAgo, { bucket: 'stale', label: 'Updated 30 min ago' });
+
+  const multiDay = offlineSyncService.getStalenessLabel('2026-01-01T09:00:00.000Z', now);
+  assert.deepEqual(multiDay, { bucket: 'old', label: 'Cached data from 4 days ago' });
+});
+
 test('replayQueue processes in FIFO order', async () => {
   await clearQueue();
   const calls = [];
