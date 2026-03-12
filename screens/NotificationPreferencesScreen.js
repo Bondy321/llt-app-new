@@ -13,17 +13,25 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
 import { saveUserPreferences, getUserPreferences, registerForPushNotificationsAsync } from '../services/notificationService';
-import { COLORS as THEME } from '../theme';
+import { COLORS as THEME, SHADOWS } from '../theme';
 
 // Brand Colors
 const COLORS = {
   primaryBlue: THEME.primary,
-  lightBlueAccent: '#93C5FD',
+  lightBlueAccent: THEME.primaryLight,
+  primaryLight: THEME.primaryLight,
   white: THEME.white,
   darkText: THEME.textPrimary,
   secondaryText: THEME.textSecondary,
+  tertiaryText: THEME.textMuted,
   appBackground: THEME.background,
   successGreen: THEME.success,
+  successLight: THEME.successLight,
+  warning: THEME.warning,
+  warningLight: THEME.warningLight,
+  danger: THEME.error,
+  dangerLight: THEME.errorLight,
+  border: THEME.border,
   headerBg: THEME.white,
 };
 
@@ -43,9 +51,9 @@ const ToggleRow = ({ label, icon, value, onValueChange, color = COLORS.primaryBl
       <Text style={styles.labelText}>{label}</Text>
     </View>
     <Switch
-      trackColor={{ false: '#CBD5E0', true: color }}
-      thumbColor={Platform.OS === 'ios' ? '#FFF' : value ? color : '#f4f3f4'}
-      ios_backgroundColor="#CBD5E0"
+      trackColor={{ false: COLORS.border, true: color }}
+      thumbColor={Platform.OS === 'ios' ? COLORS.white : value ? color : COLORS.white}
+      ios_backgroundColor={COLORS.border}
       onValueChange={onValueChange}
       value={value}
     />
@@ -224,10 +232,10 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
 
         <View style={styles.emptyPanelContainer}>
           <View style={styles.emptyPanel}>
-            <MaterialCommunityIcons
+              <MaterialCommunityIcons
               name={loadError ? 'alert-circle-outline' : 'account-circle-outline'}
               size={34}
-              color={loadError ? '#E53E3E' : COLORS.primaryBlue}
+              color={loadError ? COLORS.danger : COLORS.primaryBlue}
             />
             <Text style={styles.emptyPanelTitle}>{loadError ? 'Something went wrong' : 'Not signed in'}</Text>
             <Text style={styles.emptyPanelMessage}>{loadError || emptyStateMessage}</Text>
@@ -283,7 +291,7 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
             icon="bullhorn-outline"
             value={opsPrefs.driver_updates}
             onValueChange={(v) => setOpsPrefs({ ...opsPrefs, driver_updates: v })}
-            color="#E67E22" // Orange for importance
+            color={COLORS.warning}
           />
           <ToggleRow
             label="Itinerary Updates"
@@ -323,7 +331,7 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
             icon="incognito"
             value={marketingPrefs.mystery_tours}
             onValueChange={(v) => setMarketingPrefs({ ...marketingPrefs, mystery_tours: v })}
-            color="#9B59B6" // Purple for mystery
+            color={COLORS.primaryLight}
           />
           <ToggleRow
             label="Classic Scotland"
@@ -336,14 +344,14 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
             icon="star-face"
             value={marketingPrefs.vip_experiences}
             onValueChange={(v) => setMarketingPrefs({ ...marketingPrefs, vip_experiences: v })}
-            color="#F1C40F" // Gold
+            color={COLORS.warning}
           />
            <ToggleRow
             label="Hiking & Nature"
             icon="pine-tree"
             value={marketingPrefs.hiking_nature}
             onValueChange={(v) => setMarketingPrefs({ ...marketingPrefs, hiking_nature: v })}
-            color="#27AE60" // Green
+            color={COLORS.successGreen}
           />
         </PreferenceSection>
 
@@ -426,7 +434,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: COLORS.headerBg,
     borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
+    borderBottomColor: COLORS.border,
   },
   headerTitle: {
     fontSize: 18,
@@ -454,16 +462,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   successBanner: {
-    backgroundColor: `${COLORS.successGreen}12`,
-    borderColor: `${COLORS.successGreen}55`,
+    backgroundColor: COLORS.successLight,
+    borderColor: COLORS.successGreen,
   },
   errorBanner: {
-    backgroundColor: '#FEE2E2',
-    borderColor: '#FCA5A5',
+    backgroundColor: COLORS.dangerLight,
+    borderColor: COLORS.danger,
   },
   infoBanner: {
-    backgroundColor: `${COLORS.primaryBlue}12`,
-    borderColor: `${COLORS.primaryBlue}55`,
+    backgroundColor: THEME.primaryMuted,
+    borderColor: COLORS.lightBlueAccent,
   },
   statusBannerText: {
     color: COLORS.darkText,
@@ -495,11 +503,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     marginBottom: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
+    ...SHADOWS.md,
   },
   sectionTitle: {
     fontSize: 18,
@@ -544,11 +548,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     marginTop: 10,
-    shadowColor: COLORS.primaryBlue,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
+    ...SHADOWS.lg,
   },
   disabledButton: {
     opacity: 0.7,
@@ -558,7 +558,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: COLORS.border,
     paddingVertical: 12,
     paddingHorizontal: 14,
     flexDirection: 'row',
@@ -595,7 +595,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 20,
     fontSize: 13,
-    color: '#A0AEC0',
+    color: COLORS.tertiaryText,
   },
   emptyPanelContainer: {
     flex: 1,
@@ -609,11 +609,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 20,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
+    ...SHADOWS.md,
   },
   emptyPanelTitle: {
     marginTop: 12,
