@@ -24,6 +24,7 @@ import { getTourItinerary } from '../services/bookingServiceRealtime';
 import { realtimeDb } from '../firebase';
 import { COLORS as THEME } from '../theme';
 import offlineSyncService from '../services/offlineSyncService';
+import logger from '../services/loggerService';
 const { parseSupportedStartDate } = require('../services/itineraryDateParser');
 
 // Brand Colors
@@ -74,6 +75,15 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   const scrollViewRef = useRef(null);
   const searchAnimation = useRef(new Animated.Value(0)).current;
   const realtimeListener = useRef(null);
+  const retryTimeoutRef = useRef(null);
+  const loadRequestIdRef = useRef(0);
+
+  const clearRetryTimeout = useCallback(() => {
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -83,6 +93,8 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
   // --- REAL-TIME SYNC ---
   useEffect(() => {
+    loadRequestIdRef.current += 1;
+
     loadItinerary();
 
     // Set up real-time listener for live updates
@@ -103,12 +115,18 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       realtimeListener.current = { ref: itineraryRef, listener: onUpdate };
 
       return () => {
+        clearRetryTimeout();
+        loadRequestIdRef.current += 1;
         if (realtimeListener.current) {
           realtimeListener.current.ref.off('value', realtimeListener.current.listener);
         }
       };
     }
-  }, [tourId, isEditing]);
+    return () => {
+      clearRetryTimeout();
+      loadRequestIdRef.current += 1;
+    };
+  }, [tourId, isEditing, clearRetryTimeout]);
 
   // --- OFFLINE CACHING ---
   const cacheItinerary = async (data) => {
@@ -116,7 +134,11 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       await offlineSyncService.saveTourPack(tourId, isDriver ? 'driver' : 'passenger', { itinerary: data });
       await offlineSyncService.setTourPackMeta(tourId, isDriver ? 'driver' : 'passenger', { lastSyncedAt: new Date().toISOString() });
     } catch (error) {
-      console.log('Cache save failed:', error);
+      logger.warn('ItineraryScreen', 'Failed to save itinerary cache', {
+        tourId,
+        isDriver,
+        error: error?.message || String(error)
+      });
     }
   };
 
@@ -129,7 +151,11 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
         return data;
       }
     } catch (error) {
-      console.log('Cache load failed:', error);
+      logger.warn('ItineraryScreen', 'Failed to load itinerary cache', {
+        tourId,
+        isDriver,
+        error: error?.message || String(error)
+      });
     }
     return null;
   };
@@ -195,9 +221,14 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
   // --- DATA LOADING WITH RETRY ---
   const loadItinerary = async ({ showSkeleton = true, retry = 0 } = {}) => {
+    const requestId = ++loadRequestIdRef.current;
+    const isCurrentRequest = () => requestId === loadRequestIdRef.current;
+
     try {
+      clearRetryTimeout();
       setErrorMessage('');
       if (!tourId) {
+        if (!isCurrentRequest()) return;
         setItinerary(null);
         setLoading(false);
         setRefreshing(false);
@@ -208,14 +239,16 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       else setRefreshing(true);
 
       // Try to load from cache first
-      const cached = await loadCachedItinerary();
-      if (cached && showSkeleton) {
-        setItinerary(cached);
-        setEditedItinerary(JSON.parse(JSON.stringify(cached)));
+      const cachedSnapshot = await loadCachedItinerary();
+      if (!isCurrentRequest()) return;
+      if (cachedSnapshot && showSkeleton) {
+        setItinerary(cachedSnapshot);
+        setEditedItinerary(JSON.parse(JSON.stringify(cachedSnapshot)));
         setLoading(false);
       }
 
       const tourItinerary = await getTourItinerary(tourId);
+      if (!isCurrentRequest()) return;
       setItinerary(tourItinerary || null);
       setEditedItinerary(JSON.parse(JSON.stringify(tourItinerary || {})));
       setIsOnline(true);
@@ -228,18 +261,24 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       setRetryCount(0);
     } catch (error) {
       console.error('Error loading itinerary:', error);
+      if (!isCurrentRequest()) return;
+
+      const fallbackSnapshot = await loadCachedItinerary();
+      if (!isCurrentRequest()) return;
 
       if (retry < 3) {
         const delay = Math.pow(2, retry) * 1000;
-        setTimeout(() => {
+        retryTimeoutRef.current = setTimeout(() => {
+          if (requestId !== loadRequestIdRef.current) return;
           loadItinerary({ showSkeleton: false, retry: retry + 1 });
         }, delay);
         setRetryCount(retry + 1);
         setErrorMessage(`Connection issue. Retrying (${retry + 1}/3)...`);
       } else {
-        if (cachedItinerary) {
-          setItinerary(cachedItinerary);
-          setEditedItinerary(JSON.parse(JSON.stringify(cachedItinerary)));
+        const terminalFallback = fallbackSnapshot || cachedItinerary;
+        if (terminalFallback) {
+          setItinerary(terminalFallback);
+          setEditedItinerary(JSON.parse(JSON.stringify(terminalFallback)));
           setIsOnline(false);
           setErrorMessage('Using offline data. Pull to refresh when online.');
         } else {
@@ -248,6 +287,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
         }
       }
     } finally {
+      if (!isCurrentRequest()) return;
       setLoading(false);
       setRefreshing(false);
     }
