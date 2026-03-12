@@ -1,33 +1,42 @@
 # Date Contract (Mobile + Web Admin)
 
-To prevent parsing drift between clients, both mobile and web-admin use the same strict date contract:
+This contract prevents locale drift (UK vs US parsing issues) across mobile and web-admin.
 
-## Accepted string formats
+## Accepted date-only strings
 
-- UK: `dd/MM/yyyy` (example: `09/10/2025`)
-- ISO: `yyyy-MM-dd` (example: `2025-10-09`)
+- UK: `dd/MM/yyyy` (example: `09/10/2026`)
+- ISO date: `yyyy-MM-dd` (example: `2026-10-09`)
 
-No other string formats are accepted.
+No other date string shape is valid.
 
-## Parsing rules
+## Accepted timestamp strings
 
-- Inputs are trimmed and validated against exact regex format.
-- Calendar validity is enforced (e.g. `31/02/2025` and `2025-02-31` are rejected).
-- Ambiguous or invalid values return structured validation errors:
-  - `TYPE_ERROR`
-  - `REQUIRED`
-  - `INVALID_FORMAT`
-  - `INVALID_DATE`
+- Epoch milliseconds (`number` or numeric string)
+- ISO-8601 datetime **with timezone** (`Z` or `+/-HH:mm`)
 
-## Storage + display rules
+## Validation rules
 
-- Canonical storage for tour start/end dates is UK format (`dd/MM/yyyy`).
-- HTML date inputs use ISO format (`yyyy-MM-dd`) and must be converted strictly.
-- UI display in web-admin should always flow through shared date formatter helpers.
+- Inputs are trimmed and regex-validated before parsing.
+- Calendar validity is required (`31/02/2026` is rejected).
+- Unsupported values map to explicit errors (for forms) or null fallback (for display).
 
-## Implementations
+## Mandatory implementation rules
 
-- Web admin strict parser/formatter source: `web-admin/src/utils/dateUtils.js`
-- Mobile strict start-date parser source: `services/itineraryDateParser.js`
+1. Never use `new Date(dateString)` on user/data payloads.
+2. Never use `Date.parse(...)` outside strict utility gates.
+3. For UK dates, parse manually (`day`, `month`, `year`) in strict helpers.
+4. Tour start/end dates are stored canonically as UK format (`dd/MM/yyyy`).
+5. HTML `<input type="date">` values are ISO (`yyyy-MM-dd`) and must convert via strict helpers.
 
-When updating either implementation, keep this contract aligned to avoid cross-client behaviour drift.
+## Shared references
+
+- Mobile itinerary date parsing: `services/itineraryDateParser.js`
+- Web-admin strict date/timestamp utilities: `web-admin/src/utils/dateUtils.js`
+- Web-admin date display contract: `docs/date-contract-web-admin.md`
+
+## QA minimums
+
+- Mixed UK + ISO inputs in same dataset.
+- Invalid leap day and invalid month/day combinations.
+- Boundary display around DST transitions.
+- Unsupported formats produce deterministic fallback text and no crashes.

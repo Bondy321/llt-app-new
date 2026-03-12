@@ -1,30 +1,50 @@
-# React + Vite
+# LLT Web Admin Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Operations dashboard for Loch Lomond Travel built with React + Vite + Mantine.
 
-Currently, two official plugins are available:
+## What this app does
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Driver CRUD + tour assignments
+- Tour monitoring and operational status views
+- Broadcast announcements
+- Admin settings workflows
 
-## React Compiler
+## Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- React 19
+- Vite 7
+- Mantine 8
+- React Router 7
+- Firebase JS SDK 12
+- Vitest + Testing Library
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
-
-## Testing
-
-Run the unit test suite with:
-
-```bash
-npm run test
-```
-
-For watch mode during development:
+## Local setup
 
 ```bash
-npm run test:watch
+npm install
+npm run dev
 ```
+
+Build + preview:
+
+```bash
+npm run build
+npm run preview
+```
+
+## Tests
+
+```bash
+npm test
+npm run test:components
+npm run test:services
+npm run test:utils
+npm run test:all
+```
+
+## Operational contracts
+
+- Date/timestamp parsing must use strict helpers in `src/utils/dateUtils.js`.
+- Driver assignment writes must match `docs/data-contracts/driver-assignment.md`.
+- User-facing errors should be sanitized (avoid raw backend/internal messages).
+- Follow security header configuration in `vite.config.js` for preview/deploy parity.
