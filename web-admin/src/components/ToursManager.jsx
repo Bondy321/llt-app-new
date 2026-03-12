@@ -1873,42 +1873,52 @@ export default function ToursManager() {
       )}
 
       {/* Modals */}
-      <CreateTourModal
-        opened={createModalOpened}
-        onClose={closeCreateModal}
-        onSuccess={handleTourCreated}
-        userEmail="admin"
-      />
+      {createModalOpened && (
+        <CreateTourModal
+          opened={createModalOpened}
+          onClose={closeCreateModal}
+          onSuccess={handleTourCreated}
+          userEmail="admin"
+        />
+      )}
 
-      <EditTourModal
-        opened={editModalOpened}
-        onClose={closeEditModal}
-        tourId={selectedTourId}
-        tour={selectedTour}
-        onSuccess={() => {}}
-      />
+      {editModalOpened && (
+        <EditTourModal
+          opened={editModalOpened}
+          onClose={closeEditModal}
+          tourId={selectedTourId}
+          tour={selectedTour}
+          onSuccess={() => {}}
+        />
+      )}
 
-      <DeleteTourModal
-        opened={deleteModalOpened}
-        onClose={closeDeleteModal}
-        tourId={selectedTourId}
-        tourName={selectedTour?.name}
-        onConfirm={() => setSelectedTourId(null)}
-      />
+      {deleteModalOpened && (
+        <DeleteTourModal
+          opened={deleteModalOpened}
+          onClose={closeDeleteModal}
+          tourId={selectedTourId}
+          tourName={selectedTour?.name}
+          onConfirm={() => setSelectedTourId(null)}
+        />
+      )}
 
-      <TourDetailsModal
-        opened={detailsModalOpened}
-        onClose={closeDetailsModal}
-        tourId={selectedTourId}
-        tour={selectedTour}
-      />
+      {detailsModalOpened && (
+        <TourDetailsModal
+          opened={detailsModalOpened}
+          onClose={closeDetailsModal}
+          tourId={selectedTourId}
+          tour={selectedTour}
+        />
+      )}
 
-      <ImportExportModal
-        opened={importExportModalOpened}
-        onClose={closeImportExportModal}
-        tours={tours}
-        onImportSuccess={() => {}}
-      />
+      {importExportModalOpened && (
+        <ImportExportModal
+          opened={importExportModalOpened}
+          onClose={closeImportExportModal}
+          tours={tours}
+          onImportSuccess={() => {}}
+        />
+      )}
     </Box>
   );
 }

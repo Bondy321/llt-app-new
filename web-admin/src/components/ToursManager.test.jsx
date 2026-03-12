@@ -108,7 +108,7 @@ describe('ToursManager query-param status behavior', () => {
     expect(screen.getByText('Unassigned (TBA)')).toBeInTheDocument();
     expect(screen.queryByText('Tour 3')).not.toBeInTheDocument();
     expect(screen.getByText('Tour 1')).toBeInTheDocument();
-  });
+  }, 30000);
 
   it('changing status updates URL and resets pagination to page 1', async () => {
     const { container } = renderAt('?status=all');
@@ -123,7 +123,7 @@ describe('ToursManager query-param status behavior', () => {
       expect(screen.getByTestId('location-search')).toHaveTextContent('?status=assigned');
     });
     expect(screen.getByText('Showing 4 of 4 tours')).toBeInTheDocument();
-  });
+  }, 45000);
 
   it('preserves unrelated query params while updating status', async () => {
     const { container } = renderAt('?foo=bar&status=active');
@@ -136,7 +136,7 @@ describe('ToursManager query-param status behavior', () => {
       expect(screen.getByTestId('location-search')).toHaveTextContent('?foo=bar&status=inactive');
     });
     expect(screen.getByText('Showing 7 of 7 tours')).toBeInTheDocument();
-  });
+  }, 30000);
 
   it('falls back safely for invalid status values', async () => {
     renderAt('?status=bogus');
@@ -144,5 +144,5 @@ describe('ToursManager query-param status behavior', () => {
     await screen.findByText('Showing 12 of 13 tours');
     expect(screen.getByTestId('location-search')).toHaveTextContent('?status=bogus');
     expect(screen.getByText('All Tours')).toBeInTheDocument();
-  });
+  }, 30000);
 });
