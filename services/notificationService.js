@@ -5,8 +5,11 @@ import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { realtimeDb } from '../firebase';
+import appMetadataModule from './appMetadata';
 
 // Configure how notifications behave when the app is open
+const { resolveAppVersionMetadata } = appMetadataModule;
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -374,6 +377,11 @@ export const saveUserPreferences = async (userId, preferences) => {
     }
 
     // 2. Save token and preferences
+    const appVersionMetadata = resolveAppVersionMetadata({
+      constants: Constants,
+      platform: Platform,
+    });
+
     const updateData = {
       pushToken: token,
       pushTokenStatus: 'ACTIVE',
@@ -383,7 +391,9 @@ export const saveUserPreferences = async (userId, preferences) => {
       lastUpdated: nowIso,
       deviceOS: Platform.OS,
       deviceModel: Device.modelName || 'Unknown',
-      appVersion: Platform.Version,
+      appVersion: appVersionMetadata.appVersion,
+      appBuild: appVersionMetadata.appBuild,
+      osVersion: appVersionMetadata.osVersion,
     };
 
     await Promise.race([
