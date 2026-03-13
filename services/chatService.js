@@ -14,6 +14,7 @@ if (!isTestEnv) {
 
 const offlineSyncService = loadOptionalService({
   modulePath: './offlineSyncService',
+  loadModule: () => require('./offlineSyncService'),
   serviceLabel: 'Offline sync service',
   isTestEnv,
 });
