@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import unifiedSyncContract from '../../../utils/unifiedSyncContract';
+import unifiedSyncContract from './unifiedSyncContract';
 import { HEALTH_STATE, buildHealthSnapshot } from './healthService';
 
 const { HEALTH_STATE: CONTRACT_STATE, UNIFIED_SYNC_STATES } = unifiedSyncContract;
