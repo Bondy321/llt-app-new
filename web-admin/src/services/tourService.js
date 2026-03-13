@@ -203,7 +203,22 @@ export const generateTourId = (tourCode) => {
     const random = Math.random().toString(36).substring(2, 6).toUpperCase();
     return `TOUR_${timestamp}_${random}`;
   }
-  return tourCode.replace(/\s+/g, '_');
+
+  const normalized = String(tourCode)
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '_')
+    .replace(/[.#$\[\]/]/g, '');
+
+  const collapsed = normalized.replace(/^_+|_+$/g, '');
+
+  if (!collapsed) {
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `TOUR_${timestamp}_${random}`;
+  }
+
+  return collapsed;
 };
 
 /**

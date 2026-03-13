@@ -23,6 +23,17 @@ When adding a note here:
 - Move durable guidance into `docs/` once stabilized.
 - Remove stale investigation notes after outcomes are documented elsewhere.
 
+## 2026-03-12 - Hardening tour ID normalization (pre-TestFlight)
+- I picked a reliability fix that eliminates subtle key drift between mobile and web-admin.
+- `web-admin/src/services/tourService.js` previously generated IDs with only whitespace replacement, which could preserve lowercase and Firebase-invalid key chars (`.#$[]/`).
+- This could produce duplicate-ish tours (`5112d_8` vs `5112D_8`) and invalid writes if operators pasted noisy codes.
+- I updated `generateTourId` to:
+  - trim + uppercase,
+  - collapse whitespace to `_`,
+  - strip Firebase-invalid key chars,
+  - and safely fall back to random `TOUR_*` id if normalization empties the string.
+- Added targeted tests to lock this behavior (`web-admin/src/services/tourService.test.js`).
+- Why this one: it is tiny, high-leverage, and directly reduces production data-shape risk right before TestFlight.
 ## 2026-03-12 (mobile) — notification settings resilience
 
 - I fixed a subtle-but-important UX integrity issue in Notification Preferences: the screen could silently show default toggles when preference fetch failed, which is dangerous right before TestFlight because users may think they are seeing real saved settings.
