@@ -457,6 +457,7 @@ export const buildDriverAssignmentUpdates = ({
   updates[`tour_manifests/${tourId}/assigned_drivers/${driverId}`] = isAssigned ? true : null;
   updates[`tour_manifests/${tourId}/assigned_driver_codes/${driverId}`] = isAssigned
     ? {
+        driverId,
         tourId,
         tourCode: tourCode || tourId,
         assignedAt,

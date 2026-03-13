@@ -94,6 +94,7 @@ describe('buildDriverAssignmentUpdates', () => {
     });
 
     expect(updates['tour_manifests/5112D_8/assigned_driver_codes/D-BONDY']).toEqual({
+      driverId: 'D-BONDY',
       tourId: '5112D_8',
       tourCode: '5112D 8',
       assignedAt: '2026-02-01T10:15:00.000Z',
@@ -143,6 +144,7 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
     expect(updates['drivers/D-ALICE/assignments/TOUR_A']).toBe(true);
     expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-ALICE']).toBe(true);
     expect(updates['tour_manifests/TOUR_A/assigned_driver_codes/D-ALICE']).toMatchObject({
+      driverId: 'D-ALICE',
       tourId: 'TOUR_A',
       tourCode: '5100D 1',
     });
