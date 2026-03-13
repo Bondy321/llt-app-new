@@ -1,12 +1,17 @@
 const loadOptionalService = ({
   modulePath,
+  loadModule,
   serviceLabel,
   logger,
   isTestEnv = process.env.NODE_ENV === 'test',
   shouldLogWhenUnavailable = false,
 }) => {
   try {
-    return require(modulePath);
+    if (typeof loadModule !== 'function') {
+      throw new Error('Optional service loader requires a loadModule function');
+    }
+
+    return loadModule();
   } catch (error) {
     const message = error?.message || String(error);
     const shouldLog = !isTestEnv && shouldLogWhenUnavailable;

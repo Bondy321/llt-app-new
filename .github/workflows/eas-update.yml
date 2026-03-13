@@ -9,6 +9,7 @@ jobs:
   publish-development-update:
     runs-on: ubuntu-latest
     env:
+      CI: true
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
       EXPO_PUBLIC_FIREBASE_API_KEY: ${{ secrets.EXPO_PUBLIC_FIREBASE_API_KEY }}
       EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN }}
@@ -27,10 +28,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -45,5 +46,5 @@ jobs:
 
       - name: Publish development channel update (native only)
         run: |
-          eas update --channel preview --platform ios --message "CI update: ${{ github.sha }}" --non-interactive
-          eas update --channel preview --platform android --message "CI update: ${{ github.sha }}" --non-interactive
+          eas update --channel preview --platform ios --message "CI update: ${{ github.sha }}"
+          eas update --channel preview --platform android --message "CI update: ${{ github.sha }}"

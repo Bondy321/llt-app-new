@@ -41,6 +41,7 @@ if (!isTestEnv) {
 
 const offlineSyncService = loadOptionalService({
   modulePath: './offlineSyncService',
+  loadModule: () => require('./offlineSyncService'),
   serviceLabel: 'BookingService',
   logger,
   isTestEnv,
