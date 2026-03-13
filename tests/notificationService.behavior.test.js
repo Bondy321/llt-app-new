@@ -23,6 +23,10 @@ const buildNotificationService = ({ permission = 'granted', token = 'ExponentPus
     if (request === 'expo-notifications') {
       return {
         AndroidImportance: { MAX: 'MAX' },
+        IosAuthorizationStatus: {
+          PROVISIONAL: 3,
+          EPHEMERAL: 4,
+        },
         setNotificationHandler: () => {},
         setNotificationChannelAsync: async () => {},
         getPermissionsAsync: async () => ({ status: permissionStatus }),
@@ -133,6 +137,80 @@ test('saveUserPreferences handles denied permission path without throwing and ma
   assert.equal(updates[0].preferences.ops.group_chat, true);
   assert.equal(updates[0].preferences.ops.itinerary_changes, true);
   assert.equal(updates[0].preferences.marketing.mystery_tours, true);
+});
+
+test('registerForPushNotificationsAsync accepts iOS provisional permissions and still returns a token', async () => {
+  const original = Module._load;
+  const tokenRequests = [];
+
+  Module._load = function mocked(request, parent, isMain) {
+    if (request === 'expo-device') {
+      return { isDevice: true, modelName: 'Test Device' };
+    }
+
+    if (request === 'expo-notifications') {
+      return {
+        AndroidImportance: { MAX: 'MAX' },
+        IosAuthorizationStatus: {
+          PROVISIONAL: 3,
+          EPHEMERAL: 4,
+        },
+        setNotificationHandler: () => {},
+        setNotificationChannelAsync: async () => {},
+        getPermissionsAsync: async () => ({
+          status: 'undetermined',
+          ios: { status: 3 },
+        }),
+        requestPermissionsAsync: async () => ({
+          status: 'undetermined',
+          ios: { status: 3 },
+        }),
+        getExpoPushTokenAsync: async (options) => {
+          tokenRequests.push(options ?? null);
+          return { data: 'ExponentPushToken[provisional]' };
+        },
+      };
+    }
+
+    if (request === 'expo-constants') {
+      return {
+        expoConfig: {
+          extra: {
+            eas: {
+              projectId: 'test-project-id',
+            },
+          },
+        },
+        easConfig: null,
+      };
+    }
+
+    if (request === 'react-native') {
+      return { Platform: { OS: 'ios', Version: '18.0' } };
+    }
+
+    if (request.endsWith('/firebase') || request === '../firebase') {
+      return {
+        realtimeDb: {
+          ref: () => ({
+            update: async () => {},
+            once: async () => ({ val: () => null }),
+          }),
+        },
+      };
+    }
+
+    return original(request, parent, isMain);
+  };
+
+  delete require.cache[require.resolve('../services/notificationService')];
+  const service = require('../services/notificationService');
+
+  const token = await service.registerForPushNotificationsAsync();
+  assert.equal(token, 'ExponentPushToken[provisional]');
+  assert.deepEqual(tokenRequests, [{ projectId: 'test-project-id' }]);
+
+  Module._load = original;
 });
 
 test('getUserPreferences can throw explicit fetch errors for UI empty/error state handling', async () => {

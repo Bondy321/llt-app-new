@@ -91,6 +91,17 @@ const resolveExpoProjectId = () => {
   return null;
 };
 
+const isGrantedNotificationPermission = (permissionResponse) => {
+  const status = permissionResponse?.status;
+  if (status === 'granted') {
+    return true;
+  }
+
+  const iosPermissionStatus = permissionResponse?.ios?.status;
+  return iosPermissionStatus === Notifications.IosAuthorizationStatus?.PROVISIONAL
+    || iosPermissionStatus === Notifications.IosAuthorizationStatus?.EPHEMERAL;
+};
+
 /**
  * Normalizes legacy preference payloads into one stable schema.
  */
@@ -217,21 +228,20 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
     }
 
     // Get or request permissions
-    let finalStatus;
+    let finalPermissions;
     try {
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
-      finalStatus = existingStatus;
+      const existingPermissions = await Notifications.getPermissionsAsync();
+      finalPermissions = existingPermissions;
 
-      if (existingStatus !== 'granted') {
-        const { status } = await Notifications.requestPermissionsAsync();
-        finalStatus = status;
+      if (!isGrantedNotificationPermission(existingPermissions)) {
+        finalPermissions = await Notifications.requestPermissionsAsync();
       }
     } catch (permError) {
       console.error('Error checking/requesting notification permissions:', permError);
       return null;
     }
 
-    if (finalStatus !== 'granted') {
+    if (!isGrantedNotificationPermission(finalPermissions)) {
       console.warn('Notification permission not granted');
       return null;
     }
