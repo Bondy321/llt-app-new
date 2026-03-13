@@ -1,6 +1,8 @@
 import { get, ref } from 'firebase/database';
 import { nowAsISOString, toEpochMsStrict } from '../utils/dateUtils';
-import unifiedSyncContract from '../../../utils/unifiedSyncContract';
+import * as unifiedSyncContractModule from '../../../utils/unifiedSyncContract';
+
+const unifiedSyncContract = unifiedSyncContractModule.default ?? unifiedSyncContractModule;
 
 const { HEALTH_STATE, UNIFIED_SYNC_STATES: HEALTH_META } = unifiedSyncContract;
 
