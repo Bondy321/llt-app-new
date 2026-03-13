@@ -61,6 +61,21 @@ const ToggleRow = ({ label, icon, value, onValueChange, color = COLORS.primaryBl
 );
 
 export default function NotificationPreferencesScreen({ onBack, userId }) {
+  const defaultOpsPrefs = {
+    driver_updates: true,
+    itinerary_changes: true,
+    group_chat: true,
+    group_photos: false,
+  };
+
+  const defaultMarketingPrefs = {
+    steam_trains: false,
+    mystery_tours: false,
+    scotland_classics: false,
+    vip_experiences: false,
+    hiking_nature: false,
+  };
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -70,21 +85,10 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
   const [testStatus, setTestStatus] = useState({ type: '', message: '' });
 
   // 1. Operational Alerts (During the tour)
-  const [opsPrefs, setOpsPrefs] = useState({
-    driver_updates: true, // Driver announcements
-    itinerary_changes: true, // Schedule changes
-    group_chat: true, // All chat messages
-    group_photos: false, // New photo uploads (can be spammy)
-  });
+  const [opsPrefs, setOpsPrefs] = useState(defaultOpsPrefs);
 
   // 2. Marketing Interests (Future tours)
-  const [marketingPrefs, setMarketingPrefs] = useState({
-    steam_trains: false,
-    mystery_tours: false,
-    scotland_classics: false,
-    vip_experiences: false,
-    hiking_nature: false,
-  });
+  const [marketingPrefs, setMarketingPrefs] = useState(defaultMarketingPrefs);
   const [initialOpsPrefs, setInitialOpsPrefs] = useState(null);
   const [initialMarketingPrefs, setInitialMarketingPrefs] = useState(null);
 
@@ -119,14 +123,16 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
     }
 
     try {
-      const saved = await getUserPreferences(userId);
-      const nextOpsPrefs = saved?.ops ? { ...opsPrefs, ...saved.ops } : { ...opsPrefs };
-      const nextMarketingPrefs = saved?.marketing ? { ...marketingPrefs, ...saved.marketing } : { ...marketingPrefs };
+      const saved = await getUserPreferences(userId, { throwOnError: true });
+      const nextOpsPrefs = saved?.ops
+        ? { ...defaultOpsPrefs, ...saved.ops }
+        : { ...defaultOpsPrefs };
+      const nextMarketingPrefs = saved?.marketing
+        ? { ...defaultMarketingPrefs, ...saved.marketing }
+        : { ...defaultMarketingPrefs };
 
-      if (saved) {
-        if (saved.ops) setOpsPrefs(nextOpsPrefs);
-        if (saved.marketing) setMarketingPrefs(nextMarketingPrefs);
-      }
+      setOpsPrefs(nextOpsPrefs);
+      setMarketingPrefs(nextMarketingPrefs);
       setInitialOpsPrefs(nextOpsPrefs);
       setInitialMarketingPrefs(nextMarketingPrefs);
     } catch (error) {

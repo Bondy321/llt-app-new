@@ -414,7 +414,9 @@ export const saveUserPreferences = async (userId, preferences) => {
  * Loads existing preferences from Firebase
  * Enhanced with validation and timeout protection
  */
-export const getUserPreferences = async (userId) => {
+export const getUserPreferences = async (userId, options = {}) => {
+  const { throwOnError = false } = options || {};
+
   try {
     // Validate input
     const validatedUserId = validateUserId(userId);
@@ -435,6 +437,11 @@ export const getUserPreferences = async (userId) => {
     return snapshot.val() || null;
   } catch (error) {
     console.error('Error fetching preferences:', error);
+
+    if (throwOnError) {
+      throw error;
+    }
+
     return null;
   }
 };
