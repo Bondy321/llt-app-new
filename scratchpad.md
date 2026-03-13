@@ -22,3 +22,12 @@ When adding a note here:
 - Include date and owning area (mobile/web-admin/functions).
 - Move durable guidance into `docs/` once stabilized.
 - Remove stale investigation notes after outcomes are documented elsewhere.
+
+## 2026-03-12 (mobile) — notification settings resilience
+
+- I fixed a subtle-but-important UX integrity issue in Notification Preferences: the screen could silently show default toggles when preference fetch failed, which is dangerous right before TestFlight because users may think they are seeing real saved settings.
+- `getUserPreferences` now supports an explicit `throwOnError` option so UI flows can distinguish “no saved prefs yet” from “backend read failed”.
+- The screen now opts into that strict mode and always initializes state from deterministic defaults + known remote values, avoiding stale closure merges and preventing accidental false confidence.
+- Added a regression test to ensure fetch failures can be surfaced intentionally for empty/error state rendering paths.
+
+Why I cared about this one: notification trust is make-or-break for real users. Silent fallback here looks polished but can mask backend issues and lead to noisy notifications or missed alerts.
