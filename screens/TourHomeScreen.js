@@ -1160,13 +1160,21 @@ export default function TourHomeScreen({
                 {/* Seat Information */}
                 {bookingData?.seatNumbers?.length > 0 && (
                   <View style={styles.seatSection}>
-                    <View style={styles.seatRow}>
-                      {bookingData.seatNumbers.map((seat, index) => (
-                        <View key={index} style={styles.seatBox}>
-                          <MaterialCommunityIcons name="seat" size={18} color={COLORS.coralAccent} />
-                          <Text style={styles.seatNumber}>{seat}</Text>
-                        </View>
-                      ))}
+                    <View style={styles.seatGrid}>
+                      {Array.from({ length: Math.ceil(bookingData.seatNumbers.length / 2) }, (_, rowIndex) => {
+                        const rowSeats = bookingData.seatNumbers.slice(rowIndex * 2, rowIndex * 2 + 2);
+
+                        return (
+                          <View key={`seat-row-${rowIndex}`} style={styles.seatRow}>
+                            {rowSeats.map((seat, seatIndex) => (
+                              <View key={`seat-${rowIndex}-${seatIndex}-${seat}`} style={styles.seatBox}>
+                                <MaterialCommunityIcons name="seat" size={18} color={COLORS.coralAccent} />
+                                <Text style={styles.seatNumber}>{seat}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        );
+                      })}
                     </View>
                     <Text style={styles.seatLabel}>
                       {bookingData.seatNumbers.length > 1 ? 'Assigned Seats' : 'Your Seat'}
@@ -1852,10 +1860,14 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
   },
+  seatGrid: {
+    gap: 12,
+    marginBottom: 8,
+  },
   seatRow: {
     flexDirection: 'row',
     gap: 12,
-    marginBottom: 8,
+    justifyContent: 'center',
   },
   seatBox: {
     flexDirection: 'row',
