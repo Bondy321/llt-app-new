@@ -134,3 +134,56 @@ test('saveUserPreferences handles denied permission path without throwing and ma
   assert.equal(updates[0].preferences.ops.itinerary_changes, true);
   assert.equal(updates[0].preferences.marketing.mystery_tours, true);
 });
+
+test('getUserPreferences can throw explicit fetch errors for UI empty/error state handling', async () => {
+  const original = Module._load;
+
+  Module._load = function mocked(request, parent, isMain) {
+    if (request === 'expo-device') {
+      return { isDevice: true, modelName: 'Test Device' };
+    }
+
+    if (request === 'expo-notifications') {
+      return {
+        AndroidImportance: { MAX: 'MAX' },
+        setNotificationHandler: () => {},
+        setNotificationChannelAsync: async () => {},
+        getPermissionsAsync: async () => ({ status: 'granted' }),
+        requestPermissionsAsync: async () => ({ status: 'granted' }),
+        getExpoPushTokenAsync: async () => ({ data: 'ExponentPushToken[test-token]' }),
+      };
+    }
+
+    if (request === 'expo-constants') {
+      return { expoConfig: { extra: { eas: { projectId: 'test-project-id' } } }, easConfig: null };
+    }
+
+    if (request === 'react-native') {
+      return { Platform: { OS: 'ios', Version: '18.0' } };
+    }
+
+    if (request.endsWith('/firebase') || request === '../firebase') {
+      return {
+        realtimeDb: {
+          ref: () => ({
+            once: async () => {
+              throw new Error('simulated fetch failure');
+            },
+          }),
+        },
+      };
+    }
+
+    return original(request, parent, isMain);
+  };
+
+  delete require.cache[require.resolve('../services/notificationService')];
+  const service = require('../services/notificationService');
+
+  await assert.rejects(
+    () => service.getUserPreferences('user-3', { throwOnError: true }),
+    /simulated fetch failure/
+  );
+
+  Module._load = original;
+});
