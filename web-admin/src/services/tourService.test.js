@@ -62,6 +62,21 @@ describe('tourService CSV preview integration', () => {
   });
 });
 
+describe('generateTourId normalization', () => {
+  it('normalizes casing/spacing and removes firebase-invalid key characters', async () => {
+    const { generateTourId } = await import('./tourService.js');
+
+    expect(generateTourId(' 5112d 8 ')).toBe('5112D_8');
+    expect(generateTourId('ops.#$[]/ tour')).toBe('OPS_TOUR');
+  });
+
+  it('falls back to generated id when normalization removes all content', async () => {
+    const { generateTourId } = await import('./tourService.js');
+
+    expect(generateTourId(' ///  ###  ')).toMatch(/^TOUR_[A-Z0-9]+_[A-Z0-9]{4}$/);
+  });
+});
+
 
 describe('buildDriverAssignmentUpdates', () => {
   it('writes canonical assigned_driver_codes payload on assignment', async () => {
