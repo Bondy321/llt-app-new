@@ -7,12 +7,18 @@ import {
   Switch,
   TouchableOpacity,
   ActivityIndicator,
-  Platform
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Notifications from 'expo-notifications';
-import { saveUserPreferences, getUserPreferences, registerForPushNotificationsAsync } from '../services/notificationService';
+import {
+  saveUserPreferences,
+  getUserPreferences,
+  registerForPushNotificationsAsync,
+  primeNotificationPermissions,
+} from '../services/notificationService';
 import { COLORS as THEME, SHADOWS } from '../theme';
 
 // Brand Colors
@@ -60,7 +66,14 @@ const ToggleRow = ({ label, icon, value, onValueChange, color = COLORS.primaryBl
   </View>
 );
 
-export default function NotificationPreferencesScreen({ onBack, userId }) {
+export default function NotificationPreferencesScreen({
+  onBack,
+  userId,
+  isOnboarding = false,
+  audience = 'passenger',
+  onComplete,
+  returnTo,
+}) {
   const defaultOpsPrefs = {
     driver_updates: true,
     itinerary_changes: true,
@@ -83,6 +96,8 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
   const [statusBanner, setStatusBanner] = useState(null);
   const [lastSavedAt, setLastSavedAt] = useState('');
   const [testStatus, setTestStatus] = useState({ type: '', message: '' });
+  const [permissionStatus, setPermissionStatus] = useState({ state: 'unavailable', description: '' });
+  const [onboardingActionBusy, setOnboardingActionBusy] = useState(false);
 
   // 1. Operational Alerts (During the tour)
   const [opsPrefs, setOpsPrefs] = useState(defaultOpsPrefs);
@@ -123,6 +138,14 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
     }
 
     try {
+      const permissionProbe = await primeNotificationPermissions({
+        userId,
+        requestIfNeeded: false,
+      });
+      if (permissionProbe?.success) {
+        setPermissionStatus(permissionProbe.data);
+      }
+
       const saved = await getUserPreferences(userId, { throwOnError: true });
       const nextOpsPrefs = saved?.ops
         ? { ...defaultOpsPrefs, ...saved.ops }
@@ -162,6 +185,9 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
     setSaving(false);
 
     if (result.success) {
+      if (result?.permissionState) {
+        setPermissionStatus(result.permissionState);
+      }
       setInitialOpsPrefs({ ...opsPrefs });
       setInitialMarketingPrefs({ ...marketingPrefs });
       const savedAt = new Date().toISOString();
@@ -177,6 +203,100 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
       });
     }
   };
+
+  const completeOnboarding = async (status) => {
+    if (typeof onComplete === 'function') {
+      await onComplete({
+        status,
+        audience,
+        returnTo,
+      });
+      return;
+    }
+    onBack?.();
+  };
+
+  const handleEnableNow = async () => {
+    if (!userId) return;
+    setOnboardingActionBusy(true);
+    setStatusBanner(null);
+
+    const permissionProbe = await primeNotificationPermissions({
+      userId,
+      requestIfNeeded: true,
+    });
+
+    if (!permissionProbe?.success) {
+      setOnboardingActionBusy(false);
+      setStatusBanner({
+        type: 'error',
+        message: permissionProbe?.error || 'Could not check permissions right now. Please try again.',
+      });
+      return;
+    }
+
+    setPermissionStatus(permissionProbe.data);
+
+    const fullPreferences = {
+      ops: opsPrefs,
+      marketing: marketingPrefs,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const saveResult = await saveUserPreferences(userId, fullPreferences);
+
+    if (!saveResult.success) {
+      setOnboardingActionBusy(false);
+      setStatusBanner({
+        type: 'error',
+        message: 'We could not save your preferences. Check your connection and retry.',
+      });
+      return;
+    }
+
+    if (saveResult?.permissionState) {
+      setPermissionStatus(saveResult.permissionState);
+    }
+
+    setOnboardingActionBusy(false);
+    await completeOnboarding('completed');
+  };
+
+  const handleMaybeLater = async () => {
+    await completeOnboarding('skipped');
+  };
+
+  const onboardingCopy = {
+    passenger: {
+      title: 'Stay in the loop on your tour',
+      subtitle: 'Turn on notifications so you get pickup timing changes, driver announcements, and group updates without opening the app.',
+      icon: 'bus-clock',
+      cardTitle: 'Recommended for passengers',
+      cardBody: 'We will use notifications only for the updates you choose below. You can change everything later in Settings.',
+      primaryCta: 'Enable notifications',
+      secondaryCta: 'Maybe later',
+    },
+    driver: {
+      title: 'Enable critical driver alerts',
+      subtitle: 'Driver notifications are essential for itinerary changes, operational updates, and urgent HQ messages while on the road.',
+      icon: 'steering',
+      cardTitle: 'Recommended for drivers',
+      cardBody: 'To keep operations smooth, keep Driver Announcements and Itinerary Updates switched on.',
+      primaryCta: 'Enable driver alerts',
+      secondaryCta: 'Skip for now',
+    },
+  };
+
+  const activeOnboardingCopy = onboardingCopy[audience] || onboardingCopy.passenger;
+
+  const permissionToneByState = {
+    granted: { label: 'Enabled', color: COLORS.successGreen, icon: 'check-circle-outline' },
+    denied: { label: 'Not enabled yet', color: COLORS.warning, icon: 'alert-outline' },
+    blocked: { label: 'Blocked in device settings', color: COLORS.danger, icon: 'alert-circle-outline' },
+    unavailable: { label: 'Unavailable on this device', color: COLORS.secondaryText, icon: 'cellphone-off' },
+  };
+
+  const permissionTone = permissionToneByState[permissionStatus?.state] || permissionToneByState.unavailable;
 
   const handleTestNotification = async () => {
     try {
@@ -263,14 +383,41 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.headerButton}>
-          <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.darkText} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Notifications</Text>
-        <View style={styles.headerButton} /> 
+        {isOnboarding ? <View style={styles.headerButton} /> : (
+          <TouchableOpacity onPress={onBack} style={styles.headerButton}>
+            <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.darkText} />
+          </TouchableOpacity>
+        )}
+        <Text style={styles.headerTitle}>{isOnboarding ? 'Welcome' : 'Notifications'}</Text>
+        <View style={styles.headerButton} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContainer}>
+        {isOnboarding ? (
+          <LinearGradient
+            colors={[`${COLORS.primaryBlue}F2`, COLORS.primaryLight]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.heroCard}
+          >
+            <View style={styles.heroIconWrap}>
+              <MaterialCommunityIcons name={activeOnboardingCopy.icon} size={28} color={COLORS.white} />
+            </View>
+            <Text style={styles.heroTitle}>{activeOnboardingCopy.title}</Text>
+            <Text style={styles.heroSubtitle}>{activeOnboardingCopy.subtitle}</Text>
+
+            <View style={styles.permissionBadgeRow}>
+              <MaterialCommunityIcons name={permissionTone.icon} size={16} color={permissionTone.color} />
+              <Text style={[styles.permissionBadgeText, { color: permissionTone.color }]}>{permissionTone.label}</Text>
+            </View>
+
+            <View style={styles.heroInfoCard}>
+              <Text style={styles.heroInfoTitle}>{activeOnboardingCopy.cardTitle}</Text>
+              <Text style={styles.heroInfoBody}>{activeOnboardingCopy.cardBody}</Text>
+            </View>
+          </LinearGradient>
+        ) : null}
+
         {statusBanner ? (
           <View style={[styles.statusBanner, statusBanner.type === 'error' ? styles.errorBanner : styles.successBanner]}>
             <Text style={styles.statusBannerText}>{statusBanner.message}</Text>
@@ -287,7 +434,9 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
         ) : null}
 
         <Text style={styles.introText}>
-          Customize your alerts. We promise not to spam you.
+          {isOnboarding
+            ? 'Choose what you want to hear about. You can edit this anytime later.'
+            : 'Customize your alerts. We promise not to spam you.'}
         </Text>
 
         {/* SECTION 1: ON TOUR */}
@@ -361,7 +510,7 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
           />
         </PreferenceSection>
 
-        {hasChanges ? (
+        {!isOnboarding && hasChanges ? (
           <TouchableOpacity
             style={[styles.saveButton, saving && styles.disabledButton]}
             onPress={handleSave}
@@ -373,21 +522,47 @@ export default function NotificationPreferencesScreen({ onBack, userId }) {
               <Text style={styles.saveButtonText}>Save Preferences</Text>
             )}
           </TouchableOpacity>
-        ) : (
+        ) : !isOnboarding ? (
           <View style={styles.noChangesCard}>
             <MaterialCommunityIcons name="check-circle-outline" size={16} color={COLORS.secondaryText} />
             <Text style={styles.noChangesText}>No unsaved changes</Text>
           </View>
-        )}
+        ) : null}
+
+        {isOnboarding ? (
+          <View style={styles.onboardingActionWrap}>
+            <TouchableOpacity
+              style={[styles.saveButton, (onboardingActionBusy || saving) && styles.disabledButton]}
+              onPress={handleEnableNow}
+              disabled={onboardingActionBusy || saving}
+            >
+              {(onboardingActionBusy || saving) ? (
+                <ActivityIndicator color={COLORS.white} />
+              ) : (
+                <Text style={styles.saveButtonText}>{activeOnboardingCopy.primaryCta}</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.secondaryOnboardingButton}
+              onPress={handleMaybeLater}
+              disabled={onboardingActionBusy || saving}
+            >
+              <Text style={styles.secondaryOnboardingButtonText}>{activeOnboardingCopy.secondaryCta}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
         
-        <TouchableOpacity
-          style={styles.testButton}
-          onPress={handleTestNotification}
-          disabled={saving}
-        >
-          <MaterialCommunityIcons name="bell-check-outline" size={20} color={COLORS.secondaryText} />
-          <Text style={styles.testButtonText}>Test Notification System</Text>
-        </TouchableOpacity>
+        {!isOnboarding ? (
+          <TouchableOpacity
+            style={styles.testButton}
+            onPress={handleTestNotification}
+            disabled={saving}
+          >
+            <MaterialCommunityIcons name="bell-check-outline" size={20} color={COLORS.secondaryText} />
+            <Text style={styles.testButtonText}>Test Notification System</Text>
+          </TouchableOpacity>
+        ) : null}
 
         {testStatus.type ? (
           <View style={[
@@ -454,6 +629,67 @@ const styles = StyleSheet.create({
   scrollContainer: {
     padding: 20,
     paddingBottom: 40,
+  },
+  heroCard: {
+    borderRadius: 18,
+    padding: 20,
+    marginBottom: 20,
+    ...SHADOWS.lg,
+  },
+  heroIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  heroTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: COLORS.white,
+    lineHeight: 29,
+  },
+  heroSubtitle: {
+    marginTop: 10,
+    fontSize: 15,
+    color: 'rgba(255,255,255,0.95)',
+    lineHeight: 22,
+  },
+  permissionBadgeRow: {
+    marginTop: 14,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: COLORS.white,
+  },
+  permissionBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  heroInfoCard: {
+    marginTop: 14,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.28)',
+    padding: 12,
+  },
+  heroInfoTitle: {
+    color: COLORS.white,
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  heroInfoBody: {
+    marginTop: 6,
+    color: 'rgba(255,255,255,0.95)',
+    fontSize: 13,
+    lineHeight: 18,
   },
   introText: {
     fontSize: 16,
@@ -581,6 +817,24 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontSize: 18,
     fontWeight: '700',
+  },
+  onboardingActionWrap: {
+    marginTop: 8,
+  },
+  secondaryOnboardingButton: {
+    marginTop: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingVertical: 12,
+    backgroundColor: COLORS.white,
+  },
+  secondaryOnboardingButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: COLORS.secondaryText,
   },
   // New Styles for Test Button
   testButton: {
