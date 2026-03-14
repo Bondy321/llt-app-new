@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, Text, StyleSheet, Animated, Easing, PanResponder } from 'react-native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Import Firebase services
@@ -39,39 +39,6 @@ const COLORS = {
   darkText: THEME.textPrimary,
   errorRed: THEME.error,
   appBackground: THEME.background,
-};
-
-const SYNC_SEVERITY_TOKENS = {
-  critical: {
-    backgroundColor: THEME.sync.critical.background,
-    borderColor: THEME.sync.critical.border,
-    textColor: THEME.sync.critical.foreground,
-    detailColor: THEME.sync.critical.foregroundMuted,
-  },
-  warning: {
-    backgroundColor: THEME.sync.warning.background,
-    borderColor: THEME.sync.warning.border,
-    textColor: THEME.sync.warning.foreground,
-    detailColor: THEME.sync.warning.foregroundMuted,
-  },
-  info: {
-    backgroundColor: THEME.sync.info.background,
-    borderColor: THEME.sync.info.border,
-    textColor: THEME.sync.info.foreground,
-    detailColor: THEME.sync.info.foregroundMuted,
-  },
-  success: {
-    backgroundColor: THEME.sync.success.background,
-    borderColor: THEME.sync.success.border,
-    textColor: THEME.sync.success.foreground,
-    detailColor: THEME.sync.success.foregroundMuted,
-  },
-  default: {
-    backgroundColor: THEME.sync.info.background,
-    borderColor: THEME.sync.info.border,
-    textColor: THEME.sync.info.foreground,
-    detailColor: THEME.sync.info.foregroundMuted,
-  },
 };
 
 const SESSION_KEYS = {
@@ -116,6 +83,14 @@ const createSessionStorage = () => {
 const { storage: SessionStorage, mode: storageMode } = createSessionStorage();
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppContent />
+    </SafeAreaProvider>
+  );
+}
+
+function AppContent() {
   const [initializing, setInitializing] = useState(true);
   const [user, setUser] = useState(null);
   const [authError, setAuthError] = useState(null);
@@ -179,11 +154,12 @@ export default function App() {
 
   const diagnosticsTourId = tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
   const diagnosticsRole = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
-  const { isConnected, firebaseConnected, unifiedSyncStatus } = useDiagnostics({
+  const { isConnected, firebaseConnected } = useDiagnostics({
     onForeground: refreshAppData,
     activeTourId: diagnosticsTourId,
     role: diagnosticsRole,
   });
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     logger.info('App', 'Application starting', {
@@ -505,51 +481,23 @@ export default function App() {
 
   if (initializing) {
     return (
-      <View style={styles.loadingContainer}>
+      <SafeAreaView style={styles.loadingContainer} edges={['top']}>
         <ActivityIndicator size="large" color={COLORS.primaryBlue} />
         <Text style={styles.loadingText}>Connecting to Tour Services...</Text>
-      </View>
+      </SafeAreaView>
     );
   }
 
   if (authError) {
     return (
-      <View style={styles.loadingContainer}>
-        <MaterialCommunityIcons name="alert-circle-outline" size={60} color={COLORS.errorRed} />
+      <SafeAreaView style={styles.loadingContainer} edges={['top']}>
+        <Text style={styles.errorIcon}>⚠️</Text>
         <Text style={styles.errorTitle}>Connection Error</Text>
         <Text style={styles.errorText}>{authError}</Text>
         <Text style={styles.errorDetail}>Please check your internet connection and restart the app.</Text>
-      </View>
+      </SafeAreaView>
     );
   }
-
-  const syncTokens = SYNC_SEVERITY_TOKENS[unifiedSyncStatus?.severity] || SYNC_SEVERITY_TOKENS.default;
-  const syncSummary = unifiedSyncStatus?.syncSummary || null;
-  const syncOutcome = syncSummary ? offlineSyncService.formatSyncOutcome(syncSummary) : null;
-  const hasSyncCounts = syncSummary
-    ? [syncSummary.syncedCount, syncSummary.pendingCount, syncSummary.failedCount].some((count) => Number(count) > 0)
-    : false;
-  const shouldShowOutcome = Boolean(syncOutcome) && (hasSyncCounts || syncSummary?.source === 'manual-refresh');
-  const showLastSyncLine = unifiedSyncStatus?.showLastSync && syncSummary?.lastSuccessAt;
-  const lastSyncRelative = showLastSyncLine
-    ? offlineSyncService.formatLastSyncRelative(syncSummary.lastSuccessAt)
-    : null;
-
-  const UnifiedSyncBanner = () => (
-    <View pointerEvents="none" style={[styles.syncBanner, { backgroundColor: syncTokens.backgroundColor, borderColor: syncTokens.borderColor }]}>
-      <MaterialCommunityIcons name={unifiedSyncStatus?.icon || 'cloud-sync'} size={20} color={syncTokens.textColor} />
-      <View style={styles.syncTextContainer}>
-        {shouldShowOutcome && (
-          <Text style={[styles.syncPrimaryLine, { color: syncTokens.textColor }]}>{syncOutcome}</Text>
-        )}
-        <Text style={[styles.syncLabel, { color: syncTokens.textColor }]}>{unifiedSyncStatus?.label || 'Sync status'}</Text>
-        <Text style={[styles.syncDescription, { color: syncTokens.detailColor }]}>{unifiedSyncStatus?.description || ''}</Text>
-        {showLastSyncLine && (
-          <Text style={[styles.syncDetail, { color: syncTokens.detailColor }]}>Last synced: {lastSyncRelative}</Text>
-        )}
-      </View>
-    </View>
-  );
 
   const renderScreen = () => {
     const screenProps = { isConnected, logger };
@@ -679,9 +627,8 @@ case 'Itinerary':
   return (
     <>
       <StatusBar style="light" backgroundColor={COLORS.primaryBlue} />
-      <UnifiedSyncBanner />
       {loginTransition ? (
-        <View style={styles.loginTransitionOverlay}>
+        <View style={[styles.loginTransitionOverlay, { top: insets.top + 8 }]}>
           <Text style={styles.loginTransitionText}>{loginTransition.message}</Text>
           <View style={styles.loginTransitionTrack}>
             <Animated.View
@@ -709,30 +656,12 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.appBackground, padding: 30 },
   loadingText: { marginTop: 15, fontSize: 16, color: COLORS.darkText, opacity: 0.8 },
   errorTitle: { fontSize: 22, fontWeight: 'bold', color: COLORS.errorRed, marginTop: 20, marginBottom: 10, textAlign: 'center' },
+  errorIcon: { fontSize: 52 },
   screenContainer: { flex: 1 },
   errorText: { fontSize: 16, color: COLORS.darkText, textAlign: 'center', marginBottom: 5 },
   errorDetail: { fontSize: 14, color: COLORS.darkText, opacity: 0.6, textAlign: 'center', marginTop: 15 },
-  syncBanner: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'flex-start',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 1000,
-    borderBottomWidth: 1,
-  },
-  syncTextContainer: { marginLeft: 8, flex: 1 },
-  syncPrimaryLine: { fontSize: 12, fontWeight: '700' },
-  syncLabel: { fontSize: 14, fontWeight: '600' },
-  syncDescription: { fontSize: 12, marginTop: 1 },
-  syncDetail: { fontSize: 12, marginTop: 2 },
   loginTransitionOverlay: {
     position: 'absolute',
-    top: 52,
     left: 12,
     right: 12,
     zIndex: 1001,
