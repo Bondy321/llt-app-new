@@ -72,12 +72,21 @@ const isValidPushToken = (token) => {
 /**
  * Safely removes invalid push tokens from user profiles
  */
-const removeInvalidToken = async (userId, token) => {
+const removeInvalidToken = async (userId, token, options = {}) => {
+  const { reason = 'INVALID_TOKEN' } = options;
+  const nowIso = new Date().toISOString();
+
   try {
-    await admin.database().ref(`users/${userId}/pushToken`).remove();
-    log.info('Removed invalid token', { userId });
+    await admin.database().ref(`users/${userId}`).update({
+      pushToken: null,
+      pushTokenStatus: 'INVALID',
+      pushTokenInvalidReason: reason,
+      pushTokenUpdatedAt: nowIso,
+      lastUpdated: nowIso,
+    });
+    log.info('Removed invalid token', { userId, reason });
   } catch (error) {
-    log.error('Failed to remove invalid token', error, { userId });
+    log.error('Failed to remove invalid token', error, { userId, reason });
   }
 };
 
@@ -258,6 +267,27 @@ const selectNotificationRecipients = ({
   }
 
   return { validRecipients, invalidTokens };
+};
+
+const collectExpoTokenFailures = (ticketChunk = [], messageChunk = []) => {
+  const failures = [];
+
+  ticketChunk.forEach((ticket, index) => {
+    if (ticket?.status !== 'error') return;
+
+    const errorCode = typeof ticket?.details?.error === 'string'
+      ? ticket.details.error
+      : null;
+
+    if (errorCode === 'DeviceNotRegistered') {
+      failures.push({
+        token: messageChunk[index]?.to || null,
+        errorCode,
+      });
+    }
+  });
+
+  return failures;
 };
 
 /**
@@ -866,9 +896,10 @@ exports.sendChatNotification = onValueCreated(
       for (const chunk of chunks) {
         try {
           const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+          const deviceNotRegisteredFailures = collectExpoTokenFailures(ticketChunk, chunk);
 
           // Check for errors in tickets
-          ticketChunk.forEach((ticket, index) => {
+          ticketChunk.forEach((ticket) => {
             if (ticket.status === 'error') {
               errorCount++;
               log.error("Notification ticket error", {
@@ -879,6 +910,14 @@ exports.sendChatNotification = onValueCreated(
               successCount++;
             }
           });
+
+          if (deviceNotRegisteredFailures.length > 0) {
+            await Promise.all(deviceNotRegisteredFailures.map(async ({ token, errorCode }) => {
+              const recipient = validRecipients.find((candidate) => candidate?.userData?.pushToken === token);
+              if (!recipient?.userId) return;
+              await removeInvalidToken(recipient.userId, token, { reason: errorCode || 'DEVICE_NOT_REGISTERED' });
+            }));
+          }
         } catch (chunkError) {
           errorCount += chunk.length;
           log.error("Error sending notification chunk", chunkError, { tourId, chunkSize: chunk.length });
@@ -1031,6 +1070,7 @@ exports.sendItineraryNotification = onValueUpdated(
       for (const chunk of chunks) {
         try {
           const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+          const deviceNotRegisteredFailures = collectExpoTokenFailures(ticketChunk, chunk);
 
           // Check for errors in tickets
           ticketChunk.forEach((ticket) => {
@@ -1044,6 +1084,14 @@ exports.sendItineraryNotification = onValueUpdated(
               successCount++;
             }
           });
+
+          if (deviceNotRegisteredFailures.length > 0) {
+            await Promise.all(deviceNotRegisteredFailures.map(async ({ token, errorCode }) => {
+              const recipient = validRecipients.find((candidate) => candidate?.userData?.pushToken === token);
+              if (!recipient?.userId) return;
+              await removeInvalidToken(recipient.userId, token, { reason: errorCode || 'DEVICE_NOT_REGISTERED' });
+            }));
+          }
         } catch (chunkError) {
           errorCount += chunk.length;
           log.error("Error sending notification chunk", chunkError, { tourId, chunkSize: chunk.length });

@@ -135,6 +135,7 @@ test('saveUserPreferences handles denied permission path without throwing and ma
   assert.equal(updates.length, 2);
   assert.equal(updates[0].pushPermissionState, 'denied');
   assert.equal(updates[1].pushTokenStatus, 'UNAVAILABLE');
+  assert.equal(updates.some((entry) => entry.__tokenRequestOptions), false);
   assert.equal(updates[1].pushPermissionState, 'denied');
   assert.equal(updates[1].preferences.chatNotifications, true);
   assert.equal(updates[1].preferences.itineraryNotifications, true);

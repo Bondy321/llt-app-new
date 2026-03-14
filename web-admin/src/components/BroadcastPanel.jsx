@@ -54,6 +54,15 @@ const messageTemplates = [
   { value: 'custom', label: 'Custom Message', message: '' },
 ];
 
+const normalizeTourIdForPath = (value) => {
+  if (typeof value !== 'string') return '';
+  return value.trim();
+};
+
+const isValidFirebaseKeySegment = (value) => {
+  return typeof value === 'string' && value.length > 0 && !/[./$#\[\]]/.test(value);
+};
+
 // Recent Broadcast Item Component
 function normalizeBroadcastTimestamp(timestamp) {
   return toEpochMsStrict(timestamp);
@@ -121,8 +130,14 @@ export function BroadcastPanel() {
       return undefined;
     }
 
+    const normalizedTourId = normalizeTourIdForPath(tourId);
+    if (!isValidFirebaseKeySegment(normalizedTourId)) {
+      setBroadcastHistory([]);
+      return undefined;
+    }
+
     const historyQuery = query(
-      ref(db, `broadcasts/${tourId}`),
+      ref(db, `broadcasts/${normalizedTourId}`),
       orderByChild('createdAtMs'),
       limitToLast(25)
     );
@@ -142,7 +157,7 @@ export function BroadcastPanel() {
   // Tour options for Select
   const tourOptions = Object.entries(tours).map(([id, tour]) => ({
     value: id,
-    label: `${id} - ${tour.driverName || 'TBA'}`,
+    label: `${id} - ${tour.name || tour.driverName || 'TBA'}`,
   }));
 
   // Handle template change
@@ -158,7 +173,9 @@ export function BroadcastPanel() {
   const handleSend = async (e) => {
     e.preventDefault();
 
-    if (!tourId) {
+    const normalizedTourId = normalizeTourIdForPath(tourId);
+
+    if (!normalizedTourId) {
       notifications.show({
         title: 'Tour Required',
         message: 'Please select a tour to broadcast to',
@@ -176,10 +193,37 @@ export function BroadcastPanel() {
       return;
     }
 
+    if (!isValidFirebaseKeySegment(normalizedTourId)) {
+      notifications.show({
+        title: 'Invalid Tour ID',
+        message: 'Selected tour ID cannot be used for broadcast delivery.',
+        color: 'red',
+      });
+      return;
+    }
+
+    if (!auth.currentUser?.uid) {
+      notifications.show({
+        title: 'Sign-in Required',
+        message: 'Please sign in again before sending broadcasts.',
+        color: 'red',
+      });
+      return;
+    }
+
+    if (message.trim().length > 2000) {
+      notifications.show({
+        title: 'Message Too Long',
+        message: 'Broadcast messages must be 2000 characters or fewer.',
+        color: 'red',
+      });
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const broadcastsRef = ref(db, `broadcasts/${tourId}`);
+      const broadcastsRef = ref(db, `broadcasts/${normalizedTourId}`);
       const newBroadcastRef = push(broadcastsRef);
 
       const createdAtMs = Date.now();
@@ -193,7 +237,7 @@ export function BroadcastPanel() {
 
       notifications.show({
         title: 'Broadcast Sent!',
-        message: `Announcement sent to tour ${tourId}`,
+        message: `Announcement sent to tour ${normalizedTourId}`,
         color: 'green',
         icon: <IconCheck size={16} />,
       });
@@ -324,7 +368,7 @@ export function BroadcastPanel() {
                 size="lg"
                 color="orange"
                 leftSection={<IconSend size={18} />}
-                disabled={!tourId || !message.trim()}
+                disabled={!tourId || !message.trim() || loading || !auth.currentUser?.uid}
               >
                 Send Broadcast
               </Button>

@@ -41,6 +41,9 @@ test('Cloud function notification path keeps chunked send and targeted profile f
   assert.match(src, /chunkArrayDeterministically/);
   assert.match(src, /expo\.chunkPushNotifications/);
   assert.match(src, /invalidTokens/);
+  assert.match(src, /collectExpoTokenFailures/);
+  assert.match(src, /DeviceNotRegistered/);
+  assert.match(src, /pushTokenStatus: 'INVALID'/);
 });
 
 test('useDiagnostics keeps probe throttling windows and duplicate-outcome log guard', () => {

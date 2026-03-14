@@ -355,6 +355,23 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
   }
 };
 
+const buildUnavailableTokenPatch = ({
+  nowIso,
+  existingUserData,
+  permissionState,
+  mergedPreferences,
+}) => ({
+  pushTokenStatus: 'UNAVAILABLE',
+  pushTokenProvider: existingUserData.pushTokenProvider || 'expo',
+  pushTokenUpdatedAt: nowIso,
+  pushPermissionState: permissionState.state,
+  pushPermissionCanAskAgain: permissionState.canAskAgain,
+  pushPermissionUpdatedAt: nowIso,
+  preferences: mergedPreferences,
+  lastUpdated: nowIso,
+  deviceOS: Platform.OS,
+});
+
 /**
  * Saves the user's token and preferences to Firebase.
  * Enhanced with validation and better error handling
@@ -443,28 +460,39 @@ export const saveUserPreferences = async (userId, preferences) => {
         description: permissionProbe?.error || permissionStateDescriptions.unavailable,
       };
 
-    // 2. Get the token (will ask for permission if not already granted)
-    const token = await registerForPushNotificationsAsync();
     const nowIso = new Date().toISOString();
 
-    if (!token) {
-      // Preserve existing token details unless they are absent, while making status explicit
-      const tokenStatusPatch = {
-        pushTokenStatus: 'UNAVAILABLE',
-        pushTokenProvider: existingUserData.pushTokenProvider || 'expo',
-        pushTokenUpdatedAt: existingUserData.pushTokenUpdatedAt || nowIso,
-      };
-
+    if (!permissionState.granted) {
       await Promise.race([
-        userRef.update({
-          preferences: mergedPreferences,
-          pushPermissionState: permissionState.state,
-          pushPermissionCanAskAgain: permissionState.canAskAgain,
-          pushPermissionUpdatedAt: nowIso,
-          lastUpdated: nowIso,
-          deviceOS: Platform.OS,
-          ...tokenStatusPatch,
-        }),
+        userRef.update(buildUnavailableTokenPatch({
+          nowIso,
+          existingUserData,
+          permissionState,
+          mergedPreferences,
+        })),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Preferences save timeout')), 10000)
+        )
+      ]);
+
+      return {
+        success: true,
+        warning: 'Preferences saved, but notifications are disabled (no permission or not on physical device)',
+        permissionState,
+      };
+    }
+
+    // 2. Get the token (permission already granted above)
+    const token = await registerForPushNotificationsAsync();
+
+    if (!token) {
+      await Promise.race([
+        userRef.update(buildUnavailableTokenPatch({
+          nowIso,
+          existingUserData,
+          permissionState,
+          mergedPreferences,
+        })),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Preferences save timeout')), 10000)
         )
