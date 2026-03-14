@@ -96,11 +96,13 @@ test('saveUserPreferences normalizes legacy preference shape and persists token 
   });
 
   assert.equal(result.success, true);
-  assert.equal(updates.length, 2);
-  assert.deepEqual(updates[0].__tokenRequestOptions, { projectId: 'test-project-id' });
-  assert.equal(updates[1].pushTokenStatus, 'ACTIVE');
-  assert.equal(updates[1].pushTokenProvider, 'expo');
-  assert.deepEqual(updates[1].preferences, {
+  assert.equal(updates.length, 3);
+  assert.equal(updates[0].pushPermissionState, 'granted');
+  assert.deepEqual(updates[1].__tokenRequestOptions, { projectId: 'test-project-id' });
+  assert.equal(updates[2].pushTokenStatus, 'ACTIVE');
+  assert.equal(updates[2].pushTokenProvider, 'expo');
+  assert.equal(updates[2].pushPermissionState, 'granted');
+  assert.deepEqual(updates[2].preferences, {
     chatNotifications: true,
     itineraryNotifications: false,
     ops: {
@@ -130,13 +132,30 @@ test('saveUserPreferences handles denied permission path without throwing and ma
 
   assert.equal(result.success, true);
   assert.ok(result.warning.includes('notifications are disabled'));
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0].pushTokenStatus, 'UNAVAILABLE');
-  assert.equal(updates[0].preferences.chatNotifications, true);
-  assert.equal(updates[0].preferences.itineraryNotifications, true);
-  assert.equal(updates[0].preferences.ops.group_chat, true);
-  assert.equal(updates[0].preferences.ops.itinerary_changes, true);
-  assert.equal(updates[0].preferences.marketing.mystery_tours, true);
+  assert.equal(updates.length, 2);
+  assert.equal(updates[0].pushPermissionState, 'denied');
+  assert.equal(updates[1].pushTokenStatus, 'UNAVAILABLE');
+  assert.equal(updates[1].pushPermissionState, 'denied');
+  assert.equal(updates[1].preferences.chatNotifications, true);
+  assert.equal(updates[1].preferences.itineraryNotifications, true);
+  assert.equal(updates[1].preferences.ops.group_chat, true);
+  assert.equal(updates[1].preferences.ops.itinerary_changes, true);
+  assert.equal(updates[1].preferences.marketing.mystery_tours, true);
+});
+
+test('primeNotificationPermissions reports denied state when permission can still be requested later', async () => {
+  const { service, setPermission } = buildNotificationService({ permission: 'undetermined' });
+  setPermission('undetermined');
+
+  const result = await service.primeNotificationPermissions({
+    userId: 'user-4',
+    requestIfNeeded: false,
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.data.state, 'denied');
+  assert.equal(result.data.granted, false);
+  assert.equal(result.data.canAskAgain, true);
 });
 
 test('registerForPushNotificationsAsync accepts iOS provisional permissions and still returns a token', async () => {

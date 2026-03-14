@@ -102,6 +102,81 @@ const isGrantedNotificationPermission = (permissionResponse) => {
     || iosPermissionStatus === Notifications.IosAuthorizationStatus?.EPHEMERAL;
 };
 
+const resolvePermissionState = (permissionResponse) => {
+  if (isGrantedNotificationPermission(permissionResponse)) {
+    return 'granted';
+  }
+
+  const canAskAgain = permissionResponse?.canAskAgain;
+  if (canAskAgain === false) {
+    return 'blocked';
+  }
+
+  return 'denied';
+};
+
+const permissionStateDescriptions = {
+  granted: 'Notifications are enabled.',
+  denied: 'Notifications are not enabled yet.',
+  blocked: 'Notifications are blocked in device settings.',
+  unavailable: 'Notifications are unavailable on this device.',
+};
+
+const persistPermissionState = async ({ userId, permissionState, canAskAgain }) => {
+  if (!userId || !realtimeDb) {
+    return;
+  }
+
+  try {
+    const nowIso = new Date().toISOString();
+    await realtimeDb.ref(`users/${userId}`).update({
+      pushPermissionState: permissionState,
+      pushPermissionCanAskAgain: typeof canAskAgain === 'boolean' ? canAskAgain : null,
+      pushPermissionUpdatedAt: nowIso,
+      lastUpdated: nowIso,
+    });
+  } catch (error) {
+    console.warn('Failed to persist push permission state:', error?.message || error);
+  }
+};
+
+export const primeNotificationPermissions = async ({ userId = null, requestIfNeeded = true } = {}) => {
+  try {
+    if (!Device.isDevice) {
+      const unavailable = {
+        state: 'unavailable',
+        granted: false,
+        canAskAgain: false,
+        status: 'unavailable',
+        description: permissionStateDescriptions.unavailable,
+      };
+      await persistPermissionState({ userId, permissionState: unavailable.state, canAskAgain: unavailable.canAskAgain });
+      return { success: true, data: unavailable };
+    }
+
+    let permissionResponse = await Notifications.getPermissionsAsync();
+
+    if (requestIfNeeded && !isGrantedNotificationPermission(permissionResponse) && permissionResponse?.canAskAgain !== false) {
+      permissionResponse = await Notifications.requestPermissionsAsync();
+    }
+
+    const state = resolvePermissionState(permissionResponse);
+    const result = {
+      state,
+      granted: state === 'granted',
+      canAskAgain: permissionResponse?.canAskAgain !== false,
+      status: permissionResponse?.status || 'unknown',
+      description: permissionStateDescriptions[state] || permissionStateDescriptions.denied,
+    };
+
+    await persistPermissionState({ userId, permissionState: result.state, canAskAgain: result.canAskAgain });
+    return { success: true, data: result };
+  } catch (error) {
+    console.error('primeNotificationPermissions failed:', error);
+    return { success: false, error: error?.message || 'Permission check failed' };
+  }
+};
+
 /**
  * Normalizes legacy preference payloads into one stable schema.
  */
@@ -356,7 +431,19 @@ export const saveUserPreferences = async (userId, preferences) => {
       marketing: mergedMarketing,
     };
 
-    // 1. Get the token (will ask for permission if not already granted)
+    // 1. Get a normalized permission state and request prompt if needed
+    const permissionProbe = await primeNotificationPermissions({ userId: validatedUserId, requestIfNeeded: true });
+    const permissionState = permissionProbe?.success
+      ? permissionProbe.data
+      : {
+        state: 'unavailable',
+        granted: false,
+        canAskAgain: false,
+        status: 'unavailable',
+        description: permissionProbe?.error || permissionStateDescriptions.unavailable,
+      };
+
+    // 2. Get the token (will ask for permission if not already granted)
     const token = await registerForPushNotificationsAsync();
     const nowIso = new Date().toISOString();
 
@@ -371,6 +458,9 @@ export const saveUserPreferences = async (userId, preferences) => {
       await Promise.race([
         userRef.update({
           preferences: mergedPreferences,
+          pushPermissionState: permissionState.state,
+          pushPermissionCanAskAgain: permissionState.canAskAgain,
+          pushPermissionUpdatedAt: nowIso,
           lastUpdated: nowIso,
           deviceOS: Platform.OS,
           ...tokenStatusPatch,
@@ -382,11 +472,12 @@ export const saveUserPreferences = async (userId, preferences) => {
 
       return {
         success: true,
-        warning: 'Preferences saved, but notifications are disabled (no permission or not on physical device)'
+        warning: 'Preferences saved, but notifications are disabled (no permission or not on physical device)',
+        permissionState,
       };
     }
 
-    // 2. Save token and preferences
+    // 3. Save token and preferences
     const appVersionMetadata = resolveAppVersionMetadata({
       constants: Constants,
       platform: Platform,
@@ -397,6 +488,9 @@ export const saveUserPreferences = async (userId, preferences) => {
       pushTokenStatus: 'ACTIVE',
       pushTokenUpdatedAt: nowIso,
       pushTokenProvider: 'expo',
+      pushPermissionState: permissionState.state,
+      pushPermissionCanAskAgain: permissionState.canAskAgain,
+      pushPermissionUpdatedAt: nowIso,
       preferences: mergedPreferences,
       lastUpdated: nowIso,
       deviceOS: Platform.OS,
@@ -413,7 +507,7 @@ export const saveUserPreferences = async (userId, preferences) => {
       )
     ]);
 
-    return { success: true };
+    return { success: true, permissionState };
   } catch (error) {
     console.error('Error saving preferences:', error);
     return { success: false, error: error.message };

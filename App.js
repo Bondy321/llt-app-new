@@ -78,7 +78,10 @@ const SESSION_KEYS = {
   TOUR_DATA: '@LLT:tourData',
   BOOKING_DATA: '@LLT:bookingData',
   LAST_SCREEN: '@LLT:lastScreen',
+  NOTIFICATION_ONBOARDING: '@LLT:notificationOnboarding',
 };
+
+const NOTIFICATION_ONBOARDING_REMINDER_MS = 24 * 60 * 60 * 1000;
 
 const { normalizePassengerEmail, resolveOfflineLoginFromCache } = offlineLoginResolver;
 
@@ -246,11 +249,60 @@ export default function App() {
         setTourData(tourData);
         if (tourData) setTourCode(tourData.tourCode);
         
-        setCurrentScreen(screen === 'Login' ? (bookingData.id && bookingData.id.startsWith('D-') ? 'DriverHome' : 'TourHome') : screen);
+        const fallbackScreen = bookingData.id && bookingData.id.startsWith('D-') ? 'DriverHome' : 'TourHome';
+        const restoredScreen = screen === 'Login' || screen === 'NotificationPreferences' ? fallbackScreen : screen;
+        setCurrentScreen(restoredScreen);
       }
     } catch (error) {
       logger.warn('Session', 'Failed to restore session', { error: error.message });
     }
+  };
+
+  const loadNotificationOnboardingState = async () => {
+    try {
+      const raw = await SessionStorage.multiGet([SESSION_KEYS.NOTIFICATION_ONBOARDING]);
+      const serialized = raw?.[0]?.[1];
+      if (!serialized) return null;
+      const parsed = JSON.parse(serialized);
+      if (!parsed || typeof parsed !== 'object') return null;
+      return parsed;
+    } catch (error) {
+      logger.warn('NotificationOnboarding', 'Failed to load onboarding state', { error: error.message });
+      return null;
+    }
+  };
+
+  const saveNotificationOnboardingState = async (nextState = {}) => {
+    try {
+      await SessionStorage.multiSet([
+        [SESSION_KEYS.NOTIFICATION_ONBOARDING, JSON.stringify(nextState)],
+      ]);
+    } catch (error) {
+      logger.warn('NotificationOnboarding', 'Failed to persist onboarding state', { error: error.message });
+    }
+  };
+
+  const shouldShowNotificationOnboarding = async ({ userId, audience }) => {
+    const savedState = await loadNotificationOnboardingState();
+    if (!savedState) return true;
+
+    const sameUser = savedState?.userId && userId && savedState.userId === userId;
+    const sameAudience = savedState?.audience === audience;
+    const status = savedState?.status;
+
+    if (status === 'completed' && sameUser && sameAudience) {
+      return false;
+    }
+
+    if (status === 'skipped' && sameUser && sameAudience) {
+      const skippedAtMs = Date.parse(savedState?.updatedAt || '');
+      if (Number.isFinite(skippedAtMs)) {
+        return (Date.now() - skippedAtMs) >= NOTIFICATION_ONBOARDING_REMINDER_MS;
+      }
+      return false;
+    }
+
+    return true;
   };
 
   const saveSession = async (overrides = {}) => {
@@ -309,12 +361,19 @@ export default function App() {
       startLoginTransition({ targetScreen, durationMs });
     }
 
+    const onboardingAudience = userType === 'driver' ? 'driver' : 'passenger';
+    const shouldOnboardNotifications = await shouldShowNotificationOnboarding({
+      userId: user?.uid,
+      audience: onboardingAudience,
+    });
+    const postLoginScreen = shouldOnboardNotifications ? 'NotificationPreferences' : targetScreen;
+
     if (userType === 'driver') {
       logger.info('Auth', 'Driver Logged In', { driverId: maskIdentifier(bookingOrDriverData.id) });
       setTourCode(tourDetails?.tourCode || '');
       setTourData(tourDetails || null);
       setBookingData(bookingOrDriverData);
-      setCurrentScreen('DriverHome');
+      setCurrentScreen(postLoginScreen);
       if (tourDetails?.id) {
         await offlineSyncService.saveTourPack(tourDetails.id, 'driver', {
           tour: tourDetails,
@@ -325,8 +384,16 @@ export default function App() {
       await saveSession({
         tourData: tourDetails || null,
         bookingData: bookingOrDriverData,
-        currentScreen: 'DriverHome',
+        currentScreen: postLoginScreen,
       });
+
+      if (shouldOnboardNotifications) {
+        setScreenParams({
+          isOnboarding: true,
+          audience: 'driver',
+          returnTo: 'DriverHome',
+        });
+      }
       return;
     }
 
@@ -348,7 +415,7 @@ export default function App() {
       }
     }
 
-    setCurrentScreen('TourHome');
+    setCurrentScreen(postLoginScreen);
     if (tourDetails?.id) {
       await offlineSyncService.saveTourPack(tourDetails.id, 'passenger', {
         tour: tourDetails,
@@ -361,9 +428,28 @@ export default function App() {
     await saveSession({
       tourData: tourDetails || null,
       bookingData: normalizedBookingData,
-      currentScreen: 'TourHome',
+      currentScreen: postLoginScreen,
     });
 
+    if (shouldOnboardNotifications) {
+      setScreenParams({
+        isOnboarding: true,
+        audience: 'passenger',
+        returnTo: 'TourHome',
+      });
+    }
+
+  };
+
+  const handleNotificationOnboardingComplete = async ({ status, audience, returnTo }) => {
+    const normalizedStatus = status === 'completed' ? 'completed' : 'skipped';
+    await saveNotificationOnboardingState({
+      status: normalizedStatus,
+      audience,
+      userId: user?.uid || null,
+      updatedAt: new Date().toISOString(),
+    });
+    navigateTo(returnTo || homeScreen, { from: 'NotificationPreferences', onboardingCompleted: normalizedStatus === 'completed' });
   };
 
   // Updated navigation to accept params
@@ -574,10 +660,15 @@ case 'Itinerary':
         const mapTourId = screenParams.tourId || tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
         return <MapScreen {...screenProps} onBack={() => navigateTo('TourHome')} tourId={mapTourId} tourData={tourData} />;
       case 'NotificationPreferences':
+        const notificationReturnTarget = screenParams?.returnTo || (isDriverSession ? 'DriverHome' : 'TourHome');
         return (
           <NotificationPreferencesScreen
-            onBack={() => navigateTo('TourHome')}
+            onBack={() => navigateTo(notificationReturnTarget, { from: 'NotificationPreferences' })}
             userId={user?.uid}
+            isOnboarding={screenParams?.isOnboarding === true}
+            audience={screenParams?.audience || (isDriverSession ? 'driver' : 'passenger')}
+            returnTo={notificationReturnTarget}
+            onComplete={handleNotificationOnboardingComplete}
           />
         );
       default:
