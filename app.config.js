@@ -1,19 +1,112 @@
-const appConfig = require('./app.json');
-
 const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 module.exports = {
-  ...appConfig,
   expo: {
-    ...appConfig.expo,
-    android: {
-      ...appConfig.expo.android,
+    name: 'Loch Lomond Travel',
+    slug: 'loch-lomond-travel',
+    version: '1.0.0',
+    orientation: 'portrait',
+    icon: './assets/images/outward_app_icon.png',
+    userInterfaceStyle: 'light',
+    splash: {
+      image: './assets/splash.png',
+      resizeMode: 'contain',
+      backgroundColor: '#007DC3',
+    },
+    assetBundlePatterns: ['**/*'],
+    ios: {
+      supportsTablet: true,
+      bundleIdentifier: 'com.lochlomondtravel.tourapp',
+      buildNumber: '1',
+      infoPlist: {
+        NSPhotoLibraryUsageDescription:
+          'Loch Lomond Travel needs access to your photo library to save and share tour memories.',
+        NSCameraUsageDescription:
+          'Loch Lomond Travel needs camera access to capture tour moments.',
+        NSLocationWhenInUseUsageDescription:
+          'Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.',
+        NSLocationAlwaysAndWhenInUseUsageDescription:
+          'Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.',
+        UIBackgroundModes: ['location', 'fetch', 'remote-notification'],
+      },
       config: {
-        ...appConfig.expo.android?.config,
+        usesNonExemptEncryption: false,
+      },
+    },
+    android: {
+      adaptiveIcon: {
+        foregroundImage: './assets/images/outward_app_icon.png',
+        backgroundColor: '#007DC3',
+      },
+      package: 'com.lochlomondtravel.tourapp',
+      versionCode: 1,
+      permissions: [
+        'CAMERA',
+        'READ_EXTERNAL_STORAGE',
+        'WRITE_EXTERNAL_STORAGE',
+        'ACCESS_COARSE_LOCATION',
+        'ACCESS_FINE_LOCATION',
+        'ACCESS_BACKGROUND_LOCATION',
+        'RECEIVE_BOOT_COMPLETED',
+        'VIBRATE',
+      ],
+      config: {
         googleMaps: {
           apiKey: googleMapsApiKey || '',
         },
       },
     },
+    web: {
+      favicon: './assets/favicon.png',
+    },
+    plugins: [
+      'expo-font',
+      'expo-secure-store',
+      [
+        'expo-build-properties',
+        {
+          ios: {
+            deploymentTarget: '15.1',
+          },
+        },
+      ],
+      [
+        'expo-location',
+        {
+          locationAlwaysAndWhenInUsePermission:
+            'Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.',
+          locationWhenInUsePermission:
+            'Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.',
+        },
+      ],
+      [
+        'expo-image-picker',
+        {
+          photosPermission:
+            'Loch Lomond Travel needs access to your photo library to save and share tour memories.',
+          cameraPermission:
+            'Loch Lomond Travel needs camera access to capture tour moments.',
+        },
+      ],
+      [
+        'expo-notifications',
+        {
+          color: '#007DC3',
+        },
+      ],
+    ],
+    updates: {
+      fallbackToCacheTimeout: 0,
+      url: 'https://u.expo.dev/1b1ae41f-9096-4e7d-887c-b617613cf603',
+    },
+    runtimeVersion: {
+      policy: 'appVersion',
+    },
+    extra: {
+      eas: {
+        projectId: '1b1ae41f-9096-4e7d-887c-b617613cf603',
+      },
+    },
+    owner: 'lochlomondtravel',
   },
 };
