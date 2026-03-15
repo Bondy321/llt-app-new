@@ -3,7 +3,8 @@ import * as FileSystem from 'expo-file-system';
 
 const OPTIMIZATION_PROFILES = {
   full: {
-    maxLongEdge: 1600,
+    // Preserve the original aspect ratio and resolution to avoid user-visible cropping/downsizing.
+    maxLongEdge: null,
     compress: 0.68,
     minCompress: 0.38,
     compressStep: 0.1,
