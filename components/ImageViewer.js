@@ -128,7 +128,9 @@ export default function ImageViewer({
         setCurrentIndex(prev => prev + 1);
         translateX.setValue(0);
       });
+      return true;
     }
+    return false;
   }, [currentIndex, photos.length]);
 
   const goToPrevious = useCallback(() => {
@@ -143,13 +145,28 @@ export default function ImageViewer({
         setCurrentIndex(prev => prev - 1);
         translateX.setValue(0);
       });
+      return true;
     }
-  }, [currentIndex]);
+    return false;
+  }, [currentIndex, translateX]);
+
+  const resetSwipePosition = useCallback(() => {
+    Animated.spring(translateX, {
+      toValue: 0,
+      friction: 10,
+      tension: 40,
+      useNativeDriver: true,
+    }).start();
+  }, [translateX]);
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
       onMoveShouldSetPanResponder: (_, gestureState) => {
+        return Math.abs(gestureState.dx) > 10;
+      },
+      onMoveShouldSetPanResponderCapture: (_, gestureState) => {
         return Math.abs(gestureState.dx) > 10;
       },
       onPanResponderMove: (_, gestureState) => {
@@ -164,21 +181,24 @@ export default function ImageViewer({
       },
       onPanResponderRelease: (_, gestureState) => {
         const { dx, vx } = gestureState;
+        const isSwipeLeft = dx < -SWIPE_THRESHOLD || vx < -VELOCITY_THRESHOLD;
+        const isSwipeRight = dx > SWIPE_THRESHOLD || vx > VELOCITY_THRESHOLD;
 
-        if (dx < -SWIPE_THRESHOLD || vx < -VELOCITY_THRESHOLD) {
-          goToNext();
-        } else if (dx > SWIPE_THRESHOLD || vx > VELOCITY_THRESHOLD) {
-          goToPrevious();
-        } else {
-          // Snap back
-          Animated.spring(translateX, {
-            toValue: 0,
-            friction: 10,
-            tension: 40,
-            useNativeDriver: true,
-          }).start();
+        if (isSwipeLeft) {
+          const moved = goToNext();
+          if (!moved) resetSwipePosition();
+          return;
         }
+
+        if (isSwipeRight) {
+          const moved = goToPrevious();
+          if (!moved) resetSwipePosition();
+          return;
+        }
+
+        resetSwipePosition();
       },
+      onPanResponderTerminationRequest: () => false,
     })
   ).current;
 
