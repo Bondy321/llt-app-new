@@ -64,26 +64,33 @@ const URL_REGEX = /(https?:\/\/[^\s]+)/g;
 // Brand Colors
 const COLORS = {
   primaryBlue: THEME.primary,
-  lightBlueAccent: '#93C5FD',
+  primaryLight: THEME.primaryLight,
+  primaryDark: THEME.primaryDark,
+  lightBlueAccent: THEME.sync.info.border,
   coralAccent: THEME.accent,
+  coralMuted: THEME.accentLight,
   white: THEME.white,
   darkText: THEME.textPrimary,
   secondaryText: THEME.textSecondary,
+  tertiaryText: THEME.textMuted,
+  border: THEME.border,
   appBackground: THEME.background,
-  chatScreenBackground: '#EFF6FF',
+  chatScreenBackground: THEME.background,
+  surfaceSecondary: '#EFF6FF',
   myMessageBackground: THEME.primary,
   theirMessageBackground: THEME.white,
   driverMessageBackground: THEME.accentLight,
   driverMessageBorder: '#FDBA74',
   inputBackground: THEME.white,
   sendButtonColor: THEME.accent,
-  chatHeaderColor: THEME.success,
-  onlineIndicator: '#22C55E',
-  offlineIndicator: '#94A3B8',
-  typingIndicator: '#64748B',
-  linkColor: '#2563EB',
-  reactionBackground: 'rgba(0,0,0,0.05)',
+  chatHeaderColor: THEME.primary,
+  onlineIndicator: THEME.success,
+  offlineIndicator: THEME.textMuted,
+  typingIndicator: THEME.textSecondary,
+  linkColor: THEME.primaryLight,
+  reactionBackground: `${THEME.primary}10`,
   newMessageBanner: THEME.accent,
+  overlay: THEME.overlay,
 };
 
 // ==================== TYPING INDICATOR COMPONENT ====================
@@ -391,7 +398,7 @@ const AttachmentMenu = ({ visible, onClose, onPickImage, onTakePhoto }) => {
         }}
         activeOpacity={0.7}
       >
-        <View style={[styles.attachmentIconBg, { backgroundColor: '#DBEAFE' }]}>
+        <View style={[styles.attachmentIconBg, { backgroundColor: THEME.primaryMuted }]}>
           <MaterialCommunityIcons name="image" size={24} color={COLORS.primaryBlue} />
         </View>
         <Text style={styles.attachmentLabel}>Gallery</Text>
@@ -405,7 +412,7 @@ const AttachmentMenu = ({ visible, onClose, onPickImage, onTakePhoto }) => {
         }}
         activeOpacity={0.7}
       >
-        <View style={[styles.attachmentIconBg, { backgroundColor: '#FEE2E2' }]}>
+        <View style={[styles.attachmentIconBg, { backgroundColor: THEME.errorLight }]}>
           <MaterialCommunityIcons name="camera" size={24} color={THEME.error} />
         </View>
         <Text style={styles.attachmentLabel}>Camera</Text>
@@ -416,7 +423,7 @@ const AttachmentMenu = ({ visible, onClose, onPickImage, onTakePhoto }) => {
         onPress={onClose}
         activeOpacity={0.7}
       >
-        <View style={[styles.attachmentIconBg, { backgroundColor: '#F1F5F9' }]}>
+        <View style={[styles.attachmentIconBg, { backgroundColor: COLORS.surfaceSecondary }]}>
           <MaterialCommunityIcons name="close" size={24} color={COLORS.secondaryText} />
         </View>
         <Text style={styles.attachmentLabel}>Cancel</Text>
@@ -1478,7 +1485,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     <SafeAreaView style={styles.safeArea}>
       {/* Header */}
       <LinearGradient
-        colors={[COLORS.chatHeaderColor, '#059669']}
+        colors={internalDriverChat ? [COLORS.primaryDark, COLORS.primaryBlue] : [COLORS.primaryBlue, COLORS.primaryLight]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.header}
@@ -1626,7 +1633,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
                   { height: Math.min(Math.max(44, inputHeight), 120) },
                 ]}
                 placeholder="Type your message..."
-                placeholderTextColor="#A0AEC0"
+                placeholderTextColor={COLORS.tertiaryText}
                 value={inputText}
                 onChangeText={handleTextChange}
                 multiline
@@ -1654,7 +1661,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
                     name="send-circle"
                     size={38}
                     color={
-                      inputText.trim() === '' ? '#CBD5E0' : COLORS.sendButtonColor
+                      inputText.trim() === '' ? COLORS.tertiaryText : COLORS.sendButtonColor
                     }
                   />
                 )}
@@ -1713,13 +1720,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: Platform.OS === 'ios' ? 12 : 15,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: Platform.OS === 'ios' ? SPACING.md : SPACING.lg,
+    borderBottomLeftRadius: RADIUS.xl,
+    borderBottomRightRadius: RADIUS.xl,
     ...SHADOWS.md,
   },
   headerButton: {
-    width: 108,
-    padding: 5,
+    width: 96,
+    padding: SPACING.xs,
     alignItems: 'flex-start',
     justifyContent: 'center',
   },
@@ -1728,36 +1737,45 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 19,
+    fontWeight: '800',
     color: COLORS.white,
+    letterSpacing: 0.2,
   },
   headerSubtitle: {
     fontSize: 12,
     color: COLORS.white,
-    opacity: 0.85,
+    opacity: 0.9,
     marginTop: 2,
+    fontWeight: '600',
   },
   headerRight: {
     width: 108,
     flexDirection: 'row',
     justifyContent: 'flex-end',
     alignItems: 'center',
-    gap: SPACING.sm,
+    gap: SPACING.xs,
   },
   syncNowBtn: {
-    width: 24,
+    width: 28,
+    height: 28,
+    borderRadius: RADIUS.full,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
   },
   onlineIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    borderRadius: RADIUS.full,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
   },
   onlineDot: {
     width: 8,
@@ -1805,6 +1823,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: SPACING.xxl,
   },
   loadingText: {
     marginTop: 12,
@@ -1843,7 +1862,11 @@ const styles = StyleSheet.create({
     borderRadius: 60,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: SPACING.xl,
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    ...SHADOWS.sm,
   },
   emptyText: {
     fontSize: 22,
@@ -1860,7 +1883,7 @@ const styles = StyleSheet.create({
   },
   emptyTips: {
     flexDirection: 'row',
-    gap: 24,
+    gap: SPACING.xl,
   },
   emptyTip: {
     flexDirection: 'row',
@@ -1880,13 +1903,13 @@ const styles = StyleSheet.create({
 
   // Messages
   messagesScrollContainer: {
-    paddingVertical: 15,
-    paddingHorizontal: 12,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.md,
     flexGrow: 1,
   },
   messageRow: {
     flexDirection: 'row',
-    marginBottom: 8,
+    marginBottom: SPACING.sm,
   },
   myMessageRow: {
     justifyContent: 'flex-end',
@@ -1896,18 +1919,22 @@ const styles = StyleSheet.create({
   },
   messageBubble: {
     maxWidth: '80%',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingVertical: SPACING.sm + 2,
+    paddingHorizontal: SPACING.md,
     borderRadius: RADIUS.lg,
   },
   myMessageBubble: {
     backgroundColor: COLORS.myMessageBackground,
-    borderBottomRightRadius: 4,
+    borderBottomRightRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryDark}40`,
   },
   theirMessageBubble: {
     backgroundColor: COLORS.theirMessageBackground,
-    borderBottomLeftRadius: 4,
+    borderBottomLeftRadius: RADIUS.sm,
     ...SHADOWS.sm,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   driverMessageBubble: {
     backgroundColor: COLORS.driverMessageBackground,
@@ -1949,7 +1976,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     paddingHorizontal: 8,
     paddingVertical: 2,
-    backgroundColor: '#FFE1CE',
+    backgroundColor: COLORS.coralMuted,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: COLORS.driverMessageBorder,
@@ -1994,17 +2021,19 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
   },
   linkInMessageSelf: {
-    color: '#93C5FD',
+    color: COLORS.lightBlueAccent,
   },
   linkPreview: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(37, 99, 235, 0.08)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    marginTop: 8,
+    backgroundColor: `${COLORS.primaryBlue}10`,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs + 2,
+    borderRadius: RADIUS.md,
+    marginTop: SPACING.sm,
     gap: 6,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}20`,
   },
   linkText: {
     flex: 1,
@@ -2031,7 +2060,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#F1F5F9',
+    backgroundColor: COLORS.surfaceSecondary,
     width: SCREEN_WIDTH * 0.55,
     height: SCREEN_WIDTH * 0.55,
     borderRadius: RADIUS.md,
@@ -2041,7 +2070,7 @@ const styles = StyleSheet.create({
     height: SCREEN_WIDTH * 0.35,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#F1F5F9',
+    backgroundColor: COLORS.surfaceSecondary,
     borderRadius: RADIUS.md,
   },
   imageErrorText: {
@@ -2064,6 +2093,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}12`,
   },
   reactionEmoji: {
     fontSize: 14,
@@ -2079,20 +2110,22 @@ const styles = StyleSheet.create({
   dateSeparator: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 16,
-    paddingHorizontal: 16,
+    marginVertical: SPACING.lg,
+    paddingHorizontal: SPACING.lg,
   },
   dateSeparatorLine: {
     flex: 1,
     height: 1,
-    backgroundColor: '#CBD5E1',
+    backgroundColor: COLORS.border,
   },
   dateSeparatorBadge: {
-    backgroundColor: '#E2E8F0',
-    paddingHorizontal: 12,
+    backgroundColor: COLORS.white,
+    paddingHorizontal: SPACING.md,
     paddingVertical: 4,
-    borderRadius: 12,
-    marginHorizontal: 12,
+    borderRadius: RADIUS.full,
+    marginHorizontal: SPACING.sm,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   dateSeparatorText: {
     fontSize: 12,
@@ -2115,9 +2148,9 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   unreadSeparatorBadge: {
-    backgroundColor: '#FFF7ED',
+    backgroundColor: COLORS.coralMuted,
     borderWidth: 1,
-    borderColor: '#FDBA74',
+    borderColor: COLORS.driverMessageBorder,
     paddingHorizontal: SPACING.md,
     paddingVertical: 4,
     borderRadius: RADIUS.full,
@@ -2131,18 +2164,20 @@ const styles = StyleSheet.create({
 
   // Typing Indicator
   typingContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
   },
   typingBubble: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.white,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm + 2,
     borderRadius: RADIUS.lg,
     alignSelf: 'flex-start',
     ...SHADOWS.sm,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   typingDots: {
     flexDirection: 'row',
@@ -2171,9 +2206,11 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.newMessageBanner,
     paddingHorizontal: 16,
     paddingVertical: 10,
-    borderRadius: 20,
+    borderRadius: RADIUS.full,
     ...SHADOWS.md,
     gap: 6,
+    borderWidth: 1,
+    borderColor: `${COLORS.coralAccent}70`,
   },
   newMessagesBannerText: {
     color: COLORS.white,
@@ -2206,11 +2243,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'flex-end',
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.sm,
     borderTopWidth: 1,
-    borderTopColor: '#E2E8F0',
+    borderTopColor: COLORS.border,
     backgroundColor: COLORS.white,
+    borderTopLeftRadius: RADIUS.xl,
+    borderTopRightRadius: RADIUS.xl,
+    ...SHADOWS.md,
   },
   draftBadge: {
     width: '100%',
@@ -2226,22 +2266,26 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   attachButton: {
-    padding: 6,
+    padding: SPACING.xs + 2,
     marginRight: 4,
     marginBottom: 4,
+    borderRadius: RADIUS.full,
+    backgroundColor: `${COLORS.primaryBlue}08`,
   },
   textInput: {
     flex: 1,
     minHeight: 44,
     maxHeight: 120,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: COLORS.surfaceSecondary,
     borderRadius: 22,
-    paddingHorizontal: 16,
+    paddingHorizontal: SPACING.lg,
     paddingVertical: 10,
     paddingTop: 12,
     fontSize: 16,
     color: COLORS.darkText,
     marginRight: 8,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   sendButton: {
     padding: 2,
@@ -2256,10 +2300,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     backgroundColor: COLORS.white,
-    paddingVertical: 16,
-    paddingHorizontal: 24,
+    paddingVertical: SPACING.lg,
+    paddingHorizontal: SPACING.xl,
     borderTopWidth: 1,
-    borderTopColor: '#E2E8F0',
+    borderTopColor: COLORS.border,
+    borderTopLeftRadius: RADIUS.xl,
+    borderTopRightRadius: RADIUS.xl,
   },
   attachmentOption: {
     alignItems: 'center',
@@ -2271,6 +2317,8 @@ const styles = StyleSheet.create({
     borderRadius: 26,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   attachmentLabel: {
     fontSize: 13,
@@ -2281,7 +2329,7 @@ const styles = StyleSheet.create({
   // Modals
   reactionModalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.3)',
+    backgroundColor: COLORS.overlay,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -2289,8 +2337,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     backgroundColor: COLORS.white,
     borderRadius: RADIUS.xl,
-    padding: 8,
+    padding: SPACING.sm,
     ...SHADOWS.lg,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   reactionOption: {
     padding: 10,
@@ -2300,7 +2350,7 @@ const styles = StyleSheet.create({
   },
   actionMenuOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: COLORS.overlay,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -2310,6 +2360,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     width: 200,
     ...SHADOWS.xl,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   actionMenuItem: {
     flexDirection: 'row',
@@ -2320,7 +2372,7 @@ const styles = StyleSheet.create({
   },
   actionMenuItemDanger: {
     borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
+    borderTopColor: COLORS.border,
     marginTop: 4,
     paddingTop: 18,
   },
@@ -2333,7 +2385,7 @@ const styles = StyleSheet.create({
   // Image Viewer
   imageViewerOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.95)',
+    backgroundColor: 'rgba(15, 23, 42, 0.95)',
     justifyContent: 'center',
     alignItems: 'center',
   },
