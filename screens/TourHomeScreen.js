@@ -38,7 +38,7 @@ const COLORS = {
   primaryBlue: THEME.primary,
   primaryLight: THEME.primaryLight,
   primaryDark: THEME.primaryDark,
-  lightBlueAccent: '#93C5FD',
+  lightBlueAccent: THEME.sync.info.border,
   lightBlue: THEME.primaryMuted,
   coralAccent: THEME.accent,
   white: THEME.white,
@@ -53,6 +53,7 @@ const COLORS = {
   warningLight: THEME.warningLight,
   error: THEME.error,
   errorLight: THEME.errorLight,
+  overlay: THEME.overlay,
 };
 
 // Haptic feedback helper
@@ -871,21 +872,21 @@ export default function TourHomeScreen({
       title: 'Group Album',
       subtitle: 'Shared memories',
       icon: 'image-multiple',
-      color: '#16a085',
+      color: THEME.success,
     },
     {
       id: 'Itinerary',
       title: 'Itinerary',
       subtitle: 'Full schedule',
       icon: 'map-legend',
-      color: '#3498DB',
+      color: THEME.primaryLight,
     },
     {
       id: 'Chat',
       title: 'Group Chat',
       subtitle: 'Stay connected',
       icon: 'chat-processing-outline',
-      color: '#2ECC71',
+      color: THEME.success,
     },
     {
       id: 'SafetySupport',
@@ -906,7 +907,7 @@ export default function TourHomeScreen({
       onPress: () => onNavigate('GroupPhotobook'),
     },
     { icon: 'bus-marker', label: 'Find Bus', color: COLORS.coralAccent, onPress: () => onNavigate('Map') },
-    { icon: 'chat', label: 'Chat', color: '#2ECC71', onPress: () => onNavigate('Chat'), badge: null },
+    { icon: 'chat', label: 'Chat', color: THEME.success, onPress: () => onNavigate('Chat'), badge: null },
   ];
 
   const orderedQuickActions = useMemo(() => {
@@ -916,7 +917,7 @@ export default function TourHomeScreen({
       Itinerary: {
         icon: 'map-legend',
         label: 'Itinerary',
-        color: '#3498DB',
+        color: THEME.primaryLight,
         onPress: () => onNavigate('Itinerary'),
       },
       GroupPhotobook: quickActions.find((action) => action.label === 'Group Photos'),
@@ -1392,20 +1393,20 @@ const styles = StyleSheet.create({
   },
   container: {
     flexGrow: 1,
-    paddingHorizontal: 18,
-    paddingTop: 16,
-    paddingBottom: 28,
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.md,
+    paddingBottom: SPACING.xxl,
   },
 
   // Header styles
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: SPACING.lg,
     backgroundColor: COLORS.white,
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    borderRadius: RADIUS.xl,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
     ...SHADOWS.lg,
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -1417,7 +1418,7 @@ const styles = StyleSheet.create({
   },
   headerTextContainer: {
     flex: 1,
-    marginLeft: 14,
+    marginLeft: SPACING.md,
   },
   greetingRow: {
     flexDirection: 'row',
@@ -1434,7 +1435,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '800',
     color: COLORS.primaryBlue,
-    letterSpacing: 0.5,
+    letterSpacing: 0.35,
   },
   cacheLabel: { fontSize: 12, color: COLORS.subtleText, marginTop: 4 },
   refreshStatusContainer: {
@@ -1483,13 +1484,13 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   recentChangesCard: {
-    marginTop: 10,
-    backgroundColor: `${COLORS.primaryBlue}08`,
+    marginTop: SPACING.sm,
+    backgroundColor: `${COLORS.primaryBlue}09`,
     borderWidth: 1,
     borderColor: `${COLORS.primaryBlue}20`,
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.sm,
     gap: 6,
   },
   recentChangesTitle: {
@@ -1513,24 +1514,28 @@ const styles = StyleSheet.create({
   },
   headerActions: {
     flexDirection: 'row',
-    gap: 10,
+    gap: SPACING.sm,
   },
   headerButton: {
-    padding: 10,
-    borderRadius: 14,
-    backgroundColor: `${COLORS.primaryBlue}10`,
+    padding: SPACING.sm + 2,
+    borderRadius: RADIUS.md,
+    backgroundColor: `${COLORS.primaryBlue}0D`,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}14`,
   },
 
   // Countdown styles
   countdownContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: `${COLORS.primaryBlue}10`,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 14,
-    marginBottom: 16,
+    backgroundColor: `${COLORS.primaryBlue}0D`,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    borderRadius: RADIUS.lg,
+    marginBottom: SPACING.lg,
     gap: 10,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}18`,
   },
   countdownUrgent: {
     backgroundColor: COLORS.warningLight,
@@ -1567,8 +1572,8 @@ const styles = StyleSheet.create({
 
   // Status card styles
   statusCard: {
-    marginBottom: 18,
-    borderRadius: 20,
+    marginBottom: SPACING.lg,
+    borderRadius: RADIUS.xl,
     overflow: 'hidden',
     ...SHADOWS.lg,
     borderWidth: 1,
@@ -1577,7 +1582,7 @@ const styles = StyleSheet.create({
   },
   statusCardGradient: {
     flexDirection: 'row',
-    padding: 18,
+    padding: SPACING.lg,
     alignItems: 'flex-start',
   },
   statusIconContainer: {
@@ -1630,7 +1635,13 @@ const styles = StyleSheet.create({
 
   // Quick actions styles
   quickActionsContainer: {
-    marginBottom: 20,
+    marginBottom: SPACING.xl,
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.xl,
+    padding: SPACING.lg,
+    ...SHADOWS.md,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}12`,
   },
   quickActionsTitle: {
     fontSize: 13,
@@ -1644,7 +1655,7 @@ const styles = StyleSheet.create({
   quickActionsSubtitle: {
     fontSize: 13,
     color: COLORS.subtleText,
-    marginBottom: 12,
+    marginBottom: SPACING.md,
     marginHorizontal: 4,
     lineHeight: 18,
   },
@@ -1654,12 +1665,12 @@ const styles = StyleSheet.create({
   },
   quickActionButton: {
     alignItems: 'center',
-    width: (SCREEN_WIDTH - 36 - 30) / 4,
+    width: (SCREEN_WIDTH - SPACING.lg * 2 - SPACING.sm * 3 - 8) / 4,
   },
   quickActionIconContainer: {
     width: 52,
     height: 52,
-    borderRadius: 16,
+    borderRadius: RADIUS.lg,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 8,
@@ -1690,8 +1701,8 @@ const styles = StyleSheet.create({
 
   // Boarding pass styles
   boardingPass: {
-    marginBottom: 24,
-    borderRadius: 20,
+    marginBottom: SPACING.xl,
+    borderRadius: RADIUS.xl,
     overflow: 'hidden',
     backgroundColor: COLORS.white,
     ...SHADOWS.xl,
@@ -1699,9 +1710,9 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
   },
   boardingPassHeader: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 24,
+    paddingHorizontal: SPACING.xl,
+    paddingTop: SPACING.xl,
+    paddingBottom: SPACING.xxl,
   },
   boardingPassHeaderContent: {
     flexDirection: 'row',
@@ -1743,7 +1754,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 1,
   },
   boardingPassBody: {
-    padding: 20,
+    padding: SPACING.xl,
   },
   boardingPassDivider: {
     height: 1,
@@ -1971,8 +1982,8 @@ const styles = StyleSheet.create({
 
   // Find My Bus card styles
   findBusCard: {
-    marginBottom: 24,
-    borderRadius: 20,
+    marginBottom: SPACING.xl,
+    borderRadius: RADIUS.xl,
     overflow: 'hidden',
     backgroundColor: COLORS.white,
     ...SHADOWS.lg,
@@ -1980,7 +1991,7 @@ const styles = StyleSheet.create({
     borderColor: `${COLORS.coralAccent}30`,
   },
   findBusGradient: {
-    padding: 18,
+    padding: SPACING.lg,
   },
   findBusContent: {
     flexDirection: 'row',
@@ -2043,21 +2054,21 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '800',
     color: COLORS.darkText,
-    marginBottom: 16,
+    marginBottom: SPACING.lg,
     paddingLeft: 4,
   },
 
   // Features grid styles
   featuresGrid: {
-    gap: 14,
+    gap: SPACING.md,
   },
   featuresRow: {
     flexDirection: 'row',
-    gap: 14,
+    gap: SPACING.md,
   },
   featureCard: {
     flex: 1,
-    borderRadius: 18,
+    borderRadius: RADIUS.lg,
     overflow: 'hidden',
     backgroundColor: COLORS.white,
     ...SHADOWS.md,
@@ -2065,7 +2076,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
   },
   featureCardLarge: {
-    borderRadius: 18,
+    borderRadius: RADIUS.lg,
     overflow: 'hidden',
     backgroundColor: COLORS.white,
     ...SHADOWS.md,
@@ -2076,7 +2087,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   featureCardGradient: {
-    padding: 18,
+    padding: SPACING.lg,
     minHeight: 130,
     justifyContent: 'space-between',
   },
@@ -2116,10 +2127,10 @@ const styles = StyleSheet.create({
   // Modal styles
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: COLORS.overlay,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    padding: SPACING.xxl,
   },
   modalCard: {
     width: '100%',
