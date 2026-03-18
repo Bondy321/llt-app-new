@@ -385,7 +385,7 @@ test('subscribeToTourPhotos sorts by descending timestamp and returns a safe fal
 });
 
 test('subscribeToPrivatePhotos scopes path to user and sorts newest first', async () => {
-  let seenPath;
+  const seenPaths = [];
   let received;
 
   const unsubscribe = subscribeToPrivatePhotos('tour-A', 'user-5', (photos) => {
@@ -393,7 +393,7 @@ test('subscribeToPrivatePhotos scopes path to user and sorts newest first', asyn
   }, {
     realtimeDbInstance: {},
     dbRefFn: (_db, path) => {
-      seenPath = path;
+      seenPaths.push(path);
       return { path };
     },
     queryFn: (ref) => ref,
@@ -408,8 +408,42 @@ test('subscribeToPrivatePhotos scopes path to user and sorts newest first', asyn
     },
   });
 
-  assert.strictEqual(seenPath, 'private_tour_photos/tour-A/user-5');
+  assert.deepStrictEqual(seenPaths, ['private_tour_photos/tour-A/user-5']);
   assert.deepStrictEqual(received.map((p) => p.id), ['two', 'one']);
+  assert.deepStrictEqual(received.map((p) => p.ownerScope), ['user-5', 'user-5']);
+  unsubscribe();
+});
+
+test('subscribeToPrivatePhotos merges stable booking owner scope with legacy uid photos', async () => {
+  let received;
+
+  const unsubscribe = subscribeToPrivatePhotos('tour-B', 'booking-123', (photos) => {
+    received = photos;
+  }, {
+    legacyUserId: 'uid-legacy',
+    realtimeDbInstance: {},
+    dbRefFn: (_db, path) => ({ path }),
+    queryFn: (ref) => ref,
+    orderByChildFn: () => 'timestamp',
+    limitToLastFn: (limit) => limit,
+    onValueFn: (ref, callback) => {
+      if (ref.path.endsWith('/booking-123')) {
+        callback(mockSnapshot({ stable: { timestamp: 20 } }));
+      } else {
+        callback(mockSnapshot({ legacy: { timestamp: 10 } }));
+      }
+      return () => {};
+    },
+  });
+
+  assert.deepStrictEqual(
+    received.map((photo) => ({ id: photo.id, ownerScope: photo.ownerScope })),
+    [
+      { id: 'stable', ownerScope: 'booking-123' },
+      { id: 'legacy', ownerScope: 'uid-legacy' },
+    ],
+  );
+
   unsubscribe();
 });
 
