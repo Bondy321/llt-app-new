@@ -566,7 +566,7 @@ function AppContent() {
           />
         );
       case 'Photobook':
-        return <PhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} privatePhotoOwnerId={bookingData?.id || user?.uid} />;
+        return <PhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} tourId={tourData?.id} privatePhotoOwnerId={bookingData?.id} />;
       case 'GroupPhotobook':
         return <GroupPhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} userName={bookingData?.passengerNames?.[0] || 'Tour Member'} />;
 case 'Itinerary':

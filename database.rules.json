@@ -187,8 +187,8 @@
     "private_tour_photos": {
       "$tourId": {
         "$userId": {
-          ".read": "auth != null && (auth.uid === $userId || root.child('users').child(auth.uid).child('privatePhotoOwnerId').val() === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
-          ".write": "auth != null && (auth.uid === $userId || root.child('users').child(auth.uid).child('privatePhotoOwnerId').val() === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')"
+          ".read": "auth != null && (root.child('users').child(auth.uid).child('privatePhotoOwnerId').val() === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
+          ".write": "auth != null && (root.child('users').child(auth.uid).child('privatePhotoOwnerId').val() === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')"
         }
       }
     },

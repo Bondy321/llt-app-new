@@ -31,7 +31,7 @@ import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
 const { width: windowWidth } = Dimensions.get('window');
 const THUMBNAIL_SIZE = (windowWidth - SPACING.lg * 2 - SPACING.sm * 2) / 3;
 
-export default function PhotobookScreen({ onBack, userId, tourId, privatePhotoOwnerId }) {
+export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId }) {
   const [photos, setPhotos] = useState([]);
   const [loadingPhotos, setLoadingPhotos] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -61,17 +61,15 @@ export default function PhotobookScreen({ onBack, userId, tourId, privatePhotoOw
       setPhotos(photoList);
       setLoadingPhotos(false);
       setRefreshing(false);
-    }, {
-      legacyUserId: userId && userId !== privatePhotoOwnerId ? userId : null,
     });
 
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, [tourId, privatePhotoOwnerId, userId]);
+  }, [tourId, privatePhotoOwnerId]);
 
   const visiblePhotos = useMemo(() => {
-    const scoped = mineOnly ? photos.filter((photo) => photo.ownerScope === privatePhotoOwnerId) : photos;
+    const scoped = mineOnly ? photos.filter((photo) => photo.userId === privatePhotoOwnerId) : photos;
     const sorted = [...scoped].sort((a, b) => {
       const aTs = a.timestamp || 0;
       const bTs = b.timestamp || 0;
@@ -298,7 +296,7 @@ export default function PhotobookScreen({ onBack, userId, tourId, privatePhotoOw
   const handleDeletePhoto = async (photo) => {
     try {
       if (typeof deletePrivatePhoto === 'function') {
-        await deletePrivatePhoto(tourId, photo.ownerScope || privatePhotoOwnerId, photo.id);
+        await deletePrivatePhoto(tourId, privatePhotoOwnerId, photo.id);
       }
     } catch (error) {
       console.error('Delete error:', error);
@@ -346,14 +344,12 @@ export default function PhotobookScreen({ onBack, userId, tourId, privatePhotoOw
 
         unsubscribe = subscribeToPrivatePhotos(tourId, privatePhotoOwnerId, (photoList) => {
           completeRefresh(photoList);
-        }, {
-          legacyUserId: userId && userId !== privatePhotoOwnerId ? userId : null,
         });
       });
     } finally {
       setRefreshing(false);
     }
-  }, [tourId, privatePhotoOwnerId, userId]);
+  }, [tourId, privatePhotoOwnerId]);
 
   const handleImageLoad = (photoId) => {
     setLoadedImages(prev => ({ ...prev, [photoId]: true }));
@@ -599,7 +595,7 @@ export default function PhotobookScreen({ onBack, userId, tourId, privatePhotoOw
         canDelete={true}
         currentUserId={privatePhotoOwnerId}
         showUploaderInfo={false}
-        onEditCaption={async (photo, nextCaption) => updatePhotoCaption({ tourId, photoId: photo.id, userId: photo.ownerScope || privatePhotoOwnerId, caption: nextCaption, visibility: 'private' })}
+        onEditCaption={async (photo, nextCaption) => updatePhotoCaption({ tourId, photoId: photo.id, userId: privatePhotoOwnerId, caption: nextCaption, visibility: 'private' })}
       />
 
       {/* Upload Modal with Caption */}
