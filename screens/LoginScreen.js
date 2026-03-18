@@ -295,7 +295,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                     <Text style={styles.errorText}>{errorState.message}</Text>
                     {errorState.recoverySteps?.length ? (
                       <TouchableOpacity style={styles.disclosureButton} onPress={() => setShowRecoverySteps((current) => !current)}>
-                        <Text style={styles.disclosureText}>How to recover</Text>
+                        <Text style={styles.disclosureText}>How to recover?</Text>
                         <MaterialCommunityIcons name={showRecoverySteps ? 'chevron-up' : 'chevron-down'} size={16} color={COLORS.errorRed} />
                       </TouchableOpacity>
                     ) : null}
