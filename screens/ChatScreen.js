@@ -486,6 +486,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [viewingImage, setViewingImage] = useState(null);
 
   const insets = useSafeAreaInsets();
+  const composerBottomInset = insets.bottom > 0 ? Math.max(insets.bottom, SPACING.md) : SPACING.md;
   const currentUser = auth.currentUser;
   const isDriver = bookingData?.isDriver === true;
   const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
@@ -1480,7 +1481,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Error state
   if (!tourId) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
         <View style={[styles.header, { backgroundColor: COLORS.chatHeaderColor }]}>
           <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7}>
             <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
@@ -1498,7 +1499,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       {/* Header */}
       <LinearGradient
         colors={internalDriverChat ? [COLORS.primaryDark, COLORS.primaryBlue] : [COLORS.primaryBlue, COLORS.primaryLight]}
@@ -1624,74 +1625,76 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
             />
 
             {/* Input Area */}
-            <View
-              style={[styles.inputArea, { paddingBottom: Math.max(SPACING.sm, insets.bottom) }]}
-              onLayout={(event) => {
-                const nextHeight = Math.ceil(event.nativeEvent.layout.height);
-                setComposerHeight((prev) => (prev === nextHeight ? prev : nextHeight));
-              }}
-            >
-              {draftRestored && (
-                <View style={styles.draftBadge}>
-                  <MaterialCommunityIcons name="content-save-edit-outline" size={14} color={COLORS.primaryBlue} />
-                  <Text style={styles.draftBadgeText}>Draft restored</Text>
-                </View>
-              )}
-
-              <TouchableOpacity
-                style={styles.attachButton}
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setShowAttachmentMenu(!showAttachmentMenu);
+            <View style={[styles.inputDock, { paddingBottom: composerBottomInset }]}>
+              <View
+                style={styles.inputArea}
+                onLayout={(event) => {
+                  const nextHeight = Math.ceil(event.nativeEvent.layout.height + composerBottomInset);
+                  setComposerHeight((prev) => (prev === nextHeight ? prev : nextHeight));
                 }}
-                activeOpacity={0.7}
               >
-                <MaterialCommunityIcons
-                  name={showAttachmentMenu ? 'close' : 'plus-circle'}
-                  size={28}
-                  color={showAttachmentMenu ? COLORS.secondaryText : COLORS.primaryBlue}
-                />
-              </TouchableOpacity>
-
-              <TextInput
-                style={[
-                  styles.textInput,
-                  { height: Math.min(Math.max(44, inputHeight), 120) },
-                ]}
-                placeholder="Type your message..."
-                placeholderTextColor={COLORS.tertiaryText}
-                value={inputText}
-                onChangeText={handleTextChange}
-                multiline
-                onContentSizeChange={(event) =>
-                  setInputHeight(event.nativeEvent.contentSize.height)
-                }
-                selectionColor={COLORS.primaryBlue}
-                editable={!sending && !uploadingImage}
-                blurOnSubmit={false}
-              />
-
-              <TouchableOpacity
-                style={[
-                  styles.sendButton,
-                  (sending || uploadingImage || !inputText.trim()) && styles.sendButtonDisabled,
-                ]}
-                onPress={handleSendMessage}
-                activeOpacity={0.7}
-                disabled={sending || uploadingImage || !inputText.trim()}
-              >
-                {sending || uploadingImage ? (
-                  <ActivityIndicator size="small" color={COLORS.sendButtonColor} />
-                ) : (
-                  <MaterialCommunityIcons
-                    name="send-circle"
-                    size={38}
-                    color={
-                      inputText.trim() === '' ? COLORS.tertiaryText : COLORS.sendButtonColor
-                    }
-                  />
+                {draftRestored && (
+                  <View style={styles.draftBadge}>
+                    <MaterialCommunityIcons name="content-save-edit-outline" size={14} color={COLORS.primaryBlue} />
+                    <Text style={styles.draftBadgeText}>Draft restored</Text>
+                  </View>
                 )}
-              </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.attachButton}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setShowAttachmentMenu(!showAttachmentMenu);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <MaterialCommunityIcons
+                    name={showAttachmentMenu ? 'close' : 'plus-circle'}
+                    size={28}
+                    color={showAttachmentMenu ? COLORS.secondaryText : COLORS.primaryBlue}
+                  />
+                </TouchableOpacity>
+
+                <TextInput
+                  style={[
+                    styles.textInput,
+                    { height: Math.min(Math.max(44, inputHeight), 120) },
+                  ]}
+                  placeholder="Type your message..."
+                  placeholderTextColor={COLORS.tertiaryText}
+                  value={inputText}
+                  onChangeText={handleTextChange}
+                  multiline
+                  onContentSizeChange={(event) =>
+                    setInputHeight(event.nativeEvent.contentSize.height)
+                  }
+                  selectionColor={COLORS.primaryBlue}
+                  editable={!sending && !uploadingImage}
+                  blurOnSubmit={false}
+                />
+
+                <TouchableOpacity
+                  style={[
+                    styles.sendButton,
+                    (sending || uploadingImage || !inputText.trim()) && styles.sendButtonDisabled,
+                  ]}
+                  onPress={handleSendMessage}
+                  activeOpacity={0.7}
+                  disabled={sending || uploadingImage || !inputText.trim()}
+                >
+                  {sending || uploadingImage ? (
+                    <ActivityIndicator size="small" color={COLORS.sendButtonColor} />
+                  ) : (
+                    <MaterialCommunityIcons
+                      name="send-circle"
+                      size={38}
+                      color={
+                        inputText.trim() === '' ? COLORS.tertiaryText : COLORS.sendButtonColor
+                      }
+                    />
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
           </>
         )}
@@ -2265,18 +2268,21 @@ const styles = StyleSheet.create({
   },
 
   // Input Area
+  inputDock: {
+    backgroundColor: COLORS.white,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    ...SHADOWS.md,
+  },
   inputArea: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'flex-end',
     paddingHorizontal: SPACING.sm,
-    paddingVertical: SPACING.sm,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
+    paddingTop: SPACING.sm,
     backgroundColor: COLORS.white,
     borderTopLeftRadius: RADIUS.xl,
     borderTopRightRadius: RADIUS.xl,
-    ...SHADOWS.md,
   },
   draftBadge: {
     width: '100%',
