@@ -1538,7 +1538,6 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
           <Text style={styles.headerTitle}>
             {internalDriverChat ? 'Driver Chat' : 'Group Chat'}
           </Text>
-          {tourData?.name && <Text style={styles.headerSubtitle}>{tourData.name}</Text>}
         </View>
 
         <View style={styles.headerRight}>
@@ -1793,13 +1792,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: COLORS.white,
     letterSpacing: 0.2,
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    color: COLORS.white,
-    opacity: 0.9,
-    marginTop: 2,
-    fontWeight: '600',
   },
   headerRight: {
     width: 108,
