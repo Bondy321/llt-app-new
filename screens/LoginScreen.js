@@ -232,7 +232,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
             </Animated.View>
 
             <Animated.View style={[styles.formCard, { opacity: formAnimation }]}> 
-              <Text style={styles.welcomeText}>Welcome Aboard</Text>
+              <Text style={styles.welcomeText}>Welcome</Text>
 
               <View style={styles.hintsRow}>
                 {Object.entries(LOGIN_MODE_HINTS).map(([key, hint]) => {
