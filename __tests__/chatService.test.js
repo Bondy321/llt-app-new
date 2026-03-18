@@ -1,26 +1,140 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { sendMessage, markChatAsRead, markInternalChatAsRead } = require('../services/chatService');
+const {
+  sendMessage,
+  markChatAsRead,
+  markInternalChatAsRead,
+  toggleReaction,
+  addReaction,
+  removeReaction,
+  subscribeToChatMessages,
+} = require('../services/chatService');
 
-const createMockRealtimeDb = () => {
+const createMockRealtimeDb = (initialData = {}) => {
   const refCalls = [];
+  const data = JSON.parse(JSON.stringify(initialData));
+  const listeners = new Map();
+
+  const normalizePath = (path = '') => path.split('/').filter(Boolean);
+  const getValue = (path) => normalizePath(path).reduce((acc, part) => (acc == null ? undefined : acc[part]), data);
+  const cloneValue = (value) => (value === undefined ? null : JSON.parse(JSON.stringify(value)));
+  const setValue = (path, value) => {
+    const parts = normalizePath(path);
+    if (parts.length === 0) {
+      throw new Error('Root writes are not supported in test mock');
+    }
+
+    let cursor = data;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const key = parts[i];
+      if (!cursor[key] || typeof cursor[key] !== 'object') {
+        cursor[key] = {};
+      }
+      cursor = cursor[key];
+    }
+
+    const lastKey = parts[parts.length - 1];
+    if (value === null) {
+      delete cursor[lastKey];
+    } else {
+      cursor[lastKey] = cloneValue(value);
+    }
+  };
+
+  const buildSnapshot = (path) => {
+    const value = getValue(path);
+    return {
+      key: normalizePath(path).slice(-1)[0] || null,
+      val: () => cloneValue(value),
+      exists: () => value !== undefined && value !== null,
+      forEach: (callback) => {
+        if (!value || typeof value !== 'object') return false;
+        Object.entries(value).forEach(([childKey, childValue]) => {
+          callback({
+            key: childKey,
+            val: () => cloneValue(childValue),
+            exists: () => childValue !== undefined && childValue !== null,
+          });
+        });
+        return false;
+      },
+    };
+  };
+
+  const notifyValueListeners = (path) => {
+    const parts = normalizePath(path);
+    for (let i = parts.length; i >= 1; i -= 1) {
+      const candidate = parts.slice(0, i).join('/');
+      const callbacks = listeners.get(candidate) || [];
+      callbacks.forEach((callback) => callback(buildSnapshot(candidate)));
+    }
+  };
 
   return {
     refCalls,
+    data,
     ref(path) {
-      const context = { path, setCalls: [], pushCalls: [] };
+      const context = { path, setCalls: [], updateCalls: [], pushCalls: [] };
 
       context.set = async (value) => {
-        context.setCalls.push(value);
+        context.setCalls.push(cloneValue(value));
+        setValue(path, value);
+        notifyValueListeners(path);
         return value;
       };
+
+      context.update = async (patch) => {
+        context.updateCalls.push(cloneValue(patch));
+        const current = getValue(path);
+        setValue(path, { ...(current && typeof current === 'object' ? current : {}), ...patch });
+        notifyValueListeners(path);
+        return patch;
+      };
+
+      context.remove = async () => {
+        setValue(path, null);
+        notifyValueListeners(path);
+      };
+
+      context.once = async () => buildSnapshot(path);
+
+      context.transaction = async (updater) => {
+        const current = cloneValue(getValue(path));
+        const next = updater(current);
+        if (next === undefined) {
+          return { committed: false, snapshot: buildSnapshot(path) };
+        }
+        setValue(path, next === null ? null : next);
+        notifyValueListeners(path);
+        return { committed: true, snapshot: buildSnapshot(path) };
+      };
+
+      context.on = (eventType, callback) => {
+        assert.equal(eventType, 'value');
+        const callbacks = listeners.get(path) || [];
+        callbacks.push(callback);
+        listeners.set(path, callbacks);
+        callback(buildSnapshot(path));
+        return callback;
+      };
+
+      context.off = (eventType, callback) => {
+        assert.equal(eventType, 'value');
+        const callbacks = listeners.get(path) || [];
+        listeners.set(path, callbacks.filter((candidate) => candidate !== callback));
+      };
+
+      context.orderByChild = () => context;
+      context.limitToLast = () => context;
 
       context.push = () => {
         const key = `msg-${context.pushCalls.length + 1}`;
         const refObject = {
           key,
           async set(value) {
-            context.setCalls.push(value);
+            context.setCalls.push(cloneValue(value));
+            setValue(`${path}/${key}`, value);
+            notifyValueListeners(`${path}/${key}`);
             return value;
           },
         };
@@ -88,4 +202,89 @@ test('markInternalChatAsRead writes timestamp to internal chat lastRead path', a
   const refCall = mockDb.refCalls[0];
   assert.equal(refCall.path, 'internal_chats/tour-88/lastRead/driver-3');
   assert.ok(new Date(refCall.setCalls[0]).getTime());
+});
+
+test('toggleReaction migrates legacy array reactions to stable user maps and toggles cleanly', async () => {
+  const mockDb = createMockRealtimeDb({
+    chats: {
+      'tour-1': {
+        messages: {
+          'msg-1': {
+            text: 'Hello',
+            reactions: {
+              '👍': ['user-1'],
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const addResult = await toggleReaction('tour-1', 'msg-1', '👍', 'user-2', mockDb);
+  assert.equal(addResult.success, true);
+  assert.equal(addResult.action, 'added');
+  assert.deepEqual(mockDb.data.chats['tour-1'].messages['msg-1'].reactions['👍'], {
+    'user-1': true,
+    'user-2': true,
+  });
+
+  const removeResult = await toggleReaction('tour-1', 'msg-1', '👍', 'user-1', mockDb);
+  assert.equal(removeResult.success, true);
+  assert.equal(removeResult.action, 'removed');
+  assert.deepEqual(mockDb.data.chats['tour-1'].messages['msg-1'].reactions['👍'], {
+    'user-2': true,
+  });
+});
+
+test('addReaction and removeReaction are idempotent against map-backed reactions', async () => {
+  const mockDb = createMockRealtimeDb();
+
+  const firstAdd = await addReaction('tour-2', 'msg-9', '🎉', 'driver-1', mockDb);
+  const secondAdd = await addReaction('tour-2', 'msg-9', '🎉', 'driver-1', mockDb);
+  assert.equal(firstAdd.success, true);
+  assert.equal(secondAdd.success, true);
+  assert.deepEqual(mockDb.data.chats['tour-2'].messages['msg-9'].reactions['🎉'], {
+    'driver-1': true,
+  });
+
+  const firstRemove = await removeReaction('tour-2', 'msg-9', '🎉', 'driver-1', mockDb);
+  const secondRemove = await removeReaction('tour-2', 'msg-9', '🎉', 'driver-1', mockDb);
+  assert.equal(firstRemove.success, true);
+  assert.equal(secondRemove.success, true);
+  assert.equal(mockDb.data.chats['tour-2'].messages['msg-9'].reactions?.['🎉'], undefined);
+});
+
+test('subscribeToChatMessages normalizes reaction maps for the UI', async () => {
+  const mockDb = createMockRealtimeDb({
+    chats: {
+      'tour-3': {
+        messages: {
+          'msg-1': {
+            text: 'Hi',
+            timestamp: '2026-03-18T09:00:00.000Z',
+            reactions: {
+              '❤️': {
+                'user-1': true,
+                'user-2': true,
+                ignored: false,
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const updates = [];
+  const unsubscribe = subscribeToChatMessages('tour-3', (messages) => {
+    updates.push(messages);
+  }, mockDb);
+
+  assert.equal(typeof unsubscribe, 'function');
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0][0].reactions, {
+    '❤️': ['user-1', 'user-2'],
+  });
+
+  unsubscribe();
 });

@@ -191,22 +191,44 @@ const UnreadSeparator = () => (
 );
 
 // ==================== MESSAGE REACTIONS COMPONENT ====================
-const MessageReactions = ({ reactions, onReactionPress, messageId }) => {
+const getReactionUserIds = (users) => {
+  if (Array.isArray(users)) {
+    return users.filter((userId) => typeof userId === 'string' && userId.trim().length > 0);
+  }
+
+  if (users && typeof users === 'object') {
+    return Object.entries(users)
+      .filter(([userId, reacted]) => reacted === true && typeof userId === 'string' && userId.trim().length > 0)
+      .map(([userId]) => userId);
+  }
+
+  return [];
+};
+
+const MessageReactions = ({ reactions, onReactionPress, messageId, currentUserId }) => {
   if (!reactions || Object.keys(reactions).length === 0) return null;
+
+  const visibleReactions = Object.entries(reactions)
+    .map(([emoji, users]) => ({ emoji, userIds: getReactionUserIds(users) }))
+    .filter(({ userIds }) => userIds.length > 0);
+
+  if (visibleReactions.length === 0) return null;
 
   return (
     <View style={styles.reactionsContainer}>
-      {Object.entries(reactions).map(([emoji, users]) => {
-        if (!users || users.length === 0) return null;
+      {visibleReactions.map(({ emoji, userIds }) => {
+        const reactedByCurrentUser = currentUserId ? userIds.includes(currentUserId) : false;
         return (
           <TouchableOpacity
             key={emoji}
-            style={styles.reactionBubble}
+            style={[styles.reactionBubble, reactedByCurrentUser && styles.reactionBubbleActive]}
             onPress={() => onReactionPress(messageId, emoji)}
             activeOpacity={0.7}
           >
             <Text style={styles.reactionEmoji}>{emoji}</Text>
-            <Text style={styles.reactionCount}>{users.length}</Text>
+            <Text style={[styles.reactionCount, reactedByCurrentUser && styles.reactionCountActive]}>
+              {userIds.length}
+            </Text>
           </TouchableOpacity>
         );
       })}
@@ -1387,6 +1409,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
                 reactions={msg.reactions}
                 onReactionPress={handleReaction}
                 messageId={msg.id}
+                currentUserId={currentUser?.uid}
               />
             </View>
           </View>
@@ -2125,6 +2148,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: `${COLORS.primaryBlue}12`,
   },
+  reactionBubbleActive: {
+    backgroundColor: `${COLORS.primaryBlue}20`,
+    borderColor: COLORS.primaryBlue,
+  },
   reactionEmoji: {
     fontSize: 14,
   },
@@ -2133,6 +2160,9 @@ const styles = StyleSheet.create({
     color: COLORS.darkText,
     marginLeft: 4,
     fontWeight: '600',
+  },
+  reactionCountActive: {
+    color: COLORS.primaryBlue,
   },
 
   // Date Separator

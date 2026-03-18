@@ -45,10 +45,39 @@ const parseTimestampToMillis = (timestamp) => {
   return null;
 };
 
+const normalizeReactionUsers = (users) => {
+  if (Array.isArray(users)) {
+    return users.filter((userId) => typeof userId === 'string' && userId.trim().length > 0);
+  }
+
+  if (users && typeof users === 'object') {
+    return Object.entries(users)
+      .filter(([userId, reacted]) => reacted === true && typeof userId === 'string' && userId.trim().length > 0)
+      .map(([userId]) => userId);
+  }
+
+  return [];
+};
+
+const normalizeReactions = (reactions) => {
+  if (!reactions || typeof reactions !== 'object') {
+    return {};
+  }
+
+  return Object.entries(reactions).reduce((accumulator, [emoji, users]) => {
+    const normalizedUsers = normalizeReactionUsers(users);
+    if (normalizedUsers.length > 0) {
+      accumulator[emoji] = normalizedUsers;
+    }
+    return accumulator;
+  }, {});
+};
+
 const normalizeMessageTimestamp = (message = {}) => {
   const timestampMs = parseTimestampToMillis(message.timestamp);
   return {
     ...message,
+    reactions: normalizeReactions(message.reactions),
     timestamp: timestampMs ?? message.timestamp ?? null,
     timestampMs,
   };
@@ -171,7 +200,7 @@ const buildMessagePayload = (messageText, senderInfo, messageId, messageType = '
     isDriver: !!safeSender.isDriver,
     type: messageType, // 'text', 'image', 'system'
     status: 'sending', // 'sending', 'sent', 'delivered', 'failed'
-    reactions: {}, // { emoji: [userId1, userId2, ...] }
+    reactions: {}, // { emoji: { [userId]: true } } normalized to arrays in UI/service reads
   };
 };
 
@@ -457,69 +486,19 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
 
 // Add a reaction to a message
 const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb) => {
-  try {
-    if (!isValidFirebaseKey(emoji)) {
-      return { success: false, error: 'Invalid emoji character' };
-    }
-
-    const db = dbInstance || realtimeDb;
-    if (!db) {
-      return { success: false, error: 'Database unavailable' };
-    }
-
-    const reactionRef = db.ref(`chats/${tourId}/messages/${messageId}/reactions/${emoji}`);
-
-    // Get current reactions for this emoji
-    const snapshot = await reactionRef.once('value');
-    const currentUsers = snapshot.val() || [];
-
-    // Add user if not already reacted
-    if (!currentUsers.includes(userId)) {
-      await reactionRef.set([...currentUsers, userId]);
-    }
-
-    return { success: true };
-  } catch (error) {
-    console.error('Error adding reaction:', error);
-    return { success: false, error: error.message };
-  }
+  const result = await toggleReaction(tourId, messageId, emoji, userId, dbInstance, { forceAction: 'add' });
+  return result.success ? { success: true } : result;
 };
 
 // Remove a reaction from a message
 const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb) => {
-  try {
-    if (!isValidFirebaseKey(emoji)) {
-      return { success: false, error: 'Invalid emoji character' };
-    }
-
-    const db = dbInstance || realtimeDb;
-    if (!db) {
-      return { success: false, error: 'Database unavailable' };
-    }
-
-    const reactionRef = db.ref(`chats/${tourId}/messages/${messageId}/reactions/${emoji}`);
-
-    const snapshot = await reactionRef.once('value');
-    const currentUsers = snapshot.val() || [];
-
-    const updatedUsers = currentUsers.filter(id => id !== userId);
-
-    if (updatedUsers.length === 0) {
-      await reactionRef.remove();
-    } else {
-      await reactionRef.set(updatedUsers);
-    }
-
-    return { success: true };
-  } catch (error) {
-    console.error('Error removing reaction:', error);
-    return { success: false, error: error.message };
-  }
+  const result = await toggleReaction(tourId, messageId, emoji, userId, dbInstance, { forceAction: 'remove' });
+  return result.success ? { success: true } : result;
 };
 
 // Toggle a reaction (add if not present, remove if present)
-// Uses transaction to prevent race conditions
-const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb) => {
+// Uses a transaction and stores user IDs as a map for Firebase stability.
+const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb, options = {}) => {
   try {
     // Validate inputs
     const validatedTourId = validateTourId(tourId);
@@ -542,18 +521,36 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
 
     const reactionRef = db.ref(`chats/${validatedTourId}/messages/${validatedMessageId}/reactions/${sanitizedEmoji}`);
 
-    // Use transaction to avoid race conditions
+    // Use transaction to avoid race conditions and normalize legacy array payloads.
     const transactionResult = await reactionRef.transaction((currentUsers) => {
-      const users = Array.isArray(currentUsers) ? currentUsers : [];
+      const normalizedUsers = normalizeReactionUsers(currentUsers);
+      const userMap = normalizedUsers.reduce((accumulator, reactionUserId) => {
+        accumulator[reactionUserId] = true;
+        return accumulator;
+      }, {});
+      const hasUserReaction = !!userMap[validatedUserId];
 
-      if (users.includes(validatedUserId)) {
-        // Remove user's reaction
-        const updatedUsers = users.filter(id => id !== validatedUserId);
-        return updatedUsers.length === 0 ? null : updatedUsers; // null removes the path
-      } else {
-        // Add user's reaction
-        return [...users, validatedUserId];
+      if (options.forceAction === 'add') {
+        if (hasUserReaction) {
+          return userMap;
+        }
+        return { ...userMap, [validatedUserId]: true };
       }
+
+      if (options.forceAction === 'remove') {
+        if (!hasUserReaction) {
+          return Object.keys(userMap).length > 0 ? userMap : null;
+        }
+        delete userMap[validatedUserId];
+        return Object.keys(userMap).length > 0 ? userMap : null;
+      }
+
+      if (hasUserReaction) {
+        delete userMap[validatedUserId];
+        return Object.keys(userMap).length > 0 ? userMap : null;
+      }
+
+      return { ...userMap, [validatedUserId]: true };
     });
 
     if (!transactionResult || !transactionResult.committed) {
@@ -561,9 +558,10 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
     }
 
     const newValue = transactionResult.snapshot.val();
-    const action = newValue && Array.isArray(newValue) && newValue.includes(validatedUserId) ? 'added' : 'removed';
+    const normalizedUsers = normalizeReactionUsers(newValue);
+    const action = normalizedUsers.includes(validatedUserId) ? 'added' : 'removed';
 
-    return { success: true, action };
+    return { success: true, action, users: normalizedUsers };
   } catch (error) {
     console.error('Error toggling reaction:', error);
     return { success: false, error: error.message };
