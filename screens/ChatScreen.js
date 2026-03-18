@@ -20,7 +20,7 @@ import {
   View,
 } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -466,6 +466,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(null);
   const [inputHeight, setInputHeight] = useState(44);
   const [draftRestored, setDraftRestored] = useState(false);
+  const [composerHeight, setComposerHeight] = useState(0);
 
   // Feature state
   const [typingUsers, setTypingUsers] = useState([]);
@@ -484,6 +485,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [viewingImage, setViewingImage] = useState(null);
 
+  const insets = useSafeAreaInsets();
   const currentUser = auth.currentUser;
   const isDriver = bookingData?.isDriver === true;
   const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
@@ -499,6 +501,14 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     const chatType = internalDriverChat ? 'internal' : 'group';
     return `last_seen_${chatType}_${tourId}_${currentUser?.uid || 'anonymous'}`;
   }, [tourId, internalDriverChat, currentUser?.uid]);
+
+  const listBottomSpacerHeight = useMemo(() => {
+    const safeComposerHeight = composerHeight > 0 ? composerHeight : 72;
+    const attachmentMenuHeight = showAttachmentMenu ? 108 : 0;
+    const typingHeight = typingUsers.length > 0 ? 44 : 0;
+
+    return safeComposerHeight + attachmentMenuHeight + typingHeight + SPACING.lg;
+  }, [composerHeight, showAttachmentMenu, typingUsers.length]);
 
   // Refs
   const messageListRef = useRef(null);
@@ -546,6 +556,12 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       messageListRef.current?.scrollToEnd({ animated });
     });
   }, []);
+
+  useEffect(() => {
+    if (isAtBottom) {
+      scrollToBottom(false);
+    }
+  }, [composerHeight, isAtBottom, listBottomSpacerHeight, scrollToBottom]);
 
   // Handle scroll position tracking
   const handleScroll = useCallback((event) => {
@@ -1546,7 +1562,10 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
             {/* Messages List */}
             <FlatList
               ref={messageListRef}
-              contentContainerStyle={styles.messagesScrollContainer}
+              contentContainerStyle={[
+                styles.messagesScrollContainer,
+                { paddingBottom: listBottomSpacerHeight },
+              ]}
               data={groupedMessages}
               keyExtractor={keyExtractor}
               renderItem={renderMessageRow}
@@ -1559,6 +1578,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
               onContentSizeChange={() => {
                 if (isAtBottom) scrollToBottom(false);
               }}
+              ListFooterComponent={<View style={{ height: Math.max(SPACING.sm, insets.bottom) }} />}
               onScroll={handleScroll}
               scrollEventThrottle={100}
               showsVerticalScrollIndicator={false}
@@ -1604,7 +1624,13 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
             />
 
             {/* Input Area */}
-            <View style={styles.inputArea}>
+            <View
+              style={[styles.inputArea, { paddingBottom: Math.max(SPACING.sm, insets.bottom) }]}
+              onLayout={(event) => {
+                const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+                setComposerHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+              }}
+            >
               {draftRestored && (
                 <View style={styles.draftBadge}>
                   <MaterialCommunityIcons name="content-save-edit-outline" size={14} color={COLORS.primaryBlue} />
