@@ -153,11 +153,12 @@ const normalizeCursor = (endBefore) => {
   return null;
 };
 
-const mapSnapshotToPhotos = (snapshot) => {
+const mapSnapshotToPhotos = (snapshot, extras = {}) => {
   const data = snapshot.val() || {};
   return Object.entries(data).map(([id, value]) => ({
     id,
     ...value,
+    ...extras,
     timestamp: normalizeTimestamp(value?.timestamp),
   }));
 };
@@ -657,22 +658,43 @@ const subscribeToPrivatePhotos = (
     queryFn = query,
     orderByChildFn = orderByChild,
     limitToLastFn = limitToLast,
+    legacyUserId = null,
   } = {},
 ) => {
   if (!tourId || !userId || typeof callback !== 'function') {
     return () => {};
   }
 
-  const photosRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${userId}`);
-  const photosQuery = queryFn(photosRef, orderByChildFn('timestamp'), limitToLastFn(LIVE_PHOTOS_WINDOW));
+  const ownerScopes = Array.from(new Set(
+    [userId, legacyUserId]
+      .filter((value) => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  ));
+  const snapshotsByOwner = new Map();
 
-  const unsubscribe = onValueFn(photosQuery, (snapshot) => {
-    const photos = mapSnapshotToPhotos(snapshot);
+  const emitMergedPhotos = () => {
+    const photos = [];
+    snapshotsByOwner.forEach((snapshot, ownerScope) => {
+      photos.push(...mapSnapshotToPhotos(snapshot, { ownerScope }));
+    });
     sortPhotosDescending(photos);
     callback(photos);
+  };
+
+  const unsubscribes = ownerScopes.map((ownerScope) => {
+    const photosRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${ownerScope}`);
+    const photosQuery = queryFn(photosRef, orderByChildFn('timestamp'), limitToLastFn(LIVE_PHOTOS_WINDOW));
+
+    return onValueFn(photosQuery, (snapshot) => {
+      snapshotsByOwner.set(ownerScope, snapshot);
+      emitMergedPhotos();
+    });
   });
 
-  return () => unsubscribe();
+  return () => {
+    unsubscribes.forEach((unsubscribe) => unsubscribe());
+  };
 };
 
 /**

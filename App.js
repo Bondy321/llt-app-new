@@ -6,7 +6,7 @@ import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Import Firebase services
-import { auth, authHelpers } from './firebase';
+import { auth, authHelpers, realtimeDb } from './firebase';
 import { joinTour } from './services/bookingServiceRealtime';
 import logger, { maskIdentifier } from './services/loggerService';
 import useDiagnostics from './hooks/useDiagnostics';
@@ -391,6 +391,22 @@ function AppContent() {
       }
     }
 
+    if (user?.uid && normalizedBookingData?.id && realtimeDb) {
+      try {
+        await realtimeDb.ref(`users/${user.uid}`).update({
+          privatePhotoOwnerId: normalizedBookingData.id,
+          privatePhotoOwnerType: 'booking',
+          lastUpdated: Date.now(),
+        });
+      } catch (error) {
+        logger.error('Photobook', 'Failed to persist stable private photo owner identity', {
+          error: error.message,
+          userId: user.uid,
+          bookingRef: normalizedBookingData.id,
+        });
+      }
+    }
+
     setCurrentScreen(postLoginScreen);
     if (tourDetails?.id) {
       await offlineSyncService.saveTourPack(tourDetails.id, 'passenger', {
@@ -550,7 +566,7 @@ function AppContent() {
           />
         );
       case 'Photobook':
-        return <PhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} />;
+        return <PhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} privatePhotoOwnerId={bookingData?.id || user?.uid} />;
       case 'GroupPhotobook':
         return <GroupPhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} userName={bookingData?.passengerNames?.[0] || 'Tour Member'} />;
 case 'Itinerary':
