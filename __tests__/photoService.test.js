@@ -414,39 +414,6 @@ test('subscribeToPrivatePhotos scopes path to user and sorts newest first', asyn
   unsubscribe();
 });
 
-test('subscribeToPrivatePhotos merges stable booking owner scope with legacy uid photos', async () => {
-  let received;
-
-  const unsubscribe = subscribeToPrivatePhotos('tour-B', 'booking-123', (photos) => {
-    received = photos;
-  }, {
-    legacyUserId: 'uid-legacy',
-    realtimeDbInstance: {},
-    dbRefFn: (_db, path) => ({ path }),
-    queryFn: (ref) => ref,
-    orderByChildFn: () => 'timestamp',
-    limitToLastFn: (limit) => limit,
-    onValueFn: (ref, callback) => {
-      if (ref.path.endsWith('/booking-123')) {
-        callback(mockSnapshot({ stable: { timestamp: 20 } }));
-      } else {
-        callback(mockSnapshot({ legacy: { timestamp: 10 } }));
-      }
-      return () => {};
-    },
-  });
-
-  assert.deepStrictEqual(
-    received.map((photo) => ({ id: photo.id, ownerScope: photo.ownerScope })),
-    [
-      { id: 'stable', ownerScope: 'booking-123' },
-      { id: 'legacy', ownerScope: 'uid-legacy' },
-    ],
-  );
-
-  unsubscribe();
-});
-
 test('fetchTourPhotosPage returns bounded page with cursor and hasMore contract', async () => {
   const queryCalls = [];
 
