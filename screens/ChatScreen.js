@@ -1141,7 +1141,20 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       setShowReactionPicker(false);
       setSelectedMessage(null);
 
-      await toggleReaction(tourId, messageId, emoji, currentUser.uid);
+      const result = await toggleReaction(tourId, messageId, emoji, currentUser.uid);
+      if (!result?.success) {
+        console.warn('Failed to toggle chat reaction', {
+          tourId,
+          messageId,
+          emoji,
+          userId: currentUser.uid,
+          error: result?.error || 'Unknown error',
+        });
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        return;
+      }
+
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     },
     [tourId, currentUser?.uid]
   );

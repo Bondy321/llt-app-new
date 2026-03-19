@@ -115,7 +115,7 @@
         ".read": "auth != null",
         "messages": {
           "$messageId": {
-            ".write": "auth != null && (!data.exists() || data.child('senderId').val() === auth.uid || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
+            ".write": "auth != null && ((!data.exists() && (newData.child('senderId').val() === auth.uid || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')) || (data.exists() && (data.child('senderId').val() === auth.uid || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')))",
             "senderId": {
               ".validate": "newData.isString() && (data.exists() ? newData.val() === data.val() : newData.val() === auth.uid || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')"
             },
@@ -127,6 +127,15 @@
             },
             "timestamp": {
               ".validate": "newData.isString() || newData.isNumber()"
+            },
+            "reactions": {
+              "$emoji": {
+                ".write": "auth != null",
+                "$userId": {
+                  ".write": "auth != null && auth.uid === $userId",
+                  ".validate": "!newData.exists() || newData.val() === true"
+                }
+              }
             }
           }
         },
