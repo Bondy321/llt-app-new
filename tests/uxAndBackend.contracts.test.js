@@ -71,3 +71,14 @@ test('Logger service keeps batching/backoff and sensitive-data redaction', () =>
   assert.match(src, /redactSensitiveData/);
   assert.match(src, /routeUserId/);
 });
+
+
+test('Realtime Database rules allow authenticated users to write only their own reaction leaf under chat messages', () => {
+  const rules = JSON.parse(read('database.rules.json'));
+  const reactionRules = rules.rules.chats.$tourId.messages.$messageId.reactions;
+
+  assert.ok(reactionRules);
+  assert.equal(reactionRules.$emoji['.write'], 'auth != null');
+  assert.equal(reactionRules.$emoji.$userId['.write'], 'auth != null && auth.uid === $userId');
+  assert.equal(reactionRules.$emoji.$userId['.validate'], '!newData.exists() || newData.val() === true');
+});
