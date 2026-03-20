@@ -82,3 +82,18 @@ test('Realtime Database rules allow authenticated users to write only their own 
   assert.equal(reactionRules.$emoji.$userId['.write'], 'auth != null && auth.uid === $userId');
   assert.equal(reactionRules.$emoji.$userId['.validate'], '!newData.exists() || newData.val() === true');
 });
+
+
+test('Realtime Database rules support image chat payloads and private photo owner self-heal bootstrap', () => {
+  const rules = JSON.parse(read('database.rules.json'));
+  const messageValidate = rules.rules.chats.$tourId.messages.$messageId['.validate'];
+  const privatePhotosRead = rules.rules.private_tour_photos.$tourId.$ownerId['.read'];
+  const photobookScreen = read('screens/PhotobookScreen.js');
+
+  assert.match(messageValidate, /newData\.child\('type'\)\.val\(\) === 'image'/);
+  assert.match(messageValidate, /newData\.child\('thumbnailUrl'\)/);
+  assert.match(privatePhotosRead, /auth\.uid === \$ownerId/);
+  assert.match(privatePhotosRead, /privatePhotoOwnerId/);
+  assert.match(photobookScreen, /ensurePrivatePhotoOwnerAccess/);
+  assert.match(photobookScreen, /realtimeDb\.ref\(`users\/\$\{authUid\}`\)\.update/);
+});

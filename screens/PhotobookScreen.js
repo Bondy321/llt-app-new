@@ -26,6 +26,8 @@ import { uploadPhoto, subscribeToPrivatePhotos, updatePhotoCaption } from '../se
 import { optimizeImageForUpload, formatBytes } from '../services/imageOptimizationService';
 import { deletePrivatePhoto } from '../services/photoService';
 import ImageViewer from '../components/ImageViewer';
+import { auth, realtimeDb } from '../firebase';
+import logger from '../services/loggerService';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: windowWidth } = Dimensions.get('window');
@@ -53,20 +55,63 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId })
   // Image loading states for skeleton
   const [loadedImages, setLoadedImages] = useState({});
 
+  const ensurePrivatePhotoOwnerAccess = useCallback(async () => {
+    const authUid = auth?.currentUser?.uid;
+    if (!authUid || !privatePhotoOwnerId || !realtimeDb) {
+      return;
+    }
+
+    try {
+      await realtimeDb.ref(`users/${authUid}`).update({
+        privatePhotoOwnerId,
+        privatePhotoOwnerType: 'booking',
+        lastUpdated: Date.now(),
+      });
+    } catch (error) {
+      logger.error('Photobook', 'Failed to refresh private photo owner identity before private photo access', {
+        error: error.message,
+        authUid,
+        privatePhotoOwnerId,
+        tourId,
+      });
+    }
+  }, [privatePhotoOwnerId, tourId]);
+
   useEffect(() => {
     if (!tourId || !privatePhotoOwnerId) return undefined;
 
-    setLoadingPhotos(true);
-    const unsubscribe = subscribeToPrivatePhotos(tourId, privatePhotoOwnerId, (photoList) => {
-      setPhotos(photoList);
-      setLoadingPhotos(false);
-      setRefreshing(false);
+    let unsubscribe = null;
+    let isCancelled = false;
+
+    const bootstrapPrivatePhotos = async () => {
+      setLoadingPhotos(true);
+      await ensurePrivatePhotoOwnerAccess();
+      if (isCancelled) return;
+
+      unsubscribe = subscribeToPrivatePhotos(tourId, privatePhotoOwnerId, (photoList) => {
+        setPhotos(photoList);
+        setLoadingPhotos(false);
+        setRefreshing(false);
+      });
+    };
+
+    bootstrapPrivatePhotos().catch((error) => {
+      logger.error('Photobook', 'Failed to bootstrap private photo subscription', {
+        error: error.message,
+        privatePhotoOwnerId,
+        tourId,
+      });
+      if (!isCancelled) {
+        setLoadingPhotos(false);
+        setRefreshing(false);
+      }
     });
 
     return () => {
+      isCancelled = true;
       if (unsubscribe) unsubscribe();
     };
-  }, [tourId, privatePhotoOwnerId]);
+  }, [ensurePrivatePhotoOwnerAccess, privatePhotoOwnerId, tourId]);
 
   const visiblePhotos = useMemo(() => {
     const scoped = mineOnly ? photos.filter((photo) => photo.userId === privatePhotoOwnerId) : photos;
@@ -218,6 +263,7 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId })
     setPendingUploads((prev) => prev.map((item) => item.id === pending.id ? { ...item, status: 'uploading', error: null, progress: 0 } : item));
 
     try {
+      await ensurePrivatePhotoOwnerAccess();
       await uploadPhoto(pending.uri, tourId, privatePhotoOwnerId, pending.caption.trim(), {
         visibility: 'private',
         thumbnailUri: pending.thumbnailUri || null,
