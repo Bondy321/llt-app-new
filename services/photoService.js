@@ -39,6 +39,20 @@ const DOWNLOAD_URL_RETRYABLE_CODES = new Set([
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const resolveRealtimeTimestamp = (serverTimestampFn, nowFn = Date.now) => {
+  try {
+    const candidate = typeof serverTimestampFn === 'function' ? serverTimestampFn() : null;
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+      return candidate;
+    }
+  } catch (error) {
+    // Fall back to a client timestamp when the SDK placeholder cannot be serialized as a number.
+  }
+
+  const fallback = nowFn();
+  return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : Date.now();
+};
+
 const getDownloadUrlWithRetry = async (getDownloadURLFn, fileRef, { maxAttempts = 5, initialDelayMs = 200 } = {}) => {
   let attempt = 0;
   let lastError = null;
@@ -415,6 +429,7 @@ const uploadPhoto = async (
     onProgress = null,
     thumbnailUri = null,
     optimizationMetrics = null,
+    nowFn = Date.now,
   } = {}
 ) => {
   try {
@@ -534,7 +549,7 @@ const uploadPhoto = async (
         fullUrl: downloadURL,
         userId: validatedUserId,
         caption: validatedCaption,
-        timestamp: serverTimestampFn(),
+        timestamp: resolveRealtimeTimestamp(serverTimestampFn, nowFn),
         storagePath,
         fileSize: blob.size,
         fileType: blob.type,
@@ -845,6 +860,7 @@ const updatePhotoCaption = async (
     dbRefFn = databaseRef,
     updateFn = update,
     serverTimestampFn = serverTimestamp,
+    nowFn = Date.now,
   } = {},
 ) => {
   const validatedTourId = validateTourId(tourId);
@@ -860,7 +876,7 @@ const updatePhotoCaption = async (
   const photoRef = dbRefFn(realtimeDbInstance, basePath);
   await updateFn(photoRef, {
     caption: validatedCaption,
-    captionUpdatedAt: serverTimestampFn(),
+    captionUpdatedAt: resolveRealtimeTimestamp(serverTimestampFn, nowFn),
     captionEditedBy: validatedUserId,
   });
 
