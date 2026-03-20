@@ -148,6 +148,36 @@ test('uploadPhoto stores private photos in private_tour_photos namespaces', asyn
   assert.strictEqual(blob.closed, true);
 });
 
+
+test('uploadPhoto falls back to a numeric client timestamp when server timestamp is a placeholder object', async (t) => {
+  const originalNow = Date.now;
+  Date.now = () => 1700000000123;
+  t.after(() => {
+    Date.now = originalNow;
+  });
+
+  const blob = createMockBlob();
+  let dbPayload;
+
+  await uploadPhoto('file://private.jpg', 'tour-rt', 'owner-1', 'Fallback timestamp', {
+    visibility: 'private',
+    storageInstance: {},
+    realtimeDbInstance: {},
+    fetchFn: async () => ({ ok: true, blob: async () => blob }),
+    storageRefFn: (_storage, path) => ({ path }),
+    uploadBytesFn: async () => {},
+    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
+    dbRefFn: mockDbRef,
+    pushFn: () => ({ key: 'private-photo-ts' }),
+    setFn: async (_ref, payload) => {
+      dbPayload = payload;
+    },
+    serverTimestampFn: () => ({ '.sv': 'timestamp' }),
+  });
+
+  assert.strictEqual(dbPayload.timestamp, 1700000000123);
+});
+
 test('uploadPhoto rejects unsupported image types', async () => {
   const blob = createMockBlob({ type: 'image/gif' });
 
@@ -567,6 +597,34 @@ test('uploadPhoto reports progress updates when resumable upload is available', 
   });
 
   assert.deepStrictEqual(progress, [0.25, 1]);
+});
+
+
+test('updatePhotoCaption falls back to a numeric client timestamp when server timestamp is a placeholder object', async (t) => {
+  const originalNow = Date.now;
+  Date.now = () => 777;
+  t.after(() => {
+    Date.now = originalNow;
+  });
+
+  let payload;
+
+  await updatePhotoCaption({
+    tourId: 'tour-1',
+    photoId: 'photo-1',
+    userId: 'user-1',
+    caption: 'Updated caption',
+    visibility: 'private',
+  }, {
+    realtimeDbInstance: {},
+    dbRefFn: () => ({ path: 'ignored' }),
+    updateFn: async (_ref, values) => {
+      payload = values;
+    },
+    serverTimestampFn: () => ({ '.sv': 'timestamp' }),
+  });
+
+  assert.strictEqual(payload.captionUpdatedAt, 777);
 });
 
 test('updatePhotoCaption writes caption edit metadata for group photo', async () => {
