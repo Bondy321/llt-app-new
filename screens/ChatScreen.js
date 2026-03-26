@@ -287,13 +287,83 @@ const ReactionPicker = ({ visible, onClose, onSelectReaction, position }) => {
 };
 
 // ==================== MESSAGE ACTION MENU ====================
-const MessageActionMenu = ({ visible, onClose, message, onCopy, onReply, onReact, onDelete, canDelete }) => {
+const MessageActionMenu = ({
+  visible,
+  onClose,
+  message,
+  onCopy,
+  onReply,
+  onReact,
+  onOpenReactionPicker,
+  onDelete,
+  onCopyLink,
+  onOpenLink,
+  canDelete,
+  insets,
+}) => {
   if (!visible) return null;
+
+  const safePreview = buildReplyPreviewText(message).slice(0, 120);
+  const normalizedMessageTime = normalizeTimestamp(message?.timestamp);
+  const messageTimeLabel = normalizedMessageTime
+    ? new Date(normalizedMessageTime).toLocaleString([], {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    })
+    : 'Unknown time';
+  const firstLinkMatch = typeof message?.text === 'string' ? message.text.match(URL_REGEX) : null;
+  const hasLink = Array.isArray(firstLinkMatch) && firstLinkMatch.length > 0;
 
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.actionMenuOverlay} onPress={onClose}>
-        <View style={styles.actionMenu}>
+        <Pressable
+          style={[styles.actionMenuSheet, { paddingBottom: Math.max(insets?.bottom || 0, SPACING.md) }]}
+          onPress={() => {}}
+        >
+          <View style={styles.actionMenuHandle} />
+          <View style={styles.actionMessagePreviewCard}>
+            <View style={styles.actionMessagePreviewHeader}>
+              <Text style={styles.actionMessageSender} numberOfLines={1}>
+                {message?.senderName || 'Tour Participant'}
+              </Text>
+              <Text style={styles.actionMessageTime}>{messageTimeLabel}</Text>
+            </View>
+            <Text style={styles.actionMessagePreviewText} numberOfLines={3}>
+              {safePreview || 'Message'}
+            </Text>
+          </View>
+
+          <View style={styles.actionQuickReactionRow}>
+            {QUICK_REACTIONS.map((emoji) => (
+              <TouchableOpacity
+                key={`quick-reaction-${emoji}`}
+                style={styles.actionQuickReaction}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  onReact(emoji);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.actionQuickReactionEmoji}>{emoji}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity
+              style={styles.actionQuickReaction}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                onOpenReactionPicker();
+              }}
+              activeOpacity={0.7}
+            >
+              <MaterialCommunityIcons name="dots-horizontal" size={20} color={COLORS.secondaryText} />
+            </TouchableOpacity>
+          </View>
+
           <TouchableOpacity
             style={styles.actionMenuItem}
             onPress={() => {
@@ -309,23 +379,37 @@ const MessageActionMenu = ({ visible, onClose, message, onCopy, onReply, onReact
             style={styles.actionMenuItem}
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              onReact();
-            }}
-          >
-            <MaterialCommunityIcons name="emoticon-happy-outline" size={22} color={COLORS.darkText} />
-            <Text style={styles.actionMenuText}>React</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionMenuItem}
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               onReply();
             }}
           >
             <MaterialCommunityIcons name="reply-outline" size={22} color={COLORS.darkText} />
             <Text style={styles.actionMenuText}>Reply</Text>
           </TouchableOpacity>
+
+          {hasLink && (
+            <>
+              <TouchableOpacity
+                style={styles.actionMenuItem}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  onOpenLink();
+                }}
+              >
+                <MaterialCommunityIcons name="open-in-new" size={22} color={COLORS.darkText} />
+                <Text style={styles.actionMenuText}>Open Link</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionMenuItem}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  onCopyLink();
+                }}
+              >
+                <MaterialCommunityIcons name="link-variant" size={22} color={COLORS.darkText} />
+                <Text style={styles.actionMenuText}>Copy Link</Text>
+              </TouchableOpacity>
+            </>
+          )}
 
           {canDelete && (
             <TouchableOpacity
@@ -339,7 +423,7 @@ const MessageActionMenu = ({ visible, onClose, message, onCopy, onReply, onReact
               <Text style={[styles.actionMenuText, { color: THEME.error }]}>Delete</Text>
             </TouchableOpacity>
           )}
-        </View>
+        </Pressable>
       </Pressable>
     </Modal>
   );
@@ -1259,6 +1343,48 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     setSelectedMessage(null);
   }, [selectedMessage]);
 
+  const getSelectedMessageFirstLink = useCallback(() => {
+    if (!selectedMessage || typeof selectedMessage.text !== 'string') return null;
+    const matches = selectedMessage.text.match(URL_REGEX);
+    return matches?.[0] || null;
+  }, [selectedMessage]);
+
+  const handleCopyFirstLink = useCallback(() => {
+    const firstLink = getSelectedMessageFirstLink();
+    if (!firstLink) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+
+    Clipboard.setString(firstLink);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setShowActionMenu(false);
+    setSelectedMessage(null);
+  }, [getSelectedMessageFirstLink]);
+
+  const handleOpenFirstLink = useCallback(async () => {
+    const firstLink = getSelectedMessageFirstLink();
+    if (!firstLink) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+
+    try {
+      const supported = await Linking.canOpenURL(firstLink);
+      if (!supported) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        return;
+      }
+      await Linking.openURL(firstLink);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch (error) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setShowActionMenu(false);
+      setSelectedMessage(null);
+    }
+  }, [getSelectedMessageFirstLink]);
+
   // Handle delete message
   const handleDeleteMessage = useCallback(async () => {
     if (selectedMessage) {
@@ -2137,12 +2263,21 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         message={selectedMessage}
         onCopy={handleCopyMessage}
         onReply={handleReplyToMessage}
-        onReact={() => {
+        onReact={(emoji) => {
+          setShowActionMenu(false);
+          if (selectedMessage?.id && emoji) {
+            handleReaction(selectedMessage.id, emoji);
+          }
+        }}
+        onOpenReactionPicker={() => {
           setShowActionMenu(false);
           setShowReactionPicker(true);
         }}
+        onCopyLink={handleCopyFirstLink}
+        onOpenLink={handleOpenFirstLink}
         onDelete={handleDeleteMessage}
         canDelete={selectedMessage?.senderId === currentUser?.uid || isDriver}
+        insets={insets}
       />
 
       <ReactionPicker
@@ -3105,24 +3240,85 @@ const styles = StyleSheet.create({
   actionMenuOverlay: {
     flex: 1,
     backgroundColor: COLORS.overlay,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: 'flex-end',
   },
-  actionMenu: {
+  actionMenuSheet: {
     backgroundColor: COLORS.white,
-    borderRadius: RADIUS.lg,
-    paddingVertical: 8,
-    width: 200,
+    borderTopLeftRadius: RADIUS.xl,
+    borderTopRightRadius: RADIUS.xl,
+    paddingTop: SPACING.sm,
+    paddingHorizontal: SPACING.md,
     ...SHADOWS.xl,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
+  actionMenuHandle: {
+    width: 44,
+    height: 4,
+    borderRadius: RADIUS.full,
+    backgroundColor: COLORS.border,
+    alignSelf: 'center',
+    marginBottom: SPACING.md,
+  },
+  actionMessagePreviewCard: {
+    borderRadius: RADIUS.lg,
+    padding: SPACING.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surfaceSecondary,
+    marginBottom: SPACING.sm,
+  },
+  actionMessagePreviewHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.xs,
+    gap: SPACING.sm,
+  },
+  actionMessageSender: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.darkText,
+    flex: 1,
+  },
+  actionMessageTime: {
+    fontSize: 12,
+    color: COLORS.secondaryText,
+    fontWeight: '500',
+  },
+  actionMessagePreviewText: {
+    fontSize: 14,
+    lineHeight: 19,
+    color: COLORS.darkText,
+    fontWeight: '500',
+  },
+  actionQuickReactionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: SPACING.sm,
+    gap: SPACING.xs,
+  },
+  actionQuickReaction: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: THEME.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionQuickReactionEmoji: {
+    fontSize: 22,
+  },
   actionMenuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 20,
+    paddingVertical: 13,
+    paddingHorizontal: 10,
     gap: 14,
+    borderRadius: RADIUS.md,
   },
   actionMenuItemDanger: {
     borderTopWidth: 1,
