@@ -50,6 +50,7 @@ import { auth } from '../firebase';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import SyncStatusBanner from '../components/SyncStatusBanner';
 const { buildChatSearchResults, normalizeSearchQuery } = require('../utils/chatSearch');
+const { buildUnreadSummary } = require('../utils/chatUnreadSummary');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -59,6 +60,7 @@ const DATE_SEPARATOR_HEIGHT = 40;
 const UNREAD_SEPARATOR_HEIGHT = 36;
 const ESTIMATED_MESSAGE_ROW_HEIGHT = 120;
 const SEARCH_RESULT_PREVIEW_LIMIT = 3;
+const CATCH_UP_BUBBLE_DISTANCE_THRESHOLD = 220;
 
 const SEARCH_FILTERS = [
   { key: 'all', label: 'All', icon: 'message-text-outline' },
@@ -435,6 +437,33 @@ const NewMessagesBanner = ({ count, onPress }) => {
         {count} new message{count > 1 ? 's' : ''}
       </Text>
     </TouchableOpacity>
+  );
+};
+
+const UnreadCatchUpCard = ({ summary, onJumpToUnread, onJumpToLatest }) => {
+  if (!summary || !summary.count) return null;
+
+  return (
+    <View style={styles.catchUpCard}>
+      <View style={styles.catchUpCardHeader}>
+        <MaterialCommunityIcons name="chat-alert-outline" size={18} color={COLORS.primaryBlue} />
+        <Text style={styles.catchUpCardTitle}>
+          {summary.count} unread message{summary.count > 1 ? 's' : ''}
+        </Text>
+      </View>
+      <Text style={styles.catchUpCardBody}>
+        Latest from <Text style={styles.catchUpCardBodyStrong}>{summary.latestSender}</Text>
+        {summary.latestRelativeLabel ? ` · ${summary.latestRelativeLabel}` : ''}
+      </Text>
+      <View style={styles.catchUpActions}>
+        <TouchableOpacity style={styles.catchUpButtonSecondary} onPress={onJumpToUnread} activeOpacity={0.85}>
+          <Text style={styles.catchUpButtonSecondaryText}>First unread</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.catchUpButtonPrimary} onPress={onJumpToLatest} activeOpacity={0.85}>
+          <Text style={styles.catchUpButtonPrimaryText}>Latest</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 };
 
@@ -1365,7 +1394,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
   const showJumpToUnread = useMemo(() => {
     if (!unreadAnchorMessageId || unreadAnchorY == null) return false;
-    return Math.abs(currentScrollY - unreadAnchorY) > 180;
+    return Math.abs(currentScrollY - unreadAnchorY) > CATCH_UP_BUBBLE_DISTANCE_THRESHOLD;
   }, [unreadAnchorMessageId, unreadAnchorY, currentScrollY]);
 
   const jumpToUnread = useCallback(() => {
@@ -1376,6 +1405,13 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     if (unreadAnchorY == null) return;
     messageListRef.current?.scrollToOffset({ offset: Math.max(unreadAnchorY - 80, 0), animated: true });
   }, [unreadAnchorIndex, unreadAnchorY]);
+
+  const unreadSummary = useMemo(() => (
+    buildUnreadSummary(messages, {
+      lastSeenTimestamp,
+      currentUserId: currentUser?.uid || null,
+    })
+  ), [messages, lastSeenTimestamp, currentUser?.uid]);
 
   const searchResults = useMemo(
     () => buildChatSearchResults(messages, searchQuery),
@@ -1969,10 +2005,20 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
             />
 
             {showJumpToUnread && (
-              <TouchableOpacity style={styles.jumpToUnreadFab} onPress={jumpToUnread} activeOpacity={0.85}>
-                <MaterialCommunityIcons name="message-badge" size={20} color={COLORS.white} />
-                <Text style={styles.jumpToUnreadFabText}>Jump to unread</Text>
-              </TouchableOpacity>
+              <>
+                <UnreadCatchUpCard
+                  summary={unreadSummary}
+                  onJumpToUnread={jumpToUnread}
+                  onJumpToLatest={() => {
+                    scrollToBottom(true);
+                    markActiveChatRead({ force: true });
+                  }}
+                />
+                <TouchableOpacity style={styles.jumpToUnreadFab} onPress={jumpToUnread} activeOpacity={0.85}>
+                  <MaterialCommunityIcons name="message-badge" size={20} color={COLORS.white} />
+                  <Text style={styles.jumpToUnreadFabText}>Jump to unread</Text>
+                </TouchableOpacity>
+              </>
             )}
 
             {/* Attachment Menu */}
@@ -2819,6 +2865,68 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
+  catchUpCard: {
+    position: 'absolute',
+    bottom: 182,
+    right: SPACING.lg,
+    left: SPACING.lg,
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}20`,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    ...SHADOWS.md,
+  },
+  catchUpCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    marginBottom: 4,
+  },
+  catchUpCardTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.darkText,
+  },
+  catchUpCardBody: {
+    fontSize: 12,
+    color: COLORS.secondaryText,
+    marginBottom: SPACING.xs,
+  },
+  catchUpCardBodyStrong: {
+    fontWeight: '700',
+    color: COLORS.darkText,
+  },
+  catchUpActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: SPACING.xs,
+  },
+  catchUpButtonSecondary: {
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}30`,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 6,
+    backgroundColor: `${COLORS.primaryBlue}08`,
+  },
+  catchUpButtonSecondaryText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.primaryBlue,
+  },
+  catchUpButtonPrimary: {
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 6,
+    backgroundColor: COLORS.primaryBlue,
+  },
+  catchUpButtonPrimaryText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.white,
+  },
 
   jumpToUnreadFab: {
     position: 'absolute',
