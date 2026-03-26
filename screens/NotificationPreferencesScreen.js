@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   StyleSheet,
   Text,
@@ -41,20 +41,45 @@ const COLORS = {
   headerBg: THEME.white,
 };
 
-const PreferenceSection = ({ title, children }) => (
+const PreferenceSection = ({ title, subtitle, children, enabledCount, totalCount }) => (
   <View style={styles.section}>
-    <Text style={styles.sectionTitle}>{title}</Text>
+    <View style={styles.sectionHeaderRow}>
+      <View style={styles.sectionHeaderTextWrap}>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        {subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}
+      </View>
+      {typeof enabledCount === 'number' && typeof totalCount === 'number' ? (
+        <View style={styles.sectionCountPill}>
+          <Text style={styles.sectionCountText}>{enabledCount}/{totalCount} on</Text>
+        </View>
+      ) : null}
+    </View>
     <View style={styles.sectionContent}>{children}</View>
   </View>
 );
 
-const ToggleRow = ({ label, icon, value, onValueChange, color = COLORS.primaryBlue }) => (
+const ToggleRow = ({
+  label,
+  description,
+  icon,
+  value,
+  onValueChange,
+  color = COLORS.primaryBlue,
+  badge,
+  disabled = false,
+}) => (
   <View style={styles.toggleRow}>
     <View style={styles.labelContainer}>
       <View style={[styles.iconCircle, { backgroundColor: `${color}20` }]}>
         <MaterialCommunityIcons name={icon} size={20} color={color} />
       </View>
-      <Text style={styles.labelText}>{label}</Text>
+      <View style={styles.labelTextWrap}>
+        <View style={styles.labelTitleRow}>
+          <Text style={styles.labelText}>{label}</Text>
+          {badge ? <Text style={styles.labelBadge}>{badge}</Text> : null}
+        </View>
+        {description ? <Text style={styles.labelDescription}>{description}</Text> : null}
+      </View>
     </View>
     <Switch
       trackColor={{ false: COLORS.border, true: color }}
@@ -62,6 +87,7 @@ const ToggleRow = ({ label, icon, value, onValueChange, color = COLORS.primaryBl
       ios_backgroundColor={COLORS.border}
       onValueChange={onValueChange}
       value={value}
+      disabled={disabled}
     />
   </View>
 );
@@ -89,6 +115,69 @@ export default function NotificationPreferencesScreen({
     hiking_nature: false,
   };
 
+  const opsPreferenceMeta = {
+    driver_updates: {
+      label: 'Driver Announcements',
+      description: 'Critical updates from your driver and operations team.',
+      icon: 'bullhorn-outline',
+      color: COLORS.warning,
+      badge: 'Essential',
+    },
+    itinerary_changes: {
+      label: 'Itinerary Updates',
+      description: 'Timing changes, stop swaps, and schedule adjustments.',
+      icon: 'clock-time-four-outline',
+      color: COLORS.primaryBlue,
+      badge: 'Essential',
+    },
+    group_chat: {
+      label: 'Group Chat Messages',
+      description: 'New messages in your tour conversation.',
+      icon: 'chat-processing-outline',
+      color: COLORS.primaryLight,
+    },
+    group_photos: {
+      label: 'New Photo Uploads',
+      description: 'Alerts when your group shares new memories.',
+      icon: 'image-multiple-outline',
+      color: COLORS.successGreen,
+    },
+  };
+
+  const marketingPreferenceMeta = {
+    steam_trains: {
+      label: 'Steam Train Journeys',
+      description: 'Scenic heritage rail adventures across Scotland.',
+      icon: 'train',
+      color: COLORS.primaryBlue,
+    },
+    mystery_tours: {
+      label: 'Mystery Tours',
+      description: 'Surprise destinations with curated premium experiences.',
+      icon: 'incognito',
+      color: COLORS.primaryLight,
+    },
+    scotland_classics: {
+      label: 'Classic Scotland',
+      description: 'Castles, lochs, and signature heritage routes.',
+      icon: 'castle',
+      color: COLORS.primaryBlue,
+    },
+    vip_experiences: {
+      label: 'VIP & Luxury',
+      description: 'High-touch premium experiences and limited departures.',
+      icon: 'star-face',
+      color: COLORS.warning,
+      badge: 'Premium',
+    },
+    hiking_nature: {
+      label: 'Hiking & Nature',
+      description: 'Outdoor-focused trips through Highlands and scenic trails.',
+      icon: 'pine-tree',
+      color: COLORS.successGreen,
+    },
+  };
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -112,6 +201,9 @@ export default function NotificationPreferencesScreen({
     initialMarketingPrefs !== null &&
     (JSON.stringify(opsPrefs) !== JSON.stringify(initialOpsPrefs) ||
       JSON.stringify(marketingPrefs) !== JSON.stringify(initialMarketingPrefs));
+
+  const opsEnabledCount = useMemo(() => Object.values(opsPrefs).filter(Boolean).length, [opsPrefs]);
+  const marketingEnabledCount = useMemo(() => Object.values(marketingPrefs).filter(Boolean).length, [marketingPrefs]);
 
   const formatTimestamp = (isoDate) => {
     const date = new Date(isoDate);
@@ -172,35 +264,41 @@ export default function NotificationPreferencesScreen({
   const handleSave = async () => {
     setSaving(true);
     setStatusBanner(null);
-    
-    // Combine all preferences into a clean object structure
-    const fullPreferences = {
-      ops: opsPrefs,
-      marketing: marketingPrefs,
-      updatedAt: new Date().toISOString()
-    };
 
-    const result = await saveUserPreferences(userId, fullPreferences);
+    try {
+      const fullPreferences = {
+        ops: opsPrefs,
+        marketing: marketingPrefs,
+        updatedAt: new Date().toISOString(),
+      };
 
-    setSaving(false);
+      const result = await saveUserPreferences(userId, fullPreferences);
 
-    if (result.success) {
-      if (result?.permissionState) {
-        setPermissionStatus(result.permissionState);
+      if (result.success) {
+        if (result?.permissionState) {
+          setPermissionStatus(result.permissionState);
+        }
+        setInitialOpsPrefs({ ...opsPrefs });
+        setInitialMarketingPrefs({ ...marketingPrefs });
+        const savedAt = new Date().toISOString();
+        setLastSavedAt(savedAt);
+        setStatusBanner({
+          type: 'success',
+          message: result.warning || "Preferences saved. We'll only send notifications based on your choices.",
+        });
+      } else {
+        setStatusBanner({
+          type: 'error',
+          message: 'Could not save settings. Please check your internet connection and try again.',
+        });
       }
-      setInitialOpsPrefs({ ...opsPrefs });
-      setInitialMarketingPrefs({ ...marketingPrefs });
-      const savedAt = new Date().toISOString();
-      setLastSavedAt(savedAt);
-      setStatusBanner({
-        type: 'success',
-        message: result.warning || "Preferences saved. We'll only send notifications based on your choices.",
-      });
-    } else {
+    } catch (error) {
       setStatusBanner({
         type: 'error',
-        message: 'Could not save settings. Please check your internet connection and try again.',
+        message: 'Unexpected error while saving preferences. Please retry.',
       });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -264,6 +362,67 @@ export default function NotificationPreferencesScreen({
 
   const handleMaybeLater = async () => {
     await completeOnboarding('skipped');
+  };
+
+  const applyOpsPreset = (preset) => {
+    if (preset === 'all') {
+      setOpsPrefs({
+        driver_updates: true,
+        itinerary_changes: true,
+        group_chat: true,
+        group_photos: true,
+      });
+      return;
+    }
+
+    if (preset === 'essential') {
+      setOpsPrefs({
+        driver_updates: true,
+        itinerary_changes: true,
+        group_chat: true,
+        group_photos: false,
+      });
+      return;
+    }
+
+    setOpsPrefs({
+      driver_updates: false,
+      itinerary_changes: false,
+      group_chat: false,
+      group_photos: false,
+    });
+  };
+
+  const applyMarketingPreset = (preset) => {
+    if (preset === 'recommended') {
+      setMarketingPrefs({
+        steam_trains: true,
+        mystery_tours: true,
+        scotland_classics: true,
+        vip_experiences: false,
+        hiking_nature: true,
+      });
+      return;
+    }
+
+    if (preset === 'all') {
+      setMarketingPrefs({
+        steam_trains: true,
+        mystery_tours: true,
+        scotland_classics: true,
+        vip_experiences: true,
+        hiking_nature: true,
+      });
+      return;
+    }
+
+    setMarketingPrefs({
+      steam_trains: false,
+      mystery_tours: false,
+      scotland_classics: false,
+      vip_experiences: false,
+      hiking_nature: false,
+    });
   };
 
   const onboardingCopy = {
@@ -439,75 +598,88 @@ export default function NotificationPreferencesScreen({
             : 'Customize your alerts. We promise not to spam you.'}
         </Text>
 
+        {!isOnboarding ? (
+          <View style={styles.permissionSummaryCard}>
+            <View style={styles.permissionSummaryHeader}>
+              <MaterialCommunityIcons name={permissionTone.icon} size={18} color={permissionTone.color} />
+              <Text style={styles.permissionSummaryTitle}>Notification Permission</Text>
+            </View>
+            <Text style={[styles.permissionSummaryState, { color: permissionTone.color }]}>{permissionTone.label}</Text>
+            {permissionStatus?.description ? (
+              <Text style={styles.permissionSummaryBody}>{permissionStatus.description}</Text>
+            ) : null}
+          </View>
+        ) : null}
+
         {/* SECTION 1: ON TOUR */}
-        <PreferenceSection title="While On Tour">
-          <ToggleRow
-            label="Driver Announcements"
-            icon="bullhorn-outline"
-            value={opsPrefs.driver_updates}
-            onValueChange={(v) => setOpsPrefs({ ...opsPrefs, driver_updates: v })}
-            color={COLORS.warning}
-          />
-          <ToggleRow
-            label="Itinerary Updates"
-            icon="clock-time-four-outline"
-            value={opsPrefs.itinerary_changes}
-            onValueChange={(v) => setOpsPrefs({ ...opsPrefs, itinerary_changes: v })}
-          />
-          <ToggleRow
-            label="Group Chat Messages"
-            icon="chat-processing-outline"
-            value={opsPrefs.group_chat}
-            onValueChange={(v) => setOpsPrefs({ ...opsPrefs, group_chat: v })}
-          />
-          <ToggleRow
-            label="New Photo Uploads"
-            icon="image-multiple-outline"
-            value={opsPrefs.group_photos}
-            onValueChange={(v) => setOpsPrefs({ ...opsPrefs, group_photos: v })}
-          />
+        <PreferenceSection
+          title="While On Tour"
+          subtitle="Control operational updates during active tours."
+          enabledCount={opsEnabledCount}
+          totalCount={Object.keys(defaultOpsPrefs).length}
+        >
+          <View style={styles.presetRow}>
+            <TouchableOpacity style={styles.presetChip} onPress={() => applyOpsPreset('essential')}>
+              <Text style={styles.presetChipText}>Essential</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.presetChip} onPress={() => applyOpsPreset('all')}>
+              <Text style={styles.presetChipText}>All on</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.presetChip} onPress={() => applyOpsPreset('none')}>
+              <Text style={styles.presetChipText}>All off</Text>
+            </TouchableOpacity>
+          </View>
+          {Object.entries(opsPreferenceMeta).map(([key, meta]) => (
+            <ToggleRow
+              key={key}
+              label={meta.label}
+              description={meta.description}
+              icon={meta.icon}
+              value={opsPrefs[key]}
+              onValueChange={(v) => setOpsPrefs({ ...opsPrefs, [key]: v })}
+              color={meta.color}
+              badge={meta.badge}
+              disabled={saving || onboardingActionBusy}
+            />
+          ))}
         </PreferenceSection>
 
         {/* SECTION 2: FUTURE TOURS */}
-        <PreferenceSection title="Future Tour Interests">
+        <PreferenceSection
+          title="Future Tour Interests"
+          subtitle="Tell us what you want to hear about after this trip."
+          enabledCount={marketingEnabledCount}
+          totalCount={Object.keys(defaultMarketingPrefs).length}
+        >
           <Text style={styles.subText}>
             Be the first to know when we release dates for these specific experiences:
           </Text>
-          
-          <ToggleRow
-            label="Steam Train Journeys"
-            icon="train"
-            value={marketingPrefs.steam_trains}
-            onValueChange={(v) => setMarketingPrefs({ ...marketingPrefs, steam_trains: v })}
-            color={COLORS.primaryBlue}
-          />
-          <ToggleRow
-            label="Mystery Tours"
-            icon="incognito"
-            value={marketingPrefs.mystery_tours}
-            onValueChange={(v) => setMarketingPrefs({ ...marketingPrefs, mystery_tours: v })}
-            color={COLORS.primaryLight}
-          />
-          <ToggleRow
-            label="Classic Scotland"
-            icon="castle"
-            value={marketingPrefs.scotland_classics}
-            onValueChange={(v) => setMarketingPrefs({ ...marketingPrefs, scotland_classics: v })}
-          />
-          <ToggleRow
-            label="VIP & Luxury"
-            icon="star-face"
-            value={marketingPrefs.vip_experiences}
-            onValueChange={(v) => setMarketingPrefs({ ...marketingPrefs, vip_experiences: v })}
-            color={COLORS.warning}
-          />
-           <ToggleRow
-            label="Hiking & Nature"
-            icon="pine-tree"
-            value={marketingPrefs.hiking_nature}
-            onValueChange={(v) => setMarketingPrefs({ ...marketingPrefs, hiking_nature: v })}
-            color={COLORS.successGreen}
-          />
+
+          <View style={styles.presetRow}>
+            <TouchableOpacity style={styles.presetChip} onPress={() => applyMarketingPreset('recommended')}>
+              <Text style={styles.presetChipText}>Recommended</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.presetChip} onPress={() => applyMarketingPreset('all')}>
+              <Text style={styles.presetChipText}>All on</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.presetChip} onPress={() => applyMarketingPreset('none')}>
+              <Text style={styles.presetChipText}>All off</Text>
+            </TouchableOpacity>
+          </View>
+
+          {Object.entries(marketingPreferenceMeta).map(([key, meta]) => (
+            <ToggleRow
+              key={key}
+              label={meta.label}
+              description={meta.description}
+              icon={meta.icon}
+              value={marketingPrefs[key]}
+              onValueChange={(v) => setMarketingPrefs({ ...marketingPrefs, [key]: v })}
+              color={meta.color}
+              badge={meta.badge}
+              disabled={saving || onboardingActionBusy}
+            />
+          ))}
         </PreferenceSection>
 
         {!isOnboarding && hasChanges ? (
@@ -751,7 +923,35 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: COLORS.darkText,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
     marginBottom: 16,
+    alignItems: 'flex-start',
+  },
+  sectionHeaderTextWrap: {
+    flex: 1,
+  },
+  sectionSubtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    color: COLORS.secondaryText,
+    lineHeight: 18,
+  },
+  sectionCountPill: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: COLORS.appBackground,
+  },
+  sectionCountText: {
+    fontSize: 12,
+    color: COLORS.secondaryText,
+    fontWeight: '700',
   },
   sectionContent: {
     gap: 16,
@@ -765,12 +965,21 @@ const styles = StyleSheet.create({
   toggleRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    gap: 12,
   },
   labelContainer: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 12,
+    flex: 1,
+  },
+  labelTextWrap: { flex: 1 },
+  labelTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
   },
   iconCircle: {
     width: 36,
@@ -780,9 +989,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   labelText: {
-    fontSize: 16,
+    fontSize: 15,
     color: COLORS.darkText,
-    fontWeight: '500',
+    fontWeight: '600',
+  },
+  labelDescription: {
+    marginTop: 3,
+    fontSize: 13,
+    lineHeight: 18,
+    color: COLORS.secondaryText,
+  },
+  labelBadge: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.primaryBlue,
+    backgroundColor: THEME.primaryMuted,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
   },
   saveButton: {
     backgroundColor: COLORS.primaryBlue,
@@ -856,6 +1080,56 @@ const styles = StyleSheet.create({
     marginTop: 20,
     fontSize: 13,
     color: COLORS.tertiaryText,
+  },
+  permissionSummaryCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 14,
+    marginBottom: 18,
+  },
+  permissionSummaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  permissionSummaryTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.secondaryText,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  permissionSummaryState: {
+    marginTop: 8,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  permissionSummaryBody: {
+    marginTop: 4,
+    fontSize: 13,
+    color: COLORS.secondaryText,
+    lineHeight: 18,
+  },
+  presetRow: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginBottom: 4,
+  },
+  presetChip: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: COLORS.appBackground,
+  },
+  presetChipText: {
+    fontSize: 12,
+    color: COLORS.secondaryText,
+    fontWeight: '700',
   },
   emptyPanelContainer: {
     flex: 1,
