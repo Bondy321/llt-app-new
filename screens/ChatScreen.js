@@ -147,6 +147,17 @@ const normalizeTimestamp = (timestamp) => {
   return null;
 };
 
+const buildReplyPreviewText = (message = {}) => {
+  if (!message || typeof message !== 'object') return '';
+  if (message.type === 'image') {
+    const caption = typeof message.text === 'string' ? message.text.trim() : '';
+    return caption ? `📷 ${caption}` : '📷 Photo';
+  }
+
+  const text = typeof message.text === 'string' ? message.text.trim() : '';
+  return text.length > 0 ? text : 'Message';
+};
+
 const DateSeparator = ({ date }) => {
   const formatDateLabel = (dateStr) => {
     const normalized = normalizeTimestamp(dateStr);
@@ -265,7 +276,7 @@ const ReactionPicker = ({ visible, onClose, onSelectReaction, position }) => {
 };
 
 // ==================== MESSAGE ACTION MENU ====================
-const MessageActionMenu = ({ visible, onClose, message, onCopy, onReact, onDelete, canDelete }) => {
+const MessageActionMenu = ({ visible, onClose, message, onCopy, onReply, onReact, onDelete, canDelete }) => {
   if (!visible) return null;
 
   return (
@@ -292,6 +303,17 @@ const MessageActionMenu = ({ visible, onClose, message, onCopy, onReact, onDelet
           >
             <MaterialCommunityIcons name="emoticon-happy-outline" size={22} color={COLORS.darkText} />
             <Text style={styles.actionMenuText}>React</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionMenuItem}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              onReply();
+            }}
+          >
+            <MaterialCommunityIcons name="reply-outline" size={22} color={COLORS.darkText} />
+            <Text style={styles.actionMenuText}>Reply</Text>
           </TouchableOpacity>
 
           {canDelete && (
@@ -501,6 +523,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [lastSeenTimestamp, setLastSeenTimestamp] = useState(null);
   const [currentScrollY, setCurrentScrollY] = useState(0);
   const [unreadAnchorY, setUnreadAnchorY] = useState(null);
+  const [replyingToMessage, setReplyingToMessage] = useState(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
@@ -931,6 +954,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
     setSending(true);
     setInputText('');
+    setReplyingToMessage(null);
 
     // Clear typing status
     if (typingTimeoutRef.current) {
@@ -955,6 +979,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       isDriver,
       status: 'sending',
       type: 'text',
+      ...(replyingToMessage ? { replyTo: replyingToMessage } : {}),
     };
 
     setMessages((prev) => [...prev, optimisticMessage]);
@@ -962,7 +987,9 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
     try {
       const sendFn = internalDriverChat ? sendInternalDriverMessage : sendMessage;
-      const result = await sendFn(tourId, trimmed, senderInfo);
+      const result = await sendFn(tourId, trimmed, senderInfo, undefined, {
+        replyTo: replyingToMessage || undefined,
+      });
 
       if (!result?.success || !result?.message) {
         setMessages((prev) => prev.filter((msg) => msg.id !== optimisticId));
@@ -1017,6 +1044,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     userName,
     isDriver,
     internalDriverChat,
+    replyingToMessage,
     refreshQueueStats,
     scrollToBottom,
   ]);
@@ -1170,6 +1198,18 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     setShowActionMenu(true);
   }, []);
 
+  const handleReplyToMessage = useCallback(() => {
+    if (!selectedMessage) return;
+
+    setReplyingToMessage({
+      messageId: selectedMessage.id,
+      senderName: selectedMessage.senderName || 'Participant',
+      previewText: buildReplyPreviewText(selectedMessage),
+    });
+    setShowActionMenu(false);
+    setSelectedMessage(null);
+  }, [selectedMessage]);
+
   // Handle copy message
   const handleCopyMessage = useCallback(() => {
     if (selectedMessage) {
@@ -1303,6 +1343,16 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     return groupedMessages.findIndex((item) => item.type === 'message' && item.data?.id === unreadAnchorMessageId);
   }, [groupedMessages, unreadAnchorMessageId]);
 
+  const messageIndexById = useMemo(() => {
+    const indexMap = new Map();
+    groupedMessages.forEach((item, index) => {
+      if (item.type === 'message' && item.data?.id) {
+        indexMap.set(item.data.id, index);
+      }
+    });
+    return indexMap;
+  }, [groupedMessages]);
+
   const showJumpToUnread = useMemo(() => {
     if (!unreadAnchorMessageId || unreadAnchorY == null) return false;
     return Math.abs(currentScrollY - unreadAnchorY) > 180;
@@ -1330,13 +1380,11 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
   const jumpToMessageById = useCallback((messageId) => {
     if (!messageId) return;
-    const groupedIndex = groupedMessages.findIndex(
-      (item) => item.type === 'message' && item.data?.id === messageId
-    );
+    const groupedIndex = messageIndexById.get(messageId) ?? -1;
     if (groupedIndex < 0) return;
 
     messageListRef.current?.scrollToIndex({ index: groupedIndex, animated: true, viewPosition: 0.45 });
-  }, [groupedMessages]);
+  }, [messageIndexById]);
 
   useEffect(() => {
     setActiveSearchResultIndex(0);
@@ -1443,6 +1491,35 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
                   </View>
                 )}
               </View>
+
+              {msg.replyTo?.messageId && (
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={[styles.replyReferenceCard, isSelf && styles.replyReferenceCardSelf]}
+                  onPress={() => jumpToMessageById(msg.replyTo.messageId)}
+                >
+                  <View style={styles.replyReferenceAccent} />
+                  <View style={styles.replyReferenceContent}>
+                    <Text
+                      numberOfLines={1}
+                      style={[styles.replyReferenceSender, isSelf && styles.replyReferenceSenderSelf]}
+                    >
+                      {msg.replyTo.senderName || 'Participant'}
+                    </Text>
+                    <Text
+                      numberOfLines={2}
+                      style={[styles.replyReferencePreview, isSelf && styles.replyReferencePreviewSelf]}
+                    >
+                      {msg.replyTo.previewText || 'Message'}
+                    </Text>
+                  </View>
+                  <MaterialCommunityIcons
+                    name="arrow-top-right"
+                    size={14}
+                    color={isSelf ? COLORS.lightBlueAccent : COLORS.secondaryText}
+                  />
+                </TouchableOpacity>
+              )}
 
               {/* Image Content */}
               {isImage && msg.imageUrl && (
@@ -1792,6 +1869,28 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
                   setComposerHeight((prev) => (prev === nextHeight ? prev : nextHeight));
                 }}
               >
+                {replyingToMessage?.messageId && (
+                  <View style={styles.replyComposerCard}>
+                    <View style={styles.replyComposerAccent} />
+                    <View style={styles.replyComposerBody}>
+                      <Text style={styles.replyComposerTitle}>
+                        Replying to {replyingToMessage.senderName || 'Participant'}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.replyComposerPreview}>
+                        {replyingToMessage.previewText || 'Message'}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.replyComposerClose}
+                      onPress={() => setReplyingToMessage(null)}
+                      activeOpacity={0.7}
+                      accessibilityLabel="Cancel reply"
+                    >
+                      <MaterialCommunityIcons name="close" size={16} color={COLORS.secondaryText} />
+                    </TouchableOpacity>
+                  </View>
+                )}
+
                 {draftRestored && (
                   <View style={styles.draftBadge}>
                     <MaterialCommunityIcons name="content-save-edit-outline" size={14} color={COLORS.primaryBlue} />
@@ -1868,6 +1967,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         }}
         message={selectedMessage}
         onCopy={handleCopyMessage}
+        onReply={handleReplyToMessage}
         onReact={() => {
           setShowActionMenu(false);
           setShowReactionPicker(true);
@@ -2194,6 +2294,47 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 4,
   },
+  replyReferenceCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}26`,
+    backgroundColor: `${COLORS.primaryBlue}10`,
+    marginBottom: SPACING.xs,
+    paddingVertical: SPACING.xs,
+    paddingHorizontal: SPACING.sm,
+    gap: SPACING.xs,
+  },
+  replyReferenceCardSelf: {
+    borderColor: `${COLORS.lightBlueAccent}70`,
+    backgroundColor: `${COLORS.primaryDark}55`,
+  },
+  replyReferenceAccent: {
+    width: 3,
+    borderRadius: RADIUS.full,
+    alignSelf: 'stretch',
+    backgroundColor: COLORS.primaryBlue,
+  },
+  replyReferenceContent: {
+    flex: 1,
+  },
+  replyReferenceSender: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.primaryBlue,
+  },
+  replyReferenceSenderSelf: {
+    color: COLORS.lightBlueAccent,
+  },
+  replyReferencePreview: {
+    marginTop: 2,
+    fontSize: 12,
+    color: COLORS.secondaryText,
+  },
+  replyReferencePreviewSelf: {
+    color: `${COLORS.white}CC`,
+  },
   senderName: {
     fontSize: 13,
     fontWeight: '700',
@@ -2507,6 +2648,48 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
     borderTopLeftRadius: RADIUS.xl,
     borderTopRightRadius: RADIUS.xl,
+  },
+  replyComposerCard: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACING.xs,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}30`,
+    backgroundColor: COLORS.surfaceSecondary,
+    borderRadius: RADIUS.md,
+    paddingVertical: SPACING.xs,
+    paddingHorizontal: SPACING.sm,
+    gap: SPACING.xs,
+  },
+  replyComposerAccent: {
+    width: 3,
+    alignSelf: 'stretch',
+    borderRadius: RADIUS.full,
+    backgroundColor: COLORS.primaryBlue,
+  },
+  replyComposerBody: {
+    flex: 1,
+  },
+  replyComposerTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.primaryBlue,
+  },
+  replyComposerPreview: {
+    marginTop: 1,
+    fontSize: 12,
+    color: COLORS.secondaryText,
+  },
+  replyComposerClose: {
+    width: 24,
+    height: 24,
+    borderRadius: RADIUS.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   draftBadge: {
     width: '100%',

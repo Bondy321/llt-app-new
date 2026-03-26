@@ -213,6 +213,31 @@ const buildImageMessagePayload = (imageUrl, caption, senderInfo, messageId) => {
   };
 };
 
+const sanitizeReplyContext = (replyTo) => {
+  if (!replyTo || typeof replyTo !== 'object') {
+    return null;
+  }
+
+  const replyMessageId = typeof replyTo.messageId === 'string' ? replyTo.messageId.trim() : '';
+  if (!replyMessageId) {
+    return null;
+  }
+
+  const replySenderName = typeof replyTo.senderName === 'string' && replyTo.senderName.trim().length > 0
+    ? sanitizeInput(replyTo.senderName.trim())
+    : 'Participant';
+
+  const replyPreview = typeof replyTo.previewText === 'string'
+    ? sanitizeInput(replyTo.previewText.trim()).slice(0, 160)
+    : '';
+
+  return {
+    messageId: replyMessageId,
+    senderName: replySenderName,
+    previewText: replyPreview,
+  };
+};
+
 const buildMessagesFromSnapshot = (snapshot) => {
   const messages = [];
 
@@ -257,6 +282,10 @@ const sendMessageDirect = async (payload, dbInstance = realtimeDb) => {
       status: 'sent',
       idempotencyKey: payload.idempotencyKey || messageId,
     };
+    const replyContext = sanitizeReplyContext(payload.replyTo);
+    if (replyContext) {
+      payloadForDb.replyTo = replyContext;
+    }
 
     if (pushedRef?.set) {
       await pushedRef.set(payloadForDb);
@@ -290,6 +319,10 @@ const sendInternalMessageDirect = async (payload, dbInstance = realtimeDb) => {
       status: 'sent',
       idempotencyKey: payload.idempotencyKey || messageId,
     };
+    const replyContext = sanitizeReplyContext(payload.replyTo);
+    if (replyContext) {
+      payloadForDb.replyTo = replyContext;
+    }
 
     if (pushedRef?.set) {
       await pushedRef.set(payloadForDb);
@@ -319,6 +352,7 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb,
       senderInfo: validatedSender,
       timestamp: new Date().toISOString(),
       idempotencyKey,
+      replyTo: sanitizeReplyContext(options.replyTo),
     };
 
     const directResult = await sendMessageDirect(payload, db);
@@ -342,6 +376,7 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb,
       status: 'queued',
       type: 'text',
       idempotencyKey,
+      ...(payload.replyTo ? { replyTo: payload.replyTo } : {}),
     };
 
     const queued = await offlineSyncService.enqueueAction({
@@ -436,6 +471,7 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
       senderInfo: { ...validatedSender, isDriver: true },
       timestamp: new Date().toISOString(),
       idempotencyKey,
+      replyTo: sanitizeReplyContext(options.replyTo),
     };
 
     const directResult = await sendInternalMessageDirect(payload, db);
@@ -458,6 +494,7 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
       status: 'queued',
       type: 'text',
       idempotencyKey,
+      ...(payload.replyTo ? { replyTo: payload.replyTo } : {}),
     };
 
     const queued = await offlineSyncService.enqueueAction({

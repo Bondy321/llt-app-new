@@ -181,6 +181,32 @@ test('sendMessage rejects empty content', async () => {
   assert.ok(mockDb.refCalls.length === 0);
 });
 
+test('sendMessage persists sanitized reply context metadata', async () => {
+  const mockDb = createMockRealtimeDb();
+  const senderInfo = { name: 'Jamie', userId: 'user-9', isDriver: false };
+
+  const result = await sendMessage('tour-reply', 'Following up', senderInfo, mockDb, {
+    replyTo: {
+      messageId: 'msg-42',
+      senderName: 'Driver Bondy',
+      previewText: '  Please be at the pickup point by 08:15 AM.  ',
+    },
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.message.replyTo.messageId, 'msg-42');
+  assert.equal(result.message.replyTo.senderName, 'Driver Bondy');
+  assert.equal(result.message.replyTo.previewText, 'Please be at the pickup point by 08:15 AM.');
+
+  const refCall = mockDb.refCalls[0];
+  assert.ok(refCall);
+  assert.deepEqual(refCall.setCalls[0].replyTo, {
+    messageId: 'msg-42',
+    senderName: 'Driver Bondy',
+    previewText: 'Please be at the pickup point by 08:15 AM.',
+  });
+});
+
 
 test('markChatAsRead writes timestamp to chat lastRead path', async () => {
   const mockDb = createMockRealtimeDb();
