@@ -49,6 +49,7 @@ import * as photoService from '../services/photoService';
 import { auth } from '../firebase';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import SyncStatusBanner from '../components/SyncStatusBanner';
+const { buildChatSearchResults, normalizeSearchQuery } = require('../utils/chatSearch');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -500,6 +501,9 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [lastSeenTimestamp, setLastSeenTimestamp] = useState(null);
   const [currentScrollY, setCurrentScrollY] = useState(0);
   const [unreadAnchorY, setUnreadAnchorY] = useState(null);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
 
   // Modal state
   const [selectedMessage, setSelectedMessage] = useState(null);
@@ -1313,6 +1317,69 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     messageListRef.current?.scrollToOffset({ offset: Math.max(unreadAnchorY - 80, 0), animated: true });
   }, [unreadAnchorIndex, unreadAnchorY]);
 
+  const searchResults = useMemo(
+    () => buildChatSearchResults(messages, searchQuery),
+    [messages, searchQuery]
+  );
+
+  const activeSearchResultMessageId = useMemo(() => {
+    if (searchResults.length === 0) return null;
+    const safeIndex = Math.min(Math.max(activeSearchResultIndex, 0), searchResults.length - 1);
+    return searchResults[safeIndex]?.id || null;
+  }, [searchResults, activeSearchResultIndex]);
+
+  const jumpToMessageById = useCallback((messageId) => {
+    if (!messageId) return;
+    const groupedIndex = groupedMessages.findIndex(
+      (item) => item.type === 'message' && item.data?.id === messageId
+    );
+    if (groupedIndex < 0) return;
+
+    messageListRef.current?.scrollToIndex({ index: groupedIndex, animated: true, viewPosition: 0.45 });
+  }, [groupedMessages]);
+
+  useEffect(() => {
+    setActiveSearchResultIndex(0);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    if (!isSearchOpen) return;
+    if (searchResults.length === 0) return;
+    jumpToMessageById(activeSearchResultMessageId);
+  }, [isSearchOpen, searchResults.length, activeSearchResultMessageId, jumpToMessageById]);
+
+  const cycleSearchResult = useCallback((direction) => {
+    if (searchResults.length === 0) return;
+    const nextIndex = (activeSearchResultIndex + direction + searchResults.length) % searchResults.length;
+    setActiveSearchResultIndex(nextIndex);
+    jumpToMessageById(searchResults[nextIndex]?.id);
+  }, [searchResults, activeSearchResultIndex, jumpToMessageById]);
+
+  const renderHighlightedText = useCallback((content, isSelf) => {
+    const normalizedQuery = normalizeSearchQuery(searchQuery);
+    if (!normalizedQuery || typeof content !== 'string') {
+      return <Text>{content}</Text>;
+    }
+
+    const matcher = new RegExp(`(${normalizedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'ig');
+    const segments = content.split(matcher);
+    return (
+      <Text>
+        {segments.map((segment, index) => {
+          const isMatch = segment.toLowerCase() === normalizedQuery;
+          return (
+            <Text
+              key={`${segment}-${index}`}
+              style={isMatch ? [styles.searchHighlight, isSelf && styles.searchHighlightSelf] : undefined}
+            >
+              {segment}
+            </Text>
+          );
+        })}
+      </Text>
+    );
+  }, [searchQuery]);
+
   // Render a single message
   const renderMessage = useCallback(
     (msg) => {
@@ -1320,6 +1387,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       const isMsgDriver = !!msg.isDriver;
       const isDeleted = !!msg.deleted;
       const isImage = msg.type === 'image';
+      const isSearchMatch = !!activeSearchResultMessageId && activeSearchResultMessageId === msg.id;
 
       if (isDeleted) {
         return (
@@ -1355,6 +1423,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
                 isSelf ? styles.myMessageBubble : styles.theirMessageBubble,
                 isMsgDriver && !isSelf && styles.driverMessageBubble,
                 isImage && styles.imageMessageBubble,
+                isSearchMatch && styles.searchFocusedBubble,
               ]}
             >
               {/* Message Header */}
@@ -1396,7 +1465,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
                         {part.content}
                       </Text>
                     ) : (
-                      <Text key={index}>{part.content}</Text>
+                      <Text key={index}>{renderHighlightedText(part.content, isSelf)}</Text>
                     )
                   )}
                 </Text>
@@ -1429,7 +1498,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         </Pressable>
       );
     },
-    [currentUser?.uid, formatTime, handleMessageLongPress, handleReaction, parseMessageText]
+    [currentUser?.uid, formatTime, handleMessageLongPress, handleReaction, parseMessageText, renderHighlightedText, activeSearchResultMessageId]
   );
 
   const keyExtractor = useCallback((item) => {
@@ -1554,6 +1623,16 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         </View>
 
         <View style={styles.headerRight}>
+          <TouchableOpacity
+            style={styles.syncNowBtn}
+            onPress={() => {
+              setIsSearchOpen((prev) => !prev);
+              if (isSearchOpen) setSearchQuery('');
+            }}
+            accessibilityLabel="Search chat messages"
+          >
+            <MaterialCommunityIcons name={isSearchOpen ? 'close' : 'magnify'} size={18} color={COLORS.white} />
+          </TouchableOpacity>
           <View style={styles.onlineIndicator}>
             <View style={[styles.onlineDot, { backgroundColor: COLORS.onlineIndicator }]} />
             <Text style={styles.onlineCount}>
@@ -1573,6 +1652,51 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
           </TouchableOpacity>
         </View>
       </LinearGradient>
+
+      {isSearchOpen && (
+        <View style={styles.searchPanel}>
+          <View style={styles.searchInputRow}>
+            <MaterialCommunityIcons name="magnify" size={18} color={COLORS.secondaryText} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search messages or names"
+              placeholderTextColor={COLORS.tertiaryText}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery('')} activeOpacity={0.7}>
+                <MaterialCommunityIcons name="close-circle" size={18} color={COLORS.tertiaryText} />
+              </TouchableOpacity>
+            )}
+          </View>
+          <View style={styles.searchMetaRow}>
+            <Text style={styles.searchMetaText}>
+              {searchQuery.trim().length === 0
+                ? 'Type to search this conversation'
+                : `${searchResults.length} message${searchResults.length === 1 ? '' : 's'} matched`}
+            </Text>
+            <View style={styles.searchNavButtons}>
+              <TouchableOpacity
+                style={[styles.searchNavBtn, searchResults.length === 0 && styles.searchNavBtnDisabled]}
+                onPress={() => cycleSearchResult(-1)}
+                disabled={searchResults.length === 0}
+              >
+                <MaterialCommunityIcons name="chevron-up" size={18} color={COLORS.primaryBlue} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.searchNavBtn, searchResults.length === 0 && styles.searchNavBtnDisabled]}
+                onPress={() => cycleSearchResult(1)}
+                disabled={searchResults.length === 0}
+              >
+                <MaterialCommunityIcons name="chevron-down" size={18} color={COLORS.primaryBlue} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
 
       <SyncStatusBanner
         state={syncBannerContract}
@@ -1876,6 +2000,58 @@ const styles = StyleSheet.create({
   keyboardAvoidingContainer: {
     flex: 1,
   },
+  searchPanel: {
+    paddingHorizontal: SPACING.md,
+    paddingTop: SPACING.sm,
+    paddingBottom: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    backgroundColor: COLORS.white,
+  },
+  searchInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADIUS.lg,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    backgroundColor: COLORS.appBackground,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: COLORS.darkText,
+    paddingVertical: 2,
+  },
+  searchMetaRow: {
+    marginTop: SPACING.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  searchMetaText: {
+    fontSize: 12,
+    color: COLORS.secondaryText,
+    fontWeight: '600',
+  },
+  searchNavButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+  },
+  searchNavBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: RADIUS.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: `${COLORS.primaryBlue}15`,
+  },
+  searchNavBtnDisabled: {
+    opacity: 0.45,
+  },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -2070,6 +2246,19 @@ const styles = StyleSheet.create({
   },
   messageStatus: {
     marginLeft: 2,
+  },
+  searchFocusedBubble: {
+    borderColor: COLORS.coralAccent,
+    borderWidth: 2,
+  },
+  searchHighlight: {
+    backgroundColor: `${COLORS.coralAccent}40`,
+    color: COLORS.darkText,
+    fontWeight: '700',
+  },
+  searchHighlightSelf: {
+    backgroundColor: `${COLORS.white}50`,
+    color: COLORS.white,
   },
 
   // Links
