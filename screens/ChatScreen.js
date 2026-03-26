@@ -58,6 +58,15 @@ const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🎉'];
 const DATE_SEPARATOR_HEIGHT = 40;
 const UNREAD_SEPARATOR_HEIGHT = 36;
 const ESTIMATED_MESSAGE_ROW_HEIGHT = 120;
+const SEARCH_RESULT_PREVIEW_LIMIT = 3;
+
+const SEARCH_FILTERS = [
+  { key: 'all', label: 'All', icon: 'message-text-outline' },
+  { key: 'drivers', label: 'Drivers', icon: 'steering' },
+  { key: 'mine', label: 'Mine', icon: 'account' },
+  { key: 'links', label: 'Links', icon: 'link-variant' },
+  { key: 'media', label: 'Photos', icon: 'image-outline' },
+];
 
 // URL Detection Regex
 const URL_REGEX = /(https?:\/\/[^\s]+)/g;
@@ -526,6 +535,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [replyingToMessage, setReplyingToMessage] = useState(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchFilter, setSearchFilter] = useState('all');
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
 
   // Modal state
@@ -1371,12 +1381,74 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     () => buildChatSearchResults(messages, searchQuery),
     [messages, searchQuery]
   );
+  const messageLookupById = useMemo(
+    () => new Map(messages.map((entry) => [entry?.id, entry])),
+    [messages]
+  );
+
+  const filteredSearchResults = useMemo(() => {
+    if (searchResults.length === 0) return [];
+    return searchResults.filter((result) => {
+      const message = messageLookupById.get(result.id);
+      if (!message) return false;
+
+      switch (searchFilter) {
+        case 'drivers':
+          return message.isDriver === true;
+        case 'mine':
+          return message.senderId === currentUser?.uid;
+        case 'links':
+          return typeof message.text === 'string' && new RegExp(URL_REGEX).test(message.text);
+        case 'media':
+          return message.type === 'image' || Boolean(message.imageUrl);
+        case 'all':
+        default:
+          return true;
+      }
+    });
+  }, [searchResults, messageLookupById, searchFilter, currentUser?.uid]);
 
   const activeSearchResultMessageId = useMemo(() => {
-    if (searchResults.length === 0) return null;
-    const safeIndex = Math.min(Math.max(activeSearchResultIndex, 0), searchResults.length - 1);
-    return searchResults[safeIndex]?.id || null;
-  }, [searchResults, activeSearchResultIndex]);
+    if (filteredSearchResults.length === 0) return null;
+    const safeIndex = Math.min(Math.max(activeSearchResultIndex, 0), filteredSearchResults.length - 1);
+    return filteredSearchResults[safeIndex]?.id || null;
+  }, [filteredSearchResults, activeSearchResultIndex]);
+
+  const searchResultPreviewCards = useMemo(() => {
+    if (filteredSearchResults.length === 0) return [];
+    const normalizedQuery = normalizeSearchQuery(searchQuery);
+    const activeId = activeSearchResultMessageId;
+
+    return filteredSearchResults
+      .slice(0, SEARCH_RESULT_PREVIEW_LIMIT)
+      .map((result) => {
+        const message = messageLookupById.get(result.id);
+        if (!message) return null;
+
+        const messageText = typeof message.text === 'string' ? message.text.trim() : '';
+        const fallbackText = message.type === 'image' ? '📷 Photo' : 'Message';
+        const previewText = messageText || fallbackText;
+
+        const lowerCasePreview = previewText.toLowerCase();
+        const queryIndex = normalizedQuery ? lowerCasePreview.indexOf(normalizedQuery) : -1;
+        const snippetStart = queryIndex > 24 ? queryIndex - 24 : 0;
+        const snippetEnd = queryIndex >= 0
+          ? Math.min(previewText.length, queryIndex + normalizedQuery.length + 36)
+          : Math.min(previewText.length, 72);
+        const snippet = previewText.slice(snippetStart, snippetEnd).trim();
+        const formattedSnippet = snippetStart > 0 ? `…${snippet}` : snippet;
+
+        return {
+          id: message.id,
+          senderName: message.senderName || 'Participant',
+          previewText: formattedSnippet || fallbackText,
+          timestamp: message.timestamp,
+          isActive: activeId === message.id,
+          isDriver: message.isDriver === true,
+        };
+      })
+      .filter(Boolean);
+  }, [filteredSearchResults, messageLookupById, searchQuery, activeSearchResultMessageId]);
 
   const jumpToMessageById = useCallback((messageId) => {
     if (!messageId) return;
@@ -1388,20 +1460,20 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
   useEffect(() => {
     setActiveSearchResultIndex(0);
-  }, [searchQuery]);
+  }, [searchQuery, searchFilter]);
 
   useEffect(() => {
     if (!isSearchOpen) return;
-    if (searchResults.length === 0) return;
+    if (filteredSearchResults.length === 0) return;
     jumpToMessageById(activeSearchResultMessageId);
-  }, [isSearchOpen, searchResults.length, activeSearchResultMessageId, jumpToMessageById]);
+  }, [isSearchOpen, filteredSearchResults.length, activeSearchResultMessageId, jumpToMessageById]);
 
   const cycleSearchResult = useCallback((direction) => {
-    if (searchResults.length === 0) return;
-    const nextIndex = (activeSearchResultIndex + direction + searchResults.length) % searchResults.length;
+    if (filteredSearchResults.length === 0) return;
+    const nextIndex = (activeSearchResultIndex + direction + filteredSearchResults.length) % filteredSearchResults.length;
     setActiveSearchResultIndex(nextIndex);
-    jumpToMessageById(searchResults[nextIndex]?.id);
-  }, [searchResults, activeSearchResultIndex, jumpToMessageById]);
+    jumpToMessageById(filteredSearchResults[nextIndex]?.id);
+  }, [filteredSearchResults, activeSearchResultIndex, jumpToMessageById]);
 
   const renderHighlightedText = useCallback((content, isSelf) => {
     const normalizedQuery = normalizeSearchQuery(searchQuery);
@@ -1753,25 +1825,76 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
             <Text style={styles.searchMetaText}>
               {searchQuery.trim().length === 0
                 ? 'Type to search this conversation'
-                : `${searchResults.length} message${searchResults.length === 1 ? '' : 's'} matched`}
+                : `${filteredSearchResults.length} message${filteredSearchResults.length === 1 ? '' : 's'} matched`}
             </Text>
             <View style={styles.searchNavButtons}>
               <TouchableOpacity
-                style={[styles.searchNavBtn, searchResults.length === 0 && styles.searchNavBtnDisabled]}
+                style={[styles.searchNavBtn, filteredSearchResults.length === 0 && styles.searchNavBtnDisabled]}
                 onPress={() => cycleSearchResult(-1)}
-                disabled={searchResults.length === 0}
+                disabled={filteredSearchResults.length === 0}
               >
                 <MaterialCommunityIcons name="chevron-up" size={18} color={COLORS.primaryBlue} />
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.searchNavBtn, searchResults.length === 0 && styles.searchNavBtnDisabled]}
+                style={[styles.searchNavBtn, filteredSearchResults.length === 0 && styles.searchNavBtnDisabled]}
                 onPress={() => cycleSearchResult(1)}
-                disabled={searchResults.length === 0}
+                disabled={filteredSearchResults.length === 0}
               >
                 <MaterialCommunityIcons name="chevron-down" size={18} color={COLORS.primaryBlue} />
               </TouchableOpacity>
             </View>
           </View>
+
+          <View style={styles.searchFiltersRow}>
+            {SEARCH_FILTERS.map((filter) => {
+              const active = searchFilter === filter.key;
+              return (
+                <TouchableOpacity
+                  key={filter.key}
+                  style={[styles.searchFilterChip, active && styles.searchFilterChipActive]}
+                  onPress={() => setSearchFilter(filter.key)}
+                  activeOpacity={0.8}
+                >
+                  <MaterialCommunityIcons
+                    name={filter.icon}
+                    size={14}
+                    color={active ? COLORS.white : COLORS.primaryBlue}
+                  />
+                  <Text style={[styles.searchFilterLabel, active && styles.searchFilterLabelActive]}>
+                    {filter.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {searchResultPreviewCards.length > 0 && (
+            <View style={styles.searchPreviewList}>
+              {searchResultPreviewCards.map((item) => (
+                <TouchableOpacity
+                  key={`search-preview-${item.id}`}
+                  style={[styles.searchPreviewCard, item.isActive && styles.searchPreviewCardActive]}
+                  onPress={() => jumpToMessageById(item.id)}
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.searchPreviewHeader}>
+                    <View style={styles.searchPreviewSenderRow}>
+                      <Text style={styles.searchPreviewSender}>{item.senderName}</Text>
+                      {item.isDriver && (
+                        <View style={styles.searchPreviewDriverBadge}>
+                          <Text style={styles.searchPreviewDriverBadgeText}>DRIVER</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.searchPreviewTime}>{formatTime(item.timestamp)}</Text>
+                  </View>
+                  <Text numberOfLines={2} style={styles.searchPreviewText}>
+                    {item.previewText}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
         </View>
       )}
 
@@ -2151,6 +2274,90 @@ const styles = StyleSheet.create({
   },
   searchNavBtnDisabled: {
     opacity: 0.45,
+  },
+  searchFiltersRow: {
+    marginTop: SPACING.sm,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: SPACING.xs,
+  },
+  searchFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    borderRadius: RADIUS.full,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}30`,
+    backgroundColor: `${COLORS.primaryBlue}10`,
+  },
+  searchFilterChipActive: {
+    backgroundColor: COLORS.primaryBlue,
+    borderColor: COLORS.primaryBlue,
+  },
+  searchFilterLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.primaryBlue,
+  },
+  searchFilterLabelActive: {
+    color: COLORS.white,
+  },
+  searchPreviewList: {
+    marginTop: SPACING.sm,
+    gap: SPACING.xs,
+  },
+  searchPreviewCard: {
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.appBackground,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+  },
+  searchPreviewCardActive: {
+    borderColor: COLORS.primaryBlue,
+    backgroundColor: `${COLORS.primaryBlue}10`,
+  },
+  searchPreviewHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.xs / 2,
+  },
+  searchPreviewSenderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    flexShrink: 1,
+  },
+  searchPreviewSender: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.darkText,
+  },
+  searchPreviewTime: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.secondaryText,
+  },
+  searchPreviewDriverBadge: {
+    borderRadius: RADIUS.full,
+    backgroundColor: `${COLORS.coralAccent}26`,
+    paddingHorizontal: SPACING.xs + 2,
+    paddingVertical: SPACING.xs / 2,
+  },
+  searchPreviewDriverBadgeText: {
+    fontSize: 9,
+    letterSpacing: 0.3,
+    color: COLORS.coralAccent,
+    fontWeight: '800',
+  },
+  searchPreviewText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: COLORS.secondaryText,
   },
   loadingContainer: {
     flex: 1,
