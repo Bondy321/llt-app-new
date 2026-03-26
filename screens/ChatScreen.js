@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Linking,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   FlatList,
@@ -61,6 +62,9 @@ const UNREAD_SEPARATOR_HEIGHT = 36;
 const ESTIMATED_MESSAGE_ROW_HEIGHT = 120;
 const SEARCH_RESULT_PREVIEW_LIMIT = 3;
 const CATCH_UP_BUBBLE_DISTANCE_THRESHOLD = 220;
+const SWIPE_REPLY_ACTIVATION_THRESHOLD = 56;
+const SWIPE_REPLY_MAX_DRAG = 92;
+const SWIPE_REPLY_HINT_KEY_PREFIX = 'swipe_reply_hint_seen';
 
 const SEARCH_FILTERS = [
   { key: 'all', label: 'All', icon: 'message-text-outline' },
@@ -551,6 +555,94 @@ const UnreadCatchUpCard = ({ summary, onJumpToUnread, onJumpToLatest }) => {
   );
 };
 
+const SwipeReplyHint = ({ visible, onDismiss }) => {
+  if (!visible) return null;
+
+  return (
+    <TouchableOpacity style={styles.swipeReplyHint} activeOpacity={0.92} onPress={onDismiss}>
+      <MaterialCommunityIcons name="gesture-swipe-right" size={16} color={COLORS.primaryBlue} />
+      <Text style={styles.swipeReplyHintText}>Tip: swipe a message right to reply quickly.</Text>
+      <MaterialCommunityIcons name="close" size={14} color={COLORS.secondaryText} />
+    </TouchableOpacity>
+  );
+};
+
+const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }) => {
+  const translateX = useRef(new Animated.Value(0)).current;
+  const feedbackScale = useRef(new Animated.Value(0.9)).current;
+  const feedbackOpacity = useRef(new Animated.Value(0)).current;
+  const triggerLatchRef = useRef(false);
+
+  const resetToOrigin = useCallback(() => {
+    Animated.parallel([
+      Animated.spring(translateX, {
+        toValue: 0,
+        useNativeDriver: true,
+        speed: 28,
+        bounciness: 5,
+      }),
+      Animated.timing(feedbackOpacity, {
+        toValue: 0,
+        duration: 120,
+        useNativeDriver: true,
+      }),
+      Animated.timing(feedbackScale, {
+        toValue: 0.9,
+        duration: 120,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      triggerLatchRef.current = false;
+    });
+  }, [translateX, feedbackOpacity, feedbackScale]);
+
+  const panResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_event, gestureState) => {
+      if (disabled) return false;
+      const { dx, dy } = gestureState;
+      return dx > 8 && Math.abs(dx) > Math.abs(dy) * 1.4;
+    },
+    onPanResponderMove: (_event, gestureState) => {
+      const dragX = Math.max(0, Math.min(gestureState.dx, SWIPE_REPLY_MAX_DRAG));
+      const progress = Math.min(dragX / SWIPE_REPLY_ACTIVATION_THRESHOLD, 1);
+
+      translateX.setValue(dragX);
+      feedbackOpacity.setValue(0.2 + progress * 0.8);
+      feedbackScale.setValue(0.9 + progress * 0.1);
+    },
+    onPanResponderRelease: (_event, gestureState) => {
+      if (gestureState.dx >= SWIPE_REPLY_ACTIVATION_THRESHOLD && !triggerLatchRef.current) {
+        triggerLatchRef.current = true;
+        onSwipeReply?.();
+      }
+      resetToOrigin();
+    },
+    onPanResponderTerminate: resetToOrigin,
+    onPanResponderTerminationRequest: () => true,
+  }), [disabled, feedbackOpacity, feedbackScale, onSwipeReply, resetToOrigin, translateX]);
+
+  return (
+    <View style={styles.swipeReplyRowContainer}>
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.swipeReplyFeedback,
+          { opacity: feedbackOpacity, transform: [{ scale: feedbackScale }] },
+        ]}
+      >
+        <MaterialCommunityIcons name="reply-outline" size={16} color={COLORS.primaryBlue} />
+        <Text style={styles.swipeReplyFeedbackText}>Reply</Text>
+      </Animated.View>
+      <Animated.View
+        style={{ transform: [{ translateX }] }}
+        {...panResponder.panHandlers}
+      >
+        {children}
+      </Animated.View>
+    </View>
+  );
+};
+
 // ==================== ATTACHMENT MENU ====================
 const AttachmentMenu = ({ visible, onClose, onPickImage, onTakePhoto }) => {
   if (!visible) return null;
@@ -650,6 +742,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFilter, setSearchFilter] = useState('all');
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
+  const [showSwipeReplyHint, setShowSwipeReplyHint] = useState(false);
 
   // Modal state
   const [selectedMessage, setSelectedMessage] = useState(null);
@@ -664,6 +757,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
   const draftStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_DRAFTS' }), []);
   const readStateStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_READ_STATE' }), []);
+  const uxHintStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_UX_HINTS' }), []);
   const draftStorageKey = useMemo(() => {
     if (!tourId) return null;
     const chatType = internalDriverChat ? 'internal' : 'group';
@@ -673,6 +767,11 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     if (!tourId) return null;
     const chatType = internalDriverChat ? 'internal' : 'group';
     return `last_seen_${chatType}_${tourId}_${currentUser?.uid || 'anonymous'}`;
+  }, [tourId, internalDriverChat, currentUser?.uid]);
+  const swipeReplyHintStorageKey = useMemo(() => {
+    if (!tourId) return null;
+    const chatType = internalDriverChat ? 'internal' : 'group';
+    return `${SWIPE_REPLY_HINT_KEY_PREFIX}_${chatType}_${tourId}_${currentUser?.uid || 'anonymous'}`;
   }, [tourId, internalDriverChat, currentUser?.uid]);
 
   const listBottomSpacerHeight = useMemo(() => {
@@ -853,6 +952,29 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
     return () => clearTimeout(timeout);
   }, [draftStorage, draftStorageKey, inputText]);
+
+  useEffect(() => {
+    let active = true;
+    if (!swipeReplyHintStorageKey) {
+      setShowSwipeReplyHint(false);
+      return;
+    }
+
+    const restoreHintState = async () => {
+      try {
+        const seenValue = await uxHintStorage.getItemAsync(swipeReplyHintStorageKey);
+        if (!active) return;
+        setShowSwipeReplyHint(seenValue !== '1');
+      } catch (error) {
+        if (active) setShowSwipeReplyHint(true);
+      }
+    };
+
+    restoreHintState();
+    return () => {
+      active = false;
+    };
+  }, [swipeReplyHintStorageKey, uxHintStorage]);
 
   // Mark chat as read when screen opens with a valid user/tour context
   useEffect(() => {
@@ -1321,17 +1443,37 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     setShowActionMenu(true);
   }, []);
 
-  const handleReplyToMessage = useCallback(() => {
-    if (!selectedMessage) return;
+  const dismissSwipeReplyHint = useCallback(async () => {
+    setShowSwipeReplyHint(false);
+    if (!swipeReplyHintStorageKey) return;
+    try {
+      await uxHintStorage.setItemAsync(swipeReplyHintStorageKey, '1');
+    } catch (error) {
+      // no-op: hint persistence failures should not break chat UX
+    }
+  }, [swipeReplyHintStorageKey, uxHintStorage]);
+
+  const startReplyComposer = useCallback((message, source = 'menu') => {
+    if (!message) return;
 
     setReplyingToMessage({
-      messageId: selectedMessage.id,
-      senderName: selectedMessage.senderName || 'Participant',
-      previewText: buildReplyPreviewText(selectedMessage),
+      messageId: message.id,
+      senderName: message.senderName || 'Participant',
+      previewText: buildReplyPreviewText(message),
     });
+
+    if (source === 'swipe') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      dismissSwipeReplyHint();
+    }
+  }, [dismissSwipeReplyHint]);
+
+  const handleReplyToMessage = useCallback(() => {
+    if (!selectedMessage) return;
+    startReplyComposer(selectedMessage, 'menu');
     setShowActionMenu(false);
     setSelectedMessage(null);
-  }, [selectedMessage]);
+  }, [selectedMessage, startReplyComposer]);
 
   // Handle copy message
   const handleCopyMessage = useCallback(() => {
@@ -1690,15 +1832,13 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       const textParts = parseMessageText(msg.text);
       const hasLink = textParts.some((part) => part.type === 'link');
 
-      return (
+      const messageBody = (
         <Pressable
           key={msg.id}
           onLongPress={() => handleMessageLongPress(msg)}
           delayLongPress={300}
         >
-          <View
-            style={[styles.messageRow, isSelf ? styles.myMessageRow : styles.theirMessageRow]}
-          >
+          <View style={[styles.messageRow, isSelf ? styles.myMessageRow : styles.theirMessageRow]}>
             <View
               style={[
                 styles.messageBubble,
@@ -1808,8 +1948,26 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
           </View>
         </Pressable>
       );
+
+      return (
+        <SwipeToReplyMessageWrapper
+          onSwipeReply={() => startReplyComposer(msg, 'swipe')}
+          disabled={isDeleted}
+        >
+          {messageBody}
+        </SwipeToReplyMessageWrapper>
+      );
     },
-    [currentUser?.uid, formatTime, handleMessageLongPress, handleReaction, parseMessageText, renderHighlightedText, activeSearchResultMessageId]
+    [
+      currentUser?.uid,
+      formatTime,
+      handleMessageLongPress,
+      handleReaction,
+      parseMessageText,
+      renderHighlightedText,
+      activeSearchResultMessageId,
+      startReplyComposer,
+    ]
   );
 
   const keyExtractor = useCallback((item) => {
@@ -2059,6 +2217,11 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
           )}
         </View>
       )}
+
+      <SwipeReplyHint
+        visible={showSwipeReplyHint && messages.length > 0}
+        onDismiss={dismissSwipeReplyHint}
+      />
 
       <SyncStatusBanner
         state={syncBannerContract}
@@ -2998,6 +3161,49 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontSize: 14,
     fontWeight: '600',
+  },
+  swipeReplyHint: {
+    marginHorizontal: SPACING.lg,
+    marginTop: SPACING.sm,
+    marginBottom: SPACING.xs,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.full,
+    backgroundColor: THEME.primaryMuted,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}25`,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+  },
+  swipeReplyHintText: {
+    flex: 1,
+    fontSize: 12,
+    color: COLORS.primaryBlue,
+    fontWeight: '600',
+  },
+  swipeReplyRowContainer: {
+    position: 'relative',
+  },
+  swipeReplyFeedback: {
+    position: 'absolute',
+    left: SPACING.lg + 4,
+    top: '50%',
+    marginTop: -12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: THEME.primaryMuted,
+    borderColor: `${COLORS.primaryBlue}20`,
+    borderWidth: 1,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 5,
+  },
+  swipeReplyFeedbackText: {
+    fontSize: 11,
+    color: COLORS.primaryBlue,
+    fontWeight: '700',
   },
 
   catchUpCard: {
