@@ -52,6 +52,7 @@ import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import SyncStatusBanner from '../components/SyncStatusBanner';
 const { buildChatSearchResults, normalizeSearchQuery } = require('../utils/chatSearch');
 const { buildUnreadSummary } = require('../utils/chatUnreadSummary');
+const { canRetryFailedMessage } = require('../utils/chatRetry');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -743,6 +744,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [searchFilter, setSearchFilter] = useState('all');
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const [showSwipeReplyHint, setShowSwipeReplyHint] = useState(false);
+  const [retryingMessageIds, setRetryingMessageIds] = useState({});
 
   // Modal state
   const [selectedMessage, setSelectedMessage] = useState(null);
@@ -1294,6 +1296,92 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     scrollToBottom,
   ]);
 
+  const handleRetryFailedMessage = useCallback(async (message) => {
+    if (!canRetryFailedMessage(message, currentUser?.uid)) return;
+    if (!tourId || !currentUser?.uid) return;
+    if (retryingMessageIds[message.id]) return;
+
+    const trimmed = message.text.trim();
+    if (!trimmed) return;
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setRetryingMessageIds((prev) => ({ ...prev, [message.id]: true }));
+
+    setMessages((prev) =>
+      prev.map((msg) => (
+        msg.id === message.id
+          ? { ...msg, status: 'sending', retryAttemptedAt: new Date().toISOString() }
+          : msg
+      ))
+    );
+
+    const senderInfo = {
+      name: userName,
+      userId: currentUser.uid,
+      isDriver,
+    };
+
+    try {
+      const sendFn = internalDriverChat ? sendInternalDriverMessage : sendMessage;
+      const result = await sendFn(tourId, trimmed, senderInfo, undefined, {
+        replyTo: message.replyTo || undefined,
+      });
+
+      if (!result?.success || !result?.message) {
+        setMessages((prev) => prev.map((msg) => (msg.id === message.id ? { ...msg, status: 'failed' } : msg)));
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        return;
+      }
+
+      const confirmedMessage = { ...result.message, status: result.queued ? 'queued' : 'sent' };
+      setMessages((prev) => {
+        const withoutRetried = prev.filter((msg) => msg.id !== message.id && msg.id !== confirmedMessage.id);
+        return [...withoutRetried, confirmedMessage];
+      });
+
+      if (!result.queued && result.serverPromise?.finally) {
+        result.serverPromise
+          .then(() => {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === confirmedMessage.id ? { ...msg, status: 'delivered' } : msg
+              )
+            );
+          })
+          .catch(() => {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === confirmedMessage.id ? { ...msg, status: 'failed' } : msg
+              )
+            );
+          });
+      }
+
+      if (result.queued) {
+        await refreshQueueStats();
+      }
+    } catch (error) {
+      console.error('Error retrying failed chat message:', error);
+      setMessages((prev) => prev.map((msg) => (msg.id === message.id ? { ...msg, status: 'failed' } : msg)));
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setRetryingMessageIds((prev) => {
+        const next = { ...prev };
+        delete next[message.id];
+        return next;
+      });
+      await refreshQueueStats();
+    }
+  }, [
+    currentUser?.uid,
+    internalDriverChat,
+    isDriver,
+    retryingMessageIds,
+    refreshQueueStats,
+    tourId,
+    userName,
+  ]);
+
   const handleManualSync = useCallback(async ({ retryFailedOnly = false } = {}) => {
     try {
       const beforeStatsResult = await offlineSyncService.getQueueStats();
@@ -1812,6 +1900,8 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       const isDeleted = !!msg.deleted;
       const isImage = msg.type === 'image';
       const isSearchMatch = !!activeSearchResultMessageId && activeSearchResultMessageId === msg.id;
+      const isRetryEligible = canRetryFailedMessage(msg, currentUser?.uid);
+      const isRetrying = !!retryingMessageIds[msg.id];
 
       if (isDeleted) {
         return (
@@ -1937,6 +2027,26 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
                 <MessageStatus status={msg.status} isSelf={isSelf} />
               </View>
 
+              {isRetryEligible && (
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={[styles.failedMessageRetryChip, isRetrying && styles.failedMessageRetryChipDisabled]}
+                  onPress={() => handleRetryFailedMessage(msg)}
+                  disabled={isRetrying}
+                  accessibilityRole="button"
+                  accessibilityLabel={isRetrying ? 'Retrying message' : 'Retry sending failed message'}
+                >
+                  {isRetrying ? (
+                    <ActivityIndicator size="small" color={COLORS.white} />
+                  ) : (
+                    <MaterialCommunityIcons name="refresh" size={14} color={COLORS.white} />
+                  )}
+                  <Text style={styles.failedMessageRetryText}>
+                    {isRetrying ? 'Retrying…' : 'Tap to retry'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+
               {/* Reactions */}
               <MessageReactions
                 reactions={msg.reactions}
@@ -1967,6 +2077,8 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       renderHighlightedText,
       activeSearchResultMessageId,
       startReplyComposer,
+      retryingMessageIds,
+      handleRetryFailedMessage,
     ]
   );
 
@@ -2938,6 +3050,27 @@ const styles = StyleSheet.create({
   },
   messageStatus: {
     marginLeft: 2,
+  },
+  failedMessageRetryChip: {
+    marginTop: SPACING.sm,
+    alignSelf: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: THEME.error,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACING.sm + 2,
+    paddingVertical: 5,
+    ...SHADOWS.sm,
+  },
+  failedMessageRetryChipDisabled: {
+    opacity: 0.75,
+  },
+  failedMessageRetryText: {
+    color: COLORS.white,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.2,
   },
   searchFocusedBubble: {
     borderColor: COLORS.coralAccent,
