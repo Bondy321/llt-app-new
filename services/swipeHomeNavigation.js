@@ -1,4 +1,5 @@
 const EDGE_START_WIDTH_PX = 32;
+const SWIPE_REPLY_EDGE_BUFFER_PX = 8;
 const SWIPE_ACTIVATION_DISTANCE_PX = 18;
 const SWIPE_COMMIT_DISTANCE_PX = 72;
 const SWIPE_COMMIT_VELOCITY_X = 0.22;
@@ -49,12 +50,30 @@ const shouldCommitEdgeSwipeHome = (
   return dx > 0;
 };
 
+const shouldPrioritizeEdgeSwipeOverMessageSwipe = (
+  gestureState = {},
+  options = {}
+) => {
+  const {
+    edgeStartWidthPx = EDGE_START_WIDTH_PX,
+    swipeReplyEdgeBufferPx = SWIPE_REPLY_EDGE_BUFFER_PX,
+  } = options;
+
+  const x0 = Number(gestureState.x0);
+
+  if (!isFiniteNumber(x0)) return false;
+
+  return x0 <= edgeStartWidthPx + swipeReplyEdgeBufferPx;
+};
+
 module.exports = {
   EDGE_START_WIDTH_PX,
+  SWIPE_REPLY_EDGE_BUFFER_PX,
   SWIPE_ACTIVATION_DISTANCE_PX,
   SWIPE_COMMIT_DISTANCE_PX,
   SWIPE_COMMIT_VELOCITY_X,
   MAX_VERTICAL_DRIFT_PX,
   isEligibleEdgeSwipe,
   shouldCommitEdgeSwipeHome,
+  shouldPrioritizeEdgeSwipeOverMessageSwipe,
 };

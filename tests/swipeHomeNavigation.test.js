@@ -3,9 +3,11 @@ const assert = require('node:assert');
 
 const {
   EDGE_START_WIDTH_PX,
+  SWIPE_REPLY_EDGE_BUFFER_PX,
   SWIPE_ACTIVATION_DISTANCE_PX,
   SWIPE_COMMIT_DISTANCE_PX,
   isEligibleEdgeSwipe,
+  shouldPrioritizeEdgeSwipeOverMessageSwipe,
   shouldCommitEdgeSwipeHome,
 } = require('../services/swipeHomeNavigation');
 
@@ -51,4 +53,20 @@ test('edge swipe commit requires enough horizontal distance or velocity', () => 
   assert.equal(committedWithDistance, true);
   assert.equal(committedWithVelocity, true);
   assert.equal(rejected, false);
+});
+
+test('chat swipe-reply defers to edge swipe near bezel zone', () => {
+  const shouldDefer = shouldPrioritizeEdgeSwipeOverMessageSwipe({
+    x0: EDGE_START_WIDTH_PX + SWIPE_REPLY_EDGE_BUFFER_PX - 1,
+  });
+
+  assert.equal(shouldDefer, true);
+});
+
+test('chat swipe-reply remains available away from edge swipe zone', () => {
+  const shouldDefer = shouldPrioritizeEdgeSwipeOverMessageSwipe({
+    x0: EDGE_START_WIDTH_PX + SWIPE_REPLY_EDGE_BUFFER_PX + 20,
+  });
+
+  assert.equal(shouldDefer, false);
 });
