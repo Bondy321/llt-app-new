@@ -28,24 +28,21 @@ import {
   Stack,
   Paper,
   Badge,
-  RingProgress,
   Center,
   Loader,
   Box,
   Table,
-  ScrollArea,
   Avatar,
   Divider,
   ActionIcon,
   Tooltip,
   Button,
+  Flex,
 } from '@mantine/core';
 import {
   IconUsers,
   IconMap,
-  IconBus,
   IconMessageCircle,
-  IconTrendingUp,
   IconClock,
   IconCalendar,
   IconRefresh,
@@ -53,97 +50,52 @@ import {
   IconArrowDownRight,
   IconActivity,
   IconRoute,
+  IconAlertTriangle,
+  IconChecklist,
+  IconStars,
+  IconBolt,
 } from '@tabler/icons-react';
 
-// Stat Card Component
-function StatCard({ title, value, icon, color, description, trend, trendValue }) {
-  const Icon = icon;
+function ExecutiveStatCard({ title, value, icon: Icon, color, subtitle, trend }) {
   return (
-    <Card shadow="sm" padding="lg" radius="md" withBorder>
+    <Card shadow="sm" padding="lg" radius="lg" withBorder>
       <Group justify="space-between" align="flex-start">
-        <div>
+        <Stack gap={4}>
           <Text size="xs" tt="uppercase" fw={700} c="dimmed">
             {title}
           </Text>
-          <Title order={2} mt={4}>
-            {value}
-          </Title>
-          {description && (
-            <Text size="xs" c="dimmed" mt={4}>
-              {description}
-            </Text>
-          )}
-        </div>
-        <ThemeIcon
-          color={color}
-          variant="light"
-          size={48}
-          radius="md"
-        >
-          <Icon size={24} stroke={1.5} />
+          <Title order={2}>{value}</Title>
+          <Text size="xs" c="dimmed">
+            {subtitle}
+          </Text>
+        </Stack>
+        <ThemeIcon color={color} variant="light" radius="md" size={46}>
+          <Icon size={22} stroke={1.7} />
         </ThemeIcon>
       </Group>
-      {trend && (
+
+      {trend ? (
         <Group mt="md" gap="xs">
           <ThemeIcon
-            color={trend === 'up' ? 'teal' : 'red'}
+            color={trend.direction === 'up' ? 'teal' : 'red'}
             variant="light"
             size="sm"
             radius="xl"
           >
-            {trend === 'up' ? <IconArrowUpRight size={14} /> : <IconArrowDownRight size={14} />}
+            {trend.direction === 'up' ? <IconArrowUpRight size={14} /> : <IconArrowDownRight size={14} />}
           </ThemeIcon>
-          <Text size="xs" c={trend === 'up' ? 'teal' : 'red'} fw={500}>
-            {trendValue}
+          <Text size="xs" c={trend.direction === 'up' ? 'teal' : 'red'} fw={600}>
+            {trend.label}
           </Text>
-          <Text size="xs" c="dimmed">vs last week</Text>
+          <Text size="xs" c="dimmed">
+            vs previous period
+          </Text>
         </Group>
-      )}
+      ) : null}
     </Card>
   );
 }
 
-// Activity Item Component
-function ActivityItem({ driver, tour, time, type }) {
-  const getActivityColor = (type) => {
-    switch (type) {
-      case 'assigned': return 'green';
-      case 'completed': return 'blue';
-      case 'started': return 'orange';
-      default: return 'gray';
-    }
-  };
-
-  const getActivityLabel = (type) => {
-    switch (type) {
-      case 'assigned': return 'Assigned to tour';
-      case 'completed': return 'Completed tour';
-      case 'started': return 'Started tour';
-      default: return 'Activity';
-    }
-  };
-
-  return (
-    <Group gap="sm" py="xs">
-      <Avatar size="sm" radius="xl" color={getActivityColor(type)}>
-        {driver?.charAt(0) || '?'}
-      </Avatar>
-      <Box style={{ flex: 1 }}>
-        <Text size="sm" fw={500}>
-          {driver || 'Unknown Driver'}
-        </Text>
-        <Text size="xs" c="dimmed">
-          {getActivityLabel(type)} {tour}
-        </Text>
-      </Box>
-      <Badge size="xs" variant="light" color={getActivityColor(type)}>
-        {time}
-      </Badge>
-    </Group>
-  );
-}
-
-// Main Dashboard Component
 export default function Dashboard() {
   const navigate = useNavigate();
   const [drivers, setDrivers] = useState({});
@@ -183,7 +135,6 @@ export default function Dashboard() {
       }));
     };
 
-    // Subscribe to drivers
     const driversRef = ref(db, 'drivers');
     const unsubDrivers = onValue(
       driversRef,
@@ -194,7 +145,6 @@ export default function Dashboard() {
       registerListenerError,
     );
 
-    // Subscribe to tours
     const toursRef = ref(db, 'tours');
     const unsubTours = onValue(
       toursRef,
@@ -265,23 +215,20 @@ export default function Dashboard() {
 
   const resolveCurrentTourId = (driver) => driver?.currentTourId || driver?.activeTourId || '';
 
-  // Calculate statistics
   const totalDrivers = Object.keys(drivers).length;
   const totalTours = Object.keys(tours).length;
-
-  // Count active drivers (currentTourId canonical, with activeTourId legacy read fallback)
   const activeDrivers = Object.values(drivers).filter((d) => !!resolveCurrentTourId(d)).length;
+  const assignedTours = Object.values(tours).filter((tour) => tour.driverName && tour.driverName !== 'TBA').length;
 
-  // Count assigned tours (those with a driver other than TBA)
-  const assignedTours = Object.values(tours).filter(t => t.driverName && t.driverName !== 'TBA').length;
-
-  // Calculate driver utilization
   const driverUtilization = totalDrivers > 0 ? Math.round((activeDrivers / totalDrivers) * 100) : 0;
-
-  // Calculate tour assignment rate
   const tourAssignmentRate = totalTours > 0 ? Math.round((assignedTours / totalTours) * 100) : 0;
 
-  // Get recent drivers (newest first based on createdAt)
+  const toursWithPassengers = Object.values(tours).filter((tour) => (tour.currentParticipants || 0) > 0);
+  const totalPassengers = toursWithPassengers.reduce((sum, tour) => sum + (tour.currentParticipants || 0), 0);
+  const averagePassengersPerActiveTour = toursWithPassengers.length
+    ? Math.round(totalPassengers / toursWithPassengers.length)
+    : 0;
+
   const recentDrivers = Object.entries(drivers)
     .sort((a, b) => {
       const dateA = toEpochMsStrict(a[1].createdAt) ?? 0;
@@ -313,159 +260,154 @@ export default function Dashboard() {
       .slice(0, 5);
   }, [tours]);
 
-  // Get today's date for display
+  const operationalReadiness = Math.round((driverUtilization * 0.45 + tourAssignmentRate * 0.55) || 0);
+
   const today = formatLongDateForDisplay(new Date(), '-');
 
   if (loading) {
     return (
-      <Center style={{ minHeight: 400 }}>
+      <Center style={{ minHeight: 420 }}>
         <Stack align="center" gap="md">
           <Loader size="lg" color="brand" />
-          <Text c="dimmed">Loading dashboard...</Text>
+          <Text c="dimmed">Preparing your dispatch command center…</Text>
         </Stack>
       </Center>
     );
   }
 
   return (
-    <Box>
-      {/* Header */}
-      <Group justify="space-between" mb="xl">
-        <div>
-          <Title order={2}>Dashboard</Title>
-          <Text c="dimmed" size="sm">{today}</Text>
-        </div>
-        <Tooltip label="Refresh data">
-          <ActionIcon
-            variant="light"
-            size="lg"
-            onClick={handleRefresh}
-            loading={refreshing}
-          >
-            <IconRefresh size={18} />
-          </ActionIcon>
-        </Tooltip>
-      </Group>
+    <Stack gap="xl">
+      <Card
+        withBorder
+        radius="xl"
+        p="xl"
+        style={{
+          background: 'linear-gradient(135deg, var(--mantine-color-blue-9) 0%, var(--mantine-color-indigo-6) 55%, var(--mantine-color-cyan-6) 100%)',
+        }}
+      >
+        <Group justify="space-between" align="flex-start" wrap="wrap" gap="lg">
+          <Stack gap={6}>
+            <Group gap="xs">
+              <ThemeIcon color="white" variant="light" size="md" radius="xl">
+                <IconStars size={16} />
+              </ThemeIcon>
+              <Text size="xs" fw={700} c="white" style={{ letterSpacing: 0.8 }}>
+                OPERATIONS OVERVIEW
+              </Text>
+            </Group>
+            <Title order={2} c="white">
+              Dispatch Intelligence Dashboard
+            </Title>
+            <Text c="rgba(255,255,255,0.9)" maw={680}>
+              Unified real-time operations insight for LLT tours, staffing coverage, and health telemetry.
+            </Text>
+            <Group gap="sm" mt="xs">
+              <Badge color={healthSnapshot.color} variant="white">
+                {healthSnapshot.label}
+              </Badge>
+              <Badge color="white" variant="dot">
+                {today}
+              </Badge>
+              <Badge color="white" variant="dot">
+                Last sync {formatTimeForDisplay(healthSignals.lastSuccessfulSyncAt, 'pending')}
+              </Badge>
+            </Group>
+          </Stack>
 
-      {/* Stats Grid */}
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="lg" mb="xl">
-        <StatCard
+          <Flex align="center" gap="sm">
+            <Tooltip label="Refresh data">
+              <ActionIcon variant="white" size="xl" onClick={handleRefresh} loading={refreshing}>
+                <IconRefresh size={20} />
+              </ActionIcon>
+            </Tooltip>
+            <Button
+              variant="white"
+              leftSection={<IconRoute size={16} />}
+              onClick={() => navigate('/tours?status=unassigned')}
+            >
+              Dispatch Queue
+            </Button>
+          </Flex>
+        </Group>
+      </Card>
+
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="lg">
+        <ExecutiveStatCard
           title="Total Drivers"
           value={totalDrivers}
           icon={IconUsers}
           color="blue"
-          description={`${activeDrivers} currently active`}
-          trend="up"
-          trendValue="+12%"
+          subtitle={`${activeDrivers} currently active on route`}
+          trend={{ direction: 'up', label: '+12%' }}
         />
-        <StatCard
+        <ExecutiveStatCard
           title="Total Tours"
           value={totalTours}
           icon={IconMap}
-          color="green"
-          description={`${assignedTours} with assigned drivers`}
-          trend="up"
-          trendValue="+8%"
+          color="teal"
+          subtitle={`${assignedTours} with assigned drivers`}
+          trend={{ direction: 'up', label: '+8%' }}
         />
-        <StatCard
-          title="Active Now"
-          value={activeDrivers}
-          icon={IconBus}
-          color="orange"
-          description="Drivers on tour"
+        <ExecutiveStatCard
+          title="Operational Readiness"
+          value={`${operationalReadiness}%`}
+          icon={IconBolt}
+          color="violet"
+          subtitle="Weighted by assignment coverage and active staffing"
         />
-        <StatCard
+        <ExecutiveStatCard
           title="Unassigned Tours"
-          value={totalTours - assignedTours}
-          icon={IconRoute}
+          value={Math.max(totalTours - assignedTours, 0)}
+          icon={IconAlertTriangle}
           color="red"
-          description="Awaiting driver assignment"
+          subtitle="Requires dispatch assignment"
         />
       </SimpleGrid>
 
-      {/* Secondary Stats */}
-      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg" mb="xl">
-        {/* Driver Utilization */}
-        <Card shadow="sm" padding="lg" radius="md" withBorder>
+      <SimpleGrid cols={{ base: 1, lg: 3 }} spacing="lg">
+        <Card shadow="sm" padding="lg" radius="lg" withBorder>
           <Group justify="space-between" mb="md">
-            <Text fw={500}>Driver Utilization</Text>
-            <Badge variant="light" color="blue">{driverUtilization}%</Badge>
+            <Text fw={600}>Resource Utilization</Text>
+            <Badge variant="light" color="blue">
+              Live
+            </Badge>
           </Group>
-          <Group align="flex-end" gap="xs">
-            <RingProgress
-              size={120}
-              thickness={12}
-              roundCaps
-              sections={[{ value: driverUtilization, color: 'blue' }]}
-              label={
-                <Center>
-                  <ThemeIcon color="blue" variant="light" radius="xl" size="xl">
-                    <IconUsers size={22} />
-                  </ThemeIcon>
-                </Center>
-              }
-            />
-            <Stack gap={0} style={{ flex: 1 }}>
-              <Text size="sm" c="dimmed">
-                {activeDrivers} of {totalDrivers} drivers are currently on active tours
-              </Text>
-              <Progress.Root size="xl" mt="md">
-                <Progress.Section value={driverUtilization} color="blue">
-                  <Progress.Label>Active</Progress.Label>
-                </Progress.Section>
-                <Progress.Section value={100 - driverUtilization} color="gray.3">
-                  <Progress.Label>Available</Progress.Label>
-                </Progress.Section>
-              </Progress.Root>
-            </Stack>
-          </Group>
+
+          <Stack gap="md">
+            <Box>
+              <Group justify="space-between" mb={6}>
+                <Text size="sm" fw={500}>Driver utilization</Text>
+                <Text size="sm" c="dimmed">{driverUtilization}%</Text>
+              </Group>
+              <Progress value={driverUtilization} color="blue" radius="xl" size="lg" />
+            </Box>
+
+            <Box>
+              <Group justify="space-between" mb={6}>
+                <Text size="sm" fw={500}>Tour assignment rate</Text>
+                <Text size="sm" c="dimmed">{tourAssignmentRate}%</Text>
+              </Group>
+              <Progress value={tourAssignmentRate} color="green" radius="xl" size="lg" />
+            </Box>
+
+            <Divider />
+
+            <Group justify="space-between">
+              <Text size="sm" c="dimmed">Passengers on active tours</Text>
+              <Text fw={700}>{totalPassengers}</Text>
+            </Group>
+            <Group justify="space-between">
+              <Text size="sm" c="dimmed">Avg passengers / active tour</Text>
+              <Text fw={700}>{averagePassengersPerActiveTour}</Text>
+            </Group>
+          </Stack>
         </Card>
 
-        {/* Tour Assignment Rate */}
-        <Card shadow="sm" padding="lg" radius="md" withBorder>
+        <Card shadow="sm" padding="lg" radius="lg" withBorder>
           <Group justify="space-between" mb="md">
-            <Text fw={500}>Tour Assignment Rate</Text>
-            <Badge variant="light" color="green">{tourAssignmentRate}%</Badge>
-          </Group>
-          <Group align="flex-end" gap="xs">
-            <RingProgress
-              size={120}
-              thickness={12}
-              roundCaps
-              sections={[{ value: tourAssignmentRate, color: 'green' }]}
-              label={
-                <Center>
-                  <ThemeIcon color="green" variant="light" radius="xl" size="xl">
-                    <IconMap size={22} />
-                  </ThemeIcon>
-                </Center>
-              }
-            />
-            <Stack gap={0} style={{ flex: 1 }}>
-              <Text size="sm" c="dimmed">
-                {assignedTours} of {totalTours} tours have drivers assigned
-              </Text>
-              <Progress.Root size="xl" mt="md">
-                <Progress.Section value={tourAssignmentRate} color="green">
-                  <Progress.Label>Assigned</Progress.Label>
-                </Progress.Section>
-                <Progress.Section value={100 - tourAssignmentRate} color="gray.3">
-                  <Progress.Label>TBA</Progress.Label>
-                </Progress.Section>
-              </Progress.Root>
-            </Stack>
-          </Group>
-        </Card>
-      </SimpleGrid>
-
-      {/* Recent Drivers & Quick Actions */}
-      <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="lg">
-        {/* Priority Actions */}
-        <Card shadow="sm" padding="lg" radius="md" withBorder>
-          <Group justify="space-between" mb="md">
-            <Text fw={500}>Priority Actions</Text>
+            <Text fw={600}>Dispatch Priority Queue</Text>
             <Badge variant="light" color={unassignedUpcomingTours.length > 0 ? 'red' : 'green'}>
-              {unassignedUpcomingTours.length > 0 ? `${unassignedUpcomingTours.length} urgent` : 'No urgent items'}
+              {unassignedUpcomingTours.length > 0 ? `${unassignedUpcomingTours.length} pending` : 'All covered'}
             </Badge>
           </Group>
 
@@ -475,9 +417,9 @@ export default function Dashboard() {
                 const urgency = getUrgencyBadge(tour.dayDelta);
                 return (
                   <Paper key={tour.id} p="sm" radius="md" withBorder>
-                    <Group justify="space-between" align="center">
+                    <Group justify="space-between" align="center" wrap="nowrap">
                       <Box style={{ flex: 1, minWidth: 0 }}>
-                        <Text fw={500} size="sm" truncate="end">{tour.name}</Text>
+                        <Text fw={600} size="sm" truncate="end">{tour.name}</Text>
                         <Text size="xs" c="dimmed">
                           Starts {formatDateForDisplay(tour.startDate)} • {tour.participants} passengers
                         </Text>
@@ -489,134 +431,125 @@ export default function Dashboard() {
                   </Paper>
                 );
               })}
-
               <Button
                 mt="sm"
                 variant="light"
                 color="red"
-                leftSection={<IconRoute size={16} />}
+                leftSection={<IconChecklist size={16} />}
                 onClick={() => navigate('/tours?status=unassigned')}
               >
-                Review unassigned tours
+                Review and assign tours
               </Button>
             </Stack>
           ) : (
-            <Text c="dimmed" size="sm">
-              All tours starting within 7 days currently have drivers assigned.
-            </Text>
+            <Center py="xl">
+              <Stack align="center" gap="xs">
+                <ThemeIcon size="lg" radius="xl" color="green" variant="light">
+                  <IconChecklist size={18} />
+                </ThemeIcon>
+                <Text size="sm" fw={600}>Dispatch queue is clear</Text>
+                <Text size="xs" c="dimmed" ta="center" maw={260}>
+                  Every upcoming tour in the next 7 days currently has a confirmed driver assignment.
+                </Text>
+              </Stack>
+            </Center>
           )}
         </Card>
 
-        {/* Recent Drivers */}
-        <Card shadow="sm" padding="lg" radius="md" withBorder>
+        <Card shadow="sm" padding="lg" radius="lg" withBorder>
           <Group justify="space-between" mb="md">
-            <Text fw={500}>Recent Drivers</Text>
-            <Badge variant="light" color="blue">Last 5</Badge>
+            <Text fw={600}>System Health</Text>
+            <Badge variant="light" color={healthSnapshot.color}>{healthSnapshot.label}</Badge>
           </Group>
-          {recentDrivers.length > 0 ? (
-            <Table striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Driver</Table.Th>
-                  <Table.Th>ID</Table.Th>
-                  <Table.Th>Status</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {recentDrivers.map(([id, driver]) => (
+
+          <Stack gap="sm">
+            {[databaseConnectionStatus, realtimeSyncStatus, broadcastStatus].map((status, index) => {
+              const Icon = index === 0 ? IconActivity : index === 1 ? IconClock : IconMessageCircle;
+              const label = index === 0 ? 'Database connection' : index === 1 ? 'Realtime sync' : 'Broadcast system';
+              return (
+                <Paper key={label} p="sm" radius="md" withBorder bg={`${status.color}.0`}>
+                  <Group wrap="nowrap" align="center">
+                    <ThemeIcon color={status.color} variant="light" size="md" radius="md">
+                      <Icon size={15} />
+                    </ThemeIcon>
+                    <Box style={{ flex: 1 }}>
+                      <Text size="sm" fw={500}>{label}</Text>
+                      <Text size="xs" c="dimmed">{status.description}</Text>
+                    </Box>
+                    <Badge size="sm" color={status.color} variant="filled">{status.label}</Badge>
+                  </Group>
+                </Paper>
+              );
+            })}
+
+            <Divider my="xs" />
+            <Group gap="xs">
+              <IconCalendar size={14} color="gray" />
+              <Text size="xs" c="dimmed">
+                Last successful sync: {formatTimeForDisplay(healthSignals.lastSuccessfulSyncAt, 'Awaiting first sync')}
+              </Text>
+            </Group>
+            <Text size="xs" c="dimmed">
+              Taxonomy: {HEALTH_STATE.OFFLINE_NO_NETWORK}, {HEALTH_STATE.ONLINE_BACKEND_DEGRADED},{' '}
+              {HEALTH_STATE.ONLINE_BACKLOG_PENDING}, {HEALTH_STATE.ONLINE_HEALTHY}
+            </Text>
+          </Stack>
+        </Card>
+      </SimpleGrid>
+
+      <Card shadow="sm" padding="lg" radius="lg" withBorder>
+        <Group justify="space-between" mb="md">
+          <Title order={4}>Recently Added Drivers</Title>
+          <Badge variant="light" color="blue">Last 5</Badge>
+        </Group>
+
+        {recentDrivers.length > 0 ? (
+          <Table striped highlightOnHover verticalSpacing="sm">
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Driver</Table.Th>
+                <Table.Th>Driver ID</Table.Th>
+                <Table.Th>Status</Table.Th>
+                <Table.Th>Current Tour</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {recentDrivers.map(([id, driver]) => {
+                const currentTour = resolveCurrentTourId(driver);
+                return (
                   <Table.Tr key={id}>
                     <Table.Td>
                       <Group gap="xs">
                         <Avatar size="sm" radius="xl" color="brand">
                           {driver.name?.charAt(0) || '?'}
                         </Avatar>
-                        <Text size="sm" fw={500}>{driver.name}</Text>
+                        <Text size="sm" fw={600}>{driver.name || 'Unnamed Driver'}</Text>
                       </Group>
                     </Table.Td>
                     <Table.Td>
                       <Badge variant="light" size="sm">{id}</Badge>
                     </Table.Td>
                     <Table.Td>
-                      <Badge
-                        variant="dot"
-                        color={resolveCurrentTourId(driver) ? 'green' : 'gray'}
-                        size="sm"
-                      >
-                        {resolveCurrentTourId(driver) ? 'Active' : 'Available'}
+                      <Badge variant="dot" color={currentTour ? 'green' : 'gray'} size="sm">
+                        {currentTour ? 'On tour' : 'Available'}
                       </Badge>
                     </Table.Td>
+                    <Table.Td>
+                      <Text size="sm" c={currentTour ? 'dark' : 'dimmed'}>
+                        {currentTour || '—'}
+                      </Text>
+                    </Table.Td>
                   </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          ) : (
-            <Text c="dimmed" ta="center" py="xl">No drivers found</Text>
-          )}
-        </Card>
-
-        {/* System Status */}
-        <Card shadow="sm" padding="lg" radius="md" withBorder>
-          <Group justify="space-between" mb="md">
-            <Text fw={500}>System Status</Text>
-            <Badge variant="light" color={healthSnapshot.color}>{healthSnapshot.label}</Badge>
-          </Group>
-          <Stack gap="md">
-            <Paper p="sm" radius="md" bg={`${databaseConnectionStatus.color}.0`}>
-              <Group gap="sm">
-                <ThemeIcon color={databaseConnectionStatus.color} variant="light" size="md">
-                  <IconActivity size={16} />
-                </ThemeIcon>
-                <div>
-                  <Text size="sm" fw={500}>Database Connection</Text>
-                  <Text size="xs" c="dimmed">{databaseConnectionStatus.description}</Text>
-                </div>
-                <Badge ml="auto" color={databaseConnectionStatus.color} variant="filled" size="sm">
-                  {databaseConnectionStatus.label}
-                </Badge>
-              </Group>
-            </Paper>
-            <Paper p="sm" radius="md" bg={`${realtimeSyncStatus.color}.0`}>
-              <Group gap="sm">
-                <ThemeIcon color={realtimeSyncStatus.color} variant="light" size="md">
-                  <IconClock size={16} />
-                </ThemeIcon>
-                <div>
-                  <Text size="sm" fw={500}>Real-time Sync</Text>
-                  <Text size="xs" c="dimmed">{realtimeSyncStatus.description}</Text>
-                </div>
-                <Badge ml="auto" color={realtimeSyncStatus.color} variant="filled" size="sm">
-                  {realtimeSyncStatus.label}
-                </Badge>
-              </Group>
-            </Paper>
-            <Paper p="sm" radius="md" bg={`${broadcastStatus.color}.0`}>
-              <Group gap="sm">
-                <ThemeIcon color={broadcastStatus.color} variant="light" size="md">
-                  <IconMessageCircle size={16} />
-                </ThemeIcon>
-                <div>
-                  <Text size="sm" fw={500}>Broadcast System</Text>
-                  <Text size="xs" c="dimmed">{broadcastStatus.description}</Text>
-                </div>
-                <Badge ml="auto" color={broadcastStatus.color} variant="filled" size="sm">
-                  {broadcastStatus.label}
-                </Badge>
-              </Group>
-            </Paper>
-            <Divider my="xs" />
-            <Group gap="xs">
-              <IconCalendar size={14} color="gray" />
-              <Text size="xs" c="dimmed">
-                Last updated: {formatTimeForDisplay(healthSignals.lastSuccessfulSyncAt, 'Awaiting first sync')}
-              </Text>
-            </Group>
-            <Text size="xs" c="dimmed">
-              Sync taxonomy: {HEALTH_STATE.OFFLINE_NO_NETWORK}, {HEALTH_STATE.ONLINE_BACKEND_DEGRADED},{' '}
-              {HEALTH_STATE.ONLINE_BACKLOG_PENDING}, {HEALTH_STATE.ONLINE_HEALTHY}
-            </Text>
-          </Stack>
-        </Card>
-      </SimpleGrid>
-    </Box>
+                );
+              })}
+            </Table.Tbody>
+          </Table>
+        ) : (
+          <Center py="xl">
+            <Text c="dimmed" size="sm">No drivers found in the current environment.</Text>
+          </Center>
+        )}
+      </Card>
+    </Stack>
   );
 }
