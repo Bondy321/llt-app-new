@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { auth } from '../firebase';
 import { updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
+import { ref, get, update, serverTimestamp } from 'firebase/database';
 import { notifications } from '@mantine/notifications';
 import {
   Card,
@@ -21,14 +22,14 @@ import {
   Avatar,
   Modal,
   Alert,
+  Progress,
+  Skeleton,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
-  IconSettings,
   IconUser,
   IconLock,
   IconBell,
-  IconPalette,
   IconDatabase,
   IconShield,
   IconKey,
@@ -36,7 +37,11 @@ import {
   IconAlertCircle,
   IconCheck,
   IconInfoCircle,
+  IconDeviceFloppy,
+  IconRefresh,
+  IconRotateClockwise2,
 } from '@tabler/icons-react';
+import { db } from '../firebase';
 
 // Settings Section Component
 function SettingsSection({ title, description, icon, color, children }) {
@@ -57,10 +62,19 @@ function SettingsSection({ title, description, icon, color, children }) {
   );
 }
 
+const DEFAULT_NOTIFICATION_SETTINGS = {
+  pushNotifications: true,
+  emailNotifications: true,
+  soundEnabled: true,
+  highPriorityOnly: false,
+  dailyDigest: true,
+};
+
 // Main Settings Component
 export default function Settings() {
   const user = auth.currentUser;
   const [passwordModalOpened, { open: openPasswordModal, close: closePasswordModal }] = useDisclosure(false);
+  const [resetModalOpened, { open: openResetModal, close: closeResetModal }] = useDisclosure(false);
 
   // Password change state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -68,10 +82,64 @@ export default function Settings() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
 
-  // Settings state
-  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
-  const [emailNotifications, setEmailNotifications] = useState(true);
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  // Settings state (persisted)
+  const [notificationSettings, setNotificationSettings] = useState(DEFAULT_NOTIFICATION_SETTINGS);
+  const [initialSettings, setInitialSettings] = useState(DEFAULT_NOTIFICATION_SETTINGS);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState(null);
+
+  const settingsRef = useMemo(
+    () => (user?.uid ? ref(db, `web_admin_settings/${user.uid}`) : null),
+    [user?.uid]
+  );
+
+  const hasUnsavedChanges = useMemo(
+    () => JSON.stringify(notificationSettings) !== JSON.stringify(initialSettings),
+    [notificationSettings, initialSettings]
+  );
+
+  const securityScore = useMemo(() => {
+    let score = 70;
+    if (notificationSettings.highPriorityOnly) score += 5;
+    if (!notificationSettings.soundEnabled) score += 5;
+    if (notificationSettings.dailyDigest) score += 5;
+    if (user?.emailVerified) score += 15;
+    return Math.min(score, 100);
+  }, [notificationSettings, user?.emailVerified]);
+
+  const loadSettings = useCallback(async () => {
+    if (!settingsRef) {
+      setSettingsLoading(false);
+      return;
+    }
+
+    setSettingsLoading(true);
+    try {
+      const snapshot = await get(settingsRef);
+      const data = snapshot.val() || {};
+      const nextSettings = {
+        ...DEFAULT_NOTIFICATION_SETTINGS,
+        ...(data.notificationSettings || {}),
+      };
+
+      setNotificationSettings(nextSettings);
+      setInitialSettings(nextSettings);
+      setLastSavedAt(data?.updatedAtISO || null);
+    } catch {
+      notifications.show({
+        title: 'Settings load issue',
+        message: 'Unable to load saved preferences right now. You can still update and save manually.',
+        color: 'yellow',
+      });
+    } finally {
+      setSettingsLoading(false);
+    }
+  }, [settingsRef]);
+
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
   const handlePasswordChange = async (e) => {
     e.preventDefault();
@@ -126,15 +194,96 @@ export default function Settings() {
     }
   };
 
+  const handleSettingToggle = (key) => {
+    setNotificationSettings((current) => ({
+      ...current,
+      [key]: !current[key],
+    }));
+  };
+
+  const handleSaveSettings = async () => {
+    if (!settingsRef || settingsSaving || !hasUnsavedChanges) return;
+
+    setSettingsSaving(true);
+    const savedAt = new Date().toISOString();
+    try {
+      await update(settingsRef, {
+        notificationSettings,
+        updatedAt: serverTimestamp(),
+        updatedAtISO: savedAt,
+      });
+
+      setInitialSettings(notificationSettings);
+      setLastSavedAt(savedAt);
+      notifications.show({
+        title: 'Settings saved',
+        message: 'Your preferences are now live for this admin account.',
+        color: 'green',
+      });
+    } catch {
+      notifications.show({
+        title: 'Save failed',
+        message: 'Could not save your settings. Please retry.',
+        color: 'red',
+      });
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  const handleResetToDefaults = async () => {
+    setNotificationSettings(DEFAULT_NOTIFICATION_SETTINGS);
+    closeResetModal();
+  };
+
+  const renderLastSaved = () => {
+    if (!lastSavedAt) return 'Not saved yet';
+    const parsed = new Date(lastSavedAt);
+    if (Number.isNaN(parsed.getTime())) return 'Saved recently';
+    return parsed.toLocaleString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   return (
     <Box>
       {/* Header */}
-      <Group justify="space-between" mb="xl">
-        <div>
-          <Title order={2}>Settings</Title>
-          <Text c="dimmed" size="sm">Manage your account and application preferences</Text>
-        </div>
-      </Group>
+      <Card mb="xl" radius="lg" withBorder p="xl" bg="linear-gradient(135deg, var(--mantine-color-brand-0), var(--mantine-color-white))">
+        <Group justify="space-between" align="start">
+          <div>
+            <Title order={2}>Settings</Title>
+            <Text c="dimmed" size="sm">Premium account controls, secure defaults, and production-ready preference management.</Text>
+            <Text mt={6} size="xs" c="dimmed">Last saved: {renderLastSaved()}</Text>
+          </div>
+          <Group gap="xs">
+            <Button
+              variant="light"
+              leftSection={<IconRefresh size={16} />}
+              onClick={loadSettings}
+              loading={settingsLoading}
+            >
+              Refresh
+            </Button>
+            <Button
+              leftSection={<IconDeviceFloppy size={16} />}
+              onClick={handleSaveSettings}
+              loading={settingsSaving}
+              disabled={!hasUnsavedChanges}
+            >
+              Save changes
+            </Button>
+          </Group>
+        </Group>
+        <Progress mt="md" value={securityScore} color={securityScore >= 85 ? 'green' : 'yellow'} size="lg" radius="xl" />
+        <Group justify="space-between" mt="xs">
+          <Text size="xs" c="dimmed">Workspace security posture</Text>
+          <Text size="xs" fw={700}>{securityScore}/100</Text>
+        </Group>
+      </Card>
 
       <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="lg">
         {/* Profile Settings */}
@@ -224,45 +373,88 @@ export default function Settings() {
         {/* Notification Settings */}
         <SettingsSection
           title="Notifications"
-          description="Configure alert preferences"
+          description="Fine-grained operational alert routing"
           icon={IconBell}
           color="orange"
         >
           <Stack gap="md">
-            <Group justify="space-between">
-              <div>
-                <Text fw={500}>Push Notifications</Text>
-                <Text size="xs" c="dimmed">Receive alerts in your browser</Text>
-              </div>
-              <Switch
-                checked={notificationsEnabled}
-                onChange={(e) => setNotificationsEnabled(e.currentTarget.checked)}
-                color="brand"
-              />
-            </Group>
-            <Divider />
-            <Group justify="space-between">
-              <div>
-                <Text fw={500}>Email Notifications</Text>
-                <Text size="xs" c="dimmed">Receive important updates via email</Text>
-              </div>
-              <Switch
-                checked={emailNotifications}
-                onChange={(e) => setEmailNotifications(e.currentTarget.checked)}
-                color="brand"
-              />
-            </Group>
-            <Divider />
-            <Group justify="space-between">
-              <div>
-                <Text fw={500}>Sound Effects</Text>
-                <Text size="xs" c="dimmed">Play sounds for notifications</Text>
-              </div>
-              <Switch
-                checked={soundEnabled}
-                onChange={(e) => setSoundEnabled(e.currentTarget.checked)}
-                color="brand"
-              />
+            {settingsLoading ? (
+              <>
+                <Skeleton height={54} radius="md" />
+                <Skeleton height={54} radius="md" />
+                <Skeleton height={54} radius="md" />
+              </>
+            ) : (
+              <>
+                <Group justify="space-between">
+                  <div>
+                    <Text fw={500}>Push Notifications</Text>
+                    <Text size="xs" c="dimmed">Receive alerts in your browser</Text>
+                  </div>
+                  <Switch
+                    checked={notificationSettings.pushNotifications}
+                    onChange={() => handleSettingToggle('pushNotifications')}
+                    color="brand"
+                  />
+                </Group>
+                <Divider />
+                <Group justify="space-between">
+                  <div>
+                    <Text fw={500}>Email Notifications</Text>
+                    <Text size="xs" c="dimmed">Receive important updates via email</Text>
+                  </div>
+                  <Switch
+                    checked={notificationSettings.emailNotifications}
+                    onChange={() => handleSettingToggle('emailNotifications')}
+                    color="brand"
+                  />
+                </Group>
+                <Divider />
+                <Group justify="space-between">
+                  <div>
+                    <Text fw={500}>Sound Effects</Text>
+                    <Text size="xs" c="dimmed">Play sounds for notifications</Text>
+                  </div>
+                  <Switch
+                    checked={notificationSettings.soundEnabled}
+                    onChange={() => handleSettingToggle('soundEnabled')}
+                    color="brand"
+                  />
+                </Group>
+                <Divider />
+                <Group justify="space-between">
+                  <div>
+                    <Text fw={500}>High-priority only mode</Text>
+                    <Text size="xs" c="dimmed">Silence low-urgency updates during operations</Text>
+                  </div>
+                  <Switch
+                    checked={notificationSettings.highPriorityOnly}
+                    onChange={() => handleSettingToggle('highPriorityOnly')}
+                    color="brand"
+                  />
+                </Group>
+                <Divider />
+                <Group justify="space-between">
+                  <div>
+                    <Text fw={500}>Daily Digest</Text>
+                    <Text size="xs" c="dimmed">Receive a daily operations summary</Text>
+                  </div>
+                  <Switch
+                    checked={notificationSettings.dailyDigest}
+                    onChange={() => handleSettingToggle('dailyDigest')}
+                    color="brand"
+                  />
+                </Group>
+              </>
+            )}
+
+            <Group justify="space-between" mt="xs">
+              <Button variant="default" onClick={() => setNotificationSettings(initialSettings)} disabled={!hasUnsavedChanges}>
+                Revert Changes
+              </Button>
+              <Button variant="subtle" color="red" onClick={openResetModal} leftSection={<IconRotateClockwise2 size={16} />}>
+                Reset Defaults
+              </Button>
             </Group>
           </Stack>
         </SettingsSection>
@@ -279,7 +471,7 @@ export default function Settings() {
               <Stack gap="xs">
                 <Group justify="space-between">
                   <Text size="sm" c="dimmed">Version</Text>
-                  <Badge variant="light">1.0.0</Badge>
+                  <Badge variant="light">1.1.0</Badge>
                 </Group>
                 <Group justify="space-between">
                   <Text size="sm" c="dimmed">Environment</Text>
@@ -291,17 +483,23 @@ export default function Settings() {
                 </Group>
                 <Group justify="space-between">
                   <Text size="sm" c="dimmed">Region</Text>
-                  <Badge variant="light">Europe West 1</Badge>
+                  <Badge variant="light">europe-west1</Badge>
                 </Group>
               </Stack>
             </Paper>
 
             <Alert icon={<IconCheck size={16} />} color="green" variant="light">
-              All systems operational
+              Settings persistence and security controls are operational.
             </Alert>
           </Stack>
         </SettingsSection>
       </SimpleGrid>
+
+      {hasUnsavedChanges ? (
+        <Alert mt="lg" color="yellow" icon={<IconAlertCircle size={16} />} variant="light">
+          You have unsaved changes. Save now to publish these preferences to production.
+        </Alert>
+      ) : null}
 
       {/* Password Change Modal */}
       <Modal
@@ -352,6 +550,18 @@ export default function Settings() {
             </Group>
           </Stack>
         </form>
+      </Modal>
+
+      <Modal opened={resetModalOpened} onClose={closeResetModal} centered title="Reset notification preferences?">
+        <Stack>
+          <Text size="sm" c="dimmed">
+            This resets alert preferences to LLT recommended defaults. Your changes are only saved after you click “Save changes”.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={closeResetModal}>Cancel</Button>
+            <Button color="red" onClick={handleResetToDefaults}>Reset</Button>
+          </Group>
+        </Stack>
       </Modal>
     </Box>
   );
