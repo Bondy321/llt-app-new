@@ -21,11 +21,14 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system';
-import { COLORS, SPACING, RADIUS } from '../theme';
+import { LinearGradient } from 'expo-linear-gradient';
+import { COLORS, SPACING, RADIUS, SHADOWS, FONT_WEIGHT } from '../theme';
+import loggerService from '../services/loggerService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = 80;
 const VELOCITY_THRESHOLD = 0.3;
+const PANEL_MAX_HEIGHT = SCREEN_HEIGHT * 0.44;
 
 export default function ImageViewer({
   visible,
@@ -44,6 +47,7 @@ export default function ImageViewer({
   const [saving, setSaving] = useState(false);
   const [editingCaption, setEditingCaption] = useState(false);
   const [draftCaption, setDraftCaption] = useState('');
+  const [captionSaving, setCaptionSaving] = useState(false);
 
   const translateX = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -205,14 +209,15 @@ export default function ImageViewer({
   const formatDate = (timestamp) => {
     if (!timestamp) return 'Unknown date';
     const date = new Date(timestamp);
-    return date.toLocaleDateString(undefined, {
+    if (Number.isNaN(date.getTime())) return 'Unknown date';
+    return new Intl.DateTimeFormat(undefined, {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
-    });
+    }).format(date);
   };
 
   const handleShare = async () => {
@@ -224,7 +229,8 @@ export default function ImageViewer({
         url: currentPhoto.url,
       });
     } catch (error) {
-      console.log('Share error:', error);
+      loggerService.warn('ImageViewer', 'Share action failed', { message: error?.message });
+      Alert.alert('Share unavailable', 'Unable to open share options right now. Please try again.');
     }
   };
 
@@ -252,7 +258,7 @@ export default function ImageViewer({
         throw new Error('Download failed');
       }
     } catch (error) {
-      console.error('Save error:', error);
+      loggerService.error('ImageViewer', 'Failed to save photo to device', { message: error?.message });
       Alert.alert('Error', 'Could not save the photo. Please try again.');
     } finally {
       setSaving(false);
@@ -293,10 +299,14 @@ export default function ImageViewer({
 
   const saveCaption = async () => {
     try {
+      setCaptionSaving(true);
       await onEditCaption(currentPhoto, draftCaption);
       setEditingCaption(false);
     } catch (error) {
+      loggerService.warn('ImageViewer', 'Caption update failed', { message: error?.message });
       Alert.alert('Caption update failed', 'Please try again.');
+    } finally {
+      setCaptionSaving(false);
     }
   };
 
@@ -305,6 +315,23 @@ export default function ImageViewer({
     outputRange: [200, 0],
   });
   if (!visible) return null;
+
+  if (!photos.length) {
+    return (
+      <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
+        <View style={styles.emptyContainer}>
+          <View style={styles.emptyCard}>
+            <MaterialCommunityIcons name="image-off-outline" size={30} color={COLORS.textSecondary} />
+            <Text style={styles.emptyTitle}>Photo unavailable</Text>
+            <Text style={styles.emptyBody}>This photo can’t be loaded right now. Try refreshing the gallery.</Text>
+            <TouchableOpacity onPress={onClose} style={styles.emptyCloseButton}>
+              <Text style={styles.emptyCloseText}>Close viewer</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
 
   return (
     <Modal
@@ -317,6 +344,11 @@ export default function ImageViewer({
       <StatusBar barStyle="light-content" backgroundColor="rgba(0,0,0,0.9)" />
       <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
         {/* Header */}
+        <LinearGradient
+          pointerEvents="none"
+          colors={['rgba(2, 6, 23, 0.9)', 'rgba(2, 6, 23, 0)']}
+          style={styles.headerGradient}
+        />
         <View style={styles.header}>
           <TouchableOpacity onPress={onClose} style={styles.headerButton}>
             <MaterialCommunityIcons name="close" size={28} color={COLORS.white} />
@@ -329,6 +361,8 @@ export default function ImageViewer({
           <TouchableOpacity
             onPress={() => setShowInfo(!showInfo)}
             style={styles.headerButton}
+            accessibilityRole="button"
+            accessibilityLabel={showInfo ? 'Hide photo details' : 'Show photo details'}
           >
             <MaterialCommunityIcons
               name={showInfo ? "information" : "information-outline"}
@@ -371,6 +405,8 @@ export default function ImageViewer({
             <TouchableOpacity
               style={[styles.navArrow, styles.navArrowLeft]}
               onPress={goToPrevious}
+              accessibilityRole="button"
+              accessibilityLabel="Previous photo"
             >
               <MaterialCommunityIcons name="chevron-left" size={40} color="rgba(255,255,255,0.8)" />
             </TouchableOpacity>
@@ -379,6 +415,8 @@ export default function ImageViewer({
             <TouchableOpacity
               style={[styles.navArrow, styles.navArrowRight]}
               onPress={goToNext}
+              accessibilityRole="button"
+              accessibilityLabel="Next photo"
             >
               <MaterialCommunityIcons name="chevron-right" size={40} color="rgba(255,255,255,0.8)" />
             </TouchableOpacity>
@@ -386,10 +424,17 @@ export default function ImageViewer({
         </Animated.View>
 
         {/* Bottom Actions */}
+        <LinearGradient
+          pointerEvents="none"
+          colors={['rgba(2, 6, 23, 0)', 'rgba(2, 6, 23, 0.92)']}
+          style={styles.bottomGradient}
+        />
         <View style={styles.bottomActions}>
           <TouchableOpacity
             onPress={handleShare}
             style={styles.actionButton}
+            accessibilityRole="button"
+            accessibilityLabel="Share photo"
           >
             <MaterialCommunityIcons name="share-variant" size={24} color={COLORS.white} />
             <Text style={styles.actionText}>Share</Text>
@@ -398,7 +443,9 @@ export default function ImageViewer({
           <TouchableOpacity
             onPress={handleSaveToDevice}
             style={styles.actionButton}
-            disabled={saving}
+            disabled={saving || !currentPhoto.url}
+            accessibilityRole="button"
+            accessibilityLabel="Save photo to device"
           >
             {saving ? (
               <ActivityIndicator size="small" color={COLORS.white} />
@@ -412,6 +459,8 @@ export default function ImageViewer({
             <TouchableOpacity
               onPress={handleDelete}
               style={[styles.actionButton, styles.deleteButton]}
+              accessibilityRole="button"
+              accessibilityLabel="Delete photo"
             >
               <MaterialCommunityIcons name="delete-outline" size={24} color={COLORS.error} />
               <Text style={[styles.actionText, { color: COLORS.error }]}>Delete</Text>
@@ -494,8 +543,12 @@ export default function ImageViewer({
               <TouchableOpacity onPress={() => setEditingCaption(false)} style={styles.editModalCancel}>
                 <Text style={styles.editModalCancelText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={saveCaption} style={styles.editModalSave}>
-                <Text style={styles.editModalSaveText}>Save</Text>
+              <TouchableOpacity
+                onPress={saveCaption}
+                style={[styles.editModalSave, captionSaving && styles.editModalSaveDisabled]}
+                disabled={captionSaving}
+              >
+                {captionSaving ? <ActivityIndicator color={COLORS.white} /> : <Text style={styles.editModalSaveText}>Save</Text>}
               </TouchableOpacity>
             </View>
           </View>
@@ -509,7 +562,53 @@ export default function ImageViewer({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.95)',
+    backgroundColor: '#020617',
+  },
+  emptyContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(2, 6, 23, 0.92)',
+    justifyContent: 'center',
+    padding: SPACING.xl,
+  },
+  emptyCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.xl,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: SPACING.xl,
+    alignItems: 'center',
+    ...SHADOWS.xl,
+  },
+  emptyTitle: {
+    marginTop: SPACING.md,
+    fontSize: 18,
+    color: COLORS.textPrimary,
+    fontWeight: FONT_WEIGHT.bold,
+  },
+  emptyBody: {
+    marginTop: SPACING.sm,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  emptyCloseButton: {
+    marginTop: SPACING.lg,
+    backgroundColor: COLORS.primary,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: RADIUS.md,
+  },
+  emptyCloseText: {
+    color: COLORS.white,
+    fontWeight: FONT_WEIGHT.bold,
+  },
+  headerGradient: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: SCREEN_HEIGHT * 0.18,
+    zIndex: 1,
   },
   header: {
     flexDirection: 'row',
@@ -523,12 +622,15 @@ const styles = StyleSheet.create({
   headerButton: {
     padding: SPACING.sm,
     borderRadius: RADIUS.full,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
   },
   counter: {
     color: COLORS.white,
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: FONT_WEIGHT.semibold,
+    letterSpacing: 0.4,
   },
   imageContainer: {
     flex: 1,
@@ -564,8 +666,10 @@ const styles = StyleSheet.create({
     height: 50,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
     borderRadius: 25,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
   },
   navArrowLeft: {
     left: 10,
@@ -573,23 +677,36 @@ const styles = StyleSheet.create({
   navArrowRight: {
     right: 10,
   },
+  bottomGradient: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: SCREEN_HEIGHT * 0.26,
+  },
   bottomActions: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     paddingVertical: SPACING.lg,
     paddingHorizontal: SPACING.xl,
-    gap: SPACING.xxxl,
+    gap: SPACING.xxl,
   },
   actionButton: {
     alignItems: 'center',
-    padding: SPACING.sm,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    borderRadius: RADIUS.md,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    minWidth: 92,
   },
   actionText: {
     color: COLORS.white,
     fontSize: 12,
     marginTop: 4,
-    fontWeight: '500',
+    fontWeight: FONT_WEIGHT.medium,
   },
   deleteButton: {
     opacity: 0.9,
@@ -624,7 +741,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.xl,
     paddingTop: SPACING.md,
     paddingBottom: Platform.OS === 'ios' ? 40 : 24,
-    maxHeight: SCREEN_HEIGHT * 0.4,
+    maxHeight: PANEL_MAX_HEIGHT,
+    ...SHADOWS.xl,
   },
   infoPanelHandle: {
     width: 40,
@@ -636,7 +754,7 @@ const styles = StyleSheet.create({
   },
   infoTitle: {
     fontSize: 18,
-    fontWeight: '700',
+    fontWeight: FONT_WEIGHT.bold,
     color: COLORS.textPrimary,
     marginBottom: SPACING.lg,
   },
@@ -654,7 +772,7 @@ const styles = StyleSheet.create({
   infoValue: {
     fontSize: 14,
     color: COLORS.textPrimary,
-    fontWeight: '500',
+    fontWeight: FONT_WEIGHT.medium,
     flex: 1,
   },
   captionContainer: {
@@ -685,10 +803,11 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
     borderRadius: RADIUS.lg,
     padding: SPACING.lg,
+    ...SHADOWS.xl,
   },
   editModalTitle: {
     fontSize: 18,
-    fontWeight: '700',
+    fontWeight: FONT_WEIGHT.bold,
     color: COLORS.textPrimary,
     marginBottom: SPACING.md,
   },
@@ -713,7 +832,7 @@ const styles = StyleSheet.create({
   },
   editModalCancelText: {
     color: COLORS.textSecondary,
-    fontWeight: '600',
+    fontWeight: FONT_WEIGHT.semibold,
   },
   editModalSave: {
     backgroundColor: COLORS.primary,
@@ -723,6 +842,9 @@ const styles = StyleSheet.create({
   },
   editModalSaveText: {
     color: COLORS.white,
-    fontWeight: '700',
+    fontWeight: FONT_WEIGHT.bold,
+  },
+  editModalSaveDisabled: {
+    opacity: 0.75,
   },
 });
