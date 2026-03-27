@@ -2,17 +2,39 @@ import React, { useMemo } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { COLORS as THEME, SPACING } from '../theme';
+import { COLORS as THEME, SPACING, RADIUS, SHADOWS, FONT_WEIGHT } from '../theme';
 import { getTourDayContext } from '../services/itineraryDateParser';
 
 const COLORS = {
-  primaryBlue: THEME.primary,
+  primary: THEME.primary,
+  primaryDark: THEME.primaryDark,
+  primaryMuted: THEME.primaryMuted,
+  primaryLight: THEME.primaryLight,
+  accent: THEME.accent,
+  accentLight: THEME.accentLight,
   white: THEME.white,
-  darkText: THEME.textPrimary,
-  secondaryText: THEME.textSecondary,
-  coralAccent: THEME.accent,
-  lightBg: '#F8FAFC',
-  successGreen: THEME.success,
+  surface: THEME.surface,
+  background: THEME.background,
+  border: THEME.border,
+  text: THEME.textPrimary,
+  textSecondary: THEME.textSecondary,
+  textMuted: THEME.textMuted,
+  success: THEME.success,
+  successLight: THEME.successLight,
+};
+
+const parseAgendaHighlights = (rawContent) => {
+  if (!rawContent || typeof rawContent !== 'string') {
+    return [];
+  }
+
+  return rawContent
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[-•\d.)\s]+/, '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
 };
 
 export default function TodaysAgendaCard({ tourData, onNudge }) {
@@ -35,109 +57,283 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
 
   if (!currentDayData) return null;
 
-  // RENDER: Tour hasn't started yet
   if (currentDayData.status === 'FUTURE') {
     const daysToGo = currentDayData.daysToGo;
+
     return (
       <View style={styles.container}>
-        <Text style={[styles.sectionTitle, styles.countdownSectionTitle]}>Tour Countdown</Text>
-        <View style={styles.card}>
-          <LinearGradient colors={[COLORS.primaryBlue, '#005A8D']} style={styles.headerFuture}>
-            <MaterialCommunityIcons name="bus" size={32} color={COLORS.white} />
-            <View style={styles.countdownContent}>
-              <Text style={styles.headerTitleFuture}>Your Adventure Starts Soon!</Text>
-              <View style={styles.countdownBadge}>
-                <Text style={styles.countdownNumber}>{daysToGo}</Text>
-                <Text style={styles.countdownLabel}>{daysToGo === 1 ? 'day' : 'days'} to go</Text>
-              </View>
+        <Text style={styles.sectionTitle}>Tour Countdown</Text>
+        <LinearGradient colors={[COLORS.primary, COLORS.primaryDark]} style={styles.countdownCard}>
+          <View style={styles.countdownTopRow}>
+            <View style={styles.countdownIconBadge}>
+              <MaterialCommunityIcons name="bus-clock" size={20} color={COLORS.white} />
             </View>
-          </LinearGradient>
-        </View>
+            <View style={styles.countdownMeta}>
+              <Text style={styles.countdownTitle}>Your journey begins soon</Text>
+              <Text style={styles.countdownSubtitle}>Get ready for premium pickup updates and day-by-day guidance.</Text>
+            </View>
+          </View>
+
+          <View style={styles.countdownStatCard}>
+            <Text style={styles.countdownNumber}>{daysToGo}</Text>
+            <Text style={styles.countdownLabel}>{daysToGo === 1 ? 'day to departure' : 'days to departure'}</Text>
+          </View>
+        </LinearGradient>
       </View>
     );
   }
 
-  // RENDER: Tour Completed
   if (currentDayData.status === 'COMPLETED') {
     return null;
   }
 
-  // RENDER: Active Tour Day
   const { dayNumber, data } = currentDayData;
-  const content = data.content || '';
+  const content = data?.content || '';
+  const highlights = parseAgendaHighlights(content);
+  const previewLine = highlights.length ? highlights[0] : 'No details available for today yet.';
 
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
-        <Text style={styles.sectionTitle}>Today's Itinerary</Text>
+        <Text style={styles.sectionTitle}>Today&apos;s Itinerary</Text>
+        <View style={styles.livePill}>
+          <MaterialCommunityIcons name="check-decagram" size={12} color={COLORS.success} />
+          <Text style={styles.livePillText}>Live</Text>
+        </View>
       </View>
 
       <TouchableOpacity
-        activeOpacity={0.95}
+        activeOpacity={0.94}
         onPress={onNudge}
         style={styles.card}
-        accessible={true}
+        accessibilityRole="button"
         accessibilityLabel={`Day ${dayNumber} itinerary card`}
-        accessibilityHint="Double tap to view full itinerary"
+        accessibilityHint="Double tap to open full itinerary"
       >
-        <LinearGradient colors={[COLORS.white, COLORS.lightBg]} style={styles.cardInner}>
-          {/* Header */}
-          <View style={styles.rowBetween}>
-            <View style={styles.badge}>
-              <MaterialCommunityIcons name="calendar-today" size={14} color={COLORS.primaryBlue} />
-              <Text style={styles.badgeText}>Day {dayNumber}</Text>
-            </View>
+        <View style={styles.cardInner}>
+          <View style={styles.dayHeader}>
+            <LinearGradient colors={[COLORS.primary, COLORS.primaryDark]} style={styles.dayBadge}>
+              <MaterialCommunityIcons name="calendar-today" size={14} color={COLORS.white} />
+              <Text style={styles.dayBadgeText}>Day {dayNumber}</Text>
+            </LinearGradient>
+
             <TouchableOpacity
               onPress={onNudge}
-              style={styles.viewAllBtn}
-              accessible={true}
-              accessibilityLabel="View full itinerary"
+              style={styles.viewAllButton}
+              accessibilityRole="button"
+              accessibilityLabel="Open full itinerary"
             >
-              <Text style={styles.viewAllText}>View All Days</Text>
-              <MaterialCommunityIcons name="chevron-right" size={16} color={COLORS.primaryBlue} />
+              <Text style={styles.viewAllText}>Full itinerary</Text>
+              <MaterialCommunityIcons name="arrow-right" size={16} color={COLORS.primary} />
             </TouchableOpacity>
           </View>
 
-          {/* Day Content */}
-          <Text style={styles.dayContent} numberOfLines={6}>
-            {content || 'No details available for today.'}
-          </Text>
-        </LinearGradient>
+          <Text style={styles.previewText}>{previewLine}</Text>
+
+          {highlights.length > 1 ? (
+            <View style={styles.highlightsWrap}>
+              {highlights.slice(1).map((highlight) => (
+                <View key={highlight} style={styles.highlightRow}>
+                  <View style={styles.highlightDot} />
+                  <Text style={styles.highlightText} numberOfLines={2}>
+                    {highlight}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          <View style={styles.footerRow}>
+            <View style={styles.footerPill}>
+              <MaterialCommunityIcons name="map-marker-radius-outline" size={14} color={COLORS.accent} />
+              <Text style={styles.footerPillText}>Tap to view all stops</Text>
+            </View>
+            <MaterialCommunityIcons name="chevron-right-circle" size={20} color={COLORS.primary} />
+          </View>
+        </View>
       </TouchableOpacity>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { marginBottom: 24 },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, marginLeft: 4 },
-  sectionTitle: { fontSize: 20, fontWeight: '700', color: COLORS.darkText },
-  countdownSectionTitle: { marginBottom: SPACING.lg },
-
-  card: {
-    borderRadius: 18,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 5,
-    backgroundColor: COLORS.white,
+  container: {
+    marginBottom: SPACING.xxl,
   },
-  cardInner: { borderRadius: 18, padding: 18 },
-
-  // Future State
-  headerFuture: { flexDirection: 'row', alignItems: 'center', padding: 24, borderRadius: 18 },
-  countdownContent: { flex: 1, marginLeft: 16 },
-  headerTitleFuture: { color: COLORS.white, fontWeight: '700', fontSize: 18, marginBottom: 12 },
-  countdownBadge: { backgroundColor: 'rgba(255,255,255,0.2)', width: '100%', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, marginBottom: 8 },
-  countdownNumber: { color: COLORS.white, fontSize: 32, fontWeight: '800', textAlign: 'center' },
-  countdownLabel: { color: COLORS.white, fontSize: 14, fontWeight: '600', textAlign: 'center', opacity: 0.9 },
-
-  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  badge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E1F0FF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, gap: 6 },
-  badgeText: { color: COLORS.primaryBlue, fontWeight: '700', fontSize: 13 },
-  viewAllBtn: { flexDirection: 'row', alignItems: 'center' },
-  viewAllText: { color: COLORS.primaryBlue, fontSize: 13, fontWeight: '600', marginRight: 2 },
-
-  dayContent: { fontSize: 15, color: COLORS.darkText, lineHeight: 24, letterSpacing: 0.1 },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: FONT_WEIGHT.bold,
+    color: COLORS.text,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: SPACING.md,
+    paddingHorizontal: SPACING.xs,
+  },
+  livePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    backgroundColor: COLORS.successLight,
+    borderWidth: 1,
+    borderColor: COLORS.success,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 6,
+  },
+  livePillText: {
+    fontSize: 12,
+    color: COLORS.success,
+    fontWeight: FONT_WEIGHT.semibold,
+    textTransform: 'uppercase',
+  },
+  card: {
+    borderRadius: RADIUS.xl,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    ...SHADOWS.lg,
+  },
+  cardInner: {
+    borderRadius: RADIUS.xl,
+    padding: SPACING.lg,
+    backgroundColor: COLORS.surface,
+    gap: SPACING.md,
+  },
+  dayHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: SPACING.md,
+  },
+  dayBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+  },
+  dayBadgeText: {
+    color: COLORS.white,
+    fontWeight: FONT_WEIGHT.bold,
+    fontSize: 13,
+  },
+  viewAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    paddingVertical: SPACING.xs,
+    paddingHorizontal: SPACING.sm,
+    borderRadius: RADIUS.full,
+    backgroundColor: COLORS.primaryMuted,
+  },
+  viewAllText: {
+    fontSize: 12,
+    color: COLORS.primary,
+    fontWeight: FONT_WEIGHT.semibold,
+  },
+  previewText: {
+    color: COLORS.text,
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: FONT_WEIGHT.semibold,
+  },
+  highlightsWrap: {
+    gap: SPACING.sm,
+  },
+  highlightRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.sm,
+  },
+  highlightDot: {
+    width: 7,
+    height: 7,
+    borderRadius: RADIUS.full,
+    backgroundColor: COLORS.accent,
+    marginTop: 7,
+  },
+  highlightText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: COLORS.textSecondary,
+  },
+  footerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  footerPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    backgroundColor: COLORS.accentLight,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    borderWidth: 1,
+    borderColor: COLORS.accent,
+  },
+  footerPillText: {
+    color: COLORS.text,
+    fontSize: 12,
+    fontWeight: FONT_WEIGHT.medium,
+  },
+  countdownCard: {
+    borderRadius: RADIUS.xl,
+    padding: SPACING.lg,
+    gap: SPACING.lg,
+    ...SHADOWS.xl,
+  },
+  countdownTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+  },
+  countdownIconBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: RADIUS.full,
+    backgroundColor: COLORS.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  countdownMeta: {
+    flex: 1,
+  },
+  countdownTitle: {
+    color: COLORS.white,
+    fontSize: 18,
+    fontWeight: FONT_WEIGHT.bold,
+  },
+  countdownSubtitle: {
+    marginTop: SPACING.xs,
+    color: COLORS.white,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  countdownStatCard: {
+    backgroundColor: COLORS.primaryLight,
+    borderWidth: 1,
+    borderColor: COLORS.primaryMuted,
+    borderRadius: RADIUS.lg,
+    alignItems: 'center',
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+  },
+  countdownNumber: {
+    color: COLORS.white,
+    fontSize: 34,
+    fontWeight: FONT_WEIGHT.extrabold,
+  },
+  countdownLabel: {
+    marginTop: SPACING.xs,
+    color: COLORS.white,
+    fontSize: 13,
+    fontWeight: FONT_WEIGHT.semibold,
+  },
 });
