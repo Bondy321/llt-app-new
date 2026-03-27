@@ -4,6 +4,7 @@ import {
   TouchableOpacity, ActivityIndicator, Modal, Alert
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getTourManifest, updateManifestBooking, MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import offlineSyncService from '../services/offlineSyncService';
@@ -250,6 +251,46 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
   const isSearchView = viewMode === VIEW_MODE.SEARCH;
   const sectionListData = viewMode === VIEW_MODE.LOCATION ? sectionedLocationBookings : sectionedPriorityBookings;
+  const resultsDescriptor = `${sortedFilteredBookings.length} of ${manifestData.bookings.length} bookings`;
+  const unresolvedDescriptor = `${resolutionStats.unresolved} unresolved`;
+  const queueDescriptor = `${queueStats.pending} pending · ${queueStats.failed} failed`;
+
+  const insightCards = useMemo(() => {
+    const nextPickup = nextPriorityBooking
+      ? `${nextPriorityBooking.pickupTime || 'TBA'} · ${nextPriorityBooking.pickupLocation || 'Unknown pickup'}`
+      : 'No unresolved bookings';
+
+    return [
+      {
+        key: 'completion',
+        icon: 'progress-check',
+        title: 'Completion',
+        value: `${resolutionStats.completionPercent}%`,
+        subtitle: `${resolutionStats.resolved}/${resolutionStats.total} resolved`,
+      },
+      {
+        key: 'next',
+        icon: 'clock-fast',
+        title: 'Next priority',
+        value: nextPriorityBooking ? nextPriorityBooking.id : 'All clear',
+        subtitle: nextPickup,
+      },
+      {
+        key: 'sync',
+        icon: queueStats.failed > 0 ? 'cloud-alert-outline' : 'cloud-check-outline',
+        title: 'Sync health',
+        value: queueStats.failed > 0 ? 'Needs review' : 'Healthy',
+        subtitle: queueDescriptor,
+      },
+    ];
+  }, [
+    nextPriorityBooking,
+    queueDescriptor,
+    queueStats.failed,
+    resolutionStats.completionPercent,
+    resolutionStats.resolved,
+    resolutionStats.total,
+  ]);
 
   // --- Actions ---
   const handleOpenBooking = (booking) => {
@@ -403,7 +444,12 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
   // --- Render Functions ---
   const renderHeader = () => (
-    <View style={styles.header}>
+    <LinearGradient
+      colors={[COLORS.primaryDark, COLORS.primary]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.header}
+    >
       {/* Back Button (Added from Phase 4 fix) */}
       <TouchableOpacity
         onPress={() => navigation.goBack()} 
@@ -453,11 +499,24 @@ export default function PassengerManifestScreen({ route, navigation }) {
         </Text>
       </View>
 
+      <View style={styles.insightsRow}>
+        {insightCards.map((card) => (
+          <View key={card.key} style={styles.insightCard}>
+            <View style={styles.insightHeader}>
+              <MaterialCommunityIcons name={card.icon} size={14} color={COLORS.textLight} />
+              <Text style={styles.insightTitle}>{card.title}</Text>
+            </View>
+            <Text style={styles.insightValue} numberOfLines={1}>{card.value}</Text>
+            <Text style={styles.insightSubtitle} numberOfLines={1}>{card.subtitle}</Text>
+          </View>
+        ))}
+      </View>
+
       <View style={styles.syncRow}>
         <View style={styles.syncStatusPill}>
           <MaterialCommunityIcons name="cloud-sync-outline" size={14} color={COLORS.primaryDark} />
           <Text style={styles.syncStatusText}>
-            {queueStats.pending} pending · {queueStats.failed} failed
+            {queueDescriptor}
           </Text>
         </View>
         <TouchableOpacity onPress={() => handleSyncNow()} style={styles.syncBtn} disabled={refreshing}>
@@ -501,6 +560,11 @@ export default function PassengerManifestScreen({ route, navigation }) {
             <MaterialCommunityIcons name="close-circle" size={20} color={COLORS.muted} />
           </TouchableOpacity>
         )}
+      </View>
+      <View style={styles.searchMetaRow}>
+        <Text style={styles.searchMetaText}>{resultsDescriptor}</Text>
+        <Text style={styles.searchMetaDivider}>•</Text>
+        <Text style={styles.searchMetaText}>{unresolvedDescriptor}</Text>
       </View>
 
       <View style={styles.segmentedControl}>
@@ -569,7 +633,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
           )}
         </View>
       )}
-    </View>
+    </LinearGradient>
   );
 
   return (
@@ -723,6 +787,12 @@ export default function PassengerManifestScreen({ route, navigation }) {
                         <Text style={styles.actionBtnText}>No Show</Text>
                       </TouchableOpacity>
                     </View>
+                    <View style={styles.modalHintRow}>
+                      <MaterialCommunityIcons name="information-outline" size={16} color={COLORS.muted} />
+                      <Text style={styles.modalHintText}>
+                        Use “Some Here” when only part of the booking has boarded.
+                      </Text>
+                    </View>
 
                     <TouchableOpacity
                       style={[styles.secondaryActionBtn, { borderColor: COLORS.info }]}
@@ -754,7 +824,6 @@ export default function PassengerManifestScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
   header: {
-    backgroundColor: COLORS.primaryDark,
     paddingHorizontal: SPACING.lg,
     paddingTop: 12,
     paddingBottom: SPACING.xl,
@@ -899,6 +968,44 @@ const styles = StyleSheet.create({
     marginTop: SPACING.sm,
     color: '#DBEAFE',
     fontSize: 12,
+    fontWeight: FONT_WEIGHT.medium,
+  },
+  insightsRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    marginBottom: SPACING.md,
+  },
+  insightCard: {
+    flex: 1,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: 'rgba(191, 219, 254, 0.5)',
+    backgroundColor: 'rgba(15, 23, 42, 0.26)',
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.sm,
+  },
+  insightHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    marginBottom: 4,
+  },
+  insightTitle: {
+    color: '#BFDBFE',
+    fontSize: 10,
+    fontWeight: FONT_WEIGHT.bold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  insightValue: {
+    color: COLORS.textLight,
+    fontSize: 15,
+    fontWeight: FONT_WEIGHT.extrabold,
+  },
+  insightSubtitle: {
+    marginTop: 2,
+    color: '#E2E8F0',
+    fontSize: 11,
     fontWeight: FONT_WEIGHT.medium,
   },
 
@@ -1062,6 +1169,22 @@ const styles = StyleSheet.create({
     color: COLORS.primaryDark,
     fontWeight: FONT_WEIGHT.medium,
   },
+  searchMetaRow: {
+    marginTop: SPACING.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+  },
+  searchMetaText: {
+    color: '#E2E8F0',
+    fontSize: 12,
+    fontWeight: FONT_WEIGHT.semibold,
+  },
+  searchMetaDivider: {
+    color: '#93C5FD',
+    fontSize: 12,
+    fontWeight: FONT_WEIGHT.bold,
+  },
   
   listContent: { padding: SPACING.lg, paddingBottom: SPACING.xxxl },
   emptyStateCard: {
@@ -1138,6 +1261,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 20,
     borderStyle: 'dashed'
+  },
+  modalHintRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    marginBottom: SPACING.md,
+    backgroundColor: COLORS.bg,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.sm,
+  },
+  modalHintText: {
+    flex: 1,
+    color: COLORS.muted,
+    fontSize: 12,
+    fontWeight: FONT_WEIGHT.medium,
   },
   closeBtn: { padding: 15, alignItems: 'center' },
   closeBtnText: { color: COLORS.muted, fontWeight: 'bold', fontSize: 16 },
