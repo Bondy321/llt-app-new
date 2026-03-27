@@ -10,25 +10,32 @@ import offlineSyncService from '../services/offlineSyncService';
 import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
 import ManifestBookingCard from '../components/ManifestBookingCard';
-import { COLORS as THEME, SPACING } from '../theme';
+import { COLORS as THEME, SPACING, RADIUS, SHADOWS, FONT_WEIGHT } from '../theme';
 const { getBookingSyncState, normalizeSyncState } = require('../utils/manifestSyncState');
 const { pickupTimeToMinutes } = require('../services/pickupTimeParser');
 
 const COLORS = {
   primary: THEME.primary,
+  primaryDark: THEME.primaryDark,
+  primaryMuted: THEME.primaryMuted,
   bg: THEME.background,
+  surface: THEME.surface,
   border: THEME.border,
   searchBg: THEME.white,
   success: THEME.success,
+  successSoft: THEME.successLight,
   danger: THEME.error,
+  dangerSoft: THEME.errorLight,
   info: THEME.primaryLight,
   warning: THEME.warning,
+  warningSoft: THEME.warningLight,
   muted: THEME.textSecondary,
   panel: THEME.textPrimary,
-  chipBg: THEME.surfaceSecondary,
+  chipBg: THEME.surfaceSecondary || '#F1F5F9',
   chipActiveBg: THEME.primary,
   chipText: THEME.textSecondary,
   chipActiveText: THEME.white,
+  textLight: THEME.textInverse,
 };
 
 const VIEW_MODE = {
@@ -228,6 +235,14 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
   const totalStats = useMemo(() => computeStats(manifestData.bookings), [manifestData.bookings]);
   const filteredStats = useMemo(() => computeStats(filteredBookings), [filteredBookings]);
+  const resolutionStats = useMemo(() => {
+    const resolved = Math.max(filteredStats.checkedIn + filteredStats.noShows, 0);
+    const total = Math.max(filteredStats.totalPax, 0);
+    const unresolved = Math.max(total - resolved, 0);
+    const completionPercent = total === 0 ? 0 : Math.round((resolved / total) * 100);
+
+    return { resolved, unresolved, total, completionPercent };
+  }, [filteredStats]);
   const nextPriorityBooking = useMemo(
     () => sortedFilteredBookings.find((booking) => priorityRank(booking.status) === 0) || null,
     [sortedFilteredBookings]
@@ -390,49 +405,66 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const renderHeader = () => (
     <View style={styles.header}>
       {/* Back Button (Added from Phase 4 fix) */}
-      <TouchableOpacity 
+      <TouchableOpacity
         onPress={() => navigation.goBack()} 
         style={styles.backButton}
       >
-        <MaterialCommunityIcons name="arrow-left" size={24} color="white" />
+        <MaterialCommunityIcons name="arrow-left" size={24} color={COLORS.textLight} />
         <Text style={styles.backText}>Console</Text>
       </TouchableOpacity>
 
-      {/* --- NEW: DASHBOARD METRICS --- */}
+      <Text style={styles.headerTitle}>Passenger Manifest</Text>
+      <Text style={styles.headerSubtitle}>Live boarding control for tour {tourId}</Text>
+
       <View style={styles.dashboardContainer}>
-        
-        {/* Total Expected */}
         <View style={styles.dashboardItem}>
-          <Text style={styles.dashLabel}>TOTAL</Text>
+          <Text style={styles.dashLabel}>EXPECTED</Text>
           <Text style={styles.dashValue}>{filteredStats.totalPax}</Text>
           <Text style={styles.dashSubValue}>of {totalStats.totalPax}</Text>
         </View>
-
-        {/* Vertical Divider */}
         <View style={styles.dashDivider} />
-
-        {/* Boarded (Green) */}
         <View style={styles.dashboardItem}>
-          <Text style={[styles.dashLabel, { color: '#ABEBC6' }]}>BOARDED</Text>
+          <Text style={[styles.dashLabel, styles.successTint]}>BOARDED</Text>
           <Text style={[styles.dashValue, { color: COLORS.success }]}>
             {filteredStats.checkedIn}
           </Text>
           <Text style={styles.dashSubValue}>of {totalStats.checkedIn}</Text>
         </View>
-
-        {/* Vertical Divider */}
         <View style={styles.dashDivider} />
-
-        {/* No Shows (Red) */}
         <View style={styles.dashboardItem}>
-          <Text style={[styles.dashLabel, { color: '#F1948A' }]}>NO SHOW</Text>
+          <Text style={[styles.dashLabel, styles.dangerTint]}>NO SHOW</Text>
           <Text style={[styles.dashValue, { color: COLORS.danger }]}>
             {filteredStats.noShows}
           </Text>
           <Text style={styles.dashSubValue}>of {totalStats.noShows}</Text>
         </View>
-
       </View>
+
+      <View style={styles.progressShell}>
+        <View style={styles.progressHeader}>
+          <Text style={styles.progressTitle}>Boarding completion</Text>
+          <Text style={styles.progressValue}>{resolutionStats.completionPercent}%</Text>
+        </View>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${resolutionStats.completionPercent}%` }]} />
+        </View>
+        <Text style={styles.progressMeta}>
+          {resolutionStats.resolved} resolved • {resolutionStats.unresolved} unresolved
+        </Text>
+      </View>
+
+      <View style={styles.syncRow}>
+        <View style={styles.syncStatusPill}>
+          <MaterialCommunityIcons name="cloud-sync-outline" size={14} color={COLORS.primaryDark} />
+          <Text style={styles.syncStatusText}>
+            {queueStats.pending} pending · {queueStats.failed} failed
+          </Text>
+        </View>
+        <TouchableOpacity onPress={() => handleSyncNow()} style={styles.syncBtn} disabled={refreshing}>
+          <Text style={styles.syncBtnText}>{refreshing ? 'Syncing…' : 'Sync now'}</Text>
+        </TouchableOpacity>
+      </View>
+      {conflictNote ? <Text style={styles.conflictText}>{conflictNote}</Text> : null}
 
       {nextPriorityBooking && (
         <TouchableOpacity
@@ -455,17 +487,18 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
       {/* Search Bar (Existing) */}
       <View style={styles.searchContainer}>
-        <MaterialCommunityIcons name="magnify" size={24} color="#BDC3C7" />
+        <MaterialCommunityIcons name="magnify" size={20} color={COLORS.muted} />
         <TextInput 
           style={styles.searchInput}
           placeholder="Search booking, passenger, or pickup..."
+          placeholderTextColor={THEME.textMuted}
           value={searchQuery}
           onChangeText={setSearchQuery}
           autoCapitalize="characters"
         />
         {searchQuery.length > 0 && (
           <TouchableOpacity onPress={() => setSearchQuery('')}>
-            <MaterialCommunityIcons name="close-circle" size={20} color="#BDC3C7" />
+            <MaterialCommunityIcons name="close-circle" size={20} color={COLORS.muted} />
           </TouchableOpacity>
         )}
       </View>
@@ -546,7 +579,15 @@ export default function PassengerManifestScreen({ route, navigation }) {
       {loading && !refreshing ? (
         <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 20 }} />
       ) : (
-        isSearchView ? (
+        sortedFilteredBookings.length === 0 ? (
+          <View style={styles.emptyStateCard}>
+            <MaterialCommunityIcons name="clipboard-search-outline" size={34} color={COLORS.primary} />
+            <Text style={styles.emptyStateTitle}>No matching bookings</Text>
+            <Text style={styles.emptyStateBody}>
+              Adjust search or filters to find passengers, then update statuses.
+            </Text>
+          </View>
+        ) : isSearchView ? (
           <FlatList
             data={sortedFilteredBookings}
             keyExtractor={item => item.id}
@@ -713,44 +754,54 @@ export default function PassengerManifestScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
   header: {
-    backgroundColor: COLORS.panel,
-    padding: 16,
+    backgroundColor: COLORS.primaryDark,
+    paddingHorizontal: SPACING.lg,
     paddingTop: 12,
-    paddingBottom: 22,
+    paddingBottom: SPACING.xl,
   },
   backButton: {
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: SPACING.lg,
-    marginBottom: 15
+    marginBottom: SPACING.sm,
   },
-  backText: { color: 'white', fontSize: 16, fontWeight: 'bold', marginLeft: 5 },
+  backText: { color: COLORS.textLight, fontSize: 16, fontWeight: FONT_WEIGHT.bold, marginLeft: 5 },
+  headerTitle: {
+    color: COLORS.textLight,
+    fontWeight: FONT_WEIGHT.extrabold,
+    fontSize: 26,
+  },
+  headerSubtitle: {
+    color: '#C7D2FE',
+    marginTop: SPACING.xs,
+    marginBottom: SPACING.md,
+    fontSize: 13,
+    fontWeight: FONT_WEIGHT.medium,
+  },
 
   dashboardContainer: {
     flexDirection: 'row',
-    backgroundColor: '#111827',
-    borderRadius: 14,
-    padding: 14,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    borderRadius: RADIUS.lg,
+    padding: SPACING.md,
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 14,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.18,
-    shadowRadius: 6,
-    elevation: 3,
+    marginBottom: SPACING.md,
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.35)',
   },
   nextActionCard: {
-    marginBottom: 14,
+    marginBottom: SPACING.md,
     backgroundColor: COLORS.searchBg,
     borderWidth: 1,
     borderColor: COLORS.border,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm + 2,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    ...SHADOWS.sm,
   },
   nextActionMeta: {
     flex: 1,
@@ -758,14 +809,14 @@ const styles = StyleSheet.create({
   },
   nextActionEyebrow: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: FONT_WEIGHT.bold,
     color: COLORS.info,
     marginBottom: 2,
   },
   nextActionTitle: {
     fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.panel,
+    fontWeight: FONT_WEIGHT.bold,
+    color: COLORS.primaryDark,
   },
   nextActionDetail: {
     marginTop: 2,
@@ -773,9 +824,9 @@ const styles = StyleSheet.create({
     color: COLORS.muted,
   },
   nextActionButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: COLORS.info,
     alignItems: 'center',
     justifyContent: 'center',
@@ -787,33 +838,77 @@ const styles = StyleSheet.create({
   dashDivider: {
     width: 1,
     height: '70%',
-    backgroundColor: '#1F2937',
+    backgroundColor: 'rgba(203, 213, 225, 0.35)',
   },
   dashLabel: {
     fontSize: 11,
-    fontWeight: '700',
-    color: '#CBD5E1',
+    fontWeight: FONT_WEIGHT.bold,
+    color: '#D1D5DB',
     marginBottom: 4,
     letterSpacing: 0.5,
   },
   dashValue: {
     fontSize: 26,
-    fontWeight: 'bold',
-    color: 'white',
+    fontWeight: FONT_WEIGHT.extrabold,
+    color: COLORS.textLight,
   },
   dashSubValue: {
     marginTop: 2,
     fontSize: 11,
-    color: '#CBD5E1',
-    fontWeight: '600'
+    color: '#E2E8F0',
+    fontWeight: FONT_WEIGHT.semibold,
+  },
+  successTint: { color: '#BBF7D0' },
+  dangerTint: { color: '#FECACA' },
+  progressShell: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: 'rgba(191, 219, 254, 0.45)',
+    padding: SPACING.md,
+    marginBottom: SPACING.md,
+  },
+  progressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.sm,
+  },
+  progressTitle: {
+    color: COLORS.textLight,
+    fontWeight: FONT_WEIGHT.semibold,
+    fontSize: 13,
+  },
+  progressValue: {
+    color: COLORS.textLight,
+    fontWeight: FONT_WEIGHT.bold,
+    fontSize: 13,
+  },
+  progressTrack: {
+    height: 8,
+    borderRadius: RADIUS.full,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: RADIUS.full,
+    backgroundColor: '#BFDBFE',
+  },
+  progressMeta: {
+    marginTop: SPACING.sm,
+    color: '#DBEAFE',
+    fontSize: 12,
+    fontWeight: FONT_WEIGHT.medium,
   },
 
   segmentedControl: {
     flexDirection: 'row',
-    backgroundColor: '#1F2937',
-    borderRadius: 10,
+    backgroundColor: 'rgba(15, 23, 42, 0.7)',
+    borderRadius: RADIUS.md,
     padding: 4,
     marginTop: 12,
+    marginBottom: SPACING.xs,
   },
   segmentBtn: {
     flex: 1,
@@ -822,15 +917,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   segmentBtnActive: {
-    backgroundColor: '#374151',
+    backgroundColor: 'rgba(59, 130, 246, 0.35)',
   },
   segmentBtnText: {
-    color: '#D1D5DB',
-    fontWeight: '700',
+    color: '#E2E8F0',
+    fontWeight: FONT_WEIGHT.bold,
     fontSize: 12,
   },
   segmentBtnTextActive: {
-    color: 'white',
+    color: COLORS.textLight,
   },
   filterChipRow: {
     gap: 8,
@@ -859,7 +954,7 @@ const styles = StyleSheet.create({
   },
   statusBanner: {
     marginTop: SPACING.sm,
-    borderRadius: SPACING.sm,
+    borderRadius: RADIUS.md,
     borderWidth: 1,
     paddingVertical: SPACING.sm,
     paddingHorizontal: SPACING.sm,
@@ -869,15 +964,15 @@ const styles = StyleSheet.create({
   },
   statusBanner_success: {
     borderColor: COLORS.success,
-    backgroundColor: COLORS.searchBg,
+    backgroundColor: COLORS.successSoft,
   },
   statusBanner_warning: {
     borderColor: COLORS.warning,
-    backgroundColor: COLORS.searchBg,
+    backgroundColor: COLORS.warningSoft,
   },
   statusBanner_error: {
     borderColor: COLORS.danger,
-    backgroundColor: COLORS.searchBg,
+    backgroundColor: COLORS.dangerSoft,
   },
   statusBannerTextWrap: {
     flex: 1,
@@ -918,41 +1013,94 @@ const styles = StyleSheet.create({
     padding: 2,
   },
 
-  syncRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8 },
-  syncText: { color: 'white', flex: 1, fontWeight: '600' },
-  syncBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: '#2563EB' },
-  retryBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: '#B45309' },
-  syncBtnText: { color: 'white', fontWeight: '700', fontSize: 12 },
-  conflictText: { color: '#FDE68A', marginBottom: 8, fontSize: 12 },
+  syncRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    marginBottom: SPACING.sm,
+  },
+  syncStatusPill: {
+    flex: 1,
+    backgroundColor: COLORS.primaryMuted,
+    borderColor: '#93C5FD',
+    borderWidth: 1,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+  },
+  syncStatusText: {
+    color: COLORS.primaryDark,
+    fontWeight: FONT_WEIGHT.semibold,
+    fontSize: 12,
+  },
+  syncBtn: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.full,
+    backgroundColor: COLORS.info,
+  },
+  syncBtnText: { color: COLORS.textLight, fontWeight: FONT_WEIGHT.bold, fontSize: 12 },
+  conflictText: { color: '#FDE68A', marginBottom: 8, fontSize: 12, fontWeight: FONT_WEIGHT.semibold },
   searchContainer: {
     flexDirection: 'row',
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 12,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm + 1,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: COLORS.border,
+    ...SHADOWS.sm,
   },
   searchInput: {
     flex: 1,
-    marginLeft: 10,
-    fontSize: 16,
-    color: COLORS.primary,
+    marginLeft: SPACING.sm,
+    fontSize: 15,
+    color: COLORS.primaryDark,
+    fontWeight: FONT_WEIGHT.medium,
   },
   
-  listContent: { padding: 15 },
+  listContent: { padding: SPACING.lg, paddingBottom: SPACING.xxxl },
+  emptyStateCard: {
+    margin: SPACING.lg,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.xl,
+    alignItems: 'center',
+    ...SHADOWS.md,
+  },
+  emptyStateTitle: {
+    marginTop: SPACING.sm,
+    fontSize: 17,
+    fontWeight: FONT_WEIGHT.bold,
+    color: COLORS.primaryDark,
+  },
+  emptyStateBody: {
+    marginTop: SPACING.xs,
+    fontSize: 13,
+    color: COLORS.muted,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
   sectionHeader: {
     backgroundColor: '#EEF2FF',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-    marginBottom: 10,
-    marginTop: 5,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    borderRadius: RADIUS.sm,
+    marginBottom: SPACING.sm,
+    marginTop: SPACING.xs,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
   },
   sectionTitle: {
-    fontWeight: 'bold',
-    color: COLORS.muted,
-    fontSize: 14,
+    fontWeight: FONT_WEIGHT.bold,
+    color: COLORS.primaryDark,
+    fontSize: 13,
   },
 
   // Modal Styles
