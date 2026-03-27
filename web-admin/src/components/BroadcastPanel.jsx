@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { ref, push, set, onValue, query, orderByChild, limitToLast } from 'firebase/database';
 import { db, auth } from '../firebase';
 import { notifications } from '@mantine/notifications';
@@ -8,7 +8,6 @@ import {
   Title,
   Group,
   Button,
-  TextInput,
   Textarea,
   Stack,
   Box,
@@ -17,16 +16,15 @@ import {
   ThemeIcon,
   SimpleGrid,
   Select,
-  Divider,
   Alert,
-  Timeline,
   ScrollArea,
-  Avatar,
-  Center,
   Loader,
-  Tabs,
+  Progress,
+  Divider,
+  RingProgress,
   ActionIcon,
   Tooltip,
+  TextInput,
 } from '@mantine/core';
 import { formatTimeForDisplay, toEpochMsStrict } from '../utils/dateUtils';
 import {
@@ -34,17 +32,21 @@ import {
   IconSend,
   IconMap,
   IconUsers,
-  IconClock,
   IconCheck,
-  IconAlertCircle,
   IconMessage,
   IconBroadcast,
   IconHistory,
   IconInfoCircle,
+  IconAlertCircle,
+  IconSearch,
+  IconWand,
+  IconSparkles,
   IconRefresh,
 } from '@tabler/icons-react';
 
-// Message Templates
+const MAX_BROADCAST_LENGTH = 2000;
+const IDEAL_MAX_LENGTH = 240;
+
 const messageTemplates = [
   { value: 'arriving', label: 'Bus Arriving', message: 'The bus is arriving in 5 minutes. Please make your way to the pickup point.' },
   { value: 'delayed', label: 'Delay Notice', message: 'We apologize for the delay. The bus will arrive in approximately 15 minutes.' },
@@ -63,7 +65,6 @@ const isValidFirebaseKeySegment = (value) => {
   return typeof value === 'string' && value.length > 0 && !/[./$#\[\]]/.test(value);
 };
 
-// Recent Broadcast Item Component
 function normalizeBroadcastTimestamp(timestamp) {
   return toEpochMsStrict(timestamp);
 }
@@ -99,12 +100,48 @@ function BroadcastHistoryItem({ broadcast }) {
           {formatTimeForDisplay(timestampMs, 'Unknown time')}
         </Text>
       </Group>
-      <Text size="sm" lineClamp={2}>{broadcast.message}</Text>
+      <Text size="sm">{broadcast.message}</Text>
     </Paper>
   );
 }
 
-// Main Broadcast Panel Component
+const getMessageTone = (message) => {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return {
+      label: 'Start drafting your announcement',
+      color: 'gray',
+      icon: <IconInfoCircle size={14} />,
+      helper: 'Templates are a good baseline for consistent communication.',
+    };
+  }
+
+  if (trimmed.length < 24) {
+    return {
+      label: 'Too short for a clear update',
+      color: 'yellow',
+      icon: <IconAlertCircle size={14} />,
+      helper: 'Add context such as place/time so passengers know what to do.',
+    };
+  }
+
+  if (trimmed.length > IDEAL_MAX_LENGTH) {
+    return {
+      label: 'Long message: consider tightening',
+      color: 'orange',
+      icon: <IconAlertCircle size={14} />,
+      helper: 'Push notifications perform best when concise and action-oriented.',
+    };
+  }
+
+  return {
+    label: 'Great length for push notifications',
+    color: 'green',
+    icon: <IconCheck size={14} />,
+    helper: 'Clear and concise. Ready for passenger delivery.',
+  };
+};
+
 export function BroadcastPanel() {
   const [tourId, setTourId] = useState('');
   const [message, setMessage] = useState('');
@@ -113,8 +150,8 @@ export function BroadcastPanel() {
   const [tours, setTours] = useState({});
   const [loadingTours, setLoadingTours] = useState(true);
   const [broadcastHistory, setBroadcastHistory] = useState([]);
+  const [historyFilter, setHistoryFilter] = useState('');
 
-  // Fetch tours for the dropdown
   useEffect(() => {
     const toursRef = ref(db, 'tours');
     const unsubscribe = onValue(toursRef, (snapshot) => {
@@ -145,7 +182,7 @@ export function BroadcastPanel() {
     const unsubscribe = onValue(historyQuery, (snapshot) => {
       const broadcasts = snapshot.val() || {};
       const history = Object.entries(broadcasts)
-        .map(([broadcastId, broadcastPayload]) => normalizeBroadcastMessage(tourId, broadcastId, broadcastPayload))
+        .map(([broadcastId, payload]) => normalizeBroadcastMessage(tourId, broadcastId, payload))
         .sort((a, b) => (b.timestampMs ?? 0) - (a.timestampMs ?? 0));
 
       setBroadcastHistory(history);
@@ -154,42 +191,56 @@ export function BroadcastPanel() {
     return () => unsubscribe();
   }, [tourId]);
 
-  // Tour options for Select
-  const tourOptions = Object.entries(tours).map(([id, tour]) => ({
-    value: id,
-    label: `${id} - ${tour.name || tour.driverName || 'TBA'}`,
-  }));
+  const totalTours = Object.keys(tours).length;
+  const assignedTours = Object.values(tours).filter((t) => t.driverName && t.driverName !== 'TBA').length;
+  const selectedTour = tours[tourId] || null;
 
-  // Handle template change
+  const quality = getMessageTone(message);
+  const messageLength = message.trim().length;
+  const progress = Math.min(100, Math.round((messageLength / MAX_BROADCAST_LENGTH) * 100));
+  const estimatedReadSeconds = Math.max(1, Math.ceil(message.trim().split(/\s+/).filter(Boolean).length / 3));
+
+  const tourOptions = useMemo(() => (
+    Object.entries(tours).map(([id, tour]) => ({
+      value: id,
+      label: `${id} - ${tour.name || tour.driverName || 'TBA'}`,
+    }))
+  ), [tours]);
+
+  const filteredHistory = useMemo(() => {
+    const q = historyFilter.trim().toLowerCase();
+    if (!q) return broadcastHistory;
+    return broadcastHistory.filter((item) => item.message.toLowerCase().includes(q));
+  }, [broadcastHistory, historyFilter]);
+
+  const appendSnippet = (snippet) => {
+    setSelectedTemplate('custom');
+    setMessage((current) => {
+      const base = current.trim();
+      return base ? `${base} ${snippet}` : snippet;
+    });
+  };
+
   const handleTemplateChange = (value) => {
     setSelectedTemplate(value);
-    const template = messageTemplates.find(t => t.value === value);
+    const template = messageTemplates.find((t) => t.value === value);
     if (template && template.message) {
       setMessage(template.message);
     }
   };
 
-  // Handle send broadcast
   const handleSend = async (e) => {
     e.preventDefault();
 
     const normalizedTourId = normalizeTourIdForPath(tourId);
 
     if (!normalizedTourId) {
-      notifications.show({
-        title: 'Tour Required',
-        message: 'Please select a tour to broadcast to',
-        color: 'red',
-      });
+      notifications.show({ title: 'Tour Required', message: 'Please select a tour to broadcast to', color: 'red' });
       return;
     }
 
     if (!message.trim()) {
-      notifications.show({
-        title: 'Message Required',
-        message: 'Please enter a message to broadcast',
-        color: 'red',
-      });
+      notifications.show({ title: 'Message Required', message: 'Please enter a message to broadcast', color: 'red' });
       return;
     }
 
@@ -203,18 +254,14 @@ export function BroadcastPanel() {
     }
 
     if (!auth.currentUser?.uid) {
-      notifications.show({
-        title: 'Sign-in Required',
-        message: 'Please sign in again before sending broadcasts.',
-        color: 'red',
-      });
+      notifications.show({ title: 'Sign-in Required', message: 'Please sign in again before sending broadcasts.', color: 'red' });
       return;
     }
 
-    if (message.trim().length > 2000) {
+    if (message.trim().length > MAX_BROADCAST_LENGTH) {
       notifications.show({
         title: 'Message Too Long',
-        message: 'Broadcast messages must be 2000 characters or fewer.',
+        message: `Broadcast messages must be ${MAX_BROADCAST_LENGTH} characters or fewer.`,
         color: 'red',
       });
       return;
@@ -226,51 +273,38 @@ export function BroadcastPanel() {
       const broadcastsRef = ref(db, `broadcasts/${normalizedTourId}`);
       const newBroadcastRef = push(broadcastsRef);
 
-      const createdAtMs = Date.now();
-
       await set(newBroadcastRef, {
         message: message.trim(),
-        createdAtMs,
+        createdAtMs: Date.now(),
         createdByUid: auth.currentUser?.uid || null,
         source: 'web_admin',
       });
 
       notifications.show({
-        title: 'Broadcast Sent!',
+        title: 'Broadcast Sent',
         message: `Announcement sent to tour ${normalizedTourId}`,
         color: 'green',
         icon: <IconCheck size={16} />,
       });
 
-      // Reset form
       setMessage('');
       setSelectedTemplate('custom');
     } catch (error) {
-      notifications.show({
-        title: 'Broadcast Failed',
-        message: error.message,
-        color: 'red',
-      });
+      notifications.show({ title: 'Broadcast Failed', message: error.message, color: 'red' });
     } finally {
       setLoading(false);
     }
   };
 
-  // Stats
-  const totalTours = Object.keys(tours).length;
-  const assignedTours = Object.values(tours).filter(t => t.driverName && t.driverName !== 'TBA').length;
-
   return (
     <Box>
-      {/* Header */}
       <Group justify="space-between" mb="xl">
         <div>
           <Title order={2}>Broadcast System</Title>
-          <Text c="dimmed" size="sm">Send announcements to tour passengers</Text>
+          <Text c="dimmed" size="sm">Premium passenger communication with delivery-safe checks</Text>
         </div>
       </Group>
 
-      {/* Stats Cards */}
       <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="lg" mb="xl">
         <Paper p="md" radius="md" withBorder>
           <Group justify="space-between">
@@ -297,7 +331,7 @@ export function BroadcastPanel() {
         <Paper p="md" radius="md" withBorder>
           <Group justify="space-between">
             <div>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Broadcasts Today</Text>
+              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Recent Broadcasts</Text>
               <Text size="xl" fw={700} c="orange">{broadcastHistory.length}</Text>
             </div>
             <ThemeIcon color="orange" variant="light" size="xl" radius="md">
@@ -308,21 +342,19 @@ export function BroadcastPanel() {
       </SimpleGrid>
 
       <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="lg">
-        {/* Broadcast Form */}
         <Card shadow="sm" padding="lg" radius="md" withBorder>
           <Group gap="xs" mb="lg">
             <ThemeIcon color="orange" variant="light" size="lg" radius="md">
               <IconBroadcast size={20} />
             </ThemeIcon>
             <div>
-              <Text fw={600}>New Broadcast</Text>
-              <Text size="xs" c="dimmed">Send an announcement to passengers</Text>
+              <Text fw={600}>Compose Broadcast</Text>
+              <Text size="xs" c="dimmed">Guided composer with live quality signals</Text>
             </div>
           </Group>
 
           <form onSubmit={handleSend}>
             <Stack gap="md">
-              {/* Tour Selection */}
               <Select
                 label="Target Tour"
                 placeholder="Select a tour"
@@ -331,34 +363,71 @@ export function BroadcastPanel() {
                 onChange={setTourId}
                 searchable
                 clearable
-                leftSection={<IconMap size={16} />}
+                leftSection={loadingTours ? <Loader size={14} /> : <IconMap size={16} />}
                 disabled={loadingTours}
-                description="Choose which tour to broadcast to"
+                description="Choose the tour that should receive this push message"
               />
 
-              {/* Message Template */}
+              {selectedTour ? (
+                <Paper withBorder p="sm" radius="md" bg="gray.0">
+                  <Group justify="space-between">
+                    <div>
+                      <Text size="xs" c="dimmed">Selected tour</Text>
+                      <Text fw={600}>{selectedTour.name || 'Untitled Tour'}</Text>
+                      <Text size="xs" c="dimmed">Tour code: {tourId}</Text>
+                    </div>
+                    <Badge color="blue" variant="light">{selectedTour.driverName || 'Driver unassigned'}</Badge>
+                  </Group>
+                </Paper>
+              ) : null}
+
               <Select
                 label="Message Template"
                 placeholder="Choose a template or write custom"
-                data={messageTemplates.map(t => ({ value: t.value, label: t.label }))}
+                data={messageTemplates.map((t) => ({ value: t.value, label: t.label }))}
                 value={selectedTemplate}
                 onChange={handleTemplateChange}
                 leftSection={<IconMessage size={16} />}
               />
 
-              {/* Message Content */}
+              <Group gap="xs" wrap="wrap">
+                <Tooltip label="Append current time marker">
+                  <ActionIcon variant="light" color="blue" onClick={() => appendSnippet(`[${new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}]`)}>
+                    <IconWand size={16} />
+                  </ActionIcon>
+                </Tooltip>
+                <Button variant="light" size="xs" onClick={() => appendSnippet('Please arrive 10 minutes early.')}>+ arrival note</Button>
+                <Button variant="light" size="xs" onClick={() => appendSnippet('Reply in group chat if you need assistance.')}>+ assistance CTA</Button>
+              </Group>
+
               <Textarea
                 label="Message"
                 placeholder="Enter your announcement message..."
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                minRows={4}
-                maxRows={6}
-                description={`${message.length} characters`}
+                minRows={5}
+                maxRows={8}
+                description={`${messageLength} characters • ~${estimatedReadSeconds}s read`}
               />
 
+              <Stack gap={6}>
+                <Group justify="space-between">
+                  <Text size="xs" c="dimmed">Length budget</Text>
+                  <Text size="xs" c={messageLength > MAX_BROADCAST_LENGTH ? 'red' : 'dimmed'}>{messageLength}/{MAX_BROADCAST_LENGTH}</Text>
+                </Group>
+                <Progress
+                  value={progress}
+                  color={messageLength > MAX_BROADCAST_LENGTH ? 'red' : messageLength > IDEAL_MAX_LENGTH ? 'yellow' : 'green'}
+                  size="sm"
+                />
+              </Stack>
+
+              <Alert icon={quality.icon} color={quality.color} variant="light" title={quality.label}>
+                {quality.helper}
+              </Alert>
+
               <Alert icon={<IconInfoCircle size={16} />} color="blue" variant="light">
-                This message will be sent as a push notification to all passengers subscribed to the selected tour.
+                This message will be sent to passengers with notifications enabled for this tour.
               </Alert>
 
               <Button
@@ -376,45 +445,36 @@ export function BroadcastPanel() {
           </form>
         </Card>
 
-        {/* Broadcast History & Info */}
         <Stack gap="lg">
-          {/* Quick Tips */}
           <Card shadow="sm" padding="lg" radius="md" withBorder>
-            <Group gap="xs" mb="md">
-              <ThemeIcon color="blue" variant="light" size="lg" radius="md">
-                <IconInfoCircle size={20} />
+            <Group gap="xs" mb="sm">
+              <ThemeIcon color="violet" variant="light" size="lg" radius="md">
+                <IconSparkles size={20} />
               </ThemeIcon>
-              <Text fw={600}>Tips for Effective Broadcasts</Text>
+              <Text fw={600}>Live Preview</Text>
             </Group>
-            <Stack gap="xs">
-              <Paper p="sm" radius="md" bg="gray.0">
-                <Group gap="xs">
-                  <IconCheck size={14} color="green" />
-                  <Text size="sm">Keep messages clear and concise</Text>
-                </Group>
-              </Paper>
-              <Paper p="sm" radius="md" bg="gray.0">
-                <Group gap="xs">
-                  <IconCheck size={14} color="green" />
-                  <Text size="sm">Include specific times when relevant</Text>
-                </Group>
-              </Paper>
-              <Paper p="sm" radius="md" bg="gray.0">
-                <Group gap="xs">
-                  <IconCheck size={14} color="green" />
-                  <Text size="sm">Use templates for common announcements</Text>
-                </Group>
-              </Paper>
-              <Paper p="sm" radius="md" bg="gray.0">
-                <Group gap="xs">
-                  <IconCheck size={14} color="green" />
-                  <Text size="sm">Double-check the target tour before sending</Text>
-                </Group>
-              </Paper>
-            </Stack>
+            <Paper withBorder radius="lg" p="md" bg="dark.8">
+              <Group justify="space-between" mb="xs">
+                <Text size="xs" c="gray.4">LLT App · now</Text>
+                <Badge size="xs" variant="light" color="orange">Push</Badge>
+              </Group>
+              <Text fw={700} c="white">{tourId ? `Tour ${tourId}` : 'Select a tour'}</Text>
+              <Text size="sm" c="gray.3" mt="xs">{message.trim() || 'Your broadcast preview appears here...'}</Text>
+            </Paper>
+
+            <Divider my="md" />
+
+            <Group justify="space-between">
+              <Text size="sm" fw={600}>Delivery Confidence</Text>
+              <RingProgress
+                size={70}
+                thickness={7}
+                sections={[{ value: messageLength > MAX_BROADCAST_LENGTH ? 0 : messageLength < 24 ? 35 : messageLength > IDEAL_MAX_LENGTH ? 72 : 100, color: messageLength > MAX_BROADCAST_LENGTH ? 'red' : messageLength < 24 ? 'yellow' : messageLength > IDEAL_MAX_LENGTH ? 'orange' : 'green' }]}
+                label={<Text ta="center" size="xs" fw={700}>{messageLength > MAX_BROADCAST_LENGTH ? '0%' : messageLength < 24 ? '35%' : messageLength > IDEAL_MAX_LENGTH ? '72%' : '100%'}</Text>}
+              />
+            </Group>
           </Card>
 
-          {/* Recent Broadcasts */}
           <Card shadow="sm" padding="lg" radius="md" withBorder>
             <Group justify="space-between" mb="md">
               <Group gap="xs">
@@ -423,14 +483,29 @@ export function BroadcastPanel() {
                 </ThemeIcon>
                 <Text fw={600}>Recent Broadcasts</Text>
               </Group>
-              <Badge variant="light" color="gray">{broadcastHistory.length}</Badge>
+              <Badge variant="light" color="gray">{filteredHistory.length}</Badge>
             </Group>
 
-            {broadcastHistory.length > 0 ? (
-              <ScrollArea h={250}>
+            <TextInput
+              mb="sm"
+              leftSection={<IconSearch size={14} />}
+              rightSection={historyFilter ? (
+                <Tooltip label="Clear filter">
+                  <ActionIcon variant="subtle" onClick={() => setHistoryFilter('')}>
+                    <IconRefresh size={14} />
+                  </ActionIcon>
+                </Tooltip>
+              ) : null}
+              placeholder="Filter by keyword"
+              value={historyFilter}
+              onChange={(event) => setHistoryFilter(event.currentTarget.value)}
+            />
+
+            {filteredHistory.length > 0 ? (
+              <ScrollArea h={290}>
                 <Stack gap="xs">
-                  {broadcastHistory.map((broadcast, index) => (
-                    <BroadcastHistoryItem key={index} broadcast={broadcast} />
+                  {filteredHistory.map((broadcast) => (
+                    <BroadcastHistoryItem key={broadcast.id} broadcast={broadcast} />
                   ))}
                 </Stack>
               </ScrollArea>
@@ -439,7 +514,7 @@ export function BroadcastPanel() {
                 <ThemeIcon color="gray" variant="light" size="xl" radius="xl" mb="sm">
                   <IconSpeakerphone size={24} />
                 </ThemeIcon>
-                <Text c="dimmed" size="sm">No broadcasts sent yet this session</Text>
+                <Text c="dimmed" size="sm">No matching broadcasts yet</Text>
               </Paper>
             )}
           </Card>
