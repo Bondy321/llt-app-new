@@ -58,6 +58,57 @@ const PreferenceSection = ({ title, subtitle, children, enabledCount, totalCount
   </View>
 );
 
+const PreferenceHealthCard = ({
+  opsEnabledCount,
+  opsTotal,
+  marketingEnabledCount,
+  marketingTotal,
+  isOnboarding,
+}) => {
+  const opsRatio = opsTotal ? opsEnabledCount / opsTotal : 0;
+  const marketingRatio = marketingTotal ? marketingEnabledCount / marketingTotal : 0;
+  const overallScore = Math.round(((opsRatio * 0.7) + (marketingRatio * 0.3)) * 100);
+
+  const tone =
+    overallScore >= 80
+      ? { icon: 'star-circle', color: COLORS.successGreen, label: 'Excellent coverage' }
+      : overallScore >= 55
+        ? { icon: 'checkbox-marked-circle-outline', color: COLORS.warning, label: 'Good coverage' }
+        : { icon: 'bell-alert-outline', color: COLORS.danger, label: 'Low coverage' };
+
+  return (
+    <View style={styles.healthCard}>
+      <View style={styles.healthHeader}>
+        <View style={styles.healthHeaderText}>
+          <Text style={styles.healthTitle}>Notification readiness</Text>
+          <Text style={styles.healthSubtitle}>
+            {isOnboarding
+              ? 'Turn on the updates you need while travelling.'
+              : 'Keep your setup tuned for timely updates.'}
+          </Text>
+        </View>
+        <View style={styles.healthScorePill}>
+          <Text style={styles.healthScoreText}>{overallScore}%</Text>
+        </View>
+      </View>
+
+      <View style={styles.healthProgressTrack}>
+        <View style={[styles.healthProgressFill, { width: `${overallScore}%` }]} />
+      </View>
+
+      <View style={styles.healthMetaRow}>
+        <View style={styles.healthMetaPill}>
+          <MaterialCommunityIcons name={tone.icon} size={14} color={tone.color} />
+          <Text style={[styles.healthMetaText, { color: tone.color }]}>{tone.label}</Text>
+        </View>
+        <Text style={styles.healthSummaryText}>
+          Tour alerts {opsEnabledCount}/{opsTotal} · Interests {marketingEnabledCount}/{marketingTotal}
+        </Text>
+      </View>
+    </View>
+  );
+};
+
 const ToggleRow = ({
   label,
   description,
@@ -187,6 +238,8 @@ export default function NotificationPreferencesScreen({
   const [testStatus, setTestStatus] = useState({ type: '', message: '' });
   const [permissionStatus, setPermissionStatus] = useState({ state: 'unavailable', description: '' });
   const [onboardingActionBusy, setOnboardingActionBusy] = useState(false);
+  const [activeOpsPreset, setActiveOpsPreset] = useState('essential');
+  const [activeMarketingPreset, setActiveMarketingPreset] = useState('recommended');
 
   // 1. Operational Alerts (During the tour)
   const [opsPrefs, setOpsPrefs] = useState(defaultOpsPrefs);
@@ -365,6 +418,7 @@ export default function NotificationPreferencesScreen({
   };
 
   const applyOpsPreset = (preset) => {
+    setActiveOpsPreset(preset);
     if (preset === 'all') {
       setOpsPrefs({
         driver_updates: true,
@@ -394,6 +448,7 @@ export default function NotificationPreferencesScreen({
   };
 
   const applyMarketingPreset = (preset) => {
+    setActiveMarketingPreset(preset);
     if (preset === 'recommended') {
       setMarketingPrefs({
         steam_trains: true,
@@ -598,6 +653,14 @@ export default function NotificationPreferencesScreen({
             : 'Customize your alerts. We promise not to spam you.'}
         </Text>
 
+        <PreferenceHealthCard
+          opsEnabledCount={opsEnabledCount}
+          opsTotal={Object.keys(defaultOpsPrefs).length}
+          marketingEnabledCount={marketingEnabledCount}
+          marketingTotal={Object.keys(defaultMarketingPrefs).length}
+          isOnboarding={isOnboarding}
+        />
+
         {!isOnboarding ? (
           <View style={styles.permissionSummaryCard}>
             <View style={styles.permissionSummaryHeader}>
@@ -619,14 +682,23 @@ export default function NotificationPreferencesScreen({
           totalCount={Object.keys(defaultOpsPrefs).length}
         >
           <View style={styles.presetRow}>
-            <TouchableOpacity style={styles.presetChip} onPress={() => applyOpsPreset('essential')}>
-              <Text style={styles.presetChipText}>Essential</Text>
+            <TouchableOpacity
+              style={[styles.presetChip, activeOpsPreset === 'essential' && styles.presetChipActive]}
+              onPress={() => applyOpsPreset('essential')}
+            >
+              <Text style={[styles.presetChipText, activeOpsPreset === 'essential' && styles.presetChipTextActive]}>Essential</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.presetChip} onPress={() => applyOpsPreset('all')}>
-              <Text style={styles.presetChipText}>All on</Text>
+            <TouchableOpacity
+              style={[styles.presetChip, activeOpsPreset === 'all' && styles.presetChipActive]}
+              onPress={() => applyOpsPreset('all')}
+            >
+              <Text style={[styles.presetChipText, activeOpsPreset === 'all' && styles.presetChipTextActive]}>All on</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.presetChip} onPress={() => applyOpsPreset('none')}>
-              <Text style={styles.presetChipText}>All off</Text>
+            <TouchableOpacity
+              style={[styles.presetChip, activeOpsPreset === 'none' && styles.presetChipActive]}
+              onPress={() => applyOpsPreset('none')}
+            >
+              <Text style={[styles.presetChipText, activeOpsPreset === 'none' && styles.presetChipTextActive]}>All off</Text>
             </TouchableOpacity>
           </View>
           {Object.entries(opsPreferenceMeta).map(([key, meta]) => (
@@ -656,14 +728,30 @@ export default function NotificationPreferencesScreen({
           </Text>
 
           <View style={styles.presetRow}>
-            <TouchableOpacity style={styles.presetChip} onPress={() => applyMarketingPreset('recommended')}>
-              <Text style={styles.presetChipText}>Recommended</Text>
+            <TouchableOpacity
+              style={[styles.presetChip, activeMarketingPreset === 'recommended' && styles.presetChipActive]}
+              onPress={() => applyMarketingPreset('recommended')}
+            >
+              <Text
+                style={[
+                  styles.presetChipText,
+                  activeMarketingPreset === 'recommended' && styles.presetChipTextActive,
+                ]}
+              >
+                Recommended
+              </Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.presetChip} onPress={() => applyMarketingPreset('all')}>
-              <Text style={styles.presetChipText}>All on</Text>
+            <TouchableOpacity
+              style={[styles.presetChip, activeMarketingPreset === 'all' && styles.presetChipActive]}
+              onPress={() => applyMarketingPreset('all')}
+            >
+              <Text style={[styles.presetChipText, activeMarketingPreset === 'all' && styles.presetChipTextActive]}>All on</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.presetChip} onPress={() => applyMarketingPreset('none')}>
-              <Text style={styles.presetChipText}>All off</Text>
+            <TouchableOpacity
+              style={[styles.presetChip, activeMarketingPreset === 'none' && styles.presetChipActive]}
+              onPress={() => applyMarketingPreset('none')}
+            >
+              <Text style={[styles.presetChipText, activeMarketingPreset === 'none' && styles.presetChipTextActive]}>All off</Text>
             </TouchableOpacity>
           </View>
 
@@ -683,17 +771,29 @@ export default function NotificationPreferencesScreen({
         </PreferenceSection>
 
         {!isOnboarding && hasChanges ? (
-          <TouchableOpacity
-            style={[styles.saveButton, saving && styles.disabledButton]}
-            onPress={handleSave}
-            disabled={saving}
+          <LinearGradient
+            colors={[COLORS.primaryBlue, COLORS.lightBlueAccent]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.saveCard}
           >
-            {saving ? (
-              <ActivityIndicator color={COLORS.white} />
-            ) : (
-              <Text style={styles.saveButtonText}>Save Preferences</Text>
-            )}
-          </TouchableOpacity>
+            <View style={styles.saveCardHeader}>
+              <MaterialCommunityIcons name="content-save-check-outline" size={18} color={COLORS.white} />
+              <Text style={styles.saveCardHeaderText}>Unsaved changes</Text>
+            </View>
+            <Text style={styles.saveCardBody}>Review complete. Save now to apply this experience across your account.</Text>
+            <TouchableOpacity
+              style={[styles.saveButton, styles.saveButtonOnGradient, saving && styles.disabledButton]}
+              onPress={handleSave}
+              disabled={saving}
+            >
+              {saving ? (
+                <ActivityIndicator color={COLORS.primaryBlue} />
+              ) : (
+                <Text style={styles.saveButtonTextOnGradient}>Save Preferences</Text>
+              )}
+            </TouchableOpacity>
+          </LinearGradient>
         ) : !isOnboarding ? (
           <View style={styles.noChangesCard}>
             <MaterialCommunityIcons name="check-circle-outline" size={16} color={COLORS.secondaryText} />
@@ -869,6 +969,82 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textAlign: 'center',
   },
+  healthCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 14,
+    marginBottom: 18,
+  },
+  healthHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  healthHeaderText: { flex: 1 },
+  healthTitle: {
+    color: COLORS.darkText,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  healthSubtitle: {
+    marginTop: 4,
+    color: COLORS.secondaryText,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  healthScorePill: {
+    borderRadius: 999,
+    backgroundColor: THEME.primaryMuted,
+    borderWidth: 1,
+    borderColor: COLORS.lightBlueAccent,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  healthScoreText: {
+    color: COLORS.primaryBlue,
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  healthProgressTrack: {
+    marginTop: 10,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: COLORS.appBackground,
+    overflow: 'hidden',
+  },
+  healthProgressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: COLORS.primaryBlue,
+  },
+  healthMetaRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  healthMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: COLORS.appBackground,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  healthMetaText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  healthSummaryText: {
+    color: COLORS.secondaryText,
+    fontSize: 12,
+    fontWeight: '600',
+  },
   statusBanner: {
     borderRadius: 12,
     padding: 12,
@@ -1016,6 +1192,38 @@ const styles = StyleSheet.create({
     marginTop: 10,
     ...SHADOWS.lg,
   },
+  saveCard: {
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 10,
+    ...SHADOWS.lg,
+  },
+  saveCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  saveCardHeaderText: {
+    color: COLORS.white,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  saveCardBody: {
+    color: 'rgba(255,255,255,0.92)',
+    marginTop: 8,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  saveButtonOnGradient: {
+    marginTop: 12,
+    backgroundColor: COLORS.white,
+    marginBottom: 0,
+  },
+  saveButtonTextOnGradient: {
+    color: COLORS.primaryBlue,
+    fontSize: 17,
+    fontWeight: '800',
+  },
   disabledButton: {
     opacity: 0.7,
   },
@@ -1126,10 +1334,17 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     backgroundColor: COLORS.appBackground,
   },
+  presetChipActive: {
+    borderColor: COLORS.primaryBlue,
+    backgroundColor: THEME.primaryMuted,
+  },
   presetChipText: {
     fontSize: 12,
     color: COLORS.secondaryText,
     fontWeight: '700',
+  },
+  presetChipTextActive: {
+    color: COLORS.primaryBlue,
   },
   emptyPanelContainer: {
     flex: 1,
