@@ -727,6 +727,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [inputHeight, setInputHeight] = useState(44);
   const [draftRestored, setDraftRestored] = useState(false);
   const [composerHeight, setComposerHeight] = useState(0);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
 
   // Feature state
   const [typingUsers, setTypingUsers] = useState([]);
@@ -779,10 +780,9 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const listBottomSpacerHeight = useMemo(() => {
     const safeComposerHeight = composerHeight > 0 ? composerHeight : 72;
     const attachmentMenuHeight = showAttachmentMenu ? 108 : 0;
-    const typingHeight = typingUsers.length > 0 ? 44 : 0;
 
-    return safeComposerHeight + attachmentMenuHeight + typingHeight + SPACING.lg;
-  }, [composerHeight, showAttachmentMenu, typingUsers.length]);
+    return safeComposerHeight + attachmentMenuHeight + SPACING.md;
+  }, [composerHeight, showAttachmentMenu]);
 
   // Refs
   const messageListRef = useRef(null);
@@ -848,6 +848,12 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       markActiveChatRead({ force: true });
     }
   }, [markActiveChatRead]);
+
+  const handleScrollBeginDrag = useCallback(() => {
+    if (isKeyboardVisible) {
+      Keyboard.dismiss();
+    }
+  }, [isKeyboardVisible]);
 
 
   useEffect(() => {
@@ -1147,9 +1153,11 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Keyboard listeners
   useEffect(() => {
     const showSub = Keyboard.addListener('keyboardDidShow', () => {
+      setIsKeyboardVisible(true);
       if (isAtBottom) scrollToBottom(true);
     });
     const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      setIsKeyboardVisible(false);
       if (isAtBottom) scrollToBottom(true);
     });
 
@@ -2377,7 +2385,10 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
               }}
               ListFooterComponent={<View style={{ height: Math.max(SPACING.sm, insets.bottom) }} />}
               onScroll={handleScroll}
+              onScrollBeginDrag={handleScrollBeginDrag}
               scrollEventThrottle={100}
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+              keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
               onScrollToIndexFailed={({ index }) => {
                 const fallbackOffset = Math.max(index * ESTIMATED_MESSAGE_ROW_HEIGHT - 80, 0);
@@ -2431,13 +2442,15 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
             />
 
             {/* Input Area */}
-            <View style={[styles.inputDock, { paddingBottom: composerBottomInset }]}>
+            <View
+              style={[styles.inputDock, { paddingBottom: composerBottomInset }]}
+              onLayout={(event) => {
+                const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+                setComposerHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+              }}
+            >
               <View
                 style={styles.inputArea}
-                onLayout={(event) => {
-                  const nextHeight = Math.ceil(event.nativeEvent.layout.height + composerBottomInset);
-                  setComposerHeight((prev) => (prev === nextHeight ? prev : nextHeight));
-                }}
               >
                 {replyingToMessage?.messageId && (
                   <View style={styles.replyComposerCard}>
