@@ -11,6 +11,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Dimensions,
+  Keyboard,
   ActivityIndicator,
   Animated,
   Image,
@@ -110,11 +111,30 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
   const [showRecoverySteps, setShowRecoverySteps] = useState(false);
   const [fieldTouched, setFieldTouched] = useState({ bookingReference: false, email: false });
   const [activeInput, setActiveInput] = useState(null);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const activeLogger = logger || loggerService;
 
   const [logoAnimation] = useState(new Animated.Value(0));
   const [formAnimation] = useState(new Animated.Value(0));
   const [buttonAnimation] = useState(new Animated.Value(1));
+  const scrollRef = React.useRef(null);
+
+  useEffect(() => {
+    if (!Keyboard?.addListener) {
+      return undefined;
+    }
+
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSubscription = Keyboard.addListener(showEvent, () => setIsKeyboardVisible(true));
+    const hideSubscription = Keyboard.addListener(hideEvent, () => setIsKeyboardVisible(false));
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
 
   const clearErrorState = () => setErrorState(null);
   const setSimpleError = (message) => setErrorState(createErrorState(message));
@@ -292,8 +312,18 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
   return (
     <LinearGradient colors={[COLORS.primaryBlue, COLORS.secondaryBlue]} style={styles.gradient}>
       <SafeAreaView style={styles.safeArea}>
-        <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.container}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.keyboardAvoidingContainer}>
+          <ScrollView
+            ref={scrollRef}
+            contentContainerStyle={[styles.scrollContainer, isKeyboardVisible && styles.scrollContainerKeyboardVisible]}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+            bounces={!isKeyboardVisible}
+            overScrollMode="never"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.container}>
             <Animated.View style={[styles.logoSection, { opacity: logoAnimation }]}> 
               <Image source={require('../assets/images/app-icon-llt.png')} style={styles.logoImage} resizeMode="contain" />
               <Text style={styles.appTitle}>Loch Lomond Travel</Text>
@@ -340,7 +370,10 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                   style={styles.input}
                   value={bookingReference}
                   onChangeText={handleReferenceChange}
-                  onFocus={() => setActiveInput('reference')}
+                  onFocus={() => {
+                    setActiveInput('reference');
+                    scrollRef.current?.scrollTo({ y: height * 0.24, animated: true });
+                  }}
                   onBlur={() => {
                     setActiveInput(null);
                     setFieldTouched((current) => ({ ...current, bookingReference: true }));
@@ -367,7 +400,10 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                       setEmail(text);
                       if (errorState && !errorState.reason) clearErrorState();
                     }}
-                    onFocus={() => setActiveInput('email')}
+                    onFocus={() => {
+                      setActiveInput('email');
+                      scrollRef.current?.scrollTo({ y: height * 0.32, animated: true });
+                    }}
                     onBlur={() => {
                       setActiveInput(null);
                       handleEmailBlur();
@@ -464,8 +500,9 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                 </View>
               ) : null}
             </Animated.View>
-          </KeyboardAvoidingView>
-        </ScrollView>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     </LinearGradient>
   );
@@ -474,8 +511,10 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
 const styles = StyleSheet.create({
   gradient: { flex: 1 },
   safeArea: { flex: 1, backgroundColor: 'transparent' },
-  scrollContainer: { flexGrow: 1 },
-  container: { flex: 1, paddingHorizontal: SPACING.xl, paddingBottom: SPACING.xxl },
+  keyboardAvoidingContainer: { flex: 1 },
+  scrollContainer: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: SPACING.xl, paddingBottom: SPACING.xxl },
+  scrollContainerKeyboardVisible: { justifyContent: 'flex-start', paddingBottom: SPACING.lg },
+  container: { flex: 1 },
   logoSection: {
     alignItems: 'center',
     marginTop: height * 0.065,
