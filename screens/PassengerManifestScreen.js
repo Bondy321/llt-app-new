@@ -4,7 +4,6 @@ import {
   TouchableOpacity, ActivityIndicator, Modal, Alert
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getTourManifest, updateManifestBooking, MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import offlineSyncService from '../services/offlineSyncService';
@@ -255,43 +254,6 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const unresolvedDescriptor = `${resolutionStats.unresolved} unresolved`;
   const queueDescriptor = `${queueStats.pending} pending · ${queueStats.failed} failed`;
 
-  const insightCards = useMemo(() => {
-    const nextPickup = nextPriorityBooking
-      ? `${nextPriorityBooking.pickupTime || 'TBA'} · ${nextPriorityBooking.pickupLocation || 'Unknown pickup'}`
-      : 'No unresolved bookings';
-
-    return [
-      {
-        key: 'completion',
-        icon: 'progress-check',
-        title: 'Completion',
-        value: `${resolutionStats.completionPercent}%`,
-        subtitle: `${resolutionStats.resolved}/${resolutionStats.total} resolved`,
-      },
-      {
-        key: 'next',
-        icon: 'clock-fast',
-        title: 'Next priority',
-        value: nextPriorityBooking ? nextPriorityBooking.id : 'All clear',
-        subtitle: nextPickup,
-      },
-      {
-        key: 'sync',
-        icon: queueStats.failed > 0 ? 'cloud-alert-outline' : 'cloud-check-outline',
-        title: 'Sync health',
-        value: queueStats.failed > 0 ? 'Needs review' : 'Healthy',
-        subtitle: queueDescriptor,
-      },
-    ];
-  }, [
-    nextPriorityBooking,
-    queueDescriptor,
-    queueStats.failed,
-    resolutionStats.completionPercent,
-    resolutionStats.resolved,
-    resolutionStats.total,
-  ]);
-
   // --- Actions ---
   const handleOpenBooking = (booking) => {
     setSelectedBooking(booking);
@@ -444,23 +406,23 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
   // --- Render Functions ---
   const renderHeader = () => (
-    <LinearGradient
-      colors={[COLORS.primaryDark, COLORS.primary]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.header}
-    >
-      {/* Back Button (Added from Phase 4 fix) */}
-      <TouchableOpacity
-        onPress={() => navigation.goBack()} 
-        style={styles.backButton}
-      >
-        <MaterialCommunityIcons name="arrow-left" size={24} color={COLORS.textLight} />
-        <Text style={styles.backText}>Console</Text>
-      </TouchableOpacity>
-
-      <Text style={styles.headerTitle}>Passenger Manifest</Text>
-      <Text style={styles.headerSubtitle}>Live boarding control for tour {tourId}</Text>
+    <View style={styles.header}>
+      <View style={styles.topBar}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backButton}
+        >
+          <MaterialCommunityIcons name="arrow-left" size={20} color={COLORS.textLight} />
+          <Text style={styles.backText}>Console</Text>
+        </TouchableOpacity>
+        <View style={styles.topBarTitleWrap}>
+          <Text style={styles.headerTitle}>Passenger Manifest</Text>
+          <Text style={styles.headerSubtitle} numberOfLines={1}>Tour {tourId}</Text>
+        </View>
+        <TouchableOpacity onPress={() => handleSyncNow()} style={styles.syncBtn} disabled={refreshing}>
+          <Text style={styles.syncBtnText}>{refreshing ? 'Syncing…' : 'Sync'}</Text>
+        </TouchableOpacity>
+      </View>
 
       <View style={styles.dashboardContainer}>
         <View style={styles.dashboardItem}>
@@ -486,119 +448,106 @@ export default function PassengerManifestScreen({ route, navigation }) {
         </View>
       </View>
 
-      <View style={styles.progressShell}>
-        <View style={styles.progressHeader}>
-          <Text style={styles.progressTitle}>Boarding completion</Text>
-          <Text style={styles.progressValue}>{resolutionStats.completionPercent}%</Text>
-        </View>
-        <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: `${resolutionStats.completionPercent}%` }]} />
-        </View>
-        <Text style={styles.progressMeta}>
-          {resolutionStats.resolved} resolved • {resolutionStats.unresolved} unresolved
-        </Text>
-      </View>
-
-      <View style={styles.insightsRow}>
-        {insightCards.map((card) => (
-          <View key={card.key} style={styles.insightCard}>
-            <View style={styles.insightHeader}>
-              <MaterialCommunityIcons name={card.icon} size={14} color={COLORS.textLight} />
-              <Text style={styles.insightTitle}>{card.title}</Text>
-            </View>
-            <Text style={styles.insightValue} numberOfLines={1}>{card.value}</Text>
-            <Text style={styles.insightSubtitle} numberOfLines={1}>{card.subtitle}</Text>
+      <View style={styles.progressRow}>
+        <View style={styles.progressShell}>
+          <View style={styles.progressHeader}>
+            <Text style={styles.progressTitle}>Completion</Text>
+            <Text style={styles.progressValue}>{resolutionStats.completionPercent}%</Text>
           </View>
-        ))}
-      </View>
-
-      <View style={styles.syncRow}>
-        <View style={styles.syncStatusPill}>
-          <MaterialCommunityIcons name="cloud-sync-outline" size={14} color={COLORS.primaryDark} />
-          <Text style={styles.syncStatusText}>
-            {queueDescriptor}
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${resolutionStats.completionPercent}%` }]} />
+          </View>
+          <Text style={styles.progressMeta}>
+            {resolutionStats.resolved} resolved • {resolutionStats.unresolved} unresolved
           </Text>
         </View>
-        <TouchableOpacity onPress={() => handleSyncNow()} style={styles.syncBtn} disabled={refreshing}>
-          <Text style={styles.syncBtnText}>{refreshing ? 'Syncing…' : 'Sync now'}</Text>
-        </TouchableOpacity>
+        <View style={styles.syncStatusPill}>
+          <MaterialCommunityIcons
+            name={queueStats.failed > 0 ? 'cloud-alert-outline' : 'cloud-check-outline'}
+            size={14}
+            color={COLORS.primaryDark}
+          />
+          <View style={styles.syncTextWrap}>
+            <Text style={styles.syncStatusText}>{queueStats.failed > 0 ? 'Needs review' : 'Healthy sync'}</Text>
+            <Text style={styles.syncStatusMeta}>{queueDescriptor}</Text>
+          </View>
+        </View>
       </View>
       {conflictNote ? <Text style={styles.conflictText}>{conflictNote}</Text> : null}
 
-      {nextPriorityBooking && (
-        <TouchableOpacity
-          style={styles.nextActionCard}
-          onPress={() => handleOpenBooking(nextPriorityBooking)}
-          activeOpacity={0.9}
-        >
-          <View style={styles.nextActionMeta}>
-            <Text style={styles.nextActionEyebrow}>NEXT ACTION</Text>
-            <Text style={styles.nextActionTitle}>{nextPriorityBooking.id}</Text>
-            <Text style={styles.nextActionDetail} numberOfLines={1}>
-              {(nextPriorityBooking.pickupTime || 'TBA')} • {nextPriorityBooking.pickupLocation || 'Unknown pickup'}
-            </Text>
-          </View>
-          <View style={styles.nextActionButton}>
-            <MaterialCommunityIcons name="arrow-right" size={18} color={COLORS.white} />
-          </View>
-        </TouchableOpacity>
-      )}
-
-      {/* Search Bar (Existing) */}
-      <View style={styles.searchContainer}>
-        <MaterialCommunityIcons name="magnify" size={20} color={COLORS.muted} />
-        <TextInput 
-          style={styles.searchInput}
-          placeholder="Search booking, passenger, or pickup..."
-          placeholderTextColor={THEME.textMuted}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          autoCapitalize="characters"
-        />
-        {searchQuery.length > 0 && (
-          <TouchableOpacity onPress={() => setSearchQuery('')}>
-            <MaterialCommunityIcons name="close-circle" size={20} color={COLORS.muted} />
+      <View style={styles.actionSearchRow}>
+        {nextPriorityBooking ? (
+          <TouchableOpacity
+            style={styles.nextActionCard}
+            onPress={() => handleOpenBooking(nextPriorityBooking)}
+            activeOpacity={0.9}
+          >
+            <View style={styles.nextActionMeta}>
+              <Text style={styles.nextActionEyebrow}>NEXT</Text>
+              <Text style={styles.nextActionTitle}>{nextPriorityBooking.id}</Text>
+            </View>
+            <MaterialCommunityIcons name="arrow-right" size={18} color={COLORS.info} />
           </TouchableOpacity>
+        ) : (
+          <View style={[styles.nextActionCard, styles.nextActionCardClear]}>
+            <Text style={styles.nextActionClearText}>All bookings resolved</Text>
+          </View>
         )}
+        <View style={styles.searchContainer}>
+          <MaterialCommunityIcons name="magnify" size={18} color={COLORS.muted} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search passenger or booking..."
+            placeholderTextColor={THEME.textMuted}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="characters"
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <MaterialCommunityIcons name="close-circle" size={18} color={COLORS.muted} />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+      <View style={styles.filtersRow}>
+        <View style={styles.segmentedControl}>
+          {Object.values(VIEW_MODE).map((mode) => (
+            <TouchableOpacity
+              key={mode}
+              style={[styles.segmentBtn, viewMode === mode && styles.segmentBtnActive]}
+              onPress={() => setViewMode(mode)}
+            >
+              <Text style={[styles.segmentBtnText, viewMode === mode && styles.segmentBtnTextActive]}>
+                {mode === VIEW_MODE.PRIORITY ? 'Priority' : mode === VIEW_MODE.LOCATION ? 'Location' : 'Search'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <FlatList
+          horizontal
+          data={STATUS_FILTERS}
+          keyExtractor={(item) => item.key}
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterChipRow}
+          renderItem={({ item }) => {
+            const isActive = statusFilter === item.key;
+            return (
+              <TouchableOpacity
+                style={[styles.filterChip, isActive && styles.filterChipActive]}
+                onPress={() => setStatusFilter(item.key)}
+              >
+                <Text style={[styles.filterChipText, isActive && styles.filterChipTextActive]}>{item.label}</Text>
+              </TouchableOpacity>
+            );
+          }}
+        />
       </View>
       <View style={styles.searchMetaRow}>
         <Text style={styles.searchMetaText}>{resultsDescriptor}</Text>
         <Text style={styles.searchMetaDivider}>•</Text>
         <Text style={styles.searchMetaText}>{unresolvedDescriptor}</Text>
       </View>
-
-      <View style={styles.segmentedControl}>
-        {Object.values(VIEW_MODE).map((mode) => (
-          <TouchableOpacity
-            key={mode}
-            style={[styles.segmentBtn, viewMode === mode && styles.segmentBtnActive]}
-            onPress={() => setViewMode(mode)}
-          >
-            <Text style={[styles.segmentBtnText, viewMode === mode && styles.segmentBtnTextActive]}>
-              {mode === VIEW_MODE.PRIORITY ? 'Priority' : mode === VIEW_MODE.LOCATION ? 'Location' : 'Search'}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <FlatList
-        horizontal
-        data={STATUS_FILTERS}
-        keyExtractor={(item) => item.key}
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.filterChipRow}
-        renderItem={({ item }) => {
-          const isActive = statusFilter === item.key;
-          return (
-            <TouchableOpacity
-              style={[styles.filterChip, isActive && styles.filterChipActive]}
-              onPress={() => setStatusFilter(item.key)}
-            >
-              <Text style={[styles.filterChipText, isActive && styles.filterChipTextActive]}>{item.label}</Text>
-            </TouchableOpacity>
-          );
-        }}
-      />
 
       {statusFeedback && (
         <View style={[styles.statusBanner, styles[`statusBanner_${statusFeedback.variant || 'success'}`]]}>
@@ -633,7 +582,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
           )}
         </View>
       )}
-    </LinearGradient>
+    </View>
   );
 
   return (
@@ -824,27 +773,38 @@ export default function PassengerManifestScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
   header: {
+    backgroundColor: COLORS.primaryDark,
+    height: '34%',
+    minHeight: 240,
     paddingHorizontal: SPACING.lg,
-    paddingTop: 12,
-    paddingBottom: SPACING.xl,
+    paddingTop: SPACING.sm,
+    paddingBottom: SPACING.sm,
+    justifyContent: 'space-between',
+    gap: SPACING.sm,
+  },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  topBarTitleWrap: {
+    flex: 1,
   },
   backButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: SPACING.lg,
-    marginBottom: SPACING.sm,
+    paddingVertical: SPACING.xs,
   },
-  backText: { color: COLORS.textLight, fontSize: 16, fontWeight: FONT_WEIGHT.bold, marginLeft: 5 },
+  backText: { color: COLORS.textLight, fontSize: 14, fontWeight: FONT_WEIGHT.bold, marginLeft: 5 },
   headerTitle: {
     color: COLORS.textLight,
     fontWeight: FONT_WEIGHT.extrabold,
-    fontSize: 26,
+    fontSize: 20,
   },
   headerSubtitle: {
     color: '#C7D2FE',
-    marginTop: SPACING.xs,
-    marginBottom: SPACING.md,
-    fontSize: 13,
+    marginTop: 2,
+    fontSize: 12,
     fontWeight: FONT_WEIGHT.medium,
   },
 
@@ -855,50 +815,50 @@ const styles = StyleSheet.create({
     padding: SPACING.md,
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: SPACING.md,
+    marginBottom: 0,
     borderWidth: 1,
     borderColor: 'rgba(148, 163, 184, 0.35)',
   },
+  progressRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    alignItems: 'stretch',
+  },
   nextActionCard: {
-    marginBottom: SPACING.md,
+    flex: 1,
     backgroundColor: COLORS.searchBg,
     borderWidth: 1,
     borderColor: COLORS.border,
     borderRadius: RADIUS.md,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm + 2,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.sm,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     ...SHADOWS.sm,
   },
+  nextActionCardClear: {
+    justifyContent: 'center',
+  },
+  nextActionClearText: {
+    color: COLORS.success,
+    fontSize: 12,
+    fontWeight: FONT_WEIGHT.bold,
+  },
   nextActionMeta: {
     flex: 1,
-    paddingRight: 10,
+    paddingRight: SPACING.xs,
   },
   nextActionEyebrow: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: FONT_WEIGHT.bold,
     color: COLORS.info,
-    marginBottom: 2,
+    marginBottom: 1,
   },
   nextActionTitle: {
-    fontSize: 17,
+    fontSize: 14,
     fontWeight: FONT_WEIGHT.bold,
     color: COLORS.primaryDark,
-  },
-  nextActionDetail: {
-    marginTop: 2,
-    fontSize: 13,
-    color: COLORS.muted,
-  },
-  nextActionButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: COLORS.info,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   dashboardItem: {
     flex: 1,
@@ -910,51 +870,51 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(203, 213, 225, 0.35)',
   },
   dashLabel: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: FONT_WEIGHT.bold,
     color: '#D1D5DB',
-    marginBottom: 4,
+    marginBottom: 2,
     letterSpacing: 0.5,
   },
   dashValue: {
-    fontSize: 26,
+    fontSize: 20,
     fontWeight: FONT_WEIGHT.extrabold,
     color: COLORS.textLight,
   },
   dashSubValue: {
-    marginTop: 2,
-    fontSize: 11,
+    marginTop: 1,
+    fontSize: 10,
     color: '#E2E8F0',
     fontWeight: FONT_WEIGHT.semibold,
   },
   successTint: { color: '#BBF7D0' },
   dangerTint: { color: '#FECACA' },
   progressShell: {
+    flex: 1.2,
     backgroundColor: 'rgba(255,255,255,0.12)',
     borderRadius: RADIUS.md,
     borderWidth: 1,
     borderColor: 'rgba(191, 219, 254, 0.45)',
-    padding: SPACING.md,
-    marginBottom: SPACING.md,
+    padding: SPACING.sm,
   },
   progressHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: SPACING.sm,
+    marginBottom: SPACING.xs,
   },
   progressTitle: {
     color: COLORS.textLight,
     fontWeight: FONT_WEIGHT.semibold,
-    fontSize: 13,
+    fontSize: 12,
   },
   progressValue: {
     color: COLORS.textLight,
     fontWeight: FONT_WEIGHT.bold,
-    fontSize: 13,
+    fontSize: 12,
   },
   progressTrack: {
-    height: 8,
+    height: 6,
     borderRadius: RADIUS.full,
     backgroundColor: 'rgba(255,255,255,0.25)',
     overflow: 'hidden',
@@ -965,48 +925,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#BFDBFE',
   },
   progressMeta: {
-    marginTop: SPACING.sm,
+    marginTop: SPACING.xs,
     color: '#DBEAFE',
-    fontSize: 12,
-    fontWeight: FONT_WEIGHT.medium,
-  },
-  insightsRow: {
-    flexDirection: 'row',
-    gap: SPACING.sm,
-    marginBottom: SPACING.md,
-  },
-  insightCard: {
-    flex: 1,
-    borderRadius: RADIUS.md,
-    borderWidth: 1,
-    borderColor: 'rgba(191, 219, 254, 0.5)',
-    backgroundColor: 'rgba(15, 23, 42, 0.26)',
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: SPACING.sm,
-  },
-  insightHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.xs,
-    marginBottom: 4,
-  },
-  insightTitle: {
-    color: '#BFDBFE',
-    fontSize: 10,
-    fontWeight: FONT_WEIGHT.bold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  insightValue: {
-    color: COLORS.textLight,
-    fontSize: 15,
-    fontWeight: FONT_WEIGHT.extrabold,
-  },
-  insightSubtitle: {
-    marginTop: 2,
-    color: '#E2E8F0',
     fontSize: 11,
     fontWeight: FONT_WEIGHT.medium,
+  },
+  actionSearchRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    alignItems: 'center',
+  },
+  filtersRow: {
+    gap: SPACING.xs,
   },
 
   segmentedControl: {
@@ -1014,8 +944,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(15, 23, 42, 0.7)',
     borderRadius: RADIUS.md,
     padding: 4,
-    marginTop: 12,
-    marginBottom: SPACING.xs,
+    marginBottom: 0,
   },
   segmentBtn: {
     flex: 1,
@@ -1035,9 +964,8 @@ const styles = StyleSheet.create({
     color: COLORS.textLight,
   },
   filterChipRow: {
-    gap: 8,
-    marginTop: 12,
-    paddingBottom: 4,
+    gap: SPACING.xs,
+    paddingBottom: 2,
   },
   filterChip: {
     backgroundColor: COLORS.chipBg,
@@ -1060,7 +988,7 @@ const styles = StyleSheet.create({
     color: COLORS.chipActiveText,
   },
   statusBanner: {
-    marginTop: SPACING.sm,
+    marginTop: 2,
     borderRadius: RADIUS.md,
     borderWidth: 1,
     paddingVertical: SPACING.sm,
@@ -1120,43 +1048,44 @@ const styles = StyleSheet.create({
     padding: 2,
   },
 
-  syncRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.sm,
-    marginBottom: SPACING.sm,
-  },
   syncStatusPill: {
-    flex: 1,
+    flex: 0.8,
     backgroundColor: COLORS.primaryMuted,
     borderColor: '#93C5FD',
     borderWidth: 1,
-    borderRadius: RADIUS.full,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACING.xs,
   },
+  syncTextWrap: { flex: 1 },
   syncStatusText: {
     color: COLORS.primaryDark,
     fontWeight: FONT_WEIGHT.semibold,
-    fontSize: 12,
+    fontSize: 11,
+  },
+  syncStatusMeta: {
+    color: COLORS.primaryDark,
+    fontSize: 10,
+    fontWeight: FONT_WEIGHT.medium,
   },
   syncBtn: {
     paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm,
-    borderRadius: RADIUS.full,
+    paddingVertical: SPACING.xs + 2,
+    borderRadius: RADIUS.md,
     backgroundColor: COLORS.info,
   },
-  syncBtnText: { color: COLORS.textLight, fontWeight: FONT_WEIGHT.bold, fontSize: 12 },
-  conflictText: { color: '#FDE68A', marginBottom: 8, fontSize: 12, fontWeight: FONT_WEIGHT.semibold },
+  syncBtnText: { color: COLORS.textLight, fontWeight: FONT_WEIGHT.bold, fontSize: 11 },
+  conflictText: { color: '#FDE68A', marginBottom: 2, fontSize: 11, fontWeight: FONT_WEIGHT.semibold },
   searchContainer: {
+    flex: 1.4,
     flexDirection: 'row',
     backgroundColor: COLORS.surface,
     borderRadius: RADIUS.md,
     paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm + 1,
+    paddingVertical: SPACING.xs + 1,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -1164,13 +1093,13 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    marginLeft: SPACING.sm,
-    fontSize: 15,
+    marginLeft: SPACING.xs,
+    fontSize: 13,
     color: COLORS.primaryDark,
     fontWeight: FONT_WEIGHT.medium,
   },
   searchMetaRow: {
-    marginTop: SPACING.sm,
+    marginTop: SPACING.xs,
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACING.xs,
