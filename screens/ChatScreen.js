@@ -53,7 +53,6 @@ import SyncStatusBanner from '../components/SyncStatusBanner';
 const { buildChatSearchResults, normalizeSearchQuery } = require('../utils/chatSearch');
 const { buildUnreadSummary } = require('../utils/chatUnreadSummary');
 const { canRetryFailedMessage } = require('../utils/chatRetry');
-const { shouldPrioritizeEdgeSwipeOverMessageSwipe } = require('../services/swipeHomeNavigation');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -601,7 +600,6 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
   const panResponder = useMemo(() => PanResponder.create({
     onMoveShouldSetPanResponder: (_event, gestureState) => {
       if (disabled) return false;
-      if (shouldPrioritizeEdgeSwipeOverMessageSwipe(gestureState)) return false;
       const { dx, dy } = gestureState;
       return dx > 8 && Math.abs(dx) > Math.abs(dy) * 1.4;
     },
