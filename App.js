@@ -109,7 +109,11 @@ function AppContent() {
 
   const isDriverSession = bookingData?.id && bookingData.id.startsWith('D-');
   const homeScreen = isDriverSession ? 'DriverHome' : 'TourHome';
-  const canSwipeToHome = currentScreen !== 'Login' && currentScreen !== 'TourHome' && currentScreen !== 'DriverHome';
+  const canSwipeToHome =
+    currentScreen !== 'Login' &&
+    currentScreen !== 'TourHome' &&
+    currentScreen !== 'DriverHome' &&
+    currentScreen !== 'Chat';
 
   const clearLoginTransitionArtifacts = () => {
     if (loginTransitionTimerRef.current) {
