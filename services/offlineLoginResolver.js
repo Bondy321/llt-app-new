@@ -29,6 +29,23 @@ const resolveCachedPassengerEmail = (identity) => {
   return '';
 };
 
+const preserveStableIdentityFields = (identity) => {
+  if (!identity || typeof identity !== 'object') return identity;
+
+  const stablePassengerId = typeof identity.stablePassengerId === 'string'
+    ? identity.stablePassengerId.trim()
+    : '';
+  const identityVersion = typeof identity.identityVersion === 'string'
+    ? identity.identityVersion.trim()
+    : '';
+
+  return {
+    ...identity,
+    ...(stablePassengerId ? { stablePassengerId } : {}),
+    ...(identityVersion ? { identityVersion } : {}),
+  };
+};
+
 const resolveOfflineLoginFromCache = async ({
   reference,
   normalizedEmail,
@@ -87,7 +104,7 @@ const resolveOfflineLoginFromCache = async ({
         source: 'session',
         type: expectedRole,
         tour: cachedTourData,
-        identity: cachedBookingData,
+        identity: preserveStableIdentityFields(cachedBookingData),
       };
     }
 
@@ -133,7 +150,7 @@ const resolveOfflineLoginFromCache = async ({
           source: 'tour-pack',
           type: expectedRole,
           tour: cachedPackResult.data.tour || cachedTourData,
-          identity: packIdentity,
+          identity: preserveStableIdentityFields(packIdentity),
         };
       }
     }
