@@ -727,6 +727,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const [inputHeight, setInputHeight] = useState(44);
   const [draftRestored, setDraftRestored] = useState(false);
   const [composerHeight, setComposerHeight] = useState(0);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
 
   // Feature state
   const [typingUsers, setTypingUsers] = useState([]);
@@ -779,10 +780,9 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const listBottomSpacerHeight = useMemo(() => {
     const safeComposerHeight = composerHeight > 0 ? composerHeight : 72;
     const attachmentMenuHeight = showAttachmentMenu ? 108 : 0;
-    const typingHeight = typingUsers.length > 0 ? 44 : 0;
 
-    return safeComposerHeight + attachmentMenuHeight + typingHeight + SPACING.lg;
-  }, [composerHeight, showAttachmentMenu, typingUsers.length]);
+    return safeComposerHeight + attachmentMenuHeight + SPACING.md;
+  }, [composerHeight, showAttachmentMenu]);
 
   // Refs
   const messageListRef = useRef(null);
@@ -791,6 +791,8 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const lastMessageCountRef = useRef(0);
   const lastReadMarkAtRef = useRef(0);
   const rowOffsetsRef = useRef({});
+  const listViewportHeightRef = useRef(0);
+  const listContentHeightRef = useRef(0);
 
   const getMessageTimestamp = useCallback((message) => {
     if (!message) return null;
@@ -827,7 +829,10 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Scroll to bottom helper
   const scrollToBottom = useCallback((animated = true) => {
     requestAnimationFrame(() => {
-      messageListRef.current?.scrollToEnd({ animated });
+      const viewportHeight = listViewportHeightRef.current || 0;
+      const contentHeight = listContentHeightRef.current || 0;
+      const targetOffset = Math.max(contentHeight - viewportHeight, 0);
+      messageListRef.current?.scrollToOffset({ offset: targetOffset, animated });
     });
   }, []);
 
@@ -840,14 +845,22 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Handle scroll position tracking
   const handleScroll = useCallback((event) => {
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    listViewportHeightRef.current = layoutMeasurement.height;
+    listContentHeightRef.current = contentSize.height;
     setCurrentScrollY(contentOffset.y);
-    const isBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - 50;
+    const isBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - 16;
     setIsAtBottom(isBottom);
     if (isBottom) {
       setNewMessagesCount(0);
       markActiveChatRead({ force: true });
     }
   }, [markActiveChatRead]);
+
+  const handleScrollBeginDrag = useCallback(() => {
+    if (isKeyboardVisible) {
+      Keyboard.dismiss();
+    }
+  }, [isKeyboardVisible]);
 
 
   useEffect(() => {
@@ -1147,9 +1160,11 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Keyboard listeners
   useEffect(() => {
     const showSub = Keyboard.addListener('keyboardDidShow', () => {
+      setIsKeyboardVisible(true);
       if (isAtBottom) scrollToBottom(true);
     });
     const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      setIsKeyboardVisible(false);
       if (isAtBottom) scrollToBottom(true);
     });
 
@@ -2359,10 +2374,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
             {/* Messages List */}
             <FlatList
               ref={messageListRef}
-              contentContainerStyle={[
-                styles.messagesScrollContainer,
-                { paddingBottom: listBottomSpacerHeight },
-              ]}
+              contentContainerStyle={styles.messagesScrollContainer}
               data={groupedMessages}
               keyExtractor={keyExtractor}
               renderItem={renderMessageRow}
@@ -2372,12 +2384,19 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
               initialNumToRender={20}
               maxToRenderPerBatch={20}
               windowSize={10}
-              onContentSizeChange={() => {
+              onLayout={(event) => {
+                listViewportHeightRef.current = event.nativeEvent.layout.height;
+              }}
+              onContentSizeChange={(_, contentHeight) => {
+                listContentHeightRef.current = contentHeight;
                 if (isAtBottom) scrollToBottom(false);
               }}
-              ListFooterComponent={<View style={{ height: Math.max(SPACING.sm, insets.bottom) }} />}
+              ListFooterComponent={<View style={{ height: listBottomSpacerHeight }} />}
               onScroll={handleScroll}
+              onScrollBeginDrag={handleScrollBeginDrag}
               scrollEventThrottle={100}
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+              keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
               onScrollToIndexFailed={({ index }) => {
                 const fallbackOffset = Math.max(index * ESTIMATED_MESSAGE_ROW_HEIGHT - 80, 0);
@@ -2431,13 +2450,15 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
             />
 
             {/* Input Area */}
-            <View style={[styles.inputDock, { paddingBottom: composerBottomInset }]}>
+            <View
+              style={[styles.inputDock, { paddingBottom: composerBottomInset }]}
+              onLayout={(event) => {
+                const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+                setComposerHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+              }}
+            >
               <View
                 style={styles.inputArea}
-                onLayout={(event) => {
-                  const nextHeight = Math.ceil(event.nativeEvent.layout.height + composerBottomInset);
-                  setComposerHeight((prev) => (prev === nextHeight ? prev : nextHeight));
-                }}
               >
                 {replyingToMessage?.messageId && (
                   <View style={styles.replyComposerCard}>
