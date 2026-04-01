@@ -226,6 +226,20 @@ const validateBookingRef = (bookingRef) => {
   return bookingRef.trim().toUpperCase();
 };
 
+const buildPassengerStableIdentity = ({ bookingRef, normalizedEmail } = {}) => {
+  const normalizedBookingRef = typeof bookingRef === 'string' ? bookingRef.trim().toUpperCase() : '';
+  const normalizedPassengerEmail = typeof normalizedEmail === 'string' ? normalizedEmail.trim().toLowerCase() : '';
+
+  if (!normalizedBookingRef || !normalizedPassengerEmail) {
+    return { stablePassengerId: null, identityVersion: null };
+  }
+
+  return {
+    stablePassengerId: `pax_v1:${normalizedBookingRef}:${normalizedPassengerEmail}`,
+    identityVersion: 'pax_v1',
+  };
+};
+
 /**
  * Validates driver ID
  */
@@ -848,12 +862,19 @@ const validateBookingReference = async (reference, email) => {
       return { valid: false, error: 'This tour is no longer active' };
     }
 
+    const { stablePassengerId, identityVersion } = buildPassengerStableIdentity({
+      bookingRef: resolvedBookingRef,
+      normalizedEmail,
+    });
+
     return {
       valid: true,
       type: 'passenger',
       booking: {
         ...normalizedBooking,
         normalizedPassengerEmail: normalizedEmail,
+        stablePassengerId,
+        identityVersion,
       },
       tour: {
         id: tourId,
@@ -1020,6 +1041,7 @@ module.exports = {
   MANIFEST_STATUS,
   ensureBookingSchemaConsistency,
   ensureTourParticipantCount,
+  buildPassengerStableIdentity,
   validateBookingReference,
   joinTour,
   getTourItinerary,

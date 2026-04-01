@@ -163,6 +163,19 @@ const normalizeTimestamp = (timestamp) => {
   return null;
 };
 
+const isMessageOwnedByCurrentSession = (message, session) => {
+  const senderStableId = typeof message?.senderStableId === 'string' ? message.senderStableId.trim() : '';
+  const currentStableId = typeof session?.stablePassengerId === 'string' ? session.stablePassengerId.trim() : '';
+
+  if (senderStableId && currentStableId) {
+    return senderStableId === currentStableId;
+  }
+
+  const senderId = typeof message?.senderId === 'string' ? message.senderId.trim() : '';
+  const currentUid = typeof session?.uid === 'string' ? session.uid.trim() : '';
+  return Boolean(senderId && currentUid && senderId === currentUid);
+};
+
 const buildReplyPreviewText = (message = {}) => {
   if (!message || typeof message !== 'object') return '';
   if (message.type === 'image') {
@@ -756,6 +769,10 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const insets = useSafeAreaInsets();
   const composerBottomInset = insets.bottom > 0 ? Math.max(insets.bottom, SPACING.md) : SPACING.md;
   const currentUser = auth.currentUser;
+  const currentSessionIdentity = useMemo(() => ({
+    stablePassengerId: bookingData?.stablePassengerId || null,
+    uid: currentUser?.uid || null,
+  }), [bookingData?.stablePassengerId, currentUser?.uid]);
   const isDriver = bookingData?.isDriver === true;
   const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
   const draftStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_DRAFTS' }), []);
@@ -1803,7 +1820,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         case 'drivers':
           return message.isDriver === true;
         case 'mine':
-          return message.senderId === currentUser?.uid;
+          return isMessageOwnedByCurrentSession(message, currentSessionIdentity);
         case 'links':
           return typeof message.text === 'string' && new RegExp(URL_REGEX).test(message.text);
         case 'media':
@@ -1813,7 +1830,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
           return true;
       }
     });
-  }, [searchResults, messageLookupById, searchFilter, currentUser?.uid]);
+  }, [searchResults, messageLookupById, searchFilter, currentSessionIdentity]);
 
   const activeSearchResultMessageId = useMemo(() => {
     if (filteredSearchResults.length === 0) return null;
@@ -1910,7 +1927,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Render a single message
   const renderMessage = useCallback(
     (msg) => {
-      const isSelf = msg.senderId === currentUser?.uid;
+      const isSelf = isMessageOwnedByCurrentSession(msg, currentSessionIdentity);
       const isMsgDriver = !!msg.isDriver;
       const isDeleted = !!msg.deleted;
       const isImage = msg.type === 'image';
@@ -2084,6 +2101,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       );
     },
     [
+      currentSessionIdentity,
       currentUser?.uid,
       formatTime,
       handleMessageLongPress,
@@ -2572,7 +2590,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         onCopyLink={handleCopyFirstLink}
         onOpenLink={handleOpenFirstLink}
         onDelete={handleDeleteMessage}
-        canDelete={selectedMessage?.senderId === currentUser?.uid || isDriver}
+        canDelete={isMessageOwnedByCurrentSession(selectedMessage, currentSessionIdentity) || isDriver}
         insets={insets}
       />
 

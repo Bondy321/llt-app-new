@@ -32,6 +32,11 @@ import DriverItineraryScreen from './screens/DriverItineraryScreen';
 const { getLoginTransitionDurationMs } = require('./screens/loginFlow');
 const { isEligibleEdgeSwipe, shouldCommitEdgeSwipeHome } = require('./services/swipeHomeNavigation');
 
+const IDENTITY_VERSION = 'pax_v1';
+const IDENTITY_SESSION_KEYS = {
+  IDENTITY_BINDING: '@LLT:identityBinding',
+};
+
 const COLORS = {
   primaryBlue: THEME.primary,
   lightBlueAccent: '#93C5FD',
@@ -46,6 +51,7 @@ const SESSION_KEYS = {
   BOOKING_DATA: '@LLT:bookingData',
   LAST_SCREEN: '@LLT:lastScreen',
   NOTIFICATION_ONBOARDING: '@LLT:notificationOnboarding',
+  IDENTITY_BINDING: IDENTITY_SESSION_KEYS.IDENTITY_BINDING,
 };
 
 const NOTIFICATION_ONBOARDING_REMINDER_MS = 24 * 60 * 60 * 1000;
