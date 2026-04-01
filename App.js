@@ -105,6 +105,7 @@ function AppContent() {
   const [tourCode, setTourCode] = useState('');
   const [tourData, setTourData] = useState(null);
   const [bookingData, setBookingData] = useState(null);
+  const [identityBinding, setIdentityBinding] = useState(null);
   
   // State for passing params between screens manually (since we aren't using React Navigation stack)
   const [screenParams, setScreenParams] = useState({});
@@ -191,6 +192,39 @@ function AppContent() {
     };
   }, []);
 
+  const hydrateIdentityBindingForCurrentUser = async (authUid) => {
+    if (!authUid || !realtimeDb) return;
+
+    try {
+      const snapshot = await realtimeDb.ref(`users/${authUid}`).once('value');
+      const userProfile = snapshot.val() || {};
+      const stablePassengerId = userProfile?.stablePassengerId;
+
+      if (!stablePassengerId) {
+        logger.info('Identity', 'IdentityBinding missing for auth user', { authUid: maskIdentifier(authUid) });
+        return;
+      }
+
+      const hydratedBinding = {
+        stablePassengerId,
+        identityVersion: userProfile?.identityVersion || IDENTITY_VERSION,
+        bookingRef: userProfile?.bookingRef || null,
+        normalizedPassengerEmail: userProfile?.normalizedPassengerEmail || null,
+        authUid,
+      };
+
+      setIdentityBinding(hydratedBinding);
+      await SessionStorage.multiSet([
+        [SESSION_KEYS.IDENTITY_BINDING, JSON.stringify(hydratedBinding)],
+      ]);
+    } catch (error) {
+      logger.warn('Identity', 'Failed to hydrate identity binding for auth user', {
+        error: error.message,
+        authUid: maskIdentifier(authUid),
+      });
+    }
+  };
+
   const initializeApp = async () => {
     try {
       await restoreSession();
@@ -200,6 +234,7 @@ function AppContent() {
       if (currentUser) {
         logger.setUserId(currentUser.uid);
         logger.info('Auth', 'User authenticated', { uid: maskIdentifier(currentUser.uid) });
+        await hydrateIdentityBindingForCurrentUser(currentUser.uid);
       }
 
       setInitializing(false);
@@ -220,12 +255,24 @@ function AppContent() {
 
   const restoreSession = async () => {
     try {
-      const [savedTourData, savedBookingData, lastScreen] = await SessionStorage.multiGet([
+      const [savedTourData, savedBookingData, lastScreen, savedIdentityBinding] = await SessionStorage.multiGet([
         SESSION_KEYS.TOUR_DATA,
         SESSION_KEYS.BOOKING_DATA,
-        SESSION_KEYS.LAST_SCREEN
+        SESSION_KEYS.LAST_SCREEN,
+        SESSION_KEYS.IDENTITY_BINDING,
       ]);
       
+      if (savedIdentityBinding?.[1]) {
+        try {
+          const restoredBinding = JSON.parse(savedIdentityBinding[1]);
+          if (restoredBinding && typeof restoredBinding === 'object') {
+            setIdentityBinding(restoredBinding);
+          }
+        } catch (parseError) {
+          logger.warn('Session', 'Failed to parse identity binding payload', { error: parseError.message });
+        }
+      }
+
       if (savedBookingData[1]) {
         const bookingData = JSON.parse(savedBookingData[1]);
         const tourData = savedTourData[1] ? JSON.parse(savedTourData[1]) : null;
@@ -296,12 +343,21 @@ function AppContent() {
       const persistedTourData = Object.prototype.hasOwnProperty.call(overrides, 'tourData') ? overrides.tourData : tourData;
       const persistedBookingData = Object.prototype.hasOwnProperty.call(overrides, 'bookingData') ? overrides.bookingData : bookingData;
       const persistedScreen = Object.prototype.hasOwnProperty.call(overrides, 'currentScreen') ? overrides.currentScreen : currentScreen;
+      const persistedIdentityBinding = Object.prototype.hasOwnProperty.call(overrides, 'identityBinding')
+        ? overrides.identityBinding
+        : identityBinding;
 
-      await SessionStorage.multiSet([
+      const sessionEntries = [
         [SESSION_KEYS.TOUR_DATA, JSON.stringify(persistedTourData)],
         [SESSION_KEYS.BOOKING_DATA, JSON.stringify(persistedBookingData)],
-        [SESSION_KEYS.LAST_SCREEN, persistedScreen]
-      ]);
+        [SESSION_KEYS.LAST_SCREEN, persistedScreen],
+      ];
+
+      if (persistedIdentityBinding) {
+        sessionEntries.push([SESSION_KEYS.IDENTITY_BINDING, JSON.stringify(persistedIdentityBinding)]);
+      }
+
+      await SessionStorage.multiSet(sessionEntries);
     } catch (error) {
       logger.error('Session', 'Failed to save session', { error: error.message });
     }
@@ -391,6 +447,19 @@ function AppContent() {
       bookingRef: normalizedBookingData?.id,
       normalizedEmail: normalizedBookingData?.normalizedPassengerEmail,
     });
+    const nextIdentityBinding = stablePassengerId
+      ? {
+          stablePassengerId,
+          identityVersion: identityVersion || IDENTITY_VERSION,
+          bookingRef: normalizedBookingData?.id || null,
+          normalizedPassengerEmail: normalizedBookingData?.normalizedPassengerEmail || null,
+          authUid: user?.uid || null,
+        }
+      : null;
+
+    if (nextIdentityBinding) {
+      setIdentityBinding(nextIdentityBinding);
+    }
 
     logger.info('Navigation', 'Passenger Login', { bookingRef: maskIdentifier(reference) });
     setTourCode(tourDetails?.tourCode || '');
@@ -461,6 +530,7 @@ function AppContent() {
       tourData: tourDetails || null,
       bookingData: normalizedBookingData,
       currentScreen: postLoginScreen,
+      identityBinding: nextIdentityBinding || identityBinding,
     });
 
     if (shouldOnboardNotifications) {
@@ -518,11 +588,13 @@ function AppContent() {
       await SessionStorage.multiRemove([
         SESSION_KEYS.TOUR_DATA,
         SESSION_KEYS.BOOKING_DATA,
-        SESSION_KEYS.LAST_SCREEN
+        SESSION_KEYS.LAST_SCREEN,
+        SESSION_KEYS.IDENTITY_BINDING,
       ]);
       setTourCode('');
       setTourData(null);
       setBookingData(null);
+      setIdentityBinding(null);
       setScreenParams({});
       setCurrentScreen('Login');
     } catch (error) {
@@ -646,8 +718,15 @@ case 'Itinerary':
         
         // Construct booking data for chat if we are in driver mode (since driver doesn't have standard bookingData)
         const effectiveBookingData = isDriver 
-          ? { isDriver: true, passengerNames: [screenParams.driverName || bookingData?.name || 'Driver'] }
-          : bookingData;
+          ? {
+              isDriver: true,
+              passengerNames: [screenParams.driverName || bookingData?.name || 'Driver'],
+              stablePassengerId: identityBinding?.stablePassengerId || null,
+            }
+          : {
+              ...(bookingData || {}),
+              stablePassengerId: identityBinding?.stablePassengerId || bookingData?.stablePassengerId || null,
+            };
 
         return (
           <ChatScreen
@@ -657,6 +736,7 @@ case 'Itinerary':
             bookingData={effectiveBookingData}
             tourData={tourData || { name: 'Tour Chat' }}
             internalDriverChat={screenParams.internalDriverChat === true}
+            identityBinding={identityBinding}
           />
         );
       case 'Map':
