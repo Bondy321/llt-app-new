@@ -171,6 +171,7 @@
             },
             "reactions": {
               "$emoji": {
+                ".write": "auth != null",
                 "$userId": {
                   ".write": "auth != null && auth.uid === $userId",
                   ".validate": "!newData.exists() || newData.val() === true"
