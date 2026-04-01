@@ -791,6 +791,8 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const lastMessageCountRef = useRef(0);
   const lastReadMarkAtRef = useRef(0);
   const rowOffsetsRef = useRef({});
+  const listViewportHeightRef = useRef(0);
+  const listContentHeightRef = useRef(0);
 
   const getMessageTimestamp = useCallback((message) => {
     if (!message) return null;
@@ -827,7 +829,10 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Scroll to bottom helper
   const scrollToBottom = useCallback((animated = true) => {
     requestAnimationFrame(() => {
-      messageListRef.current?.scrollToEnd({ animated });
+      const viewportHeight = listViewportHeightRef.current || 0;
+      const contentHeight = listContentHeightRef.current || 0;
+      const targetOffset = Math.max(contentHeight - viewportHeight, 0);
+      messageListRef.current?.scrollToOffset({ offset: targetOffset, animated });
     });
   }, []);
 
@@ -840,8 +845,10 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Handle scroll position tracking
   const handleScroll = useCallback((event) => {
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    listViewportHeightRef.current = layoutMeasurement.height;
+    listContentHeightRef.current = contentSize.height;
     setCurrentScrollY(contentOffset.y);
-    const isBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - 50;
+    const isBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - 16;
     setIsAtBottom(isBottom);
     if (isBottom) {
       setNewMessagesCount(0);
@@ -2367,10 +2374,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
             {/* Messages List */}
             <FlatList
               ref={messageListRef}
-              contentContainerStyle={[
-                styles.messagesScrollContainer,
-                { paddingBottom: listBottomSpacerHeight },
-              ]}
+              contentContainerStyle={styles.messagesScrollContainer}
               data={groupedMessages}
               keyExtractor={keyExtractor}
               renderItem={renderMessageRow}
@@ -2380,10 +2384,14 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
               initialNumToRender={20}
               maxToRenderPerBatch={20}
               windowSize={10}
-              onContentSizeChange={() => {
+              onLayout={(event) => {
+                listViewportHeightRef.current = event.nativeEvent.layout.height;
+              }}
+              onContentSizeChange={(_, contentHeight) => {
+                listContentHeightRef.current = contentHeight;
                 if (isAtBottom) scrollToBottom(false);
               }}
-              ListFooterComponent={<View style={{ height: Math.max(SPACING.sm, insets.bottom) }} />}
+              ListFooterComponent={<View style={{ height: listBottomSpacerHeight }} />}
               onScroll={handleScroll}
               onScrollBeginDrag={handleScrollBeginDrag}
               scrollEventThrottle={100}
