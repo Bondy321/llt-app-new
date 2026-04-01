@@ -387,6 +387,10 @@ function AppContent() {
       ...bookingOrDriverData,
       normalizedPassengerEmail: normalizePassengerEmail(bookingOrDriverData?.normalizedPassengerEmail),
     };
+    const { stablePassengerId, identityVersion } = bookingService.buildPassengerStableIdentity({
+      bookingRef: normalizedBookingData?.id,
+      normalizedEmail: normalizedBookingData?.normalizedPassengerEmail,
+    });
 
     logger.info('Navigation', 'Passenger Login', { bookingRef: maskIdentifier(reference) });
     setTourCode(tourDetails?.tourCode || '');
@@ -403,16 +407,42 @@ function AppContent() {
 
     if (user?.uid && normalizedBookingData?.id && realtimeDb) {
       try {
-        await realtimeDb.ref(`users/${user.uid}`).update({
-          privatePhotoOwnerId: normalizedBookingData.id,
-          privatePhotoOwnerType: 'booking',
-          lastUpdated: Date.now(),
+        const now = Date.now();
+        const updates = {
+          [`users/${user.uid}/privatePhotoOwnerId`]: normalizedBookingData.id,
+          [`users/${user.uid}/privatePhotoOwnerType`]: 'booking',
+          [`users/${user.uid}/lastUpdated`]: now,
+        };
+
+        if (stablePassengerId && normalizedBookingData?.normalizedPassengerEmail) {
+          updates[`users/${user.uid}/stablePassengerId`] = stablePassengerId;
+          updates[`users/${user.uid}/identityVersion`] = identityVersion || IDENTITY_VERSION;
+          updates[`users/${user.uid}/bookingRef`] = normalizedBookingData.id;
+          updates[`users/${user.uid}/normalizedPassengerEmail`] = normalizedBookingData.normalizedPassengerEmail;
+          updates[`identity_bindings/${stablePassengerId}/${user.uid}`] = true;
+          updates[`identity_bindings_meta/${stablePassengerId}/bookingRef`] = normalizedBookingData.id;
+          updates[`identity_bindings_meta/${stablePassengerId}/normalizedPassengerEmail`] = normalizedBookingData.normalizedPassengerEmail;
+          updates[`identity_bindings_meta/${stablePassengerId}/identityVersion`] = identityVersion || IDENTITY_VERSION;
+          updates[`identity_bindings_meta/${stablePassengerId}/lastSeenAt`] = now;
+        } else {
+          logger.warn('Identity', 'Stable identity unavailable during passenger login', {
+            reason: 'STABLE_ID_UNAVAILABLE',
+            authUid: maskIdentifier(user.uid),
+            bookingRef: maskIdentifier(normalizedBookingData.id),
+          });
+        }
+
+        await realtimeDb.ref().update(updates);
+        logger.info('Identity', 'IdentityBinding persisted', {
+          authUid: maskIdentifier(user.uid),
+          bookingRef: maskIdentifier(normalizedBookingData.id),
+          stablePassengerId: stablePassengerId ? maskIdentifier(stablePassengerId) : null,
         });
       } catch (error) {
-        logger.error('Photobook', 'Failed to persist stable private photo owner identity', {
+        logger.error('Identity', 'IdentityBinding persist failed', {
           error: error.message,
-          userId: user.uid,
-          bookingRef: normalizedBookingData.id,
+          authUid: maskIdentifier(user.uid),
+          bookingRef: maskIdentifier(normalizedBookingData.id),
         });
       }
     }
