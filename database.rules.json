@@ -207,6 +207,10 @@
         "pushPermissionCanAskAgain": { ".validate": "!newData.exists() || newData.isBoolean() || newData.val() === null" },
         "pushPermissionUpdatedAt": { ".validate": "!newData.exists() || newData.isString()" },
         "privatePhotoOwnerId": { ".validate": "!newData.exists() || newData.isString()" },
+        "stablePassengerId": { ".validate": "!newData.exists() || newData.isString()" },
+        "identityVersion": { ".validate": "!newData.exists() || newData.val() === 'pax_v1'" },
+        "bookingRef": { ".validate": "!newData.exists() || newData.isString()" },
+        "normalizedPassengerEmail": { ".validate": "!newData.exists() || newData.isString()" },
         "lastUpdated": { ".validate": "!newData.exists() || newData.isString() || newData.isNumber()" },
         "deviceOS": { ".validate": "!newData.exists() || newData.isString()" },
         "deviceModel": { ".validate": "!newData.exists() || newData.isString()" },
@@ -230,6 +234,24 @@
             "hiking_nature": { ".validate": "!newData.exists() || newData.isBoolean()" }
           }
         }
+      }
+    },
+
+
+    "identity_bindings": {
+      "$stablePassengerId": {
+        ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+        "$uid": {
+          ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || auth.uid === $uid)",
+          ".validate": "!newData.exists() || newData.val() === true"
+        }
+      }
+    },
+
+    "identity_bindings_meta": {
+      "$stablePassengerId": {
+        ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+        ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
       }
     },
 
