@@ -14,6 +14,7 @@ import offlineSyncService from './services/offlineSyncService';
 import * as bookingService from './services/bookingServiceRealtime';
 import * as chatService from './services/chatService';
 import offlineLoginResolver from './services/offlineLoginResolver';
+import { migrateRecentChatMessagesForStableIdentity } from './services/chatIdentityMigrationService';
 import { COLORS as THEME } from './theme';
 
 // Import Screens
@@ -532,6 +533,16 @@ function AppContent() {
       currentScreen: postLoginScreen,
       identityBinding: nextIdentityBinding || identityBinding,
     });
+
+    if (stablePassengerId && user?.uid && tourDetails?.id) {
+      migrateRecentChatMessagesForStableIdentity({
+        tourId: tourDetails.id,
+        currentAuthUid: user.uid,
+        stablePassengerId,
+        realtimeDb,
+        logger,
+      });
+    }
 
     if (shouldOnboardNotifications) {
       setScreenParams({
