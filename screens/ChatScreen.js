@@ -774,6 +774,13 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
     uid: currentUser?.uid || null,
   }), [bookingData?.stablePassengerId, currentUser?.uid]);
   const isDriver = bookingData?.isDriver === true;
+  const passengerStableId = useMemo(() => {
+    if (isDriver) return null;
+    const stableId = bookingData?.identityBinding?.stablePassengerId;
+    if (typeof stableId !== 'string') return null;
+    const normalizedStableId = stableId.trim();
+    return normalizedStableId.length > 0 ? normalizedStableId : null;
+  }, [bookingData?.identityBinding?.stablePassengerId, isDriver]);
   const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
   const draftStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_DRAFTS' }), []);
   const readStateStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_READ_STATE' }), []);
@@ -1245,6 +1252,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       name: userName,
       userId: currentUser?.uid || 'anonymous',
       isDriver,
+      ...(passengerStableId ? { stablePassengerId: passengerStableId } : {}),
     };
 
     const optimisticTimestamp = new Date().toISOString();
@@ -1254,6 +1262,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       text: trimmed,
       senderName: userName,
       senderId: senderInfo.userId,
+      ...(passengerStableId ? { senderStableId: passengerStableId } : {}),
       timestamp: optimisticTimestamp,
       isDriver,
       status: 'sending',
@@ -1351,6 +1360,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       name: userName,
       userId: currentUser.uid,
       isDriver,
+      ...(passengerStableId ? { stablePassengerId: passengerStableId } : {}),
     };
 
     try {
@@ -1513,6 +1523,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
             name: userName,
             userId,
             isDriver,
+            ...(passengerStableId ? { stablePassengerId: passengerStableId } : {}),
           };
 
           await sendImageMessage(tourId, uploadResult.url, '', senderInfo);
@@ -1527,7 +1538,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
 
       setUploadingImage(false);
     },
-    [tourId, userName, currentUser?.uid, isDriver]
+    [tourId, userName, currentUser?.uid, isDriver, passengerStableId]
   );
 
   // Handle reaction
