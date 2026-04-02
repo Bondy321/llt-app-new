@@ -52,7 +52,6 @@ import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import SyncStatusBanner from '../components/SyncStatusBanner';
 const { buildChatSearchResults, normalizeSearchQuery } = require('../utils/chatSearch');
 const { buildUnreadSummary } = require('../utils/chatUnreadSummary');
-const { canRetryFailedMessage } = require('../utils/chatRetry');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -163,16 +162,18 @@ const normalizeTimestamp = (timestamp) => {
   return null;
 };
 
-const isMessageOwnedByCurrentSession = (message, session) => {
+const isMessageOwnedByCurrentSession = (message, currentUserUid, identityBinding) => {
   const senderStableId = typeof message?.senderStableId === 'string' ? message.senderStableId.trim() : '';
-  const currentStableId = typeof session?.stablePassengerId === 'string' ? session.stablePassengerId.trim() : '';
+  const currentStableId = typeof identityBinding?.stablePassengerId === 'string'
+    ? identityBinding.stablePassengerId.trim()
+    : '';
 
   if (senderStableId && currentStableId) {
     return senderStableId === currentStableId;
   }
 
   const senderId = typeof message?.senderId === 'string' ? message.senderId.trim() : '';
-  const currentUid = typeof session?.uid === 'string' ? session.uid.trim() : '';
+  const currentUid = typeof currentUserUid === 'string' ? currentUserUid.trim() : '';
   return Boolean(senderId && currentUid && senderId === currentUid);
 };
 
@@ -769,18 +770,28 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const insets = useSafeAreaInsets();
   const composerBottomInset = insets.bottom > 0 ? Math.max(insets.bottom, SPACING.md) : SPACING.md;
   const currentUser = auth.currentUser;
-  const currentSessionIdentity = useMemo(() => ({
-    stablePassengerId: bookingData?.stablePassengerId || null,
-    uid: currentUser?.uid || null,
-  }), [bookingData?.stablePassengerId, currentUser?.uid]);
+  const identityBinding = useMemo(() => {
+    const sourceBinding = bookingData?.identityBinding && typeof bookingData.identityBinding === 'object'
+      ? bookingData.identityBinding
+      : {};
+    const rawStablePassengerId = sourceBinding?.stablePassengerId || bookingData?.stablePassengerId || null;
+    const normalizedStablePassengerId = typeof rawStablePassengerId === 'string'
+      ? rawStablePassengerId.trim()
+      : '';
+
+    return {
+      ...sourceBinding,
+      stablePassengerId: normalizedStablePassengerId || null,
+    };
+  }, [bookingData?.identityBinding, bookingData?.stablePassengerId]);
   const isDriver = bookingData?.isDriver === true;
   const passengerStableId = useMemo(() => {
     if (isDriver) return null;
-    const stableId = bookingData?.identityBinding?.stablePassengerId;
+    const stableId = identityBinding?.stablePassengerId;
     if (typeof stableId !== 'string') return null;
     const normalizedStableId = stableId.trim();
     return normalizedStableId.length > 0 ? normalizedStableId : null;
-  }, [bookingData?.identityBinding?.stablePassengerId, isDriver]);
+  }, [identityBinding, isDriver]);
   const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
   const draftStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_DRAFTS' }), []);
   const readStateStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_READ_STATE' }), []);
@@ -817,6 +828,20 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const rowOffsetsRef = useRef({});
   const listViewportHeightRef = useRef(0);
   const listContentHeightRef = useRef(0);
+
+  useEffect(() => {
+    console.debug('[ChatScreen] stable identity active for session:', Boolean(identityBinding?.stablePassengerId));
+  }, []);
+
+  const canRetryFailedMessageForCurrentSession = useCallback((message) => {
+    if (!isMessageOwnedByCurrentSession(message, currentUser?.uid, identityBinding)) return false;
+    if (!message || typeof message !== 'object') return false;
+    if (message.deleted) return false;
+    if (message.status !== 'failed') return false;
+    if ((message.type || 'text') !== 'text') return false;
+    if (typeof message.text !== 'string' || message.text.trim().length === 0) return false;
+    return true;
+  }, [currentUser?.uid, identityBinding]);
 
   const getMessageTimestamp = useCallback((message) => {
     if (!message) return null;
@@ -1338,7 +1363,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   ]);
 
   const handleRetryFailedMessage = useCallback(async (message) => {
-    if (!canRetryFailedMessage(message, currentUser?.uid)) return;
+    if (!canRetryFailedMessageForCurrentSession(message)) return;
     if (!tourId || !currentUser?.uid) return;
     if (retryingMessageIds[message.id]) return;
 
@@ -1415,6 +1440,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       await refreshQueueStats();
     }
   }, [
+    canRetryFailedMessageForCurrentSession,
     currentUser?.uid,
     internalDriverChat,
     isDriver,
@@ -1806,11 +1832,14 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   }, [unreadAnchorIndex, unreadAnchorY]);
 
   const unreadSummary = useMemo(() => (
-    buildUnreadSummary(messages, {
-      lastSeenTimestamp,
-      currentUserId: currentUser?.uid || null,
-    })
-  ), [messages, lastSeenTimestamp, currentUser?.uid]);
+    buildUnreadSummary(
+      messages.filter((message) => !isMessageOwnedByCurrentSession(message, currentUser?.uid, identityBinding)),
+      {
+        lastSeenTimestamp,
+        currentUserId: null,
+      }
+    )
+  ), [messages, lastSeenTimestamp, currentUser?.uid, identityBinding]);
 
   const searchResults = useMemo(
     () => buildChatSearchResults(messages, searchQuery),
@@ -1831,7 +1860,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         case 'drivers':
           return message.isDriver === true;
         case 'mine':
-          return isMessageOwnedByCurrentSession(message, currentSessionIdentity);
+          return isMessageOwnedByCurrentSession(message, currentUser?.uid, identityBinding);
         case 'links':
           return typeof message.text === 'string' && new RegExp(URL_REGEX).test(message.text);
         case 'media':
@@ -1841,7 +1870,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
           return true;
       }
     });
-  }, [searchResults, messageLookupById, searchFilter, currentSessionIdentity]);
+  }, [searchResults, messageLookupById, searchFilter, currentUser?.uid, identityBinding]);
 
   const activeSearchResultMessageId = useMemo(() => {
     if (filteredSearchResults.length === 0) return null;
@@ -1938,12 +1967,12 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   // Render a single message
   const renderMessage = useCallback(
     (msg) => {
-      const isSelf = isMessageOwnedByCurrentSession(msg, currentSessionIdentity);
+      const isSelf = isMessageOwnedByCurrentSession(msg, currentUser?.uid, identityBinding);
       const isMsgDriver = !!msg.isDriver;
       const isDeleted = !!msg.deleted;
       const isImage = msg.type === 'image';
       const isSearchMatch = !!activeSearchResultMessageId && activeSearchResultMessageId === msg.id;
-      const isRetryEligible = canRetryFailedMessage(msg, currentUser?.uid);
+      const isRetryEligible = canRetryFailedMessageForCurrentSession(msg);
       const isRetrying = !!retryingMessageIds[msg.id];
 
       if (isDeleted) {
@@ -2112,7 +2141,8 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
       );
     },
     [
-      currentSessionIdentity,
+      canRetryFailedMessageForCurrentSession,
+      identityBinding,
       currentUser?.uid,
       formatTime,
       handleMessageLongPress,
@@ -2601,7 +2631,7 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
         onCopyLink={handleCopyFirstLink}
         onOpenLink={handleOpenFirstLink}
         onDelete={handleDeleteMessage}
-        canDelete={isMessageOwnedByCurrentSession(selectedMessage, currentSessionIdentity) || isDriver}
+        canDelete={isMessageOwnedByCurrentSession(selectedMessage, currentUser?.uid, identityBinding) || isDriver}
         insets={insets}
       />
 
