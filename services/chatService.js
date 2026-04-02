@@ -147,10 +147,15 @@ const validateSenderInfo = (senderInfo) => {
     throw new Error('Sender must have a valid userId');
   }
 
+  const normalizedStablePassengerId = typeof senderInfo.stablePassengerId === 'string'
+    ? senderInfo.stablePassengerId.trim()
+    : '';
+
   return {
     userId: senderInfo.userId.trim(),
     name: (senderInfo.name || 'Anonymous').trim(),
     isDriver: !!senderInfo.isDriver,
+    ...(normalizedStablePassengerId ? { stablePassengerId: normalizedStablePassengerId } : {}),
   };
 };
 
@@ -196,6 +201,7 @@ const buildMessagePayload = (messageText, senderInfo, messageId, messageType = '
     text: sanitizedText,
     senderName: sanitizeInput(safeSender.name || 'Anonymous'),
     senderId: safeSender.userId || 'anonymous',
+    ...(safeSender.stablePassengerId ? { senderStableId: safeSender.stablePassengerId } : {}),
     timestamp,
     isDriver: !!safeSender.isDriver,
     type: messageType, // 'text', 'image', 'system'
@@ -277,6 +283,7 @@ const sendMessageDirect = async (payload, dbInstance = realtimeDb) => {
       text: validatedMessage,
       senderName: validatedSender.name,
       senderId: validatedSender.userId,
+      ...(validatedSender.stablePassengerId ? { senderStableId: validatedSender.stablePassengerId } : {}),
       timestamp: payload.timestamp || new Date().toISOString(),
       isDriver: validatedSender.isDriver,
       status: 'sent',
@@ -371,6 +378,7 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb,
       text: validatedMessage,
       senderName: validatedSender.name,
       senderId: validatedSender.userId,
+      ...(validatedSender.stablePassengerId ? { senderStableId: validatedSender.stablePassengerId } : {}),
       timestamp: payload.timestamp,
       isDriver: validatedSender.isDriver,
       status: 'queued',
