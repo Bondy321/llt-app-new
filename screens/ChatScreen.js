@@ -53,6 +53,7 @@ import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import SyncStatusBanner from '../components/SyncStatusBanner';
 const { buildChatSearchResults, normalizeSearchQuery } = require('../utils/chatSearch');
 const { buildUnreadSummary } = require('../utils/chatUnreadSummary');
+const { buildReplyTargetIndex, resolveReplyTargetIndex } = require('../utils/chatReplyNavigation');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -820,6 +821,7 @@ export default function ChatScreen({
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [viewingImage, setViewingImage] = useState(null);
   const [reactionFeedbackMessage, setReactionFeedbackMessage] = useState('');
+  const [replyJumpFeedbackMessage, setReplyJumpFeedbackMessage] = useState('');
 
   const insets = useSafeAreaInsets();
   const composerBottomInset = insets.bottom > 0 ? Math.max(insets.bottom, SPACING.md) : SPACING.md;
@@ -905,6 +907,7 @@ export default function ChatScreen({
   const listContentHeightRef = useRef(0);
   const reactionFailureTimeoutRef = useRef(null);
   const inFlightReactionKeysRef = useRef(new Set());
+  const pendingJumpIndexRef = useRef(null);
 
   useEffect(() => {
     console.info('[ChatScreen] identity binding source selected', {
@@ -1950,15 +1953,7 @@ export default function ChatScreen({
     return groupedMessages.findIndex((item) => item.type === 'message' && item.data?.id === unreadAnchorMessageId);
   }, [groupedMessages, unreadAnchorMessageId]);
 
-  const messageIndexById = useMemo(() => {
-    const indexMap = new Map();
-    groupedMessages.forEach((item, index) => {
-      if (item.type === 'message' && item.data?.id) {
-        indexMap.set(item.data.id, index);
-      }
-    });
-    return indexMap;
-  }, [groupedMessages]);
+  const replyTargetIndex = useMemo(() => buildReplyTargetIndex(groupedMessages), [groupedMessages]);
 
   const showJumpToUnread = useMemo(() => {
     if (!unreadAnchorMessageId || unreadAnchorY == null) return false;
@@ -2058,12 +2053,24 @@ export default function ChatScreen({
   }, [filteredSearchResults, messageLookupById, searchQuery, activeSearchResultMessageId]);
 
   const jumpToMessageById = useCallback((messageId) => {
-    if (!messageId) return;
-    const groupedIndex = messageIndexById.get(messageId) ?? -1;
-    if (groupedIndex < 0) return;
+    const targetIndex = resolveReplyTargetIndex(messageId, replyTargetIndex);
+    if (targetIndex < 0) {
+      setReplyJumpFeedbackMessage('Could not find the original message in this chat history.');
+      return false;
+    }
 
-    messageListRef.current?.scrollToIndex({ index: groupedIndex, animated: true, viewPosition: 0.45 });
-  }, [messageIndexById]);
+    pendingJumpIndexRef.current = targetIndex;
+    setReplyJumpFeedbackMessage('');
+    messageListRef.current?.scrollToIndex({ index: targetIndex, animated: true, viewPosition: 0.45 });
+    return true;
+  }, [replyTargetIndex]);
+
+
+  useEffect(() => {
+    if (!replyJumpFeedbackMessage) return undefined;
+    const timeoutId = setTimeout(() => setReplyJumpFeedbackMessage(''), 2600);
+    return () => clearTimeout(timeoutId);
+  }, [replyJumpFeedbackMessage]);
 
   useEffect(() => {
     setActiveSearchResultIndex(0);
@@ -2567,6 +2574,13 @@ export default function ChatScreen({
         </View>
       ) : null}
 
+      {replyJumpFeedbackMessage ? (
+        <View style={styles.replyJumpFeedbackBanner}>
+          <MaterialCommunityIcons name="message-alert-outline" size={16} color={COLORS.white} />
+          <Text style={styles.replyJumpFeedbackText}>{replyJumpFeedbackMessage}</Text>
+        </View>
+      ) : null}
+
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardAvoidingContainer}
@@ -2610,6 +2624,19 @@ export default function ChatScreen({
               onScrollToIndexFailed={({ index }) => {
                 const fallbackOffset = Math.max(index * ESTIMATED_MESSAGE_ROW_HEIGHT - 80, 0);
                 messageListRef.current?.scrollToOffset({ offset: fallbackOffset, animated: true });
+
+                const pendingTargetIndex = pendingJumpIndexRef.current;
+                if (pendingTargetIndex == null || pendingTargetIndex !== index) {
+                  return;
+                }
+
+                setTimeout(() => {
+                  messageListRef.current?.scrollToIndex({
+                    index: pendingTargetIndex,
+                    animated: true,
+                    viewPosition: 0.45,
+                  });
+                }, 120);
               }}
               refreshControl={
                 <RefreshControl
@@ -3539,6 +3566,24 @@ const styles = StyleSheet.create({
     ...SHADOWS.sm,
   },
   reactionFeedbackText: {
+    flex: 1,
+    color: COLORS.white,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  replyJumpFeedbackBanner: {
+    marginHorizontal: SPACING.lg,
+    marginBottom: SPACING.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    backgroundColor: COLORS.primaryBlue,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    ...SHADOWS.sm,
+  },
+  replyJumpFeedbackText: {
     flex: 1,
     color: COLORS.white,
     fontSize: 12,
