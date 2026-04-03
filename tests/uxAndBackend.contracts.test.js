@@ -97,3 +97,30 @@ test('Realtime Database rules support image chat payloads and private photo owne
   assert.match(photobookScreen, /ensurePrivatePhotoOwnerAccess/);
   assert.match(photobookScreen, /realtimeDb\.ref\(`users\/\$\{authUid\}`\)\.update/);
 });
+
+test('Realtime Database rules gate identity_bindings_meta writes to admin or an existing caller-owned binding', () => {
+  const rules = JSON.parse(read('database.rules.json'));
+  const writeRule = rules.rules.identity_bindings_meta.$stablePassengerId['.write'];
+
+  assert.equal(
+    writeRule,
+    "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('identity_bindings/' + $stablePassengerId + '/' + auth.uid).val() === true)",
+  );
+
+  // Proof contract:
+  // - User A writing metadata for User B's stable ID is denied because binding lookup checks
+  //   identity_bindings/<targetStableId>/<auth.uid>, which is false/absent for User A.
+  // - User A writing own stable ID metadata is allowed once identity_bindings/<ownStableId>/<auth.uid> is true.
+  assert.match(writeRule, /root\.child\('identity_bindings\/' \+ \$stablePassengerId \+ '\/' \+ auth\.uid\)\.val\(\) === true/);
+});
+
+test('Passenger login flow still performs identity binding + metadata multi-path update in App.js', () => {
+  const appSrc = read('App.js');
+
+  assert.match(appSrc, /updates\[`identity_bindings\/\$\{stablePassengerId\}\/\$\{user\.uid\}`\] = true;/);
+  assert.match(appSrc, /updates\[`identity_bindings_meta\/\$\{stablePassengerId\}\/bookingRef`\] = normalizedBookingData\.id;/);
+  assert.match(appSrc, /updates\[`identity_bindings_meta\/\$\{stablePassengerId\}\/normalizedPassengerEmail`\] = normalizedBookingData\.normalizedPassengerEmail;/);
+  assert.match(appSrc, /updates\[`identity_bindings_meta\/\$\{stablePassengerId\}\/identityVersion`\] = identityVersion \|\| IDENTITY_VERSION;/);
+  assert.match(appSrc, /updates\[`identity_bindings_meta\/\$\{stablePassengerId\}\/lastSeenAt`\] = now;/);
+  assert.match(appSrc, /await realtimeDb\.ref\(\)\.update\(updates\);/);
+});
