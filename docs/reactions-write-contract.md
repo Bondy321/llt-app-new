@@ -51,3 +51,20 @@ The following patterns are forbidden for toggles because they overwrite the whol
 - `update(chats/.../reactions/{emoji}, {...})` when intended as toggle logic
 
 Reason: overwriting `reactions/{emoji}` can drop concurrent leaf writes and violates canonical write guarantees.
+
+### Parent-path writes (explicitly forbidden)
+
+No reaction method (`addReaction`, `removeReaction`, `toggleReaction`) may write to any of the following parent paths:
+
+- `chats/{tourId}/messages/{messageId}`
+- `chats/{tourId}/messages/{messageId}/reactions`
+- `chats/{tourId}/messages/{messageId}/reactions/{emoji}`
+
+Equivalent code-level anti-patterns include:
+
+- `set(chats/.../messages/{messageId}, ...)`
+- `update(chats/.../messages/{messageId}, ...)` for reaction mutations
+- `set(chats/.../reactions/{emoji}, ...)` without `/{userId}`
+- `remove(chats/.../reactions/{emoji})` without `/{userId}`
+
+Reason: parent writes can overwrite sibling users' reaction state and violate per-user isolation.
