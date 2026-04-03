@@ -258,6 +258,41 @@ const getReactionUserIds = (users) => {
   return Array.from(normalizedUserIds).sort((a, b) => a.localeCompare(b));
 };
 
+const normalizeReactionMap = (reactions) => {
+  if (!reactions || typeof reactions !== 'object') return {};
+
+  return Object.entries(reactions).reduce((accumulator, [emoji, users]) => {
+    if (typeof emoji !== 'string') return accumulator;
+    const sanitizedEmoji = emoji.trim();
+    if (!sanitizedEmoji) return accumulator;
+
+    const normalizedUsers = getReactionUserIds(users);
+    if (normalizedUsers.length > 0) {
+      accumulator[sanitizedEmoji] = normalizedUsers;
+    }
+    return accumulator;
+  }, {});
+};
+
+const applyOptimisticReactionToggle = ({ reactions, emoji, userId }) => {
+  const normalizedReactions = normalizeReactionMap(reactions);
+  const existingUserIds = Array.isArray(normalizedReactions[emoji]) ? normalizedReactions[emoji] : [];
+  const hasReaction = existingUserIds.includes(userId);
+
+  const nextEmojiUserIds = hasReaction
+    ? existingUserIds.filter((existingUserId) => existingUserId !== userId)
+    : [...existingUserIds, userId].sort((a, b) => a.localeCompare(b));
+
+  const nextReactions = { ...normalizedReactions };
+  if (nextEmojiUserIds.length === 0) {
+    delete nextReactions[emoji];
+  } else {
+    nextReactions[emoji] = nextEmojiUserIds;
+  }
+
+  return { nextReactions };
+};
+
 const MessageReactions = ({ reactions, onReactionPress, messageId, currentUserId }) => {
   if (!reactions || Object.keys(reactions).length === 0) return null;
 
@@ -784,6 +819,7 @@ export default function ChatScreen({
   const [showActionMenu, setShowActionMenu] = useState(false);
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [viewingImage, setViewingImage] = useState(null);
+  const [reactionFeedbackMessage, setReactionFeedbackMessage] = useState('');
 
   const insets = useSafeAreaInsets();
   const composerBottomInset = insets.bottom > 0 ? Math.max(insets.bottom, SPACING.md) : SPACING.md;
@@ -867,6 +903,8 @@ export default function ChatScreen({
   const rowOffsetsRef = useRef({});
   const listViewportHeightRef = useRef(0);
   const listContentHeightRef = useRef(0);
+  const reactionFailureTimeoutRef = useRef(null);
+  const inFlightReactionKeysRef = useRef(new Set());
 
   useEffect(() => {
     console.info('[ChatScreen] identity binding source selected', {
@@ -1117,6 +1155,21 @@ export default function ChatScreen({
     }
   }, []);
 
+  const clearReactionFailureTimeout = useCallback(() => {
+    if (reactionFailureTimeoutRef.current) {
+      clearTimeout(reactionFailureTimeoutRef.current);
+      reactionFailureTimeoutRef.current = null;
+    }
+  }, []);
+
+  const showReactionFailureFeedback = useCallback((message = 'Could not update reaction. Please try again.') => {
+    clearReactionFailureTimeout();
+    setReactionFeedbackMessage(message);
+    reactionFailureTimeoutRef.current = setTimeout(() => {
+      setReactionFeedbackMessage('');
+    }, 3200);
+  }, [clearReactionFailureTimeout]);
+
   const showSyncBanner = useCallback(
     ({ contract, outcomeText = '', autoDismissMs = 4500 }) => {
       clearSyncBannerTimeout();
@@ -1219,8 +1272,9 @@ export default function ChatScreen({
   useEffect(() => {
     return () => {
       clearSyncBannerTimeout();
+      clearReactionFailureTimeout();
     };
-  }, [clearSyncBannerTimeout]);
+  }, [clearReactionFailureTimeout, clearSyncBannerTimeout]);
 
   // Subscribe to offline queue state updates
   useEffect(() => {
@@ -1620,26 +1674,66 @@ export default function ChatScreen({
   const handleReaction = useCallback(
     async (messageId, emoji) => {
       if (!currentUser?.uid) return;
+      if (!messageId || !emoji) return;
 
       setShowReactionPicker(false);
       setSelectedMessage(null);
+      const lockKey = `${messageId}::${emoji}::${currentUser.uid}`;
+      if (inFlightReactionKeysRef.current.has(lockKey)) {
+        return;
+      }
+      inFlightReactionKeysRef.current.add(lockKey);
 
-      const result = await toggleReaction(tourId, messageId, emoji, currentUser.uid);
-      if (!result?.success) {
-        console.warn('Failed to toggle chat reaction', {
+      let rollbackReactions = null;
+      let hasTargetMessage = false;
+
+      setMessages((prevMessages) =>
+        prevMessages.map((message) => {
+          if (message.id !== messageId) return message;
+          hasTargetMessage = true;
+          rollbackReactions = normalizeReactionMap(message.reactions);
+          const { nextReactions } = applyOptimisticReactionToggle({
+            reactions: message.reactions,
+            emoji,
+            userId: currentUser.uid,
+          });
+          return { ...message, reactions: nextReactions };
+        })
+      );
+
+      if (!hasTargetMessage) {
+        inFlightReactionKeysRef.current.delete(lockKey);
+        return;
+      }
+
+      try {
+        const result = await toggleReaction(tourId, messageId, emoji, currentUser.uid);
+        if (!result?.success) {
+          throw new Error(result?.error || 'Unknown error');
+        }
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      } catch (error) {
+        setMessages((prevMessages) =>
+          prevMessages.map((message) => (
+            message.id === messageId
+              ? { ...message, reactions: rollbackReactions || {} }
+              : message
+          ))
+        );
+        logger.warn('ChatScreen', 'chat_reaction_toggle_failed_rolled_back', {
           tourId,
           messageId,
           emoji,
           userId: currentUser.uid,
-          error: result?.error || 'Unknown error',
+          error: error?.message || 'Unknown error',
         });
+        showReactionFailureFeedback('Could not update reaction. Check your connection and try again.');
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        return;
+      } finally {
+        inFlightReactionKeysRef.current.delete(lockKey);
       }
-
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     },
-    [tourId, currentUser?.uid]
+    [tourId, currentUser?.uid, showReactionFailureFeedback]
   );
 
   // Handle message long press
@@ -2465,6 +2559,13 @@ export default function ChatScreen({
         onRetry={() => handleManualSync({ retryFailedOnly: true })}
         retryLabel="Retry failed actions"
       />
+
+      {reactionFeedbackMessage ? (
+        <View style={styles.reactionFeedbackBanner}>
+          <MaterialCommunityIcons name="wifi-alert" size={16} color={COLORS.white} />
+          <Text style={styles.reactionFeedbackText}>{reactionFeedbackMessage}</Text>
+        </View>
+      ) : null}
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -3422,6 +3523,25 @@ const styles = StyleSheet.create({
   newMessagesBannerText: {
     color: COLORS.white,
     fontSize: 14,
+    fontWeight: '600',
+  },
+  reactionFeedbackBanner: {
+    marginHorizontal: SPACING.lg,
+    marginTop: SPACING.xs,
+    marginBottom: SPACING.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    backgroundColor: THEME.error,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    ...SHADOWS.sm,
+  },
+  reactionFeedbackText: {
+    flex: 1,
+    color: COLORS.white,
+    fontSize: 12,
     fontWeight: '600',
   },
   swipeReplyHint: {
