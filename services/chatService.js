@@ -46,17 +46,27 @@ const parseTimestampToMillis = (timestamp) => {
 };
 
 const normalizeReactionUsers = (users) => {
+  const normalizedUserIds = new Set();
+
   if (Array.isArray(users)) {
-    return users.filter((userId) => typeof userId === 'string' && userId.trim().length > 0);
+    users.forEach((userId) => {
+      if (typeof userId !== 'string') return;
+      const trimmedUserId = userId.trim();
+      if (!trimmedUserId) return;
+      normalizedUserIds.add(trimmedUserId);
+    });
+  } else if (users && typeof users === 'object') {
+    Object.entries(users).forEach(([userId, reacted]) => {
+      if (reacted !== true || typeof userId !== 'string') return;
+      const trimmedUserId = userId.trim();
+      if (!trimmedUserId) return;
+      normalizedUserIds.add(trimmedUserId);
+    });
+  } else {
+    return [];
   }
 
-  if (users && typeof users === 'object') {
-    return Object.entries(users)
-      .filter(([userId, reacted]) => reacted === true && typeof userId === 'string' && userId.trim().length > 0)
-      .map(([userId]) => userId);
-  }
-
-  return [];
+  return Array.from(normalizedUserIds).sort((a, b) => a.localeCompare(b));
 };
 
 const normalizeReactions = (reactions) => {
@@ -65,9 +75,15 @@ const normalizeReactions = (reactions) => {
   }
 
   return Object.entries(reactions).reduce((accumulator, [emoji, users]) => {
+    if (typeof emoji !== 'string') {
+      return accumulator;
+    }
+    const normalizedEmoji = emoji.trim();
+    if (!normalizedEmoji) return accumulator;
+
     const normalizedUsers = normalizeReactionUsers(users);
     if (normalizedUsers.length > 0) {
-      accumulator[emoji] = normalizedUsers;
+      accumulator[normalizedEmoji] = normalizedUsers;
     }
     return accumulator;
   }, {});

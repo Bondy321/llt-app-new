@@ -235,17 +235,27 @@ const UnreadSeparator = () => (
 
 // ==================== MESSAGE REACTIONS COMPONENT ====================
 const getReactionUserIds = (users) => {
+  const normalizedUserIds = new Set();
+
   if (Array.isArray(users)) {
-    return users.filter((userId) => typeof userId === 'string' && userId.trim().length > 0);
+    users.forEach((userId) => {
+      if (typeof userId !== 'string') return;
+      const trimmedUserId = userId.trim();
+      if (!trimmedUserId) return;
+      normalizedUserIds.add(trimmedUserId);
+    });
+  } else if (users && typeof users === 'object') {
+    Object.entries(users).forEach(([userId, reacted]) => {
+      if (reacted !== true || typeof userId !== 'string') return;
+      const trimmedUserId = userId.trim();
+      if (!trimmedUserId) return;
+      normalizedUserIds.add(trimmedUserId);
+    });
+  } else {
+    return [];
   }
 
-  if (users && typeof users === 'object') {
-    return Object.entries(users)
-      .filter(([userId, reacted]) => reacted === true && typeof userId === 'string' && userId.trim().length > 0)
-      .map(([userId]) => userId);
-  }
-
-  return [];
+  return Array.from(normalizedUserIds).sort((a, b) => a.localeCompare(b));
 };
 
 const MessageReactions = ({ reactions, onReactionPress, messageId, currentUserId }) => {
