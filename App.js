@@ -509,10 +509,16 @@ function AppContent() {
           stablePassengerId: stablePassengerId ? maskIdentifier(stablePassengerId) : null,
         });
       } catch (error) {
+        const isIdentityBindingWriteRejected = error?.code === 'PERMISSION_DENIED'
+          || /permission_denied/i.test(error?.message || '')
+          || /Permission denied/i.test(error?.message || '');
         logger.error('Identity', 'IdentityBinding persist failed', {
           error: error.message,
+          code: error?.code || null,
+          reason: isIdentityBindingWriteRejected ? 'IDENTITY_BINDING_WRITE_DENIED_OR_INVALID' : 'IDENTITY_BINDING_WRITE_FAILED',
           authUid: maskIdentifier(user.uid),
           bookingRef: maskIdentifier(normalizedBookingData.id),
+          stablePassengerId: stablePassengerId ? maskIdentifier(stablePassengerId) : null,
         });
       }
     }
