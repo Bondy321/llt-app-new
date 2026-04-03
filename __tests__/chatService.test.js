@@ -74,7 +74,7 @@ const createMockRealtimeDb = (initialData = {}) => {
     refCalls,
     data,
     ref(path) {
-      const context = { path, setCalls: [], updateCalls: [], pushCalls: [] };
+      const context = { path, setCalls: [], removeCalls: 0, updateCalls: [], pushCalls: [] };
 
       context.set = async (value) => {
         context.setCalls.push(cloneValue(value));
@@ -92,6 +92,7 @@ const createMockRealtimeDb = (initialData = {}) => {
       };
 
       context.remove = async () => {
+        context.removeCalls += 1;
         setValue(path, null);
         notifyValueListeners(path);
       };
@@ -283,6 +284,18 @@ test('addReaction and removeReaction are idempotent against map-backed reactions
   const secondAdd = await addReaction('tour-2', 'msg-9', '🎉', 'driver-1', mockDb);
   assert.equal(firstAdd.success, true);
   assert.equal(secondAdd.success, true);
+  const addLeafWrites = mockDb.refCalls.filter(
+    (refCall) => refCall.path === 'chats/tour-2/messages/msg-9/reactions/🎉/driver-1'
+  );
+  assert.equal(addLeafWrites.length, 2);
+  assert.deepEqual(addLeafWrites.map((refCall) => refCall.setCalls), [[true], [true]]);
+  assert.ok(
+    mockDb.refCalls.every(
+      (refCall) => refCall.path !== 'chats/tour-2/messages/msg-9/reactions/🎉'
+        && refCall.path !== 'chats/tour-2/messages/msg-9/reactions'
+        && refCall.path !== 'chats/tour-2/messages/msg-9'
+    )
+  );
   assert.deepEqual(mockDb.data.chats['tour-2'].messages['msg-9'].reactions['🎉'], {
     'driver-1': true,
   });
@@ -291,9 +304,62 @@ test('addReaction and removeReaction are idempotent against map-backed reactions
   const secondRemove = await removeReaction('tour-2', 'msg-9', '🎉', 'driver-1', mockDb);
   assert.equal(firstRemove.success, true);
   assert.equal(secondRemove.success, true);
+  const removeLeafWrites = mockDb.refCalls.filter(
+    (refCall) => refCall.path === 'chats/tour-2/messages/msg-9/reactions/🎉/driver-1'
+  );
+  assert.equal(removeLeafWrites.length, 4);
+  assert.equal(removeLeafWrites[2].removeCalls, 1);
+  assert.equal(removeLeafWrites[3].removeCalls, 1);
+  assert.ok(
+    mockDb.refCalls.every(
+      (refCall) => refCall.path !== 'chats/tour-2/messages/msg-9/reactions/🎉'
+        && refCall.path !== 'chats/tour-2/messages/msg-9/reactions'
+        && refCall.path !== 'chats/tour-2/messages/msg-9'
+    )
+  );
   assert.ok(
     mockDb.data.chats['tour-2'].messages['msg-9'].reactions?.['🎉'] === undefined
       || Object.keys(mockDb.data.chats['tour-2'].messages['msg-9'].reactions?.['🎉'] || {}).length === 0
+  );
+});
+
+test('addReaction sets exact reaction leaf ref to true', async () => {
+  const mockDb = createMockRealtimeDb();
+
+  const result = await addReaction('tour-10', 'msg-1', '🔥', 'user-7', mockDb);
+
+  assert.equal(result.success, true);
+  assert.equal(mockDb.refCalls.length, 1);
+  assert.equal(mockDb.refCalls[0].path, 'chats/tour-10/messages/msg-1/reactions/🔥/user-7');
+  assert.deepEqual(mockDb.refCalls[0].setCalls, [true]);
+});
+
+test('removeReaction removes exact reaction leaf ref', async () => {
+  const mockDb = createMockRealtimeDb({
+    chats: {
+      'tour-10': {
+        messages: {
+          'msg-1': {
+            reactions: {
+              '🔥': {
+                'user-7': true,
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const result = await removeReaction('tour-10', 'msg-1', '🔥', 'user-7', mockDb);
+
+  assert.equal(result.success, true);
+  assert.equal(mockDb.refCalls.length, 1);
+  assert.equal(mockDb.refCalls[0].path, 'chats/tour-10/messages/msg-1/reactions/🔥/user-7');
+  assert.equal(mockDb.refCalls[0].removeCalls, 1);
+  assert.equal(
+    mockDb.data.chats['tour-10'].messages['msg-1'].reactions?.['🔥']?.['user-7'],
+    undefined
   );
 });
 

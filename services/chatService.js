@@ -541,21 +541,7 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
 
 // Add a reaction to a message
 const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb) => {
-  const result = await toggleReaction(tourId, messageId, emoji, userId, dbInstance, { forceAction: 'add' });
-  return result.success ? { success: true } : result;
-};
-
-// Remove a reaction from a message
-const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb) => {
-  const result = await toggleReaction(tourId, messageId, emoji, userId, dbInstance, { forceAction: 'remove' });
-  return result.success ? { success: true } : result;
-};
-
-// Toggle a reaction (add if not present, remove if present)
-// IMPORTANT: toggles never overwrite reactions/{emoji}; only leaf set/remove writes are allowed.
-const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb, options = {}) => {
   try {
-    // Validate inputs
     const validatedTourId = validateTourId(tourId);
     const validatedMessageId = validateMessageId(messageId);
     const validatedUserId = validateUserId(userId);
@@ -581,8 +567,83 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       sanitizedEmoji,
       validatedUserId
     );
+
+    await reactionLeafRef.set(true);
+    return { success: true };
+  } catch (error) {
+    console.error('Error adding reaction:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Remove a reaction from a message
+const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb) => {
+  try {
+    const validatedTourId = validateTourId(tourId);
+    const validatedMessageId = validateMessageId(messageId);
+    const validatedUserId = validateUserId(userId);
+
+    if (!emoji || typeof emoji !== 'string' || emoji.trim().length === 0) {
+      return { success: false, error: 'Invalid emoji' };
+    }
+
+    const sanitizedEmoji = emoji.trim();
+    if (!isValidFirebaseKey(sanitizedEmoji)) {
+      return { success: false, error: 'Invalid emoji character for database key' };
+    }
+
+    const db = dbInstance || realtimeDb;
+    if (!db) {
+      return { success: false, error: 'Database unavailable' };
+    }
+
+    const reactionLeafRef = getReactionLeafRef(
+      db,
+      validatedTourId,
+      validatedMessageId,
+      sanitizedEmoji,
+      validatedUserId
+    );
+
+    await reactionLeafRef.remove();
+    return { success: true };
+  } catch (error) {
+    console.error('Error removing reaction:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Toggle a reaction (add if not present, remove if present)
+// IMPORTANT: toggles never overwrite reactions/{emoji}; only leaf set/remove writes are allowed.
+const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb, options = {}) => {
+  try {
+    // Validate inputs
+    const validatedTourId = validateTourId(tourId);
+    const validatedMessageId = validateMessageId(messageId);
+    const validatedUserId = validateUserId(userId);
+
+    if (!emoji || typeof emoji !== 'string' || emoji.trim().length === 0) {
+      return { success: false, error: 'Invalid emoji' };
+    }
+
+    const sanitizedEmoji = emoji.trim();
+    if (!isValidFirebaseKey(sanitizedEmoji)) {
+      return { success: false, error: 'Invalid emoji character for database key' };
+    }
+
+    const db = dbInstance || realtimeDb;
+    if (!db) {
+      return { success: false, error: 'Database unavailable' };
+    }
+
     const emojiRef = getReactionEmojiRef(db, validatedTourId, validatedMessageId, sanitizedEmoji);
-    const reactionLeafSnapshot = await reactionLeafRef.once('value');
+    const reactionLeafSnapshot = await getReactionLeafRef(
+      db,
+      validatedTourId,
+      validatedMessageId,
+      sanitizedEmoji,
+      validatedUserId
+    ).once('value');
     const hasUserReaction = reactionLeafSnapshot.exists();
     const getNormalizedReactionPayload = async () => {
       const nextSnapshot = await emojiRef.once('value');
@@ -592,28 +653,24 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
     };
 
     if (options.forceAction === 'add') {
-      if (!hasUserReaction) {
-        await reactionLeafRef.set(true);
-      }
+      await addReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
       const payload = await getNormalizedReactionPayload();
       return { success: true, action: 'added', ...payload };
     }
 
     if (options.forceAction === 'remove') {
-      if (hasUserReaction) {
-        await reactionLeafRef.remove();
-      }
+      await removeReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
       const payload = await getNormalizedReactionPayload();
       return { success: true, action: 'removed', ...payload };
     }
 
     if (hasUserReaction) {
-      await reactionLeafRef.remove();
+      await removeReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
       const payload = await getNormalizedReactionPayload();
       return { success: true, action: 'removed', ...payload };
     }
 
-    await reactionLeafRef.set(true);
+    await addReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
     const payload = await getNormalizedReactionPayload();
     return { success: true, action: 'added', ...payload };
   } catch (error) {
