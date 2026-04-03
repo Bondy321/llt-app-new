@@ -727,7 +727,14 @@ const ImageViewerModal = ({ visible, imageUrl, onClose }) => {
 };
 
 // ==================== MAIN CHAT SCREEN ====================
-export default function ChatScreen({ onBack, tourId, bookingData, tourData, internalDriverChat = false }) {
+export default function ChatScreen({
+  onBack,
+  tourId,
+  bookingData,
+  tourData,
+  internalDriverChat = false,
+  identityBinding: identityBindingProp = null,
+}) {
   // Core state
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
@@ -770,20 +777,26 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const insets = useSafeAreaInsets();
   const composerBottomInset = insets.bottom > 0 ? Math.max(insets.bottom, SPACING.md) : SPACING.md;
   const currentUser = auth.currentUser;
-  const identityBinding = useMemo(() => {
-    const sourceBinding = bookingData?.identityBinding && typeof bookingData.identityBinding === 'object'
-      ? bookingData.identityBinding
-      : {};
+  const { identityBinding, identityBindingSource } = useMemo(() => {
+    const hasIdentityBindingProp = identityBindingProp && typeof identityBindingProp === 'object';
+    const sourceBinding = hasIdentityBindingProp
+      ? identityBindingProp
+      : (bookingData?.identityBinding && typeof bookingData.identityBinding === 'object'
+        ? bookingData.identityBinding
+        : {});
     const rawStablePassengerId = sourceBinding?.stablePassengerId || bookingData?.stablePassengerId || null;
     const normalizedStablePassengerId = typeof rawStablePassengerId === 'string'
       ? rawStablePassengerId.trim()
       : '';
 
     return {
-      ...sourceBinding,
-      stablePassengerId: normalizedStablePassengerId || null,
+      identityBinding: {
+        ...sourceBinding,
+        stablePassengerId: normalizedStablePassengerId || null,
+      },
+      identityBindingSource: hasIdentityBindingProp ? 'prop' : 'bookingData_fallback',
     };
-  }, [bookingData?.identityBinding, bookingData?.stablePassengerId]);
+  }, [identityBindingProp, bookingData?.identityBinding, bookingData?.stablePassengerId]);
   const isDriver = bookingData?.isDriver === true;
   const passengerStableId = useMemo(() => {
     if (isDriver) return null;
@@ -830,8 +843,11 @@ export default function ChatScreen({ onBack, tourId, bookingData, tourData, inte
   const listContentHeightRef = useRef(0);
 
   useEffect(() => {
-    console.debug('[ChatScreen] stable identity active for session:', Boolean(identityBinding?.stablePassengerId));
-  }, []);
+    console.info('[ChatScreen] identity binding source selected', {
+      source: identityBindingSource,
+      hasStableBinding: Boolean(identityBinding?.stablePassengerId),
+    });
+  }, [identityBinding?.stablePassengerId, identityBindingSource]);
 
   const canRetryFailedMessageForCurrentSession = useCallback((message) => {
     if (!isMessageOwnedByCurrentSession(message, currentUser?.uid, identityBinding)) return false;

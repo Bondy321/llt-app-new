@@ -738,11 +738,9 @@ case 'Itinerary':
           ? {
               isDriver: true,
               passengerNames: [screenParams.driverName || bookingData?.name || 'Driver'],
-              stablePassengerId: identityBinding?.stablePassengerId || null,
             }
           : {
               ...(bookingData || {}),
-              stablePassengerId: identityBinding?.stablePassengerId || bookingData?.stablePassengerId || null,
             };
 
         return (
