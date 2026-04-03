@@ -8,6 +8,7 @@ const {
   addReaction,
   removeReaction,
   subscribeToChatMessages,
+  subscribeToInternalDriverChat,
 } = require('../services/chatService');
 
 const createMockRealtimeDb = (initialData = {}) => {
@@ -396,4 +397,84 @@ test('subscribeToChatMessages normalizes reaction maps for the UI', async () => 
   });
 
   unsubscribe();
+});
+
+test('chat subscriptions normalize canonical maps, legacy arrays, and malformed reaction payloads', async () => {
+  const mockDb = createMockRealtimeDb({
+    chats: {
+      'tour-4': {
+        messages: {
+          'msg-legacy': {
+            text: 'legacy',
+            timestamp: '2026-03-18T09:00:00.000Z',
+            reactions: {
+              '👍': ['user-2', '', ' user-1 ', 'user-2'],
+            },
+          },
+          'msg-map': {
+            text: 'map',
+            timestamp: '2026-03-18T09:01:00.000Z',
+            reactions: {
+              '❤️': {
+                ' user-3 ': true,
+                '': true,
+                ignored: false,
+              },
+            },
+          },
+          'msg-bad': {
+            text: 'bad',
+            timestamp: '2026-03-18T09:02:00.000Z',
+            reactions: {
+              '🎉': 'not-an-array-or-map',
+            },
+          },
+        },
+      },
+    },
+    internal_chats: {
+      'tour-4': {
+        messages: {
+          'int-1': {
+            text: 'internal',
+            timestamp: '2026-03-18T09:03:00.000Z',
+            reactions: {
+              '🔥': {
+                'driver-b': true,
+                'driver-a': true,
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const groupUpdates = [];
+  const unsubscribeGroup = subscribeToChatMessages('tour-4', (messages) => {
+    groupUpdates.push(messages);
+  }, mockDb);
+
+  const internalUpdates = [];
+  const unsubscribeInternal = subscribeToInternalDriverChat('tour-4', (messages) => {
+    internalUpdates.push(messages);
+  }, mockDb);
+
+  assert.equal(groupUpdates.length, 1);
+  const latestGroup = groupUpdates[0];
+  assert.deepEqual(latestGroup.find((msg) => msg.id === 'msg-legacy')?.reactions, {
+    '👍': ['user-1', 'user-2'],
+  });
+  assert.deepEqual(latestGroup.find((msg) => msg.id === 'msg-map')?.reactions, {
+    '❤️': ['user-3'],
+  });
+  assert.deepEqual(latestGroup.find((msg) => msg.id === 'msg-bad')?.reactions, {});
+
+  assert.equal(internalUpdates.length, 1);
+  assert.deepEqual(internalUpdates[0][0].reactions, {
+    '🔥': ['driver-a', 'driver-b'],
+  });
+
+  unsubscribeGroup();
+  unsubscribeInternal();
 });
