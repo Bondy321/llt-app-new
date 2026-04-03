@@ -92,7 +92,7 @@ const normalizeReactions = (reactions) => {
 const getReactionLeafRef = (db, tourId, messageId, emoji, userId) =>
   db.ref(`chats/${tourId}/messages/${messageId}/reactions/${emoji}/${userId}`);
 
-const getReactionEmojiRef = (db, tourId, messageId, emoji) =>
+const getReactionEmojiReadRef = (db, tourId, messageId, emoji) =>
   db.ref(`chats/${tourId}/messages/${messageId}/reactions/${emoji}`);
 
 const normalizeMessageTimestamp = (message = {}) => {
@@ -652,7 +652,9 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       return { success: false, error: 'Database unavailable' };
     }
 
-    const emojiRef = getReactionEmojiRef(db, validatedTourId, validatedMessageId, sanitizedEmoji);
+    // Read-only parent ref for legacy-shape compatibility checks.
+    // All writes must remain user-leaf only: reactions/{emoji}/{userId}.
+    const emojiReadRef = getReactionEmojiReadRef(db, validatedTourId, validatedMessageId, sanitizedEmoji);
     const reactionLeafSnapshot = await getReactionLeafRef(
       db,
       validatedTourId,
@@ -662,7 +664,7 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
     ).once('value');
     const hasUserReaction = reactionLeafSnapshot.exists();
     const getNormalizedReactionPayload = async () => {
-      const nextSnapshot = await emojiRef.once('value');
+      const nextSnapshot = await emojiReadRef.once('value');
       const users = normalizeReactionUsers(nextSnapshot.val());
       const reactions = users.length > 0 ? { [sanitizedEmoji]: users } : {};
       return { users, reactions };

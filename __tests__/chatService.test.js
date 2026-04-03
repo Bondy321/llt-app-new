@@ -151,6 +151,29 @@ const createMockRealtimeDb = (initialData = {}) => {
   };
 };
 
+const assertNoReactionParentWrites = (refCalls, tourId, messageId, emoji) => {
+  const forbiddenPaths = new Set([
+    `chats/${tourId}/messages/${messageId}`,
+    `chats/${tourId}/messages/${messageId}/reactions`,
+    `chats/${tourId}/messages/${messageId}/reactions/${emoji}`,
+  ]);
+
+  refCalls.forEach((refCall) => {
+    const performedWrite = refCall.setCalls.length > 0
+      || refCall.removeCalls > 0
+      || refCall.updateCalls.length > 0;
+    if (!performedWrite) {
+      return;
+    }
+
+    assert.equal(
+      forbiddenPaths.has(refCall.path),
+      false,
+      `Forbidden parent write used: ${refCall.path}`
+    );
+  });
+};
+
 test('sendMessage builds payload with sender info and driver flag', async () => {
   const mockDb = createMockRealtimeDb();
   const senderInfo = { name: 'Alex', userId: 'user-1', isDriver: true };
@@ -362,6 +385,37 @@ test('removeReaction removes exact reaction leaf ref', async () => {
     mockDb.data.chats['tour-10'].messages['msg-1'].reactions?.['🔥']?.['user-7'],
     undefined
   );
+});
+
+test('reaction methods never write to reaction parent or message parent paths', async () => {
+  const mockDb = createMockRealtimeDb({
+    chats: {
+      'tour-guard': {
+        messages: {
+          'msg-guard': {
+            reactions: {
+              '👍': {
+                'user-a': true,
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  await addReaction('tour-guard', 'msg-guard', '👍', 'user-b', mockDb);
+  await removeReaction('tour-guard', 'msg-guard', '👍', 'user-a', mockDb);
+  await toggleReaction('tour-guard', 'msg-guard', '👍', 'user-c', mockDb);
+  await toggleReaction('tour-guard', 'msg-guard', '👍', 'user-c', mockDb);
+
+  const leafPath = 'chats/tour-guard/messages/msg-guard/reactions/👍';
+  const allWritePaths = mockDb.refCalls
+    .filter((refCall) => refCall.setCalls.length > 0 || refCall.removeCalls > 0 || refCall.updateCalls.length > 0)
+    .map((refCall) => refCall.path);
+
+  assert.ok(allWritePaths.every((path) => path.startsWith(`${leafPath}/`)));
+  assertNoReactionParentWrites(mockDb.refCalls, 'tour-guard', 'msg-guard', '👍');
 });
 
 test('subscribeToChatMessages normalizes reaction maps for the UI', async () => {
