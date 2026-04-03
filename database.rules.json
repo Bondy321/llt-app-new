@@ -251,7 +251,23 @@
     "identity_bindings_meta": {
       "$stablePassengerId": {
         ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
-        ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
+        ".write": "auth != null",
+        ".validate": "!newData.exists() || (newData.hasChildren(['bookingRef', 'normalizedPassengerEmail', 'identityVersion', 'lastSeenAt']) && newData.child('bookingRef').isString() && newData.child('bookingRef').val().length > 0 && newData.child('normalizedPassengerEmail').isString() && newData.child('normalizedPassengerEmail').val().matches(/^[^A-Z\\s@]+@[^A-Z\\s@]+\\.[^A-Z\\s@]+$/) && newData.child('identityVersion').val() === 'pax_v1' && newData.child('lastSeenAt').isNumber())",
+        "bookingRef": {
+          ".validate": "newData.isString() && newData.val().length > 0"
+        },
+        "normalizedPassengerEmail": {
+          ".validate": "newData.isString() && newData.val().matches(/^[^A-Z\\s@]+@[^A-Z\\s@]+\\.[^A-Z\\s@]+$/)"
+        },
+        "identityVersion": {
+          ".validate": "newData.val() === 'pax_v1'"
+        },
+        "lastSeenAt": {
+          ".validate": "newData.isNumber()"
+        },
+        "$other": {
+          ".validate": false
+        }
       }
     },
 
