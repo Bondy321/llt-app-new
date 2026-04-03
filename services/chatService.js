@@ -19,6 +19,15 @@ const offlineSyncService = loadOptionalService({
   isTestEnv,
 });
 
+const loggerServiceModule = loadOptionalService({
+  modulePath: './loggerService',
+  loadModule: () => require('./loggerService'),
+  serviceLabel: 'Logger service',
+  isTestEnv,
+});
+
+const logger = loggerServiceModule?.default || loggerServiceModule;
+
 // ==================== CONSTANTS & CONFIGURATION ====================
 
 const MAX_MESSAGE_LENGTH = 10000;
@@ -209,6 +218,62 @@ const isValidFirebaseKey = (key) => {
     return false;
   }
   return !/[./$#\[\]]/.test(key);
+};
+
+const maskUserId = (userId) => {
+  if (!userId || typeof userId !== 'string') return 'anonymous';
+  const trimmedUserId = userId.trim();
+  if (!trimmedUserId) return 'anonymous';
+  if (trimmedUserId.length <= 4) return `${trimmedUserId[0] || ''}***`;
+  return `${trimmedUserId.slice(0, 2)}***${trimmedUserId.slice(-2)}`;
+};
+
+const mapReactionFailureReason = (error, fallbackReason = 'REACTION_TOGGLE_FAILED') => {
+  const errorCode = typeof error?.code === 'string' ? error.code.toLowerCase() : '';
+  const errorMessage = typeof error?.message === 'string' ? error.message.toLowerCase() : '';
+
+  if (errorCode.includes('permission_denied') || errorMessage.includes('permission denied')) {
+    return 'REACTION_WRITE_DENIED';
+  }
+
+  if (
+    errorCode.includes('network')
+    || errorCode.includes('unavailable')
+    || errorMessage.includes('network')
+    || errorMessage.includes('timeout')
+    || errorMessage.includes('offline')
+    || errorMessage.includes('unavailable')
+    || errorMessage.includes('disconnected')
+  ) {
+    return 'REACTION_NETWORK_FAILURE';
+  }
+
+  if (
+    errorMessage.includes('invalid')
+    || errorMessage.includes('must be')
+    || errorMessage.includes('required')
+    || errorMessage.includes('database unavailable')
+  ) {
+    return 'REACTION_INPUT_INVALID';
+  }
+
+  return fallbackReason;
+};
+
+const logReactionEvent = (level, eventName, payload) => {
+  if (logger && typeof logger[level] === 'function') {
+    logger[level]('ChatService', eventName, payload);
+    return;
+  }
+
+  const message = `[ChatService] ${eventName}`;
+  if (level === 'error') {
+    console.error(message, payload);
+  } else if (level === 'warn') {
+    console.warn(message, payload);
+  } else {
+    console.log(message, payload);
+  }
 };
 
 // ==================== MESSAGE BUILDING ====================
@@ -632,6 +697,15 @@ const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
 // Toggle a reaction (add if not present, remove if present)
 // IMPORTANT: toggles never overwrite reactions/{emoji}; only leaf set/remove writes are allowed.
 const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb, options = {}) => {
+  const normalizedEmoji = typeof emoji === 'string' ? emoji.trim() : '';
+  const maskedUserId = maskUserId(userId);
+  logReactionEvent('info', 'reaction_toggle_attempt', {
+    tourId: typeof tourId === 'string' ? tourId.trim() : '',
+    messageId: typeof messageId === 'string' ? messageId.trim() : '',
+    emoji: normalizedEmoji,
+    maskedUserId,
+  });
+
   try {
     // Validate inputs
     const validatedTourId = validateTourId(tourId);
@@ -671,27 +745,77 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
     };
 
     if (options.forceAction === 'add') {
-      await addReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
+      const addResult = await addReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
+      if (!addResult?.success) {
+        throw new Error(addResult?.error || 'Failed to add reaction');
+      }
       const payload = await getNormalizedReactionPayload();
+      logReactionEvent('info', 'reaction_toggle_success', {
+        tourId: validatedTourId,
+        messageId: validatedMessageId,
+        emoji: sanitizedEmoji,
+        maskedUserId,
+        action: 'added',
+      });
       return { success: true, action: 'added', ...payload };
     }
 
     if (options.forceAction === 'remove') {
-      await removeReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
+      const removeResult = await removeReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
+      if (!removeResult?.success) {
+        throw new Error(removeResult?.error || 'Failed to remove reaction');
+      }
       const payload = await getNormalizedReactionPayload();
+      logReactionEvent('info', 'reaction_toggle_success', {
+        tourId: validatedTourId,
+        messageId: validatedMessageId,
+        emoji: sanitizedEmoji,
+        maskedUserId,
+        action: 'removed',
+      });
       return { success: true, action: 'removed', ...payload };
     }
 
     if (hasUserReaction) {
-      await removeReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
+      const removeResult = await removeReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
+      if (!removeResult?.success) {
+        throw new Error(removeResult?.error || 'Failed to remove reaction');
+      }
       const payload = await getNormalizedReactionPayload();
+      logReactionEvent('info', 'reaction_toggle_success', {
+        tourId: validatedTourId,
+        messageId: validatedMessageId,
+        emoji: sanitizedEmoji,
+        maskedUserId,
+        action: 'removed',
+      });
       return { success: true, action: 'removed', ...payload };
     }
 
-    await addReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
+    const addResult = await addReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
+    if (!addResult?.success) {
+      throw new Error(addResult?.error || 'Failed to add reaction');
+    }
     const payload = await getNormalizedReactionPayload();
+    logReactionEvent('info', 'reaction_toggle_success', {
+      tourId: validatedTourId,
+      messageId: validatedMessageId,
+      emoji: sanitizedEmoji,
+      maskedUserId,
+      action: 'added',
+    });
     return { success: true, action: 'added', ...payload };
   } catch (error) {
+    const reason = mapReactionFailureReason(error);
+    logReactionEvent('warn', 'reaction_toggle_failure', {
+      reason,
+      tourId: typeof tourId === 'string' ? tourId.trim() : '',
+      messageId: typeof messageId === 'string' ? messageId.trim() : '',
+      emoji: normalizedEmoji,
+      maskedUserId,
+      errorCode: typeof error?.code === 'string' ? error.code : 'UNKNOWN',
+      errorMessage: typeof error?.message === 'string' ? error.message : 'Unknown reaction toggle failure',
+    });
     console.error('Error toggling reaction:', error);
     return { success: false, error: error.message };
   }
