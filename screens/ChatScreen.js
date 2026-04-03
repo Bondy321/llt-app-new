@@ -59,14 +59,13 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // Quick Reaction Emojis
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🎉'];
-const DATE_SEPARATOR_HEIGHT = 40;
-const UNREAD_SEPARATOR_HEIGHT = 36;
 const ESTIMATED_MESSAGE_ROW_HEIGHT = 120;
 const SEARCH_RESULT_PREVIEW_LIMIT = 3;
 const CATCH_UP_BUBBLE_DISTANCE_THRESHOLD = 220;
 const SWIPE_REPLY_ACTIVATION_THRESHOLD = 56;
 const SWIPE_REPLY_MAX_DRAG = 92;
 const SWIPE_REPLY_HINT_KEY_PREFIX = 'swipe_reply_hint_seen';
+const SCROLL_BOTTOM_THRESHOLD = 16;
 
 const SEARCH_FILTERS = [
   { key: 'all', label: 'All', icon: 'message-text-outline' },
@@ -496,7 +495,7 @@ const MessageActionMenu = ({
 };
 
 // ==================== IMAGE MESSAGE COMPONENT ====================
-const ImageMessage = ({ imageUrl, onPress }) => {
+const ImageMessage = React.memo(({ imageUrl, onPress }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
@@ -514,7 +513,7 @@ const ImageMessage = ({ imageUrl, onPress }) => {
         </View>
       ) : (
         <Image
-          source={{ uri: imageUrl }}
+          source={{ uri: imageUrl, cache: 'force-cache' }}
           style={styles.messageImage}
           onLoadStart={() => setLoading(true)}
           onLoadEnd={() => setLoading(false)}
@@ -522,12 +521,14 @@ const ImageMessage = ({ imageUrl, onPress }) => {
             setLoading(false);
             setError(true);
           }}
+          progressiveRenderingEnabled
+          fadeDuration={120}
           resizeMode="cover"
         />
       )}
     </TouchableOpacity>
   );
-};
+});
 
 // ==================== LINK PREVIEW COMPONENT ====================
 const LinkPreview = ({ url }) => {
@@ -805,8 +806,8 @@ export default function ChatScreen({
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [lastSeenTimestamp, setLastSeenTimestamp] = useState(null);
-  const [currentScrollY, setCurrentScrollY] = useState(0);
   const [unreadAnchorY, setUnreadAnchorY] = useState(null);
+  const [showJumpToUnread, setShowJumpToUnread] = useState(false);
   const [replyingToMessage, setReplyingToMessage] = useState(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -908,6 +909,17 @@ export default function ChatScreen({
   const reactionFailureTimeoutRef = useRef(null);
   const inFlightReactionKeysRef = useRef(new Set());
   const pendingJumpIndexRef = useRef(null);
+  const isAtBottomRef = useRef(true);
+  const currentScrollYRef = useRef(0);
+
+  const updateUnreadJumpVisibility = useCallback((scrollY, anchorY) => {
+    if (anchorY == null) {
+      setShowJumpToUnread(false);
+      return;
+    }
+    const shouldShow = Math.abs(scrollY - anchorY) > CATCH_UP_BUBBLE_DISTANCE_THRESHOLD;
+    setShowJumpToUnread((prev) => (prev === shouldShow ? prev : shouldShow));
+  }, []);
 
   useEffect(() => {
     console.info('[ChatScreen] identity binding source selected', {
@@ -979,14 +991,16 @@ export default function ChatScreen({
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
     listViewportHeightRef.current = layoutMeasurement.height;
     listContentHeightRef.current = contentSize.height;
-    setCurrentScrollY(contentOffset.y);
-    const isBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - 16;
-    setIsAtBottom(isBottom);
+    currentScrollYRef.current = contentOffset.y;
+    const isBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - SCROLL_BOTTOM_THRESHOLD;
+    isAtBottomRef.current = isBottom;
+    setIsAtBottom((prev) => (prev === isBottom ? prev : isBottom));
+    updateUnreadJumpVisibility(contentOffset.y, unreadAnchorY);
     if (isBottom) {
       setNewMessagesCount(0);
       markActiveChatRead({ force: true });
     }
-  }, [markActiveChatRead]);
+  }, [markActiveChatRead, unreadAnchorY, updateUnreadJumpVisibility]);
 
   const handleScrollBeginDrag = useCallback(() => {
     if (isKeyboardVisible) {
@@ -1955,10 +1969,13 @@ export default function ChatScreen({
 
   const replyTargetIndex = useMemo(() => buildReplyTargetIndex(groupedMessages), [groupedMessages]);
 
-  const showJumpToUnread = useMemo(() => {
-    if (!unreadAnchorMessageId || unreadAnchorY == null) return false;
-    return Math.abs(currentScrollY - unreadAnchorY) > CATCH_UP_BUBBLE_DISTANCE_THRESHOLD;
-  }, [unreadAnchorMessageId, unreadAnchorY, currentScrollY]);
+  useEffect(() => {
+    if (!unreadAnchorMessageId || unreadAnchorY == null) {
+      setShowJumpToUnread(false);
+      return;
+    }
+    updateUnreadJumpVisibility(currentScrollYRef.current, unreadAnchorY);
+  }, [unreadAnchorMessageId, unreadAnchorY, updateUnreadJumpVisibility]);
 
   const jumpToUnread = useCallback(() => {
     if (unreadAnchorIndex >= 0) {
@@ -2311,33 +2328,6 @@ export default function ChatScreen({
     return item.id;
   }, []);
 
-  const getItemLayout = useCallback((data, index) => {
-    if (!data || index < 0 || index >= data.length) {
-      return { length: ESTIMATED_MESSAGE_ROW_HEIGHT, offset: 0, index };
-    }
-
-    let offset = 0;
-    for (let i = 0; i < index; i += 1) {
-      const row = data[i];
-      if (row.type === 'date') {
-        offset += DATE_SEPARATOR_HEIGHT;
-      } else if (row.type === 'unread-separator') {
-        offset += UNREAD_SEPARATOR_HEIGHT;
-      } else {
-        offset += rowOffsetsRef.current[row.data?.id] || ESTIMATED_MESSAGE_ROW_HEIGHT;
-      }
-    }
-
-    const row = data[index];
-    const length = row.type === 'date'
-      ? DATE_SEPARATOR_HEIGHT
-      : row.type === 'unread-separator'
-        ? UNREAD_SEPARATOR_HEIGHT
-        : rowOffsetsRef.current[row.data?.id] || ESTIMATED_MESSAGE_ROW_HEIGHT;
-
-    return { length, offset, index };
-  }, []);
-
   const renderMessageRow = useCallback(({ item }) => {
     if (item.type === 'date') return <DateSeparator date={item.date} />;
     if (item.type === 'unread-separator') return <UnreadSeparator />;
@@ -2602,22 +2592,22 @@ export default function ChatScreen({
               keyExtractor={keyExtractor}
               renderItem={renderMessageRow}
               ListEmptyComponent={renderEmptyMessages}
-              getItemLayout={getItemLayout}
-              removeClippedSubviews
+              removeClippedSubviews={false}
               initialNumToRender={20}
-              maxToRenderPerBatch={20}
-              windowSize={10}
+              maxToRenderPerBatch={12}
+              updateCellsBatchingPeriod={16}
+              windowSize={7}
               onLayout={(event) => {
                 listViewportHeightRef.current = event.nativeEvent.layout.height;
               }}
               onContentSizeChange={(_, contentHeight) => {
                 listContentHeightRef.current = contentHeight;
-                if (isAtBottom) scrollToBottom(false);
+                if (isAtBottomRef.current) scrollToBottom(false);
               }}
               ListFooterComponent={<View style={{ height: listBottomSpacerHeight }} />}
               onScroll={handleScroll}
               onScrollBeginDrag={handleScrollBeginDrag}
-              scrollEventThrottle={100}
+              scrollEventThrottle={16}
               keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
