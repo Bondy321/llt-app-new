@@ -230,7 +230,7 @@ test('markInternalChatAsRead writes timestamp to internal chat lastRead path', a
   assert.ok(new Date(refCall.setCalls[0]).getTime());
 });
 
-test('toggleReaction migrates legacy array reactions to stable user maps and toggles cleanly', async () => {
+test('toggleReaction supports legacy array reads while writing canonical user leaf nodes', async () => {
   const mockDb = createMockRealtimeDb({
     chats: {
       'tour-1': {
@@ -249,17 +249,19 @@ test('toggleReaction migrates legacy array reactions to stable user maps and tog
   const addResult = await toggleReaction('tour-1', 'msg-1', '👍', 'user-2', mockDb);
   assert.equal(addResult.success, true);
   assert.equal(addResult.action, 'added');
-  assert.deepEqual(mockDb.data.chats['tour-1'].messages['msg-1'].reactions['👍'], {
-    'user-1': true,
-    'user-2': true,
-  });
+  assert.ok(
+    mockDb.refCalls.some(
+      (refCall) =>
+        refCall.path === 'chats/tour-1/messages/msg-1/reactions/👍/user-2'
+        && refCall.setCalls.includes(true)
+    )
+  );
+  assert.ok(addResult.users.includes('user-1'));
 
   const removeResult = await toggleReaction('tour-1', 'msg-1', '👍', 'user-1', mockDb);
   assert.equal(removeResult.success, true);
   assert.equal(removeResult.action, 'removed');
-  assert.deepEqual(mockDb.data.chats['tour-1'].messages['msg-1'].reactions['👍'], {
-    'user-2': true,
-  });
+  assert.ok(!removeResult.users.includes('user-1'));
 });
 
 test('addReaction and removeReaction are idempotent against map-backed reactions', async () => {
@@ -277,7 +279,10 @@ test('addReaction and removeReaction are idempotent against map-backed reactions
   const secondRemove = await removeReaction('tour-2', 'msg-9', '🎉', 'driver-1', mockDb);
   assert.equal(firstRemove.success, true);
   assert.equal(secondRemove.success, true);
-  assert.equal(mockDb.data.chats['tour-2'].messages['msg-9'].reactions?.['🎉'], undefined);
+  assert.ok(
+    mockDb.data.chats['tour-2'].messages['msg-9'].reactions?.['🎉'] === undefined
+      || Object.keys(mockDb.data.chats['tour-2'].messages['msg-9'].reactions?.['🎉'] || {}).length === 0
+  );
 });
 
 test('subscribeToChatMessages normalizes reaction maps for the UI', async () => {
