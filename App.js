@@ -202,7 +202,7 @@ function AppContent() {
       const stablePassengerId = userProfile?.stablePassengerId;
 
       if (!stablePassengerId) {
-        logger.info('Identity', 'IdentityBinding missing for auth user', { authUid: maskIdentifier(authUid) });
+        logger.info('Identity', 'identity_binding_missing', { authUid: maskIdentifier(authUid) });
         return;
       }
 
@@ -218,6 +218,10 @@ function AppContent() {
       await SessionStorage.multiSet([
         [SESSION_KEYS.IDENTITY_BINDING, JSON.stringify(hydratedBinding)],
       ]);
+      logger.info('Identity', 'identity_binding_hydrated', {
+        authUid: maskIdentifier(authUid),
+        stablePassengerId: maskIdentifier(stablePassengerId),
+      });
     } catch (error) {
       logger.warn('Identity', 'Failed to hydrate identity binding for auth user', {
         error: error.message,
@@ -503,7 +507,7 @@ function AppContent() {
         }
 
         await realtimeDb.ref().update(updates);
-        logger.info('Identity', 'IdentityBinding persisted', {
+        logger.info('Identity', 'identity_binding_persist_success', {
           authUid: maskIdentifier(user.uid),
           bookingRef: maskIdentifier(normalizedBookingData.id),
           stablePassengerId: stablePassengerId ? maskIdentifier(stablePassengerId) : null,
@@ -512,7 +516,7 @@ function AppContent() {
         const isIdentityBindingWriteRejected = error?.code === 'PERMISSION_DENIED'
           || /permission_denied/i.test(error?.message || '')
           || /Permission denied/i.test(error?.message || '');
-        logger.error('Identity', 'IdentityBinding persist failed', {
+        logger.error('Identity', 'identity_binding_persist_failure', {
           error: error.message,
           code: error?.code || null,
           reason: isIdentityBindingWriteRejected ? 'IDENTITY_BINDING_WRITE_DENIED_OR_INVALID' : 'IDENTITY_BINDING_WRITE_FAILED',
