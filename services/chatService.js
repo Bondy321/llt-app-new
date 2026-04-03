@@ -73,6 +73,12 @@ const normalizeReactions = (reactions) => {
   }, {});
 };
 
+const getReactionLeafRef = (db, tourId, messageId, emoji, userId) =>
+  db.ref(`chats/${tourId}/messages/${messageId}/reactions/${emoji}/${userId}`);
+
+const getReactionEmojiRef = (db, tourId, messageId, emoji) =>
+  db.ref(`chats/${tourId}/messages/${messageId}/reactions/${emoji}`);
+
 const normalizeMessageTimestamp = (message = {}) => {
   const timestampMs = parseTimestampToMillis(message.timestamp);
   return {
@@ -528,6 +534,10 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
 };
 
 // ==================== MESSAGE REACTIONS ====================
+// Canonical write contract source of truth:
+// docs/reactions-write-contract.md
+// Writes must only target chats/{tourId}/messages/{messageId}/reactions/{emoji}/{userId} leaf nodes.
+// Legacy formats are read-only compatible through normalizeReactionUsers/normalizeReactions.
 
 // Add a reaction to a message
 const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb) => {
@@ -542,7 +552,7 @@ const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
 };
 
 // Toggle a reaction (add if not present, remove if present)
-// Uses a transaction and stores user IDs as a map for Firebase stability.
+// IMPORTANT: toggles never overwrite reactions/{emoji}; only leaf set/remove writes are allowed.
 const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb, options = {}) => {
   try {
     // Validate inputs
@@ -564,49 +574,65 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       return { success: false, error: 'Database unavailable' };
     }
 
-    const reactionRef = db.ref(`chats/${validatedTourId}/messages/${validatedMessageId}/reactions/${sanitizedEmoji}`);
+    const emojiRef = getReactionEmojiRef(db, validatedTourId, validatedMessageId, sanitizedEmoji);
+    const reactionLeafRef = getReactionLeafRef(
+      db,
+      validatedTourId,
+      validatedMessageId,
+      sanitizedEmoji,
+      validatedUserId
+    );
 
-    // Use transaction to avoid race conditions and normalize legacy array payloads.
-    const transactionResult = await reactionRef.transaction((currentUsers) => {
-      const normalizedUsers = normalizeReactionUsers(currentUsers);
-      const userMap = normalizedUsers.reduce((accumulator, reactionUserId) => {
-        accumulator[reactionUserId] = true;
-        return accumulator;
-      }, {});
-      const hasUserReaction = !!userMap[validatedUserId];
+    // Read supports legacy array/object formats, but writes always use canonical user leaf.
+    const emojiSnapshot = await emojiRef.once('value');
+    const rawEmojiValue = emojiSnapshot.val();
+    const normalizedUsers = normalizeReactionUsers(rawEmojiValue);
+    const hasUserReaction = normalizedUsers.includes(validatedUserId);
 
-      if (options.forceAction === 'add') {
-        if (hasUserReaction) {
-          return userMap;
-        }
-        return { ...userMap, [validatedUserId]: true };
+    if (options.forceAction === 'add') {
+      if (!hasUserReaction) {
+        await reactionLeafRef.set(true);
       }
-
-      if (options.forceAction === 'remove') {
-        if (!hasUserReaction) {
-          return Object.keys(userMap).length > 0 ? userMap : null;
-        }
-        delete userMap[validatedUserId];
-        return Object.keys(userMap).length > 0 ? userMap : null;
-      }
-
-      if (hasUserReaction) {
-        delete userMap[validatedUserId];
-        return Object.keys(userMap).length > 0 ? userMap : null;
-      }
-
-      return { ...userMap, [validatedUserId]: true };
-    });
-
-    if (!transactionResult || !transactionResult.committed) {
-      return { success: false, error: 'Transaction not committed' };
+      return { success: true, action: 'added', users: hasUserReaction ? normalizedUsers : [...normalizedUsers, validatedUserId] };
     }
 
-    const newValue = transactionResult.snapshot.val();
-    const normalizedUsers = normalizeReactionUsers(newValue);
-    const action = normalizedUsers.includes(validatedUserId) ? 'added' : 'removed';
+    if (options.forceAction === 'remove') {
+      if (hasUserReaction) {
+        if (Array.isArray(rawEmojiValue)) {
+          const matchingIndexes = rawEmojiValue
+            .map((value, index) => (value === validatedUserId ? index : -1))
+            .filter((index) => index >= 0);
+          await Promise.all(
+            matchingIndexes.map((index) =>
+              db.ref(`chats/${validatedTourId}/messages/${validatedMessageId}/reactions/${sanitizedEmoji}/${index}`).remove()
+            )
+          );
+        }
+        await reactionLeafRef.remove();
+      }
+      const nextSnapshot = await emojiRef.once('value');
+      return { success: true, action: 'removed', users: normalizeReactionUsers(nextSnapshot.val()) };
+    }
 
-    return { success: true, action, users: normalizedUsers };
+    if (hasUserReaction) {
+      if (Array.isArray(rawEmojiValue)) {
+        const matchingIndexes = rawEmojiValue
+          .map((value, index) => (value === validatedUserId ? index : -1))
+          .filter((index) => index >= 0);
+        await Promise.all(
+          matchingIndexes.map((index) =>
+            db.ref(`chats/${validatedTourId}/messages/${validatedMessageId}/reactions/${sanitizedEmoji}/${index}`).remove()
+          )
+        );
+      }
+      await reactionLeafRef.remove();
+      const nextSnapshot = await emojiRef.once('value');
+      return { success: true, action: 'removed', users: normalizeReactionUsers(nextSnapshot.val()) };
+    }
+
+    await reactionLeafRef.set(true);
+    const nextSnapshot = await emojiRef.once('value');
+    return { success: true, action: 'added', users: normalizeReactionUsers(nextSnapshot.val()) };
   } catch (error) {
     console.error('Error toggling reaction:', error);
     return { success: false, error: error.message };

@@ -122,6 +122,7 @@
             },
             "reactions": {
               "$emoji": {
+                ".write": false,
                 "$userId": {
                   ".write": "auth != null && auth.uid === $userId",
                   ".validate": "!newData.exists() || newData.val() === true"
