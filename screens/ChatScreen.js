@@ -48,6 +48,7 @@ import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
 import * as photoService from '../services/photoService';
 import { auth } from '../firebase';
+import logger from '../services/loggerService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import SyncStatusBanner from '../components/SyncStatusBanner';
 const { buildChatSearchResults, normalizeSearchQuery } = require('../utils/chatSearch');
@@ -805,6 +806,21 @@ export default function ChatScreen({
     const normalizedStableId = stableId.trim();
     return normalizedStableId.length > 0 ? normalizedStableId : null;
   }, [identityBinding, isDriver]);
+  const logSenderIdentityPath = useCallback(() => {
+    if (passengerStableId) {
+      logger.info('ChatScreen', 'chat_sender_stable_id_used', {
+        tourId,
+        source: identityBindingSource,
+      });
+      return;
+    }
+
+    logger.info('ChatScreen', 'chat_sender_uid_fallback_used', {
+      tourId,
+      source: identityBindingSource,
+      currentUserUidPresent: Boolean(currentUser?.uid),
+    });
+  }, [passengerStableId, tourId, identityBindingSource, currentUser?.uid]);
   const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
   const draftStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_DRAFTS' }), []);
   const readStateStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_READ_STATE' }), []);
@@ -1295,6 +1311,7 @@ export default function ChatScreen({
       isDriver,
       ...(passengerStableId ? { stablePassengerId: passengerStableId } : {}),
     };
+    logSenderIdentityPath();
 
     const optimisticTimestamp = new Date().toISOString();
     const optimisticId = `local-${Date.now()}`;
@@ -1372,8 +1389,10 @@ export default function ChatScreen({
     currentUser?.uid,
     userName,
     isDriver,
+    passengerStableId,
     internalDriverChat,
     replyingToMessage,
+    logSenderIdentityPath,
     refreshQueueStats,
     scrollToBottom,
   ]);
@@ -1403,6 +1422,7 @@ export default function ChatScreen({
       isDriver,
       ...(passengerStableId ? { stablePassengerId: passengerStableId } : {}),
     };
+    logSenderIdentityPath();
 
     try {
       const sendFn = internalDriverChat ? sendInternalDriverMessage : sendMessage;
@@ -1460,7 +1480,9 @@ export default function ChatScreen({
     currentUser?.uid,
     internalDriverChat,
     isDriver,
+    passengerStableId,
     retryingMessageIds,
+    logSenderIdentityPath,
     refreshQueueStats,
     tourId,
     userName,
@@ -1567,6 +1589,7 @@ export default function ChatScreen({
             isDriver,
             ...(passengerStableId ? { stablePassengerId: passengerStableId } : {}),
           };
+          logSenderIdentityPath();
 
           await sendImageMessage(tourId, uploadResult.url, '', senderInfo);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -1580,7 +1603,7 @@ export default function ChatScreen({
 
       setUploadingImage(false);
     },
-    [tourId, userName, currentUser?.uid, isDriver, passengerStableId]
+    [tourId, userName, currentUser?.uid, isDriver, passengerStableId, logSenderIdentityPath]
   );
 
   // Handle reaction
