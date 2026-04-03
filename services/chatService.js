@@ -574,7 +574,6 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       return { success: false, error: 'Database unavailable' };
     }
 
-    const emojiRef = getReactionEmojiRef(db, validatedTourId, validatedMessageId, sanitizedEmoji);
     const reactionLeafRef = getReactionLeafRef(
       db,
       validatedTourId,
@@ -582,57 +581,41 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       sanitizedEmoji,
       validatedUserId
     );
-
-    // Read supports legacy array/object formats, but writes always use canonical user leaf.
-    const emojiSnapshot = await emojiRef.once('value');
-    const rawEmojiValue = emojiSnapshot.val();
-    const normalizedUsers = normalizeReactionUsers(rawEmojiValue);
-    const hasUserReaction = normalizedUsers.includes(validatedUserId);
+    const emojiRef = getReactionEmojiRef(db, validatedTourId, validatedMessageId, sanitizedEmoji);
+    const reactionLeafSnapshot = await reactionLeafRef.once('value');
+    const hasUserReaction = reactionLeafSnapshot.exists();
+    const getNormalizedReactionPayload = async () => {
+      const nextSnapshot = await emojiRef.once('value');
+      const users = normalizeReactionUsers(nextSnapshot.val());
+      const reactions = users.length > 0 ? { [sanitizedEmoji]: users } : {};
+      return { users, reactions };
+    };
 
     if (options.forceAction === 'add') {
       if (!hasUserReaction) {
         await reactionLeafRef.set(true);
       }
-      return { success: true, action: 'added', users: hasUserReaction ? normalizedUsers : [...normalizedUsers, validatedUserId] };
+      const payload = await getNormalizedReactionPayload();
+      return { success: true, action: 'added', ...payload };
     }
 
     if (options.forceAction === 'remove') {
       if (hasUserReaction) {
-        if (Array.isArray(rawEmojiValue)) {
-          const matchingIndexes = rawEmojiValue
-            .map((value, index) => (value === validatedUserId ? index : -1))
-            .filter((index) => index >= 0);
-          await Promise.all(
-            matchingIndexes.map((index) =>
-              db.ref(`chats/${validatedTourId}/messages/${validatedMessageId}/reactions/${sanitizedEmoji}/${index}`).remove()
-            )
-          );
-        }
         await reactionLeafRef.remove();
       }
-      const nextSnapshot = await emojiRef.once('value');
-      return { success: true, action: 'removed', users: normalizeReactionUsers(nextSnapshot.val()) };
+      const payload = await getNormalizedReactionPayload();
+      return { success: true, action: 'removed', ...payload };
     }
 
     if (hasUserReaction) {
-      if (Array.isArray(rawEmojiValue)) {
-        const matchingIndexes = rawEmojiValue
-          .map((value, index) => (value === validatedUserId ? index : -1))
-          .filter((index) => index >= 0);
-        await Promise.all(
-          matchingIndexes.map((index) =>
-            db.ref(`chats/${validatedTourId}/messages/${validatedMessageId}/reactions/${sanitizedEmoji}/${index}`).remove()
-          )
-        );
-      }
       await reactionLeafRef.remove();
-      const nextSnapshot = await emojiRef.once('value');
-      return { success: true, action: 'removed', users: normalizeReactionUsers(nextSnapshot.val()) };
+      const payload = await getNormalizedReactionPayload();
+      return { success: true, action: 'removed', ...payload };
     }
 
     await reactionLeafRef.set(true);
-    const nextSnapshot = await emojiRef.once('value');
-    return { success: true, action: 'added', users: normalizeReactionUsers(nextSnapshot.val()) };
+    const payload = await getNormalizedReactionPayload();
+    return { success: true, action: 'added', ...payload };
   } catch (error) {
     console.error('Error toggling reaction:', error);
     return { success: false, error: error.message };

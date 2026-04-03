@@ -230,7 +230,7 @@ test('markInternalChatAsRead writes timestamp to internal chat lastRead path', a
   assert.ok(new Date(refCall.setCalls[0]).getTime());
 });
 
-test('toggleReaction supports legacy array reads while writing canonical user leaf nodes', async () => {
+test('toggleReaction toggles exclusively from canonical user leaf and never writes message parent', async () => {
   const mockDb = createMockRealtimeDb({
     chats: {
       'tour-1': {
@@ -257,11 +257,23 @@ test('toggleReaction supports legacy array reads while writing canonical user le
     )
   );
   assert.ok(addResult.users.includes('user-1'));
+  assert.deepEqual(addResult.reactions, { '👍': ['user-1'] });
 
   const removeResult = await toggleReaction('tour-1', 'msg-1', '👍', 'user-1', mockDb);
   assert.equal(removeResult.success, true);
-  assert.equal(removeResult.action, 'removed');
-  assert.ok(!removeResult.users.includes('user-1'));
+  assert.equal(removeResult.action, 'added');
+  assert.ok(
+    mockDb.refCalls.some(
+      (refCall) =>
+        refCall.path === 'chats/tour-1/messages/msg-1/reactions/👍/user-1'
+        && refCall.setCalls.includes(true)
+    )
+  );
+  assert.ok(
+    mockDb.refCalls.every(
+      (refCall) => refCall.path !== 'chats/tour-1/messages/msg-1'
+    )
+  );
 });
 
 test('addReaction and removeReaction are idempotent against map-backed reactions', async () => {
