@@ -74,16 +74,28 @@ npm run serve
 npm test
 npm run test:mobile
 npm run test:web-admin
+npm run test:all:with-emulators
 ```
 
 Sectioned suites:
 
 ```bash
 npm run test:mobile:auth
-npm run test:mobile:sync
-npm run test:mobile:ui
-npm run test:mobile:services
-npm run test:mobile:photo
+npm run test:mobile:sync:contract
+npm run test:mobile:sync:engine
+npm run test:mobile:services:booking
+npm run test:mobile:services:chat
+npm run test:mobile:services:photo
+npm run test:mobile:services:notifications
+npm run test:mobile:ui:date-time
+npm run test:mobile:ux
+npm run test:mobile:infra
+```
+
+Emulator-only suite (run only when needed):
+
+```bash
+npm run test:emulators
 ```
 
 ## Build + release
