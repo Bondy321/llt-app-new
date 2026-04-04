@@ -583,11 +583,15 @@ const MessageStatus = ({ status, isSelf }) => {
 };
 
 // ==================== NEW MESSAGES BANNER ====================
-const NewMessagesBanner = ({ count, onPress }) => {
+const NewMessagesBanner = ({ count, onPress, bottomOffset }) => {
   if (count === 0) return null;
 
   return (
-    <TouchableOpacity style={styles.newMessagesBanner} onPress={onPress} activeOpacity={0.9}>
+    <TouchableOpacity
+      style={[styles.newMessagesBanner, typeof bottomOffset === 'number' ? { bottom: bottomOffset } : null]}
+      onPress={onPress}
+      activeOpacity={0.9}
+    >
       <MaterialCommunityIcons name="arrow-down" size={16} color={COLORS.white} />
       <Text style={styles.newMessagesBannerText}>
         {count} new message{count > 1 ? 's' : ''}
@@ -596,11 +600,11 @@ const NewMessagesBanner = ({ count, onPress }) => {
   );
 };
 
-const UnreadCatchUpCard = ({ summary, onJumpToUnread, onJumpToLatest }) => {
+const UnreadCatchUpCard = ({ summary, onJumpToUnread, onJumpToLatest, bottomOffset }) => {
   if (!summary || !summary.count) return null;
 
   return (
-    <View style={styles.catchUpCard}>
+    <View style={[styles.catchUpCard, typeof bottomOffset === 'number' ? { bottom: bottomOffset } : null]}>
       <View style={styles.catchUpCardHeader}>
         <MaterialCommunityIcons name="chat-alert-outline" size={18} color={COLORS.primaryBlue} />
         <Text style={styles.catchUpCardTitle}>
@@ -819,6 +823,7 @@ export default function ChatScreen({
   const [draftRestored, setDraftRestored] = useState(false);
   const [composerHeight, setComposerHeight] = useState(0);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   // Feature state
   const [typingUsers, setTypingUsers] = useState([]);
@@ -914,11 +919,15 @@ export default function ChatScreen({
   }, [tourId, internalDriverChat, currentUser?.uid]);
 
   const listBottomSpacerHeight = useMemo(() => {
-    const safeComposerHeight = composerHeight > 0 ? composerHeight : 72;
-    const attachmentMenuHeight = showAttachmentMenu ? 108 : 0;
+    const attachmentMenuLift = showAttachmentMenu ? SPACING.sm : 0;
+    return SPACING.sm + attachmentMenuLift;
+  }, [showAttachmentMenu]);
 
-    return safeComposerHeight + attachmentMenuHeight + SPACING.md;
-  }, [composerHeight, showAttachmentMenu]);
+  const floatingUiBottomInset = useMemo(() => {
+    const safeComposerHeight = composerHeight > 0 ? composerHeight : (72 + composerBottomInset);
+    const keyboardLift = Platform.OS === 'android' && isKeyboardVisible ? Math.max(keyboardHeight - composerBottomInset, 0) : 0;
+    return safeComposerHeight + keyboardLift + SPACING.sm;
+  }, [composerHeight, composerBottomInset, isKeyboardVisible, keyboardHeight]);
 
   // Refs
   const messageListRef = useRef(null);
@@ -1344,20 +1353,30 @@ export default function ChatScreen({
 
   // Keyboard listeners
   useEffect(() => {
-    const showSub = Keyboard.addListener('keyboardDidShow', () => {
+    const keyboardShowEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const keyboardHideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(keyboardShowEvent, (event) => {
       setIsKeyboardVisible(true);
-      if (isAtBottom) scrollToBottom(true);
+      const nextKeyboardHeight = event?.endCoordinates?.height || 0;
+      setKeyboardHeight(nextKeyboardHeight);
+      if (isAtBottomRef.current) {
+        requestAnimationFrame(() => scrollToBottom(true));
+      }
     });
-    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+    const hideSub = Keyboard.addListener(keyboardHideEvent, () => {
       setIsKeyboardVisible(false);
-      if (isAtBottom) scrollToBottom(true);
+      setKeyboardHeight(0);
+      if (isAtBottomRef.current) {
+        requestAnimationFrame(() => scrollToBottom(true));
+      }
     });
 
     return () => {
       showSub.remove();
       hideSub.remove();
     };
-  }, [isAtBottom, scrollToBottom]);
+  }, [scrollToBottom]);
 
   // Handle typing indicator
   const handleTextChange = useCallback(
@@ -2706,6 +2725,7 @@ export default function ChatScreen({
             {/* New Messages Banner */}
             <NewMessagesBanner
               count={newMessagesCount}
+              bottomOffset={floatingUiBottomInset}
               onPress={() => {
                 scrollToBottom(true);
                 setNewMessagesCount(0);
@@ -2716,13 +2736,18 @@ export default function ChatScreen({
               <>
                 <UnreadCatchUpCard
                   summary={unreadSummary}
+                  bottomOffset={floatingUiBottomInset + 96}
                   onJumpToUnread={jumpToUnread}
                   onJumpToLatest={() => {
                     scrollToBottom(true);
                     markActiveChatRead({ force: true });
                   }}
                 />
-                <TouchableOpacity style={styles.jumpToUnreadFab} onPress={jumpToUnread} activeOpacity={0.85}>
+                <TouchableOpacity
+                  style={[styles.jumpToUnreadFab, { bottom: floatingUiBottomInset + 52 }]}
+                  onPress={jumpToUnread}
+                  activeOpacity={0.85}
+                >
                   <MaterialCommunityIcons name="message-badge" size={20} color={COLORS.white} />
                   <Text style={styles.jumpToUnreadFabText}>Jump to unread</Text>
                 </TouchableOpacity>
