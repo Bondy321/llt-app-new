@@ -323,11 +323,15 @@ const sanitizeReplyContext = (replyTo) => {
   const replyPreview = typeof replyTo.previewText === 'string'
     ? sanitizeInput(replyTo.previewText.trim()).slice(0, 160)
     : '';
+  const replyIdempotencyKey = typeof replyTo.idempotencyKey === 'string'
+    ? replyTo.idempotencyKey.trim()
+    : '';
 
   return {
     messageId: replyMessageId,
     senderName: replySenderName,
     previewText: replyPreview,
+    ...(replyIdempotencyKey ? { idempotencyKey: replyIdempotencyKey } : {}),
   };
 };
 

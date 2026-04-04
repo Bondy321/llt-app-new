@@ -213,6 +213,7 @@ test('sendMessage persists sanitized reply context metadata', async () => {
   const result = await sendMessage('tour-reply', 'Following up', senderInfo, mockDb, {
     replyTo: {
       messageId: 'msg-42',
+      idempotencyKey: 'offline-msg-42',
       senderName: 'Driver Bondy',
       previewText: '  Please be at the pickup point by 08:15 AM.  ',
     },
@@ -220,6 +221,7 @@ test('sendMessage persists sanitized reply context metadata', async () => {
 
   assert.equal(result.success, true);
   assert.equal(result.message.replyTo.messageId, 'msg-42');
+  assert.equal(result.message.replyTo.idempotencyKey, 'offline-msg-42');
   assert.equal(result.message.replyTo.senderName, 'Driver Bondy');
   assert.equal(result.message.replyTo.previewText, 'Please be at the pickup point by 08:15 AM.');
 
@@ -227,6 +229,7 @@ test('sendMessage persists sanitized reply context metadata', async () => {
   assert.ok(refCall);
   assert.deepEqual(refCall.setCalls[0].replyTo, {
     messageId: 'msg-42',
+    idempotencyKey: 'offline-msg-42',
     senderName: 'Driver Bondy',
     previewText: 'Please be at the pickup point by 08:15 AM.',
   });

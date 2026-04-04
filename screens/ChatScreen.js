@@ -53,7 +53,11 @@ import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import SyncStatusBanner from '../components/SyncStatusBanner';
 const { buildChatSearchResults, normalizeSearchQuery } = require('../utils/chatSearch');
 const { buildUnreadSummary } = require('../utils/chatUnreadSummary');
-const { buildReplyTargetIndex, resolveReplyTargetIndex } = require('../utils/chatReplyNavigation');
+const {
+  buildReplyTargetIndex,
+  collectMessageIdCandidates,
+  resolveReplyTargetIndex,
+} = require('../utils/chatReplyNavigation');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -64,6 +68,7 @@ const SEARCH_RESULT_PREVIEW_LIMIT = 3;
 const CATCH_UP_BUBBLE_DISTANCE_THRESHOLD = 220;
 const SWIPE_REPLY_ACTIVATION_THRESHOLD = 56;
 const SWIPE_REPLY_MAX_DRAG = 92;
+const SWIPE_REPLY_READY_THRESHOLD = SWIPE_REPLY_ACTIVATION_THRESHOLD - 6;
 const SWIPE_REPLY_HINT_KEY_PREFIX = 'swipe_reply_hint_seen';
 const SCROLL_BOTTOM_THRESHOLD = 16;
 
@@ -635,14 +640,16 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
   const feedbackScale = useRef(new Animated.Value(0.9)).current;
   const feedbackOpacity = useRef(new Animated.Value(0)).current;
   const triggerLatchRef = useRef(false);
+  const readyToReplyRef = useRef(false);
+  const [isReadyToReply, setIsReadyToReply] = useState(false);
 
   const resetToOrigin = useCallback(() => {
     Animated.parallel([
       Animated.spring(translateX, {
         toValue: 0,
         useNativeDriver: true,
-        speed: 28,
-        bounciness: 5,
+        speed: 26,
+        bounciness: 4,
       }),
       Animated.timing(feedbackOpacity, {
         toValue: 0,
@@ -656,6 +663,8 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
       }),
     ]).start(() => {
       triggerLatchRef.current = false;
+      readyToReplyRef.current = false;
+      setIsReadyToReply(false);
     });
   }, [translateX, feedbackOpacity, feedbackScale]);
 
@@ -663,15 +672,23 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
     onMoveShouldSetPanResponder: (_event, gestureState) => {
       if (disabled) return false;
       const { dx, dy } = gestureState;
-      return dx > 8 && Math.abs(dx) > Math.abs(dy) * 1.4;
+      return dx > 10 && Math.abs(dx) > Math.abs(dy) * 1.55;
     },
     onPanResponderMove: (_event, gestureState) => {
       const dragX = Math.max(0, Math.min(gestureState.dx, SWIPE_REPLY_MAX_DRAG));
       const progress = Math.min(dragX / SWIPE_REPLY_ACTIVATION_THRESHOLD, 1);
+      const isReady = dragX >= SWIPE_REPLY_READY_THRESHOLD;
 
       translateX.setValue(dragX);
       feedbackOpacity.setValue(0.2 + progress * 0.8);
       feedbackScale.setValue(0.9 + progress * 0.1);
+      if (isReady !== readyToReplyRef.current) {
+        readyToReplyRef.current = isReady;
+        setIsReadyToReply(isReady);
+        if (isReady) {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        }
+      }
     },
     onPanResponderRelease: (_event, gestureState) => {
       if (gestureState.dx >= SWIPE_REPLY_ACTIVATION_THRESHOLD && !triggerLatchRef.current) {
@@ -690,11 +707,16 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
         pointerEvents="none"
         style={[
           styles.swipeReplyFeedback,
+          isReadyToReply && styles.swipeReplyFeedbackReady,
           { opacity: feedbackOpacity, transform: [{ scale: feedbackScale }] },
         ]}
       >
-        <MaterialCommunityIcons name="reply-outline" size={16} color={COLORS.primaryBlue} />
-        <Text style={styles.swipeReplyFeedbackText}>Reply</Text>
+        <MaterialCommunityIcons
+          name={isReadyToReply ? 'reply' : 'reply-outline'}
+          size={16}
+          color={COLORS.primaryBlue}
+        />
+        <Text style={styles.swipeReplyFeedbackText}>{isReadyToReply ? 'Release to reply' : 'Reply'}</Text>
       </Animated.View>
       <Animated.View
         style={{ transform: [{ translateX }] }}
@@ -823,6 +845,7 @@ export default function ChatScreen({
   const [viewingImage, setViewingImage] = useState(null);
   const [reactionFeedbackMessage, setReactionFeedbackMessage] = useState('');
   const [replyJumpFeedbackMessage, setReplyJumpFeedbackMessage] = useState('');
+  const [highlightedReplyTargetMessageId, setHighlightedReplyTargetMessageId] = useState(null);
 
   const insets = useSafeAreaInsets();
   const composerBottomInset = insets.bottom > 0 ? Math.max(insets.bottom, SPACING.md) : SPACING.md;
@@ -1775,6 +1798,7 @@ export default function ChatScreen({
 
     setReplyingToMessage({
       messageId: message.id,
+      ...(message.idempotencyKey ? { idempotencyKey: message.idempotencyKey } : {}),
       senderName: message.senderName || 'Participant',
       previewText: buildReplyPreviewText(message),
     });
@@ -2069,8 +2093,33 @@ export default function ChatScreen({
       .filter(Boolean);
   }, [filteredSearchResults, messageLookupById, searchQuery, activeSearchResultMessageId]);
 
-  const jumpToMessageById = useCallback((messageId) => {
-    const targetIndex = resolveReplyTargetIndex(messageId, replyTargetIndex);
+  const jumpToMessageById = useCallback((messageId, fallbackId = null) => {
+    const targetCandidates = [
+      ...collectMessageIdCandidates(messageId),
+      ...collectMessageIdCandidates(fallbackId),
+    ];
+    const uniqueCandidates = Array.from(new Set(targetCandidates));
+    let targetIndex = -1;
+
+    uniqueCandidates.some((candidate) => {
+      const resolved = resolveReplyTargetIndex(candidate, replyTargetIndex);
+      if (resolved < 0) return false;
+      targetIndex = resolved;
+      return true;
+    });
+
+    if (targetIndex < 0 && uniqueCandidates.length > 0) {
+      targetIndex = groupedMessages.findIndex((item) => {
+        if (item?.type !== 'message') return false;
+        const messageData = item.data || {};
+        const candidatePool = [
+          ...collectMessageIdCandidates(messageData.id),
+          ...collectMessageIdCandidates(messageData.idempotencyKey),
+        ];
+        return uniqueCandidates.some((candidate) => candidatePool.includes(candidate));
+      });
+    }
+
     if (targetIndex < 0) {
       setReplyJumpFeedbackMessage('Could not find the original message in this chat history.');
       return false;
@@ -2078,9 +2127,13 @@ export default function ChatScreen({
 
     pendingJumpIndexRef.current = targetIndex;
     setReplyJumpFeedbackMessage('');
+    const targetMessageId = groupedMessages[targetIndex]?.data?.id;
+    if (targetMessageId) {
+      setHighlightedReplyTargetMessageId(targetMessageId);
+    }
     messageListRef.current?.scrollToIndex({ index: targetIndex, animated: true, viewPosition: 0.45 });
     return true;
-  }, [replyTargetIndex]);
+  }, [groupedMessages, replyTargetIndex]);
 
 
   useEffect(() => {
@@ -2088,6 +2141,12 @@ export default function ChatScreen({
     const timeoutId = setTimeout(() => setReplyJumpFeedbackMessage(''), 2600);
     return () => clearTimeout(timeoutId);
   }, [replyJumpFeedbackMessage]);
+
+  useEffect(() => {
+    if (!highlightedReplyTargetMessageId) return undefined;
+    const timeoutId = setTimeout(() => setHighlightedReplyTargetMessageId(null), 2200);
+    return () => clearTimeout(timeoutId);
+  }, [highlightedReplyTargetMessageId]);
 
   useEffect(() => {
     setActiveSearchResultIndex(0);
@@ -2139,6 +2198,7 @@ export default function ChatScreen({
       const isDeleted = !!msg.deleted;
       const isImage = msg.type === 'image';
       const isSearchMatch = !!activeSearchResultMessageId && activeSearchResultMessageId === msg.id;
+      const isReplyJumpTarget = !!highlightedReplyTargetMessageId && highlightedReplyTargetMessageId === msg.id;
       const isRetryEligible = canRetryFailedMessageForCurrentSession(msg);
       const isRetrying = !!retryingMessageIds[msg.id];
 
@@ -2175,6 +2235,7 @@ export default function ChatScreen({
                 isMsgDriver && !isSelf && styles.driverMessageBubble,
                 isImage && styles.imageMessageBubble,
                 isSearchMatch && styles.searchFocusedBubble,
+                isReplyJumpTarget && styles.replyJumpTargetBubble,
               ]}
             >
               {/* Message Header */}
@@ -2199,7 +2260,7 @@ export default function ChatScreen({
                 <TouchableOpacity
                   activeOpacity={0.85}
                   style={[styles.replyReferenceCard, isSelf && styles.replyReferenceCardSelf]}
-                  onPress={() => jumpToMessageById(msg.replyTo.messageId)}
+                  onPress={() => jumpToMessageById(msg.replyTo.messageId, msg.replyTo.idempotencyKey)}
                 >
                   <View style={styles.replyReferenceAccent} />
                   <View style={styles.replyReferenceContent}>
@@ -2317,6 +2378,7 @@ export default function ChatScreen({
       parseMessageText,
       renderHighlightedText,
       activeSearchResultMessageId,
+      highlightedReplyTargetMessageId,
       startReplyComposer,
       retryingMessageIds,
       handleRetryFailedMessage,
@@ -3323,6 +3385,10 @@ const styles = StyleSheet.create({
     borderColor: COLORS.coralAccent,
     borderWidth: 2,
   },
+  replyJumpTargetBubble: {
+    borderColor: COLORS.primaryBlue,
+    borderWidth: 2,
+  },
   searchHighlight: {
     backgroundColor: `${COLORS.coralAccent}40`,
     color: COLORS.darkText,
@@ -3616,6 +3682,10 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.full,
     paddingHorizontal: SPACING.sm,
     paddingVertical: 5,
+  },
+  swipeReplyFeedbackReady: {
+    backgroundColor: `${THEME.success}20`,
+    borderColor: `${THEME.success}60`,
   },
   swipeReplyFeedbackText: {
     fontSize: 11,
