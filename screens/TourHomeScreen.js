@@ -274,7 +274,6 @@ const QuickActionButton = ({ icon, label, color, onPress, badge, delay = 0 }) =>
       <TouchableOpacity
         style={styles.quickActionButton}
         onPress={() => {
-          triggerHaptic('light');
           onPress();
         }}
         onPressIn={handlePressIn}
@@ -444,7 +443,6 @@ const FeatureCard = ({ item, onPress, index, isLarge = false }) => {
       <TouchableOpacity
         style={styles.featureCardInner}
         onPress={() => {
-          triggerHaptic('light');
           onPress();
         }}
         onPressIn={handlePressIn}
@@ -1004,7 +1002,6 @@ export default function TourHomeScreen({
               <TouchableOpacity
                 style={styles.headerButton}
                 onPress={() => {
-                  triggerHaptic('light');
                   onNavigate('NotificationPreferences');
                 }}
                 accessible={true}
@@ -1230,7 +1227,6 @@ export default function TourHomeScreen({
             style={styles.findBusCard}
             delay={300}
             onPress={() => {
-              triggerHaptic('light');
               onNavigate('Map');
             }}
             accessibilityLabel="Find My Bus"

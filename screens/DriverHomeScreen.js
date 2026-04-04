@@ -573,9 +573,6 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       });
       return;
     }
-    if (Platform.OS === 'ios') {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    }
     onNavigate('Chat', {
       tourId: activeTourId,
       isDriver: true,
@@ -597,9 +594,6 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         },
       });
       return;
-    }
-    if (Platform.OS === 'ios') {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
     onNavigate('Chat', {
       tourId: activeTourId,
@@ -881,9 +875,6 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
               <TouchableOpacity
                 style={[styles.wideButton, styles.dangerButton]}
                 onPress={() => {
-                  if (Platform.OS === 'ios') {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  }
                   onNavigate('SafetySupport', { from: 'DriverHome', mode: 'driver' });
                 }}
                 activeOpacity={0.9}
@@ -909,9 +900,6 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                       actionHandler: () => setJoinModalVisible(true),
                     });
                     return;
-                  }
-                  if (Platform.OS === 'ios') {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   }
                   onNavigate('PassengerManifest', { tourId: activeTourId });
                 }}
@@ -939,9 +927,6 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                     });
                     return;
                   }
-                  if (Platform.OS === 'ios') {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  }
                   onNavigate('Itinerary', { tourId: activeTourId, isDriver: true });
                 }}
                 activeOpacity={0.9}
@@ -967,9 +952,6 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                       actionHandler: () => setJoinModalVisible(true),
                     });
                     return;
-                  }
-                  if (Platform.OS === 'ios') {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   }
                   onNavigate('DriverItinerary', { tourId: activeTourId, isDriver: true });
                 }}
