@@ -25,12 +25,14 @@ import { uploadPhoto, subscribeToTourPhotos, updatePhotoCaption } from '../servi
 import { optimizeImageForUpload, formatBytes } from '../services/imageOptimizationService';
 import { deleteGroupPhoto } from '../services/photoService';
 import ImageViewer from '../components/ImageViewer';
+import { auth } from '../firebase';
+import { getCanonicalIdentity } from '../services/identityService';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: windowWidth } = Dimensions.get('window');
 const THUMBNAIL_SIZE = (windowWidth - SPACING.lg * 2 - SPACING.sm * 2) / 3;
 
-export default function GroupPhotobookScreen({ onBack, userId, tourId, userName }) {
+export default function GroupPhotobookScreen({ onBack, userId, tourId, userName, canonicalIdentity: canonicalIdentityProp = null }) {
   const MIN_REFRESH_SPINNER_MS = 120;
   const [photos, setPhotos] = useState([]);
   const [loadingPhotos, setLoadingPhotos] = useState(true);
@@ -53,6 +55,12 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
   // Image loading states for skeleton
   const [loadedImages, setLoadedImages] = useState({});
   const prefetchedUrisRef = useRef(new Set());
+  const currentUser = auth.currentUser;
+  const canonicalIdentity = useMemo(
+    () => canonicalIdentityProp || getCanonicalIdentity({ authUser: currentUser, bookingData: { id: userId } }),
+    [canonicalIdentityProp, currentUser, userId]
+  );
+  const principalId = canonicalIdentity?.principalId || userId;
 
   useEffect(() => {
     if (!tourId) return undefined;
@@ -75,13 +83,13 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
   }, [tourId]);
 
   const visiblePhotos = useMemo(() => {
-    const scoped = mineOnly ? photos.filter((photo) => photo.userId === userId) : photos;
+    const scoped = mineOnly ? photos.filter((photo) => photo.userId === principalId) : photos;
     return [...scoped].sort((a, b) => {
       const aTs = a.timestamp || 0;
       const bTs = b.timestamp || 0;
       return sortMode === 'oldest' ? aTs - bTs : bTs - aTs;
     });
-  }, [photos, mineOnly, sortMode, userId]);
+  }, [photos, mineOnly, sortMode, principalId]);
 
   const gallerySections = useMemo(() => {
     const grouped = new Map();
@@ -141,7 +149,7 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
     const contributors = new Set(visiblePhotos.map(p => p.userId).filter(Boolean));
     return contributors.size;
   }, [visiblePhotos]);
-  const myPhotos = visiblePhotos.filter(p => p.userId === userId).length;
+  const myPhotos = visiblePhotos.filter(p => p.userId === principalId).length;
 
   const requestCameraPermission = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -223,7 +231,7 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
   const uploadPendingItem = async (pending) => {
     setPendingUploads((prev) => prev.map((item) => item.id === pending.id ? { ...item, status: 'uploading', error: null, progress: 0 } : item));
     try {
-      await uploadPhoto(pending.uri, tourId, userId, pending.caption.trim(), {
+      await uploadPhoto(pending.uri, tourId, principalId, pending.caption.trim(), {
         visibility: 'group',
         uploaderName: userName || 'Tour Member',
         thumbnailUri: pending.thumbnailUri || null,
@@ -391,7 +399,7 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
   const handleDeletePhoto = async (photo) => {
     try {
       if (typeof deleteGroupPhoto === 'function') {
-        await deleteGroupPhoto(tourId, photo.id, userId);
+        await deleteGroupPhoto(tourId, photo.id, principalId);
       }
     } catch (error) {
       console.error('Delete error:', error);
@@ -595,7 +603,7 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
                     onLoad={() => handleImageLoad(photo.id)}
                   />
 
-                  {photo.userId === userId && (
+                  {photo.userId === principalId && (
                     <View style={styles.myPhotoBadge}>
                       <MaterialCommunityIcons name="account" size={10} color={COLORS.white} />
                     </View>
@@ -645,9 +653,9 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName 
         onClose={() => setViewerVisible(false)}
         onDelete={handleDeletePhoto}
         canDelete={true}
-        currentUserId={userId}
+        currentUserId={principalId}
         showUploaderInfo={true}
-        onEditCaption={async (photo, nextCaption) => updatePhotoCaption({ tourId, photoId: photo.id, userId, caption: nextCaption, visibility: 'group' })}
+        onEditCaption={async (photo, nextCaption) => updatePhotoCaption({ tourId, photoId: photo.id, userId: principalId, caption: nextCaption, visibility: 'group' })}
       />
 
       {/* Upload Modal with Caption */}

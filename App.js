@@ -1,5 +1,5 @@
 // App.js
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, Text, StyleSheet, Animated, Easing, PanResponder } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,6 +15,7 @@ import * as bookingService from './services/bookingServiceRealtime';
 import * as chatService from './services/chatService';
 import offlineLoginResolver from './services/offlineLoginResolver';
 import { migrateRecentChatMessagesForStableIdentity } from './services/chatIdentityMigrationService';
+import { getCanonicalIdentity } from './services/identityService';
 import { COLORS as THEME } from './theme';
 
 // Import Screens
@@ -116,6 +117,10 @@ function AppContent() {
   const loginProgress = useRef(new Animated.Value(0)).current;
 
   const isDriverSession = bookingData?.id && bookingData.id.startsWith('D-');
+  const canonicalIdentity = useMemo(
+    () => getCanonicalIdentity({ authUser: user, bookingData, identityBinding }),
+    [user, bookingData, identityBinding]
+  );
   const homeScreen = isDriverSession ? 'DriverHome' : 'TourHome';
   const canSwipeToHome =
     currentScreen !== 'Login' &&
@@ -699,9 +704,26 @@ function AppContent() {
           />
         );
       case 'Photobook':
-        return <PhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} tourId={tourData?.id} privatePhotoOwnerId={bookingData?.id} />;
+        return (
+          <PhotobookScreen
+            {...screenProps}
+            onBack={() => navigateTo('TourHome')}
+            tourId={tourData?.id}
+            privatePhotoOwnerId={canonicalIdentity?.principalId}
+            canonicalIdentity={canonicalIdentity}
+          />
+        );
       case 'GroupPhotobook':
-        return <GroupPhotobookScreen {...screenProps} onBack={() => navigateTo('TourHome')} userId={user?.uid} tourId={tourData?.id} userName={bookingData?.passengerNames?.[0] || 'Tour Member'} />;
+        return (
+          <GroupPhotobookScreen
+            {...screenProps}
+            onBack={() => navigateTo('TourHome')}
+            userId={canonicalIdentity?.principalId}
+            tourId={tourData?.id}
+            userName={bookingData?.passengerNames?.[0] || 'Tour Member'}
+            canonicalIdentity={canonicalIdentity}
+          />
+        );
 case 'Itinerary':
         // CHECK: Is the user a driver?
         const isDriverUser = screenParams.isDriver || (bookingData?.id && bookingData.id.startsWith('D-'));
@@ -756,6 +778,7 @@ case 'Itinerary':
             tourData={tourData || { name: 'Tour Chat' }}
             internalDriverChat={screenParams.internalDriverChat === true}
             identityBinding={identityBinding}
+            canonicalIdentity={canonicalIdentity}
           />
         );
       case 'Map':
@@ -767,7 +790,7 @@ case 'Itinerary':
         return (
           <NotificationPreferencesScreen
             onBack={() => navigateTo(notificationReturnTarget, { from: 'NotificationPreferences' })}
-            userId={user?.uid}
+            userId={canonicalIdentity?.principalId}
             isOnboarding={screenParams?.isOnboarding === true}
             audience={screenParams?.audience || (isDriverSession ? 'driver' : 'passenger')}
             returnTo={notificationReturnTarget}
