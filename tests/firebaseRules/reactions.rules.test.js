@@ -17,6 +17,8 @@ const MESSAGE_PATH = `chats/${TOUR_ID}/messages/${MESSAGE_ID}`;
 const REACTION_PATH = `${MESSAGE_PATH}/reactions/👍`;
 const DRIVER_AUTH_UID = 'driver-auth-1';
 const DRIVER_PRINCIPAL_ID = 'driver:BONDY';
+const PASSENGER_AUTH_UID = 'passenger-auth-1';
+const PASSENGER_PRINCIPAL_ID = 'pax:ABC123';
 const INTERNAL_TOUR_ID = 'TOUR_INTERNAL_001';
 
 const parseHost = () => {
@@ -40,6 +42,7 @@ const seedMessage = async () => {
   await testEnv.withSecurityRulesDisabled(async (context) => {
     await context.database(dbUrl).ref(MESSAGE_PATH).set({
       senderId: 'userB',
+      senderStableId: 'userB',
       senderName: 'User B',
       text: 'original text',
       timestamp: 1710000000000,
@@ -48,6 +51,11 @@ const seedMessage = async () => {
     });
 
     await context.database(dbUrl).ref(`identity_bindings/${DRIVER_PRINCIPAL_ID}/${DRIVER_AUTH_UID}`).set(true);
+    await context.database(dbUrl).ref(`identity_bindings/${PASSENGER_PRINCIPAL_ID}/${PASSENGER_AUTH_UID}`).set(true);
+    await context.database(dbUrl).ref(`users/${PASSENGER_AUTH_UID}`).set({
+      stablePassengerId: PASSENGER_PRINCIPAL_ID,
+      privatePhotoOwnerId: PASSENGER_PRINCIPAL_ID,
+    });
   });
 };
 
@@ -93,6 +101,52 @@ test('denies user A overwriting emoji reaction object directly', async () => {
 
 test('denies user A editing message text on message by user B', async () => {
   await assertFails(dbFor('userA').ref(`${MESSAGE_PATH}/text`).set('tampered text'));
+});
+
+test('allows principal-based reaction leaf writes via users/{auth.uid} + identity_bindings', async () => {
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`${REACTION_PATH}/${PASSENGER_PRINCIPAL_ID}`).set(true));
+});
+
+test('allows principal-based typing writes via users/{auth.uid} + identity_bindings', async () => {
+  await assertSucceeds(
+    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/typing/${PASSENGER_PRINCIPAL_ID}`).set({
+      name: 'Passenger One',
+      timestamp: Date.now(),
+    })
+  );
+});
+
+test('allows principal-based presence writes via users/{auth.uid} + identity_bindings', async () => {
+  await assertSucceeds(
+    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/presence/${PASSENGER_PRINCIPAL_ID}`).set({
+      name: 'Passenger One',
+      lastSeen: Date.now(),
+      online: true,
+    })
+  );
+});
+
+test('denies principal-based chat writes when identity_bindings ownership is missing', async () => {
+  const foreignPrincipalId = 'pax:FOREIGN';
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref(`users/${PASSENGER_AUTH_UID}/stablePassengerId`).set(foreignPrincipalId);
+  });
+
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`${REACTION_PATH}/${PASSENGER_PRINCIPAL_ID}`).set(true));
+  await assertFails(
+    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/typing/${PASSENGER_PRINCIPAL_ID}`).set({
+      name: 'Passenger One',
+      timestamp: Date.now(),
+    })
+  );
+  await assertFails(
+    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/presence/${PASSENGER_PRINCIPAL_ID}`).set({
+      name: 'Passenger One',
+      lastSeen: Date.now(),
+      online: true,
+    })
+  );
 });
 
 test('allows admin actions per existing policy (message text edit)', async () => {

@@ -73,14 +73,18 @@ test('Logger service keeps batching/backoff and sensitive-data redaction', () =>
 });
 
 
-test('Realtime Database rules allow authenticated users to write only their own reaction leaf under chat messages', () => {
+test('Realtime Database rules allow principal-owned reaction, typing, and presence writes', () => {
   const rules = JSON.parse(read('database.rules.json'));
-  const reactionRules = rules.rules.chats.$tourId.messages.$messageId.reactions;
+  const chatRules = rules.rules.chats.$tourId;
+  const expectedPrincipalWrite = "auth != null && (auth.uid === $id || $id === root.child('users/' + auth.uid + '/stablePassengerId').val() || $id === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $id + '/' + auth.uid).val() === true)";
 
-  assert.ok(reactionRules);
-  assert.equal(reactionRules.$emoji['.write'], 'auth != null');
-  assert.equal(reactionRules.$emoji.$userId['.write'], 'auth != null && auth.uid === $userId');
-  assert.equal(reactionRules.$emoji.$userId['.validate'], '!newData.exists() || newData.val() === true');
+  assert.ok(chatRules.messages.$messageId.reactions);
+  assert.equal(chatRules.messages.$messageId.reactions.$emoji['.write'], false);
+  assert.equal(chatRules.messages.$messageId.reactions.$emoji.$id['.write'], expectedPrincipalWrite);
+  assert.equal(chatRules.messages.$messageId.reactions.$emoji.$id['.validate'], '!newData.exists() || newData.val() === true');
+
+  assert.equal(chatRules.typing.$id['.write'], expectedPrincipalWrite);
+  assert.equal(chatRules.presence.$id['.write'], expectedPrincipalWrite);
 });
 
 
