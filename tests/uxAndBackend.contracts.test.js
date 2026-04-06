@@ -93,9 +93,10 @@ test('Realtime Database rules support image chat payloads and private photo owne
   assert.match(messageValidate, /newData\.child\('type'\)\.val\(\) === 'image'/);
   assert.match(messageValidate, /newData\.child\('thumbnailUrl'\)/);
   assert.match(privatePhotosRead, /auth\.uid === \$ownerId/);
-  assert.match(privatePhotosRead, /privatePhotoOwnerId/);
+  assert.match(privatePhotosRead, /stablePassengerId/);
   assert.match(photobookScreen, /ensurePrivatePhotoOwnerAccess/);
   assert.match(photobookScreen, /realtimeDb\.ref\(`users\/\$\{authUid\}`\)\.update/);
+  assert.match(photobookScreen, /stablePassengerId: principalId/);
 });
 
 test('Realtime Database rules gate identity_bindings_meta writes to admin or an existing caller-owned binding', () => {
@@ -118,6 +119,7 @@ test('Passenger login flow still performs identity binding + metadata multi-path
   const appSrc = read('App.js');
 
   assert.match(appSrc, /updates\[`identity_bindings\/\$\{stablePassengerId\}\/\$\{user\.uid\}`\] = true;/);
+  assert.match(appSrc, /`users\/\$\{user\.uid\}\/privatePhotoOwnerId`\]: stablePassengerId \|\| normalizedBookingData\.id,/);
   assert.match(appSrc, /updates\[`identity_bindings_meta\/\$\{stablePassengerId\}\/bookingRef`\] = normalizedBookingData\.id;/);
   assert.match(appSrc, /updates\[`identity_bindings_meta\/\$\{stablePassengerId\}\/normalizedPassengerEmail`\] = normalizedBookingData\.normalizedPassengerEmail;/);
   assert.match(appSrc, /updates\[`identity_bindings_meta\/\$\{stablePassengerId\}\/identityVersion`\] = identityVersion \|\| IDENTITY_VERSION;/);

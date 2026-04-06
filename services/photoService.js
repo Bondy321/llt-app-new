@@ -257,7 +257,7 @@ const fetchTourPhotosPage = async (
  *
  * Input contract:
  * - tourId: required non-empty string
- * - userId: required non-empty string
+ * - ownerId: required non-empty string
  * - limit: optional positive integer (default 30, max 100)
  * - endBefore: optional cursor ({ timestamp, id }) or timestamp value
  *
@@ -266,12 +266,12 @@ const fetchTourPhotosPage = async (
  * - empty datasets return { items: [], nextCursor: null, hasMore: false }
  * - missing/invalid timestamps are normalized to 0 for deterministic ordering
  *
- * @param {{ tourId: string, userId: string, limit?: number, endBefore?: ({ timestamp: unknown, id?: string }|number|string|null) }} params
+ * @param {{ tourId: string, ownerId: string, limit?: number, endBefore?: ({ timestamp: unknown, id?: string }|number|string|null) }} params
  * @param {Object} [deps]
  * @returns {Promise<{ items: Array<Object>, nextCursor: ({ timestamp: number, id: string }|null), hasMore: boolean }>}
  */
 const fetchPrivatePhotosPage = async (
-  { tourId, userId, limit = 30, endBefore = null },
+  { tourId, ownerId, limit = 30, endBefore = null },
   {
     realtimeDbInstance = realtimeDbModular,
     dbRefFn = databaseRef,
@@ -283,11 +283,11 @@ const fetchPrivatePhotosPage = async (
   } = {},
 ) => {
   const validatedTourId = validateTourId(tourId);
-  const validatedUserId = validateUserId(userId);
+  const validatedOwnerId = validateUserId(ownerId);
   const safeLimit = sanitizePageLimit(limit);
   const cursor = normalizeCursor(endBefore);
 
-  const baseRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${validatedTourId}/${validatedUserId}`);
+  const baseRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${validatedTourId}/${validatedOwnerId}`);
   const constraints = [orderByChildFn('timestamp')];
   if (cursor) {
     constraints.push(endAtFn(cursor.timestamp, cursor.id || undefined));
@@ -664,7 +664,7 @@ const subscribeToTourPhotos = (
 
 const subscribeToPrivatePhotos = (
   tourId,
-  userId,
+  ownerId,
   callback,
   {
     realtimeDbInstance = realtimeDbModular,
@@ -675,11 +675,11 @@ const subscribeToPrivatePhotos = (
     limitToLastFn = limitToLast,
   } = {},
 ) => {
-  if (!tourId || !userId || typeof callback !== 'function') {
+  if (!tourId || !ownerId || typeof callback !== 'function') {
     return () => {};
   }
 
-  const ownerScope = userId.trim();
+  const ownerScope = ownerId.trim();
   if (!ownerScope) {
     return () => {};
   }
@@ -797,7 +797,7 @@ const deleteGroupPhoto = async (
  */
 const deletePrivatePhoto = async (
   tourId,
-  userId,
+  ownerId,
   photoId,
   {
     storageInstance = storage,
@@ -809,13 +809,13 @@ const deletePrivatePhoto = async (
     getFn = get,
   } = {}
 ) => {
-  if (!tourId || !userId || !photoId) {
+  if (!tourId || !ownerId || !photoId) {
     throw new Error('Missing delete parameters');
   }
 
   try {
     // First, get the photo data to find the storage path
-    const photoRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${userId}/${photoId}`);
+    const photoRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${ownerId}/${photoId}`);
     const snapshot = await getFn(photoRef);
     const photoData = snapshot.val();
 
@@ -854,7 +854,7 @@ const deletePrivatePhoto = async (
 };
 
 const updatePhotoCaption = async (
-  { tourId, photoId, userId, caption, visibility = 'group' },
+  { tourId, photoId, userId, ownerId, caption, visibility = 'group' },
   {
     realtimeDbInstance = realtimeDbModular,
     dbRefFn = databaseRef,
@@ -865,19 +865,19 @@ const updatePhotoCaption = async (
 ) => {
   const validatedTourId = validateTourId(tourId);
   const validatedPhotoId = validatePhotoId(photoId);
-  const validatedUserId = validateUserId(userId);
+  const resolvedOwnerId = validateUserId(ownerId || userId);
   const validatedCaption = validateCaption(caption);
   const validatedVisibility = validateVisibility(visibility);
 
   const basePath = validatedVisibility === 'private'
-    ? `private_tour_photos/${validatedTourId}/${validatedUserId}/${validatedPhotoId}`
+    ? `private_tour_photos/${validatedTourId}/${resolvedOwnerId}/${validatedPhotoId}`
     : `group_tour_photos/${validatedTourId}/${validatedPhotoId}`;
 
   const photoRef = dbRefFn(realtimeDbInstance, basePath);
   await updateFn(photoRef, {
     caption: validatedCaption,
     captionUpdatedAt: resolveRealtimeTimestamp(serverTimestampFn, nowFn),
-    captionEditedBy: validatedUserId,
+    captionEditedBy: resolvedOwnerId,
   });
 
   return { success: true };
@@ -890,6 +890,7 @@ const uploadPhotoDirect = async (payload = {}) => {
       uri,
       tourId,
       userId,
+      ownerId,
       caption = '',
       visibility = 'group',
       uploaderName = 'Tour Member',
@@ -898,7 +899,8 @@ const uploadPhotoDirect = async (payload = {}) => {
       onProgress = null,
     } = payload;
 
-    const data = await uploadPhoto(uri, tourId, userId, caption, {
+    const resolvedOwnerId = ownerId || userId;
+    const data = await uploadPhoto(uri, tourId, resolvedOwnerId, caption, {
       visibility,
       uploaderName,
       thumbnailUri,
