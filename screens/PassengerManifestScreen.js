@@ -38,12 +38,6 @@ const COLORS = {
   textLight: THEME.textInverse,
 };
 
-const VIEW_MODE = {
-  PRIORITY: 'PRIORITY',
-  LOCATION: 'LOCATION',
-  SEARCH: 'SEARCH'
-};
-
 const STATUS_FILTERS = [
   { key: 'ALL', label: 'All' },
   { key: MANIFEST_STATUS.PENDING, label: 'Pending' },
@@ -58,7 +52,6 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [manifestData, setManifestData] = useState({ bookings: [], stats: {} });
   const [searchQuery, setSearchQuery] = useState('');
-  const [viewMode, setViewMode] = useState(VIEW_MODE.PRIORITY);
   const [statusFilter, setStatusFilter] = useState('ALL');
 
   // Modal State
@@ -213,26 +206,6 @@ export default function PassengerManifestScreen({ route, navigation }) {
     });
   }, [sortedFilteredBookings]);
 
-  const sectionedLocationBookings = useMemo(() => {
-    const groups = {};
-    filteredBookings.forEach((booking) => {
-      const location = booking.pickupLocation || 'Unknown Location';
-      if (!groups[location]) groups[location] = [];
-      groups[location].push(booking);
-    });
-
-    return Object.entries(groups)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([title, data]) => ({
-        title,
-        data: data.sort((a, b) => {
-          const priorityDelta = priorityRank(a.status) - priorityRank(b.status);
-          if (priorityDelta !== 0) return priorityDelta;
-          return toPickupTimeSortValue(a.pickupTime) - toPickupTimeSortValue(b.pickupTime);
-        })
-      }));
-  }, [filteredBookings]);
-
   const totalStats = useMemo(() => computeStats(manifestData.bookings), [manifestData.bookings]);
   const filteredStats = useMemo(() => computeStats(filteredBookings), [filteredBookings]);
   const resolutionStats = useMemo(() => {
@@ -248,8 +221,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
     [sortedFilteredBookings]
   );
 
-  const isSearchView = viewMode === VIEW_MODE.SEARCH;
-  const sectionListData = viewMode === VIEW_MODE.LOCATION ? sectionedLocationBookings : sectionedPriorityBookings;
+  const sectionListData = sectionedPriorityBookings;
   const resultsDescriptor = `${sortedFilteredBookings.length} of ${manifestData.bookings.length} bookings`;
   const unresolvedDescriptor = `${resolutionStats.unresolved} unresolved`;
   const queueDescriptor = `${queueStats.pending} pending · ${queueStats.failed} failed`;
@@ -511,19 +483,6 @@ export default function PassengerManifestScreen({ route, navigation }) {
         </View>
       </View>
       <View style={styles.filtersRow}>
-        <View style={styles.segmentedControl}>
-          {Object.values(VIEW_MODE).map((mode) => (
-            <TouchableOpacity
-              key={mode}
-              style={[styles.segmentBtn, viewMode === mode && styles.segmentBtnActive]}
-              onPress={() => setViewMode(mode)}
-            >
-              <Text style={[styles.segmentBtnText, viewMode === mode && styles.segmentBtnTextActive]}>
-                {mode === VIEW_MODE.PRIORITY ? 'Priority' : mode === VIEW_MODE.LOCATION ? 'Location' : 'Search'}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
         <FlatList
           horizontal
           data={STATUS_FILTERS}
@@ -600,22 +559,6 @@ export default function PassengerManifestScreen({ route, navigation }) {
               Adjust search or filters to find passengers, then update statuses.
             </Text>
           </View>
-        ) : isSearchView ? (
-          <FlatList
-            data={sortedFilteredBookings}
-            keyExtractor={item => item.id}
-            renderItem={({ item }) => (
-              <ManifestBookingCard 
-                booking={item} 
-                onPress={() => handleOpenBooking(item)} 
-                isSearchResult={true} 
-                syncState={getBookingSyncState(bookingSyncState, item.id) || 'synced'}
-              />
-            )}
-            contentContainerStyle={styles.listContent}
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
-          />
         ) : (
           <SectionList
             sections={sectionListData}
@@ -774,8 +717,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
   header: {
     backgroundColor: COLORS.primaryDark,
-    height: '34%',
-    minHeight: 240,
     paddingHorizontal: SPACING.lg,
     paddingTop: SPACING.sm,
     paddingBottom: SPACING.sm,
@@ -937,31 +878,6 @@ const styles = StyleSheet.create({
   },
   filtersRow: {
     gap: SPACING.xs,
-  },
-
-  segmentedControl: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(15, 23, 42, 0.7)',
-    borderRadius: RADIUS.md,
-    padding: 4,
-    marginBottom: 0,
-  },
-  segmentBtn: {
-    flex: 1,
-    borderRadius: 8,
-    paddingVertical: 8,
-    alignItems: 'center',
-  },
-  segmentBtnActive: {
-    backgroundColor: 'rgba(59, 130, 246, 0.35)',
-  },
-  segmentBtnText: {
-    color: '#E2E8F0',
-    fontWeight: FONT_WEIGHT.bold,
-    fontSize: 12,
-  },
-  segmentBtnTextActive: {
-    color: COLORS.textLight,
   },
   filterChipRow: {
     gap: SPACING.xs,
