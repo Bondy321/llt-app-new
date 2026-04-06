@@ -3,8 +3,16 @@ import firebase from 'firebase/compat/app';
 import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
 import 'firebase/compat/database';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getStorage } from 'firebase/storage';
 import { getDatabase } from 'firebase/database';
+import {
+  getAuth,
+  getReactNativePersistence,
+  initializeAuth,
+  onAuthStateChanged,
+  signInAnonymously,
+} from 'firebase/auth';
 import { createPersistenceProvider } from './services/persistenceProvider.js';
 
 // Initialize a resilient persistence layer for auth/session state.
@@ -68,6 +76,38 @@ const toStorageBucketUrl = (value) => {
   return normalized.startsWith('gs://') ? normalized : `gs://${normalized}`;
 };
 
+const hasAuthInstance = () => typeof auth === 'object' && auth !== null;
+
+const resolveAuthRestoreReady = () => {
+  if (!hasAuthInstance()) {
+    return Promise.resolve();
+  }
+
+  if (!authRestoreReadyPromise) {
+    if (typeof auth.authStateReady === 'function') {
+      authRestoreReadyPromise = auth.authStateReady().catch((error) => {
+        console.warn('Auth state restoration readiness failed:', error?.message || error);
+      });
+    } else {
+      authRestoreReadyPromise = new Promise((resolve) => {
+        const unsubscribe = onAuthStateChanged(
+          auth,
+          () => {
+            unsubscribe();
+            resolve();
+          },
+          () => {
+            unsubscribe();
+            resolve();
+          }
+        );
+      });
+    }
+  }
+
+  return authRestoreReadyPromise;
+};
+
 class AuthPersistence {
   constructor() {
     this.AUTH_KEY = 'LLT_authUser';
@@ -123,6 +163,7 @@ let storage;
 let realtimeDb;
 let realtimeDbModular;
 let firebaseInitializationError = null;
+let authRestoreReadyPromise = null;
 const firebaseInitHealth = {
   attempted: false,
   initialized: false,
@@ -161,24 +202,27 @@ try {
   }
 
   // Initialize services
-  auth = firebase.auth();
   db = firebase.firestore();
   // Keep one compat app boundary while using modular SDK where RN benefits (storage/realtime typed access).
   // This avoids creating two Firebase app instances and keeps auth/firestore callers stable.
   const modularApp = app._delegate || app;
+
+  try {
+    auth = initializeAuth(modularApp, {
+      persistence: getReactNativePersistence(AsyncStorage),
+    });
+    console.log('Firebase auth configured with React Native persistence');
+  } catch (authInitError) {
+    auth = getAuth(modularApp);
+    console.warn(
+      'Firebase auth already initialized; reusing existing instance.',
+      authInitError?.message || authInitError
+    );
+  }
+
   storage = getStorage(modularApp, toStorageBucketUrl(firebaseConfig.storageBucket));
   realtimeDb = firebase.database();
   realtimeDbModular = getDatabase(modularApp);
-
-  // Configure auth persistence
-  // Use NONE because we manage persistence via custom authStorage/AuthPersistence
-  auth.setPersistence(firebase.auth.Auth.Persistence.NONE)
-    .then(() => {
-      console.log('Firebase persistence enabled');
-    })
-    .catch((error) => {
-      console.error('Error setting persistence:', error);
-    });
 
   // Configure Firestore settings
   // Note: IndexedDB persistence is not supported in React Native
@@ -224,8 +268,8 @@ const notifyAuthStateListeners = (user) => {
 };
 
 // Set up global auth state observer (guarded to avoid crashing when Firebase fails to init)
-if (auth?.onAuthStateChanged) {
-  auth.onAuthStateChanged(async (user) => {
+if (hasAuthInstance()) {
+  onAuthStateChanged(auth, async (user) => {
     if (IS_DEV) {
       console.log('Global auth state changed');
     }
@@ -259,19 +303,18 @@ const authHelpers = {
       if (IS_DEV) {
         console.log('Attempting anonymous sign in...');
       }
-      
-      // Check if we have a stored auth state
-      const storedAuth = await authPersistence.getStoredAuthState();
-      
-      if (storedAuth && auth.currentUser) {
+
+      await resolveAuthRestoreReady();
+
+      if (auth.currentUser) {
         if (IS_DEV) {
           console.log('Using existing auth session');
         }
         return auth.currentUser;
       }
-      
+
       // Sign in anonymously
-      const result = await auth.signInAnonymously();
+      const result = await signInAnonymously(auth);
       if (IS_DEV) {
         console.log('Anonymous sign in successful');
       }
@@ -288,6 +331,8 @@ const authHelpers = {
 
   async ensureAuthenticated() {
     assertAuthAvailable('ensure authentication');
+
+    await resolveAuthRestoreReady();
 
     if (auth.currentUser) {
       return auth.currentUser;

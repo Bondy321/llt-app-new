@@ -24,15 +24,6 @@ const loadFirebaseWithMocks = ({ missingConfig = false } = {}) => {
         apps: [],
         initializeApp: () => ({ _delegate: { appId: 'app' } }),
         app: () => ({ _delegate: { appId: 'app' } }),
-        auth: Object.assign(
-          () => ({
-            setPersistence: () => Promise.resolve(),
-            onAuthStateChanged: () => {},
-            currentUser: null,
-            signInAnonymously: async () => ({ user: { uid: 'u1', metadata: {} } }),
-          }),
-          { Auth: { Persistence: { NONE: 'none' } } }
-        ),
         firestore: Object.assign(
           () => ({ settings: () => {} }),
           { CACHE_SIZE_UNLIMITED: 1 }
@@ -54,8 +45,26 @@ const loadFirebaseWithMocks = ({ missingConfig = false } = {}) => {
       return { getStorage: () => ({}) };
     }
 
+    if (request === 'firebase/auth') {
+      const authState = { currentUser: null };
+      return {
+        getAuth: () => authState,
+        getReactNativePersistence: () => ({ type: 'react-native' }),
+        initializeAuth: () => authState,
+        onAuthStateChanged: (_auth, callback) => {
+          callback(authState.currentUser);
+          return () => {};
+        },
+        signInAnonymously: async () => ({ user: { uid: 'u1', metadata: {} } }),
+      };
+    }
+
     if (request === 'firebase/database') {
       return { getDatabase: () => ({}) };
+    }
+
+    if (request === '@react-native-async-storage/async-storage') {
+      return { __esModule: true, default: {} };
     }
 
     if (request.endsWith('/services/persistenceProvider.js')) {
