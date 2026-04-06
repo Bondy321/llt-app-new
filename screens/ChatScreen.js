@@ -170,20 +170,37 @@ const normalizeTimestamp = (timestamp) => {
 };
 
 const isMessageOwnedByCurrentSession = (message, canonicalIdentity) => {
+  const currentPrincipalType = typeof canonicalIdentity?.principalType === 'string'
+    ? canonicalIdentity.principalType.trim()
+    : '';
+  const currentStableId = typeof canonicalIdentity?.stablePassengerId === 'string'
+    ? canonicalIdentity.stablePassengerId.trim()
+    : '';
   const senderPrincipalId = typeof message?.senderId === 'string' ? message.senderId.trim() : '';
   const currentPrincipalId = typeof canonicalIdentity?.principalId === 'string'
     ? canonicalIdentity.principalId.trim()
     : '';
+  const senderStableId = typeof message?.senderStableId === 'string' ? message.senderStableId.trim() : '';
+  const senderType = typeof message?.senderType === 'string'
+    ? message.senderType.trim()
+    : (message?.isDriver ? 'driver' : 'passenger');
 
-  if (senderPrincipalId && currentPrincipalId) {
+  if (currentPrincipalType === 'passenger' && currentStableId) {
+    if (senderStableId) {
+      return senderStableId === currentStableId;
+    }
+
+    if (senderType === 'passenger' && senderPrincipalId === currentStableId) {
+      return true;
+    }
+    return false;
+  }
+
+  if (senderPrincipalId && currentPrincipalId && senderType !== 'passenger') {
     return senderPrincipalId === currentPrincipalId;
   }
 
-  const senderStableId = typeof message?.senderStableId === 'string' ? message.senderStableId.trim() : '';
-  const currentStableId = typeof canonicalIdentity?.stablePassengerId === 'string'
-    ? canonicalIdentity.stablePassengerId.trim()
-    : '';
-  return Boolean(senderStableId && currentStableId && senderStableId === currentStableId);
+  return Boolean(senderPrincipalId && currentPrincipalId && senderPrincipalId === currentPrincipalId);
 };
 
 const buildReplyPreviewText = (message = {}) => {
@@ -890,6 +907,11 @@ export default function ChatScreen({
   );
   const principalId = canonicalIdentity?.principalId || 'anonymous';
   const passengerStableId = canonicalIdentity?.stablePassengerId || null;
+  const authUid = canonicalIdentity?.authUid || currentUser?.uid || null;
+  const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
+  const requiresPassengerStableIdForWrites = !isDriver
+    && canonicalIdentity?.principalType === 'passenger'
+    && principalId !== 'anonymous';
   const logSenderIdentityPath = useCallback(() => {
     if (canonicalIdentity?.principalType === 'driver') {
       logger.info('ChatScreen', 'chat_sender_driver_principal_used', {
@@ -913,7 +935,16 @@ export default function ChatScreen({
       currentUserUidPresent: Boolean(currentUser?.uid),
     });
   }, [canonicalIdentity?.principalType, passengerStableId, tourId, identityBindingSource, currentUser?.uid]);
-  const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
+
+  const buildChatSenderInfo = useCallback(() => ({
+    name: userName,
+    userId: principalId,
+    principalId,
+    principalType: canonicalIdentity?.principalType || (isDriver ? 'driver' : 'passenger'),
+    isDriver,
+    ...(authUid ? { authUid } : {}),
+    ...(passengerStableId ? { stablePassengerId: passengerStableId, senderStableId: passengerStableId } : {}),
+  }), [authUid, canonicalIdentity?.principalType, isDriver, passengerStableId, principalId, userName]);
   const draftStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_DRAFTS' }), []);
   const readStateStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_READ_STATE' }), []);
   const uxHintStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_UX_HINTS' }), []);
@@ -1443,14 +1474,19 @@ export default function ChatScreen({
     }
     setTypingStatus(tourId, principalId, userName, false, isDriver);
 
-    const senderInfo = {
-      name: userName,
-      userId: principalId,
-      principalId,
-      principalType: canonicalIdentity?.principalType || (isDriver ? 'driver' : 'passenger'),
-      isDriver,
-      ...(passengerStableId ? { stablePassengerId: passengerStableId } : {}),
-    };
+    if (requiresPassengerStableIdForWrites && !passengerStableId) {
+      setInputText(trimmed);
+      setSending(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      logger.warn('ChatScreen', 'chat_send_blocked_missing_sender_stable_id', {
+        tourId,
+        principalId,
+        hasAuthUid: Boolean(authUid),
+      });
+      return;
+    }
+
+    const senderInfo = buildChatSenderInfo();
     logSenderIdentityPath();
 
     const optimisticTimestamp = new Date().toISOString();
@@ -1523,6 +1559,10 @@ export default function ChatScreen({
 
     setSending(false);
   }, [
+    authUid,
+    buildChatSenderInfo,
+    canonicalIdentity?.principalType,
+    requiresPassengerStableIdForWrites,
     sending,
     inputText,
     tourId,
@@ -1556,14 +1596,18 @@ export default function ChatScreen({
       ))
     );
 
-    const senderInfo = {
-      name: userName,
-      userId: principalId,
-      principalId,
-      principalType: canonicalIdentity?.principalType || (isDriver ? 'driver' : 'passenger'),
-      isDriver,
-      ...(passengerStableId ? { stablePassengerId: passengerStableId } : {}),
-    };
+    if (requiresPassengerStableIdForWrites && !passengerStableId) {
+      setMessages((prev) => prev.map((msg) => (msg.id === message.id ? { ...msg, status: 'failed' } : msg)));
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      logger.warn('ChatScreen', 'chat_retry_blocked_missing_sender_stable_id', {
+        tourId,
+        principalId,
+        messageId: message.id,
+      });
+      return;
+    }
+
+    const senderInfo = buildChatSenderInfo();
     logSenderIdentityPath();
 
     try {
@@ -1618,8 +1662,10 @@ export default function ChatScreen({
       await refreshQueueStats();
     }
   }, [
+    buildChatSenderInfo,
     canRetryFailedMessageForCurrentSession,
     principalId,
+    requiresPassengerStableIdForWrites,
     internalDriverChat,
     isDriver,
     passengerStableId,
@@ -1725,14 +1771,16 @@ export default function ChatScreen({
         );
 
         if (uploadResult && uploadResult.url) {
-          const senderInfo = {
-            name: userName,
-            userId,
-            principalId: userId,
-            principalType: canonicalIdentity?.principalType || (isDriver ? 'driver' : 'passenger'),
-            isDriver,
-            ...(passengerStableId ? { stablePassengerId: passengerStableId } : {}),
-          };
+          if (requiresPassengerStableIdForWrites && !passengerStableId) {
+            logger.warn('ChatScreen', 'chat_image_send_blocked_missing_sender_stable_id', {
+              tourId,
+              principalId: userId,
+            });
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+            return;
+          }
+
+          const senderInfo = buildChatSenderInfo();
           logSenderIdentityPath();
 
           await sendImageMessage(tourId, uploadResult.url, '', senderInfo);
@@ -1747,7 +1795,15 @@ export default function ChatScreen({
 
       setUploadingImage(false);
     },
-    [tourId, userName, principalId, isDriver, passengerStableId, logSenderIdentityPath]
+    [
+      buildChatSenderInfo,
+      logSenderIdentityPath,
+      passengerStableId,
+      principalId,
+      requiresPassengerStableIdForWrites,
+      tourId,
+      userName,
+    ]
   );
 
   // Handle reaction

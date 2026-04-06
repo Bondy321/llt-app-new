@@ -2,8 +2,7 @@ import { maskIdentifier } from './loggerService';
 
 const MIGRATION_LIMIT = 300;
 const MIGRATION_TIMEOUT_MS = 5000;
-
-let hasRunThisLaunch = false;
+const activeMigrations = new Map();
 
 const withTimeout = (promise, timeoutMs) => new Promise((resolve, reject) => {
   const timeoutId = setTimeout(() => {
@@ -21,11 +20,40 @@ const withTimeout = (promise, timeoutMs) => new Promise((resolve, reject) => {
     });
 });
 
-const migrateRecentChatMessagesInternal = async ({ tourId, currentAuthUid, stablePassengerId, realtimeDb, logger }) => {
+const loadBoundAuthUids = async ({ realtimeDb, stablePassengerId }) => {
+  const snapshot = await realtimeDb.ref(`identity_bindings/${stablePassengerId}`).once('value');
+  const bindings = snapshot.val() || {};
+
+  const boundAuthUids = new Set();
+  Object.entries(bindings).forEach(([uid, linked]) => {
+    if (linked !== true || typeof uid !== 'string') return;
+    const normalizedUid = uid.trim();
+    if (!normalizedUid) return;
+    boundAuthUids.add(normalizedUid);
+  });
+
+  return boundAuthUids;
+};
+
+const migrateRecentChatMessagesInternal = async ({ tourId, stablePassengerId, realtimeDb, logger }) => {
   const startedAt = Date.now();
   let scannedCount = 0;
   let patchedCount = 0;
   let skippedCount = 0;
+
+  const boundAuthUids = await loadBoundAuthUids({ realtimeDb, stablePassengerId });
+  if (boundAuthUids.size === 0) {
+    logger.info('ChatIdentityMigration', 'No identity bindings found for passenger principal', {
+      tourId,
+      stablePassengerId: maskIdentifier(stablePassengerId),
+      boundUidCount: 0,
+      scannedCount,
+      patchedCount,
+      skippedCount,
+      durationMs: Date.now() - startedAt,
+    });
+    return;
+  }
 
   const messagesSnapshot = await realtimeDb
     .ref(`chats/${tourId}/messages`)
@@ -44,18 +72,20 @@ const migrateRecentChatMessagesInternal = async ({ tourId, currentAuthUid, stabl
       return;
     }
 
-    if (message.senderStableId) {
+    if (typeof message.senderStableId === 'string' && message.senderStableId.trim().length > 0) {
       skippedCount += 1;
       return;
     }
 
-    if (message.senderId === currentAuthUid) {
-      updates[`chats/${tourId}/messages/${messageId}/senderStableId`] = stablePassengerId;
-      patchedCount += 1;
+    const senderId = typeof message.senderId === 'string' ? message.senderId.trim() : '';
+    if (!senderId || !boundAuthUids.has(senderId)) {
+      skippedCount += 1;
       return;
     }
 
-    skippedCount += 1;
+    updates[`chats/${tourId}/messages/${messageId}/senderStableId`] = stablePassengerId;
+    updates[`chats/${tourId}/messages/${messageId}/senderType`] = 'passenger';
+    patchedCount += 1;
   });
 
   if (patchedCount > 0) {
@@ -65,8 +95,8 @@ const migrateRecentChatMessagesInternal = async ({ tourId, currentAuthUid, stabl
   const durationMs = Date.now() - startedAt;
   logger.info('ChatIdentityMigration', 'Migration metrics', {
     tourId,
-    authUid: maskIdentifier(currentAuthUid),
     stablePassengerId: maskIdentifier(stablePassengerId),
+    boundUidCount: boundAuthUids.size,
     scannedCount,
     patchedCount,
     skippedCount,
@@ -76,45 +106,49 @@ const migrateRecentChatMessagesInternal = async ({ tourId, currentAuthUid, stabl
 
 export const migrateRecentChatMessagesForStableIdentity = async ({
   tourId,
-  currentAuthUid,
   stablePassengerId,
   realtimeDb,
   logger,
 }) => {
-  if (hasRunThisLaunch) {
+  if (!tourId || !stablePassengerId || !realtimeDb || !logger) {
     return;
   }
 
-  if (!tourId || !currentAuthUid || !stablePassengerId || !realtimeDb || !logger) {
-    return;
+  const migrationKey = `${tourId}::${stablePassengerId}`;
+  if (activeMigrations.has(migrationKey)) {
+    return activeMigrations.get(migrationKey);
   }
 
-  hasRunThisLaunch = true;
+  const runPromise = (async () => {
+    const startedAt = Date.now();
 
-  const startedAt = Date.now();
-
-  try {
-    await withTimeout(
-      migrateRecentChatMessagesInternal({
+    try {
+      await withTimeout(
+        migrateRecentChatMessagesInternal({
+          tourId,
+          stablePassengerId,
+          realtimeDb,
+          logger,
+        }),
+        MIGRATION_TIMEOUT_MS,
+      );
+    } catch (error) {
+      const durationMs = Date.now() - startedAt;
+      logger.warn('ChatIdentityMigration', 'Migration skipped due to soft failure', {
+        reason: error?.message || 'UNKNOWN_ERROR',
         tourId,
-        currentAuthUid,
-        stablePassengerId,
-        realtimeDb,
-        logger,
-      }),
-      MIGRATION_TIMEOUT_MS,
-    );
-  } catch (error) {
-    const durationMs = Date.now() - startedAt;
-    logger.warn('ChatIdentityMigration', 'Migration skipped due to soft failure', {
-      reason: error?.message || 'UNKNOWN_ERROR',
-      tourId,
-      authUid: maskIdentifier(currentAuthUid),
-      stablePassengerId: maskIdentifier(stablePassengerId),
-      scannedCount: 0,
-      patchedCount: 0,
-      skippedCount: 0,
-      durationMs,
-    });
-  }
+        stablePassengerId: maskIdentifier(stablePassengerId),
+        scannedCount: 0,
+        patchedCount: 0,
+        skippedCount: 0,
+        durationMs,
+      });
+    } finally {
+      activeMigrations.delete(migrationKey);
+    }
+  })();
+
+  activeMigrations.set(migrationKey, runPromise);
+  return runPromise;
 };
+
