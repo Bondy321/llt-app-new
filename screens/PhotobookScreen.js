@@ -34,7 +34,7 @@ import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
 const { width: windowWidth } = Dimensions.get('window');
 const THUMBNAIL_SIZE = (windowWidth - SPACING.lg * 2 - SPACING.sm * 2) / 3;
 
-export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId, canonicalIdentity: canonicalIdentityProp = null }) {
+export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId, stablePassengerId, canonicalIdentity: canonicalIdentityProp = null }) {
   const [photos, setPhotos] = useState([]);
   const [loadingPhotos, setLoadingPhotos] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -57,10 +57,10 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId, c
   const [loadedImages, setLoadedImages] = useState({});
   const currentUser = auth.currentUser;
   const canonicalIdentity = useMemo(
-    () => canonicalIdentityProp || getCanonicalIdentity({ authUser: currentUser, bookingData: { id: privatePhotoOwnerId } }),
-    [canonicalIdentityProp, currentUser, privatePhotoOwnerId]
+    () => canonicalIdentityProp || getCanonicalIdentity({ authUser: currentUser, bookingData: { id: stablePassengerId || privatePhotoOwnerId, stablePassengerId: stablePassengerId || null } }),
+    [canonicalIdentityProp, currentUser, privatePhotoOwnerId, stablePassengerId]
   );
-  const principalId = canonicalIdentity?.principalId || privatePhotoOwnerId;
+  const principalId = canonicalIdentity?.principalId || stablePassengerId || privatePhotoOwnerId;
 
   const ensurePrivatePhotoOwnerAccess = useCallback(async () => {
     const authUid = auth?.currentUser?.uid;
@@ -71,7 +71,8 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId, c
     try {
       await realtimeDb.ref(`users/${authUid}`).update({
         privatePhotoOwnerId: principalId,
-        privatePhotoOwnerType: 'booking',
+        stablePassengerId: principalId,
+        privatePhotoOwnerType: principalId === privatePhotoOwnerId ? 'booking' : 'stable_passenger',
         lastUpdated: Date.now(),
       });
     } catch (error) {

@@ -488,8 +488,8 @@ function AppContent() {
       try {
         const now = Date.now();
         const updates = {
-          [`users/${user.uid}/privatePhotoOwnerId`]: normalizedBookingData.id,
-          [`users/${user.uid}/privatePhotoOwnerType`]: 'booking',
+          [`users/${user.uid}/privatePhotoOwnerId`]: stablePassengerId || normalizedBookingData.id,
+          [`users/${user.uid}/privatePhotoOwnerType`]: stablePassengerId ? 'stable_passenger' : 'booking',
           [`users/${user.uid}/lastUpdated`]: now,
         };
 
@@ -709,6 +709,7 @@ function AppContent() {
             onBack={() => navigateTo('TourHome')}
             tourId={tourData?.id}
             privatePhotoOwnerId={canonicalIdentity?.principalId}
+            stablePassengerId={canonicalIdentity?.stablePassengerId || null}
             canonicalIdentity={canonicalIdentity}
           />
         );
