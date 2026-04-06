@@ -28,12 +28,13 @@ import { deletePrivatePhoto } from '../services/photoService';
 import ImageViewer from '../components/ImageViewer';
 import { auth, realtimeDb } from '../firebase';
 import logger from '../services/loggerService';
+import { getCanonicalIdentity } from '../services/identityService';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: windowWidth } = Dimensions.get('window');
 const THUMBNAIL_SIZE = (windowWidth - SPACING.lg * 2 - SPACING.sm * 2) / 3;
 
-export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId }) {
+export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId, canonicalIdentity: canonicalIdentityProp = null }) {
   const [photos, setPhotos] = useState([]);
   const [loadingPhotos, setLoadingPhotos] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -54,16 +55,22 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId })
 
   // Image loading states for skeleton
   const [loadedImages, setLoadedImages] = useState({});
+  const currentUser = auth.currentUser;
+  const canonicalIdentity = useMemo(
+    () => canonicalIdentityProp || getCanonicalIdentity({ authUser: currentUser, bookingData: { id: privatePhotoOwnerId } }),
+    [canonicalIdentityProp, currentUser, privatePhotoOwnerId]
+  );
+  const principalId = canonicalIdentity?.principalId || privatePhotoOwnerId;
 
   const ensurePrivatePhotoOwnerAccess = useCallback(async () => {
     const authUid = auth?.currentUser?.uid;
-    if (!authUid || !privatePhotoOwnerId || !realtimeDb) {
+    if (!authUid || !principalId || !realtimeDb) {
       return;
     }
 
     try {
       await realtimeDb.ref(`users/${authUid}`).update({
-        privatePhotoOwnerId,
+        privatePhotoOwnerId: principalId,
         privatePhotoOwnerType: 'booking',
         lastUpdated: Date.now(),
       });
@@ -71,14 +78,14 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId })
       logger.error('Photobook', 'Failed to refresh private photo owner identity before private photo access', {
         error: error.message,
         authUid,
-        privatePhotoOwnerId,
+        privatePhotoOwnerId: principalId,
         tourId,
       });
     }
-  }, [privatePhotoOwnerId, tourId]);
+  }, [principalId, tourId]);
 
   useEffect(() => {
-    if (!tourId || !privatePhotoOwnerId) return undefined;
+    if (!tourId || !principalId) return undefined;
 
     let unsubscribe = null;
     let isCancelled = false;
@@ -88,7 +95,7 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId })
       await ensurePrivatePhotoOwnerAccess();
       if (isCancelled) return;
 
-      unsubscribe = subscribeToPrivatePhotos(tourId, privatePhotoOwnerId, (photoList) => {
+      unsubscribe = subscribeToPrivatePhotos(tourId, principalId, (photoList) => {
         setPhotos(photoList);
         setLoadingPhotos(false);
         setRefreshing(false);
@@ -98,7 +105,7 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId })
     bootstrapPrivatePhotos().catch((error) => {
       logger.error('Photobook', 'Failed to bootstrap private photo subscription', {
         error: error.message,
-        privatePhotoOwnerId,
+        privatePhotoOwnerId: principalId,
         tourId,
       });
       if (!isCancelled) {
@@ -111,17 +118,17 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId })
       isCancelled = true;
       if (unsubscribe) unsubscribe();
     };
-  }, [ensurePrivatePhotoOwnerAccess, privatePhotoOwnerId, tourId]);
+  }, [ensurePrivatePhotoOwnerAccess, principalId, tourId]);
 
   const visiblePhotos = useMemo(() => {
-    const scoped = mineOnly ? photos.filter((photo) => photo.userId === privatePhotoOwnerId) : photos;
+    const scoped = mineOnly ? photos.filter((photo) => photo.userId === principalId) : photos;
     const sorted = [...scoped].sort((a, b) => {
       const aTs = a.timestamp || 0;
       const bTs = b.timestamp || 0;
       return sortMode === 'oldest' ? aTs - bTs : bTs - aTs;
     });
     return sorted;
-  }, [photos, mineOnly, sortMode, privatePhotoOwnerId]);
+  }, [photos, mineOnly, sortMode, principalId]);
 
   const albumSectionsData = useMemo(() => {
     const grouped = {};
@@ -264,7 +271,7 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId })
 
     try {
       await ensurePrivatePhotoOwnerAccess();
-      await uploadPhoto(pending.uri, tourId, privatePhotoOwnerId, pending.caption.trim(), {
+      await uploadPhoto(pending.uri, tourId, principalId, pending.caption.trim(), {
         visibility: 'private',
         thumbnailUri: pending.thumbnailUri || null,
         optimizationMetrics: pending.metrics || null,
@@ -342,7 +349,7 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId })
   const handleDeletePhoto = async (photo) => {
     try {
       if (typeof deletePrivatePhoto === 'function') {
-        await deletePrivatePhoto(tourId, privatePhotoOwnerId, photo.id);
+        await deletePrivatePhoto(tourId, principalId, photo.id);
       }
     } catch (error) {
       console.error('Delete error:', error);
@@ -354,7 +361,7 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId })
     setRefreshing(true);
 
     try {
-      if (!tourId || !privatePhotoOwnerId) {
+      if (!tourId || !principalId) {
         setPhotos([]);
         return;
       }
@@ -388,14 +395,14 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId })
           completeRefresh();
         }, 5000);
 
-        unsubscribe = subscribeToPrivatePhotos(tourId, privatePhotoOwnerId, (photoList) => {
+        unsubscribe = subscribeToPrivatePhotos(tourId, principalId, (photoList) => {
           completeRefresh(photoList);
         });
       });
     } finally {
       setRefreshing(false);
     }
-  }, [tourId, privatePhotoOwnerId]);
+  }, [tourId, principalId]);
 
   const handleImageLoad = (photoId) => {
     setLoadedImages(prev => ({ ...prev, [photoId]: true }));
@@ -639,9 +646,9 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId })
         onClose={() => setViewerVisible(false)}
         onDelete={handleDeletePhoto}
         canDelete={true}
-        currentUserId={privatePhotoOwnerId}
+        currentUserId={principalId}
         showUploaderInfo={false}
-        onEditCaption={async (photo, nextCaption) => updatePhotoCaption({ tourId, photoId: photo.id, userId: privatePhotoOwnerId, caption: nextCaption, visibility: 'private' })}
+        onEditCaption={async (photo, nextCaption) => updatePhotoCaption({ tourId, photoId: photo.id, userId: principalId, caption: nextCaption, visibility: 'private' })}
       />
 
       {/* Upload Modal with Caption */}

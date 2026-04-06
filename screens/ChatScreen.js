@@ -49,6 +49,7 @@ import * as chatService from '../services/chatService';
 import * as photoService from '../services/photoService';
 import { auth } from '../firebase';
 import logger from '../services/loggerService';
+import { getCanonicalIdentity } from '../services/identityService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import SyncStatusBanner from '../components/SyncStatusBanner';
 const { buildChatSearchResults, normalizeSearchQuery } = require('../utils/chatSearch');
@@ -168,19 +169,21 @@ const normalizeTimestamp = (timestamp) => {
   return null;
 };
 
-const isMessageOwnedByCurrentSession = (message, currentUserUid, identityBinding) => {
-  const senderStableId = typeof message?.senderStableId === 'string' ? message.senderStableId.trim() : '';
-  const currentStableId = typeof identityBinding?.stablePassengerId === 'string'
-    ? identityBinding.stablePassengerId.trim()
+const isMessageOwnedByCurrentSession = (message, canonicalIdentity) => {
+  const senderPrincipalId = typeof message?.senderId === 'string' ? message.senderId.trim() : '';
+  const currentPrincipalId = typeof canonicalIdentity?.principalId === 'string'
+    ? canonicalIdentity.principalId.trim()
     : '';
 
-  if (senderStableId && currentStableId) {
-    return senderStableId === currentStableId;
+  if (senderPrincipalId && currentPrincipalId) {
+    return senderPrincipalId === currentPrincipalId;
   }
 
-  const senderId = typeof message?.senderId === 'string' ? message.senderId.trim() : '';
-  const currentUid = typeof currentUserUid === 'string' ? currentUserUid.trim() : '';
-  return Boolean(senderId && currentUid && senderId === currentUid);
+  const senderStableId = typeof message?.senderStableId === 'string' ? message.senderStableId.trim() : '';
+  const currentStableId = typeof canonicalIdentity?.stablePassengerId === 'string'
+    ? canonicalIdentity.stablePassengerId.trim()
+    : '';
+  return Boolean(senderStableId && currentStableId && senderStableId === currentStableId);
 };
 
 const buildReplyPreviewText = (message = {}) => {
@@ -808,6 +811,7 @@ export default function ChatScreen({
   tourData,
   internalDriverChat = false,
   identityBinding: identityBindingProp = null,
+  canonicalIdentity: canonicalIdentityProp = null,
 }) {
   // Core state
   const [messages, setMessages] = useState([]);
@@ -876,14 +880,25 @@ export default function ChatScreen({
     };
   }, [identityBindingProp, bookingData?.identityBinding, bookingData?.stablePassengerId]);
   const isDriver = bookingData?.isDriver === true;
-  const passengerStableId = useMemo(() => {
-    if (isDriver) return null;
-    const stableId = identityBinding?.stablePassengerId;
-    if (typeof stableId !== 'string') return null;
-    const normalizedStableId = stableId.trim();
-    return normalizedStableId.length > 0 ? normalizedStableId : null;
-  }, [identityBinding, isDriver]);
+  const canonicalIdentity = useMemo(
+    () => canonicalIdentityProp || getCanonicalIdentity({
+      authUser: currentUser,
+      bookingData,
+      identityBinding,
+    }),
+    [canonicalIdentityProp, currentUser, bookingData, identityBinding]
+  );
+  const principalId = canonicalIdentity?.principalId || 'anonymous';
+  const passengerStableId = canonicalIdentity?.stablePassengerId || null;
   const logSenderIdentityPath = useCallback(() => {
+    if (canonicalIdentity?.principalType === 'driver') {
+      logger.info('ChatScreen', 'chat_sender_driver_principal_used', {
+        tourId,
+        source: identityBindingSource,
+      });
+      return;
+    }
+
     if (passengerStableId) {
       logger.info('ChatScreen', 'chat_sender_stable_id_used', {
         tourId,
@@ -897,7 +912,7 @@ export default function ChatScreen({
       source: identityBindingSource,
       currentUserUidPresent: Boolean(currentUser?.uid),
     });
-  }, [passengerStableId, tourId, identityBindingSource, currentUser?.uid]);
+  }, [canonicalIdentity?.principalType, passengerStableId, tourId, identityBindingSource, currentUser?.uid]);
   const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
   const draftStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_DRAFTS' }), []);
   const readStateStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_READ_STATE' }), []);
@@ -905,18 +920,18 @@ export default function ChatScreen({
   const draftStorageKey = useMemo(() => {
     if (!tourId) return null;
     const chatType = internalDriverChat ? 'internal' : 'group';
-    return `draft_${chatType}_${tourId}_${currentUser?.uid || 'anonymous'}`;
-  }, [tourId, internalDriverChat, currentUser?.uid]);
+    return `draft_${chatType}_${tourId}_${principalId}`;
+  }, [tourId, internalDriverChat, principalId]);
   const readStateStorageKey = useMemo(() => {
     if (!tourId) return null;
     const chatType = internalDriverChat ? 'internal' : 'group';
-    return `last_seen_${chatType}_${tourId}_${currentUser?.uid || 'anonymous'}`;
-  }, [tourId, internalDriverChat, currentUser?.uid]);
+    return `last_seen_${chatType}_${tourId}_${principalId}`;
+  }, [tourId, internalDriverChat, principalId]);
   const swipeReplyHintStorageKey = useMemo(() => {
     if (!tourId) return null;
     const chatType = internalDriverChat ? 'internal' : 'group';
-    return `${SWIPE_REPLY_HINT_KEY_PREFIX}_${chatType}_${tourId}_${currentUser?.uid || 'anonymous'}`;
-  }, [tourId, internalDriverChat, currentUser?.uid]);
+    return `${SWIPE_REPLY_HINT_KEY_PREFIX}_${chatType}_${tourId}_${principalId}`;
+  }, [tourId, internalDriverChat, principalId]);
 
   const listBottomSpacerHeight = useMemo(() => {
     const attachmentMenuLift = showAttachmentMenu ? SPACING.sm : 0;
@@ -961,14 +976,14 @@ export default function ChatScreen({
   }, [identityBinding?.stablePassengerId, identityBindingSource]);
 
   const canRetryFailedMessageForCurrentSession = useCallback((message) => {
-    if (!isMessageOwnedByCurrentSession(message, currentUser?.uid, identityBinding)) return false;
+    if (!isMessageOwnedByCurrentSession(message, canonicalIdentity)) return false;
     if (!message || typeof message !== 'object') return false;
     if (message.deleted) return false;
     if (message.status !== 'failed') return false;
     if ((message.type || 'text') !== 'text') return false;
     if (typeof message.text !== 'string' || message.text.trim().length === 0) return false;
     return true;
-  }, [currentUser?.uid, identityBinding]);
+  }, [canonicalIdentity]);
 
   const getMessageTimestamp = useCallback((message) => {
     if (!message) return null;
@@ -976,7 +991,7 @@ export default function ChatScreen({
   }, []);
 
   const markActiveChatRead = useCallback(async ({ force = false } = {}) => {
-    if (!tourId || !currentUser?.uid) return;
+    if (!tourId || !principalId) return;
 
     const now = Date.now();
     if (!force && now - lastReadMarkAtRef.current < 3000) return;
@@ -985,7 +1000,7 @@ export default function ChatScreen({
     const markReadFn = internalDriverChat ? markInternalChatAsRead : markChatAsRead;
     const latestMessage = messages[messages.length - 1];
     const latestTimestamp = getMessageTimestamp(latestMessage);
-    const result = await markReadFn(tourId, currentUser.uid);
+    const result = await markReadFn(tourId, principalId);
 
     if (result?.success && latestTimestamp && readStateStorageKey) {
       setLastSeenTimestamp(latestTimestamp);
@@ -994,7 +1009,7 @@ export default function ChatScreen({
     }
   }, [
     tourId,
-    currentUser?.uid,
+    principalId,
     internalDriverChat,
     messages,
     getMessageTimestamp,
@@ -1176,11 +1191,11 @@ export default function ChatScreen({
 
   // Subscribe to typing indicators
   useEffect(() => {
-    if (!tourId || !currentUser?.uid) return;
+    if (!tourId || !principalId) return;
 
-    const unsubscribe = subscribeToTypingIndicators(tourId, currentUser.uid, setTypingUsers);
+    const unsubscribe = subscribeToTypingIndicators(tourId, principalId, setTypingUsers);
     return () => unsubscribe();
-  }, [tourId, currentUser?.uid]);
+  }, [tourId, principalId]);
 
   // Subscribe to presence
   useEffect(() => {
@@ -1341,15 +1356,15 @@ export default function ChatScreen({
 
   // Set online presence on mount/unmount
   useEffect(() => {
-    if (!tourId || !currentUser?.uid) return;
+    if (!tourId || !principalId) return;
 
-    setOnlinePresence(tourId, currentUser.uid, userName, true, isDriver);
+    setOnlinePresence(tourId, principalId, userName, true, isDriver);
 
     return () => {
-      setOnlinePresence(tourId, currentUser.uid, userName, false, isDriver);
-      setTypingStatus(tourId, currentUser.uid, userName, false, isDriver);
+      setOnlinePresence(tourId, principalId, userName, false, isDriver);
+      setTypingStatus(tourId, principalId, userName, false, isDriver);
     };
-  }, [tourId, currentUser?.uid, userName, isDriver]);
+  }, [tourId, principalId, userName, isDriver]);
 
   // Keyboard listeners
   useEffect(() => {
@@ -1387,7 +1402,7 @@ export default function ChatScreen({
 
       setInputText(text);
 
-      if (!tourId || !currentUser?.uid) return;
+      if (!tourId || !principalId) return;
 
       // Clear existing timeout
       if (typingTimeoutRef.current) {
@@ -1396,17 +1411,17 @@ export default function ChatScreen({
 
       // Set typing status
       if (text.trim().length > 0) {
-        setTypingStatus(tourId, currentUser.uid, userName, true, isDriver);
+        setTypingStatus(tourId, principalId, userName, true, isDriver);
 
         // Clear typing after 3 seconds of inactivity
         typingTimeoutRef.current = setTimeout(() => {
-          setTypingStatus(tourId, currentUser.uid, userName, false, isDriver);
+          setTypingStatus(tourId, principalId, userName, false, isDriver);
         }, 3000);
       } else {
-        setTypingStatus(tourId, currentUser.uid, userName, false, isDriver);
+        setTypingStatus(tourId, principalId, userName, false, isDriver);
       }
     },
-    [draftRestored, inputText, tourId, currentUser?.uid, userName, isDriver]
+    [draftRestored, inputText, tourId, principalId, userName, isDriver]
   );
 
   // Send message handler
@@ -1426,11 +1441,13 @@ export default function ChatScreen({
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
-    setTypingStatus(tourId, currentUser?.uid, userName, false, isDriver);
+    setTypingStatus(tourId, principalId, userName, false, isDriver);
 
     const senderInfo = {
       name: userName,
-      userId: currentUser?.uid || 'anonymous',
+      userId: principalId,
+      principalId,
+      principalType: canonicalIdentity?.principalType || (isDriver ? 'driver' : 'passenger'),
       isDriver,
       ...(passengerStableId ? { stablePassengerId: passengerStableId } : {}),
     };
@@ -1509,7 +1526,7 @@ export default function ChatScreen({
     sending,
     inputText,
     tourId,
-    currentUser?.uid,
+    principalId,
     userName,
     isDriver,
     passengerStableId,
@@ -1522,7 +1539,7 @@ export default function ChatScreen({
 
   const handleRetryFailedMessage = useCallback(async (message) => {
     if (!canRetryFailedMessageForCurrentSession(message)) return;
-    if (!tourId || !currentUser?.uid) return;
+    if (!tourId || !principalId) return;
     if (retryingMessageIds[message.id]) return;
 
     const trimmed = message.text.trim();
@@ -1541,7 +1558,9 @@ export default function ChatScreen({
 
     const senderInfo = {
       name: userName,
-      userId: currentUser.uid,
+      userId: principalId,
+      principalId,
+      principalType: canonicalIdentity?.principalType || (isDriver ? 'driver' : 'passenger'),
       isDriver,
       ...(passengerStableId ? { stablePassengerId: passengerStableId } : {}),
     };
@@ -1600,7 +1619,7 @@ export default function ChatScreen({
     }
   }, [
     canRetryFailedMessageForCurrentSession,
-    currentUser?.uid,
+    principalId,
     internalDriverChat,
     isDriver,
     passengerStableId,
@@ -1690,7 +1709,7 @@ export default function ChatScreen({
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
       try {
-        const userId = currentUser?.uid || 'anonymous';
+        const userId = principalId;
 
         // Upload to Firebase Storage using correct signature:
         // uploadPhoto(uri, tourId, userId, caption, options)
@@ -1709,6 +1728,8 @@ export default function ChatScreen({
           const senderInfo = {
             name: userName,
             userId,
+            principalId: userId,
+            principalType: canonicalIdentity?.principalType || (isDriver ? 'driver' : 'passenger'),
             isDriver,
             ...(passengerStableId ? { stablePassengerId: passengerStableId } : {}),
           };
@@ -1726,18 +1747,18 @@ export default function ChatScreen({
 
       setUploadingImage(false);
     },
-    [tourId, userName, currentUser?.uid, isDriver, passengerStableId, logSenderIdentityPath]
+    [tourId, userName, principalId, isDriver, passengerStableId, logSenderIdentityPath]
   );
 
   // Handle reaction
   const handleReaction = useCallback(
     async (messageId, emoji) => {
-      if (!currentUser?.uid) return;
+      if (!principalId) return;
       if (!messageId || !emoji) return;
 
       setShowReactionPicker(false);
       setSelectedMessage(null);
-      const lockKey = `${messageId}::${emoji}::${currentUser.uid}`;
+      const lockKey = `${messageId}::${emoji}::${principalId}`;
       if (inFlightReactionKeysRef.current.has(lockKey)) {
         return;
       }
@@ -1754,7 +1775,7 @@ export default function ChatScreen({
           const { nextReactions } = applyOptimisticReactionToggle({
             reactions: message.reactions,
             emoji,
-            userId: currentUser.uid,
+            userId: principalId,
           });
           return { ...message, reactions: nextReactions };
         })
@@ -1766,7 +1787,7 @@ export default function ChatScreen({
       }
 
       try {
-        const result = await toggleReaction(tourId, messageId, emoji, currentUser.uid);
+        const result = await toggleReaction(tourId, messageId, emoji, principalId);
         if (!result?.success) {
           throw new Error(result?.error || 'Unknown error');
         }
@@ -1783,7 +1804,7 @@ export default function ChatScreen({
           tourId,
           messageId,
           emoji,
-          userId: currentUser.uid,
+          userId: principalId,
           error: error?.message || 'Unknown error',
         });
         showReactionFailureFeedback('Could not update reaction. Check your connection and try again.');
@@ -1792,7 +1813,7 @@ export default function ChatScreen({
         inFlightReactionKeysRef.current.delete(lockKey);
       }
     },
-    [tourId, currentUser?.uid, showReactionFailureFeedback]
+    [tourId, principalId, showReactionFailureFeedback]
   );
 
   // Handle message long press
@@ -1890,14 +1911,14 @@ export default function ChatScreen({
   // Handle delete message
   const handleDeleteMessage = useCallback(async () => {
     if (selectedMessage) {
-      const result = await deleteMessage(tourId, selectedMessage.id, currentUser?.uid, isDriver);
+      const result = await deleteMessage(tourId, selectedMessage.id, principalId, isDriver);
       if (result.success) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
     }
     setShowActionMenu(false);
     setSelectedMessage(null);
-  }, [tourId, selectedMessage, currentUser?.uid, isDriver]);
+  }, [tourId, selectedMessage, principalId, isDriver]);
 
   // Handle refresh
   const handleRefresh = useCallback(async () => {
@@ -2031,13 +2052,13 @@ export default function ChatScreen({
 
   const unreadSummary = useMemo(() => (
     buildUnreadSummary(
-      messages.filter((message) => !isMessageOwnedByCurrentSession(message, currentUser?.uid, identityBinding)),
+      messages.filter((message) => !isMessageOwnedByCurrentSession(message, canonicalIdentity)),
       {
         lastSeenTimestamp,
         currentUserId: null,
       }
     )
-  ), [messages, lastSeenTimestamp, currentUser?.uid, identityBinding]);
+  ), [messages, lastSeenTimestamp, canonicalIdentity]);
 
   const searchResults = useMemo(
     () => buildChatSearchResults(messages, searchQuery),
@@ -2058,7 +2079,7 @@ export default function ChatScreen({
         case 'drivers':
           return message.isDriver === true;
         case 'mine':
-          return isMessageOwnedByCurrentSession(message, currentUser?.uid, identityBinding);
+          return isMessageOwnedByCurrentSession(message, canonicalIdentity);
         case 'links':
           return typeof message.text === 'string' && new RegExp(URL_REGEX).test(message.text);
         case 'media':
@@ -2068,7 +2089,7 @@ export default function ChatScreen({
           return true;
       }
     });
-  }, [searchResults, messageLookupById, searchFilter, currentUser?.uid, identityBinding]);
+  }, [searchResults, messageLookupById, searchFilter, canonicalIdentity]);
 
   const activeSearchResultMessageId = useMemo(() => {
     if (filteredSearchResults.length === 0) return null;
@@ -2212,7 +2233,7 @@ export default function ChatScreen({
   // Render a single message
   const renderMessage = useCallback(
     (msg) => {
-      const isSelf = isMessageOwnedByCurrentSession(msg, currentUser?.uid, identityBinding);
+      const isSelf = isMessageOwnedByCurrentSession(msg, canonicalIdentity);
       const isMsgDriver = !!msg.isDriver;
       const isDeleted = !!msg.deleted;
       const isImage = msg.type === 'image';
@@ -2371,7 +2392,7 @@ export default function ChatScreen({
                 reactions={msg.reactions}
                 onReactionPress={handleReaction}
                 messageId={msg.id}
-                currentUserId={currentUser?.uid}
+                currentUserId={principalId}
               />
             </View>
           </View>
@@ -2390,7 +2411,7 @@ export default function ChatScreen({
     [
       canRetryFailedMessageForCurrentSession,
       identityBinding,
-      currentUser?.uid,
+      principalId,
       formatTime,
       handleMessageLongPress,
       handleReaction,
@@ -2885,7 +2906,7 @@ export default function ChatScreen({
         onCopyLink={handleCopyFirstLink}
         onOpenLink={handleOpenFirstLink}
         onDelete={handleDeleteMessage}
-        canDelete={isMessageOwnedByCurrentSession(selectedMessage, currentUser?.uid, identityBinding) || isDriver}
+        canDelete={isMessageOwnedByCurrentSession(selectedMessage, canonicalIdentity) || isDriver}
         insets={insets}
       />
 

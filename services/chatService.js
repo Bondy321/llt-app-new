@@ -174,16 +174,25 @@ const validateSenderInfo = (senderInfo) => {
     throw new Error('Invalid sender information');
   }
 
-  if (!senderInfo.userId || typeof senderInfo.userId !== 'string') {
-    throw new Error('Sender must have a valid userId');
+  const principalId = typeof senderInfo.principalId === 'string'
+    ? senderInfo.principalId.trim()
+    : (typeof senderInfo.userId === 'string' ? senderInfo.userId.trim() : '');
+
+  if (!principalId) {
+    throw new Error('Sender must have a valid principalId');
   }
 
   const normalizedStablePassengerId = typeof senderInfo.stablePassengerId === 'string'
     ? senderInfo.stablePassengerId.trim()
     : '';
+  const normalizedPrincipalType = typeof senderInfo.principalType === 'string'
+    ? senderInfo.principalType.trim()
+    : (principalId.startsWith('driver:') ? 'driver' : 'passenger');
 
   return {
-    userId: senderInfo.userId.trim(),
+    userId: principalId,
+    principalId,
+    principalType: normalizedPrincipalType || 'passenger',
     name: (senderInfo.name || 'Anonymous').trim(),
     isDriver: !!senderInfo.isDriver,
     ...(normalizedStablePassengerId ? { stablePassengerId: normalizedStablePassengerId } : {}),
@@ -287,7 +296,8 @@ const buildMessagePayload = (messageText, senderInfo, messageId, messageType = '
     id: messageId,
     text: sanitizedText,
     senderName: sanitizeInput(safeSender.name || 'Anonymous'),
-    senderId: safeSender.userId || 'anonymous',
+    senderId: safeSender.principalId || safeSender.userId || 'anonymous',
+    senderType: safeSender.principalType || (safeSender.isDriver ? 'driver' : 'passenger'),
     ...(safeSender.stablePassengerId ? { senderStableId: safeSender.stablePassengerId } : {}),
     timestamp,
     isDriver: !!safeSender.isDriver,
@@ -373,7 +383,8 @@ const sendMessageDirect = async (payload, dbInstance = realtimeDb) => {
     const payloadForDb = {
       text: validatedMessage,
       senderName: validatedSender.name,
-      senderId: validatedSender.userId,
+      senderId: validatedSender.principalId,
+      senderType: validatedSender.principalType,
       ...(validatedSender.stablePassengerId ? { senderStableId: validatedSender.stablePassengerId } : {}),
       timestamp: payload.timestamp || new Date().toISOString(),
       isDriver: validatedSender.isDriver,
@@ -411,7 +422,8 @@ const sendInternalMessageDirect = async (payload, dbInstance = realtimeDb) => {
     const payloadForDb = {
       text: validatedMessage,
       senderName: validatedSender.name,
-      senderId: validatedSender.userId,
+      senderId: validatedSender.principalId,
+      senderType: validatedSender.principalType,
       timestamp: payload.timestamp || new Date().toISOString(),
       isDriver: true,
       status: 'sent',
@@ -468,7 +480,8 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb,
       id: localMessageId,
       text: validatedMessage,
       senderName: validatedSender.name,
-      senderId: validatedSender.userId,
+      senderId: validatedSender.principalId,
+      senderType: validatedSender.principalType,
       ...(validatedSender.stablePassengerId ? { senderStableId: validatedSender.stablePassengerId } : {}),
       timestamp: payload.timestamp,
       isDriver: validatedSender.isDriver,
@@ -587,7 +600,8 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
       id: localMessageId,
       text: validatedMessage,
       senderName: validatedSender.name,
-      senderId: validatedSender.userId,
+      senderId: validatedSender.principalId,
+      senderType: validatedSender.principalType,
       timestamp: payload.timestamp,
       isDriver: true,
       status: 'queued',
