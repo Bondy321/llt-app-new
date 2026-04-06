@@ -126,8 +126,8 @@
             "reactions": {
               "$emoji": {
                 ".write": false,
-                "$userId": {
-                  ".write": "auth != null && auth.uid === $userId",
+                "$id": {
+                  ".write": "auth != null && (auth.uid === $id || $id === root.child('users/' + auth.uid + '/stablePassengerId').val() || $id === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $id + '/' + auth.uid).val() === true)",
                   ".validate": "!newData.exists() || newData.val() === true"
                 }
               }
@@ -141,14 +141,14 @@
           }
         },
         "typing": {
-          "$userId": {
-            ".write": "auth != null && auth.uid === $userId",
+          "$id": {
+            ".write": "auth != null && (auth.uid === $id || $id === root.child('users/' + auth.uid + '/stablePassengerId').val() || $id === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $id + '/' + auth.uid).val() === true)",
             ".validate": "!newData.exists() || (newData.hasChildren(['name', 'timestamp']) && newData.child('name').isString() && (!newData.child('isDriver').exists() || newData.child('isDriver').isBoolean()) && newData.child('timestamp').isNumber())"
           }
         },
         "presence": {
-          "$userId": {
-            ".write": "auth != null && auth.uid === $userId",
+          "$id": {
+            ".write": "auth != null && (auth.uid === $id || $id === root.child('users/' + auth.uid + '/stablePassengerId').val() || $id === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $id + '/' + auth.uid).val() === true)",
             ".validate": "!newData.exists() || (newData.hasChildren(['name', 'lastSeen', 'online']) && newData.child('name').isString() && (!newData.child('isDriver').exists() || newData.child('isDriver').isBoolean()) && newData.child('lastSeen').isNumber() && newData.child('online').isBoolean())"
           }
         }
