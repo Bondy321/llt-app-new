@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const {
   sendMessage,
+  sendInternalDriverMessage,
   markChatAsRead,
   markInternalChatAsRead,
   toggleReaction,
@@ -255,6 +256,27 @@ test('sendMessage rejects passenger writes without stable sender identity once p
   assert.equal(result.success, false);
   assert.match(result.error, /senderStableId is required/i);
   assert.equal(mockDb.refCalls.length, 0);
+});
+
+test('sendInternalDriverMessage writes senderStableId for driver principals when explicit stable id is not provided', async () => {
+  const mockDb = createMockRealtimeDb();
+  const senderInfo = {
+    name: 'Driver Bondy',
+    principalId: 'driver:BONDY',
+    principalType: 'driver',
+    isDriver: true,
+  };
+
+  const result = await sendInternalDriverMessage('tour-internal', 'Ops check-in', senderInfo, mockDb, {
+    messageId: 'int-driver-1',
+  });
+
+  assert.equal(result.success, true);
+  const writeRef = mockDb.refCalls.find((refCall) => refCall.path === 'internal_chats/tour-internal/messages/int-driver-1');
+  assert.ok(writeRef);
+  assert.equal(writeRef.setCalls.length, 1);
+  assert.equal(writeRef.setCalls[0].senderType, 'driver');
+  assert.equal(writeRef.setCalls[0].senderStableId, 'driver:BONDY');
 });
 
 
