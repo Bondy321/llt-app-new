@@ -23,7 +23,13 @@ test('manifest update queues when offline option is false', async () => {
 
 test('chat send queues when offline option is false', async () => {
   await clearQueue();
-  const result = await sendMessage('tour-1', 'Hello queue', { name: 'Tester', userId: 'u-1', isDriver: false }, null, { online: false });
+  const result = await sendMessage(
+    'tour-1',
+    'Hello queue',
+    { name: 'Tester', userId: 'stable-pax-1', principalType: 'passenger', stablePassengerId: 'stable-pax-1', isDriver: false },
+    null,
+    { online: false }
+  );
   assert.equal(result.success, true);
   assert.equal(result.queued, true);
   assert.equal(result.message.status, 'queued');

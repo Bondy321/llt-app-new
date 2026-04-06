@@ -176,7 +176,7 @@ const assertNoReactionParentWrites = (refCalls, tourId, messageId, emoji) => {
 
 test('sendMessage builds payload with sender info and driver flag', async () => {
   const mockDb = createMockRealtimeDb();
-  const senderInfo = { name: 'Alex', userId: 'user-1', isDriver: true };
+  const senderInfo = { name: 'Alex', userId: 'driver:alex', principalType: 'driver', isDriver: true };
 
   const result = await sendMessage('tour-123', ' Hello ', senderInfo, mockDb);
 
@@ -184,7 +184,7 @@ test('sendMessage builds payload with sender info and driver flag', async () => 
   assert.ok(result.message.id);
   assert.equal(result.message.text, 'Hello');
   assert.equal(result.message.senderName, 'Alex');
-  assert.equal(result.message.senderId, 'user-1');
+  assert.equal(result.message.senderId, 'driver:alex');
   assert.equal(result.message.isDriver, true);
   assert.ok(new Date(result.message.timestamp).getTime());
 
@@ -192,7 +192,7 @@ test('sendMessage builds payload with sender info and driver flag', async () => 
   assert.ok(refCall);
   assert.equal(refCall.setCalls[0].text, 'Hello');
   assert.equal(refCall.setCalls[0].senderName, 'Alex');
-  assert.equal(refCall.setCalls[0].senderId, 'user-1');
+  assert.equal(refCall.setCalls[0].senderId, 'driver:alex');
   assert.equal(refCall.setCalls[0].timestamp, result.message.timestamp);
   assert.equal(refCall.setCalls[0].isDriver, true);
 });
@@ -208,7 +208,13 @@ test('sendMessage rejects empty content', async () => {
 
 test('sendMessage persists sanitized reply context metadata', async () => {
   const mockDb = createMockRealtimeDb();
-  const senderInfo = { name: 'Jamie', userId: 'user-9', isDriver: false };
+  const senderInfo = {
+    name: 'Jamie',
+    userId: 'passenger-9',
+    principalType: 'passenger',
+    stablePassengerId: 'passenger-9',
+    isDriver: false,
+  };
 
   const result = await sendMessage('tour-reply', 'Following up', senderInfo, mockDb, {
     replyTo: {
@@ -233,6 +239,22 @@ test('sendMessage persists sanitized reply context metadata', async () => {
     senderName: 'Driver Bondy',
     previewText: 'Please be at the pickup point by 08:15 AM.',
   });
+});
+
+test('sendMessage rejects passenger writes without stable sender identity once principal is known', async () => {
+  const mockDb = createMockRealtimeDb();
+  const senderInfo = {
+    name: 'Morgan',
+    userId: 'uid-legacy-1',
+    principalType: 'passenger',
+    isDriver: false,
+  };
+
+  const result = await sendMessage('tour-legacy', 'Hello', senderInfo, mockDb);
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /senderStableId is required/i);
+  assert.equal(mockDb.refCalls.length, 0);
 });
 
 

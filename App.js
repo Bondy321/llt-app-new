@@ -552,7 +552,6 @@ function AppContent() {
     if (stablePassengerId && user?.uid && tourDetails?.id) {
       migrateRecentChatMessagesForStableIdentity({
         tourId: tourDetails.id,
-        currentAuthUid: user.uid,
         stablePassengerId,
         realtimeDb,
         logger,

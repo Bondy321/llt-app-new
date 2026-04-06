@@ -184,10 +184,20 @@ const validateSenderInfo = (senderInfo) => {
 
   const normalizedStablePassengerId = typeof senderInfo.stablePassengerId === 'string'
     ? senderInfo.stablePassengerId.trim()
+    : (typeof senderInfo.senderStableId === 'string' ? senderInfo.senderStableId.trim() : '');
+  const normalizedAuthUid = typeof senderInfo.authUid === 'string'
+    ? senderInfo.authUid.trim()
     : '';
   const normalizedPrincipalType = typeof senderInfo.principalType === 'string'
     ? senderInfo.principalType.trim()
     : (principalId.startsWith('driver:') ? 'driver' : 'passenger');
+  const isKnownPassengerIdentity = normalizedPrincipalType === 'passenger'
+    && principalId !== 'anonymous'
+    && !principalId.startsWith('driver:');
+
+  if (isKnownPassengerIdentity && !normalizedStablePassengerId) {
+    throw new Error('Passenger senderStableId is required once identity is known');
+  }
 
   return {
     userId: principalId,
@@ -195,6 +205,7 @@ const validateSenderInfo = (senderInfo) => {
     principalType: normalizedPrincipalType || 'passenger',
     name: (senderInfo.name || 'Anonymous').trim(),
     isDriver: !!senderInfo.isDriver,
+    ...(normalizedAuthUid ? { authUid: normalizedAuthUid } : {}),
     ...(normalizedStablePassengerId ? { stablePassengerId: normalizedStablePassengerId } : {}),
   };
 };
