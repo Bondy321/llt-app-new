@@ -7,6 +7,7 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
+const { sendInternalDriverMessage } = require('../../services/chatService');
 
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const PROJECT_ID = 'demo-llt-rules';
@@ -14,6 +15,9 @@ const TOUR_ID = 'TOUR_001';
 const MESSAGE_ID = 'MSG_001';
 const MESSAGE_PATH = `chats/${TOUR_ID}/messages/${MESSAGE_ID}`;
 const REACTION_PATH = `${MESSAGE_PATH}/reactions/👍`;
+const DRIVER_AUTH_UID = 'driver-auth-1';
+const DRIVER_PRINCIPAL_ID = 'driver:BONDY';
+const INTERNAL_TOUR_ID = 'TOUR_INTERNAL_001';
 
 const parseHost = () => {
   const value = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
@@ -42,6 +46,8 @@ const seedMessage = async () => {
       isDriver: false,
       status: 'sent',
     });
+
+    await context.database(dbUrl).ref(`identity_bindings/${DRIVER_PRINCIPAL_ID}/${DRIVER_AUTH_UID}`).set(true);
   });
 };
 
@@ -95,4 +101,27 @@ test('allows admin actions per existing policy (message text edit)', async () =>
 
   const snapshot = await adminTextRef.get();
   assert.equal(snapshot.val(), 'admin text update');
+});
+
+test('service-generated internal driver message payload is accepted by rules', async () => {
+  const senderInfo = {
+    name: 'Driver Bondy',
+    principalId: DRIVER_PRINCIPAL_ID,
+    principalType: 'driver',
+    isDriver: true,
+  };
+
+  const result = await sendInternalDriverMessage(
+    INTERNAL_TOUR_ID,
+    'Internal operations update',
+    senderInfo,
+    dbFor(DRIVER_AUTH_UID),
+    { messageId: 'int_rules_001' }
+  );
+
+  assert.equal(result.success, true);
+  const written = await dbFor(DRIVER_AUTH_UID).ref(`internal_chats/${INTERNAL_TOUR_ID}/messages/int_rules_001`).get();
+  assert.equal(written.exists(), true);
+  assert.equal(written.child('senderType').val(), 'driver');
+  assert.equal(written.child('senderStableId').val(), DRIVER_PRINCIPAL_ID);
 });

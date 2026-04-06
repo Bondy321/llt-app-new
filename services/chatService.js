@@ -199,6 +199,9 @@ const validateSenderInfo = (senderInfo) => {
     throw new Error('Passenger senderStableId is required once identity is known');
   }
 
+  const resolvedStablePassengerId = normalizedStablePassengerId
+    || (normalizedPrincipalType === 'driver' ? principalId : '');
+
   return {
     userId: principalId,
     principalId,
@@ -206,7 +209,7 @@ const validateSenderInfo = (senderInfo) => {
     name: (senderInfo.name || 'Anonymous').trim(),
     isDriver: !!senderInfo.isDriver,
     ...(normalizedAuthUid ? { authUid: normalizedAuthUid } : {}),
-    ...(normalizedStablePassengerId ? { stablePassengerId: normalizedStablePassengerId } : {}),
+    ...(resolvedStablePassengerId ? { stablePassengerId: resolvedStablePassengerId } : {}),
   };
 };
 
@@ -435,6 +438,7 @@ const sendInternalMessageDirect = async (payload, dbInstance = realtimeDb) => {
       senderName: validatedSender.name,
       senderId: validatedSender.principalId,
       senderType: validatedSender.principalType,
+      ...(validatedSender.stablePassengerId ? { senderStableId: validatedSender.stablePassengerId } : {}),
       timestamp: payload.timestamp || new Date().toISOString(),
       isDriver: true,
       status: 'sent',
@@ -613,6 +617,7 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
       senderName: validatedSender.name,
       senderId: validatedSender.principalId,
       senderType: validatedSender.principalType,
+      ...(validatedSender.stablePassengerId ? { senderStableId: validatedSender.stablePassengerId } : {}),
       timestamp: payload.timestamp,
       isDriver: true,
       status: 'queued',
