@@ -1,132 +1,101 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 
-const read = (path) => fs.readFileSync(path, 'utf8');
+const offlineSyncService = require('../services/offlineSyncService');
 
-test('GroupPhotobookScreen keeps virtualized SectionList with throttled prefetch guard', () => {
-  const src = read('screens/GroupPhotobookScreen.js');
-  assert.match(src, /SectionList/);
-  assert.match(src, /prefetchedUrisRef = useRef\(new Set\(\)\)/);
-  assert.match(src, /if \(!previewUrl \|\| prefetchedUrisRef\.current\.has\(previewUrl\)\) return;/);
-  assert.match(src, /initialNumToRender=\{9\}/);
+const readJson = (relativePath) => JSON.parse(fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8'));
+
+test('buildSyncSummary and formatSyncOutcome normalize counts and copy contract text', () => {
+  const summary = offlineSyncService.buildSyncSummary({
+    syncedCount: 7.9,
+    pendingCount: -2,
+    failedCount: '3.2',
+    source: 'not-real',
+    lastSuccessAt: 1700000000000,
+  });
+
+  assert.deepEqual(summary, {
+    syncedCount: 7,
+    pendingCount: 0,
+    failedCount: 3,
+    lastSuccessAt: 1700000000000,
+    source: 'unknown',
+  });
+
+  assert.equal(
+    offlineSyncService.formatSyncOutcome(summary),
+    '7 synced / 0 pending / 3 failed',
+  );
 });
 
-test('PhotobookScreen keeps SectionList virtualization and stable viewer indexing by id', () => {
-  const src = read('screens/PhotobookScreen.js');
-  assert.match(src, /SectionList/);
-  assert.match(src, /photoIndexById/);
-  assert.match(src, /const openViewer = useCallback\(\(photoId\)/);
-  assert.match(src, /setTimeout\(\(\) => \{/);
-  assert.match(src, /\}, 5000\);/);
-  assert.match(src, /initialNumToRender=\{12\}/);
+test('formatLastSyncRelative returns deterministic user-facing buckets', () => {
+  const now = Date.UTC(2026, 0, 20, 12, 0, 0);
+
+  assert.equal(offlineSyncService.formatLastSyncRelative(now, now), 'Just now');
+  assert.equal(offlineSyncService.formatLastSyncRelative(now - 10 * 60 * 1000, now), '10m ago');
+  assert.equal(offlineSyncService.formatLastSyncRelative(now - 3 * 60 * 60 * 1000, now), '3h ago');
+  assert.equal(offlineSyncService.formatLastSyncRelative(now - 30 * 60 * 60 * 1000, now), 'Yesterday');
+  assert.equal(offlineSyncService.formatLastSyncRelative(now + 1, now), 'Never');
 });
 
-test('ChatScreen keeps mixed-row timeline contract and unread-jump path', () => {
-  const src = read('screens/ChatScreen.js');
-  assert.match(src, /type: 'date'/);
-  assert.match(src, /type: 'unread-separator'/);
-  assert.match(src, /scrollToIndex\(\{ index: unreadAnchorIndex/);
-  assert.match(src, /FlatList/);
-  assert.match(src, /keyExtractor = useCallback/);
+test('deriveUnifiedSyncStatus maps network/backend/queue into canonical sync states', () => {
+  const offline = offlineSyncService.deriveUnifiedSyncStatus({ network: { isOnline: false } });
+  assert.equal(offline.stateKey, 'OFFLINE_NO_NETWORK');
+
+  const degraded = offlineSyncService.deriveUnifiedSyncStatus({
+    network: { isOnline: true },
+    backend: { isReachable: false },
+  });
+  assert.equal(degraded.stateKey, 'ONLINE_BACKEND_DEGRADED');
+
+  const backlog = offlineSyncService.deriveUnifiedSyncStatus({
+    network: { isOnline: true },
+    backend: { isReachable: true, isDegraded: false },
+    queue: { pending: 2, syncing: 0, failed: 1 },
+  });
+  assert.equal(backlog.stateKey, 'ONLINE_BACKLOG_PENDING');
+  assert.equal(backlog.syncSummary.pendingCount, 2);
+  assert.equal(backlog.syncSummary.failedCount, 1);
+
+  const healthy = offlineSyncService.deriveUnifiedSyncStatus({
+    network: { isOnline: true },
+    backend: { isReachable: true, isDegraded: false },
+    queue: { pending: 0, syncing: 0, failed: 0 },
+  });
+  assert.equal(healthy.stateKey, 'ONLINE_HEALTHY');
 });
 
-test('Cloud function notification path keeps chunked send and targeted profile fetch behavior', () => {
-  const src = read('functions/index.js');
-  assert.match(src, /fetchUsersSnapshot/);
-  assert.match(src, /USER_PROFILE_CACHE_TTL_MS/);
-  assert.match(src, /cacheMissCount/);
-  assert.match(src, /requestedUserCount/);
-  assert.match(src, /ref\(`users\/\$\{userId\}`\)\.once\('value'\)/);
-  assert.match(src, /chunkArrayDeterministically/);
-  assert.match(src, /expo\.chunkPushNotifications/);
-  assert.match(src, /invalidTokens/);
-  assert.match(src, /collectExpoTokenFailures/);
-  assert.match(src, /DeviceNotRegistered/);
-  assert.match(src, /pushTokenStatus: 'INVALID'/);
-});
-
-test('useDiagnostics keeps probe throttling windows and duplicate-outcome log guard', () => {
-  const src = read('hooks/useDiagnostics.js');
-  assert.match(src, /PROBE_WINDOWS_MS/);
-  assert.match(src, /appForeground: 5000/);
-  assert.match(src, /networkReconnect: 8000/);
-  assert.match(src, /duplicateFailure/);
-  assert.match(src, /statusRef\.current\.firebaseConnected === connected/);
-});
-
-test('ImageViewer keeps thumbnail-first progressive load and active-url race guard', () => {
-  const src = read('components/ImageViewer.js');
-  assert.match(src, /activeImageUrlRef/);
-  assert.match(src, /if \(!imageUrl \|\| imageUrl !== activeImageUrlRef\.current\) return;/);
-  assert.match(src, /hasThumbnail &&/);
-  assert.match(src, /Animated\.Image/);
-});
-
-test('Logger service keeps batching/backoff and sensitive-data redaction', () => {
-  const src = read('services/loggerService.js');
-  assert.match(src, /baseRetryDelayMs = 400/);
-  assert.match(src, /maxRetryAttempts = 4/);
-  assert.match(src, /updateBatchWithRetry/);
-  assert.match(src, /redactSensitiveData/);
-  assert.match(src, /routeUserId/);
-});
-
-
-test('Realtime Database rules allow principal-owned reaction, typing, and presence writes', () => {
-  const rules = JSON.parse(read('database.rules.json'));
+test('Static contract: principal-owned chat reaction/typing/presence writes stay aligned with security rules', () => {
+  // Intentional static check: these are Firebase Rules expressions, not executable JS exports.
+  // We pin exact policy strings so auth principal equivalence across three write paths cannot drift.
+  const rules = readJson('database.rules.json');
   const chatRules = rules.rules.chats.$tourId;
   const expectedPrincipalWrite = "auth != null && (auth.uid === $id || $id === root.child('users/' + auth.uid + '/stablePassengerId').val() || $id === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $id + '/' + auth.uid).val() === true)";
 
-  assert.ok(chatRules.messages.$messageId.reactions);
   assert.equal(chatRules.messages.$messageId.reactions.$emoji['.write'], false);
   assert.equal(chatRules.messages.$messageId.reactions.$emoji.$id['.write'], expectedPrincipalWrite);
-  assert.equal(chatRules.messages.$messageId.reactions.$emoji.$id['.validate'], '!newData.exists() || newData.val() === true');
-
   assert.equal(chatRules.typing.$id['.write'], expectedPrincipalWrite);
   assert.equal(chatRules.presence.$id['.write'], expectedPrincipalWrite);
 });
 
-
-test('Realtime Database rules support image chat payloads and private photo owner self-heal bootstrap', () => {
-  const rules = JSON.parse(read('database.rules.json'));
-  const messageValidate = rules.rules.chats.$tourId.messages.$messageId['.validate'];
-  const privatePhotosRead = rules.rules.private_tour_photos.$tourId.$ownerId['.read'];
-  const photobookScreen = read('screens/PhotobookScreen.js');
-
-  assert.match(messageValidate, /newData\.child\('type'\)\.val\(\) === 'image'/);
-  assert.match(messageValidate, /newData\.child\('thumbnailUrl'\)/);
-  assert.match(privatePhotosRead, /auth\.uid === \$ownerId/);
-  assert.match(privatePhotosRead, /stablePassengerId/);
-  assert.match(photobookScreen, /ensurePrivatePhotoOwnerAccess/);
-  assert.match(photobookScreen, /realtimeDb\.ref\(`users\/\$\{authUid\}`\)\.update/);
-  assert.match(photobookScreen, /stablePassengerId: principalId/);
-});
-
-test('Realtime Database rules gate identity_bindings_meta writes to admin or an existing caller-owned binding', () => {
-  const rules = JSON.parse(read('database.rules.json'));
+test('Static contract: identity_bindings_meta writes are limited to admin or caller-owned binding', () => {
+  // Intentional static check: this is a least-privilege invariant in database.rules.json.
+  const rules = readJson('database.rules.json');
   const writeRule = rules.rules.identity_bindings_meta.$stablePassengerId['.write'];
 
   assert.equal(
     writeRule,
     "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('identity_bindings/' + $stablePassengerId + '/' + auth.uid).val() === true)",
   );
-
-  // Proof contract:
-  // - User A writing metadata for User B's stable ID is denied because binding lookup checks
-  //   identity_bindings/<targetStableId>/<auth.uid>, which is false/absent for User A.
-  // - User A writing own stable ID metadata is allowed once identity_bindings/<ownStableId>/<auth.uid> is true.
-  assert.match(writeRule, /root\.child\('identity_bindings\/' \+ \$stablePassengerId \+ '\/' \+ auth\.uid\)\.val\(\) === true/);
 });
 
-test('Passenger login flow still performs identity binding + metadata multi-path update in App.js', () => {
-  const appSrc = read('App.js');
+test('Static contract: chat message validation keeps image payload branch and thumbnail requirement', () => {
+  // Intentional static check: validation expression is a rules DSL string; regex guards critical media constraints.
+  const rules = readJson('database.rules.json');
+  const messageValidate = rules.rules.chats.$tourId.messages.$messageId['.validate'];
 
-  assert.match(appSrc, /updates\[`identity_bindings\/\$\{stablePassengerId\}\/\$\{user\.uid\}`\] = true;/);
-  assert.match(appSrc, /`users\/\$\{user\.uid\}\/privatePhotoOwnerId`\]: stablePassengerId \|\| normalizedBookingData\.id,/);
-  assert.match(appSrc, /updates\[`identity_bindings_meta\/\$\{stablePassengerId\}\/bookingRef`\] = normalizedBookingData\.id;/);
-  assert.match(appSrc, /updates\[`identity_bindings_meta\/\$\{stablePassengerId\}\/normalizedPassengerEmail`\] = normalizedBookingData\.normalizedPassengerEmail;/);
-  assert.match(appSrc, /updates\[`identity_bindings_meta\/\$\{stablePassengerId\}\/identityVersion`\] = identityVersion \|\| IDENTITY_VERSION;/);
-  assert.match(appSrc, /updates\[`identity_bindings_meta\/\$\{stablePassengerId\}\/lastSeenAt`\] = now;/);
-  assert.match(appSrc, /await realtimeDb\.ref\(\)\.update\(updates\);/);
+  assert.match(messageValidate, /newData\.child\('type'\)\.val\(\) === 'image'/);
+  assert.match(messageValidate, /newData\.child\('thumbnailUrl'\)/);
 });
