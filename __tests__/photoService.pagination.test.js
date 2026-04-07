@@ -1,6 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const firebaseModulePath = require.resolve('../firebase');
+delete require.cache[firebaseModulePath];
+require.cache[firebaseModulePath] = {
+  id: firebaseModulePath,
+  filename: firebaseModulePath,
+  loaded: true,
+  exports: {
+    storage: {},
+    realtimeDbModular: {},
+  },
+};
+
 const {
   fetchTourPhotosPage,
   fetchPrivatePhotosPage,
@@ -89,7 +101,7 @@ test('fetchTourPhotosPage ignores invalid cursor values and excludes explicit cu
 
 test('fetchPrivatePhotosPage normalizes timestamps and returns empty contract for no rows', async () => {
   const empty = await fetchPrivatePhotosPage(
-    { tourId: 'T-9', userId: 'U-9', limit: -3 },
+    { tourId: 'T-9', ownerId: 'U-9', limit: -3 },
     {
       realtimeDbInstance: {},
       dbRefFn: (_db, path) => ({ path }),
