@@ -55,10 +55,10 @@ test('useDiagnostics keeps probe throttling windows and duplicate-outcome log gu
   assert.match(src, /statusRef\.current\.firebaseConnected === connected/);
 });
 
-test('ImageViewer keeps thumbnail-first progressive load and load-id race guard', () => {
+test('ImageViewer keeps thumbnail-first progressive load and active-url race guard', () => {
   const src = read('components/ImageViewer.js');
-  assert.match(src, /imageLoadIdRef/);
-  assert.match(src, /if \(loadId !== imageLoadIdRef\.current\) return;/);
+  assert.match(src, /activeImageUrlRef/);
+  assert.match(src, /if \(!imageUrl \|\| imageUrl !== activeImageUrlRef\.current\) return;/);
   assert.match(src, /hasThumbnail &&/);
   assert.match(src, /Animated\.Image/);
 });
