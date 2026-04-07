@@ -1,6 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
+const firebaseModulePath = require.resolve('../firebase');
+delete require.cache[firebaseModulePath];
+require.cache[firebaseModulePath] = {
+  id: firebaseModulePath,
+  filename: firebaseModulePath,
+  loaded: true,
+  exports: {
+    storage: {},
+    realtimeDbModular: {},
+  },
+};
+
 const {
   uploadPhoto,
   fetchTourPhotosPage,
@@ -475,7 +487,7 @@ test('fetchPrivatePhotosPage applies endBefore cursor and normalizes timestamps 
 
   const result = await fetchPrivatePhotosPage({
     tourId: 'tour-2',
-    userId: 'user-2',
+    ownerId: 'user-2',
     limit: 3,
     endBefore: { timestamp: '120', id: 'cursor-a' },
   }, {
