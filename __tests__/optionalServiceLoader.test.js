@@ -20,10 +20,21 @@ describe('loadOptionalService', () => {
     const { loadOptionalService } = require(loaderPath);
     const loaded = loadOptionalService({
       modulePath: './timeUtils',
+      loadModule: () => require('../services/timeUtils'),
       serviceLabel: 'Time service',
     });
 
     assert.equal(typeof loaded.parseTimestampMs, 'function');
+  });
+
+  test('returns null when loadModule is missing', () => {
+    const { loadOptionalService } = require(loaderPath);
+    const loaded = loadOptionalService({
+      modulePath: './missingLoadModule',
+      serviceLabel: 'Missing loader service',
+    });
+
+    assert.equal(loaded, null);
   });
 
   test('returns null and does not warn in tests', () => {
