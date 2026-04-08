@@ -1,8 +1,8 @@
-# Loch Lomond Travel (LLT) App - Agent Onboarding & System Status
+# Loch Lomond Travel (LLT) App - Agent Onboarding & Current System Status
 
-Welcome, Agent. This document provides a comprehensive overview of the current state of the LLT App ecosystem. It details the architecture, technologies, patterns, known issues, and guidelines for contributing.
+Welcome, Agent. This file is the operational source of truth for contributors working in this repo.
 
-**Last Updated:** February 2026 (Production readiness + verifier hardening)
+**Last Updated:** April 8, 2026 (post stable-identity + sync-contract hardening)
 
 ---
 
@@ -10,1166 +10,446 @@ Welcome, Agent. This document provides a comprehensive overview of the current s
 
 1. [System Architecture Overview](#1-system-architecture-overview)
 2. [Technology Stack](#2-technology-stack)
-3. [Directory Structure](#3-directory-structure)
-4. [Database Architecture](#4-database-architecture)
-5. [Authentication System](#5-authentication-system)
-6. [Key Screens & Components](#6-key-screens--components)
-7. [Services Layer](#7-services-layer)
-8. [Design System (theme.js)](#8-design-system-themejs)
-9. [Firebase Cloud Functions](#9-firebase-cloud-functions)
-10. [Web Admin Dashboard](#10-web-admin-dashboard)
-11. [Firebase Security Rules](#11-firebase-security-rules)
-12. [Testing](#12-testing)
-13. [Build & Deployment](#13-build--deployment)
-14. [Code Patterns & Conventions](#14-code-patterns--conventions)
-15. [Known Issues & Watch List](#15-known-issues--watch-list)
-16. [Upcoming Roadmap](#16-upcoming-roadmap)
-17. [Agent Directives](#17-agent-directives)
+3. [Repository Structure](#3-repository-structure)
+4. [Data Model & Backend Contracts](#4-data-model--backend-contracts)
+5. [Authentication & Identity Model](#5-authentication--identity-model)
+6. [Mobile App Features & Screens](#6-mobile-app-features--screens)
+7. [Services Layer (Mobile)](#7-services-layer-mobile)
+8. [Web Admin Dashboard](#8-web-admin-dashboard)
+9. [Cloud Functions (Gen 2)](#9-cloud-functions-gen-2)
+10. [Security Rules & Access Constraints](#10-security-rules--access-constraints)
+11. [Testing Strategy & Commands](#11-testing-strategy--commands)
+12. [Build, Release, and Runtime Notes](#12-build-release-and-runtime-notes)
+13. [Engineering Contracts & Conventions](#13-engineering-contracts--conventions)
+14. [Known Risks / Watch List](#14-known-risks--watch-list)
+15. [Agent Directives (Must Follow)](#15-agent-directives-must-follow)
+16. [Quick Reference](#16-quick-reference)
 
 ---
 
 ## 1. System Architecture Overview
 
-The LLT ecosystem is a multi-platform solution consisting of:
-- **Mobile App** (React Native/Expo) - For passengers and drivers
-- **Web Admin Dashboard** (React/Vite) - For operations staff
-- **Serverless Backend** (Firebase Cloud Functions Gen 2)
+LLT is a multi-surface system:
+- **Mobile app** (Expo / React Native) for passengers + drivers
+- **Web admin** (React + Vite + Mantine) for ops team
+- **Firebase Cloud Functions Gen 2** for notification fanout + verifier endpoints + migration helpers
 
-### Core Data Flow
+### Core data flow
 
-```
-Google Sheets (CMS)
-       │
-       ▼
-Google Apps Script (syncToFirebase)
-       │
-       ▼
-Firebase Realtime Database (Source of Truth)
-       │
-       ├──► Mobile App (Passengers/Drivers)
-       │
-       ├──► Web Admin Dashboard (Operations)
-       │
-       └──► Cloud Functions (Notifications)
-              │
-              ▼
-         Expo Push API
+```text
+Google Sheets CMS
+   -> Apps Script sync
+      -> Firebase Realtime Database (source of truth)
+         -> Mobile app
+         -> Web admin
+         -> Cloud Functions (notifications/verifiers/migrations)
 ```
 
-### Google Sheets CMS Structure
+### Operational region
 
-| Sheet | Purpose |
-|-------|---------|
-| **Tour Master** | Tour definitions (codes, names, dates, durations) |
-| **Itineraries** | Raw text itineraries for each tour |
-| **Pax** | Passenger lists, pickup points, booking references |
+**All Firebase resources are in `europe-west1`**. New backend code must explicitly keep this region.
 
 ---
 
 ## 2. Technology Stack
 
-### Mobile App
+### Mobile app
+- React Native `0.81.5`
+- Expo SDK `54` (`expo ~54.0.33`)
+- React `19.1.0`
+- Firebase JS SDK `^12.10.0`
+- react-native-maps `1.20.1`
+- expo-notifications `~0.32.16`
+- expo-secure-store `~15.0.8`
+- @react-native-async-storage/async-storage `2.2.0`
+- @react-native-clipboard/clipboard `^1.16.3`
 
-| Category | Technology | Version |
-|----------|-----------|---------|
-| Framework | React Native | 0.81.5 |
-| Platform | Expo SDK | 54 |
-| React | React | 19.1.0 |
-| Database | Firebase Realtime Database | 9.21.0 |
-| Authentication | Firebase Auth (Anonymous) | 9.21.0 |
-| Storage | Firebase Cloud Storage | 9.21.0 |
-| Maps | react-native-maps | 1.20.1 |
-| Push Notifications | expo-notifications | Latest |
-| Secure Storage | expo-secure-store | Latest |
-| Location | expo-location | Latest |
-| Session Storage | @react-native-async-storage/async-storage | 2.2.0 |
+### Web admin
+- React `^19.2.0`
+- Vite `^7.2.4`
+- Mantine `^8.3.9`
+- Firebase `^12.6.0`
+- Vitest `^4.0.18`
 
-### Web Admin Dashboard
-
-| Category | Technology | Version |
-|----------|-----------|---------|
-| Framework | React | 19.2.0 |
-| Build Tool | Vite | 7.2.4 |
-| UI Library | Mantine | 8.3.9 |
-| Routing | React Router DOM | 7.9.6 |
-| Database | Firebase | 12.6.0 |
-
-### Backend
-
-| Category | Technology |
-|----------|-----------|
-| Functions | Firebase Cloud Functions Gen 2 |
-| Notifications | Expo Server SDK |
-| Admin SDK | Firebase Admin SDK |
-| Region | europe-west1 (Belgium) |
+### Backend (Functions)
+- firebase-functions `^7.1.1` (Gen 2 APIs)
+- firebase-admin `^13.7.0`
+- expo-server-sdk `^4.0.0`
+- Functions runtime target: Node `24`
 
 ---
 
-## 3. Directory Structure
+## 3. Repository Structure
 
+```text
+/llt-app-new
+├── App.js
+├── app.config.js
+├── firebase.js
+├── theme.js
+├── screens/
+├── components/
+├── services/
+├── utils/
+├── hooks/
+├── tests/                 # Node test suites (mobile + contracts)
+├── __tests__/             # additional mobile/service tests
+├── docs/                  # architecture and contract docs
+├── functions/             # Firebase Functions Gen 2
+└── web-admin/             # Vite React admin dashboard
 ```
-/llt-app-new/
-│
-├── App.js                          # Main entry point & screen routing
-├── index.js                        # Expo root component registration
-├── firebase.js                     # Firebase initialization & auth helpers
-├── theme.js                        # Centralized design system
-│
-├── app.json                        # Expo app configuration
-├── eas.json                        # EAS build profiles
-├── database.rules.json             # Firebase Security Rules
-├── firebase.json                   # Firebase Functions deployment config
-├── package.json                    # Mobile app dependencies
-├── babel.config.js                 # Babel configuration
-│
-├── screens/                        # UI Screens
-│   ├── LoginScreen.js              # Authentication (booking ref / driver code)
-│   ├── TourHomeScreen.js           # Passenger main dashboard
-│   ├── DriverHomeScreen.js         # Driver console
-│   ├── PassengerManifestScreen.js  # Driver boarding manifest
-│   ├── ItineraryScreen.js          # Tour timeline/schedule
-│   ├── ChatScreen.js               # Group & internal driver chat
-│   ├── MapScreen.js                # Live pickup location
-│   ├── PhotobookScreen.js          # Personal photo gallery
-│   ├── GroupPhotobookScreen.js     # Shared tour photos
-│   ├── NotificationPreferencesScreen.js  # User preferences
-│   └── SafetySupportScreen.js      # Emergency/safety features
-│
-├── services/                       # Business logic & API handlers
-│   ├── bookingServiceRealtime.js   # Booking validation & tour joining
-│   ├── chatService.js              # Chat message operations
-│   ├── photoService.js             # Photo upload/management
-│   ├── notificationService.js      # Push notification registration
-│   ├── loggerService.js            # Centralized logging with persistence
-│   ├── safetyService.js            # Safety/emergency features
-│   └── persistenceProvider.js      # Multi-layer storage provider
-│
-├── hooks/                          # Custom React Hooks
-│   └── useDiagnostics.js           # Network & Firebase connectivity
-│
-├── components/                     # Reusable UI Components
-│   ├── ImageViewer.js              # Photo gallery viewer
-│   ├── TodaysAgendaCard.js         # Schedule/agenda display
-│   └── ManifestBookingCard.js      # Booking status card
-│
-├── assets/                         # Static Assets
-│   ├── images/
-│   │   └── outward_app_icon.png    # App icon
-│   ├── splash.png                  # Splash screen
-│   ├── favicon.png
-│   └── adaptive-icon.png
-│
-├── functions/                      # Firebase Cloud Functions
-│   ├── index.js                    # Cloud Functions Gen 2 triggers
-│   ├── package.json
-│   └── package-lock.json
-│
-├── web-admin/                      # Web Operations Dashboard
-│   ├── src/
-│   │   ├── App.jsx                 # Main web admin app
-│   │   ├── main.jsx                # React entry point
-│   │   ├── firebase.js             # Web Firebase config
-│   │   ├── components/
-│   │   │   ├── DriversManager.jsx  # Driver CRUD operations
-│   │   │   ├── ToursManager.jsx    # Tour management
-│   │   │   ├── BroadcastPanel.jsx  # System-wide announcements
-│   │   │   ├── Dashboard.jsx       # Main operations dashboard
-│   │   │   └── Settings.jsx        # Admin settings
-│   │   └── services/
-│   │       └── tourService.js      # Tour operations helpers
-│   ├── vite.config.js
-│   └── package.json
-│
-├── tests/                          # Unit Tests
-│   └── joinTour.test.js            # Booking service tests
-│
-├── __tests__/                      # Additional Tests
-│   ├── chatService.test.js
-│   └── photoService.test.js
-│
-├── .env.example                    # Environment variables template
-├── .firebaserc                     # Firebase project configuration
-└── devcontainer.json               # Dev container setup
-```
+
+### Notable additions since early 2026
+- `services/identityService.js` + identity migration helpers
+- `services/offlineLoginResolver.js` for offline login gating
+- `utils/unifiedSyncContract.js` shared sync-state taxonomy
+- `docs/reactions-write-contract.md` (canonical reaction write rules)
+- web-admin parity tests (`healthContractParity`, URL filter sync coverage)
 
 ---
 
-## 4. Database Architecture
+## 4. Data Model & Backend Contracts
 
-### Firebase Realtime Database Structure
+Primary Realtime DB roots (do **not** rename):
+- `tours`
+- `bookings`
+- `tour_manifests`
+- `drivers`
+- `users`
+- `chats`
+- `internal_chats`
+- `group_tour_photos`
+- `private_tour_photos`
+- `identity_bindings`
+- `identity_bindings_meta`
+- `broadcasts`
 
-```
-{
-  // Tour definitions synced from Google Sheets
-  tours/{tourId}: {
-    name: string,
-    code: string,
-    startDate: string,
-    duration: number,
-    driverLocation: {
-      lat: number,
-      lng: number,
-      timestamp: number
-    },
-    currentParticipants: number,
-    participants/{userId}: {
-      joinedAt: timestamp
-    },
-    itinerary: {
-      stops: [{
-        name: string,
-        time: string,
-        description: string
-      }]
-    },
-    driverInfo: {
-      id: string,
-      name: string,
-      phone: string
-    }
-  },
+### Important modernized contracts
 
-  // Booking references linking passengers to tours
-  bookings/{bookingRef}: {
-    tourCode: string,
-    tourId: string,
-    passengerNames: string[],
-    pickupPoints: [{
-      location: string,
-      time: string
-    }],
-    seatNumbers: string[],
-    status: 'PENDING' | 'BOARDED' | 'NO_SHOW' | 'PARTIAL'
-  },
+1. **Driver assignment contract**
+   - Canonical active assignment key is `drivers/{driverId}/currentTourId`
+   - `activeTourId` exists as legacy fallback only
+   - Multi-path updates must keep `drivers`, `tour_manifests`, and related context in sync
 
-  // Tour manifests for driver boarding operations
-  tour_manifests/{tourId}: {
-    assigned_drivers: string[],        // Driver IDs
-    assigned_driver_codes: string[],   // Driver codes (D-BONDY)
-    bookings/{bookingRef}: {
-      status: 'PENDING' | 'BOARDED' | 'NO_SHOW' | 'PARTIAL',
-      passengerStatuses: string[]
-    }
-  },
+2. **Chat reaction contract**
+   - Canonical write path:
+     - `chats/{tourId}/messages/{messageId}/reactions/{emoji}/{userId} = true`
+   - Never overwrite `reactions/{emoji}` for toggle logic
+   - Legacy array/object reaction shapes are read-compatible only
 
-  // Driver profiles
-  drivers/{driverId}: {
-    id: string,
-    name: string,
-    phone: string,
-    authUid: string,                   // Firebase Auth UID
-    assignedTours: string[],
-    currentTourId: string,
-    currentTourCode: string
-  },
+3. **Manifest sync conflict policy**
+   - Compare local/server `lastUpdated`
+   - Newer timestamp wins
+   - Server-win path must reconcile local cache + user feedback
 
-  // Group chat (passengers + drivers)
-  chats/{tourId}/messages/{messageId}: {
-    senderId: string,
-    senderName: string,
-    text: string,
-    timestamp: number,
-    isDriver?: boolean
-  },
-
-  // Internal driver-only chat
-  internal_chats/{tourId}/messages/{messageId}: {
-    senderId: string,
-    senderName: string,
-    text: string,
-    timestamp: number
-  },
-
-  // User profiles (push tokens, preferences)
-  users/{userId}: {
-    pushToken: string,
-    preferences: {
-      chatNotifications: boolean,
-      itineraryNotifications: boolean
-    },
-    lastUpdated: timestamp,
-    deviceOS: string,
-    deviceModel: string,
-    appVersion: string
-  },
-
-  // Shared tour photos
-  group_tour_photos/{tourId}/{photoId}: {
-    uploaderId: string,
-    uploaderName: string,
-    url: string,
-    timestamp: number
-  },
-
-  // Private user photos
-  private_tour_photos/{tourId}/{userId}/{photoId}: {
-    url: string,
-    timestamp: number,
-    caption?: string
-  },
-
-  // Application logs
-  logs/{userId}/{sessionId}/{timestamp}: {
-    level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR',
-    component: string,
-    message: string,
-    data: object,
-    timestamp: number,
-    sessionId: string,
-    deviceInfo: object
-  }
-}
-```
-
-### Database Region
-
-**CRITICAL:** All Firebase resources are in `europe-west1` (Belgium).
-
-All new Cloud Functions MUST explicitly specify the region:
-```javascript
-exports.myFunction = onValueCreated(
-  { ref: '/path/{id}', region: 'europe-west1' },
-  async (event) => { ... }
-);
-```
+4. **Sync-state taxonomy contract**
+   - `OFFLINE_NO_NETWORK`
+   - `ONLINE_BACKEND_DEGRADED`
+   - `ONLINE_BACKLOG_PENDING`
+   - `ONLINE_HEALTHY`
 
 ---
 
-## 5. Authentication System
+## 5. Authentication & Identity Model
 
-The app uses a dual authentication system:
+Authentication remains anonymous Firebase auth at foundation, but login modes are more explicit:
 
-### 1. Anonymous Authentication (Foundation)
-- All users start with Firebase anonymous sign-in
-- Persisted via custom `AuthPersistence` class
-- Session restored automatically on app restart
+### Passenger login
+- Booking reference + passenger email verifier flow
+- `validateBookingReference()` integrates Cloud Function verifier responses
+- Verifier reasons are mapped to deterministic UX reasons (`INVALID_CREDENTIALS`, `TRY_AGAIN_LATER`, `INTERNAL_ERROR`, `METHOD_NOT_ALLOWED`, etc.)
 
-### 2. Passenger Mode (Booking Reference)
-```
-Login Code Format: T12345, ABC123, etc.
-```
-- Validates against `/bookings/{bookingRef}`
-- Links user UID to tour via booking data
-- Stores session in AsyncStorage
+### Driver login
+- Driver codes (`D-*`) map to driver records and assignment context
+- Successful login hydrates immediate Driver Home tour context
 
-### 3. Driver Mode (Hidden)
-```
-Login Code Format: D-BONDY, D-SMITH, etc.
-```
-- Any code starting with `D-` triggers driver mode
-- Validates against `/drivers/{driverId}`
-- Performs multi-path update on successful login:
-  - Updates `drivers/{driverId}/authUid`
-  - Updates `tour_manifests/{tourId}/assigned_drivers`
-  - Updates `tour_manifests/{tourId}/assigned_driver_codes`
+### Stable passenger identity (critical)
+- Canonical identity format: `pax_v1:{BOOKING_REF}:{normalized_email}`
+- Stored under user profile and binding paths
+- Used in chat/photo/rules ownership checks
 
-### Persistence Provider Hierarchy
-
-The app uses a fallback chain for data persistence:
-
-```javascript
-// persistenceProvider.js
-1. expo-secure-store    // Primary: encrypted, per-device
-2. AsyncStorage         // Fallback: plain storage
-3. In-memory mock       // Final: for tests/web
-```
+### Offline login behavior
+- Cached-session/Tour Pack identity permits offline re-entry for known users
+- Unknown first-time codes remain blocked offline with explicit reason mapping
 
 ---
 
-## 6. Key Screens & Components
+## 6. Mobile App Features & Screens
 
-### Passenger Screens
+Core screens (mobile):
+- `LoginScreen`, `TourHomeScreen`, `DriverHomeScreen`, `PassengerManifestScreen`
+- `ItineraryScreen`, `DriverItineraryScreen`
+- `ChatScreen`, `MapScreen`
+- `PhotobookScreen`, `GroupPhotobookScreen`
+- `NotificationPreferencesScreen`, `SafetySupportScreen`
 
-| Screen | File | Purpose |
-|--------|------|---------|
-| Login | `LoginScreen.js` | Authentication via booking ref |
-| Tour Home | `TourHomeScreen.js` | Main dashboard with manifest status |
-| Itinerary | `ItineraryScreen.js` | Tour schedule and timeline |
-| Chat | `ChatScreen.js` | Group chat with driver badges |
-| Map | `MapScreen.js` | Live pickup location display |
-| Photobook | `PhotobookScreen.js` | Personal photo gallery |
-| Group Photos | `GroupPhotobookScreen.js` | Shared tour photos |
-| Notifications | `NotificationPreferencesScreen.js` | Push preferences |
-| Safety | `SafetySupportScreen.js` | Emergency features |
-
-### Driver Screens
-
-| Screen | File | Purpose |
-|--------|------|---------|
-| Driver Home | `DriverHomeScreen.js` | Driver console with actions |
-| Manifest | `PassengerManifestScreen.js` | Boarding management |
-
-### Key Components
-
-| Component | File | Purpose |
-|-----------|------|---------|
-| Today's Agenda | `TodaysAgendaCard.js` | Current day schedule |
-| Manifest Card | `ManifestBookingCard.js` | Individual booking status |
-| Image Viewer | `ImageViewer.js` | Photo gallery modal |
+### UX hardening that is now expected
+- Non-blocking sync feedback (banner-first, fewer blocking alerts)
+- Chat unread anchors + jump-to-unread behavior
+- Pull-to-refresh tied to real queue replay outcomes
+- Driver location freshness/staleness messaging for both driver and passenger surfaces
 
 ---
 
-## 7. Services Layer
+## 7. Services Layer (Mobile)
 
-### bookingServiceRealtime.js
-Core booking and tour operations:
-- `validateLoginCode(code)` - Determines code type (booking/driver)
-- `joinTour(tourId, userId)` - Atomic tour joining with transactions
-- `assignDriverToTour(driverId, tourId)` - Multi-path driver assignment
-- `updateManifestStatus(tourId, bookingRef, status)` - Boarding updates
-- `deriveParentStatusFromPassengers(statuses)` - Status aggregation
+Key services and responsibilities:
 
-### chatService.js
-Chat operations:
-- `sendMessage(tourId, message)` - Send to group chat
-- `sendInternalMessage(tourId, message)` - Driver-only chat
-- `subscribeToMessages(tourId, callback)` - Real-time listener
-
-### photoService.js
-Photo management:
-- `uploadPhoto(tourId, userId, photo)` - Upload to Firebase Storage
-- `getGroupPhotos(tourId)` - Fetch shared photos
-- `getPrivatePhotos(tourId, userId)` - Fetch user photos
-
-### notificationService.js
-Push notification management:
-- `registerForPushNotifications()` - Get Expo push token
-- `saveUserPreferences(userId, prefs)` - Store preferences
-- `updatePushToken(userId, token)` - Update token in Firebase
-
-### loggerService.js
-Centralized logging with persistence:
-- `log(level, component, message, data)` - Create log entry
-- `uploadLogs(userId)` - Sync logs to Firebase
-- Maintains local queue (max 1000 entries)
-- Auto-uploads WARN+ level logs
-
-### safetyService.js
-Emergency and safety features:
-- Emergency contact handling
-- Safety information display
-
-### persistenceProvider.js
-Multi-layer storage abstraction:
-- Unified API for secure storage operations
-- Automatic fallback between storage providers
-- Web compatibility with memory storage
+- `bookingServiceRealtime.js`
+  - login validation
+  - join tour / driver assignment flows
+  - passenger verifier integration
+- `offlineSyncService.js`
+  - Tour Pack caching
+  - queueing/replay for manifest/chat/internal chat/photo uploads
+  - `buildSyncSummary`, `formatSyncOutcome`, `lastSuccessAt`
+- `chatService.js`
+  - group/internal chat sends/subscriptions
+  - reaction leaf writes and normalization
+  - read-state + typing/presence paths
+- `photoService.js`
+  - group/private uploads + metadata handling
+- `notificationService.js`
+  - push token + preference persistence behavior
+- `identityService.js`
+  - stable identity helpers and migration support
+- `itineraryDateParser.js`, `pickupTimeParser.js`, `timeUtils.js`
+  - strict date/time parsing contracts
+- `loggerService.js`
+  - structured + safe logging conventions
 
 ---
 
-## 8. Design System (theme.js)
+## 8. Web Admin Dashboard
 
-The app uses a centralized design system for consistency:
+Location: `web-admin/`
 
-### Colors
+Main surfaces:
+- `Dashboard`
+- `DriversManager`
+- `ToursManager`
+- `BroadcastPanel`
+- `Settings`
 
-```javascript
-colors: {
-  primary: '#1E40AF',        // Deep blue
-  primaryLight: '#3B82F6',   // Lighter blue
-  accent: '#F97316',         // Orange
-  accentLight: '#FB923C',    // Lighter orange
-
-  success: '#10B981',        // Green
-  warning: '#F59E0B',        // Amber
-  error: '#EF4444',          // Red
-  info: '#3B82F6',           // Blue
-
-  background: '#F3F4F6',     // Light gray
-  surface: '#FFFFFF',        // White
-  surfaceSecondary: '#F9FAFB',
-
-  text: '#111827',           // Near black
-  textSecondary: '#6B7280',  // Gray
-  textTertiary: '#9CA3AF',   // Light gray
-  textOnPrimary: '#FFFFFF',
-
-  border: '#E5E7EB',
-  borderLight: '#F3F4F6',
-  divider: '#E5E7EB',
-}
-```
-
-### Manifest Status Colors
-
-```javascript
-statusColors: {
-  BOARDED: '#10B981',     // Green - passenger boarded
-  NO_SHOW: '#EF4444',     // Red - passenger didn't show
-  PARTIAL: '#F59E0B',     // Amber - partial boarding
-  PENDING: '#6B7280',     // Gray - not yet processed
-}
-```
-
-### Spacing Scale
-
-```javascript
-spacing: {
-  xs: 4,
-  sm: 8,
-  md: 12,
-  lg: 16,
-  xl: 20,
-  xxl: 24,
-  xxxl: 32,
-}
-```
-
-### Border Radius
-
-```javascript
-borderRadius: {
-  sm: 4,
-  md: 8,
-  lg: 12,
-  xl: 16,
-  full: 9999,
-}
-```
-
-### Shadows
-
-```javascript
-shadows: {
-  sm: { shadowOffset: {width: 0, height: 1}, shadowOpacity: 0.05, ... },
-  md: { shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.1, ... },
-  lg: { shadowOffset: {width: 0, height: 10}, shadowOpacity: 0.1, ... },
-  xl: { shadowOffset: {width: 0, height: 20}, shadowOpacity: 0.1, ... },
-}
-```
+### Current operational expectations
+- Tours status filter and URL query param are synchronized both directions
+- “All Tours” removes `status` query param (canonical URL behavior)
+- Driver assignment writes align with mobile’s canonical `currentTourId`
+- Health/sync semantics are mapped to same shared taxonomy as mobile
 
 ---
 
-## 9. Firebase Cloud Functions
+## 9. Cloud Functions (Gen 2)
 
-Located in `/functions/index.js`. All functions use **Gen 2 syntax**.
+Location: `functions/index.js`
 
-### sendChatNotification
-Triggered when a new chat message is created:
-```javascript
-exports.sendChatNotification = onValueCreated(
-  { ref: '/chats/{tourId}/messages/{messageId}', region: 'europe-west1' },
-  async (event) => { ... }
-);
-```
+Current exported functions include:
+- `verifyPassengerLogin` (HTTPS verifier endpoint)
+- `normalizeRecentBroadcastTimestamps` (migration helper)
+- `processBroadcastWrite` (broadcast -> chat fanout)
+- `migrateLegacyAnnouncementsToBroadcasts` (migration helper)
+- `sendChatNotification` (DB trigger)
+- `sendItineraryNotification` (DB trigger)
 
-### sendItineraryNotification
-Triggered when itinerary is updated:
-```javascript
-exports.sendItineraryNotification = onValueUpdated(
-  { ref: '/tours/{tourId}/itinerary', region: 'europe-west1' },
-  async (event) => { ... }
-);
-```
-
-### Key Features
-- Respects user notification preferences from `/users/{userId}/preferences`
-- Uses Expo Push API for delivery
-- Rate limiting (10 requests per 60 seconds per key)
-- JSON-formatted logging for debugging
+### Function-level requirements
+- Gen 2 syntax only
+- Explicit region `europe-west1`
+- Defensive validation for payloads and path params
+- Notification delivery protections:
+  - deterministic chunking
+  - recipient caps
+  - token invalidation handling
+  - preference-aware routing
 
 ---
 
-## 10. Web Admin Dashboard
+## 10. Security Rules & Access Constraints
 
-Located in `/web-admin/`. Built with React + Vite + Mantine UI.
+Source: `database.rules.json`
 
-### Components
+Highlights:
+- Rules are now strict on schema validation for major collections
+- Identity-aware writes allow ownership through:
+  - raw `auth.uid`
+  - `users/{uid}/stablePassengerId`
+  - `users/{uid}/privatePhotoOwnerId`
+  - `identity_bindings/{stablePassengerId}/{uid}`
+- Reactions are user-leaf writes only (parent reaction writes blocked)
+- `users` now validates push token state metadata and identity metadata fields
 
-| Component | Purpose |
-|-----------|---------|
-| `Dashboard.jsx` | Main operations overview |
-| `DriversManager.jsx` | Create/edit/delete drivers, manage assignments |
-| `ToursManager.jsx` | Tour management and status |
-| `BroadcastPanel.jsx` | Send HQ announcements to all tours |
-| `Settings.jsx` | Admin configuration |
-
-### Running Locally
-
-```bash
-cd web-admin
-npm install
-npm run dev
-```
-
-### Key Features
-- Driver account management
-- Multi-tour driver assignment
-- System-wide broadcast messaging
-- Real-time tour status monitoring
+If changing data shape under any protected path, update:
+1) service code, 2) security rules, 3) tests, 4) docs contract(s).
 
 ---
 
-## 11. Firebase Security Rules
+## 11. Testing Strategy & Commands
 
-Located in `database.rules.json`. These rules enforce access control:
-
-```json
-{
-  "rules": {
-    "drivers": {
-      ".read": "auth != null",
-      "$driverCode": {
-        ".write": "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' ||
-                   data.child('authUid').val() === auth.uid ||
-                   newData.child('authUid').val() === auth.uid"
-      }
-    },
-
-    "bookings": {
-      ".read": "auth != null",
-      ".indexOn": ["tourCode"],
-      "$bookingId": {
-        ".write": "auth != null"
-      }
-    },
-
-    "tour_manifests": {
-      ".read": "auth != null",
-      ".write": "auth != null",
-      "$tourId": {
-        "assigned_drivers": {
-          ".indexOn": [".value"]
-        }
-      }
-    },
-
-    "tours": {
-      ".read": "auth != null",
-      ".write": "auth != null",
-      "$tourId": {
-        ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
-        ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'"
-      }
-    },
-
-    "chats": {
-      "$tourId": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      }
-    },
-
-    "internal_chats": {
-      "$tourId": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      }
-    },
-
-    "logs": {
-      "$userId": {
-        ".read": false,
-        ".write": "auth != null || $userId === 'anonymous'"
-      }
-    },
-
-    "group_tour_photos": {
-      "$tourId": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      }
-    },
-
-    "private_tour_photos": {
-      "$tourId": {
-        "$userId": {
-          ".read": "auth != null && auth.uid === $userId",
-          ".write": "auth != null && auth.uid === $userId"
-        }
-      }
-    },
-
-    "users": {
-      "$userId": {
-        ".read": "auth != null && (auth.uid === $userId ||
-                  auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
-        ".write": "auth != null && (auth.uid === $userId ||
-                   auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')"
-      }
-    }
-  }
-}
-```
-
-### Key Rules Summary
-
-| Path | Read | Write |
-|------|------|-------|
-| `/drivers` | Authenticated | Admin, owner, or claiming |
-| `/bookings` | Authenticated | Authenticated |
-| `/tour_manifests` | Authenticated | Authenticated |
-| `/tours` | Authenticated | Admin only |
-| `/chats` | Authenticated | Authenticated |
-| `/internal_chats` | Authenticated | Authenticated |
-| `/logs` | Never | Anyone (anonymous allowed) |
-| `/group_tour_photos` | Authenticated | Authenticated |
-| `/private_tour_photos` | Owner only | Owner only |
-| `/users` | Self + Admin | Self + Admin |
-
----
-
-## 12. Testing
-
-### Framework
-Node.js built-in `test` module (Node.js 18+)
-
-### Test Files
-
-| File | Purpose |
-|------|---------|
-| `tests/joinTour.test.js` | Booking service unit tests |
-| `__tests__/chatService.test.js` | Chat service tests |
-| `__tests__/photoService.test.js` | Photo service tests |
-
-### Running Tests
+### Root test orchestration
 
 ```bash
 npm test
+npm run test:all
+npm run test:all:fast
+npm run test:all:full
+npm run test:all:with-emulators
 ```
 
-### Test Pattern
+### Mobile segmented suites
 
-```javascript
-import { test, describe, mock } from 'node:test';
-import assert from 'node:assert';
-
-describe('Feature', () => {
-  test('should do something', async () => {
-    const mockDb = createMockRealtimeDb();
-    const result = await someFunction(mockDb);
-    assert.strictEqual(result.success, true);
-  });
-});
+```bash
+npm run test:mobile:auth
+npm run test:mobile:sync:contract
+npm run test:mobile:sync:engine
+npm run test:mobile:services:booking
+npm run test:mobile:services:chat
+npm run test:mobile:services:photo
+npm run test:mobile:services:notifications
+npm run test:mobile:ui:date-time
+npm run test:mobile:ux
+npm run test:mobile:infra
 ```
 
-### Key Test Scenarios (joinTour.test.js)
-- Concurrent join handling
-- Transaction safety
-- Participant count reconciliation
-- Booking schema normalization
-- Error handling for invalid inputs
+### Web admin tests
+
+```bash
+npm run test:web-admin
+# or
+cd web-admin && npm run test
+```
+
+### Emulator-only rules tests
+
+```bash
+npm run test:emulators
+```
 
 ---
 
-## 13. Build & Deployment
+## 12. Build, Release, and Runtime Notes
 
-### Mobile App (EAS)
+### Mobile
+- Config is in `app.config.js` (not static `app.json`)
+- EAS profiles are in `eas.json`
+- Runtime version policy is `appVersion`
 
-Build profiles defined in `eas.json`:
-
-| Profile | Purpose | Output |
-|---------|---------|--------|
-| `development` | Dev client for simulators | APK / Simulator build |
-| `development-device` | Dev client for physical devices | APK / IPA |
-| `preview` | Internal testing | APK / IPA |
-| `production` | App Store / Play Store release | AAB / IPA |
-
-### Build Commands
+Build/update commands:
 
 ```bash
-# Development builds
-npm run build:dev:ios           # iOS simulator
-npm run build:dev:android       # Android emulator
-npm run build:dev:ios-device    # iOS physical device
-
-# Preview builds
-npm run build:preview           # Both platforms
-
-# Production builds
-npm run build:production        # Both platforms with auto-versioning
+npm run build:dev:ios
+npm run build:dev:android
+npm run build:dev:ios-device
+npm run build:preview
+npm run build:production
+npm run update:dev
+npm run update:prod
 ```
 
-### Environment Variables
-
-Environment variables are stored in EAS Secrets (not in repo):
-
-```javascript
-// eas.json references
-"env": {
-  "EXPO_PUBLIC_FIREBASE_API_KEY": "@firebase_api_key",
-  "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "@firebase_auth_domain",
-  // ... etc
-}
-```
-
-### Web Admin
+### Web admin
 
 ```bash
 cd web-admin
-npm run dev       # Development server
-npm run build     # Production build
-npm run preview   # Preview production build
+npm run dev
+npm run build
+npm run preview
 ```
 
-### Firebase Functions
+### Functions
 
 ```bash
 cd functions
-npm run deploy    # Deploy to Firebase
-npm run serve     # Local emulator
-npm run logs      # View production logs
+npm run serve
+npm run deploy
+npm run logs
 ```
 
-### Starting Development
+Migration helpers:
 
 ```bash
-# Mobile app
-npm install
-npm start         # Expo dev server
-npm run start:dev # With dev client
-
-# Web admin
-cd web-admin
-npm install
-npm run dev
+npm --prefix functions run migrate:assigned-driver-codes
+npm --prefix functions run migrate:private-photo-owners
 ```
 
 ---
 
-## 14. Code Patterns & Conventions
+## 13. Engineering Contracts & Conventions
 
-### Multi-Path Updates
-Always use multi-path updates for data consistency across nodes:
-
-```javascript
-const updates = {};
-updates[`drivers/${driverId}/currentTourId`] = tourId;
-updates[`tour_manifests/${tourId}/assigned_drivers/${driverId}`] = true;
-updates[`tour_manifests/${tourId}/assigned_driver_codes`] = arrayUnion(driverCode);
-await realtimeDb.ref().update(updates);
-```
-
-### Transaction-Based Operations
-Use transactions for atomic counter updates:
-
-```javascript
-await realtimeDb.ref(`tours/${tourId}/currentParticipants`).transaction(current => {
-  return (current || 0) + 1;
-});
-```
-
-### Tour Code Sanitization
-Normalize tour codes for use as Firebase keys:
-
-```javascript
-// "5112D 8" -> "5112D_8"
-const sanitizeTourId = (tourCode) => {
-  return tourCode.replace(/\s+/g, '_').toUpperCase();
-};
-```
-
-### Manifest Status Derivation
-Aggregate passenger statuses to parent booking status:
-
-```javascript
-const deriveParentStatusFromPassengers = (passengerStatuses) => {
-  const allBoarded = passengerStatuses.every(s => s === 'BOARDED');
-  const allNoShow = passengerStatuses.every(s => s === 'NO_SHOW');
-  const allPending = passengerStatuses.every(s => s === 'PENDING');
-
-  if (allBoarded) return 'BOARDED';
-  if (allNoShow) return 'NO_SHOW';
-  if (allPending) return 'PENDING';
-  return 'PARTIAL';
-};
-```
-
-### Service Return Pattern
-Services return consistent response objects:
-
-```javascript
-return { success: true, data: result };
-return { success: false, error: 'Error message' };
-```
-
-### Structured Logging
-Use loggerService for consistent logging:
-
-```javascript
-import { logger } from '../services/loggerService';
-
-logger.info('ChatScreen', 'Message sent', { tourId, messageId });
-logger.error('ChatScreen', 'Failed to send message', { error: e.message });
-```
-
-### Date Parsing (UK Format)
-**CRITICAL:** Always parse dates manually due to UK format (dd/MM/yyyy):
-
-```javascript
-// CORRECT
-const [day, month, year] = dateString.split('/').map(Number);
-const date = new Date(year, month - 1, day);
-
-// WRONG - will parse as US format
-const date = new Date(dateString);
-```
-
-### Navigation Pattern
-The app uses manual screen management (no React Navigation):
-
-```javascript
-// In App.js
-const navigateTo = (screen, params = {}) => {
-  setScreenParams(params);
-  setCurrentScreen(screen);
-  saveSession({ screen, params });
-};
-```
-
-### Firebase Listeners
-Set up and clean up listeners properly:
-
-```javascript
-useEffect(() => {
-  const unsubscribe = realtimeDb
-    .ref(`chats/${tourId}/messages`)
-    .on('value', (snapshot) => {
-      // Handle data
-    });
-
-  return () => {
-    realtimeDb.ref(`chats/${tourId}/messages`).off('value', unsubscribe);
-  };
-}, [tourId]);
-```
+1. **Region**: Always `europe-west1` for backend resources.
+2. **Dates**: Never rely on locale parsing for itinerary/pickup dates.
+   - Accept only explicit UK (`dd/MM/yyyy`) or ISO (`yyyy-MM-dd`) formats.
+3. **Assignment writes**: Use service helpers + multi-path updates.
+4. **Sync contract**: Reuse shared taxonomy/formatters; do not fork wording by screen.
+5. **Reaction writes**: User-leaf writes only; no parent overwrite toggles.
+6. **Logging**: Use safe logging conventions (`docs/safe-logging-conventions.md`).
+7. **Service return shape**: preserve `{ success: true|false, data|error }` style.
+8. **Optional service loading**: use `optionalServiceLoader` pattern where applicable.
 
 ---
 
-## 15. Known Issues & Watch List
+## 14. Known Risks / Watch List
 
-### Date Parsing (UK vs US)
-- **Issue:** JavaScript `Date()` defaults to US format (MM/dd/yyyy), but backend data uses UK format (dd/MM/yyyy)
-- **Solution:** Always use manual parsing: `split('/').map(Number)`
-- **Reference:** See `ItineraryScreen.js` for correct implementation
-
-### Firebase Region Mismatch
-- **Issue:** Functions in wrong region cause "database mismatch" errors
-- **Solution:** All Cloud Functions must specify `.region("europe-west1")`
-
-### Expo Push Token Expiration
-- **Issue:** Push tokens can expire or become invalid
-- **Solution:** Re-register token on each app launch and handle invalid token errors
-
-### Offline Mode Limitations
-- **Issue:** App requires network for most operations
-- **Status:** Partial offline support via Firebase persistence
-- **Future:** Enhanced caching for Itinerary and Tickets (see Roadmap)
-
-### Driver Assignment Race Conditions
-- **Issue:** Concurrent driver assignments could cause data inconsistency
-- **Solution:** Always use `assignDriverToTour()` helper which performs atomic multi-path updates
+1. **Date parsing drift risk**
+   - Avoid `new Date("dd/MM/yyyy")` and any locale-dependent parsing.
+2. **Identity migration edge cases**
+   - Legacy `privatePhotoOwnerId` and stable identity bindings must remain compatible during gradual rollout.
+3. **Offline queue growth**
+   - Retry-bounded and processed-ID trimming are mandatory; avoid unbounded local growth.
+4. **Function fanout scale**
+   - Keep recipient caps/chunk sizes and caching tuned as participant counts grow.
+5. **Rules/code divergence**
+   - Schema changes without parallel rule/test updates are the highest-risk regression source.
 
 ---
 
-## 16. Upcoming Roadmap
+## 15. Agent Directives (Must Follow)
 
-### Production Persistence
-Replace MockStorage fallback with robust production storage. Ensure users stay logged in across app restarts reliably.
-
-### Chat Media
-Enable photo uploads directly within the Chat interface, reusing `photoService.js` infrastructure.
-
-### Offline Mode
-Enhance caching for Itinerary and Tickets so the app works without signal in the Scottish Highlands.
-
-### Push Notification Improvements
-- Notification grouping by tour
-- Quiet hours support
-- Enhanced delivery tracking
-
-### Driver Features
-- Route optimization suggestions
-- Automated boarding reminders
-- Driver shift management
+1. Do **not** rename core DB roots (`drivers`, `tours`, `users`, `bookings`, `tour_manifests`, etc.).
+2. Use shared helpers/contracts before introducing new abstractions.
+3. Any data-shape change requires matching updates in:
+   - services
+   - security rules
+   - tests
+   - docs contract(s)
+4. New Cloud Functions must be Gen 2 and region-pinned.
+5. Keep UX feedback non-blocking where established (status banners + retry affordances).
+6. Never commit secrets; use EAS/Firebase managed secret channels.
 
 ---
 
-## 17. Agent Directives
+## 16. Quick Reference
 
-When working on this repository, follow these critical guidelines:
+### High-signal files
+- `README.md`
+- `docs/date-contract.md`
+- `docs/date-contract-web-admin.md`
+- `docs/data-contracts/driver-assignment.md`
+- `docs/offline-tour-pack.md`
+- `docs/reactions-write-contract.md`
+- `docs/safe-logging-conventions.md`
+- `database.rules.json`
+- `functions/index.js`
 
-### 1. Respect Database Paths
-The paths `drivers`, `tours`, `users`, `bookings`, and `tour_manifests` are hardcoded in Security Rules. Do not rename them.
-
-### 2. Multi-Path Updates
-When modifying driver assignments, ALWAYS use multi-path updates to keep `/drivers`, `/tours`, and `/tour_manifests` in sync:
-
-```javascript
-// CORRECT
-await assignDriverToTour(driverId, tourId);
-
-// WRONG - will cause data inconsistency
-await db.ref(`drivers/${id}/currentTourId`).set(tourId);
-```
-
-### 3. Gen 2 Functions
-All new backend logic must use Firebase Functions Gen 2 syntax:
-
-```javascript
-// CORRECT - Gen 2
-exports.myFunction = onValueCreated(
-  { ref: '/path/{id}', region: 'europe-west1' },
-  async (event) => { ... }
-);
-
-// WRONG - Gen 1 (deprecated)
-exports.myFunction = functions.database.ref('/path/{id}').onCreate(...);
-```
-
-### 4. Region Specification
-Always specify `europe-west1` region for Cloud Functions:
-
-```javascript
-{ ref: '/path', region: 'europe-west1' }
-```
-
-### 5. Date Handling
-Never use `new Date(dateString)` for UK-formatted dates. Always parse manually:
-
-```javascript
-const [day, month, year] = dateString.split('/').map(Number);
-```
-
-### 6. Theme Consistency
-Use values from `theme.js` for all styling. Don't hardcode colors or spacing:
-
-```javascript
-// CORRECT
-import theme from '../theme';
-style={{ backgroundColor: theme.colors.primary, padding: theme.spacing.md }}
-
-// WRONG
-style={{ backgroundColor: '#1E40AF', padding: 12 }}
-```
-
-### 7. Error Handling
-Return consistent response objects from services:
-
-```javascript
-return { success: true, data: result };
-return { success: false, error: 'Descriptive error message' };
-```
-
-### 8. Logging
-Use `loggerService` for all logging needs:
-
-```javascript
-import { logger } from '../services/loggerService';
-logger.info('ComponentName', 'Action description', { relevantData });
-```
-
-### 9. Testing
-Write tests for new functionality using the Node.js test framework pattern established in `tests/joinTour.test.js`.
-
-### 10. Environment Variables
-Never commit secrets. Use EAS Secrets for environment variables in builds.
-
----
-
-
-### Offline Tour Pack (January 2026)
-
-- `services/offlineSyncService.js` now manages Tour Pack cache and an offline action queue.
-- Queue action types:
-  - `MANIFEST_UPDATE`
-  - `CHAT_MESSAGE`
-  - `INTERNAL_CHAT_MESSAGE`
-- Replay policy:
-  - FIFO execution by `createdAt`
-  - single-run lock (no parallel replay)
-  - retry-bounded (max 5 attempts)
-  - local processed action IDs prevent duplicate replay after restart
-- Manifest conflict policy:
-  - compare local `lastUpdated` with server `lastUpdated`
-  - prefer most recent timestamp
-  - if server wins, reconcile and log event
-  - user note: "One update was reconciled with newer server data."
-
-### UX Reliability Updates (Pre-Production QA, January 2026)
-
-- **Passenger live bus indicator path alignment:** passenger dashboard listener now reads from `tours/{tourId}/driverLocation` (same path used by driver updates and map screen).
-- **Driver assignment instant context update:** after assigning a driver to a new tour, the app updates in-memory and persisted session state immediately so Driver Home actions work without re-login.
-- **Meaningful pull-to-refresh:** Tour Home and Chat refresh now run actual offline queue replay and report queue outcomes (synced/failed/pending) with user-facing status feedback.
-- **Clipboard compatibility fix:** chat message copy now uses `@react-native-clipboard/clipboard` to avoid deprecated `react-native` Clipboard behavior in production builds.
-- **Notification settings load resilience:** Notification Preferences now exits spinner states safely (missing `userId` or fetch errors), shows actionable empty/error cards, and supports retry/recover without app restart.
-- **Chat read-state reliability:** opening chat and returning to the bottom of the thread now marks chat as read (tour + internal driver chat), reducing stale unread counters.
-- **Non-blocking chat sync UX:** pull-to-refresh sync outcomes are surfaced via in-screen banners with optional “retry failed actions” affordance instead of disruptive modal alerts.
-- **Pickup countdown parsing hardening:** pickup countdown now supports `HH:mm` and `h:mm AM/PM` variants, handles explicit UK/ISO date context, and shows a fallback status when format is unsupported.
-- **Itinerary date parsing guardrails:** itinerary start-date handling now accepts only explicit UK (`dd/MM/yyyy`) or ISO (`yyyy-MM-dd`) formats, warns drivers on unsupported formats, and avoids locale-dependent parsing drift.
-
-### UX QA Refresh Additions (Production Readiness, February 2026)
-
-- **Canonical sync-state contract (mobile + services):** offline sync now exposes a single four-state taxonomy (`OFFLINE_NO_NETWORK`, `ONLINE_BACKEND_DEGRADED`, `ONLINE_BACKLOG_PENDING`, `ONLINE_HEALTHY`) with normalized metadata (`label`, `description`, `severity`, `icon`, `canRetry`, `showLastSync`) so app-shell and screen messaging cannot drift.
-- **Manual refresh copy contract:** all refresh surfaces now use one formatter output (`"{X} synced / {Y} pending / {Z} failed"`) backed by normalized summary shaping (`buildSyncSummary`) so UI text is deterministic and never leaks `undefined` values.
-- **Last-known-good sync visibility:** successful zero-failure replays persist `lastSuccessAt`, and diagnostics/screens consume shared relative-time formatting (`Just now`, `2m ago`, `1h ago`, `Yesterday`) so users can trust freshness before/after first live sync.
-- **Unified diagnostics/app-shell rendering:** `useDiagnostics` now provides a unified sync status object consumed directly by `App.js` and key operational screens (Tour Home, Chat, Driver Home), while web-admin dashboard terminology is explicitly mapped to the same taxonomy for cross-platform language parity.
-- **Sync-contract regression coverage:** dedicated tests now lock taxonomy keys, derivation precedence, formatter/fallback behavior, and last-sync visibility rules to prevent wording/contract regressions.
-
-- **Offline-aware login for returning users:** Login now allows cached-trip entry when offline if the entered booking/driver code matches persisted session or Tour Pack identity. Unknown first-time codes remain blocked offline with actionable guidance.
-- **Offline login clarity UX:** offline login rejections now support explicit reason mapping (`NO_CACHED_SESSION`, `CODE_MISMATCH`, `CACHE_EXPIRED`) plus an in-screen "Why can't I log in offline?" helper so users understand exactly how to recover.
-- **Chat queue sync consistency:** chat manual sync and pull-to-refresh now share a single queue-outcome helper and use non-blocking in-screen banners (including retry affordances) instead of disruptive modal failure alerts.
-- **Driver location trust improvements:** Driver Home now shows a stale-location nudge when the published pickup point is old and includes an optional persisted auto-share toggle (3-minute cadence while the screen is active and a tour is assigned).
-- **Passenger map freshness messaging:** Map experience now provides clearer stale-data copy so passengers understand when location updates are aging and when to refresh or contact the driver.
-- **Map refresh lifecycle hardening:** map refresh spinner now starts/stops with the real refresh job, uses short minimum visual smoothing (~120ms), and explicitly resets rotation state to avoid orphaned animation loops.
-- **Manifest speed workflow:** Passenger Manifest now supports boarding-priority workflows (status filtering + pickup-time-first grouping) while keeping location grouping available for fallback operational views.
-- **Manifest action feedback UX:** after manifest updates, drivers now get in-screen progress feedback (boarded/no-show delta + unresolved remaining) and a one-tap "Open next" action for the next unresolved booking.
-- **Operational non-blocking status UX:** manifest sync/status flows now prioritize in-screen banners and retry affordances for routine operational outcomes to reduce modal interruption during fast driver workflows.
-- **Manifest error-recovery UX:** manifest save/sync failures now surface in-banner recovery CTAs (for example “Retry now” and “Retry failed”) instead of disruptive blocking modals during boarding.
-- **Chat unread catch-up UX:** chat now persists per-tour/per-chat-type read anchors and renders an “Unread messages” separator plus a “Jump to unread” floating action to help users return to context faster.
-- **Login recovery CTA UX:** offline login rejection states now provide immediate recovery actions (“Retry now”, “I’m connected, verify this code”, and “Contact support”) and clearer reason-specific guidance for mismatch vs no-cache scenarios.
-- **Passenger home refresh non-blocking UX:** Tour Home refresh outcomes now use in-screen tone-aware status banners with inline retry affordances, removing modal refresh-error interruptions.
-- **Notification preferences confidence UX:** Notification settings now include dirty-state save controls, inline success/error banners, explicit “last saved” feedback, and in-screen test-notification status with retry.
-- **Driver assignment contract alignment (web + mobile):** web-admin now treats `drivers/{driverId}/currentTourId` as the canonical active-tour field (with `activeTourId` as read-only legacy fallback) and clears the legacy key on write to keep admin mutations compatible with mobile runtime expectations.
-- **Driver login payload enrichment:** `validateBookingReference()` now resolves and returns the driver’s assigned tour payload (`tour`) plus an explicit `assignmentStatus` (`ASSIGNED`, `ASSIGNED_TOUR_NOT_FOUND`, `UNASSIGNED`) so App login can hydrate Driver Home context immediately after authentication.
-- **Passenger verifier explicit reason mapping:** `validateBookingReference()` now maps additional verifier reasons to clear passenger-safe copy for `INVALID_CREDENTIALS`, `TRY_AGAIN_LATER`, `INTERNAL_ERROR`, and `METHOD_NOT_ALLOWED`, improving deterministic login recovery guidance.
-- **Verifier mapping regression coverage:** `tests/validateBookingReference.passengerVerifier.test.js` includes dedicated assertions for each explicit reason mapping above to prevent drift in passenger-facing login error copy.
-- **Tours filter deep-link parity (web-admin):** `ToursManager` now keeps the status UI filter and `?status=` query param synchronized both ways (URL→UI on navigation/mount, UI→URL on interaction), enabling reliable dashboard deep links such as `/tours?status=unassigned`.
-- **Canonical all-status URL behavior:** selecting “All Tours” now removes the `status` query param rather than writing `status=all`, reducing duplicate URL shapes for the same state and keeping bookmarks/share links cleaner.
-- **Web-admin status-sync regression coverage:** `web-admin/src/components/ToursManager.test.jsx` now verifies hydration from URL, status-change URL writes, pagination reset to page 1, preservation of unrelated query params, and safe fallback for invalid status values.
-- **Web-admin test-runtime alignment:** `web-admin/src/utils/triageUtils.test.js` is now Vitest-native (instead of Node `node:test`) so `npm test` runs the entire web-admin suite in one pass without bundler failures.
-
-## Quick Reference
-
-### Common Commands
+### Common commands
 
 ```bash
-# Start development
-npm start                    # Expo dev server
-npm run start:dev           # With dev client
+# mobile
+npm start
+npm run start:dev
 
-# Build
-npm run build:dev:ios       # iOS simulator build
-npm run build:preview       # Internal testing
-npm run build:production    # Production release
+# tests
+npm test
+npm run test:web-admin
 
-# Test
-npm test                    # Run unit tests
+# web admin
+cd web-admin && npm run dev
 
-# Web Admin
-cd web-admin && npm run dev # Start admin dashboard
-
-# Functions
-cd functions && npm run deploy  # Deploy Cloud Functions
+# functions
+cd functions && npm run serve
 ```
 
-### Key Files to Know
+### Admin UID (hardcoded in rules)
 
-| File | Purpose |
-|------|---------|
-| `App.js` | Main entry, routing, session management |
-| `firebase.js` | Firebase initialization, auth helpers |
-| `theme.js` | Design system constants |
-| `services/bookingServiceRealtime.js` | Core booking logic |
-| `screens/DriverHomeScreen.js` | Driver console |
-| `screens/TourHomeScreen.js` | Passenger dashboard |
-| `functions/index.js` | Cloud Functions |
-| `database.rules.json` | Security rules |
-
-### Admin UID
-
-The hardcoded admin UID in security rules: `9CWQ4705gVRkfW5Xki5LyvrmVp23`
+`9CWQ4705gVRkfW5Xki5LyvrmVp23`
 
 ---
 
-*This document should be updated whenever significant changes are made to the codebase architecture, database structure, or development patterns.*
+Update this document whenever architecture, contracts, or operating conventions change materially.
