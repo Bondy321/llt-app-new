@@ -1,6 +1,6 @@
 // components/ImageViewer.js
 // Enhanced full-screen image viewer with swipe navigation, zoom, and actions
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import {
   StyleSheet,
   View,
@@ -163,48 +163,42 @@ export default function ImageViewer({
     }).start();
   }, [translateX]);
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onStartShouldSetPanResponderCapture: () => true,
-      onMoveShouldSetPanResponder: (_, gestureState) => {
-        return Math.abs(gestureState.dx) > 10;
-      },
-      onMoveShouldSetPanResponderCapture: (_, gestureState) => {
-        return Math.abs(gestureState.dx) > 10;
-      },
-      onPanResponderMove: (_, gestureState) => {
-        // Only allow horizontal movement within bounds
-        const newX = gestureState.dx;
-        if ((currentIndex === 0 && newX > 0) ||
-            (currentIndex === photos.length - 1 && newX < 0)) {
-          translateX.setValue(newX * 0.3); // Resistance at edges
-        } else {
-          translateX.setValue(newX);
-        }
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        const { dx, vx } = gestureState;
-        const isSwipeLeft = dx < -SWIPE_THRESHOLD || vx < -VELOCITY_THRESHOLD;
-        const isSwipeRight = dx > SWIPE_THRESHOLD || vx > VELOCITY_THRESHOLD;
+  const panResponder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onStartShouldSetPanResponderCapture: () => false,
+    onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dx) > 10,
+    onMoveShouldSetPanResponderCapture: (_, gestureState) => Math.abs(gestureState.dx) > 10,
+    onPanResponderMove: (_, gestureState) => {
+      // Only allow horizontal movement within bounds
+      const newX = gestureState.dx;
+      if ((currentIndex === 0 && newX > 0) ||
+          (currentIndex === photos.length - 1 && newX < 0)) {
+        translateX.setValue(newX * 0.3); // Resistance at edges
+      } else {
+        translateX.setValue(newX);
+      }
+    },
+    onPanResponderRelease: (_, gestureState) => {
+      const { dx, vx } = gestureState;
+      const isSwipeLeft = dx < -SWIPE_THRESHOLD || vx < -VELOCITY_THRESHOLD;
+      const isSwipeRight = dx > SWIPE_THRESHOLD || vx > VELOCITY_THRESHOLD;
 
-        if (isSwipeLeft) {
-          const moved = goToNext();
-          if (!moved) resetSwipePosition();
-          return;
-        }
+      if (isSwipeLeft) {
+        const moved = goToNext();
+        if (!moved) resetSwipePosition();
+        return;
+      }
 
-        if (isSwipeRight) {
-          const moved = goToPrevious();
-          if (!moved) resetSwipePosition();
-          return;
-        }
+      if (isSwipeRight) {
+        const moved = goToPrevious();
+        if (!moved) resetSwipePosition();
+        return;
+      }
 
-        resetSwipePosition();
-      },
-      onPanResponderTerminationRequest: () => false,
-    })
-  ).current;
+      resetSwipePosition();
+    },
+    onPanResponderTerminationRequest: () => false,
+  }), [currentIndex, goToNext, goToPrevious, photos.length, resetSwipePosition, translateX]);
 
   const formatDate = (timestamp) => {
     if (!timestamp) return 'Unknown date';
@@ -355,7 +349,10 @@ export default function ImageViewer({
       statusBarTranslucent
     >
       <StatusBar barStyle="light-content" backgroundColor="rgba(0,0,0,0.9)" />
-      <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
+      <Animated.View
+        style={[styles.container, { opacity: fadeAnim }]}
+        {...panResponder.panHandlers}
+      >
         {/* Header */}
         <LinearGradient
           pointerEvents="none"
@@ -386,10 +383,7 @@ export default function ImageViewer({
         </View>
 
         {/* Main Image Area */}
-        <Animated.View
-          style={[styles.imageContainer, { transform: [{ translateX }] }]}
-          {...panResponder.panHandlers}
-        >
+        <Animated.View style={[styles.imageContainer, { transform: [{ translateX }] }]}>
           {imageLoading && !hasThumbnail && (
             <View style={styles.loadingOverlay}>
               <ActivityIndicator size="large" color={COLORS.white} />

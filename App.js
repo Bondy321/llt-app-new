@@ -1,5 +1,5 @@
 // App.js
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, Text, StyleSheet, Animated, Easing, PanResponder } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -111,6 +111,7 @@ function AppContent() {
   
   // State for passing params between screens manually (since we aren't using React Navigation stack)
   const [screenParams, setScreenParams] = useState({});
+  const [isImageViewerVisible, setIsImageViewerVisible] = useState(false);
   const [loginTransition, setLoginTransition] = useState(null);
   const loginTransitionTimerRef = useRef(null);
   const loginTransitionAnimationRef = useRef(null);
@@ -126,7 +127,12 @@ function AppContent() {
     currentScreen !== 'Login' &&
     currentScreen !== 'TourHome' &&
     currentScreen !== 'DriverHome' &&
-    currentScreen !== 'Chat';
+    currentScreen !== 'Chat' &&
+    !isImageViewerVisible;
+
+  const handleViewerVisibilityChange = useCallback((visible) => {
+    setIsImageViewerVisible(Boolean(visible));
+  }, []);
 
   const clearLoginTransitionArtifacts = () => {
     if (loginTransitionTimerRef.current) {
@@ -707,6 +713,7 @@ function AppContent() {
           <PhotobookScreen
             {...screenProps}
             onBack={() => navigateTo('TourHome')}
+            onViewerVisibilityChange={handleViewerVisibilityChange}
             tourId={tourData?.id}
             privatePhotoOwnerId={canonicalIdentity?.principalId}
             stablePassengerId={canonicalIdentity?.stablePassengerId || null}
@@ -718,6 +725,7 @@ function AppContent() {
           <GroupPhotobookScreen
             {...screenProps}
             onBack={() => navigateTo('TourHome')}
+            onViewerVisibilityChange={handleViewerVisibilityChange}
             userId={canonicalIdentity?.principalId}
             tourId={tourData?.id}
             userName={bookingData?.passengerNames?.[0] || 'Tour Member'}

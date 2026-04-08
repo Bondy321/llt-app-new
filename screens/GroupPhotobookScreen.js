@@ -32,7 +32,14 @@ import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
 const { width: windowWidth } = Dimensions.get('window');
 const THUMBNAIL_SIZE = (windowWidth - SPACING.lg * 2 - SPACING.sm * 2) / 3;
 
-export default function GroupPhotobookScreen({ onBack, userId, tourId, userName, canonicalIdentity: canonicalIdentityProp = null }) {
+export default function GroupPhotobookScreen({
+  onBack,
+  userId,
+  tourId,
+  userName,
+  canonicalIdentity: canonicalIdentityProp = null,
+  onViewerVisibilityChange = null,
+}) {
   const MIN_REFRESH_SPINNER_MS = 120;
   const [photos, setPhotos] = useState([]);
   const [loadingPhotos, setLoadingPhotos] = useState(true);
@@ -46,6 +53,20 @@ export default function GroupPhotobookScreen({ onBack, userId, tourId, userName,
   // Image viewer state
   const [viewerVisible, setViewerVisible] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
+
+  useEffect(() => {
+    if (typeof onViewerVisibilityChange === 'function') {
+      onViewerVisibilityChange(viewerVisible);
+    }
+  }, [onViewerVisibilityChange, viewerVisible]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof onViewerVisibilityChange === 'function') {
+        onViewerVisibilityChange(false);
+      }
+    };
+  }, [onViewerVisibilityChange]);
 
   // Upload modal state
   const [showUploadModal, setShowUploadModal] = useState(false);
