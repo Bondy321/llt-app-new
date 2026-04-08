@@ -234,29 +234,42 @@ export default function ImageViewer({
     }
   };
 
+  const resolveCurrentPhotoUri = useCallback(() => {
+    return currentPhoto?.fullUrl || currentPhoto?.url || currentPhoto?.thumbnailUrl || null;
+  }, [currentPhoto]);
+
   const handleSaveToDevice = async () => {
     try {
       setSaving(true);
 
+      const photoUri = resolveCurrentPhotoUri();
+      if (!photoUri || typeof photoUri !== 'string') {
+        Alert.alert('Photo unavailable', 'This photo cannot be saved right now. Please refresh and try again.');
+        return;
+      }
+
       // Request permission
-      const { status } = await MediaLibrary.requestPermissionsAsync();
+      const { status } = await MediaLibrary.requestPermissionsAsync(true);
       if (status !== 'granted') {
         Alert.alert('Permission Required', 'Please allow access to save photos to your device.');
         return;
       }
 
-      // Download the image
-      const filename = `llt_photo_${Date.now()}.jpg`;
-      const fileUri = FileSystem.documentDirectory + filename;
+      const isLocalFile = photoUri.startsWith('file://');
+      const extensionMatch = photoUri.match(/\.([a-zA-Z0-9]+)(?:\?|$)/);
+      const normalizedExtension = (extensionMatch?.[1] || 'jpg').toLowerCase();
+      const extension = ['jpg', 'jpeg', 'png', 'heic', 'webp'].includes(normalizedExtension)
+        ? normalizedExtension
+        : 'jpg';
+      const filename = `llt_photo_${Date.now()}.${extension}`;
+      const fileUri = `${FileSystem.cacheDirectory || FileSystem.documentDirectory}${filename}`;
 
-      const downloadResult = await FileSystem.downloadAsync(currentPhoto.url, fileUri);
+      const assetSourceUri = isLocalFile
+        ? photoUri
+        : (await FileSystem.downloadAsync(photoUri, fileUri)).uri;
 
-      if (downloadResult.status === 200) {
-        await MediaLibrary.saveToLibraryAsync(downloadResult.uri);
-        Alert.alert('Saved!', 'Photo has been saved to your device.');
-      } else {
-        throw new Error('Download failed');
-      }
+      await MediaLibrary.saveToLibraryAsync(assetSourceUri);
+      Alert.alert('Saved!', 'Photo has been saved to your device.');
     } catch (error) {
       loggerService.error('ImageViewer', 'Failed to save photo to device', { message: error?.message });
       Alert.alert('Error', 'Could not save the photo. Please try again.');
