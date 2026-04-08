@@ -11,8 +11,13 @@ require('@babel/register')({
 
 const originalLoad = Module._load;
 
-const buildNotificationService = ({ permission = 'granted', token = 'ExponentPushToken[test-token]' } = {}) => {
+const buildNotificationService = ({
+  permission = 'granted',
+  token = 'ExponentPushToken[test-token]',
+  authUid = null,
+} = {}) => {
   const updates = [];
+  const refPaths = [];
   let permissionStatus = permission;
 
   Module._load = function mocked(request, parent, isMain) {
@@ -57,21 +62,25 @@ const buildNotificationService = ({ permission = 'granted', token = 'ExponentPus
 
     if (request.endsWith('/firebase') || request === '../firebase') {
       return {
+        auth: authUid ? { currentUser: { uid: authUid } } : { currentUser: null },
         realtimeDb: {
-          ref: () => ({
-            once: async () => ({
-              val: () => ({
-                preferences: {
-                  ops: { group_photos: true },
-                  marketing: { mystery_tours: true },
-                },
-                pushTokenProvider: 'expo',
+          ref: (path = '') => {
+            refPaths.push(path);
+            return {
+              once: async () => ({
+                val: () => ({
+                  preferences: {
+                    ops: { group_photos: true },
+                    marketing: { mystery_tours: true },
+                  },
+                  pushTokenProvider: 'expo',
+                }),
               }),
-            }),
-            update: async (payload) => {
-              updates.push(payload);
-            },
-          }),
+              update: async (payload) => {
+                updates.push(payload);
+              },
+            };
+          },
         },
       };
     }
@@ -81,7 +90,7 @@ const buildNotificationService = ({ permission = 'granted', token = 'ExponentPus
 
   delete require.cache[require.resolve('../services/notificationService')];
   const service = require('../services/notificationService');
-  return { service, updates, setPermission: (next) => { permissionStatus = next; } };
+  return { service, updates, refPaths, setPermission: (next) => { permissionStatus = next; } };
 };
 
 test.after(() => {
@@ -284,4 +293,25 @@ test('getUserPreferences can throw explicit fetch errors for UI empty/error stat
   );
 
   Module._load = original;
+});
+
+test('getUserPreferences uses authenticated uid when provided userId is principal-scoped', async () => {
+  const { service, refPaths } = buildNotificationService({ authUid: 'auth-uid-42' });
+
+  await service.getUserPreferences('driver:D-BONDY', { throwOnError: true });
+
+  assert.ok(refPaths.includes('users/auth-uid-42/preferences'));
+  assert.equal(refPaths.includes('users/driver:D-BONDY/preferences'), false);
+});
+
+test('saveUserPreferences writes to authenticated uid when provided userId is principal-scoped', async () => {
+  const { service, refPaths } = buildNotificationService({ authUid: 'auth-uid-99' });
+
+  const result = await service.saveUserPreferences('stable-passenger-123', {
+    notifications: { messages: true },
+  });
+
+  assert.equal(result.success, true);
+  assert.ok(refPaths.includes('users/auth-uid-99'));
+  assert.equal(refPaths.includes('users/stable-passenger-123'), false);
 });

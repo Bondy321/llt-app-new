@@ -4,7 +4,7 @@ import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { realtimeDb } from '../firebase';
+import { auth, realtimeDb } from '../firebase';
 import appMetadataModule from './appMetadata';
 
 // Configure how notifications behave when the app is open
@@ -28,6 +28,31 @@ const validateUserId = (userId) => {
     throw new Error('Invalid user ID');
   }
   return userId.trim();
+};
+
+const resolveAuthUid = () => {
+  const currentUid = auth?.currentUser?.uid;
+  if (typeof currentUid !== 'string') {
+    return null;
+  }
+  const trimmed = currentUid.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const resolveNotificationUserId = (candidateUserId) => {
+  const authUid = resolveAuthUid();
+  const normalizedCandidate = typeof candidateUserId === 'string' ? candidateUserId.trim() : '';
+
+  if (authUid) {
+    if (normalizedCandidate && normalizedCandidate !== authUid) {
+      console.warn(
+        `Notification service received non-auth userId (${normalizedCandidate}); using authenticated uid instead.`
+      );
+    }
+    return authUid;
+  }
+
+  return validateUserId(candidateUserId);
 };
 
 /**
@@ -381,7 +406,7 @@ const buildUnavailableTokenPatch = ({
 export const saveUserPreferences = async (userId, preferences) => {
   try {
     // Validate inputs
-    const validatedUserId = validateUserId(userId);
+    const validatedUserId = resolveNotificationUserId(userId);
     const validatedPreferences = validatePreferences(preferences);
 
     if (!realtimeDb) {
@@ -551,7 +576,7 @@ export const getUserPreferences = async (userId, options = {}) => {
 
   try {
     // Validate input
-    const validatedUserId = validateUserId(userId);
+    const validatedUserId = resolveNotificationUserId(userId);
 
     if (!realtimeDb) {
       throw new Error('Database not initialized');

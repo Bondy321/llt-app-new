@@ -15,7 +15,7 @@ import * as bookingService from './services/bookingServiceRealtime';
 import * as chatService from './services/chatService';
 import offlineLoginResolver from './services/offlineLoginResolver';
 import { migrateRecentChatMessagesForStableIdentity } from './services/chatIdentityMigrationService';
-import { getCanonicalIdentity } from './services/identityService';
+import { getCanonicalIdentity, resolveAuthScopedUserId } from './services/identityService';
 import { COLORS as THEME } from './theme';
 
 // Import Screens
@@ -787,10 +787,14 @@ case 'Itinerary':
         return <MapScreen {...screenProps} onBack={() => navigateTo('TourHome')} tourId={mapTourId} tourData={tourData} />;
       case 'NotificationPreferences':
         const notificationReturnTarget = screenParams?.returnTo || (isDriverSession ? 'DriverHome' : 'TourHome');
+        const notificationPreferencesUserId = resolveAuthScopedUserId({
+          canonicalIdentity,
+          authUser: user,
+        });
         return (
           <NotificationPreferencesScreen
             onBack={() => navigateTo(notificationReturnTarget, { from: 'NotificationPreferences' })}
-            userId={canonicalIdentity?.principalId}
+            userId={notificationPreferencesUserId}
             isOnboarding={screenParams?.isOnboarding === true}
             audience={screenParams?.audience || (isDriverSession ? 'driver' : 'passenger')}
             returnTo={notificationReturnTarget}
