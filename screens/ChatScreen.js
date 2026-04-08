@@ -587,8 +587,10 @@ const MessageStatus = ({ status, isSelf }) => {
     switch (status) {
       case 'sending':
         return <MaterialCommunityIcons name="clock-outline" size={14} color={COLORS.lightBlueAccent} />;
-      case 'sent':
+      case 'queued':
         return <MaterialCommunityIcons name="check" size={14} color={COLORS.lightBlueAccent} />;
+      case 'sent':
+        return <MaterialCommunityIcons name="check-all" size={14} color={COLORS.lightBlueAccent} />;
       case 'delivered':
         return <MaterialCommunityIcons name="check-all" size={14} color={COLORS.lightBlueAccent} />;
       case 'failed':
