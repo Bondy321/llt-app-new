@@ -160,6 +160,36 @@ test('uploadPhoto stores private photos in private_tour_photos namespaces', asyn
   assert.strictEqual(blob.closed, true);
 });
 
+test('uploadPhoto sanitizes private owner key segments for Realtime Database paths', async (t) => {
+  const originalNow = Date.now;
+  Date.now = () => 1700000000000;
+  t.after(() => {
+    Date.now = originalNow;
+  });
+
+  const ownerId = 'pax_v1:T123659:msandreayoung@yahoo.co.uk';
+  let writePath;
+
+  await uploadPhoto('file://private.jpg', 'tour-55', ownerId, 'Owner with email', {
+    visibility: 'private',
+    storageInstance: {},
+    realtimeDbInstance: {},
+    fetchFn: async () => ({ ok: true, blob: async () => createMockBlob() }),
+    storageRefFn: (_storage, path) => ({ path }),
+    uploadBytesFn: async () => {},
+    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
+    dbRefFn: (_db, path) => ({ path }),
+    pushFn: (ref) => {
+      writePath = ref.path;
+      return { key: 'private-photo-sanitized' };
+    },
+    setFn: async () => {},
+    serverTimestampFn: () => 1,
+  });
+
+  assert.strictEqual(writePath, 'private_tour_photos/tour-55/pax_v1:T123659:msandreayoung@yahoo_2E_co_2E_uk');
+});
+
 
 test('uploadPhoto falls back to a numeric client timestamp when server timestamp is a placeholder object', async (t) => {
   const originalNow = Date.now;
@@ -454,6 +484,27 @@ test('subscribeToPrivatePhotos scopes path to user and sorts newest first', asyn
   assert.deepStrictEqual(received.map((p) => p.id), ['two', 'one']);
   assert.deepStrictEqual(received.map((p) => p.ownerScope), ['user-5', 'user-5']);
   unsubscribe();
+});
+
+test('subscribeToPrivatePhotos sanitizes owner scope with invalid key characters', async () => {
+  const seenPaths = [];
+
+  subscribeToPrivatePhotos('tour-A', 'pax_v1:T123659:msandreayoung@yahoo.co.uk', () => {}, {
+    realtimeDbInstance: {},
+    dbRefFn: (_db, path) => {
+      seenPaths.push(path);
+      return { path };
+    },
+    queryFn: (ref) => ref,
+    orderByChildFn: () => 'timestamp',
+    limitToLastFn: (limit) => limit,
+    onValueFn: (_ref, callback) => {
+      callback(mockSnapshot({}));
+      return () => {};
+    },
+  });
+
+  assert.deepStrictEqual(seenPaths, ['private_tour_photos/tour-A/pax_v1:T123659:msandreayoung@yahoo_2E_co_2E_uk']);
 });
 
 test('fetchTourPhotosPage returns bounded page with cursor and hasMore contract', async () => {

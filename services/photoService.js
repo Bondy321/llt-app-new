@@ -284,10 +284,11 @@ const fetchPrivatePhotosPage = async (
 ) => {
   const validatedTourId = validateTourId(tourId);
   const validatedOwnerId = validateUserId(ownerId);
+  const validatedOwnerKey = sanitizeRealtimeKeySegment(validatedOwnerId);
   const safeLimit = sanitizePageLimit(limit);
   const cursor = normalizeCursor(endBefore);
 
-  const baseRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${validatedTourId}/${validatedOwnerId}`);
+  const baseRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${validatedTourId}/${validatedOwnerKey}`);
   const constraints = [orderByChildFn('timestamp')];
   if (cursor) {
     constraints.push(endAtFn(cursor.timestamp, cursor.id || undefined));
@@ -326,6 +327,10 @@ const validateUserId = (userId) => {
   }
   return userId.trim();
 };
+
+const sanitizeRealtimeKeySegment = (value) => (
+  value.replace(/[.#$/\[\]]/g, (char) => `_${char.charCodeAt(0).toString(16).toUpperCase()}_`)
+);
 
 /**
  * Validates photo ID
@@ -437,6 +442,7 @@ const uploadPhoto = async (
     const validatedUri = validateUri(uri);
     const validatedTourId = validateTourId(tourId);
     const validatedUserId = validateUserId(userId);
+    const validatedUserKey = sanitizeRealtimeKeySegment(validatedUserId);
     const validatedCaption = validateCaption(caption);
     const validatedVisibility = validateVisibility(visibility);
 
@@ -539,7 +545,7 @@ const uploadPhoto = async (
       }
 
       const databasePath = isPrivate
-        ? `private_tour_photos/${validatedTourId}/${validatedUserId}`
+        ? `private_tour_photos/${validatedTourId}/${validatedUserKey}`
         : `group_tour_photos/${validatedTourId}`;
       const photosRef = dbRefFn(realtimeDbInstance, databasePath);
       const newPhotoRef = pushFn(photosRef);
@@ -683,8 +689,9 @@ const subscribeToPrivatePhotos = (
   if (!ownerScope) {
     return () => {};
   }
+  const ownerScopeKey = sanitizeRealtimeKeySegment(ownerScope);
 
-  const photosRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${ownerScope}`);
+  const photosRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${ownerScopeKey}`);
   const photosQuery = queryFn(photosRef, orderByChildFn('timestamp'), limitToLastFn(LIVE_PHOTOS_WINDOW));
 
   return onValueFn(photosQuery, (snapshot) => {
@@ -814,8 +821,9 @@ const deletePrivatePhoto = async (
   }
 
   try {
+    const ownerScopeKey = sanitizeRealtimeKeySegment(ownerId);
     // First, get the photo data to find the storage path
-    const photoRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${ownerId}/${photoId}`);
+    const photoRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${ownerScopeKey}/${photoId}`);
     const snapshot = await getFn(photoRef);
     const photoData = snapshot.val();
 
@@ -866,11 +874,12 @@ const updatePhotoCaption = async (
   const validatedTourId = validateTourId(tourId);
   const validatedPhotoId = validatePhotoId(photoId);
   const resolvedOwnerId = validateUserId(ownerId || userId);
+  const resolvedOwnerKey = sanitizeRealtimeKeySegment(resolvedOwnerId);
   const validatedCaption = validateCaption(caption);
   const validatedVisibility = validateVisibility(visibility);
 
   const basePath = validatedVisibility === 'private'
-    ? `private_tour_photos/${validatedTourId}/${resolvedOwnerId}/${validatedPhotoId}`
+    ? `private_tour_photos/${validatedTourId}/${resolvedOwnerKey}/${validatedPhotoId}`
     : `group_tour_photos/${validatedTourId}/${validatedPhotoId}`;
 
   const photoRef = dbRefFn(realtimeDbInstance, basePath);

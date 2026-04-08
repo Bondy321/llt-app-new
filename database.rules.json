@@ -197,13 +197,13 @@
     "private_tour_photos": {
       "$tourId": {
         "$ownerId": {
-          ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || auth.uid === $ownerId || root.child('users/' + auth.uid + '/stablePassengerId').val() === $ownerId || root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() === $ownerId || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)",
-          ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || auth.uid === $ownerId || root.child('users/' + auth.uid + '/stablePassengerId').val() === $ownerId || root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() === $ownerId || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)",
+          ".read": "auth != null",
+          ".write": "auth != null",
           ".indexOn": ["timestamp"],
           "$photoId": {
-            ".validate": "!newData.exists() || (newData.child('url').isString() && newData.child('userId').isString() && newData.child('userId').val() === $ownerId && (!newData.child('fullUrl').exists() || newData.child('fullUrl').isString()) && (!newData.child('caption').exists() || newData.child('caption').isString()) && (!newData.child('timestamp').exists() || newData.child('timestamp').isNumber()) && (!newData.child('storagePath').exists() || newData.child('storagePath').isString()) && (!newData.child('fileSize').exists() || newData.child('fileSize').isNumber()) && (!newData.child('fileType').exists() || newData.child('fileType').isString()) && (!newData.child('thumbnailUrl').exists() || newData.child('thumbnailUrl').isString()) && (!newData.child('thumbnailStoragePath').exists() || newData.child('thumbnailStoragePath').isString()) && (!newData.child('captionUpdatedAt').exists() || newData.child('captionUpdatedAt').isNumber()) && (!newData.child('captionEditedBy').exists() || newData.child('captionEditedBy').isString()))",
+            ".validate": "!newData.exists() || (newData.child('url').isString() && newData.child('userId').isString() && (!newData.child('fullUrl').exists() || newData.child('fullUrl').isString()) && (!newData.child('caption').exists() || newData.child('caption').isString()) && (!newData.child('timestamp').exists() || newData.child('timestamp').isNumber()) && (!newData.child('storagePath').exists() || newData.child('storagePath').isString()) && (!newData.child('fileSize').exists() || newData.child('fileSize').isNumber()) && (!newData.child('fileType').exists() || newData.child('fileType').isString()) && (!newData.child('thumbnailUrl').exists() || newData.child('thumbnailUrl').isString()) && (!newData.child('thumbnailStoragePath').exists() || newData.child('thumbnailStoragePath').isString()) && (!newData.child('captionUpdatedAt').exists() || newData.child('captionUpdatedAt').isNumber()) && (!newData.child('captionEditedBy').exists() || newData.child('captionEditedBy').isString()))",
             "userId": {
-              ".validate": "newData.isString() && (data.exists() ? newData.val() === data.val() : newData.val() === $ownerId)"
+              ".validate": "newData.isString() && (data.exists() ? newData.val() === data.val() : (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || newData.val() === auth.uid || newData.val() === root.child('users/' + auth.uid + '/stablePassengerId').val() || newData.val() === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + newData.val() + '/' + auth.uid).val() === true))"
             }
           }
         }
