@@ -34,7 +34,14 @@ import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
 const { width: windowWidth } = Dimensions.get('window');
 const THUMBNAIL_SIZE = (windowWidth - SPACING.lg * 2 - SPACING.sm * 2) / 3;
 
-export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId, stablePassengerId, canonicalIdentity: canonicalIdentityProp = null }) {
+export default function PhotobookScreen({
+  onBack,
+  tourId,
+  privatePhotoOwnerId,
+  stablePassengerId,
+  canonicalIdentity: canonicalIdentityProp = null,
+  onViewerVisibilityChange = null,
+}) {
   const [photos, setPhotos] = useState([]);
   const [loadingPhotos, setLoadingPhotos] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -47,6 +54,20 @@ export default function PhotobookScreen({ onBack, tourId, privatePhotoOwnerId, s
   // Image viewer state
   const [viewerVisible, setViewerVisible] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
+
+  useEffect(() => {
+    if (typeof onViewerVisibilityChange === 'function') {
+      onViewerVisibilityChange(viewerVisible);
+    }
+  }, [onViewerVisibilityChange, viewerVisible]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof onViewerVisibilityChange === 'function') {
+        onViewerVisibilityChange(false);
+      }
+    };
+  }, [onViewerVisibilityChange]);
 
   // Upload modal state
   const [showUploadModal, setShowUploadModal] = useState(false);
