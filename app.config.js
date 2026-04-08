@@ -21,6 +21,8 @@ module.exports = {
       infoPlist: {
         NSPhotoLibraryUsageDescription:
           'Loch Lomond Travel needs access to your photo library to save and share tour memories.',
+        NSPhotoLibraryAddUsageDescription:
+          'Loch Lomond Travel needs permission to add saved tour photos to your library.',
         NSCameraUsageDescription:
           'Loch Lomond Travel needs camera access to capture tour moments.',
         NSLocationWhenInUseUsageDescription:
@@ -42,6 +44,7 @@ module.exports = {
       versionCode: 1,
       permissions: [
         'CAMERA',
+        'READ_MEDIA_IMAGES',
         'READ_EXTERNAL_STORAGE',
         'WRITE_EXTERNAL_STORAGE',
         'ACCESS_COARSE_LOCATION',
@@ -86,6 +89,15 @@ module.exports = {
             'Loch Lomond Travel needs access to your photo library to save and share tour memories.',
           cameraPermission:
             'Loch Lomond Travel needs camera access to capture tour moments.',
+        },
+      ],
+      [
+        'expo-media-library',
+        {
+          photosPermission:
+            'Loch Lomond Travel needs access to your photo library to save and share tour memories.',
+          savePhotosPermission:
+            'Loch Lomond Travel needs permission to add saved tour photos to your library.',
         },
       ],
       [
