@@ -28,7 +28,6 @@ import { createPersistenceProvider } from '../services/persistenceProvider';
 import logger from '../services/loggerService';
 import { getMinutesAgo } from '../services/timeUtils';
 import { COLORS as THEME } from '../theme';
-import SyncStatusBanner from '../components/SyncStatusBanner';
 
 const { width } = Dimensions.get('window');
 
@@ -720,21 +719,6 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
           </View>
 
           <ScrollView contentContainerStyle={styles.content}>
-            {bannerContract && (
-              <View style={styles.inlineBannerWrap}>
-                <SyncStatusBanner
-                  state={bannerContract}
-                  outcomeText={bannerOutcomeText}
-                  lastSyncAt={lastSuccessfulSyncAt}
-                  onRetry={bannerContract?.canRetry ? bannerRetryHandler : null}
-                  retryLabel="Retry now"
-                />
-                <TouchableOpacity onPress={dismissBanner} style={styles.inlineBannerDismiss} accessibilityRole="button" accessibilityLabel="Dismiss status message">
-                  <MaterialCommunityIcons name="close" size={18} color={COLORS.muted} />
-                </TouchableOpacity>
-              </View>
-            )}
-
             {/* Tour Assignment Card */}
             <View style={styles.assignCard}>
               <View style={{ flex: 1 }}>
