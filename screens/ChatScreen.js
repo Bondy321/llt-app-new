@@ -51,7 +51,6 @@ import { auth } from '../firebase';
 import logger from '../services/loggerService';
 import { getCanonicalIdentity } from '../services/identityService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
-import SyncStatusBanner from '../components/SyncStatusBanner';
 const { buildChatSearchResults, normalizeSearchQuery } = require('../utils/chatSearch');
 const { buildUnreadSummary } = require('../utils/chatUnreadSummary');
 const {
@@ -2705,14 +2704,6 @@ export default function ChatScreen({
       <SwipeReplyHint
         visible={showSwipeReplyHint && messages.length > 0}
         onDismiss={dismissSwipeReplyHint}
-      />
-
-      <SyncStatusBanner
-        state={syncBannerContract}
-        outcomeText={syncBannerOutcomeText}
-        lastSyncAt={lastSuccessfulSyncAt}
-        onRetry={() => handleManualSync({ retryFailedOnly: true })}
-        retryLabel="Retry failed actions"
       />
 
       {reactionFeedbackMessage ? (

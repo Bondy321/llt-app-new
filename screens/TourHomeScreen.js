@@ -28,7 +28,6 @@ import offlineSyncService from '../services/offlineSyncService';
 import { parseTimestampMs } from '../services/timeUtils';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import { getPickupCountdownState } from '../services/pickupTimeParser';
-import SyncStatusBanner from '../components/SyncStatusBanner';
 const { buildTourHomeActionPlan } = require('../utils/tourHomeActionPlanner');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -978,14 +977,6 @@ export default function TourHomeScreen({
               </View>
               <Text style={styles.tourCodeDisplay}>{tourCode}</Text>
               <Text style={styles.tourName} numberOfLines={1}>{tourData?.name || 'Active Tour'}</Text><Text style={styles.cacheLabel}>{cacheStatusLabel}</Text>
-              <SyncStatusBanner
-                state={refreshStatusContract}
-                outcomeText={refreshStatusOutcomeText}
-                lastSyncAt={lastSuccessfulSyncAt}
-                onRetry={onRefresh}
-                retryLabel="Retry refresh"
-                compact
-              />
               {recentChanges.length > 0 ? (
                 <View style={styles.recentChangesCard}>
                   <Text style={styles.recentChangesTitle}>Since your last check</Text>
