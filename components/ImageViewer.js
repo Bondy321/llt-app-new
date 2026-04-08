@@ -349,7 +349,10 @@ export default function ImageViewer({
       statusBarTranslucent
     >
       <StatusBar barStyle="light-content" backgroundColor="rgba(0,0,0,0.9)" />
-      <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
+      <Animated.View
+        style={[styles.container, { opacity: fadeAnim }]}
+        {...panResponder.panHandlers}
+      >
         {/* Header */}
         <LinearGradient
           pointerEvents="none"
@@ -380,10 +383,7 @@ export default function ImageViewer({
         </View>
 
         {/* Main Image Area */}
-        <Animated.View
-          style={[styles.imageContainer, { transform: [{ translateX }] }]}
-          {...panResponder.panHandlers}
-        >
+        <Animated.View style={[styles.imageContainer, { transform: [{ translateX }] }]}>
           {imageLoading && !hasThumbnail && (
             <View style={styles.loadingOverlay}>
               <ActivityIndicator size="large" color={COLORS.white} />
