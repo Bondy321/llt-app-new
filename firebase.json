@@ -21,5 +21,8 @@
         "*.local"
       ]
     }
-  ]
+  ],
+  "storage": {
+    "rules": "storage_rules.json"
+  }
 }
