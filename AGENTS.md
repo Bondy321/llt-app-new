@@ -245,9 +245,7 @@ Location: `functions/index.js`
 
 Current exported functions include:
 - `verifyPassengerLogin` (HTTPS verifier endpoint)
-- `normalizeRecentBroadcastTimestamps` (migration helper)
 - `processBroadcastWrite` (broadcast -> chat fanout)
-- `migrateLegacyAnnouncementsToBroadcasts` (migration helper)
 - `sendChatNotification` (DB trigger)
 - `sendItineraryNotification` (DB trigger)
 

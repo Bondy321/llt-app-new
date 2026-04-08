@@ -20,7 +20,7 @@
       ".read": "auth != null",
       ".indexOn": ["tourCode"],
       "$bookingRef": {
-        ".write": "auth != null",
+        ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
         ".validate": "!newData.exists() || (newData.hasChildren(['tourId']) && newData.child('tourId').isString() && (!newData.child('tourCode').exists() || newData.child('tourCode').isString()) && (!newData.child('passengerNames').exists() || newData.child('passengerNames').hasChildren()) && (!newData.child('passengers').exists() || newData.child('passengers').hasChildren()) && (!newData.child('pickupLocation').exists() || newData.child('pickupLocation').isString()) && (!newData.child('pickupTime').exists() || newData.child('pickupTime').isString()) && (!newData.child('pickupPoints').exists() || newData.child('pickupPoints').hasChildren()) && (!newData.child('seatNumbers').exists() || newData.child('seatNumbers').hasChildren()) && (!newData.child('status').exists() || newData.child('status').val() === 'PENDING' || newData.child('status').val() === 'BOARDED' || newData.child('status').val() === 'NO_SHOW' || newData.child('status').val() === 'PARTIAL'))",
         "pickupPoints": {
           "$index": {
@@ -48,7 +48,7 @@
         },
         "bookings": {
           "$bookingRef": {
-            ".write": "auth != null",
+            ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists()) && root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId",
             ".validate": "!newData.exists() || ((!newData.child('status').exists() || newData.child('status').val() === 'PENDING' || newData.child('status').val() === 'BOARDED' || newData.child('status').val() === 'NO_SHOW' || newData.child('status').val() === 'PARTIAL') && (!newData.child('passengerStatus').exists() || newData.child('passengerStatus').hasChildren()) && (!newData.child('lastUpdated').exists() || newData.child('lastUpdated').isString() || newData.child('lastUpdated').isNumber()) && (!newData.child('idempotencyKey').exists() || newData.child('idempotencyKey').isString()))",
             "passengerStatus": {
               "$index": {
@@ -297,7 +297,7 @@
     "globalSafetyAlerts": {
       ".read": "auth != null",
       "$eventId": {
-        ".write": "auth != null",
+        ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || (!data.exists() && newData.exists() && newData.child('status').val() === 'pending' && newData.child('userId').isString() && (newData.child('userId').val() === auth.uid || newData.child('userId').val() === root.child('users/' + auth.uid + '/stablePassengerId').val() || newData.child('userId').val() === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + newData.child('userId').val() + '/' + auth.uid).val() === true)))",
         ".validate": "!newData.exists() || (newData.child('timestamp').isString() && newData.child('status').isString() && newData.child('userId').isString())"
       }
     },

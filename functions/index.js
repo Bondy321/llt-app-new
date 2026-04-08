@@ -403,15 +403,6 @@ setInterval(() => {
 
 
 
-const parseTimestampToMillis = (timestamp) => {
-  if (typeof timestamp === 'number' && Number.isFinite(timestamp)) return timestamp;
-  if (typeof timestamp === 'string') {
-    const parsed = Date.parse(timestamp);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-};
-
 const normalizeBookingRef = (bookingRef) => {
   if (typeof bookingRef !== 'string') return '';
   return bookingRef.trim().toUpperCase();
@@ -522,69 +513,6 @@ exports.verifyPassengerLogin = onRequest(
   }
 );
 
-/**
- * One-time migration helper:
- * Normalizes legacy broadcast timestamps (ISO strings) into numeric epoch milliseconds.
- * Usage: deploy, invoke once, then delete/disable if no longer needed.
- */
-exports.normalizeRecentBroadcastTimestamps = onRequest(
-  {
-    region: "europe-west1",
-    maxInstances: 1,
-  },
-  async (req, res) => {
-    const days = Number(req.query.days || req.body?.days || 14);
-    const dryRun = String(req.query.dryRun || req.body?.dryRun || 'true') === 'true';
-    const cutoffMs = Date.now() - Math.max(days, 1) * 24 * 60 * 60 * 1000;
-
-    try {
-      const snapshot = await admin.database().ref('chats').once('value');
-      const updates = {};
-      let scanned = 0;
-      let normalized = 0;
-
-      snapshot.forEach((tourSnap) => {
-        const tourId = tourSnap.key;
-        const messagesSnap = tourSnap.child('messages');
-        if (!messagesSnap.exists()) return;
-
-        messagesSnap.forEach((messageSnap) => {
-          scanned += 1;
-          const value = messageSnap.val() || {};
-
-          if (value?.messageType !== 'ADMIN_BROADCAST' && value?.source !== 'web_admin') {
-            return;
-          }
-
-          const parsed = parseTimestampToMillis(value.timestamp);
-          if (!parsed || parsed < cutoffMs) return;
-
-          if (typeof value.timestamp !== 'number') {
-            normalized += 1;
-            updates[`chats/${tourId}/messages/${messageSnap.key}/timestamp`] = parsed;
-          }
-        });
-      });
-
-      if (!dryRun && Object.keys(updates).length > 0) {
-        await admin.database().ref().update(updates);
-      }
-
-      return res.status(200).json({
-        success: true,
-        dryRun,
-        days,
-        scanned,
-        normalized,
-      });
-    } catch (error) {
-      log.error('Failed to normalize broadcast timestamps', error);
-      return res.status(500).json({ success: false, error: error.message });
-    }
-  }
-);
-
-
 const validateBroadcastData = (broadcastData) => {
   const errors = [];
 
@@ -669,63 +597,6 @@ exports.processBroadcastWrite = onValueCreated(
     } catch (error) {
       log.error('Failed to process broadcast write', error, { tourId, broadcastId });
       return null;
-    }
-  }
-);
-
-/**
- * One-time migration helper:
- * Moves legacy ANNOUNCEMENT chat entries into /broadcasts/{tourId}/{broadcastId}.
- */
-exports.migrateLegacyAnnouncementsToBroadcasts = onRequest(
-  {
-    region: 'europe-west1',
-    maxInstances: 1,
-  },
-  async (req, res) => {
-    const dryRun = String(req.query.dryRun || req.body?.dryRun || 'true') === 'true';
-
-    try {
-      const chatsSnapshot = await admin.database().ref('chats').once('value');
-      const updates = {};
-      let scanned = 0;
-      let migrated = 0;
-
-      chatsSnapshot.forEach((tourSnapshot) => {
-        const tourId = tourSnapshot.key;
-        const messagesSnapshot = tourSnapshot.child('messages');
-
-        messagesSnapshot.forEach((messageSnapshot) => {
-          scanned += 1;
-          const payload = messageSnapshot.val() || {};
-          const text = typeof payload.text === 'string' ? payload.text : '';
-          const isLegacy = text.toUpperCase().startsWith('ANNOUNCEMENT:');
-          const isTagged = payload.messageType === 'ADMIN_BROADCAST' || payload.source === 'web_admin';
-
-          if (!isLegacy && !isTagged) return;
-
-          const createdAtMs = parseTimestampToMillis(payload.timestamp) || Date.now();
-          const message = text.replace(/^ANNOUNCEMENT:\s*/i, '').trim();
-          if (!message) return;
-
-          migrated += 1;
-          updates[`broadcasts/${tourId}/${messageSnapshot.key}`] = {
-            message,
-            createdAtMs,
-            createdByUid: payload.senderUid || 'legacy_migration',
-            source: payload.source || 'legacy_chat_migration',
-          };
-        });
-      });
-
-      if (!dryRun && Object.keys(updates).length > 0) {
-        await admin.database().ref().update(updates);
-      }
-
-      return res.status(200).json({ success: true, dryRun, scanned, migrated });
-    } catch (error) {
-      log.error('Failed to migrate legacy broadcasts', error);
-      return res.status(500).json({ success: false, error: error.message });
     }
   }
 );
