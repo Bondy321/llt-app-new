@@ -53,6 +53,16 @@ const getCanonicalIdentity = ({ authUser = null, bookingData = {}, identityBindi
   };
 };
 
+const resolveAuthScopedUserId = ({ canonicalIdentity = null, authUser = null } = {}) => {
+  const canonicalAuthUid = resolveTrimmedString(canonicalIdentity?.authUid);
+  if (canonicalAuthUid) {
+    return canonicalAuthUid;
+  }
+
+  return resolveTrimmedString(authUser?.uid);
+};
+
 module.exports = {
   getCanonicalIdentity,
+  resolveAuthScopedUserId,
 };
