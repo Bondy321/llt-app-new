@@ -5,7 +5,6 @@ const MAX_CACHE_ENTRIES = 160;
 const TARGET_CACHE_ENTRIES = 120;
 
 const inFlightDownloads = new Map();
-const knownCachedUris = new Set();
 let cacheDirReady = false;
 
 const hashString = (input) => {
@@ -46,14 +45,9 @@ const buildCacheFileUri = (remoteUri) => {
 };
 
 const fileExists = async (uri) => {
-  if (knownCachedUris.has(uri)) return true;
   try {
     const info = await FileSystem.getInfoAsync(uri);
-    const exists = Boolean(info?.exists);
-    if (exists) {
-      knownCachedUris.add(uri);
-    }
-    return exists;
+    return Boolean(info?.exists);
   } catch {
     return false;
   }
@@ -79,7 +73,6 @@ const trimCacheIfNeeded = async () => {
     await Promise.allSettled(
       toDelete.map(({ uri }) => FileSystem.deleteAsync(uri, { idempotent: true })),
     );
-    toDelete.forEach(({ uri }) => knownCachedUris.delete(uri));
   } catch {
     // No-op: cache trim failure should never break image rendering.
   }
@@ -106,7 +99,6 @@ export const getCachedPhotoUri = async (remoteUri) => {
     try {
       const result = await FileSystem.downloadAsync(remoteUri, cacheUri);
       if (result?.uri) {
-        knownCachedUris.add(result.uri);
         await trimCacheIfNeeded();
         return result.uri;
       }

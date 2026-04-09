@@ -50,12 +50,12 @@ export default function ImageViewer({
   const [draftCaption, setDraftCaption] = useState('');
   const [captionSaving, setCaptionSaving] = useState(false);
   const [resolvedPhotoUri, setResolvedPhotoUri] = useState(null);
-  const [activeImageRequestId, setActiveImageRequestId] = useState(0);
 
   const translateX = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const infoSlideAnim = useRef(new Animated.Value(0)).current;
   const fullImageOpacity = useRef(new Animated.Value(0)).current;
+  const activeImageUrlRef = useRef(null);
   const resolveRequestIdRef = useRef(0);
 
   useEffect(() => {
@@ -102,8 +102,8 @@ export default function ImageViewer({
     if (!visible) return;
     const currentRequestId = resolveRequestIdRef.current + 1;
     resolveRequestIdRef.current = currentRequestId;
-    setActiveImageRequestId(currentRequestId);
     const sourceUri = currentPhoto.url || null;
+    activeImageUrlRef.current = sourceUri;
     fullImageOpacity.setValue(0);
     setResolvedPhotoUri(sourceUri);
     setImageLoading(Boolean(sourceUri));
@@ -418,8 +418,8 @@ export default function ImageViewer({
               style={[styles.image, styles.fullImageLayer, { opacity: fullImageOpacity }]}
               resizeMode="contain"
               onLoadStart={() => setImageLoading(true)}
-              onLoad={() => handleFullImageLoaded(activeImageRequestId)}
-              onError={() => handleFullImageError(activeImageRequestId)}
+              onLoad={() => handleFullImageLoaded(activeImageUrlRef.current)}
+              onError={() => handleFullImageError(activeImageUrlRef.current)}
             />
           </View>
 
