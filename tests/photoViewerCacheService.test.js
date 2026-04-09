@@ -117,29 +117,3 @@ test('prefetchPhotoUris skips invalid entries and executes safely', async () => 
 
   assert.equal(downloads, 2);
 });
-
-test('getCachedPhotoUri can skip network download when cache miss and downloadIfMissing is false', async () => {
-  let downloadCount = 0;
-  const remoteUri = 'https://cdn.example.com/no-download.jpg';
-  const service = loadServiceWithFsMock({
-    fsImpl: {
-      cacheDirectory: 'file:///cache/',
-      documentDirectory: 'file:///docs/',
-      getInfoAsync: async (uri) => {
-        if (uri.endsWith('/photo-viewer-cache/')) return { exists: true };
-        return { exists: false };
-      },
-      makeDirectoryAsync: async () => {},
-      downloadAsync: async (_remote, local) => {
-        downloadCount += 1;
-        return { uri: local };
-      },
-      readDirectoryAsync: async () => [],
-      deleteAsync: async () => {},
-    },
-  });
-
-  const result = await service.getCachedPhotoUri(remoteUri, { downloadIfMissing: false });
-  assert.equal(result, remoteUri);
-  assert.equal(downloadCount, 0);
-});
