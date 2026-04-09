@@ -95,6 +95,7 @@ test('uploadPhoto stores group photo using group_tour_photos paths and rich meta
   assert.strictEqual(uploadCall.ref.path, storagePaths[0]);
   assert.strictEqual(uploadCall.uploadedBlob, blob);
   assert.strictEqual(uploadCall.metadata.contentType, 'image/jpeg');
+  assert.strictEqual(uploadCall.metadata.cacheControl, 'public,max-age=31536000,immutable');
   assert.strictEqual(uploadCall.metadata.customMetadata.uploadedBy, 'user-9');
 
   assert.deepStrictEqual(setPayload, {
@@ -287,8 +288,8 @@ test('uploadPhoto stores thumbnail and optimization metadata when provided', asy
     storageInstance: {},
     realtimeDbInstance: {},
     storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async (ref) => {
-      uploaded.push(ref.path);
+    uploadBytesFn: async (ref, _blob, metadata) => {
+      uploaded.push({ path: ref.path, metadata });
     },
     getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
     dbRefFn: mockDbRef,
@@ -300,10 +301,17 @@ test('uploadPhoto stores thumbnail and optimization metadata when provided', asy
     fetchFn: mockFetch,
   });
 
-  assert.deepStrictEqual(uploaded, [
+  assert.deepStrictEqual(uploaded.map((entry) => entry.path), [
     'group_tour_photos/tour-thumb/1700000000000_user-thumb.jpg',
     'group_tour_photos/tour-thumb/thumbnails/1700000000000_user-thumb_thumb.jpg',
   ]);
+  assert.strictEqual(uploaded[0].metadata.cacheControl, 'public,max-age=31536000,immutable');
+  assert.strictEqual(uploaded[0].metadata.contentType, 'image/jpeg');
+  assert.strictEqual(uploaded[0].metadata.customMetadata.uploadedBy, 'user-thumb');
+  assert.strictEqual(uploaded[1].metadata.cacheControl, 'public,max-age=31536000,immutable');
+  assert.strictEqual(uploaded[1].metadata.contentType, 'image/jpeg');
+  assert.strictEqual(uploaded[1].metadata.customMetadata.uploadedBy, 'user-thumb');
+  assert.strictEqual(uploaded[1].metadata.customMetadata.variant, 'thumbnail');
   assert.strictEqual(payload.thumbnailUrl, 'https://example.com/group_tour_photos/tour-thumb/thumbnails/1700000000000_user-thumb_thumb.jpg');
   assert.strictEqual(payload.thumbnailStoragePath, 'group_tour_photos/tour-thumb/thumbnails/1700000000000_user-thumb_thumb.jpg');
   assert.deepStrictEqual(payload.optimization, {
@@ -334,14 +342,14 @@ test('uploadPhoto continues when thumbnail upload fails and still writes full ph
   });
 
   let payload;
-  const uploadedPaths = [];
+  const uploaded = [];
   await uploadPhoto('file://main.jpg', 'tour-thumb-fallback', 'user-thumb', 'Thumb optional', {
     thumbnailUri: 'file://thumb.jpg',
     storageInstance: {},
     realtimeDbInstance: {},
     storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async (ref) => {
-      uploadedPaths.push(ref.path);
+    uploadBytesFn: async (ref, _blob, metadata) => {
+      uploaded.push({ path: ref.path, metadata });
       if (ref.path.includes('/thumbnails/')) {
         throw new Error('thumbnail path denied');
       }
@@ -356,10 +364,12 @@ test('uploadPhoto continues when thumbnail upload fails and still writes full ph
     fetchFn: mockFetch,
   });
 
-  assert.deepStrictEqual(uploadedPaths, [
+  assert.deepStrictEqual(uploaded.map((entry) => entry.path), [
     'group_tour_photos/tour-thumb-fallback/1700000000000_user-thumb.jpg',
     'group_tour_photos/tour-thumb-fallback/thumbnails/1700000000000_user-thumb_thumb.jpg',
   ]);
+  assert.strictEqual(uploaded[0].metadata.cacheControl, 'public,max-age=31536000,immutable');
+  assert.strictEqual(uploaded[1].metadata.cacheControl, 'public,max-age=31536000,immutable');
   assert.strictEqual(payload.url, 'https://example.com/group_tour_photos/tour-thumb-fallback/1700000000000_user-thumb.jpg');
   assert.ok(!('thumbnailUrl' in payload));
   assert.ok(!('thumbnailStoragePath' in payload));

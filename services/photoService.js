@@ -31,6 +31,7 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic'];
 const MAX_CAPTION_LENGTH = 500;
 const LIVE_PHOTOS_WINDOW = 100;
+const PHOTO_CACHE_CONTROL_HEADER = 'public,max-age=31536000,immutable';
 const DOWNLOAD_URL_RETRYABLE_CODES = new Set([
   'storage/object-not-found',
   'storage/retry-limit-exceeded',
@@ -484,6 +485,7 @@ const uploadPhoto = async (
     try {
       const metadata = {
         contentType: blob.type,
+        cacheControl: PHOTO_CACHE_CONTROL_HEADER,
         customMetadata: {
           uploadedBy: validatedUserId,
           uploadedAt: new Date().toISOString(),
@@ -530,6 +532,7 @@ const uploadPhoto = async (
           const thumbnailRef = storageRefFn(storageInstance, thumbnailPath);
           await uploadBytesFn(thumbnailRef, thumbnailBlob, {
             contentType: 'image/jpeg',
+            cacheControl: PHOTO_CACHE_CONTROL_HEADER,
             customMetadata: {
               uploadedBy: validatedUserId,
               uploadedAt: new Date().toISOString(),
