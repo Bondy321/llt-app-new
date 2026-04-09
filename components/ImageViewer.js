@@ -18,6 +18,7 @@ import {
   ActivityIndicator,
   TextInput,
 } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system';
@@ -50,12 +51,17 @@ export default function ImageViewer({
   const [draftCaption, setDraftCaption] = useState('');
   const [captionSaving, setCaptionSaving] = useState(false);
   const [resolvedPhotoUri, setResolvedPhotoUri] = useState(null);
+  const [activeResolveRequestId, setActiveResolveRequestId] = useState(0);
+  const [prefetchPolicy, setPrefetchPolicy] = useState({
+    neighborDistance: 2,
+    thumbnailsOnly: false,
+    delayMs: 300,
+  });
 
   const translateX = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const infoSlideAnim = useRef(new Animated.Value(0)).current;
   const fullImageOpacity = useRef(new Animated.Value(0)).current;
-  const activeImageUrlRef = useRef(null);
   const resolveRequestIdRef = useRef(0);
 
   useEffect(() => {
@@ -85,25 +91,77 @@ export default function ImageViewer({
 
   const currentPhoto = photos[currentIndex] || {};
   const hasThumbnail = Boolean(currentPhoto.thumbnailUrl);
+  const currentPhotoKey = currentPhoto?.id || currentPhoto?.url || `${currentIndex}`;
+  const resolveViewerPrimaryUri = useCallback((photo) => (
+    photo?.viewerUrl
+    || photo?.mediumUrl
+    || photo?.optimizedUrl
+    || photo?.url
+    || photo?.thumbnailUrl
+    || null
+  ), []);
+
+  useEffect(() => {
+    let mounted = true;
+    if (!visible) return () => {
+      mounted = false;
+    };
+
+    NetInfo.fetch().then((state) => {
+      if (!mounted) return;
+      const cellularGeneration = state?.details?.cellularGeneration;
+      const isWeakCellular = cellularGeneration === '2g' || cellularGeneration === '3g';
+      const isConstrained = state?.type === 'cellular' || Boolean(state?.details?.isConnectionExpensive) || isWeakCellular;
+
+      setPrefetchPolicy(isConstrained
+        ? { neighborDistance: 1, thumbnailsOnly: true, delayMs: 450 }
+        : { neighborDistance: 2, thumbnailsOnly: false, delayMs: 300 });
+    }).catch(() => {});
+
+    return () => {
+      mounted = false;
+    };
+  }, [visible]);
+
+  const currentViewerUri = useMemo(
+    () => resolveViewerPrimaryUri(currentPhoto),
+    [currentPhoto, resolveViewerPrimaryUri]
+  );
 
   useEffect(() => {
     if (!visible || !photos.length) return;
     const nearbyUris = [];
-    [currentIndex - 1, currentIndex, currentIndex + 1].forEach((idx) => {
-      const uri = photos[idx]?.url;
-      if (uri) nearbyUris.push(uri);
-      const thumbnailUri = photos[idx]?.thumbnailUrl;
-      if (thumbnailUri) nearbyUris.push(thumbnailUri);
-    });
-    prefetchPhotoUris(nearbyUris).catch(() => {});
-  }, [visible, currentIndex, photos]);
+    for (let offset = 1; offset <= prefetchPolicy.neighborDistance; offset += 1) {
+      const previousPhoto = photos[currentIndex - offset];
+      const nextPhoto = photos[currentIndex + offset];
+      [previousPhoto, nextPhoto].forEach((photo) => {
+        if (!photo) return;
+        if (!prefetchPolicy.thumbnailsOnly) {
+          const viewerUri = resolveViewerPrimaryUri(photo);
+          if (viewerUri) nearbyUris.push(viewerUri);
+        }
+        if (photo.thumbnailUrl) nearbyUris.push(photo.thumbnailUrl);
+      });
+    }
+
+    const prefetchCandidates = currentViewerUri
+      ? nearbyUris.filter((uri) => uri !== currentViewerUri)
+      : nearbyUris;
+    if (!prefetchCandidates.length) return;
+
+    const timer = setTimeout(() => {
+      prefetchPhotoUris(prefetchCandidates).catch(() => {});
+    }, prefetchPolicy.delayMs);
+
+    return () => clearTimeout(timer);
+  }, [visible, currentIndex, photos, currentViewerUri, prefetchPolicy, resolveViewerPrimaryUri]);
 
   useEffect(() => {
     if (!visible) return;
     const currentRequestId = resolveRequestIdRef.current + 1;
     resolveRequestIdRef.current = currentRequestId;
-    const sourceUri = currentPhoto.url || null;
-    activeImageUrlRef.current = sourceUri;
+    setActiveResolveRequestId(currentRequestId);
+    const sourceUri = currentViewerUri;
     fullImageOpacity.setValue(0);
     setResolvedPhotoUri(sourceUri);
     setImageLoading(Boolean(sourceUri));
@@ -114,7 +172,13 @@ export default function ImageViewer({
       if (resolveRequestIdRef.current !== currentRequestId) return;
       setResolvedPhotoUri(cachedUri);
     }).catch(() => {});
-  }, [visible, currentIndex, currentPhoto.url, fullImageOpacity]);
+  }, [visible, currentIndex, currentViewerUri, fullImageOpacity]);
+
+  useEffect(() => {
+    if (visible) return;
+    resolveRequestIdRef.current += 1;
+    setActiveResolveRequestId(resolveRequestIdRef.current);
+  }, [visible]);
 
   const handleFullImageLoaded = useCallback((requestId) => {
     if (!requestId || requestId !== resolveRequestIdRef.current) return;
@@ -146,7 +210,9 @@ export default function ImageViewer({
         useNativeDriver: true,
       }).start(() => {
         setCurrentIndex(prev => prev + 1);
-        translateX.setValue(0);
+        requestAnimationFrame(() => {
+          translateX.setValue(0);
+        });
       });
       return true;
     }
@@ -163,7 +229,9 @@ export default function ImageViewer({
         useNativeDriver: true,
       }).start(() => {
         setCurrentIndex(prev => prev - 1);
-        translateX.setValue(0);
+        requestAnimationFrame(() => {
+          translateX.setValue(0);
+        });
       });
       return true;
     }
@@ -408,18 +476,24 @@ export default function ImageViewer({
           <View style={styles.imageLayerContainer}>
             {hasThumbnail && (
               <Image
+                key={`thumb-${currentPhotoKey}`}
                 source={{ uri: currentPhoto.thumbnailUrl }}
                 style={styles.image}
                 resizeMode="contain"
               />
             )}
             <Animated.Image
+              key={`full-${currentPhotoKey}`}
               source={resolvedPhotoUri ? { uri: resolvedPhotoUri, cache: 'force-cache' } : undefined}
               style={[styles.image, styles.fullImageLayer, { opacity: fullImageOpacity }]}
               resizeMode="contain"
-              onLoadStart={() => setImageLoading(true)}
-              onLoad={() => handleFullImageLoaded(activeImageUrlRef.current)}
-              onError={() => handleFullImageError(activeImageUrlRef.current)}
+              onLoadStart={() => {
+                if (activeResolveRequestId === resolveRequestIdRef.current) {
+                  setImageLoading(true);
+                }
+              }}
+              onLoad={() => handleFullImageLoaded(activeResolveRequestId)}
+              onError={() => handleFullImageError(activeResolveRequestId)}
             />
           </View>
 

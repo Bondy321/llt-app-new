@@ -25,6 +25,7 @@ import { uploadPhoto, subscribeToTourPhotos, updatePhotoCaption } from '../servi
 import { optimizeImageForUpload, formatBytes } from '../services/imageOptimizationService';
 import { deleteGroupPhoto } from '../services/photoService';
 import ImageViewer from '../components/ImageViewer';
+import { getCachedPhotoUri } from '../services/photoViewerCacheService';
 import { auth } from '../firebase';
 import { getCanonicalIdentity } from '../services/identityService';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
@@ -321,6 +322,12 @@ export default function GroupPhotobookScreen({
   };
 
   const openViewer = (groupIndex, photoIndexInGroup) => {
+    const selectedPhoto = gallerySections[groupIndex]?.photos?.[photoIndexInGroup] || null;
+    const selectedUri = selectedPhoto?.viewerUrl || selectedPhoto?.mediumUrl || selectedPhoto?.optimizedUrl || selectedPhoto?.url || null;
+    if (selectedUri) {
+      getCachedPhotoUri(selectedUri).catch(() => {});
+    }
+
     const flatIndex = viewerFlatIndexMap[`${groupIndex}:${photoIndexInGroup}`] ?? 0;
 
     setViewerIndex(flatIndex);
@@ -332,7 +339,7 @@ export default function GroupPhotobookScreen({
       if (!Array.isArray(item)) return;
 
       item.forEach(({ photo }) => {
-        const previewUrl = photo?.thumbnailUrl || photo?.url;
+        const previewUrl = photo?.thumbnailUrl;
         if (!previewUrl || prefetchedUrisRef.current.has(previewUrl)) return;
 
         prefetchedUrisRef.current.add(previewUrl);

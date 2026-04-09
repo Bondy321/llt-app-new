@@ -26,6 +26,7 @@ import { uploadPhoto, subscribeToPrivatePhotos, updatePhotoCaption } from '../se
 import { optimizeImageForUpload, formatBytes } from '../services/imageOptimizationService';
 import { deletePrivatePhoto } from '../services/photoService';
 import ImageViewer from '../components/ImageViewer';
+import { getCachedPhotoUri } from '../services/photoViewerCacheService';
 import { auth, realtimeDb } from '../firebase';
 import logger from '../services/loggerService';
 import { getCanonicalIdentity } from '../services/identityService';
@@ -363,10 +364,15 @@ export default function PhotobookScreen({
   const openViewer = useCallback((photoId) => {
     const flatIndex = photoIndexById[photoId];
     if (typeof flatIndex !== 'number') return;
+    const selectedPhoto = visiblePhotos[flatIndex] || null;
+    const selectedUri = selectedPhoto?.viewerUrl || selectedPhoto?.mediumUrl || selectedPhoto?.optimizedUrl || selectedPhoto?.url || null;
+    if (selectedUri) {
+      getCachedPhotoUri(selectedUri).catch(() => {});
+    }
 
     setViewerIndex(flatIndex);
     setViewerVisible(true);
-  }, [photoIndexById]);
+  }, [photoIndexById, visiblePhotos]);
 
   const handleDeletePhoto = async (photo) => {
     try {
