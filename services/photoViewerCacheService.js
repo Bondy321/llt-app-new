@@ -44,14 +44,15 @@ const buildCacheFileUri = (remoteUri) => {
   return `${CACHE_DIR}${hash}.${ext}`;
 };
 
-const fileExists = async (uri) => {
+const getFileInfo = async (uri) => {
   try {
-    const info = await FileSystem.getInfoAsync(uri);
-    return Boolean(info?.exists);
+    return await FileSystem.getInfoAsync(uri);
   } catch {
-    return false;
+    return null;
   }
 };
+
+const isCacheFileValid = (info) => Boolean(info?.exists && Number(info?.size || 0) > 0);
 
 const trimCacheIfNeeded = async () => {
   try {
@@ -86,8 +87,12 @@ export const getCachedPhotoUri = async (remoteUri) => {
   if (!cacheDirReady) return remoteUri;
 
   const cacheUri = buildCacheFileUri(remoteUri);
-  if (await fileExists(cacheUri)) {
+  const cacheInfo = await getFileInfo(cacheUri);
+  if (isCacheFileValid(cacheInfo)) {
     return cacheUri;
+  }
+  if (cacheInfo?.exists) {
+    await FileSystem.deleteAsync(cacheUri, { idempotent: true }).catch(() => {});
   }
 
   const existingDownload = inFlightDownloads.get(remoteUri);
@@ -96,14 +101,21 @@ export const getCachedPhotoUri = async (remoteUri) => {
   }
 
   const downloadPromise = (async () => {
+    const tempUri = `${cacheUri}.tmp`;
     try {
-      const result = await FileSystem.downloadAsync(remoteUri, cacheUri);
-      if (result?.uri) {
+      await FileSystem.deleteAsync(tempUri, { idempotent: true }).catch(() => {});
+      const result = await FileSystem.downloadAsync(remoteUri, tempUri);
+      const downloadedInfo = await getFileInfo(result?.uri || tempUri);
+      if (result?.uri && isCacheFileValid(downloadedInfo)) {
+        await FileSystem.deleteAsync(cacheUri, { idempotent: true }).catch(() => {});
+        await FileSystem.moveAsync({ from: result.uri, to: cacheUri });
         await trimCacheIfNeeded();
-        return result.uri;
+        return cacheUri;
       }
+      await FileSystem.deleteAsync(tempUri, { idempotent: true }).catch(() => {});
       return remoteUri;
     } catch {
+      await FileSystem.deleteAsync(tempUri, { idempotent: true }).catch(() => {});
       return remoteUri;
     } finally {
       inFlightDownloads.delete(remoteUri);
@@ -124,4 +136,5 @@ export const __internal = {
   hashString,
   extractExtension,
   buildCacheFileUri,
+  isCacheFileValid,
 };

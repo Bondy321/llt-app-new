@@ -36,12 +36,13 @@ test('getCachedPhotoUri returns local file when cache already exists', async () 
       getInfoAsync: async (uri) => {
         infoCalls.push(uri);
         if (uri.endsWith('/photo-viewer-cache/')) return { exists: true };
-        return { exists: true, modificationTime: 100 };
+        return { exists: true, size: 32, modificationTime: 100 };
       },
       makeDirectoryAsync: async () => {},
       downloadAsync: async () => {
         throw new Error('Should not download when file exists');
       },
+      moveAsync: async () => {},
       readDirectoryAsync: async () => [],
       deleteAsync: async () => {},
     },
@@ -65,6 +66,7 @@ test('getCachedPhotoUri deduplicates concurrent download requests', async () => 
           firstLookup = false;
           return { exists: false };
         }
+        if (uri.endsWith('.tmp')) return { exists: true, size: 48 };
         return { exists: false };
       },
       makeDirectoryAsync: async () => {},
@@ -73,6 +75,7 @@ test('getCachedPhotoUri deduplicates concurrent download requests', async () => 
         await new Promise((resolve) => setTimeout(resolve, 5));
         return { uri: local };
       },
+      moveAsync: async () => {},
       readDirectoryAsync: async () => [],
       deleteAsync: async () => {},
     },
@@ -95,6 +98,7 @@ test('prefetchPhotoUris skips invalid entries and executes safely', async () => 
       documentDirectory: 'file:///docs/',
       getInfoAsync: async (uri) => {
         if (uri.endsWith('/photo-viewer-cache/')) return { exists: true };
+        if (uri.endsWith('.tmp')) return { exists: true, size: 64 };
         return { exists: false };
       },
       makeDirectoryAsync: async () => {},
@@ -102,6 +106,7 @@ test('prefetchPhotoUris skips invalid entries and executes safely', async () => 
         downloads += 1;
         return { uri: local };
       },
+      moveAsync: async () => {},
       readDirectoryAsync: async () => [],
       deleteAsync: async () => {},
     },
@@ -116,4 +121,58 @@ test('prefetchPhotoUris skips invalid entries and executes safely', async () => 
   ]);
 
   assert.equal(downloads, 2);
+});
+
+test('getCachedPhotoUri clears zero-byte cached files before re-downloading', async () => {
+  const deletedUris = [];
+  const service = loadServiceWithFsMock({
+    fsImpl: {
+      cacheDirectory: 'file:///cache/',
+      documentDirectory: 'file:///docs/',
+      getInfoAsync: async (uri) => {
+        if (uri.endsWith('/photo-viewer-cache/')) return { exists: true };
+        if (uri.endsWith('.tmp')) return { exists: true, size: 88 };
+        if (uri.includes('/photo-viewer-cache/')) return { exists: true, size: 0 };
+        return { exists: false };
+      },
+      makeDirectoryAsync: async () => {},
+      downloadAsync: async (_remote, local) => ({ uri: local }),
+      moveAsync: async () => {},
+      readDirectoryAsync: async () => [],
+      deleteAsync: async (uri) => {
+        deletedUris.push(uri);
+      },
+    },
+  });
+
+  const result = await service.getCachedPhotoUri('https://cdn.example.com/broken.jpg');
+  assert.ok(result.endsWith('.jpg'));
+  assert.ok(deletedUris.some((uri) => uri.endsWith('.jpg')));
+});
+
+test('getCachedPhotoUri returns remote URI when download result is empty', async () => {
+  const movedFiles = [];
+  const service = loadServiceWithFsMock({
+    fsImpl: {
+      cacheDirectory: 'file:///cache/',
+      documentDirectory: 'file:///docs/',
+      getInfoAsync: async (uri) => {
+        if (uri.endsWith('/photo-viewer-cache/')) return { exists: true };
+        if (uri.endsWith('.tmp')) return { exists: true, size: 0 };
+        return { exists: false };
+      },
+      makeDirectoryAsync: async () => {},
+      downloadAsync: async (_remote, local) => ({ uri: local }),
+      moveAsync: async (args) => {
+        movedFiles.push(args);
+      },
+      readDirectoryAsync: async () => [],
+      deleteAsync: async () => {},
+    },
+  });
+
+  const remoteUri = 'https://cdn.example.com/empty.jpg';
+  const result = await service.getCachedPhotoUri(remoteUri);
+  assert.equal(result, remoteUri);
+  assert.equal(movedFiles.length, 0);
 });

@@ -50,12 +50,12 @@ export default function ImageViewer({
   const [draftCaption, setDraftCaption] = useState('');
   const [captionSaving, setCaptionSaving] = useState(false);
   const [resolvedPhotoUri, setResolvedPhotoUri] = useState(null);
+  const [activeResolveRequestId, setActiveResolveRequestId] = useState(0);
 
   const translateX = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const infoSlideAnim = useRef(new Animated.Value(0)).current;
   const fullImageOpacity = useRef(new Animated.Value(0)).current;
-  const activeImageUrlRef = useRef(null);
   const resolveRequestIdRef = useRef(0);
 
   useEffect(() => {
@@ -102,8 +102,8 @@ export default function ImageViewer({
     if (!visible) return;
     const currentRequestId = resolveRequestIdRef.current + 1;
     resolveRequestIdRef.current = currentRequestId;
+    setActiveResolveRequestId(currentRequestId);
     const sourceUri = currentPhoto.url || null;
-    activeImageUrlRef.current = sourceUri;
     fullImageOpacity.setValue(0);
     setResolvedPhotoUri(sourceUri);
     setImageLoading(Boolean(sourceUri));
@@ -115,6 +115,12 @@ export default function ImageViewer({
       setResolvedPhotoUri(cachedUri);
     }).catch(() => {});
   }, [visible, currentIndex, currentPhoto.url, fullImageOpacity]);
+
+  useEffect(() => {
+    if (visible) return;
+    resolveRequestIdRef.current += 1;
+    setActiveResolveRequestId(resolveRequestIdRef.current);
+  }, [visible]);
 
   const handleFullImageLoaded = useCallback((requestId) => {
     if (!requestId || requestId !== resolveRequestIdRef.current) return;
@@ -417,9 +423,13 @@ export default function ImageViewer({
               source={resolvedPhotoUri ? { uri: resolvedPhotoUri, cache: 'force-cache' } : undefined}
               style={[styles.image, styles.fullImageLayer, { opacity: fullImageOpacity }]}
               resizeMode="contain"
-              onLoadStart={() => setImageLoading(true)}
-              onLoad={() => handleFullImageLoaded(activeImageUrlRef.current)}
-              onError={() => handleFullImageError(activeImageUrlRef.current)}
+              onLoadStart={() => {
+                if (activeResolveRequestId === resolveRequestIdRef.current) {
+                  setImageLoading(true);
+                }
+              }}
+              onLoad={() => handleFullImageLoaded(activeResolveRequestId)}
+              onError={() => handleFullImageError(activeResolveRequestId)}
             />
           </View>
 
