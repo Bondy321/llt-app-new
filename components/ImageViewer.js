@@ -18,6 +18,7 @@ import {
   ActivityIndicator,
   TextInput,
 } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system';
@@ -85,6 +86,42 @@ export default function ImageViewer({
 
   const currentPhoto = photos[currentIndex] || {};
   const hasThumbnail = Boolean(currentPhoto.thumbnailUrl);
+  const currentPhotoKey = currentPhoto?.id || currentPhoto?.url || `${currentIndex}`;
+  const resolveViewerPrimaryUri = useCallback((photo) => (
+    photo?.viewerUrl
+    || photo?.mediumUrl
+    || photo?.optimizedUrl
+    || photo?.url
+    || photo?.thumbnailUrl
+    || null
+  ), []);
+
+  useEffect(() => {
+    let mounted = true;
+    if (!visible) return () => {
+      mounted = false;
+    };
+
+    NetInfo.fetch().then((state) => {
+      if (!mounted) return;
+      const cellularGeneration = state?.details?.cellularGeneration;
+      const isWeakCellular = cellularGeneration === '2g' || cellularGeneration === '3g';
+      const isConstrained = state?.type === 'cellular' || Boolean(state?.details?.isConnectionExpensive) || isWeakCellular;
+
+      setPrefetchPolicy(isConstrained
+        ? { neighborDistance: 1, thumbnailsOnly: true, delayMs: 450 }
+        : { neighborDistance: 2, thumbnailsOnly: false, delayMs: 300 });
+    }).catch(() => {});
+
+    return () => {
+      mounted = false;
+    };
+  }, [visible]);
+
+  const currentViewerUri = useMemo(
+    () => resolveViewerPrimaryUri(currentPhoto),
+    [currentPhoto, resolveViewerPrimaryUri]
+  );
 
   useEffect(() => {
     if (!visible || !photos.length) return;
@@ -118,7 +155,13 @@ export default function ImageViewer({
       if (resolveRequestIdRef.current !== currentRequestId) return;
       setResolvedPhotoUri(cachedUri);
     }).catch(() => {});
-  }, [visible, currentIndex, currentPhoto.url, fullImageOpacity]);
+  }, [visible, currentIndex, currentViewerUri, fullImageOpacity]);
+
+  useEffect(() => {
+    if (visible) return;
+    resolveRequestIdRef.current += 1;
+    setActiveResolveRequestId(resolveRequestIdRef.current);
+  }, [visible]);
 
   useEffect(() => {
     if (visible) return;
@@ -156,7 +199,9 @@ export default function ImageViewer({
         useNativeDriver: true,
       }).start(() => {
         setCurrentIndex(prev => prev + 1);
-        translateX.setValue(0);
+        requestAnimationFrame(() => {
+          translateX.setValue(0);
+        });
       });
       return true;
     }
@@ -173,7 +218,9 @@ export default function ImageViewer({
         useNativeDriver: true,
       }).start(() => {
         setCurrentIndex(prev => prev - 1);
-        translateX.setValue(0);
+        requestAnimationFrame(() => {
+          translateX.setValue(0);
+        });
       });
       return true;
     }
@@ -418,12 +465,14 @@ export default function ImageViewer({
           <View style={styles.imageLayerContainer}>
             {hasThumbnail && (
               <Image
+                key={`thumb-${currentPhotoKey}`}
                 source={{ uri: currentPhoto.thumbnailUrl }}
                 style={styles.image}
                 resizeMode="contain"
               />
             )}
             <Animated.Image
+              key={`full-${currentPhotoKey}`}
               source={resolvedPhotoUri ? { uri: resolvedPhotoUri, cache: 'force-cache' } : undefined}
               style={[styles.image, styles.fullImageLayer, { opacity: fullImageOpacity }]}
               resizeMode="contain"
