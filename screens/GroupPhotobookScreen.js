@@ -332,7 +332,7 @@ export default function GroupPhotobookScreen({
       if (!Array.isArray(item)) return;
 
       item.forEach(({ photo }) => {
-        const previewUrl = photo?.thumbnailUrl || photo?.url;
+        const previewUrl = photo?.thumbnailUrl;
         if (!previewUrl || prefetchedUrisRef.current.has(previewUrl)) return;
 
         prefetchedUrisRef.current.add(previewUrl);
