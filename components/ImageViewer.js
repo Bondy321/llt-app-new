@@ -89,14 +89,18 @@ export default function ImageViewer({
   useEffect(() => {
     if (!visible || !photos.length) return;
     const nearbyUris = [];
-    [currentIndex - 1, currentIndex, currentIndex + 1].forEach((idx) => {
+    [currentIndex - 1, currentIndex + 1].forEach((idx) => {
       const uri = photos[idx]?.url;
       if (uri) nearbyUris.push(uri);
       const thumbnailUri = photos[idx]?.thumbnailUrl;
       if (thumbnailUri) nearbyUris.push(thumbnailUri);
     });
-    prefetchPhotoUris(nearbyUris).catch(() => {});
-  }, [visible, currentIndex, photos]);
+    const currentDisplayUri = currentPhoto.url || currentPhoto.thumbnailUrl || null;
+    const prefetchCandidates = currentDisplayUri
+      ? nearbyUris.filter((uri) => uri !== currentDisplayUri)
+      : nearbyUris;
+    prefetchPhotoUris(prefetchCandidates).catch(() => {});
+  }, [visible, currentIndex, photos, currentPhoto.url, currentPhoto.thumbnailUrl]);
 
   useEffect(() => {
     if (!visible) return;
