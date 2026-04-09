@@ -52,11 +52,6 @@ export default function ImageViewer({
   const [captionSaving, setCaptionSaving] = useState(false);
   const [resolvedPhotoUri, setResolvedPhotoUri] = useState(null);
   const [activeResolveRequestId, setActiveResolveRequestId] = useState(0);
-  const [prefetchPolicy, setPrefetchPolicy] = useState({
-    neighborDistance: 2,
-    thumbnailsOnly: false,
-    delayMs: 300,
-  });
 
   const translateX = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -131,37 +126,25 @@ export default function ImageViewer({
   useEffect(() => {
     if (!visible || !photos.length) return;
     const nearbyUris = [];
-    for (let offset = 1; offset <= prefetchPolicy.neighborDistance; offset += 1) {
-      const previousPhoto = photos[currentIndex - offset];
-      const nextPhoto = photos[currentIndex + offset];
-      [previousPhoto, nextPhoto].forEach((photo) => {
-        if (!photo) return;
-        if (!prefetchPolicy.thumbnailsOnly) {
-          const viewerUri = resolveViewerPrimaryUri(photo);
-          if (viewerUri) nearbyUris.push(viewerUri);
-        }
-        if (photo.thumbnailUrl) nearbyUris.push(photo.thumbnailUrl);
-      });
-    }
-
-    const prefetchCandidates = currentViewerUri
-      ? nearbyUris.filter((uri) => uri !== currentViewerUri)
+    [currentIndex - 1, currentIndex + 1].forEach((idx) => {
+      const uri = photos[idx]?.url;
+      if (uri) nearbyUris.push(uri);
+      const thumbnailUri = photos[idx]?.thumbnailUrl;
+      if (thumbnailUri) nearbyUris.push(thumbnailUri);
+    });
+    const currentDisplayUri = currentPhoto.url || currentPhoto.thumbnailUrl || null;
+    const prefetchCandidates = currentDisplayUri
+      ? nearbyUris.filter((uri) => uri !== currentDisplayUri)
       : nearbyUris;
-    if (!prefetchCandidates.length) return;
-
-    const timer = setTimeout(() => {
-      prefetchPhotoUris(prefetchCandidates).catch(() => {});
-    }, prefetchPolicy.delayMs);
-
-    return () => clearTimeout(timer);
-  }, [visible, currentIndex, photos, currentViewerUri, prefetchPolicy, resolveViewerPrimaryUri]);
+    prefetchPhotoUris(prefetchCandidates).catch(() => {});
+  }, [visible, currentIndex, photos, currentPhoto.url, currentPhoto.thumbnailUrl]);
 
   useEffect(() => {
     if (!visible) return;
     const currentRequestId = resolveRequestIdRef.current + 1;
     resolveRequestIdRef.current = currentRequestId;
     setActiveResolveRequestId(currentRequestId);
-    const sourceUri = currentViewerUri;
+    const sourceUri = currentPhoto.url || null;
     fullImageOpacity.setValue(0);
     setResolvedPhotoUri(sourceUri);
     setImageLoading(Boolean(sourceUri));
@@ -173,6 +156,12 @@ export default function ImageViewer({
       setResolvedPhotoUri(cachedUri);
     }).catch(() => {});
   }, [visible, currentIndex, currentViewerUri, fullImageOpacity]);
+
+  useEffect(() => {
+    if (visible) return;
+    resolveRequestIdRef.current += 1;
+    setActiveResolveRequestId(resolveRequestIdRef.current);
+  }, [visible]);
 
   useEffect(() => {
     if (visible) return;
