@@ -116,25 +116,25 @@ export default function ImageViewer({
     }).catch(() => {});
   }, [visible, currentIndex, currentPhoto.url, fullImageOpacity]);
 
-  const handleFullImageLoaded = useCallback((imageUrl) => {
-    if (!imageUrl || imageUrl !== activeImageUrlRef.current) return;
+  const handleFullImageLoaded = useCallback((requestId) => {
+    if (!requestId || requestId !== resolveRequestIdRef.current) return;
 
     Animated.timing(fullImageOpacity, {
       toValue: 1,
       duration: 220,
       useNativeDriver: true,
     }).start(() => {
-      if (imageUrl === activeImageUrlRef.current) {
+      if (requestId === resolveRequestIdRef.current) {
         setImageLoading(false);
       }
     });
-  }, [fullImageOpacity]);
+  }, [fullImageOpacity, resolveRequestIdRef]);
 
-  const handleFullImageError = useCallback((imageUrl) => {
-    if (!imageUrl || imageUrl !== activeImageUrlRef.current) return;
+  const handleFullImageError = useCallback((requestId) => {
+    if (!requestId || requestId !== resolveRequestIdRef.current) return;
     setImageLoading(false);
     fullImageOpacity.setValue(1);
-  }, [fullImageOpacity]);
+  }, [fullImageOpacity, resolveRequestIdRef]);
 
   const goToNext = useCallback(() => {
     if (currentIndex < photos.length - 1) {
