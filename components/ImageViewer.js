@@ -24,6 +24,7 @@ import * as FileSystem from 'expo-file-system';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, SPACING, RADIUS, SHADOWS, FONT_WEIGHT } from '../theme';
 import loggerService from '../services/loggerService';
+import { getCachedPhotoUri, prefetchPhotoUris } from '../services/photoViewerCacheService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = 80;
@@ -48,12 +49,14 @@ export default function ImageViewer({
   const [editingCaption, setEditingCaption] = useState(false);
   const [draftCaption, setDraftCaption] = useState('');
   const [captionSaving, setCaptionSaving] = useState(false);
+  const [resolvedPhotoUri, setResolvedPhotoUri] = useState(null);
+  const [activeImageRequestId, setActiveImageRequestId] = useState(0);
 
   const translateX = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const infoSlideAnim = useRef(new Animated.Value(0)).current;
   const fullImageOpacity = useRef(new Animated.Value(0)).current;
-  const activeImageUrlRef = useRef(null);
+  const resolveRequestIdRef = useRef(0);
 
   useEffect(() => {
     setCurrentIndex(initialIndex);
@@ -85,40 +88,55 @@ export default function ImageViewer({
 
   useEffect(() => {
     if (!visible || !photos.length) return;
-    [currentIndex - 1, currentIndex, currentIndex + 1].forEach((idx) => {
+    const nearbyUris = [];
+    [currentIndex - 1, currentIndex + 1].forEach((idx) => {
       const uri = photos[idx]?.url;
-      if (uri) Image.prefetch(uri).catch(() => {});
+      if (uri) nearbyUris.push(uri);
       const thumbnailUri = photos[idx]?.thumbnailUrl;
-      if (thumbnailUri) Image.prefetch(thumbnailUri).catch(() => {});
+      if (thumbnailUri) nearbyUris.push(thumbnailUri);
     });
+    const currentThumbnailUri = photos[currentIndex]?.thumbnailUrl;
+    if (currentThumbnailUri) nearbyUris.push(currentThumbnailUri);
+    prefetchPhotoUris(nearbyUris).catch(() => {});
   }, [visible, currentIndex, photos]);
 
   useEffect(() => {
     if (!visible) return;
-    activeImageUrlRef.current = currentPhoto.url || null;
+    const currentRequestId = resolveRequestIdRef.current + 1;
+    resolveRequestIdRef.current = currentRequestId;
+    setActiveImageRequestId(currentRequestId);
+    const sourceUri = currentPhoto.url || null;
     fullImageOpacity.setValue(0);
-    setImageLoading(Boolean(currentPhoto.url));
+    setResolvedPhotoUri(null);
+    setImageLoading(Boolean(sourceUri));
+
+    if (!sourceUri) return;
+    getCachedPhotoUri(sourceUri, { downloadIfMissing: false }).then((cachedUri) => {
+      if (!cachedUri) return;
+      if (resolveRequestIdRef.current !== currentRequestId) return;
+      setResolvedPhotoUri(cachedUri);
+    }).catch(() => {});
   }, [visible, currentIndex, currentPhoto.url, fullImageOpacity]);
 
-  const handleFullImageLoaded = useCallback((imageUrl) => {
-    if (!imageUrl || imageUrl !== activeImageUrlRef.current) return;
+  const handleFullImageLoaded = useCallback((requestId) => {
+    if (!requestId || requestId !== resolveRequestIdRef.current) return;
 
     Animated.timing(fullImageOpacity, {
       toValue: 1,
       duration: 220,
       useNativeDriver: true,
     }).start(() => {
-      if (imageUrl === activeImageUrlRef.current) {
+      if (requestId === resolveRequestIdRef.current) {
         setImageLoading(false);
       }
     });
-  }, [fullImageOpacity]);
+  }, [fullImageOpacity, resolveRequestIdRef]);
 
-  const handleFullImageError = useCallback((imageUrl) => {
-    if (!imageUrl || imageUrl !== activeImageUrlRef.current) return;
+  const handleFullImageError = useCallback((requestId) => {
+    if (!requestId || requestId !== resolveRequestIdRef.current) return;
     setImageLoading(false);
     fullImageOpacity.setValue(1);
-  }, [fullImageOpacity]);
+  }, [fullImageOpacity, resolveRequestIdRef]);
 
   const goToNext = useCallback(() => {
     if (currentIndex < photos.length - 1) {
@@ -398,12 +416,12 @@ export default function ImageViewer({
               />
             )}
             <Animated.Image
-              source={{ uri: currentPhoto.url }}
+              source={resolvedPhotoUri ? { uri: resolvedPhotoUri, cache: 'force-cache' } : undefined}
               style={[styles.image, styles.fullImageLayer, { opacity: fullImageOpacity }]}
               resizeMode="contain"
               onLoadStart={() => setImageLoading(true)}
-              onLoad={() => handleFullImageLoaded(currentPhoto.url)}
-              onError={() => handleFullImageError(currentPhoto.url)}
+              onLoad={() => handleFullImageLoaded(activeImageRequestId)}
+              onError={() => handleFullImageError(activeImageRequestId)}
             />
           </View>
 
