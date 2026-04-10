@@ -12,6 +12,15 @@ const OPTIMIZATION_PROFILES = {
     maxIterations: 6,
     format: ImageManipulator.SaveFormat.JPEG,
   },
+  viewer: {
+    maxLongEdge: 1600,
+    compress: 0.72,
+    minCompress: 0.45,
+    compressStep: 0.07,
+    targetMaxBytes: 450000,
+    maxIterations: 6,
+    format: ImageManipulator.SaveFormat.JPEG,
+  },
   thumbnail: {
     maxLongEdge: 420,
     compress: 0.55,
@@ -115,32 +124,48 @@ export const optimizeImageForUpload = async (asset, options = {}) => {
     targetMaxBytes: options.fullTargetMaxBytes ?? OPTIMIZATION_PROFILES.full.targetMaxBytes,
     maxIterations: options.maxIterations ?? OPTIMIZATION_PROFILES.full.maxIterations,
   });
+  const viewerProfile = resolveProfile(OPTIMIZATION_PROFILES.viewer, {
+    targetMaxBytes: options.viewerTargetMaxBytes ?? OPTIMIZATION_PROFILES.viewer.targetMaxBytes,
+    maxIterations: options.maxIterations ?? OPTIMIZATION_PROFILES.viewer.maxIterations,
+  });
   const thumbnailProfile = resolveProfile(OPTIMIZATION_PROFILES.thumbnail, {
     targetMaxBytes: options.thumbnailTargetMaxBytes ?? OPTIMIZATION_PROFILES.thumbnail.targetMaxBytes,
     maxIterations: options.maxIterations ?? OPTIMIZATION_PROFILES.thumbnail.maxIterations,
   });
 
   const full = await optimizeVariant(asset.uri, fullProfile, dimensions);
-  const thumbnail = await optimizeVariant(full.uri, thumbnailProfile, {
+  const viewer = await optimizeVariant(full.uri, viewerProfile, {
     width: full.width,
     height: full.height,
+  });
+  const thumbnail = await optimizeVariant(viewer.uri, thumbnailProfile, {
+    width: viewer.width,
+    height: viewer.height,
   });
 
   return {
     uploadUri: full.uri,
+    viewerUri: viewer.uri,
     thumbnailUri: thumbnail.uri,
     metrics: {
       originalSizeBytes,
       optimizedSizeBytes: full.sizeBytes,
+      viewerSizeBytes: viewer.sizeBytes,
       thumbnailSizeBytes: thumbnail.sizeBytes,
       optimizationRatio: originalSizeBytes && full.sizeBytes
         ? Number((1 - (full.sizeBytes / originalSizeBytes)).toFixed(4))
         : null,
+      viewerOptimizationRatio: originalSizeBytes && viewer.sizeBytes
+        ? Number((1 - (viewer.sizeBytes / originalSizeBytes)).toFixed(4))
+        : null,
       fullOptimizationPasses: full.optimizationPasses,
+      viewerOptimizationPasses: viewer.optimizationPasses,
       thumbnailOptimizationPasses: thumbnail.optimizationPasses,
       fullFinalQualityUsed: full.finalQualityUsed,
+      viewerFinalQualityUsed: viewer.finalQualityUsed,
       thumbnailFinalQualityUsed: thumbnail.finalQualityUsed,
       fullResizeApplied: full.resizeApplied,
+      viewerResizeApplied: viewer.resizeApplied,
       thumbnailResizeApplied: thumbnail.resizeApplied,
     },
   };

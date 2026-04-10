@@ -27,6 +27,7 @@ import { optimizeImageForUpload, formatBytes } from '../services/imageOptimizati
 import { deletePrivatePhoto } from '../services/photoService';
 import ImageViewer from '../components/ImageViewer';
 import { getCachedPhotoUri } from '../services/photoViewerCacheService';
+import { resolveViewerDisplayUri } from '../services/photoVariantService';
 import { auth, realtimeDb } from '../firebase';
 import logger from '../services/loggerService';
 import { getCanonicalIdentity } from '../services/identityService';
@@ -297,6 +298,7 @@ export default function PhotobookScreen({
       await uploadPhoto(pending.uri, tourId, principalId, pending.caption.trim(), {
         visibility: 'private',
         thumbnailUri: pending.thumbnailUri || null,
+        viewerUri: pending.viewerUri || null,
         optimizationMetrics: pending.metrics || null,
         onProgress: (ratio) => {
           const percent = Math.round((ratio || 0) * 100);
@@ -322,6 +324,7 @@ export default function PhotobookScreen({
         id: `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         uri: optimized.uploadUri,
         thumbnailUri: optimized.thumbnailUri,
+        viewerUri: optimized.viewerUri || null,
         previewUri: pendingImage.uri,
         caption,
         progress: 0,
@@ -365,7 +368,7 @@ export default function PhotobookScreen({
     const flatIndex = photoIndexById[photoId];
     if (typeof flatIndex !== 'number') return;
     const selectedPhoto = visiblePhotos[flatIndex] || null;
-    const selectedUri = selectedPhoto?.viewerUrl || selectedPhoto?.mediumUrl || selectedPhoto?.optimizedUrl || selectedPhoto?.url || null;
+    const selectedUri = resolveViewerDisplayUri(selectedPhoto);
     if (selectedUri) {
       getCachedPhotoUri(selectedUri).catch(() => {});
     }

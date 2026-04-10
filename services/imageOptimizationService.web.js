@@ -12,12 +12,18 @@ export const optimizeImageForUpload = async (asset) => {
 
   return {
     uploadUri: asset.uri,
+    viewerUri: asset.uri,
     thumbnailUri: asset.uri,
     metrics: {
       originalSizeBytes,
       optimizedSizeBytes: originalSizeBytes,
+      viewerSizeBytes: originalSizeBytes,
       thumbnailSizeBytes: originalSizeBytes,
       optimizationRatio: 0,
+      viewerOptimizationRatio: 0,
+      viewerOptimizationPasses: 1,
+      viewerFinalQualityUsed: 1,
+      viewerResizeApplied: false,
     },
   };
 };

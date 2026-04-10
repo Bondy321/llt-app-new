@@ -434,6 +434,7 @@ const uploadPhoto = async (
     fetchFn = fetch,
     onProgress = null,
     thumbnailUri = null,
+    viewerUri = null,
     optimizationMetrics = null,
     nowFn = Date.now,
   } = {}
@@ -481,6 +482,9 @@ const uploadPhoto = async (
     let thumbnailBlob = null;
     let thumbnailPath = null;
     let thumbnailDownloadURL = null;
+    let viewerBlob = null;
+    let viewerPath = null;
+    let viewerDownloadURL = null;
 
     try {
       const metadata = {
@@ -547,6 +551,34 @@ const uploadPhoto = async (
         }
       }
 
+      if (viewerUri && typeof viewerUri === 'string') {
+        try {
+          viewerBlob = await createBlob(viewerUri, fetchFn);
+          validateBlob(viewerBlob);
+
+          const viewerFilename = `${uploadTimestamp}_${validatedUserId}_viewer.jpg`;
+          viewerPath = isPrivate
+            ? `private_tour_photos/${validatedTourId}/${validatedUserId}/viewers/${viewerFilename}`
+            : `group_tour_photos/${validatedTourId}/viewers/${viewerFilename}`;
+
+          const viewerRef = storageRefFn(storageInstance, viewerPath);
+          await uploadBytesFn(viewerRef, viewerBlob, {
+            contentType: 'image/jpeg',
+            cacheControl: PHOTO_CACHE_CONTROL_HEADER,
+            customMetadata: {
+              uploadedBy: validatedUserId,
+              uploadedAt: new Date().toISOString(),
+              variant: 'viewer',
+            },
+          });
+          viewerDownloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, viewerRef);
+        } catch (viewerError) {
+          viewerPath = null;
+          viewerDownloadURL = null;
+          console.warn('Viewer upload failed; continuing with full-size photo and thumbnail.', viewerError);
+        }
+      }
+
       const databasePath = isPrivate
         ? `private_tour_photos/${validatedTourId}/${validatedUserKey}`
         : `group_tour_photos/${validatedTourId}`;
@@ -569,12 +601,19 @@ const uploadPhoto = async (
         photoData.thumbnailStoragePath = thumbnailPath;
       }
 
+      if (viewerDownloadURL) {
+        photoData.viewerUrl = viewerDownloadURL;
+        photoData.viewerStoragePath = viewerPath;
+      }
+
       if (optimizationMetrics && typeof optimizationMetrics === 'object') {
         photoData.optimization = {
           originalSizeBytes: optimizationMetrics.originalSizeBytes || null,
           optimizedSizeBytes: optimizationMetrics.optimizedSizeBytes || blob.size,
+          viewerSizeBytes: optimizationMetrics.viewerSizeBytes || (viewerBlob ? viewerBlob.size : null),
           thumbnailSizeBytes: optimizationMetrics.thumbnailSizeBytes || (thumbnailBlob ? thumbnailBlob.size : null),
           optimizationRatio: optimizationMetrics.optimizationRatio ?? null,
+          viewerOptimizationRatio: optimizationMetrics.viewerOptimizationRatio ?? null,
         };
       }
 
@@ -607,6 +646,14 @@ const uploadPhoto = async (
           thumbnailBlob.close();
         } catch (error) {
           console.warn('Error closing thumbnail blob:', error);
+        }
+      }
+
+      if (viewerBlob && typeof viewerBlob.close === 'function') {
+        try {
+          viewerBlob.close();
+        } catch (error) {
+          console.warn('Error closing viewer blob:', error);
         }
       }
     }
@@ -907,6 +954,7 @@ const uploadPhotoDirect = async (payload = {}) => {
       visibility = 'group',
       uploaderName = 'Tour Member',
       thumbnailUri = null,
+      viewerUri = null,
       optimizationMetrics = null,
       onProgress = null,
     } = payload;
@@ -916,6 +964,7 @@ const uploadPhotoDirect = async (payload = {}) => {
       visibility,
       uploaderName,
       thumbnailUri,
+      viewerUri,
       optimizationMetrics,
       onProgress,
     });
