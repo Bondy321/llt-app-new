@@ -317,8 +317,10 @@ test('uploadPhoto stores thumbnail and optimization metadata when provided', asy
   assert.deepStrictEqual(payload.optimization, {
     originalSizeBytes: 4096,
     optimizedSizeBytes: 2048,
+    viewerSizeBytes: null,
     thumbnailSizeBytes: 512,
     optimizationRatio: 0.5,
+    viewerOptimizationRatio: null,
   });
   assert.strictEqual(mainBlob.closed, true);
   assert.strictEqual(thumbBlob.closed, true);
@@ -375,6 +377,105 @@ test('uploadPhoto continues when thumbnail upload fails and still writes full ph
   assert.ok(!('thumbnailStoragePath' in payload));
   assert.strictEqual(mainBlob.closed, true);
   assert.strictEqual(thumbBlob.closed, true);
+});
+
+test('uploadPhoto stores viewer variant metadata when provided', async (t) => {
+  const originalNow = Date.now;
+  Date.now = () => 1700000000000;
+  t.after(() => {
+    Date.now = originalNow;
+  });
+
+  const mainBlob = createMockBlob({ size: 2048, type: 'image/jpeg' });
+  const viewerBlob = createMockBlob({ size: 900, type: 'image/jpeg' });
+
+  const mockFetch = async (uri) => ({
+    ok: true,
+    blob: async () => (uri.includes('viewer') ? viewerBlob : mainBlob),
+  });
+
+  let payload;
+  const uploaded = [];
+
+  await uploadPhoto('file://main.jpg', 'tour-viewer', 'user-viewer', 'Viewer test', {
+    viewerUri: 'file://viewer.jpg',
+    optimizationMetrics: {
+      originalSizeBytes: 4096,
+      optimizedSizeBytes: 2048,
+      viewerSizeBytes: 900,
+      optimizationRatio: 0.5,
+      viewerOptimizationRatio: 0.78,
+    },
+    storageInstance: {},
+    realtimeDbInstance: {},
+    storageRefFn: (_storage, path) => ({ path }),
+    uploadBytesFn: async (ref, _blob, metadata) => {
+      uploaded.push({ path: ref.path, metadata });
+    },
+    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
+    dbRefFn: mockDbRef,
+    pushFn: () => ({ key: 'viewer-photo' }),
+    setFn: async (_ref, value) => {
+      payload = value;
+    },
+    serverTimestampFn: () => 84,
+    fetchFn: mockFetch,
+  });
+
+  assert.deepStrictEqual(uploaded.map((entry) => entry.path), [
+    'group_tour_photos/tour-viewer/1700000000000_user-viewer.jpg',
+    'group_tour_photos/tour-viewer/viewers/1700000000000_user-viewer_viewer.jpg',
+  ]);
+  assert.strictEqual(uploaded[1].metadata.customMetadata.variant, 'viewer');
+  assert.strictEqual(payload.viewerUrl, 'https://example.com/group_tour_photos/tour-viewer/viewers/1700000000000_user-viewer_viewer.jpg');
+  assert.strictEqual(payload.viewerStoragePath, 'group_tour_photos/tour-viewer/viewers/1700000000000_user-viewer_viewer.jpg');
+  assert.strictEqual(payload.optimization.viewerSizeBytes, 900);
+  assert.strictEqual(payload.optimization.viewerOptimizationRatio, 0.78);
+  assert.strictEqual(mainBlob.closed, true);
+  assert.strictEqual(viewerBlob.closed, true);
+});
+
+test('uploadPhoto continues when viewer upload fails and still writes full record', async (t) => {
+  const originalNow = Date.now;
+  Date.now = () => 1700000000000;
+  t.after(() => {
+    Date.now = originalNow;
+  });
+
+  const mainBlob = createMockBlob({ size: 2048, type: 'image/jpeg' });
+  const viewerBlob = createMockBlob({ size: 900, type: 'image/jpeg' });
+
+  const mockFetch = async (uri) => ({
+    ok: true,
+    blob: async () => (uri.includes('viewer') ? viewerBlob : mainBlob),
+  });
+
+  let payload;
+  await uploadPhoto('file://main.jpg', 'tour-viewer-fallback', 'user-viewer', 'Viewer optional', {
+    viewerUri: 'file://viewer.jpg',
+    storageInstance: {},
+    realtimeDbInstance: {},
+    storageRefFn: (_storage, path) => ({ path }),
+    uploadBytesFn: async (ref) => {
+      if (ref.path.includes('/viewers/')) {
+        throw new Error('viewer path denied');
+      }
+    },
+    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
+    dbRefFn: mockDbRef,
+    pushFn: () => ({ key: 'viewer-fallback-photo' }),
+    setFn: async (_ref, value) => {
+      payload = value;
+    },
+    serverTimestampFn: () => 42,
+    fetchFn: mockFetch,
+  });
+
+  assert.strictEqual(payload.url, 'https://example.com/group_tour_photos/tour-viewer-fallback/1700000000000_user-viewer.jpg');
+  assert.ok(!('viewerUrl' in payload));
+  assert.ok(!('viewerStoragePath' in payload));
+  assert.strictEqual(mainBlob.closed, true);
+  assert.strictEqual(viewerBlob.closed, true);
 });
 
 test('uploadPhoto retries getDownloadURL for transient storage errors before succeeding', async (t) => {

@@ -26,6 +26,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, SPACING, RADIUS, SHADOWS, FONT_WEIGHT } from '../theme';
 import loggerService from '../services/loggerService';
 import { getCachedPhotoUri, prefetchPhotoUris } from '../services/photoViewerCacheService';
+import {
+  resolveViewerDisplayUri,
+  resolveSaveUri,
+  resolveFullQualityUri,
+  buildNeighborPrefetchUris,
+} from '../services/photoVariantService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = 80;
@@ -52,6 +58,12 @@ export default function ImageViewer({
   const [captionSaving, setCaptionSaving] = useState(false);
   const [resolvedPhotoUri, setResolvedPhotoUri] = useState(null);
   const [activeResolveRequestId, setActiveResolveRequestId] = useState(0);
+  const [fullQualityRequestedByPhotoKey, setFullQualityRequestedByPhotoKey] = useState({});
+  const [prefetchPolicy, setPrefetchPolicy] = useState({
+    neighborDistance: 2,
+    thumbnailsOnly: false,
+    delayMs: 300,
+  });
 
   const translateX = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -87,14 +99,20 @@ export default function ImageViewer({
   const currentPhoto = photos[currentIndex] || {};
   const hasThumbnail = Boolean(currentPhoto.thumbnailUrl);
   const currentPhotoKey = currentPhoto?.id || currentPhoto?.url || `${currentIndex}`;
-  const resolveViewerPrimaryUri = useCallback((photo) => (
-    photo?.viewerUrl
-    || photo?.mediumUrl
-    || photo?.optimizedUrl
-    || photo?.url
-    || photo?.thumbnailUrl
-    || null
-  ), []);
+  const currentViewerUri = useMemo(
+    () => resolveViewerDisplayUri(currentPhoto),
+    [currentPhoto]
+  );
+  const currentFullQualityUri = useMemo(
+    () => resolveFullQualityUri(currentPhoto),
+    [currentPhoto]
+  );
+  const fullQualityRequested = Boolean(fullQualityRequestedByPhotoKey[currentPhotoKey]);
+  const canRequestFullQuality = Boolean(
+    currentFullQualityUri
+    && currentViewerUri
+    && currentFullQualityUri !== currentViewerUri
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -118,33 +136,31 @@ export default function ImageViewer({
     };
   }, [visible]);
 
-  const currentViewerUri = useMemo(
-    () => resolveViewerPrimaryUri(currentPhoto),
-    [currentPhoto, resolveViewerPrimaryUri]
-  );
-
   useEffect(() => {
-    if (!visible || !photos.length) return;
-    const nearbyUris = [];
-    [currentIndex - 1, currentIndex + 1].forEach((idx) => {
-      const uri = photos[idx]?.url;
-      if (uri) nearbyUris.push(uri);
-      const thumbnailUri = photos[idx]?.thumbnailUrl;
-      if (thumbnailUri) nearbyUris.push(thumbnailUri);
+    if (!visible || !photos.length) return undefined;
+
+    const prefetchCandidates = buildNeighborPrefetchUris({
+      photos,
+      currentIndex,
+      neighborDistance: prefetchPolicy.neighborDistance,
+      thumbnailsOnly: prefetchPolicy.thumbnailsOnly,
     });
-    const currentDisplayUri = currentPhoto.url || currentPhoto.thumbnailUrl || null;
-    const prefetchCandidates = currentDisplayUri
-      ? nearbyUris.filter((uri) => uri !== currentDisplayUri)
-      : nearbyUris;
-    prefetchPhotoUris(prefetchCandidates).catch(() => {});
-  }, [visible, currentIndex, photos, currentPhoto.url, currentPhoto.thumbnailUrl]);
+
+    const timer = setTimeout(() => {
+      prefetchPhotoUris(prefetchCandidates).catch(() => {});
+    }, prefetchPolicy.delayMs);
+
+    return () => clearTimeout(timer);
+  }, [visible, currentIndex, photos, prefetchPolicy]);
 
   useEffect(() => {
     if (!visible) return;
     const currentRequestId = resolveRequestIdRef.current + 1;
     resolveRequestIdRef.current = currentRequestId;
     setActiveResolveRequestId(currentRequestId);
-    const sourceUri = currentPhoto.url || null;
+    const sourceUri = fullQualityRequested
+      ? (currentFullQualityUri || currentViewerUri || null)
+      : (currentViewerUri || null);
     fullImageOpacity.setValue(0);
     setResolvedPhotoUri(sourceUri);
     setImageLoading(Boolean(sourceUri));
@@ -155,19 +171,23 @@ export default function ImageViewer({
       if (resolveRequestIdRef.current !== currentRequestId) return;
       setResolvedPhotoUri(cachedUri);
     }).catch(() => {});
-  }, [visible, currentIndex, currentViewerUri, fullImageOpacity]);
+  }, [visible, currentIndex, currentViewerUri, currentFullQualityUri, fullQualityRequested, fullImageOpacity]);
 
   useEffect(() => {
     if (visible) return;
     resolveRequestIdRef.current += 1;
     setActiveResolveRequestId(resolveRequestIdRef.current);
+    setFullQualityRequestedByPhotoKey({});
   }, [visible]);
 
-  useEffect(() => {
-    if (visible) return;
-    resolveRequestIdRef.current += 1;
-    setActiveResolveRequestId(resolveRequestIdRef.current);
-  }, [visible]);
+  const requestFullQuality = useCallback(() => {
+    if (!canRequestFullQuality || !currentPhotoKey) return;
+    setFullQualityRequestedByPhotoKey((prev) => ({
+      ...prev,
+      [currentPhotoKey]: true,
+    }));
+    setImageLoading(true);
+  }, [canRequestFullQuality, currentPhotoKey]);
 
   const handleFullImageLoaded = useCallback((requestId) => {
     if (!requestId || requestId !== resolveRequestIdRef.current) return;
@@ -301,9 +321,7 @@ export default function ImageViewer({
     }
   };
 
-  const resolveCurrentPhotoUri = useCallback(() => {
-    return currentPhoto?.fullUrl || currentPhoto?.url || currentPhoto?.thumbnailUrl || null;
-  }, [currentPhoto]);
+  const resolveCurrentPhotoUri = useCallback(() => resolveSaveUri(currentPhoto), [currentPhoto]);
 
   const handleSaveToDevice = async () => {
     try {
@@ -529,7 +547,7 @@ export default function ImageViewer({
           <TouchableOpacity
             onPress={handleSaveToDevice}
             style={styles.actionButton}
-            disabled={saving || !currentPhoto.url}
+            disabled={saving || !resolveCurrentPhotoUri()}
             accessibilityRole="button"
             accessibilityLabel="Save photo to device"
           >
@@ -540,6 +558,18 @@ export default function ImageViewer({
             )}
             <Text style={styles.actionText}>{saving ? 'Saving...' : 'Save'}</Text>
           </TouchableOpacity>
+
+          {canRequestFullQuality && !fullQualityRequested && (
+            <TouchableOpacity
+              onPress={requestFullQuality}
+              style={styles.actionButton}
+              accessibilityRole="button"
+              accessibilityLabel="Load full quality photo"
+            >
+              <MaterialCommunityIcons name="image-filter-hdr" size={24} color={COLORS.white} />
+              <Text style={styles.actionText}>Full quality</Text>
+            </TouchableOpacity>
+          )}
 
           {canDeleteThis && (
             <TouchableOpacity

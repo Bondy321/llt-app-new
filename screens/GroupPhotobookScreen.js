@@ -26,6 +26,7 @@ import { optimizeImageForUpload, formatBytes } from '../services/imageOptimizati
 import { deleteGroupPhoto } from '../services/photoService';
 import ImageViewer from '../components/ImageViewer';
 import { getCachedPhotoUri } from '../services/photoViewerCacheService';
+import { resolveViewerDisplayUri } from '../services/photoVariantService';
 import { auth } from '../firebase';
 import { getCanonicalIdentity } from '../services/identityService';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
@@ -257,6 +258,7 @@ export default function GroupPhotobookScreen({
         visibility: 'group',
         uploaderName: userName || 'Tour Member',
         thumbnailUri: pending.thumbnailUri || null,
+        viewerUri: pending.viewerUri || null,
         optimizationMetrics: pending.metrics || null,
         onProgress: (ratio) => {
           const percent = Math.round((ratio || 0) * 100);
@@ -282,6 +284,7 @@ export default function GroupPhotobookScreen({
         id: `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         uri: optimized.uploadUri,
         thumbnailUri: optimized.thumbnailUri,
+        viewerUri: optimized.viewerUri || null,
         previewUri: pendingImage.uri,
         caption,
         progress: 0,
@@ -323,7 +326,7 @@ export default function GroupPhotobookScreen({
 
   const openViewer = (groupIndex, photoIndexInGroup) => {
     const selectedPhoto = gallerySections[groupIndex]?.photos?.[photoIndexInGroup] || null;
-    const selectedUri = selectedPhoto?.viewerUrl || selectedPhoto?.mediumUrl || selectedPhoto?.optimizedUrl || selectedPhoto?.url || null;
+    const selectedUri = resolveViewerDisplayUri(selectedPhoto);
     if (selectedUri) {
       getCachedPhotoUri(selectedUri).catch(() => {});
     }
