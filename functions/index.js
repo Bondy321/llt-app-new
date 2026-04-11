@@ -967,7 +967,9 @@ const processPhotoVariantObject = async (event) => {
 
 exports.generatePhotoVariants = onObjectFinalized(
   {
-    region: "europe-west1",
+    // Storage triggers must run in the same region as the bucket.
+    // We keep this trigger in us-east1 to match Firebase free-tier bucket location.
+    region: "us-east1",
     maxInstances: 10,
   },
   processPhotoVariantObject,

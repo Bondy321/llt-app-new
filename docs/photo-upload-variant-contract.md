@@ -29,3 +29,9 @@ Cloud Function variant generation updates records to:
 Compatibility behavior:
 
 - Existing records without `variantStatus` are treated as display-ready if they already include a legacy display URL (`viewerUrl`, `url`, `fullUrl`, or `thumbnailUrl`).
+
+## Deployment requirement (region alignment)
+
+- Cloud Storage triggers must run in the same region as the bucket they listen to.
+- For the current Firebase free-tier setup, the default Storage bucket is `us-east1`, so `generatePhotoVariants` is deployed in `us-east1`.
+- Other backend functions remain in `europe-west1`; this function is an intentional regional exception.
