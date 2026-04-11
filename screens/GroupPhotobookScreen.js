@@ -300,7 +300,7 @@ export default function GroupPhotobookScreen({
           attemptCount: 0,
           lastError: null,
         },
-      };
+      });
       if (!enqueueResult.success) {
         Alert.alert('Upload queued failed', enqueueResult.error || 'Could not queue upload. Please try again.');
         return;
