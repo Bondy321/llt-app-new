@@ -280,6 +280,7 @@ export default function GroupPhotobookScreen({
         tourId,
         createdAt,
         payload: {
+          payloadVersion: 2,
           jobId,
           idempotencyKey,
           createdAt,
@@ -291,8 +292,6 @@ export default function GroupPhotobookScreen({
           localAssets: {
             sourceUri: optimized.uploadUri,
             previewUri: pendingImage.uri,
-            thumbnailUri: optimized.thumbnailUri || null,
-            viewerUri: optimized.viewerUri || null,
             optimizationMetrics: optimized.metrics || null,
           },
           metadata: {

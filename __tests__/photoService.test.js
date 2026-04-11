@@ -22,6 +22,7 @@ const {
   deleteGroupPhoto,
   deletePrivatePhoto,
   updatePhotoCaption,
+  uploadPhotoDirect,
 } = require('../services/photoService');
 
 const mockDbRef = (_db, path) => ({ path });
@@ -101,6 +102,7 @@ test('uploadPhoto stores group photo using group_tour_photos paths and rich meta
   assert.deepStrictEqual(setPayload, {
     url: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
     fullUrl: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
+    sourceUrl: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
     userId: 'user-9',
     caption: 'Lovely day!',
     timestamp: 1234567890,
@@ -108,6 +110,10 @@ test('uploadPhoto stores group photo using group_tour_photos paths and rich meta
     fileSize: 1024,
     fileType: 'image/jpeg',
     idempotencyKey: null,
+    variantStatus: 'ready',
+    variantUpdatedAt: 1700000000000,
+    variantError: null,
+    variantVersion: 2,
     uploaderName: 'Driver Bond',
   });
 
@@ -477,6 +483,43 @@ test('uploadPhoto continues when viewer upload fails and still writes full recor
   assert.ok(!('viewerStoragePath' in payload));
   assert.strictEqual(mainBlob.closed, true);
   assert.strictEqual(viewerBlob.closed, true);
+});
+
+test('uploadPhoto source-only mode writes processing variant state without client variants', async (t) => {
+  const originalNow = Date.now;
+  Date.now = () => 1700000000000;
+  t.after(() => {
+    Date.now = originalNow;
+  });
+
+  const mainBlob = createMockBlob({ size: 2048, type: 'image/jpeg' });
+  const uploaded = [];
+  let payload;
+
+  await uploadPhoto('file://main.jpg', 'tour-source-only', 'user-source', 'Source-only', {
+    generateClientVariants: false,
+    storageInstance: {},
+    realtimeDbInstance: {},
+    storageRefFn: (_storage, path) => ({ path }),
+    uploadBytesFn: async (ref, _blob, metadata) => {
+      uploaded.push({ path: ref.path, metadata });
+    },
+    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
+    dbRefFn: mockDbRef,
+    pushFn: () => ({ key: 'source-photo' }),
+    setFn: async (_ref, value) => {
+      payload = value;
+    },
+    serverTimestampFn: () => 42,
+    fetchFn: async () => ({ ok: true, blob: async () => mainBlob }),
+  });
+
+  assert.deepStrictEqual(uploaded.map((entry) => entry.path), [
+    'group_tour_photos/tour-source-only/1700000000000_user-source.jpg',
+  ]);
+  assert.strictEqual(payload.variantStatus, 'processing');
+  assert.strictEqual(payload.sourceUrl, 'https://example.com/group_tour_photos/tour-source-only/1700000000000_user-source.jpg');
+  assert.strictEqual(payload.variantVersion, 2);
 });
 
 test('uploadPhoto retries getDownloadURL for transient storage errors before succeeding', async (t) => {
@@ -871,4 +914,16 @@ test('uploadPhoto reuses existing record when idempotency key already exists', a
   assert.equal(setCalls, 0);
   assert.equal(result.id, 'existing_photo');
   assert.equal(result.deduped, true);
+});
+
+test('uploadPhotoDirect rejects payloadVersion=2 payloads without idempotencyKey', async () => {
+  const result = await uploadPhotoDirect({
+    payloadVersion: 2,
+    tourId: 'tour-direct',
+    userId: 'user-direct',
+    localAssets: { sourceUri: 'file://source.jpg' },
+  });
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /idempotencyKey is required/);
 });

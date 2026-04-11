@@ -7,8 +7,10 @@
 
 const { onValueCreated, onValueUpdated } = require("firebase-functions/v2/database");
 const { onRequest } = require("firebase-functions/v2/https");
+const { onObjectFinalized } = require("firebase-functions/v2/storage");
 const admin = require("firebase-admin");
 const { Expo } = require("expo-server-sdk");
+const sharp = require("sharp");
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -22,6 +24,7 @@ const USER_PROFILE_FETCH_CHUNK_SIZE = 100;
 const USER_PROFILE_CACHE_TTL_MS = 2 * 60 * 1000;
 const USER_PROFILE_CACHE_MAX_ENTRIES = 5000;
 const userProfileCache = new Map();
+const PHOTO_CACHE_CONTROL_HEADER = "public,max-age=31536000,immutable";
 
 // ==================== UTILITY FUNCTIONS ====================
 
@@ -316,6 +319,37 @@ const isAdminBroadcast = (senderId) => {
     senderId.startsWith('admin_') ||
     senderId.startsWith('hq_')
   );
+};
+
+const parseSourcePhotoPath = (objectPath = "") => {
+  const groupMatch = objectPath.match(/^group_tour_photos\/([^/]+)\/([^/]+)$/);
+  if (groupMatch) {
+    return {
+      visibility: "group",
+      tourId: groupMatch[1],
+      ownerKey: null,
+      filename: groupMatch[2],
+    };
+  }
+
+  const privateMatch = objectPath.match(/^private_tour_photos\/([^/]+)\/([^/]+)\/([^/]+)$/);
+  if (privateMatch) {
+    return {
+      visibility: "private",
+      tourId: privateMatch[1],
+      ownerKey: privateMatch[2],
+      filename: privateMatch[3],
+    };
+  }
+
+  return null;
+};
+
+const buildPhotoCollectionPath = ({ visibility, tourId, ownerKey }) => {
+  if (visibility === "private") {
+    return `private_tour_photos/${tourId}/${ownerKey}`;
+  }
+  return `group_tour_photos/${tourId}`;
 };
 
 /**
@@ -818,6 +852,126 @@ exports.sendChatNotification = onValueCreated(
     }
   }
 );
+
+const processPhotoVariantObject = async (event) => {
+    const objectData = event.data || {};
+    const bucketName = objectData.bucket;
+    const objectPath = objectData.name || "";
+    const metadata = objectData.metadata || {};
+
+    if (!bucketName || !objectPath) {
+      return null;
+    }
+
+    if (metadata.variant && metadata.variant !== "source") {
+      return null;
+    }
+
+    const parsed = parseSourcePhotoPath(objectPath);
+    if (!parsed) {
+      return null;
+    }
+
+    const { tourId, visibility, ownerKey } = parsed;
+    const idempotencyKey = typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey.trim() : "";
+    if (!tourId || !idempotencyKey) {
+      return null;
+    }
+
+    const dbRoot = admin.database().ref(buildPhotoCollectionPath({ visibility, tourId, ownerKey }));
+    const existingSnapshot = await dbRoot
+      .orderByChild("idempotencyKey")
+      .equalTo(idempotencyKey)
+      .once("value");
+
+    if (!existingSnapshot.exists()) {
+      return null;
+    }
+
+    const [photoId, photoRecord] = Object.entries(existingSnapshot.val() || {})[0] || [];
+    if (!photoId || !photoRecord) return null;
+    if (typeof photoRecord.storagePath !== "string" || photoRecord.storagePath !== objectPath) {
+      log.warn("Skipping variant generation due to storagePath mismatch", {
+        tourId,
+        visibility,
+        objectPath,
+        photoId,
+      });
+      return null;
+    }
+    if (photoRecord.variantStatus === "ready" && photoRecord.viewerUrl && photoRecord.thumbnailUrl) {
+      return null;
+    }
+
+    const sourceFile = admin.storage().bucket(bucketName).file(objectPath);
+    const [sourceBuffer] = await sourceFile.download();
+    const viewerBuffer = await sharp(sourceBuffer).rotate().resize({ width: 1600, withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+    const thumbnailBuffer = await sharp(sourceBuffer).rotate().resize({ width: 480, withoutEnlargement: true }).jpeg({ quality: 72 }).toBuffer();
+
+    const extensionlessName = parsed.filename.replace(/\.[^/.]+$/, "");
+    const viewerPath = visibility === "private"
+      ? `private_tour_photos/${tourId}/${ownerKey}/viewers/${extensionlessName}_viewer.jpg`
+      : `group_tour_photos/${tourId}/viewers/${extensionlessName}_viewer.jpg`;
+    const thumbnailPath = visibility === "private"
+      ? `private_tour_photos/${tourId}/${ownerKey}/thumbnails/${extensionlessName}_thumb.jpg`
+      : `group_tour_photos/${tourId}/thumbnails/${extensionlessName}_thumb.jpg`;
+
+    try {
+      await Promise.all([
+        admin.storage().bucket(bucketName).file(viewerPath).save(viewerBuffer, {
+          metadata: {
+            contentType: "image/jpeg",
+            cacheControl: PHOTO_CACHE_CONTROL_HEADER,
+            metadata: {
+              variant: "viewer",
+              idempotencyKey,
+            },
+          },
+        }),
+        admin.storage().bucket(bucketName).file(thumbnailPath).save(thumbnailBuffer, {
+          metadata: {
+            contentType: "image/jpeg",
+            cacheControl: PHOTO_CACHE_CONTROL_HEADER,
+            metadata: {
+              variant: "thumbnail",
+              idempotencyKey,
+            },
+          },
+        }),
+      ]);
+
+      const [viewerUrl, thumbnailUrl] = await Promise.all([
+        admin.storage().bucket(bucketName).file(viewerPath).getSignedUrl({ action: "read", expires: "2500-01-01" }).then((value) => value[0]),
+        admin.storage().bucket(bucketName).file(thumbnailPath).getSignedUrl({ action: "read", expires: "2500-01-01" }).then((value) => value[0]),
+      ]);
+
+      await dbRoot.child(photoId).update({
+        viewerUrl,
+        viewerStoragePath: viewerPath,
+        thumbnailUrl,
+        thumbnailStoragePath: thumbnailPath,
+        variantStatus: "ready",
+        variantUpdatedAt: Date.now(),
+        variantError: null,
+      });
+    } catch (error) {
+      await dbRoot.child(photoId).update({
+        variantStatus: "failed",
+        variantUpdatedAt: Date.now(),
+        variantError: error?.message || "Variant generation failed",
+      });
+    }
+
+    return null;
+  };
+
+exports.generatePhotoVariants = onObjectFinalized(
+  {
+    region: "europe-west1",
+    maxInstances: 10,
+  },
+  processPhotoVariantObject,
+);
 /**
  * Trigger: When the itinerary is updated at /tours/{tourId}/itinerary
  * Enhanced with validation, better error handling, and performance tracking
@@ -991,3 +1145,9 @@ exports.sendItineraryNotification = onValueUpdated(
     }
   }
 );
+
+exports.__testables = {
+  parseSourcePhotoPath,
+  buildPhotoCollectionPath,
+  processPhotoVariantObject,
+};

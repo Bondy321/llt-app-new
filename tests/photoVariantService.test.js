@@ -8,24 +8,25 @@ const {
   buildNeighborPrefetchUris,
 } = require('../services/photoVariantService');
 
-test('resolveViewerDisplayUri prioritizes viewerUrl then url/fullUrl then thumbnailUrl', () => {
+test('resolveViewerDisplayUri prioritizes viewer/thumbnail/source fallbacks for processing and legacy records', () => {
   assert.equal(resolveViewerDisplayUri({
     viewerUrl: 'https://cdn/viewer.jpg',
-    url: 'https://cdn/url.jpg',
-    fullUrl: 'https://cdn/full.jpg',
     thumbnailUrl: 'https://cdn/thumb.jpg',
+    sourceUrl: 'https://cdn/source.jpg',
+    url: 'https://cdn/url.jpg',
+    fullUrl: 'https://cdn/full.jpg'
   }), 'https://cdn/viewer.jpg');
 
   assert.equal(resolveViewerDisplayUri({
-    url: 'https://cdn/url.jpg',
-    fullUrl: 'https://cdn/full.jpg',
     thumbnailUrl: 'https://cdn/thumb.jpg',
-  }), 'https://cdn/url.jpg');
+    sourceUrl: 'https://cdn/source.jpg',
+    url: 'https://cdn/url.jpg',
+  }), 'https://cdn/thumb.jpg');
 
   assert.equal(resolveViewerDisplayUri({
+    sourceUrl: 'https://cdn/source.jpg',
     fullUrl: 'https://cdn/full.jpg',
-    thumbnailUrl: 'https://cdn/thumb.jpg',
-  }), 'https://cdn/full.jpg');
+  }), 'https://cdn/source.jpg');
 
   assert.equal(resolveViewerDisplayUri({ thumbnailUrl: 'https://cdn/thumb.jpg' }), 'https://cdn/thumb.jpg');
   assert.equal(resolveFullQualityUri({ fullUrl: 'https://cdn/full.jpg', url: 'https://cdn/url.jpg' }), 'https://cdn/full.jpg');
@@ -48,9 +49,7 @@ test('buildNeighborPrefetchUris prioritizes viewer display variants for neighbor
   assert.deepEqual(uris, [
     'https://cdn/0-viewer.jpg',
     'https://cdn/0-thumb.jpg',
-    'https://cdn/2-url.jpg',
     'https://cdn/2-thumb.jpg',
-    'https://cdn/3-full.jpg',
     'https://cdn/3-thumb.jpg',
   ]);
   assert.equal(resolveSaveUri({ fullUrl: 'f', url: 'u' }), 'f');

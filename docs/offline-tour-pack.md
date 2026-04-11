@@ -31,12 +31,13 @@ Screen actions
 - `INTERNAL_CHAT_MESSAGE`
 - `PHOTO_UPLOAD`
 
-### PHOTO_UPLOAD payload contract (Phase 1)
+### PHOTO_UPLOAD payload contract (Phase 2)
 
 `PHOTO_UPLOAD` is now the canonical durable photo-upload action and is used by both group and private photobook surfaces.
 
 Required normalized fields:
 
+- `payloadVersion` (`2` for source-only uploads; absent/`1` is legacy replay compatibility mode)
 - `jobId` (stable queue item id)
 - `idempotencyKey` (deterministic per logical upload; reused on retry)
 - `createdAt`
@@ -51,9 +52,12 @@ Required normalized fields:
 Optional retained fields:
 
 - `localAssets.previewUri`
+- `localAssets.optimizationMetrics`
+
+Legacy compatibility fields still accepted in replay sanitizer:
+
 - `localAssets.thumbnailUri`
 - `localAssets.viewerUri`
-- `localAssets.optimizationMetrics`
 
 ## Replay policy
 
@@ -64,6 +68,7 @@ Optional retained fields:
 5. Failed actions remain visible and retryable.
 6. `PHOTO_UPLOAD` replay transitions are `queued|retrying -> uploading -> completed|failed`.
 7. `PHOTO_UPLOAD` replays through `photoService.uploadPhotoDirect(...)` only (screen components never call upload network code directly).
+8. Completed `PHOTO_UPLOAD` items are pruned deterministically (24h TTL while retaining the most recent completed items), while `failed|retrying` items are retained for manual retry.
 
 ## Manifest conflict policy
 

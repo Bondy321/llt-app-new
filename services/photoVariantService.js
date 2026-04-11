@@ -1,8 +1,9 @@
 const resolveViewerDisplayUri = (photo) => (
   photo?.viewerUrl
+  || photo?.thumbnailUrl
+  || photo?.sourceUrl
   || photo?.url
   || photo?.fullUrl
-  || photo?.thumbnailUrl
   || null
 );
 
