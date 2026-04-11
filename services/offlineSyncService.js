@@ -17,6 +17,8 @@ const QUEUE_KEY = 'queue_v1';
 const PROCESSED_ACTIONS_KEY = 'processed_action_ids_v1';
 const LAST_SUCCESS_AT_KEY = 'last_success_at_v1';
 const MAX_PROCESSED_IDS = 500;
+const PHOTO_UPLOAD_COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
+const PHOTO_UPLOAD_COMPLETED_KEEP_LAST = 20;
 
 
 const listeners = new Set();
@@ -42,12 +44,16 @@ const sanitizePhotoUploadPayload = (payload = {}, action = {}) => {
   const safePayload = payload && typeof payload === 'object' ? payload : {};
   const localAssets = safePayload.localAssets && typeof safePayload.localAssets === 'object' ? safePayload.localAssets : {};
   const metadata = safePayload.metadata && typeof safePayload.metadata === 'object' ? safePayload.metadata : {};
+  const normalizedPayloadVersion = Number.isFinite(Number(safePayload.payloadVersion))
+    ? Number(safePayload.payloadVersion)
+    : 1;
   const createdAt = parseTimestampMs(safePayload.createdAt)
     ? new Date(parseTimestampMs(safePayload.createdAt)).toISOString()
     : (action.createdAt || new Date().toISOString());
 
   return {
     ...safePayload,
+    payloadVersion: normalizedPayloadVersion >= 2 ? 2 : 1,
     jobId: safePayload.jobId || action.id,
     idempotencyKey: typeof safePayload.idempotencyKey === 'string' ? safePayload.idempotencyKey : null,
     createdAt,
@@ -68,6 +74,33 @@ const sanitizePhotoUploadPayload = (payload = {}, action = {}) => {
     },
     attemptCount: Number.isFinite(safePayload.attemptCount) ? Math.max(0, Math.trunc(safePayload.attemptCount)) : 0,
     lastError: safePayload.lastError || null,
+  };
+};
+
+const pruneCompletedPhotoUploadActions = (queue = [], now = Date.now()) => {
+  if (!Array.isArray(queue) || queue.length === 0) {
+    return { queue: [], removedCount: 0 };
+  }
+
+  const completedPhotoActions = queue
+    .filter((action) => action?.type === 'PHOTO_UPLOAD' && action?.status === 'completed')
+    .sort((a, b) => (parseTimestampMs(a.lastUpdatedAt) || 0) - (parseTimestampMs(b.lastUpdatedAt) || 0));
+
+  const keepIds = new Set(completedPhotoActions
+    .slice(-PHOTO_UPLOAD_COMPLETED_KEEP_LAST)
+    .map((action) => action.id));
+  const cutoffMs = now - PHOTO_UPLOAD_COMPLETED_TTL_MS;
+
+  const prunedQueue = queue.filter((action) => {
+    if (action?.type !== 'PHOTO_UPLOAD' || action?.status !== 'completed') return true;
+    if (keepIds.has(action.id)) return true;
+    const completedAtMs = parseTimestampMs(action.lastUpdatedAt) || parseTimestampMs(action.createdAt) || 0;
+    return completedAtMs >= cutoffMs;
+  });
+
+  return {
+    queue: prunedQueue,
+    removedCount: Math.max(0, queue.length - prunedQueue.length),
   };
 };
 
@@ -227,15 +260,19 @@ const getQueueRaw = async () => {
       .filter(Boolean)
       .sort((a, b) => (parseTimestampMs(a.createdAt) || 0) - (parseTimestampMs(b.createdAt) || 0));
 
-    if (sanitizedQueue.length !== queue.length || JSON.stringify(sanitizedQueue) !== JSON.stringify(queue)) {
+    const pruneResult = pruneCompletedPhotoUploadActions(sanitizedQueue);
+    const sanitizedAndPrunedQueue = pruneResult.queue;
+
+    if (sanitizedAndPrunedQueue.length !== queue.length || JSON.stringify(sanitizedAndPrunedQueue) !== JSON.stringify(queue)) {
       logger.warn('OfflineSync', 'Queue data was sanitized to remove or repair invalid entries', {
         previousCount: queue.length,
         sanitizedCount: sanitizedQueue.length,
+        prunedCompletedPhotoUploads: pruneResult.removedCount,
       });
-      await storage.setItemAsync(QUEUE_KEY, JSON.stringify(sanitizedQueue));
+      await storage.setItemAsync(QUEUE_KEY, JSON.stringify(sanitizedAndPrunedQueue));
     }
 
-    return sanitizedQueue;
+    return sanitizedAndPrunedQueue;
   } catch (error) {
     logger.error('OfflineSync', 'Failed to read queue', { error: error?.message });
     await storage.setItemAsync(QUEUE_KEY, JSON.stringify([]));
@@ -245,11 +282,12 @@ const getQueueRaw = async () => {
 
 const setQueueRaw = async (queue, options = {}) => {
   try {
-    await storage.setItemAsync(QUEUE_KEY, JSON.stringify(queue));
+    const pruneResult = pruneCompletedPhotoUploadActions(queue);
+    await storage.setItemAsync(QUEUE_KEY, JSON.stringify(pruneResult.queue));
     if (!options.silent) {
       await emitQueueState();
     }
-    return RESPONSE.ok(queue);
+    return RESPONSE.ok(pruneResult.queue);
   } catch (error) {
     return RESPONSE.fail(error);
   }
@@ -739,4 +777,5 @@ module.exports = {
   getPhotoUploadActions,
   getStalenessBucket,
   getStalenessLabel,
+  pruneCompletedPhotoUploadActions,
 };

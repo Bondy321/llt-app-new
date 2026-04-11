@@ -535,7 +535,76 @@ test('PHOTO_UPLOAD enqueue payload is normalized with idempotency and local asse
   assert.equal(enqueue.success, true);
   assert.equal(enqueue.data.payload.jobId, 'photo-contract-1');
   assert.equal(enqueue.data.payload.idempotencyKey, 'idem-photo-1');
+  assert.equal(enqueue.data.payload.payloadVersion, 1);
   assert.equal(enqueue.data.payload.localAssets.sourceUri, 'file:///tmp/source.jpg');
+});
+
+test('PHOTO_UPLOAD enqueue normalizes payloadVersion=2 source-only payload', async () => {
+  await clearQueue();
+  const enqueue = await offlineSyncService.enqueueAction({
+    id: 'photo-contract-v2',
+    type: 'PHOTO_UPLOAD',
+    tourId: 'tour-photo-contract',
+    payload: {
+      payloadVersion: 2,
+      idempotencyKey: 'idem-photo-v2',
+      visibility: 'group',
+      userId: 'user-1',
+      localAssets: { sourceUri: 'file:///tmp/source-v2.jpg', previewUri: 'file:///tmp/preview-v2.jpg' },
+    },
+  });
+  assert.equal(enqueue.success, true);
+  assert.equal(enqueue.data.payload.payloadVersion, 2);
+  assert.equal(enqueue.data.payload.localAssets.sourceUri, 'file:///tmp/source-v2.jpg');
+  assert.equal(enqueue.data.payload.localAssets.previewUri, 'file:///tmp/preview-v2.jpg');
+});
+
+test('legacy PHOTO_UPLOAD payload keeps thumbnail/viewer fields for replay compatibility', async () => {
+  await clearQueue();
+  const enqueue = await offlineSyncService.enqueueAction({
+    id: 'photo-contract-legacy-variants',
+    type: 'PHOTO_UPLOAD',
+    tourId: 'tour-photo-contract',
+    payload: {
+      idempotencyKey: 'idem-photo-legacy',
+      visibility: 'group',
+      userId: 'user-1',
+      localAssets: {
+        sourceUri: 'file:///tmp/source.jpg',
+        thumbnailUri: 'file:///tmp/thumb.jpg',
+        viewerUri: 'file:///tmp/viewer.jpg',
+      },
+    },
+  });
+
+  assert.equal(enqueue.success, true);
+  assert.equal(enqueue.data.payload.payloadVersion, 1);
+  assert.equal(enqueue.data.payload.localAssets.thumbnailUri, 'file:///tmp/thumb.jpg');
+  assert.equal(enqueue.data.payload.localAssets.viewerUri, 'file:///tmp/viewer.jpg');
+});
+
+test('pruneCompletedPhotoUploadActions removes stale completed uploads but keeps failed entries', () => {
+  const now = Date.parse('2026-04-11T00:00:00.000Z');
+  const staleCompleted = Array.from({ length: 22 }).map((_, index) => ({
+    id: `old-completed-${index}`,
+    type: 'PHOTO_UPLOAD',
+    status: 'completed',
+    createdAt: '2026-04-08T00:00:00.000Z',
+    lastUpdatedAt: '2026-04-08T00:00:00.000Z',
+  }));
+  const result = offlineSyncService.pruneCompletedPhotoUploadActions([
+    ...staleCompleted,
+    {
+      id: 'failed-photo',
+      type: 'PHOTO_UPLOAD',
+      status: 'failed',
+      createdAt: '2026-04-08T00:00:00.000Z',
+      lastUpdatedAt: '2026-04-08T00:00:00.000Z',
+    },
+  ], now);
+
+  assert.equal(result.removedCount, 2);
+  assert.equal(result.queue.some((item) => item.id === 'failed-photo'), true);
 });
 
 test('PHOTO_UPLOAD retry keeps one logical record and transitions retrying to completed', async () => {

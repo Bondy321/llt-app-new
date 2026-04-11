@@ -442,6 +442,7 @@ const uploadPhoto = async (
     onProgress = null,
     thumbnailUri = null,
     viewerUri = null,
+    generateClientVariants = true,
     optimizationMetrics = null,
     idempotencyKey = null,
     nowFn = Date.now,
@@ -508,6 +509,10 @@ const uploadPhoto = async (
           uploadedBy: validatedUserId,
           uploadedAt: new Date().toISOString(),
           idempotencyKey: normalizedIdempotencyKey || '',
+          tourId: validatedTourId,
+          visibility: validatedVisibility,
+          ownerKey: validatedUserKey,
+          sourceRole: 'source',
         },
       };
 
@@ -538,7 +543,7 @@ const uploadPhoto = async (
 
       const downloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, fileRef);
 
-      if (thumbnailUri && typeof thumbnailUri === 'string') {
+      if (generateClientVariants && thumbnailUri && typeof thumbnailUri === 'string') {
         try {
           thumbnailBlob = await createBlob(thumbnailUri, fetchFn);
           validateBlob(thumbnailBlob);
@@ -566,7 +571,7 @@ const uploadPhoto = async (
         }
       }
 
-      if (viewerUri && typeof viewerUri === 'string') {
+      if (generateClientVariants && viewerUri && typeof viewerUri === 'string') {
         try {
           viewerBlob = await createBlob(viewerUri, fetchFn);
           validateBlob(viewerBlob);
@@ -620,6 +625,7 @@ const uploadPhoto = async (
       const photoData = {
         url: downloadURL,
         fullUrl: downloadURL,
+        sourceUrl: downloadURL,
         userId: validatedUserId,
         caption: validatedCaption,
         timestamp: resolveRealtimeTimestamp(serverTimestampFn, nowFn),
@@ -627,6 +633,10 @@ const uploadPhoto = async (
         fileSize: blob.size,
         fileType: blob.type,
         idempotencyKey: normalizedIdempotencyKey,
+        variantStatus: generateClientVariants ? 'ready' : 'processing',
+        variantUpdatedAt: nowFn(),
+        variantError: null,
+        variantVersion: 2,
       };
 
       if (thumbnailDownloadURL) {
@@ -986,29 +996,55 @@ const uploadPhotoDirect = async (payload = {}) => {
       caption = '',
       visibility = 'group',
       uploaderName = 'Tour Member',
-      thumbnailUri = null,
-      viewerUri = null,
       optimizationMetrics = null,
       onProgress = null,
       localAssets = null,
       metadata = null,
       idempotencyKey = null,
+      payloadVersion = 1,
     } = payload;
 
     const resolvedLocalAssets = localAssets && typeof localAssets === 'object' ? localAssets : {};
     const resolvedMetadata = metadata && typeof metadata === 'object' ? metadata : {};
     const sourceUri = uri || resolvedLocalAssets.sourceUri;
-    const sourceCaption = caption ?? resolvedMetadata.caption ?? '';
-    const sourceThumbnailUri = thumbnailUri || resolvedLocalAssets.thumbnailUri || null;
-    const sourceViewerUri = viewerUri || resolvedLocalAssets.viewerUri || null;
+    const sourceCaption = (typeof caption === 'string' && caption.length > 0)
+      ? caption
+      : (resolvedMetadata.caption ?? '');
     const sourceOptimizationMetrics = optimizationMetrics || resolvedLocalAssets.optimizationMetrics || null;
 
     const resolvedOwnerId = ownerId || userId;
+    const normalizedPayloadVersion = Number(payloadVersion) >= 2 ? 2 : 1;
+
+    if (normalizedPayloadVersion >= 2) {
+      const validatedTourId = validateTourId(tourId);
+      const validatedUserId = validateUserId(resolvedOwnerId);
+      const validatedCaption = validateCaption(sourceCaption);
+      const validatedVisibility = validateVisibility(visibility);
+      const normalizedIdempotencyKey = typeof idempotencyKey === 'string' && idempotencyKey.trim()
+        ? idempotencyKey.trim().slice(0, IDEMPOTENCY_KEY_MAX_LENGTH)
+        : null;
+
+      if (!normalizedIdempotencyKey) {
+        return { success: false, error: 'idempotencyKey is required for payloadVersion 2 photo uploads' };
+      }
+
+      const data = await uploadPhoto(sourceUri, validatedTourId, validatedUserId, validatedCaption, {
+        visibility: validatedVisibility,
+        uploaderName,
+        optimizationMetrics: sourceOptimizationMetrics,
+        onProgress,
+        idempotencyKey: normalizedIdempotencyKey,
+        generateClientVariants: false,
+      });
+
+      return { success: true, data };
+    }
+
     const data = await uploadPhoto(sourceUri, tourId, resolvedOwnerId, sourceCaption, {
       visibility,
       uploaderName,
-      thumbnailUri: sourceThumbnailUri,
-      viewerUri: sourceViewerUri,
+      thumbnailUri: resolvedLocalAssets.thumbnailUri || null,
+      viewerUri: resolvedLocalAssets.viewerUri || null,
       optimizationMetrics: sourceOptimizationMetrics,
       onProgress,
       idempotencyKey,
