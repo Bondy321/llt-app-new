@@ -190,9 +190,12 @@ test('PHOTO_UPLOAD queue actions replay through injected photoService behavior',
 
   assert.equal(replay.success, true);
   assert.equal(replay.data.processed, 1);
-  assert.deepEqual(uploadedPayload, { uri: 'file://photo.jpg', tourId: 'TOUR-1', userId: 'USER-1' });
+  assert.equal(uploadedPayload.tourId, 'TOUR-1');
+  assert.equal(uploadedPayload.userId, 'USER-1');
+  assert.equal(uploadedPayload.localAssets.sourceUri, 'file://photo.jpg');
 
   const queuedAfter = await offlineSyncService.getQueuedActions();
   assert.equal(queuedAfter.success, true);
-  assert.equal(queuedAfter.data.length, 0);
+  assert.equal(queuedAfter.data.length, 1);
+  assert.equal(queuedAfter.data[0].status, 'completed');
 });

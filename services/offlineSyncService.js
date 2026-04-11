@@ -11,7 +11,7 @@ const storage = createPersistenceProvider({ namespace: 'LLT_OFFLINE' });
 
 const SCHEMA_VERSION = 1;
 const SUPPORTED_QUEUE_TYPES = new Set(['MANIFEST_UPDATE', 'CHAT_MESSAGE', 'INTERNAL_CHAT_MESSAGE', 'PHOTO_UPLOAD']);
-const SUPPORTED_QUEUE_STATUSES = new Set(['queued', 'syncing', 'failed']);
+const SUPPORTED_QUEUE_STATUSES = new Set(['queued', 'uploading', 'retrying', 'failed', 'completed', 'syncing']);
 const MAX_ATTEMPTS = 5;
 const QUEUE_KEY = 'queue_v1';
 const PROCESSED_ACTIONS_KEY = 'processed_action_ids_v1';
@@ -20,6 +20,7 @@ const MAX_PROCESSED_IDS = 500;
 
 
 const listeners = new Set();
+const queueListeners = new Set();
 let replayLock = false;
 
 const RESPONSE = {
@@ -37,6 +38,39 @@ const safeJsonParse = (raw, fallback) => {
   }
 };
 
+const sanitizePhotoUploadPayload = (payload = {}, action = {}) => {
+  const safePayload = payload && typeof payload === 'object' ? payload : {};
+  const localAssets = safePayload.localAssets && typeof safePayload.localAssets === 'object' ? safePayload.localAssets : {};
+  const metadata = safePayload.metadata && typeof safePayload.metadata === 'object' ? safePayload.metadata : {};
+  const createdAt = parseTimestampMs(safePayload.createdAt)
+    ? new Date(parseTimestampMs(safePayload.createdAt)).toISOString()
+    : (action.createdAt || new Date().toISOString());
+
+  return {
+    ...safePayload,
+    jobId: safePayload.jobId || action.id,
+    idempotencyKey: typeof safePayload.idempotencyKey === 'string' ? safePayload.idempotencyKey : null,
+    createdAt,
+    tourId: safePayload.tourId || action.tourId,
+    visibility: safePayload.visibility === 'private' ? 'private' : 'group',
+    ownerId: safePayload.ownerId || safePayload.ownerIdentity || safePayload.userId || null,
+    userId: safePayload.userId || safePayload.ownerId || safePayload.ownerIdentity || null,
+    localAssets: {
+      sourceUri: localAssets.sourceUri || safePayload.uri || null,
+      previewUri: localAssets.previewUri || safePayload.previewUri || localAssets.sourceUri || safePayload.uri || null,
+      thumbnailUri: localAssets.thumbnailUri || safePayload.thumbnailUri || null,
+      viewerUri: localAssets.viewerUri || safePayload.viewerUri || null,
+      optimizationMetrics: localAssets.optimizationMetrics || safePayload.optimizationMetrics || null,
+    },
+    metadata: {
+      caption: metadata.caption ?? safePayload.caption ?? '',
+      ...metadata,
+    },
+    attemptCount: Number.isFinite(safePayload.attemptCount) ? Math.max(0, Math.trunc(safePayload.attemptCount)) : 0,
+    lastError: safePayload.lastError || null,
+  };
+};
+
 const sanitizeActionRecord = (action) => {
   if (!action || typeof action !== 'object') return null;
 
@@ -51,7 +85,7 @@ const sanitizeActionRecord = (action) => {
   const normalizedCreatedAt = parseTimestampMs(action.createdAt)
     ? new Date(parseTimestampMs(action.createdAt)).toISOString()
     : new Date().toISOString();
-  const normalizedStatus = SUPPORTED_QUEUE_STATUSES.has(action.status) ? action.status : 'queued';
+  const status = SUPPORTED_QUEUE_STATUSES.has(action.status) ? action.status : 'queued';
   const normalizedAttempts = Number.isFinite(action.attempts) ? Math.max(0, Math.trunc(action.attempts)) : 0;
   const nextAttemptAtMs = parseTimestampMs(action.nextAttemptAt);
   const normalizedNextAttemptAt = Number.isFinite(nextAttemptAtMs) ? new Date(nextAttemptAtMs).toISOString() : null;
@@ -65,9 +99,11 @@ const sanitizeActionRecord = (action) => {
     id,
     type,
     tourId,
-    payload: action.payload && typeof action.payload === 'object' ? action.payload : {},
+    payload: type === 'PHOTO_UPLOAD'
+      ? sanitizePhotoUploadPayload(action.payload, action)
+      : (action.payload && typeof action.payload === 'object' ? action.payload : {}),
     createdAt: normalizedCreatedAt,
-    status: normalizedStatus,
+    status,
     attempts: normalizedAttempts,
     nextAttemptAt: normalizedNextAttemptAt,
     lastUpdatedAt: normalizedLastUpdatedAt,
@@ -164,6 +200,15 @@ const emitQueueState = async () => {
       listener(stats.success ? stats.data : { pending: 0, syncing: 0, failed: 0, total: 0 });
     } catch (error) {
       logger.warn('OfflineSync', 'Queue listener failed', { error: error?.message });
+    }
+  });
+
+  const queue = await getQueueRaw();
+  queueListeners.forEach((listener) => {
+    try {
+      listener(queue);
+    } catch (error) {
+      logger.warn('OfflineSync', 'Queue actions listener failed', { error: error?.message });
     }
   });
 };
@@ -378,12 +423,15 @@ const getTourPackMeta = async (tourId, role) => {
 
 const buildAction = (action) => {
   const nowIso = new Date().toISOString();
+  const payload = action.type === 'PHOTO_UPLOAD'
+    ? sanitizePhotoUploadPayload(action.payload, action)
+    : (action.payload || {});
   return {
     id: action.id || `action_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     type: action.type,
     tourId: action.tourId,
     createdAt: action.createdAt || nowIso,
-    payload: action.payload || {},
+    payload,
     attempts: Number.isFinite(action.attempts) ? action.attempts : 0,
     status: action.status || 'queued',
     lastError: action.lastError || null,
@@ -472,8 +520,9 @@ const getQueueStats = async () => {
     const queue = await getQueueRaw();
     const stats = queue.reduce(
       (acc, action) => {
-        if (action.status === 'syncing') acc.syncing += 1;
+        if (action.status === 'uploading' || action.status === 'syncing') acc.syncing += 1;
         else if (action.status === 'failed') acc.failed += 1;
+        else if (action.status === 'completed') {}
         else acc.pending += 1;
         return acc;
       },
@@ -500,7 +549,7 @@ const retryFailedActions = async ({ types, resetAttempts = false } = {}) => {
       retriedCount += 1;
       return {
         ...action,
-        status: 'queued',
+        status: action.type === 'PHOTO_UPLOAD' ? 'retrying' : 'queued',
         nextAttemptAt: null,
         ...(resetAttempts ? { attempts: 0 } : null),
       };
@@ -528,6 +577,19 @@ const subscribeQueueState = (listener) => {
 
   return () => {
     listeners.delete(listener);
+  };
+};
+
+const subscribeQueuedActions = (listener) => {
+  if (typeof listener !== 'function') {
+    return () => {};
+  }
+
+  queueListeners.add(listener);
+  getQueueRaw().then((queue) => listener(queue));
+
+  return () => {
+    queueListeners.delete(listener);
   };
 };
 
@@ -577,7 +639,7 @@ const replayQueue = async ({ db, services = {} } = {}) => {
         continue;
       }
 
-      if (action.status === 'failed') {
+      if (action.status === 'failed' || (action.type === 'PHOTO_UPLOAD' && action.status === 'completed')) {
         continue;
       }
 
@@ -587,14 +649,24 @@ const replayQueue = async ({ db, services = {} } = {}) => {
         continue;
       }
 
-      await updateAction(action.id, { status: 'syncing', lastError: null }, { silent: true });
+      const inProgressStatus = action.type === 'PHOTO_UPLOAD' ? 'uploading' : 'syncing';
+      await updateAction(action.id, { status: inProgressStatus, lastError: null }, { silent: true });
       const result = await applyReplayAction(action, { ...services, db });
 
       if (result?.success) {
         processed += 1;
-        await removeAction(action.id, { silent: true });
-        processedActionIds = [...processedActionIds, action.id];
-        await setProcessedActionIds(processedActionIds);
+        if (action.type === 'PHOTO_UPLOAD') {
+          await updateAction(action.id, {
+            status: 'completed',
+            lastError: null,
+            nextAttemptAt: null,
+            result: result.data || null,
+          }, { silent: true });
+        } else {
+          await removeAction(action.id, { silent: true });
+          processedActionIds = [...processedActionIds, action.id];
+          await setProcessedActionIds(processedActionIds);
+        }
       } else {
         failed += 1;
         const attempts = (action.attempts || 0) + 1;
@@ -602,7 +674,7 @@ const replayQueue = async ({ db, services = {} } = {}) => {
         const delayMinutes = Math.min(2 ** attempts, 60);
         await updateAction(action.id, {
           attempts,
-          status: shouldFail ? 'failed' : 'queued',
+          status: shouldFail ? 'failed' : (action.type === 'PHOTO_UPLOAD' ? 'retrying' : 'queued'),
           lastError: result?.error || 'Replay failed',
           nextAttemptAt: new Date(Date.now() + delayMinutes * 60 * 1000).toISOString(),
         }, { silent: true });
@@ -627,6 +699,21 @@ const replayQueue = async ({ db, services = {} } = {}) => {
   }
 };
 
+const getPhotoUploadActions = async ({ tourId, visibility, ownerId } = {}) => {
+  const queued = await getQueuedActions();
+  if (!queued.success) return queued;
+
+  const filtered = queued.data.filter((action) => {
+    if (action.type !== 'PHOTO_UPLOAD') return false;
+    if (tourId && action.tourId !== tourId) return false;
+    const payload = action.payload || {};
+    if (visibility && payload.visibility !== visibility) return false;
+    if (ownerId && payload.ownerId !== ownerId && payload.userId !== ownerId) return false;
+    return true;
+  });
+  return RESPONSE.ok(filtered);
+};
+
 module.exports = {
   SCHEMA_VERSION,
   buildSyncSummary,
@@ -648,6 +735,8 @@ module.exports = {
   retryFailedActions,
   replayQueue,
   subscribeQueueState,
+  subscribeQueuedActions,
+  getPhotoUploadActions,
   getStalenessBucket,
   getStalenessLabel,
 };

@@ -11,7 +11,7 @@ Screen actions
   -> offlineSyncService
       -> persistenceProvider (SecureStore -> AsyncStorage -> memory)
       -> Tour Pack cache (role + tour scoped)
-      -> action queue (manifest/chat/internal-chat)
+      -> action queue (manifest/chat/internal-chat/photo)
   -> replay triggers (foreground, reconnect, manual refresh, login restore)
 ```
 
@@ -29,6 +29,31 @@ Screen actions
 - `MANIFEST_UPDATE`
 - `CHAT_MESSAGE`
 - `INTERNAL_CHAT_MESSAGE`
+- `PHOTO_UPLOAD`
+
+### PHOTO_UPLOAD payload contract (Phase 1)
+
+`PHOTO_UPLOAD` is now the canonical durable photo-upload action and is used by both group and private photobook surfaces.
+
+Required normalized fields:
+
+- `jobId` (stable queue item id)
+- `idempotencyKey` (deterministic per logical upload; reused on retry)
+- `createdAt`
+- `tourId`
+- `visibility` (`group` | `private`)
+- `ownerId` / `userId` identity fields compatible with current rules
+- `localAssets.sourceUri`
+- `metadata.caption` (optional)
+- `attemptCount`
+- `lastError`
+
+Optional retained fields:
+
+- `localAssets.previewUri`
+- `localAssets.thumbnailUri`
+- `localAssets.viewerUri`
+- `localAssets.optimizationMetrics`
 
 ## Replay policy
 
@@ -37,6 +62,8 @@ Screen actions
 3. Max retry attempts: 5 per action.
 4. Processed action IDs persisted locally to avoid duplicate replay after restart.
 5. Failed actions remain visible and retryable.
+6. `PHOTO_UPLOAD` replay transitions are `queued|retrying -> uploading -> completed|failed`.
+7. `PHOTO_UPLOAD` replays through `photoService.uploadPhotoDirect(...)` only (screen components never call upload network code directly).
 
 ## Manifest conflict policy
 

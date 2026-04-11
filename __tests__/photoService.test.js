@@ -107,6 +107,7 @@ test('uploadPhoto stores group photo using group_tour_photos paths and rich meta
     storagePath: 'group_tour_photos/tour-77/1700000000000_user-9.jpg',
     fileSize: 1024,
     fileType: 'image/jpeg',
+    idempotencyKey: null,
     uploaderName: 'Driver Bond',
   });
 
@@ -830,4 +831,44 @@ test('updatePhotoCaption writes caption edit metadata for group photo', async ()
     captionEditedBy: 'user-1',
   });
   assert.deepStrictEqual(result, { success: true });
+});
+
+test('uploadPhoto reuses existing record when idempotency key already exists', async () => {
+  const blob = createMockBlob();
+  let pushCalls = 0;
+  let setCalls = 0;
+
+  const result = await uploadPhoto('file://group.jpg', 'tour-77', 'user-9', 'Lovely day!', {
+    idempotencyKey: 'idem-123',
+    uploaderName: 'Driver Bond',
+    storageInstance: {},
+    realtimeDbInstance: {},
+    storageRefFn: (_storage, path) => ({ path }),
+    uploadBytesFn: async () => {},
+    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
+    dbRefFn: mockDbRef,
+    getFn: async () => mockSnapshot({
+      existing_photo: {
+        idempotencyKey: 'idem-123',
+        url: 'https://example.com/group_tour_photos/tour-77/existing.jpg',
+        userId: 'user-9',
+        caption: 'Already done',
+        uploaderName: 'Driver Bond',
+      },
+    }),
+    pushFn: () => {
+      pushCalls += 1;
+      return { key: 'new-photo' };
+    },
+    setFn: async () => {
+      setCalls += 1;
+    },
+    serverTimestampFn: () => 123,
+    fetchFn: async () => ({ ok: true, blob: async () => blob }),
+  });
+
+  assert.equal(pushCalls, 0);
+  assert.equal(setCalls, 0);
+  assert.equal(result.id, 'existing_photo');
+  assert.equal(result.deduped, true);
 });

@@ -21,9 +21,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { uploadPhoto, subscribeToTourPhotos, updatePhotoCaption } from '../services/photoService';
+import * as offlineSyncService from '../services/offlineSyncService';
+import * as photoService from '../services/photoService';
 import { optimizeImageForUpload, formatBytes } from '../services/imageOptimizationService';
-import { deleteGroupPhoto } from '../services/photoService';
 import ImageViewer from '../components/ImageViewer';
 import { getCachedPhotoUri } from '../services/photoViewerCacheService';
 import { resolveViewerDisplayUri } from '../services/photoVariantService';
@@ -46,9 +46,7 @@ export default function GroupPhotobookScreen({
   const [photos, setPhotos] = useState([]);
   const [loadingPhotos, setLoadingPhotos] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [pendingUploads, setPendingUploads] = useState([]);
+  const [photoQueueItems, setPhotoQueueItems] = useState([]);
   const [sortMode, setSortMode] = useState('newest');
   const [mineOnly, setMineOnly] = useState(false);
 
@@ -89,7 +87,7 @@ export default function GroupPhotobookScreen({
     if (!tourId) return undefined;
 
     setLoadingPhotos(true);
-    const unsubscribe = subscribeToTourPhotos(tourId, (photoList) => {
+    const unsubscribe = photoService.subscribeToTourPhotos(tourId, (photoList) => {
       // Add uploader name to photos for display
       const photosWithNames = photoList.map(photo => ({
         ...photo,
@@ -103,6 +101,29 @@ export default function GroupPhotobookScreen({
     return () => {
       if (unsubscribe) unsubscribe();
     };
+  }, [tourId]);
+
+  useEffect(() => {
+    if (!tourId) return undefined;
+
+    const refreshPhotoQueue = async () => {
+      const queued = await offlineSyncService.getPhotoUploadActions({ tourId, visibility: 'group' });
+      if (queued.success) {
+        setPhotoQueueItems(queued.data.filter((item) => item.status !== 'completed'));
+      }
+    };
+
+    refreshPhotoQueue();
+    const unsubscribe = offlineSyncService.subscribeQueuedActions((actions) => {
+      const filtered = actions.filter((action) => (
+        action.type === 'PHOTO_UPLOAD'
+        && action.tourId === tourId
+        && action?.payload?.visibility === 'group'
+        && action.status !== 'completed'
+      ));
+      setPhotoQueueItems(filtered);
+    });
+    return unsubscribe;
   }, [tourId]);
 
   const visiblePhotos = useMemo(() => {
@@ -236,69 +257,60 @@ export default function GroupPhotobookScreen({
     );
   };
 
-  const getUploadErrorMessage = (error) => {
-    switch (error?.code) {
-      case 'file-too-large':
-        return 'Please choose a photo smaller than 5MB to upload.';
-      case 'permission-denied':
-        return 'Please check your connection or permissions and try again.';
-      case 'network-error':
-        return 'Network error occurred while uploading. Please try again.';
-      case 'invalid-params':
-        return 'Something went wrong preparing your photo. Please try again.';
-      default:
-        return 'Could not upload your photo. Please try again.';
-    }
-  };
-
-  const uploadPendingItem = async (pending) => {
-    setPendingUploads((prev) => prev.map((item) => item.id === pending.id ? { ...item, status: 'uploading', error: null, progress: 0 } : item));
-    try {
-      await uploadPhoto(pending.uri, tourId, principalId, pending.caption.trim(), {
-        visibility: 'group',
-        uploaderName: userName || 'Tour Member',
-        thumbnailUri: pending.thumbnailUri || null,
-        viewerUri: pending.viewerUri || null,
-        optimizationMetrics: pending.metrics || null,
-        onProgress: (ratio) => {
-          const percent = Math.round((ratio || 0) * 100);
-          setUploadProgress(percent);
-          setPendingUploads((prev) => prev.map((item) => item.id === pending.id ? { ...item, progress: percent } : item));
-        },
-      });
-      setPendingUploads((prev) => prev.filter((item) => item.id !== pending.id));
-    } catch (error) {
-      setPendingUploads((prev) => prev.map((item) => item.id === pending.id ? { ...item, status: 'failed', error: getUploadErrorMessage(error), progress: 0 } : item));
-    }
-  };
+  const makePhotoIdempotencyKey = ({ principal, tour, sourceUri, timestamp }) => (
+    `photo_v1:${tour}:${principal}:${timestamp}:${sourceUri}`.replace(/\s+/g, '')
+  );
 
   const handleUpload = async () => {
     if (!pendingImage?.uri) return;
 
-    setUploading(true);
-    setUploadProgress(0);
-
     try {
       const optimized = await optimizeImageForUpload(pendingImage);
-      const pending = {
-        id: `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        uri: optimized.uploadUri,
-        thumbnailUri: optimized.thumbnailUri,
-        viewerUri: optimized.viewerUri || null,
-        previewUri: pendingImage.uri,
-        caption,
-        progress: 0,
-        status: 'queued',
-        error: null,
-        metrics: optimized.metrics,
+      const createdAt = new Date().toISOString();
+      const jobId = `photo_upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const idempotencyKey = makePhotoIdempotencyKey({
+        principal: principalId,
+        tour: tourId,
+        sourceUri: pendingImage.uri,
+        timestamp: createdAt,
+      });
+      const enqueueResult = await offlineSyncService.enqueueAction({
+        id: jobId,
+        type: 'PHOTO_UPLOAD',
+        tourId,
+        createdAt,
+        payload: {
+          jobId,
+          idempotencyKey,
+          createdAt,
+          tourId,
+          visibility: 'group',
+          ownerId: principalId,
+          userId: principalId,
+          uploaderName: userName || 'Tour Member',
+          localAssets: {
+            sourceUri: optimized.uploadUri,
+            previewUri: pendingImage.uri,
+            thumbnailUri: optimized.thumbnailUri || null,
+            viewerUri: optimized.viewerUri || null,
+            optimizationMetrics: optimized.metrics || null,
+          },
+          metadata: {
+            caption: caption.trim(),
+          },
+          attemptCount: 0,
+          lastError: null,
+        },
       };
+      if (!enqueueResult.success) {
+        Alert.alert('Upload queued failed', enqueueResult.error || 'Could not queue upload. Please try again.');
+        return;
+      }
 
       setShowUploadModal(false);
-      setPendingUploads((prev) => [pending, ...prev]);
       setPendingImage(null);
       setCaption('');
-
-      await uploadPendingItem(pending);
+      offlineSyncService.replayQueue({ services: { photoService } }).catch(() => {});
 
       if (optimized.metrics?.originalSizeBytes && optimized.metrics?.optimizedSizeBytes) {
         Alert.alert(
@@ -308,14 +320,16 @@ export default function GroupPhotobookScreen({
       }
     } catch (error) {
       Alert.alert('Image preparation failed', 'Could not optimize this image. Please try a different photo.');
-    } finally {
-      setUploading(false);
-      setUploadProgress(0);
     }
   };
 
   const retryUpload = async (pending) => {
-    await uploadPendingItem(pending);
+    await offlineSyncService.updateAction(pending.id, {
+      status: 'retrying',
+      nextAttemptAt: null,
+      lastError: null,
+    });
+    await offlineSyncService.replayQueue({ services: { photoService } });
   };
 
   const cancelUpload = () => {
@@ -356,15 +370,15 @@ export default function GroupPhotobookScreen({
   });
 
   const renderPendingUploads = () => {
-    if (pendingUploads.length === 0) return null;
+    if (photoQueueItems.length === 0) return null;
 
     return (
       <View style={styles.pendingSection}>
         <Text style={styles.pendingTitle}>Uploads</Text>
         <View style={styles.grid}>
-          {pendingUploads.map((item) => (
+          {photoQueueItems.map((item) => (
             <View key={item.id} style={styles.imageTouchable}>
-              <Image source={{ uri: item.previewUri || item.uri }} style={styles.imageThumbnail} />
+              <Image source={{ uri: item?.payload?.localAssets?.previewUri || item?.payload?.localAssets?.sourceUri }} style={styles.imageThumbnail} />
               <View style={styles.pendingOverlay}>
                 {item.status === 'failed' ? (
                   <>
@@ -374,7 +388,7 @@ export default function GroupPhotobookScreen({
                     </TouchableOpacity>
                   </>
                 ) : (
-                  <Text style={styles.pendingProgressText}>{item.progress}%</Text>
+                  <Text style={styles.pendingProgressText}>{item.status}</Text>
                 )}
               </View>
             </View>
@@ -385,7 +399,7 @@ export default function GroupPhotobookScreen({
   };
 
   const renderEmptyState = () => {
-    if (pendingUploads.length > 0) return null;
+    if (photoQueueItems.length > 0) return null;
 
     return (
       <View style={styles.emptyContainer}>
@@ -429,8 +443,8 @@ export default function GroupPhotobookScreen({
 
   const handleDeletePhoto = async (photo) => {
     try {
-      if (typeof deleteGroupPhoto === 'function') {
-        await deleteGroupPhoto(tourId, photo.id, principalId);
+      if (typeof photoService.deleteGroupPhoto === 'function') {
+        await photoService.deleteGroupPhoto(tourId, photo.id, principalId);
       }
     } catch (error) {
       console.error('Delete error:', error);
@@ -475,7 +489,7 @@ export default function GroupPhotobookScreen({
           completeRefresh(photoList);
         };
 
-        unsubscribe = subscribeToTourPhotos(tourId, handleSnapshot);
+        unsubscribe = photoService.subscribeToTourPhotos(tourId, handleSnapshot);
       });
     } catch (error) {
       Alert.alert('Refresh Failed', 'Unable to refresh photos right now.');
@@ -522,23 +536,18 @@ export default function GroupPhotobookScreen({
           onPress={showUploadOptions}
           style={styles.headerButton}
           activeOpacity={0.7}
-          disabled={uploading}
+          disabled={false}
         >
           <MaterialCommunityIcons name="camera-plus" size={26} color={COLORS.white} />
         </TouchableOpacity>
       </LinearGradient>
 
       {/* Upload Progress Bar */}
-      {uploading && (
+      {photoQueueItems.length > 0 && (
         <View style={styles.progressContainer}>
           <View style={styles.progressContent}>
             <ActivityIndicator size="small" color={COLORS.success} />
-            <Text style={styles.progressText}>
-              Sharing with group... {Math.round(uploadProgress)}%
-            </Text>
-          </View>
-          <View style={styles.progressBar}>
-            <View style={[styles.progressFill, { width: `${uploadProgress}%` }]} />
+            <Text style={styles.progressText}>Uploads in queue: {photoQueueItems.length}</Text>
           </View>
         </View>
       )}
@@ -665,7 +674,7 @@ export default function GroupPhotobookScreen({
           style={styles.fab}
           onPress={showUploadOptions}
           activeOpacity={0.9}
-          disabled={uploading}
+          disabled={false}
         >
           <LinearGradient
             colors={[COLORS.success, '#22C55E']}
@@ -686,7 +695,7 @@ export default function GroupPhotobookScreen({
         canDelete={true}
         currentUserId={principalId}
         showUploaderInfo={true}
-        onEditCaption={async (photo, nextCaption) => updatePhotoCaption({ tourId, photoId: photo.id, userId: principalId, caption: nextCaption, visibility: 'group' })}
+        onEditCaption={async (photo, nextCaption) => photoService.updatePhotoCaption({ tourId, photoId: photo.id, userId: principalId, caption: nextCaption, visibility: 'group' })}
       />
 
       {/* Upload Modal with Caption */}

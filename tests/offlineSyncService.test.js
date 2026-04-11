@@ -311,7 +311,8 @@ test('replayQueue can process PHOTO_UPLOAD when photoService direct handler is p
 
   const remaining = await offlineSyncService.getQueuedActions();
   assert.equal(remaining.success, true);
-  assert.equal(remaining.data.length, 0);
+  assert.equal(remaining.data.length, 1);
+  assert.equal(remaining.data[0].status, 'completed');
 });
 
 test('replayQueue skips max-attempt failed action and replays once when re-queued', async () => {
@@ -513,4 +514,106 @@ test('replayQueue does not refresh lastSuccessAt when there is no work to proces
   const afterReplay = await offlineSyncService.getLastSuccessAt();
   assert.equal(afterReplay.success, true);
   assert.equal(afterReplay.data, 123456789);
+});
+
+test('PHOTO_UPLOAD enqueue payload is normalized with idempotency and local assets contract', async () => {
+  await clearQueue();
+  const createdAt = new Date().toISOString();
+  const enqueue = await offlineSyncService.enqueueAction({
+    id: 'photo-contract-1',
+    type: 'PHOTO_UPLOAD',
+    tourId: 'tour-photo-contract',
+    payload: {
+      idempotencyKey: 'idem-photo-1',
+      createdAt,
+      visibility: 'group',
+      userId: 'user-1',
+      localAssets: { sourceUri: 'file:///tmp/source.jpg' },
+      metadata: { caption: 'hello' },
+    },
+  });
+  assert.equal(enqueue.success, true);
+  assert.equal(enqueue.data.payload.jobId, 'photo-contract-1');
+  assert.equal(enqueue.data.payload.idempotencyKey, 'idem-photo-1');
+  assert.equal(enqueue.data.payload.localAssets.sourceUri, 'file:///tmp/source.jpg');
+});
+
+test('PHOTO_UPLOAD retry keeps one logical record and transitions retrying to completed', async () => {
+  await clearQueue();
+  let calls = 0;
+  await offlineSyncService.enqueueAction({
+    id: 'photo-retry-1',
+    type: 'PHOTO_UPLOAD',
+    tourId: 'tour-photo',
+    payload: {
+      idempotencyKey: 'idem-retry-1',
+      tourId: 'tour-photo',
+      visibility: 'group',
+      userId: 'user-1',
+      localAssets: { sourceUri: 'file:///tmp/retry.jpg' },
+      metadata: { caption: 'retry' },
+    },
+  });
+
+  await offlineSyncService.replayQueue({
+    services: {
+      photoService: {
+        uploadPhotoDirect: async () => {
+          calls += 1;
+          if (calls === 1) return { success: false, error: 'network' };
+          return { success: true, data: { id: 'photo-1' } };
+        },
+      },
+    },
+  });
+  const failedQueue = await offlineSyncService.getQueuedActions();
+  assert.equal(failedQueue.data[0].status, 'retrying');
+
+  await offlineSyncService.updateAction('photo-retry-1', { nextAttemptAt: null, status: 'retrying' });
+  await offlineSyncService.replayQueue({
+    services: {
+      photoService: {
+        uploadPhotoDirect: async () => {
+          calls += 1;
+          return { success: true, data: { id: 'photo-1' } };
+        },
+      },
+    },
+  });
+  const completedQueue = await offlineSyncService.getQueuedActions();
+  assert.equal(completedQueue.data[0].status, 'completed');
+  assert.equal(calls, 2);
+});
+
+test('PHOTO_UPLOAD survives restart-like rehydrate and can replay later', async () => {
+  await clearQueue();
+  await offlineSyncService.enqueueAction({
+    id: 'photo-restart-1',
+    type: 'PHOTO_UPLOAD',
+    tourId: 'tour-restart',
+    payload: {
+      idempotencyKey: 'idem-restart-1',
+      tourId: 'tour-restart',
+      visibility: 'private',
+      ownerId: 'owner-1',
+      localAssets: { sourceUri: 'file:///tmp/restart.jpg' },
+      metadata: { caption: 'restart' },
+    },
+  });
+
+  const reloadedModule = require('../services/offlineSyncService');
+  const queued = await reloadedModule.getPhotoUploadActions({ tourId: 'tour-restart', visibility: 'private', ownerId: 'owner-1' });
+  assert.equal(queued.success, true);
+  assert.equal(queued.data.length, 1);
+
+  const replay = await reloadedModule.replayQueue({
+    services: {
+      photoService: {
+        uploadPhotoDirect: async () => ({ success: true, data: { id: 'photo-restart-server' } }),
+      },
+    },
+  });
+  assert.equal(replay.success, true);
+  const after = await reloadedModule.getPhotoUploadActions({ tourId: 'tour-restart', visibility: 'private', ownerId: 'owner-1' });
+  assert.equal(after.data[0].status, 'completed');
 });
