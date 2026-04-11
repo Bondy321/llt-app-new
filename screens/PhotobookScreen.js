@@ -22,9 +22,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { uploadPhoto, subscribeToPrivatePhotos, updatePhotoCaption } from '../services/photoService';
+import * as offlineSyncService from '../services/offlineSyncService';
+import * as photoService from '../services/photoService';
 import { optimizeImageForUpload, formatBytes } from '../services/imageOptimizationService';
-import { deletePrivatePhoto } from '../services/photoService';
 import ImageViewer from '../components/ImageViewer';
 import { getCachedPhotoUri } from '../services/photoViewerCacheService';
 import { resolveViewerDisplayUri } from '../services/photoVariantService';
@@ -47,9 +47,7 @@ export default function PhotobookScreen({
   const [photos, setPhotos] = useState([]);
   const [loadingPhotos, setLoadingPhotos] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [pendingUploads, setPendingUploads] = useState([]);
+  const [photoQueueItems, setPhotoQueueItems] = useState([]);
   const [sortMode, setSortMode] = useState('newest');
   const [mineOnly, setMineOnly] = useState(false);
 
@@ -119,7 +117,7 @@ export default function PhotobookScreen({
       await ensurePrivatePhotoOwnerAccess();
       if (isCancelled) return;
 
-      unsubscribe = subscribeToPrivatePhotos(tourId, principalId, (photoList) => {
+      unsubscribe = photoService.subscribeToPrivatePhotos(tourId, principalId, (photoList) => {
         setPhotos(photoList);
         setLoadingPhotos(false);
         setRefreshing(false);
@@ -143,6 +141,30 @@ export default function PhotobookScreen({
       if (unsubscribe) unsubscribe();
     };
   }, [ensurePrivatePhotoOwnerAccess, principalId, tourId]);
+
+  useEffect(() => {
+    if (!tourId || !principalId) return undefined;
+
+    const refreshPhotoQueue = async () => {
+      const queued = await offlineSyncService.getPhotoUploadActions({ tourId, visibility: 'private', ownerId: principalId });
+      if (queued.success) {
+        setPhotoQueueItems(queued.data.filter((item) => item.status !== 'completed'));
+      }
+    };
+
+    refreshPhotoQueue();
+    const unsubscribe = offlineSyncService.subscribeQueuedActions((actions) => {
+      const filtered = actions.filter((action) => (
+        action.type === 'PHOTO_UPLOAD'
+        && action.tourId === tourId
+        && action?.payload?.visibility === 'private'
+        && (action?.payload?.ownerId === principalId || action?.payload?.userId === principalId)
+        && action.status !== 'completed'
+      ));
+      setPhotoQueueItems(filtered);
+    });
+    return unsubscribe;
+  }, [principalId, tourId]);
 
   const visiblePhotos = useMemo(() => {
     const scoped = mineOnly ? photos.filter((photo) => photo.userId === principalId) : photos;
@@ -275,70 +297,59 @@ export default function PhotobookScreen({
     );
   };
 
-  const getUploadErrorMessage = (error) => {
-    switch (error?.code) {
-      case 'file-too-large':
-        return 'Please choose a photo smaller than 5MB to upload.';
-      case 'permission-denied':
-        return 'Please check your connection or permissions and try again.';
-      case 'network-error':
-        return 'Network error occurred while uploading. Please try again.';
-      case 'invalid-params':
-        return 'Something went wrong preparing your photo. Please try again.';
-      default:
-        return 'Could not upload your photo. Please try again.';
-    }
-  };
-
-  const uploadPendingItem = async (pending) => {
-    setPendingUploads((prev) => prev.map((item) => item.id === pending.id ? { ...item, status: 'uploading', error: null, progress: 0 } : item));
-
-    try {
-      await ensurePrivatePhotoOwnerAccess();
-      await uploadPhoto(pending.uri, tourId, principalId, pending.caption.trim(), {
-        visibility: 'private',
-        thumbnailUri: pending.thumbnailUri || null,
-        viewerUri: pending.viewerUri || null,
-        optimizationMetrics: pending.metrics || null,
-        onProgress: (ratio) => {
-          const percent = Math.round((ratio || 0) * 100);
-          setUploadProgress(percent);
-          setPendingUploads((prev) => prev.map((item) => item.id === pending.id ? { ...item, progress: percent } : item));
-        },
-      });
-      setPendingUploads((prev) => prev.filter((item) => item.id !== pending.id));
-    } catch (error) {
-      setPendingUploads((prev) => prev.map((item) => item.id === pending.id ? { ...item, status: 'failed', error: getUploadErrorMessage(error), progress: 0 } : item));
-    }
-  };
+  const makePhotoIdempotencyKey = ({ principal, tour, sourceUri, timestamp }) => (
+    `photo_v1:${tour}:${principal}:${timestamp}:${sourceUri}`.replace(/\s+/g, '')
+  );
 
   const handleUpload = async () => {
     if (!pendingImage?.uri) return;
 
-    setUploading(true);
-    setUploadProgress(0);
-
     try {
       const optimized = await optimizeImageForUpload(pendingImage);
-      const pending = {
-        id: `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        uri: optimized.uploadUri,
-        thumbnailUri: optimized.thumbnailUri,
-        viewerUri: optimized.viewerUri || null,
-        previewUri: pendingImage.uri,
-        caption,
-        progress: 0,
-        status: 'queued',
-        error: null,
-        metrics: optimized.metrics,
-      };
-
+      await ensurePrivatePhotoOwnerAccess();
+      const createdAt = new Date().toISOString();
+      const jobId = `photo_upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const idempotencyKey = makePhotoIdempotencyKey({
+        principal: principalId,
+        tour: tourId,
+        sourceUri: pendingImage.uri,
+        timestamp: createdAt,
+      });
+      const enqueueResult = await offlineSyncService.enqueueAction({
+        id: jobId,
+        type: 'PHOTO_UPLOAD',
+        tourId,
+        createdAt,
+        payload: {
+          jobId,
+          idempotencyKey,
+          createdAt,
+          tourId,
+          visibility: 'private',
+          ownerId: principalId,
+          userId: principalId,
+          localAssets: {
+            sourceUri: optimized.uploadUri,
+            previewUri: pendingImage.uri,
+            thumbnailUri: optimized.thumbnailUri || null,
+            viewerUri: optimized.viewerUri || null,
+            optimizationMetrics: optimized.metrics || null,
+          },
+          metadata: {
+            caption: caption.trim(),
+          },
+          attemptCount: 0,
+          lastError: null,
+        },
+      });
+      if (!enqueueResult.success) {
+        Alert.alert('Upload queue failed', enqueueResult.error || 'Could not queue upload.');
+        return;
+      }
       setShowUploadModal(false);
-      setPendingUploads((prev) => [pending, ...prev]);
       setPendingImage(null);
       setCaption('');
-
-      await uploadPendingItem(pending);
+      offlineSyncService.replayQueue({ services: { photoService } }).catch(() => {});
 
       if (optimized.metrics?.originalSizeBytes && optimized.metrics?.optimizedSizeBytes) {
         Alert.alert(
@@ -348,14 +359,16 @@ export default function PhotobookScreen({
       }
     } catch (error) {
       Alert.alert('Image preparation failed', 'Could not optimize this image. Please try a different photo.');
-    } finally {
-      setUploading(false);
-      setUploadProgress(0);
     }
   };
 
   const retryUpload = async (pending) => {
-    await uploadPendingItem(pending);
+    await offlineSyncService.updateAction(pending.id, {
+      status: 'retrying',
+      nextAttemptAt: null,
+      lastError: null,
+    });
+    await offlineSyncService.replayQueue({ services: { photoService } });
   };
 
   const cancelUpload = () => {
@@ -379,8 +392,8 @@ export default function PhotobookScreen({
 
   const handleDeletePhoto = async (photo) => {
     try {
-      if (typeof deletePrivatePhoto === 'function') {
-        await deletePrivatePhoto(tourId, principalId, photo.id);
+      if (typeof photoService.deletePrivatePhoto === 'function') {
+        await photoService.deletePrivatePhoto(tourId, principalId, photo.id);
       }
     } catch (error) {
       console.error('Delete error:', error);
@@ -426,7 +439,7 @@ export default function PhotobookScreen({
           completeRefresh();
         }, 5000);
 
-        unsubscribe = subscribeToPrivatePhotos(tourId, principalId, (photoList) => {
+        unsubscribe = photoService.subscribeToPrivatePhotos(tourId, principalId, (photoList) => {
           completeRefresh(photoList);
         });
       });
@@ -469,23 +482,18 @@ export default function PhotobookScreen({
           onPress={showUploadOptions}
           style={styles.headerButton}
           activeOpacity={0.7}
-          disabled={uploading}
+          disabled={false}
         >
           <MaterialCommunityIcons name="camera-plus" size={26} color={COLORS.white} />
         </TouchableOpacity>
       </LinearGradient>
 
       {/* Upload Progress Bar */}
-      {uploading && (
+      {photoQueueItems.length > 0 && (
         <View style={styles.progressContainer}>
           <View style={styles.progressContent}>
             <ActivityIndicator size="small" color={COLORS.primary} />
-            <Text style={styles.progressText}>
-              Uploading... {Math.round(uploadProgress)}%
-            </Text>
-          </View>
-          <View style={styles.progressBar}>
-            <View style={[styles.progressFill, { width: `${uploadProgress}%` }]} />
+            <Text style={styles.progressText}>Uploads in queue: {photoQueueItems.length}</Text>
           </View>
         </View>
       )}
@@ -536,7 +544,7 @@ export default function PhotobookScreen({
           <Text style={styles.loadingText}>Loading your memories...</Text>
         </View>
       ) : (
-        visiblePhotos.length === 0 && pendingUploads.length === 0 ? (
+        visiblePhotos.length === 0 && photoQueueItems.length === 0 ? (
           <View style={styles.emptyContainer}>
             <View style={styles.emptyIconWrapper}>
               <MaterialCommunityIcons name="lock-outline" size={60} color={COLORS.primary} />
@@ -608,13 +616,13 @@ export default function PhotobookScreen({
               </View>
             )}
             renderSectionFooter={() => <View style={styles.sectionSpacer} />}
-            ListHeaderComponent={pendingUploads.length > 0 ? (
+            ListHeaderComponent={photoQueueItems.length > 0 ? (
               <View style={styles.pendingSection}>
                 <Text style={styles.pendingTitle}>Uploads</Text>
                 <View style={styles.grid}>
-                  {pendingUploads.map((item) => (
+                  {photoQueueItems.map((item) => (
                     <View key={item.id} style={styles.imageTouchable}>
-                      <Image source={{ uri: item.previewUri || item.uri }} style={styles.imageThumbnail} />
+                      <Image source={{ uri: item?.payload?.localAssets?.previewUri || item?.payload?.localAssets?.sourceUri }} style={styles.imageThumbnail} />
                       <View style={styles.pendingOverlay}>
                         {item.status === 'failed' ? (
                           <>
@@ -624,7 +632,7 @@ export default function PhotobookScreen({
                             </TouchableOpacity>
                           </>
                         ) : (
-                          <Text style={styles.pendingProgressText}>{item.progress}%</Text>
+                          <Text style={styles.pendingProgressText}>{item.status}</Text>
                         )}
                       </View>
                     </View>
@@ -658,7 +666,7 @@ export default function PhotobookScreen({
           style={styles.fab}
           onPress={showUploadOptions}
           activeOpacity={0.9}
-          disabled={uploading}
+          disabled={false}
         >
           <LinearGradient
             colors={[COLORS.accent, '#FB923C']}
@@ -679,7 +687,7 @@ export default function PhotobookScreen({
         canDelete={true}
         currentUserId={principalId}
         showUploaderInfo={false}
-        onEditCaption={async (photo, nextCaption) => updatePhotoCaption({ tourId, photoId: photo.id, userId: principalId, caption: nextCaption, visibility: 'private' })}
+        onEditCaption={async (photo, nextCaption) => photoService.updatePhotoCaption({ tourId, photoId: photo.id, userId: principalId, caption: nextCaption, visibility: 'private' })}
       />
 
       {/* Upload Modal with Caption */}

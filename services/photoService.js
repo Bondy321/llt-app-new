@@ -37,8 +37,14 @@ const DOWNLOAD_URL_RETRYABLE_CODES = new Set([
   'storage/retry-limit-exceeded',
   'storage/unknown',
 ]);
+const IDEMPOTENCY_KEY_MAX_LENGTH = 180;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sanitizeStorageSegment = (value, fallback = 'photo') => {
+  if (typeof value !== 'string') return fallback;
+  const sanitized = value.trim().replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, IDEMPOTENCY_KEY_MAX_LENGTH);
+  return sanitized || fallback;
+};
 
 const resolveRealtimeTimestamp = (serverTimestampFn, nowFn = Date.now) => {
   try {
@@ -430,12 +436,14 @@ const uploadPhoto = async (
     dbRefFn = databaseRef,
     pushFn = push,
     setFn = set,
+    getFn = get,
     serverTimestampFn = serverTimestamp,
     fetchFn = fetch,
     onProgress = null,
     thumbnailUri = null,
     viewerUri = null,
     optimizationMetrics = null,
+    idempotencyKey = null,
     nowFn = Date.now,
   } = {}
 ) => {
@@ -447,6 +455,9 @@ const uploadPhoto = async (
     const validatedUserKey = sanitizeRealtimeKeySegment(validatedUserId);
     const validatedCaption = validateCaption(caption);
     const validatedVisibility = validateVisibility(visibility);
+    const normalizedIdempotencyKey = typeof idempotencyKey === 'string' && idempotencyKey.trim()
+      ? idempotencyKey.trim().slice(0, IDEMPOTENCY_KEY_MAX_LENGTH)
+      : null;
 
     if (!storageInstance) {
       throw new Error('Storage instance not initialized');
@@ -473,7 +484,10 @@ const uploadPhoto = async (
     const extension = extensionMap[blob.type] || 'jpg';
 
     const uploadTimestamp = Date.now();
-    const filename = `${uploadTimestamp}_${validatedUserId}.${extension}`;
+    const deterministicSegment = normalizedIdempotencyKey
+      ? sanitizeStorageSegment(normalizedIdempotencyKey, `${uploadTimestamp}_${validatedUserId}`)
+      : `${uploadTimestamp}_${validatedUserId}`;
+    const filename = `${deterministicSegment}.${extension}`;
     const storagePath = isPrivate
       ? `private_tour_photos/${validatedTourId}/${validatedUserId}/${filename}`
       : `group_tour_photos/${validatedTourId}/${filename}`;
@@ -493,6 +507,7 @@ const uploadPhoto = async (
         customMetadata: {
           uploadedBy: validatedUserId,
           uploadedAt: new Date().toISOString(),
+          idempotencyKey: normalizedIdempotencyKey || '',
         },
       };
 
@@ -583,6 +598,23 @@ const uploadPhoto = async (
         ? `private_tour_photos/${validatedTourId}/${validatedUserKey}`
         : `group_tour_photos/${validatedTourId}`;
       const photosRef = dbRefFn(realtimeDbInstance, databasePath);
+      if (normalizedIdempotencyKey) {
+        const existingSnapshot = await getFn(photosRef);
+        const existingData = existingSnapshot.val() || {};
+        const existingEntry = Object.entries(existingData).find(([, value]) => value?.idempotencyKey === normalizedIdempotencyKey);
+        if (existingEntry) {
+          const [existingId, existingPhoto] = existingEntry;
+          return {
+            id: existingId,
+            url: existingPhoto.url || existingPhoto.fullUrl || null,
+            userId: existingPhoto.userId || validatedUserId,
+            caption: existingPhoto.caption || validatedCaption,
+            uploaderName: existingPhoto.uploaderName || uploaderName || 'Tour Member',
+            deduped: true,
+          };
+        }
+      }
+
       const newPhotoRef = pushFn(photosRef);
 
       const photoData = {
@@ -594,6 +626,7 @@ const uploadPhoto = async (
         storagePath,
         fileSize: blob.size,
         fileType: blob.type,
+        idempotencyKey: normalizedIdempotencyKey,
       };
 
       if (thumbnailDownloadURL) {
@@ -957,16 +990,28 @@ const uploadPhotoDirect = async (payload = {}) => {
       viewerUri = null,
       optimizationMetrics = null,
       onProgress = null,
+      localAssets = null,
+      metadata = null,
+      idempotencyKey = null,
     } = payload;
 
+    const resolvedLocalAssets = localAssets && typeof localAssets === 'object' ? localAssets : {};
+    const resolvedMetadata = metadata && typeof metadata === 'object' ? metadata : {};
+    const sourceUri = uri || resolvedLocalAssets.sourceUri;
+    const sourceCaption = caption ?? resolvedMetadata.caption ?? '';
+    const sourceThumbnailUri = thumbnailUri || resolvedLocalAssets.thumbnailUri || null;
+    const sourceViewerUri = viewerUri || resolvedLocalAssets.viewerUri || null;
+    const sourceOptimizationMetrics = optimizationMetrics || resolvedLocalAssets.optimizationMetrics || null;
+
     const resolvedOwnerId = ownerId || userId;
-    const data = await uploadPhoto(uri, tourId, resolvedOwnerId, caption, {
+    const data = await uploadPhoto(sourceUri, tourId, resolvedOwnerId, sourceCaption, {
       visibility,
       uploaderName,
-      thumbnailUri,
-      viewerUri,
-      optimizationMetrics,
+      thumbnailUri: sourceThumbnailUri,
+      viewerUri: sourceViewerUri,
+      optimizationMetrics: sourceOptimizationMetrics,
       onProgress,
+      idempotencyKey,
     });
 
     return { success: true, data };
