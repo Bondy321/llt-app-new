@@ -29,3 +29,9 @@ Cloud Function variant generation updates records to:
 Compatibility behavior:
 
 - Existing records without `variantStatus` are treated as display-ready if they already include a legacy display URL (`viewerUrl`, `url`, `fullUrl`, or `thumbnailUrl`).
+
+## Deployment requirement (region alignment)
+
+- `generatePhotoVariants` is pinned to `europe-west1` and must listen to a bucket in the same region.
+- Set Functions param `PHOTO_VARIANTS_BUCKET` to your **europe-west1** Storage bucket name before deploy.
+- If this param points to a `us-east1` (or any non-europe-west1) bucket, deploy will fail with a region-mismatch trigger error.

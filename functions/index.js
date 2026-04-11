@@ -8,6 +8,7 @@
 const { onValueCreated, onValueUpdated } = require("firebase-functions/v2/database");
 const { onRequest } = require("firebase-functions/v2/https");
 const { onObjectFinalized } = require("firebase-functions/v2/storage");
+const { defineString } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const { Expo } = require("expo-server-sdk");
 const sharp = require("sharp");
@@ -25,6 +26,7 @@ const USER_PROFILE_CACHE_TTL_MS = 2 * 60 * 1000;
 const USER_PROFILE_CACHE_MAX_ENTRIES = 5000;
 const userProfileCache = new Map();
 const PHOTO_CACHE_CONTROL_HEADER = "public,max-age=31536000,immutable";
+const PHOTO_VARIANTS_BUCKET = defineString("PHOTO_VARIANTS_BUCKET");
 
 // ==================== UTILITY FUNCTIONS ====================
 
@@ -968,6 +970,7 @@ const processPhotoVariantObject = async (event) => {
 exports.generatePhotoVariants = onObjectFinalized(
   {
     region: "europe-west1",
+    bucket: PHOTO_VARIANTS_BUCKET,
     maxInstances: 10,
   },
   processPhotoVariantObject,

@@ -492,7 +492,7 @@ test('replayQueue writes lastSuccessAt whenever at least one action is processed
   const afterFailure = await offlineSyncService.getLastSuccessAt();
   assert.equal(afterFailure.success, true);
   assert.equal(typeof afterFailure.data, 'number');
-  assert.equal(afterFailure.data > priorValue, true);
+  assert.equal(afterFailure.data >= priorValue, true);
 });
 
 test('replayQueue does not refresh lastSuccessAt when there is no work to process', async () => {

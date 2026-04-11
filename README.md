@@ -23,6 +23,7 @@ Google Sheets CMS
 ## Core engineering contracts
 
 1. **Firebase region:** all functions and backend resources run in `europe-west1`.
+   - For storage-triggered photo variants, set Functions param `PHOTO_VARIANTS_BUCKET` to a bucket that is also in `europe-west1`.
 2. **Date parsing:** only strict UK (`dd/MM/yyyy`) or ISO (`yyyy-MM-dd`) date strings are accepted.
 3. **Driver assignment writes:** must be multi-path and keep `drivers`, `tours`, and `tour_manifests` synchronized.
 4. **Sync UX contract:** use canonical sync states (`OFFLINE_NO_NETWORK`, `ONLINE_BACKEND_DEGRADED`, `ONLINE_BACKLOG_PENDING`, `ONLINE_HEALTHY`).
