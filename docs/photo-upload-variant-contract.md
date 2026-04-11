@@ -32,6 +32,6 @@ Compatibility behavior:
 
 ## Deployment requirement (region alignment)
 
-- `generatePhotoVariants` is pinned to `europe-west1` and must listen to a bucket in the same region.
-- Set Functions param `PHOTO_VARIANTS_BUCKET` to your **europe-west1** Storage bucket name before deploy.
-- If this param points to a `us-east1` (or any non-europe-west1) bucket, deploy will fail with a region-mismatch trigger error.
+- Cloud Storage triggers must run in the same region as the bucket they listen to.
+- For the current Firebase free-tier setup, the default Storage bucket is `us-east1`, so `generatePhotoVariants` is deployed in `us-east1`.
+- Other backend functions remain in `europe-west1`; this function is an intentional regional exception.
