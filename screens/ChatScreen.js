@@ -67,7 +67,8 @@ const ESTIMATED_MESSAGE_ROW_HEIGHT = 120;
 const SEARCH_RESULT_PREVIEW_LIMIT = 3;
 const CATCH_UP_BUBBLE_DISTANCE_THRESHOLD = 220;
 const SWIPE_REPLY_ACTIVATION_THRESHOLD = 56;
-const SWIPE_REPLY_MAX_DRAG = 92;
+const SWIPE_REPLY_MAX_DRAG = 172;
+const SWIPE_REPLY_CUTOFF_TRIGGER = 156;
 const SWIPE_REPLY_READY_THRESHOLD = SWIPE_REPLY_ACTIVATION_THRESHOLD - 6;
 const SWIPE_REPLY_HINT_KEY_PREFIX = 'swipe_reply_hint_seen';
 const SCROLL_BOTTOM_THRESHOLD = 16;
@@ -666,6 +667,7 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
   const feedbackOpacity = useRef(new Animated.Value(0)).current;
   const triggerLatchRef = useRef(false);
   const readyToReplyRef = useRef(false);
+  const peakDragRef = useRef(0);
   const [isReadyToReply, setIsReadyToReply] = useState(false);
 
   const resetToOrigin = useCallback(() => {
@@ -689,6 +691,7 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
     ]).start(() => {
       triggerLatchRef.current = false;
       readyToReplyRef.current = false;
+      peakDragRef.current = 0;
       setIsReadyToReply(false);
     });
   }, [translateX, feedbackOpacity, feedbackScale]);
@@ -701,6 +704,7 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
     },
     onPanResponderMove: (_event, gestureState) => {
       const dragX = Math.max(0, Math.min(gestureState.dx, SWIPE_REPLY_MAX_DRAG));
+      peakDragRef.current = Math.max(peakDragRef.current, dragX);
       const progress = Math.min(dragX / SWIPE_REPLY_ACTIVATION_THRESHOLD, 1);
       const isReady = dragX >= SWIPE_REPLY_READY_THRESHOLD;
 
@@ -716,7 +720,9 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
       }
     },
     onPanResponderRelease: (_event, gestureState) => {
-      if (gestureState.dx >= SWIPE_REPLY_ACTIVATION_THRESHOLD && !triggerLatchRef.current) {
+      const effectiveDrag = Math.max(Math.max(0, gestureState.dx), peakDragRef.current);
+      const reachedCutoff = peakDragRef.current >= SWIPE_REPLY_CUTOFF_TRIGGER;
+      if ((effectiveDrag >= SWIPE_REPLY_ACTIVATION_THRESHOLD || reachedCutoff) && !triggerLatchRef.current) {
         triggerLatchRef.current = true;
         onSwipeReply?.();
       }
