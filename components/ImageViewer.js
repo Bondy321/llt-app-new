@@ -37,6 +37,8 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = 80;
 const VELOCITY_THRESHOLD = 0.3;
 const PANEL_MAX_HEIGHT = SCREEN_HEIGHT * 0.44;
+const SWIPE_ZONE_TOP = SCREEN_HEIGHT * 0.2;
+const SWIPE_ZONE_BOTTOM = SCREEN_HEIGHT * 0.8;
 
 export default function ImageViewer({
   visible,
@@ -256,11 +258,22 @@ export default function ImageViewer({
     }).start();
   }, [translateX]);
 
+  const isWithinVerticalSwipeZone = useCallback(
+    (yPosition) => yPosition >= SWIPE_ZONE_TOP && yPosition <= SWIPE_ZONE_BOTTOM,
+    []
+  );
+
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => false,
     onStartShouldSetPanResponderCapture: () => false,
-    onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dx) > 10,
-    onMoveShouldSetPanResponderCapture: (_, gestureState) => Math.abs(gestureState.dx) > 10,
+    onMoveShouldSetPanResponder: (_, gestureState) => (
+      Math.abs(gestureState.dx) > 10
+      && isWithinVerticalSwipeZone(gestureState.y0)
+    ),
+    onMoveShouldSetPanResponderCapture: (_, gestureState) => (
+      Math.abs(gestureState.dx) > 10
+      && isWithinVerticalSwipeZone(gestureState.y0)
+    ),
     onPanResponderMove: (_, gestureState) => {
       // Only allow horizontal movement within bounds
       const newX = gestureState.dx;
@@ -291,7 +304,7 @@ export default function ImageViewer({
       resetSwipePosition();
     },
     onPanResponderTerminationRequest: () => false,
-  }), [currentIndex, goToNext, goToPrevious, photos.length, resetSwipePosition, translateX]);
+  }), [currentIndex, goToNext, goToPrevious, isWithinVerticalSwipeZone, photos.length, resetSwipePosition, translateX]);
 
   const formatDate = (timestamp) => {
     if (!timestamp) return 'Unknown date';
