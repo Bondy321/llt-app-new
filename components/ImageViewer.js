@@ -36,7 +36,6 @@ import {
 import {
   SWIPE_ZONE_HEIGHT_RATIO,
   getSwipeZoneBounds,
-  isWithinVerticalSwipeZone as isWithinVerticalSwipeZoneBounds,
 } from '../services/imageViewerSwipeZone';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -272,14 +271,6 @@ export default function ImageViewer({
     }).start();
   }, [translateX]);
 
-  const isWithinVerticalSwipeZone = useCallback(
-    (yPosition) => isWithinVerticalSwipeZoneBounds(yPosition, {
-      swipeZoneTop,
-      swipeZoneBottom,
-    }),
-    [swipeZoneBottom, swipeZoneTop]
-  );
-
   const canStartHorizontalSwipe = useCallback((gestureState) => {
     const startY = typeof gestureState?.y0 === 'number' ? gestureState.y0 : null;
     const currentY = typeof gestureState?.moveY === 'number' ? gestureState.moveY : null;
@@ -295,18 +286,29 @@ export default function ImageViewer({
       return isWithinMeasuredZone(startY) || isWithinMeasuredZone(currentY);
     }
 
-    return isWithinVerticalSwipeZone(startY) || isWithinVerticalSwipeZone(currentY);
-  }, [imageGestureZoneBounds, isWithinVerticalSwipeZone]);
+    const hasRuntimeFallbackZone = Number.isFinite(swipeZoneTop) && Number.isFinite(swipeZoneBottom);
+    if (!hasRuntimeFallbackZone) return true;
+
+    const isWithinFallbackZone = (yPosition) => (
+      typeof yPosition === 'number'
+      && yPosition >= (swipeZoneTop - SWIPE_ZONE_VERTICAL_BLEED)
+      && yPosition <= (swipeZoneBottom + SWIPE_ZONE_VERTICAL_BLEED)
+    );
+
+    return isWithinFallbackZone(startY) || isWithinFallbackZone(currentY);
+  }, [imageGestureZoneBounds, swipeZoneBottom, swipeZoneTop]);
 
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => false,
     onStartShouldSetPanResponderCapture: () => false,
     onMoveShouldSetPanResponder: (_, gestureState) => (
-      Math.abs(gestureState.dx) > 10
+      Math.abs(gestureState.dx) > 8
+      && Math.abs(gestureState.dx) > (Math.abs(gestureState.dy) * 1.15)
       && canStartHorizontalSwipe(gestureState)
     ),
     onMoveShouldSetPanResponderCapture: (_, gestureState) => (
-      Math.abs(gestureState.dx) > 10
+      Math.abs(gestureState.dx) > 8
+      && Math.abs(gestureState.dx) > (Math.abs(gestureState.dy) * 1.15)
       && canStartHorizontalSwipe(gestureState)
     ),
     onPanResponderMove: (_, gestureState) => {
@@ -490,7 +492,6 @@ export default function ImageViewer({
       <StatusBar barStyle="light-content" backgroundColor="rgba(0,0,0,0.9)" />
       <Animated.View
         style={[styles.container, { opacity: fadeAnim }]}
-        {...panResponder.panHandlers}
       >
         {/* Header */}
         <LinearGradient
@@ -543,6 +544,7 @@ export default function ImageViewer({
             });
           }}
         >
+          <View style={styles.swipeGestureCapture} {...panResponder.panHandlers} />
           {imageLoading && !hasThumbnail && (
             <View style={styles.loadingOverlay}>
               <ActivityIndicator size="large" color={COLORS.white} />
@@ -821,11 +823,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  swipeGestureCapture: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2,
+  },
   imageLayerContainer: {
     width: SCREEN_WIDTH,
     height: SCREEN_HEIGHT * 0.65,
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 1,
   },
   image: {
     width: SCREEN_WIDTH,
@@ -844,6 +851,7 @@ const styles = StyleSheet.create({
   },
   navArrow: {
     position: 'absolute',
+    zIndex: 3,
     top: '50%',
     marginTop: -25,
     width: 50,
