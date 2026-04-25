@@ -37,8 +37,9 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = 80;
 const VELOCITY_THRESHOLD = 0.3;
 const PANEL_MAX_HEIGHT = SCREEN_HEIGHT * 0.44;
-const SWIPE_ZONE_TOP = SCREEN_HEIGHT * 0.2;
-const SWIPE_ZONE_BOTTOM = SCREEN_HEIGHT * 0.8;
+const SWIPE_ZONE_HEIGHT_RATIO = 0.6;
+const SWIPE_ZONE_TOP = SCREEN_HEIGHT * ((1 - SWIPE_ZONE_HEIGHT_RATIO) / 2);
+const SWIPE_ZONE_BOTTOM = SCREEN_HEIGHT * (1 - ((1 - SWIPE_ZONE_HEIGHT_RATIO) / 2));
 
 export default function ImageViewer({
   visible,
@@ -263,16 +264,22 @@ export default function ImageViewer({
     []
   );
 
+  const canStartHorizontalSwipe = useCallback((gestureState) => {
+    const startY = typeof gestureState?.y0 === 'number' ? gestureState.y0 : null;
+    const currentY = typeof gestureState?.moveY === 'number' ? gestureState.moveY : null;
+    return isWithinVerticalSwipeZone(startY) || isWithinVerticalSwipeZone(currentY);
+  }, [isWithinVerticalSwipeZone]);
+
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => false,
     onStartShouldSetPanResponderCapture: () => false,
     onMoveShouldSetPanResponder: (_, gestureState) => (
       Math.abs(gestureState.dx) > 10
-      && isWithinVerticalSwipeZone(gestureState.y0)
+      && canStartHorizontalSwipe(gestureState)
     ),
     onMoveShouldSetPanResponderCapture: (_, gestureState) => (
       Math.abs(gestureState.dx) > 10
-      && isWithinVerticalSwipeZone(gestureState.y0)
+      && canStartHorizontalSwipe(gestureState)
     ),
     onPanResponderMove: (_, gestureState) => {
       // Only allow horizontal movement within bounds
@@ -304,7 +311,7 @@ export default function ImageViewer({
       resetSwipePosition();
     },
     onPanResponderTerminationRequest: () => false,
-  }), [currentIndex, goToNext, goToPrevious, isWithinVerticalSwipeZone, photos.length, resetSwipePosition, translateX]);
+  }), [canStartHorizontalSwipe, currentIndex, goToNext, goToPrevious, photos.length, resetSwipePosition, translateX]);
 
   const formatDate = (timestamp) => {
     if (!timestamp) return 'Unknown date';
