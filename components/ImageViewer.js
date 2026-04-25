@@ -43,6 +43,7 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = 80;
 const VELOCITY_THRESHOLD = 0.3;
 const PANEL_MAX_HEIGHT = SCREEN_HEIGHT * 0.44;
+const SWIPE_ZONE_VERTICAL_BLEED = 28;
 
 export default function ImageViewer({
   visible,
@@ -78,6 +79,7 @@ export default function ImageViewer({
     thumbnailsOnly: false,
     delayMs: 300,
   });
+  const [imageGestureZoneBounds, setImageGestureZoneBounds] = useState(null);
 
   const translateX = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -281,8 +283,20 @@ export default function ImageViewer({
   const canStartHorizontalSwipe = useCallback((gestureState) => {
     const startY = typeof gestureState?.y0 === 'number' ? gestureState.y0 : null;
     const currentY = typeof gestureState?.moveY === 'number' ? gestureState.moveY : null;
+    const hasMeasuredImageZone = Number.isFinite(imageGestureZoneBounds?.top)
+      && Number.isFinite(imageGestureZoneBounds?.bottom);
+    if (hasMeasuredImageZone) {
+      const expandedTop = imageGestureZoneBounds.top - SWIPE_ZONE_VERTICAL_BLEED;
+      const expandedBottom = imageGestureZoneBounds.bottom + SWIPE_ZONE_VERTICAL_BLEED;
+      const isWithinMeasuredZone = (yPosition) => {
+        if (typeof yPosition !== 'number') return false;
+        return yPosition >= expandedTop && yPosition <= expandedBottom;
+      };
+      return isWithinMeasuredZone(startY) || isWithinMeasuredZone(currentY);
+    }
+
     return isWithinVerticalSwipeZone(startY) || isWithinVerticalSwipeZone(currentY);
-  }, [isWithinVerticalSwipeZone]);
+  }, [imageGestureZoneBounds, isWithinVerticalSwipeZone]);
 
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => false,
@@ -508,7 +522,27 @@ export default function ImageViewer({
         </View>
 
         {/* Main Image Area */}
-        <Animated.View style={[styles.imageContainer, { transform: [{ translateX }] }]}>
+        <Animated.View
+          style={[styles.imageContainer, { transform: [{ translateX }] }]}
+          onLayout={(event) => {
+            const { y, height } = event.nativeEvent.layout || {};
+            const nextBounds = Number.isFinite(y) && Number.isFinite(height)
+              ? { top: y, bottom: y + height }
+              : null;
+            setImageGestureZoneBounds((previousBounds) => {
+              if (!nextBounds && !previousBounds) return previousBounds;
+              if (!nextBounds) return null;
+              if (
+                previousBounds
+                && previousBounds.top === nextBounds.top
+                && previousBounds.bottom === nextBounds.bottom
+              ) {
+                return previousBounds;
+              }
+              return nextBounds;
+            });
+          }}
+        >
           {imageLoading && !hasThumbnail && (
             <View style={styles.loadingOverlay}>
               <ActivityIndicator size="large" color={COLORS.white} />
