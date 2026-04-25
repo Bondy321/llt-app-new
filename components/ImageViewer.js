@@ -9,6 +9,7 @@ import {
   Modal,
   TouchableOpacity,
   Dimensions,
+  useWindowDimensions,
   Platform,
   Animated,
   PanResponder,
@@ -32,14 +33,16 @@ import {
   resolveFullQualityUri,
   buildNeighborPrefetchUris,
 } from '../services/photoVariantService';
+import {
+  SWIPE_ZONE_HEIGHT_RATIO,
+  getSwipeZoneBounds,
+  isWithinVerticalSwipeZone as isWithinVerticalSwipeZoneBounds,
+} from '../services/imageViewerSwipeZone';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = 80;
 const VELOCITY_THRESHOLD = 0.3;
 const PANEL_MAX_HEIGHT = SCREEN_HEIGHT * 0.44;
-const SWIPE_ZONE_HEIGHT_RATIO = 0.6;
-const SWIPE_ZONE_TOP = SCREEN_HEIGHT * ((1 - SWIPE_ZONE_HEIGHT_RATIO) / 2);
-const SWIPE_ZONE_BOTTOM = SCREEN_HEIGHT * (1 - ((1 - SWIPE_ZONE_HEIGHT_RATIO) / 2));
 
 export default function ImageViewer({
   visible,
@@ -52,6 +55,14 @@ export default function ImageViewer({
   currentUserId = null,
   onEditCaption = null,
 }) {
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const runtimeWidth = windowWidth || SCREEN_WIDTH;
+  const runtimeHeight = windowHeight || SCREEN_HEIGHT;
+  const { top: swipeZoneTop, bottom: swipeZoneBottom } = useMemo(
+    () => getSwipeZoneBounds(runtimeHeight, SWIPE_ZONE_HEIGHT_RATIO),
+    [runtimeHeight]
+  );
+
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [showInfo, setShowInfo] = useState(false);
   const [imageLoading, setImageLoading] = useState(true);
@@ -216,7 +227,7 @@ export default function ImageViewer({
     if (currentIndex < photos.length - 1) {
       setImageLoading(true);
       Animated.spring(translateX, {
-        toValue: -SCREEN_WIDTH,
+        toValue: -runtimeWidth,
         friction: 10,
         tension: 40,
         useNativeDriver: true,
@@ -229,13 +240,13 @@ export default function ImageViewer({
       return true;
     }
     return false;
-  }, [currentIndex, photos.length]);
+  }, [currentIndex, photos.length, runtimeWidth, translateX]);
 
   const goToPrevious = useCallback(() => {
     if (currentIndex > 0) {
       setImageLoading(true);
       Animated.spring(translateX, {
-        toValue: SCREEN_WIDTH,
+        toValue: runtimeWidth,
         friction: 10,
         tension: 40,
         useNativeDriver: true,
@@ -248,7 +259,7 @@ export default function ImageViewer({
       return true;
     }
     return false;
-  }, [currentIndex, translateX]);
+  }, [currentIndex, runtimeWidth, translateX]);
 
   const resetSwipePosition = useCallback(() => {
     Animated.spring(translateX, {
@@ -260,8 +271,11 @@ export default function ImageViewer({
   }, [translateX]);
 
   const isWithinVerticalSwipeZone = useCallback(
-    (yPosition) => yPosition >= SWIPE_ZONE_TOP && yPosition <= SWIPE_ZONE_BOTTOM,
-    []
+    (yPosition) => isWithinVerticalSwipeZoneBounds(yPosition, {
+      swipeZoneTop,
+      swipeZoneBottom,
+    }),
+    [swipeZoneBottom, swipeZoneTop]
   );
 
   const canStartHorizontalSwipe = useCallback((gestureState) => {
