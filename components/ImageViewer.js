@@ -33,16 +33,13 @@ import {
   resolveFullQualityUri,
   buildNeighborPrefetchUris,
 } from '../services/photoVariantService';
-import {
-  SWIPE_ZONE_HEIGHT_RATIO,
-  getSwipeZoneBounds,
-} from '../services/imageViewerSwipeZone';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = 80;
 const VELOCITY_THRESHOLD = 0.3;
 const PANEL_MAX_HEIGHT = SCREEN_HEIGHT * 0.44;
-const SWIPE_ZONE_VERTICAL_BLEED = 28;
+const HORIZONTAL_INTENT_THRESHOLD = 8;
+const HORIZONTAL_OVER_VERTICAL_RATIO = 1.15;
 
 export default function ImageViewer({
   visible,
@@ -55,13 +52,8 @@ export default function ImageViewer({
   currentUserId = null,
   onEditCaption = null,
 }) {
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const { width: windowWidth } = useWindowDimensions();
   const runtimeWidth = windowWidth || SCREEN_WIDTH;
-  const runtimeHeight = windowHeight || SCREEN_HEIGHT;
-  const { top: swipeZoneTop, bottom: swipeZoneBottom } = useMemo(
-    () => getSwipeZoneBounds(runtimeHeight, SWIPE_ZONE_HEIGHT_RATIO),
-    [runtimeHeight]
-  );
 
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [showInfo, setShowInfo] = useState(false);
@@ -78,8 +70,6 @@ export default function ImageViewer({
     thumbnailsOnly: false,
     delayMs: 300,
   });
-  const [imageGestureZoneBounds, setImageGestureZoneBounds] = useState(null);
-
   const translateX = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const infoSlideAnim = useRef(new Animated.Value(0)).current;
@@ -271,46 +261,16 @@ export default function ImageViewer({
     }).start();
   }, [translateX]);
 
-  const canStartHorizontalSwipe = useCallback((gestureState) => {
-    const startY = typeof gestureState?.y0 === 'number' ? gestureState.y0 : null;
-    const currentY = typeof gestureState?.moveY === 'number' ? gestureState.moveY : null;
-    const hasMeasuredImageZone = Number.isFinite(imageGestureZoneBounds?.top)
-      && Number.isFinite(imageGestureZoneBounds?.bottom);
-    if (hasMeasuredImageZone) {
-      const expandedTop = imageGestureZoneBounds.top - SWIPE_ZONE_VERTICAL_BLEED;
-      const expandedBottom = imageGestureZoneBounds.bottom + SWIPE_ZONE_VERTICAL_BLEED;
-      const isWithinMeasuredZone = (yPosition) => {
-        if (typeof yPosition !== 'number') return false;
-        return yPosition >= expandedTop && yPosition <= expandedBottom;
-      };
-      return isWithinMeasuredZone(startY) || isWithinMeasuredZone(currentY);
-    }
-
-    const hasRuntimeFallbackZone = Number.isFinite(swipeZoneTop) && Number.isFinite(swipeZoneBottom);
-    if (!hasRuntimeFallbackZone) return true;
-
-    const isWithinFallbackZone = (yPosition) => (
-      typeof yPosition === 'number'
-      && yPosition >= (swipeZoneTop - SWIPE_ZONE_VERTICAL_BLEED)
-      && yPosition <= (swipeZoneBottom + SWIPE_ZONE_VERTICAL_BLEED)
-    );
-
-    return isWithinFallbackZone(startY) || isWithinFallbackZone(currentY);
-  }, [imageGestureZoneBounds, swipeZoneBottom, swipeZoneTop]);
+  const isHorizontalSwipeIntent = useCallback((gestureState) => (
+    Math.abs(gestureState.dx) > HORIZONTAL_INTENT_THRESHOLD
+    && Math.abs(gestureState.dx) > (Math.abs(gestureState.dy) * HORIZONTAL_OVER_VERTICAL_RATIO)
+  ), []);
 
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => false,
     onStartShouldSetPanResponderCapture: () => false,
-    onMoveShouldSetPanResponder: (_, gestureState) => (
-      Math.abs(gestureState.dx) > 8
-      && Math.abs(gestureState.dx) > (Math.abs(gestureState.dy) * 1.15)
-      && canStartHorizontalSwipe(gestureState)
-    ),
-    onMoveShouldSetPanResponderCapture: (_, gestureState) => (
-      Math.abs(gestureState.dx) > 8
-      && Math.abs(gestureState.dx) > (Math.abs(gestureState.dy) * 1.15)
-      && canStartHorizontalSwipe(gestureState)
-    ),
+    onMoveShouldSetPanResponder: (_, gestureState) => isHorizontalSwipeIntent(gestureState),
+    onMoveShouldSetPanResponderCapture: (_, gestureState) => isHorizontalSwipeIntent(gestureState),
     onPanResponderMove: (_, gestureState) => {
       // Only allow horizontal movement within bounds
       const newX = gestureState.dx;
@@ -341,7 +301,7 @@ export default function ImageViewer({
       resetSwipePosition();
     },
     onPanResponderTerminationRequest: () => false,
-  }), [canStartHorizontalSwipe, currentIndex, goToNext, goToPrevious, photos.length, resetSwipePosition, translateX]);
+  }), [currentIndex, goToNext, goToPrevious, isHorizontalSwipeIntent, photos.length, resetSwipePosition, translateX]);
 
   const formatDate = (timestamp) => {
     if (!timestamp) return 'Unknown date';
@@ -525,24 +485,6 @@ export default function ImageViewer({
         {/* Main Image Area */}
         <Animated.View
           style={[styles.imageContainer, { transform: [{ translateX }] }]}
-          onLayout={(event) => {
-            const { y, height } = event.nativeEvent.layout || {};
-            const nextBounds = Number.isFinite(y) && Number.isFinite(height)
-              ? { top: y, bottom: y + height }
-              : null;
-            setImageGestureZoneBounds((previousBounds) => {
-              if (!nextBounds && !previousBounds) return previousBounds;
-              if (!nextBounds) return null;
-              if (
-                previousBounds
-                && previousBounds.top === nextBounds.top
-                && previousBounds.bottom === nextBounds.bottom
-              ) {
-                return previousBounds;
-              }
-              return nextBounds;
-            });
-          }}
         >
           <View style={styles.swipeGestureCapture} {...panResponder.panHandlers} />
           {imageLoading && !hasThumbnail && (
