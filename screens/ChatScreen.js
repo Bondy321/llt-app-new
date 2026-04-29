@@ -2605,7 +2605,7 @@ export default function ChatScreen({
             accessibilityLabel={queueStats.pending > 0 || queueStats.syncing > 0 ? 'Sync pending' : 'Messages sent'}
           >
             <MaterialCommunityIcons
-              name={queueStats.pending > 0 || queueStats.syncing > 0 ? 'check' : 'check-all'}
+              name="sync"
               size={18}
               color={COLORS.white}
             />
