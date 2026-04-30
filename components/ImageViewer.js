@@ -33,13 +33,16 @@ import {
   resolveFullQualityUri,
   buildNeighborPrefetchUris,
 } from '../services/photoVariantService';
+import {
+  DEFAULT_HORIZONTAL_INTENT_THRESHOLD,
+  DEFAULT_HORIZONTAL_OVER_VERTICAL_RATIO,
+  isHorizontalSwipeIntent as isHorizontalSwipeIntentGesture,
+} from '../services/imageViewerGestureIntent';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = 80;
 const VELOCITY_THRESHOLD = 0.3;
 const PANEL_MAX_HEIGHT = SCREEN_HEIGHT * 0.44;
-const HORIZONTAL_INTENT_THRESHOLD = 8;
-const HORIZONTAL_OVER_VERTICAL_RATIO = 1.15;
 
 export default function ImageViewer({
   visible,
@@ -262,8 +265,10 @@ export default function ImageViewer({
   }, [translateX]);
 
   const isHorizontalSwipeIntent = useCallback((gestureState) => (
-    Math.abs(gestureState.dx) > HORIZONTAL_INTENT_THRESHOLD
-    && Math.abs(gestureState.dx) > (Math.abs(gestureState.dy) * HORIZONTAL_OVER_VERTICAL_RATIO)
+    isHorizontalSwipeIntentGesture(gestureState, {
+      horizontalIntentThreshold: DEFAULT_HORIZONTAL_INTENT_THRESHOLD,
+      horizontalOverVerticalRatio: DEFAULT_HORIZONTAL_OVER_VERTICAL_RATIO,
+    })
   ), []);
 
   const panResponder = useMemo(() => PanResponder.create({
@@ -485,10 +490,10 @@ export default function ImageViewer({
         {/* Main Image Area */}
         <Animated.View
           style={[styles.imageContainer, { transform: [{ translateX }] }]}
+          {...panResponder.panHandlers}
         >
-          <View style={styles.swipeGestureCapture} {...panResponder.panHandlers} />
           {imageLoading && !hasThumbnail && (
-            <View style={styles.loadingOverlay}>
+            <View pointerEvents="none" style={styles.loadingOverlay}>
               <ActivityIndicator size="large" color={COLORS.white} />
             </View>
           )}
@@ -765,16 +770,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  swipeGestureCapture: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 2,
-  },
   imageLayerContainer: {
     width: SCREEN_WIDTH,
     height: SCREEN_HEIGHT * 0.65,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 1,
   },
   image: {
     width: SCREEN_WIDTH,
