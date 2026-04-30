@@ -490,10 +490,10 @@ export default function ImageViewer({
         {/* Main Image Area */}
         <Animated.View
           style={[styles.imageContainer, { transform: [{ translateX }] }]}
+          {...panResponder.panHandlers}
         >
-          <View style={styles.swipeGestureCapture} {...panResponder.panHandlers} />
           {imageLoading && !hasThumbnail && (
-            <View style={styles.loadingOverlay}>
+            <View pointerEvents="none" style={styles.loadingOverlay}>
               <ActivityIndicator size="large" color={COLORS.white} />
             </View>
           )}
@@ -770,16 +770,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  swipeGestureCapture: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 2,
-  },
   imageLayerContainer: {
     width: SCREEN_WIDTH,
     height: SCREEN_HEIGHT * 0.65,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 1,
   },
   image: {
     width: SCREEN_WIDTH,
