@@ -271,42 +271,72 @@ export default function ImageViewer({
     })
   ), []);
 
-  const panResponder = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => false,
-    onStartShouldSetPanResponderCapture: () => false,
-    onMoveShouldSetPanResponder: (_, gestureState) => isHorizontalSwipeIntent(gestureState),
-    onMoveShouldSetPanResponderCapture: (_, gestureState) => isHorizontalSwipeIntent(gestureState),
-    onPanResponderMove: (_, gestureState) => {
-      // Only allow horizontal movement within bounds
-      const newX = gestureState.dx;
-      if ((currentIndex === 0 && newX > 0) ||
-          (currentIndex === photos.length - 1 && newX < 0)) {
-        translateX.setValue(newX * 0.3); // Resistance at edges
-      } else {
-        translateX.setValue(newX);
-      }
-    },
-    onPanResponderRelease: (_, gestureState) => {
-      const { dx, vx } = gestureState;
-      const isSwipeLeft = dx < -SWIPE_THRESHOLD || vx < -VELOCITY_THRESHOLD;
-      const isSwipeRight = dx > SWIPE_THRESHOLD || vx > VELOCITY_THRESHOLD;
+  const panResponder = useMemo(() => {
+    // Tracks whether the current gesture has crossed the horizontal-intent
+    // threshold, so vertical/stationary touches in empty areas don't jitter
+    // the image when the parent claims the touch on start.
+    let horizontalLocked = false;
+    return PanResponder.create({
+      // Claim touches that don't hit a child responder (e.g., the empty side
+      // regions next to the image). Without this the responder system never
+      // tracks moves originating outside a child, so swipes there were dead
+      // and only worked when the touch started on top of an arrow button.
+      onStartShouldSetPanResponder: () => true,
+      // Don't intercept in the capture phase — let child TouchableOpacity
+      // arrows still receive their taps. The move-capture handler below
+      // still negotiates a swipe away from a child once horizontal intent
+      // appears (so swipes that begin on an arrow keep working too).
+      onStartShouldSetPanResponderCapture: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) => isHorizontalSwipeIntent(gestureState),
+      onMoveShouldSetPanResponderCapture: (_, gestureState) => isHorizontalSwipeIntent(gestureState),
+      onPanResponderGrant: () => {
+        horizontalLocked = false;
+      },
+      onPanResponderMove: (_, gestureState) => {
+        if (!horizontalLocked) {
+          if (!isHorizontalSwipeIntent(gestureState)) return;
+          horizontalLocked = true;
+        }
+        const newX = gestureState.dx;
+        if ((currentIndex === 0 && newX > 0) ||
+            (currentIndex === photos.length - 1 && newX < 0)) {
+          translateX.setValue(newX * 0.3); // Resistance at edges
+        } else {
+          translateX.setValue(newX);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const wasHorizontalLocked = horizontalLocked;
+        horizontalLocked = false;
+        if (!wasHorizontalLocked) {
+          // Tap or vertical-only gesture — leave position untouched.
+          return;
+        }
+        const { dx, vx } = gestureState;
+        const isSwipeLeft = dx < -SWIPE_THRESHOLD || vx < -VELOCITY_THRESHOLD;
+        const isSwipeRight = dx > SWIPE_THRESHOLD || vx > VELOCITY_THRESHOLD;
 
-      if (isSwipeLeft) {
-        const moved = goToNext();
-        if (!moved) resetSwipePosition();
-        return;
-      }
+        if (isSwipeLeft) {
+          const moved = goToNext();
+          if (!moved) resetSwipePosition();
+          return;
+        }
 
-      if (isSwipeRight) {
-        const moved = goToPrevious();
-        if (!moved) resetSwipePosition();
-        return;
-      }
+        if (isSwipeRight) {
+          const moved = goToPrevious();
+          if (!moved) resetSwipePosition();
+          return;
+        }
 
-      resetSwipePosition();
-    },
-    onPanResponderTerminationRequest: () => false,
-  }), [currentIndex, goToNext, goToPrevious, isHorizontalSwipeIntent, photos.length, resetSwipePosition, translateX]);
+        resetSwipePosition();
+      },
+      onPanResponderTerminate: () => {
+        horizontalLocked = false;
+        resetSwipePosition();
+      },
+      onPanResponderTerminationRequest: () => false,
+    });
+  }, [currentIndex, goToNext, goToPrevious, isHorizontalSwipeIntent, photos.length, resetSwipePosition, translateX]);
 
   const formatDate = (timestamp) => {
     if (!timestamp) return 'Unknown date';
