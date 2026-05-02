@@ -1,7 +1,11 @@
 const TIME_24H_REGEX = /^([01]?\d|2[0-3]):([0-5]\d)$/;
 const TIME_12H_REGEX = /^(\d{1,2}):([0-5]\d)\s*([AP]M)$/;
-const ISO_DATE_REGEX = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;
-const UK_DATE_REGEX = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+// Date strings must match the project date contract (docs/date-contract.md):
+// strict zero-padded UK (dd/MM/yyyy) or ISO (yyyy-MM-dd). Looser shapes are
+// rejected so ambiguous inputs like "1/2/2026" cannot silently parse and
+// drive a wrong pickup countdown on the home screen.
+const ISO_DATE_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
+const UK_DATE_REGEX = /^(\d{2})\/(\d{2})\/(\d{4})$/;
 
 const normalizePickupTimeInput = (value) => {
   if (typeof value !== 'string') return '';
