@@ -10,12 +10,22 @@ import appMetadataModule from './appMetadata';
 // Configure how notifications behave when the app is open
 const { resolveAppVersionMetadata } = appMetadataModule;
 
+// Foreground presentation contract.
+// expo-notifications >=0.27 split the iOS foreground display flag in two
+// (`shouldShowBanner` for the heads-up banner and `shouldShowList` for the
+// notification center entry); `shouldShowAlert` is only honored as a legacy
+// fallback. Emitting all three keeps banners visible on the SDK we ship
+// (~0.32) and on any older host that still consumes `shouldShowAlert`.
+export const buildForegroundNotificationPresentation = () => ({
+  shouldShowBanner: true,
+  shouldShowList: true,
+  shouldShowAlert: true,
+  shouldPlaySound: true,
+  shouldSetBadge: false,
+});
+
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async () => buildForegroundNotificationPresentation(),
 });
 
 // ==================== VALIDATION HELPERS ====================

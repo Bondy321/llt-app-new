@@ -18,6 +18,7 @@ const buildNotificationService = ({
 } = {}) => {
   const updates = [];
   const refPaths = [];
+  const handlerRegistrations = [];
   let permissionStatus = permission;
 
   Module._load = function mocked(request, parent, isMain) {
@@ -32,7 +33,9 @@ const buildNotificationService = ({
           PROVISIONAL: 3,
           EPHEMERAL: 4,
         },
-        setNotificationHandler: () => {},
+        setNotificationHandler: (handler) => {
+          handlerRegistrations.push(handler);
+        },
         setNotificationChannelAsync: async () => {},
         getPermissionsAsync: async () => ({ status: permissionStatus }),
         requestPermissionsAsync: async () => ({ status: permissionStatus }),
@@ -90,7 +93,13 @@ const buildNotificationService = ({
 
   delete require.cache[require.resolve('../services/notificationService')];
   const service = require('../services/notificationService');
-  return { service, updates, refPaths, setPermission: (next) => { permissionStatus = next; } };
+  return {
+    service,
+    updates,
+    refPaths,
+    handlerRegistrations,
+    setPermission: (next) => { permissionStatus = next; },
+  };
 };
 
 test.after(() => {
@@ -314,4 +323,31 @@ test('saveUserPreferences writes to authenticated uid when provided userId is pr
   assert.equal(result.success, true);
   assert.ok(refPaths.includes('users/auth-uid-99'));
   assert.equal(refPaths.includes('users/stable-passenger-123'), false);
+});
+
+test('buildForegroundNotificationPresentation emits both modern and legacy iOS display flags', () => {
+  const { service } = buildNotificationService();
+
+  const presentation = service.buildForegroundNotificationPresentation();
+
+  // expo-notifications >=0.27 requires shouldShowBanner / shouldShowList to
+  // surface foreground heads-up alerts on iOS 14+. shouldShowAlert is kept
+  // for backwards compatibility with hosts pinned to older SDKs. Removing
+  // any of these would silently suppress chat / itinerary banners on iOS.
+  assert.equal(presentation.shouldShowBanner, true);
+  assert.equal(presentation.shouldShowList, true);
+  assert.equal(presentation.shouldShowAlert, true);
+  assert.equal(presentation.shouldPlaySound, true);
+  assert.equal(presentation.shouldSetBadge, false);
+});
+
+test('module load installs a foreground handler that returns the canonical presentation contract', async () => {
+  const { service, handlerRegistrations } = buildNotificationService();
+
+  assert.equal(handlerRegistrations.length, 1, 'expected setNotificationHandler to be called exactly once on import');
+  const [registration] = handlerRegistrations;
+  assert.equal(typeof registration?.handleNotification, 'function');
+
+  const handled = await registration.handleNotification();
+  assert.deepEqual(handled, service.buildForegroundNotificationPresentation());
 });
