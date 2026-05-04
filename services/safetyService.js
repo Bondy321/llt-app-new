@@ -130,44 +130,52 @@ export const EVENT_STATUS = {
 // Offline queue storage key
 const OFFLINE_QUEUE_KEY = '@LLT:safetyOfflineQueue';
 
-const writeAuxiliarySafetyLogs = async (payload, eventId) => {
-  const auxiliaryWrites = [];
+// Cap retries so a permanently-bad payload (e.g. revoked tour, stale auth)
+// can't loop forever on every reconnect.
+const MAX_REPLAY_ATTEMPTS = 5;
+
+// In-flight processOfflineQueue promise. Prevents duplicate ops alerts when
+// NetInfo flips connectivity rapidly and several listeners fire at once.
+let replayLock = null;
+
+const generateSafetyEventId = () =>
+  `safety_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+
+const normalizeEventId = (candidate) =>
+  typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
+
+// Build the absolute-path multi-location update that delivers a safety event
+// to every audience in a single atomic Firebase write. Reusing the same
+// `eventId` across audiences makes retries idempotent: a second write to the
+// same key is an upsert, not a duplicate record.
+const buildSafetyMultiPathUpdates = ({ payload, eventId }) => {
+  if (!eventId) {
+    throw new Error('Safety event id is required for atomic write');
+  }
+
+  const userId = payload.userId || 'anonymous';
+  const updates = {};
+
+  updates[`logs/${userId}/safety/${eventId}`] = payload;
 
   if (payload.tourId) {
-    const tourRef = realtimeDb.ref(`tours/${payload.tourId}/safetyAlerts`).push();
-    auxiliaryWrites.push(
-      tourRef.set({
-        ...payload,
-        eventId,
-      })
-    );
+    updates[`tours/${payload.tourId}/safetyAlerts/${eventId}`] = {
+      ...payload,
+      eventId,
+    };
   }
 
   if (payload.isSOS || payload.severity === SEVERITY_LEVELS.CRITICAL) {
-    const globalRef = realtimeDb.ref('globalSafetyAlerts').push();
-    auxiliaryWrites.push(
-      globalRef.set({
-        ...payload,
-        eventId,
-        tourAlertId: payload.tourId ? `tours/${payload.tourId}/safetyAlerts` : null,
-      })
-    );
-  }
-
-  if (!auxiliaryWrites.length) return;
-
-  const results = await Promise.allSettled(auxiliaryWrites);
-  const rejectedCount = results.filter((result) => result.status === 'rejected').length;
-
-  if (rejectedCount > 0) {
-    await logger.warn('Safety', 'Safety event logged with partial visibility', {
+    updates[`globalSafetyAlerts/${eventId}`] = {
+      ...payload,
       eventId,
-      rejectedCount,
-      tourId: payload.tourId,
-      severity: payload.severity,
-      isSOS: payload.isSOS,
-    });
+      tourAlertId: payload.tourId
+        ? `tours/${payload.tourId}/safetyAlerts/${eventId}`
+        : null,
+    };
   }
+
+  return updates;
 };
 
 // Build standardized payload
@@ -209,7 +217,10 @@ const buildPayload = ({
   userId: userId || 'anonymous',
 });
 
-// Log a safety event to Firebase
+// Log a safety event to Firebase as a single atomic multi-path write so the
+// user log, tour alert, and (for SOS/CRITICAL) global alert either all land
+// or none does. A partial write here would leave operations dispatchers
+// blind to an SOS that the passenger believes was sent.
 export async function logSafetyEvent(params) {
   const {
     userId,
@@ -223,9 +234,11 @@ export async function logSafetyEvent(params) {
     coords = null,
     attachments = [],
     isSOS = false,
+    eventId: providedEventId,
   } = params;
 
   const sanitizedUserId = userId || 'anonymous';
+  const eventId = normalizeEventId(providedEventId) || generateSafetyEventId();
   const payload = buildPayload({
     userId: sanitizedUserId,
     bookingId,
@@ -241,91 +254,158 @@ export async function logSafetyEvent(params) {
   });
 
   try {
-    // Write to user's safety log
-    const userRef = realtimeDb.ref(`logs/${sanitizedUserId}/safety`).push();
-    await userRef.set(payload);
-
-    await writeAuxiliarySafetyLogs(payload, userRef.key);
+    const updates = buildSafetyMultiPathUpdates({ payload, eventId });
+    await realtimeDb.ref().update(updates);
 
     await logger.warn('Safety', 'Safety event recorded', {
       category,
       severity,
       isSOS,
       tourId,
+      eventId,
     });
 
-    return { success: true, eventId: userRef.key, payload };
+    return { success: true, eventId, payload };
   } catch (error) {
-    await logger.error('Safety', 'Failed to log safety event', { error: error.message });
+    await logger.error('Safety', 'Failed to log safety event; queuing for retry', {
+      error: error.message,
+      eventId,
+    });
 
-    // Queue for offline retry
-    await queueOfflineSafetyEvent(payload);
+    // Persist with the same eventId so the eventual replay overwrites
+    // the same Firebase keys instead of producing duplicate records.
+    await queueOfflineSafetyEvent({ ...payload, eventId });
 
     throw error;
   }
 }
 
-// Queue safety events when offline
+// Queue safety events when offline. Idempotent: re-queueing the same eventId
+// replaces the prior entry rather than stacking duplicates.
 export async function queueOfflineSafetyEvent(payload) {
   try {
     const existingQueue = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
-    const queue = existingQueue ? JSON.parse(existingQueue) : [];
-    queue.push({
+    const parsed = existingQueue ? JSON.parse(existingQueue) : [];
+    const queue = Array.isArray(parsed) ? parsed : [];
+
+    const eventId = normalizeEventId(payload?.eventId) || generateSafetyEventId();
+    const previousIndex = queue.findIndex((entry) => entry?.eventId === eventId);
+    const previousAttempts = previousIndex >= 0
+      ? Number(queue[previousIndex]?.attempts) || 0
+      : 0;
+
+    const queuedEntry = {
       ...payload,
-      queuedAt: new Date().toISOString(),
-    });
+      eventId,
+      queuedAt: payload?.queuedAt || new Date().toISOString(),
+      attempts: previousAttempts,
+    };
+
+    if (previousIndex >= 0) {
+      queue[previousIndex] = queuedEntry;
+    } else {
+      queue.push(queuedEntry);
+    }
+
     await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
-    await logger.info('Safety', 'Event queued for offline retry', { queueLength: queue.length });
+    await logger.info('Safety', 'Event queued for offline retry', {
+      queueLength: queue.length,
+      eventId,
+    });
   } catch (error) {
     await logger.error('Safety', 'Failed to queue offline event', { error: error.message });
   }
 }
 
-// Process offline queue when back online
+// Process offline queue when back online. Single-flight: a second concurrent
+// caller short-circuits so we never double-publish ops alerts when NetInfo
+// flips and several listeners fire in the same tick.
 export async function processOfflineQueue(userId) {
-  try {
-    const existingQueue = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
-    if (!existingQueue) return { processed: 0, failed: 0 };
-
-    const queue = JSON.parse(existingQueue);
-    if (queue.length === 0) return { processed: 0, failed: 0 };
-
-    let processed = 0;
-    let failed = 0;
-    const failedEvents = [];
-
-    for (const event of queue) {
-      try {
-        const sanitizedUserId = userId || event.userId || 'anonymous';
-        const ref = realtimeDb.ref(`logs/${sanitizedUserId}/safety`).push();
-        await ref.set({
-          ...event,
-          processedFromQueue: true,
-          originalTimestamp: event.timestamp,
-          timestamp: new Date().toISOString(),
-        });
-
-        await writeAuxiliarySafetyLogs(event, ref.key);
-        processed++;
-      } catch (error) {
-        failed++;
-        failedEvents.push(event);
-      }
-    }
-
-    // Update queue with only failed events
-    if (failedEvents.length > 0) {
-      await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(failedEvents));
-    } else {
-      await AsyncStorage.removeItem(OFFLINE_QUEUE_KEY);
-    }
-
-    await logger.info('Safety', 'Offline queue processed', { processed, failed });
-    return { processed, failed };
-  } catch (error) {
-    await logger.error('Safety', 'Failed to process offline queue', { error: error.message });
-    return { processed: 0, failed: 0, error: error.message };
+  if (replayLock) {
+    return { processed: 0, failed: 0, dropped: 0, alreadyRunning: true };
   }
+
+  replayLock = (async () => {
+    try {
+      const existingQueue = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
+      if (!existingQueue) return { processed: 0, failed: 0, dropped: 0 };
+
+      const parsedQueue = JSON.parse(existingQueue);
+      const queue = Array.isArray(parsedQueue) ? parsedQueue : [];
+      if (queue.length === 0) return { processed: 0, failed: 0, dropped: 0 };
+
+      let processed = 0;
+      let failed = 0;
+      let dropped = 0;
+      const remaining = [];
+
+      for (const event of queue) {
+        const sanitizedUserId = userId || event?.userId || 'anonymous';
+        const eventId = normalizeEventId(event?.eventId) || generateSafetyEventId();
+        const attemptsSoFar = (Number(event?.attempts) || 0) + 1;
+
+        try {
+          const replayPayload = {
+            ...event,
+            userId: sanitizedUserId,
+            processedFromQueue: true,
+            originalTimestamp: event?.timestamp,
+            timestamp: new Date().toISOString(),
+          };
+          delete replayPayload.attempts;
+          delete replayPayload.queuedAt;
+          delete replayPayload.lastError;
+          delete replayPayload.lastAttemptAt;
+          delete replayPayload.eventId;
+
+          const updates = buildSafetyMultiPathUpdates({
+            payload: replayPayload,
+            eventId,
+          });
+          await realtimeDb.ref().update(updates);
+          processed++;
+        } catch (error) {
+          if (attemptsSoFar >= MAX_REPLAY_ATTEMPTS) {
+            dropped++;
+            await logger.fatal('Safety', 'Dropping safety event after max retries', {
+              eventId,
+              attempts: attemptsSoFar,
+              error: error.message,
+              category: event?.category,
+              severity: event?.severity,
+              isSOS: event?.isSOS,
+              tourId: event?.tourId,
+            });
+          } else {
+            failed++;
+            remaining.push({
+              ...event,
+              eventId,
+              attempts: attemptsSoFar,
+              lastError: error.message,
+              lastAttemptAt: new Date().toISOString(),
+            });
+          }
+        }
+      }
+
+      if (remaining.length > 0) {
+        await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(remaining));
+      } else {
+        await AsyncStorage.removeItem(OFFLINE_QUEUE_KEY);
+      }
+
+      await logger.info('Safety', 'Offline queue processed', { processed, failed, dropped });
+      return { processed, failed, dropped };
+    } catch (error) {
+      await logger.error('Safety', 'Failed to process offline queue', { error: error.message });
+      return { processed: 0, failed: 0, dropped: 0, error: error.message };
+    } finally {
+      replayLock = null;
+    }
+  })();
+
+  return replayLock;
 }
 
 // Update live location sharing status
