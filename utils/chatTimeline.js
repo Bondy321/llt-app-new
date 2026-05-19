@@ -130,6 +130,7 @@ const formatChatTimestamp = (timestamp) => {
 };
 
 const resolveOwnership = (message, isMessageOwned) => {
+  if (!message || typeof message !== 'object') return false;
   if (typeof isMessageOwned === 'function') return Boolean(isMessageOwned(message));
   return false;
 };
