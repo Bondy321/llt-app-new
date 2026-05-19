@@ -35,6 +35,16 @@ const MAX_CAPTION_LENGTH = 500;
 const MAX_TYPING_INDICATOR_AGE_MS = 10000;
 const MAX_PRESENCE_AGE_MS = 300000; // 5 minutes
 const CLEANUP_TYPING_DELAY_MS = 10000;
+const DEFAULT_LIVE_MESSAGE_LIMIT = 80;
+const DEFAULT_PAGE_MESSAGE_LIMIT = 40;
+
+const normalizeMessageLimit = (limit, fallback) => {
+  const numericLimit = Number(limit);
+  if (!Number.isFinite(numericLimit)) return fallback;
+  const integerLimit = Math.floor(numericLimit);
+  if (integerLimit <= 0) return fallback;
+  return Math.min(integerLimit, 250);
+};
 
 const parseTimestampToMillis = (timestamp) => {
   if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
@@ -106,9 +116,11 @@ const getReactionEmojiReadRef = (db, tourId, messageId, emoji) =>
 
 const normalizeMessageTimestamp = (message = {}) => {
   const timestampMs = parseTimestampToMillis(message.timestamp);
+  const timestampRaw = message.timestampRaw ?? message.timestamp ?? null;
   return {
     ...message,
     reactions: normalizeReactions(message.reactions),
+    timestampRaw,
     timestamp: timestampMs ?? message.timestamp ?? null,
     timestampMs,
   };
@@ -379,6 +391,35 @@ const buildMessagesFromSnapshot = (snapshot) => {
 
   return messages;
 };
+
+const getChatMessagesPath = (tourId, scope = 'group') => {
+  const validatedTourId = validateTourId(tourId);
+  return scope === 'internal'
+    ? `internal_chats/${validatedTourId}/messages`
+    : `chats/${validatedTourId}/messages`;
+};
+
+const buildTimestampQuery = (messagesRef, {
+  limit,
+  beforeTimestamp = null,
+} = {}) => {
+  const safeLimit = normalizeMessageLimit(limit, DEFAULT_LIVE_MESSAGE_LIMIT);
+  let queryRef = typeof messagesRef?.orderByChild === 'function'
+    ? messagesRef.orderByChild('timestamp')
+    : messagesRef;
+
+  if (beforeTimestamp !== null && beforeTimestamp !== undefined && typeof queryRef?.endAt === 'function') {
+    queryRef = queryRef.endAt(beforeTimestamp);
+  }
+
+  if (typeof queryRef?.limitToLast === 'function') {
+    queryRef = queryRef.limitToLast(safeLimit);
+  }
+
+  return queryRef;
+};
+
+const readMessagesFromSnapshot = (snapshot) => buildMessagesFromSnapshot(snapshot);
 
 // ==================== SEND MESSAGES ====================
 
@@ -1021,7 +1062,7 @@ const subscribeToPresence = (tourId, onPresenceUpdate, dbInstance = realtimeDb) 
 // ==================== MESSAGE SUBSCRIPTIONS ====================
 
 // Subscribe to chat messages for a tour
-const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtimeDb) => {
+const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtimeDb, options = {}) => {
   try {
     // Validate inputs
     const validatedTourId = validateTourId(tourId);
@@ -1035,10 +1076,13 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtime
     }
 
     const messagesRef = db.ref(`chats/${validatedTourId}/messages`);
+    const messagesQuery = buildTimestampQuery(messagesRef, {
+      limit: normalizeMessageLimit(options.limit, DEFAULT_LIVE_MESSAGE_LIMIT),
+    });
 
-    const listener = messagesRef.on('value', (snapshot) => {
+    const listener = messagesQuery.on('value', (snapshot) => {
       try {
-        const messages = buildMessagesFromSnapshot(snapshot);
+        const messages = readMessagesFromSnapshot(snapshot);
         onMessagesUpdate(messages);
       } catch (error) {
         console.error('Error processing chat messages snapshot:', error);
@@ -1052,7 +1096,8 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtime
     // Return unsubscribe function
     return () => {
       try {
-        messagesRef.off('value', listener);
+        const refForOff = typeof messagesQuery?.off === 'function' ? messagesQuery : messagesRef;
+        refForOff.off('value', listener);
       } catch (error) {
         console.warn('Error unsubscribing from chat messages', error);
       }
@@ -1064,7 +1109,7 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtime
 };
 
 // Subscribe to internal driver chat messages for a tour
-const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance = realtimeDb) => {
+const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance = realtimeDb, options = {}) => {
   const db = dbInstance || realtimeDb;
 
   if (!db || !tourId || typeof onMessagesUpdate !== 'function') {
@@ -1073,14 +1118,18 @@ const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance = re
   }
 
   const messagesRef = db.ref(`internal_chats/${tourId}/messages`);
+  const messagesQuery = buildTimestampQuery(messagesRef, {
+    limit: normalizeMessageLimit(options.limit, DEFAULT_LIVE_MESSAGE_LIMIT),
+  });
 
-  const listener = messagesRef.on('value', (snapshot) => {
-    onMessagesUpdate(buildMessagesFromSnapshot(snapshot));
+  const listener = messagesQuery.on('value', (snapshot) => {
+    onMessagesUpdate(readMessagesFromSnapshot(snapshot));
   });
 
   return () => {
     try {
-      messagesRef.off('value', listener);
+      const refForOff = typeof messagesQuery?.off === 'function' ? messagesQuery : messagesRef;
+      refForOff.off('value', listener);
     } catch (error) {
       console.warn('Error unsubscribing from internal driver chat messages', error);
     }
@@ -1188,6 +1237,70 @@ const getChatMessages = async (tourId, limit = 50, dbInstance = realtimeDb) => {
   }
 };
 
+const getChatMessagesPage = async ({
+  tourId,
+  scope = 'group',
+  beforeTimestamp = null,
+  beforeMessageId = null,
+  limit = DEFAULT_PAGE_MESSAGE_LIMIT,
+  dbInstance = realtimeDb,
+} = {}) => {
+  try {
+    const db = dbInstance || realtimeDb;
+    if (!db) return { success: false, error: 'Realtime database unavailable', messages: [] };
+
+    const safeLimit = normalizeMessageLimit(limit, DEFAULT_PAGE_MESSAGE_LIMIT);
+    const overfetchLimit = safeLimit + 2;
+    const messagePath = getChatMessagesPath(tourId, scope);
+    const messagesRef = db.ref(messagePath);
+    const messagesQuery = buildTimestampQuery(messagesRef, {
+      limit: overfetchLimit,
+      beforeTimestamp,
+    });
+
+    const snapshot = await messagesQuery.once('value');
+    const allMessages = readMessagesFromSnapshot(snapshot);
+    const cursorMs = parseTimestampToMillis(beforeTimestamp);
+    const hasCursor = beforeTimestamp !== null && beforeTimestamp !== undefined;
+
+    const olderMessages = hasCursor
+      ? allMessages.filter((message) => {
+        if (!message || message.id === beforeMessageId) return false;
+        const messageMs = message.timestampMs ?? parseTimestampToMillis(message.timestamp);
+        if (!Number.isFinite(cursorMs) || !Number.isFinite(messageMs)) {
+          return message.id !== beforeMessageId;
+        }
+        return messageMs <= cursorMs;
+      })
+      : allMessages;
+
+    const pageMessages = olderMessages.length > safeLimit
+      ? olderMessages.slice(olderMessages.length - safeLimit)
+      : olderMessages;
+    const nextCursor = pageMessages.length > 0
+      ? {
+        beforeTimestamp: pageMessages[0].timestampRaw ?? pageMessages[0].timestamp,
+        beforeMessageId: pageMessages[0].id,
+      }
+      : null;
+
+    return {
+      success: true,
+      messages: pageMessages,
+      hasMore: olderMessages.length > safeLimit,
+      nextCursor,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error?.message || 'Unable to load chat messages',
+      messages: [],
+      hasMore: false,
+      nextCursor: null,
+    };
+  }
+};
+
 // Copy message text to clipboard (returns text for clipboard API)
 const getMessageTextForCopy = (message) => {
   if (!message) return '';
@@ -1266,6 +1379,7 @@ module.exports = {
 
   // Utilities
   getChatMessages,
+  getChatMessagesPage,
   getMessageTextForCopy,
   deleteMessage,
 };

@@ -22,7 +22,7 @@
     "test:mobile:sync:contract": "NODE_ENV=test node --test tests/unifiedSyncStatus.test.js tests/manifestSyncState.test.js tests/passengerManifestSyncLabels.test.js tests/syncUiContract.test.js tests/uxAndBackend.contracts.test.js tests/tourHomeActionPlanner.test.js",
     "test:mobile:sync:engine": "NODE_ENV=test node --test tests/offlineSyncService.test.js __tests__/offlineSyncService.test.js __tests__/offlineQueueing.test.js __tests__/persistenceProvider.test.js",
     "test:mobile:services:booking": "NODE_ENV=test node --test tests/joinTour.test.js tests/driverAssignmentContract.test.js tests/assignDriverToTour.cleanup.test.js",
-    "test:mobile:services:chat": "NODE_ENV=test node --test __tests__/chatService.test.js __tests__/chatRetry.test.js __tests__/chatUnreadSummary.test.js __tests__/chatReplyNavigation.test.js tests/chatSearch.test.js",
+    "test:mobile:services:chat": "NODE_ENV=test node --test __tests__/chatService.test.js __tests__/chatRetry.test.js __tests__/chatUnreadSummary.test.js __tests__/chatReplyNavigation.test.js tests/chatSearch.test.js tests/chatTimeline.test.js",
     "test:mobile:services:photo": "NODE_ENV=test node --test __tests__/photoService.test.js __tests__/photoService.pagination.test.js tests/imageOptimizationService.test.js",
     "test:mobile:services:notifications": "NODE_ENV=test node --test tests/notificationService.behavior.test.js",
     "test:mobile:ui:date-time": "NODE_ENV=test node --test tests/pickupTimeParser.test.js tests/itineraryDateParser.test.js tests/timeUtils.test.js",
