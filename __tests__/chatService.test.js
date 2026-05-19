@@ -10,6 +10,7 @@ const {
   removeReaction,
   subscribeToChatMessages,
   subscribeToInternalDriverChat,
+  getChatMessagesPage,
 } = require('../services/chatService');
 
 const createMockRealtimeDb = (initialData = {}) => {
@@ -20,6 +21,43 @@ const createMockRealtimeDb = (initialData = {}) => {
   const normalizePath = (path = '') => path.split('/').filter(Boolean);
   const getValue = (path) => normalizePath(path).reduce((acc, part) => (acc == null ? undefined : acc[part]), data);
   const cloneValue = (value) => (value === undefined ? null : JSON.parse(JSON.stringify(value)));
+  const parseTime = (value) => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric)) return numeric;
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+  };
+  const applyQuery = (value, queryState = {}) => {
+    if (!value || typeof value !== 'object' || !queryState.orderByChild) {
+      return value;
+    }
+
+    let entries = Object.entries(value).sort((a, b) => {
+      const aValue = a[1]?.[queryState.orderByChild];
+      const bValue = b[1]?.[queryState.orderByChild];
+      const timeDelta = parseTime(aValue) - parseTime(bValue);
+      if (timeDelta !== 0) return timeDelta;
+      return a[0].localeCompare(b[0]);
+    });
+
+    if (queryState.endAt !== undefined) {
+      const endMs = parseTime(queryState.endAt);
+      entries = entries.filter(([, childValue]) => parseTime(childValue?.[queryState.orderByChild]) <= endMs);
+    }
+
+    if (queryState.limitToLast !== undefined) {
+      entries = entries.slice(-queryState.limitToLast);
+    }
+
+    return entries.reduce((accumulator, [key, childValue]) => {
+      accumulator[key] = childValue;
+      return accumulator;
+    }, {});
+  };
   const setValue = (path, value) => {
     const parts = normalizePath(path);
     if (parts.length === 0) {
@@ -43,8 +81,8 @@ const createMockRealtimeDb = (initialData = {}) => {
     }
   };
 
-  const buildSnapshot = (path) => {
-    const value = getValue(path);
+  const buildSnapshot = (path, queryState = {}) => {
+    const value = applyQuery(getValue(path), queryState);
     return {
       key: normalizePath(path).slice(-1)[0] || null,
       val: () => cloneValue(value),
@@ -99,7 +137,7 @@ const createMockRealtimeDb = (initialData = {}) => {
         notifyValueListeners(path);
       };
 
-      context.once = async () => buildSnapshot(path);
+      context.once = async () => buildSnapshot(path, context.queryState);
 
       context.transaction = async (updater) => {
         const current = cloneValue(getValue(path));
@@ -112,12 +150,14 @@ const createMockRealtimeDb = (initialData = {}) => {
         return { committed: true, snapshot: buildSnapshot(path) };
       };
 
+      context.queryState = {};
+
       context.on = (eventType, callback) => {
         assert.equal(eventType, 'value');
         const callbacks = listeners.get(path) || [];
         callbacks.push(callback);
         listeners.set(path, callbacks);
-        callback(buildSnapshot(path));
+        callback(buildSnapshot(path, context.queryState));
         return callback;
       };
 
@@ -127,8 +167,18 @@ const createMockRealtimeDb = (initialData = {}) => {
         listeners.set(path, callbacks.filter((candidate) => candidate !== callback));
       };
 
-      context.orderByChild = () => context;
-      context.limitToLast = () => context;
+      context.orderByChild = (child) => {
+        context.queryState.orderByChild = child;
+        return context;
+      };
+      context.endAt = (value) => {
+        context.queryState.endAt = value;
+        return context;
+      };
+      context.limitToLast = (limit) => {
+        context.queryState.limitToLast = limit;
+        return context;
+      };
 
       context.push = () => {
         const key = `msg-${context.pushCalls.length + 1}`;
@@ -463,6 +513,117 @@ test('reaction methods never write to reaction parent or message parent paths', 
 
   assert.ok(allWritePaths.every((path) => path.startsWith(`${leafPath}/`)));
   assertNoReactionParentWrites(mockDb.refCalls, 'tour-guard', 'msg-guard', '👍');
+});
+
+test('subscribeToChatMessages uses a bounded timestamp query by default', async () => {
+  const mockDb = createMockRealtimeDb({
+    chats: {
+      'tour-bounded': {
+        messages: {
+          old: { text: 'old', timestamp: '2026-03-18T09:00:00.000Z' },
+          recent: { text: 'recent', timestamp: '2026-03-18T10:00:00.000Z' },
+        },
+      },
+    },
+  });
+
+  const updates = [];
+  const unsubscribe = subscribeToChatMessages('tour-bounded', (messages) => {
+    updates.push(messages);
+  }, mockDb);
+
+  assert.equal(mockDb.refCalls[0].path, 'chats/tour-bounded/messages');
+  assert.equal(mockDb.refCalls[0].queryState.orderByChild, 'timestamp');
+  assert.equal(mockDb.refCalls[0].queryState.limitToLast, 80);
+  assert.deepEqual(updates[0].map((message) => message.id), ['old', 'recent']);
+  unsubscribe();
+});
+
+test('chat subscriptions accept custom limits and internal chat uses the same bounded query', async () => {
+  const mockDb = createMockRealtimeDb({
+    chats: {
+      'tour-limit': {
+        messages: {
+          first: { text: 'first', timestamp: '2026-03-18T09:00:00.000Z' },
+          second: { text: 'second', timestamp: '2026-03-18T09:01:00.000Z' },
+          third: { text: 'third', timestamp: '2026-03-18T09:02:00.000Z' },
+        },
+      },
+    },
+    internal_chats: {
+      'tour-limit': {
+        messages: {
+          intFirst: { text: 'first', timestamp: '2026-03-18T09:00:00.000Z' },
+          intSecond: { text: 'second', timestamp: '2026-03-18T09:01:00.000Z' },
+        },
+      },
+    },
+  });
+
+  const groupUpdates = [];
+  const internalUpdates = [];
+  const unsubscribeGroup = subscribeToChatMessages('tour-limit', (messages) => {
+    groupUpdates.push(messages);
+  }, mockDb, { limit: 2 });
+  const unsubscribeInternal = subscribeToInternalDriverChat('tour-limit', (messages) => {
+    internalUpdates.push(messages);
+  }, mockDb, { limit: 1 });
+
+  assert.equal(mockDb.refCalls[0].queryState.limitToLast, 2);
+  assert.deepEqual(groupUpdates[0].map((message) => message.id), ['second', 'third']);
+  assert.equal(mockDb.refCalls[1].path, 'internal_chats/tour-limit/messages');
+  assert.equal(mockDb.refCalls[1].queryState.orderByChild, 'timestamp');
+  assert.equal(mockDb.refCalls[1].queryState.limitToLast, 1);
+  assert.deepEqual(internalUpdates[0].map((message) => message.id), ['intSecond']);
+
+  unsubscribeGroup();
+  unsubscribeInternal();
+});
+
+test('getChatMessagesPage returns older normalized messages without duplicating cursor', async () => {
+  const mockDb = createMockRealtimeDb({
+    chats: {
+      'tour-page': {
+        messages: {
+          msg1: {
+            text: 'one',
+            timestamp: '2026-03-18T09:00:00.000Z',
+            reactions: { '👍': { userA: true } },
+          },
+          msg2: { text: 'two', timestamp: '2026-03-18T09:01:00.000Z' },
+          msg3: { text: 'three', timestamp: '2026-03-18T09:02:00.000Z' },
+          msg4: { text: 'four', timestamp: '2026-03-18T09:03:00.000Z' },
+        },
+      },
+    },
+  });
+
+  const result = await getChatMessagesPage({
+    tourId: 'tour-page',
+    beforeTimestamp: '2026-03-18T09:03:00.000Z',
+    beforeMessageId: 'msg4',
+    limit: 2,
+    dbInstance: mockDb,
+  });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.messages.map((message) => message.id), ['msg2', 'msg3']);
+  assert.deepEqual(result.messages[0].reactions, {});
+  assert.equal(result.hasMore, true);
+  assert.deepEqual(result.nextCursor, {
+    beforeTimestamp: '2026-03-18T09:01:00.000Z',
+    beforeMessageId: 'msg2',
+  });
+});
+
+test('getChatMessagesPage returns failure contract when database is unavailable', async () => {
+  const result = await getChatMessagesPage({
+    tourId: 'tour-page',
+    dbInstance: null,
+  });
+
+  assert.equal(result.success, false);
+  assert.deepEqual(result.messages, []);
 });
 
 test('subscribeToChatMessages normalizes reaction maps for the UI', async () => {

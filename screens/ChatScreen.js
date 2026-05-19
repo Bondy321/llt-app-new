@@ -34,6 +34,7 @@ import {
   subscribeToInternalDriverChat,
   subscribeToTypingIndicators,
   subscribeToPresence,
+  getChatMessagesPage,
   setTypingStatus,
   setOnlinePresence,
   toggleReaction,
@@ -51,6 +52,7 @@ import { auth } from '../firebase';
 import logger from '../services/loggerService';
 import { getCanonicalIdentity } from '../services/identityService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
+import SyncStatusBanner from '../components/SyncStatusBanner';
 const { buildChatSearchResults, normalizeSearchQuery } = require('../utils/chatSearch');
 const { buildUnreadSummary } = require('../utils/chatUnreadSummary');
 const {
@@ -58,6 +60,12 @@ const {
   collectMessageIdCandidates,
   resolveReplyTargetIndex,
 } = require('../utils/chatReplyNavigation');
+const {
+  buildChatTimelineItems,
+  formatChatTimestamp,
+  getOldestMessageCursor,
+  mergeMessagesById,
+} = require('../utils/chatTimeline');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -72,6 +80,8 @@ const SWIPE_REPLY_CUTOFF_TRIGGER = 156;
 const SWIPE_REPLY_READY_THRESHOLD = SWIPE_REPLY_ACTIVATION_THRESHOLD - 6;
 const SWIPE_REPLY_HINT_KEY_PREFIX = 'swipe_reply_hint_seen';
 const SCROLL_BOTTOM_THRESHOLD = 16;
+const LIVE_CHAT_MESSAGE_LIMIT = 80;
+const CHAT_PAGE_MESSAGE_LIMIT = 40;
 
 const SEARCH_FILTERS = [
   { key: 'all', label: 'All', icon: 'message-text-outline' },
@@ -827,6 +837,640 @@ const ImageViewerModal = ({ visible, imageUrl, onClose }) => {
   );
 };
 
+const AttachmentTray = AttachmentMenu;
+const ChatActionSheet = MessageActionMenu;
+
+const ChatHeader = React.memo(({
+  internalDriverChat,
+  isSearchOpen,
+  onBack,
+  onToggleSearch,
+  onSync,
+  onlineCount,
+  queueStats,
+}) => (
+  <LinearGradient
+    colors={internalDriverChat ? [COLORS.primaryDark, COLORS.primaryBlue] : [COLORS.primaryBlue, COLORS.primaryLight]}
+    start={{ x: 0, y: 0 }}
+    end={{ x: 1, y: 1 }}
+    style={styles.header}
+  >
+    <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7}>
+      <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
+    </TouchableOpacity>
+
+    <View style={styles.headerTitleContainer}>
+      <Text style={styles.headerTitle}>
+        {internalDriverChat ? 'Driver Chat' : 'Group Chat'}
+      </Text>
+    </View>
+
+    <View style={styles.headerRight}>
+      <TouchableOpacity
+        style={styles.syncNowBtn}
+        onPress={onToggleSearch}
+        accessibilityRole="button"
+        accessibilityLabel="Search chat messages"
+      >
+        <MaterialCommunityIcons name={isSearchOpen ? 'close' : 'magnify'} size={18} color={COLORS.white} />
+      </TouchableOpacity>
+      <View style={styles.onlineIndicator}>
+        <View style={[styles.onlineDot, { backgroundColor: COLORS.onlineIndicator }]} />
+        <Text style={styles.onlineCount}>{onlineCount} online</Text>
+      </View>
+      <TouchableOpacity
+        style={styles.syncNowBtn}
+        onPress={onSync}
+        accessibilityRole="button"
+        accessibilityLabel={queueStats.pending > 0 || queueStats.syncing > 0 ? 'Sync pending' : 'Messages sent'}
+      >
+        <MaterialCommunityIcons
+          name={queueStats.pending > 0 || queueStats.syncing > 0 ? 'check' : 'check-all'}
+          size={18}
+          color={COLORS.white}
+        />
+      </TouchableOpacity>
+    </View>
+  </LinearGradient>
+));
+
+const ChatFeedbackHost = React.memo(({
+  syncState,
+  syncOutcomeText,
+  lastSuccessfulSyncAt,
+  onRetrySync,
+  reactionFeedbackMessage,
+  replyJumpFeedbackMessage,
+  transientFeedback,
+  imageSendState,
+  onRetryImage,
+  draftRestored,
+}) => {
+  const feedbackRows = [];
+
+  if (reactionFeedbackMessage) {
+    feedbackRows.push({
+      key: 'reaction',
+      type: 'error',
+      icon: 'wifi-alert',
+      message: reactionFeedbackMessage,
+    });
+  }
+
+  if (replyJumpFeedbackMessage) {
+    feedbackRows.push({
+      key: 'reply-jump',
+      type: 'info',
+      icon: 'message-alert-outline',
+      message: replyJumpFeedbackMessage,
+    });
+  }
+
+  if (transientFeedback?.message) {
+    feedbackRows.push({
+      key: 'transient',
+      type: transientFeedback.type || 'info',
+      icon: transientFeedback.icon || 'information-outline',
+      message: transientFeedback.message,
+    });
+  }
+
+  if (draftRestored) {
+    feedbackRows.push({
+      key: 'draft',
+      type: 'info',
+      icon: 'content-save-edit-outline',
+      message: 'Draft restored',
+    });
+  }
+
+  if (imageSendState?.status && imageSendState.status !== 'idle') {
+    feedbackRows.push({
+      key: 'image',
+      type: imageSendState.status === 'failed' ? 'error' : imageSendState.status === 'success' ? 'success' : 'info',
+      icon: imageSendState.status === 'failed' ? 'alert-circle-outline' : imageSendState.status === 'success' ? 'check-circle-outline' : 'image',
+      message: imageSendState.message || 'Sending photo...',
+      actionLabel: imageSendState.status === 'failed' && imageSendState.retryUri ? 'Retry' : '',
+      onAction: imageSendState.status === 'failed' ? onRetryImage : null,
+      loading: imageSendState.status === 'uploading',
+    });
+  }
+
+  if (!syncState && feedbackRows.length === 0) return null;
+
+  return (
+    <View style={styles.feedbackHost}>
+      {syncState ? (
+        <SyncStatusBanner
+          state={syncState}
+          outcomeText={syncOutcomeText}
+          lastSyncAt={lastSuccessfulSyncAt}
+          onRetry={syncState?.canRetry ? onRetrySync : null}
+          compact
+        />
+      ) : null}
+      {feedbackRows.map((item) => (
+        <View
+          key={item.key}
+          style={[
+            styles.feedbackPill,
+            item.type === 'error' && styles.feedbackPillError,
+            item.type === 'success' && styles.feedbackPillSuccess,
+          ]}
+        >
+          {item.loading ? (
+            <ActivityIndicator size="small" color={COLORS.primaryBlue} />
+          ) : (
+            <MaterialCommunityIcons
+              name={item.icon}
+              size={16}
+              color={item.type === 'error' ? THEME.error : item.type === 'success' ? THEME.success : COLORS.primaryBlue}
+            />
+          )}
+          <Text
+            style={[
+              styles.feedbackPillText,
+              item.type === 'error' && styles.feedbackPillTextError,
+              item.type === 'success' && styles.feedbackPillTextSuccess,
+            ]}
+          >
+            {item.message}
+          </Text>
+          {item.actionLabel && item.onAction ? (
+            <TouchableOpacity style={styles.feedbackPillAction} onPress={item.onAction} activeOpacity={0.8}>
+              <Text style={styles.feedbackPillActionText}>{item.actionLabel}</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ))}
+    </View>
+  );
+});
+
+const ChatLoadingSkeleton = () => (
+  <View style={styles.skeletonContainer}>
+    {[0, 1, 2, 3, 4, 5].map((item) => (
+      <View
+        key={`chat-skeleton-${item}`}
+        style={[
+          styles.skeletonRow,
+          item % 3 === 2 ? styles.skeletonRowSelf : styles.skeletonRowOther,
+        ]}
+      >
+        <View style={[styles.skeletonBubble, item % 2 === 0 && styles.skeletonBubbleWide]} />
+      </View>
+    ))}
+  </View>
+);
+
+const LoadOlderControl = React.memo(({ visible, loading, onPress }) => {
+  if (!visible) return null;
+
+  return (
+    <TouchableOpacity
+      style={styles.loadOlderButton}
+      onPress={onPress}
+      activeOpacity={0.86}
+      disabled={loading}
+      accessibilityRole="button"
+      accessibilityLabel={loading ? 'Loading older messages' : 'Load older messages'}
+    >
+      {loading ? (
+        <ActivityIndicator size="small" color={COLORS.primaryBlue} />
+      ) : (
+        <MaterialCommunityIcons name="chevron-up" size={18} color={COLORS.primaryBlue} />
+      )}
+      <Text style={styles.loadOlderButtonText}>{loading ? 'Loading older messages' : 'Load older messages'}</Text>
+    </TouchableOpacity>
+  );
+});
+
+const ChatFloatingJump = React.memo(({
+  mode,
+  count,
+  summary,
+  bottomOffset,
+  onJumpToUnread,
+  onJumpToLatest,
+}) => {
+  if (mode === 'unread' && summary?.count) {
+    return (
+      <TouchableOpacity
+        style={[styles.floatingJumpCard, typeof bottomOffset === 'number' ? { bottom: bottomOffset } : null]}
+        onPress={onJumpToUnread}
+        activeOpacity={0.9}
+      >
+        <View style={styles.floatingJumpHeader}>
+          <MaterialCommunityIcons name="chat-alert-outline" size={18} color={COLORS.primaryBlue} />
+          <Text style={styles.floatingJumpTitle}>
+            {summary.count} unread message{summary.count > 1 ? 's' : ''}
+          </Text>
+        </View>
+        <Text style={styles.floatingJumpBody} numberOfLines={1}>
+          Latest from {summary.latestSender}{summary.latestRelativeLabel ? ` - ${summary.latestRelativeLabel}` : ''}
+        </Text>
+        <View style={styles.floatingJumpActions}>
+          <Text style={styles.floatingJumpActionText}>Jump to unread</Text>
+          <TouchableOpacity
+            style={styles.floatingJumpLatest}
+            onPress={onJumpToLatest}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.floatingJumpLatestText}>Latest</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    );
+  }
+
+  if (mode === 'new' && count > 0) {
+    return (
+      <TouchableOpacity
+        style={[styles.floatingJumpPill, typeof bottomOffset === 'number' ? { bottom: bottomOffset } : null]}
+        onPress={onJumpToLatest}
+        activeOpacity={0.9}
+      >
+        <MaterialCommunityIcons name="arrow-down" size={16} color={COLORS.white} />
+        <Text style={styles.floatingJumpPillText}>
+          {count} new message{count > 1 ? 's' : ''}
+        </Text>
+      </TouchableOpacity>
+    );
+  }
+
+  return null;
+});
+
+const MessageBubble = React.memo(({
+  message,
+  presentation,
+  activeSearchResultMessageId,
+  highlightedReplyTargetMessageId,
+  currentUserId,
+  canRetry,
+  isRetrying,
+  onRetry,
+  onLongPress,
+  onReactionPress,
+  onOpenImage,
+  onJumpToMessage,
+  renderHighlightedText,
+  formatTime,
+  parseMessageText,
+}) => {
+  const isSelf = Boolean(presentation?.isOwnMessage);
+  const isMsgDriver = !!message?.isDriver;
+  const isDeleted = !!message?.deleted;
+  const isImage = message?.type === 'image';
+  const isSearchMatch = !!activeSearchResultMessageId && activeSearchResultMessageId === message?.id;
+  const isReplyJumpTarget = !!highlightedReplyTargetMessageId && highlightedReplyTargetMessageId === message?.id;
+
+  if (isDeleted) {
+    return (
+      <View style={[styles.messageRow, isSelf ? styles.myMessageRow : styles.theirMessageRow]}>
+        <View style={[styles.messageBubble, styles.deletedMessageBubble]}>
+          <Text style={styles.deletedMessageText}>
+            <MaterialCommunityIcons name="cancel" size={14} color={COLORS.secondaryText} />
+            {' This message was deleted'}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  const textParts = parseMessageText(message?.text);
+  const hasLink = textParts.some((part) => part.type === 'link');
+  const clusterPosition = presentation?.clusterPosition || 'single';
+  const showSender = Boolean(presentation?.showSender);
+
+  return (
+    <Pressable onLongPress={() => onLongPress(message)} delayLongPress={300}>
+      <View style={[styles.messageRow, isSelf ? styles.myMessageRow : styles.theirMessageRow]}>
+        <View
+          style={[
+            styles.messageBubble,
+            isSelf ? styles.myMessageBubble : styles.theirMessageBubble,
+            isSelf && clusterPosition === 'first' && styles.myMessageBubbleClusterFirst,
+            isSelf && clusterPosition === 'middle' && styles.myMessageBubbleClusterMiddle,
+            isSelf && clusterPosition === 'last' && styles.myMessageBubbleClusterLast,
+            !isSelf && clusterPosition === 'first' && styles.theirMessageBubbleClusterFirst,
+            !isSelf && clusterPosition === 'middle' && styles.theirMessageBubbleClusterMiddle,
+            !isSelf && clusterPosition === 'last' && styles.theirMessageBubbleClusterLast,
+            isMsgDriver && !isSelf && styles.driverMessageBubble,
+            isImage && styles.imageMessageBubble,
+            isSearchMatch && styles.searchFocusedBubble,
+            isReplyJumpTarget && styles.replyJumpTargetBubble,
+          ]}
+        >
+          {showSender && (
+            <View style={styles.messageHeader}>
+              <Text
+                style={[
+                  styles.senderName,
+                  isMsgDriver && !isSelf && styles.driverSenderName,
+                ]}
+              >
+                {message?.senderName || 'Participant'}
+              </Text>
+              {isMsgDriver && (
+                <View style={styles.driverBadge}>
+                  <Text style={styles.driverBadgeText}>DRIVER</Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {message?.replyTo?.messageId && (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[styles.replyReferenceCard, isSelf && styles.replyReferenceCardSelf]}
+              onPress={() => onJumpToMessage(message.replyTo.messageId, message.replyTo.idempotencyKey)}
+            >
+              <View style={styles.replyReferenceAccent} />
+              <View style={styles.replyReferenceContent}>
+                <Text
+                  numberOfLines={1}
+                  style={[styles.replyReferenceSender, isSelf && styles.replyReferenceSenderSelf]}
+                >
+                  {message.replyTo.senderName || 'Participant'}
+                </Text>
+                <Text
+                  numberOfLines={2}
+                  style={[styles.replyReferencePreview, isSelf && styles.replyReferencePreviewSelf]}
+                >
+                  {message.replyTo.previewText || 'Message'}
+                </Text>
+              </View>
+              <MaterialCommunityIcons
+                name="arrow-top-right"
+                size={14}
+                color={isSelf ? COLORS.lightBlueAccent : COLORS.secondaryText}
+              />
+            </TouchableOpacity>
+          )}
+
+          {isImage && message?.imageUrl && (
+            <ImageMessage
+              imageUrl={message.imageUrl}
+              onPress={() => onOpenImage(message.imageUrl)}
+            />
+          )}
+
+          {!!message?.text && (
+            <Text style={[styles.messageText, isSelf && styles.myMessageText]}>
+              {textParts.map((part, index) => (
+                part.type === 'link' ? (
+                  <Text
+                    key={`${message.id}-link-${index}`}
+                    style={[styles.linkInMessage, isSelf && styles.linkInMessageSelf]}
+                    onPress={() => Linking.openURL(part.content)}
+                  >
+                    {part.content}
+                  </Text>
+                ) : (
+                  <Text key={`${message.id}-text-${index}`}>{renderHighlightedText(part.content, isSelf)}</Text>
+                )
+              ))}
+            </Text>
+          )}
+
+          {hasLink && !isSelf && (
+            <LinkPreview url={textParts.find((p) => p.type === 'link')?.content || ''} />
+          )}
+
+          <View style={styles.messageFooter}>
+            <Text style={[styles.timestamp, isSelf && styles.myTimestamp]}>
+              {formatTime(message?.timestamp)}
+            </Text>
+            <MessageStatus status={message?.status} isSelf={isSelf} />
+          </View>
+
+          {canRetry && (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[styles.failedMessageRetryChip, isRetrying && styles.failedMessageRetryChipDisabled]}
+              onPress={() => onRetry(message)}
+              disabled={isRetrying}
+              accessibilityRole="button"
+              accessibilityLabel={isRetrying ? 'Retrying message' : 'Retry sending failed message'}
+            >
+              {isRetrying ? (
+                <ActivityIndicator size="small" color={COLORS.white} />
+              ) : (
+                <MaterialCommunityIcons name="refresh" size={14} color={COLORS.white} />
+              )}
+              <Text style={styles.failedMessageRetryText}>
+                {isRetrying ? 'Retrying...' : 'Tap to retry'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          <MessageReactions
+            reactions={message?.reactions}
+            onReactionPress={onReactionPress}
+            messageId={message?.id}
+            currentUserId={currentUserId}
+          />
+        </View>
+      </View>
+    </Pressable>
+  );
+});
+
+const MessageRow = React.memo(({
+  item,
+  unreadAnchorMessageId,
+  onRowLayout,
+  onSwipeReply,
+  ...bubbleProps
+}) => {
+  if (item.type === 'date') return <DateSeparator date={item.date} />;
+  if (item.type === 'unread-separator') return <UnreadSeparator />;
+
+  const messageId = item.data?.id;
+  return (
+    <View
+      onLayout={(event) => {
+        if (!messageId) return;
+        onRowLayout(messageId, event.nativeEvent.layout);
+      }}
+    >
+      <SwipeToReplyMessageWrapper
+        onSwipeReply={() => onSwipeReply(item.data)}
+        disabled={!!item.data?.deleted}
+      >
+        <MessageBubble
+          message={item.data}
+          presentation={item.presentation}
+          {...bubbleProps}
+        />
+      </SwipeToReplyMessageWrapper>
+    </View>
+  );
+});
+
+const ChatTimeline = React.memo(({
+  loading,
+  messageListRef,
+  groupedMessages,
+  keyExtractor,
+  renderMessageRow,
+  renderEmptyMessages,
+  listBottomSpacerHeight,
+  onLayout,
+  onContentSizeChange,
+  onScroll,
+  onScrollBeginDrag,
+  onScrollToIndexFailed,
+  refreshing,
+  onRefresh,
+  hasMoreHistory,
+  loadingOlderMessages,
+  onLoadOlderMessages,
+}) => {
+  if (loading) {
+    return <ChatLoadingSkeleton />;
+  }
+
+  return (
+    <FlatList
+      ref={messageListRef}
+      contentContainerStyle={styles.messagesScrollContainer}
+      data={groupedMessages}
+      keyExtractor={keyExtractor}
+      renderItem={renderMessageRow}
+      ListEmptyComponent={renderEmptyMessages}
+      ListHeaderComponent={(
+        <LoadOlderControl
+          visible={hasMoreHistory && groupedMessages.length > 0}
+          loading={loadingOlderMessages}
+          onPress={onLoadOlderMessages}
+        />
+      )}
+      removeClippedSubviews={Platform.OS === 'android'}
+      initialNumToRender={20}
+      maxToRenderPerBatch={12}
+      updateCellsBatchingPeriod={24}
+      windowSize={7}
+      onLayout={onLayout}
+      onContentSizeChange={onContentSizeChange}
+      ListFooterComponent={<View style={{ height: listBottomSpacerHeight }} />}
+      onScroll={onScroll}
+      onScrollBeginDrag={onScrollBeginDrag}
+      scrollEventThrottle={16}
+      keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+      onScrollToIndexFailed={onScrollToIndexFailed}
+      refreshControl={(
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          colors={[COLORS.primaryBlue]}
+          tintColor={COLORS.primaryBlue}
+        />
+      )}
+    />
+  );
+});
+
+const ChatComposer = React.memo(({
+  composerBottomInset,
+  inputHeight,
+  inputText,
+  sending,
+  replyingToMessage,
+  showAttachmentMenu,
+  onComposerLayout,
+  onCancelReply,
+  onToggleAttachments,
+  onTextChange,
+  onInputContentSizeChange,
+  onSendMessage,
+}) => (
+  <View
+    style={[styles.inputDock, { paddingBottom: composerBottomInset }]}
+    onLayout={onComposerLayout}
+  >
+    <View style={styles.inputArea}>
+      {replyingToMessage?.messageId && (
+        <View style={styles.replyComposerCard}>
+          <View style={styles.replyComposerAccent} />
+          <View style={styles.replyComposerBody}>
+            <Text style={styles.replyComposerTitle}>
+              Replying to {replyingToMessage.senderName || 'Participant'}
+            </Text>
+            <Text numberOfLines={1} style={styles.replyComposerPreview}>
+              {replyingToMessage.previewText || 'Message'}
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.replyComposerClose}
+            onPress={onCancelReply}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel reply"
+          >
+            <MaterialCommunityIcons name="close" size={16} color={COLORS.secondaryText} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <TouchableOpacity
+        style={styles.attachButton}
+        onPress={onToggleAttachments}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={showAttachmentMenu ? 'Close attachments' : 'Open attachments'}
+      >
+        <MaterialCommunityIcons
+          name={showAttachmentMenu ? 'close' : 'plus-circle'}
+          size={28}
+          color={showAttachmentMenu ? COLORS.secondaryText : COLORS.primaryBlue}
+        />
+      </TouchableOpacity>
+
+      <TextInput
+        style={[
+          styles.textInput,
+          { height: Math.min(Math.max(44, inputHeight), 120) },
+        ]}
+        placeholder="Type your message..."
+        placeholderTextColor={COLORS.tertiaryText}
+        value={inputText}
+        onChangeText={onTextChange}
+        multiline
+        onContentSizeChange={onInputContentSizeChange}
+        selectionColor={COLORS.primaryBlue}
+        editable
+        blurOnSubmit={false}
+      />
+
+      <TouchableOpacity
+        style={[
+          styles.sendButton,
+          (sending || !inputText.trim()) && styles.sendButtonDisabled,
+        ]}
+        onPress={onSendMessage}
+        activeOpacity={0.7}
+        disabled={sending || !inputText.trim()}
+        accessibilityRole="button"
+        accessibilityLabel="Send message"
+      >
+        {sending ? (
+          <ActivityIndicator size="small" color={COLORS.sendButtonColor} />
+        ) : (
+          <MaterialCommunityIcons
+            name="send-circle"
+            size={38}
+            color={inputText.trim() === '' ? COLORS.tertiaryText : COLORS.sendButtonColor}
+          />
+        )}
+      </TouchableOpacity>
+    </View>
+  </View>
+));
+
 // ==================== MAIN CHAT SCREEN ====================
 export default function ChatScreen({
   onBack,
@@ -852,6 +1496,9 @@ export default function ChatScreen({
   const [composerHeight, setComposerHeight] = useState(0);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const [transientFeedback, setTransientFeedback] = useState(null);
 
   // Feature state
   const [typingUsers, setTypingUsers] = useState([]);
@@ -859,7 +1506,7 @@ export default function ChatScreen({
   const [newMessagesCount, setNewMessagesCount] = useState(0);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
-  const [uploadingImage, setUploadingImage] = useState(false);
+  const [imageSendState, setImageSendState] = useState({ status: 'idle', message: '', retryUri: null });
   const [lastSeenTimestamp, setLastSeenTimestamp] = useState(null);
   const [unreadAnchorY, setUnreadAnchorY] = useState(null);
   const [showJumpToUnread, setShowJumpToUnread] = useState(false);
@@ -981,16 +1628,19 @@ export default function ChatScreen({
     const keyboardLift = Platform.OS === 'android' && isKeyboardVisible ? Math.max(keyboardHeight - composerBottomInset, 0) : 0;
     return safeComposerHeight + keyboardLift + SPACING.sm;
   }, [composerHeight, composerBottomInset, isKeyboardVisible, keyboardHeight]);
+  const isImageUploading = imageSendState.status === 'uploading';
 
   // Refs
   const messageListRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const syncBannerTimeoutRef = useRef(null);
-  const lastMessageCountRef = useRef(0);
+  const transientFeedbackTimeoutRef = useRef(null);
+  const lastLiveMessageCursorRef = useRef(null);
   const lastReadMarkAtRef = useRef(0);
   const rowOffsetsRef = useRef({});
   const listViewportHeightRef = useRef(0);
   const listContentHeightRef = useRef(0);
+  const preserveScrollAfterPrependRef = useRef(null);
   const reactionFailureTimeoutRef = useRef(null);
   const inFlightReactionKeysRef = useRef(new Set());
   const pendingJumpIndexRef = useRef(null);
@@ -1123,29 +1773,52 @@ export default function ChatScreen({
   // Subscribe to messages
   useEffect(() => {
     if (!tourId) {
+      lastLiveMessageCursorRef.current = null;
+      setMessages([]);
+      setHasMoreHistory(false);
+      setNewMessagesCount(0);
       setLoading(false);
       return;
     }
 
+    lastLiveMessageCursorRef.current = null;
+    setMessages([]);
+    setHasMoreHistory(false);
+    setNewMessagesCount(0);
+    setLoading(true);
     const subscribeFn = internalDriverChat ? subscribeToInternalDriverChat : subscribeToChatMessages;
     const unsubscribe = subscribeFn(tourId, (newMessages) => {
-      setMessages(newMessages);
+      setMessages((prevMessages) => mergeMessagesById(prevMessages, newMessages));
+      setHasMoreHistory(newMessages.length >= LIVE_CHAT_MESSAGE_LIMIT);
       setLoading(false);
 
-      // Track new messages when not at bottom
-      if (!isAtBottom && newMessages.length > lastMessageCountRef.current) {
-        setNewMessagesCount((prev) => prev + (newMessages.length - lastMessageCountRef.current));
+      const latestMessage = newMessages[newMessages.length - 1] || null;
+      const latestCursor = latestMessage
+        ? `${latestMessage.id || 'unknown'}:${latestMessage.timestamp ?? latestMessage.timestampMs ?? ''}`
+        : null;
+      const previousCursor = lastLiveMessageCursorRef.current;
+
+      if (!isAtBottomRef.current && previousCursor && latestCursor && latestCursor !== previousCursor) {
+        const previousTimestamp = previousCursor.split(':').slice(1).join(':');
+        const previousMs = normalizeTimestamp(previousTimestamp);
+        const incomingCount = Number.isFinite(previousMs)
+          ? newMessages.filter((message) => {
+            const messageTs = getMessageTimestamp(message);
+            return Number.isFinite(messageTs) && messageTs > previousMs;
+          }).length
+          : 1;
+        setNewMessagesCount((prev) => prev + Math.max(incomingCount, 1));
       }
-      lastMessageCountRef.current = newMessages.length;
+      lastLiveMessageCursorRef.current = latestCursor;
 
       // Auto-scroll if at bottom
-      if (isAtBottom) {
+      if (isAtBottomRef.current) {
         scrollToBottom(true);
       }
-    });
+    }, undefined, { limit: LIVE_CHAT_MESSAGE_LIMIT });
 
     return () => unsubscribe();
-  }, [tourId, internalDriverChat, isAtBottom, scrollToBottom]);
+  }, [tourId, internalDriverChat, scrollToBottom, getMessageTimestamp]);
 
   // Restore persisted chat draft for this tour/user context
   useEffect(() => {
@@ -1264,6 +1937,24 @@ export default function ChatScreen({
     }
   }, []);
 
+  const clearTransientFeedbackTimeout = useCallback(() => {
+    if (transientFeedbackTimeoutRef.current) {
+      clearTimeout(transientFeedbackTimeoutRef.current);
+      transientFeedbackTimeoutRef.current = null;
+    }
+  }, []);
+
+  const showTransientFeedback = useCallback(({ type = 'info', message = '', icon = 'information-outline', autoDismissMs = 3600 } = {}) => {
+    if (!message) return;
+    clearTransientFeedbackTimeout();
+    setTransientFeedback({ type, message, icon });
+    if (autoDismissMs > 0) {
+      transientFeedbackTimeoutRef.current = setTimeout(() => {
+        setTransientFeedback(null);
+      }, autoDismissMs);
+    }
+  }, [clearTransientFeedbackTimeout]);
+
   const showReactionFailureFeedback = useCallback((message = 'Could not update reaction. Please try again.') => {
     clearReactionFailureTimeout();
     setReactionFeedbackMessage(message);
@@ -1375,8 +2066,9 @@ export default function ChatScreen({
     return () => {
       clearSyncBannerTimeout();
       clearReactionFailureTimeout();
+      clearTransientFeedbackTimeout();
     };
-  }, [clearReactionFailureTimeout, clearSyncBannerTimeout]);
+  }, [clearReactionFailureTimeout, clearSyncBannerTimeout, clearTransientFeedbackTimeout]);
 
   // Subscribe to offline queue state updates
   useEffect(() => {
@@ -1484,6 +2176,11 @@ export default function ChatScreen({
     if (requiresPassengerStableIdForWrites && !passengerStableId) {
       setInputText(trimmed);
       setSending(false);
+      showTransientFeedback({
+        type: 'warning',
+        icon: 'account-alert-outline',
+        message: 'Your chat identity is still syncing. Try again in a moment.',
+      });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       logger.warn('ChatScreen', 'chat_send_blocked_missing_sender_stable_id', {
         tourId,
@@ -1497,9 +2194,10 @@ export default function ChatScreen({
     logSenderIdentityPath();
 
     const optimisticTimestamp = new Date().toISOString();
-    const optimisticId = `local-${Date.now()}`;
+    const optimisticId = `${internalDriverChat ? 'int' : 'msg'}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const optimisticMessage = {
       id: optimisticId,
+      idempotencyKey: optimisticId,
       text: trimmed,
       senderName: userName,
       senderId: senderInfo.userId,
@@ -1517,21 +2215,23 @@ export default function ChatScreen({
     try {
       const sendFn = internalDriverChat ? sendInternalDriverMessage : sendMessage;
       const result = await sendFn(tourId, trimmed, senderInfo, undefined, {
+        messageId: optimisticId,
+        idempotencyKey: optimisticId,
         replyTo: replyingToMessage || undefined,
       });
 
       if (!result?.success || !result?.message) {
         setMessages((prev) => prev.filter((msg) => msg.id !== optimisticId));
         setInputText(trimmed);
+        showTransientFeedback({
+          type: 'warning',
+          icon: 'message-alert-outline',
+          message: result?.error || 'Message could not be sent. Please try again.',
+        });
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       } else {
         const confirmedMessage = { ...result.message, status: result.queued ? 'queued' : 'sent' };
-        setMessages((prev) => {
-          const filtered = prev.filter(
-            (msg) => msg.id !== optimisticId && msg.id !== confirmedMessage.id
-          );
-          return [...filtered, confirmedMessage];
-        });
+        setMessages((prev) => mergeMessagesById(prev, [confirmedMessage]));
 
         if (!result.queued && result.serverPromise?.finally) {
           result.serverPromise
@@ -1559,6 +2259,11 @@ export default function ChatScreen({
       console.error('Error sending message:', error);
       setMessages((prev) => prev.filter((msg) => msg.id !== optimisticId));
       setInputText(trimmed);
+      showTransientFeedback({
+        type: 'warning',
+        icon: 'message-alert-outline',
+        message: 'Message could not be sent. Please try again.',
+      });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       await refreshQueueStats();
@@ -1581,6 +2286,7 @@ export default function ChatScreen({
     replyingToMessage,
     logSenderIdentityPath,
     refreshQueueStats,
+    showTransientFeedback,
     scrollToBottom,
   ]);
 
@@ -1605,6 +2311,16 @@ export default function ChatScreen({
 
     if (requiresPassengerStableIdForWrites && !passengerStableId) {
       setMessages((prev) => prev.map((msg) => (msg.id === message.id ? { ...msg, status: 'failed' } : msg)));
+      setRetryingMessageIds((prev) => {
+        const next = { ...prev };
+        delete next[message.id];
+        return next;
+      });
+      showTransientFeedback({
+        type: 'warning',
+        icon: 'account-alert-outline',
+        message: 'Your chat identity is still syncing. Try again in a moment.',
+      });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       logger.warn('ChatScreen', 'chat_retry_blocked_missing_sender_stable_id', {
         tourId,
@@ -1625,15 +2341,17 @@ export default function ChatScreen({
 
       if (!result?.success || !result?.message) {
         setMessages((prev) => prev.map((msg) => (msg.id === message.id ? { ...msg, status: 'failed' } : msg)));
+        showTransientFeedback({
+          type: 'warning',
+          icon: 'message-alert-outline',
+          message: result?.error || 'Message could not be retried. Please try again.',
+        });
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         return;
       }
 
       const confirmedMessage = { ...result.message, status: result.queued ? 'queued' : 'sent' };
-      setMessages((prev) => {
-        const withoutRetried = prev.filter((msg) => msg.id !== message.id && msg.id !== confirmedMessage.id);
-        return [...withoutRetried, confirmedMessage];
-      });
+      setMessages((prev) => mergeMessagesById(prev.filter((msg) => msg.id !== message.id), [confirmedMessage]));
 
       if (!result.queued && result.serverPromise?.finally) {
         result.serverPromise
@@ -1659,6 +2377,11 @@ export default function ChatScreen({
     } catch (error) {
       console.error('Error retrying failed chat message:', error);
       setMessages((prev) => prev.map((msg) => (msg.id === message.id ? { ...msg, status: 'failed' } : msg)));
+      showTransientFeedback({
+        type: 'warning',
+        icon: 'message-alert-outline',
+        message: 'Message could not be retried. Please try again.',
+      });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setRetryingMessageIds((prev) => {
@@ -1679,6 +2402,7 @@ export default function ChatScreen({
     retryingMessageIds,
     logSenderIdentityPath,
     refreshQueueStats,
+    showTransientFeedback,
     tourId,
     userName,
   ]);
@@ -1714,51 +2438,15 @@ export default function ChatScreen({
     }
   }, [internalDriverChat, refreshQueueStats, showQueueSyncOutcome]);
 
-  // Image picker handler
-  const handlePickImage = useCallback(async () => {
-    setShowAttachmentMenu(false);
-
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      quality: 0.8,
-    });
-
-    if (!result.canceled && result.assets?.[0]) {
-      await handleSendImage(result.assets[0].uri);
-    }
-  }, []);
-
-  // Camera handler
-  const handleTakePhoto = useCallback(async () => {
-    setShowAttachmentMenu(false);
-
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      return;
-    }
-
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: false,
-      quality: 0.8,
-    });
-
-    if (!result.canceled && result.assets?.[0]) {
-      await handleSendImage(result.assets[0].uri);
-    }
-  }, []);
-
-  // Send image handler
   const handleSendImage = useCallback(
     async (imageUri) => {
-      setUploadingImage(true);
+      if (!imageUri || isImageUploading) return;
+
+      setImageSendState({
+        status: 'uploading',
+        message: 'Preparing photo...',
+        retryUri: imageUri,
+      });
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
       try {
@@ -1779,6 +2467,11 @@ export default function ChatScreen({
 
         if (uploadResult && uploadResult.url) {
           if (requiresPassengerStableIdForWrites && !passengerStableId) {
+            setImageSendState({
+              status: 'failed',
+              message: 'Your chat identity is still syncing. Try again in a moment.',
+              retryUri: imageUri,
+            });
             logger.warn('ChatScreen', 'chat_image_send_blocked_missing_sender_stable_id', {
               tourId,
               principalId: userId,
@@ -1790,20 +2483,40 @@ export default function ChatScreen({
           const senderInfo = buildChatSenderInfo();
           logSenderIdentityPath();
 
-          await sendImageMessage(tourId, uploadResult.url, '', senderInfo);
+          const result = await sendImageMessage(tourId, uploadResult.url, '', senderInfo);
+          if (!result?.success) {
+            throw new Error(result?.error || 'Image message could not be sent');
+          }
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          setImageSendState({
+            status: 'success',
+            message: 'Photo sent',
+            retryUri: null,
+          });
+          setTimeout(() => {
+            setImageSendState((prev) => (prev.status === 'success' ? { status: 'idle', message: '', retryUri: null } : prev));
+          }, 2400);
         } else {
+          setImageSendState({
+            status: 'failed',
+            message: 'Photo could not be uploaded. Try again.',
+            retryUri: imageUri,
+          });
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         }
       } catch (error) {
         console.error('Error sending image:', error);
+        setImageSendState({
+          status: 'failed',
+          message: 'Photo could not be sent. Try again.',
+          retryUri: imageUri,
+        });
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
-
-      setUploadingImage(false);
     },
     [
       buildChatSenderInfo,
+      isImageUploading,
       logSenderIdentityPath,
       passengerStableId,
       principalId,
@@ -1812,6 +2525,63 @@ export default function ChatScreen({
       userName,
     ]
   );
+
+  // Image picker handler
+  const handlePickImage = useCallback(async () => {
+    setShowAttachmentMenu(false);
+
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      showTransientFeedback({
+        type: 'warning',
+        icon: 'image-off-outline',
+        message: 'Gallery permission is needed to choose a photo.',
+      });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: false,
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets?.[0]) {
+      await handleSendImage(result.assets[0].uri);
+    }
+  }, [handleSendImage, showTransientFeedback]);
+
+  // Camera handler
+  const handleTakePhoto = useCallback(async () => {
+    setShowAttachmentMenu(false);
+
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      showTransientFeedback({
+        type: 'warning',
+        icon: 'camera-off-outline',
+        message: 'Camera permission is needed to take a photo.',
+      });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: false,
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets?.[0]) {
+      await handleSendImage(result.assets[0].uri);
+    }
+  }, [handleSendImage, showTransientFeedback]);
+
+  const handleRetryImageSend = useCallback(() => {
+    const retryUri = imageSendState.retryUri;
+    if (!retryUri || isImageUploading) return;
+    handleSendImage(retryUri);
+  }, [handleSendImage, imageSendState.retryUri, isImageUploading]);
 
   // Handle reaction
   const handleReaction = useCallback(
@@ -2012,16 +2782,61 @@ export default function ChatScreen({
     }
   }, [refreshQueueStats, showQueueSyncOutcome]);
 
+  const handleLoadOlderMessages = useCallback(async () => {
+    if (!tourId || loadingOlderMessages || messages.length === 0) return;
+
+    const cursor = getOldestMessageCursor(messages);
+    if (!cursor) {
+      setHasMoreHistory(false);
+      return;
+    }
+
+    preserveScrollAfterPrependRef.current = {
+      previousContentHeight: listContentHeightRef.current,
+      previousScrollY: currentScrollYRef.current,
+    };
+    setLoadingOlderMessages(true);
+
+    try {
+      const result = await getChatMessagesPage({
+        tourId,
+        scope: internalDriverChat ? 'internal' : 'group',
+        beforeTimestamp: cursor.beforeTimestamp,
+        beforeMessageId: cursor.beforeMessageId,
+        limit: CHAT_PAGE_MESSAGE_LIMIT,
+      });
+
+      if (!result?.success) {
+        preserveScrollAfterPrependRef.current = null;
+        showTransientFeedback({
+          type: 'warning',
+          icon: 'cloud-alert-outline',
+          message: result?.error || 'Older messages could not be loaded right now.',
+        });
+        return;
+      }
+
+      setHasMoreHistory(Boolean(result.hasMore));
+      if (Array.isArray(result.messages) && result.messages.length > 0) {
+        setMessages((prevMessages) => mergeMessagesById(result.messages, prevMessages));
+      } else {
+        preserveScrollAfterPrependRef.current = null;
+      }
+    } catch (error) {
+      preserveScrollAfterPrependRef.current = null;
+      showTransientFeedback({
+        type: 'warning',
+        icon: 'cloud-alert-outline',
+        message: 'Older messages could not be loaded right now.',
+      });
+    } finally {
+      setLoadingOlderMessages(false);
+    }
+  }, [internalDriverChat, loadingOlderMessages, messages, showTransientFeedback, tourId]);
+
   // Format time helper
   const formatTime = useCallback((timestamp) => {
-    const normalized = normalizeTimestamp(timestamp);
-    if (!normalized) return '';
-    const date = new Date(normalized);
-    return date.toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true,
-    });
+    return formatChatTimestamp(timestamp);
   }, []);
 
   // Parse message text for links
@@ -2059,35 +2874,12 @@ export default function ChatScreen({
     return unreadMessage?.id || null;
   }, [messages, lastSeenTimestamp, getMessageTimestamp]);
 
-  // Group messages by date
   const groupedMessages = useMemo(() => {
-    const groups = [];
-    let currentDate = null;
-    let unreadInjected = false;
-
-    messages.forEach((msg) => {
-      const msgTimestamp = getMessageTimestamp(msg);
-      const msgDate = msgTimestamp ? new Date(msgTimestamp).toDateString() : 'Unknown date';
-
-      if (msgDate !== currentDate) {
-        groups.push({
-          type: 'date',
-          id: `date-${msgDate}-${msgTimestamp ?? msg.timestamp ?? msg.id}`,
-          date: msgTimestamp ?? msg.timestamp,
-        });
-        currentDate = msgDate;
-      }
-
-      if (!unreadInjected && unreadAnchorMessageId && msg.id === unreadAnchorMessageId) {
-        groups.push({ type: 'unread-separator', id: `unread-${msg.id}` });
-        unreadInjected = true;
-      }
-
-      groups.push({ type: 'message', id: `message-${msg.id}`, data: msg });
+    return buildChatTimelineItems(messages, {
+      lastSeenTimestamp,
+      isMessageOwned: (message) => isMessageOwnedByCurrentSession(message, canonicalIdentity),
     });
-
-    return groups;
-  }, [messages, unreadAnchorMessageId]);
+  }, [messages, lastSeenTimestamp, canonicalIdentity]);
 
   const unreadAnchorIndex = useMemo(() => {
     if (!unreadAnchorMessageId) return -1;
@@ -2493,26 +3285,53 @@ export default function ChatScreen({
     return item.id;
   }, []);
 
-  const renderMessageRow = useCallback(({ item }) => {
-    if (item.type === 'date') return <DateSeparator date={item.date} />;
-    if (item.type === 'unread-separator') return <UnreadSeparator />;
+  const handleMessageRowLayout = useCallback((messageId, layout) => {
+    const { y, height } = layout;
+    rowOffsetsRef.current[messageId] = height;
+    if (messageId === unreadAnchorMessageId) {
+      setUnreadAnchorY(y);
+    }
+  }, [unreadAnchorMessageId]);
 
-    const messageId = item.data?.id;
+  const renderMessageRow = useCallback(({ item }) => {
     return (
-      <View
-        onLayout={(event) => {
-          if (!messageId) return;
-          const { y, height } = event.nativeEvent.layout;
-          rowOffsetsRef.current[messageId] = height;
-          if (messageId === unreadAnchorMessageId) {
-            setUnreadAnchorY(y);
-          }
-        }}
-      >
-        {renderMessage(item.data)}
-      </View>
+      <MessageRow
+        item={item}
+        unreadAnchorMessageId={unreadAnchorMessageId}
+        onRowLayout={handleMessageRowLayout}
+        onSwipeReply={(message) => startReplyComposer(message, 'swipe')}
+        activeSearchResultMessageId={activeSearchResultMessageId}
+        highlightedReplyTargetMessageId={highlightedReplyTargetMessageId}
+        currentUserId={principalId}
+        canRetry={item.type === 'message' ? canRetryFailedMessageForCurrentSession(item.data) : false}
+        isRetrying={item.type === 'message' ? !!retryingMessageIds[item.data?.id] : false}
+        onRetry={handleRetryFailedMessage}
+        onLongPress={handleMessageLongPress}
+        onReactionPress={handleReaction}
+        onOpenImage={setViewingImage}
+        onJumpToMessage={jumpToMessageById}
+        renderHighlightedText={renderHighlightedText}
+        formatTime={formatTime}
+        parseMessageText={parseMessageText}
+      />
     );
-  }, [renderMessage, unreadAnchorMessageId]);
+  }, [
+    activeSearchResultMessageId,
+    canRetryFailedMessageForCurrentSession,
+    formatTime,
+    handleMessageLongPress,
+    handleMessageRowLayout,
+    handleReaction,
+    handleRetryFailedMessage,
+    highlightedReplyTargetMessageId,
+    jumpToMessageById,
+    parseMessageText,
+    principalId,
+    renderHighlightedText,
+    retryingMessageIds,
+    startReplyComposer,
+    unreadAnchorMessageId,
+  ]);
 
   const renderEmptyMessages = useCallback(() => (
     <View style={styles.emptyContainer}>
@@ -2526,9 +3345,9 @@ export default function ChatScreen({
           color={COLORS.primaryBlue}
         />
       </LinearGradient>
-      <Text style={styles.emptyText}>Start the Conversation!</Text>
+      <Text style={styles.emptyText}>No messages yet</Text>
       <Text style={styles.emptySubtext}>
-        Say hello to your fellow travelers and tour guides
+        Say hello, share a useful update, or send a photo from the tour.
       </Text>
       <View style={styles.emptyTips}>
         <View style={styles.emptyTip}>
@@ -2565,53 +3384,18 @@ export default function ChatScreen({
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-      {/* Header */}
-      <LinearGradient
-        colors={internalDriverChat ? [COLORS.primaryDark, COLORS.primaryBlue] : [COLORS.primaryBlue, COLORS.primaryLight]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.header}
-      >
-        <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7}>
-          <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
-        </TouchableOpacity>
-
-        <View style={styles.headerTitleContainer}>
-          <Text style={styles.headerTitle}>
-            {internalDriverChat ? 'Driver Chat' : 'Group Chat'}
-          </Text>
-        </View>
-
-        <View style={styles.headerRight}>
-          <TouchableOpacity
-            style={styles.syncNowBtn}
-            onPress={() => {
-              setIsSearchOpen((prev) => !prev);
-              if (isSearchOpen) setSearchQuery('');
-            }}
-            accessibilityLabel="Search chat messages"
-          >
-            <MaterialCommunityIcons name={isSearchOpen ? 'close' : 'magnify'} size={18} color={COLORS.white} />
-          </TouchableOpacity>
-          <View style={styles.onlineIndicator}>
-            <View style={[styles.onlineDot, { backgroundColor: COLORS.onlineIndicator }]} />
-            <Text style={styles.onlineCount}>
-              {presenceInfo.onlineCount} online
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={styles.syncNowBtn}
-            onPress={handleManualSync}
-            accessibilityLabel={queueStats.pending > 0 || queueStats.syncing > 0 ? 'Sync pending' : 'Messages sent'}
-          >
-            <MaterialCommunityIcons
-              name={queueStats.pending > 0 || queueStats.syncing > 0 ? 'check' : 'check-all'}
-              size={18}
-              color={COLORS.white}
-            />
-          </TouchableOpacity>
-        </View>
-      </LinearGradient>
+      <ChatHeader
+        internalDriverChat={internalDriverChat}
+        isSearchOpen={isSearchOpen}
+        onBack={onBack}
+        onToggleSearch={() => {
+          setIsSearchOpen((prev) => !prev);
+          if (isSearchOpen) setSearchQuery('');
+        }}
+        onSync={handleManualSync}
+        onlineCount={presenceInfo.onlineCount}
+        queueStats={queueStats}
+      />
 
       {isSearchOpen && (
         <View style={styles.searchPanel}>
@@ -2714,232 +3498,128 @@ export default function ChatScreen({
         onDismiss={dismissSwipeReplyHint}
       />
 
-      {reactionFeedbackMessage ? (
-        <View style={styles.reactionFeedbackBanner}>
-          <MaterialCommunityIcons name="wifi-alert" size={16} color={COLORS.white} />
-          <Text style={styles.reactionFeedbackText}>{reactionFeedbackMessage}</Text>
-        </View>
-      ) : null}
-
-      {replyJumpFeedbackMessage ? (
-        <View style={styles.replyJumpFeedbackBanner}>
-          <MaterialCommunityIcons name="message-alert-outline" size={16} color={COLORS.white} />
-          <Text style={styles.replyJumpFeedbackText}>{replyJumpFeedbackMessage}</Text>
-        </View>
-      ) : null}
+      <ChatFeedbackHost
+        syncState={syncBannerContract}
+        syncOutcomeText={syncBannerOutcomeText}
+        lastSuccessfulSyncAt={lastSuccessfulSyncAt}
+        onRetrySync={() => handleManualSync({ retryFailedOnly: true })}
+        reactionFeedbackMessage={reactionFeedbackMessage}
+        replyJumpFeedbackMessage={replyJumpFeedbackMessage}
+        transientFeedback={transientFeedback}
+        imageSendState={imageSendState}
+        onRetryImage={handleRetryImageSend}
+        draftRestored={draftRestored}
+      />
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardAvoidingContainer}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
-        {/* Loading State */}
-        {loading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={COLORS.primaryBlue} />
-            <Text style={styles.loadingText}>Loading messages...</Text>
-          </View>
-        ) : (
-          <>
-            {/* Messages List */}
-            <FlatList
-              ref={messageListRef}
-              contentContainerStyle={styles.messagesScrollContainer}
-              data={groupedMessages}
-              keyExtractor={keyExtractor}
-              renderItem={renderMessageRow}
-              ListEmptyComponent={renderEmptyMessages}
-              removeClippedSubviews={false}
-              initialNumToRender={20}
-              maxToRenderPerBatch={12}
-              updateCellsBatchingPeriod={16}
-              windowSize={7}
-              onLayout={(event) => {
-                listViewportHeightRef.current = event.nativeEvent.layout.height;
-              }}
-              onContentSizeChange={(_, contentHeight) => {
-                listContentHeightRef.current = contentHeight;
-                if (isAtBottomRef.current) scrollToBottom(false);
-              }}
-              ListFooterComponent={<View style={{ height: listBottomSpacerHeight }} />}
-              onScroll={handleScroll}
-              onScrollBeginDrag={handleScrollBeginDrag}
-              scrollEventThrottle={16}
-              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-              onScrollToIndexFailed={({ index }) => {
-                const fallbackOffset = Math.max(index * ESTIMATED_MESSAGE_ROW_HEIGHT - 80, 0);
-                messageListRef.current?.scrollToOffset({ offset: fallbackOffset, animated: true });
+        <ChatTimeline
+          loading={loading}
+          messageListRef={messageListRef}
+          groupedMessages={groupedMessages}
+          keyExtractor={keyExtractor}
+          renderMessageRow={renderMessageRow}
+          renderEmptyMessages={renderEmptyMessages}
+          listBottomSpacerHeight={listBottomSpacerHeight}
+          onLayout={(event) => {
+            listViewportHeightRef.current = event.nativeEvent.layout.height;
+          }}
+          onContentSizeChange={(_, contentHeight) => {
+            const preserveRequest = preserveScrollAfterPrependRef.current;
+            const previousContentHeight = listContentHeightRef.current;
+            listContentHeightRef.current = contentHeight;
 
-                const pendingTargetIndex = pendingJumpIndexRef.current;
-                if (pendingTargetIndex == null || pendingTargetIndex !== index) {
-                  return;
-                }
+            if (preserveRequest) {
+              preserveScrollAfterPrependRef.current = null;
+              const delta = Math.max(contentHeight - preserveRequest.previousContentHeight, 0);
+              messageListRef.current?.scrollToOffset({
+                offset: preserveRequest.previousScrollY + delta,
+                animated: false,
+              });
+              return;
+            }
 
-                setTimeout(() => {
-                  messageListRef.current?.scrollToIndex({
-                    index: pendingTargetIndex,
-                    animated: true,
-                    viewPosition: 0.45,
-                  });
-                }, 120);
-              }}
-              refreshControl={
-                <RefreshControl
-                  refreshing={refreshing}
-                  onRefresh={handleRefresh}
-                  colors={[COLORS.primaryBlue]}
-                  tintColor={COLORS.primaryBlue}
-                />
-              }
-            />
+            if (isAtBottomRef.current && contentHeight >= previousContentHeight) {
+              scrollToBottom(false);
+            }
+          }}
+          onScroll={handleScroll}
+          onScrollBeginDrag={handleScrollBeginDrag}
+          onScrollToIndexFailed={({ index }) => {
+            const fallbackOffset = Math.max(index * ESTIMATED_MESSAGE_ROW_HEIGHT - 80, 0);
+            messageListRef.current?.scrollToOffset({ offset: fallbackOffset, animated: true });
 
-            {/* Typing Indicator */}
-            <TypingIndicator typingUsers={typingUsers} />
+            const pendingTargetIndex = pendingJumpIndexRef.current;
+            if (pendingTargetIndex == null || pendingTargetIndex !== index) {
+              return;
+            }
 
-            {/* New Messages Banner */}
-            <NewMessagesBanner
-              count={newMessagesCount}
-              bottomOffset={floatingUiBottomInset}
-              onPress={() => {
-                scrollToBottom(true);
-                setNewMessagesCount(0);
-              }}
-            />
+            setTimeout(() => {
+              messageListRef.current?.scrollToIndex({
+                index: pendingTargetIndex,
+                animated: true,
+                viewPosition: 0.45,
+              });
+            }, 120);
+          }}
+          refreshing={refreshing}
+          onRefresh={handleRefresh}
+          hasMoreHistory={hasMoreHistory}
+          loadingOlderMessages={loadingOlderMessages}
+          onLoadOlderMessages={handleLoadOlderMessages}
+        />
 
-            {showJumpToUnread && (
-              <>
-                <UnreadCatchUpCard
-                  summary={unreadSummary}
-                  bottomOffset={floatingUiBottomInset + 96}
-                  onJumpToUnread={jumpToUnread}
-                  onJumpToLatest={() => {
-                    scrollToBottom(true);
-                    markActiveChatRead({ force: true });
-                  }}
-                />
-                <TouchableOpacity
-                  style={[styles.jumpToUnreadFab, { bottom: floatingUiBottomInset + 52 }]}
-                  onPress={jumpToUnread}
-                  activeOpacity={0.85}
-                >
-                  <MaterialCommunityIcons name="message-badge" size={20} color={COLORS.white} />
-                  <Text style={styles.jumpToUnreadFabText}>Jump to unread</Text>
-                </TouchableOpacity>
-              </>
-            )}
+        {!loading && <TypingIndicator typingUsers={typingUsers} />}
 
-            {/* Attachment Menu */}
-            <AttachmentMenu
-              visible={showAttachmentMenu}
-              onClose={() => setShowAttachmentMenu(false)}
-              onPickImage={handlePickImage}
-              onTakePhoto={handleTakePhoto}
-            />
-
-            {/* Input Area */}
-            <View
-              style={[styles.inputDock, { paddingBottom: composerBottomInset }]}
-              onLayout={(event) => {
-                const nextHeight = Math.ceil(event.nativeEvent.layout.height);
-                setComposerHeight((prev) => (prev === nextHeight ? prev : nextHeight));
-              }}
-            >
-              <View
-                style={styles.inputArea}
-              >
-                {replyingToMessage?.messageId && (
-                  <View style={styles.replyComposerCard}>
-                    <View style={styles.replyComposerAccent} />
-                    <View style={styles.replyComposerBody}>
-                      <Text style={styles.replyComposerTitle}>
-                        Replying to {replyingToMessage.senderName || 'Participant'}
-                      </Text>
-                      <Text numberOfLines={1} style={styles.replyComposerPreview}>
-                        {replyingToMessage.previewText || 'Message'}
-                      </Text>
-                    </View>
-                    <TouchableOpacity
-                      style={styles.replyComposerClose}
-                      onPress={() => setReplyingToMessage(null)}
-                      activeOpacity={0.7}
-                      accessibilityLabel="Cancel reply"
-                    >
-                      <MaterialCommunityIcons name="close" size={16} color={COLORS.secondaryText} />
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                {draftRestored && (
-                  <View style={styles.draftBadge}>
-                    <MaterialCommunityIcons name="content-save-edit-outline" size={14} color={COLORS.primaryBlue} />
-                    <Text style={styles.draftBadgeText}>Draft restored</Text>
-                  </View>
-                )}
-
-                <TouchableOpacity
-                  style={styles.attachButton}
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setShowAttachmentMenu(!showAttachmentMenu);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <MaterialCommunityIcons
-                    name={showAttachmentMenu ? 'close' : 'plus-circle'}
-                    size={28}
-                    color={showAttachmentMenu ? COLORS.secondaryText : COLORS.primaryBlue}
-                  />
-                </TouchableOpacity>
-
-                <TextInput
-                  style={[
-                    styles.textInput,
-                    { height: Math.min(Math.max(44, inputHeight), 120) },
-                  ]}
-                  placeholder="Type your message..."
-                  placeholderTextColor={COLORS.tertiaryText}
-                  value={inputText}
-                  onChangeText={handleTextChange}
-                  multiline
-                  onContentSizeChange={(event) =>
-                    setInputHeight(event.nativeEvent.contentSize.height)
-                  }
-                  selectionColor={COLORS.primaryBlue}
-                  editable={!sending && !uploadingImage}
-                  blurOnSubmit={false}
-                />
-
-                <TouchableOpacity
-                  style={[
-                    styles.sendButton,
-                    (sending || uploadingImage || !inputText.trim()) && styles.sendButtonDisabled,
-                  ]}
-                  onPress={handleSendMessage}
-                  activeOpacity={0.7}
-                  disabled={sending || uploadingImage || !inputText.trim()}
-                >
-                  {sending || uploadingImage ? (
-                    <ActivityIndicator size="small" color={COLORS.sendButtonColor} />
-                  ) : (
-                    <MaterialCommunityIcons
-                      name="send-circle"
-                      size={38}
-                      color={
-                        inputText.trim() === '' ? COLORS.tertiaryText : COLORS.sendButtonColor
-                      }
-                    />
-                  )}
-                </TouchableOpacity>
-              </View>
-            </View>
-          </>
+        {!loading && (
+          <ChatFloatingJump
+            mode={showJumpToUnread ? 'unread' : newMessagesCount > 0 ? 'new' : 'none'}
+            count={newMessagesCount}
+            summary={unreadSummary}
+            bottomOffset={showJumpToUnread ? floatingUiBottomInset + 56 : floatingUiBottomInset}
+            onJumpToUnread={jumpToUnread}
+            onJumpToLatest={() => {
+              scrollToBottom(true);
+              setNewMessagesCount(0);
+              markActiveChatRead({ force: true });
+            }}
+          />
         )}
+
+        <AttachmentTray
+          visible={showAttachmentMenu}
+          onClose={() => setShowAttachmentMenu(false)}
+          onPickImage={handlePickImage}
+          onTakePhoto={handleTakePhoto}
+        />
+
+        <ChatComposer
+          composerBottomInset={composerBottomInset}
+          inputHeight={inputHeight}
+          inputText={inputText}
+          sending={sending}
+          replyingToMessage={replyingToMessage}
+          showAttachmentMenu={showAttachmentMenu}
+          onComposerLayout={(event) => {
+            const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+            setComposerHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+          }}
+          onCancelReply={() => setReplyingToMessage(null)}
+          onToggleAttachments={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            setShowAttachmentMenu((prev) => !prev);
+          }}
+          onTextChange={handleTextChange}
+          onInputContentSizeChange={(event) => setInputHeight(event.nativeEvent.contentSize.height)}
+          onSendMessage={handleSendMessage}
+        />
       </KeyboardAvoidingView>
 
       {/* Modals */}
-      <MessageActionMenu
+      <ChatActionSheet
         visible={showActionMenu}
         onClose={() => {
           setShowActionMenu(false);
@@ -3058,33 +3738,54 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
-  refreshStatusContainer: {
-    borderBottomWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+  feedbackHost: {
+    paddingHorizontal: SPACING.md,
+    paddingTop: SPACING.xs,
+    gap: SPACING.xs,
   },
-  refreshStatusSuccess: {
-    backgroundColor: THEME.sync.success.background,
-    borderBottomColor: THEME.sync.success.border,
+  feedbackPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}25`,
+    backgroundColor: THEME.primaryMuted,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
   },
-  refreshStatusWarning: {
-    backgroundColor: THEME.sync.warning.background,
-    borderBottomColor: THEME.sync.warning.border,
-  },
-  refreshStatusError: {
+  feedbackPillError: {
+    borderColor: THEME.sync.critical.border,
     backgroundColor: THEME.sync.critical.background,
-    borderBottomColor: THEME.sync.critical.border,
   },
-  refreshStatusText: {
-    color: THEME.sync.info.foregroundMuted,
+  feedbackPillSuccess: {
+    borderColor: THEME.sync.success.border,
+    backgroundColor: THEME.sync.success.background,
+  },
+  feedbackPillText: {
+    flex: 1,
+    color: COLORS.primaryBlue,
     fontSize: 12,
-    fontWeight: '600',
-  },
-  refreshStatusActionText: {
-    marginTop: 2,
-    fontSize: 11,
-    color: THEME.sync.info.foreground,
     fontWeight: '700',
+  },
+  feedbackPillTextError: {
+    color: THEME.sync.critical.foreground,
+  },
+  feedbackPillTextSuccess: {
+    color: THEME.sync.success.foreground,
+  },
+  feedbackPillAction: {
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 5,
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  feedbackPillActionText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.primaryBlue,
   },
   keyboardAvoidingContainer: {
     flex: 1,
@@ -3236,6 +3937,32 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: COLORS.secondaryText,
   },
+  skeletonContainer: {
+    flex: 1,
+    paddingHorizontal: SPACING.md,
+    paddingTop: SPACING.xl,
+    backgroundColor: COLORS.chatScreenBackground,
+  },
+  skeletonRow: {
+    flexDirection: 'row',
+    marginBottom: SPACING.md,
+  },
+  skeletonRowOther: {
+    justifyContent: 'flex-start',
+  },
+  skeletonRowSelf: {
+    justifyContent: 'flex-end',
+  },
+  skeletonBubble: {
+    width: '52%',
+    height: 54,
+    borderRadius: RADIUS.lg,
+    backgroundColor: '#E2E8F0',
+    opacity: 0.75,
+  },
+  skeletonBubbleWide: {
+    width: '68%',
+  },
   errorContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -3313,6 +4040,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.md,
     flexGrow: 1,
   },
+  loadOlderButton: {
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    marginBottom: SPACING.md,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}25`,
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    ...SHADOWS.sm,
+  },
+  loadOlderButtonText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.primaryBlue,
+  },
   messageRow: {
     flexDirection: 'row',
     marginBottom: SPACING.sm,
@@ -3335,12 +4081,32 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: `${COLORS.primaryDark}40`,
   },
+  myMessageBubbleClusterFirst: {
+    borderBottomRightRadius: RADIUS.lg,
+  },
+  myMessageBubbleClusterMiddle: {
+    borderTopRightRadius: RADIUS.sm,
+    borderBottomRightRadius: RADIUS.sm,
+  },
+  myMessageBubbleClusterLast: {
+    borderTopRightRadius: RADIUS.sm,
+  },
   theirMessageBubble: {
     backgroundColor: COLORS.theirMessageBackground,
     borderBottomLeftRadius: RADIUS.sm,
     ...SHADOWS.sm,
     borderWidth: 1,
     borderColor: COLORS.border,
+  },
+  theirMessageBubbleClusterFirst: {
+    borderBottomLeftRadius: RADIUS.lg,
+  },
+  theirMessageBubbleClusterMiddle: {
+    borderTopLeftRadius: RADIUS.sm,
+    borderBottomLeftRadius: RADIUS.sm,
+  },
+  theirMessageBubbleClusterLast: {
+    borderTopLeftRadius: RADIUS.sm,
   },
   driverMessageBubble: {
     backgroundColor: COLORS.driverMessageBackground,
@@ -3689,6 +4455,76 @@ const styles = StyleSheet.create({
   },
 
   // New Messages Banner
+  floatingJumpPill: {
+    position: 'absolute',
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.newMessageBanner,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: RADIUS.full,
+    ...SHADOWS.md,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: `${COLORS.coralAccent}70`,
+  },
+  floatingJumpPillText: {
+    color: COLORS.white,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  floatingJumpCard: {
+    position: 'absolute',
+    right: SPACING.lg,
+    left: SPACING.lg,
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}20`,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    ...SHADOWS.md,
+  },
+  floatingJumpHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+  },
+  floatingJumpTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.darkText,
+  },
+  floatingJumpBody: {
+    marginTop: 3,
+    fontSize: 12,
+    color: COLORS.secondaryText,
+  },
+  floatingJumpActions: {
+    marginTop: SPACING.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  floatingJumpActionText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.primaryBlue,
+  },
+  floatingJumpLatest: {
+    borderRadius: RADIUS.full,
+    backgroundColor: `${COLORS.primaryBlue}10`,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}25`,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 5,
+  },
+  floatingJumpLatestText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.primaryBlue,
+  },
   newMessagesBanner: {
     position: 'absolute',
     bottom: 80,
