@@ -748,6 +748,9 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
     onMoveShouldSetPanResponder: (_event, gestureState) => {
       return shouldStartSwipeReplyGesture(gestureState, { disabled });
     },
+    onMoveShouldSetPanResponderCapture: (_event, gestureState) => {
+      return shouldStartSwipeReplyGesture(gestureState, { disabled });
+    },
     onPanResponderMove: (_event, gestureState) => {
       if (triggerLatchRef.current) return;
 
@@ -780,7 +783,7 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
       resetToOrigin({ unlockTrigger: true });
     },
     onPanResponderTerminate: () => resetToOrigin({ unlockTrigger: true }),
-    onPanResponderTerminationRequest: () => true,
+    onPanResponderTerminationRequest: () => false,
   }), [
     disabled,
     feedbackOpacity,

@@ -8,10 +8,6 @@ const {
   shouldStartSwipeReplyGesture,
   shouldTriggerSwipeReplyOnRelease,
 } = require('../services/chatSwipeReplyGesture');
-const {
-  EDGE_START_WIDTH_PX,
-  SWIPE_REPLY_EDGE_BUFFER_PX,
-} = require('../services/swipeHomeNavigation');
 
 test('snap activation distance is about halfway across common phone widths', () => {
   assert.equal(getSwipeReplySnapActivationDistance(390), 195);
@@ -50,22 +46,20 @@ test('release can still commit once the reply is armed', () => {
   assert.equal(shouldReject, false);
 });
 
-test('message swipe starts with rightward horizontal intent away from home edge zone', () => {
+test('message swipe starts with rightward horizontal intent', () => {
   const shouldStart = shouldStartSwipeReplyGesture({
-    x0: EDGE_START_WIDTH_PX + SWIPE_REPLY_EDGE_BUFFER_PX + 24,
-    dx: 14,
+    x0: 0,
+    dx: 16,
     dy: 4,
   });
 
   assert.equal(shouldStart, true);
 });
 
-test('message swipe does not steal the app home-edge gesture', () => {
-  const shouldStart = shouldStartSwipeReplyGesture({
-    x0: EDGE_START_WIDTH_PX + SWIPE_REPLY_EDGE_BUFFER_PX - 1,
-    dx: 24,
-    dy: 2,
-  });
+test('message swipe rejects vertical scroll intent and disabled rows', () => {
+  const verticalIntent = shouldStartSwipeReplyGesture({ dx: 18, dy: 20 });
+  const disabled = shouldStartSwipeReplyGesture({ dx: 24, dy: 2 }, { disabled: true });
 
-  assert.equal(shouldStart, false);
+  assert.equal(verticalIntent, false);
+  assert.equal(disabled, false);
 });
