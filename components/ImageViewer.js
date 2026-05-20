@@ -72,7 +72,6 @@ export default function ImageViewer({
   const [prefetchPolicy, setPrefetchPolicy] = useState({
     neighborDistance: 2,
     thumbnailsOnly: false,
-    delayMs: 300,
   });
   const translateX = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -136,8 +135,8 @@ export default function ImageViewer({
       const isConstrained = state?.type === 'cellular' || Boolean(state?.details?.isConnectionExpensive) || isWeakCellular;
 
       setPrefetchPolicy(isConstrained
-        ? { neighborDistance: 1, thumbnailsOnly: true, delayMs: 450 }
-        : { neighborDistance: 2, thumbnailsOnly: false, delayMs: 300 });
+        ? { neighborDistance: 1, thumbnailsOnly: true }
+        : { neighborDistance: 2, thumbnailsOnly: false });
     }).catch(() => {});
 
     return () => {
@@ -155,14 +154,31 @@ export default function ImageViewer({
       thumbnailsOnly: prefetchPolicy.thumbnailsOnly,
     });
 
-    const timer = setTimeout(() => {
-      if (prefetchCandidates.length > 0) {
-        ExpoImage.prefetch(prefetchCandidates, 'memory-disk').catch(() => {});
-      }
-    }, prefetchPolicy.delayMs);
-
-    return () => clearTimeout(timer);
+    if (prefetchCandidates.length > 0) {
+      ExpoImage.prefetch(prefetchCandidates, 'memory-disk').catch(() => {});
+    }
   }, [visible, currentIndex, photos, prefetchPolicy]);
+
+  const prefetchPhotoAtIndex = useCallback((index) => {
+    if (!visible || index < 0 || index >= photos.length) return;
+
+    const photo = photos[index];
+    if (!photo) return;
+
+    const candidates = [];
+    const primary = resolveViewerDisplayUri(photo);
+    if (primary) {
+      candidates.push(primary);
+    }
+    if (photo.thumbnailUrl) {
+      candidates.push(photo.thumbnailUrl);
+    }
+
+    const uniqueCandidates = [...new Set(candidates.filter((uri) => typeof uri === 'string' && uri.length > 0))];
+    if (uniqueCandidates.length > 0) {
+      ExpoImage.prefetch(uniqueCandidates, 'memory-disk').catch(() => {});
+    }
+  }, [photos, visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -198,7 +214,7 @@ export default function ImageViewer({
 
     Animated.timing(fullImageOpacity, {
       toValue: 1,
-      duration: 220,
+      duration: 110,
       useNativeDriver: true,
     }).start(() => {
       if (requestId === resolveRequestIdRef.current) {
@@ -215,6 +231,7 @@ export default function ImageViewer({
 
   const goToNext = useCallback(() => {
     if (currentIndex < photos.length - 1) {
+      prefetchPhotoAtIndex(currentIndex + 1);
       setImageLoading(true);
       Animated.spring(translateX, {
         toValue: -runtimeWidth,
@@ -230,10 +247,11 @@ export default function ImageViewer({
       return true;
     }
     return false;
-  }, [currentIndex, photos.length, runtimeWidth, translateX]);
+  }, [currentIndex, photos.length, prefetchPhotoAtIndex, runtimeWidth, translateX]);
 
   const goToPrevious = useCallback(() => {
     if (currentIndex > 0) {
+      prefetchPhotoAtIndex(currentIndex - 1);
       setImageLoading(true);
       Animated.spring(translateX, {
         toValue: runtimeWidth,
@@ -249,7 +267,7 @@ export default function ImageViewer({
       return true;
     }
     return false;
-  }, [currentIndex, runtimeWidth, translateX]);
+  }, [currentIndex, prefetchPhotoAtIndex, runtimeWidth, translateX]);
 
   const resetSwipePosition = useCallback(() => {
     Animated.spring(translateX, {
@@ -272,6 +290,7 @@ export default function ImageViewer({
     // threshold, so vertical/stationary touches in empty areas don't jitter
     // the image when the parent claims the touch on start.
     let horizontalLocked = false;
+    let prefetchedSwipeIndex = null;
     return PanResponder.create({
       // Claim touches that don't hit a child responder (e.g., the empty side
       // regions next to the image). Without this the responder system never
@@ -287,6 +306,7 @@ export default function ImageViewer({
       onMoveShouldSetPanResponderCapture: (_, gestureState) => isHorizontalSwipeIntent(gestureState),
       onPanResponderGrant: () => {
         horizontalLocked = false;
+        prefetchedSwipeIndex = null;
       },
       onPanResponderMove: (_, gestureState) => {
         if (!horizontalLocked) {
@@ -294,6 +314,11 @@ export default function ImageViewer({
           horizontalLocked = true;
         }
         const newX = gestureState.dx;
+        const targetIndex = newX < 0 ? currentIndex + 1 : currentIndex - 1;
+        if (targetIndex !== prefetchedSwipeIndex) {
+          prefetchedSwipeIndex = targetIndex;
+          prefetchPhotoAtIndex(targetIndex);
+        }
         if ((currentIndex === 0 && newX > 0) ||
             (currentIndex === photos.length - 1 && newX < 0)) {
           translateX.setValue(newX * 0.3); // Resistance at edges
@@ -304,6 +329,7 @@ export default function ImageViewer({
       onPanResponderRelease: (_, gestureState) => {
         const wasHorizontalLocked = horizontalLocked;
         horizontalLocked = false;
+        prefetchedSwipeIndex = null;
         if (!wasHorizontalLocked) {
           // Tap or vertical-only gesture — leave position untouched.
           return;
@@ -328,11 +354,12 @@ export default function ImageViewer({
       },
       onPanResponderTerminate: () => {
         horizontalLocked = false;
+        prefetchedSwipeIndex = null;
         resetSwipePosition();
       },
       onPanResponderTerminationRequest: () => false,
     });
-  }, [currentIndex, goToNext, goToPrevious, isHorizontalSwipeIntent, photos.length, resetSwipePosition, translateX]);
+  }, [currentIndex, goToNext, goToPrevious, isHorizontalSwipeIntent, photos.length, prefetchPhotoAtIndex, resetSwipePosition, translateX]);
 
   const formatDate = (timestamp) => {
     if (!timestamp) return 'Unknown date';
@@ -547,7 +574,7 @@ export default function ImageViewer({
               style={[styles.image, styles.fullImageLayer, { opacity: fullImageOpacity }]}
               contentFit="contain"
               cachePolicy="memory-disk"
-              transition={140}
+              transition={70}
               onLoadStart={() => {
                 if (activeResolveRequestId === resolveRequestIdRef.current) {
                   setImageLoading(true);
