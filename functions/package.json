@@ -8,7 +8,8 @@
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
     "migrate:assigned-driver-codes": "node scripts/normalizeAssignedDriverCodes.js",
-    "migrate:private-photo-owners": "node scripts/migratePrivatePhotoOwnersToStablePassengerIds.js"
+    "migrate:private-photo-owners": "node scripts/migratePrivatePhotoOwnersToStablePassengerIds.js",
+    "backfill:photo-variants": "node scripts/backfillPhotoVariants.js"
   },
   "engines": {
     "node": "24"

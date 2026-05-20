@@ -96,3 +96,26 @@ test('optimizeImageForUpload exits safely at max iterations when target budgets 
   assert.equal(result.metrics.optimizedSizeBytes, 5_000_000);
   assert.equal(result.metrics.viewerSizeBytes, 5_000_000);
 });
+
+test('optimizeSourcePhotoForUpload skips viewer and thumbnail variant work', async () => {
+  const service = buildService({
+    sizeByCall: (uri) => {
+      if (uri.includes('optimized-1')) return 1_100_000;
+      return 2_400_000;
+    },
+  });
+
+  const result = await service.optimizeSourcePhotoForUpload({
+    uri: 'file://source-only.jpg',
+    fileSize: 2_400_000,
+    width: 3000,
+    height: 2000,
+  }, { maxIterations: 4 });
+
+  assert.equal(result.uploadUri, 'file://optimized-1.jpg');
+  assert.equal(result.metrics.optimizedSizeBytes, 1_100_000);
+  assert.equal(result.metrics.viewerSizeBytes, null);
+  assert.equal(result.metrics.thumbnailSizeBytes, null);
+  assert.equal(result.metrics.viewerOptimizationPasses, 0);
+  assert.equal(result.metrics.thumbnailOptimizationPasses, 0);
+});
