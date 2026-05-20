@@ -6,6 +6,8 @@ const {
   resolveSaveUri,
   resolveFullQualityUri,
   buildNeighborPrefetchUris,
+  buildPhotoCacheKey,
+  resolveThumbnailDisplayUri,
 } = require('../services/photoVariantService');
 
 test('resolveViewerDisplayUri prioritizes viewer/thumbnail/source fallbacks for processing and legacy records', () => {
@@ -53,4 +55,30 @@ test('buildNeighborPrefetchUris prioritizes viewer display variants for neighbor
     'https://cdn/3-thumb.jpg',
   ]);
   assert.equal(resolveSaveUri({ fullUrl: 'f', url: 'u' }), 'f');
+});
+
+test('buildPhotoCacheKey prefers variant storage paths over signed URLs', () => {
+  const photo = {
+    id: 'photo-1',
+    variantVersion: 2,
+    thumbnailUrl: 'https://signed.example.com/thumb.jpg?token=one',
+    thumbnailStoragePath: 'group_tour_photos/tour-1/thumbnails/photo_thumb.jpg',
+    viewerUrl: 'https://signed.example.com/viewer.jpg?token=two',
+    viewerStoragePath: 'group_tour_photos/tour-1/viewers/photo_viewer.jpg',
+    storagePath: 'group_tour_photos/tour-1/photo.jpg',
+  };
+
+  assert.equal(
+    buildPhotoCacheKey(photo, 'thumbnail'),
+    'thumbnail:group_tour_photos/tour-1/thumbnails/photo_thumb.jpg:v2',
+  );
+  assert.equal(
+    buildPhotoCacheKey(photo, 'viewer'),
+    'viewer:group_tour_photos/tour-1/viewers/photo_viewer.jpg:v2',
+  );
+  assert.equal(
+    buildPhotoCacheKey({ id: 'legacy-photo', url: 'https://signed.example.com/photo.jpg' }, 'thumbnail'),
+    'thumbnail:legacy-photo:vlegacy',
+  );
+  assert.equal(resolveThumbnailDisplayUri({ viewerUrl: 'viewer', url: 'full' }), 'viewer');
 });

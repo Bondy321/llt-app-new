@@ -28,6 +28,31 @@ export const optimizeImageForUpload = async (asset) => {
   };
 };
 
+export const optimizeSourcePhotoForUpload = async (asset) => {
+  if (!asset?.uri) {
+    throw new Error('Missing image asset URI');
+  }
+
+  const originalSizeBytes = await safeFileSize(asset);
+
+  return {
+    uploadUri: asset.uri,
+    metrics: {
+      originalSizeBytes,
+      optimizedSizeBytes: originalSizeBytes,
+      optimizationRatio: 0,
+      fullOptimizationPasses: 1,
+      fullFinalQualityUsed: 1,
+      fullResizeApplied: false,
+      viewerSizeBytes: null,
+      thumbnailSizeBytes: null,
+      viewerOptimizationRatio: null,
+      viewerOptimizationPasses: 0,
+      thumbnailOptimizationPasses: 0,
+    },
+  };
+};
+
 export const formatBytes = (bytes) => {
   if (typeof bytes !== 'number' || Number.isNaN(bytes) || bytes < 0) return 'Unknown';
   if (bytes < 1024) return `${bytes} B`;

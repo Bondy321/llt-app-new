@@ -176,7 +176,9 @@ test('uploadPhoto sanitizes private owner key segments for Realtime Database pat
   });
 
   const ownerId = 'pax_v1:T123659:msandreayoung@yahoo.co.uk';
+  const expectedOwnerKey = 'pax_v1:T123659:msandreayoung@yahoo_2E_co_2E_uk';
   let writePath;
+  let storedPayload;
 
   await uploadPhoto('file://private.jpg', 'tour-55', ownerId, 'Owner with email', {
     visibility: 'private',
@@ -191,11 +193,17 @@ test('uploadPhoto sanitizes private owner key segments for Realtime Database pat
       writePath = ref.path;
       return { key: 'private-photo-sanitized' };
     },
-    setFn: async () => {},
+    setFn: async (_ref, payload) => {
+      storedPayload = payload;
+    },
     serverTimestampFn: () => 1,
   });
 
-  assert.strictEqual(writePath, 'private_tour_photos/tour-55/pax_v1:T123659:msandreayoung@yahoo_2E_co_2E_uk');
+  assert.strictEqual(writePath, `private_tour_photos/tour-55/${expectedOwnerKey}`);
+  assert.strictEqual(
+    storedPayload.storagePath,
+    `private_tour_photos/tour-55/${expectedOwnerKey}/1700000000000_pax_v1_T123659_msandreayoung_yahoo.co.uk.jpg`,
+  );
 });
 
 

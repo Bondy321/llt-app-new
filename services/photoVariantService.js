@@ -21,6 +21,49 @@ const resolveFullQualityUri = (photo) => (
   || null
 );
 
+const resolveThumbnailDisplayUri = (photo) => (
+  photo?.thumbnailUrl
+  || photo?.viewerUrl
+  || photo?.sourceUrl
+  || photo?.url
+  || photo?.fullUrl
+  || null
+);
+
+const normalizeCacheKeyPart = (value) => {
+  if (value === null || value === undefined) return null;
+  const normalized = String(value).trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const buildPhotoCacheKey = (photo, variant = 'viewer') => {
+  if (!photo || typeof photo !== 'object') return null;
+
+  const variantPrefix = normalizeCacheKeyPart(variant) || 'viewer';
+  const version = normalizeCacheKeyPart(photo.variantVersion)
+    || normalizeCacheKeyPart(photo.variantUpdatedAt)
+    || 'legacy';
+
+  const storagePathByVariant = {
+    thumbnail: photo.thumbnailStoragePath,
+    viewer: photo.viewerStoragePath,
+    full: photo.storagePath,
+    source: photo.storagePath,
+  };
+  const storagePath = normalizeCacheKeyPart(storagePathByVariant[variantPrefix])
+    || normalizeCacheKeyPart(photo.storagePath);
+  if (storagePath) {
+    return `${variantPrefix}:${storagePath}:v${version}`;
+  }
+
+  const stableId = normalizeCacheKeyPart(photo.id)
+    || normalizeCacheKeyPart(photo.idempotencyKey)
+    || normalizeCacheKeyPart(resolveViewerDisplayUri(photo))
+    || normalizeCacheKeyPart(resolveThumbnailDisplayUri(photo));
+
+  return stableId ? `${variantPrefix}:${stableId}:v${version}` : null;
+};
+
 const buildNeighborPrefetchUris = ({ photos = [], currentIndex = 0, neighborDistance = 2, thumbnailsOnly = false }) => {
   if (!Array.isArray(photos) || photos.length === 0) return [];
 
@@ -53,7 +96,9 @@ const buildNeighborPrefetchUris = ({ photos = [], currentIndex = 0, neighborDist
 
 module.exports = {
   resolveViewerDisplayUri,
+  resolveThumbnailDisplayUri,
   resolveSaveUri,
   resolveFullQualityUri,
+  buildPhotoCacheKey,
   buildNeighborPrefetchUris,
 };
