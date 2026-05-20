@@ -26,7 +26,7 @@
     "test:mobile:services:photo": "NODE_ENV=test node --test __tests__/photoService.test.js __tests__/photoService.pagination.test.js tests/imageOptimizationService.test.js",
     "test:mobile:services:notifications": "NODE_ENV=test node --test tests/notificationService.behavior.test.js",
     "test:mobile:ui:date-time": "NODE_ENV=test node --test tests/pickupTimeParser.test.js tests/itineraryDateParser.test.js tests/timeUtils.test.js",
-    "test:mobile:ux": "NODE_ENV=test node --test tests/swipeHomeNavigation.test.js",
+    "test:mobile:ux": "NODE_ENV=test node --test tests/swipeHomeNavigation.test.js tests/chatSwipeReplyGesture.test.js",
     "test:mobile:infra": "NODE_ENV=test node --test tests/firebase.initHealth.test.js tests/appMetadata.test.js __tests__/optionalServiceLoader.test.js",
     "test:web-admin": "npm --prefix web-admin run test",
     "test:emulators": "npm run test:emulators:firebase-rules",
