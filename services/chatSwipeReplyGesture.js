@@ -1,7 +1,5 @@
-const { shouldPrioritizeEdgeSwipeOverMessageSwipe } = require('./swipeHomeNavigation');
-
-const SWIPE_REPLY_START_DISTANCE_PX = 6;
-const SWIPE_REPLY_HORIZONTAL_INTENT_RATIO = 1.2;
+const SWIPE_REPLY_START_DISTANCE_PX = 8;
+const SWIPE_REPLY_HORIZONTAL_INTENT_RATIO = 1.35;
 const SWIPE_REPLY_RELEASE_ACTIVATION_DISTANCE_PX = 72;
 const SWIPE_REPLY_SNAP_ACTIVATION_SCREEN_RATIO = 0.5;
 const SWIPE_REPLY_MIN_SNAP_ACTIVATION_DISTANCE_PX = 160;
@@ -59,15 +57,11 @@ const shouldStartSwipeReplyGesture = (
 ) => {
   const {
     disabled = false,
-    allowNearScreenEdge = false,
     startDistancePx = SWIPE_REPLY_START_DISTANCE_PX,
     horizontalIntentRatio = SWIPE_REPLY_HORIZONTAL_INTENT_RATIO,
   } = options;
 
   if (disabled) return false;
-  if (!allowNearScreenEdge && shouldPrioritizeEdgeSwipeOverMessageSwipe(gestureState)) {
-    return false;
-  }
 
   const dx = toFiniteNumber(gestureState.dx);
   const dy = toFiniteNumber(gestureState.dy);
