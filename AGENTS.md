@@ -2,7 +2,7 @@
 
 Welcome, Agent. This file is the operational source of truth for contributors working in this repo.
 
-**Last Updated:** April 8, 2026 (post stable-identity + sync-contract hardening)
+**Last Updated:** April 11, 2026 (post photo variant pipeline + photobook sync hardening)
 
 ---
 
@@ -104,6 +104,7 @@ Google Sheets CMS
 - `services/offlineLoginResolver.js` for offline login gating
 - `utils/unifiedSyncContract.js` shared sync-state taxonomy
 - `docs/reactions-write-contract.md` (canonical reaction write rules)
+- `docs/photo-upload-variant-contract.md` (canonical photo variant lifecycle + compatibility guidance)
 - web-admin parity tests (`healthContractParity`, URL filter sync coverage)
 
 ---
@@ -147,6 +148,20 @@ Primary Realtime DB roots (do **not** rename):
    - `ONLINE_BACKEND_DEGRADED`
    - `ONLINE_BACKLOG_PENDING`
    - `ONLINE_HEALTHY`
+
+5. **Photo upload + display contract (critical, current)**
+   - Canonical queue action is `PHOTO_UPLOAD` with `payloadVersion: 2` and required `idempotencyKey`.
+   - Queue payloads are source-first (`localAssets.sourceUri` required); preview assets are optional and optimistic-only.
+   - Photo records begin in `variantStatus: "processing"` for source-only uploads, then transition to:
+     - `variantStatus: "ready"` with `viewerUrl` + `thumbnailUrl`; or
+     - `variantStatus: "failed"` with `variantError`.
+   - Legacy records without `variantStatus` must remain readable via fallback URL precedence.
+   - Canonical DB fields now include variant metadata (`viewerUrl`, `thumbnailUrl`, `variantStatus`, `variantUpdatedAt`, `variantVersion`) plus caption audit fields (`captionUpdatedAt`, `captionEditedBy`).
+
+6. **Private photo owner scope contract**
+   - Canonical private owner key is stable passenger identity when available.
+   - Legacy keying must remain readable during rollout (`privatePhotoOwnerId`, booking-ref keyed nodes).
+   - `private_tour_photos/{tourId}/{ownerKey}` access patterns must remain identity-aware and migration-safe.
 
 ---
 
@@ -208,7 +223,14 @@ Key services and responsibilities:
   - reaction leaf writes and normalization
   - read-state + typing/presence paths
 - `photoService.js`
-  - group/private uploads + metadata handling
+  - direct source uploads (`uploadPhotoDirect`) with idempotency + replay-safe behavior
+  - group/private pagination helpers (`fetchGroupTourPhotosPage`, `fetchPrivateTourPhotosPage`)
+  - live subscriptions and stable ordering for group/private photobooks
+  - metadata + variant lifecycle fields (`variantStatus`, `viewerUrl`, `thumbnailUrl`, `variantError`)
+  - caption updates (`captionUpdatedAt`, `captionEditedBy`) and owner-scoped delete rules
+- `photoVariantService.js`
+  - viewer/thumbnail/source URL fallback resolution for mixed legacy + modern records
+  - candidate preloading helpers for smoother photobook rendering
 - `notificationService.js`
   - push token + preference persistence behavior
 - `identityService.js`
@@ -247,6 +269,7 @@ Current exported functions include:
 - `verifyPassengerLogin` (HTTPS verifier endpoint)
 - `processBroadcastWrite` (broadcast -> chat fanout)
 - `sendChatNotification` (DB trigger)
+- `generatePhotoVariants` (Storage trigger for viewer/thumbnail generation + DB variant status updates)
 - `sendItineraryNotification` (DB trigger)
 
 ### Function-level requirements
@@ -273,6 +296,10 @@ Highlights:
   - `users/{uid}/privatePhotoOwnerId`
   - `identity_bindings/{stablePassengerId}/{uid}`
 - Reactions are user-leaf writes only (parent reaction writes blocked)
+- Photo schema validation enforces variant-safe fields and statuses on:
+  - `group_tour_photos/{tourId}/{photoId}`
+  - `private_tour_photos/{tourId}/{ownerKey}/{photoId}`
+  - allowed `variantStatus` values: `processing | ready | failed`
 - `users` now validates push token state metadata and identity metadata fields
 
 If changing data shape under any protected path, update:
@@ -306,6 +333,13 @@ npm run test:mobile:ui:date-time
 npm run test:mobile:ux
 npm run test:mobile:infra
 ```
+
+Photo-focused suites in current rotation:
+- `__tests__/photoService.test.js`
+- `__tests__/photoService.pagination.test.js`
+- `tests/imageOptimizationService.test.js`
+- `tests/photoVariantService.test.js`
+- `tests/firebaseRules/photoVariants.rules.test.js` (run via emulator-targeted rule test workflows)
 
 ### Web admin tests
 
@@ -377,9 +411,11 @@ npm --prefix functions run migrate:private-photo-owners
 3. **Assignment writes**: Use service helpers + multi-path updates.
 4. **Sync contract**: Reuse shared taxonomy/formatters; do not fork wording by screen.
 5. **Reaction writes**: User-leaf writes only; no parent overwrite toggles.
-6. **Logging**: Use safe logging conventions (`docs/safe-logging-conventions.md`).
-7. **Service return shape**: preserve `{ success: true|false, data|error }` style.
-8. **Optional service loading**: use `optionalServiceLoader` pattern where applicable.
+6. **Photo uploads**: `PHOTO_UPLOAD` queue actions must remain replay-safe and idempotent (`payloadVersion: 2` + `idempotencyKey` for modern payloads).
+7. **Photo variants**: never assume `viewerUrl`/`thumbnailUrl` exists at create-time; respect `processing -> ready|failed` lifecycle and fallback URL resolution.
+8. **Logging**: Use safe logging conventions (`docs/safe-logging-conventions.md`).
+9. **Service return shape**: preserve `{ success: true|false, data|error }` style.
+10. **Optional service loading**: use `optionalServiceLoader` pattern where applicable.
 
 ---
 
@@ -395,6 +431,10 @@ npm --prefix functions run migrate:private-photo-owners
    - Keep recipient caps/chunk sizes and caching tuned as participant counts grow.
 5. **Rules/code divergence**
    - Schema changes without parallel rule/test updates are the highest-risk regression source.
+6. **Photo variant backfill/lag**
+   - Newly uploaded source images can remain `processing` briefly while Storage trigger catches up; UI must continue fallback rendering without blocking.
+7. **Mixed legacy vs modern photo records**
+   - Some tours can contain older records (`url`/`fullUrl` only) alongside variant-native records (`viewerUrl`/`thumbnailUrl` + `variantStatus`); keep compatibility paths covered in service + tests.
 
 ---
 
@@ -421,6 +461,7 @@ npm --prefix functions run migrate:private-photo-owners
 - `docs/date-contract-web-admin.md`
 - `docs/data-contracts/driver-assignment.md`
 - `docs/offline-tour-pack.md`
+- `docs/photo-upload-variant-contract.md`
 - `docs/reactions-write-contract.md`
 - `docs/safe-logging-conventions.md`
 - `database.rules.json`
