@@ -18,6 +18,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
@@ -66,6 +67,11 @@ const {
   getOldestMessageCursor,
   mergeMessagesById,
 } = require('../utils/chatTimeline');
+const {
+  getSwipeReplyDragState,
+  shouldStartSwipeReplyGesture,
+  shouldTriggerSwipeReplyOnRelease,
+} = require('../services/chatSwipeReplyGesture');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -74,10 +80,6 @@ const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🎉'];
 const ESTIMATED_MESSAGE_ROW_HEIGHT = 120;
 const SEARCH_RESULT_PREVIEW_LIMIT = 3;
 const CATCH_UP_BUBBLE_DISTANCE_THRESHOLD = 220;
-const SWIPE_REPLY_ACTIVATION_THRESHOLD = 56;
-const SWIPE_REPLY_MAX_DRAG = 172;
-const SWIPE_REPLY_CUTOFF_TRIGGER = 156;
-const SWIPE_REPLY_READY_THRESHOLD = SWIPE_REPLY_ACTIVATION_THRESHOLD - 6;
 const SWIPE_REPLY_HINT_KEY_PREFIX = 'swipe_reply_hint_seen';
 const SCROLL_BOTTOM_THRESHOLD = 16;
 const LIVE_CHAT_MESSAGE_LIMIT = 80;
@@ -672,6 +674,7 @@ const SwipeReplyHint = ({ visible, onDismiss }) => {
 };
 
 const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }) => {
+  const { width: windowWidth } = useWindowDimensions();
   const translateX = useRef(new Animated.Value(0)).current;
   const feedbackScale = useRef(new Animated.Value(0.9)).current;
   const feedbackOpacity = useRef(new Animated.Value(0)).current;
@@ -680,7 +683,17 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
   const peakDragRef = useRef(0);
   const [isReadyToReply, setIsReadyToReply] = useState(false);
 
-  const resetToOrigin = useCallback(() => {
+  const setReadyToReply = useCallback((isReady, shouldPulse = false) => {
+    if (isReady === readyToReplyRef.current) return;
+
+    readyToReplyRef.current = isReady;
+    setIsReadyToReply(isReady);
+    if (isReady && shouldPulse) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+  }, []);
+
+  const resetToOrigin = useCallback(({ unlockTrigger = true } = {}) => {
     Animated.parallel([
       Animated.spring(translateX, {
         toValue: 0,
@@ -699,48 +712,87 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
         useNativeDriver: true,
       }),
     ]).start(() => {
-      triggerLatchRef.current = false;
+      if (unlockTrigger) {
+        triggerLatchRef.current = false;
+      }
       readyToReplyRef.current = false;
       peakDragRef.current = 0;
       setIsReadyToReply(false);
     });
   }, [translateX, feedbackOpacity, feedbackScale]);
 
+  const triggerSwipeReply = useCallback((resetOptions = {}) => {
+    if (triggerLatchRef.current) return;
+
+    triggerLatchRef.current = true;
+    readyToReplyRef.current = true;
+    setIsReadyToReply(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    resetToOrigin(resetOptions);
+    onSwipeReply?.();
+  }, [onSwipeReply, resetToOrigin]);
+
   const panResponder = useMemo(() => PanResponder.create({
+    onPanResponderGrant: () => {
+      translateX.stopAnimation();
+      feedbackOpacity.stopAnimation();
+      feedbackScale.stopAnimation();
+      translateX.setValue(0);
+      feedbackOpacity.setValue(0);
+      feedbackScale.setValue(0.9);
+      triggerLatchRef.current = false;
+      readyToReplyRef.current = false;
+      peakDragRef.current = 0;
+      setIsReadyToReply(false);
+    },
     onMoveShouldSetPanResponder: (_event, gestureState) => {
-      if (disabled) return false;
-      const { dx, dy } = gestureState;
-      return dx > 10 && Math.abs(dx) > Math.abs(dy) * 1.55;
+      return shouldStartSwipeReplyGesture(gestureState, { disabled });
     },
     onPanResponderMove: (_event, gestureState) => {
-      const dragX = Math.max(0, Math.min(gestureState.dx, SWIPE_REPLY_MAX_DRAG));
-      peakDragRef.current = Math.max(peakDragRef.current, dragX);
-      const progress = Math.min(dragX / SWIPE_REPLY_ACTIVATION_THRESHOLD, 1);
-      const isReady = dragX >= SWIPE_REPLY_READY_THRESHOLD;
+      if (triggerLatchRef.current) return;
 
-      translateX.setValue(dragX);
-      feedbackOpacity.setValue(0.2 + progress * 0.8);
-      feedbackScale.setValue(0.9 + progress * 0.1);
-      if (isReady !== readyToReplyRef.current) {
-        readyToReplyRef.current = isReady;
-        setIsReadyToReply(isReady);
-        if (isReady) {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        }
+      const dragState = getSwipeReplyDragState(gestureState, {
+        screenWidth: windowWidth || SCREEN_WIDTH,
+        peakDragX: peakDragRef.current,
+      });
+
+      peakDragRef.current = dragState.peakDragX;
+      translateX.setValue(dragState.dragX);
+      feedbackOpacity.setValue(0.18 + dragState.progress * 0.82);
+      feedbackScale.setValue(0.9 + dragState.progress * 0.12);
+      setReadyToReply(dragState.isReleaseReady, true);
+
+      if (dragState.shouldSnapActivate) {
+        triggerSwipeReply({ unlockTrigger: false });
       }
     },
     onPanResponderRelease: (_event, gestureState) => {
-      const effectiveDrag = Math.max(Math.max(0, gestureState.dx), peakDragRef.current);
-      const reachedCutoff = peakDragRef.current >= SWIPE_REPLY_CUTOFF_TRIGGER;
-      if ((effectiveDrag >= SWIPE_REPLY_ACTIVATION_THRESHOLD || reachedCutoff) && !triggerLatchRef.current) {
-        triggerLatchRef.current = true;
-        onSwipeReply?.();
+      if (triggerLatchRef.current) {
+        resetToOrigin({ unlockTrigger: true });
+        return;
       }
-      resetToOrigin();
+
+      if (shouldTriggerSwipeReplyOnRelease(gestureState, { peakDragX: peakDragRef.current })) {
+        triggerSwipeReply({ unlockTrigger: true });
+        return;
+      }
+
+      resetToOrigin({ unlockTrigger: true });
     },
-    onPanResponderTerminate: resetToOrigin,
+    onPanResponderTerminate: () => resetToOrigin({ unlockTrigger: true }),
     onPanResponderTerminationRequest: () => true,
-  }), [disabled, feedbackOpacity, feedbackScale, onSwipeReply, resetToOrigin, translateX]);
+  }), [
+    disabled,
+    feedbackOpacity,
+    feedbackScale,
+    resetToOrigin,
+    setReadyToReply,
+    translateX,
+    triggerSwipeReply,
+    windowWidth,
+  ]);
+
+  const feedbackColor = isReadyToReply ? THEME.success : COLORS.primaryBlue;
 
   return (
     <View style={styles.swipeReplyRowContainer}>
@@ -755,9 +807,11 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
         <MaterialCommunityIcons
           name={isReadyToReply ? 'reply' : 'reply-outline'}
           size={16}
-          color={COLORS.primaryBlue}
+          color={feedbackColor}
         />
-        <Text style={styles.swipeReplyFeedbackText}>{isReadyToReply ? 'Release to reply' : 'Reply'}</Text>
+        <Text style={[styles.swipeReplyFeedbackText, isReadyToReply && styles.swipeReplyFeedbackTextReady]}>
+          {isReadyToReply ? 'Reply ready' : 'Reply'}
+        </Text>
       </Animated.View>
       <Animated.View
         style={{ transform: [{ translateX }] }}
@@ -4628,6 +4682,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: COLORS.primaryBlue,
     fontWeight: '700',
+  },
+  swipeReplyFeedbackTextReady: {
+    color: THEME.success,
   },
 
   catchUpCard: {
