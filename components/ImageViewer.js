@@ -212,15 +212,8 @@ export default function ImageViewer({
   const handleFullImageLoaded = useCallback((requestId) => {
     if (!requestId || requestId !== resolveRequestIdRef.current) return;
 
-    Animated.timing(fullImageOpacity, {
-      toValue: 1,
-      duration: 110,
-      useNativeDriver: true,
-    }).start(() => {
-      if (requestId === resolveRequestIdRef.current) {
-        setImageLoading(false);
-      }
-    });
+    fullImageOpacity.setValue(1);
+    setImageLoading(false);
   }, [fullImageOpacity, resolveRequestIdRef]);
 
   const handleFullImageError = useCallback((requestId) => {
@@ -574,7 +567,6 @@ export default function ImageViewer({
               style={[styles.image, styles.fullImageLayer, { opacity: fullImageOpacity }]}
               contentFit="contain"
               cachePolicy="memory-disk"
-              transition={70}
               onLoadStart={() => {
                 if (activeResolveRequestId === resolveRequestIdRef.current) {
                   setImageLoading(true);
