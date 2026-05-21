@@ -5,6 +5,7 @@ import {
   StyleSheet,
   View,
   Text,
+  Image,
   Modal,
   TouchableOpacity,
   Dimensions,
@@ -20,18 +21,17 @@ import {
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Image as ExpoImage } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, SPACING, RADIUS, SHADOWS, FONT_WEIGHT } from '../theme';
 import loggerService from '../services/loggerService';
+import { getCachedPhotoUri, prefetchPhotoUris } from '../services/photoViewerCacheService';
 import {
   resolveViewerDisplayUri,
   resolveSaveUri,
   resolveFullQualityUri,
   buildNeighborPrefetchUris,
-  buildPhotoCacheKey,
 } from '../services/photoVariantService';
 import {
   DEFAULT_HORIZONTAL_INTENT_THRESHOLD,
@@ -43,7 +43,6 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = 80;
 const VELOCITY_THRESHOLD = 0.3;
 const PANEL_MAX_HEIGHT = SCREEN_HEIGHT * 0.44;
-const AnimatedExpoImage = Animated.createAnimatedComponent(ExpoImage);
 
 export default function ImageViewer({
   visible,
@@ -156,9 +155,7 @@ export default function ImageViewer({
     });
 
     const timer = setTimeout(() => {
-      if (prefetchCandidates.length > 0) {
-        ExpoImage.prefetch(prefetchCandidates, 'memory-disk').catch(() => {});
-      }
+      prefetchPhotoUris(prefetchCandidates).catch(() => {});
     }, prefetchPolicy.delayMs);
 
     return () => clearTimeout(timer);
@@ -175,6 +172,13 @@ export default function ImageViewer({
     fullImageOpacity.setValue(0);
     setResolvedPhotoUri(sourceUri);
     setImageLoading(Boolean(sourceUri));
+
+    if (!sourceUri) return;
+    getCachedPhotoUri(sourceUri).then((cachedUri) => {
+      if (!cachedUri) return;
+      if (resolveRequestIdRef.current !== currentRequestId) return;
+      setResolvedPhotoUri(cachedUri);
+    }).catch(() => {});
   }, [visible, currentIndex, currentViewerUri, currentFullQualityUri, fullQualityRequested, fullImageOpacity]);
 
   useEffect(() => {
@@ -430,14 +434,6 @@ export default function ImageViewer({
 
   const canDeleteThis = canDelete && currentPhoto.userId === currentUserId;
   const canEditCaption = typeof onEditCaption === 'function' && currentPhoto.userId === currentUserId;
-  const thumbnailCacheKey = buildPhotoCacheKey(currentPhoto, 'thumbnail');
-  const fullImageCacheKey = buildPhotoCacheKey(currentPhoto, fullQualityRequested ? 'full' : 'viewer');
-  const thumbnailSource = currentPhoto.thumbnailUrl
-    ? (thumbnailCacheKey ? { uri: currentPhoto.thumbnailUrl, cacheKey: thumbnailCacheKey } : { uri: currentPhoto.thumbnailUrl })
-    : undefined;
-  const fullImageSource = resolvedPhotoUri
-    ? (fullImageCacheKey ? { uri: resolvedPhotoUri, cacheKey: fullImageCacheKey } : { uri: resolvedPhotoUri })
-    : undefined;
 
   const startEditCaption = () => {
     setDraftCaption(currentPhoto.caption || '');
@@ -533,21 +529,18 @@ export default function ImageViewer({
           )}
           <View style={styles.imageLayerContainer}>
             {hasThumbnail && (
-              <ExpoImage
+              <Image
                 key={`thumb-${currentPhotoKey}`}
-                source={thumbnailSource}
+                source={{ uri: currentPhoto.thumbnailUrl }}
                 style={styles.image}
-                contentFit="contain"
-                cachePolicy="memory-disk"
+                resizeMode="contain"
               />
             )}
-            <AnimatedExpoImage
+            <Animated.Image
               key={`full-${currentPhotoKey}`}
-              source={fullImageSource}
+              source={resolvedPhotoUri ? { uri: resolvedPhotoUri, cache: 'force-cache' } : undefined}
               style={[styles.image, styles.fullImageLayer, { opacity: fullImageOpacity }]}
-              contentFit="contain"
-              cachePolicy="memory-disk"
-              transition={140}
+              resizeMode="contain"
               onLoadStart={() => {
                 if (activeResolveRequestId === resolveRequestIdRef.current) {
                   setImageLoading(true);
