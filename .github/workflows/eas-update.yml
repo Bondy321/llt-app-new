@@ -4,9 +4,14 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+concurrency:
+  group: eas-update-production
+  cancel-in-progress: true
 
 jobs:
-  publish-development-update:
+  publish-production-update:
     runs-on: ubuntu-latest
     env:
       CI: true
@@ -25,8 +30,16 @@ jobs:
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repository at triggering commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Verify release commit is on main
+        run: |
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor ${{ github.sha }} origin/main
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -44,7 +57,14 @@ jobs:
           eas-version: latest
           token: ${{ env.EXPO_TOKEN }}
 
-      - name: Publish development channel update (native only)
+      - name: Log release context
         run: |
-          eas update --channel production --platform ios --message "CI update: ${{ github.sha }}"
-          eas update --channel production --platform android --message "CI update: ${{ github.sha }}"
+          echo "GitHub ref: ${{ github.ref }}"
+          echo "GitHub sha: ${{ github.sha }}"
+          node -e "const pkg=require('./package.json'); console.log('App version:', pkg.version)"
+          eas whoami
+          eas project:info --non-interactive
+
+      - name: Publish production channel update (single group)
+        run: |
+          eas update --channel production --platform all --non-interactive --message "CI update: ${{ github.sha }}"
