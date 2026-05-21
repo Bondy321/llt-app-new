@@ -6,6 +6,8 @@ const loadOptionalService = ({
   isTestEnv = process.env.NODE_ENV === 'test',
   shouldLogWhenUnavailable = false,
 }) => {
+  const label = serviceLabel || 'Optional service';
+
   try {
     if (typeof loadModule !== 'function') {
       throw new Error('Optional service loader requires a loadModule function');
@@ -17,9 +19,9 @@ const loadOptionalService = ({
     const shouldLog = !isTestEnv && shouldLogWhenUnavailable;
 
     if (shouldLog && logger?.warn) {
-      logger.warn(serviceLabel, 'Optional service unavailable', { modulePath, error: message });
+      logger.warn(label, 'Optional service unavailable', { modulePath, error: message });
     } else if (shouldLog) {
-      console.warn(`${serviceLabel} unavailable:`, message);
+      console.warn(`${label} unavailable:`, message);
     }
 
     return null;
