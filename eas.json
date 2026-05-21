@@ -1,7 +1,8 @@
 {
   "cli": {
     "version": ">= 5.0.0",
-    "promptToConfigurePushNotifications": false
+    "promptToConfigurePushNotifications": false,
+    "appVersionSource": "local"
   },
   "build": {
     "base": {
@@ -53,7 +54,6 @@
     },
     "production": {
       "extends": "base",
-      "autoIncrement": true,
       "ios": {
         "resourceClass": "m-medium"
       },
