@@ -1,17 +1,24 @@
-name: EAS Update
+name: EAS Build
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - ios
+          - android
 
 concurrency:
-  group: eas-update-production
-  cancel-in-progress: true
+  group: eas-build-production-${{ github.event.inputs.platform }}
+  cancel-in-progress: false
 
 jobs:
-  publish-production-update:
+  build-production:
     runs-on: ubuntu-latest
     env:
       CI: true
@@ -31,13 +38,12 @@ jobs:
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK }}
 
     steps:
-      - name: Checkout repository at triggering commit
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Verify release commit is on main
+      - name: Verify build commit is on main
         run: |
           git fetch origin main --depth=1
           git merge-base --is-ancestor ${{ github.sha }} origin/main
@@ -58,14 +64,13 @@ jobs:
           eas-version: latest
           token: ${{ env.EXPO_TOKEN }}
 
-      - name: Log release context
+      - name: Log build context
         run: |
           echo "GitHub ref: ${{ github.ref }}"
           echo "GitHub sha: ${{ github.sha }}"
-          node -e "const pkg=require('./package.json'); console.log('App version:', pkg.version)"
+          node -e "const app=require('./app.config.js').expo; console.log('Expo app version:', app.version)"
           eas whoami
           eas project:info --non-interactive
 
-      - name: Publish production channel update (single group)
-        run: |
-          eas update --channel production --platform all --non-interactive --message "CI update: ${{ github.sha }}"
+      - name: Build production binary
+        run: eas build --profile production --platform ${{ github.event.inputs.platform }} --non-interactive
