@@ -316,7 +316,10 @@ const logReactionEvent = (level, eventName, payload) => {
 const buildMessagePayload = (messageText, senderInfo, messageId, messageType = 'text') => {
   const safeSender = senderInfo || {};
   const timestamp = new Date().toISOString();
-  const sanitizedText = sanitizeInput(messageText?.trim() || '');
+  const rawMessageText = typeof messageText === 'string'
+    ? messageText
+    : String(messageText ?? '');
+  const sanitizedText = sanitizeInput(rawMessageText.trim());
 
   return {
     id: messageId,
