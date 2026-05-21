@@ -67,6 +67,24 @@ describe('loadOptionalService', () => {
     assert.equal(warnMock.mock.callCount(), 0);
   });
 
+
+  test('falls back to a safe default label when serviceLabel is missing', () => {
+    const warnMock = mock.method(console, 'warn', () => {});
+    const { loadOptionalService } = require(loaderPath);
+
+    const loaded = loadOptionalService({
+      modulePath: './missingService',
+      isTestEnv: false,
+      shouldLogWhenUnavailable: true,
+      logger: null,
+    });
+
+    assert.equal(loaded, null);
+    assert.equal(warnMock.mock.callCount(), 1);
+    const firstCallArgs = warnMock.mock.calls[0].arguments;
+    assert.equal(firstCallArgs[0], 'Optional service unavailable:');
+  });
+
   test('uses logger.warn when missing module logging is enabled', () => {
     const logger = { warn: mock.fn() };
     const { loadOptionalService } = require(loaderPath);
