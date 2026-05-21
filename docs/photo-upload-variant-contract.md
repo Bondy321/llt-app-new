@@ -11,6 +11,8 @@
 
 Legacy queue payloads without `payloadVersion` remain replay-compatible and are treated as Phase 1 payloads.
 
+Mobile upload preparation should only optimize the source upload file for v2 payloads. Viewer and thumbnail variants are server-owned so the app does not spend client CPU generating files that are not uploaded in the v2 queue handoff.
+
 ## DB lifecycle fields
 
 New uploads should enter `group_tour_photos/*` or `private_tour_photos/*` with:
@@ -35,3 +37,13 @@ Compatibility behavior:
 - Cloud Storage triggers must run in the same region as the bucket they listen to.
 - For the current Firebase free-tier setup, the default Storage bucket is `us-east1`, so `generatePhotoVariants` is deployed in `us-east1`.
 - Other backend functions remain in `europe-west1`; this function is an intentional regional exception.
+
+## Backfill / retry
+
+Existing records missing `viewerUrl` or `thumbnailUrl`, or records with `variantStatus: "failed"`, can be inspected with:
+
+```bash
+npm --prefix functions run backfill:photo-variants -- --dry-run --limit=50
+```
+
+Apply with `--apply` after reviewing the dry-run output. Use `--visibility=group|private`, `--tourId=...`, and `--ownerKey=...` to narrow the run.
