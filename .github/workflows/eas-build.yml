@@ -1,0 +1,75 @@
+name: EAS Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - ios
+          - android
+
+concurrency:
+  group: eas-build-production-${{ github.event.inputs.platform }}
+  cancel-in-progress: false
+
+jobs:
+  build-production:
+    runs-on: ubuntu-latest
+    env:
+      CI: true
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EXPO_PUBLIC_FIREBASE_API_KEY: ${{ secrets.EXPO_PUBLIC_FIREBASE_API_KEY }}
+      EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+      EXPO_PUBLIC_FIREBASE_DATABASE_URL: ${{ secrets.EXPO_PUBLIC_FIREBASE_DATABASE_URL }}
+      EXPO_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_PROJECT_ID }}
+      EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET: ${{ secrets.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET }}
+      EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID }}
+      EXPO_PUBLIC_FIREBASE_APP_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_APP_ID }}
+      EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID }}
+      EXPO_PUBLIC_SUPPORT_PHONE: ${{ secrets.EXPO_PUBLIC_SUPPORT_PHONE }}
+      EXPO_PUBLIC_SUPPORT_SMS: ${{ secrets.EXPO_PUBLIC_SUPPORT_SMS }}
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK }}
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify build commit is on main
+        run: |
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor ${{ github.sha }} origin/main
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Expo and EAS CLI
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          eas-version: latest
+          token: ${{ env.EXPO_TOKEN }}
+
+      - name: Log build context
+        run: |
+          echo "GitHub ref: ${{ github.ref }}"
+          echo "GitHub sha: ${{ github.sha }}"
+          node -e "const app=require('./app.config.js').expo; console.log('Expo app version:', app.version)"
+          eas whoami
+          eas project:info --non-interactive
+
+      - name: Build production binary
+        run: eas build --profile production --platform ${{ github.event.inputs.platform }} --non-interactive
