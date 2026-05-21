@@ -17,7 +17,6 @@ const {
   fetchTourPhotosPage,
   fetchPrivatePhotosPage,
   subscribeToTourPhotos,
-  subscribeToPrivatePhotos,
 } = require('../services/photoService');
 
 const makeSnapshot = (value) => ({ val: () => value });
@@ -144,36 +143,4 @@ test('subscribeToTourPhotos remains backward compatible and bounded via limitToL
   assert.equal(seenLimit, 100);
   assert.deepEqual(callbackRows.map((row) => row.id), ['newest', 'old']);
   assert.equal(typeof unsubscribe, 'function');
-});
-
-test('photo subscriptions accept a smaller live limit without changing defaults', async () => {
-  const limits = [];
-
-  subscribeToTourPhotos('tour-live-small', () => {}, {
-    realtimeDbInstance: {},
-    dbRefFn: (_db, path) => ({ path }),
-    orderByChildFn: () => 'timestamp',
-    limitToLastFn: (limit) => {
-      limits.push(limit);
-      return limit;
-    },
-    queryFn: (_ref, ...constraints) => constraints,
-    onValueFn: () => () => {},
-    limit: 30,
-  });
-
-  subscribeToPrivatePhotos('tour-live-small', 'owner@example.com', () => {}, {
-    realtimeDbInstance: {},
-    dbRefFn: (_db, path) => ({ path }),
-    orderByChildFn: () => 'timestamp',
-    limitToLastFn: (limit) => {
-      limits.push(limit);
-      return limit;
-    },
-    queryFn: (_ref, ...constraints) => constraints,
-    onValueFn: () => () => {},
-    limit: 25,
-  });
-
-  assert.deepEqual(limits, [30, 25]);
 });

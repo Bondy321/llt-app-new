@@ -352,127 +352,6 @@ const buildPhotoCollectionPath = ({ visibility, tourId, ownerKey }) => {
   return `group_tour_photos/${tourId}`;
 };
 
-const createPhotoVariantBuffers = async (sourceBuffer) => {
-  const [viewerBuffer, thumbnailBuffer] = await Promise.all([
-    sharp(sourceBuffer).rotate().resize({ width: 1600, withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer(),
-    sharp(sourceBuffer).rotate().resize({ width: 480, withoutEnlargement: true }).jpeg({ quality: 72 }).toBuffer(),
-  ]);
-
-  return { viewerBuffer, thumbnailBuffer };
-};
-
-const buildPhotoVariantPaths = ({ visibility, tourId, ownerKey, filename }) => {
-  const extensionlessName = filename.replace(/\.[^/.]+$/, "");
-  const viewerPath = visibility === "private"
-    ? `private_tour_photos/${tourId}/${ownerKey}/viewers/${extensionlessName}_viewer.jpg`
-    : `group_tour_photos/${tourId}/viewers/${extensionlessName}_viewer.jpg`;
-  const thumbnailPath = visibility === "private"
-    ? `private_tour_photos/${tourId}/${ownerKey}/thumbnails/${extensionlessName}_thumb.jpg`
-    : `group_tour_photos/${tourId}/thumbnails/${extensionlessName}_thumb.jpg`;
-
-  return { viewerPath, thumbnailPath };
-};
-
-const generatePhotoVariantsForRecord = async ({
-  bucketName,
-  visibility,
-  tourId,
-  ownerKey = null,
-  photoId,
-  photoRecord,
-  dryRun = false,
-  storageBucket = null,
-  dbRoot = null,
-}) => {
-  const objectPath = typeof photoRecord?.storagePath === "string" ? photoRecord.storagePath : "";
-  if (!bucketName || !objectPath || !photoId || !tourId) {
-    return { status: "skipped", reason: "missing-required-fields" };
-  }
-
-  const filename = objectPath.split("/").pop();
-  if (!filename) {
-    return { status: "skipped", reason: "missing-filename" };
-  }
-
-  const { viewerPath, thumbnailPath } = buildPhotoVariantPaths({
-    visibility,
-    tourId,
-    ownerKey,
-    filename,
-  });
-
-  if (dryRun) {
-    return {
-      status: "dry-run",
-      photoId,
-      objectPath,
-      viewerPath,
-      thumbnailPath,
-    };
-  }
-
-  const resolvedDbRoot = dbRoot || admin.database().ref(buildPhotoCollectionPath({ visibility, tourId, ownerKey }));
-  const resolvedBucket = storageBucket || admin.storage().bucket(bucketName);
-
-  try {
-    const sourceFile = resolvedBucket.file(objectPath);
-    const [sourceBuffer] = await sourceFile.download();
-    const { viewerBuffer, thumbnailBuffer } = await createPhotoVariantBuffers(sourceBuffer);
-
-    await Promise.all([
-      resolvedBucket.file(viewerPath).save(viewerBuffer, {
-        metadata: {
-          contentType: "image/jpeg",
-          cacheControl: PHOTO_CACHE_CONTROL_HEADER,
-          metadata: {
-            variant: "viewer",
-            idempotencyKey: photoRecord.idempotencyKey || "",
-          },
-        },
-      }),
-      resolvedBucket.file(thumbnailPath).save(thumbnailBuffer, {
-        metadata: {
-          contentType: "image/jpeg",
-          cacheControl: PHOTO_CACHE_CONTROL_HEADER,
-          metadata: {
-            variant: "thumbnail",
-            idempotencyKey: photoRecord.idempotencyKey || "",
-          },
-        },
-      }),
-    ]);
-
-    const [viewerUrl, thumbnailUrl] = await Promise.all([
-      resolvedBucket.file(viewerPath).getSignedUrl({ action: "read", expires: "2500-01-01" }).then((value) => value[0]),
-      resolvedBucket.file(thumbnailPath).getSignedUrl({ action: "read", expires: "2500-01-01" }).then((value) => value[0]),
-    ]);
-
-    await resolvedDbRoot.child(photoId).update({
-      viewerUrl,
-      viewerStoragePath: viewerPath,
-      thumbnailUrl,
-      thumbnailStoragePath: thumbnailPath,
-      variantStatus: "ready",
-      variantUpdatedAt: Date.now(),
-      variantError: null,
-    });
-
-    return { status: "ready", photoId, viewerPath, thumbnailPath };
-  } catch (error) {
-    await resolvedDbRoot.child(photoId).update({
-      variantStatus: "failed",
-      variantUpdatedAt: Date.now(),
-      variantError: error?.message || "Variant generation failed",
-    });
-
-    return {
-      status: "failed",
-      photoId,
-      error: error?.message || "Variant generation failed",
-    };
-  }
-};
-
 /**
  * Verifies that an admin broadcast is legitimate by checking the senderUid.
  * Rejects messages that claim admin status without a verified non-anonymous auth UID.
@@ -1024,18 +903,64 @@ const processPhotoVariantObject = async (event) => {
       return null;
     }
 
-    await generatePhotoVariantsForRecord({
-      bucketName,
-      visibility,
-      tourId,
-      ownerKey,
-      photoId,
-      photoRecord: {
-        ...photoRecord,
-        idempotencyKey,
-        storagePath: objectPath,
-      },
-    });
+    const sourceFile = admin.storage().bucket(bucketName).file(objectPath);
+    const [sourceBuffer] = await sourceFile.download();
+    const viewerBuffer = await sharp(sourceBuffer).rotate().resize({ width: 1600, withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+    const thumbnailBuffer = await sharp(sourceBuffer).rotate().resize({ width: 480, withoutEnlargement: true }).jpeg({ quality: 72 }).toBuffer();
+
+    const extensionlessName = parsed.filename.replace(/\.[^/.]+$/, "");
+    const viewerPath = visibility === "private"
+      ? `private_tour_photos/${tourId}/${ownerKey}/viewers/${extensionlessName}_viewer.jpg`
+      : `group_tour_photos/${tourId}/viewers/${extensionlessName}_viewer.jpg`;
+    const thumbnailPath = visibility === "private"
+      ? `private_tour_photos/${tourId}/${ownerKey}/thumbnails/${extensionlessName}_thumb.jpg`
+      : `group_tour_photos/${tourId}/thumbnails/${extensionlessName}_thumb.jpg`;
+
+    try {
+      await Promise.all([
+        admin.storage().bucket(bucketName).file(viewerPath).save(viewerBuffer, {
+          metadata: {
+            contentType: "image/jpeg",
+            cacheControl: PHOTO_CACHE_CONTROL_HEADER,
+            metadata: {
+              variant: "viewer",
+              idempotencyKey,
+            },
+          },
+        }),
+        admin.storage().bucket(bucketName).file(thumbnailPath).save(thumbnailBuffer, {
+          metadata: {
+            contentType: "image/jpeg",
+            cacheControl: PHOTO_CACHE_CONTROL_HEADER,
+            metadata: {
+              variant: "thumbnail",
+              idempotencyKey,
+            },
+          },
+        }),
+      ]);
+
+      const [viewerUrl, thumbnailUrl] = await Promise.all([
+        admin.storage().bucket(bucketName).file(viewerPath).getSignedUrl({ action: "read", expires: "2500-01-01" }).then((value) => value[0]),
+        admin.storage().bucket(bucketName).file(thumbnailPath).getSignedUrl({ action: "read", expires: "2500-01-01" }).then((value) => value[0]),
+      ]);
+
+      await dbRoot.child(photoId).update({
+        viewerUrl,
+        viewerStoragePath: viewerPath,
+        thumbnailUrl,
+        thumbnailStoragePath: thumbnailPath,
+        variantStatus: "ready",
+        variantUpdatedAt: Date.now(),
+        variantError: null,
+      });
+    } catch (error) {
+      await dbRoot.child(photoId).update({
+        variantStatus: "failed",
+        variantUpdatedAt: Date.now(),
+        variantError: error?.message || "Variant generation failed",
+      });
+    }
 
     return null;
   };
@@ -1227,7 +1152,4 @@ exports.__testables = {
   parseSourcePhotoPath,
   buildPhotoCollectionPath,
   processPhotoVariantObject,
-  createPhotoVariantBuffers,
-  buildPhotoVariantPaths,
-  generatePhotoVariantsForRecord,
 };

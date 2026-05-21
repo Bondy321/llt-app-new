@@ -1,12 +1,13 @@
 // screens/GroupPhotobookScreen.js
 // Enhanced group photobook with contributor info, date grouping, and premium viewing experience
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   StyleSheet,
   Text,
   View,
   TouchableOpacity,
   SectionList,
+  Image,
   Dimensions,
   Platform,
   ActivityIndicator,
@@ -19,15 +20,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Image as ExpoImage } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as offlineSyncService from '../services/offlineSyncService';
 import * as photoService from '../services/photoService';
-import { optimizeSourcePhotoForUpload, formatBytes } from '../services/imageOptimizationService';
+import { optimizeImageForUpload, formatBytes } from '../services/imageOptimizationService';
 import ImageViewer from '../components/ImageViewer';
-import GalleryPhotoTile from '../components/GalleryPhotoTile';
-import { usePhotoGalleryData } from '../hooks/usePhotoGalleryData';
-import { usePhotoThumbnailPrefetch } from '../hooks/usePhotoThumbnailPrefetch';
+import { getCachedPhotoUri } from '../services/photoViewerCacheService';
+import { resolveViewerDisplayUri } from '../services/photoVariantService';
 import { auth } from '../firebase';
 import { getCanonicalIdentity } from '../services/identityService';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
@@ -43,6 +42,10 @@ export default function GroupPhotobookScreen({
   canonicalIdentity: canonicalIdentityProp = null,
   onViewerVisibilityChange = null,
 }) {
+  const MIN_REFRESH_SPINNER_MS = 120;
+  const [photos, setPhotos] = useState([]);
+  const [loadingPhotos, setLoadingPhotos] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [photoQueueItems, setPhotoQueueItems] = useState([]);
   const [sortMode, setSortMode] = useState('newest');
   const [mineOnly, setMineOnly] = useState(false);
@@ -70,6 +73,9 @@ export default function GroupPhotobookScreen({
   const [pendingImage, setPendingImage] = useState(null);
   const [caption, setCaption] = useState('');
 
+  // Image loading states for skeleton
+  const [loadedImages, setLoadedImages] = useState({});
+  const prefetchedUrisRef = useRef(new Set());
   const currentUser = auth.currentUser;
   const canonicalIdentity = useMemo(
     () => canonicalIdentityProp || getCanonicalIdentity({ authUser: currentUser, bookingData: { id: userId } }),
@@ -77,27 +83,25 @@ export default function GroupPhotobookScreen({
   );
   const principalId = canonicalIdentity?.principalId || userId;
 
-  const addUploaderName = useCallback((photo) => ({
-    ...photo,
-    uploaderName: photo.uploaderName || 'Tour Member',
-  }), []);
+  useEffect(() => {
+    if (!tourId) return undefined;
 
-  const {
-    photos,
-    loading: loadingPhotos,
-    refreshing,
-    loadingMore,
-    refresh: refreshPhotos,
-    loadMore,
-  } = usePhotoGalleryData({
-    visibility: 'group',
-    tourId,
-    pageSize: 30,
-    liveLimit: 30,
-    mapPhoto: addUploaderName,
-  });
+    setLoadingPhotos(true);
+    const unsubscribe = photoService.subscribeToTourPhotos(tourId, (photoList) => {
+      // Add uploader name to photos for display
+      const photosWithNames = photoList.map(photo => ({
+        ...photo,
+        uploaderName: photo.uploaderName || 'Tour Member',
+      }));
+      setPhotos(photosWithNames);
+      setLoadingPhotos(false);
+      setRefreshing(false);
+    });
 
-  const prefetchVisibleThumbnails = usePhotoThumbnailPrefetch();
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [tourId]);
 
   useEffect(() => {
     if (!tourId) return undefined;
@@ -261,7 +265,7 @@ export default function GroupPhotobookScreen({
     if (!pendingImage?.uri) return;
 
     try {
-      const optimized = await optimizeSourcePhotoForUpload(pendingImage);
+      const optimized = await optimizeImageForUpload(pendingImage);
       const createdAt = new Date().toISOString();
       const jobId = `photo_upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const idempotencyKey = makePhotoIdempotencyKey({
@@ -333,23 +337,36 @@ export default function GroupPhotobookScreen({
     setCaption('');
   };
 
-  const openViewer = useCallback((groupIndex, photoIndexInGroup) => {
+  const openViewer = (groupIndex, photoIndexInGroup) => {
+    const selectedPhoto = gallerySections[groupIndex]?.photos?.[photoIndexInGroup] || null;
+    const selectedUri = resolveViewerDisplayUri(selectedPhoto);
+    if (selectedUri) {
+      getCachedPhotoUri(selectedUri).catch(() => {});
+    }
+
     const flatIndex = viewerFlatIndexMap[`${groupIndex}:${photoIndexInGroup}`] ?? 0;
 
     setViewerIndex(flatIndex);
     setViewerVisible(true);
-  }, [viewerFlatIndexMap]);
+  };
 
-  const onViewableItemsChanged = useCallback(({ viewableItems }) => {
-    const viewablePhotos = [];
+  const onViewableItemsChanged = useRef(({ viewableItems }) => {
     viewableItems.forEach(({ item }) => {
       if (!Array.isArray(item)) return;
+
       item.forEach(({ photo }) => {
-        if (photo) viewablePhotos.push(photo);
+        const previewUrl = photo?.thumbnailUrl;
+        if (!previewUrl || prefetchedUrisRef.current.has(previewUrl)) return;
+
+        prefetchedUrisRef.current.add(previewUrl);
+        Image.prefetch(previewUrl).catch(() => {});
       });
     });
-    prefetchVisibleThumbnails(viewablePhotos);
-  }, [prefetchVisibleThumbnails]);
+  });
+
+  const viewabilityConfig = useRef({
+    itemVisiblePercentThreshold: 40,
+  });
 
   const renderPendingUploads = () => {
     if (photoQueueItems.length === 0) return null;
@@ -360,12 +377,7 @@ export default function GroupPhotobookScreen({
         <View style={styles.grid}>
           {photoQueueItems.map((item) => (
             <View key={item.id} style={styles.imageTouchable}>
-              <ExpoImage
-                source={{ uri: item?.payload?.localAssets?.previewUri || item?.payload?.localAssets?.sourceUri }}
-                style={styles.imageThumbnail}
-                contentFit="cover"
-                cachePolicy="memory-disk"
-              />
+              <Image source={{ uri: item?.payload?.localAssets?.previewUri || item?.payload?.localAssets?.sourceUri }} style={styles.imageThumbnail} />
               <View style={styles.pendingOverlay}>
                 {item.status === 'failed' ? (
                   <>
@@ -442,7 +454,63 @@ export default function GroupPhotobookScreen({
     }
   };
 
-  const onRefresh = useCallback(() => refreshPhotos(), [refreshPhotos]);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    const refreshStartedAt = Date.now();
+
+    try {
+      if (!tourId) {
+        setPhotos([]);
+        return;
+      }
+
+      await new Promise((resolve) => {
+        let didResolve = false;
+        let unsubscribe = null;
+
+        const completeRefresh = (photoList = []) => {
+          if (didResolve) return;
+          didResolve = true;
+
+          const photosWithNames = photoList.map(photo => ({
+            ...photo,
+            uploaderName: photo.uploaderName || 'Tour Member',
+          }));
+
+          setPhotos(photosWithNames);
+          if (typeof unsubscribe === 'function') {
+            unsubscribe();
+          }
+          resolve();
+        };
+
+        const handleSnapshot = (photoList) => {
+          completeRefresh(photoList);
+        };
+
+        unsubscribe = photoService.subscribeToTourPhotos(tourId, handleSnapshot);
+      });
+    } catch (error) {
+      Alert.alert('Refresh Failed', 'Unable to refresh photos right now.');
+    } finally {
+      const elapsed = Date.now() - refreshStartedAt;
+      if (elapsed < MIN_REFRESH_SPINNER_MS) {
+        await new Promise(resolve => setTimeout(resolve, MIN_REFRESH_SPINNER_MS - elapsed));
+      }
+      setRefreshing(false);
+    }
+  }, [tourId]);
+
+  const handleImageLoad = (photoId) => {
+    setLoadedImages(prev => ({ ...prev, [photoId]: true }));
+  };
+
+  // Render skeleton placeholder
+  const renderSkeleton = () => (
+    <View style={styles.skeleton}>
+      <View style={styles.skeletonShimmer} />
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -542,11 +610,7 @@ export default function GroupPhotobookScreen({
           }}
           ListHeaderComponent={renderPendingUploads}
           ListEmptyComponent={renderEmptyState}
-          ListFooterComponent={(
-            <View style={styles.listFooter}>
-              {loadingMore && <ActivityIndicator size="small" color={COLORS.success} />}
-            </View>
-          )}
+          ListFooterComponent={<View style={{ height: 40 }} />}
           renderSectionHeader={({ section }) => (
             <View style={styles.dateGroup}>
               <View style={styles.dateHeader}>
@@ -561,12 +625,23 @@ export default function GroupPhotobookScreen({
           renderItem={({ item: row, section }) => (
             <View style={styles.gridRow}>
               {row.map(({ photo, photoIndexInSection }) => (
-                <GalleryPhotoTile
+                <TouchableOpacity
                   key={photo.id}
-                  photo={photo}
                   style={styles.imageTouchable}
                   onPress={() => openViewer(section.sectionIndex, photoIndexInSection)}
+                  activeOpacity={0.85}
                 >
+                  {!loadedImages[photo.id] && renderSkeleton()}
+                  <Image
+                    source={{ uri: photo.thumbnailUrl || photo.url }}
+                    style={[
+                      styles.imageThumbnail,
+                      !loadedImages[photo.id] && styles.imageHidden,
+                    ]}
+                    resizeMode="contain"
+                    onLoad={() => handleImageLoad(photo.id)}
+                  />
+
                   {photo.userId === principalId && (
                     <View style={styles.myPhotoBadge}>
                       <MaterialCommunityIcons name="account" size={10} color={COLORS.white} />
@@ -578,13 +653,12 @@ export default function GroupPhotobookScreen({
                       <MaterialCommunityIcons name="text" size={12} color={COLORS.white} />
                     </View>
                   )}
-                </GalleryPhotoTile>
+                </TouchableOpacity>
               ))}
             </View>
           )}
-          onViewableItemsChanged={onViewableItemsChanged}
-          onEndReached={loadMore}
-          onEndReachedThreshold={0.45}
+          onViewableItemsChanged={onViewableItemsChanged.current}
+          viewabilityConfig={viewabilityConfig.current}
           initialNumToRender={9}
           maxToRenderPerBatch={6}
           windowSize={7}
@@ -641,11 +715,10 @@ export default function GroupPhotobookScreen({
             <Text style={styles.uploadModalSubtitle}>Everyone on the tour will see this photo</Text>
 
             {pendingImage?.uri && (
-              <ExpoImage
+              <Image
                 source={{ uri: pendingImage.uri }}
                 style={styles.uploadPreview}
-                contentFit="cover"
-                cachePolicy="memory-disk"
+                resizeMode="cover"
               />
             )}
 
@@ -939,11 +1012,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: SPACING.sm,
     marginBottom: SPACING.sm,
-  },
-  listFooter: {
-    height: 52,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   imageTouchable: {
     width: THUMBNAIL_SIZE,

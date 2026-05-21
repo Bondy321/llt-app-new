@@ -171,41 +171,6 @@ export const optimizeImageForUpload = async (asset, options = {}) => {
   };
 };
 
-export const optimizeSourcePhotoForUpload = async (asset, options = {}) => {
-  if (!asset?.uri) {
-    throw new Error('Missing image asset URI');
-  }
-
-  const originalSizeBytes = typeof asset.fileSize === 'number' ? asset.fileSize : await safeFileSize(asset.uri);
-  const dimensions = { width: asset.width, height: asset.height };
-
-  const fullProfile = resolveProfile(OPTIMIZATION_PROFILES.full, {
-    targetMaxBytes: options.fullTargetMaxBytes ?? OPTIMIZATION_PROFILES.full.targetMaxBytes,
-    maxIterations: options.maxIterations ?? OPTIMIZATION_PROFILES.full.maxIterations,
-  });
-
-  const full = await optimizeVariant(asset.uri, fullProfile, dimensions);
-
-  return {
-    uploadUri: full.uri,
-    metrics: {
-      originalSizeBytes,
-      optimizedSizeBytes: full.sizeBytes,
-      optimizationRatio: originalSizeBytes && full.sizeBytes
-        ? Number((1 - (full.sizeBytes / originalSizeBytes)).toFixed(4))
-        : null,
-      fullOptimizationPasses: full.optimizationPasses,
-      fullFinalQualityUsed: full.finalQualityUsed,
-      fullResizeApplied: full.resizeApplied,
-      viewerSizeBytes: null,
-      thumbnailSizeBytes: null,
-      viewerOptimizationRatio: null,
-      viewerOptimizationPasses: 0,
-      thumbnailOptimizationPasses: 0,
-    },
-  };
-};
-
 export const formatBytes = (bytes) => {
   if (typeof bytes !== 'number' || Number.isNaN(bytes) || bytes < 0) return 'Unknown';
   if (bytes < 1024) return `${bytes} B`;

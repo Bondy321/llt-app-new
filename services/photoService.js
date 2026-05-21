@@ -487,10 +487,10 @@ const uploadPhoto = async (
     const uploadTimestamp = Date.now();
     const deterministicSegment = normalizedIdempotencyKey
       ? sanitizeStorageSegment(normalizedIdempotencyKey, `${uploadTimestamp}_${validatedUserId}`)
-      : sanitizeStorageSegment(`${uploadTimestamp}_${validatedUserId}`, `${uploadTimestamp}_photo`);
+      : `${uploadTimestamp}_${validatedUserId}`;
     const filename = `${deterministicSegment}.${extension}`;
     const storagePath = isPrivate
-      ? `private_tour_photos/${validatedTourId}/${validatedUserKey}/${filename}`
+      ? `private_tour_photos/${validatedTourId}/${validatedUserId}/${filename}`
       : `group_tour_photos/${validatedTourId}/${filename}`;
     const fileRef = storageRefFn(storageInstance, storagePath);
 
@@ -550,7 +550,7 @@ const uploadPhoto = async (
 
           const thumbnailFilename = `${uploadTimestamp}_${validatedUserId}_thumb.jpg`;
           thumbnailPath = isPrivate
-            ? `private_tour_photos/${validatedTourId}/${validatedUserKey}/thumbnails/${thumbnailFilename}`
+            ? `private_tour_photos/${validatedTourId}/${validatedUserId}/thumbnails/${thumbnailFilename}`
             : `group_tour_photos/${validatedTourId}/thumbnails/${thumbnailFilename}`;
 
           const thumbnailRef = storageRefFn(storageInstance, thumbnailPath);
@@ -578,7 +578,7 @@ const uploadPhoto = async (
 
           const viewerFilename = `${uploadTimestamp}_${validatedUserId}_viewer.jpg`;
           viewerPath = isPrivate
-            ? `private_tour_photos/${validatedTourId}/${validatedUserKey}/viewers/${viewerFilename}`
+            ? `private_tour_photos/${validatedTourId}/${validatedUserId}/viewers/${viewerFilename}`
             : `group_tour_photos/${validatedTourId}/viewers/${viewerFilename}`;
 
           const viewerRef = storageRefFn(storageInstance, viewerPath);
@@ -716,7 +716,6 @@ const subscribeToTourPhotos = (
     queryFn = query,
     orderByChildFn = orderByChild,
     limitToLastFn = limitToLast,
-    limit = LIVE_PHOTOS_WINDOW,
   } = {}
 ) => {
   try {
@@ -733,8 +732,7 @@ const subscribeToTourPhotos = (
     }
 
     const photosRef = dbRefFn(realtimeDbInstance, `group_tour_photos/${validatedTourId}`);
-    const liveLimit = sanitizePageLimit(limit || LIVE_PHOTOS_WINDOW);
-    const photosQuery = queryFn(photosRef, orderByChildFn('timestamp'), limitToLastFn(liveLimit));
+    const photosQuery = queryFn(photosRef, orderByChildFn('timestamp'), limitToLastFn(LIVE_PHOTOS_WINDOW));
 
     const unsubscribe = onValueFn(photosQuery, (snapshot) => {
       try {
@@ -774,7 +772,6 @@ const subscribeToPrivatePhotos = (
     queryFn = query,
     orderByChildFn = orderByChild,
     limitToLastFn = limitToLast,
-    limit = LIVE_PHOTOS_WINDOW,
   } = {},
 ) => {
   if (!tourId || !ownerId || typeof callback !== 'function') {
@@ -788,8 +785,7 @@ const subscribeToPrivatePhotos = (
   const ownerScopeKey = sanitizeRealtimeKeySegment(ownerScope);
 
   const photosRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${ownerScopeKey}`);
-  const liveLimit = sanitizePageLimit(limit || LIVE_PHOTOS_WINDOW);
-  const photosQuery = queryFn(photosRef, orderByChildFn('timestamp'), limitToLastFn(liveLimit));
+  const photosQuery = queryFn(photosRef, orderByChildFn('timestamp'), limitToLastFn(LIVE_PHOTOS_WINDOW));
 
   return onValueFn(photosQuery, (snapshot) => {
     const photos = mapSnapshotToPhotos(snapshot, { ownerScope });

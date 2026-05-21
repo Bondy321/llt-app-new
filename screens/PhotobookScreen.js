@@ -7,6 +7,7 @@ import {
   View,
   TouchableOpacity,
   SectionList,
+  Image,
   Dimensions,
   Platform,
   ActivityIndicator,
@@ -14,20 +15,19 @@ import {
   RefreshControl,
   TextInput,
   Modal,
+  Animated,
   KeyboardAvoidingView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Image as ExpoImage } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as offlineSyncService from '../services/offlineSyncService';
 import * as photoService from '../services/photoService';
-import { optimizeSourcePhotoForUpload, formatBytes } from '../services/imageOptimizationService';
+import { optimizeImageForUpload, formatBytes } from '../services/imageOptimizationService';
 import ImageViewer from '../components/ImageViewer';
-import GalleryPhotoTile from '../components/GalleryPhotoTile';
-import { usePhotoGalleryData } from '../hooks/usePhotoGalleryData';
-import { usePhotoThumbnailPrefetch } from '../hooks/usePhotoThumbnailPrefetch';
+import { getCachedPhotoUri } from '../services/photoViewerCacheService';
+import { resolveViewerDisplayUri } from '../services/photoVariantService';
 import { auth, realtimeDb } from '../firebase';
 import logger from '../services/loggerService';
 import { getCanonicalIdentity } from '../services/identityService';
@@ -44,6 +44,9 @@ export default function PhotobookScreen({
   canonicalIdentity: canonicalIdentityProp = null,
   onViewerVisibilityChange = null,
 }) {
+  const [photos, setPhotos] = useState([]);
+  const [loadingPhotos, setLoadingPhotos] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [photoQueueItems, setPhotoQueueItems] = useState([]);
   const [sortMode, setSortMode] = useState('newest');
   const [mineOnly, setMineOnly] = useState(false);
@@ -71,6 +74,8 @@ export default function PhotobookScreen({
   const [pendingImage, setPendingImage] = useState(null);
   const [caption, setCaption] = useState('');
 
+  // Image loading states for skeleton
+  const [loadedImages, setLoadedImages] = useState({});
   const currentUser = auth.currentUser;
   const canonicalIdentity = useMemo(
     () => canonicalIdentityProp || getCanonicalIdentity({ authUser: currentUser, bookingData: { id: stablePassengerId || privatePhotoOwnerId, stablePassengerId: stablePassengerId || null } }),
@@ -99,25 +104,43 @@ export default function PhotobookScreen({
         tourId,
       });
     }
-  }, [principalId, privatePhotoOwnerId, tourId]);
+  }, [principalId, tourId]);
 
-  const {
-    photos,
-    loading: loadingPhotos,
-    refreshing,
-    loadingMore,
-    refresh: refreshPhotos,
-    loadMore,
-  } = usePhotoGalleryData({
-    visibility: 'private',
-    tourId,
-    ownerId: principalId,
-    beforeLoad: ensurePrivatePhotoOwnerAccess,
-    pageSize: 30,
-    liveLimit: 30,
-  });
+  useEffect(() => {
+    if (!tourId || !principalId) return undefined;
 
-  const prefetchVisibleThumbnails = usePhotoThumbnailPrefetch();
+    let unsubscribe = null;
+    let isCancelled = false;
+
+    const bootstrapPrivatePhotos = async () => {
+      setLoadingPhotos(true);
+      await ensurePrivatePhotoOwnerAccess();
+      if (isCancelled) return;
+
+      unsubscribe = photoService.subscribeToPrivatePhotos(tourId, principalId, (photoList) => {
+        setPhotos(photoList);
+        setLoadingPhotos(false);
+        setRefreshing(false);
+      });
+    };
+
+    bootstrapPrivatePhotos().catch((error) => {
+      logger.error('Photobook', 'Failed to bootstrap private photo subscription', {
+        error: error.message,
+        privatePhotoOwnerId: principalId,
+        tourId,
+      });
+      if (!isCancelled) {
+        setLoadingPhotos(false);
+        setRefreshing(false);
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+      if (unsubscribe) unsubscribe();
+    };
+  }, [ensurePrivatePhotoOwnerAccess, principalId, tourId]);
 
   useEffect(() => {
     if (!tourId || !principalId) return undefined;
@@ -282,7 +305,7 @@ export default function PhotobookScreen({
     if (!pendingImage?.uri) return;
 
     try {
-      const optimized = await optimizeSourcePhotoForUpload(pendingImage);
+      const optimized = await optimizeImageForUpload(pendingImage);
       await ensurePrivatePhotoOwnerAccess();
       const createdAt = new Date().toISOString();
       const jobId = `photo_upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -356,10 +379,15 @@ export default function PhotobookScreen({
   const openViewer = useCallback((photoId) => {
     const flatIndex = photoIndexById[photoId];
     if (typeof flatIndex !== 'number') return;
+    const selectedPhoto = visiblePhotos[flatIndex] || null;
+    const selectedUri = resolveViewerDisplayUri(selectedPhoto);
+    if (selectedUri) {
+      getCachedPhotoUri(selectedUri).catch(() => {});
+    }
 
     setViewerIndex(flatIndex);
     setViewerVisible(true);
-  }, [photoIndexById]);
+  }, [photoIndexById, visiblePhotos]);
 
   const handleDeletePhoto = async (photo) => {
     try {
@@ -372,17 +400,63 @@ export default function PhotobookScreen({
     }
   };
 
-  const onRefresh = useCallback(() => refreshPhotos(), [refreshPhotos]);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
 
-  const onViewableItemsChanged = useCallback(({ viewableItems }) => {
-    const viewablePhotos = [];
-    viewableItems.forEach(({ item }) => {
-      if (Array.isArray(item)) {
-        viewablePhotos.push(...item);
+    try {
+      if (!tourId || !principalId) {
+        setPhotos([]);
+        return;
       }
-    });
-    prefetchVisibleThumbnails(viewablePhotos);
-  }, [prefetchVisibleThumbnails]);
+
+      await new Promise((resolve) => {
+        let didResolve = false;
+        let unsubscribe = null;
+        let timeoutId = null;
+
+        const completeRefresh = (photoList = null) => {
+          if (didResolve) return;
+          didResolve = true;
+
+          if (Array.isArray(photoList)) {
+            setPhotos(photoList);
+          }
+
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+
+          if (typeof unsubscribe === 'function') {
+            unsubscribe();
+          }
+
+          resolve();
+        };
+
+        timeoutId = setTimeout(() => {
+          completeRefresh();
+        }, 5000);
+
+        unsubscribe = photoService.subscribeToPrivatePhotos(tourId, principalId, (photoList) => {
+          completeRefresh(photoList);
+        });
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  }, [tourId, principalId]);
+
+  const handleImageLoad = (photoId) => {
+    setLoadedImages(prev => ({ ...prev, [photoId]: true }));
+  };
+
+  // Render skeleton placeholder
+  const renderSkeleton = () => (
+    <View style={styles.skeleton}>
+      <Animated.View style={[styles.skeletonShimmer]} />
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -515,18 +589,28 @@ export default function PhotobookScreen({
             renderItem={({ item }) => (
               <View style={styles.gridRow}>
                 {item.map((photo) => (
-                  <GalleryPhotoTile
+                  <TouchableOpacity
                     key={photo.id}
-                    photo={photo}
                     style={styles.imageTouchable}
                     onPress={() => openViewer(photo.id)}
+                    activeOpacity={0.85}
                   >
+                    {!loadedImages[photo.id] && renderSkeleton()}
+                    <Image
+                      source={{ uri: photo.thumbnailUrl || photo.url }}
+                      style={[
+                        styles.imageThumbnail,
+                        !loadedImages[photo.id] && styles.imageHidden,
+                      ]}
+                      resizeMode="contain"
+                      onLoad={() => handleImageLoad(photo.id)}
+                    />
                     {photo.caption && (
                       <View style={styles.captionIndicator}>
                         <MaterialCommunityIcons name="text" size={12} color={COLORS.white} />
                       </View>
                     )}
-                  </GalleryPhotoTile>
+                  </TouchableOpacity>
                 ))}
               </View>
             )}
@@ -537,12 +621,7 @@ export default function PhotobookScreen({
                 <View style={styles.grid}>
                   {photoQueueItems.map((item) => (
                     <View key={item.id} style={styles.imageTouchable}>
-                      <ExpoImage
-                        source={{ uri: item?.payload?.localAssets?.previewUri || item?.payload?.localAssets?.sourceUri }}
-                        style={styles.imageThumbnail}
-                        contentFit="cover"
-                        cachePolicy="memory-disk"
-                      />
+                      <Image source={{ uri: item?.payload?.localAssets?.previewUri || item?.payload?.localAssets?.sourceUri }} style={styles.imageThumbnail} />
                       <View style={styles.pendingOverlay}>
                         {item.status === 'failed' ? (
                           <>
@@ -560,17 +639,10 @@ export default function PhotobookScreen({
                 </View>
               </View>
             ) : null}
-            ListFooterComponent={(
-              <View style={styles.listFooter}>
-                {loadingMore && <ActivityIndicator size="small" color={COLORS.primary} />}
-              </View>
-            )}
+            ListFooterComponent={<View style={{ height: 40 }} />}
             contentContainerStyle={styles.scrollContainer}
             showsVerticalScrollIndicator={false}
             stickySectionHeadersEnabled={false}
-            onViewableItemsChanged={onViewableItemsChanged}
-            onEndReached={loadMore}
-            onEndReachedThreshold={0.45}
             refreshControl={
               <RefreshControl
                 refreshing={refreshing}
@@ -635,11 +707,10 @@ export default function PhotobookScreen({
             <Text style={styles.uploadModalSubtitle}>Optional: describe this memory</Text>
 
             {pendingImage?.uri && (
-              <ExpoImage
+              <Image
                 source={{ uri: pendingImage.uri }}
                 style={styles.uploadPreview}
-                contentFit="cover"
-                cachePolicy="memory-disk"
+                resizeMode="cover"
               />
             )}
 
@@ -919,11 +990,6 @@ const styles = StyleSheet.create({
   },
   sectionSpacer: {
     height: SPACING.md,
-  },
-  listFooter: {
-    height: 52,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   imageTouchable: {
     width: THUMBNAIL_SIZE,
