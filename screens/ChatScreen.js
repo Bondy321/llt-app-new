@@ -912,14 +912,18 @@ const ChatHeader = React.memo(({
     end={{ x: 1, y: 1 }}
     style={styles.header}
   >
-    <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7}>
+    <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7} hitSlop={8}>
       <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
     </TouchableOpacity>
 
     <View style={styles.headerTitleContainer}>
-      <Text style={styles.headerTitle}>
+      <Text style={styles.headerTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.84}>
         {internalDriverChat ? 'Driver Chat' : 'Group Chat'}
       </Text>
+      <View style={styles.onlineIndicator}>
+        <View style={[styles.onlineDot, { backgroundColor: COLORS.onlineIndicator }]} />
+        <Text style={styles.onlineCount}>{onlineCount} online</Text>
+      </View>
     </View>
 
     <View style={styles.headerRight}>
@@ -928,18 +932,16 @@ const ChatHeader = React.memo(({
         onPress={onToggleSearch}
         accessibilityRole="button"
         accessibilityLabel="Search chat messages"
+        hitSlop={8}
       >
         <MaterialCommunityIcons name={isSearchOpen ? 'close' : 'magnify'} size={18} color={COLORS.white} />
       </TouchableOpacity>
-      <View style={styles.onlineIndicator}>
-        <View style={[styles.onlineDot, { backgroundColor: COLORS.onlineIndicator }]} />
-        <Text style={styles.onlineCount}>{onlineCount} online</Text>
-      </View>
       <TouchableOpacity
         style={styles.syncNowBtn}
         onPress={onSync}
         accessibilityRole="button"
         accessibilityLabel={queueStats.pending > 0 || queueStats.syncing > 0 ? 'Sync pending' : 'Messages sent'}
+        hitSlop={8}
       >
         <MaterialCommunityIcons
           name={queueStats.pending > 0 || queueStats.syncing > 0 ? 'check' : 'check-all'}
@@ -1199,6 +1201,7 @@ const MessageBubble = React.memo(({
   const hasLink = textParts.some((part) => part.type === 'link');
   const clusterPosition = presentation?.clusterPosition || 'single';
   const showSender = Boolean(presentation?.showSender);
+  const hasReplyReference = Boolean(message?.replyTo?.messageId);
 
   return (
     <Pressable onLongPress={() => onLongPress(message)} delayLongPress={300}>
@@ -1215,6 +1218,7 @@ const MessageBubble = React.memo(({
             !isSelf && clusterPosition === 'last' && styles.theirMessageBubbleClusterLast,
             isMsgDriver && !isSelf && styles.driverMessageBubble,
             isImage && styles.imageMessageBubble,
+            hasReplyReference && styles.messageBubbleWithReply,
             isSearchMatch && styles.searchFocusedBubble,
             isReplyJumpTarget && styles.replyJumpTargetBubble,
           ]}
@@ -1222,6 +1226,7 @@ const MessageBubble = React.memo(({
           {showSender && (
             <View style={styles.messageHeader}>
               <Text
+                numberOfLines={1}
                 style={[
                   styles.senderName,
                   isMsgDriver && !isSelf && styles.driverSenderName,
@@ -1454,7 +1459,7 @@ const ChatComposer = React.memo(({
         <View style={styles.replyComposerCard}>
           <View style={styles.replyComposerAccent} />
           <View style={styles.replyComposerBody}>
-            <Text style={styles.replyComposerTitle}>
+            <Text numberOfLines={1} style={styles.replyComposerTitle}>
               Replying to {replyingToMessage.senderName || 'Participant'}
             </Text>
             <Text numberOfLines={1} style={styles.replyComposerPreview}>
@@ -1473,57 +1478,59 @@ const ChatComposer = React.memo(({
         </View>
       )}
 
-      <TouchableOpacity
-        style={styles.attachButton}
-        onPress={onToggleAttachments}
-        activeOpacity={0.7}
-        accessibilityRole="button"
-        accessibilityLabel={showAttachmentMenu ? 'Close attachments' : 'Open attachments'}
-      >
-        <MaterialCommunityIcons
-          name={showAttachmentMenu ? 'close' : 'plus-circle'}
-          size={28}
-          color={showAttachmentMenu ? COLORS.secondaryText : COLORS.primaryBlue}
-        />
-      </TouchableOpacity>
-
-      <TextInput
-        style={[
-          styles.textInput,
-          { height: Math.min(Math.max(44, inputHeight), 120) },
-        ]}
-        placeholder="Type your message..."
-        placeholderTextColor={COLORS.tertiaryText}
-        value={inputText}
-        onChangeText={onTextChange}
-        multiline
-        onContentSizeChange={onInputContentSizeChange}
-        selectionColor={COLORS.primaryBlue}
-        editable
-        blurOnSubmit={false}
-      />
-
-      <TouchableOpacity
-        style={[
-          styles.sendButton,
-          (sending || !inputText.trim()) && styles.sendButtonDisabled,
-        ]}
-        onPress={onSendMessage}
-        activeOpacity={0.7}
-        disabled={sending || !inputText.trim()}
-        accessibilityRole="button"
-        accessibilityLabel="Send message"
-      >
-        {sending ? (
-          <ActivityIndicator size="small" color={COLORS.sendButtonColor} />
-        ) : (
+      <View style={styles.composerInputRow}>
+        <TouchableOpacity
+          style={styles.attachButton}
+          onPress={onToggleAttachments}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={showAttachmentMenu ? 'Close attachments' : 'Open attachments'}
+        >
           <MaterialCommunityIcons
-            name="send-circle"
-            size={38}
-            color={inputText.trim() === '' ? COLORS.tertiaryText : COLORS.sendButtonColor}
+            name={showAttachmentMenu ? 'close' : 'plus-circle'}
+            size={28}
+            color={showAttachmentMenu ? COLORS.secondaryText : COLORS.primaryBlue}
           />
-        )}
-      </TouchableOpacity>
+        </TouchableOpacity>
+
+        <TextInput
+          style={[
+            styles.textInput,
+            { height: Math.min(Math.max(44, inputHeight), 120) },
+          ]}
+          placeholder="Type your message..."
+          placeholderTextColor={COLORS.tertiaryText}
+          value={inputText}
+          onChangeText={onTextChange}
+          multiline
+          onContentSizeChange={onInputContentSizeChange}
+          selectionColor={COLORS.primaryBlue}
+          editable
+          blurOnSubmit={false}
+        />
+
+        <TouchableOpacity
+          style={[
+            styles.sendButton,
+            (sending || !inputText.trim()) && styles.sendButtonDisabled,
+          ]}
+          onPress={onSendMessage}
+          activeOpacity={0.7}
+          disabled={sending || !inputText.trim()}
+          accessibilityRole="button"
+          accessibilityLabel="Send message"
+        >
+          {sending ? (
+            <ActivityIndicator size="small" color={COLORS.sendButtonColor} />
+          ) : (
+            <MaterialCommunityIcons
+              name="send-circle"
+              size={38}
+              color={inputText.trim() === '' ? COLORS.tertiaryText : COLORS.sendButtonColor}
+            />
+          )}
+        </TouchableOpacity>
+      </View>
     </View>
   </View>
 ));
@@ -3741,31 +3748,35 @@ const styles = StyleSheet.create({
     ...SHADOWS.md,
   },
   headerButton: {
-    width: 96,
-    padding: SPACING.xs,
+    width: 80,
+    height: 44,
     alignItems: 'flex-start',
     justifyContent: 'center',
   },
   headerTitleContainer: {
     flex: 1,
+    minWidth: 0,
     alignItems: 'center',
+    paddingHorizontal: SPACING.xs,
+    gap: 4,
   },
   headerTitle: {
-    fontSize: 19,
+    fontSize: 20,
     fontWeight: '800',
     color: COLORS.white,
-    letterSpacing: 0.2,
+    letterSpacing: 0,
   },
   headerRight: {
-    width: 108,
+    width: 80,
+    flexShrink: 0,
     flexDirection: 'row',
     justifyContent: 'flex-end',
     alignItems: 'center',
-    gap: SPACING.xs,
+    gap: 6,
   },
   syncNowBtn: {
-    width: 28,
-    height: 28,
+    width: 34,
+    height: 34,
     borderRadius: RADIUS.full,
     alignItems: 'center',
     justifyContent: 'center',
@@ -3778,7 +3789,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.18)',
-    paddingHorizontal: SPACING.sm,
+    paddingHorizontal: 7,
     paddingVertical: SPACING.xs,
     borderRadius: RADIUS.full,
     borderWidth: 1,
@@ -3792,8 +3803,8 @@ const styles = StyleSheet.create({
   },
   onlineCount: {
     color: COLORS.white,
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 11,
+    fontWeight: '700',
   },
   feedbackHost: {
     paddingHorizontal: SPACING.md,
@@ -4118,7 +4129,7 @@ const styles = StyleSheet.create({
   },
   messageRow: {
     flexDirection: 'row',
-    marginBottom: SPACING.sm,
+    marginBottom: 6,
   },
   myMessageRow: {
     justifyContent: 'flex-end',
@@ -4127,10 +4138,14 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
   },
   messageBubble: {
-    maxWidth: '80%',
+    maxWidth: '82%',
+    minWidth: 0,
     paddingVertical: SPACING.sm + 2,
     paddingHorizontal: SPACING.md,
     borderRadius: RADIUS.lg,
+  },
+  messageBubbleWithReply: {
+    minWidth: Math.min(SCREEN_WIDTH * 0.58, 260),
   },
   myMessageBubble: {
     backgroundColor: COLORS.myMessageBackground,
@@ -4172,7 +4187,7 @@ const styles = StyleSheet.create({
   },
   imageMessageBubble: {
     padding: 4,
-    maxWidth: '70%',
+    maxWidth: '78%',
   },
   deletedMessageBubble: {
     backgroundColor: 'transparent',
@@ -4188,11 +4203,13 @@ const styles = StyleSheet.create({
   messageHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    minWidth: 0,
     marginBottom: 4,
   },
   replyReferenceCard: {
     flexDirection: 'row',
     alignItems: 'center',
+    alignSelf: 'stretch',
     borderRadius: RADIUS.md,
     borderWidth: 1,
     borderColor: `${COLORS.primaryBlue}26`,
@@ -4214,6 +4231,7 @@ const styles = StyleSheet.create({
   },
   replyReferenceContent: {
     flex: 1,
+    minWidth: 0,
   },
   replyReferenceSender: {
     fontSize: 11,
@@ -4232,6 +4250,7 @@ const styles = StyleSheet.create({
     color: `${COLORS.white}CC`,
   },
   senderName: {
+    flexShrink: 1,
     fontSize: 13,
     fontWeight: '700',
     color: COLORS.primaryBlue,
@@ -4780,10 +4799,7 @@ const styles = StyleSheet.create({
     ...SHADOWS.md,
   },
   inputArea: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'flex-end',
-    paddingHorizontal: SPACING.sm,
+    paddingHorizontal: SPACING.md,
     paddingTop: SPACING.sm,
     backgroundColor: COLORS.white,
     borderTopLeftRadius: RADIUS.xl,
@@ -4810,6 +4826,7 @@ const styles = StyleSheet.create({
   },
   replyComposerBody: {
     flex: 1,
+    minWidth: 0,
   },
   replyComposerTitle: {
     fontSize: 12,
@@ -4822,8 +4839,8 @@ const styles = StyleSheet.create({
     color: COLORS.secondaryText,
   },
   replyComposerClose: {
-    width: 24,
-    height: 24,
+    width: 30,
+    height: 30,
     borderRadius: RADIUS.full,
     alignItems: 'center',
     justifyContent: 'center',
@@ -4845,14 +4862,22 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   attachButton: {
-    padding: SPACING.xs + 2,
-    marginRight: 4,
-    marginBottom: 4,
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
     borderRadius: RADIUS.full,
     backgroundColor: `${COLORS.primaryBlue}08`,
   },
+  composerInputRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: SPACING.xs,
+  },
   textInput: {
     flex: 1,
+    minWidth: 0,
     minHeight: 44,
     maxHeight: 120,
     backgroundColor: COLORS.surfaceSecondary,
@@ -4862,13 +4887,14 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     fontSize: 16,
     color: COLORS.darkText,
-    marginRight: 8,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
   sendButton: {
-    padding: 2,
-    marginBottom: 2,
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sendButtonDisabled: {
     opacity: 0.5,
