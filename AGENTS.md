@@ -2,7 +2,7 @@
 
 Welcome, Agent. This file is the operational source of truth for contributors working in this repo.
 
-**Last Updated:** April 8, 2026 (post stable-identity + sync-contract hardening)
+**Last Updated:** May 22, 2026 (post EAS production env hardening)
 
 ---
 
@@ -329,6 +329,10 @@ npm run test:emulators
 - Config is in `app.config.js` (not static `app.json`)
 - EAS profiles are in `eas.json`
 - Runtime version policy is `appVersion`
+- EAS profiles use explicit `development`, `preview`, and `production` environments.
+  Production GitHub Actions validate `EXPO_PUBLIC_*` values and sync them into the
+  EAS production environment before build/update; do not reintroduce `@secret`
+  placeholder aliases in `eas.json`.
 
 Build/update commands:
 
