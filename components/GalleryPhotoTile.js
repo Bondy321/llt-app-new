@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Image as RNImage, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
@@ -15,6 +15,7 @@ const GalleryPhotoTile = React.memo(function GalleryPhotoTile({
   imageStyle,
   children,
   disabled = false,
+  useExpoImage = true,
 }) {
   const uri = resolveThumbnailDisplayUri(photo);
   const cacheKey = buildPhotoCacheKey(photo, 'thumbnail');
@@ -28,7 +29,7 @@ const GalleryPhotoTile = React.memo(function GalleryPhotoTile({
       activeOpacity={0.85}
       disabled={disabled}
     >
-      {source ? (
+      {source && useExpoImage ? (
         <ExpoImage
           source={source}
           style={[styles.image, imageStyle]}
@@ -36,6 +37,12 @@ const GalleryPhotoTile = React.memo(function GalleryPhotoTile({
           cachePolicy="memory-disk"
           recyclingKey={recyclingKey}
           transition={120}
+        />
+      ) : source ? (
+        <RNImage
+          source={{ uri }}
+          style={[styles.image, imageStyle]}
+          resizeMode="cover"
         />
       ) : (
         <View style={[styles.placeholder, imageStyle]}>

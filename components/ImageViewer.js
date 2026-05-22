@@ -19,6 +19,7 @@ import {
   FlatList,
   Pressable,
   ScrollView,
+  Image as RNImage,
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -77,6 +78,11 @@ const buildImageSource = (uri, cacheKey) => {
   return normalizedUri ? (cacheKey ? { uri: normalizedUri, cacheKey } : { uri: normalizedUri }) : undefined;
 };
 
+const buildNativeImageSource = (uri) => {
+  const normalizedUri = normalizePhotoUri(uri);
+  return normalizedUri ? { uri: normalizedUri } : undefined;
+};
+
 const resolveText = (value, fallback = '') => (
   typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback
 );
@@ -88,6 +94,7 @@ const ImageViewerPage = React.memo(function ImageViewerPage({
   pageHeight,
   fullQualityRequested,
   onToggleChrome,
+  useExpoImage = true,
 }) {
   const photoKey = getPhotoKey(photo, index);
   const thumbnailUri = photo?.thumbnailUrl || null;
@@ -99,6 +106,8 @@ const ImageViewerPage = React.memo(function ImageViewerPage({
   const viewerCacheKey = buildPhotoCacheKey(photo, fullQualityRequested ? 'full' : 'viewer');
   const thumbnailSource = buildImageSource(thumbnailUri, thumbnailCacheKey);
   const viewerSource = buildImageSource(effectiveViewerUri, viewerCacheKey);
+  const thumbnailNativeSource = buildNativeImageSource(thumbnailUri);
+  const viewerNativeSource = buildNativeImageSource(effectiveViewerUri);
   const [viewerLoaded, setViewerLoaded] = useState(false);
   const [viewerFailed, setViewerFailed] = useState(false);
 
@@ -123,7 +132,7 @@ const ImageViewerPage = React.memo(function ImageViewerPage({
       accessibilityLabel="Toggle photo controls"
     >
       <View style={styles.imageStage}>
-        {shouldRenderThumbnailLayer && (
+        {shouldRenderThumbnailLayer && useExpoImage && (
           <ExpoImage
             source={thumbnailSource}
             style={styles.imageLayer}
@@ -133,7 +142,15 @@ const ImageViewerPage = React.memo(function ImageViewerPage({
           />
         )}
 
-        {viewerSource && (
+        {shouldRenderThumbnailLayer && !useExpoImage && thumbnailNativeSource && (
+          <RNImage
+            source={thumbnailNativeSource}
+            style={styles.imageLayer}
+            resizeMode="contain"
+          />
+        )}
+
+        {viewerSource && useExpoImage && (
           <ExpoImage
             source={viewerSource}
             style={styles.imageLayer}
@@ -141,6 +158,23 @@ const ImageViewerPage = React.memo(function ImageViewerPage({
             cachePolicy="memory-disk"
             recyclingKey={`viewer:${photoKey}:${fullQualityRequested ? 'full' : 'viewer'}`}
             transition={shouldRenderThumbnailLayer ? 120 : 80}
+            onLoadStart={() => {
+              setViewerLoaded(false);
+              setViewerFailed(false);
+            }}
+            onLoad={() => setViewerLoaded(true)}
+            onError={() => {
+              setViewerLoaded(true);
+              setViewerFailed(true);
+            }}
+          />
+        )}
+
+        {viewerSource && !useExpoImage && viewerNativeSource && (
+          <RNImage
+            source={viewerNativeSource}
+            style={styles.imageLayer}
+            resizeMode="contain"
             onLoadStart={() => {
               setViewerLoaded(false);
               setViewerFailed(false);
@@ -212,6 +246,7 @@ export default function ImageViewer({
   currentUserId = null,
   onEditCaption = null,
   enablePrefetch = true,
+  useExpoImage = true,
 }) {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const runtimeWidth = windowWidth || SCREEN_WIDTH;
@@ -549,8 +584,9 @@ export default function ImageViewer({
       pageHeight={runtimeHeight}
       fullQualityRequested={Boolean(fullQualityRequestedByPhotoKey[getPhotoKey(item, index)])}
       onToggleChrome={toggleChrome}
+      useExpoImage={useExpoImage}
     />
-  ), [fullQualityRequestedByPhotoKey, runtimeHeight, runtimeWidth, toggleChrome]);
+  ), [fullQualityRequestedByPhotoKey, runtimeHeight, runtimeWidth, toggleChrome, useExpoImage]);
 
   const keyExtractor = useCallback((item, index) => `${getPhotoKey(item, index)}:${index}`, []);
 

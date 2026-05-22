@@ -15,11 +15,11 @@ import {
   TextInput,
   Modal,
   KeyboardAvoidingView,
+  Image as RNImage,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Image as ExpoImage } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as offlineSyncService from '../services/offlineSyncService';
 import * as photoService from '../services/photoService';
@@ -580,6 +580,7 @@ export default function PhotobookScreen({
                     photo={photo}
                     style={styles.imageTouchable}
                     onPress={() => openViewer(photo.id)}
+                    useExpoImage={false}
                   >
                     {!hasDisplayablePhoto(photo) && (
                       <View style={styles.unavailableBadge}>
@@ -603,11 +604,10 @@ export default function PhotobookScreen({
                 <View style={styles.grid}>
                   {photoQueueItems.map((item) => (
                     <View key={item.id} style={styles.imageTouchable}>
-                      <ExpoImage
+                      <RNImage
                         source={{ uri: item?.payload?.localAssets?.previewUri || item?.payload?.localAssets?.sourceUri }}
                         style={styles.imageThumbnail}
-                        contentFit="cover"
-                        cachePolicy="memory-disk"
+                        resizeMode="cover"
                       />
                       <View style={styles.pendingOverlay}>
                         {item.status === 'failed' ? (
@@ -681,6 +681,7 @@ export default function PhotobookScreen({
         currentUserId={principalId}
         showUploaderInfo={false}
         enablePrefetch={false}
+        useExpoImage={false}
         onEditCaption={async (photo, nextCaption) => photoService.updatePhotoCaption({ tourId, photoId: photo.id, userId: principalId, caption: nextCaption, visibility: 'private' })}
       />
 
@@ -702,11 +703,10 @@ export default function PhotobookScreen({
             <Text style={styles.uploadModalSubtitle}>Optional: describe this memory</Text>
 
             {pendingImage?.uri && (
-              <ExpoImage
+              <RNImage
                 source={{ uri: pendingImage.uri }}
                 style={styles.uploadPreview}
-                contentFit="cover"
-                cachePolicy="memory-disk"
+                resizeMode="cover"
               />
             )}
 
