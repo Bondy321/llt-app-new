@@ -78,10 +78,26 @@ const normalizeCacheKeyPart = (value) => {
   return normalized.length > 0 ? normalized : null;
 };
 
+const hashCacheKey = (value) => {
+  const input = String(value || '');
+  let hash = 5381;
+
+  for (let index = 0; index < input.length; index += 1) {
+    hash = ((hash << 5) + hash) + input.charCodeAt(index);
+    hash &= 0x7fffffff;
+  }
+
+  return hash.toString(36);
+};
+
+const normalizeCacheKeyPrefix = (value) => (
+  normalizeCacheKeyPart(value)?.replace(/[^a-zA-Z0-9_-]/g, '_') || 'viewer'
+);
+
 const buildPhotoCacheKey = (photo, variant = 'viewer') => {
   if (!photo || typeof photo !== 'object') return null;
 
-  const variantPrefix = normalizeCacheKeyPart(variant) || 'viewer';
+  const variantPrefix = normalizeCacheKeyPrefix(variant);
   const version = normalizeCacheKeyPart(photo.variantVersion)
     || normalizeCacheKeyPart(photo.variantUpdatedAt)
     || 'legacy';
@@ -95,7 +111,7 @@ const buildPhotoCacheKey = (photo, variant = 'viewer') => {
   const storagePath = normalizeCacheKeyPart(storagePathByVariant[variantPrefix])
     || normalizeCacheKeyPart(photo.storagePath);
   if (storagePath) {
-    return `${variantPrefix}:${storagePath}:v${version}`;
+    return `photo_${variantPrefix}_${hashCacheKey(`${storagePath}:v${version}`)}`;
   }
 
   const stableId = normalizeCacheKeyPart(photo.id)
@@ -103,7 +119,7 @@ const buildPhotoCacheKey = (photo, variant = 'viewer') => {
     || normalizeCacheKeyPart(resolveViewerDisplayUri(photo))
     || normalizeCacheKeyPart(resolveThumbnailDisplayUri(photo));
 
-  return stableId ? `${variantPrefix}:${stableId}:v${version}` : null;
+  return stableId ? `photo_${variantPrefix}_${hashCacheKey(`${stableId}:v${version}`)}` : null;
 };
 
 const buildNeighborPrefetchUris = ({ photos = [], currentIndex = 0, neighborDistance = 2, thumbnailsOnly = false }) => {
@@ -141,6 +157,7 @@ const buildNeighborPrefetchUris = ({ photos = [], currentIndex = 0, neighborDist
 module.exports = {
   normalizePhotoUri,
   isLoadablePhotoUri,
+  hashCacheKey,
   resolveViewerDisplayUri,
   resolveThumbnailDisplayUri,
   resolveSaveUri,

@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   normalizePhotoUri,
   isLoadablePhotoUri,
+  hashCacheKey,
   resolveViewerDisplayUri,
   resolveSaveUri,
   resolveFullQualityUri,
@@ -60,7 +61,7 @@ test('buildNeighborPrefetchUris prioritizes viewer display variants for neighbor
   assert.equal(resolveSaveUri({ fullUrl: 'https://cdn/full.jpg', url: 'https://cdn/url.jpg' }), 'https://cdn/full.jpg');
 });
 
-test('buildPhotoCacheKey prefers variant storage paths over signed URLs', () => {
+test('buildPhotoCacheKey prefers variant storage paths over signed URLs and hashes native cache keys', () => {
   const photo = {
     id: 'photo-1',
     variantVersion: 2,
@@ -71,18 +72,16 @@ test('buildPhotoCacheKey prefers variant storage paths over signed URLs', () => 
     storagePath: 'group_tour_photos/tour-1/photo.jpg',
   };
 
-  assert.equal(
-    buildPhotoCacheKey(photo, 'thumbnail'),
-    'thumbnail:group_tour_photos/tour-1/thumbnails/photo_thumb.jpg:v2',
-  );
-  assert.equal(
-    buildPhotoCacheKey(photo, 'viewer'),
-    'viewer:group_tour_photos/tour-1/viewers/photo_viewer.jpg:v2',
-  );
-  assert.equal(
-    buildPhotoCacheKey({ id: 'legacy-photo', url: 'https://signed.example.com/photo.jpg' }, 'thumbnail'),
-    'thumbnail:legacy-photo:vlegacy',
-  );
+  const thumbnailCacheKey = buildPhotoCacheKey(photo, 'thumbnail');
+  const viewerCacheKey = buildPhotoCacheKey(photo, 'viewer');
+  const legacyCacheKey = buildPhotoCacheKey({ id: 'legacy-photo', url: 'https://signed.example.com/photo.jpg' }, 'thumbnail');
+
+  assert.match(thumbnailCacheKey, /^photo_thumbnail_[a-z0-9]+$/);
+  assert.match(viewerCacheKey, /^photo_viewer_[a-z0-9]+$/);
+  assert.match(legacyCacheKey, /^photo_thumbnail_[a-z0-9]+$/);
+  assert.notEqual(thumbnailCacheKey, viewerCacheKey);
+  assert.equal(thumbnailCacheKey.includes('/'), false);
+  assert.equal(viewerCacheKey.includes(':'), false);
   assert.equal(resolveThumbnailDisplayUri({ viewerUrl: 'viewer', url: 'full' }), null);
   assert.equal(resolveThumbnailDisplayUri({ viewerUrl: 'private_tour_photos/tour/file.jpg', url: 'https://cdn/full.jpg' }), 'https://cdn/full.jpg');
 });
@@ -130,6 +129,7 @@ test('photo URI resolvers ignore malformed legacy fields', () => {
   assert.equal(isLoadablePhotoUri('file:///local/photo.jpg'), true);
   assert.equal(isLoadablePhotoUri('private_tour_photos/tour-1/source.jpg'), false);
   assert.equal(isLoadablePhotoUri('gs://bucket/source.jpg'), false);
+  assert.match(hashCacheKey('pax_v1:T123659:msandreayoung@yahoo_2E_co_2E_uk/very/long/path.jpg'), /^[a-z0-9]+$/);
 
   assert.equal(resolveViewerDisplayUri({
     viewerUrl: { downloadURL: 'https://cdn/bad-viewer.jpg' },
