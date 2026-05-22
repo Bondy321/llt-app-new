@@ -8,6 +8,7 @@ const {
   buildNeighborPrefetchUris,
   buildPhotoCacheKey,
   resolveThumbnailDisplayUri,
+  isProcessingVariantRecord,
 } = require('../services/photoVariantService');
 
 test('resolveViewerDisplayUri prioritizes viewer/thumbnail/source fallbacks for processing and legacy records', () => {
@@ -81,4 +82,39 @@ test('buildPhotoCacheKey prefers variant storage paths over signed URLs', () => 
     'thumbnail:legacy-photo:vlegacy',
   );
   assert.equal(resolveThumbnailDisplayUri({ viewerUrl: 'viewer', url: 'full' }), 'viewer');
+});
+
+test('thumbnail resolver avoids full-size fallback while variants are still processing', () => {
+  const processingPhoto = {
+    id: 'processing-photo',
+    variantStatus: 'processing',
+    sourceUrl: 'https://cdn/source-large.jpg',
+    url: 'https://cdn/full-large.jpg',
+    fullUrl: 'https://cdn/full-large-2.jpg',
+  };
+
+  assert.equal(isProcessingVariantRecord(processingPhoto), true);
+  assert.equal(resolveThumbnailDisplayUri(processingPhoto), null);
+  assert.deepEqual(
+    buildNeighborPrefetchUris({
+      photos: [
+        { viewerUrl: 'https://cdn/ready-viewer.jpg', thumbnailUrl: 'https://cdn/ready-thumb.jpg' },
+        { viewerUrl: 'https://cdn/current-viewer.jpg', thumbnailUrl: 'https://cdn/current-thumb.jpg' },
+        processingPhoto,
+      ],
+      currentIndex: 1,
+      neighborDistance: 1,
+      thumbnailsOnly: false,
+    }),
+    [
+      'https://cdn/ready-viewer.jpg',
+      'https://cdn/ready-thumb.jpg',
+    ],
+  );
+
+  assert.equal(resolveThumbnailDisplayUri({
+    variantStatus: 'processing',
+    thumbnailUrl: 'https://cdn/thumb-ready.jpg',
+    sourceUrl: 'https://cdn/source-large.jpg',
+  }), 'https://cdn/thumb-ready.jpg');
 });

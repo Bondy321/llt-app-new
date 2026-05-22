@@ -21,14 +21,24 @@ const resolveFullQualityUri = (photo) => (
   || null
 );
 
-const resolveThumbnailDisplayUri = (photo) => (
-  photo?.thumbnailUrl
-  || photo?.viewerUrl
-  || photo?.sourceUrl
-  || photo?.url
-  || photo?.fullUrl
-  || null
+const isProcessingVariantRecord = (photo) => (
+  photo?.variantStatus === 'processing'
+  && !photo?.thumbnailUrl
+  && !photo?.viewerUrl
 );
+
+const resolveThumbnailDisplayUri = (photo) => {
+  if (isProcessingVariantRecord(photo)) return null;
+
+  return (
+    photo?.thumbnailUrl
+    || photo?.viewerUrl
+    || photo?.sourceUrl
+    || photo?.url
+    || photo?.fullUrl
+    || null
+  );
+};
 
 const normalizeCacheKeyPart = (value) => {
   if (value === null || value === undefined) return null;
@@ -81,7 +91,7 @@ const buildNeighborPrefetchUris = ({ photos = [], currentIndex = 0, neighborDist
         return;
       }
 
-      const primary = resolveViewerDisplayUri(photo);
+      const primary = isProcessingVariantRecord(photo) ? null : resolveViewerDisplayUri(photo);
       if (primary) {
         candidates.push(primary);
       }
@@ -101,4 +111,5 @@ module.exports = {
   resolveFullQualityUri,
   buildPhotoCacheKey,
   buildNeighborPrefetchUris,
+  isProcessingVariantRecord,
 };

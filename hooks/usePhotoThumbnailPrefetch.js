@@ -1,20 +1,27 @@
 import { useCallback, useRef } from 'react';
 import { Image as ExpoImage } from 'expo-image';
-import { resolveThumbnailDisplayUri } from '../services/photoVariantService';
+import { selectThumbnailPrefetchBatch } from '../services/photoThumbnailPrefetchPlanner';
 
 export const usePhotoThumbnailPrefetch = ({ maxBatchSize = 12 } = {}) => {
   const prefetchedUrisRef = useRef(new Set());
 
   return useCallback((photos = []) => {
-    const uris = [];
-    (Array.isArray(photos) ? photos : []).forEach((photo) => {
-      const uri = resolveThumbnailDisplayUri(photo);
-      if (!uri || prefetchedUrisRef.current.has(uri)) return;
-      prefetchedUrisRef.current.add(uri);
-      uris.push(uri);
+    const uris = selectThumbnailPrefetchBatch({
+      photos,
+      prefetchedUris: prefetchedUrisRef.current,
+      maxBatchSize,
     });
 
     if (uris.length === 0) return;
-    ExpoImage.prefetch(uris.slice(0, maxBatchSize), 'memory-disk').catch(() => {});
+
+    uris.forEach((uri) => {
+      prefetchedUrisRef.current.add(uri);
+    });
+
+    ExpoImage.prefetch(uris, 'memory-disk').catch(() => {
+      uris.forEach((uri) => {
+        prefetchedUrisRef.current.delete(uri);
+      });
+    });
   }, [maxBatchSize]);
 };
