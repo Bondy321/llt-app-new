@@ -15,7 +15,7 @@ test.after(() => {
   Module._load = originalLoad;
 });
 
-const loadFirebaseWithMocks = ({ missingConfig = false } = {}) => {
+const loadFirebaseWithMocks = ({ missingConfig = false, placeholderConfig = false } = {}) => {
   const calls = { goOnline: 0, goOffline: 0 };
 
   Module._load = function mocked(request, parent, isMain) {
@@ -75,7 +75,15 @@ const loadFirebaseWithMocks = ({ missingConfig = false } = {}) => {
   };
 
   const envBackup = { ...process.env };
-  if (missingConfig) {
+  if (placeholderConfig) {
+    process.env.EXPO_PUBLIC_FIREBASE_API_KEY = '@firebase_api_key';
+    process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN = 'd';
+    process.env.EXPO_PUBLIC_FIREBASE_DATABASE_URL = 'https://db';
+    process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = 'p';
+    process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET = 'bucket';
+    process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID = 'm';
+    process.env.EXPO_PUBLIC_FIREBASE_APP_ID = 'a';
+  } else if (missingConfig) {
     process.env.EXPO_PUBLIC_FIREBASE_API_KEY = '';
   } else {
     process.env.EXPO_PUBLIC_FIREBASE_API_KEY = 'k';
@@ -98,6 +106,15 @@ test('firebase exposes init health when required config is missing', () => {
   assert.equal(firebaseModule.firebaseInitHealth.hasError, true);
   assert.equal(firebaseModule.firebaseInitHealth.initialized, false);
   assert.equal(firebaseModule.auth, null);
+});
+
+test('firebase exposes init health when required config still contains placeholders', () => {
+  const { firebaseModule } = loadFirebaseWithMocks({ placeholderConfig: true });
+  assert.equal(firebaseModule.firebaseInitHealth.hasError, true);
+  assert.equal(firebaseModule.firebaseInitHealth.initialized, false);
+  assert.equal(firebaseModule.auth, null);
+  assert.deepEqual(firebaseModule.firebaseInitHealth.missingConfig.missingFields, ['apiKey']);
+  assert.match(firebaseModule.firebaseInitHealth.errorMessage, /placeholder/);
 });
 
 test('updateNetworkState avoids reconnect churn for duplicate connectivity state', () => {

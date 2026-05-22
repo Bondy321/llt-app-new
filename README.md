@@ -103,6 +103,11 @@ npm run test:emulators
 
 ### EAS builds
 
+Production builds use the `production` EAS environment. In GitHub Actions, repository
+secrets named `EXPO_PUBLIC_FIREBASE_*` and `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` are
+validated and synced to EAS before the build starts, so placeholder EAS values cannot
+silently ship.
+
 ```bash
 npm run build:dev:ios
 npm run build:dev:android

@@ -52,10 +52,28 @@ const FIREBASE_CONFIG_FIELD_ENV_MAP = {
   appId: 'EXPO_PUBLIC_FIREBASE_APP_ID',
 };
 
+const FIREBASE_PLACEHOLDER_VALUE_PATTERNS = [
+  /^@[\w.-]+$/,
+  /^your[_-]/i,
+  /your[_-].*here/i,
+  /placeholder/i,
+  /replace_with/i,
+  /^undefined$/i,
+  /^null$/i,
+];
+
+const isUsableFirebaseConfigValue = (value) => {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return false;
+  }
+
+  const normalized = value.trim();
+  return !FIREBASE_PLACEHOLDER_VALUE_PATTERNS.some((pattern) => pattern.test(normalized));
+};
+
 const getMissingFirebaseConfigFields = (config) => {
   return REQUIRED_FIREBASE_CONFIG_FIELDS.filter((field) => {
-    const value = config?.[field];
-    return typeof value !== 'string' || value.trim().length === 0;
+    return !isUsableFirebaseConfigValue(config?.[field]);
   });
 };
 
@@ -64,7 +82,7 @@ const buildMissingConfigDetails = (missingFields) => ({
   missingFields,
   requiredEnvVars: missingFields.map((field) => FIREBASE_CONFIG_FIELD_ENV_MAP[field] || field),
   action:
-    'Populate the missing EXPO_PUBLIC_FIREBASE_* variables before launching the app so Firebase can initialize.',
+    'Populate the missing EXPO_PUBLIC_FIREBASE_* variables with real values before launching the app so Firebase can initialize.',
 });
 
 const toStorageBucketUrl = (value) => {
@@ -178,7 +196,7 @@ try {
   if (missingConfigFields.length > 0) {
     const missingConfig = buildMissingConfigDetails(missingConfigFields);
     firebaseInitializationError = new Error(
-      `Missing required Firebase config: ${missingConfigFields.join(', ')}`
+      `Missing or placeholder required Firebase config: ${missingConfigFields.join(', ')}`
     );
     firebaseInitHealth.missingConfig = missingConfig;
     firebaseInitHealth.hasError = true;
