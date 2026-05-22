@@ -5,6 +5,7 @@ import { createPersistenceProvider } from './persistenceProvider';
 const diagnosticsStorage = createPersistenceProvider({ namespace: 'LLT_CRASH_DIAGNOSTICS' });
 
 const MAX_BREADCRUMBS = 180;
+const MAX_SNAPSHOT_BREADCRUMBS = 80;
 const MAX_FIELD_LENGTH = 420;
 const MAX_ARRAY_ITEMS = 12;
 const MAX_OBJECT_KEYS = 36;
@@ -70,26 +71,27 @@ export const summarizeUri = (uri) => {
   const schemeMatch = normalized.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
   const scheme = schemeMatch?.[1]?.toLowerCase() || 'unknown';
 
-  try {
-    if (scheme === 'http' || scheme === 'https') {
-      const parsed = new URL(normalized);
-      return {
-        present: true,
-        scheme,
-        host: parsed.host,
-        pathLength: parsed.pathname.length,
-        pathHash: stableHash(parsed.pathname),
-        queryKeyCount: Array.from(parsed.searchParams.keys()).length,
-        hasToken: parsed.searchParams.has('token') || parsed.search.includes('token='),
-        totalLength: normalized.length,
-        hash: stableHash(normalized),
-      };
-    }
-  } catch {
+  if (scheme === 'http' || scheme === 'https') {
+    const withoutScheme = normalized.replace(/^https?:\/\//i, '');
+    const slashIndex = withoutScheme.search(/[/?#]/);
+    const host = slashIndex >= 0 ? withoutScheme.slice(0, slashIndex) : withoutScheme;
+    const pathAndQuery = slashIndex >= 0 ? withoutScheme.slice(slashIndex) : '';
+    const queryIndex = pathAndQuery.indexOf('?');
+    const hashIndex = pathAndQuery.indexOf('#');
+    const pathEndIndex = [queryIndex, hashIndex].filter((index) => index >= 0).sort((a, b) => a - b)[0] ?? pathAndQuery.length;
+    const pathname = pathAndQuery.slice(0, pathEndIndex);
+    const query = queryIndex >= 0
+      ? pathAndQuery.slice(queryIndex + 1, hashIndex >= 0 ? hashIndex : undefined)
+      : '';
+
     return {
       present: true,
       scheme,
-      parseError: true,
+      host,
+      pathLength: pathname.length,
+      pathHash: stableHash(pathname),
+      queryKeyCount: query ? query.split('&').filter(Boolean).length : 0,
+      hasToken: /(?:^|[?&])token=/.test(normalized),
       totalLength: normalized.length,
       hash: stableHash(normalized),
     };
@@ -109,7 +111,16 @@ const sanitizeValue = (value, key = '', depth = 0, seen = new WeakSet()) => {
   if (depth > 5) return '[MaxDepth]';
 
   if (typeof value === 'string') {
-    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) {
+    const normalizedKey = String(key || '').toLowerCase();
+    if (normalizedKey === 'stack') {
+      return value.length > 6000 ? `${value.slice(0, 6000)}...<${value.length}>` : value;
+    }
+    if (normalizedKey === 'message' || normalizedKey === 'reason' || normalizedKey === 'event' || normalizedKey === 'component') {
+      return value.length > MAX_FIELD_LENGTH
+        ? `${value.slice(0, MAX_FIELD_LENGTH)}...<${value.length}>`
+        : value;
+    }
+    if (/^(https?|file|content|asset|ph|data|blob|gs):/i.test(value)) {
       return summarizeUri(value);
     }
     if (hasSensitiveKeyFragment(key)) {
@@ -150,6 +161,15 @@ const sanitizeValue = (value, key = '', depth = 0, seen = new WeakSet()) => {
   return output;
 };
 
+const pickLatestBreadcrumb = (snapshot) => {
+  const snapshotBreadcrumbs = Array.isArray(snapshot?.breadcrumbs) ? snapshot.breadcrumbs : [];
+  if (snapshotBreadcrumbs.length > 0) {
+    return snapshotBreadcrumbs[snapshotBreadcrumbs.length - 1];
+  }
+
+  return breadcrumbs[breadcrumbs.length - 1] || null;
+};
+
 const getRuntimeContext = () => ({
   platform: Platform.OS,
   platformVersion: Platform.Version,
@@ -181,7 +201,7 @@ const buildSnapshot = (reason = 'snapshot', extra = {}) => {
     },
     context,
     breadcrumbCount: breadcrumbs.length,
-    breadcrumbs: breadcrumbs.slice(-MAX_BREADCRUMBS),
+    breadcrumbs: breadcrumbs.slice(-MAX_SNAPSHOT_BREADCRUMBS),
     extra,
   });
 };
@@ -207,7 +227,7 @@ const persistRemoteSnapshot = async (snapshot) => {
         at: snapshot.generatedAt,
         reason: snapshot.reason,
         breadcrumbCount: snapshot.breadcrumbCount,
-        lastBreadcrumb: snapshot.breadcrumbs?.[snapshot.breadcrumbs.length - 1] || null,
+        lastBreadcrumb: pickLatestBreadcrumb(snapshot),
       },
     });
   } catch {
@@ -224,44 +244,56 @@ const scheduleLocalPersist = () => {
 };
 
 export const setDiagnosticsContext = (key, value, options = {}) => {
-  if (!key) return;
-  context = {
-    ...context,
-    [key]: sanitizeValue(value, key),
-  };
+  try {
+    if (!key) return;
+    context = {
+      ...context,
+      [key]: sanitizeValue(value, key),
+    };
 
-  if (options.flush) {
-    flushDiagnostics(`context:${key}`).catch(() => {});
-  } else {
-    scheduleLocalPersist();
+    if (options.flush) {
+      flushDiagnostics(`context:${key}`).catch(() => {});
+    } else {
+      scheduleLocalPersist();
+    }
+  } catch {
+    // Diagnostics must never affect app behavior.
   }
 };
 
 export const recordBreadcrumb = (component, event, data = {}, options = {}) => {
-  const entry = sanitizeValue({
-    at: new Date().toISOString(),
-    component: component || 'Unknown',
-    event: event || 'event',
-    data,
-  });
+  try {
+    const entry = sanitizeValue({
+      at: new Date().toISOString(),
+      component: component || 'Unknown',
+      event: event || 'event',
+      data,
+    });
 
-  breadcrumbs.push(entry);
-  if (breadcrumbs.length > MAX_BREADCRUMBS) {
-    breadcrumbs = breadcrumbs.slice(-MAX_BREADCRUMBS);
-  }
+    breadcrumbs.push(entry);
+    if (breadcrumbs.length > MAX_BREADCRUMBS) {
+      breadcrumbs = breadcrumbs.slice(-MAX_BREADCRUMBS);
+    }
 
-  if (options.flush || options.remote) {
-    flushDiagnostics(options.reason || `${component}:${event}`, { lastEvent: entry }).catch(() => {});
-  } else {
-    scheduleLocalPersist();
+    if (options.flush || options.remote) {
+      flushDiagnostics(options.reason || `${component}:${event}`, { lastEvent: entry }).catch(() => {});
+    } else {
+      scheduleLocalPersist();
+    }
+  } catch {
+    // Diagnostics must never affect app behavior.
   }
 };
 
 export const flushDiagnostics = async (reason = 'manual_flush', extra = {}) => {
-  const snapshot = buildSnapshot(reason, extra);
-  await persistLocalSnapshot(snapshot);
-  await persistRemoteSnapshot(snapshot);
-  return snapshot;
+  try {
+    const snapshot = buildSnapshot(reason, extra);
+    await persistLocalSnapshot(snapshot);
+    await persistRemoteSnapshot(snapshot);
+    return snapshot;
+  } catch {
+    return null;
+  }
 };
 
 export const flushStoredDiagnostics = async (reason = 'previous_local_snapshot') => {
