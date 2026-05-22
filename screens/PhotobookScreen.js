@@ -96,6 +96,8 @@ const summarizeQueue = (items = []) => (
   Array.isArray(items) ? items.slice(0, 12).map((item) => summarizeQueueAction(item)) : []
 );
 
+const getPhotoRowItems = (item) => (Array.isArray(item) ? item.filter(Boolean) : []);
+
 export default function PhotobookScreen({
   onBack,
   tourId,
@@ -897,7 +899,18 @@ export default function PhotobookScreen({
         ) : (
           <SectionList
             sections={photoSections}
-            keyExtractor={(item, index) => item.map((photo) => photo.id || photo.url).join('|') || `row-${index}`}
+            keyExtractor={(item, index) => {
+              const rowPhotos = getPhotoRowItems(item);
+              if (rowPhotos.length === 0) {
+                tracePrivatePhotos('section_key_unexpected_item', {
+                  index,
+                  itemType: item === null ? 'null' : typeof item,
+                  isArray: Array.isArray(item),
+                }, { remote: true });
+                return `row-${index}`;
+              }
+              return rowPhotos.map((photo) => photo.id || photo.url || photo.viewerUrl || photo.thumbnailUrl).filter(Boolean).join('|') || `row-${index}`;
+            }}
             renderSectionHeader={({ section }) => (
               <View style={styles.dateHeader}>
                 <MaterialCommunityIcons name="calendar" size={16} color={COLORS.textSecondary} />
@@ -907,34 +920,46 @@ export default function PhotobookScreen({
                 </Text>
               </View>
             )}
-            renderItem={({ item }) => (
-              <View style={styles.gridRow}>
-                {item.map((photo) => (
-                  <GalleryPhotoTile
-                    key={photo.id}
-                    photo={photo}
-                    style={styles.imageTouchable}
-                    onPress={() => openViewer(photo.id)}
-                    useExpoImage={false}
-                    onImageLoadStart={(itemPhoto) => recordTileImageEvent('load_start', itemPhoto)}
-                    onImageLoad={(itemPhoto) => recordTileImageEvent('load', itemPhoto)}
-                    onImageError={(itemPhoto, event) => recordTileImageEvent('error', itemPhoto, event)}
-                  >
-                    {!hasDisplayablePhoto(photo) && (
-                      <View style={styles.unavailableBadge}>
-                        <MaterialCommunityIcons name="image-off-outline" size={14} color={COLORS.white} />
-                      </View>
-                    )}
+            renderItem={({ item, index }) => {
+              const rowPhotos = getPhotoRowItems(item);
+              if (rowPhotos.length === 0) {
+                tracePrivatePhotos('section_render_unexpected_item', {
+                  index,
+                  itemType: item === null ? 'null' : typeof item,
+                  isArray: Array.isArray(item),
+                }, { remote: true });
+                return null;
+              }
 
-                    {photo.caption && (
-                      <View style={styles.captionIndicator}>
-                        <MaterialCommunityIcons name="text" size={12} color={COLORS.white} />
-                      </View>
-                    )}
-                  </GalleryPhotoTile>
-                ))}
-              </View>
-            )}
+              return (
+                <View style={styles.gridRow}>
+                  {rowPhotos.map((photo) => (
+                    <GalleryPhotoTile
+                      key={photo.id || photo.viewerUrl || photo.thumbnailUrl}
+                      photo={photo}
+                      style={styles.imageTouchable}
+                      onPress={() => openViewer(photo.id)}
+                      useExpoImage={false}
+                      onImageLoadStart={(itemPhoto) => recordTileImageEvent('load_start', itemPhoto)}
+                      onImageLoad={(itemPhoto) => recordTileImageEvent('load', itemPhoto)}
+                      onImageError={(itemPhoto, event) => recordTileImageEvent('error', itemPhoto, event)}
+                    >
+                      {!hasDisplayablePhoto(photo) && (
+                        <View style={styles.unavailableBadge}>
+                          <MaterialCommunityIcons name="image-off-outline" size={14} color={COLORS.white} />
+                        </View>
+                      )}
+
+                      {photo.caption && (
+                        <View style={styles.captionIndicator}>
+                          <MaterialCommunityIcons name="text" size={12} color={COLORS.white} />
+                        </View>
+                      )}
+                    </GalleryPhotoTile>
+                  ))}
+                </View>
+              );
+            }}
             renderSectionFooter={() => <View style={styles.sectionSpacer} />}
             ListHeaderComponent={photoQueueItems.length > 0 ? (
               <View style={styles.pendingSection}>
