@@ -83,4 +83,4 @@ jobs:
           eas project:info --non-interactive
 
       - name: Build production binary
-        run: eas build --profile production --platform ${{ github.event.inputs.platform }} --environment production --non-interactive
+        run: eas build --profile production --platform ${{ github.event.inputs.platform }} --non-interactive
