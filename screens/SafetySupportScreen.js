@@ -45,6 +45,10 @@ import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const SOS_COUNTDOWN_SECONDS = 5;
+const SOS_BUTTON_SIZE = Math.min(188, Math.max(160, SCREEN_WIDTH * 0.45));
+const SOS_GLOW_SIZE = SOS_BUTTON_SIZE + 28;
+const SOS_BUTTON_RADIUS = SOS_BUTTON_SIZE / 2;
+const SOS_GLOW_RADIUS = SOS_GLOW_SIZE / 2;
 
 // Colors
 const COLORS = {
@@ -111,52 +115,92 @@ const SOSButton = ({ onActivate, isActive, countdown, onCancel }) => {
   }, [isActive]);
 
   return (
-    <View style={styles.sosContainer}>
-      {isActive && (
-        <Animated.View
-          style={[
-            styles.sosGlow,
-            {
-              opacity: glowAnim,
-              transform: [{ scale: pulseAnim }],
-            },
-          ]}
-        />
-      )}
-      <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-        <TouchableOpacity
-          style={[styles.sosButton, isActive && styles.sosButtonActive]}
-          onLongPress={onActivate}
-          onPress={isActive ? onCancel : undefined}
-          delayLongPress={500}
-          activeOpacity={0.9}
-          accessibilityLabel={isActive ? 'Cancel SOS' : 'Hold for SOS Emergency'}
-          accessibilityRole="button"
-        >
-          <LinearGradient
-            colors={isActive ? [COLORS.sosRedDark, COLORS.sosRed] : [COLORS.sosRed, '#EF4444']}
-            style={styles.sosGradient}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
+    <View style={styles.sosCard}>
+      <View style={styles.sosCardHeader}>
+        <View style={styles.sosCardIcon}>
+          <MaterialCommunityIcons name="shield-alert" size={24} color={COLORS.sosRed} />
+        </View>
+        <View style={styles.sosCardHeaderText}>
+          <Text style={styles.sosEyebrow}>Emergency options</Text>
+          <Text style={styles.sosTitle}>Need urgent help?</Text>
+        </View>
+      </View>
+
+      <View style={styles.sosButtonStage}>
+        {isActive && (
+          <Animated.View
+            style={[
+              styles.sosGlow,
+              {
+                opacity: glowAnim,
+                transform: [{ scale: pulseAnim }],
+              },
+            ]}
+          />
+        )}
+        <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+          <TouchableOpacity
+            style={[styles.sosButton, isActive && styles.sosButtonActive]}
+            onLongPress={onActivate}
+            onPress={isActive ? onCancel : undefined}
+            delayLongPress={500}
+            activeOpacity={0.9}
+            accessibilityLabel={isActive ? 'Cancel SOS countdown' : 'Hold for SOS emergency options'}
+            accessibilityHint="The app opens emergency options and does not call 999 automatically."
+            accessibilityRole="button"
           >
-            {isActive ? (
-              <View style={styles.sosContent}>
-                <Text style={styles.sosCountdown}>{countdown}</Text>
-                <Text style={styles.sosCancelText}>Tap to cancel</Text>
-              </View>
-            ) : (
-              <View style={styles.sosContent}>
-                <MaterialCommunityIcons name="alarm-light" size={36} color={COLORS.white} />
-                <Text style={styles.sosText}>SOS</Text>
-                <Text style={styles.sosHint}>Hold for emergency</Text>
-              </View>
-            )}
-          </LinearGradient>
-        </TouchableOpacity>
-      </Animated.View>
-      {!isActive && (
-        <Text style={styles.sosDisclaimer}>
-          Hold the button for emergency options. The app does not contact 999 automatically.
+            <LinearGradient
+              colors={isActive ? [COLORS.sosRedDark, COLORS.sosRed] : [COLORS.sosRed, '#EF4444']}
+              style={styles.sosGradient}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+            >
+              {isActive ? (
+                <View style={styles.sosContent}>
+                  <Text
+                    style={styles.sosCountdown}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                  >
+                    {countdown}
+                  </Text>
+                  <Text
+                    style={styles.sosCancelText}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                  >
+                    Tap to cancel
+                  </Text>
+                </View>
+              ) : (
+                <View style={styles.sosContent}>
+                  <MaterialCommunityIcons name="alarm-light" size={36} color={COLORS.white} />
+                  <Text
+                    style={styles.sosText}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                  >
+                    SOS
+                  </Text>
+                </View>
+              )}
+            </LinearGradient>
+          </TouchableOpacity>
+        </Animated.View>
+      </View>
+
+      {!isActive ? (
+        <View style={styles.sosHelpPanel}>
+          <View style={styles.sosHelpIcon}>
+            <MaterialCommunityIcons name="gesture-tap-hold" size={18} color={COLORS.sosRed} />
+          </View>
+          <Text style={styles.sosHelpText}>
+            Hold SOS for emergency call options. The app does not contact 999 automatically.
+          </Text>
+        </View>
+      ) : (
+        <Text style={styles.sosActiveText}>
+          Emergency options will open when the countdown reaches zero.
         </Text>
       )}
     </View>
@@ -1034,7 +1078,7 @@ export default function SafetySupportScreen({
                 <ContactButton
                   icon="phone-in-talk"
                   label="Driver"
-                  sublabel={requestingDriverCall ? 'Requesting…' : 'Request callback'}
+                  sublabel={requestingDriverCall ? 'Requesting...' : 'Request callback'}
                   onPress={handleRequestDriverCall}
                   color={COLORS.accent}
                 />
@@ -1489,21 +1533,61 @@ const styles = StyleSheet.create({
   },
 
   // SOS Button
-  sosContainer: {
+  sosCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.xl,
+    padding: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: `${COLORS.sosRed}18`,
+    ...SHADOWS.lg,
+  },
+  sosCardHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 12,
+  },
+  sosCardIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: COLORS.sosRedLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  sosCardHeaderText: {
+    flex: 1,
+  },
+  sosEyebrow: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1.6,
+    color: COLORS.sosRed,
+    textTransform: 'uppercase',
+  },
+  sosTitle: {
+    fontSize: 23,
+    fontWeight: '900',
+    color: COLORS.text,
+    marginTop: 2,
+  },
+  sosButtonStage: {
+    minHeight: SOS_GLOW_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sosGlow: {
     position: 'absolute',
-    width: 204,
-    height: 204,
-    borderRadius: 102,
+    width: SOS_GLOW_SIZE,
+    height: SOS_GLOW_SIZE,
+    borderRadius: SOS_GLOW_RADIUS,
     backgroundColor: COLORS.sosRed,
   },
   sosButton: {
-    width: 178,
-    height: 178,
-    borderRadius: 89,
+    width: SOS_BUTTON_SIZE,
+    height: SOS_BUTTON_SIZE,
+    borderRadius: SOS_BUTTON_RADIUS,
     ...SHADOWS.xl,
   },
   sosButtonActive: {
@@ -1511,34 +1595,32 @@ const styles = StyleSheet.create({
   },
   sosGradient: {
     flex: 1,
-    borderRadius: 89,
+    borderRadius: SOS_BUTTON_RADIUS,
     justifyContent: 'center',
     alignItems: 'center',
     paddingVertical: SPACING.lg,
+    paddingHorizontal: SPACING.xl,
   },
   sosContent: {
     alignItems: 'center',
     justifyContent: 'center',
+    width: '100%',
   },
   sosText: {
     color: COLORS.white,
-    fontSize: 52,
+    fontSize: 56,
     fontWeight: '900',
     letterSpacing: 3,
     marginTop: 8,
-    lineHeight: 58,
-  },
-  sosHint: {
-    color: 'rgba(255,255,255,0.92)',
-    fontSize: 14,
-    fontWeight: '700',
-    marginTop: 8,
-    lineHeight: 18,
+    lineHeight: 60,
+    textAlign: 'center',
   },
   sosCountdown: {
     color: COLORS.white,
-    fontSize: 56,
+    fontSize: 62,
     fontWeight: '900',
+    lineHeight: 68,
+    textAlign: 'center',
   },
   sosCancelText: {
     color: 'rgba(255,255,255,0.9)',
@@ -1546,12 +1628,37 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 4,
   },
-  sosDisclaimer: {
+  sosHelpPanel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.sosRedLight,
+    borderRadius: RADIUS.md,
+    padding: 12,
+    marginTop: 12,
+  },
+  sosHelpIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.white,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  sosHelpText: {
+    flex: 1,
+    color: COLORS.sosRedDark,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
+  },
+  sosActiveText: {
     color: COLORS.textSecondary,
-    fontSize: 12,
+    fontSize: 13,
+    fontWeight: '700',
     textAlign: 'center',
     marginTop: 12,
-    paddingHorizontal: 20,
+    lineHeight: 18,
   },
 
   // Cards
