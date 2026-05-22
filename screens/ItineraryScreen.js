@@ -14,7 +14,6 @@ import {
   TextInput,
   Alert,
   Animated,
-  Dimensions,
   Share
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -22,10 +21,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getTourItinerary } from '../services/bookingServiceRealtime';
 import { realtimeDb } from '../firebase';
-import { COLORS as THEME } from '../theme';
+import { COLORS as THEME, SPACING, RADIUS, SHADOWS, FONT_WEIGHT } from '../theme';
 import offlineSyncService from '../services/offlineSyncService';
 import logger from '../services/loggerService';
-const { parseSupportedStartDate } = require('../services/itineraryDateParser');
+const { parseSupportedStartDate, getTourDayContext } = require('../services/itineraryDateParser');
+const { buildItineraryItems } = require('../utils/itineraryPresentation');
 
 // Brand Colors
 const COLORS = {
@@ -42,11 +42,11 @@ const COLORS = {
   successGreen: THEME.success,
   editBg: THEME.warningLight,
   danger: THEME.error,
-  warningYellow: '#FCD34D',
-  infoBlue: '#60A5FA'
+  primaryMuted: THEME.primaryMuted,
+  accentLight: THEME.accentLight,
+  border: THEME.border,
+  mutedText: THEME.textMuted,
 };
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function ItineraryScreen({ onBack, tourId, tourName, startDate, isDriver }) {
   const [itinerary, setItinerary] = useState(null);
@@ -68,8 +68,6 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
   // --- UI STATE ---
   const [cachedItinerary, setCachedItinerary] = useState(null);
-  const [isOnline, setIsOnline] = useState(true);
-  const [lastSync, setLastSync] = useState(null);
   const [expandAll, setExpandAll] = useState(false);
 
   const scrollViewRef = useRef(null);
@@ -106,7 +104,6 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
         if (data) {
           setItinerary(data);
           setEditedItinerary(JSON.parse(JSON.stringify(data)));
-          setLastSync(new Date());
           cacheItinerary(data);
         }
       };
@@ -178,30 +175,47 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   const parsedTourStartDate = useMemo(() => getParsedStartDate(startDate), [getParsedStartDate, startDate]);
   const hasUnsupportedStartDate = Boolean(startDate) && !parsedTourStartDate;
 
+  const getDayDate = useCallback((dayNumber) => {
+    if (!parsedTourStartDate) {
+      return null;
+    }
+    const dayDate = new Date(parsedTourStartDate);
+    dayDate.setDate(parsedTourStartDate.getDate() + (dayNumber - 1));
+    return dayDate;
+  }, [parsedTourStartDate]);
+
+  const formatShortDate = useCallback((date) => {
+    if (!date) return '';
+    return date.toLocaleDateString(undefined, {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    });
+  }, []);
+
   const formatDayLabel = useMemo(
     () => (dayNumber) => {
-      if (!parsedTourStartDate) {
+      const dayDate = getDayDate(dayNumber);
+      if (!dayDate) {
         return `Day ${dayNumber}`;
       }
-      const dayDate = new Date(parsedTourStartDate);
-      dayDate.setDate(parsedTourStartDate.getDate() + (dayNumber - 1));
       const weekday = dayDate.toLocaleDateString(undefined, { weekday: 'short' });
       const monthStr = dayDate.toLocaleDateString(undefined, { month: 'long' });
       const dayStr = getOrdinal(dayDate.getDate());
       return `Day ${dayNumber} - ${weekday} ${dayStr} ${monthStr}`;
     },
-    [parsedTourStartDate]
+    [getDayDate]
   );
 
+  const tourDayContext = useMemo(() => getTourDayContext({
+    startDate,
+    itineraryDays: itinerary?.days || [],
+  }), [itinerary?.days, startDate]);
+
   const todaysDayNumber = useMemo(() => {
-    if (!parsedTourStartDate || !itinerary?.days?.length) return null;
-    const today = new Date();
-    today.setHours(12, 0, 0, 0);
-    const diffTime = today.getTime() - parsedTourStartDate.getTime();
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
-    if (diffDays < 1 || diffDays > itinerary.days.length) return null;
-    return diffDays;
-  }, [itinerary?.days?.length, parsedTourStartDate]);
+    if (tourDayContext.status !== 'ACTIVE' || !itinerary?.days?.length) return null;
+    return itinerary.days[tourDayContext.dayIndex]?.day || tourDayContext.dayNumber;
+  }, [itinerary?.days, tourDayContext]);
 
   useEffect(() => {
     if (!itinerary?.days?.length) return;
@@ -251,8 +265,6 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       if (!isCurrentRequest()) return;
       setItinerary(tourItinerary || null);
       setEditedItinerary(JSON.parse(JSON.stringify(tourItinerary || {})));
-      setIsOnline(true);
-      setLastSync(new Date());
 
       if (tourItinerary) {
         await cacheItinerary(tourItinerary);
@@ -279,8 +291,8 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
         if (terminalFallback) {
           setItinerary(terminalFallback);
           setEditedItinerary(JSON.parse(JSON.stringify(terminalFallback)));
-          setIsOnline(false);
-          setErrorMessage('Using offline data. Pull to refresh when online.');
+          setRetryCount(0);
+          setErrorMessage('');
         } else {
           setItinerary(null);
           setErrorMessage('Could not load itinerary. Please check your connection.');
@@ -419,7 +431,6 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       setItinerary(editedItinerary);
       await cacheItinerary(editedItinerary);
       setIsEditing(false);
-      setLastSync(new Date());
       Alert.alert("Success", "Itinerary updated. Passengers will be notified shortly.");
     } catch (error) {
       console.error('Save failed:', error);
@@ -509,8 +520,17 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   const scrollToDay = (dayNumber) => {
     const position = dayPositions[dayNumber];
     if (position !== undefined && scrollViewRef.current) {
-      scrollViewRef.current.scrollTo({ y: position, animated: true });
+      scrollViewRef.current.scrollTo({ y: Math.max(position - 10, 0), animated: true });
     }
+  };
+
+  const handleJumpToDay = (dayNumber) => {
+    if (!dayNumber) return;
+    if (!isEditing && collapsedDays[dayNumber]) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setCollapsedDays((prev) => ({ ...prev, [dayNumber]: false }));
+    }
+    scrollToDay(dayNumber);
   };
 
   // --- LOADING SKELETON ---
@@ -527,39 +547,251 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
     </View>
   );
 
+  const isSearchActive = searchQuery.trim().length > 0 && !isEditing;
+
   // --- EMPTY STATE ---
-  const renderEmptyState = () => (
-    <View style={styles.emptyContainer}>
-      <MaterialCommunityIcons name="calendar-blank-outline" size={80} color={COLORS.timelineColor} />
-      <Text style={styles.emptyTitle}>No Itinerary Yet</Text>
-      <Text style={styles.emptySubtitle}>
-        {isDriver
-          ? "Tap the edit button to create your first day"
-          : "Your tour itinerary will appear here soon"}
-      </Text>
-      {isDriver && (
-        <TouchableOpacity
-          style={styles.emptyButton}
-          onPress={() => {
-            setIsEditing(true);
-            const emptyItinerary = {
-              title: tourName || 'Tour',
-              days: [
-                {
-                  day: 1,
-                  content: ''
-                }
-              ]
-            };
-            setEditedItinerary(emptyItinerary);
-          }}
+  const renderEmptyState = () => {
+    return (
+      <View style={styles.emptyContainer}>
+        <MaterialCommunityIcons name="calendar-blank-outline" size={80} color={COLORS.timelineColor} />
+        <Text style={styles.emptyTitle}>
+          {isSearchActive ? 'No Matching Days' : 'No Itinerary Yet'}
+        </Text>
+        <Text style={styles.emptySubtitle}>
+          {isSearchActive
+            ? "Try a different search term or clear search to see every day."
+            : isDriver
+            ? "Tap the edit button to create your first day"
+            : "Your tour itinerary will appear here soon"}
+        </Text>
+        {isSearchActive && (
+          <TouchableOpacity
+            style={styles.emptySecondaryButton}
+            onPress={() => setSearchQuery('')}
+            accessibilityRole="button"
+            accessibilityLabel="Clear itinerary search"
+          >
+            <MaterialCommunityIcons name="close-circle-outline" size={20} color={COLORS.primaryBlue} />
+            <Text style={styles.emptySecondaryButtonText}>Clear search</Text>
+          </TouchableOpacity>
+        )}
+        {isDriver && !isSearchActive && (
+          <TouchableOpacity
+            style={styles.emptyButton}
+            onPress={() => {
+              setIsEditing(true);
+              const emptyItinerary = {
+                title: tourName || 'Tour',
+                days: [
+                  {
+                    day: 1,
+                    content: ''
+                  }
+                ]
+              };
+              setEditedItinerary(emptyItinerary);
+            }}
+          >
+            <MaterialCommunityIcons name="plus" size={20} color={COLORS.white} />
+            <Text style={styles.emptyButtonText}>Create Itinerary</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  };
+
+  const dataToRender = isEditing ? editedItinerary : (searchQuery ? filteredItinerary : itinerary);
+  const visibleDays = dataToRender?.days || [];
+  const itineraryDayCount = itinerary?.days?.length || 0;
+  const displayTitle = tourName || dataToRender?.title || itinerary?.title || 'Tour itinerary';
+
+  const headerDaySummary = useMemo(() => {
+    if (!itineraryDayCount) {
+      return {
+        icon: 'calendar-blank-outline',
+        label: 'Itinerary pending',
+      };
+    }
+
+    if (tourDayContext.status === 'ACTIVE' && todaysDayNumber) {
+      const todayDate = getDayDate(todaysDayNumber);
+      return {
+        icon: 'calendar-today',
+        label: todayDate
+          ? `Today: Day ${todaysDayNumber}, ${formatShortDate(todayDate)}`
+          : `Today: Day ${todaysDayNumber}`,
+      };
+    }
+
+    if (tourDayContext.status === 'FUTURE') {
+      const firstDate = getDayDate(1);
+      return {
+        icon: 'calendar-start',
+        label: firstDate ? `Starts ${formatShortDate(firstDate)}` : 'Tour starts soon',
+      };
+    }
+
+    if (tourDayContext.status === 'COMPLETED') {
+      return {
+        icon: 'calendar-check-outline',
+        label: 'Tour dates completed',
+      };
+    }
+
+    return {
+      icon: 'calendar-question',
+      label: 'Dates to be confirmed',
+    };
+  }, [formatShortDate, getDayDate, itineraryDayCount, todaysDayNumber, tourDayContext]);
+
+  const timelineItemsByDay = useMemo(() => {
+    const itemsByDay = {};
+    visibleDays.forEach((dayData, dayIndex) => {
+      const dayNumber = dayData?.day || dayIndex + 1;
+      itemsByDay[dayNumber] = buildItineraryItems(dayData?.content || '');
+    });
+    return itemsByDay;
+  }, [visibleDays]);
+
+  const renderHeaderSummary = () => {
+    if (isEditing) return null;
+
+    return (
+      <View style={styles.readSummaryPanel}>
+        <Text style={styles.readSummaryEyebrow}>Daily travel plan</Text>
+        <Text style={styles.readSummaryTitle} numberOfLines={2}>
+          {displayTitle}
+        </Text>
+
+        <View style={styles.summaryPillRow}>
+          <View style={styles.summaryPill}>
+            <MaterialCommunityIcons name="calendar-multiselect" size={15} color={COLORS.primaryBlue} />
+            <Text style={styles.summaryPillText}>
+              {itineraryDayCount === 1 ? '1 day' : `${itineraryDayCount} days`}
+            </Text>
+          </View>
+
+          <View style={[styles.summaryPill, styles.summaryPillWide]}>
+            <MaterialCommunityIcons name={headerDaySummary.icon} size={15} color={COLORS.primaryBlue} />
+            <Text style={styles.summaryPillText} numberOfLines={1}>
+              {headerDaySummary.label}
+            </Text>
+          </View>
+        </View>
+      </View>
+    );
+  };
+
+  const renderDayRail = () => {
+    if (isEditing || visibleDays.length === 0) return null;
+
+    return (
+      <View style={styles.dayRailContainer}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.dayRailContent}
         >
-          <MaterialCommunityIcons name="plus" size={20} color={COLORS.white} />
-          <Text style={styles.emptyButtonText}>Create Itinerary</Text>
-        </TouchableOpacity>
-      )}
-    </View>
-  );
+          {visibleDays.map((dayData, dayIndex) => {
+            const dayNumber = dayData?.day || dayIndex + 1;
+            const isToday = todaysDayNumber === dayNumber;
+            const dayDate = getDayDate(dayNumber);
+            const items = timelineItemsByDay[dayNumber] || [];
+
+            return (
+              <TouchableOpacity
+                key={`rail-${dayNumber}-${dayIndex}`}
+                onPress={() => handleJumpToDay(dayNumber)}
+                style={[styles.dayRailChip, isToday && styles.dayRailChipToday]}
+                activeOpacity={0.86}
+                accessibilityRole="button"
+                accessibilityLabel={`Jump to Day ${dayNumber}${isToday ? ', today' : ''}`}
+              >
+                <View style={styles.dayRailTopRow}>
+                  <Text style={[styles.dayRailDayText, isToday && styles.dayRailDayTextToday]}>
+                    Day {dayNumber}
+                  </Text>
+                  {isToday ? (
+                    <View style={styles.dayRailTodayDot}>
+                      <Text style={styles.dayRailTodayText}>Today</Text>
+                    </View>
+                  ) : null}
+                </View>
+                <Text style={[styles.dayRailDateText, isToday && styles.dayRailDateTextToday]} numberOfLines={1}>
+                  {dayDate ? formatShortDate(dayDate) : `${items.length || 0} items`}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
+    );
+  };
+
+  const renderTimelineForDay = ({ dayData, dayItems }) => {
+    const content = String(dayData?.content || '').trim();
+
+    if (!content) {
+      return (
+        <View style={styles.emptyDayPanel}>
+          <MaterialCommunityIcons name="calendar-edit" size={22} color={COLORS.mutedText} />
+          <Text style={styles.emptyDayText}>No detailed plan has been published for this day yet.</Text>
+        </View>
+      );
+    }
+
+    if (!dayItems.length) {
+      return (
+        <Text style={styles.dayContentText}>
+          {content}
+        </Text>
+      );
+    }
+
+    return (
+      <View style={styles.timelineList}>
+        {dayItems.map((item, itemIndex) => {
+          const isLast = itemIndex === dayItems.length - 1;
+          const isSingle = dayItems.length === 1;
+
+          return (
+            <View
+              key={item.id}
+              style={styles.timelineItem}
+              accessible={true}
+              accessibilityLabel={item.text}
+            >
+              <View style={styles.timelineMarkerColumn}>
+                <View
+                  style={[
+                    styles.timelineConnector,
+                    itemIndex === 0 && styles.timelineConnectorFirst,
+                    isLast && styles.timelineConnectorLast,
+                    isSingle && styles.timelineConnectorHidden,
+                  ]}
+                />
+                <View style={styles.timelineIconCircle}>
+                  <MaterialCommunityIcons
+                    name={item.iconKey}
+                    size={16}
+                    color={COLORS.primaryBlue}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.timelineTextColumn}>
+                <View style={styles.timelineTitleRow}>
+                  <Text style={styles.timelineItemText}>
+                    {item.text}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    );
+  };
 
   if (loading) {
     return (
@@ -579,8 +811,6 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       </SafeAreaView>
     );
   }
-
-  const dataToRender = isEditing ? editedItinerary : (searchQuery ? filteredItinerary : itinerary);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -605,14 +835,8 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
               {isEditing ? 'EDITING MODE' : 'Itinerary'}
             </Text>
             <Text style={[styles.headerTitle, isEditing && {color: COLORS.darkText}]}>
-              {tourName || dataToRender?.title}
+              {displayTitle}
             </Text>
-            {!isOnline && (
-              <View style={styles.offlineBadge}>
-                <MaterialCommunityIcons name="cloud-off-outline" size={12} color={COLORS.white} />
-                <Text style={styles.offlineText}>Offline</Text>
-              </View>
-            )}
           </View>
 
           {isDriver && !isEditing && !showSearch && (
@@ -678,6 +902,8 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
           </Animated.View>
         )}
 
+        {renderHeaderSummary()}
+
         {/* QUICK TOOLBAR */}
         {!isEditing && itinerary?.days?.length > 0 && (
           <View style={styles.toolbar}>
@@ -690,7 +916,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
               <Text style={styles.toolbarText}>{expandAll ? 'Collapse All' : 'Expand All'}</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity onPress={() => scrollToDay(todaysDayNumber || 1)} style={styles.toolbarButton}>
+            <TouchableOpacity onPress={() => handleJumpToDay(todaysDayNumber || visibleDays[0]?.day || 1)} style={styles.toolbarButton}>
               <MaterialCommunityIcons name="calendar-today" size={18} color={COLORS.white} />
               <Text style={styles.toolbarText}>Today</Text>
             </TouchableOpacity>
@@ -702,6 +928,8 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
           </View>
         )}
       </LinearGradient>
+
+      {renderDayRail()}
 
       {/* CONTENT */}
       <ScrollView
@@ -718,8 +946,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
           ) : null
         }
       >
-        <View style={styles.cacheMetaRow}><Text style={styles.cacheMetaText}>{offlineSyncService.getStalenessLabel(lastSync).label}</Text></View>
-      {errorMessage ? (
+        {errorMessage ? (
           <View style={styles.errorBanner}>
             <MaterialCommunityIcons name="alert-circle" size={20} color={COLORS.white} />
             <Text style={styles.errorText}>{errorMessage}</Text>
@@ -728,12 +955,6 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
             )}
           </View>
         ) : null}
-
-        {lastSync && !isEditing && (
-          <Text style={styles.syncText}>
-            Last synced: {lastSync.toLocaleTimeString()}
-          </Text>
-        )}
 
         {isDriver && isEditing && hasUnsupportedStartDate && (
           <View style={styles.dateWarningBanner}>
@@ -749,14 +970,20 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
         ) : (
           <>
             {dataToRender.days.map((dayData, dayIndex) => {
-              const isCollapsed = !isEditing && collapsedDays[dayData.day];
-              const dayLabel = formatDayLabel(dayData.day);
-              const isToday = todaysDayNumber === dayData.day;
-              const content = dayData.content || '';
+              const dayNumber = dayData?.day || dayIndex + 1;
+              const isCollapsed = !isEditing && !isSearchActive && collapsedDays[dayNumber];
+              const dayLabel = formatDayLabel(dayNumber);
+              const isToday = todaysDayNumber === dayNumber;
+              const content = dayData?.content || '';
+              const dayItems = timelineItemsByDay[dayNumber] || [];
+              const dayDate = getDayDate(dayNumber);
+              const dayMetaLabel = dayItems.length
+                ? `${dayItems.length} ${dayItems.length === 1 ? 'highlight' : 'highlights'}`
+                : 'No details yet';
 
               return (
                 <View
-                  key={dayIndex}
+                  key={`${dayNumber}-${dayIndex}`}
                   style={[
                     styles.dayCard,
                     isToday && styles.todayCard,
@@ -764,54 +991,88 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
                   ]}
                   onLayout={(event) => {
                     const { y } = event.nativeEvent.layout;
-                    setDayPositions((prev) => ({ ...prev, [dayData.day]: y }));
+                    setDayPositions((prev) => ({ ...prev, [dayNumber]: y }));
                   }}
                 >
-                  <LinearGradient colors={[COLORS.white, '#F7FAFF']} style={styles.dayCardInner}>
+                  <LinearGradient
+                    colors={isToday && !isEditing ? [COLORS.white, '#FFF7ED'] : [COLORS.white, '#F7FAFF']}
+                    style={styles.dayCardInner}
+                  >
                     <TouchableOpacity
-                      onPress={() => toggleDay(dayData.day)}
-                      activeOpacity={isEditing ? 1 : 0.9}
+                      onPress={() => toggleDay(dayNumber)}
+                      disabled={isSearchActive}
+                      activeOpacity={isEditing || isSearchActive ? 1 : 0.9}
                       accessible={true}
-                      accessibilityLabel={dayLabel}
-                      accessibilityRole="button"
-                      accessibilityHint={isCollapsed ? "Double tap to expand" : "Double tap to collapse"}
+                      accessibilityLabel={`${dayLabel}${isToday ? ', today' : ''}`}
+                      accessibilityRole={isSearchActive ? undefined : "button"}
+                      accessibilityHint={
+                        isSearchActive
+                          ? "Search matches are expanded"
+                          : isCollapsed
+                          ? "Double tap to expand"
+                          : "Double tap to collapse"
+                      }
                     >
                       <View style={styles.dayHeader}>
-                        <View style={[styles.dayBadge, isToday && styles.todayBadge]}>
-                          <MaterialCommunityIcons
-                            name={isToday ? "calendar-today" : "calendar-blank"}
-                            size={14}
-                            color={COLORS.white}
-                            style={{ marginRight: 6 }}
-                          />
-                          <Text style={styles.dayBadgeText}>{dayLabel}</Text>
-                        </View>
-                        <View style={{ flex: 1 }} />
                         {isEditing ? (
-                          <View style={styles.dayEditActions}>
-                            <TouchableOpacity
-                              onPress={() => handleDuplicateDay(dayIndex)}
-                              style={styles.dayActionButton}
-                              accessible={true}
-                              accessibilityLabel="Duplicate day"
-                            >
-                              <MaterialCommunityIcons name="content-copy" size={20} color={COLORS.primaryBlue} />
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              onPress={() => handleRemoveDay(dayIndex)}
-                              style={styles.dayActionButton}
-                              accessible={true}
-                              accessibilityLabel="Delete day"
-                            >
-                              <MaterialCommunityIcons name="delete" size={20} color={COLORS.danger} />
-                            </TouchableOpacity>
-                          </View>
+                          <>
+                            <View style={[styles.dayBadge, isToday && styles.todayBadge]}>
+                              <MaterialCommunityIcons
+                                name={isToday ? "calendar-today" : "calendar-blank"}
+                                size={14}
+                                color={COLORS.white}
+                                style={{ marginRight: 6 }}
+                              />
+                              <Text style={styles.dayBadgeText}>{dayLabel}</Text>
+                            </View>
+                            <View style={{ flex: 1 }} />
+                            <View style={styles.dayEditActions}>
+                              <TouchableOpacity
+                                onPress={() => handleDuplicateDay(dayIndex)}
+                                style={styles.dayActionButton}
+                                accessible={true}
+                                accessibilityLabel="Duplicate day"
+                              >
+                                <MaterialCommunityIcons name="content-copy" size={20} color={COLORS.primaryBlue} />
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                onPress={() => handleRemoveDay(dayIndex)}
+                                style={styles.dayActionButton}
+                                accessible={true}
+                                accessibilityLabel="Delete day"
+                              >
+                                <MaterialCommunityIcons name="delete" size={20} color={COLORS.danger} />
+                              </TouchableOpacity>
+                            </View>
+                          </>
                         ) : (
-                          <MaterialCommunityIcons
-                            name={isCollapsed ? 'chevron-down' : 'chevron-up'}
-                            size={28}
-                            color={COLORS.secondaryText}
-                          />
+                          <View style={styles.readDayHeader}>
+                            <View style={styles.readDayTitleWrap}>
+                              <View style={styles.readDayTitleRow}>
+                                <Text style={styles.readDayTitle}>Day {dayNumber}</Text>
+                                {isToday ? (
+                                  <View style={styles.todayInlineBadge}>
+                                    <MaterialCommunityIcons name="calendar-today" size={12} color={COLORS.coralAccent} />
+                                    <Text style={styles.todayInlineBadgeText}>Today</Text>
+                                  </View>
+                                ) : null}
+                              </View>
+                              <Text style={styles.readDayDateText} numberOfLines={1}>
+                                {dayDate ? formatShortDate(dayDate) : 'Travel plan'}
+                              </Text>
+                              <Text style={styles.readDayMetaText} numberOfLines={1}>
+                                {dayMetaLabel}
+                              </Text>
+                            </View>
+
+                            <View style={styles.readDayChevron}>
+                              <MaterialCommunityIcons
+                                name={isCollapsed ? 'chevron-down' : 'chevron-up'}
+                                size={26}
+                                color={COLORS.secondaryText}
+                              />
+                            </View>
+                          </View>
                         )}
                       </View>
                     </TouchableOpacity>
@@ -828,12 +1089,10 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
                             multiline
                             textAlignVertical="top"
                             accessible={true}
-                            accessibilityLabel={`Day ${dayData.day} content`}
+                            accessibilityLabel={`Day ${dayNumber} content`}
                           />
                         ) : (
-                          <Text style={styles.dayContentText}>
-                            {content || 'No details available for this day.'}
-                          </Text>
+                          renderTimelineForDay({ dayData, dayItems })
                         )}
                       </View>
                     )}
@@ -885,26 +1144,135 @@ const styles = StyleSheet.create({
   headerIconButton: { padding: 8 },
   headerActions: { flexDirection: 'row', alignItems: 'center' },
   editButton: { backgroundColor: COLORS.white, borderRadius: 12 },
-  offlineBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.2)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, marginTop: 4 },
-  offlineText: { color: COLORS.white, fontSize: 10, fontWeight: '600', marginLeft: 4 },
+  readSummaryPanel: {
+    marginTop: SPACING.md,
+    padding: SPACING.md,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  readSummaryEyebrow: {
+    color: COLORS.lightBlueAccent,
+    fontSize: 11,
+    fontWeight: FONT_WEIGHT.bold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  readSummaryTitle: {
+    marginTop: 3,
+    color: COLORS.white,
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: FONT_WEIGHT.extrabold,
+  },
+  summaryPillRow: {
+    marginTop: SPACING.md,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: SPACING.sm,
+  },
+  summaryPill: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    borderRadius: RADIUS.full,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.28)',
+    backgroundColor: 'rgba(255,255,255,0.88)',
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 6,
+  },
+  summaryPillWide: {
+    flexShrink: 1,
+    maxWidth: '100%',
+  },
+  summaryPillText: {
+    flexShrink: 1,
+    color: COLORS.primaryBlue,
+    fontSize: 12,
+    fontWeight: FONT_WEIGHT.bold,
+  },
 
   // Search Bar
   searchContainer: { marginTop: 12, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', overflow: 'hidden' },
   searchInput: { flex: 1, marginLeft: 8, fontSize: 14, color: COLORS.darkText, paddingVertical: 12 },
 
   // Toolbar
-  toolbar: { flexDirection: 'row', marginTop: 12, justifyContent: 'space-around', paddingTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)' },
-  toolbarButton: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.15)' },
-  toolbarText: { color: COLORS.white, fontSize: 12, fontWeight: '600', marginLeft: 6 },
+  toolbar: { flexDirection: 'row', marginTop: 12, gap: 8, paddingTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)' },
+  toolbarButton: { flex: 1, minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.15)' },
+  toolbarText: { color: COLORS.white, fontSize: 12, fontWeight: '600', marginLeft: 6, flexShrink: 1 },
+
+  // Day rail
+  dayRailContainer: {
+    backgroundColor: COLORS.appBackground,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    paddingVertical: SPACING.sm,
+  },
+  dayRailContent: {
+    paddingHorizontal: SPACING.lg,
+    gap: SPACING.sm,
+  },
+  dayRailChip: {
+    width: 122,
+    minHeight: 58,
+    justifyContent: 'center',
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.white,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.sm,
+    ...SHADOWS.sm,
+  },
+  dayRailChipToday: {
+    borderColor: COLORS.coralAccent,
+    backgroundColor: COLORS.accentLight,
+  },
+  dayRailTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: SPACING.xs,
+  },
+  dayRailDayText: {
+    color: COLORS.darkText,
+    fontSize: 13,
+    fontWeight: FONT_WEIGHT.extrabold,
+  },
+  dayRailDayTextToday: {
+    color: COLORS.coralAccent,
+  },
+  dayRailTodayDot: {
+    borderRadius: RADIUS.full,
+    backgroundColor: COLORS.coralAccent,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  dayRailTodayText: {
+    color: COLORS.white,
+    fontSize: 9,
+    fontWeight: FONT_WEIGHT.bold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  dayRailDateText: {
+    marginTop: 4,
+    color: COLORS.secondaryText,
+    fontSize: 12,
+    fontWeight: FONT_WEIGHT.semibold,
+  },
+  dayRailDateTextToday: {
+    color: COLORS.darkText,
+  },
 
   scrollContainer: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 40 },
 
   // Error Banner
   errorBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.danger, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 12, marginBottom: 16 },
   errorText: { color: COLORS.white, fontSize: 13, fontWeight: '600', marginLeft: 8, flex: 1 },
-
-  // Sync Text
-  syncText: { fontSize: 11, color: COLORS.secondaryText, textAlign: 'center', marginBottom: 12, fontStyle: 'italic' },
 
   // Loading Skeleton
   skeletonContainer: { paddingHorizontal: 16, paddingTop: 20 },
@@ -918,6 +1286,24 @@ const styles = StyleSheet.create({
   emptySubtitle: { fontSize: 15, color: COLORS.secondaryText, textAlign: 'center', lineHeight: 22 },
   emptyButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.primaryBlue, paddingHorizontal: 24, paddingVertical: 14, borderRadius: 12, marginTop: 24, shadowColor: COLORS.primaryBlue, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
   emptyButtonText: { color: COLORS.white, fontSize: 16, fontWeight: '700', marginLeft: 8 },
+  emptySecondaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    marginTop: SPACING.xl,
+    borderWidth: 1,
+    borderColor: COLORS.primaryBlue,
+    borderRadius: RADIUS.md,
+    backgroundColor: COLORS.white,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    ...SHADOWS.sm,
+  },
+  emptySecondaryButtonText: {
+    color: COLORS.primaryBlue,
+    fontSize: 15,
+    fontWeight: FONT_WEIGHT.bold,
+  },
 
 
   dateWarningBanner: {
@@ -938,21 +1324,163 @@ const styles = StyleSheet.create({
   },
 
   // Day Cards
-  dayCard: { backgroundColor: 'transparent', borderRadius: 20, marginBottom: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.08, shadowRadius: 16, elevation: 6 },
+  dayCard: { backgroundColor: 'transparent', borderRadius: RADIUS.lg, marginBottom: SPACING.lg, ...SHADOWS.md },
   editingCard: { borderWidth: 2, borderColor: COLORS.primaryBlue, borderStyle: 'dashed' },
   todayCard: { borderWidth: 2, borderColor: COLORS.coralAccent, shadowColor: COLORS.coralAccent, shadowOpacity: 0.15 },
-  dayCardInner: { borderRadius: 20, paddingHorizontal: 18, paddingVertical: 16 },
+  dayCardInner: { borderRadius: RADIUS.lg, paddingHorizontal: SPACING.lg, paddingVertical: SPACING.lg },
 
-  dayHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  dayHeader: { flexDirection: 'row', alignItems: 'center' },
   dayBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.primaryBlue, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 12 },
   todayBadge: { backgroundColor: COLORS.coralAccent },
   dayBadgeText: { fontSize: 13, fontWeight: '800', color: COLORS.white, letterSpacing: 0.3 },
   dayEditActions: { flexDirection: 'row', gap: 8 },
   dayActionButton: { padding: 8 },
+  readDayHeader: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+  },
+  readDayTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  readDayTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: SPACING.sm,
+  },
+  readDayTitle: {
+    color: COLORS.darkText,
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: FONT_WEIGHT.extrabold,
+  },
+  readDayDateText: {
+    marginTop: 2,
+    color: COLORS.secondaryText,
+    fontSize: 13,
+    fontWeight: FONT_WEIGHT.semibold,
+  },
+  readDayMetaText: {
+    marginTop: 5,
+    color: COLORS.mutedText,
+    fontSize: 12,
+    fontWeight: FONT_WEIGHT.semibold,
+  },
+  todayInlineBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: RADIUS.full,
+    backgroundColor: COLORS.accentLight,
+    borderWidth: 1,
+    borderColor: COLORS.coralAccent,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 4,
+  },
+  todayInlineBadgeText: {
+    color: COLORS.coralAccent,
+    fontSize: 10,
+    fontWeight: FONT_WEIGHT.bold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  readDayChevron: {
+    width: 34,
+    height: 34,
+    borderRadius: RADIUS.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.appBackground,
+  },
 
   // Day content
-  contentContainer: { marginTop: 8, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#F1F5F9' },
+  contentContainer: { marginTop: SPACING.md, paddingTop: SPACING.md, borderTopWidth: 1, borderTopColor: '#F1F5F9' },
   dayContentText: { fontSize: 15, color: COLORS.darkText, lineHeight: 24, letterSpacing: 0.1 },
+  timelineList: {
+    gap: SPACING.xs,
+  },
+  timelineItem: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    borderWidth: 1,
+    borderColor: 'transparent',
+    borderRadius: RADIUS.md,
+    paddingVertical: SPACING.sm,
+    paddingRight: SPACING.sm,
+  },
+  timelineMarkerColumn: {
+    width: 34,
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    position: 'relative',
+  },
+  timelineConnector: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 16,
+    width: 2,
+    borderRadius: RADIUS.full,
+    backgroundColor: '#DBEAFE',
+  },
+  timelineConnectorFirst: {
+    top: 18,
+  },
+  timelineConnectorLast: {
+    bottom: 18,
+  },
+  timelineConnectorHidden: {
+    display: 'none',
+  },
+  timelineIconCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: RADIUS.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primaryMuted,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    zIndex: 1,
+  },
+  timelineTextColumn: {
+    flex: 1,
+    minWidth: 0,
+    paddingTop: 3,
+    paddingLeft: SPACING.sm,
+  },
+  timelineTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.sm,
+  },
+  timelineItemText: {
+    flex: 1,
+    color: COLORS.darkText,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: FONT_WEIGHT.medium,
+  },
+  emptyDayPanel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.appBackground,
+    padding: SPACING.md,
+  },
+  emptyDayText: {
+    flex: 1,
+    color: COLORS.secondaryText,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: FONT_WEIGHT.semibold,
+  },
 
   // Edit mode
   editContentInput: {
