@@ -137,7 +137,7 @@ export default function PhotobookScreen({
     liveLimit: 30,
   });
 
-  const prefetchVisibleThumbnails = usePhotoThumbnailPrefetch();
+  const prefetchVisibleThumbnails = usePhotoThumbnailPrefetch({ enabled: false });
 
   useEffect(() => {
     if (!tourId || !principalId) return undefined;
@@ -664,6 +664,7 @@ export default function PhotobookScreen({
         canDelete={true}
         currentUserId={principalId}
         showUploaderInfo={false}
+        enablePrefetch={false}
         onEditCaption={async (photo, nextCaption) => photoService.updatePhotoCaption({ tourId, photoId: photo.id, userId: principalId, caption: nextCaption, visibility: 'private' })}
       />
 

@@ -211,6 +211,7 @@ export default function ImageViewer({
   canDelete = false,
   currentUserId = null,
   onEditCaption = null,
+  enablePrefetch = true,
 }) {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const runtimeWidth = windowWidth || SCREEN_WIDTH;
@@ -356,7 +357,7 @@ export default function ImageViewer({
   }, [visible]);
 
   useEffect(() => {
-    if (!visible || !photos.length) return undefined;
+    if (!visible || !photos.length || !enablePrefetch) return undefined;
 
     const prefetchCandidates = buildNeighborPrefetchUris({
       photos,
@@ -374,7 +375,7 @@ export default function ImageViewer({
     }
 
     return undefined;
-  }, [visible, currentIndex, photos, prefetchPolicy]);
+  }, [enablePrefetch, visible, currentIndex, photos, prefetchPolicy]);
 
   const syncIndexFromOffset = useCallback((offsetX) => {
     const nextIndex = resolvePagerIndexFromOffset({

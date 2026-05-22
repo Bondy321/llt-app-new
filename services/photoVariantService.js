@@ -1,4 +1,5 @@
 const EMPTY_URI_STRINGS = new Set(['null', 'undefined', '[object object]']);
+const LOADABLE_URI_PATTERN = /^(https?:\/\/|file:\/\/|content:\/\/|asset:\/\/|ph:\/\/|data:image\/|blob:)/i;
 
 const normalizePhotoUri = (value) => {
   if (typeof value !== 'string') return null;
@@ -13,10 +14,15 @@ const normalizePhotoUri = (value) => {
   return normalized;
 };
 
+const isLoadablePhotoUri = (value) => {
+  const uri = normalizePhotoUri(value);
+  return Boolean(uri && LOADABLE_URI_PATTERN.test(uri));
+};
+
 const firstPhotoUri = (...values) => {
   for (const value of values) {
     const uri = normalizePhotoUri(value);
-    if (uri) return uri;
+    if (isLoadablePhotoUri(uri)) return uri;
   }
 
   return null;
@@ -112,7 +118,7 @@ const buildNeighborPrefetchUris = ({ photos = [], currentIndex = 0, neighborDist
 
       if (thumbnailsOnly) {
         const thumbnailUri = normalizePhotoUri(photo.thumbnailUrl);
-        if (thumbnailUri) {
+        if (isLoadablePhotoUri(thumbnailUri)) {
           candidates.push(thumbnailUri);
         }
         return;
@@ -123,7 +129,7 @@ const buildNeighborPrefetchUris = ({ photos = [], currentIndex = 0, neighborDist
         candidates.push(primary);
       }
       const thumbnailUri = normalizePhotoUri(photo.thumbnailUrl);
-      if (thumbnailUri) {
+      if (isLoadablePhotoUri(thumbnailUri)) {
         candidates.push(thumbnailUri);
       }
     });
@@ -134,6 +140,7 @@ const buildNeighborPrefetchUris = ({ photos = [], currentIndex = 0, neighborDist
 
 module.exports = {
   normalizePhotoUri,
+  isLoadablePhotoUri,
   resolveViewerDisplayUri,
   resolveThumbnailDisplayUri,
   resolveSaveUri,

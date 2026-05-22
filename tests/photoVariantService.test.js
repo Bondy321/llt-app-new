@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   normalizePhotoUri,
+  isLoadablePhotoUri,
   resolveViewerDisplayUri,
   resolveSaveUri,
   resolveFullQualityUri,
@@ -56,7 +57,7 @@ test('buildNeighborPrefetchUris prioritizes viewer display variants for neighbor
     'https://cdn/2-thumb.jpg',
     'https://cdn/3-thumb.jpg',
   ]);
-  assert.equal(resolveSaveUri({ fullUrl: 'f', url: 'u' }), 'f');
+  assert.equal(resolveSaveUri({ fullUrl: 'https://cdn/full.jpg', url: 'https://cdn/url.jpg' }), 'https://cdn/full.jpg');
 });
 
 test('buildPhotoCacheKey prefers variant storage paths over signed URLs', () => {
@@ -82,7 +83,8 @@ test('buildPhotoCacheKey prefers variant storage paths over signed URLs', () => 
     buildPhotoCacheKey({ id: 'legacy-photo', url: 'https://signed.example.com/photo.jpg' }, 'thumbnail'),
     'thumbnail:legacy-photo:vlegacy',
   );
-  assert.equal(resolveThumbnailDisplayUri({ viewerUrl: 'viewer', url: 'full' }), 'viewer');
+  assert.equal(resolveThumbnailDisplayUri({ viewerUrl: 'viewer', url: 'full' }), null);
+  assert.equal(resolveThumbnailDisplayUri({ viewerUrl: 'private_tour_photos/tour/file.jpg', url: 'https://cdn/full.jpg' }), 'https://cdn/full.jpg');
 });
 
 test('thumbnail resolver avoids full-size fallback while variants are still processing', () => {
@@ -124,6 +126,10 @@ test('photo URI resolvers ignore malformed legacy fields', () => {
   assert.equal(normalizePhotoUri({ uri: 'https://cdn/object.jpg' }), null);
   assert.equal(normalizePhotoUri('  undefined  '), null);
   assert.equal(normalizePhotoUri('  https://cdn/clean.jpg  '), 'https://cdn/clean.jpg');
+  assert.equal(isLoadablePhotoUri('https://cdn/clean.jpg'), true);
+  assert.equal(isLoadablePhotoUri('file:///local/photo.jpg'), true);
+  assert.equal(isLoadablePhotoUri('private_tour_photos/tour-1/source.jpg'), false);
+  assert.equal(isLoadablePhotoUri('gs://bucket/source.jpg'), false);
 
   assert.equal(resolveViewerDisplayUri({
     viewerUrl: { downloadURL: 'https://cdn/bad-viewer.jpg' },
@@ -134,8 +140,9 @@ test('photo URI resolvers ignore malformed legacy fields', () => {
   assert.equal(resolveSaveUri({
     fullUrl: ['https://cdn/bad-full.jpg'],
     url: 'null',
-    viewerUrl: 'https://cdn/viewer.jpg',
-  }), 'https://cdn/viewer.jpg');
+    viewerUrl: 'private_tour_photos/tour/file.jpg',
+    thumbnailUrl: 'https://cdn/thumb.jpg',
+  }), 'https://cdn/thumb.jpg');
 
   assert.equal(resolveFullQualityUri({
     fullUrl: { uri: 'https://cdn/full.jpg' },
