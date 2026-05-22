@@ -11,6 +11,7 @@ const { onObjectFinalized } = require("firebase-functions/v2/storage");
 const admin = require("firebase-admin");
 const { Expo } = require("expo-server-sdk");
 const sharp = require("sharp");
+const { randomUUID } = require("crypto");
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -373,6 +374,11 @@ const buildPhotoVariantPaths = ({ visibility, tourId, ownerKey, filename }) => {
   return { viewerPath, thumbnailPath };
 };
 
+const buildFirebaseStorageDownloadUrl = ({ bucketName, objectPath, token }) => {
+  if (!bucketName || !objectPath || !token) return null;
+  return `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(objectPath)}?alt=media&token=${token}`;
+};
+
 const generatePhotoVariantsForRecord = async ({
   bucketName,
   visibility,
@@ -418,6 +424,8 @@ const generatePhotoVariantsForRecord = async ({
     const sourceFile = resolvedBucket.file(objectPath);
     const [sourceBuffer] = await sourceFile.download();
     const { viewerBuffer, thumbnailBuffer } = await createPhotoVariantBuffers(sourceBuffer);
+    const viewerToken = randomUUID();
+    const thumbnailToken = randomUUID();
 
     await Promise.all([
       resolvedBucket.file(viewerPath).save(viewerBuffer, {
@@ -427,6 +435,7 @@ const generatePhotoVariantsForRecord = async ({
           metadata: {
             variant: "viewer",
             idempotencyKey: photoRecord.idempotencyKey || "",
+            firebaseStorageDownloadTokens: viewerToken,
           },
         },
       }),
@@ -437,15 +446,22 @@ const generatePhotoVariantsForRecord = async ({
           metadata: {
             variant: "thumbnail",
             idempotencyKey: photoRecord.idempotencyKey || "",
+            firebaseStorageDownloadTokens: thumbnailToken,
           },
         },
       }),
     ]);
 
-    const [viewerUrl, thumbnailUrl] = await Promise.all([
-      resolvedBucket.file(viewerPath).getSignedUrl({ action: "read", expires: "2500-01-01" }).then((value) => value[0]),
-      resolvedBucket.file(thumbnailPath).getSignedUrl({ action: "read", expires: "2500-01-01" }).then((value) => value[0]),
-    ]);
+    const viewerUrl = buildFirebaseStorageDownloadUrl({
+      bucketName,
+      objectPath: viewerPath,
+      token: viewerToken,
+    });
+    const thumbnailUrl = buildFirebaseStorageDownloadUrl({
+      bucketName,
+      objectPath: thumbnailPath,
+      token: thumbnailToken,
+    });
 
     await resolvedDbRoot.child(photoId).update({
       viewerUrl,
@@ -1229,5 +1245,6 @@ exports.__testables = {
   processPhotoVariantObject,
   createPhotoVariantBuffers,
   buildPhotoVariantPaths,
+  buildFirebaseStorageDownloadUrl,
   generatePhotoVariantsForRecord,
 };

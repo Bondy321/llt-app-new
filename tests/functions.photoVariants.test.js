@@ -64,6 +64,17 @@ test('buildPhotoVariantPaths maps private variants to supplied owner key', () =>
   });
 });
 
+test('buildFirebaseStorageDownloadUrl encodes object paths for token URLs', () => {
+  assert.equal(
+    __testables.buildFirebaseStorageDownloadUrl({
+      bucketName: 'demo-bucket.appspot.com',
+      objectPath: 'private_tour_photos/tour-1/pax_v1:T123:email_2E_example/viewers/source_viewer.jpg',
+      token: 'token-1',
+    }),
+    'https://firebasestorage.googleapis.com/v0/b/demo-bucket.appspot.com/o/private_tour_photos%2Ftour-1%2Fpax_v1%3AT123%3Aemail_2E_example%2Fviewers%2Fsource_viewer.jpg?alt=media&token=token-1',
+  );
+});
+
 test('generatePhotoVariantsForRecord dry run reports target variant paths without writing', async () => {
   const result = await __testables.generatePhotoVariantsForRecord({
     bucketName: 'demo-bucket.appspot.com',
@@ -83,14 +94,15 @@ test('generatePhotoVariantsForRecord dry run reports target variant paths withou
 
 test('generatePhotoVariantsForRecord writes ready variant fields', async () => {
   const savedPaths = [];
+  const saveMetadataByPath = {};
   const updates = [];
   const storageBucket = {
     file: (path) => ({
       download: async () => [Buffer.from('source')],
-      save: async () => {
+      save: async (_buffer, options) => {
         savedPaths.push(path);
+        saveMetadataByPath[path] = options?.metadata?.metadata || {};
       },
-      getSignedUrl: async () => [`https://signed.example.com/${path}`],
     }),
   };
   const dbRoot = {
@@ -121,7 +133,16 @@ test('generatePhotoVariantsForRecord writes ready variant fields', async () => {
   ]);
   assert.equal(updates[0].photoId, 'photo-1');
   assert.equal(updates[0].payload.variantStatus, 'ready');
-  assert.equal(updates[0].payload.viewerUrl, 'https://signed.example.com/group_tour_photos/tour-1/viewers/source_viewer.jpg');
+  assert.match(
+    updates[0].payload.viewerUrl,
+    /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/demo-bucket\.appspot\.com\/o\/group_tour_photos%2Ftour-1%2Fviewers%2Fsource_viewer\.jpg\?alt=media&token=/,
+  );
+  assert.match(
+    updates[0].payload.thumbnailUrl,
+    /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/demo-bucket\.appspot\.com\/o\/group_tour_photos%2Ftour-1%2Fthumbnails%2Fsource_thumb\.jpg\?alt=media&token=/,
+  );
+  assert.equal(typeof saveMetadataByPath['group_tour_photos/tour-1/viewers/source_viewer.jpg'].firebaseStorageDownloadTokens, 'string');
+  assert.equal(typeof saveMetadataByPath['group_tour_photos/tour-1/thumbnails/source_thumb.jpg'].firebaseStorageDownloadTokens, 'string');
 });
 
 test('generatePhotoVariantsForRecord marks failed when source download fails', async () => {
