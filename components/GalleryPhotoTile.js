@@ -16,6 +16,9 @@ const GalleryPhotoTile = React.memo(function GalleryPhotoTile({
   children,
   disabled = false,
   useExpoImage = true,
+  onImageLoadStart = null,
+  onImageLoad = null,
+  onImageError = null,
 }) {
   const uri = resolveThumbnailDisplayUri(photo);
   const cacheKey = buildPhotoCacheKey(photo, 'thumbnail');
@@ -37,12 +40,18 @@ const GalleryPhotoTile = React.memo(function GalleryPhotoTile({
           cachePolicy="memory-disk"
           recyclingKey={recyclingKey}
           transition={120}
+          onLoadStart={() => onImageLoadStart?.(photo)}
+          onLoad={() => onImageLoad?.(photo)}
+          onError={(event) => onImageError?.(photo, event)}
         />
       ) : source ? (
         <RNImage
           source={{ uri }}
           style={[styles.image, imageStyle]}
           resizeMode="cover"
+          onLoadStart={() => onImageLoadStart?.(photo)}
+          onLoad={() => onImageLoad?.(photo)}
+          onError={(event) => onImageError?.(photo, event)}
         />
       ) : (
         <View style={[styles.placeholder, imageStyle]}>

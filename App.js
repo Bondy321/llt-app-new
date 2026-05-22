@@ -16,6 +16,11 @@ import * as chatService from './services/chatService';
 import offlineLoginResolver from './services/offlineLoginResolver';
 import { migrateRecentChatMessagesForStableIdentity } from './services/chatIdentityMigrationService';
 import { getCanonicalIdentity, resolveAuthScopedUserId } from './services/identityService';
+import {
+  installGlobalCrashDiagnostics,
+  recordBreadcrumb as recordCrashBreadcrumb,
+  setDiagnosticsContext,
+} from './services/crashDiagnosticsService';
 import { COLORS as THEME } from './theme';
 
 // Import Screens
@@ -185,6 +190,12 @@ function AppContent() {
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
+    installGlobalCrashDiagnostics();
+    recordCrashBreadcrumb('App', 'application_starting', {
+      currentScreen,
+      environment: __DEV__ ? 'development' : 'production',
+      storageMode,
+    }, { remote: true });
     logger.info('App', 'Application starting', {
       environment: __DEV__ ? 'development' : 'production',
       storageMode
@@ -203,6 +214,23 @@ function AppContent() {
       if (typeof authUnsubscribe === 'function') authUnsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    setDiagnosticsContext('navigation', {
+      currentScreen,
+      homeScreen,
+      hasTourData: Boolean(tourData),
+      hasBookingData: Boolean(bookingData),
+      hasIdentityBinding: Boolean(identityBinding),
+      isDriverSession,
+      isImageViewerVisible,
+    });
+    recordCrashBreadcrumb('Navigation', 'screen_state_changed', {
+      currentScreen,
+      homeScreen,
+      isImageViewerVisible,
+    });
+  }, [bookingData, currentScreen, homeScreen, identityBinding, isDriverSession, isImageViewerVisible, tourData]);
 
   const hydrateIdentityBindingForCurrentUser = async (authUid) => {
     if (!authUid || !realtimeDb) return;

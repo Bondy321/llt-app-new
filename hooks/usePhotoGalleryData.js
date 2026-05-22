@@ -22,6 +22,7 @@ export const usePhotoGalleryData = ({
   beforeLoad = null,
   mapPhoto = null,
   enabled = true,
+  trace = null,
 } = {}) => {
   const [photos, setPhotos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -33,8 +34,28 @@ export const usePhotoGalleryData = ({
   const requestSeqRef = useRef(0);
 
   const canLoad = Boolean(enabled && tourId && (visibility !== 'private' || ownerId));
+  const emitTrace = useCallback((event, data = {}, options = {}) => {
+    if (typeof trace !== 'function') return;
+    try {
+      trace(event, {
+        visibility,
+        hasTourId: Boolean(tourId),
+        hasOwnerId: Boolean(ownerId),
+        canLoad,
+        ...data,
+      }, options);
+    } catch {
+      // Tracing must never affect gallery behavior.
+    }
+  }, [canLoad, ownerId, tourId, trace, visibility]);
 
   const fetchPage = useCallback(async ({ cursor = null } = {}) => {
+    emitTrace('fetch_page_start', {
+      hasCursor: Boolean(cursor),
+      cursor,
+      pageSize,
+    });
+
     if (visibility === 'private') {
       return photoService.fetchPrivatePhotosPage({
         tourId,
@@ -49,13 +70,14 @@ export const usePhotoGalleryData = ({
       limit: pageSize,
       endBefore: cursor,
     });
-  }, [ownerId, pageSize, tourId, visibility]);
+  }, [emitTrace, ownerId, pageSize, tourId, visibility]);
 
   const loadInitial = useCallback(async ({ refresh = false } = {}) => {
     const requestSeq = requestSeqRef.current + 1;
     requestSeqRef.current = requestSeq;
 
     if (!canLoad) {
+      emitTrace('load_initial_skipped', { refresh }, { remote: true });
       setPhotos([]);
       setNextCursor(null);
       setHasMore(false);
@@ -72,18 +94,32 @@ export const usePhotoGalleryData = ({
 
     try {
       if (typeof beforeLoad === 'function') {
+        emitTrace('before_load_start', { refresh });
         await beforeLoad();
+        emitTrace('before_load_success', { refresh });
       }
       const result = await fetchPage();
       if (requestSeqRef.current !== requestSeq) return;
 
       const mappedItems = mapPhotos(result?.items, mapPhoto);
+      emitTrace('load_initial_success', {
+        refresh,
+        itemCount: result?.items?.length || 0,
+        mappedCount: mappedItems.length,
+        hasMore: Boolean(result?.hasMore),
+        nextCursor: result?.nextCursor || null,
+      }, { remote: true });
       setPhotos((currentPhotos) => (refresh ? mappedItems : mergePhotoLists(mappedItems, currentPhotos)));
       setNextCursor(result?.nextCursor || null);
       setHasMore(Boolean(result?.hasMore));
       setError(null);
     } catch (loadError) {
       if (requestSeqRef.current === requestSeq) {
+        emitTrace('load_initial_error', {
+          refresh,
+          error: loadError?.message,
+          stack: loadError?.stack,
+        }, { remote: true });
         setError(loadError);
       }
     } finally {
@@ -92,7 +128,7 @@ export const usePhotoGalleryData = ({
         setRefreshing(false);
       }
     }
-  }, [beforeLoad, canLoad, fetchPage, mapPhoto]);
+  }, [beforeLoad, canLoad, emitTrace, fetchPage, mapPhoto]);
 
   const loadMore = useCallback(async () => {
     if (!canLoad || loadingMore || !hasMore || !nextCursor) return;
@@ -101,16 +137,26 @@ export const usePhotoGalleryData = ({
     try {
       const result = await fetchPage({ cursor: nextCursor });
       const mappedItems = mapPhotos(result?.items, mapPhoto);
+      emitTrace('load_more_success', {
+        itemCount: result?.items?.length || 0,
+        mappedCount: mappedItems.length,
+        hasMore: Boolean(result?.hasMore),
+        nextCursor: result?.nextCursor || null,
+      });
       setPhotos((currentPhotos) => mergePhotoLists(currentPhotos, mappedItems));
       setNextCursor(result?.nextCursor || null);
       setHasMore(Boolean(result?.hasMore));
       setError(null);
     } catch (loadError) {
+      emitTrace('load_more_error', {
+        error: loadError?.message,
+        stack: loadError?.stack,
+      }, { remote: true });
       setError(loadError);
     } finally {
       setLoadingMore(false);
     }
-  }, [canLoad, fetchPage, hasMore, loadingMore, mapPhoto, nextCursor]);
+  }, [canLoad, emitTrace, fetchPage, hasMore, loadingMore, mapPhoto, nextCursor]);
 
   const refresh = useCallback(() => loadInitial({ refresh: true }), [loadInitial]);
 
@@ -127,12 +173,18 @@ export const usePhotoGalleryData = ({
     const subscribe = async () => {
       try {
         if (typeof beforeLoad === 'function') {
+          emitTrace('subscribe_before_load_start');
           await beforeLoad();
+          emitTrace('subscribe_before_load_success');
         }
         if (cancelled) return;
 
         const onLivePhotos = (livePhotos) => {
           const mappedPhotos = mapPhotos(livePhotos, mapPhoto);
+          emitTrace('live_photos_received', {
+            liveCount: Array.isArray(livePhotos) ? livePhotos.length : 0,
+            mappedCount: mappedPhotos.length,
+          }, { remote: true });
           setPhotos((currentPhotos) => mergeLivePhotoWindow(currentPhotos, mappedPhotos));
           setLoading(false);
           setRefreshing(false);
@@ -144,6 +196,10 @@ export const usePhotoGalleryData = ({
           : photoService.subscribeToTourPhotos(tourId, onLivePhotos, { limit: liveLimit });
       } catch (subscribeError) {
         if (!cancelled) {
+          emitTrace('subscribe_error', {
+            error: subscribeError?.message,
+            stack: subscribeError?.stack,
+          }, { remote: true });
           setError(subscribeError);
           setLoading(false);
           setRefreshing(false);
@@ -156,10 +212,11 @@ export const usePhotoGalleryData = ({
     return () => {
       cancelled = true;
       if (typeof unsubscribe === 'function') {
+        emitTrace('unsubscribe');
         unsubscribe();
       }
     };
-  }, [beforeLoad, canLoad, liveLimit, mapPhoto, ownerId, tourId, visibility]);
+  }, [beforeLoad, canLoad, emitTrace, liveLimit, mapPhoto, ownerId, tourId, visibility]);
 
   return {
     photos,

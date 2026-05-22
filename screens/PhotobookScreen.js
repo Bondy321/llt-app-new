@@ -1,6 +1,6 @@
 // screens/PhotobookScreen.js
 // Enhanced personal photobook with date grouping, camera capture, captions, and premium viewing experience
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -37,6 +37,13 @@ import {
 import { auth, realtimeDb } from '../firebase';
 import logger from '../services/loggerService';
 import { getCanonicalIdentity } from '../services/identityService';
+import {
+  recordBreadcrumb as recordCrashBreadcrumb,
+  setDiagnosticsContext,
+  summarizePhotoRecord,
+  summarizeQueueAction,
+  summarizeUri,
+} from '../services/crashDiagnosticsService';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: windowWidth } = Dimensions.get('window');
@@ -81,6 +88,14 @@ const verifyQueuedUploadSource = async (item) => {
   return { recoverable: true, reason: null };
 };
 
+const summarizePhotos = (photos = []) => (
+  Array.isArray(photos) ? photos.slice(0, 12).map((photo) => summarizePhotoRecord(photo)) : []
+);
+
+const summarizeQueue = (items = []) => (
+  Array.isArray(items) ? items.slice(0, 12).map((item) => summarizeQueueAction(item)) : []
+);
+
 export default function PhotobookScreen({
   onBack,
   tourId,
@@ -115,6 +130,8 @@ export default function PhotobookScreen({
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [pendingImage, setPendingImage] = useState(null);
   const [caption, setCaption] = useState('');
+  const renderStateSeqRef = useRef(0);
+  const imageEventCountsRef = useRef({});
 
   const currentUser = auth.currentUser;
   const canonicalIdentity = useMemo(
@@ -125,13 +142,71 @@ export default function PhotobookScreen({
   const authUid = currentUser?.uid || null;
   const stablePrivateOwnerId = stablePassengerId || canonicalIdentity?.stablePassengerId || null;
 
+  const tracePrivatePhotos = useCallback((event, data = {}, options = {}) => {
+    recordCrashBreadcrumb('PrivatePhotobook', event, {
+      tourId,
+      principalId,
+      authUid,
+      stablePrivateOwnerId,
+      ...data,
+    }, {
+      remote: true,
+      ...options,
+    });
+  }, [authUid, principalId, stablePrivateOwnerId, tourId]);
+
+  useEffect(() => {
+    tracePrivatePhotos('screen_mounted', {
+      hasTourId: Boolean(tourId),
+      hasPrivatePhotoOwnerId: Boolean(privatePhotoOwnerId),
+      hasStablePassengerId: Boolean(stablePassengerId),
+      hasCanonicalIdentityProp: Boolean(canonicalIdentityProp),
+    }, { flush: true });
+
+    return () => {
+      tracePrivatePhotos('screen_unmounted', {
+        lastRenderSeq: renderStateSeqRef.current,
+      }, { remote: true });
+    };
+  }, []);
+
+  useEffect(() => {
+    setDiagnosticsContext('privatePhotobookIdentity', {
+      tourId,
+      principalId,
+      authUid,
+      stablePrivateOwnerId,
+      privatePhotoOwnerId,
+      stablePassengerId,
+      canonicalIdentity,
+    }, { flush: true });
+
+    tracePrivatePhotos('identity_resolved', {
+      hasPrincipalId: Boolean(principalId),
+      principalMatchesStable: Boolean(principalId && stablePrivateOwnerId && principalId === stablePrivateOwnerId),
+      ownerInputs: {
+        privatePhotoOwnerId,
+        stablePassengerId,
+      },
+      canonicalIdentity,
+    });
+  }, [authUid, canonicalIdentity, principalId, privatePhotoOwnerId, stablePassengerId, stablePrivateOwnerId, tourId, tracePrivatePhotos]);
+
   const ensurePrivatePhotoOwnerAccess = useCallback(async () => {
     const currentAuthUid = auth?.currentUser?.uid;
     if (!currentAuthUid || !principalId || !realtimeDb) {
+      tracePrivatePhotos('ensure_owner_access_skipped', {
+        hasCurrentAuthUid: Boolean(currentAuthUid),
+        hasPrincipalId: Boolean(principalId),
+        hasRealtimeDb: Boolean(realtimeDb),
+      });
       return;
     }
 
     try {
+      tracePrivatePhotos('ensure_owner_access_start', {
+        currentAuthUid,
+      });
       const updates = {
         privatePhotoOwnerId: principalId,
         privatePhotoOwnerType: stablePrivateOwnerId ? 'stable_passenger' : 'booking',
@@ -143,7 +218,15 @@ export default function PhotobookScreen({
       }
 
       await realtimeDb.ref(`users/${currentAuthUid}`).update(updates);
+      tracePrivatePhotos('ensure_owner_access_success', {
+        currentAuthUid,
+        updateKeys: Object.keys(updates),
+      });
     } catch (error) {
+      tracePrivatePhotos('ensure_owner_access_error', {
+        error: error?.message,
+        stack: error?.stack,
+      }, { flush: true });
       logger.error('Photobook', 'Failed to refresh private photo owner identity before private photo access', {
         error: error.message,
         authUid: currentAuthUid,
@@ -172,8 +255,14 @@ export default function PhotobookScreen({
       nextPhoto.legacyDisplayUnavailable = true;
     }
 
+    tracePrivatePhotos('map_private_photo', {
+      hasDisplayVariant,
+      source: summarizePhotoRecord(sourcePhoto),
+      mapped: summarizePhotoRecord(nextPhoto),
+    });
+
     return nextPhoto;
-  }, [authUid, principalId]);
+  }, [authUid, principalId, tracePrivatePhotos]);
 
   const {
     photos,
@@ -191,6 +280,7 @@ export default function PhotobookScreen({
     mapPhoto: mapPrivatePhoto,
     pageSize: 30,
     liveLimit: 30,
+    trace: tracePrivatePhotos,
   });
 
   const prefetchVisibleThumbnails = usePhotoThumbnailPrefetch({ enabled: false });
@@ -206,9 +296,18 @@ export default function PhotobookScreen({
   const reconcilePhotoQueueItems = useCallback(async (actions = []) => {
     const scopedActions = actions.filter(isScopedPrivatePhotoUpload);
     const usableActions = [];
+    tracePrivatePhotos('queue_reconcile_start', {
+      incomingCount: Array.isArray(actions) ? actions.length : 0,
+      scopedCount: scopedActions.length,
+      scopedActions: summarizeQueue(scopedActions),
+    });
 
     for (const action of scopedActions) {
       const sourceStatus = await verifyQueuedUploadSource(action);
+      tracePrivatePhotos('queue_item_verified', {
+        sourceStatus,
+        action: summarizeQueueAction(action),
+      });
       if (!sourceStatus.recoverable) {
         logger.warn('Photobook', 'Removing unrecoverable private photo upload from offline queue', {
           actionId: action?.id || null,
@@ -225,8 +324,13 @@ export default function PhotobookScreen({
       usableActions.push(action);
     }
 
+    tracePrivatePhotos('queue_reconcile_done', {
+      usableCount: usableActions.length,
+      usableActions: summarizeQueue(usableActions),
+    }, { remote: true });
+
     return usableActions;
-  }, [isScopedPrivatePhotoUpload, tourId]);
+  }, [isScopedPrivatePhotoUpload, tourId, tracePrivatePhotos]);
 
   useEffect(() => {
     if (!tourId || !principalId) return undefined;
@@ -236,9 +340,17 @@ export default function PhotobookScreen({
       try {
         const nextItems = await reconcilePhotoQueueItems(actions);
         if (!cancelled) {
+          tracePrivatePhotos('queue_items_applied', {
+            count: nextItems.length,
+            items: summarizeQueue(nextItems),
+          });
           setPhotoQueueItems(nextItems);
         }
       } catch (error) {
+        tracePrivatePhotos('queue_reconcile_error', {
+          error: error?.message,
+          stack: error?.stack,
+        }, { flush: true });
         logger.warn('Photobook', 'Failed to reconcile private photo upload queue', { error: error?.message });
       }
     };
@@ -340,6 +452,50 @@ export default function PhotobookScreen({
     latestPhotoDate,
   } = albumSectionsData;
 
+  useEffect(() => {
+    renderStateSeqRef.current += 1;
+    const renderState = {
+      seq: renderStateSeqRef.current,
+      loadingPhotos,
+      refreshing,
+      loadingMore,
+      hasPhotoLoadError: Boolean(photoLoadError),
+      photoLoadError: photoLoadError?.message || null,
+      totalPhotos,
+      visiblePhotoCount: visiblePhotos.length,
+      rawPhotoCount: photos.length,
+      queueCount: photoQueueItems.length,
+      sortMode,
+      mineOnly,
+      dateKeys,
+      sectionCount: photoSections.length,
+      sectionRows: photoSections.map((section) => ({
+        title: section.title,
+        photoCount: section.photoCount,
+        rowCount: section.data.length,
+      })),
+      photos: summarizePhotos(visiblePhotos),
+      queue: summarizeQueue(photoQueueItems),
+    };
+
+    setDiagnosticsContext('privatePhotobookRenderState', renderState);
+    tracePrivatePhotos('render_state', renderState, { remote: true });
+  }, [
+    dateKeys,
+    loadingMore,
+    loadingPhotos,
+    mineOnly,
+    photoLoadError,
+    photoQueueItems,
+    photoSections,
+    photos,
+    refreshing,
+    sortMode,
+    totalPhotos,
+    tracePrivatePhotos,
+    visiblePhotos,
+  ]);
+
   const requestCameraPermission = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
@@ -359,6 +515,7 @@ export default function PhotobookScreen({
   };
 
   const handleTakePhoto = async () => {
+    tracePrivatePhotos('take_photo_pressed');
     const hasPermission = await requestCameraPermission();
     if (!hasPermission) return;
 
@@ -369,12 +526,22 @@ export default function PhotobookScreen({
     });
 
     if (!result.canceled && result.assets?.[0]) {
+      tracePrivatePhotos('take_photo_selected', {
+        asset: {
+          uri: summarizeUri(result.assets[0]?.uri),
+          width: result.assets[0]?.width || null,
+          height: result.assets[0]?.height || null,
+          fileSize: result.assets[0]?.fileSize || null,
+          mimeType: result.assets[0]?.mimeType || null,
+        },
+      });
       setPendingImage(result.assets[0]);
       setShowUploadModal(true);
     }
   };
 
   const handlePickFromGallery = async () => {
+    tracePrivatePhotos('pick_from_gallery_pressed');
     const hasPermission = await requestGalleryPermission();
     if (!hasPermission) return;
 
@@ -385,6 +552,15 @@ export default function PhotobookScreen({
     });
 
     if (!result.canceled && result.assets?.[0]) {
+      tracePrivatePhotos('gallery_photo_selected', {
+        asset: {
+          uri: summarizeUri(result.assets[0]?.uri),
+          width: result.assets[0]?.width || null,
+          height: result.assets[0]?.height || null,
+          fileSize: result.assets[0]?.fileSize || null,
+          mimeType: result.assets[0]?.mimeType || null,
+        },
+      });
       setPendingImage(result.assets[0]);
       setShowUploadModal(true);
     }
@@ -410,7 +586,20 @@ export default function PhotobookScreen({
     if (!pendingImage?.uri) return;
 
     try {
+      tracePrivatePhotos('upload_prepare_start', {
+        pendingImage: {
+          uri: summarizeUri(pendingImage.uri),
+          width: pendingImage.width || null,
+          height: pendingImage.height || null,
+          fileSize: pendingImage.fileSize || null,
+          mimeType: pendingImage.mimeType || null,
+        },
+      }, { remote: true });
       const optimized = await optimizeSourcePhotoForUpload(pendingImage);
+      tracePrivatePhotos('upload_optimized', {
+        uploadUri: summarizeUri(optimized?.uploadUri),
+        metrics: optimized?.metrics || null,
+      }, { remote: true });
       await ensurePrivatePhotoOwnerAccess();
       const createdAt = new Date().toISOString();
       const jobId = `photo_upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -446,6 +635,11 @@ export default function PhotobookScreen({
           lastError: null,
         },
       });
+      tracePrivatePhotos('upload_enqueued', {
+        success: enqueueResult.success,
+        error: enqueueResult.error || null,
+        action: summarizeQueueAction(enqueueResult.data),
+      }, { flush: true });
       if (!enqueueResult.success) {
         Alert.alert('Upload queue failed', enqueueResult.error || 'Could not queue upload.');
         return;
@@ -454,6 +648,7 @@ export default function PhotobookScreen({
       setPendingImage(null);
       setCaption('');
       offlineSyncService.replayQueue({ services: { photoService } }).catch(() => {});
+      tracePrivatePhotos('upload_replay_requested');
 
       if (optimized.metrics?.originalSizeBytes && optimized.metrics?.optimizedSizeBytes) {
         Alert.alert(
@@ -462,11 +657,18 @@ export default function PhotobookScreen({
         );
       }
     } catch (error) {
+      tracePrivatePhotos('upload_prepare_error', {
+        error: error?.message,
+        stack: error?.stack,
+      }, { flush: true });
       Alert.alert('Image preparation failed', 'Could not optimize this image. Please try a different photo.');
     }
   };
 
   const retryUpload = async (pending) => {
+    tracePrivatePhotos('retry_upload_pressed', {
+      action: summarizeQueueAction(pending),
+    }, { remote: true });
     const sourceStatus = await verifyQueuedUploadSource(pending);
     if (!sourceStatus.recoverable) {
       if (pending?.id) {
@@ -481,11 +683,17 @@ export default function PhotobookScreen({
       nextAttemptAt: null,
       lastError: null,
     });
+    tracePrivatePhotos('retry_upload_replay_requested', {
+      actionId: pending?.id,
+    });
     await offlineSyncService.replayQueue({ services: { photoService } });
   };
 
   const discardUpload = async (pending) => {
     if (!pending?.id) return;
+    tracePrivatePhotos('discard_upload_pressed', {
+      action: summarizeQueueAction(pending),
+    }, { flush: true });
     await offlineSyncService.removeAction(pending.id);
     setPhotoQueueItems((items) => items.filter((item) => item.id !== pending.id));
   };
@@ -498,11 +706,16 @@ export default function PhotobookScreen({
 
   const openViewer = useCallback((photoId) => {
     const flatIndex = photoIndexById[photoId];
+    tracePrivatePhotos('open_viewer_requested', {
+      photoId,
+      flatIndex,
+      photo: summarizePhotoRecord(visiblePhotos[flatIndex] || {}),
+    }, { remote: true });
     if (typeof flatIndex !== 'number') return;
 
     setViewerIndex(flatIndex);
     setViewerVisible(true);
-  }, [photoIndexById]);
+  }, [photoIndexById, tracePrivatePhotos, visiblePhotos]);
 
   const handleDeletePhoto = async (photo) => {
     try {
@@ -524,8 +737,34 @@ export default function PhotobookScreen({
         viewablePhotos.push(...item);
       }
     });
+    tracePrivatePhotos('viewable_items_changed', {
+      viewableCount: viewablePhotos.length,
+      photos: summarizePhotos(viewablePhotos),
+    });
     prefetchVisibleThumbnails(viewablePhotos);
-  }, [prefetchVisibleThumbnails]);
+  }, [prefetchVisibleThumbnails, tracePrivatePhotos]);
+
+  const recordTileImageEvent = useCallback((eventName, photo, event = null) => {
+    const id = photo?.id || 'unknown';
+    const counts = imageEventCountsRef.current;
+    const countKey = `${eventName}:${id}`;
+    counts[countKey] = (counts[countKey] || 0) + 1;
+
+    if (counts[countKey] > 3 && eventName !== 'error') {
+      return;
+    }
+
+    tracePrivatePhotos(`tile_image_${eventName}`, {
+      count: counts[countKey],
+      photo: summarizePhotoRecord(photo),
+      nativeEvent: event?.nativeEvent
+        ? {
+            error: event.nativeEvent.error || null,
+            source: event.nativeEvent.source || null,
+          }
+        : null,
+    }, { remote: eventName === 'error' });
+  }, [tracePrivatePhotos]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -677,6 +916,9 @@ export default function PhotobookScreen({
                     style={styles.imageTouchable}
                     onPress={() => openViewer(photo.id)}
                     useExpoImage={false}
+                    onImageLoadStart={(itemPhoto) => recordTileImageEvent('load_start', itemPhoto)}
+                    onImageLoad={(itemPhoto) => recordTileImageEvent('load', itemPhoto)}
+                    onImageError={(itemPhoto, event) => recordTileImageEvent('error', itemPhoto, event)}
                   >
                     {!hasDisplayablePhoto(photo) && (
                       <View style={styles.unavailableBadge}>
@@ -709,6 +951,19 @@ export default function PhotobookScreen({
                             source={{ uri: previewUri }}
                             style={styles.imageThumbnail}
                             resizeMode="cover"
+                            onLoadStart={() => tracePrivatePhotos('queue_preview_load_start', {
+                              action: summarizeQueueAction(item),
+                              previewUri: summarizeUri(previewUri),
+                            })}
+                            onLoad={() => tracePrivatePhotos('queue_preview_load', {
+                              action: summarizeQueueAction(item),
+                              previewUri: summarizeUri(previewUri),
+                            })}
+                            onError={(event) => tracePrivatePhotos('queue_preview_error', {
+                              action: summarizeQueueAction(item),
+                              previewUri: summarizeUri(previewUri),
+                              nativeEvent: event?.nativeEvent || null,
+                            }, { remote: true })}
                           />
                         ) : (
                           <View style={[styles.imageThumbnail, styles.pendingPlaceholder]}>
