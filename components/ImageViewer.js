@@ -29,6 +29,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, SPACING, RADIUS, SHADOWS, FONT_WEIGHT } from '../theme';
 import loggerService from '../services/loggerService';
 import {
+  normalizePhotoUri,
   resolveViewerDisplayUri,
   resolveSaveUri,
   resolveFullQualityUri,
@@ -44,19 +45,40 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const DETAILS_PANEL_MAX_HEIGHT = SCREEN_HEIGHT * 0.48;
 const DARK_BACKGROUND = '#020617';
 
-const getPhotoKey = (photo, index) => (
-  photo?.id
-  || photo?.idempotencyKey
-  || photo?.viewerStoragePath
-  || photo?.thumbnailStoragePath
-  || photo?.storagePath
-  || photo?.viewerUrl
-  || photo?.url
-  || `${index}`
-);
+const normalizeKeyPart = (value) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'object' || typeof value === 'function' || typeof value === 'symbol') return null;
 
-const buildImageSource = (uri, cacheKey) => (
-  uri ? (cacheKey ? { uri, cacheKey } : { uri }) : undefined
+  const normalized = String(value).trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const getPhotoKey = (photo, index) => {
+  const candidates = [
+    photo?.id,
+    photo?.idempotencyKey,
+    photo?.viewerStoragePath,
+    photo?.thumbnailStoragePath,
+    photo?.storagePath,
+    photo?.viewerUrl,
+    photo?.url,
+  ];
+
+  for (const candidate of candidates) {
+    const key = normalizeKeyPart(candidate);
+    if (key) return key;
+  }
+
+  return `${index}`;
+};
+
+const buildImageSource = (uri, cacheKey) => {
+  const normalizedUri = normalizePhotoUri(uri);
+  return normalizedUri ? (cacheKey ? { uri: normalizedUri, cacheKey } : { uri: normalizedUri }) : undefined;
+};
+
+const resolveText = (value, fallback = '') => (
+  typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback
 );
 
 const ImageViewerPage = React.memo(function ImageViewerPage({
@@ -293,6 +315,8 @@ export default function ImageViewer({
 
   const currentPhoto = photos[currentIndex] || {};
   const currentPhotoKey = getPhotoKey(currentPhoto, currentIndex);
+  const currentCaption = resolveText(currentPhoto.caption);
+  const currentUploaderName = resolveText(currentPhoto.uploaderName);
   const currentViewerUri = useMemo(
     () => resolveViewerDisplayUri(currentPhoto),
     [currentPhoto]
@@ -342,7 +366,11 @@ export default function ImageViewer({
     });
 
     if (prefetchCandidates.length > 0) {
-      ExpoImage.prefetch(prefetchCandidates, 'memory-disk').catch(() => {});
+      try {
+        ExpoImage.prefetch(prefetchCandidates, 'memory-disk').catch(() => {});
+      } catch (error) {
+        loggerService.warn('ImageViewer', 'Photo prefetch rejected invalid candidates', { message: error?.message });
+      }
     }
 
     return undefined;
@@ -414,10 +442,10 @@ export default function ImageViewer({
   const handleShare = async () => {
     try {
       await Share.share({
-        message: currentPhoto.caption
-          ? `${currentPhoto.caption}\n\nShared from Loch Lomond Travel`
+        message: currentCaption
+          ? `${currentCaption}\n\nShared from Loch Lomond Travel`
           : 'Check out this photo from my Loch Lomond tour!',
-        url: resolveCurrentPhotoUri() || currentPhoto.url,
+        url: resolveCurrentPhotoUri() || undefined,
       });
     } catch (error) {
       loggerService.warn('ImageViewer', 'Share action failed', { message: error?.message });
@@ -493,7 +521,7 @@ export default function ImageViewer({
   const canEditCaption = typeof onEditCaption === 'function' && currentPhoto.userId === currentUserId;
 
   const startEditCaption = () => {
-    setDraftCaption(currentPhoto.caption || '');
+    setDraftCaption(currentCaption);
     setEditingCaption(true);
   };
 
@@ -711,17 +739,17 @@ export default function ImageViewer({
               </View>
             </View>
 
-            {showUploaderInfo && currentPhoto.uploaderName && (
+            {showUploaderInfo && currentUploaderName && (
               <View style={styles.detailRow}>
                 <MaterialCommunityIcons name="account" size={20} color={COLORS.textSecondary} />
                 <View style={styles.detailTextGroup}>
                   <Text style={styles.detailLabel}>By</Text>
-                  <Text style={styles.detailValue}>{currentPhoto.uploaderName}</Text>
+                  <Text style={styles.detailValue}>{currentUploaderName}</Text>
                 </View>
               </View>
             )}
 
-            {(currentPhoto.caption || canEditCaption) && (
+            {(currentCaption || canEditCaption) && (
               <View style={styles.captionBlock}>
                 <View style={styles.captionHeader}>
                   <MaterialCommunityIcons name="text" size={20} color={COLORS.textSecondary} />
@@ -732,7 +760,7 @@ export default function ImageViewer({
                     </TouchableOpacity>
                   )}
                 </View>
-                <Text style={styles.captionText}>{currentPhoto.caption || 'No caption yet'}</Text>
+                <Text style={styles.captionText}>{currentCaption || 'No caption yet'}</Text>
               </View>
             )}
 

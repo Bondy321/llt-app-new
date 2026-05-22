@@ -24,6 +24,7 @@ const {
   endAt,
 } = require('firebase/database');
 const { storage, realtimeDbModular } = require('../firebase');
+const { normalizePhotoUri } = require('./photoVariantService');
 
 // ==================== CONSTANTS ====================
 
@@ -84,6 +85,30 @@ const getDownloadUrlWithRetry = async (getDownloadURLFn, fileRef, { maxAttempts 
   }
 
   throw lastError || new Error('Failed to resolve photo URL');
+};
+
+const deleteStoredPhotoObject = async ({
+  storageInstance,
+  storageRefFn,
+  deleteObjectFn,
+  path,
+  label,
+  timeoutMs = 10000,
+}) => {
+  const storagePath = typeof path === 'string' ? path.trim() : '';
+  if (!storagePath) return;
+
+  try {
+    const fileRef = storageRefFn(storageInstance, storagePath);
+    await Promise.race([
+      deleteObjectFn(fileRef),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`${label} deletion timeout`)), timeoutMs)
+      ),
+    ]);
+  } catch (error) {
+    console.warn(`Could not delete ${label} from storage:`, error);
+  }
 };
 
 // ==================== PAGINATION HELPERS ====================
@@ -174,14 +199,75 @@ const normalizeCursor = (endBefore) => {
   return null;
 };
 
+const normalizeOptionalString = (value) => {
+  if (typeof value !== 'string') return null;
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const normalizeOptionalNumber = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const normalizePhotoRecordForClient = (id, value, extras = {}) => {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const photo = {
+    ...source,
+    ...extras,
+    id,
+    timestamp: normalizeTimestamp(source?.timestamp),
+  };
+
+  ['url', 'fullUrl', 'sourceUrl', 'thumbnailUrl', 'viewerUrl'].forEach((field) => {
+    const uri = normalizePhotoUri(source?.[field]);
+    if (uri) {
+      photo[field] = uri;
+    } else {
+      delete photo[field];
+    }
+  });
+
+  [
+    'userId',
+    'caption',
+    'uploaderName',
+    'storagePath',
+    'thumbnailStoragePath',
+    'viewerStoragePath',
+    'fileType',
+    'idempotencyKey',
+    'variantStatus',
+    'variantError',
+    'captionEditedBy',
+  ].forEach((field) => {
+    const normalized = normalizeOptionalString(source?.[field]);
+    if (normalized) {
+      photo[field] = normalized;
+    } else {
+      delete photo[field];
+    }
+  });
+
+  ['fileSize', 'variantUpdatedAt', 'variantVersion', 'captionUpdatedAt'].forEach((field) => {
+    const normalized = normalizeOptionalNumber(source?.[field]);
+    if (normalized !== null) {
+      photo[field] = normalized;
+    } else {
+      delete photo[field];
+    }
+  });
+
+  return photo;
+};
+
 const mapSnapshotToPhotos = (snapshot, extras = {}) => {
   const data = snapshot.val() || {};
-  return Object.entries(data).map(([id, value]) => ({
-    id,
-    ...value,
-    ...extras,
-    timestamp: normalizeTimestamp(value?.timestamp),
-  }));
+  return Object.entries(data).map(([id, value]) => normalizePhotoRecordForClient(id, value, extras));
 };
 
 const sortPhotosDescending = (photos) => {
@@ -851,35 +937,27 @@ const deleteGroupPhoto = async (
       throw new Error('You can only delete your own photos');
     }
 
-    // Delete from storage if path exists (with timeout)
-    if (photoData.storagePath) {
-      try {
-        const fileRef = storageRefFn(storageInstance, photoData.storagePath);
-        await Promise.race([
-          deleteObjectFn(fileRef),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Storage deletion timeout')), 10000)
-          )
-        ]);
-      } catch (storageError) {
-        // Log but don't fail if storage deletion fails
-        console.warn('Could not delete photo from storage:', storageError);
-      }
-    }
-
-    if (photoData.thumbnailStoragePath) {
-      try {
-        const thumbnailRef = storageRefFn(storageInstance, photoData.thumbnailStoragePath);
-        await Promise.race([
-          deleteObjectFn(thumbnailRef),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Thumbnail deletion timeout')), 10000)
-          )
-        ]);
-      } catch (thumbnailError) {
-        console.warn('Could not delete thumbnail from storage:', thumbnailError);
-      }
-    }
+    await deleteStoredPhotoObject({
+      storageInstance,
+      storageRefFn,
+      deleteObjectFn,
+      path: photoData.storagePath,
+      label: 'photo',
+    });
+    await deleteStoredPhotoObject({
+      storageInstance,
+      storageRefFn,
+      deleteObjectFn,
+      path: photoData.viewerStoragePath,
+      label: 'viewer photo',
+    });
+    await deleteStoredPhotoObject({
+      storageInstance,
+      storageRefFn,
+      deleteObjectFn,
+      path: photoData.thumbnailStoragePath,
+      label: 'thumbnail',
+    });
 
     // Delete from database (with timeout)
     await Promise.race([
@@ -928,25 +1006,27 @@ const deletePrivatePhoto = async (
       throw new Error('Photo not found');
     }
 
-    // Delete from storage if path exists
-    if (photoData.storagePath) {
-      try {
-        const fileRef = storageRefFn(storageInstance, photoData.storagePath);
-        await deleteObjectFn(fileRef);
-      } catch (storageError) {
-        // Log but don't fail if storage deletion fails
-        console.warn('Could not delete photo from storage:', storageError);
-      }
-    }
-
-    if (photoData.thumbnailStoragePath) {
-      try {
-        const thumbnailRef = storageRefFn(storageInstance, photoData.thumbnailStoragePath);
-        await deleteObjectFn(thumbnailRef);
-      } catch (thumbnailError) {
-        console.warn('Could not delete thumbnail from storage:', thumbnailError);
-      }
-    }
+    await deleteStoredPhotoObject({
+      storageInstance,
+      storageRefFn,
+      deleteObjectFn,
+      path: photoData.storagePath,
+      label: 'private photo',
+    });
+    await deleteStoredPhotoObject({
+      storageInstance,
+      storageRefFn,
+      deleteObjectFn,
+      path: photoData.viewerStoragePath,
+      label: 'private viewer photo',
+    });
+    await deleteStoredPhotoObject({
+      storageInstance,
+      storageRefFn,
+      deleteObjectFn,
+      path: photoData.thumbnailStoragePath,
+      label: 'private thumbnail',
+    });
 
     // Delete from database
     await removeFn(photoRef);
