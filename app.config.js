@@ -4,7 +4,7 @@ module.exports = {
   expo: {
     name: 'Loch Lomond Travel',
     slug: 'loch-lomond-travel',
-    version: '1.0.1',
+    version: '1.0.2',
     orientation: 'portrait',
     icon: './assets/images/outward_app_icon.png',
     userInterfaceStyle: 'light',
