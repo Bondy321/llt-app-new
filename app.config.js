@@ -17,7 +17,7 @@ module.exports = {
     ios: {
       supportsTablet: true,
       bundleIdentifier: 'com.lochlomondtravel.tourapp',
-      buildNumber: '2',
+      buildNumber: '3',
       infoPlist: {
         NSPhotoLibraryUsageDescription:
           'Loch Lomond Travel needs access to your photo library to save and share tour memories.',
@@ -41,7 +41,7 @@ module.exports = {
         backgroundColor: '#007DC3',
       },
       package: 'com.lochlomondtravel.tourapp',
-      versionCode: 2,
+      versionCode: 3,
       permissions: [
         'CAMERA',
         'READ_MEDIA_IMAGES',
