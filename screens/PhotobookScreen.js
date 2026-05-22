@@ -29,6 +29,7 @@ import GalleryPhotoTile from '../components/GalleryPhotoTile';
 import { usePhotoGalleryData } from '../hooks/usePhotoGalleryData';
 import { usePhotoThumbnailPrefetch } from '../hooks/usePhotoThumbnailPrefetch';
 import {
+  isLoadablePhotoUri,
   resolveThumbnailDisplayUri,
   resolveViewerDisplayUri,
 } from '../services/photoVariantService';
@@ -112,12 +113,27 @@ export default function PhotobookScreen({
     }
   }, [principalId, stablePrivateOwnerId, tourId]);
 
-  const mapPrivatePhoto = useCallback((photo) => ({
-    ...(photo || {}),
-    originalUserId: typeof photo?.userId === 'string' ? photo.userId : null,
-    userId: principalId || photo?.userId || authUid || null,
-    privateOwnerId: principalId || null,
-  }), [authUid, principalId]);
+  const mapPrivatePhoto = useCallback((photo) => {
+    const sourcePhoto = photo || {};
+    const hasDisplayVariant = isLoadablePhotoUri(sourcePhoto.viewerUrl)
+      || isLoadablePhotoUri(sourcePhoto.thumbnailUrl);
+    const nextPhoto = {
+      ...sourcePhoto,
+      originalUserId: typeof sourcePhoto?.userId === 'string' ? sourcePhoto.userId : null,
+      userId: principalId || sourcePhoto?.userId || authUid || null,
+      privateOwnerId: principalId || null,
+    };
+
+    if (!hasDisplayVariant) {
+      delete nextPhoto.url;
+      delete nextPhoto.fullUrl;
+      delete nextPhoto.sourceUrl;
+      nextPhoto.variantStatus = sourcePhoto.variantStatus || 'processing';
+      nextPhoto.legacyDisplayUnavailable = true;
+    }
+
+    return nextPhoto;
+  }, [authUid, principalId]);
 
   const {
     photos,
