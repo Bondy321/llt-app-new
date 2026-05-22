@@ -1,5 +1,5 @@
 // components/ImageViewer.js
-// Enhanced full-screen image viewer with swipe navigation, zoom, and actions
+// Fullscreen pager-style photo viewer with compact chrome and preserved photo actions.
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import {
   StyleSheet,
@@ -11,12 +11,14 @@ import {
   useWindowDimensions,
   Platform,
   Animated,
-  PanResponder,
   StatusBar,
   Share,
   Alert,
   ActivityIndicator,
   TextInput,
+  FlatList,
+  Pressable,
+  ScrollView,
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -34,20 +36,152 @@ import {
   buildPhotoCacheKey,
 } from '../services/photoVariantService';
 import {
-  DEFAULT_HORIZONTAL_INTENT_THRESHOLD,
-  DEFAULT_HORIZONTAL_OVER_VERTICAL_RATIO,
-  isHorizontalSwipeIntent as isHorizontalSwipeIntentGesture,
-} from '../services/imageViewerGestureIntent';
+  clampPagerIndex,
+  resolvePagerIndexFromOffset,
+} from '../services/imageViewerPagerState';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const SWIPE_THRESHOLD = 80;
-const VELOCITY_THRESHOLD = 0.3;
-const PANEL_MAX_HEIGHT = SCREEN_HEIGHT * 0.44;
-const AnimatedExpoImage = Animated.createAnimatedComponent(ExpoImage);
+const DETAILS_PANEL_MAX_HEIGHT = SCREEN_HEIGHT * 0.48;
+const DARK_BACKGROUND = '#020617';
+
+const getPhotoKey = (photo, index) => (
+  photo?.id
+  || photo?.idempotencyKey
+  || photo?.viewerStoragePath
+  || photo?.thumbnailStoragePath
+  || photo?.storagePath
+  || photo?.viewerUrl
+  || photo?.url
+  || `${index}`
+);
+
+const buildImageSource = (uri, cacheKey) => (
+  uri ? (cacheKey ? { uri, cacheKey } : { uri }) : undefined
+);
+
+const ImageViewerPage = React.memo(function ImageViewerPage({
+  photo,
+  index,
+  pageWidth,
+  pageHeight,
+  fullQualityRequested,
+  onToggleChrome,
+}) {
+  const photoKey = getPhotoKey(photo, index);
+  const thumbnailUri = photo?.thumbnailUrl || null;
+  const viewerUri = fullQualityRequested
+    ? (resolveFullQualityUri(photo) || resolveViewerDisplayUri(photo))
+    : resolveViewerDisplayUri(photo);
+  const effectiveViewerUri = viewerUri || thumbnailUri;
+  const thumbnailCacheKey = buildPhotoCacheKey(photo, 'thumbnail');
+  const viewerCacheKey = buildPhotoCacheKey(photo, fullQualityRequested ? 'full' : 'viewer');
+  const thumbnailSource = buildImageSource(thumbnailUri, thumbnailCacheKey);
+  const viewerSource = buildImageSource(effectiveViewerUri, viewerCacheKey);
+  const [viewerLoaded, setViewerLoaded] = useState(false);
+  const [viewerFailed, setViewerFailed] = useState(false);
+
+  useEffect(() => {
+    setViewerLoaded(false);
+    setViewerFailed(false);
+  }, [effectiveViewerUri, photoKey]);
+
+  const shouldRenderThumbnailLayer = Boolean(
+    thumbnailSource
+    && thumbnailUri
+    && thumbnailUri !== effectiveViewerUri
+  );
+  const showSpinner = Boolean(viewerSource && !viewerLoaded && !viewerFailed && !thumbnailSource);
+  const showPlaceholder = (!viewerSource && !thumbnailSource) || (viewerFailed && !thumbnailSource);
+
+  return (
+    <Pressable
+      style={[styles.page, { width: pageWidth, height: pageHeight }]}
+      onPress={onToggleChrome}
+      accessibilityRole="imagebutton"
+      accessibilityLabel="Toggle photo controls"
+    >
+      <View style={styles.imageStage}>
+        {shouldRenderThumbnailLayer && (
+          <ExpoImage
+            source={thumbnailSource}
+            style={styles.imageLayer}
+            contentFit="contain"
+            cachePolicy="memory-disk"
+            recyclingKey={`thumb:${photoKey}`}
+          />
+        )}
+
+        {viewerSource && (
+          <ExpoImage
+            source={viewerSource}
+            style={styles.imageLayer}
+            contentFit="contain"
+            cachePolicy="memory-disk"
+            recyclingKey={`viewer:${photoKey}:${fullQualityRequested ? 'full' : 'viewer'}`}
+            transition={shouldRenderThumbnailLayer ? 120 : 80}
+            onLoadStart={() => {
+              setViewerLoaded(false);
+              setViewerFailed(false);
+            }}
+            onLoad={() => setViewerLoaded(true)}
+            onError={() => {
+              setViewerLoaded(true);
+              setViewerFailed(true);
+            }}
+          />
+        )}
+
+        {showPlaceholder && (
+          <View style={styles.viewerPlaceholder}>
+            <MaterialCommunityIcons name="image-off-outline" size={34} color="rgba(255,255,255,0.5)" />
+          </View>
+        )}
+
+        {showSpinner && (
+          <View pointerEvents="none" style={styles.loadingOverlay}>
+            <ActivityIndicator size="large" color={COLORS.white} />
+          </View>
+        )}
+      </View>
+    </Pressable>
+  );
+});
+
+function ViewerIconButton({
+  icon,
+  onPress,
+  accessibilityLabel,
+  disabled = false,
+  danger = false,
+  children = null,
+}) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={disabled}
+      style={[
+        styles.iconButton,
+        danger && styles.iconButtonDanger,
+        disabled && styles.iconButtonDisabled,
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      activeOpacity={0.82}
+    >
+      {children || (
+        <MaterialCommunityIcons
+          name={icon}
+          size={24}
+          color={danger ? COLORS.error : COLORS.white}
+        />
+      )}
+    </TouchableOpacity>
+  );
+}
 
 export default function ImageViewer({
   visible,
-  photos,
+  photos = [],
   initialIndex = 0,
   onClose,
   onDelete,
@@ -56,57 +190,109 @@ export default function ImageViewer({
   currentUserId = null,
   onEditCaption = null,
 }) {
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const runtimeWidth = windowWidth || SCREEN_WIDTH;
+  const runtimeHeight = windowHeight || SCREEN_HEIGHT;
+  const pagerRef = useRef(null);
+  const visibleRef = useRef(false);
+  const lastInitialIndexRef = useRef(initialIndex);
 
-  const [currentIndex, setCurrentIndex] = useState(initialIndex);
-  const [showInfo, setShowInfo] = useState(false);
-  const [imageLoading, setImageLoading] = useState(true);
+  const safeInitialIndex = useMemo(
+    () => clampPagerIndex(initialIndex, photos.length),
+    [initialIndex, photos.length]
+  );
+
+  const [currentIndex, setCurrentIndex] = useState(safeInitialIndex);
+  const [chromeVisible, setChromeVisible] = useState(true);
+  const [detailsVisible, setDetailsVisible] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingCaption, setEditingCaption] = useState(false);
   const [draftCaption, setDraftCaption] = useState('');
   const [captionSaving, setCaptionSaving] = useState(false);
-  const [resolvedPhotoUri, setResolvedPhotoUri] = useState(null);
-  const [activeResolveRequestId, setActiveResolveRequestId] = useState(0);
   const [fullQualityRequestedByPhotoKey, setFullQualityRequestedByPhotoKey] = useState({});
   const [prefetchPolicy, setPrefetchPolicy] = useState({
     neighborDistance: 2,
     thumbnailsOnly: false,
   });
-  const translateX = useRef(new Animated.Value(0)).current;
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const infoSlideAnim = useRef(new Animated.Value(0)).current;
-  const fullImageOpacity = useRef(new Animated.Value(0)).current;
-  const resolveRequestIdRef = useRef(0);
 
-  useEffect(() => {
-    setCurrentIndex(initialIndex);
-  }, [initialIndex, visible]);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const chromeAnim = useRef(new Animated.Value(1)).current;
+  const detailsAnim = useRef(new Animated.Value(0)).current;
+
+  const scrollToIndex = useCallback((index, animated = true) => {
+    if (!photos.length) return;
+
+    const targetIndex = clampPagerIndex(index, photos.length);
+    setCurrentIndex(targetIndex);
+
+    requestAnimationFrame(() => {
+      pagerRef.current?.scrollToIndex({
+        index: targetIndex,
+        animated,
+      });
+    });
+  }, [photos.length]);
 
   useEffect(() => {
     if (visible) {
       Animated.timing(fadeAnim, {
         toValue: 1,
-        duration: 200,
+        duration: 160,
         useNativeDriver: true,
       }).start();
     } else {
       fadeAnim.setValue(0);
     }
-  }, [visible]);
+  }, [fadeAnim, visible]);
 
   useEffect(() => {
-    Animated.spring(infoSlideAnim, {
-      toValue: showInfo ? 1 : 0,
-      friction: 8,
-      tension: 40,
+    Animated.timing(chromeAnim, {
+      toValue: chromeVisible ? 1 : 0,
+      duration: 140,
       useNativeDriver: true,
     }).start();
-  }, [showInfo]);
+  }, [chromeAnim, chromeVisible]);
+
+  useEffect(() => {
+    Animated.spring(detailsAnim, {
+      toValue: detailsVisible ? 1 : 0,
+      friction: 9,
+      tension: 70,
+      useNativeDriver: true,
+    }).start();
+  }, [detailsAnim, detailsVisible]);
+
+  useEffect(() => {
+    const wasVisible = visibleRef.current;
+    const initialIndexChanged = lastInitialIndexRef.current !== initialIndex;
+
+    if (visible && (!wasVisible || initialIndexChanged)) {
+      setChromeVisible(true);
+      setDetailsVisible(false);
+      scrollToIndex(safeInitialIndex, false);
+    }
+
+    if (!visible) {
+      setDetailsVisible(false);
+      setEditingCaption(false);
+      setFullQualityRequestedByPhotoKey({});
+    }
+
+    visibleRef.current = visible;
+    lastInitialIndexRef.current = initialIndex;
+  }, [initialIndex, safeInitialIndex, scrollToIndex, visible]);
+
+  useEffect(() => {
+    if (!visible || !photos.length) return;
+
+    const clampedIndex = clampPagerIndex(currentIndex, photos.length);
+    if (clampedIndex !== currentIndex) {
+      scrollToIndex(clampedIndex, false);
+    }
+  }, [currentIndex, photos.length, scrollToIndex, visible]);
 
   const currentPhoto = photos[currentIndex] || {};
-  const hasThumbnail = Boolean(currentPhoto.thumbnailUrl);
-  const currentPhotoKey = currentPhoto?.id || currentPhoto?.url || `${currentIndex}`;
+  const currentPhotoKey = getPhotoKey(currentPhoto, currentIndex);
   const currentViewerUri = useMemo(
     () => resolveViewerDisplayUri(currentPhoto),
     [currentPhoto]
@@ -120,6 +306,7 @@ export default function ImageViewer({
     currentFullQualityUri
     && currentViewerUri
     && currentFullQualityUri !== currentViewerUri
+    && !fullQualityRequested
   );
 
   useEffect(() => {
@@ -157,48 +344,47 @@ export default function ImageViewer({
     if (prefetchCandidates.length > 0) {
       ExpoImage.prefetch(prefetchCandidates, 'memory-disk').catch(() => {});
     }
+
+    return undefined;
   }, [visible, currentIndex, photos, prefetchPolicy]);
 
-  const prefetchPhotoAtIndex = useCallback((index) => {
-    if (!visible || index < 0 || index >= photos.length) return;
+  const syncIndexFromOffset = useCallback((offsetX) => {
+    const nextIndex = resolvePagerIndexFromOffset({
+      offsetX,
+      pageWidth: runtimeWidth,
+      photoCount: photos.length,
+    });
 
-    const photo = photos[index];
-    if (!photo) return;
+    setCurrentIndex((previousIndex) => {
+      if (previousIndex !== nextIndex) {
+        setDetailsVisible(false);
+        setChromeVisible(true);
+      }
+      return nextIndex;
+    });
+  }, [photos.length, runtimeWidth]);
 
-    const candidates = [];
-    const primary = resolveViewerDisplayUri(photo);
-    if (primary) {
-      candidates.push(primary);
+  const handleMomentumScrollEnd = useCallback((event) => {
+    syncIndexFromOffset(event?.nativeEvent?.contentOffset?.x || 0);
+  }, [syncIndexFromOffset]);
+
+  const handleScrollToIndexFailed = useCallback((info) => {
+    const targetIndex = clampPagerIndex(info?.index, photos.length);
+    setTimeout(() => {
+      pagerRef.current?.scrollToOffset({
+        offset: targetIndex * runtimeWidth,
+        animated: false,
+      });
+    }, 50);
+  }, [photos.length, runtimeWidth]);
+
+  const toggleChrome = useCallback(() => {
+    if (detailsVisible) {
+      setDetailsVisible(false);
+      return;
     }
-    if (photo.thumbnailUrl) {
-      candidates.push(photo.thumbnailUrl);
-    }
-
-    const uniqueCandidates = [...new Set(candidates.filter((uri) => typeof uri === 'string' && uri.length > 0))];
-    if (uniqueCandidates.length > 0) {
-      ExpoImage.prefetch(uniqueCandidates, 'memory-disk').catch(() => {});
-    }
-  }, [photos, visible]);
-
-  useEffect(() => {
-    if (!visible) return;
-    const currentRequestId = resolveRequestIdRef.current + 1;
-    resolveRequestIdRef.current = currentRequestId;
-    setActiveResolveRequestId(currentRequestId);
-    const sourceUri = fullQualityRequested
-      ? (currentFullQualityUri || currentViewerUri || null)
-      : (currentViewerUri || null);
-    fullImageOpacity.setValue(0);
-    setResolvedPhotoUri(sourceUri);
-    setImageLoading(Boolean(sourceUri));
-  }, [visible, currentIndex, currentViewerUri, currentFullQualityUri, fullQualityRequested, fullImageOpacity]);
-
-  useEffect(() => {
-    if (visible) return;
-    resolveRequestIdRef.current += 1;
-    setActiveResolveRequestId(resolveRequestIdRef.current);
-    setFullQualityRequestedByPhotoKey({});
-  }, [visible]);
+    setChromeVisible((value) => !value);
+  }, [detailsVisible]);
 
   const requestFullQuality = useCallback(() => {
     if (!canRequestFullQuality || !currentPhotoKey) return;
@@ -206,153 +392,8 @@ export default function ImageViewer({
       ...prev,
       [currentPhotoKey]: true,
     }));
-    setImageLoading(true);
+    setChromeVisible(true);
   }, [canRequestFullQuality, currentPhotoKey]);
-
-  const handleFullImageLoaded = useCallback((requestId) => {
-    if (!requestId || requestId !== resolveRequestIdRef.current) return;
-
-    fullImageOpacity.setValue(1);
-    setImageLoading(false);
-  }, [fullImageOpacity, resolveRequestIdRef]);
-
-  const handleFullImageError = useCallback((requestId) => {
-    if (!requestId || requestId !== resolveRequestIdRef.current) return;
-    setImageLoading(false);
-    fullImageOpacity.setValue(1);
-  }, [fullImageOpacity, resolveRequestIdRef]);
-
-  const goToNext = useCallback(() => {
-    if (currentIndex < photos.length - 1) {
-      prefetchPhotoAtIndex(currentIndex + 1);
-      setImageLoading(true);
-      Animated.spring(translateX, {
-        toValue: -runtimeWidth,
-        friction: 10,
-        tension: 40,
-        useNativeDriver: true,
-      }).start(() => {
-        setCurrentIndex(prev => prev + 1);
-        requestAnimationFrame(() => {
-          translateX.setValue(0);
-        });
-      });
-      return true;
-    }
-    return false;
-  }, [currentIndex, photos.length, prefetchPhotoAtIndex, runtimeWidth, translateX]);
-
-  const goToPrevious = useCallback(() => {
-    if (currentIndex > 0) {
-      prefetchPhotoAtIndex(currentIndex - 1);
-      setImageLoading(true);
-      Animated.spring(translateX, {
-        toValue: runtimeWidth,
-        friction: 10,
-        tension: 40,
-        useNativeDriver: true,
-      }).start(() => {
-        setCurrentIndex(prev => prev - 1);
-        requestAnimationFrame(() => {
-          translateX.setValue(0);
-        });
-      });
-      return true;
-    }
-    return false;
-  }, [currentIndex, prefetchPhotoAtIndex, runtimeWidth, translateX]);
-
-  const resetSwipePosition = useCallback(() => {
-    Animated.spring(translateX, {
-      toValue: 0,
-      friction: 10,
-      tension: 40,
-      useNativeDriver: true,
-    }).start();
-  }, [translateX]);
-
-  const isHorizontalSwipeIntent = useCallback((gestureState) => (
-    isHorizontalSwipeIntentGesture(gestureState, {
-      horizontalIntentThreshold: DEFAULT_HORIZONTAL_INTENT_THRESHOLD,
-      horizontalOverVerticalRatio: DEFAULT_HORIZONTAL_OVER_VERTICAL_RATIO,
-    })
-  ), []);
-
-  const panResponder = useMemo(() => {
-    // Tracks whether the current gesture has crossed the horizontal-intent
-    // threshold, so vertical/stationary touches in empty areas don't jitter
-    // the image when the parent claims the touch on start.
-    let horizontalLocked = false;
-    let prefetchedSwipeIndex = null;
-    return PanResponder.create({
-      // Claim touches that don't hit a child responder (e.g., the empty side
-      // regions next to the image). Without this the responder system never
-      // tracks moves originating outside a child, so swipes there were dead
-      // and only worked when the touch started on top of an arrow button.
-      onStartShouldSetPanResponder: () => true,
-      // Don't intercept in the capture phase — let child TouchableOpacity
-      // arrows still receive their taps. The move-capture handler below
-      // still negotiates a swipe away from a child once horizontal intent
-      // appears (so swipes that begin on an arrow keep working too).
-      onStartShouldSetPanResponderCapture: () => false,
-      onMoveShouldSetPanResponder: (_, gestureState) => isHorizontalSwipeIntent(gestureState),
-      onMoveShouldSetPanResponderCapture: (_, gestureState) => isHorizontalSwipeIntent(gestureState),
-      onPanResponderGrant: () => {
-        horizontalLocked = false;
-        prefetchedSwipeIndex = null;
-      },
-      onPanResponderMove: (_, gestureState) => {
-        if (!horizontalLocked) {
-          if (!isHorizontalSwipeIntent(gestureState)) return;
-          horizontalLocked = true;
-        }
-        const newX = gestureState.dx;
-        const targetIndex = newX < 0 ? currentIndex + 1 : currentIndex - 1;
-        if (targetIndex !== prefetchedSwipeIndex) {
-          prefetchedSwipeIndex = targetIndex;
-          prefetchPhotoAtIndex(targetIndex);
-        }
-        if ((currentIndex === 0 && newX > 0) ||
-            (currentIndex === photos.length - 1 && newX < 0)) {
-          translateX.setValue(newX * 0.3); // Resistance at edges
-        } else {
-          translateX.setValue(newX);
-        }
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        const wasHorizontalLocked = horizontalLocked;
-        horizontalLocked = false;
-        prefetchedSwipeIndex = null;
-        if (!wasHorizontalLocked) {
-          // Tap or vertical-only gesture — leave position untouched.
-          return;
-        }
-        const { dx, vx } = gestureState;
-        const isSwipeLeft = dx < -SWIPE_THRESHOLD || vx < -VELOCITY_THRESHOLD;
-        const isSwipeRight = dx > SWIPE_THRESHOLD || vx > VELOCITY_THRESHOLD;
-
-        if (isSwipeLeft) {
-          const moved = goToNext();
-          if (!moved) resetSwipePosition();
-          return;
-        }
-
-        if (isSwipeRight) {
-          const moved = goToPrevious();
-          if (!moved) resetSwipePosition();
-          return;
-        }
-
-        resetSwipePosition();
-      },
-      onPanResponderTerminate: () => {
-        horizontalLocked = false;
-        prefetchedSwipeIndex = null;
-        resetSwipePosition();
-      },
-      onPanResponderTerminationRequest: () => false,
-    });
-  }, [currentIndex, goToNext, goToPrevious, isHorizontalSwipeIntent, photos.length, prefetchPhotoAtIndex, resetSwipePosition, translateX]);
 
   const formatDate = (timestamp) => {
     if (!timestamp) return 'Unknown date';
@@ -368,21 +409,21 @@ export default function ImageViewer({
     }).format(date);
   };
 
+  const resolveCurrentPhotoUri = useCallback(() => resolveSaveUri(currentPhoto), [currentPhoto]);
+
   const handleShare = async () => {
     try {
       await Share.share({
         message: currentPhoto.caption
           ? `${currentPhoto.caption}\n\nShared from Loch Lomond Travel`
           : 'Check out this photo from my Loch Lomond tour!',
-        url: currentPhoto.url,
+        url: resolveCurrentPhotoUri() || currentPhoto.url,
       });
     } catch (error) {
       loggerService.warn('ImageViewer', 'Share action failed', { message: error?.message });
       Alert.alert('Share unavailable', 'Unable to open share options right now. Please try again.');
     }
   };
-
-  const resolveCurrentPhotoUri = useCallback(() => resolveSaveUri(currentPhoto), [currentPhoto]);
 
   const handleSaveToDevice = async () => {
     try {
@@ -394,7 +435,6 @@ export default function ImageViewer({
         return;
       }
 
-      // Request permission
       const { status } = await MediaLibrary.requestPermissionsAsync(true);
       if (status !== 'granted') {
         Alert.alert('Permission Required', 'Please allow access to save photos to your device.');
@@ -434,13 +474,14 @@ export default function ImageViewer({
           text: 'Delete',
           style: 'destructive',
           onPress: () => {
-            if (onDelete) {
-              onDelete(currentPhoto);
-              if (photos.length <= 1) {
-                onClose();
-              } else if (currentIndex >= photos.length - 1) {
-                setCurrentIndex(prev => prev - 1);
-              }
+            if (!onDelete) return;
+
+            onDelete(currentPhoto);
+            setDetailsVisible(false);
+            if (photos.length <= 1) {
+              onClose();
+            } else if (currentIndex >= photos.length - 1) {
+              scrollToIndex(currentIndex - 1, false);
             }
           },
         },
@@ -450,14 +491,6 @@ export default function ImageViewer({
 
   const canDeleteThis = canDelete && currentPhoto.userId === currentUserId;
   const canEditCaption = typeof onEditCaption === 'function' && currentPhoto.userId === currentUserId;
-  const thumbnailCacheKey = buildPhotoCacheKey(currentPhoto, 'thumbnail');
-  const fullImageCacheKey = buildPhotoCacheKey(currentPhoto, fullQualityRequested ? 'full' : 'viewer');
-  const thumbnailSource = currentPhoto.thumbnailUrl
-    ? (thumbnailCacheKey ? { uri: currentPhoto.thumbnailUrl, cacheKey: thumbnailCacheKey } : { uri: currentPhoto.thumbnailUrl })
-    : undefined;
-  const fullImageSource = resolvedPhotoUri
-    ? (fullImageCacheKey ? { uri: resolvedPhotoUri, cacheKey: fullImageCacheKey } : { uri: resolvedPhotoUri })
-    : undefined;
 
   const startEditCaption = () => {
     setDraftCaption(currentPhoto.caption || '');
@@ -465,6 +498,8 @@ export default function ImageViewer({
   };
 
   const saveCaption = async () => {
+    if (typeof onEditCaption !== 'function') return;
+
     try {
       setCaptionSaving(true);
       await onEditCaption(currentPhoto, draftCaption);
@@ -477,10 +512,30 @@ export default function ImageViewer({
     }
   };
 
-  const infoTranslateY = infoSlideAnim.interpolate({
+  const renderPhotoPage = useCallback(({ item, index }) => (
+    <ImageViewerPage
+      photo={item}
+      index={index}
+      pageWidth={runtimeWidth}
+      pageHeight={runtimeHeight}
+      fullQualityRequested={Boolean(fullQualityRequestedByPhotoKey[getPhotoKey(item, index)])}
+      onToggleChrome={toggleChrome}
+    />
+  ), [fullQualityRequestedByPhotoKey, runtimeHeight, runtimeWidth, toggleChrome]);
+
+  const keyExtractor = useCallback((item, index) => `${getPhotoKey(item, index)}:${index}`, []);
+
+  const getItemLayout = useCallback((_, index) => ({
+    length: runtimeWidth,
+    offset: runtimeWidth * index,
+    index,
+  }), [runtimeWidth]);
+
+  const detailsTranslateY = detailsAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [200, 0],
+    outputRange: [DETAILS_PANEL_MAX_HEIGHT + 40, 0],
   });
+
   if (!visible) return null;
 
   if (!photos.length) {
@@ -490,7 +545,7 @@ export default function ImageViewer({
           <View style={styles.emptyCard}>
             <MaterialCommunityIcons name="image-off-outline" size={30} color={COLORS.textSecondary} />
             <Text style={styles.emptyTitle}>Photo unavailable</Text>
-            <Text style={styles.emptyBody}>This photo can’t be loaded right now. Try refreshing the gallery.</Text>
+            <Text style={styles.emptyBody}>This photo can't be loaded right now. Try refreshing the gallery.</Text>
             <TouchableOpacity onPress={onClose} style={styles.emptyCloseButton}>
               <Text style={styles.emptyCloseText}>Close viewer</Text>
             </TouchableOpacity>
@@ -508,207 +563,203 @@ export default function ImageViewer({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <StatusBar barStyle="light-content" backgroundColor="rgba(0,0,0,0.9)" />
-      <Animated.View
-        style={[styles.container, { opacity: fadeAnim }]}
-      >
-        {/* Header */}
-        <LinearGradient
-          pointerEvents="none"
-          colors={['rgba(2, 6, 23, 0.9)', 'rgba(2, 6, 23, 0)']}
-          style={styles.headerGradient}
+      <StatusBar barStyle="light-content" backgroundColor={DARK_BACKGROUND} />
+      <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
+        <FlatList
+          ref={pagerRef}
+          data={photos}
+          renderItem={renderPhotoPage}
+          keyExtractor={keyExtractor}
+          horizontal
+          pagingEnabled
+          initialScrollIndex={safeInitialIndex}
+          getItemLayout={getItemLayout}
+          onMomentumScrollEnd={handleMomentumScrollEnd}
+          onScrollToIndexFailed={handleScrollToIndexFailed}
+          showsHorizontalScrollIndicator={false}
+          bounces={false}
+          decelerationRate="fast"
+          snapToInterval={runtimeWidth}
+          snapToAlignment="center"
+          disableIntervalMomentum
+          initialNumToRender={3}
+          maxToRenderPerBatch={3}
+          windowSize={5}
+          removeClippedSubviews={false}
+          extraData={fullQualityRequestedByPhotoKey}
+          style={styles.pager}
         />
-        <View style={styles.header}>
-          <TouchableOpacity onPress={onClose} style={styles.headerButton}>
-            <MaterialCommunityIcons name="close" size={28} color={COLORS.white} />
-          </TouchableOpacity>
 
-          <Text style={styles.counter}>
-            {currentIndex + 1} / {photos.length}
-          </Text>
-
-          <TouchableOpacity
-            onPress={() => setShowInfo(!showInfo)}
-            style={styles.headerButton}
-            accessibilityRole="button"
-            accessibilityLabel={showInfo ? 'Hide photo details' : 'Show photo details'}
-          >
-            <MaterialCommunityIcons
-              name={showInfo ? "information" : "information-outline"}
-              size={26}
-              color={COLORS.white}
-            />
-          </TouchableOpacity>
-        </View>
-
-        {/* Main Image Area */}
         <Animated.View
-          style={[styles.imageContainer, { transform: [{ translateX }] }]}
-          {...panResponder.panHandlers}
+          pointerEvents={chromeVisible ? 'auto' : 'none'}
+          style={[styles.topChrome, { opacity: chromeAnim }]}
         >
-          {imageLoading && !hasThumbnail && (
-            <View pointerEvents="none" style={styles.loadingOverlay}>
-              <ActivityIndicator size="large" color={COLORS.white} />
+          <LinearGradient
+            pointerEvents="none"
+            colors={['rgba(2, 6, 23, 0.88)', 'rgba(2, 6, 23, 0)']}
+            style={[styles.headerGradient, { height: Math.max(118, runtimeHeight * 0.18) }]}
+          />
+          <View style={styles.header}>
+            <ViewerIconButton
+              icon="close"
+              onPress={onClose}
+              accessibilityLabel="Close photo viewer"
+            />
+
+            <View style={styles.counterPill}>
+              <Text style={styles.counterText}>{currentIndex + 1} / {photos.length}</Text>
             </View>
-          )}
-          <View style={styles.imageLayerContainer}>
-            {hasThumbnail && (
-              <ExpoImage
-                key={`thumb-${currentPhotoKey}`}
-                source={thumbnailSource}
-                style={styles.image}
-                contentFit="contain"
-                cachePolicy="memory-disk"
-              />
-            )}
-            <AnimatedExpoImage
-              key={`full-${currentPhotoKey}`}
-              source={fullImageSource}
-              style={[styles.image, styles.fullImageLayer, { opacity: fullImageOpacity }]}
-              contentFit="contain"
-              cachePolicy="memory-disk"
-              onLoadStart={() => {
-                if (activeResolveRequestId === resolveRequestIdRef.current) {
-                  setImageLoading(true);
-                }
+
+            <ViewerIconButton
+              icon="dots-horizontal"
+              onPress={() => {
+                setChromeVisible(true);
+                setDetailsVisible(true);
               }}
-              onLoad={() => handleFullImageLoaded(activeResolveRequestId)}
-              onError={() => handleFullImageError(activeResolveRequestId)}
+              accessibilityLabel="Show photo details and actions"
             />
           </View>
-
-          {/* Navigation arrows for larger screens */}
-          {currentIndex > 0 && (
-            <TouchableOpacity
-              style={[styles.navArrow, styles.navArrowLeft]}
-              onPress={goToPrevious}
-              accessibilityRole="button"
-              accessibilityLabel="Previous photo"
-            >
-              <MaterialCommunityIcons name="chevron-left" size={40} color="rgba(255,255,255,0.8)" />
-            </TouchableOpacity>
-          )}
-          {currentIndex < photos.length - 1 && (
-            <TouchableOpacity
-              style={[styles.navArrow, styles.navArrowRight]}
-              onPress={goToNext}
-              accessibilityRole="button"
-              accessibilityLabel="Next photo"
-            >
-              <MaterialCommunityIcons name="chevron-right" size={40} color="rgba(255,255,255,0.8)" />
-            </TouchableOpacity>
-          )}
         </Animated.View>
 
-        {/* Bottom Actions */}
-        <LinearGradient
-          pointerEvents="none"
-          colors={['rgba(2, 6, 23, 0)', 'rgba(2, 6, 23, 0.92)']}
-          style={styles.bottomGradient}
-        />
-        <View style={styles.bottomActions}>
-          <TouchableOpacity
-            onPress={handleShare}
-            style={styles.actionButton}
-            accessibilityRole="button"
-            accessibilityLabel="Share photo"
-          >
-            <MaterialCommunityIcons name="share-variant" size={24} color={COLORS.white} />
-            <Text style={styles.actionText}>Share</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={handleSaveToDevice}
-            style={styles.actionButton}
-            disabled={saving || !resolveCurrentPhotoUri()}
-            accessibilityRole="button"
-            accessibilityLabel="Save photo to device"
-          >
-            {saving ? (
-              <ActivityIndicator size="small" color={COLORS.white} />
-            ) : (
-              <MaterialCommunityIcons name="download" size={24} color={COLORS.white} />
-            )}
-            <Text style={styles.actionText}>{saving ? 'Saving...' : 'Save'}</Text>
-          </TouchableOpacity>
-
-          {canRequestFullQuality && !fullQualityRequested && (
-            <TouchableOpacity
-              onPress={requestFullQuality}
-              style={styles.actionButton}
-              accessibilityRole="button"
-              accessibilityLabel="Load full quality photo"
-            >
-              <MaterialCommunityIcons name="image-filter-hdr" size={24} color={COLORS.white} />
-              <Text style={styles.actionText}>Full quality</Text>
-            </TouchableOpacity>
-          )}
-
-          {canDeleteThis && (
-            <TouchableOpacity
-              onPress={handleDelete}
-              style={[styles.actionButton, styles.deleteButton]}
-              accessibilityRole="button"
-              accessibilityLabel="Delete photo"
-            >
-              <MaterialCommunityIcons name="delete-outline" size={24} color={COLORS.error} />
-              <Text style={[styles.actionText, { color: COLORS.error }]}>Delete</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* Info Panel */}
         <Animated.View
+          pointerEvents={chromeVisible ? 'auto' : 'none'}
+          style={[styles.bottomChrome, { opacity: chromeAnim }]}
+        >
+          <LinearGradient
+            pointerEvents="none"
+            colors={['rgba(2, 6, 23, 0)', 'rgba(2, 6, 23, 0.78)']}
+            style={[styles.bottomGradient, { height: Math.max(130, runtimeHeight * 0.22) }]}
+          />
+          <View style={styles.compactToolbar}>
+            <ViewerIconButton
+              icon="share-variant"
+              onPress={handleShare}
+              accessibilityLabel="Share photo"
+            />
+
+            <ViewerIconButton
+              icon="download"
+              onPress={handleSaveToDevice}
+              disabled={saving || !resolveCurrentPhotoUri()}
+              accessibilityLabel="Save photo to device"
+            >
+              {saving ? <ActivityIndicator size="small" color={COLORS.white} /> : null}
+            </ViewerIconButton>
+
+            {canRequestFullQuality && (
+              <ViewerIconButton
+                icon="image-filter-hdr"
+                onPress={requestFullQuality}
+                accessibilityLabel="Load full quality photo"
+              />
+            )}
+
+            <ViewerIconButton
+              icon="information-outline"
+              onPress={() => setDetailsVisible(true)}
+              accessibilityLabel="Show photo details"
+            />
+
+            {canDeleteThis && (
+              <ViewerIconButton
+                icon="delete-outline"
+                onPress={handleDelete}
+                accessibilityLabel="Delete photo"
+                danger
+              />
+            )}
+          </View>
+        </Animated.View>
+
+        <Animated.View
+          pointerEvents={detailsVisible ? 'auto' : 'none'}
+          style={[styles.detailsBackdrop, { opacity: detailsAnim }]}
+        >
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setDetailsVisible(false)} />
+        </Animated.View>
+
+        <Animated.View
+          pointerEvents={detailsVisible ? 'auto' : 'none'}
           style={[
-            styles.infoPanel,
-            { transform: [{ translateY: infoTranslateY }] }
+            styles.detailsPanel,
+            { transform: [{ translateY: detailsTranslateY }] },
           ]}
         >
-          <View style={styles.infoPanelHandle} />
-
-          <Text style={styles.infoTitle}>Photo Details</Text>
-
-          <View style={styles.infoRow}>
-            <MaterialCommunityIcons name="calendar" size={20} color={COLORS.textSecondary} />
-            <Text style={styles.infoLabel}>Taken</Text>
-            <Text style={styles.infoValue}>{formatDate(currentPhoto.timestamp)}</Text>
+          <View style={styles.detailsHandle} />
+          <View style={styles.detailsHeader}>
+            <Text style={styles.detailsTitle}>Photo Details</Text>
+            <TouchableOpacity
+              onPress={() => setDetailsVisible(false)}
+              style={styles.detailsCloseButton}
+              accessibilityRole="button"
+              accessibilityLabel="Close photo details"
+            >
+              <MaterialCommunityIcons name="close" size={20} color={COLORS.textPrimary} />
+            </TouchableOpacity>
           </View>
 
-          {showUploaderInfo && currentPhoto.uploaderName && (
-            <View style={styles.infoRow}>
-              <MaterialCommunityIcons name="account" size={20} color={COLORS.textSecondary} />
-              <Text style={styles.infoLabel}>By</Text>
-              <Text style={styles.infoValue}>{currentPhoto.uploaderName}</Text>
+          <ScrollView
+            style={styles.detailsScroll}
+            contentContainerStyle={styles.detailsContent}
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.detailRow}>
+              <MaterialCommunityIcons name="calendar" size={20} color={COLORS.textSecondary} />
+              <View style={styles.detailTextGroup}>
+                <Text style={styles.detailLabel}>Taken</Text>
+                <Text style={styles.detailValue}>{formatDate(currentPhoto.timestamp)}</Text>
+              </View>
             </View>
-          )}
 
-          {(currentPhoto.caption || canEditCaption) && (
-            <View style={styles.captionContainer}>
-              <MaterialCommunityIcons name="text" size={20} color={COLORS.textSecondary} />
-              <Text style={styles.captionText}>{currentPhoto.caption || 'No caption yet'}</Text>
+            {showUploaderInfo && currentPhoto.uploaderName && (
+              <View style={styles.detailRow}>
+                <MaterialCommunityIcons name="account" size={20} color={COLORS.textSecondary} />
+                <View style={styles.detailTextGroup}>
+                  <Text style={styles.detailLabel}>By</Text>
+                  <Text style={styles.detailValue}>{currentPhoto.uploaderName}</Text>
+                </View>
+              </View>
+            )}
+
+            {(currentPhoto.caption || canEditCaption) && (
+              <View style={styles.captionBlock}>
+                <View style={styles.captionHeader}>
+                  <MaterialCommunityIcons name="text" size={20} color={COLORS.textSecondary} />
+                  <Text style={styles.detailLabel}>Caption</Text>
+                  {canEditCaption && (
+                    <TouchableOpacity onPress={startEditCaption} style={styles.captionEditButton}>
+                      <MaterialCommunityIcons name="pencil" size={17} color={COLORS.primary} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <Text style={styles.captionText}>{currentPhoto.caption || 'No caption yet'}</Text>
+              </View>
+            )}
+
+            <View style={styles.detailsActionRow}>
+              {canRequestFullQuality && (
+                <TouchableOpacity onPress={requestFullQuality} style={styles.detailsActionButton}>
+                  <MaterialCommunityIcons name="image-filter-hdr" size={20} color={COLORS.primary} />
+                  <Text style={styles.detailsActionText}>Full quality</Text>
+                </TouchableOpacity>
+              )}
+
               {canEditCaption && (
-                <TouchableOpacity onPress={startEditCaption} style={styles.captionEditBtn}>
-                  <MaterialCommunityIcons name="pencil" size={16} color={COLORS.primary} />
+                <TouchableOpacity onPress={startEditCaption} style={styles.detailsActionButton}>
+                  <MaterialCommunityIcons name="pencil" size={20} color={COLORS.primary} />
+                  <Text style={styles.detailsActionText}>Edit caption</Text>
+                </TouchableOpacity>
+              )}
+
+              {canDeleteThis && (
+                <TouchableOpacity onPress={handleDelete} style={[styles.detailsActionButton, styles.detailsDangerAction]}>
+                  <MaterialCommunityIcons name="delete-outline" size={20} color={COLORS.error} />
+                  <Text style={[styles.detailsActionText, styles.detailsDangerText]}>Delete</Text>
                 </TouchableOpacity>
               )}
             </View>
-          )}
+          </ScrollView>
         </Animated.View>
-
-        {/* Dot indicators */}
-        {photos.length > 1 && photos.length <= 10 && (
-          <View style={styles.dotsContainer}>
-            {photos.map((_, index) => (
-              <View
-                key={index}
-                style={[
-                  styles.dot,
-                  index === currentIndex && styles.dotActive,
-                ]}
-              />
-            ))}
-          </View>
-        )}
       </Animated.View>
 
       <Modal
@@ -743,7 +794,6 @@ export default function ImageViewer({
           </View>
         </View>
       </Modal>
-
     </Modal>
   );
 }
@@ -751,7 +801,37 @@ export default function ImageViewer({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#020617',
+    backgroundColor: DARK_BACKGROUND,
+  },
+  pager: {
+    flex: 1,
+  },
+  page: {
+    backgroundColor: DARK_BACKGROUND,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  imageStage: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  imageLayer: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+  },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  viewerPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    height: '100%',
   },
   emptyContainer: {
     flex: 1,
@@ -791,197 +871,209 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontWeight: FONT_WEIGHT.bold,
   },
+  topChrome: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 8,
+  },
   headerGradient: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    height: SCREEN_HEIGHT * 0.18,
-    zIndex: 1,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: SPACING.lg,
-    paddingTop: Platform.OS === 'ios' ? 50 : 40,
+    paddingTop: Platform.OS === 'ios' ? 50 : 34,
     paddingBottom: SPACING.md,
-    zIndex: 10,
   },
-  headerButton: {
-    padding: SPACING.sm,
+  iconButton: {
+    width: 44,
+    height: 44,
     borderRadius: RADIUS.full,
-    backgroundColor: 'rgba(255, 255, 255, 0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.52)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.22)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
   },
-  counter: {
+  iconButtonDanger: {
+    backgroundColor: 'rgba(127, 29, 29, 0.38)',
+    borderColor: 'rgba(248, 113, 113, 0.32)',
+  },
+  iconButtonDisabled: {
+    opacity: 0.55,
+  },
+  counterPill: {
+    minWidth: 72,
+    alignItems: 'center',
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 7,
+    borderRadius: RADIUS.full,
+    backgroundColor: 'rgba(15, 23, 42, 0.48)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  counterText: {
     color: COLORS.white,
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: FONT_WEIGHT.semibold,
-    letterSpacing: 0.4,
   },
-  imageContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  imageLayerContainer: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_HEIGHT * 0.65,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  image: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_HEIGHT * 0.65,
-  },
-  fullImageLayer: {
+  bottomChrome: {
     position: 'absolute',
-    top: 0,
     left: 0,
-  },
-  loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 5,
-  },
-  navArrow: {
-    position: 'absolute',
-    zIndex: 3,
-    top: '50%',
-    marginTop: -25,
-    width: 50,
-    height: 50,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.6)',
-    borderRadius: 25,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  navArrowLeft: {
-    left: 10,
-  },
-  navArrowRight: {
-    right: 10,
+    right: 0,
+    bottom: 0,
+    zIndex: 8,
   },
   bottomGradient: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    height: SCREEN_HEIGHT * 0.26,
   },
-  bottomActions: {
+  compactToolbar: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: SPACING.lg,
-    paddingHorizontal: SPACING.xl,
-    gap: SPACING.xxl,
+    gap: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 22,
+    paddingTop: SPACING.xl,
   },
-  actionButton: {
-    alignItems: 'center',
-    paddingVertical: SPACING.sm,
-    paddingHorizontal: SPACING.md,
-    borderRadius: RADIUS.md,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.14)',
-    minWidth: 92,
+  detailsBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 12,
+    backgroundColor: 'rgba(2, 6, 23, 0.34)',
   },
-  actionText: {
-    color: COLORS.white,
-    fontSize: 12,
-    marginTop: 4,
-    fontWeight: FONT_WEIGHT.medium,
-  },
-  deleteButton: {
-    opacity: 0.9,
-  },
-  dotsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingBottom: Platform.OS === 'ios' ? 30 : 20,
-    gap: 8,
-  },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-  },
-  dotActive: {
-    backgroundColor: COLORS.white,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  infoPanel: {
+  detailsPanel: {
     position: 'absolute',
-    bottom: 0,
     left: 0,
     right: 0,
+    bottom: 0,
+    zIndex: 13,
+    maxHeight: DETAILS_PANEL_MAX_HEIGHT,
     backgroundColor: COLORS.white,
     borderTopLeftRadius: RADIUS.xl,
     borderTopRightRadius: RADIUS.xl,
-    paddingHorizontal: SPACING.xl,
     paddingTop: SPACING.md,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
-    maxHeight: PANEL_MAX_HEIGHT,
+    paddingHorizontal: SPACING.xl,
+    paddingBottom: Platform.OS === 'ios' ? 34 : SPACING.xl,
     ...SHADOWS.xl,
   },
-  infoPanelHandle: {
-    width: 40,
+  detailsHandle: {
+    width: 38,
     height: 4,
     backgroundColor: COLORS.border,
     borderRadius: 2,
     alignSelf: 'center',
-    marginBottom: SPACING.lg,
+    marginBottom: SPACING.md,
   },
-  infoTitle: {
-    fontSize: 18,
-    fontWeight: FONT_WEIGHT.bold,
-    color: COLORS.textPrimary,
-    marginBottom: SPACING.lg,
-  },
-  infoRow: {
+  detailsHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: SPACING.md,
-    gap: SPACING.sm,
   },
-  infoLabel: {
-    fontSize: 14,
-    color: COLORS.textSecondary,
-    width: 50,
-  },
-  infoValue: {
-    fontSize: 14,
-    color: COLORS.textPrimary,
-    fontWeight: FONT_WEIGHT.medium,
+  detailsTitle: {
     flex: 1,
+    fontSize: 18,
+    fontWeight: FONT_WEIGHT.bold,
+    color: COLORS.textPrimary,
   },
-  captionContainer: {
+  detailsCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: RADIUS.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.background,
+  },
+  detailsScroll: {
+    maxHeight: DETAILS_PANEL_MAX_HEIGHT - 96,
+  },
+  detailsContent: {
+    paddingBottom: SPACING.sm,
+  },
+  detailRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    marginTop: SPACING.sm,
+    gap: SPACING.md,
+    marginBottom: SPACING.lg,
+  },
+  detailTextGroup: {
+    flex: 1,
+  },
+  detailLabel: {
+    fontSize: 12,
+    color: COLORS.textMuted,
+    fontWeight: FONT_WEIGHT.semibold,
+    textTransform: 'uppercase',
+  },
+  detailValue: {
+    marginTop: 3,
+    fontSize: 15,
+    lineHeight: 21,
+    color: COLORS.textPrimary,
+    fontWeight: FONT_WEIGHT.medium,
+  },
+  captionBlock: {
     paddingTop: SPACING.md,
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
+    marginBottom: SPACING.lg,
+  },
+  captionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: SPACING.sm,
   },
-  captionText: {
-    fontSize: 15,
-    color: COLORS.textPrimary,
-    lineHeight: 22,
-    flex: 1,
+  captionEditButton: {
+    marginLeft: 'auto',
+    width: 34,
+    height: 34,
+    borderRadius: RADIUS.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primaryMuted,
   },
-  captionEditBtn: {
-    padding: SPACING.xs,
+  captionText: {
+    marginTop: SPACING.sm,
+    fontSize: 15,
+    lineHeight: 22,
+    color: COLORS.textPrimary,
+  },
+  detailsActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: SPACING.sm,
+  },
+  detailsActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    backgroundColor: COLORS.background,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  detailsActionText: {
+    color: COLORS.primary,
+    fontWeight: FONT_WEIGHT.semibold,
+    fontSize: 13,
+  },
+  detailsDangerAction: {
+    backgroundColor: COLORS.errorLight,
+    borderColor: 'rgba(220, 38, 38, 0.22)',
+  },
+  detailsDangerText: {
+    color: COLORS.error,
   },
   editModalOverlay: {
     flex: 1,
