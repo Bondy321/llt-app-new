@@ -28,6 +28,10 @@ import ImageViewer from '../components/ImageViewer';
 import GalleryPhotoTile from '../components/GalleryPhotoTile';
 import { usePhotoGalleryData } from '../hooks/usePhotoGalleryData';
 import { usePhotoThumbnailPrefetch } from '../hooks/usePhotoThumbnailPrefetch';
+import {
+  resolveThumbnailDisplayUri,
+  resolveViewerDisplayUri,
+} from '../services/photoVariantService';
 import { auth, realtimeDb } from '../firebase';
 import logger from '../services/loggerService';
 import { getCanonicalIdentity } from '../services/identityService';
@@ -77,35 +81,50 @@ export default function PhotobookScreen({
     [canonicalIdentityProp, currentUser, privatePhotoOwnerId, stablePassengerId]
   );
   const principalId = canonicalIdentity?.principalId || stablePassengerId || privatePhotoOwnerId;
+  const authUid = currentUser?.uid || null;
+  const stablePrivateOwnerId = stablePassengerId || canonicalIdentity?.stablePassengerId || null;
 
   const ensurePrivatePhotoOwnerAccess = useCallback(async () => {
-    const authUid = auth?.currentUser?.uid;
-    if (!authUid || !principalId || !realtimeDb) {
+    const currentAuthUid = auth?.currentUser?.uid;
+    if (!currentAuthUid || !principalId || !realtimeDb) {
       return;
     }
 
     try {
-      await realtimeDb.ref(`users/${authUid}`).update({
+      const updates = {
         privatePhotoOwnerId: principalId,
-        stablePassengerId: principalId,
-        privatePhotoOwnerType: principalId === privatePhotoOwnerId ? 'booking' : 'stable_passenger',
+        privatePhotoOwnerType: stablePrivateOwnerId ? 'stable_passenger' : 'booking',
         lastUpdated: Date.now(),
-      });
+      };
+
+      if (stablePrivateOwnerId) {
+        updates.stablePassengerId = stablePrivateOwnerId;
+      }
+
+      await realtimeDb.ref(`users/${currentAuthUid}`).update(updates);
     } catch (error) {
       logger.error('Photobook', 'Failed to refresh private photo owner identity before private photo access', {
         error: error.message,
-        authUid,
+        authUid: currentAuthUid,
         privatePhotoOwnerId: principalId,
         tourId,
       });
     }
-  }, [principalId, privatePhotoOwnerId, tourId]);
+  }, [principalId, stablePrivateOwnerId, tourId]);
+
+  const mapPrivatePhoto = useCallback((photo) => ({
+    ...(photo || {}),
+    originalUserId: typeof photo?.userId === 'string' ? photo.userId : null,
+    userId: principalId || photo?.userId || authUid || null,
+    privateOwnerId: principalId || null,
+  }), [authUid, principalId]);
 
   const {
     photos,
     loading: loadingPhotos,
     refreshing,
     loadingMore,
+    error: photoLoadError,
     refresh: refreshPhotos,
     loadMore,
   } = usePhotoGalleryData({
@@ -113,6 +132,7 @@ export default function PhotobookScreen({
     tourId,
     ownerId: principalId,
     beforeLoad: ensurePrivatePhotoOwnerAccess,
+    mapPhoto: mapPrivatePhoto,
     pageSize: 30,
     liveLimit: 30,
   });
@@ -144,14 +164,25 @@ export default function PhotobookScreen({
   }, [principalId, tourId]);
 
   const visiblePhotos = useMemo(() => {
-    const scoped = mineOnly ? photos.filter((photo) => photo.userId === principalId) : photos;
+    const scoped = mineOnly
+      ? photos.filter((photo) => (
+          photo.userId === principalId
+          || photo.privateOwnerId === principalId
+          || photo.ownerScope === principalId
+          || (authUid && photo.originalUserId === authUid)
+        ))
+      : photos;
     const sorted = [...scoped].sort((a, b) => {
       const aTs = a.timestamp || 0;
       const bTs = b.timestamp || 0;
       return sortMode === 'oldest' ? aTs - bTs : bTs - aTs;
     });
     return sorted;
-  }, [photos, mineOnly, sortMode, principalId]);
+  }, [authUid, photos, mineOnly, sortMode, principalId]);
+
+  const hasDisplayablePhoto = useCallback((photo) => Boolean(
+    resolveThumbnailDisplayUri(photo) || resolveViewerDisplayUri(photo)
+  ), []);
 
   const albumSectionsData = useMemo(() => {
     const grouped = {};
@@ -423,6 +454,19 @@ export default function PhotobookScreen({
         </View>
       )}
 
+      {photoLoadError && (
+        <View style={styles.errorBanner}>
+          <MaterialCommunityIcons name="cloud-alert-outline" size={20} color={COLORS.sync.warning.foreground} />
+          <View style={styles.errorBannerCopy}>
+            <Text style={styles.errorBannerTitle}>Private photos did not fully refresh</Text>
+            <Text style={styles.errorBannerText}>Your saved photos are still available where possible.</Text>
+          </View>
+          <TouchableOpacity onPress={onRefresh} style={styles.errorRetryButton} activeOpacity={0.85}>
+            <Text style={styles.errorRetryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Stats Hero Section */}
       {!loadingPhotos && visiblePhotos.length > 0 && (
         <View style={styles.statsContainer}>
@@ -521,6 +565,12 @@ export default function PhotobookScreen({
                     style={styles.imageTouchable}
                     onPress={() => openViewer(photo.id)}
                   >
+                    {!hasDisplayablePhoto(photo) && (
+                      <View style={styles.unavailableBadge}>
+                        <MaterialCommunityIcons name="image-off-outline" size={14} color={COLORS.white} />
+                      </View>
+                    )}
+
                     {photo.caption && (
                       <View style={styles.captionIndicator}>
                         <MaterialCommunityIcons name="text" size={12} color={COLORS.white} />
@@ -761,6 +811,43 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: COLORS.primary,
   },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    marginHorizontal: SPACING.lg,
+    marginTop: SPACING.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.sync.warning.border,
+    backgroundColor: COLORS.sync.warning.background,
+  },
+  errorBannerCopy: {
+    flex: 1,
+  },
+  errorBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.sync.warning.foregroundMuted,
+  },
+  errorBannerText: {
+    marginTop: 2,
+    fontSize: 12,
+    color: COLORS.sync.warning.foreground,
+  },
+  errorRetryButton: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 7,
+    borderRadius: RADIUS.full,
+    backgroundColor: COLORS.white,
+  },
+  errorRetryText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.sync.warning.foregroundMuted,
+  },
   progressBar: {
     height: 4,
     backgroundColor: COLORS.border,
@@ -955,6 +1042,14 @@ const styles = StyleSheet.create({
     bottom: 6,
     right: 6,
     backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: RADIUS.full,
+    padding: 4,
+  },
+  unavailableBadge: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
     borderRadius: RADIUS.full,
     padding: 4,
   },

@@ -730,6 +730,42 @@ test('fetchPrivatePhotosPage applies endBefore cursor and normalizes timestamps 
   assert.strictEqual(result.hasMore, false);
 });
 
+test('fetchPrivatePhotosPage normalizes malformed legacy photo fields', async () => {
+  const result = await fetchPrivatePhotosPage({
+    tourId: 'tour-legacy',
+    ownerId: 'pax_v1:ABC:legacy@example.com',
+    limit: 5,
+  }, {
+    realtimeDbInstance: {},
+    dbRefFn: mockDbRef,
+    queryFn: (...args) => ({ args }),
+    orderByChildFn: () => 'timestamp',
+    limitToLastFn: (value) => value,
+    getFn: async () => mockSnapshot({
+      legacy: {
+        timestamp: 20,
+        userId: { uid: 'bad-shape' },
+        caption: { text: 'object captions crash React Text' },
+        url: { downloadURL: 'https://cdn/bad-object-url.jpg' },
+        viewerUrl: '  https://cdn/good-viewer.jpg  ',
+        thumbnailUrl: 'undefined',
+        storagePath: ['bad-storage-path'],
+        fileSize: '4000',
+      },
+    }),
+  });
+
+  const [photo] = result.items;
+  assert.equal(photo.id, 'legacy');
+  assert.equal(photo.viewerUrl, 'https://cdn/good-viewer.jpg');
+  assert.equal('thumbnailUrl' in photo, false);
+  assert.equal('url' in photo, false);
+  assert.equal('caption' in photo, false);
+  assert.equal('userId' in photo, false);
+  assert.equal('storagePath' in photo, false);
+  assert.equal(photo.fileSize, 4000);
+});
+
 test('deleteGroupPhoto deletes owned photo from storage and database', async () => {
   const operations = [];
 
@@ -740,6 +776,7 @@ test('deleteGroupPhoto deletes owned photo from storage and database', async () 
     getFn: async () => mockSnapshot({
       userId: 'owner-1',
       storagePath: 'group_tour_photos/tour-1/file.jpg',
+      viewerStoragePath: 'group_tour_photos/tour-1/viewers/file_viewer.jpg',
       thumbnailStoragePath: 'group_tour_photos/tour-1/thumbnails/file_thumb.jpg',
     }),
     storageRefFn: (_storage, path) => ({ path }),
@@ -753,6 +790,7 @@ test('deleteGroupPhoto deletes owned photo from storage and database', async () 
 
   assert.deepStrictEqual(operations, [
     'delete-storage:group_tour_photos/tour-1/file.jpg',
+    'delete-storage:group_tour_photos/tour-1/viewers/file_viewer.jpg',
     'delete-storage:group_tour_photos/tour-1/thumbnails/file_thumb.jpg',
     'delete-db:group_tour_photos/tour-1/photo-1',
   ]);
@@ -781,7 +819,11 @@ test('deletePrivatePhoto succeeds even when storage object deletion fails', asyn
     storageInstance: {},
     realtimeDbInstance: {},
     dbRefFn: (_db, path) => ({ path }),
-    getFn: async () => mockSnapshot({ storagePath: 'private_tour_photos/tour-2/user-2/file.jpg', thumbnailStoragePath: 'private_tour_photos/tour-2/user-2/thumbnails/file_thumb.jpg' }),
+    getFn: async () => mockSnapshot({
+      storagePath: 'private_tour_photos/tour-2/user-2/file.jpg',
+      viewerStoragePath: 'private_tour_photos/tour-2/user-2/viewers/file_viewer.jpg',
+      thumbnailStoragePath: 'private_tour_photos/tour-2/user-2/thumbnails/file_thumb.jpg',
+    }),
     storageRefFn: (_storage, path) => ({ path }),
     deleteObjectFn: async () => {
       throw new Error('storage down');

@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  normalizePhotoUri,
   resolveViewerDisplayUri,
   resolveSaveUri,
   resolveFullQualityUri,
@@ -117,4 +118,44 @@ test('thumbnail resolver avoids full-size fallback while variants are still proc
     thumbnailUrl: 'https://cdn/thumb-ready.jpg',
     sourceUrl: 'https://cdn/source-large.jpg',
   }), 'https://cdn/thumb-ready.jpg');
+});
+
+test('photo URI resolvers ignore malformed legacy fields', () => {
+  assert.equal(normalizePhotoUri({ uri: 'https://cdn/object.jpg' }), null);
+  assert.equal(normalizePhotoUri('  undefined  '), null);
+  assert.equal(normalizePhotoUri('  https://cdn/clean.jpg  '), 'https://cdn/clean.jpg');
+
+  assert.equal(resolveViewerDisplayUri({
+    viewerUrl: { downloadURL: 'https://cdn/bad-viewer.jpg' },
+    thumbnailUrl: '  ',
+    sourceUrl: 'https://cdn/source.jpg',
+  }), 'https://cdn/source.jpg');
+
+  assert.equal(resolveSaveUri({
+    fullUrl: ['https://cdn/bad-full.jpg'],
+    url: 'null',
+    viewerUrl: 'https://cdn/viewer.jpg',
+  }), 'https://cdn/viewer.jpg');
+
+  assert.equal(resolveFullQualityUri({
+    fullUrl: { uri: 'https://cdn/full.jpg' },
+    url: 'undefined',
+  }), null);
+
+  assert.deepEqual(
+    buildNeighborPrefetchUris({
+      photos: [
+        { viewerUrl: { uri: 'bad' }, thumbnailUrl: 'https://cdn/good-thumb.jpg' },
+        { viewerUrl: 'https://cdn/current.jpg' },
+        { viewerUrl: 'null', thumbnailUrl: { uri: 'bad' }, url: 'https://cdn/fallback.jpg' },
+      ],
+      currentIndex: 1,
+      neighborDistance: 1,
+      thumbnailsOnly: false,
+    }),
+    [
+      'https://cdn/good-thumb.jpg',
+      'https://cdn/fallback.jpg',
+    ],
+  );
 });

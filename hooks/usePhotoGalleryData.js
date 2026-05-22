@@ -136,6 +136,7 @@ export const usePhotoGalleryData = ({
           setPhotos((currentPhotos) => mergeLivePhotoWindow(currentPhotos, mappedPhotos));
           setLoading(false);
           setRefreshing(false);
+          setError(null);
         };
 
         unsubscribe = visibility === 'private'

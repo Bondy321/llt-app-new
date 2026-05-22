@@ -1,48 +1,74 @@
-const resolveViewerDisplayUri = (photo) => (
-  photo?.viewerUrl
-  || photo?.thumbnailUrl
-  || photo?.sourceUrl
-  || photo?.url
-  || photo?.fullUrl
-  || null
+const EMPTY_URI_STRINGS = new Set(['null', 'undefined', '[object object]']);
+
+const normalizePhotoUri = (value) => {
+  if (typeof value !== 'string') return null;
+
+  const normalized = value.trim();
+  if (!normalized) return null;
+
+  if (EMPTY_URI_STRINGS.has(normalized.toLowerCase())) {
+    return null;
+  }
+
+  return normalized;
+};
+
+const firstPhotoUri = (...values) => {
+  for (const value of values) {
+    const uri = normalizePhotoUri(value);
+    if (uri) return uri;
+  }
+
+  return null;
+};
+
+const resolveViewerDisplayUri = (photo) => firstPhotoUri(
+  photo?.viewerUrl,
+  photo?.thumbnailUrl,
+  photo?.sourceUrl,
+  photo?.url,
+  photo?.fullUrl,
 );
 
-const resolveSaveUri = (photo) => (
-  photo?.fullUrl
-  || photo?.url
-  || photo?.viewerUrl
-  || photo?.thumbnailUrl
-  || null
+const resolveSaveUri = (photo) => firstPhotoUri(
+  photo?.fullUrl,
+  photo?.url,
+  photo?.viewerUrl,
+  photo?.thumbnailUrl,
 );
 
-const resolveFullQualityUri = (photo) => (
-  photo?.fullUrl
-  || photo?.url
-  || null
+const resolveFullQualityUri = (photo) => firstPhotoUri(
+  photo?.fullUrl,
+  photo?.url,
 );
 
 const isProcessingVariantRecord = (photo) => (
   photo?.variantStatus === 'processing'
-  && !photo?.thumbnailUrl
-  && !photo?.viewerUrl
+  && !normalizePhotoUri(photo?.thumbnailUrl)
+  && !normalizePhotoUri(photo?.viewerUrl)
 );
 
 const resolveThumbnailDisplayUri = (photo) => {
   if (isProcessingVariantRecord(photo)) return null;
 
   return (
-    photo?.thumbnailUrl
-    || photo?.viewerUrl
-    || photo?.sourceUrl
-    || photo?.url
-    || photo?.fullUrl
-    || null
+    firstPhotoUri(
+      photo?.thumbnailUrl,
+      photo?.viewerUrl,
+      photo?.sourceUrl,
+      photo?.url,
+      photo?.fullUrl,
+    )
   );
 };
 
 const normalizeCacheKeyPart = (value) => {
   if (value === null || value === undefined) return null;
+  if (typeof value === 'object' || typeof value === 'function' || typeof value === 'symbol') return null;
+
   const normalized = String(value).trim();
+  if (EMPTY_URI_STRINGS.has(normalized.toLowerCase())) return null;
+
   return normalized.length > 0 ? normalized : null;
 };
 
@@ -85,8 +111,9 @@ const buildNeighborPrefetchUris = ({ photos = [], currentIndex = 0, neighborDist
       if (!photo) return;
 
       if (thumbnailsOnly) {
-        if (photo.thumbnailUrl) {
-          candidates.push(photo.thumbnailUrl);
+        const thumbnailUri = normalizePhotoUri(photo.thumbnailUrl);
+        if (thumbnailUri) {
+          candidates.push(thumbnailUri);
         }
         return;
       }
@@ -95,8 +122,9 @@ const buildNeighborPrefetchUris = ({ photos = [], currentIndex = 0, neighborDist
       if (primary) {
         candidates.push(primary);
       }
-      if (photo.thumbnailUrl) {
-        candidates.push(photo.thumbnailUrl);
+      const thumbnailUri = normalizePhotoUri(photo.thumbnailUrl);
+      if (thumbnailUri) {
+        candidates.push(thumbnailUri);
       }
     });
   }
@@ -105,6 +133,7 @@ const buildNeighborPrefetchUris = ({ photos = [], currentIndex = 0, neighborDist
 };
 
 module.exports = {
+  normalizePhotoUri,
   resolveViewerDisplayUri,
   resolveThumbnailDisplayUri,
   resolveSaveUri,
