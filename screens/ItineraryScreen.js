@@ -69,6 +69,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   // --- UI STATE ---
   const [cachedItinerary, setCachedItinerary] = useState(null);
   const [expandAll, setExpandAll] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
 
   const scrollViewRef = useRef(null);
   const searchAnimation = useRef(new Animated.Value(0)).current;
@@ -128,8 +129,10 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   // --- OFFLINE CACHING ---
   const cacheItinerary = async (data) => {
     try {
+      const syncedAt = new Date().toISOString();
       await offlineSyncService.saveTourPack(tourId, isDriver ? 'driver' : 'passenger', { itinerary: data });
-      await offlineSyncService.setTourPackMeta(tourId, isDriver ? 'driver' : 'passenger', { lastSyncedAt: new Date().toISOString() });
+      await offlineSyncService.setTourPackMeta(tourId, isDriver ? 'driver' : 'passenger', { lastSyncedAt: syncedAt });
+      setLastSyncedAt(syncedAt);
     } catch (error) {
       logger.warn('ItineraryScreen', 'Failed to save itinerary cache', {
         tourId,
@@ -144,6 +147,18 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       const cached = await offlineSyncService.getTourPack(tourId, isDriver ? 'driver' : 'passenger');
       const data = cached?.success ? cached.data?.itinerary : null;
       if (data) {
+        try {
+          const meta = await offlineSyncService.getTourPackMeta(tourId, isDriver ? 'driver' : 'passenger');
+          if (meta?.success && meta.data?.lastSyncedAt) {
+            setLastSyncedAt(meta.data.lastSyncedAt);
+          }
+        } catch (metaError) {
+          logger.warn('ItineraryScreen', 'Failed to load itinerary cache metadata', {
+            tourId,
+            isDriver,
+            error: metaError?.message || String(metaError)
+          });
+        }
         setCachedItinerary(data);
         return data;
       }
@@ -605,6 +620,49 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   const itineraryDayCount = itinerary?.days?.length || 0;
   const displayTitle = tourName || dataToRender?.title || itinerary?.title || 'Tour itinerary';
 
+  const formatSyncClock = useCallback((timestamp) => {
+    if (!timestamp) return '';
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }, []);
+
+  const syncStatus = useMemo(() => {
+    const freshness = offlineSyncService.getStalenessLabel(lastSyncedAt);
+    const lastSyncedTime = formatSyncClock(lastSyncedAt);
+
+    if (refreshing) {
+      return {
+        tone: 'fresh',
+        icon: 'sync',
+        label: 'Refreshing itinerary',
+        detail: lastSyncedTime ? `Last synced ${lastSyncedTime}` : 'Checking for updates',
+      };
+    }
+
+    if (errorMessage) {
+      return {
+        tone: 'critical',
+        icon: cachedItinerary ? 'cloud-alert' : 'cloud-off-outline',
+        label: cachedItinerary ? 'Showing saved itinerary' : 'Unable to refresh',
+        detail: cachedItinerary
+          ? 'Pull down to retry when your connection improves'
+          : 'Pull down to try loading again',
+      };
+    }
+
+    return {
+      tone: freshness.bucket === 'fresh' ? 'fresh' : freshness.bucket === 'stale' ? 'warning' : 'neutral',
+      icon: freshness.bucket === 'fresh' ? 'cloud-check-outline' : 'cloud-clock-outline',
+      label: freshness.label,
+      detail: lastSyncedTime ? `Last synced ${lastSyncedTime}` : 'Live itinerary updates enabled',
+    };
+  }, [cachedItinerary, errorMessage, formatSyncClock, lastSyncedAt, refreshing]);
+
   const headerDaySummary = useMemo(() => {
     if (!itineraryDayCount) {
       return {
@@ -666,7 +724,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
         <View style={styles.summaryPillRow}>
           <View style={styles.summaryPill}>
             <MaterialCommunityIcons name="calendar-multiselect" size={15} color={COLORS.primaryBlue} />
-            <Text style={styles.summaryPillText}>
+            <Text style={styles.summaryPillText} numberOfLines={1}>
               {itineraryDayCount === 1 ? '1 day' : `${itineraryDayCount} days`}
             </Text>
           </View>
@@ -803,7 +861,14 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
             </TouchableOpacity>
             <View style={styles.headerTitleContainer}>
               <Text style={styles.headerLabel}>Itinerary</Text>
-              <Text style={styles.headerTitle}>{tourName || 'Loading...'}</Text>
+              <Text
+                style={styles.headerTitle}
+                numberOfLines={2}
+                adjustsFontSizeToFit
+                minimumFontScale={0.86}
+              >
+                {tourName || 'Loading...'}
+              </Text>
             </View>
           </View>
         </LinearGradient>
@@ -834,7 +899,12 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
             <Text style={[styles.headerLabel, isEditing && {color: COLORS.secondaryText}]}>
               {isEditing ? 'EDITING MODE' : 'Itinerary'}
             </Text>
-            <Text style={[styles.headerTitle, isEditing && {color: COLORS.darkText}]}>
+            <Text
+              style={[styles.headerTitle, isEditing && {color: COLORS.darkText}]}
+              numberOfLines={2}
+              adjustsFontSizeToFit
+              minimumFontScale={0.86}
+            >
               {displayTitle}
             </Text>
           </View>
@@ -913,17 +983,23 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
                 size={18}
                 color={COLORS.white}
               />
-              <Text style={styles.toolbarText}>{expandAll ? 'Collapse All' : 'Expand All'}</Text>
+              <Text style={styles.toolbarText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                {expandAll ? 'Collapse All' : 'Expand All'}
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity onPress={() => handleJumpToDay(todaysDayNumber || visibleDays[0]?.day || 1)} style={styles.toolbarButton}>
               <MaterialCommunityIcons name="calendar-today" size={18} color={COLORS.white} />
-              <Text style={styles.toolbarText}>Today</Text>
+              <Text style={styles.toolbarText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                Today
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity onPress={handleExportToCalendar} style={styles.toolbarButton}>
               <MaterialCommunityIcons name="export-variant" size={18} color={COLORS.white} />
-              <Text style={styles.toolbarText}>Export</Text>
+              <Text style={styles.toolbarText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                Export
+              </Text>
             </TouchableOpacity>
           </View>
         )}
@@ -946,6 +1022,51 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
           ) : null
         }
       >
+        {!isEditing && (
+          <View
+            style={[
+              styles.syncStatusStrip,
+              syncStatus.tone === 'warning' && styles.syncStatusStripWarning,
+              syncStatus.tone === 'critical' && styles.syncStatusStripCritical,
+            ]}
+          >
+            <View
+              style={[
+                styles.syncStatusIcon,
+                syncStatus.tone === 'warning' && styles.syncStatusIconWarning,
+                syncStatus.tone === 'critical' && styles.syncStatusIconCritical,
+              ]}
+            >
+              <MaterialCommunityIcons
+                name={syncStatus.icon}
+                size={18}
+                color={
+                  syncStatus.tone === 'critical'
+                    ? COLORS.danger
+                    : syncStatus.tone === 'warning'
+                    ? '#B45309'
+                    : COLORS.primaryBlue
+                }
+              />
+            </View>
+            <View style={styles.syncStatusTextWrap}>
+              <Text
+                style={[
+                  styles.syncStatusLabel,
+                  syncStatus.tone === 'warning' && styles.syncStatusLabelWarning,
+                  syncStatus.tone === 'critical' && styles.syncStatusLabelCritical,
+                ]}
+                numberOfLines={1}
+              >
+                {syncStatus.label}
+              </Text>
+              <Text style={styles.syncStatusDetail} numberOfLines={1}>
+                {syncStatus.detail}
+              </Text>
+            </View>
+          </View>
+        )}
+
         {errorMessage ? (
           <View style={styles.errorBanner}>
             <MaterialCommunityIcons name="alert-circle" size={20} color={COLORS.white} />
@@ -1139,7 +1260,7 @@ const styles = StyleSheet.create({
   headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerTitleContainer: { flex: 1, marginHorizontal: 10 },
   headerLabel: { color: COLORS.lightBlueAccent, fontSize: 12, letterSpacing: 1.2, textTransform: 'uppercase', fontWeight: '700' },
-  headerTitle: { fontSize: 24, fontWeight: '800', color: COLORS.white, marginTop: 2 },
+  headerTitle: { fontSize: 24, lineHeight: 29, fontWeight: '800', color: COLORS.white, marginTop: 2 },
   headerButton: { padding: 8, minWidth: 40, alignItems: 'center' },
   headerIconButton: { padding: 8 },
   headerActions: { flexDirection: 'row', alignItems: 'center' },
@@ -1268,7 +1389,65 @@ const styles = StyleSheet.create({
     color: COLORS.darkText,
   },
 
-  scrollContainer: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 40 },
+  scrollContainer: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 40 },
+
+  // Sync Status
+  syncStatusStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    marginBottom: SPACING.md,
+    ...SHADOWS.sm,
+  },
+  syncStatusStripWarning: {
+    borderColor: '#FCD34D',
+    backgroundColor: '#FFFBEB',
+  },
+  syncStatusStripCritical: {
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FEF2F2',
+  },
+  syncStatusIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: RADIUS.full,
+    backgroundColor: COLORS.primaryMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: SPACING.sm,
+  },
+  syncStatusIconWarning: {
+    backgroundColor: '#FEF3C7',
+  },
+  syncStatusIconCritical: {
+    backgroundColor: '#FEE2E2',
+  },
+  syncStatusTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  syncStatusLabel: {
+    color: COLORS.primaryBlue,
+    fontSize: 13,
+    fontWeight: FONT_WEIGHT.extrabold,
+  },
+  syncStatusLabelWarning: {
+    color: '#B45309',
+  },
+  syncStatusLabelCritical: {
+    color: COLORS.danger,
+  },
+  syncStatusDetail: {
+    marginTop: 2,
+    color: COLORS.secondaryText,
+    fontSize: 12,
+    fontWeight: FONT_WEIGHT.semibold,
+  },
 
   // Error Banner
   errorBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.danger, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 12, marginBottom: 16 },

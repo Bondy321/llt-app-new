@@ -768,6 +768,52 @@ export default function PhotobookScreen({
     }, { remote: eventName === 'error' });
   }, [tracePrivatePhotos]);
 
+  const renderGalleryFooter = () => {
+    const showMemoryPrompt = visiblePhotos.length > 0 && visiblePhotos.length <= 6;
+
+    return (
+      <View style={styles.listFooter}>
+        {loadingMore && (
+          <ActivityIndicator size="small" color={COLORS.primary} />
+        )}
+
+        {showMemoryPrompt && (
+          <View style={styles.memoryPromptCard}>
+            <View style={styles.memoryPromptIcon}>
+              <MaterialCommunityIcons name="image-plus" size={24} color={COLORS.primary} />
+            </View>
+            <View style={styles.memoryPromptCopy}>
+              <Text style={styles.memoryPromptTitle}>Add another memory</Text>
+              <Text style={styles.memoryPromptText}>Keep this tour close with a few more private photos.</Text>
+            </View>
+            <View style={styles.memoryPromptActions}>
+              <TouchableOpacity
+                style={styles.memoryPromptButton}
+                onPress={handleTakePhoto}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Take photo"
+              >
+                <MaterialCommunityIcons name="camera" size={18} color={COLORS.primary} />
+                <Text style={styles.memoryPromptButtonText}>Camera</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.memoryPromptButton}
+                onPress={handlePickFromGallery}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Choose from gallery"
+              >
+                <MaterialCommunityIcons name="image-multiple" size={18} color={COLORS.primary} />
+                <Text style={styles.memoryPromptButtonText}>Gallery</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </View>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       {/* Header */}
@@ -780,7 +826,9 @@ export default function PhotobookScreen({
         </TouchableOpacity>
 
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>My Photos</Text>
+          <Text style={styles.headerTitle} numberOfLines={1} adjustsFontSizeToFit>
+            My Photos
+          </Text>
           <View style={styles.headerBadge}>
             <MaterialCommunityIcons name="lock" size={12} color={COLORS.white} />
             <Text style={styles.headerBadgeText}>Private</Text>
@@ -792,6 +840,8 @@ export default function PhotobookScreen({
           style={styles.headerButton}
           activeOpacity={0.7}
           disabled={false}
+          accessibilityRole="button"
+          accessibilityLabel="Add photo"
         >
           <MaterialCommunityIcons name="camera-plus" size={26} color={COLORS.white} />
         </TouchableOpacity>
@@ -848,13 +898,28 @@ export default function PhotobookScreen({
       )}
 
       <View style={styles.filterRow}>
-        <TouchableOpacity style={[styles.filterChip, sortMode === 'newest' && styles.filterChipActive]} onPress={() => setSortMode('newest')}>
+        <TouchableOpacity
+          style={[styles.filterChip, sortMode === 'newest' && styles.filterChipActive]}
+          onPress={() => setSortMode('newest')}
+          accessibilityRole="button"
+          accessibilityState={{ selected: sortMode === 'newest' }}
+        >
           <Text style={[styles.filterChipText, sortMode === 'newest' && styles.filterChipTextActive]}>Newest</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.filterChip, sortMode === 'oldest' && styles.filterChipActive]} onPress={() => setSortMode('oldest')}>
+        <TouchableOpacity
+          style={[styles.filterChip, sortMode === 'oldest' && styles.filterChipActive]}
+          onPress={() => setSortMode('oldest')}
+          accessibilityRole="button"
+          accessibilityState={{ selected: sortMode === 'oldest' }}
+        >
           <Text style={[styles.filterChipText, sortMode === 'oldest' && styles.filterChipTextActive]}>Oldest</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.filterChip, mineOnly && styles.filterChipActive]} onPress={() => setMineOnly((v) => !v)}>
+        <TouchableOpacity
+          style={[styles.filterChip, mineOnly && styles.filterChipActive]}
+          onPress={() => setMineOnly((v) => !v)}
+          accessibilityRole="button"
+          accessibilityState={{ selected: mineOnly }}
+        >
           <Text style={[styles.filterChipText, mineOnly && styles.filterChipTextActive]}>Mine only</Text>
         </TouchableOpacity>
       </View>
@@ -1020,11 +1085,7 @@ export default function PhotobookScreen({
                 </View>
               </View>
             ) : null}
-            ListFooterComponent={(
-              <View style={styles.listFooter}>
-                {loadingMore && <ActivityIndicator size="small" color={COLORS.primary} />}
-              </View>
-            )}
+            ListFooterComponent={renderGalleryFooter}
             contentContainerStyle={styles.scrollContainer}
             showsVerticalScrollIndicator={false}
             stickySectionHeadersEnabled={false}
@@ -1054,6 +1115,8 @@ export default function PhotobookScreen({
           onPress={showUploadOptions}
           activeOpacity={0.9}
           disabled={false}
+          accessibilityRole="button"
+          accessibilityLabel="Add photo"
         >
           <LinearGradient
             colors={[COLORS.accent, '#FB923C']}
@@ -1422,9 +1485,68 @@ const styles = StyleSheet.create({
     height: SPACING.md,
   },
   listFooter: {
-    height: 52,
+    minHeight: 52,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingTop: SPACING.sm,
+    paddingBottom: SPACING.xxl,
+  },
+  memoryPromptCard: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: SPACING.md,
+    marginTop: SPACING.md,
+    ...SHADOWS.sm,
+  },
+  memoryPromptIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: RADIUS.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primaryMuted,
+  },
+  memoryPromptCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  memoryPromptTitle: {
+    color: COLORS.textPrimary,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  memoryPromptText: {
+    marginTop: 2,
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 17,
+  },
+  memoryPromptActions: {
+    gap: SPACING.sm,
+  },
+  memoryPromptButton: {
+    minWidth: 88,
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.xs,
+    borderRadius: RADIUS.full,
+    backgroundColor: COLORS.primaryMuted,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 6,
+  },
+  memoryPromptButtonText: {
+    color: COLORS.primary,
+    fontSize: 12,
+    fontWeight: '800',
   },
   imageTouchable: {
     width: THUMBNAIL_SIZE,
