@@ -21,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
 import * as offlineSyncService from '../services/offlineSyncService';
 import * as photoService from '../services/photoService';
 import { optimizeSourcePhotoForUpload, formatBytes } from '../services/imageOptimizationService';
@@ -40,6 +41,45 @@ import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: windowWidth } = Dimensions.get('window');
 const THUMBNAIL_SIZE = (windowWidth - SPACING.lg * 2 - SPACING.sm * 2) / 3;
+
+const resolveQueuedUploadSourceUri = (item) => {
+  const sourceUri = item?.payload?.localAssets?.sourceUri || item?.payload?.uri;
+  return isLoadablePhotoUri(sourceUri) ? sourceUri : null;
+};
+
+const resolveQueuedUploadPreviewUri = (item) => {
+  const localAssets = item?.payload?.localAssets || {};
+  const previewUri = localAssets.previewUri
+    || localAssets.thumbnailUri
+    || localAssets.viewerUri
+    || resolveQueuedUploadSourceUri(item);
+  return isLoadablePhotoUri(previewUri) ? previewUri : null;
+};
+
+const verifyQueuedUploadSource = async (item) => {
+  const sourceUri = resolveQueuedUploadSourceUri(item);
+  if (!sourceUri) {
+    return { recoverable: false, reason: 'missing-source-uri' };
+  }
+
+  if (!sourceUri.startsWith('file://')) {
+    return { recoverable: true, reason: null };
+  }
+
+  try {
+    const fileInfo = await FileSystem.getInfoAsync(sourceUri);
+    if (!fileInfo?.exists || fileInfo?.isDirectory) {
+      return { recoverable: false, reason: fileInfo?.isDirectory ? 'source-is-directory' : 'missing-local-file' };
+    }
+  } catch (error) {
+    logger.warn('Photobook', 'Could not verify queued upload source file', {
+      actionId: item?.id || null,
+      error: error?.message,
+    });
+  }
+
+  return { recoverable: true, reason: null };
+};
 
 export default function PhotobookScreen({
   onBack,
@@ -155,29 +195,70 @@ export default function PhotobookScreen({
 
   const prefetchVisibleThumbnails = usePhotoThumbnailPrefetch({ enabled: false });
 
+  const isScopedPrivatePhotoUpload = useCallback((action) => (
+    action?.type === 'PHOTO_UPLOAD'
+    && action.tourId === tourId
+    && action?.payload?.visibility === 'private'
+    && (action?.payload?.ownerId === principalId || action?.payload?.userId === principalId)
+    && action.status !== 'completed'
+  ), [principalId, tourId]);
+
+  const reconcilePhotoQueueItems = useCallback(async (actions = []) => {
+    const scopedActions = actions.filter(isScopedPrivatePhotoUpload);
+    const usableActions = [];
+
+    for (const action of scopedActions) {
+      const sourceStatus = await verifyQueuedUploadSource(action);
+      if (!sourceStatus.recoverable) {
+        logger.warn('Photobook', 'Removing unrecoverable private photo upload from offline queue', {
+          actionId: action?.id || null,
+          reason: sourceStatus.reason,
+          status: action?.status || null,
+          tourId,
+        });
+        if (action?.id) {
+          await offlineSyncService.removeAction(action.id);
+        }
+        continue;
+      }
+
+      usableActions.push(action);
+    }
+
+    return usableActions;
+  }, [isScopedPrivatePhotoUpload, tourId]);
+
   useEffect(() => {
     if (!tourId || !principalId) return undefined;
+    let cancelled = false;
+
+    const applyQueueItems = async (actions) => {
+      try {
+        const nextItems = await reconcilePhotoQueueItems(actions);
+        if (!cancelled) {
+          setPhotoQueueItems(nextItems);
+        }
+      } catch (error) {
+        logger.warn('Photobook', 'Failed to reconcile private photo upload queue', { error: error?.message });
+      }
+    };
 
     const refreshPhotoQueue = async () => {
       const queued = await offlineSyncService.getPhotoUploadActions({ tourId, visibility: 'private', ownerId: principalId });
       if (queued.success) {
-        setPhotoQueueItems(queued.data.filter((item) => item.status !== 'completed'));
+        await applyQueueItems(queued.data);
       }
     };
 
     refreshPhotoQueue();
     const unsubscribe = offlineSyncService.subscribeQueuedActions((actions) => {
-      const filtered = actions.filter((action) => (
-        action.type === 'PHOTO_UPLOAD'
-        && action.tourId === tourId
-        && action?.payload?.visibility === 'private'
-        && (action?.payload?.ownerId === principalId || action?.payload?.userId === principalId)
-        && action.status !== 'completed'
-      ));
-      setPhotoQueueItems(filtered);
+      applyQueueItems(actions);
     });
-    return unsubscribe;
-  }, [principalId, tourId]);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [principalId, reconcilePhotoQueueItems, tourId]);
 
   const visiblePhotos = useMemo(() => {
     const scoped = mineOnly
@@ -386,12 +467,27 @@ export default function PhotobookScreen({
   };
 
   const retryUpload = async (pending) => {
+    const sourceStatus = await verifyQueuedUploadSource(pending);
+    if (!sourceStatus.recoverable) {
+      if (pending?.id) {
+        await offlineSyncService.removeAction(pending.id);
+      }
+      Alert.alert('Upload removed', 'That photo is no longer available on this device, so it cannot be retried.');
+      return;
+    }
+
     await offlineSyncService.updateAction(pending.id, {
       status: 'retrying',
       nextAttemptAt: null,
       lastError: null,
     });
     await offlineSyncService.replayQueue({ services: { photoService } });
+  };
+
+  const discardUpload = async (pending) => {
+    if (!pending?.id) return;
+    await offlineSyncService.removeAction(pending.id);
+    setPhotoQueueItems((items) => items.filter((item) => item.id !== pending.id));
   };
 
   const cancelUpload = () => {
@@ -602,27 +698,45 @@ export default function PhotobookScreen({
               <View style={styles.pendingSection}>
                 <Text style={styles.pendingTitle}>Uploads</Text>
                 <View style={styles.grid}>
-                  {photoQueueItems.map((item) => (
-                    <View key={item.id} style={styles.imageTouchable}>
-                      <RNImage
-                        source={{ uri: item?.payload?.localAssets?.previewUri || item?.payload?.localAssets?.sourceUri }}
-                        style={styles.imageThumbnail}
-                        resizeMode="cover"
-                      />
-                      <View style={styles.pendingOverlay}>
-                        {item.status === 'failed' ? (
-                          <>
-                            <MaterialCommunityIcons name="alert-circle" size={16} color={COLORS.white} />
-                            <TouchableOpacity onPress={() => retryUpload(item)} style={styles.retryButton}>
-                              <Text style={styles.retryButtonText}>Retry</Text>
-                            </TouchableOpacity>
-                          </>
+                  {photoQueueItems.map((item) => {
+                    const previewUri = resolveQueuedUploadPreviewUri(item);
+                    const canRetry = Boolean(resolveQueuedUploadSourceUri(item));
+
+                    return (
+                      <View key={item.id} style={styles.imageTouchable}>
+                        {previewUri ? (
+                          <RNImage
+                            source={{ uri: previewUri }}
+                            style={styles.imageThumbnail}
+                            resizeMode="cover"
+                          />
                         ) : (
-                          <Text style={styles.pendingProgressText}>{item.status}</Text>
+                          <View style={[styles.imageThumbnail, styles.pendingPlaceholder]}>
+                            <MaterialCommunityIcons name="image-off-outline" size={26} color={COLORS.textMuted} />
+                          </View>
                         )}
+                        <View style={styles.pendingOverlay}>
+                          {item.status === 'failed' ? (
+                            <>
+                              <MaterialCommunityIcons name="alert-circle" size={16} color={COLORS.white} />
+                              <View style={styles.pendingActionRow}>
+                                {canRetry && (
+                                  <TouchableOpacity onPress={() => retryUpload(item)} style={styles.retryButton}>
+                                    <Text style={styles.retryButtonText}>Retry</Text>
+                                  </TouchableOpacity>
+                                )}
+                                <TouchableOpacity onPress={() => discardUpload(item)} style={[styles.retryButton, styles.discardButton]}>
+                                  <Text style={styles.retryButtonText}>Discard</Text>
+                                </TouchableOpacity>
+                              </View>
+                            </>
+                          ) : (
+                            <Text style={styles.pendingProgressText}>{item.status}</Text>
+                          )}
+                        </View>
                       </View>
-                    </View>
-                  ))}
+                    );
+                  })}
                 </View>
               </View>
             ) : null}
@@ -810,7 +924,10 @@ const styles = StyleSheet.create({
   pendingTitle: { marginHorizontal: SPACING.lg, marginBottom: SPACING.sm, fontSize: 14, fontWeight: '700', color: COLORS.textPrimary },
   pendingOverlay: { position: 'absolute', left: 0, right:0, bottom:0, backgroundColor:'rgba(0,0,0,0.55)', alignItems:'center', paddingVertical: 6 },
   pendingProgressText: { color: COLORS.white, fontWeight:'700', fontSize: 12 },
-  retryButton: { marginTop: 4, backgroundColor: COLORS.error, borderRadius: RADIUS.sm, paddingHorizontal: 8, paddingVertical: 2 },
+  pendingPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.border },
+  pendingActionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 4 },
+  retryButton: { backgroundColor: COLORS.error, borderRadius: RADIUS.sm, paddingHorizontal: 8, paddingVertical: 2 },
+  discardButton: { backgroundColor: 'rgba(15, 23, 42, 0.8)' },
   retryButtonText: { color: COLORS.white, fontSize: 11, fontWeight: '700' },
   progressContainer: {
     backgroundColor: COLORS.primaryMuted,
