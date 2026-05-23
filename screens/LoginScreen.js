@@ -29,6 +29,7 @@ import {
   FONT_WEIGHT as THEME_FONT_WEIGHT,
 } from '../theme';
 import loggerService, { maskIdentifier } from '../services/loggerService';
+import { recordBreadcrumb as recordCrashBreadcrumb } from '../services/crashDiagnosticsService';
 
 const {
   LOGIN_MODE_HINTS,
@@ -257,17 +258,33 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     if (!applyValidation('submit')) return;
 
     const { trimmedReference, normalizedReference, normalizedEmail } = normalizedInput;
+    const loginMode = normalizedReference.startsWith('D-') ? 'driver' : 'passenger';
 
     activeLogger?.info('Login', 'Login attempt started', { hasBookingRef: !!bookingReference, isConnected });
+    recordCrashBreadcrumb('Login', 'submit_started', {
+      loginMode,
+      isConnected,
+      hasEmail: Boolean(normalizedEmail),
+      referenceLength: trimmedReference.length,
+    }, { remote: true, reason: 'Login:submit_started' });
 
     if (!isConnected) {
       const offlineCheck = await resolveOfflineLogin?.(trimmedReference, normalizedEmail);
       if (offlineCheck?.success) {
+        recordCrashBreadcrumb('Login', 'offline_login_resolved', {
+          loginMode: offlineCheck.type || loginMode,
+          hasTour: Boolean(offlineCheck.tour),
+        }, { remote: true, reason: 'Login:offline_login_resolved' });
         await onLoginSuccess(normalizedReference, offlineCheck.tour, offlineCheck.identity, offlineCheck.type, {
           offlineMode: true,
         });
         return;
       }
+      recordCrashBreadcrumb('Login', 'offline_login_blocked', {
+        loginMode,
+        reason: offlineCheck?.reason || null,
+        hasCachedSession: Boolean(offlineCheck?.hasCachedSession),
+      }, { remote: true, reason: 'Login:offline_login_blocked' });
       setShowRecoverySteps(false);
       setErrorState(createOfflineErrorState(offlineCheck, createErrorState));
       return;
@@ -280,13 +297,27 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     try {
       const result = await validateBookingReference(trimmedReference, normalizedEmail);
       if (result.valid) {
+        recordCrashBreadcrumb('Login', 'validation_succeeded', {
+          loginMode: result.type || loginMode,
+          hasTour: Boolean(result.tour),
+          assignmentStatus: result.assignmentStatus || null,
+        }, { remote: true, reason: 'Login:validation_succeeded' });
         const loginData = resolveLoginIdentity(result);
         await onLoginSuccess(normalizedReference, result.tour, loginData, result.type);
       } else {
+        recordCrashBreadcrumb('Login', 'validation_failed', {
+          loginMode,
+          error: result.error || null,
+        }, { remote: true, reason: 'Login:validation_failed' });
         setSimpleError(result.error || 'Invalid booking reference. Please try again.');
       }
     } catch (error) {
       activeLogger?.error('Login', 'Login error', { error: error.message, bookingRef: maskIdentifier(trimmedReference) });
+      recordCrashBreadcrumb('Login', 'login_error', {
+        loginMode,
+        error: error.message,
+        code: error?.code || null,
+      }, { remote: true, reason: 'Login:login_error' });
       setSimpleError('Unable to verify booking. Please check your connection.');
     } finally {
       setLoading(false);

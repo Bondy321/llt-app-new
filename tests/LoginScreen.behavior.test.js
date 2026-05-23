@@ -134,6 +134,12 @@ Module._load = function mockLoader(request, parent, isMain) {
     };
   }
 
+  if (request.endsWith('/services/crashDiagnosticsService') || request === '../services/crashDiagnosticsService') {
+    return {
+      recordBreadcrumb: () => {},
+    };
+  }
+
   if (request.endsWith('/services/bookingServiceRealtime') || request === '../services/bookingServiceRealtime') {
     return {
       validateBookingReference: async () => ({ valid: false, error: 'invalid' }),

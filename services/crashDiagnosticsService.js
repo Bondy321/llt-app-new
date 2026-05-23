@@ -18,6 +18,7 @@ let breadcrumbs = [];
 let context = {};
 let persistTimer = null;
 let installedGlobalHandler = false;
+let diagnosticsAuthUidOverride;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -178,16 +179,18 @@ const getRuntimeContext = () => ({
 });
 
 const getRouteKeys = () => {
-  const authUid = auth?.currentUser?.uid || null;
+  const hasOverride = diagnosticsAuthUidOverride !== undefined;
+  const authUid = hasOverride ? diagnosticsAuthUidOverride : (auth?.currentUser?.uid || null);
   return {
     authUid,
+    authUidSource: hasOverride ? 'override' : 'firebase',
     userKey: safeRealtimeKey(authUid || 'anonymous', 'anonymous'),
     sessionKey: safeRealtimeKey(diagnosticsSessionId, 'session_unknown'),
   };
 };
 
 const buildSnapshot = (reason = 'snapshot', extra = {}) => {
-  const { authUid } = getRouteKeys();
+  const { authUid, authUidSource } = getRouteKeys();
   return sanitizeValue({
     schemaVersion: SCHEMA_VERSION,
     reason,
@@ -198,6 +201,7 @@ const buildSnapshot = (reason = 'snapshot', extra = {}) => {
       hasCurrentUser: Boolean(authUid),
       authUid: authUid ? maskIdentifier(authUid) : null,
       authUidHash: authUid ? stableHash(authUid) : null,
+      authUidSource,
     },
     context,
     breadcrumbCount: breadcrumbs.length,
@@ -241,6 +245,29 @@ const scheduleLocalPersist = () => {
     persistTimer = null;
     persistLocalSnapshot(buildSnapshot('debounced_local_persist')).catch(() => {});
   }, 250);
+};
+
+export const setDiagnosticsAuthUid = (authUid, options = {}) => {
+  try {
+    diagnosticsAuthUidOverride = authUid || null;
+    context = {
+      ...context,
+      authRoute: sanitizeValue({
+        hasAuthUid: Boolean(authUid),
+        authUid: authUid ? maskIdentifier(authUid) : null,
+        authUidHash: authUid ? stableHash(authUid) : null,
+        source: 'setDiagnosticsAuthUid',
+      }, 'authRoute'),
+    };
+
+    if (options.flush) {
+      flushDiagnostics(options.reason || 'context:authRoute').catch(() => {});
+    } else {
+      scheduleLocalPersist();
+    }
+  } catch {
+    // Diagnostics must never affect app behavior.
+  }
 };
 
 export const setDiagnosticsContext = (key, value, options = {}) => {

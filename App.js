@@ -19,6 +19,7 @@ import { getCanonicalIdentity, resolveAuthScopedUserId, toRealtimeKeySegment } f
 import {
   installGlobalCrashDiagnostics,
   recordBreadcrumb as recordCrashBreadcrumb,
+  setDiagnosticsAuthUid,
   setDiagnosticsContext,
 } from './services/crashDiagnosticsService';
 import { COLORS as THEME } from './theme';
@@ -217,6 +218,7 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
+    const shouldFlushNavigationDiagnostics = Boolean(user?.uid) || currentScreen !== 'Login';
     setDiagnosticsContext('navigation', {
       currentScreen,
       homeScreen,
@@ -225,13 +227,16 @@ function AppContent() {
       hasIdentityBinding: Boolean(identityBinding),
       isDriverSession,
       isImageViewerVisible,
-    });
+    }, { flush: shouldFlushNavigationDiagnostics });
     recordCrashBreadcrumb('Navigation', 'screen_state_changed', {
       currentScreen,
       homeScreen,
       isImageViewerVisible,
+    }, {
+      remote: shouldFlushNavigationDiagnostics,
+      reason: 'Navigation:screen_state_changed',
     });
-  }, [bookingData, currentScreen, homeScreen, identityBinding, isDriverSession, isImageViewerVisible, tourData]);
+  }, [bookingData, currentScreen, homeScreen, identityBinding, isDriverSession, isImageViewerVisible, tourData, user?.uid]);
 
   const persistPassengerIdentityForUser = async ({
     authUid,
@@ -337,6 +342,11 @@ function AppContent() {
           driverId: maskIdentifier(persisted.driverId),
           assignedTourId: persisted.assignedTourId || null,
         });
+        recordCrashBreadcrumb('Identity', 'driver_identity_session_persist_success', {
+          hasAuthUid: Boolean(authUid),
+          driverId: maskIdentifier(persisted.driverId),
+          assignedTourId: persisted.assignedTourId || null,
+        }, { remote: true, reason: 'Identity:driver_identity_session_persist_success' });
       })
       .catch((error) => {
         if (cancelled) return;
@@ -348,6 +358,13 @@ function AppContent() {
           error: error.message,
           code: error?.code || null,
         });
+        recordCrashBreadcrumb('Identity', 'driver_identity_session_persist_failure', {
+          hasAuthUid: Boolean(authUid),
+          driverId: maskIdentifier(driverId),
+          assignedTourId,
+          error: error.message,
+          code: error?.code || null,
+        }, { remote: true, reason: 'Identity:driver_identity_session_persist_failure' });
       });
 
     return () => {
@@ -454,7 +471,14 @@ function AppContent() {
 
       const currentUser = await authHelpers.ensureAuthenticated();
       if (currentUser) {
+        setUser(currentUser);
         logger.setUserId(currentUser.uid);
+        setDiagnosticsAuthUid(currentUser.uid, { flush: true, reason: 'Auth:ensure_authenticated_route_set' });
+        recordCrashBreadcrumb('Auth', 'ensure_authenticated', {
+          hasAuthUid: true,
+          isAnonymous: Boolean(currentUser.isAnonymous),
+          authUidMasked: maskIdentifier(currentUser.uid),
+        }, { remote: true, reason: 'Auth:ensure_authenticated' });
         logger.info('Auth', 'User authenticated', { uid: maskIdentifier(currentUser.uid) });
         await hydrateIdentityBindingForCurrentUser(currentUser.uid);
       }
@@ -471,7 +495,22 @@ function AppContent() {
 
   const handleAuthStateChange = async (currentUser) => {
     setUser(currentUser);
-    if (currentUser) logger.setUserId(currentUser.uid);
+    if (currentUser) {
+      logger.setUserId(currentUser.uid);
+    } else {
+      logger.setUserId(null);
+    }
+    setDiagnosticsAuthUid(currentUser?.uid || null);
+    setDiagnosticsContext('authState', {
+      hasCurrentUser: Boolean(currentUser),
+      isAnonymous: Boolean(currentUser?.isAnonymous),
+      authUidMasked: currentUser?.uid ? maskIdentifier(currentUser.uid) : null,
+    }, { flush: true });
+    recordCrashBreadcrumb('Auth', 'state_changed', {
+      hasCurrentUser: Boolean(currentUser),
+      isAnonymous: Boolean(currentUser?.isAnonymous),
+      authUidMasked: currentUser?.uid ? maskIdentifier(currentUser.uid) : null,
+    }, { remote: true, reason: 'Auth:state_changed' });
     if (initializing) setInitializing(false);
   };
 
@@ -619,6 +658,16 @@ function AppContent() {
 
   const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger', options = {}) => {
     const targetScreen = userType === 'driver' ? 'DriverHome' : 'TourHome';
+    recordCrashBreadcrumb('Auth', 'login_success_handler_started', {
+      userType,
+      targetScreen,
+      hasAuthUid: Boolean(user?.uid),
+      hasTourDetails: Boolean(tourDetails),
+      tourId: tourDetails?.id || null,
+      identityId: bookingOrDriverData?.id ? maskIdentifier(bookingOrDriverData.id) : null,
+      alreadyHydrated: Boolean(options?.alreadyHydrated),
+      offlineMode: Boolean(options?.offlineMode),
+    }, { remote: true, reason: 'Auth:login_success_handler_started' });
     const durationMs = getLoginTransitionDurationMs({ alreadyHydrated: options?.alreadyHydrated });
     const showInterstitial = !options?.alreadyHydrated;
     if (showInterstitial) {
@@ -646,6 +695,11 @@ function AppContent() {
             driverId: maskIdentifier(persisted.driverId),
             assignedTourId: persisted.assignedTourId || null,
           });
+          recordCrashBreadcrumb('Identity', 'driver_identity_persist_success', {
+            hasAuthUid: true,
+            driverId: maskIdentifier(persisted.driverId),
+            assignedTourId: persisted.assignedTourId || null,
+          }, { remote: true, reason: 'Identity:driver_identity_persist_success' });
         } catch (error) {
           logger.error('Identity', 'driver_identity_persist_failure', {
             authUid: maskIdentifier(user.uid),
@@ -654,12 +708,30 @@ function AppContent() {
             error: error.message,
             code: error?.code || null,
           });
+          recordCrashBreadcrumb('Identity', 'driver_identity_persist_failure', {
+            hasAuthUid: true,
+            driverId: maskIdentifier(bookingOrDriverData?.id),
+            assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
+            error: error.message,
+            code: error?.code || null,
+          }, { remote: true, reason: 'Identity:driver_identity_persist_failure' });
         }
+      } else {
+        recordCrashBreadcrumb('Identity', 'driver_identity_persist_skipped_no_auth_user', {
+          driverId: maskIdentifier(bookingOrDriverData?.id),
+          assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
+        }, { remote: true, reason: 'Identity:driver_identity_persist_skipped_no_auth_user' });
       }
       setTourCode(tourDetails?.tourCode || '');
       setTourData(tourDetails || null);
       setBookingData(bookingOrDriverData);
       setCurrentScreen(postLoginScreen);
+      recordCrashBreadcrumb('Auth', 'driver_login_session_established', {
+        postLoginScreen,
+        hasAuthUid: Boolean(user?.uid),
+        driverId: maskIdentifier(bookingOrDriverData?.id),
+        tourId: tourDetails?.id || null,
+      }, { remote: true, reason: 'Auth:driver_login_session_established' });
       if (tourDetails?.id) {
         await offlineSyncService.saveTourPack(tourDetails.id, 'driver', {
           tour: tourDetails,

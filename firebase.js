@@ -366,6 +366,15 @@ const authHelpers = {
     }
 
     authStateListeners.push(callback);
+    resolveAuthRestoreReady().finally(() => {
+      if (!authStateListeners.includes(callback)) return;
+      try {
+        callback(auth.currentUser || null);
+      } catch (error) {
+        console.error('Error in auth state listener:', error);
+      }
+    });
+
     return () => {
       authStateListeners = authStateListeners.filter(l => l !== callback);
     };

@@ -1,6 +1,6 @@
 // services/loggerService.js
 import { Platform } from 'react-native';
-import { realtimeDb } from '../firebase';
+import { auth, realtimeDb } from '../firebase';
 import { createPersistenceProvider } from './persistenceProvider';
 
 // Centralized persistence with SecureStore/AsyncStorage fallback for durable logs.
@@ -294,10 +294,14 @@ class Logger {
     try {
       const uploadableLogs = this.logQueue.filter((log) => LOG_LEVELS[log.level] >= this.serverMinLevel);
       if (uploadableLogs.length === 0) return;
+      const writableLogs = uploadableLogs.filter((log) => this.isServerRouteWritable(log));
+      const staleRemoteLogs = uploadableLogs.filter((log) => !this.isServerRouteWritable(log));
 
       const sentLogIds = new Set();
-      for (let i = 0; i < uploadableLogs.length; i += this.maxServerBatchSize) {
-        const chunk = uploadableLogs.slice(i, i + this.maxServerBatchSize);
+      staleRemoteLogs.forEach((log) => sentLogIds.add(log.id));
+
+      for (let i = 0; i < writableLogs.length; i += this.maxServerBatchSize) {
+        const chunk = writableLogs.slice(i, i + this.maxServerBatchSize);
         const sent = await this.sendLogsToServer(chunk);
         if (!sent) break;
         chunk.forEach((log) => sentLogIds.add(log.id));
@@ -314,6 +318,17 @@ class Logger {
     }
   }
 
+  getCurrentAuthUid() {
+    return auth?.currentUser?.uid || null;
+  }
+
+  isServerRouteWritable(log) {
+    const routeUserId = log?.routeUserId || 'anonymous';
+    if (routeUserId === 'anonymous') return true;
+    const currentAuthUid = this.getCurrentAuthUid();
+    return Boolean(currentAuthUid && routeUserId === currentAuthUid);
+  }
+
   async sendLogsToServer(logs = null) {
     try {
       if (!logs) {
@@ -323,7 +338,10 @@ class Logger {
 
       if (!realtimeDb) return false;
 
-      const logsToSend = logs.filter((log) => LOG_LEVELS[log.level] >= this.serverMinLevel);
+      const logsToSend = logs.filter((log) => (
+        LOG_LEVELS[log.level] >= this.serverMinLevel
+        && this.isServerRouteWritable(log)
+      ));
 
       if (logsToSend.length === 0) return true;
 

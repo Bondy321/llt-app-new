@@ -4,6 +4,7 @@ const isTestEnv = process.env.NODE_ENV === 'test';
 let realtimeDb;
 let auth;
 let logger;
+let recordCrashBreadcrumb;
 let getCurrentAppCheckToken;
 let maskIdentifier = (value) => value;
 const { loadOptionalService } = require('./optionalServiceLoader');
@@ -25,6 +26,13 @@ if (!isTestEnv) {
     }
   } catch (error) {
     logger = null;
+  }
+
+  try {
+    const crashDiagnosticsModule = require('./crashDiagnosticsService');
+    recordCrashBreadcrumb = crashDiagnosticsModule.recordBreadcrumb;
+  } catch (error) {
+    recordCrashBreadcrumb = null;
   }
 
   try {
@@ -52,6 +60,17 @@ const logBookingEvent = (level, message, payload = {}) => {
   try {
     const logLevel = typeof logger?.[level] === 'function' ? level : 'info';
     logger?.[logLevel]?.('BookingService', message, payload);
+  } catch (error) {
+    // Diagnostics must never affect booking flows.
+  }
+};
+
+const recordBookingDiagnostic = (event, payload = {}) => {
+  try {
+    recordCrashBreadcrumb?.('BookingService', event, payload, {
+      remote: true,
+      reason: `BookingService:${event}`,
+    });
   } catch (error) {
     // Diagnostics must never affect booking flows.
   }
@@ -620,10 +639,21 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
       passengerStatusCount: payload.passengerStatuses?.length || 0,
       hasIdempotencyKey: Boolean(payload.idempotencyKey),
     });
+    recordBookingDiagnostic('manifest_update_direct_started', {
+      tourCode: maskIdentifier(validatedTourCode),
+      bookingRef: maskIdentifier(validatedBookingRef),
+      passengerStatusCount: payload.passengerStatuses?.length || 0,
+      hasIdempotencyKey: Boolean(payload.idempotencyKey),
+      hasAuthUid: Boolean(auth?.currentUser?.uid),
+    });
 
     const db = dbInstance || realtimeDb;
     if (!db) {
       logBookingEvent('warn', 'Direct manifest update skipped without database', {
+        tourCode: maskIdentifier(validatedTourCode),
+        bookingRef: maskIdentifier(validatedBookingRef),
+      });
+      recordBookingDiagnostic('manifest_update_skipped_no_database', {
         tourCode: maskIdentifier(validatedTourCode),
         bookingRef: maskIdentifier(validatedBookingRef),
       });
@@ -663,13 +693,36 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
           bookingTourMatches: bookingTourId === tourId,
           bookingTourId: bookingTourId || null,
         });
+        recordBookingDiagnostic('manifest_write_authorization_context', {
+          tourId,
+          bookingRef: maskIdentifier(validatedBookingRef),
+          hasAuthUid: Boolean(currentAuthUid),
+          hasUserProfile: userProfileSnapshot.exists(),
+          driverId: driverId ? maskIdentifier(driverId) : null,
+          hasDriverId: Boolean(driverId),
+          driverAuthMatches: Boolean(driverId && driverProfile.authUid === currentAuthUid),
+          assignedDriverFlag: assignedDriverSnapshot?.val?.() === true,
+          participantExists: participantSnapshot.exists(),
+          bookingTourMatches: bookingTourId === tourId,
+          bookingTourId: bookingTourId || null,
+        });
       } catch (diagnosticError) {
         logBookingEvent('warn', 'Manifest write authorization context unavailable', {
           tourId,
           bookingRef: maskIdentifier(validatedBookingRef),
           error: diagnosticError?.message || String(diagnosticError),
         });
+        recordBookingDiagnostic('manifest_write_authorization_context_unavailable', {
+          tourId,
+          bookingRef: maskIdentifier(validatedBookingRef),
+          error: diagnosticError?.message || String(diagnosticError),
+        });
       }
+    } else {
+      recordBookingDiagnostic('manifest_write_without_auth_user', {
+        tourId,
+        bookingRef: maskIdentifier(validatedBookingRef),
+      });
     }
 
     const bookingManifestRef = db.ref(`tour_manifests/${tourId}/bookings/${validatedBookingRef}`);
@@ -707,6 +760,13 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
       passengerStatusCount: payload.passengerStatuses?.length || 0,
       idempotencyKey: maskIdentifier(manifestUpdate.idempotencyKey),
     });
+    recordBookingDiagnostic('manifest_update_direct_completed', {
+      tourId,
+      bookingRef: maskIdentifier(validatedBookingRef),
+      status: parentStatus,
+      passengerStatusCount: payload.passengerStatuses?.length || 0,
+      idempotencyKey: maskIdentifier(manifestUpdate.idempotencyKey),
+    });
 
     return {
       success: true,
@@ -721,6 +781,12 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
       tourCode: maskIdentifier(payload?.tourCode),
       bookingRef: maskIdentifier(payload?.bookingRef),
       error: error?.message || String(error),
+    });
+    recordBookingDiagnostic('manifest_update_direct_failed', {
+      tourCode: maskIdentifier(payload?.tourCode),
+      bookingRef: maskIdentifier(payload?.bookingRef),
+      error: error?.message || String(error),
+      code: error?.code || null,
     });
     return { success: false, error: error.message };
   }
