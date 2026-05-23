@@ -262,6 +262,7 @@ function DriverDetailsPanel({ driverId, driver }) {
         driverInfo: {
           name: driver.name,
           phone: driver.phone || '',
+          authUid: driver.authUid || '',
         },
         isAssigned: true,
       });

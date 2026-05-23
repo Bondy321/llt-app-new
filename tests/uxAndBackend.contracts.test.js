@@ -95,6 +95,7 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   const rules = readJson('database.rules.json');
   const adminUid = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
   const privateOwnerAccess = "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || auth.uid === $ownerId || $ownerId === root.child('users/' + auth.uid + '/stablePassengerId').val() || $ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)";
+  const manifestBookingAccess = `auth != null && (auth.uid === '${adminUid}' || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true)) && root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId`;
 
   assert.equal(
     rules.rules.bookings.$bookingRef['.write'],
@@ -102,12 +103,16 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   );
   assert.equal(
     rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.write'],
-    `auth != null && (auth.uid === '${adminUid}' || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists()) && root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId`,
+    manifestBookingAccess,
   );
   assert.equal(rules.rules.private_tour_photos.$tourId.$ownerId['.read'], privateOwnerAccess);
   assert.equal(rules.rules.private_tour_photos.$tourId.$ownerId['.write'], privateOwnerAccess);
   assert.deepEqual(rules.rules.users.$userId.privatePhotoOwnerKey, { '.validate': '!newData.exists() || newData.isString()' });
   assert.deepEqual(rules.rules.users.$userId.stablePassengerKey, { '.validate': '!newData.exists() || newData.isString()' });
+  assert.deepEqual(rules.rules.users.$userId.driverId, { '.validate': '!newData.exists() || newData.isString()' });
+  assert.deepEqual(rules.rules.users.$userId.driverPrincipalId, { '.validate': '!newData.exists() || newData.isString()' });
+  assert.deepEqual(rules.rules.users.$userId.driverAssignedTourId, { '.validate': '!newData.exists() || newData.isString() || newData.val() === null' });
+  assert.deepEqual(rules.rules.users.$userId.principalType, { '.validate': "!newData.exists() || newData.val() === 'passenger' || newData.val() === 'driver'" });
   assert.match(
     rules.rules.globalSafetyAlerts.$eventId['.write'],
     /auth\.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'/,

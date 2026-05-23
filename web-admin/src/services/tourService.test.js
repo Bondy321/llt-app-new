@@ -87,7 +87,7 @@ describe('buildDriverAssignmentUpdates', () => {
       driverId: 'D-BONDY',
       driverCode: 'D-BONDY',
       tourCode: '5112D 8',
-      driverInfo: { name: 'James Bondy', phone: '+441234' },
+      driverInfo: { name: 'James Bondy', phone: '+441234', authUid: 'driver-auth-1' },
       isAssigned: true,
       actorId: 'uid_web_admin_1',
       assignedAt: '2026-02-01T10:15:00.000Z',
@@ -100,6 +100,11 @@ describe('buildDriverAssignmentUpdates', () => {
       assignedAt: '2026-02-01T10:15:00.000Z',
       assignedBy: 'uid_web_admin_1',
     });
+    expect(updates['users/driver-auth-1/driverId']).toBe('D-BONDY');
+    expect(updates['users/driver-auth-1/driverPrincipalId']).toBe('driver:D-BONDY');
+    expect(updates['users/driver-auth-1/driverAssignedTourId']).toBe('5112D_8');
+    expect(updates['users/driver-auth-1/principalType']).toBe('driver');
+    expect(updates['users/driver-auth-1/lastUpdated']).toEqual(expect.any(Number));
   });
 
   it('removes canonical payload on unassignment', async () => {
@@ -132,7 +137,7 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
     setupPathSnapshots({
       'tours/TOUR_A': { tourCode: '5100D 1' },
       'tour_manifests/TOUR_A': { assigned_drivers: {} },
-      'drivers/D-ALICE': { assignments: {} },
+      'drivers/D-ALICE': { assignments: {}, authUid: 'driver-auth-alice' },
     });
 
     const { assignDriver } = await import('./tourService.js');
@@ -148,6 +153,8 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
       tourId: 'TOUR_A',
       tourCode: '5100D 1',
     });
+    expect(updates['users/driver-auth-alice/driverId']).toBe('D-ALICE');
+    expect(updates['users/driver-auth-alice/driverAssignedTourId']).toBe('TOUR_A');
   });
 
   it('reassign old->new clears old manifest links in same multi-path update', async () => {

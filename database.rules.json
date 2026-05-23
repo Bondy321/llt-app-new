@@ -48,7 +48,7 @@
         },
         "bookings": {
           "$bookingRef": {
-            ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists()) && root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId",
+            ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true)) && root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId",
             ".validate": "!newData.exists() || ((!newData.child('status').exists() || newData.child('status').val() === 'PENDING' || newData.child('status').val() === 'BOARDED' || newData.child('status').val() === 'NO_SHOW' || newData.child('status').val() === 'PARTIAL') && (!newData.child('passengerStatus').exists() || newData.child('passengerStatus').hasChildren()) && (!newData.child('lastUpdated').exists() || newData.child('lastUpdated').isString() || newData.child('lastUpdated').isNumber()) && (!newData.child('idempotencyKey').exists() || newData.child('idempotencyKey').isString()))",
             "passengerStatus": {
               "$index": {
@@ -224,6 +224,10 @@
         "pushPermissionUpdatedAt": { ".validate": "!newData.exists() || newData.isString()" },
         "privatePhotoOwnerId": { ".validate": "!newData.exists() || newData.isString()" },
         "privatePhotoOwnerKey": { ".validate": "!newData.exists() || newData.isString()" },
+        "driverId": { ".validate": "!newData.exists() || newData.isString()" },
+        "driverPrincipalId": { ".validate": "!newData.exists() || newData.isString()" },
+        "driverAssignedTourId": { ".validate": "!newData.exists() || newData.isString() || newData.val() === null" },
+        "principalType": { ".validate": "!newData.exists() || newData.val() === 'passenger' || newData.val() === 'driver'" },
         "stablePassengerId": { ".validate": "!newData.exists() || newData.isString()" },
         "stablePassengerKey": { ".validate": "!newData.exists() || newData.isString()" },
         "identityVersion": { ".validate": "!newData.exists() || newData.val() === 'pax_v1'" },

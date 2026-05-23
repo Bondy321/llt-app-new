@@ -281,6 +281,38 @@ function AppContent() {
     };
   };
 
+  const persistDriverIdentityForUser = async ({
+    authUid,
+    driverId,
+    assignedTourId,
+  }) => {
+    const normalizedDriverId = typeof driverId === 'string' ? driverId.trim().toUpperCase() : '';
+    if (!authUid || !normalizedDriverId || !realtimeDb) {
+      return { profilePersisted: false };
+    }
+
+    const now = Date.now();
+    const updates = {
+      [`users/${authUid}/driverId`]: normalizedDriverId,
+      [`users/${authUid}/driverPrincipalId`]: `driver:${normalizedDriverId}`,
+      [`users/${authUid}/principalType`]: 'driver',
+      [`users/${authUid}/lastUpdated`]: now,
+      [`drivers/${normalizedDriverId}/authUid`]: authUid,
+      [`drivers/${normalizedDriverId}/lastActive`]: new Date(now).toISOString(),
+    };
+
+    if (assignedTourId) {
+      updates[`users/${authUid}/driverAssignedTourId`] = assignedTourId;
+    }
+
+    await realtimeDb.ref().update(updates);
+    return {
+      profilePersisted: true,
+      driverId: normalizedDriverId,
+      assignedTourId: assignedTourId || null,
+    };
+  };
+
   const repairIdentityBindingFromSession = async (authUid) => {
     const [savedIdentityBinding, savedBookingData] = await SessionStorage.multiGet([
       SESSION_KEYS.IDENTITY_BINDING,
@@ -554,6 +586,28 @@ function AppContent() {
 
     if (userType === 'driver') {
       logger.info('Auth', 'Driver Logged In', { driverId: maskIdentifier(bookingOrDriverData.id) });
+      if (user?.uid) {
+        try {
+          const persisted = await persistDriverIdentityForUser({
+            authUid: user.uid,
+            driverId: bookingOrDriverData?.id,
+            assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
+          });
+          logger.info('Identity', 'driver_identity_persist_success', {
+            authUid: maskIdentifier(user.uid),
+            driverId: maskIdentifier(persisted.driverId),
+            assignedTourId: persisted.assignedTourId || null,
+          });
+        } catch (error) {
+          logger.error('Identity', 'driver_identity_persist_failure', {
+            authUid: maskIdentifier(user.uid),
+            driverId: maskIdentifier(bookingOrDriverData?.id),
+            assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
+            error: error.message,
+            code: error?.code || null,
+          });
+        }
+      }
       setTourCode(tourDetails?.tourCode || '');
       setTourData(tourDetails || null);
       setBookingData(bookingOrDriverData);

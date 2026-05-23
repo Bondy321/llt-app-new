@@ -156,6 +156,7 @@ function TourCard({ tourId, tour, drivers, onEdit, onDelete, onDuplicate, onView
       await assignDriver(tourId, selectedDriver, {
         name: driver.name,
         phone: driver.phone || '',
+        authUid: driver.authUid || '',
       });
       notifications.show({
         title: 'Driver Assigned',

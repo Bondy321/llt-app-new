@@ -420,6 +420,7 @@ const getDriverAssignmentContext = async (tourId, explicitDriverId = null) => {
     tourCode: tour.tourCode || tour.code || tourId,
     driverId: resolvedDriverId,
     driverCode: resolvedDriverId,
+    driverAuthUid: driver.authUid || null,
     manifestDriverIds,
     currentTourId,
     assignments,
@@ -453,6 +454,15 @@ export const buildDriverAssignmentUpdates = ({
   updates[`drivers/${driverId}/currentTourId`] = isAssigned ? tourId : null;
   updates[`drivers/${driverId}/currentTourCode`] = isAssigned ? (tourCode || tourId) : null;
   updates[`drivers/${driverId}/assignments/${tourId}`] = isAssigned ? true : null;
+
+  const driverAuthUid = typeof driverInfo?.authUid === 'string' ? driverInfo.authUid.trim() : '';
+  if (driverAuthUid) {
+    updates[`users/${driverAuthUid}/driverId`] = driverId;
+    updates[`users/${driverAuthUid}/driverPrincipalId`] = `driver:${driverId}`;
+    updates[`users/${driverAuthUid}/driverAssignedTourId`] = isAssigned ? tourId : null;
+    updates[`users/${driverAuthUid}/principalType`] = 'driver';
+    updates[`users/${driverAuthUid}/lastUpdated`] = Date.now();
+  }
 
   updates[`tour_manifests/${tourId}/assigned_drivers/${driverId}`] = isAssigned ? true : null;
   updates[`tour_manifests/${tourId}/assigned_driver_codes/${driverId}`] = isAssigned
@@ -514,7 +524,10 @@ export const applyDriverAssignmentMutation = async ({
       driverId: resolvedDriverId,
       driverCode: resolvedDriverCode,
       tourCode: assignment.tourCode,
-      driverInfo,
+      driverInfo: {
+        ...driverInfo,
+        authUid: driverInfo?.authUid || assignment.driverAuthUid || null,
+      },
       isAssigned,
       actorId,
     }),

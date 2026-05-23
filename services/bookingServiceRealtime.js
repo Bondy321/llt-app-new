@@ -846,6 +846,11 @@ const assignDriverToTour = async (driverId, tourCode) => {
     updates[`drivers/${validatedDriverId}/currentTourCode`] = validatedTourCode;
     updates[`drivers/${validatedDriverId}/lastActive`] = new Date().toISOString();
     updates[`drivers/${validatedDriverId}/authUid`] = currentUser.uid;
+    updates[`users/${currentUser.uid}/driverId`] = validatedDriverId;
+    updates[`users/${currentUser.uid}/driverPrincipalId`] = `driver:${validatedDriverId}`;
+    updates[`users/${currentUser.uid}/driverAssignedTourId`] = tourId;
+    updates[`users/${currentUser.uid}/principalType`] = 'driver';
+    updates[`users/${currentUser.uid}/lastUpdated`] = Date.now();
 
     // 2. Add to Tour Manifest's assigned drivers list
     updates[`tour_manifests/${tourId}/assigned_drivers/${validatedDriverId}`] = true;

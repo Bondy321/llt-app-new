@@ -130,6 +130,7 @@ Primary Realtime DB roots (do **not** rename):
    - Canonical active assignment key is `drivers/{driverId}/currentTourId`
    - `activeTourId` exists as legacy fallback only
    - Multi-path updates must keep `drivers`, `tour_manifests`, and related context in sync
+   - Driver manifest authorization also depends on `users/{authUid}/driverId` plus `drivers/{driverId}/authUid`
 
 2. **Chat reaction contract**
    - Canonical write path:
@@ -278,6 +279,8 @@ Highlights:
   - `users/{uid}/stablePassengerId`
   - `users/{uid}/privatePhotoOwnerId`
   - `identity_bindings/{stablePassengerKey}/{uid}` where `stablePassengerKey = toRealtimeKeySegment(stablePassengerId)`
+- Assigned drivers can update manifest booking rows when their user profile `driverId`,
+  matching driver `authUid`, and manifest `assigned_drivers/{driverId}` are all aligned.
 - Reactions are user-leaf writes only (parent reaction writes blocked)
 - `users` now validates push token state metadata and identity metadata fields
 

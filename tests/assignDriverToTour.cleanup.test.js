@@ -107,6 +107,10 @@ test('assignDriverToTour clears previous manifest assignment when switching tour
   const latestUpdates = mockDb.updatesHistory.at(-1);
   assert.equal(latestUpdates['drivers/D-BONDY/currentTourId'], '6000A_1');
   assert.equal(latestUpdates['drivers/D-BONDY/currentTourCode'], '6000A 1');
+  assert.equal(latestUpdates['users/dispatcher-uid-1/driverId'], 'D-BONDY');
+  assert.equal(latestUpdates['users/dispatcher-uid-1/driverPrincipalId'], 'driver:D-BONDY');
+  assert.equal(latestUpdates['users/dispatcher-uid-1/driverAssignedTourId'], '6000A_1');
+  assert.equal(latestUpdates['users/dispatcher-uid-1/principalType'], 'driver');
   assert.equal(latestUpdates['tour_manifests/6000A_1/assigned_drivers/D-BONDY'], true);
   assert.equal(latestUpdates['tour_manifests/5112D_8/assigned_drivers/D-BONDY'], null);
   assert.equal(latestUpdates['tour_manifests/5112D_8/assigned_driver_codes/D-BONDY'], null);
