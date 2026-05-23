@@ -1810,6 +1810,7 @@ export default function ChatScreen({
 
   // Refs
   const messageListRef = useRef(null);
+  const messagesRef = useRef([]);
   const typingTimeoutRef = useRef(null);
   const syncBannerTimeoutRef = useRef(null);
   const transientFeedbackTimeoutRef = useRef(null);
@@ -1824,6 +1825,10 @@ export default function ChatScreen({
   const pendingJumpIndexRef = useRef(null);
   const isAtBottomRef = useRef(true);
   const currentScrollYRef = useRef(0);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const updateUnreadJumpVisibility = useCallback((scrollY, anchorY) => {
     if (anchorY == null) {
@@ -2774,6 +2779,7 @@ export default function ChatScreen({
       if (!realtimeActorId) return;
       if (!messageId || !emoji) return;
 
+      const selectedMessageAtTap = selectedMessage;
       setShowReactionPicker(false);
       setSelectedMessage(null);
       const lockKey = `${messageId}::${emoji}::${realtimeActorId}`;
@@ -2782,53 +2788,48 @@ export default function ChatScreen({
       }
       inFlightReactionKeysRef.current.add(lockKey);
 
-      let rollbackReactions = null;
-      let hasTargetMessage = false;
-      let reactionActorId = realtimeActorId;
-      let optimisticAction = null;
-      let optimisticMatchedUserIds = [];
-      let optimisticNextEmojiUserIds = [];
-      let existingUserIdsForEmoji = [];
+      const currentMessages = Array.isArray(messagesRef.current) ? messagesRef.current : [];
+      const targetMessage = currentMessages.find((message) => message?.id === messageId)
+        || (selectedMessageAtTap?.id === messageId ? selectedMessageAtTap : null);
 
-      setMessages((prevMessages) =>
-        prevMessages.map((message) => {
-          if (message.id !== messageId) return message;
-          hasTargetMessage = true;
-          rollbackReactions = normalizeReactionMap(message.reactions);
-          const existingUserIds = rollbackReactions[emoji] || [];
-          existingUserIdsForEmoji = existingUserIds;
-          const writableExistingActorId = currentReactionUserIds.find(
-            (candidateId) => existingUserIds.includes(candidateId) && isRealtimeKeySegment(candidateId)
-          );
-          reactionActorId = writableExistingActorId || realtimeActorId;
-          const {
-            nextReactions,
-            action,
-            matchedUserIds,
-            nextEmojiUserIds,
-          } = applyOptimisticReactionToggle({
-            reactions: message.reactions,
-            emoji,
-            userId: reactionActorId,
-            userIdAliases: currentReactionUserIds,
-          });
-          optimisticAction = action;
-          optimisticMatchedUserIds = matchedUserIds;
-          optimisticNextEmojiUserIds = nextEmojiUserIds;
-          return { ...message, reactions: nextReactions };
-        })
-      );
-
-      if (!hasTargetMessage) {
+      if (!targetMessage) {
         logChatReactionDebug('chat_reaction_target_message_missing', {
           tourId,
           messageId,
           emoji,
           realtimeActorIdMasked: maskIdentifier(realtimeActorId),
+          knownMessageCount: currentMessages.length,
+          knownMessageIdsSample: currentMessages.slice(-10).map((message) => message?.id).filter(Boolean),
+          selectedMessageIdAtTap: selectedMessageAtTap?.id || null,
         }, 'warn');
         inFlightReactionKeysRef.current.delete(lockKey);
         return;
       }
+
+      const rollbackReactions = normalizeReactionMap(targetMessage.reactions);
+      let reactionActorId = realtimeActorId;
+      const existingUserIdsForEmoji = rollbackReactions[emoji] || [];
+      const writableExistingActorId = currentReactionUserIds.find(
+        (candidateId) => existingUserIdsForEmoji.includes(candidateId) && isRealtimeKeySegment(candidateId)
+      );
+      reactionActorId = writableExistingActorId || realtimeActorId;
+      const {
+        nextReactions,
+        action: optimisticAction,
+        matchedUserIds: optimisticMatchedUserIds,
+        nextEmojiUserIds: optimisticNextEmojiUserIds,
+      } = applyOptimisticReactionToggle({
+        reactions: targetMessage.reactions,
+        emoji,
+        userId: reactionActorId,
+        userIdAliases: currentReactionUserIds,
+      });
+
+      setMessages((prevMessages) =>
+        prevMessages.map((message) => (
+          message.id === messageId ? { ...message, reactions: nextReactions } : message
+        ))
+      );
 
       logChatReactionDebug('chat_reaction_optimistic_applied', {
         tourId,
@@ -2900,7 +2901,7 @@ export default function ChatScreen({
         inFlightReactionKeysRef.current.delete(lockKey);
       }
     },
-    [currentReactionUserIds, realtimeActorId, tourId, showReactionFailureFeedback]
+    [currentReactionUserIds, realtimeActorId, selectedMessage, tourId, showReactionFailureFeedback]
   );
 
   // Handle message long press
