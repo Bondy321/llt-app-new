@@ -108,7 +108,6 @@ export default function PhotobookScreen({
 }) {
   const [photoQueueItems, setPhotoQueueItems] = useState([]);
   const [sortMode, setSortMode] = useState('newest');
-  const [mineOnly, setMineOnly] = useState(false);
 
   // Image viewer state
   const [viewerVisible, setViewerVisible] = useState(false);
@@ -375,21 +374,13 @@ export default function PhotobookScreen({
   }, [principalId, reconcilePhotoQueueItems, tourId]);
 
   const visiblePhotos = useMemo(() => {
-    const scoped = mineOnly
-      ? photos.filter((photo) => (
-          photo.userId === principalId
-          || photo.privateOwnerId === principalId
-          || photo.ownerScope === principalId
-          || (authUid && photo.originalUserId === authUid)
-        ))
-      : photos;
-    const sorted = [...scoped].sort((a, b) => {
+    const sorted = [...photos].sort((a, b) => {
       const aTs = a.timestamp || 0;
       const bTs = b.timestamp || 0;
       return sortMode === 'oldest' ? aTs - bTs : bTs - aTs;
     });
     return sorted;
-  }, [authUid, photos, mineOnly, sortMode, principalId]);
+  }, [photos, sortMode]);
 
   const hasDisplayablePhoto = useCallback((photo) => Boolean(
     resolveThumbnailDisplayUri(photo) || resolveViewerDisplayUri(photo)
@@ -468,7 +459,6 @@ export default function PhotobookScreen({
       rawPhotoCount: photos.length,
       queueCount: photoQueueItems.length,
       sortMode,
-      mineOnly,
       dateKeys,
       sectionCount: photoSections.length,
       sectionRows: photoSections.map((section) => ({
@@ -486,7 +476,6 @@ export default function PhotobookScreen({
     dateKeys,
     loadingMore,
     loadingPhotos,
-    mineOnly,
     photoLoadError,
     photoQueueItems,
     photoSections,
@@ -913,14 +902,6 @@ export default function PhotobookScreen({
           accessibilityState={{ selected: sortMode === 'oldest' }}
         >
           <Text style={[styles.filterChipText, sortMode === 'oldest' && styles.filterChipTextActive]}>Oldest</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.filterChip, mineOnly && styles.filterChipActive]}
-          onPress={() => setMineOnly((v) => !v)}
-          accessibilityRole="button"
-          accessibilityState={{ selected: mineOnly }}
-        >
-          <Text style={[styles.filterChipText, mineOnly && styles.filterChipTextActive]}>Mine only</Text>
         </TouchableOpacity>
       </View>
 
