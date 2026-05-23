@@ -156,6 +156,25 @@ test('getPushTokenIneligibilityReason reports token and permission suppression r
   );
 });
 
+test('shouldRemoveInvalidToken only allows cleanup for the currently stored token', () => {
+  assert.equal(
+    __testables.shouldRemoveInvalidToken({ pushToken: 'ExponentPushToken[old]' }, 'ExponentPushToken[old]'),
+    true,
+  );
+  assert.equal(
+    __testables.shouldRemoveInvalidToken({ pushToken: 'ExponentPushToken[new]' }, 'ExponentPushToken[old]'),
+    false,
+  );
+  assert.equal(
+    __testables.shouldRemoveInvalidToken({ pushToken: null }, 'ExponentPushToken[old]'),
+    false,
+  );
+  assert.equal(
+    __testables.shouldRemoveInvalidToken(null, 'ExponentPushToken[old]'),
+    false,
+  );
+});
+
 test('collectAssignedDriverIds reads canonical and legacy manifest assignment leaves', () => {
   assert.deepEqual(
     __testables.collectAssignedDriverIds({

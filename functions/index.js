@@ -81,6 +81,12 @@ const isValidPushToken = (token) => {
   return token && typeof token === 'string' && Expo.isExpoPushToken(token);
 };
 
+const shouldRemoveInvalidToken = (userData, token) => {
+  const storedToken = typeof userData?.pushToken === 'string' ? userData.pushToken.trim() : '';
+  const failedToken = typeof token === 'string' ? token.trim() : '';
+  return Boolean(storedToken && failedToken && storedToken === failedToken);
+};
+
 /**
  * Safely removes invalid push tokens from user profiles
  */
@@ -89,14 +95,33 @@ const removeInvalidToken = async (userId, token, options = {}) => {
   const nowIso = new Date().toISOString();
 
   try {
-    await admin.database().ref(`users/${userId}`).update({
-      pushToken: null,
-      pushTokenStatus: 'INVALID',
-      pushTokenInvalidReason: reason,
-      pushTokenUpdatedAt: nowIso,
-      lastUpdated: nowIso,
+    const userRef = admin.database().ref(`users/${userId}`);
+    const result = await userRef.transaction((userData) => {
+      if (!shouldRemoveInvalidToken(userData, token)) {
+        return userData;
+      }
+
+      return {
+        ...userData,
+        pushToken: null,
+        pushTokenStatus: 'INVALID',
+        pushTokenInvalidReason: reason,
+        pushTokenUpdatedAt: nowIso,
+        lastUpdated: nowIso,
+      };
     });
-    log.info('Removed invalid token', { userId, reason });
+
+    const tokenRemoved = Boolean(
+      result?.committed
+      && result?.snapshot?.exists?.()
+      && result?.snapshot?.val?.()?.pushToken === null
+    );
+
+    if (tokenRemoved) {
+      log.info('Removed invalid token', { userId, reason });
+    } else {
+      log.info('Skipped invalid token cleanup because stored token changed', { userId, reason });
+    }
   } catch (error) {
     log.error('Failed to remove invalid token', error, { userId, reason });
   }
@@ -1490,6 +1515,7 @@ exports.__testables = {
   isDriverProfileAssignedToTour,
   resolveAssignedDriverRecipientIds,
   getPushTokenIneligibilityReason,
+  shouldRemoveInvalidToken,
   selectNotificationRecipients,
   parseSourcePhotoPath,
   buildPhotoCollectionPath,
