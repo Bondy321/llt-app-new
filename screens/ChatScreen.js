@@ -82,6 +82,8 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // Quick Reaction Emojis
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🎉'];
+const HEART_REACTION = QUICK_REACTIONS[1];
+const DOUBLE_TAP_REACTION_DELAY_MS = 300;
 const ESTIMATED_MESSAGE_ROW_HEIGHT = 120;
 const SEARCH_RESULT_PREVIEW_LIMIT = 3;
 const CATCH_UP_BUBBLE_DISTANCE_THRESHOLD = 220;
@@ -401,6 +403,27 @@ const applyOptimisticReactionToggle = ({ reactions, emoji, userId, userIdAliases
   return {
     nextReactions,
     action: hasReaction ? 'removed' : 'added',
+    matchedUserIds,
+    nextEmojiUserIds,
+  };
+};
+
+const applyOptimisticReactionAdd = ({ reactions, emoji, userId, userIdAliases = [] }) => {
+  const normalizedReactions = normalizeReactionMap(reactions);
+  const existingUserIds = Array.isArray(normalizedReactions[emoji]) ? normalizedReactions[emoji] : [];
+  const reactionUserIds = new Set([userId, ...userIdAliases].filter(Boolean));
+  const matchedUserIds = existingUserIds.filter((existingUserId) => reactionUserIds.has(existingUserId));
+  const hasReaction = matchedUserIds.length > 0;
+  const nextEmojiUserIds = hasReaction
+    ? existingUserIds
+    : [...existingUserIds, userId].sort((a, b) => a.localeCompare(b));
+
+  return {
+    nextReactions: {
+      ...normalizedReactions,
+      [emoji]: nextEmojiUserIds,
+    },
+    action: hasReaction ? 'already_added' : 'added',
     matchedUserIds,
     nextEmojiUserIds,
   };
@@ -1249,6 +1272,7 @@ const MessageBubble = React.memo(({
   onRetry,
   onLongPress,
   onReactionPress,
+  onDoubleTapReaction,
   onOpenImage,
   onJumpToMessage,
   renderHighlightedText,
@@ -1261,6 +1285,33 @@ const MessageBubble = React.memo(({
   const isImage = message?.type === 'image';
   const isSearchMatch = !!activeSearchResultMessageId && activeSearchResultMessageId === message?.id;
   const isReplyJumpTarget = !!highlightedReplyTargetMessageId && highlightedReplyTargetMessageId === message?.id;
+  const lastTapAtRef = useRef(0);
+  const longPressTriggeredRef = useRef(false);
+
+  const handlePress = useCallback(() => {
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      lastTapAtRef.current = 0;
+      return;
+    }
+
+    if (!onDoubleTapReaction || !message?.id) return;
+
+    const now = Date.now();
+    if (now - lastTapAtRef.current <= DOUBLE_TAP_REACTION_DELAY_MS) {
+      lastTapAtRef.current = 0;
+      onDoubleTapReaction(message.id, HEART_REACTION);
+      return;
+    }
+
+    lastTapAtRef.current = now;
+  }, [message?.id, onDoubleTapReaction]);
+
+  const handleLongPress = useCallback(() => {
+    longPressTriggeredRef.current = true;
+    lastTapAtRef.current = 0;
+    onLongPress(message);
+  }, [message, onLongPress]);
 
   if (isDeleted) {
     return (
@@ -1282,7 +1333,7 @@ const MessageBubble = React.memo(({
   const hasReplyReference = Boolean(message?.replyTo?.messageId);
 
   return (
-    <Pressable onLongPress={() => onLongPress(message)} delayLongPress={300}>
+    <Pressable onPress={handlePress} onLongPress={handleLongPress} delayLongPress={300}>
       <View style={[styles.messageRow, isSelf ? styles.myMessageRow : styles.theirMessageRow]}>
         <View
           style={[
@@ -2775,9 +2826,11 @@ export default function ChatScreen({
 
   // Handle reaction
   const handleReaction = useCallback(
-    async (messageId, emoji) => {
+    async (messageId, emoji, options = {}) => {
       if (!realtimeActorId) return;
       if (!messageId || !emoji) return;
+      const forceAction = options?.forceAction === 'add' ? 'add' : null;
+      const reactionSource = options?.source || 'manual';
 
       const selectedMessageAtTap = selectedMessage;
       setShowReactionPicker(false);
@@ -2818,7 +2871,7 @@ export default function ChatScreen({
         action: optimisticAction,
         matchedUserIds: optimisticMatchedUserIds,
         nextEmojiUserIds: optimisticNextEmojiUserIds,
-      } = applyOptimisticReactionToggle({
+      } = (forceAction === 'add' ? applyOptimisticReactionAdd : applyOptimisticReactionToggle)({
         reactions: targetMessage.reactions,
         emoji,
         userId: reactionActorId,
@@ -2847,6 +2900,8 @@ export default function ChatScreen({
         matchedCurrentUserIdsMasked: maskReactionDebugIds(optimisticMatchedUserIds),
         matchedCurrentUserKeys: rawReactionDebugIds(optimisticMatchedUserIds),
         optimisticAction,
+        forceAction,
+        reactionSource,
         nextUserCountForEmoji: optimisticNextEmojiUserIds.length,
         nextUserIdsMasked: maskReactionDebugIds(optimisticNextEmojiUserIds),
         nextUserKeys: rawReactionDebugIds(optimisticNextEmojiUserIds),
@@ -2861,8 +2916,17 @@ export default function ChatScreen({
           reactionActorIdMasked: maskIdentifier(reactionActorId),
           reactionActorKey: reactionActorId,
           reactionActorKeyIsRealtimeSafe: isRealtimeKeySegment(reactionActorId),
+          forceAction,
+          reactionSource,
         });
-        const result = await toggleReaction(tourId, messageId, emoji, reactionActorId);
+        const result = await toggleReaction(
+          tourId,
+          messageId,
+          emoji,
+          reactionActorId,
+          undefined,
+          forceAction ? { forceAction } : undefined
+        );
         if (!result?.success) {
           throw new Error(result?.error || 'Unknown error');
         }
@@ -2876,6 +2940,8 @@ export default function ChatScreen({
           serviceActorPresent: Array.isArray(result.users) ? result.users.includes(reactionActorId) : null,
           serviceUsersMasked: maskReactionDebugIds(result.users || []),
           serviceUserKeys: rawReactionDebugIds(result.users || []),
+          forceAction,
+          reactionSource,
         });
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       } catch (error) {
@@ -2893,6 +2959,8 @@ export default function ChatScreen({
           userId: reactionActorId,
           reactionActorKey: reactionActorId,
           reactionActorKeyIsRealtimeSafe: isRealtimeKeySegment(reactionActorId),
+          forceAction,
+          reactionSource,
           error: error?.message || 'Unknown error',
         }, 'warn');
         showReactionFailureFeedback('Could not update reaction. Check your connection and try again.');
@@ -2902,6 +2970,14 @@ export default function ChatScreen({
       }
     },
     [currentReactionUserIds, realtimeActorId, selectedMessage, tourId, showReactionFailureFeedback]
+  );
+
+  const handleHeartReactionDoubleTap = useCallback(
+    (messageId) => {
+      if (internalDriverChat) return;
+      handleReaction(messageId, HEART_REACTION, { forceAction: 'add', source: 'double_tap' });
+    },
+    [handleReaction, internalDriverChat]
   );
 
   // Handle message long press
@@ -3567,6 +3643,7 @@ export default function ChatScreen({
         onRetry={handleRetryFailedMessage}
         onLongPress={handleMessageLongPress}
         onReactionPress={handleReaction}
+        onDoubleTapReaction={internalDriverChat ? null : handleHeartReactionDoubleTap}
         onOpenImage={setViewingImage}
         onJumpToMessage={jumpToMessageById}
         renderHighlightedText={renderHighlightedText}
@@ -3579,10 +3656,12 @@ export default function ChatScreen({
     canRetryFailedMessageForCurrentSession,
     formatTime,
     handleMessageLongPress,
+    handleHeartReactionDoubleTap,
     handleMessageRowLayout,
     handleReaction,
     handleRetryFailedMessage,
     highlightedReplyTargetMessageId,
+    internalDriverChat,
     jumpToMessageById,
     parseMessageText,
     principalId,

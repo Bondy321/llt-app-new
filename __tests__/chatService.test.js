@@ -398,6 +398,55 @@ test('toggleReaction toggles exclusively from canonical user leaf and never writ
   );
 });
 
+test('toggleReaction forceAction add keeps an existing reaction applied', async () => {
+  const mockDb = createMockRealtimeDb({
+    chats: {
+      'tour-force': {
+        messages: {
+          'msg-heart': {
+            text: 'Hello',
+            reactions: {
+              heart: {
+                'user-1': true,
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const result = await toggleReaction(
+    'tour-force',
+    'msg-heart',
+    'heart',
+    'user-1',
+    mockDb,
+    { forceAction: 'add' }
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.action, 'added');
+  assert.equal(
+    mockDb.data.chats['tour-force'].messages['msg-heart'].reactions.heart['user-1'],
+    true
+  );
+  assert.ok(
+    mockDb.refCalls.some(
+      (refCall) =>
+        refCall.path === 'chats/tour-force/messages/msg-heart/reactions/heart/user-1'
+        && refCall.setCalls.includes(true)
+    )
+  );
+  assert.ok(
+    mockDb.refCalls.every(
+      (refCall) =>
+        refCall.path !== 'chats/tour-force/messages/msg-heart/reactions/heart/user-1'
+        || refCall.removeCalls === 0
+    )
+  );
+});
+
 test('addReaction and removeReaction are idempotent against map-backed reactions', async () => {
   const mockDb = createMockRealtimeDb();
 
