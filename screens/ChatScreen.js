@@ -50,7 +50,7 @@ import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
 import * as photoService from '../services/photoService';
 import { auth } from '../firebase';
-import logger from '../services/loggerService';
+import logger, { maskIdentifier } from '../services/loggerService';
 import {
   getCanonicalIdentity,
   isRealtimeKeySegment,
@@ -316,11 +316,75 @@ const normalizeReactionMap = (reactions) => {
   }, {});
 };
 
+const maskReactionDebugIds = (ids = []) => (
+  (Array.isArray(ids) ? ids : [])
+    .filter(Boolean)
+    .slice(0, 10)
+    .map(maskIdentifier)
+);
+
+const rawReactionDebugIds = (ids = []) => (
+  (Array.isArray(ids) ? ids : [])
+    .filter(Boolean)
+    .slice(0, 10)
+);
+
+const summarizeReactionMapForDebug = (reactions, currentUserIds = []) => {
+  const normalizedReactions = normalizeReactionMap(reactions);
+  const currentUserIdSet = new Set(currentUserIds.filter(Boolean));
+  const entries = Object.entries(normalizedReactions);
+
+  return {
+    emojiCount: entries.length,
+    totalReactionUsers: entries.reduce((total, [, userIds]) => total + userIds.length, 0),
+    sample: entries.slice(0, 6).map(([emoji, userIds]) => ({
+      emoji,
+      userCount: userIds.length,
+      maskedUserIds: maskReactionDebugIds(userIds),
+      rawUserKeys: rawReactionDebugIds(userIds),
+      currentUserPresent: userIds.some((userId) => currentUserIdSet.has(userId)),
+      truncated: userIds.length > 10,
+    })),
+  };
+};
+
+const summarizeMessagesForReactionDebug = (messages = [], currentUserIds = []) => {
+  const messageSummaries = (Array.isArray(messages) ? messages : [])
+    .map((message) => ({
+      messageId: message?.id || null,
+      ...summarizeReactionMapForDebug(message?.reactions, currentUserIds),
+    }))
+    .filter((summary) => summary.emojiCount > 0);
+
+  return {
+    messageCount: Array.isArray(messages) ? messages.length : 0,
+    reactionMessageCount: messageSummaries.length,
+    reactionMessageSample: messageSummaries.slice(0, 5),
+  };
+};
+
+const logChatReactionDebug = (eventName, payload = {}, level = 'info') => {
+  try {
+    const loggerMethod = typeof logger?.[level] === 'function' ? level : 'info';
+    logger[loggerMethod]('ChatScreen', eventName, payload);
+  } catch (error) {
+    // Debug logging should never affect chat behavior.
+  }
+
+  try {
+    const consoleMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
+    console[consoleMethod](`[ReactionDebug] [ChatScreen] ${eventName}`, payload);
+  } catch (error) {
+    // no-op
+  }
+};
+
 const applyOptimisticReactionToggle = ({ reactions, emoji, userId, userIdAliases = [] }) => {
   const normalizedReactions = normalizeReactionMap(reactions);
   const existingUserIds = Array.isArray(normalizedReactions[emoji]) ? normalizedReactions[emoji] : [];
   const reactionUserIds = new Set([userId, ...userIdAliases].filter(Boolean));
-  const hasReaction = existingUserIds.some((existingUserId) => reactionUserIds.has(existingUserId));
+  const matchedUserIds = existingUserIds.filter((existingUserId) => reactionUserIds.has(existingUserId));
+  const hasReaction = matchedUserIds.length > 0;
 
   const nextEmojiUserIds = hasReaction
     ? existingUserIds.filter((existingUserId) => !reactionUserIds.has(existingUserId))
@@ -333,7 +397,12 @@ const applyOptimisticReactionToggle = ({ reactions, emoji, userId, userIdAliases
     nextReactions[emoji] = nextEmojiUserIds;
   }
 
-  return { nextReactions };
+  return {
+    nextReactions,
+    action: hasReaction ? 'removed' : 'added',
+    matchedUserIds,
+    nextEmojiUserIds,
+  };
 };
 
 const MessageReactions = ({ reactions, onReactionPress, messageId, currentUserId, currentUserIds = [] }) => {
@@ -1652,6 +1721,25 @@ export default function ChatScreen({
     return Array.from(new Set(candidates.filter(Boolean)));
   }, [authUid, passengerStableId, principalId, realtimeActorId]);
   const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
+  useEffect(() => {
+    logChatReactionDebug('chat_reaction_actor_context', {
+      tourId,
+      principalIdMasked: maskIdentifier(principalId),
+      passengerStableIdMasked: maskIdentifier(passengerStableId),
+      authUidMasked: maskIdentifier(authUid),
+      realtimeActorIdMasked: maskIdentifier(realtimeActorId),
+      realtimeActorDiffersFromPrincipal: realtimeActorId !== principalId,
+      principalKeyIsRealtimeSafe: isRealtimeKeySegment(principalId),
+      stableKeyIsRealtimeSafe: passengerStableId ? isRealtimeKeySegment(passengerStableId) : null,
+      realtimeActorKeyIsRealtimeSafe: isRealtimeKeySegment(realtimeActorId),
+      aliasCount: currentReactionUserIds.length,
+      aliasIdsMasked: maskReactionDebugIds(currentReactionUserIds),
+      aliasKeys: rawReactionDebugIds(currentReactionUserIds),
+      principalKey: principalId,
+      stablePassengerKey: passengerStableId,
+      reactionActorKey: realtimeActorId,
+    });
+  }, [authUid, currentReactionUserIds, passengerStableId, principalId, realtimeActorId, tourId]);
   const requiresPassengerStableIdForWrites = !isDriver
     && canonicalIdentity?.principalType === 'passenger'
     && principalId !== 'anonymous';
@@ -1877,6 +1965,12 @@ export default function ChatScreen({
     setLoading(true);
     const subscribeFn = internalDriverChat ? subscribeToInternalDriverChat : subscribeToChatMessages;
     const unsubscribe = subscribeFn(tourId, (newMessages) => {
+      const reactionSummary = summarizeMessagesForReactionDebug(newMessages, currentReactionUserIds);
+      logChatReactionDebug('chat_reaction_subscription_received', {
+        tourId,
+        chatType: internalDriverChat ? 'internal' : 'group',
+        ...reactionSummary,
+      });
       setMessages((prevMessages) => mergeMessagesById(prevMessages, newMessages));
       setHasMoreHistory(newMessages.length >= LIVE_CHAT_MESSAGE_LIMIT);
       setLoading(false);
@@ -1907,7 +2001,7 @@ export default function ChatScreen({
     }, undefined, { limit: LIVE_CHAT_MESSAGE_LIMIT });
 
     return () => unsubscribe();
-  }, [tourId, internalDriverChat, scrollToBottom, getMessageTimestamp]);
+  }, [tourId, internalDriverChat, scrollToBottom, getMessageTimestamp, currentReactionUserIds]);
 
   // Restore persisted chat draft for this tour/user context
   useEffect(() => {
@@ -2690,6 +2784,10 @@ export default function ChatScreen({
       let rollbackReactions = null;
       let hasTargetMessage = false;
       let reactionActorId = realtimeActorId;
+      let optimisticAction = null;
+      let optimisticMatchedUserIds = [];
+      let optimisticNextEmojiUserIds = [];
+      let existingUserIdsForEmoji = [];
 
       setMessages((prevMessages) =>
         prevMessages.map((message) => {
@@ -2697,30 +2795,86 @@ export default function ChatScreen({
           hasTargetMessage = true;
           rollbackReactions = normalizeReactionMap(message.reactions);
           const existingUserIds = rollbackReactions[emoji] || [];
+          existingUserIdsForEmoji = existingUserIds;
           const writableExistingActorId = currentReactionUserIds.find(
             (candidateId) => existingUserIds.includes(candidateId) && isRealtimeKeySegment(candidateId)
           );
           reactionActorId = writableExistingActorId || realtimeActorId;
-          const { nextReactions } = applyOptimisticReactionToggle({
+          const {
+            nextReactions,
+            action,
+            matchedUserIds,
+            nextEmojiUserIds,
+          } = applyOptimisticReactionToggle({
             reactions: message.reactions,
             emoji,
             userId: reactionActorId,
             userIdAliases: currentReactionUserIds,
           });
+          optimisticAction = action;
+          optimisticMatchedUserIds = matchedUserIds;
+          optimisticNextEmojiUserIds = nextEmojiUserIds;
           return { ...message, reactions: nextReactions };
         })
       );
 
       if (!hasTargetMessage) {
+        logChatReactionDebug('chat_reaction_target_message_missing', {
+          tourId,
+          messageId,
+          emoji,
+          realtimeActorIdMasked: maskIdentifier(realtimeActorId),
+        }, 'warn');
         inFlightReactionKeysRef.current.delete(lockKey);
         return;
       }
 
+      logChatReactionDebug('chat_reaction_optimistic_applied', {
+        tourId,
+        messageId,
+        emoji,
+        realtimeActorIdMasked: maskIdentifier(realtimeActorId),
+        chosenReactionActorIdMasked: maskIdentifier(reactionActorId),
+        choseExistingSafeActor: reactionActorId !== realtimeActorId,
+        aliasCount: currentReactionUserIds.length,
+        aliasIdsMasked: maskReactionDebugIds(currentReactionUserIds),
+        aliasKeys: rawReactionDebugIds(currentReactionUserIds),
+        existingUserCountForEmoji: existingUserIdsForEmoji.length,
+        existingUserIdsMasked: maskReactionDebugIds(existingUserIdsForEmoji),
+        existingUserKeys: rawReactionDebugIds(existingUserIdsForEmoji),
+        matchedCurrentUserIdsMasked: maskReactionDebugIds(optimisticMatchedUserIds),
+        matchedCurrentUserKeys: rawReactionDebugIds(optimisticMatchedUserIds),
+        optimisticAction,
+        nextUserCountForEmoji: optimisticNextEmojiUserIds.length,
+        nextUserIdsMasked: maskReactionDebugIds(optimisticNextEmojiUserIds),
+        nextUserKeys: rawReactionDebugIds(optimisticNextEmojiUserIds),
+        reactionActorKey: reactionActorId,
+      });
+
       try {
+        logChatReactionDebug('chat_reaction_service_call_start', {
+          tourId,
+          messageId,
+          emoji,
+          reactionActorIdMasked: maskIdentifier(reactionActorId),
+          reactionActorKey: reactionActorId,
+          reactionActorKeyIsRealtimeSafe: isRealtimeKeySegment(reactionActorId),
+        });
         const result = await toggleReaction(tourId, messageId, emoji, reactionActorId);
         if (!result?.success) {
           throw new Error(result?.error || 'Unknown error');
         }
+        logChatReactionDebug('chat_reaction_service_call_success', {
+          tourId,
+          messageId,
+          emoji,
+          reactionActorIdMasked: maskIdentifier(reactionActorId),
+          serviceAction: result.action || null,
+          serviceUserCount: Array.isArray(result.users) ? result.users.length : null,
+          serviceActorPresent: Array.isArray(result.users) ? result.users.includes(reactionActorId) : null,
+          serviceUsersMasked: maskReactionDebugIds(result.users || []),
+          serviceUserKeys: rawReactionDebugIds(result.users || []),
+        });
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       } catch (error) {
         setMessages((prevMessages) =>
@@ -2730,13 +2884,15 @@ export default function ChatScreen({
               : message
           ))
         );
-        logger.warn('ChatScreen', 'chat_reaction_toggle_failed_rolled_back', {
+        logChatReactionDebug('chat_reaction_toggle_failed_rolled_back', {
           tourId,
           messageId,
           emoji,
           userId: reactionActorId,
+          reactionActorKey: reactionActorId,
+          reactionActorKeyIsRealtimeSafe: isRealtimeKeySegment(reactionActorId),
           error: error?.message || 'Unknown error',
-        });
+        }, 'warn');
         showReactionFailureFeedback('Could not update reaction. Check your connection and try again.');
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       } finally {

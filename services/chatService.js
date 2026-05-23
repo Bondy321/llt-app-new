@@ -108,11 +108,56 @@ const normalizeReactions = (reactions) => {
   }, {});
 };
 
+const summarizeReactionUsersForDebug = (users, actorId = null) => {
+  const normalizedUsers = normalizeReactionUsers(users);
+  return {
+    userCount: normalizedUsers.length,
+    maskedUserIds: normalizedUsers.slice(0, 8).map(maskUserId),
+    truncated: normalizedUsers.length > 8,
+    actorPresent: actorId ? normalizedUsers.includes(actorId) : null,
+  };
+};
+
+const summarizeReactionsForDebug = (reactions, actorId = null) => {
+  const normalizedReactions = normalizeReactions(reactions);
+  const entries = Object.entries(normalizedReactions);
+
+  return {
+    emojiCount: entries.length,
+    totalReactionUsers: entries.reduce((total, [, users]) => total + users.length, 0),
+    sample: entries.slice(0, 6).map(([emoji, users]) => ({
+      emoji,
+      ...summarizeReactionUsersForDebug(users, actorId),
+    })),
+  };
+};
+
+const summarizeMessagesForReactionDebug = (messages = []) => {
+  const messagesWithReactions = (Array.isArray(messages) ? messages : [])
+    .map((message) => ({
+      messageId: message?.id || null,
+      summary: summarizeReactionsForDebug(message?.reactions),
+    }))
+    .filter(({ summary }) => summary.emojiCount > 0);
+
+  return {
+    messageCount: Array.isArray(messages) ? messages.length : 0,
+    reactionMessageCount: messagesWithReactions.length,
+    sample: messagesWithReactions.slice(0, 5),
+  };
+};
+
+const getReactionLeafPath = (tourId, messageId, emoji, userId) =>
+  `chats/${tourId}/messages/${messageId}/reactions/${emoji}/${userId}`;
+
+const getReactionEmojiPath = (tourId, messageId, emoji) =>
+  `chats/${tourId}/messages/${messageId}/reactions/${emoji}`;
+
 const getReactionLeafRef = (db, tourId, messageId, emoji, userId) =>
-  db.ref(`chats/${tourId}/messages/${messageId}/reactions/${emoji}/${userId}`);
+  db.ref(getReactionLeafPath(tourId, messageId, emoji, userId));
 
 const getReactionEmojiReadRef = (db, tourId, messageId, emoji) =>
-  db.ref(`chats/${tourId}/messages/${messageId}/reactions/${emoji}`);
+  db.ref(getReactionEmojiPath(tourId, messageId, emoji));
 
 const normalizeMessageTimestamp = (message = {}) => {
   const timestampMs = parseTimestampToMillis(message.timestamp);
@@ -296,12 +341,19 @@ const mapReactionFailureReason = (error, fallbackReason = 'REACTION_TOGGLE_FAILE
 };
 
 const logReactionEvent = (level, eventName, payload) => {
+  const message = `[ChatService] ${eventName}`;
+  try {
+    const consoleMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
+    console[consoleMethod](`[ReactionDebug] ${message}`, payload);
+  } catch (error) {
+    // Debug logging should never affect chat behavior.
+  }
+
   if (logger && typeof logger[level] === 'function') {
     logger[level]('ChatService', eventName, payload);
     return;
   }
 
-  const message = `[ChatService] ${eventName}`;
   if (level === 'error') {
     console.error(message, payload);
   } else if (level === 'warn') {
@@ -719,6 +771,16 @@ const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realti
       return { success: false, error: 'Database unavailable' };
     }
 
+    logReactionEvent('info', 'reaction_add_write_start', {
+      tourId: validatedTourId,
+      messageId: validatedMessageId,
+      emoji: sanitizedEmoji,
+      maskedUserId: maskUserId(validatedUserId),
+      actorKey: validatedUserId,
+      reactionLeafPath: getReactionLeafPath(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId),
+      actorKeyIsRealtimeSafe: isValidFirebaseKey(validatedUserId),
+    });
+
     const reactionLeafRef = getReactionLeafRef(
       db,
       validatedTourId,
@@ -728,6 +790,12 @@ const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realti
     );
 
     await reactionLeafRef.set(true);
+    logReactionEvent('info', 'reaction_add_write_complete', {
+      tourId: validatedTourId,
+      messageId: validatedMessageId,
+      emoji: sanitizedEmoji,
+      maskedUserId: maskUserId(validatedUserId),
+    });
     return { success: true };
   } catch (error) {
     console.error('Error adding reaction:', error);
@@ -756,6 +824,16 @@ const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       return { success: false, error: 'Database unavailable' };
     }
 
+    logReactionEvent('info', 'reaction_remove_write_start', {
+      tourId: validatedTourId,
+      messageId: validatedMessageId,
+      emoji: sanitizedEmoji,
+      maskedUserId: maskUserId(validatedUserId),
+      actorKey: validatedUserId,
+      reactionLeafPath: getReactionLeafPath(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId),
+      actorKeyIsRealtimeSafe: isValidFirebaseKey(validatedUserId),
+    });
+
     const reactionLeafRef = getReactionLeafRef(
       db,
       validatedTourId,
@@ -765,6 +843,12 @@ const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
     );
 
     await reactionLeafRef.remove();
+    logReactionEvent('info', 'reaction_remove_write_complete', {
+      tourId: validatedTourId,
+      messageId: validatedMessageId,
+      emoji: sanitizedEmoji,
+      maskedUserId: maskUserId(validatedUserId),
+    });
     return { success: true };
   } catch (error) {
     console.error('Error removing reaction:', error);
@@ -804,6 +888,18 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       return { success: false, error: 'Database unavailable' };
     }
 
+    logReactionEvent('info', 'reaction_toggle_validated_context', {
+      tourId: validatedTourId,
+      messageId: validatedMessageId,
+      emoji: sanitizedEmoji,
+      maskedUserId,
+      actorKey: validatedUserId,
+      reactionLeafPath: getReactionLeafPath(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId),
+      reactionEmojiPath: getReactionEmojiPath(validatedTourId, validatedMessageId, sanitizedEmoji),
+      actorKeyIsRealtimeSafe: isValidFirebaseKey(validatedUserId),
+      forceAction: options.forceAction || null,
+    });
+
     // Read-only parent ref for legacy-shape compatibility checks.
     // All writes must remain user-leaf only: reactions/{emoji}/{userId}.
     const emojiReadRef = getReactionEmojiReadRef(db, validatedTourId, validatedMessageId, sanitizedEmoji);
@@ -815,10 +911,33 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       validatedUserId
     ).once('value');
     const hasUserReaction = reactionLeafSnapshot.exists();
+    logReactionEvent('info', 'reaction_toggle_leaf_snapshot', {
+      tourId: validatedTourId,
+      messageId: validatedMessageId,
+      emoji: sanitizedEmoji,
+      maskedUserId,
+      actorKey: validatedUserId,
+      reactionLeafPath: getReactionLeafPath(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId),
+      leafExists: hasUserReaction,
+      leafValueType: reactionLeafSnapshot.val() === true ? 'true' : typeof reactionLeafSnapshot.val(),
+    });
     const getNormalizedReactionPayload = async () => {
       const nextSnapshot = await emojiReadRef.once('value');
       const users = normalizeReactionUsers(nextSnapshot.val());
       const reactions = users.length > 0 ? { [sanitizedEmoji]: users } : {};
+      logReactionEvent('info', 'reaction_toggle_emoji_snapshot', {
+        tourId: validatedTourId,
+        messageId: validatedMessageId,
+        emoji: sanitizedEmoji,
+        maskedUserId,
+        actorKey: validatedUserId,
+        reactionEmojiPath: getReactionEmojiPath(validatedTourId, validatedMessageId, sanitizedEmoji),
+        rawEmojiNodeType: nextSnapshot.val() === null ? 'null' : Array.isArray(nextSnapshot.val()) ? 'array' : typeof nextSnapshot.val(),
+        rawEmojiNodeKeys: nextSnapshot.val() && typeof nextSnapshot.val() === 'object'
+          ? Object.keys(nextSnapshot.val()).slice(0, 12)
+          : [],
+        ...summarizeReactionUsersForDebug(nextSnapshot.val(), validatedUserId),
+      });
       return { users, reactions };
     };
 
@@ -1086,6 +1205,12 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtime
     const listener = messagesQuery.on('value', (snapshot) => {
       try {
         const messages = readMessagesFromSnapshot(snapshot);
+        const reactionSummary = summarizeMessagesForReactionDebug(messages);
+        logReactionEvent('info', 'reaction_subscription_snapshot', {
+          tourId: validatedTourId,
+          chatType: 'group',
+          ...reactionSummary,
+        });
         onMessagesUpdate(messages);
       } catch (error) {
         console.error('Error processing chat messages snapshot:', error);
@@ -1126,7 +1251,14 @@ const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance = re
   });
 
   const listener = messagesQuery.on('value', (snapshot) => {
-    onMessagesUpdate(readMessagesFromSnapshot(snapshot));
+    const messages = readMessagesFromSnapshot(snapshot);
+    const reactionSummary = summarizeMessagesForReactionDebug(messages);
+    logReactionEvent('info', 'reaction_subscription_snapshot', {
+      tourId,
+      chatType: 'internal',
+      ...reactionSummary,
+    });
+    onMessagesUpdate(messages);
   });
 
   return () => {
