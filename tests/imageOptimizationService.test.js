@@ -34,7 +34,7 @@ const buildService = ({ sizeByCall }) => {
       };
     }
 
-    if (request === 'expo-file-system') {
+    if (request === 'expo-file-system/legacy' || request === 'expo-file-system') {
       return {
         getInfoAsync: async (uri) => ({ size: sizeByCall(uri) }),
       };

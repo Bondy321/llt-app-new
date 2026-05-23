@@ -17,7 +17,7 @@ test.after(() => {
 
 const loadServiceWithFsMock = ({ fsImpl }) => {
   Module._load = function mocked(request, parent, isMain) {
-    if (request === 'expo-file-system') {
+    if (request === 'expo-file-system/legacy' || request === 'expo-file-system') {
       return fsImpl;
     }
     return originalLoad(request, parent, isMain);

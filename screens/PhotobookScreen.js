@@ -21,7 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as offlineSyncService from '../services/offlineSyncService';
 import * as photoService from '../services/photoService';
 import { optimizeSourcePhotoForUpload, formatBytes } from '../services/imageOptimizationService';

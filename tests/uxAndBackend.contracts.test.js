@@ -148,6 +148,20 @@ test('Static contract: email-style stable identities are encoded before identity
   assert.match(chatSource, /lastRead\/\$\{actorKey\}/);
 });
 
+test('Static contract: legacy Expo FileSystem methods use the explicit legacy entrypoint', () => {
+  [
+    'components/ImageViewer.js',
+    'screens/PhotobookScreen.js',
+    'services/imageOptimizationService.js',
+    'services/photoViewerCacheService.js',
+  ].forEach((relativePath) => {
+    const source = fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
+
+    assert.match(source, /from 'expo-file-system\/legacy'/);
+    assert.doesNotMatch(source, /from 'expo-file-system';/);
+  });
+});
+
 test('Static contract: chat message validation keeps image payload branch and thumbnail requirement', () => {
   // Intentional static check: validation expression is a rules DSL string; regex guards critical media constraints.
   const rules = readJson('database.rules.json');
