@@ -19,6 +19,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { StatusBar } from 'expo-status-bar';
 import TodaysAgendaCard from '../components/TodaysAgendaCard';
 import { MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import * as bookingService from '../services/bookingServiceRealtime';
@@ -53,6 +54,7 @@ const COLORS = {
   error: THEME.error,
   errorLight: THEME.errorLight,
   overlay: THEME.overlay,
+  statusBarBackground: '#475569',
 };
 
 // Haptic feedback helper
@@ -928,45 +930,52 @@ export default function TourHomeScreen({
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <LinearGradient colors={[`${COLORS.primaryBlue}0D`, COLORS.white]} style={styles.gradient}>
-          <View style={styles.container}>
-            {/* Skeleton header */}
-            <View style={styles.header}>
-              <SkeletonLoader width={44} height={44} borderRadius={12} />
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <SkeletonLoader width={120} height={14} style={{ marginBottom: 8 }} />
-                <SkeletonLoader width={180} height={24} />
+      <View style={styles.screen}>
+        <StatusBar style="light" backgroundColor={COLORS.statusBarBackground} />
+        <SafeAreaView style={styles.statusBarSafeArea} edges={['top']} />
+        <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
+          <LinearGradient colors={[`${COLORS.primaryBlue}0D`, COLORS.white]} style={styles.gradient}>
+            <View style={styles.container}>
+              {/* Skeleton header */}
+              <View style={styles.header}>
+                <SkeletonLoader width={44} height={44} borderRadius={12} />
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <SkeletonLoader width={120} height={14} style={{ marginBottom: 8 }} />
+                  <SkeletonLoader width={180} height={24} />
+                </View>
               </View>
+              {/* Skeleton cards */}
+              <SkeletonLoader width="100%" height={140} borderRadius={18} style={{ marginBottom: 18 }} />
+              <SkeletonLoader width="100%" height={200} borderRadius={20} style={{ marginBottom: 24 }} />
+              <SkeletonLoader width="100%" height={100} borderRadius={18} style={{ marginBottom: 20 }} />
             </View>
-            {/* Skeleton cards */}
-            <SkeletonLoader width="100%" height={140} borderRadius={18} style={{ marginBottom: 18 }} />
-            <SkeletonLoader width="100%" height={200} borderRadius={20} style={{ marginBottom: 24 }} />
-            <SkeletonLoader width="100%" height={100} borderRadius={18} style={{ marginBottom: 20 }} />
-          </View>
-        </LinearGradient>
-      </SafeAreaView>
+          </LinearGradient>
+        </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <LinearGradient colors={[`${COLORS.primaryBlue}0D`, COLORS.white]} style={styles.gradient}>
-        <ScrollView
-          ref={scrollViewRef}
-          contentContainerStyle={styles.container}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              colors={[COLORS.primaryBlue]}
-              tintColor={COLORS.primaryBlue}
-              title="Updating..."
-              titleColor={COLORS.subtleText}
-            />
-          }
-        >
+    <View style={styles.screen}>
+      <StatusBar style="light" backgroundColor={COLORS.statusBarBackground} />
+      <SafeAreaView style={styles.statusBarSafeArea} edges={['top']} />
+      <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
+        <LinearGradient colors={[`${COLORS.primaryBlue}0D`, COLORS.white]} style={styles.gradient}>
+          <ScrollView
+            ref={scrollViewRef}
+            contentContainerStyle={styles.container}
+            showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                colors={[COLORS.primaryBlue]}
+                tintColor={COLORS.primaryBlue}
+                title="Updating..."
+                titleColor={COLORS.subtleText}
+              />
+            }
+          >
           {/* Header with personalized greeting */}
           <AnimatedCard style={styles.header} delay={0}>
             <Image source={require('../assets/images/app-icon-llt.png')} style={styles.logoImage} />
@@ -1292,17 +1301,17 @@ export default function TourHomeScreen({
 
           {/* Bottom spacing */}
           <View style={{ height: 40 }} />
-        </ScrollView>
-      </LinearGradient>
+          </ScrollView>
+        </LinearGradient>
 
-      {/* Enhanced No-Show Modal */}
-      <Modal visible={isNoShow} transparent animationType="fade" presentationStyle="overFullScreen">
-        <View style={styles.modalOverlay}>
-          <Animated.View style={styles.modalCard}>
-            <LinearGradient
-              colors={[COLORS.errorLight, COLORS.white]}
-              style={styles.modalGradient}
-            >
+        {/* Enhanced No-Show Modal */}
+        <Modal visible={isNoShow} transparent animationType="fade" presentationStyle="overFullScreen">
+          <View style={styles.modalOverlay}>
+            <Animated.View style={styles.modalCard}>
+              <LinearGradient
+                colors={[COLORS.errorLight, COLORS.white]}
+                style={styles.modalGradient}
+              >
               <View style={styles.modalIconContainer}>
                 <View style={styles.modalIconPulse} />
                 <View style={styles.modalIconCircle}>
@@ -1362,15 +1371,23 @@ export default function TourHomeScreen({
                 <MaterialCommunityIcons name="logout-variant" size={18} color={COLORS.subtleText} />
                 <Text style={styles.modalLogoutButtonText}>Log Out</Text>
               </TouchableOpacity>
-            </LinearGradient>
-          </Animated.View>
-        </View>
-      </Modal>
-    </SafeAreaView>
+              </LinearGradient>
+            </Animated.View>
+          </View>
+        </Modal>
+      </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: COLORS.appBackground,
+  },
+  statusBarSafeArea: {
+    backgroundColor: COLORS.statusBarBackground,
+  },
   safeArea: {
     flex: 1,
     backgroundColor: COLORS.appBackground,
