@@ -21,6 +21,213 @@ Module._load = function mockedLoad(request, parent, isMain) {
 const { __testables } = require('../functions/index.js');
 Module._load = originalLoad;
 
+test('toRealtimeKeySegment encodes stable passenger IDs for RTDB paths', () => {
+  assert.equal(
+    __testables.toRealtimeKeySegment('pax_v1:T123659:msandreayoung@yahoo.co.uk'),
+    'pax_v1:T123659:msandreayoung@yahoo_2E_co_2E_uk',
+  );
+});
+
+test('resolveChatSenderParticipantIds maps stable passenger identity to participant auth uid', async () => {
+  const stablePassengerId = 'pax_v1:T123659:msandreayoung@yahoo.co.uk';
+  const lookups = [];
+
+  const result = await __testables.resolveChatSenderParticipantIds({
+    participants: {
+      'auth-uid-1': { joinedAt: '2026-05-23T10:00:00.000Z' },
+      'auth-uid-2': { joinedAt: '2026-05-23T10:01:00.000Z' },
+    },
+    messageData: {
+      senderId: stablePassengerId,
+      senderStableId: stablePassengerId,
+    },
+    loadIdentityBindings: async (principalId) => {
+      lookups.push(principalId);
+      return {
+        'auth-uid-1': true,
+        'unjoined-auth-uid': true,
+      };
+    },
+  });
+
+  assert.deepEqual(result.sort(), ['auth-uid-1']);
+  assert.deepEqual(lookups, [stablePassengerId]);
+});
+
+test('resolveChatSenderParticipantIds accepts legacy auth uid sender without binding lookup', async () => {
+  const lookups = [];
+
+  const result = await __testables.resolveChatSenderParticipantIds({
+    participants: {
+      'auth-uid-1': { joinedAt: '2026-05-23T10:00:00.000Z' },
+    },
+    messageData: {
+      senderId: 'auth-uid-1',
+    },
+    loadIdentityBindings: async (principalId) => {
+      lookups.push(principalId);
+      return {};
+    },
+  });
+
+  assert.deepEqual(result, ['auth-uid-1']);
+  assert.deepEqual(lookups, []);
+});
+
+test('selectNotificationRecipients excludes sender auth uid resolved from stable identity', () => {
+  const result = __testables.selectNotificationRecipients({
+    participantIds: ['auth-uid-1', 'auth-uid-2'],
+    usersMap: {
+      'auth-uid-1': {
+        pushToken: 'ExponentPushToken[sender]',
+        preferences: { ops: { group_chat: true } },
+      },
+      'auth-uid-2': {
+        pushToken: 'ExponentPushToken[recipient]',
+        preferences: { ops: { group_chat: true } },
+      },
+    },
+    preferencePath: ['preferences', 'ops', 'group_chat'],
+    senderId: 'pax_v1:T123659:msandreayoung@yahoo.co.uk',
+    senderParticipantIds: ['auth-uid-1'],
+    excludeSender: true,
+    context: { tourId: 'tour-1', notificationType: 'chat' },
+  });
+
+  assert.deepEqual(
+    result.validRecipients.map((recipient) => recipient.userId),
+    ['auth-uid-2'],
+  );
+});
+
+test('selectNotificationRecipients skips explicit unavailable token states but keeps legacy token-only profiles', () => {
+  const result = __testables.selectNotificationRecipients({
+    participantIds: ['legacy-user', 'unavailable-user', 'invalid-user', 'denied-user'],
+    usersMap: {
+      'legacy-user': {
+        pushToken: 'ExponentPushToken[legacy]',
+        preferences: { ops: { group_chat: true } },
+      },
+      'unavailable-user': {
+        pushToken: 'ExponentPushToken[unavailable]',
+        pushTokenStatus: 'UNAVAILABLE',
+        preferences: { ops: { group_chat: true } },
+      },
+      'invalid-user': {
+        pushToken: 'ExponentPushToken[invalid]',
+        pushTokenStatus: 'INVALID',
+        preferences: { ops: { group_chat: true } },
+      },
+      'denied-user': {
+        pushToken: 'ExponentPushToken[denied]',
+        pushTokenStatus: 'ACTIVE',
+        pushPermissionState: 'denied',
+        preferences: { ops: { group_chat: true } },
+      },
+    },
+    preferencePath: ['preferences', 'ops', 'group_chat'],
+    senderId: null,
+    excludeSender: false,
+    context: { tourId: 'tour-1', notificationType: 'chat' },
+  });
+
+  assert.deepEqual(
+    result.validRecipients.map((recipient) => recipient.userId),
+    ['legacy-user'],
+  );
+});
+
+test('getPushTokenIneligibilityReason reports token and permission suppression reasons', () => {
+  assert.equal(
+    __testables.getPushTokenIneligibilityReason({ pushTokenStatus: 'UNAVAILABLE' }),
+    'token_status_unavailable',
+  );
+  assert.equal(
+    __testables.getPushTokenIneligibilityReason({ pushTokenStatus: 'INVALID' }),
+    'token_status_invalid',
+  );
+  assert.equal(
+    __testables.getPushTokenIneligibilityReason({ pushPermissionState: 'blocked' }),
+    'permission_blocked',
+  );
+  assert.equal(
+    __testables.getPushTokenIneligibilityReason({ pushTokenStatus: 'ACTIVE', pushPermissionState: 'granted' }),
+    null,
+  );
+});
+
+test('collectAssignedDriverIds reads canonical and legacy manifest assignment leaves', () => {
+  assert.deepEqual(
+    __testables.collectAssignedDriverIds({
+      assigned_drivers: {
+        'D-BONDY': true,
+        'D-INACTIVE': null,
+      },
+      assigned_driver_codes: {
+        'D-SMITH': {
+          driverId: 'D-SMITH',
+          tourId: '5112D_8',
+        },
+        'bad.driver': true,
+      },
+    }),
+    ['D-BONDY', 'D-SMITH'],
+  );
+});
+
+test('isDriverProfileAssignedToTour accepts canonical and legacy active tour matches', () => {
+  assert.equal(
+    __testables.isDriverProfileAssignedToTour({ currentTourId: '5112D 8' }, '5112D_8'),
+    true,
+  );
+  assert.equal(
+    __testables.isDriverProfileAssignedToTour({ activeTourId: '5112D_8' }, '5112D_8'),
+    true,
+  );
+  assert.equal(
+    __testables.isDriverProfileAssignedToTour({ currentTourId: 'OTHER_TOUR' }, '5112D_8'),
+    false,
+  );
+});
+
+test('resolveAssignedDriverRecipientIds maps assigned driver records to auth uids', async () => {
+  const profiles = {
+    'D-BONDY': {
+      authUid: 'driver-auth-1',
+      currentTourId: '5112D_8',
+    },
+    'D-SMITH': {
+      authUid: 'driver-auth-2',
+      activeTourId: '5112D 8',
+    },
+    'D-STALE': {
+      authUid: 'driver-auth-stale',
+      currentTourId: 'OTHER_TOUR',
+    },
+    'D-NOAUTH': {
+      currentTourId: '5112D_8',
+    },
+  };
+
+  const result = await __testables.resolveAssignedDriverRecipientIds({
+    tourId: '5112D_8',
+    manifestData: {
+      assigned_drivers: {
+        'D-BONDY': true,
+        'D-STALE': true,
+      },
+      assigned_driver_codes: {
+        'D-SMITH': { driverId: 'D-SMITH', tourId: '5112D_8' },
+        'D-NOAUTH': { driverId: 'D-NOAUTH', tourId: '5112D_8' },
+      },
+    },
+    loadProfile: async (driverId) => profiles[driverId] || null,
+    context: { tourId: '5112D_8', notificationType: 'itinerary' },
+  });
+
+  assert.deepEqual(result, ['driver-auth-1', 'driver-auth-2']);
+});
+
 test('parseSourcePhotoPath resolves group and private source paths only', () => {
   assert.deepEqual(__testables.parseSourcePhotoPath('group_tour_photos/tour-1/file.jpg'), {
     visibility: 'group',

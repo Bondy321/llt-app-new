@@ -26,6 +26,7 @@ const USER_PROFILE_CACHE_TTL_MS = 2 * 60 * 1000;
 const USER_PROFILE_CACHE_MAX_ENTRIES = 5000;
 const userProfileCache = new Map();
 const PHOTO_CACHE_CONTROL_HEADER = "public,max-age=31536000,immutable";
+const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
 
 // ==================== UTILITY FUNCTIONS ====================
 
@@ -34,7 +35,14 @@ const PHOTO_CACHE_CONTROL_HEADER = "public,max-age=31536000,immutable";
  */
 const log = {
   info: (message, data = {}) => console.log(JSON.stringify({ level: 'info', message, ...data, timestamp: new Date().toISOString() })),
-  error: (message, error = {}, data = {}) => console.error(JSON.stringify({ level: 'error', message, error: error.message || error, stack: error.stack, ...data, timestamp: new Date().toISOString() })),
+  error: (message, error = {}, data = {}) => console.error(JSON.stringify({
+    level: 'error',
+    message,
+    error: error?.message || error || null,
+    stack: error?.stack || null,
+    ...data,
+    timestamp: new Date().toISOString(),
+  })),
   warn: (message, data = {}) => console.warn(JSON.stringify({ level: 'warn', message, ...data, timestamp: new Date().toISOString() })),
 };
 
@@ -99,6 +107,45 @@ const getPreferenceValue = (userData, prefPath, defaultValue = true) => {
     if (value === null || value === undefined || typeof value !== 'object') return undefined;
     return value[key];
   }, userData) ?? defaultValue;
+};
+
+const getPushTokenIneligibilityReason = (userData = {}) => {
+  const tokenStatus = typeof userData?.pushTokenStatus === 'string'
+    ? userData.pushTokenStatus.trim().toUpperCase()
+    : '';
+  if (tokenStatus === 'INVALID' || tokenStatus === 'UNAVAILABLE') {
+    return `token_status_${tokenStatus.toLowerCase()}`;
+  }
+
+  const permissionState = typeof userData?.pushPermissionState === 'string'
+    ? userData.pushPermissionState.trim().toLowerCase()
+    : '';
+  if (permissionState === 'denied' || permissionState === 'blocked' || permissionState === 'unavailable') {
+    return `permission_${permissionState}`;
+  }
+
+  return null;
+};
+
+const resolveTrimmedString = (value) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const toRealtimeKeySegment = (value) => {
+  const trimmed = resolveTrimmedString(value);
+  if (!trimmed) return null;
+
+  return trimmed.replace(
+    REALTIME_KEY_INVALID_GLOBAL_PATTERN,
+    (char) => `_${char.charCodeAt(0).toString(16).toUpperCase()}_`,
+  );
+};
+
+const normalizeTourKeyForComparison = (value) => {
+  const trimmed = resolveTrimmedString(value);
+  return trimmed ? trimmed.replace(/\s+/g, '_') : null;
 };
 
 const chunkArrayDeterministically = (items, size) => {
@@ -234,20 +281,35 @@ const selectNotificationRecipients = ({
   usersMap,
   preferencePath,
   senderId,
+  senderParticipantIds = [],
   excludeSender,
   context,
 }) => {
   const validRecipients = [];
   const invalidTokens = [];
+  const excludedSenderIds = new Set(senderParticipantIds.filter(Boolean));
+  if (senderId) {
+    excludedSenderIds.add(senderId);
+  }
 
   for (const userId of participantIds) {
-    if (excludeSender && senderId && userId === senderId) {
+    if (excludeSender && excludedSenderIds.has(userId)) {
       continue;
     }
 
     const userData = usersMap[userId];
     if (!userData || !userData.pushToken) {
       log.info('No token for user', { ...context, userId });
+      continue;
+    }
+
+    const ineligibilityReason = getPushTokenIneligibilityReason(userData);
+    if (ineligibilityReason) {
+      log.info('Skipping unavailable push recipient', {
+        ...context,
+        userId,
+        reason: ineligibilityReason,
+      });
       continue;
     }
 
@@ -292,6 +354,159 @@ const collectExpoTokenFailures = (ticketChunk = [], messageChunk = []) => {
   });
 
   return failures;
+};
+
+const loadIdentityBindingsForPrincipal = async (principalId) => {
+  const principalKey = toRealtimeKeySegment(principalId);
+  if (!principalKey || !isValidFirebaseKey(principalKey)) {
+    return {};
+  }
+
+  const snapshot = await admin.database()
+    .ref(`identity_bindings/${principalKey}`)
+    .once('value');
+
+  return snapshot.val() || {};
+};
+
+const resolveChatSenderParticipantIds = async ({
+  participants = {},
+  messageData = {},
+  loadIdentityBindings = loadIdentityBindingsForPrincipal,
+  context = {},
+}) => {
+  const senderParticipantIds = new Set();
+  const participantMap = participants && typeof participants === 'object'
+    ? participants
+    : {};
+  const candidatePrincipals = [
+    resolveTrimmedString(messageData.senderId),
+    resolveTrimmedString(messageData.senderStableId),
+    resolveTrimmedString(messageData.senderUid),
+  ].filter(Boolean);
+
+  candidatePrincipals.forEach((candidate) => {
+    if (participantMap[candidate]) {
+      senderParticipantIds.add(candidate);
+    }
+  });
+
+  if (senderParticipantIds.size > 0) {
+    return [...senderParticipantIds];
+  }
+
+  const uniquePrincipals = [...new Set(candidatePrincipals)];
+  for (const principalId of uniquePrincipals) {
+    try {
+      const bindings = await loadIdentityBindings(principalId);
+      if (!bindings || typeof bindings !== 'object') {
+        continue;
+      }
+
+      Object.entries(bindings).forEach(([boundUid, isBound]) => {
+        if (isBound === true && participantMap[boundUid]) {
+          senderParticipantIds.add(boundUid);
+        }
+      });
+    } catch (error) {
+      log.warn('Failed to resolve sender identity bindings for notification fanout', {
+        ...context,
+        principalKey: toRealtimeKeySegment(principalId),
+        error: error?.message || String(error),
+      });
+    }
+  }
+
+  return [...senderParticipantIds];
+};
+
+const collectAssignedDriverIds = (manifestData = {}) => {
+  const driverIds = new Set();
+
+  const addDriverId = (driverId, value) => {
+    if (!value || typeof driverId !== 'string' || !isValidFirebaseKey(driverId)) {
+      return;
+    }
+    driverIds.add(driverId);
+  };
+
+  Object.entries(manifestData?.assigned_drivers || {}).forEach(([driverId, value]) => {
+    addDriverId(driverId, value);
+  });
+
+  Object.entries(manifestData?.assigned_driver_codes || {}).forEach(([driverId, value]) => {
+    addDriverId(driverId, value);
+  });
+
+  return [...driverIds].sort((a, b) => a.localeCompare(b));
+};
+
+const isDriverProfileAssignedToTour = (driverData = {}, tourId) => {
+  const expectedTourId = normalizeTourKeyForComparison(tourId);
+  const currentTourId = normalizeTourKeyForComparison(driverData?.currentTourId);
+  const legacyActiveTourId = normalizeTourKeyForComparison(driverData?.activeTourId);
+
+  if (!currentTourId && !legacyActiveTourId) {
+    return true;
+  }
+
+  return currentTourId === expectedTourId || legacyActiveTourId === expectedTourId;
+};
+
+const loadDriverProfile = async (driverId) => {
+  const snapshot = await admin.database().ref(`drivers/${driverId}`).once('value');
+  return snapshot.val() || null;
+};
+
+const resolveAssignedDriverRecipientIds = async ({
+  tourId,
+  manifestData = {},
+  loadProfile = loadDriverProfile,
+  context = {},
+}) => {
+  const driverIds = collectAssignedDriverIds(manifestData);
+  const recipientIds = new Set();
+  const driverChunks = chunkArrayDeterministically(driverIds, USER_PROFILE_FETCH_CHUNK_SIZE);
+
+  for (const chunk of driverChunks) {
+    const profileResults = await Promise.all(chunk.map(async (driverId) => {
+      try {
+        return {
+          driverId,
+          driverData: await loadProfile(driverId),
+        };
+      } catch (error) {
+        log.warn('Failed to load assigned driver profile for notification fanout', {
+          ...context,
+          error: error?.message || String(error),
+        });
+        return { driverId, driverData: null };
+      }
+    }));
+
+    profileResults.forEach(({ driverData }) => {
+      if (!driverData || typeof driverData !== 'object') {
+        return;
+      }
+
+      if (!isDriverProfileAssignedToTour(driverData, tourId)) {
+        return;
+      }
+
+      const authUid = resolveTrimmedString(driverData.authUid);
+      if (authUid && isValidFirebaseKey(authUid)) {
+        recipientIds.add(authUid);
+      }
+    });
+  }
+
+  log.info('Resolved assigned driver notification recipients', {
+    ...context,
+    assignedDriverCount: driverIds.length,
+    assignedDriverRecipientCount: recipientIds.size,
+  });
+
+  return [...recipientIds].sort((a, b) => a.localeCompare(b));
 };
 
 /**
@@ -561,7 +776,7 @@ const checkRateLimit = (key, maxRequests = 10, windowMs = 60000) => {
 /**
  * Cleanup old rate limit entries (called periodically)
  */
-setInterval(() => {
+const maintenanceInterval = setInterval(() => {
   const now = Date.now();
   for (const [key, record] of rateLimitCache.entries()) {
     if (now > record.resetTime) {
@@ -571,6 +786,9 @@ setInterval(() => {
 
   cleanupUserProfileCache(now);
 }, 300000); // Clean up every 5 minutes
+if (typeof maintenanceInterval.unref === 'function') {
+  maintenanceInterval.unref();
+}
 
 
 
@@ -848,10 +1066,23 @@ exports.sendChatNotification = onValueCreated(
 
       const participants = participantsSnapshot.val();
       const participantIds = Object.keys(participants);
+      let senderParticipantIds = [];
 
       // Security: regular chat messages must be sent by a participant.
-      if (!isAdmin && !participants[senderId]) {
-        log.error("Sender is not a participant of the tour", null, { tourId, senderId });
+      if (!isAdmin) {
+        senderParticipantIds = await resolveChatSenderParticipantIds({
+          participants,
+          messageData,
+          context: { tourId, messageId, notificationType: 'chat' },
+        });
+      }
+
+      if (!isAdmin && senderParticipantIds.length === 0) {
+        log.error("Sender is not a participant of the tour", null, {
+          tourId,
+          senderId,
+          senderStableId: toRealtimeKeySegment(messageData.senderStableId),
+        });
         return null;
       }
 
@@ -872,6 +1103,7 @@ exports.sendChatNotification = onValueCreated(
         usersMap,
         preferencePath,
         senderId,
+        senderParticipantIds,
         excludeSender: true,
         context: { tourId, notificationType: 'chat' },
       });
@@ -1097,10 +1329,11 @@ exports.sendItineraryNotification = onValueUpdated(
       }
 
       // 2. Get only fields required for itinerary notifications.
-      const [nameSnapshot, isActiveSnapshot, participantsSnapshot] = await Promise.all([
+      const [nameSnapshot, isActiveSnapshot, participantsSnapshot, manifestSnapshot] = await Promise.all([
         admin.database().ref(`tours/${tourId}/name`).once("value"),
         admin.database().ref(`tours/${tourId}/isActive`).once("value"),
         admin.database().ref(`tours/${tourId}/participants`).once("value"),
+        admin.database().ref(`tour_manifests/${tourId}`).once("value"),
       ]);
 
       // Check if tour is active
@@ -1111,25 +1344,32 @@ exports.sendItineraryNotification = onValueUpdated(
 
       const tourName = nameSnapshot.val() || "Your Tour";
 
-      if (!participantsSnapshot.exists()) {
-        log.info("No participants for itinerary update", { tourId });
+      const participants = participantsSnapshot.exists() ? (participantsSnapshot.val() || {}) : {};
+      const participantIds = Object.keys(participants);
+      const assignedDriverRecipientIds = await resolveAssignedDriverRecipientIds({
+        tourId,
+        manifestData: manifestSnapshot.val() || {},
+        context: { tourId, notificationType: 'itinerary' },
+      });
+      const recipientIds = [...new Set([...participantIds, ...assignedDriverRecipientIds])];
+
+      if (recipientIds.length === 0) {
+        log.info("No participants or assigned drivers for itinerary update", { tourId });
         return null;
       }
 
-      const participants = participantsSnapshot.val();
-      const participantIds = Object.keys(participants);
-      const cappedParticipantIds = applyRecipientCap(participantIds, NOTIFICATION_RECIPIENT_CAP, {
+      const cappedRecipientIds = applyRecipientCap(recipientIds, NOTIFICATION_RECIPIENT_CAP, {
         tourId,
         notificationType: 'itinerary',
       });
 
       const fetchUsersStart = Date.now();
-      const usersMap = await fetchUsersSnapshot(cappedParticipantIds, { tourId, notificationType: 'itinerary' });
+      const usersMap = await fetchUsersSnapshot(cappedRecipientIds, { tourId, notificationType: 'itinerary' });
       const userFetchDurationMs = Date.now() - fetchUsersStart;
 
       const assemblyStart = Date.now();
       const { validRecipients, invalidTokens } = selectNotificationRecipients({
-        participantIds: cappedParticipantIds,
+        participantIds: cappedRecipientIds,
         usersMap,
         preferencePath: ['preferences', 'ops', 'itinerary_changes'],
         senderId: null,
@@ -1146,6 +1386,8 @@ exports.sendItineraryNotification = onValueUpdated(
         tourId,
         chunks: recipientChunks.length,
         chunkSize: RECIPIENT_CHUNK_SIZE,
+        passengerRecipientCount: participantIds.length,
+        assignedDriverRecipientCount: assignedDriverRecipientIds.length,
       });
 
       for (const recipientChunk of recipientChunks) {
@@ -1221,6 +1463,8 @@ exports.sendItineraryNotification = onValueUpdated(
       log.info("Itinerary notification completed", {
         tourId,
         recipients: pushMessages.length,
+        passengerRecipientCount: participantIds.length,
+        assignedDriverRecipientCount: assignedDriverRecipientIds.length,
         successCount,
         errorCount,
         userFetchDurationMs,
@@ -1240,6 +1484,13 @@ exports.sendItineraryNotification = onValueUpdated(
 );
 
 exports.__testables = {
+  toRealtimeKeySegment,
+  resolveChatSenderParticipantIds,
+  collectAssignedDriverIds,
+  isDriverProfileAssignedToTour,
+  resolveAssignedDriverRecipientIds,
+  getPushTokenIneligibilityReason,
+  selectNotificationRecipients,
   parseSourcePhotoPath,
   buildPhotoCollectionPath,
   processPhotoVariantObject,

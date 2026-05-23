@@ -108,8 +108,10 @@ test('saveUserPreferences normalizes legacy preference shape and persists token 
   assert.equal(updates.length, 3);
   assert.equal(updates[0].pushPermissionState, 'granted');
   assert.deepEqual(updates[1].__tokenRequestOptions, { projectId: 'test-project-id' });
+  assert.equal(updates[2].pushToken, 'ExponentPushToken[test-token]');
   assert.equal(updates[2].pushTokenStatus, 'ACTIVE');
   assert.equal(updates[2].pushTokenProvider, 'expo');
+  assert.equal(updates[2].pushTokenInvalidReason, null);
   assert.equal(updates[2].pushPermissionState, 'granted');
   assert.deepEqual(updates[2].preferences, {
     chatNotifications: true,
@@ -143,7 +145,9 @@ test('saveUserPreferences handles denied permission path without throwing and ma
   assert.ok(result.warning.includes('notifications are disabled'));
   assert.equal(updates.length, 2);
   assert.equal(updates[0].pushPermissionState, 'denied');
+  assert.equal(updates[1].pushToken, null);
   assert.equal(updates[1].pushTokenStatus, 'UNAVAILABLE');
+  assert.equal(updates[1].pushTokenInvalidReason, null);
   assert.equal(updates.some((entry) => entry.__tokenRequestOptions), false);
   assert.equal(updates[1].pushPermissionState, 'denied');
   assert.equal(updates[1].preferences.chatNotifications, true);

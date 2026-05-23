@@ -386,8 +386,10 @@ const buildUnavailableTokenPatch = ({
   permissionState,
   mergedPreferences,
 }) => ({
+  pushToken: null,
   pushTokenStatus: 'UNAVAILABLE',
   pushTokenProvider: existingUserData.pushTokenProvider || 'expo',
+  pushTokenInvalidReason: null,
   pushTokenUpdatedAt: nowIso,
   pushPermissionState: permissionState.state,
   pushPermissionCanAskAgain: permissionState.canAskAgain,
@@ -541,6 +543,7 @@ export const saveUserPreferences = async (userId, preferences) => {
       pushTokenStatus: 'ACTIVE',
       pushTokenUpdatedAt: nowIso,
       pushTokenProvider: 'expo',
+      pushTokenInvalidReason: null,
       pushPermissionState: permissionState.state,
       pushPermissionCanAskAgain: permissionState.canAskAgain,
       pushPermissionUpdatedAt: nowIso,
