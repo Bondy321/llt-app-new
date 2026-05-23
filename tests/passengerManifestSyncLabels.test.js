@@ -147,7 +147,7 @@ Module._load = function mockLoader(request, parent, isMain) {
   return originalLoad(request, parent, isMain);
 };
 
-test('PassengerManifestScreen wires booking sync states into ManifestBookingCard labels', async () => {
+test('PassengerManifestScreen only surfaces booking sync labels that need attention', async () => {
   replayQueueCalls = 0;
   getTourManifestCalls = 0;
   const PassengerManifestScreen = require('../screens/PassengerManifestScreen').default;
@@ -174,7 +174,7 @@ test('PassengerManifestScreen wires booking sync states into ManifestBookingCard
   assert.ok(allText.includes('QUEUED'));
   assert.ok(allText.includes('SYNCING'));
   assert.ok(allText.includes('FAILED'));
-  assert.ok(allText.includes('SYNCED'));
+  assert.ok(!allText.includes('SYNCED'));
 
   const sectionList = renderer.root.findByType('SectionList');
   const baselineManifestCalls = getTourManifestCalls;

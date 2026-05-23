@@ -53,6 +53,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const [manifestData, setManifestData] = useState({ bookings: [], stats: {} });
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   // Modal State
   const [selectedBooking, setSelectedBooking] = useState(null);
@@ -195,7 +196,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
       const pickupLabel = booking.pickupTime || 'TBA';
       const key = `${bucket}__${pickupLabel}`;
       if (!groups[key]) {
-        groups[key] = { title: `${bucket} • ${pickupLabel}`, data: [], unresolved, pickupLabel };
+        groups[key] = { title: `${bucket} - ${pickupLabel}`, data: [], unresolved, pickupLabel };
       }
       groups[key].data.push(booking);
     });
@@ -224,7 +225,14 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const sectionListData = sectionedPriorityBookings;
   const resultsDescriptor = `${sortedFilteredBookings.length} of ${manifestData.bookings.length} bookings`;
   const unresolvedDescriptor = `${resolutionStats.unresolved} unresolved`;
-  const queueDescriptor = `${queueStats.pending} pending · ${queueStats.failed} failed`;
+  const pendingQueueCount = queueStats.pending || 0;
+  const syncingQueueCount = queueStats.syncing || 0;
+  const failedQueueCount = queueStats.failed || 0;
+  const activeQueueCount = pendingQueueCount + syncingQueueCount + failedQueueCount;
+  const isNarrowedView = searchQuery.trim().length > 0 || statusFilter !== 'ALL';
+  const queueDescriptor = syncingQueueCount > 0
+    ? `${pendingQueueCount} pending - ${syncingQueueCount} syncing - ${failedQueueCount} failed`
+    : `${pendingQueueCount} pending - ${failedQueueCount} failed`;
 
   // --- Actions ---
   const handleOpenBooking = (booking) => {
@@ -279,10 +287,11 @@ export default function PassengerManifestScreen({ route, navigation }) {
         const unresolvedSummary = unresolvedCount === 0
           ? 'All bookings resolved.'
           : `${unresolvedCount} unresolved booking${unresolvedCount === 1 ? '' : 's'} remaining.`;
+        const syncSuffix = result?.queued ? ` (${syncStateLabel})` : '';
 
         showStatusFeedback({
           variant: 'success',
-          message: `${parts.join(' • ')}. ${unresolvedSummary} (${syncStateLabel})`,
+          message: `${parts.join(' - ')}. ${unresolvedSummary}${syncSuffix}`,
           nextBooking,
           unresolvedDelta,
           syncStateLabel,
@@ -392,35 +401,34 @@ export default function PassengerManifestScreen({ route, navigation }) {
           <Text style={styles.headerSubtitle} numberOfLines={1}>Tour {tourId}</Text>
         </View>
         <TouchableOpacity onPress={() => handleSyncNow()} style={styles.syncBtn} disabled={refreshing}>
-          <Text style={styles.syncBtnText}>{refreshing ? 'Syncing…' : 'Sync'}</Text>
+          <Text style={styles.syncBtnText}>{refreshing ? 'Syncing...' : 'Sync'}</Text>
         </TouchableOpacity>
       </View>
 
       <View style={styles.dashboardContainer}>
         <View style={styles.dashboardItem}>
           <Text style={styles.dashLabel}>EXPECTED</Text>
-          <Text style={styles.dashValue}>{filteredStats.totalPax}</Text>
-          <Text style={styles.dashSubValue}>of {totalStats.totalPax}</Text>
+          <Text style={styles.dashValue}>{totalStats.totalPax}</Text>
         </View>
         <View style={styles.dashDivider} />
         <View style={styles.dashboardItem}>
           <Text style={[styles.dashLabel, styles.successTint]}>BOARDED</Text>
           <Text style={[styles.dashValue, { color: COLORS.success }]}>
-            {filteredStats.checkedIn}
+            {totalStats.checkedIn}
           </Text>
-          <Text style={styles.dashSubValue}>of {totalStats.checkedIn}</Text>
         </View>
         <View style={styles.dashDivider} />
         <View style={styles.dashboardItem}>
           <Text style={[styles.dashLabel, styles.dangerTint]}>NO SHOW</Text>
           <Text style={[styles.dashValue, { color: COLORS.danger }]}>
-            {filteredStats.noShows}
+            {totalStats.noShows}
           </Text>
-          <Text style={styles.dashSubValue}>of {totalStats.noShows}</Text>
         </View>
       </View>
 
+      {(resolutionStats.unresolved > 0 || activeQueueCount > 0) ? (
       <View style={styles.progressRow}>
+        {resolutionStats.unresolved > 0 ? (
         <View style={styles.progressShell}>
           <View style={styles.progressHeader}>
             <Text style={styles.progressTitle}>Completion</Text>
@@ -430,21 +438,28 @@ export default function PassengerManifestScreen({ route, navigation }) {
             <View style={[styles.progressFill, { width: `${resolutionStats.completionPercent}%` }]} />
           </View>
           <Text style={styles.progressMeta}>
-            {resolutionStats.resolved} resolved • {resolutionStats.unresolved} unresolved
+            {resolutionStats.resolved} resolved - {resolutionStats.unresolved} unresolved
           </Text>
         </View>
-        <View style={styles.syncStatusPill}>
+        ) : null}
+        {activeQueueCount > 0 ? (
+        <View style={[
+          styles.syncStatusPill,
+          failedQueueCount > 0 && styles.syncStatusPill_error,
+        ]}>
           <MaterialCommunityIcons
-            name={queueStats.failed > 0 ? 'cloud-alert-outline' : 'cloud-check-outline'}
+            name={failedQueueCount > 0 ? 'cloud-alert-outline' : 'cloud-check-outline'}
             size={14}
             color={COLORS.primaryDark}
           />
           <View style={styles.syncTextWrap}>
-            <Text style={styles.syncStatusText}>{queueStats.failed > 0 ? 'Needs review' : 'Healthy sync'}</Text>
+            <Text style={styles.syncStatusText}>{failedQueueCount > 0 ? 'Needs review' : 'Waiting to sync'}</Text>
             <Text style={styles.syncStatusMeta}>{queueDescriptor}</Text>
           </View>
         </View>
+        ) : null}
       </View>
+      ) : null}
       {conflictNote ? <Text style={styles.conflictText}>{conflictNote}</Text> : null}
 
       <View style={styles.actionSearchRow}>
@@ -460,11 +475,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
             </View>
             <MaterialCommunityIcons name="arrow-right" size={18} color={COLORS.info} />
           </TouchableOpacity>
-        ) : (
-          <View style={[styles.nextActionCard, styles.nextActionCardClear]}>
-            <Text style={styles.nextActionClearText}>All bookings resolved</Text>
-          </View>
-        )}
+        ) : null}
         <View style={styles.searchContainer}>
           <MaterialCommunityIcons name="magnify" size={18} color={COLORS.muted} />
           <TextInput
@@ -481,7 +492,19 @@ export default function PassengerManifestScreen({ route, navigation }) {
             </TouchableOpacity>
           )}
         </View>
+        <TouchableOpacity
+          onPress={() => setFiltersOpen((open) => !open)}
+          style={[styles.filterToggle, (filtersOpen || statusFilter !== 'ALL') && styles.filterToggleActive]}
+          accessibilityLabel="Toggle manifest filters"
+        >
+          <MaterialCommunityIcons
+            name="filter-variant"
+            size={18}
+            color={(filtersOpen || statusFilter !== 'ALL') ? COLORS.textLight : COLORS.primaryDark}
+          />
+        </TouchableOpacity>
       </View>
+      {(filtersOpen || statusFilter !== 'ALL') ? (
       <View style={styles.filtersRow}>
         <FlatList
           horizontal
@@ -494,7 +517,10 @@ export default function PassengerManifestScreen({ route, navigation }) {
             return (
               <TouchableOpacity
                 style={[styles.filterChip, isActive && styles.filterChipActive]}
-                onPress={() => setStatusFilter(item.key)}
+                onPress={() => {
+                  setStatusFilter(item.key);
+                  if (item.key === 'ALL') setFiltersOpen(false);
+                }}
               >
                 <Text style={[styles.filterChipText, isActive && styles.filterChipTextActive]}>{item.label}</Text>
               </TouchableOpacity>
@@ -502,11 +528,14 @@ export default function PassengerManifestScreen({ route, navigation }) {
           }}
         />
       </View>
+      ) : null}
+      {(isNarrowedView || resolutionStats.unresolved > 0) ? (
       <View style={styles.searchMetaRow}>
         <Text style={styles.searchMetaText}>{resultsDescriptor}</Text>
-        <Text style={styles.searchMetaDivider}>•</Text>
+        <Text style={styles.searchMetaDivider}>-</Text>
         <Text style={styles.searchMetaText}>{unresolvedDescriptor}</Text>
       </View>
+      ) : null}
 
       {statusFeedback && (
         <View style={[styles.statusBanner, styles[`statusBanner_${statusFeedback.variant || 'success'}`]]}>
@@ -596,7 +625,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
               <>
                 <View style={styles.modalHeader}>
                   <Text style={styles.modalTitle}>{selectedBooking.passengerNames[0]}</Text>
-                  <Text style={styles.modalSubtitle}>Ref: {selectedBooking.id} • {selectedBooking.passengerNames.length} Pax</Text>
+                  <Text style={styles.modalSubtitle}>Ref: {selectedBooking.id} - {selectedBooking.passengerNames.length} Pax</Text>
                 </View>
 
                 {partialMode ? (
@@ -682,7 +711,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
                     <View style={styles.modalHintRow}>
                       <MaterialCommunityIcons name="information-outline" size={16} color={COLORS.muted} />
                       <Text style={styles.modalHintText}>
-                        Use “Some Here” when only part of the booking has boarded.
+                        Use "Some Here" when only part of the booking has boarded.
                       </Text>
                     </View>
 
@@ -718,10 +747,10 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: COLORS.primaryDark,
     paddingHorizontal: SPACING.lg,
-    paddingTop: SPACING.sm,
+    paddingTop: SPACING.xs,
     paddingBottom: SPACING.sm,
     justifyContent: 'space-between',
-    gap: SPACING.sm,
+    gap: SPACING.xs,
   },
   topBar: {
     flexDirection: 'row',
@@ -740,7 +769,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     color: COLORS.textLight,
     fontWeight: FONT_WEIGHT.extrabold,
-    fontSize: 20,
+    fontSize: 18,
   },
   headerSubtitle: {
     color: '#C7D2FE',
@@ -751,18 +780,19 @@ const styles = StyleSheet.create({
 
   dashboardContainer: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(15, 23, 42, 0.75)',
-    borderRadius: RADIUS.lg,
-    padding: SPACING.md,
+    backgroundColor: 'rgba(15, 23, 42, 0.35)',
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 0,
     borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.35)',
+    borderColor: 'rgba(148, 163, 184, 0.2)',
   },
   progressRow: {
     flexDirection: 'row',
-    gap: SPACING.sm,
+    gap: SPACING.xs,
     alignItems: 'stretch',
   },
   nextActionCard: {
@@ -811,14 +841,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(203, 213, 225, 0.35)',
   },
   dashLabel: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: FONT_WEIGHT.bold,
     color: '#D1D5DB',
-    marginBottom: 2,
+    marginBottom: 0,
     letterSpacing: 0.5,
   },
   dashValue: {
-    fontSize: 20,
+    fontSize: 17,
     fontWeight: FONT_WEIGHT.extrabold,
     color: COLORS.textLight,
   },
@@ -836,7 +866,7 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.md,
     borderWidth: 1,
     borderColor: 'rgba(191, 219, 254, 0.45)',
-    padding: SPACING.sm,
+    padding: SPACING.xs,
   },
   progressHeader: {
     flexDirection: 'row',
@@ -876,6 +906,21 @@ const styles = StyleSheet.create({
     gap: SPACING.sm,
     alignItems: 'center',
   },
+  filterToggle: {
+    width: 36,
+    height: 36,
+    borderRadius: RADIUS.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    ...SHADOWS.sm,
+  },
+  filterToggleActive: {
+    backgroundColor: COLORS.info,
+    borderColor: COLORS.info,
+  },
   filtersRow: {
     gap: SPACING.xs,
   },
@@ -886,8 +931,8 @@ const styles = StyleSheet.create({
   filterChip: {
     backgroundColor: COLORS.chipBg,
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
@@ -966,8 +1011,8 @@ const styles = StyleSheet.create({
 
   syncStatusPill: {
     flex: 0.8,
-    backgroundColor: COLORS.primaryMuted,
-    borderColor: '#93C5FD',
+    backgroundColor: COLORS.warningSoft,
+    borderColor: '#FCD34D',
     borderWidth: 1,
     borderRadius: RADIUS.md,
     paddingHorizontal: SPACING.sm,
@@ -976,20 +1021,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: SPACING.xs,
   },
+  syncStatusPill_error: {
+    backgroundColor: COLORS.dangerSoft,
+    borderColor: '#FCA5A5',
+  },
   syncTextWrap: { flex: 1 },
   syncStatusText: {
-    color: COLORS.primaryDark,
+    color: COLORS.panel,
     fontWeight: FONT_WEIGHT.semibold,
     fontSize: 11,
   },
   syncStatusMeta: {
-    color: COLORS.primaryDark,
+    color: COLORS.muted,
     fontSize: 10,
     fontWeight: FONT_WEIGHT.medium,
   },
   syncBtn: {
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.xs + 2,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs + 1,
     borderRadius: RADIUS.md,
     backgroundColor: COLORS.info,
   },
@@ -1001,7 +1050,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.surface,
     borderRadius: RADIUS.md,
     paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.xs + 1,
+    paddingVertical: SPACING.xs,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -1057,10 +1106,10 @@ const styles = StyleSheet.create({
   },
   sectionHeader: {
     backgroundColor: '#EEF2FF',
-    paddingVertical: SPACING.sm,
-    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    paddingHorizontal: SPACING.sm,
     borderRadius: RADIUS.sm,
-    marginBottom: SPACING.sm,
+    marginBottom: SPACING.xs,
     marginTop: SPACING.xs,
     borderWidth: 1,
     borderColor: '#C7D2FE',

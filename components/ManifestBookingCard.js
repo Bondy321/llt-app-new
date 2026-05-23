@@ -61,7 +61,9 @@ export default function ManifestBookingCard({ booking, onPress, isSearchResult, 
   const color = STATUS_COLORS[status];
   const statusIcon = STATUS_ICONS[status] || STATUS_ICONS.PENDING;
   const passengerCount = booking.passengerNames?.length || 0;
-  const syncMeta = getSyncMeta(syncState);
+  const normalizedSyncState = SYNC_META[syncState] ? syncState : 'synced';
+  const syncMeta = getSyncMeta(normalizedSyncState);
+  const showSyncBadge = normalizedSyncState !== 'synced';
 
   // Format names for display
   const primaryName = booking.passengerNames?.[0] || 'Unknown Passenger';
@@ -90,6 +92,7 @@ export default function ManifestBookingCard({ booking, onPress, isSearchResult, 
           </View>
         </View>
 
+        {showSyncBadge ? (
         <View
           style={[
             styles.syncBadge,
@@ -99,6 +102,7 @@ export default function ManifestBookingCard({ booking, onPress, isSearchResult, 
           <MaterialCommunityIcons name={syncMeta.icon} size={12} color={syncMeta.colors.foregroundMuted} />
           <Text style={[styles.syncText, { color: syncMeta.colors.foreground }]}>{syncMeta.label}</Text>
         </View>
+        ) : null}
       </View>
 
       <View style={styles.mainContent}>
@@ -139,17 +143,17 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: THEME.surface,
     borderRadius: RADIUS.lg,
-    padding: SPACING.lg,
-    marginBottom: SPACING.md,
-    borderLeftWidth: 5,
-    ...SHADOWS.md,
-    borderWidth: 1.5,
+    padding: SPACING.md,
+    marginBottom: SPACING.sm,
+    borderLeftWidth: 4,
+    ...SHADOWS.sm,
+    borderWidth: 1,
     borderColor: THEME.border,
   },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: SPACING.md,
+    marginBottom: SPACING.sm,
     gap: SPACING.sm,
   },
   referenceCluster: {
@@ -211,7 +215,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   leadName: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: FONT_WEIGHT.extrabold,
     color: THEME.textPrimary,
   },
@@ -247,10 +251,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: THEME.primaryMuted,
-    paddingVertical: SPACING.sm,
-    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    paddingHorizontal: SPACING.sm,
     borderRadius: RADIUS.md,
-    minWidth: 62,
+    minWidth: 56,
     borderWidth: 1,
     borderColor: THEME.border,
   },
