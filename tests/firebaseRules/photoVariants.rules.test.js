@@ -6,11 +6,13 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
+const { toRealtimeKeySegment } = require('../../services/identityService');
 
 const PROJECT_ID = 'demo-llt-photo-rules';
 const TOUR_ID = 'TOUR_001';
 const USER_UID = 'user-photo-1';
-const OWNER_KEY = 'pax_v1:BOOKING:demo_example.com';
+const OWNER_ID = 'pax_v1:BOOKING:demo@example.com';
+const OWNER_KEY = toRealtimeKeySegment(OWNER_ID);
 const GROUP_PATH = `group_tour_photos/${TOUR_ID}/photo_1`;
 const PRIVATE_PATH = `private_tour_photos/${TOUR_ID}/${OWNER_KEY}/photo_1`;
 
@@ -74,8 +76,8 @@ test('denies invalid variantStatus values', async () => {
 test('allows private photo record with ready variants in valid shape', async () => {
   await testEnv.withSecurityRulesDisabled(async (context) => {
     await context.database(dbUrl).ref(`users/${USER_UID}`).set({
-      stablePassengerId: OWNER_KEY,
-      privatePhotoOwnerId: OWNER_KEY,
+      stablePassengerId: OWNER_ID,
+      privatePhotoOwnerId: OWNER_ID,
     });
     await context.database(dbUrl).ref(`identity_bindings/${OWNER_KEY}/${USER_UID}`).set(true);
   });
@@ -84,7 +86,7 @@ test('allows private photo record with ready variants in valid shape', async () 
     url: 'https://example.com/source.jpg',
     fullUrl: 'https://example.com/source.jpg',
     sourceUrl: 'https://example.com/source.jpg',
-    userId: OWNER_KEY,
+    userId: OWNER_ID,
     timestamp: Date.now(),
     variantStatus: 'ready',
     viewerUrl: 'https://example.com/viewer.jpg',

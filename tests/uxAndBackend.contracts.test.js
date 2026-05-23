@@ -91,6 +91,25 @@ test('Static contract: identity_bindings_meta writes are limited to admin or cal
   );
 });
 
+test('Static contract: email-style stable identities are encoded before identity binding path writes', () => {
+  const appSource = fs.readFileSync(path.join(__dirname, '..', 'App.js'), 'utf8');
+  const chatSource = fs.readFileSync(path.join(__dirname, '..', 'services', 'chatService.js'), 'utf8');
+  const migrationSource = fs.readFileSync(path.join(__dirname, '..', 'services', 'chatIdentityMigrationService.js'), 'utf8');
+  const privatePhotoMigrationSource = fs.readFileSync(path.join(__dirname, '..', 'functions', 'scripts', 'migratePrivatePhotoOwnersToStablePassengerIds.js'), 'utf8');
+
+  assert.match(appSource, /stablePassengerKey = stablePassengerId \? toRealtimeKeySegment\(stablePassengerId\) : null/);
+  assert.match(appSource, /identity_bindings\/\$\{stablePassengerKey\}\/\$\{authUid\}/);
+  assert.doesNotMatch(appSource, /identity_bindings\/\$\{stablePassengerId\}/);
+  assert.match(migrationSource, /identity_bindings\/\$\{stablePassengerKey\}/);
+  assert.match(privatePhotoMigrationSource, /stableOwnerKey = toRealtimeKeySegment\(stablePassengerId\)/);
+  assert.match(privatePhotoMigrationSource, /private_tour_photos\/\$\{tourId\}\/\$\{stableOwnerKey\}/);
+  assert.doesNotMatch(privatePhotoMigrationSource, /private_tour_photos\/\$\{tourId\}\/\$\{stableOwnerId\}/);
+  assert.match(chatSource, /getRealtimeActorContext\(userId\)/);
+  assert.match(chatSource, /typing\/\$\{actorKey\}/);
+  assert.match(chatSource, /presence\/\$\{actorKey\}/);
+  assert.match(chatSource, /lastRead\/\$\{actorKey\}/);
+});
+
 test('Static contract: chat message validation keeps image payload branch and thumbnail requirement', () => {
   // Intentional static check: validation expression is a rules DSL string; regex guards critical media constraints.
   const rules = readJson('database.rules.json');

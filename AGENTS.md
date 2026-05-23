@@ -2,7 +2,7 @@
 
 Welcome, Agent. This file is the operational source of truth for contributors working in this repo.
 
-**Last Updated:** May 22, 2026 (post EAS production env hardening)
+**Last Updated:** May 23, 2026 (stable identity RTDB key hardening + chat image diagnostics)
 
 ---
 
@@ -165,7 +165,10 @@ Authentication remains anonymous Firebase auth at foundation, but login modes ar
 
 ### Stable passenger identity (critical)
 - Canonical identity format: `pax_v1:{BOOKING_REF}:{normalized_email}`
-- Stored under user profile and binding paths
+- Stored raw under user profile ownership fields
+- When used as an RTDB key segment, encode with `toRealtimeKeySegment(stablePassengerId)` because
+  email-style identities contain `.` characters. This applies to `identity_bindings`,
+  `identity_bindings_meta`, private photo owner buckets, and chat actor-scoped leaves.
 - Used in chat/photo/rules ownership checks
 
 ### Offline login behavior
@@ -271,7 +274,7 @@ Highlights:
   - raw `auth.uid`
   - `users/{uid}/stablePassengerId`
   - `users/{uid}/privatePhotoOwnerId`
-  - `identity_bindings/{stablePassengerId}/{uid}`
+  - `identity_bindings/{stablePassengerKey}/{uid}` where `stablePassengerKey = toRealtimeKeySegment(stablePassengerId)`
 - Reactions are user-leaf writes only (parent reaction writes blocked)
 - `users` now validates push token state metadata and identity metadata fields
 

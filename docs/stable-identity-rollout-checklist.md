@@ -2,6 +2,17 @@
 
 Use this checklist to validate stable identity ownership behavior across restarts, re-auth, and multi-device usage.
 
+## Path-key note
+
+`stablePassengerId` values stay in canonical raw form on user profiles and message/photo ownership fields:
+
+`pax_v1:{BOOKING_REF}:{normalized_email}`
+
+When the same identity is used as a Realtime Database path segment, encode it with
+`toRealtimeKeySegment(stablePassengerId)` first. This includes `identity_bindings`,
+`identity_bindings_meta`, private photo owner buckets, and chat actor-scoped leaves such as reactions,
+typing, presence, or read markers. Email-style identities contain `.` characters, which RTDB rejects in keys if written raw.
+
 ## 1) Same device restart ownership persistence
 
 **Goal:** Message ownership remains stable after app restart on the same device.
@@ -16,10 +27,13 @@ Use this checklist to validate stable identity ownership behavior across restart
 
 ### Firebase paths to inspect
 - `users/{uid}`
+- `identity_bindings/{stablePassengerKey}/{uid}`
+- `identity_bindings_meta/{stablePassengerKey}`
 - `chats/{tourId}/messages/{messageId}/senderStableId`
 
 ### Pass criteria
-- `users/{uid}` has a non-empty stable identity binding.
+- `users/{uid}` has a non-empty canonical `stablePassengerId`.
+- `identity_bindings/{stablePassengerKey}/{uid}` exists when identity persistence succeeds.
 - Sent messages include `senderStableId`.
 - Ownership rendering is unchanged after restart.
 
@@ -85,7 +99,7 @@ Use this checklist to validate stable identity ownership behavior across restart
 
 ## 4) Private photo access after restart
 
-**Goal:** Private photos remain accessible after restart using booking-based ownership path.
+**Goal:** Private photos remain accessible after restart using the stable owner path key.
 
 ### Steps
 1. Log in as a passenger and open private photobook.
@@ -96,16 +110,16 @@ Use this checklist to validate stable identity ownership behavior across restart
 
 ### Firebase paths to inspect
 - `users/{uid}`
-- `private_tour_photos/{tourId}/{bookingRef}`
+- `private_tour_photos/{tourId}/{stablePassengerKey}`
 
 ### Pass criteria
-- Photo records remain under `private_tour_photos/{tourId}/{bookingRef}`.
+- Photo records remain under `private_tour_photos/{tourId}/{stablePassengerKey}` while their `userId` remains the raw `stablePassengerId`.
 - Same user can still view photos after restart.
 - `users/{uid}` remains bound to expected booking ownership metadata.
 
 ### Fail criteria
 - Photos become inaccessible after restart.
-- New session points to wrong bookingRef bucket.
+- New session points to the wrong owner bucket.
 - Ownership metadata in `users/{uid}` no longer matches expected booking.
 
 ---

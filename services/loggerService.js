@@ -51,6 +51,17 @@ export const maskIdentifier = (value) => {
   return `${asString.slice(0, 2)}***${asString.slice(-2)}`;
 };
 
+const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
+
+const safeRealtimeKey = (value, fallback = 'unknown') => {
+  const raw = value === null || value === undefined ? '' : String(value).trim();
+  const source = raw || fallback;
+  return source.replace(
+    REALTIME_KEY_INVALID_GLOBAL_PATTERN,
+    (char) => `_${char.charCodeAt(0).toString(16).toUpperCase()}_`,
+  ) || fallback;
+};
+
 const redactValueForKey = (key, value) => {
   if (value === null || value === undefined) return value;
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
@@ -308,8 +319,8 @@ class Logger {
         const chunk = logsToSend.slice(i, i + this.maxServerBatchSize);
         const batch = {};
         chunk.forEach((log) => {
-          const userKey = log.routeUserId || 'anonymous';
-          const sessionKey = log.routeSessionId || 'session_unknown';
+          const userKey = safeRealtimeKey(log.routeUserId, 'anonymous');
+          const sessionKey = safeRealtimeKey(log.routeSessionId, 'session_unknown');
           const key = `logs/${userKey}/${sessionKey}/${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
           batch[key] = this.buildServerPayload(log);
         });

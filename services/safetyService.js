@@ -1,5 +1,5 @@
 // services/safetyService.js - Enhanced Safety & Emergency Services
-import { realtimeDb } from '../firebase';
+import { auth, realtimeDb } from '../firebase';
 import logger from './loggerService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -130,6 +130,24 @@ export const EVENT_STATUS = {
 // Offline queue storage key
 const OFFLINE_QUEUE_KEY = '@LLT:safetyOfflineQueue';
 
+const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
+
+const safeRealtimeKey = (value, fallback = 'anonymous') => {
+  const raw = value === null || value === undefined ? '' : String(value).trim();
+  const source = raw || fallback;
+  return source.replace(
+    REALTIME_KEY_INVALID_GLOBAL_PATTERN,
+    (char) => `_${char.charCodeAt(0).toString(16).toUpperCase()}_`,
+  ) || fallback;
+};
+
+const resolveAuthUid = () => {
+  const currentUid = auth?.currentUser?.uid;
+  return typeof currentUid === 'string' && currentUid.trim() ? currentUid.trim() : null;
+};
+
+const resolveSafetyLogUserKey = (userId) => safeRealtimeKey(resolveAuthUid() || userId || 'anonymous', 'anonymous');
+
 const writeAuxiliarySafetyLogs = async (payload, eventId) => {
   const auxiliaryWrites = [];
 
@@ -242,7 +260,7 @@ export async function logSafetyEvent(params) {
 
   try {
     // Write to user's safety log
-    const userRef = realtimeDb.ref(`logs/${sanitizedUserId}/safety`).push();
+    const userRef = realtimeDb.ref(`logs/${resolveSafetyLogUserKey(sanitizedUserId)}/safety`).push();
     await userRef.set(payload);
 
     await writeAuxiliarySafetyLogs(payload, userRef.key);
@@ -297,7 +315,7 @@ export async function processOfflineQueue(userId) {
     for (const event of queue) {
       try {
         const sanitizedUserId = userId || event.userId || 'anonymous';
-        const ref = realtimeDb.ref(`logs/${sanitizedUserId}/safety`).push();
+        const ref = realtimeDb.ref(`logs/${resolveSafetyLogUserKey(sanitizedUserId)}/safety`).push();
         await ref.set({
           ...event,
           processedFromQueue: true,
@@ -410,7 +428,7 @@ export async function getSafetyHistory(userId, limit = 20) {
 
   try {
     const snapshot = await realtimeDb
-      .ref(`logs/${userId}/safety`)
+      .ref(`logs/${resolveSafetyLogUserKey(userId)}/safety`)
       .orderByChild('timestamp')
       .limitToLast(limit)
       .once('value');

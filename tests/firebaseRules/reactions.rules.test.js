@@ -8,6 +8,7 @@ const {
   assertFails,
 } = require('@firebase/rules-unit-testing');
 const { sendInternalDriverMessage } = require('../../services/chatService');
+const { toRealtimeKeySegment } = require('../../services/identityService');
 
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const PROJECT_ID = 'demo-llt-rules';
@@ -18,7 +19,8 @@ const REACTION_PATH = `${MESSAGE_PATH}/reactions/👍`;
 const DRIVER_AUTH_UID = 'driver-auth-1';
 const DRIVER_PRINCIPAL_ID = 'driver:BONDY';
 const PASSENGER_AUTH_UID = 'passenger-auth-1';
-const PASSENGER_PRINCIPAL_ID = 'pax:ABC123';
+const PASSENGER_PRINCIPAL_ID = 'pax_v1:ABC123:demo@example.com';
+const PASSENGER_PRINCIPAL_KEY = toRealtimeKeySegment(PASSENGER_PRINCIPAL_ID);
 const INTERNAL_TOUR_ID = 'TOUR_INTERNAL_001';
 
 const parseHost = () => {
@@ -51,7 +53,7 @@ const seedMessage = async () => {
     });
 
     await context.database(dbUrl).ref(`identity_bindings/${DRIVER_PRINCIPAL_ID}/${DRIVER_AUTH_UID}`).set(true);
-    await context.database(dbUrl).ref(`identity_bindings/${PASSENGER_PRINCIPAL_ID}/${PASSENGER_AUTH_UID}`).set(true);
+    await context.database(dbUrl).ref(`identity_bindings/${PASSENGER_PRINCIPAL_KEY}/${PASSENGER_AUTH_UID}`).set(true);
     await context.database(dbUrl).ref(`users/${PASSENGER_AUTH_UID}`).set({
       stablePassengerId: PASSENGER_PRINCIPAL_ID,
       privatePhotoOwnerId: PASSENGER_PRINCIPAL_ID,
@@ -104,12 +106,12 @@ test('denies user A editing message text on message by user B', async () => {
 });
 
 test('allows principal-based reaction leaf writes via users/{auth.uid} + identity_bindings', async () => {
-  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`${REACTION_PATH}/${PASSENGER_PRINCIPAL_ID}`).set(true));
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`${REACTION_PATH}/${PASSENGER_PRINCIPAL_KEY}`).set(true));
 });
 
 test('allows principal-based typing writes via users/{auth.uid} + identity_bindings', async () => {
   await assertSucceeds(
-    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/typing/${PASSENGER_PRINCIPAL_ID}`).set({
+    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/typing/${PASSENGER_PRINCIPAL_KEY}`).set({
       name: 'Passenger One',
       timestamp: Date.now(),
     })
@@ -118,7 +120,7 @@ test('allows principal-based typing writes via users/{auth.uid} + identity_bindi
 
 test('allows principal-based presence writes via users/{auth.uid} + identity_bindings', async () => {
   await assertSucceeds(
-    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/presence/${PASSENGER_PRINCIPAL_ID}`).set({
+    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/presence/${PASSENGER_PRINCIPAL_KEY}`).set({
       name: 'Passenger One',
       lastSeen: Date.now(),
       online: true,
@@ -131,17 +133,19 @@ test('denies principal-based chat writes when identity_bindings ownership is mis
 
   await testEnv.withSecurityRulesDisabled(async (context) => {
     await context.database(dbUrl).ref(`users/${PASSENGER_AUTH_UID}/stablePassengerId`).set(foreignPrincipalId);
+    await context.database(dbUrl).ref(`users/${PASSENGER_AUTH_UID}/privatePhotoOwnerId`).set(foreignPrincipalId);
+    await context.database(dbUrl).ref(`identity_bindings/${PASSENGER_PRINCIPAL_KEY}/${PASSENGER_AUTH_UID}`).remove();
   });
 
-  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`${REACTION_PATH}/${PASSENGER_PRINCIPAL_ID}`).set(true));
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`${REACTION_PATH}/${PASSENGER_PRINCIPAL_KEY}`).set(true));
   await assertFails(
-    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/typing/${PASSENGER_PRINCIPAL_ID}`).set({
+    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/typing/${PASSENGER_PRINCIPAL_KEY}`).set({
       name: 'Passenger One',
       timestamp: Date.now(),
     })
   );
   await assertFails(
-    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/presence/${PASSENGER_PRINCIPAL_ID}`).set({
+    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/presence/${PASSENGER_PRINCIPAL_KEY}`).set({
       name: 'Passenger One',
       lastSeen: Date.now(),
       online: true,

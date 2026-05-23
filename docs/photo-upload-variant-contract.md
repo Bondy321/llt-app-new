@@ -23,6 +23,11 @@ New uploads should enter `group_tour_photos/*` or `private_tour_photos/*` with:
 - `variantError` (nullable)
 - `variantVersion` (currently `2`)
 
+For private uploads, the owner bucket is an RTDB-safe key:
+`private_tour_photos/{tourId}/{stablePassengerKey}` where
+`stablePassengerKey = toRealtimeKeySegment(stablePassengerId)`. Photo record ownership fields such
+as `userId` remain the raw `stablePassengerId`.
+
 Cloud Function variant generation updates records to:
 
 - `variantStatus: "ready"` with `viewerUrl` and `thumbnailUrl`; or

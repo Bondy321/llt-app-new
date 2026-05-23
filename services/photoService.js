@@ -25,6 +25,14 @@ const {
 } = require('firebase/database');
 const { storage, realtimeDbModular } = require('../firebase');
 const { normalizePhotoUri } = require('./photoVariantService');
+const { loadOptionalService } = require('./optionalServiceLoader');
+
+const loggerServiceModule = loadOptionalService({
+  modulePath: './loggerService',
+  loadModule: () => require('./loggerService'),
+  serviceLabel: 'Logger service',
+});
+const logger = loggerServiceModule?.default || loggerServiceModule;
 
 // ==================== CONSTANTS ====================
 
@@ -41,6 +49,38 @@ const DOWNLOAD_URL_RETRYABLE_CODES = new Set([
 const IDEMPOTENCY_KEY_MAX_LENGTH = 180;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const summarizeUriForDbLog = (uri) => {
+  if (typeof uri !== 'string' || !uri.trim()) {
+    return { present: false };
+  }
+
+  const normalized = uri.trim();
+  const schemeMatch = normalized.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
+  return {
+    present: true,
+    scheme: schemeMatch?.[1]?.toLowerCase() || 'unknown',
+    totalLength: normalized.length,
+  };
+};
+
+const summarizeErrorForDbLog = (error) => ({
+  name: error?.name || 'Error',
+  code: typeof error?.code === 'string' ? error.code : null,
+  message: error?.message || String(error),
+});
+
+const logPhotoDbEvent = (level, eventName, payload = {}) => {
+  try {
+    const persistLevel = level === 'error' ? 'error' : 'warn';
+    if (logger && typeof logger[persistLevel] === 'function') {
+      logger[persistLevel]('PhotoService', eventName, payload);
+    }
+  } catch (error) {
+    // Realtime database diagnostics must never affect photo behavior.
+  }
+};
+
 const sanitizeStorageSegment = (value, fallback = 'photo') => {
   if (typeof value !== 'string') return fallback;
   const sanitized = value.trim().replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, IDEMPOTENCY_KEY_MAX_LENGTH);
@@ -422,7 +462,7 @@ const validateUserId = (userId) => {
 };
 
 const sanitizeRealtimeKeySegment = (value) => (
-  value.replace(/[.#$/\[\]]/g, (char) => `_${char.charCodeAt(0).toString(16).toUpperCase()}_`)
+  value.replace(/[.#$/\[\]\x00-\x1F\x7F]/g, (char) => `_${char.charCodeAt(0).toString(16).toUpperCase()}_`)
 );
 
 /**
@@ -787,7 +827,14 @@ const uploadPhoto = async (
       }
     }
   } catch (error) {
-    console.error('Error uploading photo:', error);
+    logPhotoDbEvent('error', 'photo_upload_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      userId: typeof userId === 'string' ? userId.trim() : null,
+      visibility,
+      captionLength: typeof caption === 'string' ? caption.trim().length : 0,
+      uri: summarizeUriForDbLog(uri),
+      error: summarizeErrorForDbLog(error),
+    });
     throw error;
   }
 };

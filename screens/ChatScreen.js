@@ -52,6 +52,10 @@ import * as photoService from '../services/photoService';
 import { auth } from '../firebase';
 import logger, { maskIdentifier } from '../services/loggerService';
 import {
+  recordBreadcrumb,
+  summarizeUri,
+} from '../services/crashDiagnosticsService';
+import {
   getCanonicalIdentity,
   isRealtimeKeySegment,
   resolveRealtimeActorId,
@@ -364,6 +368,21 @@ const summarizeMessagesForReactionDebug = (messages = [], currentUserIds = []) =
     reactionMessageSample: messageSummaries.slice(0, 5),
   };
 };
+
+const summarizeImageAssetForDiagnostics = (asset = {}) => ({
+  uri: summarizeUri(asset?.uri),
+  width: typeof asset?.width === 'number' ? asset.width : null,
+  height: typeof asset?.height === 'number' ? asset.height : null,
+  fileSize: typeof asset?.fileSize === 'number' ? asset.fileSize : null,
+  mimeType: typeof asset?.mimeType === 'string' ? asset.mimeType : null,
+  assetIdPresent: Boolean(asset?.assetId),
+});
+
+const summarizeErrorForDiagnostics = (error) => ({
+  name: error?.name || 'Error',
+  code: typeof error?.code === 'string' ? error.code : null,
+  message: error?.message || String(error),
+});
 
 const logChatReactionDebug = (eventName, payload = {}, level = 'info') => {
   try {
@@ -1828,6 +1847,35 @@ export default function ChatScreen({
     ...(authUid ? { authUid } : {}),
     ...(passengerStableId ? { stablePassengerId: passengerStableId, senderStableId: passengerStableId } : {}),
   }), [authUid, canonicalIdentity?.principalType, isDriver, passengerStableId, principalId, userName]);
+  const traceChatImageSend = useCallback((event, data = {}) => {
+    recordBreadcrumb('ChatImage', event, {
+      tourId,
+      chatScope: internalDriverChat ? 'internal' : 'group',
+      principalType: canonicalIdentity?.principalType || (isDriver ? 'driver' : 'passenger'),
+      isDriver,
+      hasAuthUid: Boolean(authUid),
+      authUidMasked: maskIdentifier(authUid),
+      principalIdMasked: maskIdentifier(principalId),
+      passengerStableIdMasked: maskIdentifier(passengerStableId),
+      hasPassengerStableId: Boolean(passengerStableId),
+      requiresPassengerStableIdForWrites,
+      principalKeyIsRealtimeSafe: isRealtimeKeySegment(principalId),
+      stableKeyIsRealtimeSafe: passengerStableId ? isRealtimeKeySegment(passengerStableId) : null,
+      ...data,
+    }, {
+      remote: true,
+      reason: `ChatImage:${event}`,
+    });
+  }, [
+    authUid,
+    canonicalIdentity?.principalType,
+    internalDriverChat,
+    isDriver,
+    passengerStableId,
+    principalId,
+    requiresPassengerStableIdForWrites,
+    tourId,
+  ]);
   const draftStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_DRAFTS' }), []);
   const readStateStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_READ_STATE' }), []);
   const uxHintStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_UX_HINTS' }), []);
@@ -2683,6 +2731,12 @@ export default function ChatScreen({
     async (imageUri) => {
       if (!imageUri || isImageUploading) return;
 
+      let imageSendStage = 'start';
+      traceChatImageSend('send_requested', {
+        imageUri: summarizeUri(imageUri),
+        isUploadAlreadyInFlight: isImageUploading,
+      });
+
       setImageSendState({
         status: 'uploading',
         message: 'Preparing photo...',
@@ -2693,8 +2747,27 @@ export default function ChatScreen({
       try {
         const userId = principalId;
 
+        if (requiresPassengerStableIdForWrites && !passengerStableId) {
+          imageSendStage = 'identity';
+          traceChatImageSend('blocked_missing_sender_stable_id', {
+            imageUri: summarizeUri(imageUri),
+          });
+          setImageSendState({
+            status: 'failed',
+            message: 'Your chat identity is still syncing. Try again in a moment.',
+            retryUri: imageUri,
+          });
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          return;
+        }
+
         // Upload to Firebase Storage using correct signature:
         // uploadPhoto(uri, tourId, userId, caption, options)
+        imageSendStage = 'photo_upload';
+        traceChatImageSend('photo_upload_start', {
+          imageUri: summarizeUri(imageUri),
+          uploaderNamePresent: Boolean(userName),
+        });
         const uploadResult = await photoService.uploadPhoto(
           imageUri,
           tourId,
@@ -2707,27 +2780,31 @@ export default function ChatScreen({
         );
 
         if (uploadResult && uploadResult.url) {
-          if (requiresPassengerStableIdForWrites && !passengerStableId) {
-            setImageSendState({
-              status: 'failed',
-              message: 'Your chat identity is still syncing. Try again in a moment.',
-              retryUri: imageUri,
-            });
-            logger.warn('ChatScreen', 'chat_image_send_blocked_missing_sender_stable_id', {
-              tourId,
-              principalId: userId,
-            });
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-            return;
-          }
-
+          traceChatImageSend('photo_upload_success', {
+            photoIdMasked: maskIdentifier(uploadResult.id),
+            hasPhotoUrl: Boolean(uploadResult.url),
+            photoUrl: summarizeUri(uploadResult.url),
+          });
           const senderInfo = buildChatSenderInfo();
           logSenderIdentityPath();
 
+          imageSendStage = 'chat_message_write';
+          traceChatImageSend('chat_message_write_start', {
+            senderPrincipalType: senderInfo.principalType,
+            senderIdMasked: maskIdentifier(senderInfo.principalId || senderInfo.userId),
+            senderStableIdMasked: maskIdentifier(senderInfo.stablePassengerId || senderInfo.senderStableId),
+            hasImageUrl: true,
+          });
           const result = await sendImageMessage(tourId, uploadResult.url, '', senderInfo);
           if (!result?.success) {
             throw new Error(result?.error || 'Image message could not be sent');
           }
+          if (result.serverPromise && typeof result.serverPromise.then === 'function') {
+            await result.serverPromise;
+          }
+          traceChatImageSend('chat_message_write_success', {
+            messageIdMasked: maskIdentifier(result?.message?.id),
+          });
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           setImageSendState({
             status: 'success',
@@ -2738,6 +2815,10 @@ export default function ChatScreen({
             setImageSendState((prev) => (prev.status === 'success' ? { status: 'idle', message: '', retryUri: null } : prev));
           }, 2400);
         } else {
+          imageSendStage = 'photo_upload';
+          traceChatImageSend('photo_upload_missing_url', {
+            uploadResultKeys: uploadResult && typeof uploadResult === 'object' ? Object.keys(uploadResult).slice(0, 12) : [],
+          });
           setImageSendState({
             status: 'failed',
             message: 'Photo could not be uploaded. Try again.',
@@ -2746,7 +2827,11 @@ export default function ChatScreen({
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         }
       } catch (error) {
-        console.error('Error sending image:', error);
+        traceChatImageSend('send_failed', {
+          stage: imageSendStage,
+          error: summarizeErrorForDiagnostics(error),
+          imageUri: summarizeUri(imageUri),
+        });
         setImageSendState({
           status: 'failed',
           message: 'Photo could not be sent. Try again.',
@@ -2762,6 +2847,7 @@ export default function ChatScreen({
       passengerStableId,
       principalId,
       requiresPassengerStableIdForWrites,
+      traceChatImageSend,
       tourId,
       userName,
     ]
@@ -2770,8 +2856,10 @@ export default function ChatScreen({
   // Image picker handler
   const handlePickImage = useCallback(async () => {
     setShowAttachmentMenu(false);
+    traceChatImageSend('gallery_permission_requested');
 
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    traceChatImageSend('gallery_permission_result', { status });
     if (status !== 'granted') {
       showTransientFeedback({
         type: 'warning',
@@ -2787,17 +2875,23 @@ export default function ChatScreen({
       allowsEditing: false,
       quality: 0.8,
     });
+    traceChatImageSend('gallery_picker_result', {
+      canceled: Boolean(result.canceled),
+      asset: summarizeImageAssetForDiagnostics(result.assets?.[0]),
+    });
 
     if (!result.canceled && result.assets?.[0]) {
       await handleSendImage(result.assets[0].uri);
     }
-  }, [handleSendImage, showTransientFeedback]);
+  }, [handleSendImage, showTransientFeedback, traceChatImageSend]);
 
   // Camera handler
   const handleTakePhoto = useCallback(async () => {
     setShowAttachmentMenu(false);
+    traceChatImageSend('camera_permission_requested');
 
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    traceChatImageSend('camera_permission_result', { status });
     if (status !== 'granted') {
       showTransientFeedback({
         type: 'warning',
@@ -2812,11 +2906,15 @@ export default function ChatScreen({
       allowsEditing: false,
       quality: 0.8,
     });
+    traceChatImageSend('camera_picker_result', {
+      canceled: Boolean(result.canceled),
+      asset: summarizeImageAssetForDiagnostics(result.assets?.[0]),
+    });
 
     if (!result.canceled && result.assets?.[0]) {
       await handleSendImage(result.assets[0].uri);
     }
-  }, [handleSendImage, showTransientFeedback]);
+  }, [handleSendImage, showTransientFeedback, traceChatImageSend]);
 
   const handleRetryImageSend = useCallback(() => {
     const retryUri = imageSendState.retryUri;

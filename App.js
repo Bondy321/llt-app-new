@@ -15,7 +15,7 @@ import * as bookingService from './services/bookingServiceRealtime';
 import * as chatService from './services/chatService';
 import offlineLoginResolver from './services/offlineLoginResolver';
 import { migrateRecentChatMessagesForStableIdentity } from './services/chatIdentityMigrationService';
-import { getCanonicalIdentity, resolveAuthScopedUserId } from './services/identityService';
+import { getCanonicalIdentity, resolveAuthScopedUserId, toRealtimeKeySegment } from './services/identityService';
 import {
   installGlobalCrashDiagnostics,
   recordBreadcrumb as recordCrashBreadcrumb,
@@ -232,6 +232,91 @@ function AppContent() {
     });
   }, [bookingData, currentScreen, homeScreen, identityBinding, isDriverSession, isImageViewerVisible, tourData]);
 
+  const persistPassengerIdentityForUser = async ({
+    authUid,
+    stablePassengerId,
+    identityVersion,
+    bookingRef,
+    normalizedPassengerEmail,
+  }) => {
+    if (!authUid || !realtimeDb || !bookingRef) return { profilePersisted: false, bindingPersisted: false };
+
+    const now = Date.now();
+    const stablePassengerKey = stablePassengerId ? toRealtimeKeySegment(stablePassengerId) : null;
+    const profileUpdates = {
+      [`users/${authUid}/privatePhotoOwnerId`]: stablePassengerId || bookingRef,
+      [`users/${authUid}/privatePhotoOwnerType`]: stablePassengerId ? 'stable_passenger' : 'booking',
+      [`users/${authUid}/lastUpdated`]: now,
+    };
+    const bindingLinkUpdates = {};
+    const bindingMetaUpdates = {};
+
+    if (stablePassengerId && normalizedPassengerEmail) {
+      profileUpdates[`users/${authUid}/stablePassengerId`] = stablePassengerId;
+      profileUpdates[`users/${authUid}/identityVersion`] = identityVersion || IDENTITY_VERSION;
+      profileUpdates[`users/${authUid}/bookingRef`] = bookingRef;
+      profileUpdates[`users/${authUid}/normalizedPassengerEmail`] = normalizedPassengerEmail;
+      bindingLinkUpdates[`identity_bindings/${stablePassengerKey}/${authUid}`] = true;
+      bindingMetaUpdates[`identity_bindings_meta/${stablePassengerKey}/bookingRef`] = bookingRef;
+      bindingMetaUpdates[`identity_bindings_meta/${stablePassengerKey}/normalizedPassengerEmail`] = normalizedPassengerEmail;
+      bindingMetaUpdates[`identity_bindings_meta/${stablePassengerKey}/identityVersion`] = identityVersion || IDENTITY_VERSION;
+      bindingMetaUpdates[`identity_bindings_meta/${stablePassengerKey}/lastSeenAt`] = now;
+    }
+
+    await realtimeDb.ref().update(profileUpdates);
+    if (Object.keys(bindingLinkUpdates).length > 0) {
+      await realtimeDb.ref().update(bindingLinkUpdates);
+    }
+    if (Object.keys(bindingMetaUpdates).length > 0) {
+      await realtimeDb.ref().update(bindingMetaUpdates);
+    }
+
+    return {
+      profilePersisted: true,
+      bindingPersisted: Object.keys(bindingLinkUpdates).length > 0,
+      stablePassengerKey,
+    };
+  };
+
+  const repairIdentityBindingFromSession = async (authUid) => {
+    const [savedIdentityBinding, savedBookingData] = await SessionStorage.multiGet([
+      SESSION_KEYS.IDENTITY_BINDING,
+      SESSION_KEYS.BOOKING_DATA,
+    ]);
+    const restoredBinding = savedIdentityBinding?.[1] ? JSON.parse(savedIdentityBinding[1]) : null;
+    const restoredBooking = savedBookingData?.[1] ? JSON.parse(savedBookingData[1]) : null;
+    const stablePassengerId = restoredBinding?.stablePassengerId || restoredBooking?.stablePassengerId || null;
+    const normalizedPassengerEmail = restoredBinding?.normalizedPassengerEmail || normalizePassengerEmail(restoredBooking?.normalizedPassengerEmail);
+    const bookingRef = restoredBinding?.bookingRef || restoredBooking?.id || null;
+
+    if (!stablePassengerId || !normalizedPassengerEmail || !bookingRef) {
+      return null;
+    }
+
+    const identityVersion = restoredBinding?.identityVersion || IDENTITY_VERSION;
+    const persisted = await persistPassengerIdentityForUser({
+      authUid,
+      stablePassengerId,
+      identityVersion,
+      bookingRef,
+      normalizedPassengerEmail,
+    });
+    const repairedBinding = {
+      stablePassengerId,
+      stablePassengerKey: persisted.stablePassengerKey || toRealtimeKeySegment(stablePassengerId),
+      identityVersion,
+      bookingRef,
+      normalizedPassengerEmail,
+      authUid,
+    };
+
+    setIdentityBinding(repairedBinding);
+    await SessionStorage.multiSet([
+      [SESSION_KEYS.IDENTITY_BINDING, JSON.stringify(repairedBinding)],
+    ]);
+    return repairedBinding;
+  };
+
   const hydrateIdentityBindingForCurrentUser = async (authUid) => {
     if (!authUid || !realtimeDb) return;
 
@@ -241,12 +326,22 @@ function AppContent() {
       const stablePassengerId = userProfile?.stablePassengerId;
 
       if (!stablePassengerId) {
+        const repairedBinding = await repairIdentityBindingFromSession(authUid);
+        if (repairedBinding?.stablePassengerId) {
+          logger.info('Identity', 'identity_binding_repaired_from_session', {
+            authUid: maskIdentifier(authUid),
+            stablePassengerId: maskIdentifier(repairedBinding.stablePassengerId),
+            stablePassengerKey: maskIdentifier(repairedBinding.stablePassengerKey),
+          });
+          return;
+        }
         logger.info('Identity', 'identity_binding_missing', { authUid: maskIdentifier(authUid) });
         return;
       }
 
       const hydratedBinding = {
         stablePassengerId,
+        stablePassengerKey: toRealtimeKeySegment(stablePassengerId),
         identityVersion: userProfile?.identityVersion || IDENTITY_VERSION,
         bookingRef: userProfile?.bookingRef || null,
         normalizedPassengerEmail: userProfile?.normalizedPassengerEmail || null,
@@ -494,6 +589,7 @@ function AppContent() {
     const nextIdentityBinding = stablePassengerId
       ? {
           stablePassengerId,
+          stablePassengerKey: toRealtimeKeySegment(stablePassengerId),
           identityVersion: identityVersion || IDENTITY_VERSION,
           bookingRef: normalizedBookingData?.id || null,
           normalizedPassengerEmail: normalizedBookingData?.normalizedPassengerEmail || null,
@@ -520,24 +616,7 @@ function AppContent() {
 
     if (user?.uid && normalizedBookingData?.id && realtimeDb) {
       try {
-        const now = Date.now();
-        const updates = {
-          [`users/${user.uid}/privatePhotoOwnerId`]: stablePassengerId || normalizedBookingData.id,
-          [`users/${user.uid}/privatePhotoOwnerType`]: stablePassengerId ? 'stable_passenger' : 'booking',
-          [`users/${user.uid}/lastUpdated`]: now,
-        };
-
-        if (stablePassengerId && normalizedBookingData?.normalizedPassengerEmail) {
-          updates[`users/${user.uid}/stablePassengerId`] = stablePassengerId;
-          updates[`users/${user.uid}/identityVersion`] = identityVersion || IDENTITY_VERSION;
-          updates[`users/${user.uid}/bookingRef`] = normalizedBookingData.id;
-          updates[`users/${user.uid}/normalizedPassengerEmail`] = normalizedBookingData.normalizedPassengerEmail;
-          updates[`identity_bindings/${stablePassengerId}/${user.uid}`] = true;
-          updates[`identity_bindings_meta/${stablePassengerId}/bookingRef`] = normalizedBookingData.id;
-          updates[`identity_bindings_meta/${stablePassengerId}/normalizedPassengerEmail`] = normalizedBookingData.normalizedPassengerEmail;
-          updates[`identity_bindings_meta/${stablePassengerId}/identityVersion`] = identityVersion || IDENTITY_VERSION;
-          updates[`identity_bindings_meta/${stablePassengerId}/lastSeenAt`] = now;
-        } else {
+        if (!stablePassengerId || !normalizedBookingData?.normalizedPassengerEmail) {
           logger.warn('Identity', 'Stable identity unavailable during passenger login', {
             reason: 'STABLE_ID_UNAVAILABLE',
             authUid: maskIdentifier(user.uid),
@@ -545,11 +624,18 @@ function AppContent() {
           });
         }
 
-        await realtimeDb.ref().update(updates);
+        const persisted = await persistPassengerIdentityForUser({
+          authUid: user.uid,
+          stablePassengerId,
+          identityVersion,
+          bookingRef: normalizedBookingData.id,
+          normalizedPassengerEmail: normalizedBookingData.normalizedPassengerEmail,
+        });
         logger.info('Identity', 'identity_binding_persist_success', {
           authUid: maskIdentifier(user.uid),
           bookingRef: maskIdentifier(normalizedBookingData.id),
           stablePassengerId: stablePassengerId ? maskIdentifier(stablePassengerId) : null,
+          stablePassengerKey: persisted.stablePassengerKey ? maskIdentifier(persisted.stablePassengerKey) : null,
         });
       } catch (error) {
         const isIdentityBindingWriteRejected = error?.code === 'PERMISSION_DENIED'
@@ -562,6 +648,7 @@ function AppContent() {
           authUid: maskIdentifier(user.uid),
           bookingRef: maskIdentifier(normalizedBookingData.id),
           stablePassengerId: stablePassengerId ? maskIdentifier(stablePassengerId) : null,
+          stablePassengerKey: stablePassengerId ? maskIdentifier(toRealtimeKeySegment(stablePassengerId)) : null,
         });
       }
     }

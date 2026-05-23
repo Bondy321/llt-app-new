@@ -3,6 +3,7 @@
 const isTestEnv = process.env.NODE_ENV === 'test';
 let realtimeDb;
 const { loadOptionalService } = require('./optionalServiceLoader');
+const { toRealtimeKeySegment } = require('./identityService');
 
 if (!isTestEnv) {
   try {
@@ -148,7 +149,7 @@ const summarizeMessagesForReactionDebug = (messages = []) => {
 };
 
 const getReactionLeafPath = (tourId, messageId, emoji, userId) =>
-  `chats/${tourId}/messages/${messageId}/reactions/${emoji}/${userId}`;
+  `chats/${tourId}/messages/${messageId}/reactions/${emoji}/${toRealtimeActorKey(userId)}`;
 
 const getReactionEmojiPath = (tourId, messageId, emoji) =>
   `chats/${tourId}/messages/${messageId}/reactions/${emoji}`;
@@ -297,7 +298,38 @@ const isValidFirebaseKey = (key) => {
   if (!key || typeof key !== 'string' || key.trim().length === 0) {
     return false;
   }
-  return !/[./$#\[\]]/.test(key);
+  return !/[.#$\/\[\]\x00-\x1F\x7F]/.test(key);
+};
+
+const toRealtimeActorKey = (userId) => {
+  const validatedUserId = validateUserId(userId);
+  return isValidFirebaseKey(validatedUserId)
+    ? validatedUserId
+    : toRealtimeKeySegment(validatedUserId);
+};
+
+const getRealtimeActorContext = (userId) => {
+  const rawUserId = validateUserId(userId);
+  const actorKey = toRealtimeActorKey(rawUserId);
+  return {
+    rawUserId,
+    actorKey,
+    actorKeyWasEncoded: actorKey !== rawUserId,
+    actorKeyIsRealtimeSafe: isValidFirebaseKey(actorKey),
+  };
+};
+
+const buildActorKeySet = (userId) => {
+  const keys = new Set();
+  if (typeof userId === 'string' && userId.trim()) {
+    keys.add(userId.trim());
+    try {
+      keys.add(toRealtimeActorKey(userId));
+    } catch (error) {
+      // Invalid actor IDs are ignored for read-only subscription filtering.
+    }
+  }
+  return keys;
 };
 
 const maskUserId = (userId) => {
@@ -306,6 +338,32 @@ const maskUserId = (userId) => {
   if (!trimmedUserId) return 'anonymous';
   if (trimmedUserId.length <= 4) return `${trimmedUserId[0] || ''}***`;
   return `${trimmedUserId.slice(0, 2)}***${trimmedUserId.slice(-2)}`;
+};
+
+const summarizeErrorForDbLog = (error) => ({
+  name: error?.name || 'Error',
+  code: typeof error?.code === 'string' ? error.code : null,
+  message: error?.message || String(error),
+});
+
+const summarizeSenderForDbLog = (sender = {}) => ({
+  principalType: sender?.principalType || null,
+  isDriver: Boolean(sender?.isDriver),
+  senderIdMasked: maskUserId(sender?.principalId || sender?.userId),
+  senderStableIdMasked: maskUserId(sender?.stablePassengerId || sender?.senderStableId),
+  hasStablePassengerId: Boolean(sender?.stablePassengerId || sender?.senderStableId),
+  hasAuthUid: Boolean(sender?.authUid),
+});
+
+const logChatImageDbEvent = (level, eventName, payload = {}) => {
+  try {
+    const persistLevel = level === 'error' ? 'error' : 'warn';
+    if (logger && typeof logger[persistLevel] === 'function') {
+      logger[persistLevel]('ChatService', eventName, payload);
+    }
+  } catch (error) {
+    // Realtime database diagnostics must never affect chat behavior.
+  }
 };
 
 const mapReactionFailureReason = (error, fallbackReason = 'REACTION_TOGGLE_FAILED') => {
@@ -635,18 +693,31 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
     const validatedSender = validateSenderInfo(senderInfo);
 
     if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.trim()) {
+      logChatImageDbEvent('warn', 'chat_image_message_missing_url', {
+        tourId: validatedTourId,
+        sender: summarizeSenderForDbLog(validatedSender),
+      });
       return { success: false, error: 'Image URL is required' };
     }
 
     // Validate caption length if provided
     const sanitizedCaption = caption ? sanitizeInput(caption.trim()) : '';
     if (sanitizedCaption.length > MAX_CAPTION_LENGTH) {
+      logChatImageDbEvent('warn', 'chat_image_message_caption_too_long', {
+        tourId: validatedTourId,
+        captionLength: sanitizedCaption.length,
+        sender: summarizeSenderForDbLog(validatedSender),
+      });
       return { success: false, error: `Caption exceeds maximum length of ${MAX_CAPTION_LENGTH} characters` };
     }
 
     const db = dbInstance || realtimeDb;
 
     if (!db) {
+      logChatImageDbEvent('error', 'chat_image_message_database_unavailable', {
+        tourId: validatedTourId,
+        sender: summarizeSenderForDbLog(validatedSender),
+      });
       return { success: false, error: 'Realtime database unavailable' };
     }
 
@@ -666,7 +737,14 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
     ]);
 
     serverPromise.catch((error) => {
-      console.error('Error sending image message:', error);
+      logChatImageDbEvent('error', 'chat_image_message_write_failed', {
+        tourId: validatedTourId,
+        messageId: newMessageRef.key || null,
+        sender: summarizeSenderForDbLog(validatedSender),
+        captionLength: sanitizedCaption.length,
+        imageUrlLength: imageUrl.trim().length,
+        error: summarizeErrorForDbLog(error),
+      });
       if (optimisticMessage) {
         optimisticMessage.status = 'failed';
       }
@@ -674,7 +752,13 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
 
     return { success: true, message: optimisticMessage, serverPromise };
   } catch (error) {
-    console.error('Error sending image message:', error);
+    logChatImageDbEvent('error', 'chat_image_message_build_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      sender: summarizeSenderForDbLog(senderInfo),
+      hasImageUrl: Boolean(imageUrl),
+      captionLength: typeof caption === 'string' ? caption.length : 0,
+      error: summarizeErrorForDbLog(error),
+    });
     return { success: false, error: error.message };
   }
 };
@@ -758,7 +842,12 @@ const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realti
   try {
     const validatedTourId = validateTourId(tourId);
     const validatedMessageId = validateMessageId(messageId);
-    const validatedUserId = validateUserId(userId);
+    const {
+      rawUserId: validatedUserId,
+      actorKey,
+      actorKeyWasEncoded,
+      actorKeyIsRealtimeSafe,
+    } = getRealtimeActorContext(userId);
 
     if (!emoji || typeof emoji !== 'string' || emoji.trim().length === 0) {
       return { success: false, error: 'Invalid emoji' };
@@ -779,9 +868,10 @@ const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realti
       messageId: validatedMessageId,
       emoji: sanitizedEmoji,
       maskedUserId: maskUserId(validatedUserId),
-      actorKey: validatedUserId,
-      reactionLeafPath: getReactionLeafPath(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId),
-      actorKeyIsRealtimeSafe: isValidFirebaseKey(validatedUserId),
+      actorKey,
+      actorKeyWasEncoded,
+      reactionLeafPath: getReactionLeafPath(validatedTourId, validatedMessageId, sanitizedEmoji, actorKey),
+      actorKeyIsRealtimeSafe,
     });
 
     const reactionLeafRef = getReactionLeafRef(
@@ -789,7 +879,7 @@ const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realti
       validatedTourId,
       validatedMessageId,
       sanitizedEmoji,
-      validatedUserId
+      actorKey
     );
 
     await reactionLeafRef.set(true);
@@ -811,7 +901,12 @@ const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
   try {
     const validatedTourId = validateTourId(tourId);
     const validatedMessageId = validateMessageId(messageId);
-    const validatedUserId = validateUserId(userId);
+    const {
+      rawUserId: validatedUserId,
+      actorKey,
+      actorKeyWasEncoded,
+      actorKeyIsRealtimeSafe,
+    } = getRealtimeActorContext(userId);
 
     if (!emoji || typeof emoji !== 'string' || emoji.trim().length === 0) {
       return { success: false, error: 'Invalid emoji' };
@@ -832,9 +927,10 @@ const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       messageId: validatedMessageId,
       emoji: sanitizedEmoji,
       maskedUserId: maskUserId(validatedUserId),
-      actorKey: validatedUserId,
-      reactionLeafPath: getReactionLeafPath(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId),
-      actorKeyIsRealtimeSafe: isValidFirebaseKey(validatedUserId),
+      actorKey,
+      actorKeyWasEncoded,
+      reactionLeafPath: getReactionLeafPath(validatedTourId, validatedMessageId, sanitizedEmoji, actorKey),
+      actorKeyIsRealtimeSafe,
     });
 
     const reactionLeafRef = getReactionLeafRef(
@@ -842,7 +938,7 @@ const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       validatedTourId,
       validatedMessageId,
       sanitizedEmoji,
-      validatedUserId
+      actorKey
     );
 
     await reactionLeafRef.remove();
@@ -875,7 +971,12 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
     // Validate inputs
     const validatedTourId = validateTourId(tourId);
     const validatedMessageId = validateMessageId(messageId);
-    const validatedUserId = validateUserId(userId);
+    const {
+      rawUserId: validatedUserId,
+      actorKey,
+      actorKeyWasEncoded,
+      actorKeyIsRealtimeSafe,
+    } = getRealtimeActorContext(userId);
 
     if (!emoji || typeof emoji !== 'string' || emoji.trim().length === 0) {
       return { success: false, error: 'Invalid emoji' };
@@ -896,10 +997,11 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       messageId: validatedMessageId,
       emoji: sanitizedEmoji,
       maskedUserId,
-      actorKey: validatedUserId,
-      reactionLeafPath: getReactionLeafPath(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId),
+      actorKey,
+      actorKeyWasEncoded,
+      reactionLeafPath: getReactionLeafPath(validatedTourId, validatedMessageId, sanitizedEmoji, actorKey),
       reactionEmojiPath: getReactionEmojiPath(validatedTourId, validatedMessageId, sanitizedEmoji),
-      actorKeyIsRealtimeSafe: isValidFirebaseKey(validatedUserId),
+      actorKeyIsRealtimeSafe,
       forceAction: options.forceAction || null,
     });
 
@@ -911,7 +1013,7 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       validatedTourId,
       validatedMessageId,
       sanitizedEmoji,
-      validatedUserId
+      actorKey
     ).once('value');
     const hasUserReaction = reactionLeafSnapshot.exists();
     logReactionEvent('info', 'reaction_toggle_leaf_snapshot', {
@@ -919,8 +1021,9 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       messageId: validatedMessageId,
       emoji: sanitizedEmoji,
       maskedUserId,
-      actorKey: validatedUserId,
-      reactionLeafPath: getReactionLeafPath(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId),
+      actorKey,
+      actorKeyWasEncoded,
+      reactionLeafPath: getReactionLeafPath(validatedTourId, validatedMessageId, sanitizedEmoji, actorKey),
       leafExists: hasUserReaction,
       leafValueType: reactionLeafSnapshot.val() === true ? 'true' : typeof reactionLeafSnapshot.val(),
     });
@@ -933,19 +1036,19 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
         messageId: validatedMessageId,
         emoji: sanitizedEmoji,
         maskedUserId,
-        actorKey: validatedUserId,
+        actorKey,
         reactionEmojiPath: getReactionEmojiPath(validatedTourId, validatedMessageId, sanitizedEmoji),
         rawEmojiNodeType: nextSnapshot.val() === null ? 'null' : Array.isArray(nextSnapshot.val()) ? 'array' : typeof nextSnapshot.val(),
         rawEmojiNodeKeys: nextSnapshot.val() && typeof nextSnapshot.val() === 'object'
           ? Object.keys(nextSnapshot.val()).slice(0, 12)
           : [],
-        ...summarizeReactionUsersForDebug(nextSnapshot.val(), validatedUserId),
+        ...summarizeReactionUsersForDebug(nextSnapshot.val(), actorKey),
       });
       return { users, reactions };
     };
 
     if (options.forceAction === 'add') {
-      const addResult = await addReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
+      const addResult = await addReaction(validatedTourId, validatedMessageId, sanitizedEmoji, actorKey, db);
       if (!addResult?.success) {
         throw new Error(addResult?.error || 'Failed to add reaction');
       }
@@ -961,7 +1064,7 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
     }
 
     if (options.forceAction === 'remove') {
-      const removeResult = await removeReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
+      const removeResult = await removeReaction(validatedTourId, validatedMessageId, sanitizedEmoji, actorKey, db);
       if (!removeResult?.success) {
         throw new Error(removeResult?.error || 'Failed to remove reaction');
       }
@@ -977,7 +1080,7 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
     }
 
     if (hasUserReaction) {
-      const removeResult = await removeReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
+      const removeResult = await removeReaction(validatedTourId, validatedMessageId, sanitizedEmoji, actorKey, db);
       if (!removeResult?.success) {
         throw new Error(removeResult?.error || 'Failed to remove reaction');
       }
@@ -992,7 +1095,7 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       return { success: true, action: 'removed', ...payload };
     }
 
-    const addResult = await addReaction(validatedTourId, validatedMessageId, sanitizedEmoji, validatedUserId, db);
+    const addResult = await addReaction(validatedTourId, validatedMessageId, sanitizedEmoji, actorKey, db);
     if (!addResult?.success) {
       throw new Error(addResult?.error || 'Failed to add reaction');
     }
@@ -1026,10 +1129,12 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
 // Update typing status for a user
 const setTypingStatus = async (tourId, userId, userName, isTyping, isDriver = false, dbInstance = realtimeDb) => {
   try {
+    const validatedTourId = validateTourId(tourId);
+    const { actorKey } = getRealtimeActorContext(userId);
     const db = dbInstance || realtimeDb;
     if (!db) return { success: false };
 
-    const typingRef = db.ref(`chats/${tourId}/typing/${userId}`);
+    const typingRef = db.ref(`chats/${validatedTourId}/typing/${actorKey}`);
 
     if (isTyping) {
       await typingRef.set({
@@ -1068,7 +1173,9 @@ const subscribeToTypingIndicators = (tourId, currentUserId, onTypingUpdate, dbIn
     return () => {};
   }
 
-  const typingRef = db.ref(`chats/${tourId}/typing`);
+  const validatedTourId = validateTourId(tourId);
+  const currentUserKeys = buildActorKeySet(currentUserId);
+  const typingRef = db.ref(`chats/${validatedTourId}/typing`);
 
   const listener = typingRef.on('value', (snapshot) => {
     const typingUsers = [];
@@ -1080,7 +1187,7 @@ const subscribeToTypingIndicators = (tourId, currentUserId, onTypingUpdate, dbIn
 
         // Don't show current user's typing status
         // Only show if typing started within last 10 seconds
-        if (userId !== currentUserId && Date.now() - data.timestamp < 10000) {
+        if (!currentUserKeys.has(userId) && Date.now() - data.timestamp < 10000) {
           typingUsers.push({
             userId,
             name: data.name,
@@ -1107,10 +1214,12 @@ const subscribeToTypingIndicators = (tourId, currentUserId, onTypingUpdate, dbIn
 // Update user's online presence
 const setOnlinePresence = async (tourId, userId, userName, isOnline, isDriver = false, dbInstance = realtimeDb) => {
   try {
+    const validatedTourId = validateTourId(tourId);
+    const { actorKey } = getRealtimeActorContext(userId);
     const db = dbInstance || realtimeDb;
     if (!db) return { success: false };
 
-    const presenceRef = db.ref(`chats/${tourId}/presence/${userId}`);
+    const presenceRef = db.ref(`chats/${validatedTourId}/presence/${actorKey}`);
 
     if (isOnline) {
       await presenceRef.set({
@@ -1279,10 +1388,12 @@ const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance = re
 // Mark tour chat as read
 const markChatAsRead = async (tourId, userId, dbInstance = realtimeDb) => {
   try {
+    const validatedTourId = validateTourId(tourId);
+    const { actorKey } = getRealtimeActorContext(userId);
     const db = dbInstance || realtimeDb;
     if (!db) return { success: false };
 
-    const lastReadRef = db.ref(`chats/${tourId}/lastRead/${userId}`);
+    const lastReadRef = db.ref(`chats/${validatedTourId}/lastRead/${actorKey}`);
     await lastReadRef.set(new Date().toISOString());
     return { success: true };
   } catch (error) {
@@ -1294,10 +1405,12 @@ const markChatAsRead = async (tourId, userId, dbInstance = realtimeDb) => {
 // Mark internal driver chat as read
 const markInternalChatAsRead = async (tourId, userId, dbInstance = realtimeDb) => {
   try {
+    const validatedTourId = validateTourId(tourId);
+    const { actorKey } = getRealtimeActorContext(userId);
     const db = dbInstance || realtimeDb;
     if (!db) return { success: false };
 
-    const lastReadRef = db.ref(`internal_chats/${tourId}/lastRead/${userId}`);
+    const lastReadRef = db.ref(`internal_chats/${validatedTourId}/lastRead/${actorKey}`);
     await lastReadRef.set(new Date().toISOString());
     return { success: true };
   } catch (error) {

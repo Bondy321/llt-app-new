@@ -5,7 +5,7 @@
  * Copies legacy private photo owner nodes keyed by bookingRef to stable passenger IDs.
  *
  * Source: private_tour_photos/{tourId}/{bookingRef}
- * Target: private_tour_photos/{tourId}/{stablePassengerId}
+ * Target: private_tour_photos/{tourId}/{stablePassengerKey}
  *
  * Mapping source:
  * users/{uid}/stablePassengerId + users/{uid}/bookingRef|privatePhotoOwnerId
@@ -22,6 +22,17 @@ if (!admin.apps.length) {
 }
 
 const db = admin.database();
+
+const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
+
+const toRealtimeKeySegment = (value) => {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed) return null;
+  return trimmed.replace(
+    REALTIME_KEY_INVALID_GLOBAL_PATTERN,
+    (char) => `_${char.charCodeAt(0).toString(16).toUpperCase()}_`,
+  );
+};
 
 const readBooleanArg = (flag, defaultValue) => {
   const raw = process.argv.find((arg) => arg.startsWith(`${flag}=`));
@@ -41,20 +52,45 @@ const collectOwnerMappings = (users = {}) => {
       return;
     }
 
-    const candidates = [profile?.bookingRef, profile?.privatePhotoOwnerId]
+    const stableOwnerKey = toRealtimeKeySegment(stablePassengerId);
+    if (!stableOwnerKey) {
+      return;
+    }
+
+    const candidates = [profile?.bookingRef, profile?.privatePhotoOwnerId, stablePassengerId, stableOwnerKey]
       .filter((value) => typeof value === 'string')
       .map((value) => value.trim())
       .filter(Boolean);
 
     for (const legacyOwnerId of candidates) {
       if (!mapping.has(legacyOwnerId)) {
-        mapping.set(legacyOwnerId, stablePassengerId);
+        mapping.set(legacyOwnerId, { stablePassengerId, stableOwnerKey });
       }
     }
   });
 
   return mapping;
 };
+
+const normalizePrivatePhotoPayload = (payload = {}, stablePassengerId) => (
+  Object.entries(payload || {}).reduce((accumulator, [photoId, photo]) => {
+    if (!photo || typeof photo !== 'object' || Array.isArray(photo)) {
+      accumulator[photoId] = photo;
+      return accumulator;
+    }
+
+    if (photoId === 'thumbnails' || photoId === 'viewers') {
+      accumulator[photoId] = photo;
+      return accumulator;
+    }
+
+    accumulator[photoId] = {
+      ...photo,
+      userId: stablePassengerId,
+    };
+    return accumulator;
+  }, {})
+);
 
 const run = async () => {
   const dryRun = readBooleanArg('--dry-run', true);
@@ -80,21 +116,24 @@ const run = async () => {
     for (const [legacyOwnerId, payload] of Object.entries(ownerTree || {})) {
       scannedOwners += 1;
 
-      const stableOwnerId = legacyToStableOwner.get(legacyOwnerId);
-      if (!stableOwnerId) {
+      const stableOwner = legacyToStableOwner.get(legacyOwnerId);
+      if (!stableOwner) {
         skippedWithoutMapping += 1;
         continue;
       }
 
-      if (legacyOwnerId === stableOwnerId) {
+      const { stablePassengerId, stableOwnerKey } = stableOwner;
+
+      if (legacyOwnerId === stableOwnerKey) {
         skippedAlreadyMigrated += 1;
         continue;
       }
 
-      const targetPath = `private_tour_photos/${tourId}/${stableOwnerId}`;
+      const targetPath = `private_tour_photos/${tourId}/${stableOwnerKey}`;
       const targetSnap = await db.ref(targetPath).once('value');
       const existingTarget = targetSnap.val() || {};
-      const mergedTarget = { ...existingTarget, ...(payload || {}) };
+      const incomingTarget = normalizePrivatePhotoPayload(payload, stablePassengerId);
+      const mergedTarget = { ...existingTarget, ...incomingTarget };
       const incomingPhotoCount = Object.keys(payload || {}).length;
 
       updates[targetPath] = mergedTarget;

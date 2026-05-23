@@ -1,4 +1,5 @@
 import { maskIdentifier } from './loggerService';
+import { toRealtimeKeySegment } from './identityService';
 
 const MIGRATION_LIMIT = 300;
 const MIGRATION_TIMEOUT_MS = 5000;
@@ -21,7 +22,8 @@ const withTimeout = (promise, timeoutMs) => new Promise((resolve, reject) => {
 });
 
 const loadBoundAuthUids = async ({ realtimeDb, stablePassengerId }) => {
-  const snapshot = await realtimeDb.ref(`identity_bindings/${stablePassengerId}`).once('value');
+  const stablePassengerKey = toRealtimeKeySegment(stablePassengerId);
+  const snapshot = await realtimeDb.ref(`identity_bindings/${stablePassengerKey}`).once('value');
   const bindings = snapshot.val() || {};
 
   const boundAuthUids = new Set();

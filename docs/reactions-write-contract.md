@@ -8,6 +8,10 @@ All reaction writes must target the user-leaf path:
 
 `chats/{tourId}/messages/{messageId}/reactions/{emoji}/{userId} = true`
 
+`userId` is the RTDB path key for the actor. If the actor is a stable passenger identity such as
+`pax_v1:{BOOKING_REF}:{normalized_email}`, encode it with `toRealtimeKeySegment()` before writing
+the leaf. Keep the raw stable identity only in message/profile ownership values.
+
 ## Legacy read compatibility (read-only)
 
 Readers must continue to support the following historical shapes under

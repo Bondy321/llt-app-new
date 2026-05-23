@@ -16,9 +16,11 @@ require.cache[loggerServicePath] = {
   },
 };
 const { migrateRecentChatMessagesForStableIdentity } = require('../services/chatIdentityMigrationService');
+const { toRealtimeKeySegment } = require('../services/identityService');
 
 const TOUR_ID = 'TOUR_STABLE_001';
-const STABLE_PASSENGER_ID = 'pax:BOOKING-001';
+const STABLE_PASSENGER_ID = 'pax_v1:BOOKING-001:demo@example.com';
+const STABLE_PASSENGER_KEY = toRealtimeKeySegment(STABLE_PASSENGER_ID);
 const DEVICE_A_UID = 'auth:device-a';
 const DEVICE_B_UID = 'auth:device-b';
 
@@ -136,14 +138,20 @@ const createMockRealtimeDb = (initialData = {}) => {
   };
 };
 
-const createRuleAssumptionHarness = ({ db, tourId, stablePassengerId }) => {
+const createRuleAssumptionHarness = ({
+  db,
+  tourId,
+  stablePassengerId,
+  stablePassengerKey = toRealtimeKeySegment(stablePassengerId),
+}) => {
   const canActAsPrincipal = (authUid, principalId) => {
     if (!authUid || !principalId) return false;
     if (authUid === principalId) return true;
 
     const stableFromUsers = db._state.users?.[authUid]?.stablePassengerId;
     const photoOwnerFromUsers = db._state.users?.[authUid]?.privatePhotoOwnerId;
-    const identityBinding = db._state.identity_bindings?.[principalId]?.[authUid] === true;
+    const principalKey = toRealtimeKeySegment(principalId);
+    const identityBinding = db._state.identity_bindings?.[principalKey]?.[authUid] === true;
 
     return stableFromUsers === principalId || photoOwnerFromUsers === principalId || identityBinding;
   };
@@ -167,19 +175,19 @@ const createRuleAssumptionHarness = ({ db, tourId, stablePassengerId }) => {
     },
     async writeReaction(authUid, messageId, emoji = '👍') {
       ensureAllowed(authUid, stablePassengerId);
-      await db.ref(`chats/${tourId}/messages/${messageId}/reactions/${emoji}/${stablePassengerId}`).set(true);
+      await db.ref(`chats/${tourId}/messages/${messageId}/reactions/${emoji}/${stablePassengerKey}`).set(true);
     },
     async writeTyping(authUid) {
       ensureAllowed(authUid, stablePassengerId);
-      await db.ref(`chats/${tourId}/typing/${stablePassengerId}`).set({ online: true, timestamp: Date.now() });
+      await db.ref(`chats/${tourId}/typing/${stablePassengerKey}`).set({ online: true, timestamp: Date.now() });
     },
     async writePresence(authUid) {
       ensureAllowed(authUid, stablePassengerId);
-      await db.ref(`chats/${tourId}/presence/${stablePassengerId}`).set({ online: true, lastSeen: Date.now() });
+      await db.ref(`chats/${tourId}/presence/${stablePassengerKey}`).set({ online: true, lastSeen: Date.now() });
     },
     async writePrivatePhoto(authUid, photoId, url) {
       ensureAllowed(authUid, stablePassengerId);
-      await db.ref(`private_tour_photos/${tourId}/${stablePassengerId}/${photoId}`).set({
+      await db.ref(`private_tour_photos/${tourId}/${stablePassengerKey}/${photoId}`).set({
         url,
         userId: stablePassengerId,
         timestamp: Date.now(),
@@ -190,7 +198,7 @@ const createRuleAssumptionHarness = ({ db, tourId, stablePassengerId }) => {
     },
     readPrivatePhotos(authUid) {
       ensureAllowed(authUid, stablePassengerId);
-      return db._state.private_tour_photos?.[tourId]?.[stablePassengerId] || {};
+      return db._state.private_tour_photos?.[tourId]?.[stablePassengerKey] || {};
     },
   };
 };
@@ -207,7 +215,7 @@ const seedIdentity = () => ({
     },
   },
   identity_bindings: {
-    [STABLE_PASSENGER_ID]: {
+    [STABLE_PASSENGER_KEY]: {
       [DEVICE_A_UID]: true,
       [DEVICE_B_UID]: true,
     },
@@ -234,7 +242,12 @@ const seedIdentity = () => ({
 
 test('integration: two devices sharing stable identity can collaborate across chat/photo/realtime status scopes', async () => {
   const db = createMockRealtimeDb(seedIdentity());
-  const harness = createRuleAssumptionHarness({ db, tourId: TOUR_ID, stablePassengerId: STABLE_PASSENGER_ID });
+  const harness = createRuleAssumptionHarness({
+    db,
+    tourId: TOUR_ID,
+    stablePassengerId: STABLE_PASSENGER_ID,
+    stablePassengerKey: STABLE_PASSENGER_KEY,
+  });
 
   const messageIdFromA = await harness.writeChatMessage(DEVICE_A_UID, 'hello from device A');
   const messageIdFromB = await harness.writeChatMessage(DEVICE_B_UID, 'hello from device B');
@@ -252,11 +265,11 @@ test('integration: two devices sharing stable identity can collaborate across ch
   await harness.writePresence(DEVICE_B_UID);
 
   assert.equal(
-    db._state.chats[TOUR_ID].messages[messageIdFromA].reactions['🔥'][STABLE_PASSENGER_ID],
+    db._state.chats[TOUR_ID].messages[messageIdFromA].reactions['🔥'][STABLE_PASSENGER_KEY],
     true,
   );
-  assert.equal(db._state.chats[TOUR_ID].typing[STABLE_PASSENGER_ID].online, true);
-  assert.equal(db._state.chats[TOUR_ID].presence[STABLE_PASSENGER_ID].online, true);
+  assert.equal(db._state.chats[TOUR_ID].typing[STABLE_PASSENGER_KEY].online, true);
+  assert.equal(db._state.chats[TOUR_ID].presence[STABLE_PASSENGER_KEY].online, true);
 });
 
 test('integration: migration backfills legacy UID-only messages to stable passenger identity', async () => {
