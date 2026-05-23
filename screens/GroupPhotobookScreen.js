@@ -327,6 +327,16 @@ export default function GroupPhotobookScreen({
     await offlineSyncService.replayQueue({ services: { photoService } });
   };
 
+  const discardUpload = async (pending) => {
+    if (!pending?.id) return;
+    const result = await offlineSyncService.removeAction(pending.id);
+    if (!result.success) {
+      Alert.alert('Discard failed', result.error || 'Could not remove this photo from the upload queue.');
+      return;
+    }
+    setPhotoQueueItems((items) => items.filter((item) => item.id !== pending.id));
+  };
+
   const cancelUpload = () => {
     setShowUploadModal(false);
     setPendingImage(null);
@@ -370,9 +380,24 @@ export default function GroupPhotobookScreen({
                 {item.status === 'failed' ? (
                   <>
                     <MaterialCommunityIcons name="alert-circle" size={16} color={COLORS.white} />
-                    <TouchableOpacity onPress={() => retryUpload(item)} style={styles.retryButton}>
-                      <Text style={styles.retryButtonText}>Retry</Text>
-                    </TouchableOpacity>
+                    <View style={styles.pendingActionRow}>
+                      <TouchableOpacity
+                        onPress={() => retryUpload(item)}
+                        style={styles.retryButton}
+                        accessibilityRole="button"
+                        accessibilityLabel="Retry group photo upload"
+                      >
+                        <Text style={styles.retryButtonText}>Retry</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => discardUpload(item)}
+                        style={[styles.retryButton, styles.discardButton]}
+                        accessibilityRole="button"
+                        accessibilityLabel="Discard group photo upload"
+                      >
+                        <Text style={styles.retryButtonText}>Discard</Text>
+                      </TouchableOpacity>
+                    </View>
                   </>
                 ) : (
                   <Text style={styles.pendingProgressText}>{item.status}</Text>
@@ -749,7 +774,9 @@ const styles = StyleSheet.create({
   pendingTitle: { marginHorizontal: SPACING.lg, marginBottom: SPACING.sm, fontSize: 14, fontWeight: '700', color: COLORS.textPrimary },
   pendingOverlay: { position: 'absolute', left: 0, right:0, bottom:0, backgroundColor:'rgba(0,0,0,0.55)', alignItems:'center', paddingVertical: 6 },
   pendingProgressText: { color: COLORS.white, fontWeight:'700', fontSize: 12 },
-  retryButton: { marginTop: 4, backgroundColor: COLORS.error, borderRadius: RADIUS.sm, paddingHorizontal: 8, paddingVertical: 2 },
+  pendingActionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 4 },
+  retryButton: { backgroundColor: COLORS.error, borderRadius: RADIUS.sm, paddingHorizontal: 8, paddingVertical: 2 },
+  discardButton: { backgroundColor: 'rgba(15, 23, 42, 0.8)' },
   retryButtonText: { color: COLORS.white, fontSize: 11, fontWeight: '700' },
   progressContainer: {
     backgroundColor: COLORS.successLight,

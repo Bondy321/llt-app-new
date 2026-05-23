@@ -607,6 +607,44 @@ test('pruneCompletedPhotoUploadActions removes stale completed uploads but keeps
   assert.equal(result.queue.some((item) => item.id === 'failed-photo'), true);
 });
 
+test('discarding a failed group photo upload removes it from scoped queue and stats', async () => {
+  await clearQueue();
+
+  await offlineSyncService.enqueueAction({
+    id: 'photo-discard-group',
+    type: 'PHOTO_UPLOAD',
+    tourId: 'tour-photo-discard',
+    status: 'failed',
+    attempts: 5,
+    payload: {
+      payloadVersion: 2,
+      idempotencyKey: 'idem-discard-group',
+      tourId: 'tour-photo-discard',
+      visibility: 'group',
+      userId: 'user-1',
+      localAssets: { sourceUri: 'file:///tmp/discard.jpg' },
+      metadata: { caption: 'discard me' },
+    },
+  });
+
+  const before = await offlineSyncService.getPhotoUploadActions({ tourId: 'tour-photo-discard', visibility: 'group' });
+  assert.equal(before.success, true);
+  assert.equal(before.data.length, 1);
+  assert.equal(before.data[0].status, 'failed');
+
+  const removed = await offlineSyncService.removeAction('photo-discard-group');
+  assert.equal(removed.success, true);
+
+  const after = await offlineSyncService.getPhotoUploadActions({ tourId: 'tour-photo-discard', visibility: 'group' });
+  assert.equal(after.success, true);
+  assert.equal(after.data.length, 0);
+
+  const stats = await offlineSyncService.getQueueStats();
+  assert.equal(stats.success, true);
+  assert.equal(stats.data.failed, 0);
+  assert.equal(stats.data.total, 0);
+});
+
 test('PHOTO_UPLOAD retry keeps one logical record and transitions retrying to completed', async () => {
   await clearQueue();
   let calls = 0;
