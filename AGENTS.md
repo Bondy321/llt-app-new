@@ -169,6 +169,9 @@ Authentication remains anonymous Firebase auth at foundation, but login modes ar
 - When used as an RTDB key segment, encode with `toRealtimeKeySegment(stablePassengerId)` because
   email-style identities contain `.` characters. This applies to `identity_bindings`,
   `identity_bindings_meta`, private photo owner buckets, and chat actor-scoped leaves.
+- User profiles should also persist encoded owner helpers (`stablePassengerKey`,
+  `privatePhotoOwnerKey`) so RTDB rules can authorize encoded private photo bucket paths even
+  when identity binding writes are delayed.
 - Used in chat/photo/rules ownership checks
 
 ### Offline login behavior

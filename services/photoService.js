@@ -81,6 +81,46 @@ const logPhotoDbEvent = (level, eventName, payload = {}) => {
   }
 };
 
+const stableHash = (value) => {
+  const input = String(value ?? '');
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+};
+
+const summarizePathForDbLog = (path) => {
+  if (typeof path !== 'string' || !path.trim()) {
+    return { present: false };
+  }
+
+  const normalized = path.trim();
+  return {
+    present: true,
+    length: normalized.length,
+    segmentCount: normalized.split('/').filter(Boolean).length,
+    hash: stableHash(normalized),
+    containsEncodedDot: normalized.includes('_2E_'),
+  };
+};
+
+const summarizePrincipalForDbLog = (value) => {
+  if (typeof value !== 'string' || !value.trim()) {
+    return { present: false };
+  }
+
+  const normalized = value.trim();
+  return {
+    present: true,
+    length: normalized.length,
+    hash: stableHash(normalized),
+    isRealtimeSafe: !/[.#$\/\[\]\x00-\x1F\x7F]/.test(normalized),
+    containsEmailSeparator: normalized.includes('@') || normalized.includes('_40_'),
+  };
+};
+
 const sanitizeStorageSegment = (value, fallback = 'photo') => {
   if (typeof value !== 'string') return fallback;
   const sanitized = value.trim().replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, IDEMPOTENCY_KEY_MAX_LENGTH);
@@ -574,8 +614,12 @@ const uploadPhoto = async (
     nowFn = Date.now,
   } = {}
 ) => {
+  let uploadStage = 'initializing';
+  let uploadDiagnostics = {};
+
   try {
     // Validate inputs
+    uploadStage = 'validating_inputs';
     const validatedUri = validateUri(uri);
     const validatedTourId = validateTourId(tourId);
     const validatedUserId = validateUserId(userId);
@@ -595,10 +639,31 @@ const uploadPhoto = async (
     }
 
     const isPrivate = validatedVisibility === 'private';
+    uploadDiagnostics = {
+      visibility: validatedVisibility,
+      tourId: summarizePrincipalForDbLog(validatedTourId),
+      userId: summarizePrincipalForDbLog(validatedUserId),
+      ownerKey: summarizePrincipalForDbLog(validatedUserKey),
+      ownerKeyMatchesUserId: validatedUserKey === validatedUserId,
+      hasIdempotencyKey: Boolean(normalizedIdempotencyKey),
+      idempotencyKey: summarizePrincipalForDbLog(normalizedIdempotencyKey),
+      generateClientVariants: Boolean(generateClientVariants),
+      hasThumbnailUri: Boolean(thumbnailUri),
+      hasViewerUri: Boolean(viewerUri),
+      uri: summarizeUriForDbLog(validatedUri),
+    };
+    logPhotoDbEvent('warn', 'photo_upload_start', uploadDiagnostics);
 
     // Create blob and validate
+    uploadStage = 'fetching_source_blob';
     const blob = await createBlob(validatedUri, fetchFn);
+    uploadStage = 'validating_source_blob';
     validateBlob(blob);
+    uploadDiagnostics = {
+      ...uploadDiagnostics,
+      fileType: blob.type || null,
+      fileSize: typeof blob.size === 'number' ? blob.size : null,
+    };
 
     // Determine file extension from blob type
     const extensionMap = {
@@ -618,6 +683,10 @@ const uploadPhoto = async (
     const storagePath = isPrivate
       ? `private_tour_photos/${validatedTourId}/${validatedUserKey}/${filename}`
       : `group_tour_photos/${validatedTourId}/${filename}`;
+    uploadDiagnostics = {
+      ...uploadDiagnostics,
+      storagePath: summarizePathForDbLog(storagePath),
+    };
     const fileRef = storageRefFn(storageInstance, storagePath);
 
     let thumbnailBlob = null;
@@ -660,17 +729,25 @@ const uploadPhoto = async (
         }
       });
 
+      uploadStage = 'uploading_source_to_storage';
       await Promise.race([
         uploadWithProgress(),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Photo upload timeout')), 60000)
         ),
       ]);
+      logPhotoDbEvent('warn', 'photo_upload_storage_source_written', uploadDiagnostics);
 
+      uploadStage = 'resolving_source_download_url';
       const downloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, fileRef);
+      logPhotoDbEvent('warn', 'photo_upload_source_url_resolved', {
+        ...uploadDiagnostics,
+        downloadUrl: summarizeUriForDbLog(downloadURL),
+      });
 
       if (generateClientVariants && thumbnailUri && typeof thumbnailUri === 'string') {
         try {
+          uploadStage = 'uploading_thumbnail_variant';
           thumbnailBlob = await createBlob(thumbnailUri, fetchFn);
           validateBlob(thumbnailBlob);
 
@@ -699,6 +776,7 @@ const uploadPhoto = async (
 
       if (generateClientVariants && viewerUri && typeof viewerUri === 'string') {
         try {
+          uploadStage = 'uploading_viewer_variant';
           viewerBlob = await createBlob(viewerUri, fetchFn);
           validateBlob(viewerBlob);
 
@@ -728,13 +806,23 @@ const uploadPhoto = async (
       const databasePath = isPrivate
         ? `private_tour_photos/${validatedTourId}/${validatedUserKey}`
         : `group_tour_photos/${validatedTourId}`;
+      uploadDiagnostics = {
+        ...uploadDiagnostics,
+        databasePath: summarizePathForDbLog(databasePath),
+      };
       const photosRef = dbRefFn(realtimeDbInstance, databasePath);
       if (normalizedIdempotencyKey) {
+        uploadStage = 'checking_existing_photo_idempotency';
+        logPhotoDbEvent('warn', 'photo_upload_db_lookup_start', uploadDiagnostics);
         const existingSnapshot = await getFn(photosRef);
         const existingData = existingSnapshot.val() || {};
         const existingEntry = Object.entries(existingData).find(([, value]) => value?.idempotencyKey === normalizedIdempotencyKey);
         if (existingEntry) {
           const [existingId, existingPhoto] = existingEntry;
+          logPhotoDbEvent('warn', 'photo_upload_deduped_existing_record', {
+            ...uploadDiagnostics,
+            photoId: summarizePrincipalForDbLog(existingId),
+          });
           return {
             id: existingId,
             url: existingPhoto.url || existingPhoto.fullUrl || null,
@@ -791,7 +879,19 @@ const uploadPhoto = async (
         photoData.uploaderName = uploaderName.trim();
       }
 
+      uploadStage = 'writing_photo_record_to_database';
+      logPhotoDbEvent('warn', 'photo_upload_db_write_start', {
+        ...uploadDiagnostics,
+        photoId: summarizePrincipalForDbLog(newPhotoRef?.key),
+        photoDataKeys: Object.keys(photoData),
+      });
       await setFn(newPhotoRef, photoData);
+      uploadStage = 'completed';
+      logPhotoDbEvent('warn', 'photo_upload_db_write_success', {
+        ...uploadDiagnostics,
+        photoId: summarizePrincipalForDbLog(newPhotoRef?.key),
+        variantStatus: photoData.variantStatus,
+      });
 
       return {
         id: newPhotoRef.key,
@@ -828,6 +928,8 @@ const uploadPhoto = async (
     }
   } catch (error) {
     logPhotoDbEvent('error', 'photo_upload_failed', {
+      stage: uploadStage,
+      diagnostics: uploadDiagnostics,
       tourId: typeof tourId === 'string' ? tourId.trim() : null,
       userId: typeof userId === 'string' ? userId.trim() : null,
       visibility,
@@ -1118,6 +1220,8 @@ const updatePhotoCaption = async (
 
 
 const uploadPhotoDirect = async (payload = {}) => {
+  let directDiagnostics = {};
+
   try {
     const {
       uri,
@@ -1145,6 +1249,25 @@ const uploadPhotoDirect = async (payload = {}) => {
 
     const resolvedOwnerId = ownerId || userId;
     const normalizedPayloadVersion = Number(payloadVersion) >= 2 ? 2 : 1;
+    directDiagnostics = {
+      payloadVersion: normalizedPayloadVersion,
+      visibility,
+      tourId: summarizePrincipalForDbLog(tourId),
+      userId: summarizePrincipalForDbLog(userId),
+      ownerId: summarizePrincipalForDbLog(resolvedOwnerId),
+      ownerKey: summarizePrincipalForDbLog(
+        typeof resolvedOwnerId === 'string' && resolvedOwnerId.trim()
+          ? sanitizeRealtimeKeySegment(resolvedOwnerId)
+          : null
+      ),
+      hasIdempotencyKey: Boolean(idempotencyKey),
+      idempotencyKey: summarizePrincipalForDbLog(idempotencyKey),
+      hasSourceUri: Boolean(sourceUri),
+      sourceUri: summarizeUriForDbLog(sourceUri),
+      hasLocalAssets: Boolean(localAssets),
+      localAssetKeys: Object.keys(resolvedLocalAssets),
+    };
+    logPhotoDbEvent('warn', 'photo_upload_direct_start', directDiagnostics);
 
     if (normalizedPayloadVersion >= 2) {
       const validatedTourId = validateTourId(tourId);
@@ -1183,6 +1306,10 @@ const uploadPhotoDirect = async (payload = {}) => {
 
     return { success: true, data };
   } catch (error) {
+    logPhotoDbEvent('error', 'photo_upload_direct_failed', {
+      diagnostics: directDiagnostics,
+      error: summarizeErrorForDbLog(error),
+    });
     return { success: false, error: error?.message || 'Photo upload failed' };
   }
 };

@@ -28,6 +28,12 @@ For private uploads, the owner bucket is an RTDB-safe key:
 `stablePassengerKey = toRealtimeKeySegment(stablePassengerId)`. Photo record ownership fields such
 as `userId` remain the raw `stablePassengerId`.
 
+To avoid upload denials when identity binding writes are delayed, passenger profiles should also persist
+the encoded owner fields used by rules:
+
+- `users/{uid}/stablePassengerKey = toRealtimeKeySegment(stablePassengerId)`
+- `users/{uid}/privatePhotoOwnerKey = toRealtimeKeySegment(privatePhotoOwnerId)`
+
 Cloud Function variant generation updates records to:
 
 - `variantStatus: "ready"` with `viewerUrl` and `thumbnailUrl`; or

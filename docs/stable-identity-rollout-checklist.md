@@ -33,6 +33,8 @@ typing, presence, or read markers. Email-style identities contain `.` characters
 
 ### Pass criteria
 - `users/{uid}` has a non-empty canonical `stablePassengerId`.
+- `users/{uid}` also has `stablePassengerKey = toRealtimeKeySegment(stablePassengerId)` and
+  `privatePhotoOwnerKey` for private album rule checks.
 - `identity_bindings/{stablePassengerKey}/{uid}` exists when identity persistence succeeds.
 - Sent messages include `senderStableId`.
 - Ownership rendering is unchanged after restart.
@@ -114,6 +116,8 @@ typing, presence, or read markers. Email-style identities contain `.` characters
 
 ### Pass criteria
 - Photo records remain under `private_tour_photos/{tourId}/{stablePassengerKey}` while their `userId` remains the raw `stablePassengerId`.
+- Private album access can be authorized by either `identity_bindings/{stablePassengerKey}/{uid}` or
+  the encoded owner fields on `users/{uid}` (`stablePassengerKey` / `privatePhotoOwnerKey`).
 - Same user can still view photos after restart.
 - `users/{uid}` remains bound to expected booking ownership metadata.
 

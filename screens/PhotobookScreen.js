@@ -35,8 +35,8 @@ import {
   resolveViewerDisplayUri,
 } from '../services/photoVariantService';
 import { auth, realtimeDb } from '../firebase';
-import logger from '../services/loggerService';
-import { getCanonicalIdentity } from '../services/identityService';
+import logger, { maskIdentifier } from '../services/loggerService';
+import { getCanonicalIdentity, toRealtimeKeySegment } from '../services/identityService';
 import {
   recordBreadcrumb as recordCrashBreadcrumb,
   setDiagnosticsContext,
@@ -98,6 +98,21 @@ const summarizeQueue = (items = []) => (
 
 const getPhotoRowItems = (item) => (Array.isArray(item) ? item.filter(Boolean) : []);
 
+const summarizeRealtimeKey = (value) => {
+  if (typeof value !== 'string' || !value.trim()) {
+    return { present: false };
+  }
+
+  const normalized = value.trim();
+  return {
+    present: true,
+    masked: maskIdentifier(normalized),
+    length: normalized.length,
+    isRealtimeSafe: !/[.#$\/\[\]\x00-\x1F\x7F]/.test(normalized),
+    containsEncodedDot: normalized.includes('_2E_'),
+  };
+};
+
 export default function PhotobookScreen({
   onBack,
   tourId,
@@ -142,19 +157,23 @@ export default function PhotobookScreen({
   const principalId = canonicalIdentity?.principalId || stablePassengerId || privatePhotoOwnerId;
   const authUid = currentUser?.uid || null;
   const stablePrivateOwnerId = stablePassengerId || canonicalIdentity?.stablePassengerId || null;
+  const privatePhotoOwnerKey = principalId ? toRealtimeKeySegment(principalId) : null;
+  const stablePrivateOwnerKey = stablePrivateOwnerId ? toRealtimeKeySegment(stablePrivateOwnerId) : null;
 
   const tracePrivatePhotos = useCallback((event, data = {}, options = {}) => {
     recordCrashBreadcrumb('PrivatePhotobook', event, {
       tourId,
-      principalId,
+      principalId: maskIdentifier(principalId),
       authUid,
-      stablePrivateOwnerId,
+      stablePrivateOwnerId: maskIdentifier(stablePrivateOwnerId),
+      ownerKeySummary: summarizeRealtimeKey(privatePhotoOwnerKey),
+      stableOwnerKeySummary: summarizeRealtimeKey(stablePrivateOwnerKey),
       ...data,
     }, {
       remote: true,
       ...options,
     });
-  }, [authUid, principalId, stablePrivateOwnerId, tourId]);
+  }, [authUid, principalId, privatePhotoOwnerKey, stablePrivateOwnerId, stablePrivateOwnerKey, tourId]);
 
   useEffect(() => {
     tracePrivatePhotos('screen_mounted', {
@@ -174,24 +193,41 @@ export default function PhotobookScreen({
   useEffect(() => {
     setDiagnosticsContext('privatePhotobookIdentity', {
       tourId,
-      principalId,
+      principalId: maskIdentifier(principalId),
       authUid,
-      stablePrivateOwnerId,
-      privatePhotoOwnerId,
-      stablePassengerId,
-      canonicalIdentity,
+      stablePrivateOwnerId: maskIdentifier(stablePrivateOwnerId),
+      privatePhotoOwnerId: maskIdentifier(privatePhotoOwnerId),
+      stablePassengerId: maskIdentifier(stablePassengerId),
+      canonicalIdentity: canonicalIdentity
+        ? {
+            principalId: maskIdentifier(canonicalIdentity.principalId),
+            principalType: canonicalIdentity.principalType || null,
+            hasAuthUid: Boolean(canonicalIdentity.authUid),
+            stablePassengerId: maskIdentifier(canonicalIdentity.stablePassengerId),
+          }
+        : null,
+      privatePhotoOwnerKey: summarizeRealtimeKey(privatePhotoOwnerKey),
+      stablePrivateOwnerKey: summarizeRealtimeKey(stablePrivateOwnerKey),
     }, { flush: true });
 
     tracePrivatePhotos('identity_resolved', {
       hasPrincipalId: Boolean(principalId),
       principalMatchesStable: Boolean(principalId && stablePrivateOwnerId && principalId === stablePrivateOwnerId),
+      principalKeyMatchesStableKey: Boolean(privatePhotoOwnerKey && stablePrivateOwnerKey && privatePhotoOwnerKey === stablePrivateOwnerKey),
       ownerInputs: {
-        privatePhotoOwnerId,
-        stablePassengerId,
+        privatePhotoOwnerId: maskIdentifier(privatePhotoOwnerId),
+        stablePassengerId: maskIdentifier(stablePassengerId),
       },
-      canonicalIdentity,
+      canonicalIdentity: canonicalIdentity
+        ? {
+            principalId: maskIdentifier(canonicalIdentity.principalId),
+            principalType: canonicalIdentity.principalType || null,
+            hasAuthUid: Boolean(canonicalIdentity.authUid),
+            stablePassengerId: maskIdentifier(canonicalIdentity.stablePassengerId),
+          }
+        : null,
     });
-  }, [authUid, canonicalIdentity, principalId, privatePhotoOwnerId, stablePassengerId, stablePrivateOwnerId, tourId, tracePrivatePhotos]);
+  }, [authUid, canonicalIdentity, principalId, privatePhotoOwnerId, privatePhotoOwnerKey, stablePassengerId, stablePrivateOwnerId, stablePrivateOwnerKey, tourId, tracePrivatePhotos]);
 
   const ensurePrivatePhotoOwnerAccess = useCallback(async () => {
     const currentAuthUid = auth?.currentUser?.uid;
@@ -207,35 +243,43 @@ export default function PhotobookScreen({
     try {
       tracePrivatePhotos('ensure_owner_access_start', {
         currentAuthUid,
+        privatePhotoOwnerKey: summarizeRealtimeKey(privatePhotoOwnerKey),
+        stablePrivateOwnerKey: summarizeRealtimeKey(stablePrivateOwnerKey),
       });
       const updates = {
         privatePhotoOwnerId: principalId,
+        privatePhotoOwnerKey,
         privatePhotoOwnerType: stablePrivateOwnerId ? 'stable_passenger' : 'booking',
         lastUpdated: Date.now(),
       };
 
       if (stablePrivateOwnerId) {
         updates.stablePassengerId = stablePrivateOwnerId;
+        updates.stablePassengerKey = stablePrivateOwnerKey;
       }
 
       await realtimeDb.ref(`users/${currentAuthUid}`).update(updates);
       tracePrivatePhotos('ensure_owner_access_success', {
         currentAuthUid,
         updateKeys: Object.keys(updates),
+        privatePhotoOwnerKey: summarizeRealtimeKey(privatePhotoOwnerKey),
       });
     } catch (error) {
       tracePrivatePhotos('ensure_owner_access_error', {
         error: error?.message,
+        code: error?.code || null,
         stack: error?.stack,
       }, { flush: true });
       logger.error('Photobook', 'Failed to refresh private photo owner identity before private photo access', {
         error: error.message,
+        code: error?.code || null,
         authUid: currentAuthUid,
-        privatePhotoOwnerId: principalId,
+        privatePhotoOwnerId: maskIdentifier(principalId),
+        privatePhotoOwnerKey: summarizeRealtimeKey(privatePhotoOwnerKey),
         tourId,
       });
     }
-  }, [principalId, stablePrivateOwnerId, tourId]);
+  }, [principalId, privatePhotoOwnerKey, stablePrivateOwnerId, stablePrivateOwnerKey, tourId, tracePrivatePhotos]);
 
   const mapPrivatePhoto = useCallback((photo) => {
     const sourcePhoto = photo || {};
@@ -630,6 +674,7 @@ export default function PhotobookScreen({
         success: enqueueResult.success,
         error: enqueueResult.error || null,
         action: summarizeQueueAction(enqueueResult.data),
+        ownerKey: summarizeRealtimeKey(privatePhotoOwnerKey),
       }, { flush: true });
       if (!enqueueResult.success) {
         Alert.alert('Upload queue failed', enqueueResult.error || 'Could not queue upload.');
@@ -638,7 +683,43 @@ export default function PhotobookScreen({
       setShowUploadModal(false);
       setPendingImage(null);
       setCaption('');
-      offlineSyncService.replayQueue({ services: { photoService } }).catch(() => {});
+      offlineSyncService.replayQueue({ services: { photoService } })
+        .then((replayResult) => {
+          tracePrivatePhotos('upload_replay_result', {
+            success: Boolean(replayResult?.success),
+            data: replayResult?.data || null,
+            error: replayResult?.error || null,
+            actionId: jobId,
+            ownerKey: summarizeRealtimeKey(privatePhotoOwnerKey),
+          }, { flush: true });
+
+          if (!replayResult?.success || replayResult?.data?.failed > 0) {
+            logger.warn('PhotoDiagnostics', 'Private photo replay did not complete cleanly', {
+              actionId: jobId,
+              tourId,
+              replayResult,
+              ownerKey: summarizeRealtimeKey(privatePhotoOwnerKey),
+              principalId: maskIdentifier(principalId),
+            });
+          }
+        })
+        .catch((replayError) => {
+          tracePrivatePhotos('upload_replay_error', {
+            error: replayError?.message,
+            code: replayError?.code || null,
+            stack: replayError?.stack,
+            actionId: jobId,
+            ownerKey: summarizeRealtimeKey(privatePhotoOwnerKey),
+          }, { flush: true });
+          logger.error('PhotoDiagnostics', 'Private photo replay threw', {
+            error: replayError?.message,
+            code: replayError?.code || null,
+            actionId: jobId,
+            tourId,
+            ownerKey: summarizeRealtimeKey(privatePhotoOwnerKey),
+            principalId: maskIdentifier(principalId),
+          });
+        });
       tracePrivatePhotos('upload_replay_requested');
 
       if (optimized.metrics?.originalSizeBytes && optimized.metrics?.optimizedSizeBytes) {

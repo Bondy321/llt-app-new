@@ -91,6 +91,41 @@ test('Static contract: identity_bindings_meta writes are limited to admin or cal
   );
 });
 
+test('Static contract: sensitive database writes remain ownership or admin gated', () => {
+  const rules = readJson('database.rules.json');
+  const adminUid = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
+  const privateOwnerAccess = "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || auth.uid === $ownerId || $ownerId === root.child('users/' + auth.uid + '/stablePassengerId').val() || $ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)";
+
+  assert.equal(
+    rules.rules.bookings.$bookingRef['.write'],
+    `auth != null && auth.uid === '${adminUid}'`,
+  );
+  assert.equal(
+    rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.write'],
+    `auth != null && (auth.uid === '${adminUid}' || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists()) && root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId`,
+  );
+  assert.equal(rules.rules.private_tour_photos.$tourId.$ownerId['.read'], privateOwnerAccess);
+  assert.equal(rules.rules.private_tour_photos.$tourId.$ownerId['.write'], privateOwnerAccess);
+  assert.deepEqual(rules.rules.users.$userId.privatePhotoOwnerKey, { '.validate': '!newData.exists() || newData.isString()' });
+  assert.deepEqual(rules.rules.users.$userId.stablePassengerKey, { '.validate': '!newData.exists() || newData.isString()' });
+  assert.match(
+    rules.rules.globalSafetyAlerts.$eventId['.write'],
+    /auth\.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'/,
+  );
+  assert.doesNotEqual(rules.rules.globalSafetyAlerts.$eventId['.write'], 'auth != null');
+});
+
+test('Static contract: photo variant lifecycle fields stay allowed by database rules', () => {
+  const rules = readJson('database.rules.json');
+  const groupPhotoValidate = rules.rules.group_tour_photos.$tourId.$photoId['.validate'];
+  const privatePhotoValidate = rules.rules.private_tour_photos.$tourId.$ownerId.$photoId['.validate'];
+
+  ['sourceUrl', 'viewerUrl', 'viewerStoragePath', 'variantStatus', 'variantUpdatedAt', 'variantError', 'variantVersion'].forEach((field) => {
+    assert.match(groupPhotoValidate, new RegExp(`newData\\.child\\('${field}'\\)`));
+    assert.match(privatePhotoValidate, new RegExp(`newData\\.child\\('${field}'\\)`));
+  });
+});
+
 test('Static contract: email-style stable identities are encoded before identity binding path writes', () => {
   const appSource = fs.readFileSync(path.join(__dirname, '..', 'App.js'), 'utf8');
   const chatSource = fs.readFileSync(path.join(__dirname, '..', 'services', 'chatService.js'), 'utf8');
@@ -98,6 +133,9 @@ test('Static contract: email-style stable identities are encoded before identity
   const privatePhotoMigrationSource = fs.readFileSync(path.join(__dirname, '..', 'functions', 'scripts', 'migratePrivatePhotoOwnersToStablePassengerIds.js'), 'utf8');
 
   assert.match(appSource, /stablePassengerKey = stablePassengerId \? toRealtimeKeySegment\(stablePassengerId\) : null/);
+  assert.match(appSource, /privatePhotoOwnerKey = toRealtimeKeySegment\(stablePassengerId \|\| bookingRef\)/);
+  assert.match(appSource, /users\/\$\{authUid\}\/privatePhotoOwnerKey/);
+  assert.match(appSource, /users\/\$\{authUid\}\/stablePassengerKey/);
   assert.match(appSource, /identity_bindings\/\$\{stablePassengerKey\}\/\$\{authUid\}/);
   assert.doesNotMatch(appSource, /identity_bindings\/\$\{stablePassengerId\}/);
   assert.match(migrationSource, /identity_bindings\/\$\{stablePassengerKey\}/);

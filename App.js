@@ -243,8 +243,10 @@ function AppContent() {
 
     const now = Date.now();
     const stablePassengerKey = stablePassengerId ? toRealtimeKeySegment(stablePassengerId) : null;
+    const privatePhotoOwnerKey = toRealtimeKeySegment(stablePassengerId || bookingRef);
     const profileUpdates = {
       [`users/${authUid}/privatePhotoOwnerId`]: stablePassengerId || bookingRef,
+      [`users/${authUid}/privatePhotoOwnerKey`]: privatePhotoOwnerKey,
       [`users/${authUid}/privatePhotoOwnerType`]: stablePassengerId ? 'stable_passenger' : 'booking',
       [`users/${authUid}/lastUpdated`]: now,
     };
@@ -253,6 +255,7 @@ function AppContent() {
 
     if (stablePassengerId && normalizedPassengerEmail) {
       profileUpdates[`users/${authUid}/stablePassengerId`] = stablePassengerId;
+      profileUpdates[`users/${authUid}/stablePassengerKey`] = stablePassengerKey;
       profileUpdates[`users/${authUid}/identityVersion`] = identityVersion || IDENTITY_VERSION;
       profileUpdates[`users/${authUid}/bookingRef`] = bookingRef;
       profileUpdates[`users/${authUid}/normalizedPassengerEmail`] = normalizedPassengerEmail;
