@@ -120,6 +120,7 @@ function AppContent() {
   const [loginTransition, setLoginTransition] = useState(null);
   const loginTransitionTimerRef = useRef(null);
   const loginTransitionAnimationRef = useRef(null);
+  const driverIdentityPersistKeyRef = useRef(null);
   const loginProgress = useRef(new Animated.Value(0)).current;
 
   const isDriverSession = bookingData?.id && bookingData.id.startsWith('D-');
@@ -281,7 +282,7 @@ function AppContent() {
     };
   };
 
-  const persistDriverIdentityForUser = async ({
+  const persistDriverIdentityForUser = useCallback(async ({
     authUid,
     driverId,
     assignedTourId,
@@ -311,7 +312,54 @@ function AppContent() {
       driverId: normalizedDriverId,
       assignedTourId: assignedTourId || null,
     };
-  };
+  }, []);
+
+  useEffect(() => {
+    const driverId = typeof bookingData?.id === 'string' && bookingData.id.trim().toUpperCase().startsWith('D-')
+      ? bookingData.id.trim().toUpperCase()
+      : null;
+    const assignedTourId = tourData?.id || bookingData?.assignedTourId || null;
+    const authUid = user?.uid || null;
+
+    if (!authUid || !driverId) return undefined;
+
+    const persistKey = `${authUid}:${driverId}:${assignedTourId || 'unassigned'}`;
+    if (driverIdentityPersistKeyRef.current === persistKey) return undefined;
+
+    let cancelled = false;
+    driverIdentityPersistKeyRef.current = persistKey;
+
+    persistDriverIdentityForUser({ authUid, driverId, assignedTourId })
+      .then((persisted) => {
+        if (cancelled) return;
+        logger.info('Identity', 'driver_identity_session_persist_success', {
+          authUid: maskIdentifier(authUid),
+          driverId: maskIdentifier(persisted.driverId),
+          assignedTourId: persisted.assignedTourId || null,
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        driverIdentityPersistKeyRef.current = null;
+        logger.error('Identity', 'driver_identity_session_persist_failure', {
+          authUid: maskIdentifier(authUid),
+          driverId: maskIdentifier(driverId),
+          assignedTourId,
+          error: error.message,
+          code: error?.code || null,
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    bookingData?.assignedTourId,
+    bookingData?.id,
+    persistDriverIdentityForUser,
+    tourData?.id,
+    user?.uid,
+  ]);
 
   const repairIdentityBindingFromSession = async (authUid) => {
     const [savedIdentityBinding, savedBookingData] = await SessionStorage.multiGet([

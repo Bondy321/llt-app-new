@@ -631,6 +631,47 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
     }
 
     const tourId = sanitizeTourId(validatedTourCode);
+    const currentAuthUid = auth?.currentUser?.uid || null;
+    if (currentAuthUid) {
+      try {
+        const [userProfileSnapshot, participantSnapshot, bookingSnapshot] = await Promise.all([
+          db.ref(`users/${currentAuthUid}`).once('value'),
+          db.ref(`tours/${tourId}/participants/${currentAuthUid}`).once('value'),
+          db.ref(`bookings/${validatedBookingRef}`).once('value'),
+        ]);
+        const userProfile = userProfileSnapshot.exists() ? (userProfileSnapshot.val() || {}) : {};
+        const driverId = typeof userProfile.driverId === 'string' ? userProfile.driverId.trim() : '';
+        const [driverSnapshot, assignedDriverSnapshot] = driverId
+          ? await Promise.all([
+              db.ref(`drivers/${driverId}`).once('value'),
+              db.ref(`tour_manifests/${tourId}/assigned_drivers/${driverId}`).once('value'),
+            ])
+          : [null, null];
+        const driverProfile = driverSnapshot?.exists?.() ? (driverSnapshot.val() || {}) : {};
+        const bookingTourId = bookingSnapshot.exists() ? bookingSnapshot.val()?.tourId : null;
+
+        logBookingEvent('info', 'Manifest write authorization context', {
+          tourId,
+          bookingRef: maskIdentifier(validatedBookingRef),
+          authUid: maskIdentifier(currentAuthUid),
+          hasUserProfile: userProfileSnapshot.exists(),
+          driverId: driverId ? maskIdentifier(driverId) : null,
+          hasDriverId: Boolean(driverId),
+          driverAuthMatches: Boolean(driverId && driverProfile.authUid === currentAuthUid),
+          assignedDriverFlag: assignedDriverSnapshot?.val?.() === true,
+          participantExists: participantSnapshot.exists(),
+          bookingTourMatches: bookingTourId === tourId,
+          bookingTourId: bookingTourId || null,
+        });
+      } catch (diagnosticError) {
+        logBookingEvent('warn', 'Manifest write authorization context unavailable', {
+          tourId,
+          bookingRef: maskIdentifier(validatedBookingRef),
+          error: diagnosticError?.message || String(diagnosticError),
+        });
+      }
+    }
+
     const bookingManifestRef = db.ref(`tour_manifests/${tourId}/bookings/${validatedBookingRef}`);
     const snapshot = await bookingManifestRef.once('value');
     const existing = snapshot.exists() ? snapshot.val() : {};
