@@ -58,6 +58,8 @@ Security rules authorize that write when all of the following are true:
 1. `users/{authUid}/driverId` points to the driver code.
 2. `drivers/{driverId}/authUid` matches the caller auth UID.
 3. `tour_manifests/{tourId}/assigned_drivers/{driverId}` is `true`.
-4. `bookings/{bookingRef}/tourId` matches `{tourId}`.
+4. The booking belongs to `{tourId}` either by canonical `bookings/{bookingRef}/tourId`
+   or by legacy `bookings/{bookingRef}/tourCode` matching `tours/{tourId}/tourCode`
+   or `tour_manifests/{tourId}/tourCode`.
 
 Mobile driver login and driver assignment writes must therefore persist the driver profile helper fields above. Web-admin assignment writes should also persist them when the driver profile already has an `authUid`.

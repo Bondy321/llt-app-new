@@ -10,8 +10,11 @@ const {
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const PROJECT_ID = 'demo-llt-rules';
 const TOUR_ID = '5203L_22';
+const TOUR_CODE = '5203L 22';
 const BOOKING_REF = 'T123456';
+const LEGACY_TOUR_CODE_BOOKING_REF = 'TLEGACY1';
 const MANIFEST_PATH = `tour_manifests/${TOUR_ID}/bookings/${BOOKING_REF}`;
+const LEGACY_MANIFEST_PATH = `tour_manifests/${TOUR_ID}/bookings/${LEGACY_TOUR_CODE_BOOKING_REF}`;
 const DRIVER_ID = 'D-DPALMER';
 const DRIVER_AUTH_UID = 'driver-auth-1';
 const OTHER_DRIVER_ID = 'D-OTHER';
@@ -56,6 +59,9 @@ test.before(async () => {
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const db = context.database(dbUrl);
     await db.ref(`bookings/${BOOKING_REF}`).set({ tourId: TOUR_ID });
+    await db.ref(`bookings/${LEGACY_TOUR_CODE_BOOKING_REF}`).set({ tourCode: TOUR_CODE });
+    await db.ref(`tours/${TOUR_ID}/tourCode`).set(TOUR_CODE);
+    await db.ref(`tour_manifests/${TOUR_ID}/tourCode`).set(TOUR_CODE);
     await db.ref(`tours/${TOUR_ID}/participants/${PASSENGER_AUTH_UID}`).set({
       userId: PASSENGER_AUTH_UID,
       joinedAt: '2026-05-23T19:40:00.000Z',
@@ -94,6 +100,13 @@ test.after(async () => {
 
 test('allows assigned driver auth UID to update passenger manifest booking rows', async () => {
   await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(MANIFEST_PATH).update(manifestUpdate));
+});
+
+test('allows assigned driver auth UID to update legacy tourCode-only booking rows', async () => {
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(LEGACY_MANIFEST_PATH).update({
+    ...manifestUpdate,
+    idempotencyKey: 'manifest-test-legacy-tour-code',
+  }));
 });
 
 test('keeps passenger participant manifest updates working', async () => {

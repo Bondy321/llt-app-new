@@ -664,10 +664,12 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
     const currentAuthUid = auth?.currentUser?.uid || null;
     if (currentAuthUid) {
       try {
-        const [userProfileSnapshot, participantSnapshot, bookingSnapshot] = await Promise.all([
+        const [userProfileSnapshot, participantSnapshot, bookingSnapshot, tourCodeSnapshot, manifestTourCodeSnapshot] = await Promise.all([
           db.ref(`users/${currentAuthUid}`).once('value'),
           db.ref(`tours/${tourId}/participants/${currentAuthUid}`).once('value'),
           db.ref(`bookings/${validatedBookingRef}`).once('value'),
+          db.ref(`tours/${tourId}/tourCode`).once('value'),
+          db.ref(`tour_manifests/${tourId}/tourCode`).once('value'),
         ]);
         const userProfile = userProfileSnapshot.exists() ? (userProfileSnapshot.val() || {}) : {};
         const driverId = typeof userProfile.driverId === 'string' ? userProfile.driverId.trim() : '';
@@ -678,7 +680,15 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
             ])
           : [null, null];
         const driverProfile = driverSnapshot?.exists?.() ? (driverSnapshot.val() || {}) : {};
-        const bookingTourId = bookingSnapshot.exists() ? bookingSnapshot.val()?.tourId : null;
+        const bookingRecord = bookingSnapshot.exists() ? (bookingSnapshot.val() || {}) : {};
+        const bookingTourId = bookingRecord?.tourId || null;
+        const bookingTourCode = bookingRecord?.tourCode || null;
+        const tourCode = tourCodeSnapshot.exists() ? tourCodeSnapshot.val() : null;
+        const manifestTourCode = manifestTourCodeSnapshot.exists() ? manifestTourCodeSnapshot.val() : null;
+        const bookingTourMatches = bookingTourId === tourId;
+        const bookingTourCodeMatchesTour = Boolean(bookingTourCode && tourCode && bookingTourCode === tourCode);
+        const bookingTourCodeMatchesManifest = Boolean(bookingTourCode && manifestTourCode && bookingTourCode === manifestTourCode);
+        const bookingMatchesTour = bookingTourMatches || bookingTourCodeMatchesTour || bookingTourCodeMatchesManifest;
 
         logBookingEvent('info', 'Manifest write authorization context', {
           tourId,
@@ -690,8 +700,14 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
           driverAuthMatches: Boolean(driverId && driverProfile.authUid === currentAuthUid),
           assignedDriverFlag: assignedDriverSnapshot?.val?.() === true,
           participantExists: participantSnapshot.exists(),
-          bookingTourMatches: bookingTourId === tourId,
+          bookingTourMatches,
+          bookingTourCodeMatchesTour,
+          bookingTourCodeMatchesManifest,
+          bookingMatchesTour,
           bookingTourId: bookingTourId || null,
+          hasBookingTourCode: Boolean(bookingTourCode),
+          hasTourCode: Boolean(tourCode),
+          hasManifestTourCode: Boolean(manifestTourCode),
         });
         recordBookingDiagnostic('manifest_write_authorization_context', {
           tourId,
@@ -703,8 +719,14 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
           driverAuthMatches: Boolean(driverId && driverProfile.authUid === currentAuthUid),
           assignedDriverFlag: assignedDriverSnapshot?.val?.() === true,
           participantExists: participantSnapshot.exists(),
-          bookingTourMatches: bookingTourId === tourId,
+          bookingTourMatches,
+          bookingTourCodeMatchesTour,
+          bookingTourCodeMatchesManifest,
+          bookingMatchesTour,
           bookingTourId: bookingTourId || null,
+          hasBookingTourCode: Boolean(bookingTourCode),
+          hasTourCode: Boolean(tourCode),
+          hasManifestTourCode: Boolean(manifestTourCode),
         });
       } catch (diagnosticError) {
         logBookingEvent('warn', 'Manifest write authorization context unavailable', {

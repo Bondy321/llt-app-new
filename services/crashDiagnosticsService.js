@@ -144,9 +144,10 @@ const sanitizeValue = (value, key = '', depth = 0, seen = new WeakSet()) => {
   seen.add(value);
 
   if (Array.isArray(value)) {
-    const output = value.slice(0, MAX_ARRAY_ITEMS).map((item) => sanitizeValue(item, key, depth + 1, seen));
-    if (value.length > MAX_ARRAY_ITEMS) {
-      output.push({ truncatedItems: value.length - MAX_ARRAY_ITEMS });
+    const maxItems = key === 'breadcrumbs' ? MAX_SNAPSHOT_BREADCRUMBS : MAX_ARRAY_ITEMS;
+    const output = value.slice(0, maxItems).map((item) => sanitizeValue(item, key, depth + 1, seen));
+    if (value.length > maxItems) {
+      output.push({ truncatedItems: value.length - maxItems });
     }
     return output;
   }
@@ -232,6 +233,7 @@ const persistRemoteSnapshot = async (snapshot) => {
         reason: snapshot.reason,
         breadcrumbCount: snapshot.breadcrumbCount,
         lastBreadcrumb: pickLatestBreadcrumb(snapshot),
+        lastEvent: snapshot?.extra?.lastEvent || null,
       },
     });
   } catch {
