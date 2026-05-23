@@ -48,6 +48,15 @@ const offlineSyncService = loadOptionalService({
 });
 const { parseTimestampMs } = require('./timeUtils');
 
+const logBookingEvent = (level, message, payload = {}) => {
+  try {
+    const logLevel = typeof logger?.[level] === 'function' ? level : 'info';
+    logger?.[logLevel]?.('BookingService', message, payload);
+  } catch (error) {
+    // Diagnostics must never affect booking flows.
+  }
+};
+
 const buildPassengerLoginVerifierUrl = () => {
   const explicitUrl = process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL?.trim();
   if (explicitUrl) return explicitUrl;
@@ -108,6 +117,12 @@ const getAppCheckHeaderValue = async () => {
 const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
   const configuredEndpoint = buildPassengerLoginVerifierUrl();
   const derivedEndpoint = buildDerivedPassengerLoginVerifierUrl();
+  logBookingEvent('info', 'Passenger verifier request prepared', {
+    bookingRef: maskIdentifier(bookingRef),
+    hasEmail: Boolean(email),
+    configuredEndpointPresent: Boolean(configuredEndpoint),
+    derivedEndpointPresent: Boolean(derivedEndpoint),
+  });
 
   const endpointCandidates = [configuredEndpoint, derivedEndpoint].filter((value, index, list) => {
     if (typeof value !== 'string' || !value.trim()) return false;
@@ -115,6 +130,9 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
   });
 
   if (endpointCandidates.length === 0) {
+    logBookingEvent('warn', 'Passenger verifier unavailable: no endpoint candidates', {
+      bookingRef: maskIdentifier(bookingRef),
+    });
     return { valid: false, reason: 'VERIFIER_NOT_CONFIGURED' };
   }
 
@@ -134,6 +152,10 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
       : { success: false, reason: 'APPCHECK_DISABLED' };
 
     if (useAppCheck && !appCheckResult.success && strictAppCheck) {
+      logBookingEvent('warn', 'Passenger verifier blocked by strict App Check', {
+        bookingRef: maskIdentifier(bookingRef),
+        appCheckFailureReason: appCheckResult.reason,
+      });
       return {
         valid: false,
         reason: 'VERIFIER_APPCHECK_UNAVAILABLE',
@@ -154,6 +176,12 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
     }
 
     for (const endpoint of endpointCandidates) {
+      logBookingEvent('debug', 'Passenger verifier endpoint attempt started', {
+        bookingRef: maskIdentifier(bookingRef),
+        endpoint,
+        timeoutMs,
+        useAppCheck,
+      });
       const response = await fetch(endpoint, {
         method: 'POST',
         headers,
@@ -170,6 +198,11 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
           });
           continue;
         }
+        logBookingEvent('warn', 'Passenger verifier returned invalid response', {
+          bookingRef: maskIdentifier(bookingRef),
+          endpoint,
+          status: response.status,
+        });
         return { valid: false, reason: 'VERIFIER_INVALID_RESPONSE' };
       }
 
@@ -181,15 +214,36 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
           });
           continue;
         }
+        logBookingEvent('warn', 'Passenger verifier rejected request', {
+          bookingRef: maskIdentifier(bookingRef),
+          endpoint,
+          status: response.status,
+          reason: payload?.reason || 'VERIFIER_REQUEST_FAILED',
+        });
         return { valid: false, reason: payload?.reason || 'VERIFIER_REQUEST_FAILED' };
       }
 
+      logBookingEvent('info', 'Passenger verifier accepted request', {
+        bookingRef: maskIdentifier(bookingRef),
+        endpoint,
+        status: response.status,
+        valid: Boolean(payload?.valid),
+        reason: payload?.reason || null,
+      });
       return payload;
     }
 
+    logBookingEvent('warn', 'Passenger verifier endpoint not found', {
+      bookingRef: maskIdentifier(bookingRef),
+      endpointCandidateCount: endpointCandidates.length,
+    });
     return { valid: false, reason: 'VERIFIER_NOT_FOUND' };
   } catch (error) {
     if (error?.name === 'AbortError') {
+      logBookingEvent('warn', 'Passenger verifier timed out', {
+        bookingRef: maskIdentifier(bookingRef),
+        timeoutMs,
+      });
       return { valid: false, reason: 'VERIFIER_TIMEOUT' };
     }
 
@@ -445,6 +499,9 @@ const getTourManifest = async (tourCodeOriginal) => {
   try {
     // Validate inputs
     const validatedTourCode = validateTourCode(tourCodeOriginal);
+    logBookingEvent('info', 'Manifest fetch started', {
+      tourCode: maskIdentifier(validatedTourCode),
+    });
 
     if (!realtimeDb) {
       throw new Error('Realtime database not initialized');
@@ -464,6 +521,11 @@ const getTourManifest = async (tourCodeOriginal) => {
     } else if (tourCodeOriginal && tourCodeOriginal.includes('_')) {
       tourCodeForSearch = tourCodeOriginal.replace(/_/g, ' ');
     }
+    logBookingEvent('debug', 'Manifest fetch resolved booking search code', {
+      tourId,
+      tourCodeForSearch: maskIdentifier(tourCodeForSearch),
+      originalHadUnderscore: Boolean(tourCodeOriginal && tourCodeOriginal.includes('_')),
+    });
 
     const bookingsQuery = realtimeDb.ref('bookings')
       .orderByChild('tourCode')
@@ -475,6 +537,11 @@ const getTourManifest = async (tourCodeOriginal) => {
       bookingsQuery.once('value'),
       manifestRef.once('value')
     ]);
+    logBookingEvent('info', 'Manifest snapshots loaded', {
+      tourId,
+      bookingsSnapshotExists: bookingsSnapshot.exists(),
+      manifestSnapshotExists: manifestSnapshot.exists(),
+    });
 
     const bookings = [];
     const manifestData = manifestSnapshot.val() || {};
@@ -521,6 +588,14 @@ const getTourManifest = async (tourCodeOriginal) => {
       return acc;
     }, { totalBookings: bookings.length, totalPax: 0, checkedIn: 0, noShows: 0 });
 
+    logBookingEvent('info', 'Manifest fetch completed', {
+      tourId,
+      bookingCount: bookings.length,
+      totalPax: stats.totalPax,
+      checkedIn: stats.checkedIn,
+      noShows: stats.noShows,
+    });
+
     return {
       tourId,
       bookings,
@@ -528,7 +603,7 @@ const getTourManifest = async (tourCodeOriginal) => {
     };
 
   } catch (error) {
-    logger?.error?.('Manifest', 'Error fetching tour manifest', { tourCode, error: error?.message || String(error) });
+    logger?.error?.('Manifest', 'Error fetching tour manifest', { tourCode: maskIdentifier(tourCodeOriginal), error: error?.message || String(error) });
     throw error;
   }
 };
@@ -539,9 +614,19 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
     const validatedTourCode = validateTourCode(payload.tourCode);
     const validatedBookingRef = validateBookingRef(payload.bookingRef);
     validatePassengerStatuses(payload.passengerStatuses || []);
+    logBookingEvent('info', 'Direct manifest update started', {
+      tourCode: maskIdentifier(validatedTourCode),
+      bookingRef: maskIdentifier(validatedBookingRef),
+      passengerStatusCount: payload.passengerStatuses?.length || 0,
+      hasIdempotencyKey: Boolean(payload.idempotencyKey),
+    });
 
     const db = dbInstance || realtimeDb;
     if (!db) {
+      logBookingEvent('warn', 'Direct manifest update skipped without database', {
+        tourCode: maskIdentifier(validatedTourCode),
+        bookingRef: maskIdentifier(validatedBookingRef),
+      });
       return { success: false, error: 'Realtime database not initialized' };
     }
 
@@ -574,6 +659,13 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
       bookingManifestRef.update(manifestUpdate),
       new Promise((_, reject) => setTimeout(() => reject(new Error('Manifest update timeout')), 15000))
     ]);
+    logBookingEvent('info', 'Direct manifest update completed', {
+      tourId,
+      bookingRef: maskIdentifier(validatedBookingRef),
+      status: parentStatus,
+      passengerStatusCount: payload.passengerStatuses?.length || 0,
+      idempotencyKey: maskIdentifier(manifestUpdate.idempotencyKey),
+    });
 
     return {
       success: true,
@@ -584,6 +676,11 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
       idempotencyKey: manifestUpdate.idempotencyKey,
     };
   } catch (error) {
+    logBookingEvent('error', 'Direct manifest update failed', {
+      tourCode: maskIdentifier(payload?.tourCode),
+      bookingRef: maskIdentifier(payload?.bookingRef),
+      error: error?.message || String(error),
+    });
     return { success: false, error: error.message };
   }
 };
@@ -593,6 +690,13 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
     const validatedTourCode = validateTourCode(tourCode);
     const validatedBookingRef = validateBookingRef(bookingRef);
     validatePassengerStatuses(passengerStatuses);
+    logBookingEvent('info', 'Manifest update requested', {
+      tourCode: maskIdentifier(validatedTourCode),
+      bookingRef: maskIdentifier(validatedBookingRef),
+      passengerStatusCount: passengerStatuses.length,
+      onlineOption: options.online,
+      hasDbOverride: Boolean(options.db),
+    });
 
     const parentStatus = deriveParentStatusFromPassengers(passengerStatuses);
     const nowIso = new Date().toISOString();
@@ -608,6 +712,12 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
 
     const onlineResult = await applyManifestUpdateDirect(directPayload, options.db || realtimeDb);
     if (onlineResult.success) {
+      logBookingEvent('info', 'Manifest update completed online', {
+        tourCode: maskIdentifier(validatedTourCode),
+        bookingRef: maskIdentifier(validatedBookingRef),
+        status: parentStatus,
+        reconciled: Boolean(onlineResult.reconciled),
+      });
       return {
         success: true,
         queued: false,
@@ -621,6 +731,13 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
 
     const shouldQueue = !options.online || /timeout|network|unavailable/i.test(onlineResult.error || '');
     if (!shouldQueue || !offlineSyncService?.enqueueAction) {
+      logBookingEvent('warn', 'Manifest update failed without queue fallback', {
+        tourCode: maskIdentifier(validatedTourCode),
+        bookingRef: maskIdentifier(validatedBookingRef),
+        error: onlineResult.error || 'unknown',
+        shouldQueue,
+        hasOfflineSync: Boolean(offlineSyncService?.enqueueAction),
+      });
       throw new Error(onlineResult.error || 'Failed to update manifest');
     }
 
@@ -636,9 +753,21 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
     });
 
     if (!queued.success) {
+      logBookingEvent('warn', 'Manifest update queue enqueue failed', {
+        tourCode: maskIdentifier(validatedTourCode),
+        bookingRef: maskIdentifier(validatedBookingRef),
+        error: queued.error || 'unknown',
+      });
       throw new Error(queued.error || 'Failed to queue manifest update');
     }
 
+    logBookingEvent('info', 'Manifest update queued for replay', {
+      tourCode: maskIdentifier(validatedTourCode),
+      bookingRef: maskIdentifier(validatedBookingRef),
+      status: parentStatus,
+      idempotencyKey: maskIdentifier(idempotencyKey),
+      originalError: onlineResult.error || null,
+    });
     return {
       success: true,
       queued: true,
@@ -663,6 +792,10 @@ const assignDriverToTour = async (driverId, tourCode) => {
     // Validate inputs
     const validatedDriverId = validateDriverId(driverId);
     const validatedTourCode = validateTourCode(tourCode);
+    logBookingEvent('info', 'Driver assignment requested', {
+      driverId: maskIdentifier(validatedDriverId),
+      tourCode: maskIdentifier(validatedTourCode),
+    });
 
     if (!realtimeDb) {
       throw new Error('Realtime database not initialized');
@@ -674,6 +807,10 @@ const assignDriverToTour = async (driverId, tourCode) => {
 
     const currentUser = auth.currentUser;
     if (!currentUser) {
+      logBookingEvent('warn', 'Driver assignment blocked without authenticated user', {
+        driverId: maskIdentifier(validatedDriverId),
+        tourCode: maskIdentifier(validatedTourCode),
+      });
       throw new Error('You must be logged in to assign a tour');
     }
 
@@ -683,12 +820,20 @@ const assignDriverToTour = async (driverId, tourCode) => {
     // Verify tour exists
     const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
     if (!tourSnapshot.exists()) {
+      logBookingEvent('warn', 'Driver assignment failed because tour was not found', {
+        driverId: maskIdentifier(validatedDriverId),
+        tourId,
+      });
       throw new Error('Tour not found');
     }
 
     // Verify driver exists
     const driverSnapshot = await realtimeDb.ref(`drivers/${validatedDriverId}`).once('value');
     if (!driverSnapshot.exists()) {
+      logBookingEvent('warn', 'Driver assignment failed because driver was not found', {
+        driverId: maskIdentifier(validatedDriverId),
+        tourId,
+      });
       throw new Error('Driver not found');
     }
 
@@ -724,13 +869,19 @@ const assignDriverToTour = async (driverId, tourCode) => {
         setTimeout(() => reject(new Error('Driver assignment timeout')), 10000)
       )
     ]);
+    logBookingEvent('info', 'Driver assignment completed', {
+      driverId: maskIdentifier(validatedDriverId),
+      tourId,
+      previousTourId,
+      updatePathCount: Object.keys(updates).length,
+    });
 
     return { success: true, tourId };
 
   } catch (error) {
     logger?.error?.('Auth', 'Error assigning driver to tour', {
       driverId: maskIdentifier(driverId),
-      tourCode,
+      tourCode: maskIdentifier(tourCode),
       error: error?.message || String(error),
     });
     throw error;
@@ -743,6 +894,10 @@ const validateBookingReference = async (reference, email) => {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
 
     const upperRef = reference.toUpperCase().trim();
+    logBookingEvent('info', 'Login reference validation started', {
+      reference: maskIdentifier(upperRef),
+      hasEmail: Boolean(email),
+    });
 
     // --- 1. CHECK: Is it a Driver? ---
     const driverSnapshot = await realtimeDb.ref(`drivers/${upperRef}`).once('value');
@@ -782,6 +937,13 @@ const validateBookingReference = async (reference, email) => {
           };
         }
       }
+
+      logBookingEvent('info', 'Driver login reference validated', {
+        driverId: maskIdentifier(upperRef),
+        assignedTourId,
+        hasResolvedTour: Boolean(resolvedTour),
+        assignmentStatus: assignedTourId ? (resolvedTour ? 'ASSIGNED' : 'ASSIGNED_TOUR_NOT_FOUND') : 'UNASSIGNED',
+      });
       
       return {
         valid: true,
@@ -801,6 +963,9 @@ const validateBookingReference = async (reference, email) => {
     // --- 2. CHECK: Is it a Passenger Booking? ---
     const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
     if (!normalizedEmail) {
+      logBookingEvent('warn', 'Passenger login validation blocked without email', {
+        bookingRef: maskIdentifier(upperRef),
+      });
       return { valid: false, error: 'Email is required for passenger login verification' };
     }
 
@@ -810,6 +975,10 @@ const validateBookingReference = async (reference, email) => {
     });
 
     if (!passengerVerification?.valid) {
+      logBookingEvent('warn', 'Passenger login verifier rejected credentials', {
+        bookingRef: maskIdentifier(upperRef),
+        reason: passengerVerification?.reason || 'unknown',
+      });
       const reasonToMessage = {
         BOOKING_NOT_FOUND: 'Booking reference not found',
         EMAIL_MISMATCH: 'Email does not match this booking reference',
@@ -837,6 +1006,9 @@ const validateBookingReference = async (reference, email) => {
     const bookingSnapshot = await realtimeDb.ref(`bookings/${resolvedBookingRef}`).once('value');
 
     if (!bookingSnapshot.exists()) {
+      logBookingEvent('warn', 'Passenger login booking missing after verifier success', {
+        bookingRef: maskIdentifier(resolvedBookingRef),
+      });
       return { valid: false, error: 'Booking reference not found' };
     }
 
@@ -845,12 +1017,19 @@ const validateBookingReference = async (reference, email) => {
 
     const tourId = resolveVerifierTourId(passengerVerification, bookingData);
     if (!tourId) {
+      logBookingEvent('warn', 'Passenger login tour id unavailable after verifier success', {
+        bookingRef: maskIdentifier(resolvedBookingRef),
+      });
       return { valid: false, error: 'Tour information not available' };
     }
 
     const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
 
     if (!tourSnapshot.exists()) {
+      logBookingEvent('warn', 'Passenger login tour missing after verifier success', {
+        bookingRef: maskIdentifier(resolvedBookingRef),
+        tourId,
+      });
       return { valid: false, error: 'Tour information not available' };
     }
 
@@ -859,12 +1038,23 @@ const validateBookingReference = async (reference, email) => {
     const reconciledParticipantCount = await ensureTourParticipantCount(tourId, realtimeDb);
 
     if (!tourData.isActive) {
+      logBookingEvent('warn', 'Passenger login blocked for inactive tour', {
+        bookingRef: maskIdentifier(resolvedBookingRef),
+        tourId,
+      });
       return { valid: false, error: 'This tour is no longer active' };
     }
 
     const { stablePassengerId, identityVersion } = buildPassengerStableIdentity({
       bookingRef: resolvedBookingRef,
       normalizedEmail,
+    });
+
+    logBookingEvent('info', 'Passenger login reference validated', {
+      bookingRef: maskIdentifier(resolvedBookingRef),
+      tourId,
+      hasStablePassengerId: Boolean(stablePassengerId),
+      participantCount: reconciledParticipantCount,
     });
 
     return {
@@ -883,7 +1073,10 @@ const validateBookingReference = async (reference, email) => {
       }
     };
   } catch (error) {
-    logger?.error?.('Auth', 'Error validating booking reference', { error: error?.message || String(error) });
+    logger?.error?.('Auth', 'Error validating booking reference', {
+      reference: maskIdentifier(reference),
+      error: error?.message || String(error),
+    });
     return { valid: false, error: 'Error checking booking reference' };
   }
 };
@@ -916,6 +1109,11 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
     // Validate inputs
     const validatedTourId = validateTourCode(tourId); // tourId follows same validation as tourCode
     const validatedUserId = validateUserId(userId);
+    logBookingEvent('info', 'Join tour requested', {
+      tourId: validatedTourId,
+      userId: maskIdentifier(validatedUserId),
+      hasDbOverride: Boolean(dbInstance),
+    });
 
     const db = dbInstance || realtimeDb;
     if (!db) {
@@ -930,6 +1128,10 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
     }
 
     if (tourData.isActive === false) {
+      logBookingEvent('warn', 'Join tour blocked for inactive tour', {
+        tourId: validatedTourId,
+        userId: maskIdentifier(validatedUserId),
+      });
       throw new Error('Tour is no longer active');
     }
 
@@ -939,6 +1141,11 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
     // User already joined - return current count
     if (participantSnapshot.exists()) {
       const reconciledCount = await ensureTourParticipantCount(validatedTourId, db);
+      logBookingEvent('info', 'Join tour skipped because user already joined', {
+        tourId: validatedTourId,
+        userId: maskIdentifier(validatedUserId),
+        currentParticipants: reconciledCount,
+      });
       return { success: true, currentParticipants: reconciledCount, alreadyJoined: true };
     }
 
@@ -976,10 +1183,20 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
     if (!transactionResult?.committed) {
       // Transaction aborted - likely user already joined
       const reconciledCount = await ensureTourParticipantCount(validatedTourId, db);
+      logBookingEvent('warn', 'Join tour transaction aborted', {
+        tourId: validatedTourId,
+        userId: maskIdentifier(validatedUserId),
+        currentParticipants: reconciledCount,
+      });
       return { success: true, currentParticipants: reconciledCount, alreadyJoined: true };
     }
 
     const finalSnapshot = transactionResult.snapshot.val();
+    logBookingEvent('info', 'Join tour completed', {
+      tourId: validatedTourId,
+      userId: maskIdentifier(validatedUserId),
+      currentParticipants: finalSnapshot.currentParticipants,
+    });
     return {
       success: true,
       currentParticipants: finalSnapshot.currentParticipants,
@@ -995,17 +1212,26 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
 const getTourItinerary = async (tourId) => {
   try {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
+    logBookingEvent('info', 'Passenger itinerary fetch started', { tourId });
 
     const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
-    if (!tourSnapshot.exists()) return null;
+    if (!tourSnapshot.exists()) {
+      logBookingEvent('warn', 'Passenger itinerary fetch returned missing tour', { tourId });
+      return null;
+    }
 
     const tourData = tourSnapshot.val();
     const itineraryData = tourData.itinerary;
 
     if (itineraryData && typeof itineraryData === 'object' && Array.isArray(itineraryData.days)) {
+      logBookingEvent('info', 'Passenger itinerary fetch completed with stored itinerary', {
+        tourId,
+        dayCount: itineraryData.days.length,
+      });
       return { ...itineraryData, title: itineraryData.title || tourData.name };
     }
 
+    logBookingEvent('warn', 'Passenger itinerary missing structured days; using fallback', { tourId });
     return {
       title: tourData.name,
       days: [{ day: 1, content: 'Itinerary to be confirmed' }]
@@ -1020,11 +1246,20 @@ const getTourItinerary = async (tourId) => {
 const getDriverItinerary = async (tourId) => {
   try {
     if (!realtimeDb) throw new Error('Realtime database not initialized');
+    logBookingEvent('info', 'Driver itinerary fetch started', { tourId });
 
     const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
-    if (!tourSnapshot.exists()) return null;
+    if (!tourSnapshot.exists()) {
+      logBookingEvent('warn', 'Driver itinerary fetch returned missing tour', { tourId });
+      return null;
+    }
 
     const tourData = tourSnapshot.val();
+    logBookingEvent('info', 'Driver itinerary fetch completed', {
+      tourId,
+      hasDriverItinerary: Boolean(tourData.driver_itinerary),
+      hasDays: Boolean(tourData.days),
+    });
     return {
       driverItinerary: tourData.driver_itinerary || null,
       tourName: tourData.name || 'Tour',

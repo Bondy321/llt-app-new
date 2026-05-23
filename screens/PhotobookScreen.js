@@ -791,16 +791,40 @@ export default function PhotobookScreen({
 
   const handleDeletePhoto = async (photo) => {
     try {
+      tracePrivatePhotos('delete_photo_requested', {
+        photo: summarizePhotoRecord(photo),
+      }, { flush: true });
       if (typeof photoService.deletePrivatePhoto === 'function') {
         await photoService.deletePrivatePhoto(tourId, principalId, photo.id);
       }
+      tracePrivatePhotos('delete_photo_completed', {
+        photoId: maskIdentifier(photo?.id),
+      }, { flush: true });
     } catch (error) {
-      console.error('Delete error:', error);
+      tracePrivatePhotos('delete_photo_failed', {
+        photo: summarizePhotoRecord(photo),
+        error: error?.message,
+        code: error?.code || null,
+        stack: error?.stack,
+      }, { flush: true });
+      logger.error('Photobook', 'Private photo delete failed', {
+        tourId,
+        principalId: maskIdentifier(principalId),
+        photoId: maskIdentifier(photo?.id),
+        error: error?.message,
+        code: error?.code || null,
+      });
       Alert.alert('Error', 'Could not delete the photo. Please try again.');
     }
   };
 
-  const onRefresh = useCallback(() => refreshPhotos(), [refreshPhotos]);
+  const onRefresh = useCallback(() => {
+    tracePrivatePhotos('gallery_refresh_requested', {
+      currentPhotoCount: visiblePhotos.length,
+      queueCount: photoQueueItems.length,
+    });
+    return refreshPhotos();
+  }, [photoQueueItems.length, refreshPhotos, tracePrivatePhotos, visiblePhotos.length]);
 
   const onViewableItemsChanged = useCallback(({ viewableItems }) => {
     const viewablePhotos = [];

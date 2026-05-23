@@ -25,7 +25,7 @@ import { realtimeDb } from '../firebase';
 import { assignDriverToTour } from '../services/bookingServiceRealtime';
 import offlineSyncService from '../services/offlineSyncService';
 import { createPersistenceProvider } from '../services/persistenceProvider';
-import logger from '../services/loggerService';
+import logger, { maskIdentifier } from '../services/loggerService';
 import { getMinutesAgo } from '../services/timeUtils';
 import { COLORS as THEME } from '../theme';
 
@@ -97,6 +97,15 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
   const sanitizeTourId = useCallback((tourCode) => (tourCode ? tourCode.replace(/\s+/g, '_') : null), []);
   const autoSharePreferenceKey = `AUTO_SHARE_${driverData?.id || 'unknown'}`;
+
+  useEffect(() => {
+    logger.trackScreen('DriverHome', {
+      driverId: maskIdentifier(driverData?.id),
+      activeTourId,
+      hasAssignedTour: Boolean(activeTourId),
+      autoShareEnabled,
+    });
+  }, [activeTourId, autoShareEnabled, driverData?.id]);
 
   const getLastUpdateAgeMinutes = useCallback((timestamp) => {
     const minutesAgo = getMinutesAgo(timestamp);
@@ -177,16 +186,27 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
     const loadAutoSharePreference = async () => {
       try {
+        logger.debug('DriverHomeScreen', 'Auto-share preference load started', {
+          driverId: maskIdentifier(driverData?.id),
+        });
         const stored = await persistenceRef.current.getItemAsync(autoSharePreferenceKey);
         if (cancelled) return;
         const enabled = stored === 'true';
         setAutoShareEnabled(enabled);
         setAutoShareStatus(enabled ? 'Waiting for next background location share' : 'Auto-share is off');
+        logger.info('DriverHomeScreen', 'Auto-share preference loaded', {
+          driverId: maskIdentifier(driverData?.id),
+          enabled,
+        });
       } catch (error) {
         if (!cancelled) {
           setAutoShareEnabled(false);
           setAutoShareStatus('Auto-share is off');
         }
+        logger.warn('DriverHomeScreen', 'Auto-share preference load failed', {
+          driverId: maskIdentifier(driverData?.id),
+          error: error?.message || String(error),
+        });
       }
     };
 
@@ -199,8 +219,22 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
   useEffect(() => {
     if (!activeTourId) return;
+    logger.debug('DriverHomeScreen', 'Tour pack metadata load started', { activeTourId });
     offlineSyncService.getTourPackMeta(activeTourId, 'driver').then((res) => {
-      if (res.success) setCacheStatusLabel(offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label);
+      if (res.success) {
+        const label = offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label;
+        setCacheStatusLabel(label);
+        logger.info('DriverHomeScreen', 'Tour pack metadata loaded', {
+          activeTourId,
+          lastSyncedAt: res.data?.lastSyncedAt || null,
+          label,
+        });
+      } else {
+        logger.warn('DriverHomeScreen', 'Tour pack metadata load failed', {
+          activeTourId,
+          error: res.error || 'unknown',
+        });
+      }
     });
   }, [activeTourId]);
 
@@ -250,11 +284,25 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     if (!activeTourId) return;
 
     const locationRef = realtimeDb.ref(`tours/${activeTourId}/driverLocation`);
+    logger.debug('DriverHomeScreen', 'Existing driver location lookup started', { activeTourId });
     locationRef.once('value').then((snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
         setLastLocationUpdate(data);
+        logger.info('DriverHomeScreen', 'Existing driver location loaded', {
+          activeTourId,
+          hasTimestamp: Boolean(data?.timestamp || data?.lastUpdated),
+          source: data?.source || null,
+          accuracy: Number.isFinite(Number(data?.accuracy)) ? Math.round(Number(data.accuracy)) : null,
+        });
+      } else {
+        logger.info('DriverHomeScreen', 'Existing driver location empty', { activeTourId });
       }
+    }).catch((error) => {
+      logger.warn('DriverHomeScreen', 'Existing driver location lookup failed', {
+        activeTourId,
+        error: error?.message || String(error),
+      });
     });
   }, [activeTourId]);
 
@@ -262,6 +310,11 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const getAddressFromCoords = async (latitude, longitude) => {
     try {
       setAddressLoading(true);
+      logger.debug('DriverHomeScreen', 'Reverse geocode started', {
+        activeTourId,
+        latitudeApprox: Number.isFinite(Number(latitude)) ? Number(Number(latitude).toFixed(3)) : null,
+        longitudeApprox: Number.isFinite(Number(longitude)) ? Number(Number(longitude).toFixed(3)) : null,
+      });
       const result = await Location.reverseGeocodeAsync({
         latitude,
         longitude,
@@ -276,11 +329,20 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         if (addr.region) parts.push(addr.region);
 
         setAddressText(parts.join(', ') || 'Address unavailable');
+        logger.info('DriverHomeScreen', 'Reverse geocode completed', {
+          activeTourId,
+          resultCount: result.length,
+          hasAddress: parts.length > 0,
+        });
       } else {
         setAddressText('Address unavailable');
+        logger.warn('DriverHomeScreen', 'Reverse geocode returned no results', { activeTourId });
       }
     } catch (error) {
-      console.error('Geocoding error:', error);
+      logger.warn('DriverHomeScreen', 'Reverse geocode failed', {
+        activeTourId,
+        error: error?.message || String(error),
+      });
       setAddressText('Could not determine address');
     } finally {
       setAddressLoading(false);
@@ -288,23 +350,39 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   };
 
   const captureCurrentLocationWithPermission = async (accuracy = Location.Accuracy.High) => {
+    logger.debug('DriverHomeScreen', 'Location permission check started', { activeTourId, accuracy });
     const existingPermission = await Location.getForegroundPermissionsAsync();
     let permissionStatus = existingPermission?.status;
 
     if (permissionStatus !== 'granted') {
+      logger.info('DriverHomeScreen', 'Location permission request started', { activeTourId, previousStatus: permissionStatus });
       const requestedPermission = await Location.requestForegroundPermissionsAsync();
       permissionStatus = requestedPermission?.status;
     }
 
     if (permissionStatus !== 'granted') {
+      logger.warn('DriverHomeScreen', 'Location permission denied', { activeTourId, permissionStatus });
       return { success: false, error: 'permission-denied' };
     }
 
     const location = await Location.getCurrentPositionAsync({ accuracy });
+    logger.info('DriverHomeScreen', 'Location captured', {
+      activeTourId,
+      accuracy: Number.isFinite(Number(location?.coords?.accuracy)) ? Math.round(Number(location.coords.accuracy)) : null,
+      requestedAccuracy: accuracy,
+    });
     return { success: true, location };
   };
 
   const uploadLocationUpdate = async ({ latitude, longitude, accuracy, timestamp, address }, source = 'manual') => {
+    logger.info('DriverHomeScreen', 'Driver location upload started', {
+      activeTourId,
+      source,
+      hasAddress: Boolean(address),
+      accuracy: Number.isFinite(Number(accuracy)) ? Math.round(Number(accuracy)) : null,
+      latitudeApprox: Number.isFinite(Number(latitude)) ? Number(Number(latitude).toFixed(3)) : null,
+      longitudeApprox: Number.isFinite(Number(longitude)) ? Number(Number(longitude).toFixed(3)) : null,
+    });
     await realtimeDb.ref(`tours/${activeTourId}/driverLocation`).set({
       latitude,
       longitude,
@@ -313,6 +391,11 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       address: address || 'Address unavailable',
       accuracy,
       source,
+    });
+    logger.info('DriverHomeScreen', 'Driver location upload completed', {
+      activeTourId,
+      source,
+      timestamp,
     });
 
     setLastLocationUpdate({
@@ -329,6 +412,9 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   // Function to capture location and show preview
   const handleCaptureLocation = async () => {
     if (!activeTourId) {
+      logger.warn('DriverHomeScreen', 'Manual location capture blocked without tour', {
+        driverId: maskIdentifier(driverData?.id),
+      });
       showBanner({
         type: 'warning',
         message: 'Join a tour to share your pickup location.',
@@ -343,11 +429,16 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     }
 
     setUpdatingLocation(true);
+    logger.info('DriverHomeScreen', 'Manual location capture started', { activeTourId });
 
     try {
       // 1. Request Permission
       const captureResult = await captureCurrentLocationWithPermission(Location.Accuracy.High);
       if (!captureResult.success) {
+        logger.warn('DriverHomeScreen', 'Manual location capture blocked by permission', {
+          activeTourId,
+          reason: captureResult.error,
+        });
         Alert.alert('Permission Denied', 'Allow location access to share your pickup point.');
         setUpdatingLocation(false);
         return;
@@ -371,9 +462,16 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
       // 4. Show preview modal
       setPreviewModalVisible(true);
+      logger.info('DriverHomeScreen', 'Manual location preview ready', {
+        activeTourId,
+        accuracy: Number.isFinite(Number(accuracy)) ? Math.round(Number(accuracy)) : null,
+      });
 
     } catch (error) {
-      console.error(error);
+      logger.error('DriverHomeScreen', 'Manual location capture failed', {
+        activeTourId,
+        error: error?.message || String(error),
+      });
       showBanner({
         type: 'error',
         message: 'Couldn’t get your location. Retry.',
@@ -394,6 +492,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     }
 
     setConfirmingLocation(true);
+    logger.info('DriverHomeScreen', 'Manual location confirm started', { activeTourId });
 
     try {
       const { latitude, longitude, timestamp } = previewLocation;
@@ -424,9 +523,16 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         type: 'success',
         message: 'Location shared. Passengers can now see your pickup point.',
       });
+      logger.info('DriverHomeScreen', 'Manual location confirm completed', {
+        activeTourId,
+        accuracy: Number.isFinite(Number(locationAccuracy)) ? Math.round(Number(locationAccuracy)) : null,
+      });
 
     } catch (error) {
-      console.error(error);
+      logger.error('DriverHomeScreen', 'Manual location confirm failed', {
+        activeTourId,
+        error: error?.message || String(error),
+      });
       if (Platform.OS === 'ios') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
@@ -442,6 +548,11 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   };
 
   const handleToggleAutoShare = async (enabled) => {
+    logger.info('DriverHomeScreen', 'Auto-share toggle requested', {
+      activeTourId,
+      enabled,
+      hasAssignedTour: Boolean(activeTourId),
+    });
     if (enabled && !activeTourId) {
       showBanner({
         type: 'warning',
@@ -456,6 +567,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     setAutoShareStatus(enabled ? 'Waiting for next background location share' : 'Auto-share is off');
 
     await persistenceRef.current.setItemAsync(autoSharePreferenceKey, enabled ? 'true' : 'false');
+    logger.info('DriverHomeScreen', 'Auto-share preference saved', {
+      driverId: maskIdentifier(driverData?.id),
+      enabled,
+    });
   };
 
   useEffect(() => {
@@ -473,10 +588,19 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
       try {
         setAutoShareStatus('Auto-share running (battery-aware mode)');
+        logger.debug('DriverHomeScreen', 'Auto-share location capture started', {
+          activeTourId,
+          updatingLocation,
+          confirmingLocation,
+        });
         const captureResult = await captureCurrentLocationWithPermission(Location.Accuracy.Balanced);
 
         if (!captureResult.success) {
           setAutoShareStatus('Paused: location permission required');
+          logger.warn('DriverHomeScreen', 'Auto-share paused by permission', {
+            activeTourId,
+            reason: captureResult.error,
+          });
           return;
         }
 
@@ -496,10 +620,19 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
           setAutoShareLastRunAt(timestamp);
           setLocationAccuracy(accuracy);
           setAutoShareStatus('Live: periodic updates every 3 minutes');
+          logger.info('DriverHomeScreen', 'Auto-share location upload completed', {
+            activeTourId,
+            timestamp,
+            accuracy: Number.isFinite(Number(accuracy)) ? Math.round(Number(accuracy)) : null,
+          });
         }
       } catch (error) {
         if (!cancelled) {
           setAutoShareStatus('Paused: network issue, will retry automatically');
+          logger.warn('DriverHomeScreen', 'Auto-share run failed', {
+            activeTourId,
+            error: error?.message || String(error),
+          });
         }
       }
     };
@@ -526,6 +659,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     }
 
     setUpdatingLocation(true);
+    logger.info('DriverHomeScreen', 'Location preview refresh started', { activeTourId });
 
     try {
       let location = await Location.getCurrentPositionAsync({
@@ -543,9 +677,16 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       setLocationAccuracy(accuracy);
 
       await getAddressFromCoords(latitude, longitude);
+      logger.info('DriverHomeScreen', 'Location preview refresh completed', {
+        activeTourId,
+        accuracy: Number.isFinite(Number(accuracy)) ? Math.round(Number(accuracy)) : null,
+      });
 
     } catch (error) {
-      console.error(error);
+      logger.error('DriverHomeScreen', 'Location preview refresh failed', {
+        activeTourId,
+        error: error?.message || String(error),
+      });
       showBanner({
         type: 'error',
         message: 'Couldn’t refresh location. Retry.',
@@ -559,6 +700,9 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
   const handleOpenChat = () => {
     if (!activeTourId) {
+      logger.warn('DriverHomeScreen', 'Group chat navigation blocked without tour', {
+        driverId: maskIdentifier(driverData?.id),
+      });
       showBanner({
         contract: {
           ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKLOG_PENDING,
@@ -572,6 +716,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       });
       return;
     }
+    logger.info('DriverHomeScreen', 'Group chat navigation requested', {
+      activeTourId,
+      driverId: maskIdentifier(driverData?.id),
+    });
     onNavigate('Chat', {
       tourId: activeTourId,
       isDriver: true,
@@ -581,6 +729,9 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
   const handleOpenDriverChat = () => {
     if (!activeTourId) {
+      logger.warn('DriverHomeScreen', 'Internal driver chat navigation blocked without tour', {
+        driverId: maskIdentifier(driverData?.id),
+      });
       showBanner({
         contract: {
           ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKLOG_PENDING,
@@ -594,6 +745,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       });
       return;
     }
+    logger.info('DriverHomeScreen', 'Internal driver chat navigation requested', {
+      activeTourId,
+      driverId: maskIdentifier(driverData?.id),
+    });
     onNavigate('Chat', {
       tourId: activeTourId,
       isDriver: true,
@@ -605,6 +760,9 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   // --- Join Tour Logic ---
   const handleJoinTour = async () => {
     if (!inputTourCode.trim()) {
+      logger.warn('DriverHomeScreen', 'Join tour blocked without code', {
+        driverId: maskIdentifier(driverData?.id),
+      });
       showBanner({ contract: { ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKLOG_PENDING, label: 'Tour code required', description: 'Enter a valid tour code to continue.', canRetry: false, showLastSync: false, severity: 'warning', icon: 'form-textbox' } });
       return;
     }
@@ -614,14 +772,27 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     }
 
     setJoining(true);
+    logger.info('DriverHomeScreen', 'Join tour started', {
+      driverId: maskIdentifier(driverData?.id),
+      tourCode: maskIdentifier(inputTourCode.trim()),
+    });
     try {
       const driverId = driverData.id;
 
       const result = await assignDriverToTour(driverId, inputTourCode);
       const sanitizedTourId = result?.tourId || sanitizeTourId(inputTourCode.trim());
+      logger.info('DriverHomeScreen', 'Join tour assignment completed', {
+        driverId: maskIdentifier(driverId),
+        sanitizedTourId,
+        hadResultTourId: Boolean(result?.tourId),
+      });
 
       if (onDriverAssignmentChange && sanitizedTourId) {
         await onDriverAssignmentChange({ assignedTourId: sanitizedTourId });
+        logger.info('DriverHomeScreen', 'Driver assignment persisted to session', {
+          driverId: maskIdentifier(driverId),
+          sanitizedTourId,
+        });
       }
 
       if (sanitizedTourId) {
@@ -652,6 +823,11 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       setInputTourCode('');
 
     } catch (error) {
+      logger.error('DriverHomeScreen', 'Join tour failed', {
+        driverId: maskIdentifier(driverData?.id),
+        tourCode: maskIdentifier(inputTourCode.trim()),
+        error: error?.message || String(error),
+      });
       if (Platform.OS === 'ios') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
@@ -708,6 +884,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                 if (Platform.OS === 'ios') {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 }
+                logger.info('DriverHomeScreen', 'Logout requested', {
+                  driverId: maskIdentifier(driverData?.id),
+                  activeTourId,
+                });
                 onLogout();
               }}
               style={styles.iconButton}
@@ -733,6 +913,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                   if (Platform.OS === 'ios') {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   }
+                  logger.info('DriverHomeScreen', 'Join tour modal opened', {
+                    driverId: maskIdentifier(driverData?.id),
+                    activeTourId,
+                  });
                   setJoinModalVisible(true);
                 }}
                 accessibilityLabel="Change tour assignment"
@@ -859,6 +1043,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
               <TouchableOpacity
                 style={[styles.wideButton, styles.dangerButton]}
                 onPress={() => {
+                  logger.info('DriverHomeScreen', 'Safety navigation requested', {
+                    driverId: maskIdentifier(driverData?.id),
+                    activeTourId,
+                  });
                   onNavigate('SafetySupport', { from: 'DriverHome', mode: 'driver' });
                 }}
                 activeOpacity={0.9}
@@ -877,6 +1065,9 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                 style={[styles.wideButton, styles.infoButton]}
                 onPress={() => {
                   if (!activeTourId) {
+                    logger.warn('DriverHomeScreen', 'Manifest navigation blocked without tour', {
+                      driverId: maskIdentifier(driverData?.id),
+                    });
                     showBanner({
                       type: 'warning',
                       message: 'Join a tour to view the passenger manifest.',
@@ -885,6 +1076,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                     });
                     return;
                   }
+                  logger.info('DriverHomeScreen', 'Manifest navigation requested', {
+                    driverId: maskIdentifier(driverData?.id),
+                    activeTourId,
+                  });
                   onNavigate('PassengerManifest', { tourId: activeTourId });
                 }}
                 activeOpacity={0.9}
@@ -903,6 +1098,9 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                 style={[styles.wideButton, styles.purpleButton]}
                 onPress={() => {
                   if (!activeTourId) {
+                    logger.warn('DriverHomeScreen', 'Client itinerary navigation blocked without tour', {
+                      driverId: maskIdentifier(driverData?.id),
+                    });
                     showBanner({
                       type: 'warning',
                       message: 'Join a tour to open the client itinerary.',
@@ -911,6 +1109,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                     });
                     return;
                   }
+                  logger.info('DriverHomeScreen', 'Client itinerary navigation requested', {
+                    driverId: maskIdentifier(driverData?.id),
+                    activeTourId,
+                  });
                   onNavigate('Itinerary', { tourId: activeTourId, isDriver: true });
                 }}
                 activeOpacity={0.9}
@@ -929,6 +1131,9 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                 style={[styles.wideButton, styles.amberButton]}
                 onPress={() => {
                   if (!activeTourId) {
+                    logger.warn('DriverHomeScreen', 'Driver itinerary navigation blocked without tour', {
+                      driverId: maskIdentifier(driverData?.id),
+                    });
                     showBanner({
                       type: 'warning',
                       message: 'Join a tour to open the driver itinerary.',
@@ -937,6 +1142,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                     });
                     return;
                   }
+                  logger.info('DriverHomeScreen', 'Driver itinerary navigation requested', {
+                    driverId: maskIdentifier(driverData?.id),
+                    activeTourId,
+                  });
                   onNavigate('DriverItinerary', { tourId: activeTourId, isDriver: true });
                 }}
                 activeOpacity={0.9}

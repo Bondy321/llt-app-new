@@ -41,6 +41,7 @@ import {
 } from '../services/safetyService';
 import * as chatService from '../services/chatService';
 import offlineSyncService from '../services/offlineSyncService';
+import logger, { maskIdentifier } from '../services/loggerService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -513,9 +514,23 @@ export default function SafetySupportScreen({
   useEffect(() => {
     if (!tourData?.id) return;
     const role = mode === 'driver' ? 'driver' : 'passenger';
+    logger.debug('SafetySupportScreen', 'Tour pack metadata load started', { tourId: tourData.id, role });
     offlineSyncService.getTourPackMeta(tourData.id, role).then((res) => {
       if (res.success) {
-        setCacheStatusLabel(offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label);
+        const label = offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label;
+        setCacheStatusLabel(label);
+        logger.info('SafetySupportScreen', 'Tour pack metadata loaded', {
+          tourId: tourData.id,
+          role,
+          lastSyncedAt: res.data?.lastSyncedAt || null,
+          label,
+        });
+      } else {
+        logger.warn('SafetySupportScreen', 'Tour pack metadata load failed', {
+          tourId: tourData.id,
+          role,
+          error: res.error || 'unknown',
+        });
       }
     });
   }, [tourData?.id, mode]);
@@ -537,6 +552,17 @@ export default function SafetySupportScreen({
   const operationsNumber = '+441414876737';
   const tourId = tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
   const userName = bookingData?.passengerNames?.[0] || (isDriver ? tourData?.driverName : 'Passenger');
+
+  useEffect(() => {
+    logger.trackScreen('SafetySupport', {
+      tourId,
+      mode,
+      isConnected,
+      userId: maskIdentifier(userId),
+      hasTourData: Boolean(tourData),
+      hasBookingData: Boolean(bookingData),
+    });
+  }, [bookingData, isConnected, mode, tourData, tourId, userId]);
 
   // Get visible categories based on mode
   const visibleCategories = useMemo(() => {
@@ -573,7 +599,16 @@ export default function SafetySupportScreen({
   // Process offline queue when connected
   useEffect(() => {
     if (isConnected && offlineQueueCount > 0) {
+      logger.info('SafetySupportScreen', 'Processing offline safety queue after reconnect', {
+        userId: maskIdentifier(userId),
+        offlineQueueCount,
+      });
       processOfflineQueue(userId).then(({ processed, failed }) => {
+        logger.info('SafetySupportScreen', 'Offline safety queue processed', {
+          userId: maskIdentifier(userId),
+          processed,
+          failed,
+        });
         if (processed > 0) {
           Alert.alert(
             'Reports Synced',
@@ -581,30 +616,49 @@ export default function SafetySupportScreen({
           );
           setOfflineQueueCount(failed || 0);
         }
+      }).catch((error) => {
+        logger.error('SafetySupportScreen', 'Offline safety queue processing failed', {
+          userId: maskIdentifier(userId),
+          error: error?.message || String(error),
+        });
       });
     }
   }, [isConnected, offlineQueueCount, userId]);
 
   const loadTrustedContacts = async () => {
+    logger.debug('SafetySupportScreen', 'Trusted contacts load started');
     const contacts = await getTrustedContacts();
     setTrustedContacts(contacts);
+    logger.info('SafetySupportScreen', 'Trusted contacts loaded', { contactCount: contacts.length });
   };
 
   const checkOfflineQueue = async () => {
     const count = await getOfflineQueueCount();
     setOfflineQueueCount(count);
+    logger.info('SafetySupportScreen', 'Offline safety queue count loaded', { count });
   };
 
   const openDialer = (phone) => {
     if (!phone) {
+      logger.warn('SafetySupportScreen', 'Dialer blocked without phone', { mode, tourId });
       Alert.alert('Contact unavailable', 'No phone number is configured for this tour.');
       return;
     }
     const sanitized = phone.replace(/[^+\d]/g, '');
+    logger.info('SafetySupportScreen', 'Dialer opened', {
+      mode,
+      tourId,
+      phoneLength: sanitized.length,
+    });
     Linking.openURL(`tel:${sanitized}`);
   };
 
   const confirmEmergencyCall = () => {
+    logger.warn('SafetySupportScreen', 'Emergency call confirmation opened', {
+      mode,
+      tourId,
+      userId: maskIdentifier(userId),
+    });
     Alert.alert(
       'Call emergency services?',
       'Only continue for an extreme emergency requiring immediate police, fire, or ambulance response.',
@@ -621,6 +675,9 @@ export default function SafetySupportScreen({
 
   const handleRequestDriverCall = async () => {
     if (!tourId) {
+      logger.warn('SafetySupportScreen', 'Driver callback request blocked without tour id', {
+        userId: maskIdentifier(userId),
+      });
       Alert.alert('Unavailable', 'We could not find your tour right now. Please contact operations.');
       return;
     }
@@ -629,6 +686,12 @@ export default function SafetySupportScreen({
     const callbackRequestMessage = `Driver callback request: ${userName} (${bookingRef}) has requested a call as soon as possible.`;
 
     setRequestingDriverCall(true);
+    logger.info('SafetySupportScreen', 'Driver callback request started', {
+      tourId,
+      bookingRef: maskIdentifier(bookingRef),
+      userId: maskIdentifier(userId),
+      isConnected,
+    });
     const result = await chatService.sendInternalDriverMessage(
       tourId,
       callbackRequestMessage,
@@ -639,6 +702,10 @@ export default function SafetySupportScreen({
     setRequestingDriverCall(false);
 
     if (result?.success) {
+      logger.info('SafetySupportScreen', 'Driver callback request sent', {
+        tourId,
+        bookingRef: maskIdentifier(bookingRef),
+      });
       Alert.alert(
         'Callback requested',
         'Your request has been sent privately to the driver team. Please keep your phone nearby.'
@@ -646,6 +713,11 @@ export default function SafetySupportScreen({
       return;
     }
 
+    logger.warn('SafetySupportScreen', 'Driver callback request failed', {
+      tourId,
+      bookingRef: maskIdentifier(bookingRef),
+      error: result?.error || 'unknown',
+    });
     Alert.alert(
       'Could not send request',
       'Please try again, or contact operations directly if this is urgent.'
@@ -654,11 +726,22 @@ export default function SafetySupportScreen({
 
   const sendSMS = (phone, message) => {
     const encoded = encodeURIComponent(message);
+    logger.info('SafetySupportScreen', 'Emergency SMS compose opened', {
+      tourId,
+      phoneLength: phone?.replace?.(/[^+\d]/g, '')?.length || 0,
+      messageLength: message?.length || 0,
+    });
     Linking.openURL(`sms:${phone}?body=${encoded}`);
   };
 
   // ==================== SOS HANDLERS ====================
   const startSOS = async () => {
+    logger.warn('SafetySupportScreen', 'SOS countdown activated', {
+      mode,
+      tourId,
+      userId: maskIdentifier(userId),
+      includeLocation,
+    });
     if (Platform.OS === 'ios') {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     }
@@ -676,9 +759,18 @@ export default function SafetySupportScreen({
         });
         setCurrentCoords(location.coords);
         setLocationAccuracy(location.coords.accuracy);
+        logger.info('SafetySupportScreen', 'SOS location captured', {
+          tourId,
+          accuracy: Number.isFinite(Number(location?.coords?.accuracy)) ? Math.round(Number(location.coords.accuracy)) : null,
+        });
+      } else {
+        logger.warn('SafetySupportScreen', 'SOS location permission denied', { tourId, status });
       }
     } catch (error) {
-      console.warn('Could not get location for SOS');
+      logger.warn('SafetySupportScreen', 'SOS location capture failed', {
+        tourId,
+        error: error?.message || String(error),
+      });
     }
 
     // Start countdown
@@ -697,6 +789,10 @@ export default function SafetySupportScreen({
   };
 
   const cancelSOS = () => {
+    logger.info('SafetySupportScreen', 'SOS countdown cancelled', {
+      tourId,
+      userId: maskIdentifier(userId),
+    });
     if (sosTimerRef.current) {
       clearInterval(sosTimerRef.current);
     }
@@ -709,6 +805,12 @@ export default function SafetySupportScreen({
 
   const executeSOS = async () => {
     setSosActive(false);
+    logger.warn('SafetySupportScreen', 'SOS countdown completed', {
+      tourId,
+      userId: maskIdentifier(userId),
+      hasLocation: Boolean(currentCoords),
+      trustedContactCount: trustedContacts.length,
+    });
 
     if (Platform.OS === 'ios') {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -728,7 +830,17 @@ export default function SafetySupportScreen({
           coords: currentCoords,
           isSOS: true,
         });
+        logger.info('SafetySupportScreen', 'SOS safety event logged', {
+          tourId,
+          userId: maskIdentifier(userId),
+          hasLocation: true,
+        });
       } catch (error) {
+        logger.error('SafetySupportScreen', 'SOS safety event log failed', {
+          tourId,
+          userId: maskIdentifier(userId),
+          error: error?.message || String(error),
+        });
         // Keep emergency call flow non-blocking even if logging fails.
       }
     }
@@ -772,12 +884,18 @@ export default function SafetySupportScreen({
 
   // ==================== LIVE LOCATION HANDLERS ====================
   const toggleLiveLocation = async (enabled) => {
+    logger.info('SafetySupportScreen', 'Live location toggle requested', {
+      tourId,
+      userId: maskIdentifier(userId),
+      enabled,
+    });
     setLiveLocationUpdating(true);
 
     if (enabled) {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
+          logger.warn('SafetySupportScreen', 'Live location permission denied', { tourId, status });
           Alert.alert('Permission Denied', 'Location permission is required for live sharing.');
           setLiveLocationUpdating(false);
           return;
@@ -806,6 +924,11 @@ export default function SafetySupportScreen({
               true,
               location.coords
             );
+            logger.debug('SafetySupportScreen', 'Live location watch update sent', {
+              tourId,
+              userId: maskIdentifier(userId),
+              accuracy: Number.isFinite(Number(location?.coords?.accuracy)) ? Math.round(Number(location.coords.accuracy)) : null,
+            });
           }
         );
 
@@ -818,11 +941,21 @@ export default function SafetySupportScreen({
         );
 
         setLiveLocationSharing(true);
+        logger.info('SafetySupportScreen', 'Live location sharing started', {
+          tourId,
+          userId: maskIdentifier(userId),
+          accuracy: Number.isFinite(Number(location?.coords?.accuracy)) ? Math.round(Number(location.coords.accuracy)) : null,
+        });
 
         if (Platform.OS === 'ios') {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }
       } catch (error) {
+        logger.error('SafetySupportScreen', 'Live location sharing start failed', {
+          tourId,
+          userId: maskIdentifier(userId),
+          error: error?.message || String(error),
+        });
         Alert.alert('Error', 'Could not start location sharing. Please try again.');
       }
     } else {
@@ -839,6 +972,10 @@ export default function SafetySupportScreen({
       );
 
       setLiveLocationSharing(false);
+      logger.info('SafetySupportScreen', 'Live location sharing stopped', {
+        tourId,
+        userId: maskIdentifier(userId),
+      });
     }
 
     setLiveLocationUpdating(false);
@@ -848,13 +985,22 @@ export default function SafetySupportScreen({
   useEffect(() => {
     return () => {
       if (locationWatchRef.current) {
+        logger.debug('SafetySupportScreen', 'Live location watcher cleaned up', {
+          tourId,
+          userId: maskIdentifier(userId),
+        });
         locationWatchRef.current.remove();
       }
     };
-  }, []);
+  }, [tourId, userId]);
 
   // ==================== REPORT HANDLERS ====================
   const handleSelectCategory = (category) => {
+    logger.info('SafetySupportScreen', 'Safety category selected', {
+      tourId,
+      category,
+      mode,
+    });
     setSelectedCategory(category);
     setShowReportModal(true);
   };
@@ -863,6 +1009,14 @@ export default function SafetySupportScreen({
     if (!selectedCategory) return;
 
     setSubmitting(true);
+    logger.info('SafetySupportScreen', 'Safety report submit started', {
+      tourId,
+      category: selectedCategory,
+      severity: selectedSeverity,
+      includeLocation,
+      isConnected,
+      messageLength: customMessage.trim().length,
+    });
 
     try {
       let coords = null;
@@ -874,6 +1028,15 @@ export default function SafetySupportScreen({
             accuracy: Location.Accuracy.Balanced,
           });
           coords = location.coords;
+          logger.info('SafetySupportScreen', 'Safety report location captured', {
+            tourId,
+            accuracy: Number.isFinite(Number(location?.coords?.accuracy)) ? Math.round(Number(location.coords.accuracy)) : null,
+          });
+        } else {
+          logger.warn('SafetySupportScreen', 'Safety report location permission denied', {
+            tourId,
+            status,
+          });
         }
       }
 
@@ -889,6 +1052,12 @@ export default function SafetySupportScreen({
         message: meta?.description || 'Safety report',
         customMessage: customMessage.trim() || null,
         coords,
+      });
+      logger.info('SafetySupportScreen', 'Safety report submitted', {
+        tourId,
+        category: selectedCategory,
+        severity: selectedSeverity,
+        includedLocation: Boolean(coords),
       });
 
       if (Platform.OS === 'ios') {
@@ -907,6 +1076,12 @@ export default function SafetySupportScreen({
       setCustomMessage('');
     } catch (error) {
       if (!isConnected) {
+        logger.warn('SafetySupportScreen', 'Safety report queued offline', {
+          tourId,
+          category: selectedCategory,
+          severity: selectedSeverity,
+          error: error?.message || String(error),
+        });
         Alert.alert(
           'Report Queued',
           'You appear to be offline. Your report has been saved and will be submitted when you reconnect.',
@@ -914,6 +1089,12 @@ export default function SafetySupportScreen({
         );
         checkOfflineQueue();
       } else {
+        logger.error('SafetySupportScreen', 'Safety report submit failed', {
+          tourId,
+          category: selectedCategory,
+          severity: selectedSeverity,
+          error: error?.message || String(error),
+        });
         Alert.alert(
           'Error',
           'Could not submit report. Please try again or call operations directly.'
@@ -927,10 +1108,18 @@ export default function SafetySupportScreen({
   // ==================== CONTACT HANDLERS ====================
   const handleAddContact = async () => {
     if (!newContactName.trim() || !newContactPhone.trim()) {
+      logger.warn('SafetySupportScreen', 'Trusted contact add blocked by missing fields', {
+        hasName: Boolean(newContactName.trim()),
+        hasPhone: Boolean(newContactPhone.trim()),
+      });
       Alert.alert('Required', 'Please enter both name and phone number.');
       return;
     }
 
+    logger.info('SafetySupportScreen', 'Trusted contact add started', {
+      nameLength: newContactName.trim().length,
+      phoneLength: newContactPhone.replace(/[^+\d]/g, '').length,
+    });
     await addTrustedContact({
       name: newContactName.trim(),
       phone: newContactPhone.trim(),
@@ -944,9 +1133,13 @@ export default function SafetySupportScreen({
     if (Platform.OS === 'ios') {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
+    logger.info('SafetySupportScreen', 'Trusted contact add completed');
   };
 
   const handleRemoveContact = async (contactId) => {
+    logger.info('SafetySupportScreen', 'Trusted contact remove confirmation opened', {
+      contactId: maskIdentifier(contactId),
+    });
     Alert.alert(
       'Remove Contact',
       'Are you sure you want to remove this emergency contact?',
@@ -958,6 +1151,9 @@ export default function SafetySupportScreen({
           onPress: async () => {
             await removeTrustedContact(contactId);
             await loadTrustedContacts();
+            logger.info('SafetySupportScreen', 'Trusted contact removed', {
+              contactId: maskIdentifier(contactId),
+            });
           },
         },
       ]
@@ -967,6 +1163,9 @@ export default function SafetySupportScreen({
   // ==================== HISTORY HANDLERS ====================
   const loadHistory = async () => {
     setLoadingHistory(true);
+    logger.info('SafetySupportScreen', 'Safety history load started', {
+      userId: maskIdentifier(userId),
+    });
     const [history, queuedEvents] = await Promise.all([
       getSafetyHistory(userId),
       getOfflineQueuedSafetyEvents(),
@@ -979,6 +1178,12 @@ export default function SafetySupportScreen({
     setSafetyHistory(mergedHistory);
     setLoadingHistory(false);
     setShowHistoryModal(true);
+    logger.info('SafetySupportScreen', 'Safety history load completed', {
+      userId: maskIdentifier(userId),
+      remoteCount: history.length,
+      queuedCount: queuedEvents.length,
+      mergedCount: mergedHistory.length,
+    });
   };
 
   // ==================== RENDER ====================
@@ -995,6 +1200,7 @@ export default function SafetySupportScreen({
             style={styles.backButton}
             onPress={() => {
               if (Platform.OS === 'ios') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              logger.info('SafetySupportScreen', 'Back navigation requested', { tourId, mode });
               onBack();
             }}
             accessibilityLabel="Go back"

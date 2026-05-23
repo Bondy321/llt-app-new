@@ -14,6 +14,9 @@ const LOG_LEVELS = {
   FATAL: 4
 };
 
+const VERBOSE_RTDB_LOGGING_ENABLED = true;
+const VERBOSE_RTDB_MIN_LEVEL = 'DEBUG';
+
 const LOG_COLORS = {
   DEBUG: '\x1b[36m',
   INFO: '\x1b[32m',
@@ -107,7 +110,7 @@ class Logger {
     this.userId = null;
     this.sessionId = this.generateSessionId();
     this.deviceInfo = null;
-    this.maxLocalLogs = 1000;
+    this.maxLocalLogs = 5000;
     this.maxServerBatchSize = 100;
     this.flushDebounceMs = 750;
     this.maxRetryAttempts = 4;
@@ -116,6 +119,9 @@ class Logger {
     this.flushTimer = null;
     this.persistTimer = null;
     this.isFlushing = false;
+    this.sequence = 0;
+    this.serverMinLevelName = VERBOSE_RTDB_LOGGING_ENABLED ? VERBOSE_RTDB_MIN_LEVEL : 'WARN';
+    this.serverMinLevel = LOG_LEVELS[this.serverMinLevelName] ?? LOG_LEVELS.WARN;
 
     this.initializeLogger();
   }
@@ -161,11 +167,13 @@ class Logger {
     const color = LOG_COLORS[level];
     const reset = LOG_COLORS.RESET;
     const sanitizedData = redactSensitiveData(data || {});
+    this.sequence += 1;
 
     const consoleMessage = `${color}[${timestamp}] [${level}] [${component}]${reset} ${message}`;
 
     const logEntry = {
       id: `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
+      sequence: this.sequence,
       timestamp,
       level,
       component,
@@ -195,7 +203,7 @@ class Logger {
 
     if (LOG_LEVELS[level] >= LOG_LEVELS.ERROR) {
       this.scheduleServerFlush(true);
-    } else if (LOG_LEVELS[level] >= LOG_LEVELS.WARN) {
+    } else if (LOG_LEVELS[level] >= this.serverMinLevel) {
       this.scheduleServerFlush(false);
     }
   }
@@ -253,6 +261,7 @@ class Logger {
 
   buildServerPayload(log) {
     return redactSensitiveData({
+      sequence: log.sequence,
       timestamp: log.timestamp,
       level: log.level,
       component: log.component,
@@ -283,13 +292,14 @@ class Logger {
 
     this.isFlushing = true;
     try {
-      const warnAndAbove = this.logQueue.filter((log) => LOG_LEVELS[log.level] >= LOG_LEVELS.WARN);
-      if (warnAndAbove.length === 0) return;
+      const uploadableLogs = this.logQueue.filter((log) => LOG_LEVELS[log.level] >= this.serverMinLevel);
+      if (uploadableLogs.length === 0) return;
 
       const sentLogIds = new Set();
-      for (let i = 0; i < warnAndAbove.length; i += this.maxServerBatchSize) {
-        const chunk = warnAndAbove.slice(i, i + this.maxServerBatchSize);
-        await this.sendLogsToServer(chunk);
+      for (let i = 0; i < uploadableLogs.length; i += this.maxServerBatchSize) {
+        const chunk = uploadableLogs.slice(i, i + this.maxServerBatchSize);
+        const sent = await this.sendLogsToServer(chunk);
+        if (!sent) break;
         chunk.forEach((log) => sentLogIds.add(log.id));
       }
 
@@ -308,12 +318,14 @@ class Logger {
     try {
       if (!logs) {
         await this.flushServerQueue();
-        return;
+        return true;
       }
 
-      const logsToSend = logs.filter((log) => LOG_LEVELS[log.level] >= LOG_LEVELS.WARN);
+      if (!realtimeDb) return false;
 
-      if (logsToSend.length === 0) return;
+      const logsToSend = logs.filter((log) => LOG_LEVELS[log.level] >= this.serverMinLevel);
+
+      if (logsToSend.length === 0) return true;
 
       for (let i = 0; i < logsToSend.length; i += this.maxServerBatchSize) {
         const chunk = logsToSend.slice(i, i + this.maxServerBatchSize);
@@ -327,10 +339,13 @@ class Logger {
 
         await this.updateBatchWithRetry(batch);
       }
+
+      return true;
     } catch (error) {
       if (!this.isProduction) {
         console.error('Failed to send logs to server:', redactSensitiveData({ error: error?.message || 'Unknown error' }));
       }
+      return false;
     }
   }
 

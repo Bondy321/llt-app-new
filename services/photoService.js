@@ -72,7 +72,7 @@ const summarizeErrorForDbLog = (error) => ({
 
 const logPhotoDbEvent = (level, eventName, payload = {}) => {
   try {
-    const persistLevel = level === 'error' ? 'error' : 'warn';
+    const persistLevel = ['debug', 'info', 'warn', 'error'].includes(level) ? level : 'info';
     if (logger && typeof logger[persistLevel] === 'function') {
       logger[persistLevel]('PhotoService', eventName, payload);
     }
@@ -179,6 +179,11 @@ const deleteStoredPhotoObject = async ({
   if (!storagePath) return;
 
   try {
+    logPhotoDbEvent('debug', 'photo_storage_delete_start', {
+      label,
+      path: summarizePathForDbLog(storagePath),
+      timeoutMs,
+    });
     const fileRef = storageRefFn(storageInstance, storagePath);
     await Promise.race([
       deleteObjectFn(fileRef),
@@ -186,8 +191,16 @@ const deleteStoredPhotoObject = async ({
         setTimeout(() => reject(new Error(`${label} deletion timeout`)), timeoutMs)
       ),
     ]);
+    logPhotoDbEvent('debug', 'photo_storage_delete_success', {
+      label,
+      path: summarizePathForDbLog(storagePath),
+    });
   } catch (error) {
-    console.warn(`Could not delete ${label} from storage:`, error);
+    logPhotoDbEvent('warn', 'photo_storage_delete_failed', {
+      label,
+      path: summarizePathForDbLog(storagePath),
+      error: summarizeErrorForDbLog(error),
+    });
   }
 };
 
@@ -414,6 +427,18 @@ const fetchTourPhotosPage = async (
   }
   constraints.push(limitToLastFn(safeLimit + 1));
 
+  logPhotoDbEvent('debug', 'photo_page_fetch_start', {
+    visibility: 'group',
+    tourId: summarizePrincipalForDbLog(validatedTourId),
+    limit: safeLimit,
+    hasCursor: Boolean(cursor),
+    cursor: cursor
+      ? {
+          timestamp: cursor.timestamp,
+          id: summarizePrincipalForDbLog(cursor.id),
+        }
+      : null,
+  });
   const snapshot = await getFn(queryFn(baseRef, ...constraints));
   const photos = mapSnapshotToPhotos(snapshot).filter((photo) => {
     if (!cursor) {
@@ -422,7 +447,20 @@ const fetchTourPhotosPage = async (
     return !(photo.timestamp === cursor.timestamp && (!cursor.id || photo.id === cursor.id));
   });
 
-  return buildPagedPhotoResult(photos, safeLimit);
+  const result = buildPagedPhotoResult(photos, safeLimit);
+  logPhotoDbEvent('debug', 'photo_page_fetch_success', {
+    visibility: 'group',
+    tourId: summarizePrincipalForDbLog(validatedTourId),
+    returnedCount: result.items.length,
+    hasMore: result.hasMore,
+    nextCursor: result.nextCursor
+      ? {
+          timestamp: result.nextCursor.timestamp,
+          id: summarizePrincipalForDbLog(result.nextCursor.id),
+        }
+      : null,
+  });
+  return result;
 };
 
 /**
@@ -468,6 +506,20 @@ const fetchPrivatePhotosPage = async (
   }
   constraints.push(limitToLastFn(safeLimit + 1));
 
+  logPhotoDbEvent('debug', 'photo_page_fetch_start', {
+    visibility: 'private',
+    tourId: summarizePrincipalForDbLog(validatedTourId),
+    ownerId: summarizePrincipalForDbLog(validatedOwnerId),
+    ownerKey: summarizePrincipalForDbLog(validatedOwnerKey),
+    limit: safeLimit,
+    hasCursor: Boolean(cursor),
+    cursor: cursor
+      ? {
+          timestamp: cursor.timestamp,
+          id: summarizePrincipalForDbLog(cursor.id),
+        }
+      : null,
+  });
   const snapshot = await getFn(queryFn(baseRef, ...constraints));
   const photos = mapSnapshotToPhotos(snapshot).filter((photo) => {
     if (!cursor) {
@@ -476,7 +528,22 @@ const fetchPrivatePhotosPage = async (
     return !(photo.timestamp === cursor.timestamp && (!cursor.id || photo.id === cursor.id));
   });
 
-  return buildPagedPhotoResult(photos, safeLimit);
+  const result = buildPagedPhotoResult(photos, safeLimit);
+  logPhotoDbEvent('debug', 'photo_page_fetch_success', {
+    visibility: 'private',
+    tourId: summarizePrincipalForDbLog(validatedTourId),
+    ownerId: summarizePrincipalForDbLog(validatedOwnerId),
+    ownerKey: summarizePrincipalForDbLog(validatedOwnerKey),
+    returnedCount: result.items.length,
+    hasMore: result.hasMore,
+    nextCursor: result.nextCursor
+      ? {
+          timestamp: result.nextCursor.timestamp,
+          id: summarizePrincipalForDbLog(result.nextCursor.id),
+        }
+      : null,
+  });
+  return result;
 };
 
 // ==================== VALIDATION HELPERS ====================
@@ -652,7 +719,7 @@ const uploadPhoto = async (
       hasViewerUri: Boolean(viewerUri),
       uri: summarizeUriForDbLog(validatedUri),
     };
-    logPhotoDbEvent('warn', 'photo_upload_start', uploadDiagnostics);
+    logPhotoDbEvent('info', 'photo_upload_start', uploadDiagnostics);
 
     // Create blob and validate
     uploadStage = 'fetching_source_blob';
@@ -730,17 +797,18 @@ const uploadPhoto = async (
       });
 
       uploadStage = 'uploading_source_to_storage';
+      logPhotoDbEvent('debug', 'photo_upload_storage_source_start', uploadDiagnostics);
       await Promise.race([
         uploadWithProgress(),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Photo upload timeout')), 60000)
         ),
       ]);
-      logPhotoDbEvent('warn', 'photo_upload_storage_source_written', uploadDiagnostics);
+      logPhotoDbEvent('info', 'photo_upload_storage_source_written', uploadDiagnostics);
 
       uploadStage = 'resolving_source_download_url';
       const downloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, fileRef);
-      logPhotoDbEvent('warn', 'photo_upload_source_url_resolved', {
+      logPhotoDbEvent('debug', 'photo_upload_source_url_resolved', {
         ...uploadDiagnostics,
         downloadUrl: summarizeUriForDbLog(downloadURL),
       });
@@ -748,6 +816,10 @@ const uploadPhoto = async (
       if (generateClientVariants && thumbnailUri && typeof thumbnailUri === 'string') {
         try {
           uploadStage = 'uploading_thumbnail_variant';
+          logPhotoDbEvent('debug', 'photo_upload_thumbnail_variant_start', {
+            ...uploadDiagnostics,
+            thumbnailUri: summarizeUriForDbLog(thumbnailUri),
+          });
           thumbnailBlob = await createBlob(thumbnailUri, fetchFn);
           validateBlob(thumbnailBlob);
 
@@ -767,16 +839,29 @@ const uploadPhoto = async (
             },
           });
           thumbnailDownloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, thumbnailRef);
+          logPhotoDbEvent('debug', 'photo_upload_thumbnail_variant_success', {
+            ...uploadDiagnostics,
+            thumbnailPath: summarizePathForDbLog(thumbnailPath),
+            thumbnailUrl: summarizeUriForDbLog(thumbnailDownloadURL),
+          });
         } catch (thumbnailError) {
           thumbnailPath = null;
           thumbnailDownloadURL = null;
-          console.warn('Thumbnail upload failed; continuing with full-size photo only.', thumbnailError);
+          logPhotoDbEvent('warn', 'photo_upload_thumbnail_variant_failed', {
+            ...uploadDiagnostics,
+            thumbnailUri: summarizeUriForDbLog(thumbnailUri),
+            error: summarizeErrorForDbLog(thumbnailError),
+          });
         }
       }
 
       if (generateClientVariants && viewerUri && typeof viewerUri === 'string') {
         try {
           uploadStage = 'uploading_viewer_variant';
+          logPhotoDbEvent('debug', 'photo_upload_viewer_variant_start', {
+            ...uploadDiagnostics,
+            viewerUri: summarizeUriForDbLog(viewerUri),
+          });
           viewerBlob = await createBlob(viewerUri, fetchFn);
           validateBlob(viewerBlob);
 
@@ -796,10 +881,19 @@ const uploadPhoto = async (
             },
           });
           viewerDownloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, viewerRef);
+          logPhotoDbEvent('debug', 'photo_upload_viewer_variant_success', {
+            ...uploadDiagnostics,
+            viewerPath: summarizePathForDbLog(viewerPath),
+            viewerUrl: summarizeUriForDbLog(viewerDownloadURL),
+          });
         } catch (viewerError) {
           viewerPath = null;
           viewerDownloadURL = null;
-          console.warn('Viewer upload failed; continuing with full-size photo and thumbnail.', viewerError);
+          logPhotoDbEvent('warn', 'photo_upload_viewer_variant_failed', {
+            ...uploadDiagnostics,
+            viewerUri: summarizeUriForDbLog(viewerUri),
+            error: summarizeErrorForDbLog(viewerError),
+          });
         }
       }
 
@@ -813,13 +907,13 @@ const uploadPhoto = async (
       const photosRef = dbRefFn(realtimeDbInstance, databasePath);
       if (normalizedIdempotencyKey) {
         uploadStage = 'checking_existing_photo_idempotency';
-        logPhotoDbEvent('warn', 'photo_upload_db_lookup_start', uploadDiagnostics);
+        logPhotoDbEvent('debug', 'photo_upload_db_lookup_start', uploadDiagnostics);
         const existingSnapshot = await getFn(photosRef);
         const existingData = existingSnapshot.val() || {};
         const existingEntry = Object.entries(existingData).find(([, value]) => value?.idempotencyKey === normalizedIdempotencyKey);
         if (existingEntry) {
           const [existingId, existingPhoto] = existingEntry;
-          logPhotoDbEvent('warn', 'photo_upload_deduped_existing_record', {
+          logPhotoDbEvent('info', 'photo_upload_deduped_existing_record', {
             ...uploadDiagnostics,
             photoId: summarizePrincipalForDbLog(existingId),
           });
@@ -880,14 +974,14 @@ const uploadPhoto = async (
       }
 
       uploadStage = 'writing_photo_record_to_database';
-      logPhotoDbEvent('warn', 'photo_upload_db_write_start', {
+      logPhotoDbEvent('debug', 'photo_upload_db_write_start', {
         ...uploadDiagnostics,
         photoId: summarizePrincipalForDbLog(newPhotoRef?.key),
         photoDataKeys: Object.keys(photoData),
       });
       await setFn(newPhotoRef, photoData);
       uploadStage = 'completed';
-      logPhotoDbEvent('warn', 'photo_upload_db_write_success', {
+      logPhotoDbEvent('info', 'photo_upload_db_write_success', {
         ...uploadDiagnostics,
         photoId: summarizePrincipalForDbLog(newPhotoRef?.key),
         variantStatus: photoData.variantStatus,
@@ -906,7 +1000,10 @@ const uploadPhoto = async (
         try {
           blob.close();
         } catch (error) {
-          console.warn('Error closing blob:', error);
+          logPhotoDbEvent('warn', 'photo_upload_blob_close_failed', {
+            stage: uploadStage,
+            error: summarizeErrorForDbLog(error),
+          });
         }
       }
 
@@ -914,7 +1011,10 @@ const uploadPhoto = async (
         try {
           thumbnailBlob.close();
         } catch (error) {
-          console.warn('Error closing thumbnail blob:', error);
+          logPhotoDbEvent('warn', 'photo_upload_thumbnail_blob_close_failed', {
+            stage: uploadStage,
+            error: summarizeErrorForDbLog(error),
+          });
         }
       }
 
@@ -922,7 +1022,10 @@ const uploadPhoto = async (
         try {
           viewerBlob.close();
         } catch (error) {
-          console.warn('Error closing viewer blob:', error);
+          logPhotoDbEvent('warn', 'photo_upload_viewer_blob_close_failed', {
+            stage: uploadStage,
+            error: summarizeErrorForDbLog(error),
+          });
         }
       }
     }
@@ -930,8 +1033,8 @@ const uploadPhoto = async (
     logPhotoDbEvent('error', 'photo_upload_failed', {
       stage: uploadStage,
       diagnostics: uploadDiagnostics,
-      tourId: typeof tourId === 'string' ? tourId.trim() : null,
-      userId: typeof userId === 'string' ? userId.trim() : null,
+      tourId: summarizePrincipalForDbLog(typeof tourId === 'string' ? tourId.trim() : null),
+      userId: summarizePrincipalForDbLog(typeof userId === 'string' ? userId.trim() : null),
       visibility,
       captionLength: typeof caption === 'string' ? caption.trim().length : 0,
       uri: summarizeUriForDbLog(uri),
@@ -963,7 +1066,10 @@ const subscribeToTourPhotos = (
     }
 
     if (!realtimeDbInstance) {
-      console.warn('Database instance not available');
+      logPhotoDbEvent('warn', 'photo_subscription_db_unavailable', {
+        visibility: 'group',
+        tourId: summarizePrincipalForDbLog(validatedTourId),
+      });
       return () => {};
     }
 
@@ -971,29 +1077,67 @@ const subscribeToTourPhotos = (
     const liveLimit = sanitizePageLimit(limit || LIVE_PHOTOS_WINDOW);
     const photosQuery = queryFn(photosRef, orderByChildFn('timestamp'), limitToLastFn(liveLimit));
 
+    logPhotoDbEvent('debug', 'photo_subscription_start', {
+      visibility: 'group',
+      tourId: summarizePrincipalForDbLog(validatedTourId),
+      liveLimit,
+    });
     const unsubscribe = onValueFn(photosQuery, (snapshot) => {
       try {
         const photos = mapSnapshotToPhotos(snapshot);
         sortPhotosDescending(photos);
+        logPhotoDbEvent('debug', 'photo_subscription_snapshot', {
+          visibility: 'group',
+          tourId: summarizePrincipalForDbLog(validatedTourId),
+          photoCount: photos.length,
+          sample: photos.slice(0, 5).map((photo) => ({
+            id: summarizePrincipalForDbLog(photo.id),
+            timestamp: photo.timestamp || null,
+            userId: summarizePrincipalForDbLog(photo.userId),
+            variantStatus: photo.variantStatus || null,
+            hasThumbnail: Boolean(photo.thumbnailUrl),
+            hasViewer: Boolean(photo.viewerUrl),
+          })),
+        });
         callback(photos);
       } catch (error) {
-        console.error('Error processing photos snapshot:', error);
+        logPhotoDbEvent('error', 'photo_subscription_snapshot_processing_failed', {
+          visibility: 'group',
+          tourId: summarizePrincipalForDbLog(validatedTourId),
+          error: summarizeErrorForDbLog(error),
+        });
         callback([]); // Provide empty array as fallback
       }
     }, (error) => {
-      console.error('Error in photos subscription:', error);
+      logPhotoDbEvent('error', 'photo_subscription_failed', {
+        visibility: 'group',
+        tourId: summarizePrincipalForDbLog(validatedTourId),
+        error: summarizeErrorForDbLog(error),
+      });
       callback([]); // Provide empty array on error
     });
 
     return () => {
       try {
+        logPhotoDbEvent('debug', 'photo_subscription_stop', {
+          visibility: 'group',
+          tourId: summarizePrincipalForDbLog(validatedTourId),
+        });
         unsubscribe();
       } catch (error) {
-        console.warn('Error unsubscribing from photos:', error);
+        logPhotoDbEvent('warn', 'photo_subscription_unsubscribe_failed', {
+          visibility: 'group',
+          tourId: summarizePrincipalForDbLog(validatedTourId),
+          error: summarizeErrorForDbLog(error),
+        });
       }
     };
   } catch (error) {
-    console.error('Error setting up photos subscription:', error);
+    logPhotoDbEvent('error', 'photo_subscription_setup_failed', {
+      visibility: 'group',
+      tourId: summarizePrincipalForDbLog(tourId),
+      error: summarizeErrorForDbLog(error),
+    });
     return () => {};
   }
 };
@@ -1012,25 +1156,112 @@ const subscribeToPrivatePhotos = (
     limit = LIVE_PHOTOS_WINDOW,
   } = {},
 ) => {
-  if (!tourId || !ownerId || typeof callback !== 'function') {
+  try {
+    if (!tourId || !ownerId || typeof callback !== 'function') {
+      logPhotoDbEvent('warn', 'photo_subscription_private_skipped_invalid_args', {
+        hasTourId: Boolean(tourId),
+        hasOwnerId: Boolean(ownerId),
+        hasCallback: typeof callback === 'function',
+      });
+      return () => {};
+    }
+
+    if (!realtimeDbInstance) {
+      logPhotoDbEvent('warn', 'photo_subscription_db_unavailable', {
+        visibility: 'private',
+        tourId: summarizePrincipalForDbLog(tourId),
+        ownerId: summarizePrincipalForDbLog(ownerId),
+      });
+      return () => {};
+    }
+
+    const ownerScope = ownerId.trim();
+    if (!ownerScope) {
+      logPhotoDbEvent('warn', 'photo_subscription_private_skipped_empty_owner', {
+        tourId: summarizePrincipalForDbLog(tourId),
+      });
+      return () => {};
+    }
+    const ownerScopeKey = sanitizeRealtimeKeySegment(ownerScope);
+
+    const photosRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${ownerScopeKey}`);
+    const liveLimit = sanitizePageLimit(limit || LIVE_PHOTOS_WINDOW);
+    const photosQuery = queryFn(photosRef, orderByChildFn('timestamp'), limitToLastFn(liveLimit));
+
+    logPhotoDbEvent('debug', 'photo_subscription_start', {
+      visibility: 'private',
+      tourId: summarizePrincipalForDbLog(tourId),
+      ownerId: summarizePrincipalForDbLog(ownerScope),
+      ownerKey: summarizePrincipalForDbLog(ownerScopeKey),
+      liveLimit,
+    });
+
+    const unsubscribe = onValueFn(photosQuery, (snapshot) => {
+      try {
+        const photos = mapSnapshotToPhotos(snapshot, { ownerScope });
+        sortPhotosDescending(photos);
+        logPhotoDbEvent('debug', 'photo_subscription_snapshot', {
+          visibility: 'private',
+          tourId: summarizePrincipalForDbLog(tourId),
+          ownerId: summarizePrincipalForDbLog(ownerScope),
+          ownerKey: summarizePrincipalForDbLog(ownerScopeKey),
+          photoCount: photos.length,
+          sample: photos.slice(0, 5).map((photo) => ({
+            id: summarizePrincipalForDbLog(photo.id),
+            timestamp: photo.timestamp || null,
+            userId: summarizePrincipalForDbLog(photo.userId),
+            privateOwnerId: summarizePrincipalForDbLog(photo.privateOwnerId),
+            variantStatus: photo.variantStatus || null,
+            hasThumbnail: Boolean(photo.thumbnailUrl),
+            hasViewer: Boolean(photo.viewerUrl),
+          })),
+        });
+        callback(photos);
+      } catch (error) {
+        logPhotoDbEvent('error', 'photo_subscription_snapshot_processing_failed', {
+          visibility: 'private',
+          tourId: summarizePrincipalForDbLog(tourId),
+          ownerId: summarizePrincipalForDbLog(ownerScope),
+          error: summarizeErrorForDbLog(error),
+        });
+        callback([]);
+      }
+    }, (error) => {
+      logPhotoDbEvent('error', 'photo_subscription_failed', {
+        visibility: 'private',
+        tourId: summarizePrincipalForDbLog(tourId),
+        ownerId: summarizePrincipalForDbLog(ownerScope),
+        error: summarizeErrorForDbLog(error),
+      });
+      callback([]);
+    });
+
+    return () => {
+      try {
+        logPhotoDbEvent('debug', 'photo_subscription_stop', {
+          visibility: 'private',
+          tourId: summarizePrincipalForDbLog(tourId),
+          ownerId: summarizePrincipalForDbLog(ownerScope),
+        });
+        unsubscribe();
+      } catch (error) {
+        logPhotoDbEvent('warn', 'photo_subscription_unsubscribe_failed', {
+          visibility: 'private',
+          tourId: summarizePrincipalForDbLog(tourId),
+          ownerId: summarizePrincipalForDbLog(ownerScope),
+          error: summarizeErrorForDbLog(error),
+        });
+      }
+    };
+  } catch (error) {
+    logPhotoDbEvent('error', 'photo_subscription_setup_failed', {
+      visibility: 'private',
+      tourId: summarizePrincipalForDbLog(tourId),
+      ownerId: summarizePrincipalForDbLog(ownerId),
+      error: summarizeErrorForDbLog(error),
+    });
     return () => {};
   }
-
-  const ownerScope = ownerId.trim();
-  if (!ownerScope) {
-    return () => {};
-  }
-  const ownerScopeKey = sanitizeRealtimeKeySegment(ownerScope);
-
-  const photosRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${ownerScopeKey}`);
-  const liveLimit = sanitizePageLimit(limit || LIVE_PHOTOS_WINDOW);
-  const photosQuery = queryFn(photosRef, orderByChildFn('timestamp'), limitToLastFn(liveLimit));
-
-  return onValueFn(photosQuery, (snapshot) => {
-    const photos = mapSnapshotToPhotos(snapshot, { ownerScope });
-    sortPhotosDescending(photos);
-    callback(photos);
-  });
 };
 
 /**
@@ -1072,17 +1303,46 @@ const deleteGroupPhoto = async (
       throw new Error('Database instance not initialized');
     }
 
+    logPhotoDbEvent('info', 'photo_delete_start', {
+      visibility: 'group',
+      tourId: summarizePrincipalForDbLog(validatedTourId),
+      photoId: summarizePrincipalForDbLog(validatedPhotoId),
+      requestingUserId: summarizePrincipalForDbLog(requestingUserId),
+    });
+
     // First, get the photo data to find the storage path
     const photoRef = dbRefFn(realtimeDbInstance, `group_tour_photos/${validatedTourId}/${validatedPhotoId}`);
     const snapshot = await getFn(photoRef);
     const photoData = snapshot.val();
 
     if (!photoData) {
+      logPhotoDbEvent('warn', 'photo_delete_missing_record', {
+        visibility: 'group',
+        tourId: summarizePrincipalForDbLog(validatedTourId),
+        photoId: summarizePrincipalForDbLog(validatedPhotoId),
+      });
       throw new Error('Photo not found');
     }
 
+    logPhotoDbEvent('debug', 'photo_delete_record_loaded', {
+      visibility: 'group',
+      tourId: summarizePrincipalForDbLog(validatedTourId),
+      photoId: summarizePrincipalForDbLog(validatedPhotoId),
+      ownerId: summarizePrincipalForDbLog(photoData.userId),
+      hasSourcePath: Boolean(photoData.storagePath),
+      hasViewerPath: Boolean(photoData.viewerStoragePath),
+      hasThumbnailPath: Boolean(photoData.thumbnailStoragePath),
+    });
+
     // Verify ownership: only the photo uploader can delete it
     if (photoData.userId && photoData.userId !== requestingUserId) {
+      logPhotoDbEvent('warn', 'photo_delete_blocked_owner_mismatch', {
+        visibility: 'group',
+        tourId: summarizePrincipalForDbLog(validatedTourId),
+        photoId: summarizePrincipalForDbLog(validatedPhotoId),
+        ownerId: summarizePrincipalForDbLog(photoData.userId),
+        requestingUserId: summarizePrincipalForDbLog(requestingUserId),
+      });
       throw new Error('You can only delete your own photos');
     }
 
@@ -1116,9 +1376,20 @@ const deleteGroupPhoto = async (
       )
     ]);
 
+    logPhotoDbEvent('info', 'photo_delete_success', {
+      visibility: 'group',
+      tourId: summarizePrincipalForDbLog(validatedTourId),
+      photoId: summarizePrincipalForDbLog(validatedPhotoId),
+    });
     return { success: true };
   } catch (error) {
-    console.error('Delete group photo error:', error);
+    logPhotoDbEvent('error', 'photo_delete_failed', {
+      visibility: 'group',
+      tourId: summarizePrincipalForDbLog(tourId),
+      photoId: summarizePrincipalForDbLog(photoId),
+      requestingUserId: summarizePrincipalForDbLog(requestingUserId),
+      error: summarizeErrorForDbLog(error),
+    });
     throw error;
   }
 };
@@ -1146,14 +1417,39 @@ const deletePrivatePhoto = async (
 
   try {
     const ownerScopeKey = sanitizeRealtimeKeySegment(ownerId);
+    logPhotoDbEvent('info', 'photo_delete_start', {
+      visibility: 'private',
+      tourId: summarizePrincipalForDbLog(tourId),
+      ownerId: summarizePrincipalForDbLog(ownerId),
+      ownerKey: summarizePrincipalForDbLog(ownerScopeKey),
+      photoId: summarizePrincipalForDbLog(photoId),
+    });
+
     // First, get the photo data to find the storage path
     const photoRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${ownerScopeKey}/${photoId}`);
     const snapshot = await getFn(photoRef);
     const photoData = snapshot.val();
 
     if (!photoData) {
+      logPhotoDbEvent('warn', 'photo_delete_missing_record', {
+        visibility: 'private',
+        tourId: summarizePrincipalForDbLog(tourId),
+        ownerId: summarizePrincipalForDbLog(ownerId),
+        photoId: summarizePrincipalForDbLog(photoId),
+      });
       throw new Error('Photo not found');
     }
+
+    logPhotoDbEvent('debug', 'photo_delete_record_loaded', {
+      visibility: 'private',
+      tourId: summarizePrincipalForDbLog(tourId),
+      ownerId: summarizePrincipalForDbLog(ownerId),
+      ownerKey: summarizePrincipalForDbLog(ownerScopeKey),
+      photoId: summarizePrincipalForDbLog(photoId),
+      hasSourcePath: Boolean(photoData.storagePath),
+      hasViewerPath: Boolean(photoData.viewerStoragePath),
+      hasThumbnailPath: Boolean(photoData.thumbnailStoragePath),
+    });
 
     await deleteStoredPhotoObject({
       storageInstance,
@@ -1180,9 +1476,22 @@ const deletePrivatePhoto = async (
     // Delete from database
     await removeFn(photoRef);
 
+    logPhotoDbEvent('info', 'photo_delete_success', {
+      visibility: 'private',
+      tourId: summarizePrincipalForDbLog(tourId),
+      ownerId: summarizePrincipalForDbLog(ownerId),
+      ownerKey: summarizePrincipalForDbLog(ownerScopeKey),
+      photoId: summarizePrincipalForDbLog(photoId),
+    });
     return { success: true };
   } catch (error) {
-    console.error('Delete private photo error:', error);
+    logPhotoDbEvent('error', 'photo_delete_failed', {
+      visibility: 'private',
+      tourId: summarizePrincipalForDbLog(tourId),
+      ownerId: summarizePrincipalForDbLog(ownerId),
+      photoId: summarizePrincipalForDbLog(photoId),
+      error: summarizeErrorForDbLog(error),
+    });
     throw error;
   }
 };
@@ -1197,25 +1506,54 @@ const updatePhotoCaption = async (
     nowFn = Date.now,
   } = {},
 ) => {
-  const validatedTourId = validateTourId(tourId);
-  const validatedPhotoId = validatePhotoId(photoId);
-  const resolvedOwnerId = validateUserId(ownerId || userId);
-  const resolvedOwnerKey = sanitizeRealtimeKeySegment(resolvedOwnerId);
-  const validatedCaption = validateCaption(caption);
-  const validatedVisibility = validateVisibility(visibility);
+  try {
+    const validatedTourId = validateTourId(tourId);
+    const validatedPhotoId = validatePhotoId(photoId);
+    const resolvedOwnerId = validateUserId(ownerId || userId);
+    const resolvedOwnerKey = sanitizeRealtimeKeySegment(resolvedOwnerId);
+    const validatedCaption = validateCaption(caption);
+    const validatedVisibility = validateVisibility(visibility);
 
-  const basePath = validatedVisibility === 'private'
-    ? `private_tour_photos/${validatedTourId}/${resolvedOwnerKey}/${validatedPhotoId}`
-    : `group_tour_photos/${validatedTourId}/${validatedPhotoId}`;
+    const basePath = validatedVisibility === 'private'
+      ? `private_tour_photos/${validatedTourId}/${resolvedOwnerKey}/${validatedPhotoId}`
+      : `group_tour_photos/${validatedTourId}/${validatedPhotoId}`;
 
-  const photoRef = dbRefFn(realtimeDbInstance, basePath);
-  await updateFn(photoRef, {
-    caption: validatedCaption,
-    captionUpdatedAt: resolveRealtimeTimestamp(serverTimestampFn, nowFn),
-    captionEditedBy: resolvedOwnerId,
-  });
+    logPhotoDbEvent('info', 'photo_caption_update_start', {
+      visibility: validatedVisibility,
+      tourId: summarizePrincipalForDbLog(validatedTourId),
+      photoId: summarizePrincipalForDbLog(validatedPhotoId),
+      ownerId: summarizePrincipalForDbLog(resolvedOwnerId),
+      ownerKey: summarizePrincipalForDbLog(resolvedOwnerKey),
+      captionLength: validatedCaption.length,
+    });
 
-  return { success: true };
+    const photoRef = dbRefFn(realtimeDbInstance, basePath);
+    await updateFn(photoRef, {
+      caption: validatedCaption,
+      captionUpdatedAt: resolveRealtimeTimestamp(serverTimestampFn, nowFn),
+      captionEditedBy: resolvedOwnerId,
+    });
+
+    logPhotoDbEvent('info', 'photo_caption_update_success', {
+      visibility: validatedVisibility,
+      tourId: summarizePrincipalForDbLog(validatedTourId),
+      photoId: summarizePrincipalForDbLog(validatedPhotoId),
+      ownerId: summarizePrincipalForDbLog(resolvedOwnerId),
+      captionLength: validatedCaption.length,
+    });
+
+    return { success: true };
+  } catch (error) {
+    logPhotoDbEvent('error', 'photo_caption_update_failed', {
+      visibility,
+      tourId: summarizePrincipalForDbLog(tourId),
+      photoId: summarizePrincipalForDbLog(photoId),
+      ownerId: summarizePrincipalForDbLog(ownerId || userId),
+      captionLength: typeof caption === 'string' ? caption.trim().length : 0,
+      error: summarizeErrorForDbLog(error),
+    });
+    throw error;
+  }
 };
 
 
@@ -1267,7 +1605,7 @@ const uploadPhotoDirect = async (payload = {}) => {
       hasLocalAssets: Boolean(localAssets),
       localAssetKeys: Object.keys(resolvedLocalAssets),
     };
-    logPhotoDbEvent('warn', 'photo_upload_direct_start', directDiagnostics);
+    logPhotoDbEvent('info', 'photo_upload_direct_start', directDiagnostics);
 
     if (normalizedPayloadVersion >= 2) {
       const validatedTourId = validateTourId(tourId);
@@ -1279,6 +1617,7 @@ const uploadPhotoDirect = async (payload = {}) => {
         : null;
 
       if (!normalizedIdempotencyKey) {
+        logPhotoDbEvent('warn', 'photo_upload_direct_missing_idempotency_key', directDiagnostics);
         return { success: false, error: 'idempotencyKey is required for payloadVersion 2 photo uploads' };
       }
 

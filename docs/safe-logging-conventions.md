@@ -20,6 +20,10 @@ All app logging must route through `services/loggerService.js` to prevent leakin
 Representative protected keys include:
 `bookingRef`, `reference`, `driverCode`, `token`, `pushToken`, `authUid`, `uid`, `userId`, `sessionId`, `authorization`, `password`.
 
+## Temporary verbose RTDB diagnostics
+
+For the current smoke-test pass, `loggerService` is configured to upload `DEBUG` and `INFO` logs to `/logs/{user}/{session}` as well as warnings and errors. Keep new diagnostic call sites routed through `loggerService` or the existing crash diagnostics helpers, and keep identifiers masked/summarized. After the smoke run has exposed the underlying issues, tune the server upload floor back down or gate it behind a runtime flag before release.
+
 ## Safe call-site patterns
 
 ```js

@@ -21,6 +21,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { realtimeDb } from '../firebase';
 import { COLORS as THEME } from '../theme';
 import { getMinutesAgo, parseTimestampMs } from '../services/timeUtils';
+import logger from '../services/loggerService';
 
 const { width, height } = Dimensions.get('window');
 
@@ -63,6 +64,19 @@ const mapStyle = [
   { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#9e9e9e' }] },
 ];
 
+const summarizeCoords = (coords) => {
+  if (!coords) return { present: false };
+  const latitude = Number(coords.latitude);
+  const longitude = Number(coords.longitude);
+  return {
+    present: Number.isFinite(latitude) && Number.isFinite(longitude),
+    latitudeApprox: Number.isFinite(latitude) ? Number(latitude.toFixed(3)) : null,
+    longitudeApprox: Number.isFinite(longitude) ? Number(longitude.toFixed(3)) : null,
+    hasAccuracy: Number.isFinite(Number(coords.accuracy)),
+    accuracy: Number.isFinite(Number(coords.accuracy)) ? Math.round(Number(coords.accuracy)) : null,
+  };
+};
+
 export default function MapScreen({ onBack, tourId, tourData }) {
   const MIN_REFRESH_SPINNER_MS = 120;
   const [driverLocation, setDriverLocation] = useState(null);
@@ -80,6 +94,14 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   const slideAnim = useRef(new Animated.Value(100)).current;
   const markerScaleAnim = useRef(new Animated.Value(0)).current;
   const refreshRotation = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    logger.trackScreen('Map', {
+      tourId,
+      hasTourData: Boolean(tourData),
+      hasDriverPhone: Boolean(tourData?.driverPhone),
+    });
+  }, [tourData, tourData?.driverPhone, tourId]);
 
   // Pulse animation for live indicator
   useEffect(() => {
@@ -140,40 +162,59 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   // 1. Get User's Own Location
   useEffect(() => {
     (async () => {
+      logger.info('MapScreen', 'User location permission requested', { tourId });
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
+        logger.warn('MapScreen', 'User location permission denied', { tourId, status });
         setErrorMsg('Permission to access location was denied');
         setLoading(false);
         return;
       }
 
       try {
+        logger.debug('MapScreen', 'User location lookup started', { tourId, accuracy: 'balanced' });
         let location = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         });
         setUserLocation(location.coords);
+        logger.info('MapScreen', 'User location lookup completed', {
+          tourId,
+          coords: summarizeCoords(location.coords),
+        });
       } catch (err) {
-        console.error('Location error:', err);
+        logger.error('MapScreen', 'User location lookup failed', {
+          tourId,
+          error: err?.message || String(err),
+        });
         setErrorMsg('Could not get your location');
       }
     })();
-  }, []);
+  }, [tourId]);
 
   // 2. Subscribe to Driver Location from Firebase
   useEffect(() => {
     if (!tourId) {
+      logger.warn('MapScreen', 'Driver location subscription skipped without tour id');
       setLoading(false);
       return;
     }
 
     setConnectionStatus('connecting');
     const locationRef = realtimeDb.ref(`tours/${tourId}/driverLocation`);
+    logger.info('MapScreen', 'Driver location subscription started', { tourId });
 
     const unsubscribe = locationRef.on('value', (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
         setDriverLocation(data);
         setConnectionStatus('connected');
+        logger.info('MapScreen', 'Driver location snapshot received', {
+          tourId,
+          coords: summarizeCoords(data),
+          hasTimestamp: Boolean(data?.timestamp || data?.lastUpdated),
+          freshness: getLocationFreshness(data?.timestamp || data?.lastUpdated),
+          source: data?.source || null,
+        });
 
         // Haptic feedback on location update
         if (Platform.OS === 'ios') {
@@ -181,15 +222,23 @@ export default function MapScreen({ onBack, tourId, tourData }) {
         }
       } else {
         setConnectionStatus('waiting');
+        logger.info('MapScreen', 'Driver location snapshot empty', { tourId });
       }
       setLoading(false);
     }, (error) => {
-      console.error('Firebase error:', error);
+      logger.error('MapScreen', 'Driver location subscription failed', {
+        tourId,
+        error: error?.message || String(error),
+        code: error?.code || null,
+      });
       setConnectionStatus('error');
       setLoading(false);
     });
 
-    return () => locationRef.off('value', unsubscribe);
+    return () => {
+      logger.debug('MapScreen', 'Driver location subscription stopped', { tourId });
+      locationRef.off('value', unsubscribe);
+    };
   }, [tourId]);
 
   const calculateDistanceKm = (pointA, pointB) => {
@@ -270,6 +319,12 @@ export default function MapScreen({ onBack, tourId, tourData }) {
       }
 
       if (coordinates.length > 0) {
+        logger.debug('MapScreen', 'Auto-fitting map coordinates', {
+          tourId,
+          coordinateCount: coordinates.length,
+          hasDriverLocation: Boolean(driverLocation),
+          hasUserLocation: Boolean(userLocation),
+        });
         setTimeout(() => {
           mapRef.current?.fitToCoordinates(coordinates, {
             edgePadding: { top: 120, right: 60, bottom: 320, left: 60 },
@@ -278,7 +333,7 @@ export default function MapScreen({ onBack, tourId, tourData }) {
         }, 120);
       }
     }
-  }, [driverLocation, userLocation]);
+  }, [driverLocation, tourId, userLocation]);
 
   // Determine initial region
   const getInitialRegion = () => {
@@ -304,6 +359,13 @@ export default function MapScreen({ onBack, tourId, tourData }) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
 
+    logger.info('MapScreen', 'Recenter requested', {
+      tourId,
+      hasMapRef: Boolean(mapRef.current),
+      hasDriverLocation: Boolean(driverLocation),
+      hasUserLocation: Boolean(userLocation),
+    });
+
     if (!mapRef.current) return;
 
     if (driverLocation && userLocation) {
@@ -328,6 +390,7 @@ export default function MapScreen({ onBack, tourId, tourData }) {
 
     setIsRefreshing(true);
     const refreshStartedAt = Date.now();
+    logger.info('MapScreen', 'Manual location refresh started', { tourId });
 
     // Rotation animation
     const rotationLoop = Animated.loop(
@@ -344,8 +407,17 @@ export default function MapScreen({ onBack, tourId, tourData }) {
         accuracy: Location.Accuracy.Balanced,
       });
       setUserLocation(location.coords);
+      logger.info('MapScreen', 'Manual location refresh completed', {
+        tourId,
+        durationMs: Date.now() - refreshStartedAt,
+        coords: summarizeCoords(location.coords),
+      });
     } catch (err) {
-      console.error('Refresh error:', err);
+      logger.error('MapScreen', 'Manual location refresh failed', {
+        tourId,
+        durationMs: Date.now() - refreshStartedAt,
+        error: err?.message || String(err),
+      });
     } finally {
       const elapsed = Date.now() - refreshStartedAt;
       if (elapsed < MIN_REFRESH_SPINNER_MS) {
@@ -358,16 +430,25 @@ export default function MapScreen({ onBack, tourId, tourData }) {
         refreshRotation.setValue(0);
       });
     }
-  }, [refreshRotation]);
+  }, [refreshRotation, tourId]);
 
   const handleToggleMapType = useCallback(() => {
     if (Platform.OS === 'ios') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
-    setMapType(prev => prev === 'standard' ? 'satellite' : 'standard');
-  }, []);
+    setMapType(prev => {
+      const next = prev === 'standard' ? 'satellite' : 'standard';
+      logger.debug('MapScreen', 'Map type toggled', { tourId, previous: prev, next });
+      return next;
+    });
+  }, [tourId]);
 
   const handleGetDirections = useCallback(() => {
+    logger.info('MapScreen', 'Directions requested', {
+      tourId,
+      hasDriverLocation: Boolean(driverLocation),
+      freshness: locationFreshness,
+    });
     if (!driverLocation) return;
 
     if (Platform.OS === 'ios') {
@@ -384,15 +465,21 @@ export default function MapScreen({ onBack, tourId, tourData }) {
     const webUrl = `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`;
 
     Linking.canOpenURL(url).then((supported) => {
+      logger.debug('MapScreen', 'Directions URL support checked', {
+        tourId,
+        supported,
+        platform: Platform.OS,
+      });
       if (supported) {
         Linking.openURL(url);
       } else {
         Linking.openURL(webUrl);
       }
     }).catch(() => {
+      logger.warn('MapScreen', 'Directions URL support check failed; falling back to web', { tourId, platform: Platform.OS });
       Linking.openURL(webUrl);
     });
-  }, [driverLocation]);
+  }, [driverLocation, locationFreshness, tourId]);
 
   const handleCallDriver = useCallback(() => {
     if (Platform.OS === 'ios') {
@@ -400,13 +487,19 @@ export default function MapScreen({ onBack, tourId, tourData }) {
     }
 
     if (!tourData?.driverPhone) {
+      logger.warn('MapScreen', 'Call driver blocked without phone number', { tourId });
       Alert.alert('Contact Unavailable', 'Driver contact information is not available. Please contact your tour operator.');
       return;
     }
 
     const phone = tourData.driverPhone.replace(/[^+\d]/g, '');
+    logger.info('MapScreen', 'Call driver launched', {
+      tourId,
+      hasPhoneNumber: Boolean(phone),
+      phoneLength: phone.length,
+    });
     Linking.openURL(`tel:${phone}`);
-  }, [tourData]);
+  }, [tourData, tourId]);
 
   const getFreshnessConfig = (freshness) => {
     switch (freshness) {

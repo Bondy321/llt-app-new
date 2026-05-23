@@ -30,6 +30,7 @@ import { usePhotoGalleryData } from '../hooks/usePhotoGalleryData';
 import { usePhotoThumbnailPrefetch } from '../hooks/usePhotoThumbnailPrefetch';
 import { auth } from '../firebase';
 import { getCanonicalIdentity } from '../services/identityService';
+import logger, { maskIdentifier } from '../services/loggerService';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: windowWidth } = Dimensions.get('window');
@@ -77,6 +78,15 @@ export default function GroupPhotobookScreen({
   );
   const principalId = canonicalIdentity?.principalId || userId;
 
+  useEffect(() => {
+    logger.trackScreen('GroupPhotobook', {
+      tourId,
+      userId: maskIdentifier(principalId),
+      hasCanonicalIdentity: Boolean(canonicalIdentity?.principalId),
+      stableIdentityAvailable: Boolean(canonicalIdentity?.stablePassengerId),
+    });
+  }, [canonicalIdentity?.principalId, canonicalIdentity?.stablePassengerId, principalId, tourId]);
+
   const addUploaderName = useCallback((photo) => ({
     ...photo,
     uploaderName: photo.uploaderName || 'Tour Member',
@@ -103,9 +113,20 @@ export default function GroupPhotobookScreen({
     if (!tourId) return undefined;
 
     const refreshPhotoQueue = async () => {
+      logger.debug('GroupPhotobook', 'Group photo queue refresh started', { tourId });
       const queued = await offlineSyncService.getPhotoUploadActions({ tourId, visibility: 'group' });
       if (queued.success) {
         setPhotoQueueItems(queued.data.filter((item) => item.status !== 'completed'));
+        logger.info('GroupPhotobook', 'Group photo queue refreshed', {
+          tourId,
+          queuedCount: queued.data.filter((item) => item.status !== 'completed').length,
+          totalCount: queued.data.length,
+        });
+      } else {
+        logger.warn('GroupPhotobook', 'Group photo queue refresh failed', {
+          tourId,
+          error: queued.error || 'unknown',
+        });
       }
     };
 
@@ -118,6 +139,11 @@ export default function GroupPhotobookScreen({
         && action.status !== 'completed'
       ));
       setPhotoQueueItems(filtered);
+      logger.debug('GroupPhotobook', 'Group photo queue subscription update', {
+        tourId,
+        visibleQueuedCount: filtered.length,
+        totalActionCount: actions.length,
+      });
     });
     return unsubscribe;
   }, [tourId]);
@@ -192,24 +218,31 @@ export default function GroupPhotobookScreen({
   const myPhotos = visiblePhotos.filter(p => p.userId === principalId).length;
 
   const requestCameraPermission = async () => {
+    logger.info('GroupPhotobook', 'Camera permission requested', { tourId });
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
+      logger.warn('GroupPhotobook', 'Camera permission denied', { tourId, status });
       Alert.alert('Permission Needed', 'Camera permission is required to take photos.');
       return false;
     }
+    logger.info('GroupPhotobook', 'Camera permission granted', { tourId });
     return true;
   };
 
   const requestGalleryPermission = async () => {
+    logger.info('GroupPhotobook', 'Gallery permission requested', { tourId });
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
+      logger.warn('GroupPhotobook', 'Gallery permission denied', { tourId, status });
       Alert.alert('Permission Needed', 'Gallery access is required to select photos.');
       return false;
     }
+    logger.info('GroupPhotobook', 'Gallery permission granted', { tourId });
     return true;
   };
 
   const handleTakePhoto = async () => {
+    logger.info('GroupPhotobook', 'Take photo flow started', { tourId });
     const hasPermission = await requestCameraPermission();
     if (!hasPermission) return;
 
@@ -222,10 +255,20 @@ export default function GroupPhotobookScreen({
     if (!result.canceled && result.assets?.[0]) {
       setPendingImage(result.assets[0]);
       setShowUploadModal(true);
+      logger.info('GroupPhotobook', 'Camera image selected', {
+        tourId,
+        assetCount: result.assets.length,
+        hasUri: Boolean(result.assets[0]?.uri),
+        width: result.assets[0]?.width || null,
+        height: result.assets[0]?.height || null,
+      });
+    } else {
+      logger.info('GroupPhotobook', 'Take photo flow cancelled', { tourId });
     }
   };
 
   const handlePickFromGallery = async () => {
+    logger.info('GroupPhotobook', 'Gallery picker flow started', { tourId });
     const hasPermission = await requestGalleryPermission();
     if (!hasPermission) return;
 
@@ -238,10 +281,26 @@ export default function GroupPhotobookScreen({
     if (!result.canceled && result.assets?.[0]) {
       setPendingImage(result.assets[0]);
       setShowUploadModal(true);
+      logger.info('GroupPhotobook', 'Gallery image selected', {
+        tourId,
+        assetCount: result.assets.length,
+        hasUri: Boolean(result.assets[0]?.uri),
+        width: result.assets[0]?.width || null,
+        height: result.assets[0]?.height || null,
+      });
+    } else {
+      logger.info('GroupPhotobook', 'Gallery picker flow cancelled', { tourId });
     }
   };
 
   const showUploadOptions = () => {
+    logger.info('GroupPhotobook', 'Upload options opened', {
+      tourId,
+      visiblePhotoCount: visiblePhotos.length,
+      queuedCount: photoQueueItems.length,
+      mineOnly,
+      sortMode,
+    });
     Alert.alert(
       'Share Photo',
       'Add a photo for everyone to enjoy',
@@ -258,9 +317,18 @@ export default function GroupPhotobookScreen({
   );
 
   const handleUpload = async () => {
-    if (!pendingImage?.uri) return;
+    if (!pendingImage?.uri) {
+      logger.warn('GroupPhotobook', 'Upload blocked without pending image', { tourId });
+      return;
+    }
 
     try {
+      logger.info('GroupPhotobook', 'Group photo enqueue started', {
+        tourId,
+        userId: maskIdentifier(principalId),
+        hasCaption: Boolean(caption.trim()),
+        captionLength: caption.trim().length,
+      });
       const optimized = await optimizeSourcePhotoForUpload(pendingImage);
       const createdAt = new Date().toISOString();
       const jobId = `photo_upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -298,14 +366,40 @@ export default function GroupPhotobookScreen({
         },
       });
       if (!enqueueResult.success) {
+        logger.warn('GroupPhotobook', 'Group photo enqueue failed', {
+          tourId,
+          jobId,
+          error: enqueueResult.error || 'unknown',
+        });
         Alert.alert('Upload queued failed', enqueueResult.error || 'Could not queue upload. Please try again.');
         return;
       }
+      logger.info('GroupPhotobook', 'Group photo enqueued', {
+        tourId,
+        jobId,
+        optimized: Boolean(optimized.metrics),
+        originalSizeBytes: optimized.metrics?.originalSizeBytes || null,
+        optimizedSizeBytes: optimized.metrics?.optimizedSizeBytes || null,
+      });
 
       setShowUploadModal(false);
       setPendingImage(null);
       setCaption('');
-      offlineSyncService.replayQueue({ services: { photoService } }).catch(() => {});
+      offlineSyncService.replayQueue({ services: { photoService } }).then((result) => {
+        logger.info('GroupPhotobook', 'Group photo replay requested after enqueue completed', {
+          tourId,
+          jobId,
+          success: Boolean(result?.success),
+          processed: result?.data?.processed ?? null,
+          failed: result?.data?.failed ?? null,
+        });
+      }).catch((error) => {
+        logger.warn('GroupPhotobook', 'Group photo replay after enqueue failed', {
+          tourId,
+          jobId,
+          error: error?.message || String(error),
+        });
+      });
 
       if (optimized.metrics?.originalSizeBytes && optimized.metrics?.optimizedSizeBytes) {
         Alert.alert(
@@ -314,11 +408,20 @@ export default function GroupPhotobookScreen({
         );
       }
     } catch (error) {
+      logger.error('GroupPhotobook', 'Group photo preparation failed', {
+        tourId,
+        error: error?.message || String(error),
+      });
       Alert.alert('Image preparation failed', 'Could not optimize this image. Please try a different photo.');
     }
   };
 
   const retryUpload = async (pending) => {
+    logger.info('GroupPhotobook', 'Group photo retry requested', {
+      tourId,
+      actionId: pending?.id || null,
+      previousStatus: pending?.status || null,
+    });
     await offlineSyncService.updateAction(pending.id, {
       status: 'retrying',
       nextAttemptAt: null,
@@ -329,15 +432,31 @@ export default function GroupPhotobookScreen({
 
   const discardUpload = async (pending) => {
     if (!pending?.id) return;
+    logger.info('GroupPhotobook', 'Group photo discard requested', {
+      tourId,
+      actionId: pending.id,
+      previousStatus: pending.status || null,
+    });
     const result = await offlineSyncService.removeAction(pending.id);
     if (!result.success) {
+      logger.warn('GroupPhotobook', 'Group photo discard failed', {
+        tourId,
+        actionId: pending.id,
+        error: result.error || 'unknown',
+      });
       Alert.alert('Discard failed', result.error || 'Could not remove this photo from the upload queue.');
       return;
     }
+    logger.info('GroupPhotobook', 'Group photo discarded', { tourId, actionId: pending.id });
     setPhotoQueueItems((items) => items.filter((item) => item.id !== pending.id));
   };
 
   const cancelUpload = () => {
+    logger.info('GroupPhotobook', 'Upload modal cancelled', {
+      tourId,
+      hadPendingImage: Boolean(pendingImage?.uri),
+      captionLength: caption.length,
+    });
     setShowUploadModal(false);
     setPendingImage(null);
     setCaption('');
@@ -346,9 +465,16 @@ export default function GroupPhotobookScreen({
   const openViewer = useCallback((groupIndex, photoIndexInGroup) => {
     const flatIndex = viewerFlatIndexMap[`${groupIndex}:${photoIndexInGroup}`] ?? 0;
 
+    logger.info('GroupPhotobook', 'Viewer opened', {
+      tourId,
+      groupIndex,
+      photoIndexInGroup,
+      flatIndex,
+      visiblePhotoCount: visiblePhotos.length,
+    });
     setViewerIndex(flatIndex);
     setViewerVisible(true);
-  }, [viewerFlatIndexMap]);
+  }, [tourId, viewerFlatIndexMap, visiblePhotos.length]);
 
   const onViewableItemsChanged = useCallback(({ viewableItems }) => {
     const viewablePhotos = [];
@@ -455,11 +581,24 @@ export default function GroupPhotobookScreen({
 
   const handleDeletePhoto = async (photo) => {
     try {
+      logger.info('GroupPhotobook', 'Group photo delete requested', {
+        tourId,
+        photoId: maskIdentifier(photo?.id),
+        ownedByCurrentUser: photo?.userId === principalId,
+      });
       if (typeof photoService.deleteGroupPhoto === 'function') {
         await photoService.deleteGroupPhoto(tourId, photo.id, principalId);
       }
+      logger.info('GroupPhotobook', 'Group photo delete completed', {
+        tourId,
+        photoId: maskIdentifier(photo?.id),
+      });
     } catch (error) {
-      console.error('Delete error:', error);
+      logger.error('GroupPhotobook', 'Group photo delete failed', {
+        tourId,
+        photoId: maskIdentifier(photo?.id),
+        error: error?.message || String(error),
+      });
       const msg = error.message === 'You can only delete your own photos'
         ? 'You can only delete photos you uploaded.'
         : 'Could not delete the photo. Please try again.';
@@ -467,7 +606,10 @@ export default function GroupPhotobookScreen({
     }
   };
 
-  const onRefresh = useCallback(() => refreshPhotos(), [refreshPhotos]);
+  const onRefresh = useCallback(() => {
+    logger.info('GroupPhotobook', 'Gallery refresh requested', { tourId });
+    return refreshPhotos();
+  }, [refreshPhotos, tourId]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -532,13 +674,22 @@ export default function GroupPhotobookScreen({
       )}
 
       <View style={styles.filterRow}>
-        <TouchableOpacity style={[styles.filterChip, sortMode === 'newest' && styles.filterChipActive]} onPress={() => setSortMode('newest')}>
+        <TouchableOpacity style={[styles.filterChip, sortMode === 'newest' && styles.filterChipActive]} onPress={() => {
+          logger.debug('GroupPhotobook', 'Sort mode selected', { tourId, sortMode: 'newest' });
+          setSortMode('newest');
+        }}>
           <Text style={[styles.filterChipText, sortMode === 'newest' && styles.filterChipTextActive]}>Newest</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.filterChip, sortMode === 'oldest' && styles.filterChipActive]} onPress={() => setSortMode('oldest')}>
+        <TouchableOpacity style={[styles.filterChip, sortMode === 'oldest' && styles.filterChipActive]} onPress={() => {
+          logger.debug('GroupPhotobook', 'Sort mode selected', { tourId, sortMode: 'oldest' });
+          setSortMode('oldest');
+        }}>
           <Text style={[styles.filterChipText, sortMode === 'oldest' && styles.filterChipTextActive]}>Oldest</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.filterChip, mineOnly && styles.filterChipActive]} onPress={() => setMineOnly((v) => !v)}>
+        <TouchableOpacity style={[styles.filterChip, mineOnly && styles.filterChipActive]} onPress={() => setMineOnly((v) => {
+          logger.debug('GroupPhotobook', 'Mine-only filter toggled', { tourId, enabled: !v });
+          return !v;
+        })}>
           <Text style={[styles.filterChipText, mineOnly && styles.filterChipTextActive]}>Mine only</Text>
         </TouchableOpacity>
       </View>

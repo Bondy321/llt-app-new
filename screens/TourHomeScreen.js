@@ -27,6 +27,7 @@ import * as chatService from '../services/chatService';
 import { realtimeDb } from '../firebase';
 import offlineSyncService from '../services/offlineSyncService';
 import { parseTimestampMs } from '../services/timeUtils';
+import logger, { maskIdentifier } from '../services/loggerService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import { getPickupCountdownState } from '../services/pickupTimeParser';
 const { buildTourHomeActionPlan } = require('../utils/tourHomeActionPlanner');
@@ -526,19 +527,50 @@ export default function TourHomeScreen({
     return bookingData?.pickupDate || tourData?.startDate || null;
   }, [bookingData, tourData?.startDate]);
 
+  useEffect(() => {
+    logger.trackScreen('TourHome', {
+      tourId: tourData?.id || null,
+      tourCode,
+      bookingRef: maskIdentifier(bookingRef),
+      isConnected,
+      hasTourData: Boolean(tourData),
+      manifestStatus,
+      driverLocationActive,
+    });
+  }, [bookingRef, driverLocationActive, isConnected, manifestStatus, tourCode, tourData, tourData?.id]);
 
   useEffect(() => {
     const activeTourId = tourData?.id || tourCode?.replace(/\s+/g, '_');
-    if (!activeTourId) return;
+    if (!activeTourId) {
+      logger.warn('TourHome', 'Tour pack metadata load skipped without tour id', { tourCode });
+      return;
+    }
+    logger.debug('TourHome', 'Tour pack metadata load started', { activeTourId });
     offlineSyncService.getTourPackMeta(activeTourId, 'passenger').then((res) => {
       if (res.success) {
-        setCacheStatusLabel(offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label);
+        const label = offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label;
+        setCacheStatusLabel(label);
+        logger.info('TourHome', 'Tour pack metadata loaded', {
+          activeTourId,
+          lastSyncedAt: res.data?.lastSyncedAt || null,
+          label,
+        });
+      } else {
+        logger.warn('TourHome', 'Tour pack metadata load failed', {
+          activeTourId,
+          error: res.error || 'unknown',
+        });
       }
     });
   }, [tourData?.id, tourCode]);
 
   useEffect(() => {
     if (!realtimeDb || !tourCode || !bookingRef) {
+      logger.warn('TourHome', 'Realtime readiness skipped', {
+        hasRealtimeDb: Boolean(realtimeDb),
+        hasTourCode: Boolean(tourCode),
+        bookingRef: maskIdentifier(bookingRef),
+      });
       setManifestReady(true);
       setDriverReady(true);
       return;
@@ -563,14 +595,31 @@ export default function TourHomeScreen({
 
     const sanitizedTourId = tourCode.replace(/\s+/g, '_');
     const manifestRef = realtimeDb.ref(`tour_manifests/${sanitizedTourId}/bookings/${bookingRef}`);
+    logger.info('TourHome', 'Passenger realtime listeners starting', {
+      sanitizedTourId,
+      bookingRef: maskIdentifier(bookingRef),
+    });
 
     const handleSnapshot = (snapshot) => {
       const value = snapshot.val();
       setManifestStatus(value?.status || null);
       setManifestReady(true);
+      logger.info('TourHome', 'Manifest status snapshot received', {
+        sanitizedTourId,
+        bookingRef: maskIdentifier(bookingRef),
+        exists: snapshot.exists(),
+        status: value?.status || null,
+        hasPassengerStatus: Array.isArray(value?.passengerStatus),
+      });
     };
 
-    const handleManifestError = () => {
+    const handleManifestError = (error) => {
+      logger.error('TourHome', 'Manifest status listener failed', {
+        sanitizedTourId,
+        bookingRef: maskIdentifier(bookingRef),
+        error: error?.message || String(error),
+        code: error?.code || null,
+      });
       setManifestReady(true);
     };
 
@@ -583,6 +632,7 @@ export default function TourHomeScreen({
       if (!value) {
         setDriverLocationActive(false);
         setDriverReady(true);
+        logger.info('TourHome', 'Driver location snapshot empty', { sanitizedTourId });
         return;
       }
 
@@ -593,9 +643,21 @@ export default function TourHomeScreen({
 
       setDriverLocationActive(isFreshLocation);
       setDriverReady(true);
+      logger.info('TourHome', 'Driver location status snapshot received', {
+        sanitizedTourId,
+        hasTimestamp: Boolean(lastUpdatedValue),
+        ageMs: Number.isFinite(lastUpdatedMs) ? Date.now() - lastUpdatedMs : null,
+        isFreshLocation,
+        source: value?.source || null,
+      });
     };
 
-    const handleDriverError = () => {
+    const handleDriverError = (error) => {
+      logger.error('TourHome', 'Driver location listener failed', {
+        sanitizedTourId,
+        error: error?.message || String(error),
+        code: error?.code || null,
+      });
       setDriverReady(true);
       setDriverLocationActive(false);
     };
@@ -603,6 +665,10 @@ export default function TourHomeScreen({
     driverRef.on('value', handleDriverSnapshot, handleDriverError);
 
     return () => {
+      logger.debug('TourHome', 'Passenger realtime listeners stopping', {
+        sanitizedTourId,
+        bookingRef: maskIdentifier(bookingRef),
+      });
       manifestRef.off('value', handleSnapshot);
       driverRef.off('value', handleDriverSnapshot);
     };
@@ -640,9 +706,20 @@ export default function TourHomeScreen({
     triggerHaptic('light');
 
     const sanitizedTourId = tourData?.id || tourCode?.replace(/\s+/g, '_');
+    logger.info('TourHome', 'Manual refresh started', {
+      sanitizedTourId,
+      bookingRef: maskIdentifier(bookingRef),
+      isConnected,
+    });
     try {
       const replayResult = await offlineSyncService.replayQueue({
         services: { bookingService, chatService },
+      });
+      logger.info('TourHome', 'Manual refresh replay completed', {
+        sanitizedTourId,
+        success: Boolean(replayResult?.success),
+        processed: replayResult?.data?.processed ?? null,
+        failed: replayResult?.data?.failed ?? null,
       });
 
       if (sanitizedTourId && bookingRef && realtimeDb) {
@@ -668,6 +745,13 @@ export default function TourHomeScreen({
         const metaResult = await offlineSyncService.getTourPackMeta(sanitizedTourId, 'passenger');
         const metaLabel = offlineSyncService.getStalenessLabel(metaResult?.data?.lastSyncedAt).label;
         setCacheStatusLabel(metaLabel);
+        logger.info('TourHome', 'Manual refresh realtime snapshots loaded', {
+          sanitizedTourId,
+          bookingRef: maskIdentifier(bookingRef),
+          manifestStatus: manifestSnapshot.val()?.status || null,
+          driverLocationExists: driverSnapshot.exists(),
+          cacheLabel: metaLabel,
+        });
       }
 
       const afterStatsResult = await offlineSyncService.getQueueStats();
@@ -714,7 +798,20 @@ export default function TourHomeScreen({
         outcomeText: syncOutcome,
         autoDismissMs: afterStats.failed > 0 ? 8000 : afterStats.pending > 0 ? 6500 : 4000,
       });
+      logger.info('TourHome', 'Manual refresh status derived', {
+        sanitizedTourId,
+        syncOutcome,
+        severity: unifiedStatus.severity,
+        pending: afterStats.pending,
+        failed: afterStats.failed,
+        syncing: afterStats.syncing,
+      });
     } catch (error) {
+      logger.error('TourHome', 'Manual refresh failed', {
+        sanitizedTourId,
+        bookingRef: maskIdentifier(bookingRef),
+        error: error?.message || String(error),
+      });
       showRefreshStatus({
         contract: {
           ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKEND_DEGRADED,
@@ -733,6 +830,7 @@ export default function TourHomeScreen({
     offlineSyncService.getLastSuccessAt().then((result) => {
       if (mounted && result?.success) {
         setLastSuccessfulSyncAt(result.data);
+        logger.debug('TourHome', 'Last sync timestamp loaded', { lastSuccessAt: result.data || null });
       }
     });
     return () => {
@@ -820,6 +918,11 @@ export default function TourHomeScreen({
     }
 
     if (manifestStatus && previousManifestStatusRef.current !== manifestStatus) {
+      logger.info('TourHome', 'Manifest status changed', {
+        previousStatus: previousManifestStatusRef.current,
+        nextStatus: manifestStatus,
+        bookingRef: maskIdentifier(bookingRef),
+      });
       appendRecentChange(`Boarding status changed to ${manifestStatus.toLowerCase().replace('_', ' ')}.`);
     }
 
@@ -833,6 +936,11 @@ export default function TourHomeScreen({
     }
 
     if (previousDriverLocationRef.current !== driverLocationActive) {
+      logger.info('TourHome', 'Driver location active state changed', {
+        previousActive: previousDriverLocationRef.current,
+        nextActive: driverLocationActive,
+        tourId: tourData?.id || tourCode || null,
+      });
       appendRecentChange(
         driverLocationActive
           ? 'Driver location is now live on the map.'
@@ -845,18 +953,41 @@ export default function TourHomeScreen({
 
   const handleCallDriver = () => {
     triggerHaptic('medium');
+    logger.info('TourHome', 'Driver call launched', {
+      tourId: tourData?.id || null,
+      source: isNoShow ? 'no_show_modal' : 'quick_action',
+    });
     Linking.openURL('tel:+441414876737');
   };
 
   const handleMessageDriver = () => {
     triggerHaptic('light');
     if (!tourData?.driverPhone) {
+      logger.warn('TourHome', 'Driver message blocked without phone number', {
+        tourId: tourData?.id || null,
+        bookingRef: maskIdentifier(bookingRef),
+      });
       Alert.alert('Driver contact unavailable', 'Please reach out to your operator.');
       return;
     }
     const phone = tourData.driverPhone.replace(/[^+\d]/g, '');
+    logger.info('TourHome', 'Driver message launched', {
+      tourId: tourData?.id || null,
+      phoneLength: phone.length,
+    });
     Linking.openURL(`sms:${phone}`);
   };
+
+  const navigateWithLog = useCallback((screen, params = {}, source = 'unknown') => {
+    logger.info('TourHome', 'Navigation requested', {
+      targetScreen: screen,
+      source,
+      tourId: tourData?.id || null,
+      bookingRef: maskIdentifier(bookingRef),
+      params,
+    });
+    onNavigate(screen, params);
+  }, [bookingRef, onNavigate, tourData?.id]);
 
   const menuItems = [
     {
@@ -903,10 +1034,10 @@ export default function TourHomeScreen({
       icon: 'image-multiple',
       label: 'Group Photos',
       color: COLORS.primaryBlue,
-      onPress: () => onNavigate('GroupPhotobook'),
+      onPress: () => navigateWithLog('GroupPhotobook', {}, 'quick_action'),
     },
-    { icon: 'bus-marker', label: 'Find Bus', color: COLORS.coralAccent, onPress: () => onNavigate('Map') },
-    { icon: 'chat', label: 'Chat', color: THEME.success, onPress: () => onNavigate('Chat'), badge: null },
+    { icon: 'bus-marker', label: 'Find Bus', color: COLORS.coralAccent, onPress: () => navigateWithLog('Map', {}, 'quick_action') },
+    { icon: 'chat', label: 'Chat', color: THEME.success, onPress: () => navigateWithLog('Chat', {}, 'quick_action'), badge: null },
   ];
 
   const orderedQuickActions = useMemo(() => {
@@ -917,7 +1048,7 @@ export default function TourHomeScreen({
         icon: 'map-legend',
         label: 'Itinerary',
         color: THEME.primaryLight,
-        onPress: () => onNavigate('Itinerary'),
+        onPress: () => navigateWithLog('Itinerary', {}, 'quick_action'),
       },
       GroupPhotobook: quickActions.find((action) => action.label === 'Group Photos'),
     };
@@ -926,7 +1057,7 @@ export default function TourHomeScreen({
       .map((id) => byId[id])
       .filter(Boolean)
       .slice(0, 4);
-  }, [actionPlan.orderedActionIds, onNavigate, quickActions]);
+  }, [actionPlan.orderedActionIds, navigateWithLog, quickActions]);
 
   if (isLoading) {
     return (
@@ -1002,7 +1133,7 @@ export default function TourHomeScreen({
               <TouchableOpacity
                 style={styles.headerButton}
                 onPress={() => {
-                  onNavigate('NotificationPreferences');
+                  navigateWithLog('NotificationPreferences', {}, 'header_notifications');
                 }}
                 accessible={true}
                 accessibilityLabel="Notification settings"
@@ -1014,6 +1145,10 @@ export default function TourHomeScreen({
                 style={styles.headerButton}
                 onPress={() => {
                   triggerHaptic('light');
+                  logger.info('TourHome', 'Logout requested from header', {
+                    tourId: tourData?.id || null,
+                    bookingRef: maskIdentifier(bookingRef),
+                  });
                   onLogout();
                 }}
                 activeOpacity={0.7}
@@ -1218,7 +1353,7 @@ export default function TourHomeScreen({
           {/* Today's Agenda */}
           {tourData && (
             <AnimatedCard delay={250}>
-              <TodaysAgendaCard tourData={tourData} onNudge={() => onNavigate('Itinerary')} />
+              <TodaysAgendaCard tourData={tourData} onNudge={() => navigateWithLog('Itinerary', {}, 'agenda_nudge')} />
             </AnimatedCard>
           )}
 
@@ -1227,7 +1362,7 @@ export default function TourHomeScreen({
             style={styles.findBusCard}
             delay={300}
             onPress={() => {
-              onNavigate('Map');
+              navigateWithLog('Map', {}, 'find_bus_card');
             }}
             accessibilityLabel="Find My Bus"
             accessibilityHint="View your driver's location on the map"
@@ -1269,12 +1404,12 @@ export default function TourHomeScreen({
               <FeatureCard
                 item={menuItems[0]}
                 index={0}
-                onPress={() => onNavigate(menuItems[0].id)}
+                onPress={() => navigateWithLog(menuItems[0].id, {}, 'feature_card')}
               />
               <FeatureCard
                 item={menuItems[1]}
                 index={1}
-                onPress={() => onNavigate(menuItems[1].id)}
+                onPress={() => navigateWithLog(menuItems[1].id, {}, 'feature_card')}
               />
             </View>
             {/* Second row - 2 cards */}
@@ -1282,12 +1417,12 @@ export default function TourHomeScreen({
               <FeatureCard
                 item={menuItems[2]}
                 index={2}
-                onPress={() => onNavigate(menuItems[2].id)}
+                onPress={() => navigateWithLog(menuItems[2].id, {}, 'feature_card')}
               />
               <FeatureCard
                 item={menuItems[3]}
                 index={3}
-                onPress={() => onNavigate(menuItems[3].id)}
+                onPress={() => navigateWithLog(menuItems[3].id, {}, 'feature_card')}
               />
             </View>
             {/* Third row - 1 full-width card for Safety */}
@@ -1295,7 +1430,7 @@ export default function TourHomeScreen({
               item={menuItems[4]}
               index={4}
               isLarge={true}
-              onPress={() => onNavigate('SafetySupport', { from: 'TourHome', mode: 'passenger' })}
+              onPress={() => navigateWithLog('SafetySupport', { from: 'TourHome', mode: 'passenger' }, 'feature_card')}
             />
           </View>
 
@@ -1354,7 +1489,7 @@ export default function TourHomeScreen({
 
               <TouchableOpacity
                 style={styles.modalEmergencyButton}
-                onPress={() => onNavigate('SafetySupport', { from: 'TourHome', mode: 'passenger' })}
+                onPress={() => navigateWithLog('SafetySupport', { from: 'TourHome', mode: 'passenger' }, 'no_show_modal')}
                 activeOpacity={0.8}
               >
                 <MaterialCommunityIcons name="shield-alert" size={18} color={COLORS.error} />
@@ -1365,7 +1500,13 @@ export default function TourHomeScreen({
 
               <TouchableOpacity
                 style={styles.modalLogoutButton}
-                onPress={onLogout}
+                onPress={() => {
+                  logger.info('TourHome', 'Logout requested from no-show modal', {
+                    tourId: tourData?.id || null,
+                    bookingRef: maskIdentifier(bookingRef),
+                  });
+                  onLogout();
+                }}
                 activeOpacity={0.8}
               >
                 <MaterialCommunityIcons name="logout-variant" size={18} color={COLORS.subtleText} />

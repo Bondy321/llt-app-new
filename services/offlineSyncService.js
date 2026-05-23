@@ -30,6 +30,59 @@ const RESPONSE = {
   fail: (error) => ({ success: false, error: typeof error === 'string' ? error : error?.message || 'Unknown offline sync error' }),
 };
 
+const maskIdentifier = (value) => {
+  if (value === null || value === undefined) return value;
+  const asString = String(value).trim();
+  if (!asString) return asString;
+  if (asString.length <= 4) return `${asString[0] || ''}***`;
+  return `${asString.slice(0, 2)}***${asString.slice(-2)}`;
+};
+
+const summarizeUriForLog = (uri) => {
+  if (typeof uri !== 'string' || !uri.trim()) {
+    return { present: false };
+  }
+
+  const normalized = uri.trim();
+  const schemeMatch = normalized.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
+  return {
+    present: true,
+    scheme: schemeMatch?.[1]?.toLowerCase() || 'unknown',
+    length: normalized.length,
+  };
+};
+
+const summarizeQueueActionForLog = (action = {}) => {
+  const payload = action?.payload && typeof action.payload === 'object' ? action.payload : {};
+  const localAssets = payload.localAssets && typeof payload.localAssets === 'object' ? payload.localAssets : {};
+
+  return {
+    id: maskIdentifier(action?.id),
+    type: action?.type || null,
+    status: action?.status || null,
+    tourId: maskIdentifier(action?.tourId),
+    attempts: Number.isFinite(action?.attempts) ? action.attempts : 0,
+    nextAttemptAt: action?.nextAttemptAt || null,
+    createdAt: action?.createdAt || null,
+    lastUpdatedAt: action?.lastUpdatedAt || null,
+    hasLastError: Boolean(action?.lastError || payload.lastError),
+    lastError: action?.lastError || payload.lastError || null,
+    payloadVersion: payload.payloadVersion || null,
+    visibility: payload.visibility || null,
+    ownerId: maskIdentifier(payload.ownerId),
+    userId: maskIdentifier(payload.userId),
+    hasIdempotencyKey: Boolean(payload.idempotencyKey),
+    hasLocalAssets: Boolean(payload.localAssets),
+    localAssets: {
+      sourceUri: summarizeUriForLog(localAssets.sourceUri || payload.uri),
+      previewUri: summarizeUriForLog(localAssets.previewUri),
+      thumbnailUri: summarizeUriForLog(localAssets.thumbnailUri),
+      viewerUri: summarizeUriForLog(localAssets.viewerUri),
+    },
+    payloadKeys: Object.keys(payload).slice(0, 20),
+  };
+};
+
 const safeJsonParse = (raw, fallback) => {
   try {
     if (typeof raw !== 'string') return fallback;
@@ -284,11 +337,32 @@ const setQueueRaw = async (queue, options = {}) => {
   try {
     const pruneResult = pruneCompletedPhotoUploadActions(queue);
     await storage.setItemAsync(QUEUE_KEY, JSON.stringify(pruneResult.queue));
+    logger.debug('OfflineSync', 'Queue persisted', {
+      queueCount: pruneResult.queue.length,
+      prunedCompletedPhotoUploads: pruneResult.removedCount,
+      silent: Boolean(options.silent),
+      statusCounts: pruneResult.queue.reduce((acc, action) => {
+        const status = action?.status || 'unknown';
+        acc[status] = (acc[status] || 0) + 1;
+        return acc;
+      }, {}),
+      typeCounts: pruneResult.queue.reduce((acc, action) => {
+        const type = action?.type || 'unknown';
+        acc[type] = (acc[type] || 0) + 1;
+        return acc;
+      }, {}),
+      sample: pruneResult.queue.slice(0, 8).map(summarizeQueueActionForLog),
+    });
     if (!options.silent) {
       await emitQueueState();
     }
     return RESPONSE.ok(pruneResult.queue);
   } catch (error) {
+    logger.error('OfflineSync', 'Failed to persist queue', {
+      error: error?.message,
+      inputCount: Array.isArray(queue) ? queue.length : null,
+      silent: Boolean(options.silent),
+    });
     return RESPONSE.fail(error);
   }
 };
@@ -405,6 +479,12 @@ const deriveUnifiedSyncStatus = ({
 const saveTourPack = async (tourId, role, payload) => {
   try {
     if (!tourId || !role) return RESPONSE.fail('tourId and role are required');
+    logger.info('OfflineSync', 'Tour pack save started', {
+      tourId: maskIdentifier(tourId),
+      role,
+      payloadKeys: payload && typeof payload === 'object' ? Object.keys(payload).slice(0, 20) : [],
+      hasFetchedAt: Boolean(payload?.fetchedAt),
+    });
     const rawExistingPack = await storage.getItemAsync(cacheKey(tourId, role));
     const existingPack = safeJsonParse(rawExistingPack, {});
     const fetchedAt = payload?.fetchedAt || new Date().toISOString();
@@ -416,8 +496,20 @@ const saveTourPack = async (tourId, role, payload) => {
       sourceVersion,
     };
     await storage.setItemAsync(cacheKey(tourId, role), JSON.stringify(nextPayload));
+    logger.info('OfflineSync', 'Tour pack save completed', {
+      tourId: maskIdentifier(tourId),
+      role,
+      fetchedAt,
+      sourceVersion,
+      mergedKeys: Object.keys(nextPayload).slice(0, 30),
+    });
     return RESPONSE.ok(nextPayload);
   } catch (error) {
+    logger.error('OfflineSync', 'Tour pack save failed', {
+      tourId: maskIdentifier(tourId),
+      role,
+      error: error?.message,
+    });
     return RESPONSE.fail(error);
   }
 };
@@ -425,11 +517,33 @@ const saveTourPack = async (tourId, role, payload) => {
 const getTourPack = async (tourId, role) => {
   try {
     if (!tourId || !role) return RESPONSE.fail('tourId and role are required');
+    logger.debug('OfflineSync', 'Tour pack load started', {
+      tourId: maskIdentifier(tourId),
+      role,
+    });
     const raw = await storage.getItemAsync(cacheKey(tourId, role));
     const pack = safeJsonParse(raw, null);
-    if (!pack) return RESPONSE.ok(null);
+    if (!pack) {
+      logger.info('OfflineSync', 'Tour pack load missed cache', {
+        tourId: maskIdentifier(tourId),
+        role,
+      });
+      return RESPONSE.ok(null);
+    }
+    logger.info('OfflineSync', 'Tour pack load completed', {
+      tourId: maskIdentifier(tourId),
+      role,
+      fetchedAt: pack.fetchedAt || null,
+      sourceVersion: pack.sourceVersion || null,
+      keys: Object.keys(pack).slice(0, 30),
+    });
     return RESPONSE.ok(pack);
   } catch (error) {
+    logger.error('OfflineSync', 'Tour pack load failed', {
+      tourId: maskIdentifier(tourId),
+      role,
+      error: error?.message,
+    });
     return RESPONSE.fail(error);
   }
 };
@@ -437,14 +551,30 @@ const getTourPack = async (tourId, role) => {
 const setTourPackMeta = async (tourId, role, meta = {}) => {
   try {
     if (!tourId || !role) return RESPONSE.fail('tourId and role are required');
+    logger.debug('OfflineSync', 'Tour pack metadata save started', {
+      tourId: maskIdentifier(tourId),
+      role,
+      metaKeys: meta && typeof meta === 'object' ? Object.keys(meta).slice(0, 20) : [],
+    });
     const payload = {
       schemaVersion: SCHEMA_VERSION,
       lastSyncedAt: meta.lastSyncedAt || new Date().toISOString(),
       ...meta,
     };
     await storage.setItemAsync(metaKey(tourId, role), JSON.stringify(payload));
+    logger.info('OfflineSync', 'Tour pack metadata save completed', {
+      tourId: maskIdentifier(tourId),
+      role,
+      lastSyncedAt: payload.lastSyncedAt,
+      schemaVersion: payload.schemaVersion,
+    });
     return RESPONSE.ok(payload);
   } catch (error) {
+    logger.error('OfflineSync', 'Tour pack metadata save failed', {
+      tourId: maskIdentifier(tourId),
+      role,
+      error: error?.message,
+    });
     return RESPONSE.fail(error);
   }
 };
@@ -452,9 +582,26 @@ const setTourPackMeta = async (tourId, role, meta = {}) => {
 const getTourPackMeta = async (tourId, role) => {
   try {
     if (!tourId || !role) return RESPONSE.fail('tourId and role are required');
+    logger.debug('OfflineSync', 'Tour pack metadata load started', {
+      tourId: maskIdentifier(tourId),
+      role,
+    });
     const raw = await storage.getItemAsync(metaKey(tourId, role));
-    return RESPONSE.ok(safeJsonParse(raw, null));
+    const meta = safeJsonParse(raw, null);
+    logger.info('OfflineSync', 'Tour pack metadata load completed', {
+      tourId: maskIdentifier(tourId),
+      role,
+      found: Boolean(meta),
+      lastSyncedAt: meta?.lastSyncedAt || null,
+      schemaVersion: meta?.schemaVersion || null,
+    });
+    return RESPONSE.ok(meta);
   } catch (error) {
+    logger.error('OfflineSync', 'Tour pack metadata load failed', {
+      tourId: maskIdentifier(tourId),
+      role,
+      error: error?.message,
+    });
     return RESPONSE.fail(error);
   }
 };
@@ -480,15 +627,30 @@ const buildAction = (action) => {
 
 const enqueueAction = async (action) => {
   try {
+    logger.info('OfflineSync', 'Queue enqueue requested', {
+      action: summarizeQueueActionForLog(action),
+    });
     if (!action?.type || !action?.tourId) {
+      logger.warn('OfflineSync', 'Queue enqueue rejected missing required fields', {
+        hasType: Boolean(action?.type),
+        hasTourId: Boolean(action?.tourId),
+      });
       return RESPONSE.fail('type and tourId are required');
     }
     if (!SUPPORTED_QUEUE_TYPES.has(action.type)) {
+      logger.warn('OfflineSync', 'Queue enqueue rejected unsupported action type', {
+        type: action.type,
+        tourId: maskIdentifier(action.tourId),
+      });
       return RESPONSE.fail(`Unsupported action type: ${action.type}`);
     }
     const queue = await getQueueRaw();
     const exists = queue.find((entry) => entry.id === action.id);
     if (exists) {
+      logger.info('OfflineSync', 'Queue enqueue skipped duplicate action', {
+        action: summarizeQueueActionForLog(exists),
+        queueCount: queue.length,
+      });
       return RESPONSE.ok(exists);
     }
 
@@ -510,8 +672,16 @@ const enqueueAction = async (action) => {
     queue.push(entry);
     queue.sort((a, b) => (parseTimestampMs(a.createdAt) || 0) - (parseTimestampMs(b.createdAt) || 0));
     await setQueueRaw(queue);
+    logger.info('OfflineSync', 'Queue enqueue completed', {
+      action: summarizeQueueActionForLog(entry),
+      queueCount: queue.length,
+    });
     return RESPONSE.ok(entry);
   } catch (error) {
+    logger.error('OfflineSync', 'Queue enqueue failed', {
+      action: summarizeQueueActionForLog(action),
+      error: error?.message,
+    });
     return RESPONSE.fail(error);
   }
 };
@@ -529,15 +699,32 @@ const updateAction = async (id, patch = {}, options = {}) => {
   try {
     const queue = await getQueueRaw();
     const index = queue.findIndex((item) => item.id === id);
-    if (index === -1) return RESPONSE.fail('Action not found');
+    if (index === -1) {
+      logger.warn('OfflineSync', 'Queue action update missed', {
+        actionId: maskIdentifier(id),
+        patchKeys: Object.keys(patch || {}),
+      });
+      return RESPONSE.fail('Action not found');
+    }
     queue[index] = {
       ...queue[index],
       ...patch,
       lastUpdatedAt: new Date().toISOString(),
     };
     await setQueueRaw(queue, options);
+    logger.debug('OfflineSync', 'Queue action updated', {
+      actionId: maskIdentifier(id),
+      patchKeys: Object.keys(patch || {}),
+      nextAction: summarizeQueueActionForLog(queue[index]),
+      silent: Boolean(options.silent),
+    });
     return RESPONSE.ok(queue[index]);
   } catch (error) {
+    logger.error('OfflineSync', 'Queue action update failed', {
+      actionId: maskIdentifier(id),
+      patchKeys: Object.keys(patch || {}),
+      error: error?.message,
+    });
     return RESPONSE.fail(error);
   }
 };
@@ -545,10 +732,23 @@ const updateAction = async (id, patch = {}, options = {}) => {
 const removeAction = async (id, options = {}) => {
   try {
     const queue = await getQueueRaw();
+    const removed = queue.find((entry) => entry.id === id);
     const nextQueue = queue.filter((entry) => entry.id !== id);
     await setQueueRaw(nextQueue, options);
+    logger.info('OfflineSync', 'Queue action removed', {
+      actionId: maskIdentifier(id),
+      found: Boolean(removed),
+      removedAction: removed ? summarizeQueueActionForLog(removed) : null,
+      previousCount: queue.length,
+      nextCount: nextQueue.length,
+      silent: Boolean(options.silent),
+    });
     return RESPONSE.ok(true);
   } catch (error) {
+    logger.error('OfflineSync', 'Queue action remove failed', {
+      actionId: maskIdentifier(id),
+      error: error?.message,
+    });
     return RESPONSE.fail(error);
   }
 };
@@ -574,6 +774,10 @@ const getQueueStats = async () => {
 
 const retryFailedActions = async ({ types, resetAttempts = false } = {}) => {
   try {
+    logger.info('OfflineSync', 'Retry failed queue actions requested', {
+      types: Array.isArray(types) ? types : null,
+      resetAttempts,
+    });
     const queue = await getQueueRaw();
     const allowedTypes = Array.isArray(types) && types.length > 0 ? new Set(types) : null;
     let retriedCount = 0;
@@ -597,8 +801,18 @@ const retryFailedActions = async ({ types, resetAttempts = false } = {}) => {
       await setQueueRaw(nextQueue);
     }
 
+    logger.info('OfflineSync', 'Retry failed queue actions completed', {
+      retriedCount,
+      queueCount: nextQueue.length,
+      sample: nextQueue.filter((action) => action.status === 'queued' || action.status === 'retrying').slice(0, 8).map(summarizeQueueActionForLog),
+    });
     return RESPONSE.ok({ retriedCount });
   } catch (error) {
+    logger.error('OfflineSync', 'Retry failed queue actions failed', {
+      types: Array.isArray(types) ? types : null,
+      resetAttempts,
+      error: error?.message,
+    });
     return RESPONSE.fail(error);
   }
 };
@@ -609,12 +823,18 @@ const subscribeQueueState = (listener) => {
   }
 
   listeners.add(listener);
+  logger.debug('OfflineSync', 'Queue state listener subscribed', {
+    listenerCount: listeners.size,
+  });
   getQueueStats().then((stats) => {
     if (stats.success) listener(stats.data);
   });
 
   return () => {
     listeners.delete(listener);
+    logger.debug('OfflineSync', 'Queue state listener unsubscribed', {
+      listenerCount: listeners.size,
+    });
   };
 };
 
@@ -624,10 +844,16 @@ const subscribeQueuedActions = (listener) => {
   }
 
   queueListeners.add(listener);
+  logger.debug('OfflineSync', 'Queue actions listener subscribed', {
+    listenerCount: queueListeners.size,
+  });
   getQueueRaw().then((queue) => listener(queue));
 
   return () => {
     queueListeners.delete(listener);
+    logger.debug('OfflineSync', 'Queue actions listener unsubscribed', {
+      listenerCount: queueListeners.size,
+    });
   };
 };
 
@@ -655,14 +881,20 @@ const applyReplayAction = async (action, services = {}) => {
 
 const replayQueue = async ({ db, services = {} } = {}) => {
   if (replayLock) {
+    logger.info('OfflineSync', 'Queue replay skipped because another replay is active');
     return RESPONSE.ok({ skipped: true, reason: 'Replay already in progress' });
   }
 
   replayLock = true;
 
   try {
+    logger.info('OfflineSync', 'Queue replay started', {
+      hasDbOverride: Boolean(db),
+      serviceKeys: Object.keys(services || {}),
+    });
     const queue = await getQueueRaw();
     if (queue.length === 0) {
+      logger.info('OfflineSync', 'Queue replay completed with empty queue');
       return RESPONSE.ok({ processed: 0, failed: 0 });
     }
 
@@ -670,29 +902,57 @@ const replayQueue = async ({ db, services = {} } = {}) => {
     let processedActionIds = await getProcessedActionIds();
     let processed = 0;
     let failed = 0;
+    let skipped = 0;
+
+    logger.info('OfflineSync', 'Queue replay loaded actions', {
+      queueCount: sortedQueue.length,
+      processedIdCount: processedActionIds.length,
+      sample: sortedQueue.slice(0, 10).map(summarizeQueueActionForLog),
+    });
 
     for (const action of sortedQueue) {
       if (processedActionIds.includes(action.id)) {
+        skipped += 1;
+        logger.debug('OfflineSync', 'Queue replay removing already processed action', {
+          action: summarizeQueueActionForLog(action),
+        });
         await removeAction(action.id, { silent: true });
         continue;
       }
 
       if (action.status === 'failed' || (action.type === 'PHOTO_UPLOAD' && action.status === 'completed')) {
+        skipped += 1;
+        logger.debug('OfflineSync', 'Queue replay skipped action by terminal status', {
+          action: summarizeQueueActionForLog(action),
+        });
         continue;
       }
 
       const now = Date.now();
       const nextAttemptAt = parseTimestampMs(action.nextAttemptAt) || 0;
       if (nextAttemptAt && nextAttemptAt > now) {
+        skipped += 1;
+        logger.debug('OfflineSync', 'Queue replay skipped action until backoff expires', {
+          action: summarizeQueueActionForLog(action),
+          waitMs: nextAttemptAt - now,
+        });
         continue;
       }
 
       const inProgressStatus = action.type === 'PHOTO_UPLOAD' ? 'uploading' : 'syncing';
       await updateAction(action.id, { status: inProgressStatus, lastError: null }, { silent: true });
+      logger.info('OfflineSync', 'Queue replay action started', {
+        action: summarizeQueueActionForLog({ ...action, status: inProgressStatus, lastError: null }),
+      });
       const result = await applyReplayAction(action, { ...services, db });
 
       if (result?.success) {
         processed += 1;
+        logger.info('OfflineSync', 'Queue replay action succeeded', {
+          action: summarizeQueueActionForLog(action),
+          hasResultData: Boolean(result.data),
+          resultKeys: result.data && typeof result.data === 'object' ? Object.keys(result.data).slice(0, 20) : [],
+        });
         if (action.type === 'PHOTO_UPLOAD') {
           await updateAction(action.id, {
             status: 'completed',
@@ -710,6 +970,13 @@ const replayQueue = async ({ db, services = {} } = {}) => {
         const attempts = (action.attempts || 0) + 1;
         const shouldFail = attempts >= MAX_ATTEMPTS;
         const delayMinutes = Math.min(2 ** attempts, 60);
+        logger.warn('OfflineSync', 'Queue replay action failed', {
+          action: summarizeQueueActionForLog(action),
+          attempts,
+          shouldFail,
+          delayMinutes,
+          error: result?.error || 'Replay failed',
+        });
         await updateAction(action.id, {
           attempts,
           status: shouldFail ? 'failed' : (action.type === 'PHOTO_UPLOAD' ? 'retrying' : 'queued'),
@@ -728,8 +995,18 @@ const replayQueue = async ({ db, services = {} } = {}) => {
       }
     }
 
+    logger.info('OfflineSync', 'Queue replay completed', {
+      processed,
+      failed,
+      skipped,
+      queueCount: sortedQueue.length,
+    });
     return RESPONSE.ok({ processed, failed });
   } catch (error) {
+    logger.error('OfflineSync', 'Queue replay failed', {
+      error: error?.message,
+      stack: error?.stack,
+    });
     return RESPONSE.fail(error);
   } finally {
     replayLock = false;
@@ -748,6 +1025,14 @@ const getPhotoUploadActions = async ({ tourId, visibility, ownerId } = {}) => {
     if (visibility && payload.visibility !== visibility) return false;
     if (ownerId && payload.ownerId !== ownerId && payload.userId !== ownerId) return false;
     return true;
+  });
+  logger.debug('OfflineSync', 'Photo upload queue actions filtered', {
+    tourId: maskIdentifier(tourId),
+    visibility: visibility || null,
+    ownerId: maskIdentifier(ownerId),
+    totalCount: queued.data.length,
+    filteredCount: filtered.length,
+    sample: filtered.slice(0, 8).map(summarizeQueueActionForLog),
   });
   return RESPONSE.ok(filtered);
 };

@@ -6,6 +6,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { auth, realtimeDb } from '../firebase';
 import appMetadataModule from './appMetadata';
+import logger, { maskIdentifier } from './loggerService';
 
 // Configure how notifications behave when the app is open
 const { resolveAppVersionMetadata } = appMetadataModule;
@@ -45,9 +46,10 @@ const resolveNotificationUserId = (candidateUserId) => {
 
   if (authUid) {
     if (normalizedCandidate && normalizedCandidate !== authUid) {
-      console.warn(
-        `Notification service received non-auth userId (${normalizedCandidate}); using authenticated uid instead.`
-      );
+      logger.warn('NotificationService', 'Non-auth user id ignored in favor of authenticated uid', {
+        candidateUserId: maskIdentifier(normalizedCandidate),
+        authUid: maskIdentifier(authUid),
+      });
     }
     return authUid;
   }
@@ -160,13 +162,27 @@ const persistPermissionState = async ({ userId, permissionState, canAskAgain }) 
       pushPermissionUpdatedAt: nowIso,
       lastUpdated: nowIso,
     });
+    logger.info('NotificationService', 'Push permission state persisted', {
+      userId: maskIdentifier(userId),
+      permissionState,
+      canAskAgain,
+    });
   } catch (error) {
-    console.warn('Failed to persist push permission state:', error?.message || error);
+    logger.warn('NotificationService', 'Failed to persist push permission state', {
+      userId: maskIdentifier(userId),
+      permissionState,
+      error: error?.message || String(error),
+    });
   }
 };
 
 export const primeNotificationPermissions = async ({ userId = null, requestIfNeeded = true } = {}) => {
   try {
+    logger.info('NotificationService', 'Permission probe started', {
+      userId: maskIdentifier(userId),
+      requestIfNeeded,
+      isDevice: Boolean(Device.isDevice),
+    });
     if (!Device.isDevice) {
       const unavailable = {
         state: 'unavailable',
@@ -176,6 +192,9 @@ export const primeNotificationPermissions = async ({ userId = null, requestIfNee
         description: permissionStateDescriptions.unavailable,
       };
       await persistPermissionState({ userId, permissionState: unavailable.state, canAskAgain: unavailable.canAskAgain });
+      logger.info('NotificationService', 'Permission probe completed for unavailable device', {
+        userId: maskIdentifier(userId),
+      });
       return { success: true, data: unavailable };
     }
 
@@ -195,9 +214,20 @@ export const primeNotificationPermissions = async ({ userId = null, requestIfNee
     };
 
     await persistPermissionState({ userId, permissionState: result.state, canAskAgain: result.canAskAgain });
+    logger.info('NotificationService', 'Permission probe completed', {
+      userId: maskIdentifier(userId),
+      state: result.state,
+      granted: result.granted,
+      canAskAgain: result.canAskAgain,
+      requestIfNeeded,
+    });
     return { success: true, data: result };
   } catch (error) {
-    console.error('primeNotificationPermissions failed:', error);
+    logger.error('NotificationService', 'Permission probe failed', {
+      userId: maskIdentifier(userId),
+      requestIfNeeded,
+      error: error?.message || String(error),
+    });
     return { success: false, error: error?.message || 'Permission check failed' };
   }
 };
@@ -304,9 +334,14 @@ const normalizeNotificationPreferences = (preferences = {}) => {
  */
 export const registerForPushNotificationsAsync = async (retries = 3) => {
   try {
+    logger.info('NotificationService', 'Push registration started', {
+      retries,
+      platform: Platform.OS,
+      isDevice: Boolean(Device.isDevice),
+    });
     // Check if running on physical device
     if (!Device.isDevice) {
-      console.warn('Push notifications require a physical device');
+      logger.warn('NotificationService', 'Push registration blocked on non-device runtime');
       return null;
     }
 
@@ -322,7 +357,9 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
           showBadge: true,
         });
       } catch (channelError) {
-        console.error('Error setting up Android notification channel:', channelError);
+        logger.warn('NotificationService', 'Android notification channel setup failed', {
+          error: channelError?.message || String(channelError),
+        });
         // Continue anyway, channel setup failure shouldn't block registration
       }
     }
@@ -337,12 +374,17 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
         finalPermissions = await Notifications.requestPermissionsAsync();
       }
     } catch (permError) {
-      console.error('Error checking/requesting notification permissions:', permError);
+      logger.error('NotificationService', 'Push registration permission check failed', {
+        error: permError?.message || String(permError),
+      });
       return null;
     }
 
     if (!isGrantedNotificationPermission(finalPermissions)) {
-      console.warn('Notification permission not granted');
+      logger.warn('NotificationService', 'Push registration blocked by permission state', {
+        status: finalPermissions?.status || 'unknown',
+        canAskAgain: finalPermissions?.canAskAgain,
+      });
       return null;
     }
 
@@ -350,11 +392,16 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
     let token;
     const projectId = resolveExpoProjectId();
     if (!projectId) {
-      console.warn('No Expo EAS project ID found while fetching push token; using legacy token fetch fallback');
+      logger.warn('NotificationService', 'Push token project id missing; using legacy token fetch fallback');
     }
 
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
+        logger.debug('NotificationService', 'Push token fetch attempt started', {
+          attempt,
+          retries,
+          hasProjectId: Boolean(projectId),
+        });
         const tokenData = await Promise.race([
           Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined),
           new Promise((_, reject) =>
@@ -362,9 +409,18 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
           )
         ]);
         token = tokenData.data;
+        logger.info('NotificationService', 'Push token fetch succeeded', {
+          attempt,
+          retries,
+          tokenPresent: Boolean(token),
+        });
         break;
       } catch (tokenError) {
-        console.error(`Error getting push token (attempt ${attempt}/${retries}):`, tokenError);
+        logger.warn('NotificationService', 'Push token fetch attempt failed', {
+          attempt,
+          retries,
+          error: tokenError?.message || String(tokenError),
+        });
         if (attempt === retries) {
           return null;
         }
@@ -375,7 +431,9 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
 
     return token;
   } catch (error) {
-    console.error('Fatal error in registerForPushNotificationsAsync:', error);
+    logger.error('NotificationService', 'Push registration failed fatally', {
+      error: error?.message || String(error),
+    });
     return null;
   }
 };
@@ -410,6 +468,11 @@ export const saveUserPreferences = async (userId, preferences) => {
     // Validate inputs
     const validatedUserId = resolveNotificationUserId(userId);
     const validatedPreferences = validatePreferences(preferences);
+    logger.info('NotificationService', 'Preference save started', {
+      userId: maskIdentifier(validatedUserId),
+      hasOps: Boolean(extractPreferenceSource(validatedPreferences)?.ops),
+      hasMarketing: Boolean(extractPreferenceSource(validatedPreferences)?.marketing),
+    });
 
     if (!realtimeDb) {
       throw new Error('Database not initialized');
@@ -425,6 +488,12 @@ export const saveUserPreferences = async (userId, preferences) => {
     ]);
 
     const existingUserData = userSnapshot.val() || {};
+    logger.debug('NotificationService', 'Existing notification preference record loaded', {
+      userId: maskIdentifier(validatedUserId),
+      hasExistingPreferences: Boolean(existingUserData.preferences),
+      pushTokenStatus: existingUserData.pushTokenStatus || null,
+      permissionState: existingUserData.pushPermissionState || null,
+    });
     const existingRemotePreferences = normalizeNotificationPreferences(existingUserData.preferences);
     const incomingPreferences = normalizeNotificationPreferences(validatedPreferences);
     const incomingSource = extractPreferenceSource(validatedPreferences);
@@ -502,6 +571,11 @@ export const saveUserPreferences = async (userId, preferences) => {
         )
       ]);
 
+      logger.info('NotificationService', 'Preferences saved without active push token', {
+        userId: maskIdentifier(validatedUserId),
+        permissionState: permissionState.state,
+        reason: 'permission_not_granted',
+      });
       return {
         success: true,
         warning: 'Preferences saved, but notifications are disabled (no permission or not on physical device)',
@@ -525,6 +599,10 @@ export const saveUserPreferences = async (userId, preferences) => {
         )
       ]);
 
+      logger.warn('NotificationService', 'Preferences saved but push token unavailable', {
+        userId: maskIdentifier(validatedUserId),
+        permissionState: permissionState.state,
+      });
       return {
         success: true,
         warning: 'Preferences saved, but notifications are disabled (no permission or not on physical device)',
@@ -563,9 +641,19 @@ export const saveUserPreferences = async (userId, preferences) => {
       )
     ]);
 
+    logger.info('NotificationService', 'Preferences saved with active push token', {
+      userId: maskIdentifier(validatedUserId),
+      permissionState: permissionState.state,
+      deviceOS: Platform.OS,
+      appVersion: appVersionMetadata.appVersion,
+      appBuild: appVersionMetadata.appBuild,
+    });
     return { success: true, permissionState };
   } catch (error) {
-    console.error('Error saving preferences:', error);
+    logger.error('NotificationService', 'Preference save failed', {
+      userId: maskIdentifier(userId),
+      error: error?.message || String(error),
+    });
     return { success: false, error: error.message };
   }
 };
@@ -580,6 +668,10 @@ export const getUserPreferences = async (userId, options = {}) => {
   try {
     // Validate input
     const validatedUserId = resolveNotificationUserId(userId);
+    logger.info('NotificationService', 'Preference fetch started', {
+      userId: maskIdentifier(validatedUserId),
+      throwOnError,
+    });
 
     if (!realtimeDb) {
       throw new Error('Database not initialized');
@@ -594,9 +686,18 @@ export const getUserPreferences = async (userId, options = {}) => {
       )
     ]);
 
-    return snapshot.val() || null;
+    const preferences = snapshot.val() || null;
+    logger.info('NotificationService', 'Preference fetch completed', {
+      userId: maskIdentifier(validatedUserId),
+      hasPreferences: Boolean(preferences),
+    });
+    return preferences;
   } catch (error) {
-    console.error('Error fetching preferences:', error);
+    logger.error('NotificationService', 'Preference fetch failed', {
+      userId: maskIdentifier(userId),
+      throwOnError,
+      error: error?.message || String(error),
+    });
 
     if (throwOnError) {
       throw error;

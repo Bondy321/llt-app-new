@@ -329,10 +329,28 @@ const maskReactionDebugIds = (ids = []) => (
     .map(maskIdentifier)
 );
 
+const summarizeReactionDebugId = (id) => {
+  if (typeof id !== 'string' || !id.trim()) {
+    return { present: false };
+  }
+
+  const normalized = id.trim();
+  return {
+    present: true,
+    masked: maskIdentifier(normalized),
+    length: normalized.length,
+    isRealtimeSafe: isRealtimeKeySegment(normalized),
+    containsEncodedDot: normalized.includes('_2E_'),
+    containsDot: normalized.includes('.'),
+    containsAt: normalized.includes('@'),
+  };
+};
+
 const rawReactionDebugIds = (ids = []) => (
   (Array.isArray(ids) ? ids : [])
     .filter(Boolean)
     .slice(0, 10)
+    .map(summarizeReactionDebugId)
 );
 
 const summarizeReactionMapForDebug = (reactions, currentUserIds = []) => {
@@ -386,18 +404,11 @@ const summarizeErrorForDiagnostics = (error) => ({
 
 const logChatReactionDebug = (eventName, payload = {}, level = 'info') => {
   try {
-    const persistLevel = level === 'error' ? 'error' : 'warn';
+    const persistLevel = ['debug', 'info', 'warn', 'error'].includes(level) ? level : 'info';
     const loggerMethod = typeof logger?.[persistLevel] === 'function' ? persistLevel : 'warn';
     logger[loggerMethod]('ChatScreen', eventName, payload);
   } catch (error) {
     // Debug logging should never affect chat behavior.
-  }
-
-  try {
-    const consoleMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
-    console[consoleMethod](`[ReactionDebug] [ChatScreen] ${eventName}`, payload);
-  } catch (error) {
-    // no-op
   }
 };
 
@@ -1806,9 +1817,9 @@ export default function ChatScreen({
       aliasCount: currentReactionUserIds.length,
       aliasIdsMasked: maskReactionDebugIds(currentReactionUserIds),
       aliasKeys: rawReactionDebugIds(currentReactionUserIds),
-      principalKey: principalId,
-      stablePassengerKey: passengerStableId,
-      reactionActorKey: realtimeActorId,
+      principalKey: summarizeReactionDebugId(principalId),
+      stablePassengerKey: summarizeReactionDebugId(passengerStableId),
+      reactionActorKey: summarizeReactionDebugId(realtimeActorId),
     });
   }, [authUid, currentReactionUserIds, passengerStableId, principalId, realtimeActorId, tourId]);
   const requiresPassengerStableIdForWrites = !isDriver
@@ -1939,11 +1950,14 @@ export default function ChatScreen({
   }, []);
 
   useEffect(() => {
-    console.info('[ChatScreen] identity binding source selected', {
+    logger.info('ChatScreen', 'identity_binding_source_selected', {
       source: identityBindingSource,
       hasStableBinding: Boolean(identityBinding?.stablePassengerId),
+      tourId,
+      principalId: maskIdentifier(principalId),
+      passengerStableId: maskIdentifier(passengerStableId),
     });
-  }, [identityBinding?.stablePassengerId, identityBindingSource]);
+  }, [identityBinding?.stablePassengerId, identityBindingSource, passengerStableId, principalId, tourId]);
 
   const canRetryFailedMessageForCurrentSession = useCallback((message) => {
     if (!isMessageOwnedByCurrentSession(message, canonicalIdentity)) return false;
@@ -2472,7 +2486,7 @@ export default function ChatScreen({
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       logger.warn('ChatScreen', 'chat_send_blocked_missing_sender_stable_id', {
         tourId,
-        principalId,
+        principalId: maskIdentifier(principalId),
         hasAuthUid: Boolean(authUid),
       });
       return;
@@ -2499,6 +2513,16 @@ export default function ChatScreen({
 
     setMessages((prev) => [...prev, optimisticMessage]);
     scrollToBottom(true);
+    logger.info('ChatScreen', 'chat_send_requested', {
+      tourId,
+      chatScope: internalDriverChat ? 'internal' : 'group',
+      messageId: maskIdentifier(optimisticId),
+      textLength: trimmed.length,
+      hasReply: Boolean(replyingToMessage),
+      senderPrincipalType: senderInfo.principalType,
+      senderId: maskIdentifier(senderInfo.principalId || senderInfo.userId),
+      senderStableId: maskIdentifier(senderInfo.stablePassengerId || senderInfo.senderStableId),
+    });
 
     try {
       const sendFn = internalDriverChat ? sendInternalDriverMessage : sendMessage;
@@ -2509,6 +2533,13 @@ export default function ChatScreen({
       });
 
       if (!result?.success || !result?.message) {
+        logger.warn('ChatScreen', 'chat_send_result_failed', {
+          tourId,
+          chatScope: internalDriverChat ? 'internal' : 'group',
+          messageId: maskIdentifier(optimisticId),
+          error: result?.error || null,
+          queued: Boolean(result?.queued),
+        });
         setMessages((prev) => prev.filter((msg) => msg.id !== optimisticId));
         setInputText(trimmed);
         showTransientFeedback({
@@ -2519,18 +2550,38 @@ export default function ChatScreen({
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       } else {
         const confirmedMessage = { ...result.message, status: result.queued ? 'queued' : 'sent' };
+        logger.info('ChatScreen', 'chat_send_result_success', {
+          tourId,
+          chatScope: internalDriverChat ? 'internal' : 'group',
+          optimisticId: maskIdentifier(optimisticId),
+          messageId: maskIdentifier(confirmedMessage.id),
+          queued: Boolean(result.queued),
+          status: confirmedMessage.status,
+        });
         setMessages((prev) => mergeMessagesById(prev, [confirmedMessage]));
 
         if (!result.queued && result.serverPromise?.finally) {
           result.serverPromise
             .then(() => {
+              logger.info('ChatScreen', 'chat_send_server_delivery_confirmed', {
+                tourId,
+                chatScope: internalDriverChat ? 'internal' : 'group',
+                messageId: maskIdentifier(confirmedMessage.id),
+              });
               setMessages((prev) =>
                 prev.map((msg) =>
                   msg.id === confirmedMessage.id ? { ...msg, status: 'delivered' } : msg
                 )
               );
             })
-            .catch(() => {
+            .catch((deliveryError) => {
+              logger.warn('ChatScreen', 'chat_send_server_delivery_failed', {
+                tourId,
+                chatScope: internalDriverChat ? 'internal' : 'group',
+                messageId: maskIdentifier(confirmedMessage.id),
+                error: deliveryError?.message,
+                code: deliveryError?.code || null,
+              });
               setMessages((prev) =>
                 prev.map((msg) =>
                   msg.id === confirmedMessage.id ? { ...msg, status: 'failed' } : msg
@@ -2544,7 +2595,13 @@ export default function ChatScreen({
         }
       }
     } catch (error) {
-      console.error('Error sending message:', error);
+      logger.error('ChatScreen', 'chat_send_threw', {
+        tourId,
+        chatScope: internalDriverChat ? 'internal' : 'group',
+        messageId: maskIdentifier(optimisticId),
+        error: error?.message,
+        code: error?.code || null,
+      });
       setMessages((prev) => prev.filter((msg) => msg.id !== optimisticId));
       setInputText(trimmed);
       showTransientFeedback({
@@ -2613,14 +2670,24 @@ export default function ChatScreen({
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       logger.warn('ChatScreen', 'chat_retry_blocked_missing_sender_stable_id', {
         tourId,
-        principalId,
-        messageId: message.id,
+        principalId: maskIdentifier(principalId),
+        messageId: maskIdentifier(message.id),
       });
       return;
     }
 
     const senderInfo = buildChatSenderInfo();
     logSenderIdentityPath();
+    logger.info('ChatScreen', 'chat_retry_requested', {
+      tourId,
+      chatScope: internalDriverChat ? 'internal' : 'group',
+      failedMessageId: maskIdentifier(message.id),
+      textLength: trimmed.length,
+      hasReply: Boolean(message.replyTo),
+      senderPrincipalType: senderInfo.principalType,
+      senderId: maskIdentifier(senderInfo.principalId || senderInfo.userId),
+      senderStableId: maskIdentifier(senderInfo.stablePassengerId || senderInfo.senderStableId),
+    });
 
     try {
       const sendFn = internalDriverChat ? sendInternalDriverMessage : sendMessage;
@@ -2629,6 +2696,13 @@ export default function ChatScreen({
       });
 
       if (!result?.success || !result?.message) {
+        logger.warn('ChatScreen', 'chat_retry_result_failed', {
+          tourId,
+          chatScope: internalDriverChat ? 'internal' : 'group',
+          failedMessageId: maskIdentifier(message.id),
+          error: result?.error || null,
+          queued: Boolean(result?.queued),
+        });
         setMessages((prev) => prev.map((msg) => (msg.id === message.id ? { ...msg, status: 'failed' } : msg)));
         showTransientFeedback({
           type: 'warning',
@@ -2640,18 +2714,38 @@ export default function ChatScreen({
       }
 
       const confirmedMessage = { ...result.message, status: result.queued ? 'queued' : 'sent' };
+      logger.info('ChatScreen', 'chat_retry_result_success', {
+        tourId,
+        chatScope: internalDriverChat ? 'internal' : 'group',
+        previousMessageId: maskIdentifier(message.id),
+        messageId: maskIdentifier(confirmedMessage.id),
+        queued: Boolean(result.queued),
+        status: confirmedMessage.status,
+      });
       setMessages((prev) => mergeMessagesById(prev.filter((msg) => msg.id !== message.id), [confirmedMessage]));
 
       if (!result.queued && result.serverPromise?.finally) {
         result.serverPromise
           .then(() => {
+            logger.info('ChatScreen', 'chat_retry_server_delivery_confirmed', {
+              tourId,
+              chatScope: internalDriverChat ? 'internal' : 'group',
+              messageId: maskIdentifier(confirmedMessage.id),
+            });
             setMessages((prev) =>
               prev.map((msg) =>
                 msg.id === confirmedMessage.id ? { ...msg, status: 'delivered' } : msg
               )
             );
           })
-          .catch(() => {
+          .catch((deliveryError) => {
+            logger.warn('ChatScreen', 'chat_retry_server_delivery_failed', {
+              tourId,
+              chatScope: internalDriverChat ? 'internal' : 'group',
+              messageId: maskIdentifier(confirmedMessage.id),
+              error: deliveryError?.message,
+              code: deliveryError?.code || null,
+            });
             setMessages((prev) =>
               prev.map((msg) =>
                 msg.id === confirmedMessage.id ? { ...msg, status: 'failed' } : msg
@@ -2664,7 +2758,13 @@ export default function ChatScreen({
         await refreshQueueStats();
       }
     } catch (error) {
-      console.error('Error retrying failed chat message:', error);
+      logger.error('ChatScreen', 'chat_retry_threw', {
+        tourId,
+        chatScope: internalDriverChat ? 'internal' : 'group',
+        failedMessageId: maskIdentifier(message.id),
+        error: error?.message,
+        code: error?.code || null,
+      });
       setMessages((prev) => prev.map((msg) => (msg.id === message.id ? { ...msg, status: 'failed' } : msg)));
       showTransientFeedback({
         type: 'warning',
@@ -3003,7 +3103,7 @@ export default function ChatScreen({
         nextUserCountForEmoji: optimisticNextEmojiUserIds.length,
         nextUserIdsMasked: maskReactionDebugIds(optimisticNextEmojiUserIds),
         nextUserKeys: rawReactionDebugIds(optimisticNextEmojiUserIds),
-        reactionActorKey: reactionActorId,
+        reactionActorKey: summarizeReactionDebugId(reactionActorId),
       });
 
       try {
@@ -3012,7 +3112,7 @@ export default function ChatScreen({
           messageId,
           emoji,
           reactionActorIdMasked: maskIdentifier(reactionActorId),
-          reactionActorKey: reactionActorId,
+          reactionActorKey: summarizeReactionDebugId(reactionActorId),
           reactionActorKeyIsRealtimeSafe: isRealtimeKeySegment(reactionActorId),
           forceAction,
           reactionSource,
@@ -3054,8 +3154,8 @@ export default function ChatScreen({
           tourId,
           messageId,
           emoji,
-          userId: reactionActorId,
-          reactionActorKey: reactionActorId,
+          userId: maskIdentifier(reactionActorId),
+          reactionActorKey: summarizeReactionDebugId(reactionActorId),
           reactionActorKeyIsRealtimeSafe: isRealtimeKeySegment(reactionActorId),
           forceAction,
           reactionSource,

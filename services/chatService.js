@@ -424,6 +424,25 @@ const logReactionEvent = (level, eventName, payload) => {
   }
 };
 
+const logChatEvent = (level, eventName, payload = {}) => {
+  try {
+    const persistLevel = typeof logger?.[level] === 'function' ? level : 'info';
+    if (logger && typeof logger[persistLevel] === 'function') {
+      logger[persistLevel]('ChatService', eventName, payload);
+      return;
+    }
+  } catch (error) {
+    // Diagnostics must never affect chat behavior.
+  }
+
+  try {
+    const consoleMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
+    console[consoleMethod](`[ChatService] ${eventName}`, payload);
+  } catch (error) {
+    // Ignore diagnostic fallback failures.
+  }
+};
+
 // ==================== MESSAGE BUILDING ====================
 
 const buildMessagePayload = (messageText, senderInfo, messageId, messageType = 'text') => {
@@ -624,6 +643,13 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb,
     const validatedMessage = validateMessageText(message);
     const validatedSender = validateSenderInfo(senderInfo);
     const db = dbInstance || realtimeDb;
+    logChatEvent('info', 'chat_message_send_started', {
+      tourId: validatedTourId,
+      messageLength: validatedMessage.length,
+      sender: summarizeSenderForDbLog(validatedSender),
+      onlineOption: options.online,
+      hasReplyTo: Boolean(options.replyTo),
+    });
 
     const localMessageId = options.messageId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const idempotencyKey = options.idempotencyKey || localMessageId;
@@ -640,11 +666,24 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb,
     const directResult = await sendMessageDirect(payload, db);
     if (directResult.success) {
       const optimisticMessage = { ...directResult.message, status: 'sent' };
+      logChatEvent('info', 'chat_message_send_completed', {
+        tourId: validatedTourId,
+        messageId: directResult.message?.id || null,
+        sender: summarizeSenderForDbLog(validatedSender),
+        queued: false,
+      });
       return { success: true, message: optimisticMessage, queued: false, serverPromise: Promise.resolve(directResult) };
     }
 
     const shouldQueue = !options.online || /timeout|network|unavailable/i.test(directResult.error || '');
     if (!shouldQueue || !offlineSyncService?.enqueueAction) {
+      logChatEvent('warn', 'chat_message_send_failed_without_queue', {
+        tourId: validatedTourId,
+        sender: summarizeSenderForDbLog(validatedSender),
+        error: directResult.error || 'Failed to send message',
+        shouldQueue,
+        hasOfflineSync: Boolean(offlineSyncService?.enqueueAction),
+      });
       return { success: false, error: directResult.error || 'Failed to send message' };
     }
 
@@ -675,12 +714,29 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb,
     });
 
     if (!queued.success) {
+      logChatEvent('warn', 'chat_message_queue_failed', {
+        tourId: validatedTourId,
+        sender: summarizeSenderForDbLog(validatedSender),
+        idempotencyKey: maskUserId(idempotencyKey),
+        error: queued.error || 'Failed to queue message',
+      });
       return { success: false, error: queued.error || 'Failed to queue message' };
     }
 
+    logChatEvent('info', 'chat_message_queued', {
+      tourId: validatedTourId,
+      sender: summarizeSenderForDbLog(validatedSender),
+      messageId: localMessageId,
+      idempotencyKey: maskUserId(idempotencyKey),
+      originalError: directResult.error || null,
+    });
     return { success: true, queued: true, message: optimisticMessage };
   } catch (error) {
-    console.error('Error sending message:', error);
+    logChatEvent('error', 'chat_message_send_threw', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      sender: summarizeSenderForDbLog(senderInfo),
+      error: summarizeErrorForDbLog(error),
+    });
     return { success: false, error: error.message };
   }
 };
@@ -769,6 +825,13 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
     const validatedTourId = validateTourId(tourId);
     const validatedMessage = validateMessageText(message);
     const validatedSender = validateSenderInfo(senderInfo);
+    logChatEvent('info', 'internal_chat_message_send_started', {
+      tourId: validatedTourId,
+      messageLength: validatedMessage.length,
+      sender: summarizeSenderForDbLog(validatedSender),
+      onlineOption: options.online,
+      hasReplyTo: Boolean(options.replyTo),
+    });
 
     const db = dbInstance || realtimeDb;
 
@@ -786,11 +849,24 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
 
     const directResult = await sendInternalMessageDirect(payload, db);
     if (directResult.success) {
+      logChatEvent('info', 'internal_chat_message_send_completed', {
+        tourId: validatedTourId,
+        messageId: directResult.message?.id || null,
+        sender: summarizeSenderForDbLog(validatedSender),
+        queued: false,
+      });
       return { success: true, message: { ...directResult.message, status: 'sent' }, queued: false, serverPromise: Promise.resolve(directResult) };
     }
 
     const shouldQueue = !options.online || /timeout|network|unavailable/i.test(directResult.error || '');
     if (!shouldQueue || !offlineSyncService?.enqueueAction) {
+      logChatEvent('warn', 'internal_chat_message_send_failed_without_queue', {
+        tourId: validatedTourId,
+        sender: summarizeSenderForDbLog(validatedSender),
+        error: directResult.error || 'Failed to send internal message',
+        shouldQueue,
+        hasOfflineSync: Boolean(offlineSyncService?.enqueueAction),
+      });
       return { success: false, error: directResult.error || 'Failed to send internal message' };
     }
 
@@ -821,12 +897,29 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
     });
 
     if (!queued.success) {
+      logChatEvent('warn', 'internal_chat_message_queue_failed', {
+        tourId: validatedTourId,
+        sender: summarizeSenderForDbLog(validatedSender),
+        idempotencyKey: maskUserId(idempotencyKey),
+        error: queued.error || 'Failed to queue internal message',
+      });
       return { success: false, error: queued.error || 'Failed to queue internal message' };
     }
 
+    logChatEvent('info', 'internal_chat_message_queued', {
+      tourId: validatedTourId,
+      sender: summarizeSenderForDbLog(validatedSender),
+      messageId: localMessageId,
+      idempotencyKey: maskUserId(idempotencyKey),
+      originalError: directResult.error || null,
+    });
     return { success: true, queued: true, message: optimisticMessage };
   } catch (error) {
-    console.error('Error sending internal driver message:', error);
+    logChatEvent('error', 'internal_chat_message_send_threw', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      sender: summarizeSenderForDbLog(senderInfo),
+      error: summarizeErrorForDbLog(error),
+    });
     return { success: false, error: error.message };
   }
 };
@@ -891,7 +984,13 @@ const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realti
     });
     return { success: true };
   } catch (error) {
-    console.error('Error adding reaction:', error);
+    logChatEvent('error', 'reaction_add_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      messageId: typeof messageId === 'string' ? messageId.trim() : null,
+      emoji,
+      maskedUserId: maskUserId(userId),
+      error: summarizeErrorForDbLog(error),
+    });
     return { success: false, error: error.message };
   }
 };
@@ -950,7 +1049,13 @@ const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
     });
     return { success: true };
   } catch (error) {
-    console.error('Error removing reaction:', error);
+    logChatEvent('error', 'reaction_remove_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      messageId: typeof messageId === 'string' ? messageId.trim() : null,
+      emoji,
+      maskedUserId: maskUserId(userId),
+      error: summarizeErrorForDbLog(error),
+    });
     return { success: false, error: error.message };
   }
 };
@@ -1119,7 +1224,6 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       errorCode: typeof error?.code === 'string' ? error.code : 'UNKNOWN',
       errorMessage: typeof error?.message === 'string' ? error.message : 'Unknown reaction toggle failure',
     });
-    console.error('Error toggling reaction:', error);
     return { success: false, error: error.message };
   }
 };
@@ -1160,7 +1264,12 @@ const setTypingStatus = async (tourId, userId, userName, isTyping, isDriver = fa
 
     return { success: true };
   } catch (error) {
-    console.error('Error setting typing status:', error);
+    logChatEvent('warn', 'typing_status_update_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      maskedUserId: maskUserId(userId),
+      isTyping: Boolean(isTyping),
+      error: summarizeErrorForDbLog(error),
+    });
     return { success: false };
   }
 };
@@ -1204,7 +1313,10 @@ const subscribeToTypingIndicators = (tourId, currentUserId, onTypingUpdate, dbIn
     try {
       typingRef.off('value', listener);
     } catch (error) {
-      console.warn('Error unsubscribing from typing indicators', error);
+      logChatEvent('warn', 'typing_subscription_unsubscribe_failed', {
+        tourId: validatedTourId,
+        error: summarizeErrorForDbLog(error),
+      });
     }
   };
 };
@@ -1243,7 +1355,12 @@ const setOnlinePresence = async (tourId, userId, userName, isOnline, isDriver = 
 
     return { success: true };
   } catch (error) {
-    console.error('Error setting presence:', error);
+    logChatEvent('warn', 'presence_update_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      maskedUserId: maskUserId(userId),
+      isOnline: Boolean(isOnline),
+      error: summarizeErrorForDbLog(error),
+    });
     return { success: false };
   }
 };
@@ -1288,7 +1405,10 @@ const subscribeToPresence = (tourId, onPresenceUpdate, dbInstance = realtimeDb) 
     try {
       presenceRef.off('value', listener);
     } catch (error) {
-      console.warn('Error unsubscribing from presence', error);
+      logChatEvent('warn', 'presence_subscription_unsubscribe_failed', {
+        tourId,
+        error: summarizeErrorForDbLog(error),
+      });
     }
   };
 };
@@ -1305,9 +1425,13 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtime
     const db = dbInstance || realtimeDb;
 
     if (!db) {
-      console.warn('Database unavailable for chat subscription');
+      logChatEvent('warn', 'chat_subscription_skipped_database_unavailable', { tourId: validatedTourId });
       return () => {};
     }
+    logChatEvent('info', 'chat_subscription_started', {
+      tourId: validatedTourId,
+      limit: normalizeMessageLimit(options.limit, DEFAULT_LIVE_MESSAGE_LIMIT),
+    });
 
     const messagesRef = db.ref(`chats/${validatedTourId}/messages`);
     const messagesQuery = buildTimestampQuery(messagesRef, {
@@ -1325,11 +1449,17 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtime
         });
         onMessagesUpdate(messages);
       } catch (error) {
-        console.error('Error processing chat messages snapshot:', error);
+        logChatEvent('error', 'chat_subscription_snapshot_processing_failed', {
+          tourId: validatedTourId,
+          error: summarizeErrorForDbLog(error),
+        });
         onMessagesUpdate([]); // Provide empty array as fallback
       }
     }, (error) => {
-      console.error('Error in chat messages subscription:', error);
+      logChatEvent('error', 'chat_subscription_failed', {
+        tourId: validatedTourId,
+        error: summarizeErrorForDbLog(error),
+      });
       onMessagesUpdate([]); // Provide empty array on error
     });
 
@@ -1338,12 +1468,19 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtime
       try {
         const refForOff = typeof messagesQuery?.off === 'function' ? messagesQuery : messagesRef;
         refForOff.off('value', listener);
+        logChatEvent('debug', 'chat_subscription_stopped', { tourId: validatedTourId });
       } catch (error) {
-        console.warn('Error unsubscribing from chat messages', error);
+        logChatEvent('warn', 'chat_subscription_unsubscribe_failed', {
+          tourId: validatedTourId,
+          error: summarizeErrorForDbLog(error),
+        });
       }
     };
   } catch (error) {
-    console.error('Error setting up chat messages subscription:', error);
+    logChatEvent('error', 'chat_subscription_setup_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      error: summarizeErrorForDbLog(error),
+    });
     return () => {};
   }
 };
@@ -1353,12 +1490,20 @@ const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance = re
   const db = dbInstance || realtimeDb;
 
   if (!db || !tourId || typeof onMessagesUpdate !== 'function') {
-    console.warn('subscribeToInternalDriverChat called without required params');
+    logChatEvent('warn', 'internal_chat_subscription_skipped_missing_params', {
+      hasDb: Boolean(db),
+      hasTourId: Boolean(tourId),
+      hasCallback: typeof onMessagesUpdate === 'function',
+    });
     return () => {};
   }
 
   const messagesRef = db.ref(`internal_chats/${tourId}/messages`);
   const messagesQuery = buildTimestampQuery(messagesRef, {
+    limit: normalizeMessageLimit(options.limit, DEFAULT_LIVE_MESSAGE_LIMIT),
+  });
+  logChatEvent('info', 'internal_chat_subscription_started', {
+    tourId,
     limit: normalizeMessageLimit(options.limit, DEFAULT_LIVE_MESSAGE_LIMIT),
   });
 
@@ -1377,8 +1522,12 @@ const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance = re
     try {
       const refForOff = typeof messagesQuery?.off === 'function' ? messagesQuery : messagesRef;
       refForOff.off('value', listener);
+      logChatEvent('debug', 'internal_chat_subscription_stopped', { tourId });
     } catch (error) {
-      console.warn('Error unsubscribing from internal driver chat messages', error);
+      logChatEvent('warn', 'internal_chat_subscription_unsubscribe_failed', {
+        tourId,
+        error: summarizeErrorForDbLog(error),
+      });
     }
   };
 };
@@ -1397,7 +1546,11 @@ const markChatAsRead = async (tourId, userId, dbInstance = realtimeDb) => {
     await lastReadRef.set(new Date().toISOString());
     return { success: true };
   } catch (error) {
-    console.error('Error marking chat as read:', error);
+    logChatEvent('warn', 'chat_mark_read_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      maskedUserId: maskUserId(userId),
+      error: summarizeErrorForDbLog(error),
+    });
     return { success: false };
   }
 };
@@ -1414,7 +1567,11 @@ const markInternalChatAsRead = async (tourId, userId, dbInstance = realtimeDb) =
     await lastReadRef.set(new Date().toISOString());
     return { success: true };
   } catch (error) {
-    console.error('Error marking internal chat as read:', error);
+    logChatEvent('warn', 'internal_chat_mark_read_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      maskedUserId: maskUserId(userId),
+      error: summarizeErrorForDbLog(error),
+    });
     return { success: false };
   }
 };
@@ -1445,7 +1602,10 @@ const subscribeToReadReceipts = (tourId, onReadUpdate, dbInstance = realtimeDb) 
     try {
       lastReadRef.off('value', listener);
     } catch (error) {
-      console.warn('Error unsubscribing from read receipts', error);
+      logChatEvent('warn', 'read_receipts_unsubscribe_failed', {
+        tourId,
+        error: summarizeErrorForDbLog(error),
+      });
     }
   };
 };
@@ -1483,7 +1643,11 @@ const getChatMessages = async (tourId, limit = 50, dbInstance = realtimeDb) => {
 
     return messages;
   } catch (error) {
-    console.error('Error getting chat messages:', error);
+    logChatEvent('error', 'chat_messages_fetch_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      limit,
+      error: summarizeErrorForDbLog(error),
+    });
     return [];
   }
 };
@@ -1542,6 +1706,12 @@ const getChatMessagesPage = async ({
       nextCursor,
     };
   } catch (error) {
+    logChatEvent('error', 'chat_messages_page_fetch_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      scope,
+      limit,
+      error: summarizeErrorForDbLog(error),
+    });
     return {
       success: false,
       error: error?.message || 'Unable to load chat messages',
@@ -1595,7 +1765,13 @@ const deleteMessage = async (tourId, messageId, requestingUserId, isDriver = fal
 
     return { success: true };
   } catch (error) {
-    console.error('Error deleting message:', error);
+    logChatEvent('error', 'chat_message_delete_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      messageId: typeof messageId === 'string' ? messageId.trim() : null,
+      maskedUserId: maskUserId(requestingUserId),
+      isDriver: Boolean(isDriver),
+      error: summarizeErrorForDbLog(error),
+    });
     return { success: false, error: error.message };
   }
 };

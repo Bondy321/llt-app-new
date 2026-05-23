@@ -19,6 +19,7 @@ import {
   registerForPushNotificationsAsync,
   primeNotificationPermissions,
 } from '../services/notificationService';
+import logger from '../services/loggerService';
 import { COLORS as THEME, SHADOWS } from '../theme';
 
 // Brand Colors
@@ -258,6 +259,15 @@ export default function NotificationPreferencesScreen({
   const opsEnabledCount = useMemo(() => Object.values(opsPrefs).filter(Boolean).length, [opsPrefs]);
   const marketingEnabledCount = useMemo(() => Object.values(marketingPrefs).filter(Boolean).length, [marketingPrefs]);
 
+  useEffect(() => {
+    logger.trackScreen('NotificationPreferences', {
+      isOnboarding,
+      audience,
+      returnTo: returnTo || null,
+      hasUserId: Boolean(userId),
+    });
+  }, [audience, isOnboarding, returnTo, userId]);
+
   const formatTimestamp = (isoDate) => {
     const date = new Date(isoDate);
     if (Number.isNaN(date.getTime())) return '';
@@ -276,7 +286,17 @@ export default function NotificationPreferencesScreen({
     setEmptyStateMessage('');
     setStatusBanner(null);
 
+    logger.info('NotificationPreferences', 'Preference load started', {
+      hasUserId: Boolean(userId),
+      isOnboarding,
+      audience,
+    });
+
     if (!userId) {
+      logger.warn('NotificationPreferences', 'Preference load blocked without user id', {
+        isOnboarding,
+        audience,
+      });
       setEmptyStateMessage('Sign in to manage notifications.');
       setLoading(false);
       return;
@@ -289,6 +309,17 @@ export default function NotificationPreferencesScreen({
       });
       if (permissionProbe?.success) {
         setPermissionStatus(permissionProbe.data);
+        logger.info('NotificationPreferences', 'Permission probe completed during load', {
+          state: permissionProbe.data?.state,
+          granted: permissionProbe.data?.granted,
+          canAskAgain: permissionProbe.data?.canAskAgain,
+          requestIfNeeded: false,
+        });
+      } else {
+        logger.warn('NotificationPreferences', 'Permission probe failed during load', {
+          error: permissionProbe?.error || 'unknown',
+          requestIfNeeded: false,
+        });
       }
 
       const saved = await getUserPreferences(userId, { throwOnError: true });
@@ -303,7 +334,16 @@ export default function NotificationPreferencesScreen({
       setMarketingPrefs(nextMarketingPrefs);
       setInitialOpsPrefs(nextOpsPrefs);
       setInitialMarketingPrefs(nextMarketingPrefs);
+      logger.info('NotificationPreferences', 'Preference load completed', {
+        opsEnabledCount: Object.values(nextOpsPrefs).filter(Boolean).length,
+        marketingEnabledCount: Object.values(nextMarketingPrefs).filter(Boolean).length,
+        hadSavedOpsPrefs: Boolean(saved?.ops),
+        hadSavedMarketingPrefs: Boolean(saved?.marketing),
+      });
     } catch (error) {
+      logger.error('NotificationPreferences', 'Preference load failed', {
+        error: error?.message || String(error),
+      });
       setLoadError('We could not load your notification settings. Please try again.');
     } finally {
       setLoading(false);
@@ -317,6 +357,12 @@ export default function NotificationPreferencesScreen({
   const handleSave = async () => {
     setSaving(true);
     setStatusBanner(null);
+    logger.info('NotificationPreferences', 'Preference save started', {
+      opsEnabledCount,
+      marketingEnabledCount,
+      hasChanges,
+      permissionState: permissionStatus?.state || 'unknown',
+    });
 
     try {
       const fullPreferences = {
@@ -328,6 +374,12 @@ export default function NotificationPreferencesScreen({
       const result = await saveUserPreferences(userId, fullPreferences);
 
       if (result.success) {
+        logger.info('NotificationPreferences', 'Preference save completed', {
+          warning: result.warning || null,
+          permissionState: result?.permissionState?.state || permissionStatus?.state || 'unknown',
+          opsEnabledCount,
+          marketingEnabledCount,
+        });
         if (result?.permissionState) {
           setPermissionStatus(result.permissionState);
         }
@@ -340,12 +392,19 @@ export default function NotificationPreferencesScreen({
           message: result.warning || "Preferences saved. We'll only send notifications based on your choices.",
         });
       } else {
+        logger.warn('NotificationPreferences', 'Preference save returned failure', {
+          error: result.error || 'unknown',
+          permissionState: permissionStatus?.state || 'unknown',
+        });
         setStatusBanner({
           type: 'error',
           message: 'Could not save settings. Please check your internet connection and try again.',
         });
       }
     } catch (error) {
+      logger.error('NotificationPreferences', 'Preference save threw', {
+        error: error?.message || String(error),
+      });
       setStatusBanner({
         type: 'error',
         message: 'Unexpected error while saving preferences. Please retry.',
@@ -356,6 +415,11 @@ export default function NotificationPreferencesScreen({
   };
 
   const completeOnboarding = async (status) => {
+    logger.info('NotificationPreferences', 'Notification onboarding completing', {
+      status,
+      audience,
+      returnTo: returnTo || null,
+    });
     if (typeof onComplete === 'function') {
       await onComplete({
         status,
@@ -371,6 +435,11 @@ export default function NotificationPreferencesScreen({
     if (!userId) return;
     setOnboardingActionBusy(true);
     setStatusBanner(null);
+    logger.info('NotificationPreferences', 'Onboarding enable started', {
+      audience,
+      opsEnabledCount,
+      marketingEnabledCount,
+    });
 
     const permissionProbe = await primeNotificationPermissions({
       userId,
@@ -378,6 +447,9 @@ export default function NotificationPreferencesScreen({
     });
 
     if (!permissionProbe?.success) {
+      logger.warn('NotificationPreferences', 'Onboarding permission probe failed', {
+        error: permissionProbe?.error || 'unknown',
+      });
       setOnboardingActionBusy(false);
       setStatusBanner({
         type: 'error',
@@ -387,6 +459,11 @@ export default function NotificationPreferencesScreen({
     }
 
     setPermissionStatus(permissionProbe.data);
+    logger.info('NotificationPreferences', 'Onboarding permission probe completed', {
+      state: permissionProbe.data?.state,
+      granted: permissionProbe.data?.granted,
+      canAskAgain: permissionProbe.data?.canAskAgain,
+    });
 
     const fullPreferences = {
       ops: opsPrefs,
@@ -397,6 +474,9 @@ export default function NotificationPreferencesScreen({
     const saveResult = await saveUserPreferences(userId, fullPreferences);
 
     if (!saveResult.success) {
+      logger.warn('NotificationPreferences', 'Onboarding preference save failed', {
+        error: saveResult.error || 'unknown',
+      });
       setOnboardingActionBusy(false);
       setStatusBanner({
         type: 'error',
@@ -410,14 +490,19 @@ export default function NotificationPreferencesScreen({
     }
 
     setOnboardingActionBusy(false);
+    logger.info('NotificationPreferences', 'Onboarding enable completed', {
+      permissionState: saveResult?.permissionState?.state || permissionProbe.data?.state || 'unknown',
+    });
     await completeOnboarding('completed');
   };
 
   const handleMaybeLater = async () => {
+    logger.info('NotificationPreferences', 'Onboarding skipped', { audience, returnTo: returnTo || null });
     await completeOnboarding('skipped');
   };
 
   const applyOpsPreset = (preset) => {
+    logger.debug('NotificationPreferences', 'Operational preset applied', { preset });
     setActiveOpsPreset(preset);
     if (preset === 'all') {
       setOpsPrefs({
@@ -448,6 +533,7 @@ export default function NotificationPreferencesScreen({
   };
 
   const applyMarketingPreset = (preset) => {
+    logger.debug('NotificationPreferences', 'Marketing preset applied', { preset });
     setActiveMarketingPreset(preset);
     if (preset === 'recommended') {
       setMarketingPrefs({
@@ -514,11 +600,17 @@ export default function NotificationPreferencesScreen({
 
   const handleTestNotification = async () => {
     try {
+      logger.info('NotificationPreferences', 'Test notification started', {
+        permissionState: permissionStatus?.state || 'unknown',
+      });
       setTestStatus({ type: 'progress', message: 'Checking notification permissions…' });
       
       const token = await registerForPushNotificationsAsync();
       
       if (!token) {
+        logger.warn('NotificationPreferences', 'Test notification blocked without token', {
+          permissionState: permissionStatus?.state || 'unknown',
+        });
         setTestStatus({
           type: 'error',
           message: 'Permission check failed. Enable notifications in device settings and retry.',
@@ -541,8 +633,14 @@ export default function NotificationPreferencesScreen({
         type: 'success',
         message: 'Test notification sent successfully. If you did not see it, check OS notification settings.',
       });
+      logger.info('NotificationPreferences', 'Test notification scheduled', {
+        permissionState: permissionStatus?.state || 'unknown',
+      });
 
     } catch (error) {
+      logger.error('NotificationPreferences', 'Test notification failed', {
+        error: error?.message || String(error),
+      });
       setTestStatus({
         type: 'error',
         message: `Test failed: ${error.message || 'Unknown error'}`,
@@ -708,7 +806,10 @@ export default function NotificationPreferencesScreen({
               description={meta.description}
               icon={meta.icon}
               value={opsPrefs[key]}
-              onValueChange={(v) => setOpsPrefs({ ...opsPrefs, [key]: v })}
+              onValueChange={(v) => {
+                logger.debug('NotificationPreferences', 'Operational preference toggled', { key, enabled: v });
+                setOpsPrefs({ ...opsPrefs, [key]: v });
+              }}
               color={meta.color}
               badge={meta.badge}
               disabled={saving || onboardingActionBusy}
@@ -762,7 +863,10 @@ export default function NotificationPreferencesScreen({
               description={meta.description}
               icon={meta.icon}
               value={marketingPrefs[key]}
-              onValueChange={(v) => setMarketingPrefs({ ...marketingPrefs, [key]: v })}
+              onValueChange={(v) => {
+                logger.debug('NotificationPreferences', 'Marketing preference toggled', { key, enabled: v });
+                setMarketingPrefs({ ...marketingPrefs, [key]: v });
+              }}
               color={meta.color}
               badge={meta.badge}
               disabled={saving || onboardingActionBusy}

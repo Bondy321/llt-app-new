@@ -11,6 +11,7 @@ import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
 import ManifestBookingCard from '../components/ManifestBookingCard';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS, FONT_WEIGHT } from '../theme';
+import logger, { maskIdentifier } from '../services/loggerService';
 const { getBookingSyncState, normalizeSyncState } = require('../utils/manifestSyncState');
 const { pickupTimeToMinutes } = require('../services/pickupTimeParser');
 
@@ -67,6 +68,10 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const [statusFeedback, setStatusFeedback] = useState(null);
   const feedbackTimeoutRef = useRef(null);
 
+  useEffect(() => {
+    logger.trackScreen('PassengerManifest', { tourId });
+  }, [tourId]);
+
   const clearFeedbackTimeout = () => {
     if (feedbackTimeoutRef.current) {
       clearTimeout(feedbackTimeoutRef.current);
@@ -87,11 +92,21 @@ export default function PassengerManifestScreen({ route, navigation }) {
   };
 
   const loadManifest = async () => {
+    logger.info('PassengerManifest', 'Manifest load started', { tourId });
     try {
       const data = await getTourManifest(tourId);
       setManifestData(data);
+      logger.info('PassengerManifest', 'Manifest load completed', {
+        tourId,
+        bookingCount: data?.bookings?.length || 0,
+        hasStats: Boolean(data?.stats),
+      });
       return data;
     } catch (error) {
+      logger.error('PassengerManifest', 'Manifest load failed', {
+        tourId,
+        error: error?.message || String(error),
+      });
       Alert.alert('Error', 'Failed to load manifest: ' + error.message);
       return null;
     } finally {
@@ -101,6 +116,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
   };
 
   const handleRefresh = async () => {
+    logger.info('PassengerManifest', 'Pull refresh started', { tourId });
     setRefreshing(true);
     await handleSyncNow({ isManualRefresh: true });
   };
@@ -110,16 +126,31 @@ export default function PassengerManifestScreen({ route, navigation }) {
   }, [tourId]);
 
   useEffect(() => {
-    const unsubscribe = offlineSyncService.subscribeQueueState((stats) => setQueueStats(stats));
+    const unsubscribe = offlineSyncService.subscribeQueueState((stats) => {
+      logger.debug('PassengerManifest', 'Queue state updated', {
+        tourId,
+        pending: stats?.pending || 0,
+        syncing: stats?.syncing || 0,
+        failed: stats?.failed || 0,
+        total: stats?.total || 0,
+      });
+      setQueueStats(stats);
+    });
     return () => unsubscribe?.();
-  }, []);
+  }, [tourId]);
 
   useEffect(() => () => clearFeedbackTimeout(), []);
 
   useEffect(() => {
     const map = {};
     offlineSyncService.getQueuedActions().then((res) => {
-      if (!res.success) return;
+      if (!res.success) {
+        logger.warn('PassengerManifest', 'Queued manifest action scan failed', {
+          tourId,
+          error: res.error || 'unknown',
+        });
+        return;
+      }
       res.data.forEach((action) => {
         if (action.type !== 'MANIFEST_UPDATE') return;
         const bookingRef = action.payload?.bookingRef;
@@ -127,8 +158,13 @@ export default function PassengerManifestScreen({ route, navigation }) {
         map[bookingRef] = normalizeSyncState(action.status);
       });
       setBookingSyncState(map);
+      logger.debug('PassengerManifest', 'Queued manifest action map refreshed', {
+        tourId,
+        queuedBookingCount: Object.keys(map).length,
+        queueTotal: res.data.length,
+      });
     });
-  }, [manifestData.bookings.length, queueStats.pending, queueStats.failed, queueStats.syncing]);
+  }, [manifestData.bookings.length, queueStats.pending, queueStats.failed, queueStats.syncing, tourId]);
 
   const computeStats = (bookings = []) => bookings.reduce((acc, booking) => {
     const paxCount = booking.passengerNames?.length || 0;
@@ -236,6 +272,13 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
   // --- Actions ---
   const handleOpenBooking = (booking) => {
+    logger.info('PassengerManifest', 'Booking detail opened', {
+      tourId,
+      bookingRef: maskIdentifier(booking?.id),
+      status: booking?.status || null,
+      passengerCount: booking?.passengerNames?.length || 0,
+      hasPassengerStatuses: Boolean(booking?.hasPassengerStatuses),
+    });
     setSelectedBooking(booking);
     const existingStatuses = Array.isArray(booking.passengerStatus) ? booking.passengerStatus : [];
     const normalized = booking.passengerNames.map((_, idx) => existingStatuses[idx] || MANIFEST_STATUS.PENDING);
@@ -249,6 +292,12 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
     try {
       setActionLoading(true);
+      logger.info('PassengerManifest', 'Manifest update started', {
+        tourId,
+        bookingRef: maskIdentifier(selectedBooking.id),
+        passengerCount: selectedBooking.passengerNames?.length || 0,
+        passengerStatuses: passengerStatuses || null,
+      });
       const beforeStats = computeStats(manifestData.bookings);
       const beforeUnresolved = getUnresolvedBookingCount(manifestData.bookings);
       const statusesToPersist = passengerStatuses && passengerStatuses.length > 0
@@ -256,7 +305,18 @@ export default function PassengerManifestScreen({ route, navigation }) {
         : selectedBooking.passengerNames.map(() => MANIFEST_STATUS.PENDING);
 
       const result = await updateManifestBooking(tourId, selectedBooking.id, statusesToPersist, { online: true });
+      logger.info('PassengerManifest', 'Manifest update result received', {
+        tourId,
+        bookingRef: maskIdentifier(selectedBooking.id),
+        queued: Boolean(result?.queued),
+        hasConflictMessage: Boolean(result?.conflictMessage),
+      });
       if (result?.conflictMessage) {
+        logger.warn('PassengerManifest', 'Manifest update conflict surfaced', {
+          tourId,
+          bookingRef: maskIdentifier(selectedBooking.id),
+          conflictMessage: result.conflictMessage,
+        });
         setConflictNote(result.conflictMessage);
       }
       if (result?.queued) {
@@ -299,6 +359,11 @@ export default function PassengerManifestScreen({ route, navigation }) {
         });
       }
     } catch (error) {
+      logger.error('PassengerManifest', 'Manifest update failed', {
+        tourId,
+        bookingRef: maskIdentifier(selectedBooking?.id),
+        error: error?.message || String(error),
+      });
       showStatusFeedback({
         variant: 'error',
         message: 'Save failed. Retry now.',
@@ -333,8 +398,24 @@ export default function PassengerManifestScreen({ route, navigation }) {
     }
 
     try {
+      logger.info('PassengerManifest', 'Manifest sync started', {
+        tourId,
+        isManualRefresh,
+      });
       const replay = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+      logger.info('PassengerManifest', 'Manifest sync replay completed', {
+        tourId,
+        isManualRefresh,
+        success: Boolean(replay.success),
+        syncedCount: replay?.data?.syncedCount ?? replay?.syncedCount ?? null,
+        pendingCount: replay?.data?.pendingCount ?? replay?.pendingCount ?? null,
+        failedCount: replay?.data?.failedCount ?? replay?.failedCount ?? null,
+      });
       if (!replay.success) {
+        logger.warn('PassengerManifest', 'Manifest sync replay reported failure', {
+          tourId,
+          error: replay.error || 'unknown',
+        });
         showStatusFeedback({
           variant: 'error',
           message: replay.error ? `Sync failed: ${replay.error}` : 'Sync failed. Retry now.',
@@ -349,6 +430,12 @@ export default function PassengerManifestScreen({ route, navigation }) {
       if (queued.success) {
         const pendingActions = queued.data.filter((action) => action.status === 'queued').length;
         const failedActions = queued.data.filter((action) => action.status === 'failed').length;
+        logger.info('PassengerManifest', 'Manifest sync queue scan completed', {
+          tourId,
+          pendingActions,
+          failedActions,
+          totalActions: queued.data.length,
+        });
 
         if (failedActions > 0) {
           showStatusFeedback({
@@ -375,12 +462,25 @@ export default function PassengerManifestScreen({ route, navigation }) {
       }
 
       await loadManifest();
+    } catch (error) {
+      logger.error('PassengerManifest', 'Manifest sync failed unexpectedly', {
+        tourId,
+        isManualRefresh,
+        error: error?.message || String(error),
+      });
+      showStatusFeedback({
+        variant: 'error',
+        message: 'Sync failed. Retry now.',
+        ctaLabel: 'Retry now',
+        onCtaPress: () => handleSyncNow(),
+      });
     } finally {
       setRefreshing(false);
     }
   };
 
   const handleRetryFailed = async () => {
+    logger.info('PassengerManifest', 'Retry failed manifest actions started', { tourId });
     await offlineSyncService.retryFailedActions({ types: ['MANIFEST_UPDATE'] });
     await handleSyncNow();
   };

@@ -90,15 +90,30 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
     }
   }, []);
 
+  useEffect(() => {
+    logger.trackScreen('Itinerary', {
+      tourId,
+      tourName,
+      startDate,
+      isDriver: Boolean(isDriver),
+    });
+  }, [isDriver, startDate, tourId, tourName]);
+
   // --- REAL-TIME SYNC ---
   useEffect(() => {
     loadRequestIdRef.current += 1;
+    logger.info('ItineraryScreen', 'Itinerary effect started', {
+      tourId,
+      isDriver: Boolean(isDriver),
+      isEditing,
+    });
 
     loadItinerary();
 
     // Set up real-time listener for live updates
     if (tourId && !isEditing) {
       const itineraryRef = realtimeDb.ref(`tours/${tourId}/itinerary`);
+      logger.info('ItineraryScreen', 'Realtime itinerary listener starting', { tourId, isDriver: Boolean(isDriver) });
 
       const onUpdate = (snapshot) => {
         const data = snapshot.val();
@@ -106,6 +121,13 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
           setItinerary(data);
           setEditedItinerary(JSON.parse(JSON.stringify(data)));
           cacheItinerary(data);
+          logger.info('ItineraryScreen', 'Realtime itinerary snapshot received', {
+            tourId,
+            dayCount: Array.isArray(data?.days) ? data.days.length : null,
+            hasTitle: Boolean(data?.title),
+          });
+        } else {
+          logger.warn('ItineraryScreen', 'Realtime itinerary snapshot empty', { tourId });
         }
       };
 
@@ -116,6 +138,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
         clearRetryTimeout();
         loadRequestIdRef.current += 1;
         if (realtimeListener.current) {
+          logger.debug('ItineraryScreen', 'Realtime itinerary listener stopping', { tourId });
           realtimeListener.current.ref.off('value', realtimeListener.current.listener);
         }
       };
@@ -123,6 +146,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
     return () => {
       clearRetryTimeout();
       loadRequestIdRef.current += 1;
+      logger.debug('ItineraryScreen', 'Itinerary effect cleaned up without listener', { tourId });
     };
   }, [tourId, isEditing, clearRetryTimeout]);
 
@@ -133,6 +157,12 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       await offlineSyncService.saveTourPack(tourId, isDriver ? 'driver' : 'passenger', { itinerary: data });
       await offlineSyncService.setTourPackMeta(tourId, isDriver ? 'driver' : 'passenger', { lastSyncedAt: syncedAt });
       setLastSyncedAt(syncedAt);
+      logger.info('ItineraryScreen', 'Itinerary cache saved', {
+        tourId,
+        isDriver: Boolean(isDriver),
+        dayCount: Array.isArray(data?.days) ? data.days.length : null,
+        syncedAt,
+      });
     } catch (error) {
       logger.warn('ItineraryScreen', 'Failed to save itinerary cache', {
         tourId,
@@ -252,11 +282,19 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   const loadItinerary = async ({ showSkeleton = true, retry = 0 } = {}) => {
     const requestId = ++loadRequestIdRef.current;
     const isCurrentRequest = () => requestId === loadRequestIdRef.current;
+    logger.info('ItineraryScreen', 'Itinerary load started', {
+      tourId,
+      isDriver: Boolean(isDriver),
+      showSkeleton,
+      retry,
+      requestId,
+    });
 
     try {
       clearRetryTimeout();
       setErrorMessage('');
       if (!tourId) {
+        logger.warn('ItineraryScreen', 'Itinerary load skipped without tour id', { isDriver: Boolean(isDriver), requestId });
         if (!isCurrentRequest()) return;
         setItinerary(null);
         setLoading(false);
@@ -274,12 +312,23 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
         setItinerary(cachedSnapshot);
         setEditedItinerary(JSON.parse(JSON.stringify(cachedSnapshot)));
         setLoading(false);
+        logger.info('ItineraryScreen', 'Itinerary cache used before network load', {
+          tourId,
+          requestId,
+          dayCount: Array.isArray(cachedSnapshot?.days) ? cachedSnapshot.days.length : null,
+        });
       }
 
       const tourItinerary = await getTourItinerary(tourId);
       if (!isCurrentRequest()) return;
       setItinerary(tourItinerary || null);
       setEditedItinerary(JSON.parse(JSON.stringify(tourItinerary || {})));
+      logger.info('ItineraryScreen', 'Itinerary network load completed', {
+        tourId,
+        requestId,
+        hasItinerary: Boolean(tourItinerary),
+        dayCount: Array.isArray(tourItinerary?.days) ? tourItinerary.days.length : null,
+      });
 
       if (tourItinerary) {
         await cacheItinerary(tourItinerary);
@@ -287,7 +336,12 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
       setRetryCount(0);
     } catch (error) {
-      console.error('Error loading itinerary:', error);
+      logger.error('ItineraryScreen', 'Itinerary load failed', {
+        tourId,
+        requestId,
+        retry,
+        error: error?.message || String(error),
+      });
       if (!isCurrentRequest()) return;
 
       const fallbackSnapshot = await loadCachedItinerary();
@@ -295,6 +349,12 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
       if (retry < 3) {
         const delay = Math.pow(2, retry) * 1000;
+        logger.warn('ItineraryScreen', 'Itinerary load scheduling retry', {
+          tourId,
+          requestId,
+          nextRetry: retry + 1,
+          delay,
+        });
         retryTimeoutRef.current = setTimeout(() => {
           if (requestId !== loadRequestIdRef.current) return;
           loadItinerary({ showSkeleton: false, retry: retry + 1 });
@@ -304,11 +364,20 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       } else {
         const terminalFallback = fallbackSnapshot || cachedItinerary;
         if (terminalFallback) {
+          logger.warn('ItineraryScreen', 'Itinerary load using terminal cache fallback', {
+            tourId,
+            requestId,
+            dayCount: Array.isArray(terminalFallback?.days) ? terminalFallback.days.length : null,
+          });
           setItinerary(terminalFallback);
           setEditedItinerary(JSON.parse(JSON.stringify(terminalFallback)));
           setRetryCount(0);
           setErrorMessage('');
         } else {
+          logger.error('ItineraryScreen', 'Itinerary load failed with no cache fallback', {
+            tourId,
+            requestId,
+          });
           setItinerary(null);
           setErrorMessage('Could not load itinerary. Please check your connection.');
         }
@@ -322,6 +391,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
   const toggleDay = (day) => {
     if (isEditing) return;
+    logger.debug('ItineraryScreen', 'Day collapse toggled', { tourId, day, nextCollapsed: !collapsedDays[day] });
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setCollapsedDays((prev) => ({ ...prev, [day]: !prev[day] }));
   };
@@ -329,6 +399,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   const toggleExpandAll = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     const nextExpandAll = !expandAll;
+    logger.debug('ItineraryScreen', 'Expand all toggled', { tourId, nextExpandAll });
     setExpandAll(nextExpandAll);
     setCollapsedDays((prev) => {
       const nextState = { ...prev };
@@ -356,6 +427,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   }, [itinerary, searchQuery]);
 
   const toggleSearch = () => {
+    logger.debug('ItineraryScreen', 'Search visibility toggled', { tourId, nextVisible: !showSearch });
     setShowSearch(!showSearch);
     Animated.timing(searchAnimation, {
       toValue: showSearch ? 0 : 1,
@@ -389,6 +461,11 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
     });
 
     setEditedItinerary(newItinerary);
+    logger.info('ItineraryScreen', 'Edit itinerary day added', {
+      tourId,
+      newDayNumber,
+      dayCount: newItinerary.days.length,
+    });
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
   };
 
@@ -409,6 +486,11 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
               day.day = idx + 1;
             });
             setEditedItinerary(newItinerary);
+            logger.info('ItineraryScreen', 'Edit itinerary day removed', {
+              tourId,
+              removedDayIndex: dayIndex,
+              dayCount: newItinerary.days.length,
+            });
             LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
           }
         }
@@ -430,6 +512,12 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
             dayToCopy.day = newItinerary.days.length + 1;
             newItinerary.days.push(dayToCopy);
             setEditedItinerary(newItinerary);
+            logger.info('ItineraryScreen', 'Edit itinerary day duplicated', {
+              tourId,
+              sourceDayIndex: dayIndex,
+              newDayNumber: dayToCopy.day,
+              dayCount: newItinerary.days.length,
+            });
             LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
           }
         }
@@ -440,15 +528,29 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   // --- SAVE WITH RETRY ---
   const handleSaveChanges = async (retryAttempt = 0) => {
     setSaving(true);
+    logger.info('ItineraryScreen', 'Itinerary save started', {
+      tourId,
+      retryAttempt,
+      dayCount: Array.isArray(editedItinerary?.days) ? editedItinerary.days.length : null,
+    });
     try {
       await realtimeDb.ref(`tours/${tourId}/itinerary`).update(editedItinerary);
 
       setItinerary(editedItinerary);
       await cacheItinerary(editedItinerary);
       setIsEditing(false);
+      logger.info('ItineraryScreen', 'Itinerary save completed', {
+        tourId,
+        retryAttempt,
+        dayCount: Array.isArray(editedItinerary?.days) ? editedItinerary.days.length : null,
+      });
       Alert.alert("Success", "Itinerary updated. Passengers will be notified shortly.");
     } catch (error) {
-      console.error('Save failed:', error);
+      logger.error('ItineraryScreen', 'Itinerary save failed', {
+        tourId,
+        retryAttempt,
+        error: error?.message || String(error),
+      });
 
       if (retryAttempt < 2) {
         Alert.alert(
@@ -471,6 +573,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   };
 
   const handleCancelEdit = () => {
+    logger.info('ItineraryScreen', 'Itinerary edit cancel confirmation opened', { tourId });
     Alert.alert(
       "Discard Changes?",
       "All unsaved changes will be lost.",
@@ -482,6 +585,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
           onPress: () => {
             setEditedItinerary(JSON.parse(JSON.stringify(itinerary)));
             setIsEditing(false);
+            logger.info('ItineraryScreen', 'Itinerary edit discarded', { tourId });
           }
         }
       ]
@@ -491,6 +595,11 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   // --- EXPORT TO CALENDAR ---
   const handleExportToCalendar = async () => {
     if (!itinerary?.days || !startDate) {
+      logger.warn('ItineraryScreen', 'Calendar export blocked by missing data', {
+        tourId,
+        hasDays: Boolean(itinerary?.days),
+        hasStartDate: Boolean(startDate),
+      });
       Alert.alert("Error", "Cannot export: missing itinerary data");
       return;
     }
@@ -498,9 +607,18 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
     try {
       const parsedStart = parsedTourStartDate;
       if (!parsedStart) {
+        logger.warn('ItineraryScreen', 'Calendar export blocked by unsupported start date', {
+          tourId,
+          startDate,
+        });
         Alert.alert("Unsupported start date", "Calendar export supports dd/MM/yyyy or yyyy-MM-dd dates.");
         return;
       }
+      logger.info('ItineraryScreen', 'Calendar export started', {
+        tourId,
+        dayCount: itinerary.days.length,
+        startDate,
+      });
       let icsContent = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//LLT Tours//Itinerary//EN\n";
 
       itinerary.days.forEach((day, dayIndex) => {
@@ -525,8 +643,15 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
         message: icsContent,
         title: `${tourName || 'Tour'} Itinerary`
       });
+      logger.info('ItineraryScreen', 'Calendar export share sheet opened', {
+        tourId,
+        characterCount: icsContent.length,
+      });
     } catch (error) {
-      console.error('Export failed:', error);
+      logger.error('ItineraryScreen', 'Calendar export failed', {
+        tourId,
+        error: error?.message || String(error),
+      });
       Alert.alert("Export Failed", "Could not export to calendar");
     }
   };
@@ -541,6 +666,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
   const handleJumpToDay = (dayNumber) => {
     if (!dayNumber) return;
+    logger.debug('ItineraryScreen', 'Jump to day requested', { tourId, dayNumber });
     if (!isEditing && collapsedDays[dayNumber]) {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setCollapsedDays((prev) => ({ ...prev, [dayNumber]: false }));
