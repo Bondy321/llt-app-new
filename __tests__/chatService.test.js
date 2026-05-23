@@ -236,6 +236,7 @@ test('sendMessage builds payload with sender info and driver flag', async () => 
   assert.equal(result.message.text, 'Hello');
   assert.equal(result.message.senderName, 'Alex');
   assert.equal(result.message.senderId, 'driver:alex');
+  assert.equal(result.message.senderStableId, 'driver:alex');
   assert.equal(result.message.isDriver, true);
   assert.ok(new Date(result.message.timestamp).getTime());
 
@@ -244,6 +245,7 @@ test('sendMessage builds payload with sender info and driver flag', async () => 
   assert.equal(refCall.setCalls[0].text, 'Hello');
   assert.equal(refCall.setCalls[0].senderName, 'Alex');
   assert.equal(refCall.setCalls[0].senderId, 'driver:alex');
+  assert.equal(refCall.setCalls[0].senderStableId, 'driver:alex');
   assert.equal(refCall.setCalls[0].timestamp, result.message.timestamp);
   assert.equal(refCall.setCalls[0].isDriver, true);
 });

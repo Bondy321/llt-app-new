@@ -12,7 +12,8 @@ All reaction writes must target the user-leaf path:
 `pax_v1:{BOOKING_REF}:{normalized_email}`, encode it with `toRealtimeKeySegment()` before writing
 the leaf. Driver actors may use either the current auth UID or the canonical driver principal
 `driver:{DRIVER_ID}`; rules only trust that driver principal when `users/{auth.uid}/driverId`
-matches and `drivers/{driverId}/authUid` is the caller.
+matches and `drivers/{driverId}/authUid` is the caller. Driver-authored group chat messages use
+the same proof, so reactions to newly sent driver messages target a server-backed message.
 
 ## Legacy read compatibility (read-only)
 
@@ -25,6 +26,10 @@ Readers must continue to support the following historical shapes under
    - `{ "uid1": true, "uid2": true }`
 
 These legacy shapes are read-compatible only. New writes must always use canonical user-leaf writes.
+
+Some older chat messages can also predate required identity fields such as `senderStableId`.
+Rules allow reaction leaf mutations on those existing messages only when the core message fields
+remain unchanged. Creating or editing messages still has to satisfy the current message schema.
 
 ## Canonical write behavior
 

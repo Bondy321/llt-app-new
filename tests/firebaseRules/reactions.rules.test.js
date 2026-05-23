@@ -16,6 +16,12 @@ const TOUR_ID = 'TOUR_001';
 const MESSAGE_ID = 'MSG_001';
 const MESSAGE_PATH = `chats/${TOUR_ID}/messages/${MESSAGE_ID}`;
 const REACTION_PATH = `${MESSAGE_PATH}/reactions/👍`;
+const LEGACY_MESSAGE_ID = 'MSG_LEGACY_001';
+const LEGACY_MESSAGE_PATH = `chats/${TOUR_ID}/messages/${LEGACY_MESSAGE_ID}`;
+const LEGACY_REACTION_PATH = `${LEGACY_MESSAGE_PATH}/reactions/legacy_like`;
+const LEGACY_SENDER_UID = 'legacy-sender-1';
+const DRIVER_MESSAGE_ID = 'MSG_DRIVER_001';
+const DRIVER_MESSAGE_PATH = `chats/${TOUR_ID}/messages/${DRIVER_MESSAGE_ID}`;
 const DRIVER_AUTH_UID = 'driver-auth-1';
 const DRIVER_ID = 'BONDY';
 const DRIVER_PRINCIPAL_ID = `driver:${DRIVER_ID}`;
@@ -49,6 +55,14 @@ const seedMessage = async () => {
       senderName: 'User B',
       text: 'original text',
       timestamp: 1710000000000,
+      isDriver: false,
+      status: 'sent',
+    });
+    await context.database(dbUrl).ref(LEGACY_MESSAGE_PATH).set({
+      senderId: LEGACY_SENDER_UID,
+      senderName: 'Legacy Sender',
+      text: 'legacy message without stable sender identity',
+      timestamp: 1710000000001,
       isDriver: false,
       status: 'sent',
     });
@@ -100,6 +114,38 @@ test('allows user A to remove own reaction leaf', async () => {
   const ownLeaf = dbFor('userA').ref(`${REACTION_PATH}/userA`);
   await assertSucceeds(ownLeaf.set(true));
   await assertSucceeds(ownLeaf.remove());
+});
+
+test('allows reaction leaf writes on legacy messages that predate senderStableId', async () => {
+  await assertSucceeds(dbFor('userA').ref(`${LEGACY_REACTION_PATH}/userA`).set(true));
+});
+
+test('denies editing legacy message text when modern required fields are missing', async () => {
+  await assertFails(dbFor(LEGACY_SENDER_UID).ref(`${LEGACY_MESSAGE_PATH}/text`).set('edited legacy text'));
+});
+
+test('allows verified driver principals to create group chat messages without driver identity bindings', async () => {
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(DRIVER_MESSAGE_PATH).set({
+    senderId: DRIVER_PRINCIPAL_ID,
+    senderStableId: DRIVER_PRINCIPAL_ID,
+    senderName: 'Driver Bondy',
+    text: 'Driver update',
+    timestamp: 1710000000002,
+    isDriver: true,
+    status: 'sent',
+  }));
+});
+
+test('denies unverified callers creating group chat messages as a driver principal', async () => {
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`${DRIVER_MESSAGE_PATH}_foreign`).set({
+    senderId: DRIVER_PRINCIPAL_ID,
+    senderStableId: DRIVER_PRINCIPAL_ID,
+    senderName: 'Driver Bondy',
+    text: 'Spoofed driver update',
+    timestamp: 1710000000003,
+    isDriver: true,
+    status: 'sent',
+  }));
 });
 
 test('denies user A writing reaction leaf for user B', async () => {
