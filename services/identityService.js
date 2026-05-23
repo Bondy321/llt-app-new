@@ -4,6 +4,40 @@ const resolveTrimmedString = (value) => {
   return trimmed.length > 0 ? trimmed : null;
 };
 
+const REALTIME_KEY_INVALID_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/;
+const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
+
+const isRealtimeKeySegment = (value) => {
+  const trimmed = resolveTrimmedString(value);
+  return Boolean(trimmed && !REALTIME_KEY_INVALID_PATTERN.test(trimmed));
+};
+
+const toRealtimeKeySegment = (value) => {
+  const trimmed = resolveTrimmedString(value);
+  if (!trimmed) return null;
+
+  return trimmed.replace(
+    REALTIME_KEY_INVALID_GLOBAL_PATTERN,
+    (char) => `_${char.charCodeAt(0).toString(16).toUpperCase()}_`,
+  );
+};
+
+const resolveRealtimeActorId = ({ authUid = null, principalId = null } = {}) => {
+  const normalizedAuthUid = resolveTrimmedString(authUid);
+  if (isRealtimeKeySegment(normalizedAuthUid)) {
+    return normalizedAuthUid;
+  }
+
+  const normalizedPrincipalId = resolveTrimmedString(principalId);
+  if (!normalizedPrincipalId) {
+    return null;
+  }
+
+  return isRealtimeKeySegment(normalizedPrincipalId)
+    ? normalizedPrincipalId
+    : toRealtimeKeySegment(normalizedPrincipalId);
+};
+
 const resolveDriverId = ({ bookingData = {}, identityBinding = {} } = {}) => (
   resolveTrimmedString(bookingData?.driverId)
   || resolveTrimmedString(bookingData?.id)
@@ -65,4 +99,7 @@ const resolveAuthScopedUserId = ({ canonicalIdentity = null, authUser = null } =
 module.exports = {
   getCanonicalIdentity,
   resolveAuthScopedUserId,
+  resolveRealtimeActorId,
+  isRealtimeKeySegment,
+  toRealtimeKeySegment,
 };

@@ -51,7 +51,12 @@ import * as chatService from '../services/chatService';
 import * as photoService from '../services/photoService';
 import { auth } from '../firebase';
 import logger from '../services/loggerService';
-import { getCanonicalIdentity } from '../services/identityService';
+import {
+  getCanonicalIdentity,
+  isRealtimeKeySegment,
+  resolveRealtimeActorId,
+  toRealtimeKeySegment,
+} from '../services/identityService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import SyncStatusBanner from '../components/SyncStatusBanner';
 const { buildChatSearchResults, normalizeSearchQuery } = require('../utils/chatSearch');
@@ -311,13 +316,14 @@ const normalizeReactionMap = (reactions) => {
   }, {});
 };
 
-const applyOptimisticReactionToggle = ({ reactions, emoji, userId }) => {
+const applyOptimisticReactionToggle = ({ reactions, emoji, userId, userIdAliases = [] }) => {
   const normalizedReactions = normalizeReactionMap(reactions);
   const existingUserIds = Array.isArray(normalizedReactions[emoji]) ? normalizedReactions[emoji] : [];
-  const hasReaction = existingUserIds.includes(userId);
+  const reactionUserIds = new Set([userId, ...userIdAliases].filter(Boolean));
+  const hasReaction = existingUserIds.some((existingUserId) => reactionUserIds.has(existingUserId));
 
   const nextEmojiUserIds = hasReaction
-    ? existingUserIds.filter((existingUserId) => existingUserId !== userId)
+    ? existingUserIds.filter((existingUserId) => !reactionUserIds.has(existingUserId))
     : [...existingUserIds, userId].sort((a, b) => a.localeCompare(b));
 
   const nextReactions = { ...normalizedReactions };
@@ -330,7 +336,7 @@ const applyOptimisticReactionToggle = ({ reactions, emoji, userId }) => {
   return { nextReactions };
 };
 
-const MessageReactions = ({ reactions, onReactionPress, messageId, currentUserId }) => {
+const MessageReactions = ({ reactions, onReactionPress, messageId, currentUserId, currentUserIds = [] }) => {
   if (!reactions || Object.keys(reactions).length === 0) return null;
 
   const visibleReactions = Object.entries(reactions)
@@ -338,11 +344,12 @@ const MessageReactions = ({ reactions, onReactionPress, messageId, currentUserId
     .filter(({ userIds }) => userIds.length > 0);
 
   if (visibleReactions.length === 0) return null;
+  const currentUserIdSet = new Set([currentUserId, ...currentUserIds].filter(Boolean));
 
   return (
     <View style={styles.reactionsContainer}>
       {visibleReactions.map(({ emoji, userIds }) => {
-        const reactedByCurrentUser = currentUserId ? userIds.includes(currentUserId) : false;
+        const reactedByCurrentUser = userIds.some((userId) => currentUserIdSet.has(userId));
         return (
           <TouchableOpacity
             key={emoji}
@@ -1166,6 +1173,7 @@ const MessageBubble = React.memo(({
   activeSearchResultMessageId,
   highlightedReplyTargetMessageId,
   currentUserId,
+  currentUserIds,
   canRetry,
   isRetrying,
   onRetry,
@@ -1332,6 +1340,7 @@ const MessageBubble = React.memo(({
             onReactionPress={onReactionPress}
             messageId={message?.id}
             currentUserId={currentUserId}
+            currentUserIds={currentUserIds}
           />
         </View>
       </View>
@@ -1626,6 +1635,22 @@ export default function ChatScreen({
   const principalId = canonicalIdentity?.principalId || 'anonymous';
   const passengerStableId = canonicalIdentity?.stablePassengerId || null;
   const authUid = canonicalIdentity?.authUid || currentUser?.uid || null;
+  const realtimeActorId = useMemo(
+    () => resolveRealtimeActorId({ authUid, principalId }) || principalId,
+    [authUid, principalId]
+  );
+  const currentReactionUserIds = useMemo(() => {
+    const candidates = [
+      realtimeActorId,
+      principalId,
+      passengerStableId,
+      authUid,
+      toRealtimeKeySegment(principalId),
+      toRealtimeKeySegment(passengerStableId),
+    ];
+
+    return Array.from(new Set(candidates.filter(Boolean)));
+  }, [authUid, passengerStableId, principalId, realtimeActorId]);
   const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
   const requiresPassengerStableIdForWrites = !isDriver
     && canonicalIdentity?.principalType === 'passenger'
@@ -1743,7 +1768,7 @@ export default function ChatScreen({
   }, []);
 
   const markActiveChatRead = useCallback(async ({ force = false } = {}) => {
-    if (!tourId || !principalId) return;
+    if (!tourId || !realtimeActorId) return;
 
     const now = Date.now();
     if (!force && now - lastReadMarkAtRef.current < 3000) return;
@@ -1752,7 +1777,7 @@ export default function ChatScreen({
     const markReadFn = internalDriverChat ? markInternalChatAsRead : markChatAsRead;
     const latestMessage = messages[messages.length - 1];
     const latestTimestamp = getMessageTimestamp(latestMessage);
-    const result = await markReadFn(tourId, principalId);
+    const result = await markReadFn(tourId, realtimeActorId);
 
     if (result?.success && latestTimestamp && readStateStorageKey) {
       setLastSeenTimestamp(latestTimestamp);
@@ -1761,7 +1786,7 @@ export default function ChatScreen({
     }
   }, [
     tourId,
-    principalId,
+    realtimeActorId,
     internalDriverChat,
     messages,
     getMessageTimestamp,
@@ -1966,11 +1991,11 @@ export default function ChatScreen({
 
   // Subscribe to typing indicators
   useEffect(() => {
-    if (!tourId || !principalId) return;
+    if (!tourId || !realtimeActorId) return;
 
-    const unsubscribe = subscribeToTypingIndicators(tourId, principalId, setTypingUsers);
+    const unsubscribe = subscribeToTypingIndicators(tourId, realtimeActorId, setTypingUsers);
     return () => unsubscribe();
-  }, [tourId, principalId]);
+  }, [tourId, realtimeActorId]);
 
   // Subscribe to presence
   useEffect(() => {
@@ -2150,15 +2175,15 @@ export default function ChatScreen({
 
   // Set online presence on mount/unmount
   useEffect(() => {
-    if (!tourId || !principalId) return;
+    if (!tourId || !realtimeActorId) return;
 
-    setOnlinePresence(tourId, principalId, userName, true, isDriver);
+    setOnlinePresence(tourId, realtimeActorId, userName, true, isDriver);
 
     return () => {
-      setOnlinePresence(tourId, principalId, userName, false, isDriver);
-      setTypingStatus(tourId, principalId, userName, false, isDriver);
+      setOnlinePresence(tourId, realtimeActorId, userName, false, isDriver);
+      setTypingStatus(tourId, realtimeActorId, userName, false, isDriver);
     };
-  }, [tourId, principalId, userName, isDriver]);
+  }, [tourId, realtimeActorId, userName, isDriver]);
 
   // Keyboard listeners
   useEffect(() => {
@@ -2196,7 +2221,7 @@ export default function ChatScreen({
 
       setInputText(text);
 
-      if (!tourId || !principalId) return;
+      if (!tourId || !realtimeActorId) return;
 
       // Clear existing timeout
       if (typingTimeoutRef.current) {
@@ -2205,17 +2230,17 @@ export default function ChatScreen({
 
       // Set typing status
       if (text.trim().length > 0) {
-        setTypingStatus(tourId, principalId, userName, true, isDriver);
+        setTypingStatus(tourId, realtimeActorId, userName, true, isDriver);
 
         // Clear typing after 3 seconds of inactivity
         typingTimeoutRef.current = setTimeout(() => {
-          setTypingStatus(tourId, principalId, userName, false, isDriver);
+          setTypingStatus(tourId, realtimeActorId, userName, false, isDriver);
         }, 3000);
       } else {
-        setTypingStatus(tourId, principalId, userName, false, isDriver);
+        setTypingStatus(tourId, realtimeActorId, userName, false, isDriver);
       }
     },
-    [draftRestored, inputText, tourId, principalId, userName, isDriver]
+    [draftRestored, inputText, tourId, realtimeActorId, userName, isDriver]
   );
 
   // Send message handler
@@ -2235,7 +2260,7 @@ export default function ChatScreen({
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
-    setTypingStatus(tourId, principalId, userName, false, isDriver);
+    setTypingStatus(tourId, realtimeActorId, userName, false, isDriver);
 
     if (requiresPassengerStableIdForWrites && !passengerStableId) {
       setInputText(trimmed);
@@ -2343,6 +2368,7 @@ export default function ChatScreen({
     inputText,
     tourId,
     principalId,
+    realtimeActorId,
     userName,
     isDriver,
     passengerStableId,
@@ -2650,12 +2676,12 @@ export default function ChatScreen({
   // Handle reaction
   const handleReaction = useCallback(
     async (messageId, emoji) => {
-      if (!principalId) return;
+      if (!realtimeActorId) return;
       if (!messageId || !emoji) return;
 
       setShowReactionPicker(false);
       setSelectedMessage(null);
-      const lockKey = `${messageId}::${emoji}::${principalId}`;
+      const lockKey = `${messageId}::${emoji}::${realtimeActorId}`;
       if (inFlightReactionKeysRef.current.has(lockKey)) {
         return;
       }
@@ -2663,16 +2689,23 @@ export default function ChatScreen({
 
       let rollbackReactions = null;
       let hasTargetMessage = false;
+      let reactionActorId = realtimeActorId;
 
       setMessages((prevMessages) =>
         prevMessages.map((message) => {
           if (message.id !== messageId) return message;
           hasTargetMessage = true;
           rollbackReactions = normalizeReactionMap(message.reactions);
+          const existingUserIds = rollbackReactions[emoji] || [];
+          const writableExistingActorId = currentReactionUserIds.find(
+            (candidateId) => existingUserIds.includes(candidateId) && isRealtimeKeySegment(candidateId)
+          );
+          reactionActorId = writableExistingActorId || realtimeActorId;
           const { nextReactions } = applyOptimisticReactionToggle({
             reactions: message.reactions,
             emoji,
-            userId: principalId,
+            userId: reactionActorId,
+            userIdAliases: currentReactionUserIds,
           });
           return { ...message, reactions: nextReactions };
         })
@@ -2684,7 +2717,7 @@ export default function ChatScreen({
       }
 
       try {
-        const result = await toggleReaction(tourId, messageId, emoji, principalId);
+        const result = await toggleReaction(tourId, messageId, emoji, reactionActorId);
         if (!result?.success) {
           throw new Error(result?.error || 'Unknown error');
         }
@@ -2701,7 +2734,7 @@ export default function ChatScreen({
           tourId,
           messageId,
           emoji,
-          userId: principalId,
+          userId: reactionActorId,
           error: error?.message || 'Unknown error',
         });
         showReactionFailureFeedback('Could not update reaction. Check your connection and try again.');
@@ -2710,7 +2743,7 @@ export default function ChatScreen({
         inFlightReactionKeysRef.current.delete(lockKey);
       }
     },
-    [tourId, principalId, showReactionFailureFeedback]
+    [currentReactionUserIds, realtimeActorId, tourId, showReactionFailureFeedback]
   );
 
   // Handle message long press
@@ -3311,7 +3344,8 @@ export default function ChatScreen({
                 reactions={msg.reactions}
                 onReactionPress={handleReaction}
                 messageId={msg.id}
-                currentUserId={principalId}
+                currentUserId={realtimeActorId}
+                currentUserIds={currentReactionUserIds}
               />
             </View>
           </View>
@@ -3331,6 +3365,8 @@ export default function ChatScreen({
       canRetryFailedMessageForCurrentSession,
       identityBinding,
       principalId,
+      realtimeActorId,
+      currentReactionUserIds,
       formatTime,
       handleMessageLongPress,
       handleReaction,
@@ -3366,7 +3402,8 @@ export default function ChatScreen({
         onSwipeReply={(message) => startReplyComposer(message, 'swipe')}
         activeSearchResultMessageId={activeSearchResultMessageId}
         highlightedReplyTargetMessageId={highlightedReplyTargetMessageId}
-        currentUserId={principalId}
+        currentUserId={realtimeActorId}
+        currentUserIds={currentReactionUserIds}
         canRetry={item.type === 'message' ? canRetryFailedMessageForCurrentSession(item.data) : false}
         isRetrying={item.type === 'message' ? !!retryingMessageIds[item.data?.id] : false}
         onRetry={handleRetryFailedMessage}
@@ -3391,6 +3428,8 @@ export default function ChatScreen({
     jumpToMessageById,
     parseMessageText,
     principalId,
+    realtimeActorId,
+    currentReactionUserIds,
     renderHighlightedText,
     retryingMessageIds,
     startReplyComposer,

@@ -1,7 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { getCanonicalIdentity, resolveAuthScopedUserId } = require('../services/identityService');
+const {
+  getCanonicalIdentity,
+  isRealtimeKeySegment,
+  resolveAuthScopedUserId,
+  resolveRealtimeActorId,
+  toRealtimeKeySegment,
+} = require('../services/identityService');
 
 test('resolveAuthScopedUserId prefers canonical auth UID over principal identity', () => {
   const canonicalIdentity = getCanonicalIdentity({
@@ -33,5 +39,33 @@ test('resolveAuthScopedUserId returns null when no authenticated UID is availabl
       authUser: null,
     }),
     null
+  );
+});
+
+test('toRealtimeKeySegment encodes email-style passenger principals for database paths', () => {
+  const stablePassengerId = 'pax_v1:T123659:msandreayoung@yahoo.co.uk';
+
+  assert.equal(isRealtimeKeySegment(stablePassengerId), false);
+  assert.equal(
+    toRealtimeKeySegment(stablePassengerId),
+    'pax_v1:T123659:msandreayoung@yahoo_2E_co_2E_uk'
+  );
+});
+
+test('resolveRealtimeActorId prefers auth UID and falls back to encoded principal key', () => {
+  assert.equal(
+    resolveRealtimeActorId({
+      authUid: 'firebase-auth-uid',
+      principalId: 'pax_v1:T123659:msandreayoung@yahoo.co.uk',
+    }),
+    'firebase-auth-uid'
+  );
+
+  assert.equal(
+    resolveRealtimeActorId({
+      authUid: null,
+      principalId: 'pax_v1:T123659:msandreayoung@yahoo.co.uk',
+    }),
+    'pax_v1:T123659:msandreayoung@yahoo_2E_co_2E_uk'
   );
 });
