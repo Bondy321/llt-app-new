@@ -717,9 +717,6 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
     return (
       <View style={styles.readSummaryPanel}>
         <Text style={styles.readSummaryEyebrow}>Daily travel plan</Text>
-        <Text style={styles.readSummaryTitle} numberOfLines={2}>
-          {displayTitle}
-        </Text>
 
         <View style={styles.summaryPillRow}>
           <View style={styles.summaryPill}>
