@@ -365,7 +365,8 @@ const summarizeMessagesForReactionDebug = (messages = [], currentUserIds = []) =
 
 const logChatReactionDebug = (eventName, payload = {}, level = 'info') => {
   try {
-    const loggerMethod = typeof logger?.[level] === 'function' ? level : 'info';
+    const persistLevel = level === 'error' ? 'error' : 'warn';
+    const loggerMethod = typeof logger?.[persistLevel] === 'function' ? persistLevel : 'warn';
     logger[loggerMethod]('ChatScreen', eventName, payload);
   } catch (error) {
     // Debug logging should never affect chat behavior.

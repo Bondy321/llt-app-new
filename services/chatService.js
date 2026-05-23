@@ -340,6 +340,8 @@ const mapReactionFailureReason = (error, fallbackReason = 'REACTION_TOGGLE_FAILE
   return fallbackReason;
 };
 
+const REACTION_DEBUG_PERSIST_LEVEL = 'warn';
+
 const logReactionEvent = (level, eventName, payload) => {
   const message = `[ChatService] ${eventName}`;
   try {
@@ -349,8 +351,9 @@ const logReactionEvent = (level, eventName, payload) => {
     // Debug logging should never affect chat behavior.
   }
 
-  if (logger && typeof logger[level] === 'function') {
-    logger[level]('ChatService', eventName, payload);
+  const persistLevel = level === 'error' ? 'error' : REACTION_DEBUG_PERSIST_LEVEL;
+  if (logger && typeof logger[persistLevel] === 'function') {
+    logger[persistLevel]('ChatService', eventName, payload);
     return;
   }
 
