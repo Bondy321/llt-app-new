@@ -127,7 +127,7 @@
               "$emoji": {
                 ".write": false,
                 "$id": {
-                  ".write": "auth != null && (auth.uid === $id || $id === root.child('users/' + auth.uid + '/stablePassengerId').val() || $id === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $id + '/' + auth.uid).val() === true)",
+                  ".write": "auth != null && (auth.uid === $id || $id === root.child('users/' + auth.uid + '/stablePassengerId').val() || $id === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $id + '/' + auth.uid).val() === true || (root.child('users/' + auth.uid + '/driverId').isString() && $id === 'driver:' + root.child('users/' + auth.uid + '/driverId').val() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid))",
                   ".validate": "!newData.exists() || newData.val() === true"
                 }
               }
@@ -136,19 +136,19 @@
         },
         "lastRead": {
           "$principalId": {
-            ".write": "auth != null && (auth.uid === $principalId || $principalId === root.child('users/' + auth.uid + '/stablePassengerId').val() || $principalId === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $principalId + '/' + auth.uid).val() === true)",
+            ".write": "auth != null && (auth.uid === $principalId || $principalId === root.child('users/' + auth.uid + '/stablePassengerId').val() || $principalId === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $principalId + '/' + auth.uid).val() === true || (root.child('users/' + auth.uid + '/driverId').isString() && $principalId === 'driver:' + root.child('users/' + auth.uid + '/driverId').val() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid))",
             ".validate": "newData.isString() || newData.isNumber()"
           }
         },
         "typing": {
           "$id": {
-            ".write": "auth != null && (auth.uid === $id || $id === root.child('users/' + auth.uid + '/stablePassengerId').val() || $id === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $id + '/' + auth.uid).val() === true)",
+            ".write": "auth != null && (auth.uid === $id || $id === root.child('users/' + auth.uid + '/stablePassengerId').val() || $id === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $id + '/' + auth.uid).val() === true || (root.child('users/' + auth.uid + '/driverId').isString() && $id === 'driver:' + root.child('users/' + auth.uid + '/driverId').val() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid))",
             ".validate": "!newData.exists() || (newData.hasChildren(['name', 'timestamp']) && newData.child('name').isString() && (!newData.child('isDriver').exists() || newData.child('isDriver').isBoolean()) && newData.child('timestamp').isNumber())"
           }
         },
         "presence": {
           "$id": {
-            ".write": "auth != null && (auth.uid === $id || $id === root.child('users/' + auth.uid + '/stablePassengerId').val() || $id === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $id + '/' + auth.uid).val() === true)",
+            ".write": "auth != null && (auth.uid === $id || $id === root.child('users/' + auth.uid + '/stablePassengerId').val() || $id === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $id + '/' + auth.uid).val() === true || (root.child('users/' + auth.uid + '/driverId').isString() && $id === 'driver:' + root.child('users/' + auth.uid + '/driverId').val() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid))",
             ".validate": "!newData.exists() || (newData.hasChildren(['name', 'lastSeen', 'online']) && newData.child('name').isString() && (!newData.child('isDriver').exists() || newData.child('isDriver').isBoolean()) && newData.child('lastSeen').isNumber() && newData.child('online').isBoolean())"
           }
         }

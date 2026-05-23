@@ -10,7 +10,9 @@ All reaction writes must target the user-leaf path:
 
 `userId` is the RTDB path key for the actor. If the actor is a stable passenger identity such as
 `pax_v1:{BOOKING_REF}:{normalized_email}`, encode it with `toRealtimeKeySegment()` before writing
-the leaf. Keep the raw stable identity only in message/profile ownership values.
+the leaf. Driver actors may use either the current auth UID or the canonical driver principal
+`driver:{DRIVER_ID}`; rules only trust that driver principal when `users/{auth.uid}/driverId`
+matches and `drivers/{driverId}/authUid` is the caller.
 
 ## Legacy read compatibility (read-only)
 

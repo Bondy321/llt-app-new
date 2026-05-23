@@ -402,11 +402,26 @@ const summarizeErrorForDiagnostics = (error) => ({
   message: error?.message || String(error),
 });
 
+const REMOTE_REACTION_DEBUG_EVENTS = new Set([
+  'chat_reaction_actor_context',
+  'chat_reaction_target_message_missing',
+  'chat_reaction_optimistic_applied',
+  'chat_reaction_service_call_start',
+  'chat_reaction_service_call_success',
+  'chat_reaction_toggle_failed_rolled_back',
+]);
+
 const logChatReactionDebug = (eventName, payload = {}, level = 'info') => {
   try {
     const persistLevel = ['debug', 'info', 'warn', 'error'].includes(level) ? level : 'info';
     const loggerMethod = typeof logger?.[persistLevel] === 'function' ? persistLevel : 'warn';
     logger[loggerMethod]('ChatScreen', eventName, payload);
+    if (REMOTE_REACTION_DEBUG_EVENTS.has(eventName) || persistLevel === 'warn' || persistLevel === 'error') {
+      recordBreadcrumb('ChatReaction', eventName, payload, {
+        remote: true,
+        reason: `ChatReaction:${eventName}`,
+      });
+    }
   } catch (error) {
     // Debug logging should never affect chat behavior.
   }
