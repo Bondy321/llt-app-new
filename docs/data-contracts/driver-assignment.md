@@ -18,6 +18,7 @@ Assignments must be written as one multi-path update to keep these nodes consist
 
 ```ts
 interface AssignedDriverCodeRecord {
+  driverId: string;    // canonical driver key, e.g. "D-BONDY"
   tourId: string;      // sanitized Firebase key, e.g. "5112D_8"
   tourCode: string;    // human-readable code, e.g. "5112D 8"
   assignedAt: string;  // ISO timestamp, e.g. "2026-02-01T10:15:00.000Z"
@@ -27,6 +28,7 @@ interface AssignedDriverCodeRecord {
 
 ## Validation requirements
 
+- `driverId`: required, must match the `{driverId}` path segment.
 - `tourId`: required, sanitized Firebase-safe key.
 - `tourCode`: required non-empty display code.
 - `assignedAt`: required ISO datetime with timezone.

@@ -221,6 +221,70 @@ export const generateTourId = (tourCode) => {
   return collapsed;
 };
 
+const hasOwn = (value, property) => Object.prototype.hasOwnProperty.call(value || {}, property);
+
+const trimTourCode = (tourCode) => (typeof tourCode === 'string' ? tourCode.trim() : '');
+
+const tourCodesReferToSameKey = (left, right) => {
+  const leftCode = trimTourCode(left);
+  const rightCode = trimTourCode(right);
+  if (!leftCode || !rightCode) return false;
+  return generateTourId(leftCode) === generateTourId(rightCode);
+};
+
+const buildTourCodeConflictMessage = (tourCode, tourId) => (
+  `Tour code "${tourCode}" already exists at tours/${tourId}. Choose a unique tour code.`
+);
+
+const assertTourCodeCanBeCreated = async (tourId, tourCode) => {
+  const existingSnapshot = await get(ref(db, `tours/${tourId}`));
+  if (existingSnapshot?.exists?.()) {
+    throw new Error(buildTourCodeConflictMessage(tourCode, tourId));
+  }
+};
+
+const assertTourCodeUnchanged = async (tourId, updates) => {
+  if (!hasOwn(updates, 'tourCode')) return;
+
+  const nextTourCode = trimTourCode(updates.tourCode);
+  if (!nextTourCode) {
+    throw new Error('Tour code cannot be cleared after creation.');
+  }
+
+  const tourRef = ref(db, `tours/${tourId}`);
+  const snapshot = await get(tourRef);
+  const existingTour = snapshot?.val?.() || null;
+  const existingTourCode = trimTourCode(existingTour?.tourCode);
+
+  if (existingTourCode) {
+    if (!tourCodesReferToSameKey(existingTourCode, nextTourCode)) {
+      throw new Error('Tour code cannot be changed after creation. Create a new tour if the code needs to change.');
+    }
+    updates.tourCode = existingTourCode;
+    return;
+  }
+
+  if (generateTourId(nextTourCode) !== tourId) {
+    throw new Error('Tour code must match the Firebase tour ID when setting it for the first time.');
+  }
+  updates.tourCode = nextTourCode;
+};
+
+const normalizeAssignmentTourId = (tourId) => {
+  if (typeof tourId !== 'string') return '';
+  return tourId
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '_')
+    .replace(/[.#$\[\]/]/g, '');
+};
+
+const getDriverSnapshotValue = async (driverId) => {
+  if (!driverId) return {};
+  const snapshot = await get(ref(db, `drivers/${driverId}`));
+  return snapshot.val() || {};
+};
+
 /**
  * Format date to DD/MM/YYYY
  */
@@ -275,11 +339,18 @@ export const inputFormatToDDMMYYYY = (dateStr) => {
  * @returns {Promise<{id: string, tour: Object}>} - Created tour with ID
  */
 export const createTour = async (tourData, _createdBy = 'admin') => {
-  const tourId = generateTourId(tourData.tourCode);
+  const tourCode = trimTourCode(tourData?.tourCode);
+  if (!tourCode) {
+    throw new Error('Tour code is required to create a tour.');
+  }
+
+  const tourId = generateTourId(tourCode);
+  await assertTourCodeCanBeCreated(tourId, tourCode);
 
   const newTour = {
     ...DEFAULT_TOUR,
     ...tourData,
+    tourCode,
     // Ensure itinerary structure is correct
     itinerary: tourData.itinerary || {
       title: tourData.name || '',
@@ -340,6 +411,8 @@ export const createTourFromTemplate = async (templateKey, overrides = {}, create
  * @param {Object} updates - Fields to update
  */
 export const updateTour = async (tourId, updates) => {
+  await assertTourCodeUnchanged(tourId, updates);
+
   const tourRef = ref(db, `tours/${tourId}`);
   await update(tourRef, updates);
 
@@ -393,9 +466,10 @@ export const unassignDriver = async (tourId, driverId = null) => {
 };
 
 const getDriverAssignmentContext = async (tourId, explicitDriverId = null) => {
+  const normalizedTourId = normalizeAssignmentTourId(tourId);
   const [tourSnapshot, manifestSnapshot] = await Promise.all([
-    get(ref(db, `tours/${tourId}`)),
-    get(ref(db, `tour_manifests/${tourId}`)),
+    get(ref(db, `tours/${normalizedTourId}`)),
+    get(ref(db, `tour_manifests/${normalizedTourId}`)),
   ]);
 
   const tour = tourSnapshot.val() || {};
@@ -404,24 +478,32 @@ const getDriverAssignmentContext = async (tourId, explicitDriverId = null) => {
   const manifestDriverIds = Object.keys(manifestDrivers);
   const resolvedDriverId = explicitDriverId || manifestDriverIds[0] || null;
 
-  const driverSnapshot = resolvedDriverId
-    ? await get(ref(db, `drivers/${resolvedDriverId}`))
-    : { val: () => ({}) };
-  const driver = driverSnapshot.val() || {};
-  const currentTourId = driver.currentTourId || null;
+  const driver = await getDriverSnapshotValue(resolvedDriverId);
+  const currentTourId = normalizeAssignmentTourId(driver.currentTourId || driver.activeTourId || '');
   const assignments = driver.assignments || {};
 
   const knownTourIds = new Set([
-    ...Object.keys(assignments),
+    ...Object.keys(assignments).map(normalizeAssignmentTourId).filter(Boolean),
     ...(currentTourId ? [currentTourId] : []),
   ]);
 
+  const staleManifestDriverProfiles = {};
+  await Promise.all(
+    manifestDriverIds
+      .filter((manifestDriverId) => manifestDriverId !== resolvedDriverId)
+      .map(async (manifestDriverId) => {
+        staleManifestDriverProfiles[manifestDriverId] = await getDriverSnapshotValue(manifestDriverId);
+      })
+  );
+
   return {
+    tourId: normalizedTourId,
     tourCode: tour.tourCode || tour.code || tourId,
     driverId: resolvedDriverId,
     driverCode: resolvedDriverId,
     driverAuthUid: driver.authUid || null,
     manifestDriverIds,
+    staleManifestDriverProfiles,
     currentTourId,
     assignments,
     knownTourIds,
@@ -442,34 +524,40 @@ export const buildDriverAssignmentUpdates = ({
   actorId = 'web-admin',
   assignedAt = nowAsISOString(),
 }) => {
+  const normalizedTourId = normalizeAssignmentTourId(tourId);
+  if (!normalizedTourId) {
+    throw new Error('Tour ID is required for driver assignment');
+  }
+
   const updates = {
-    [`tours/${tourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',
-    [`tours/${tourId}/driverPhone`]: isAssigned ? (driverInfo.phone || '') : '',
+    [`tours/${normalizedTourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',
+    [`tours/${normalizedTourId}/driverPhone`]: isAssigned ? (driverInfo.phone || '') : '',
   };
 
   if (!driverId) {
     return updates;
   }
 
-  updates[`drivers/${driverId}/currentTourId`] = isAssigned ? tourId : null;
-  updates[`drivers/${driverId}/currentTourCode`] = isAssigned ? (tourCode || tourId) : null;
-  updates[`drivers/${driverId}/assignments/${tourId}`] = isAssigned ? true : null;
+  updates[`drivers/${driverId}/currentTourId`] = isAssigned ? normalizedTourId : null;
+  updates[`drivers/${driverId}/currentTourCode`] = isAssigned ? (tourCode || normalizedTourId) : null;
+  updates[`drivers/${driverId}/activeTourId`] = null;
+  updates[`drivers/${driverId}/assignments/${normalizedTourId}`] = isAssigned ? true : null;
 
   const driverAuthUid = typeof driverInfo?.authUid === 'string' ? driverInfo.authUid.trim() : '';
   if (driverAuthUid) {
     updates[`users/${driverAuthUid}/driverId`] = driverId;
     updates[`users/${driverAuthUid}/driverPrincipalId`] = `driver:${driverId}`;
-    updates[`users/${driverAuthUid}/driverAssignedTourId`] = isAssigned ? tourId : null;
+    updates[`users/${driverAuthUid}/driverAssignedTourId`] = isAssigned ? normalizedTourId : null;
     updates[`users/${driverAuthUid}/principalType`] = 'driver';
     updates[`users/${driverAuthUid}/lastUpdated`] = Date.now();
   }
 
-  updates[`tour_manifests/${tourId}/assigned_drivers/${driverId}`] = isAssigned ? true : null;
-  updates[`tour_manifests/${tourId}/assigned_driver_codes/${driverId}`] = isAssigned
+  updates[`tour_manifests/${normalizedTourId}/assigned_drivers/${driverId}`] = isAssigned ? true : null;
+  updates[`tour_manifests/${normalizedTourId}/assigned_driver_codes/${driverId}`] = isAssigned
     ? {
         driverId,
-        tourId,
-        tourCode: tourCode || tourId,
+        tourId: normalizedTourId,
+        tourCode: tourCode || normalizedTourId,
         assignedAt,
         assignedBy: actorId,
       }
@@ -485,14 +573,20 @@ export const applyDriverAssignmentMutation = async ({
   driverInfo,
   isAssigned,
   actorId,
+  driverProfileUpdates,
 }) => {
-  const assignment = await getDriverAssignmentContext(tourId, driverId);
+  const normalizedTourId = normalizeAssignmentTourId(tourId);
+  if (!normalizedTourId) {
+    throw new Error('Tour ID is required for driver assignment');
+  }
+
+  const assignment = await getDriverAssignmentContext(normalizedTourId, driverId);
   const resolvedDriverId = driverId || assignment.driverId;
   const resolvedDriverCode = driverCode || assignment.driverCode;
 
   const updates = {
-    [`tours/${tourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',
-    [`tours/${tourId}/driverPhone`]: isAssigned ? (driverInfo.phone || '') : '',
+    [`tours/${normalizedTourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',
+    [`tours/${normalizedTourId}/driverPhone`]: isAssigned ? (driverInfo.phone || '') : '',
   };
 
   if (!resolvedDriverId) {
@@ -500,27 +594,57 @@ export const applyDriverAssignmentMutation = async ({
     return;
   }
 
+  const nextProfileName = typeof driverProfileUpdates?.name === 'string'
+    ? driverProfileUpdates.name.trim()
+    : '';
+  const nextProfilePhone = typeof driverProfileUpdates?.phone === 'string'
+    ? driverProfileUpdates.phone.trim()
+    : null;
+  if (nextProfileName) {
+    updates[`drivers/${resolvedDriverId}/name`] = nextProfileName;
+  }
+  if (nextProfilePhone !== null) {
+    updates[`drivers/${resolvedDriverId}/phone`] = nextProfilePhone;
+  }
+
   const cleanupTourIds = new Set(assignment.knownTourIds || []);
-  cleanupTourIds.delete(tourId);
+  cleanupTourIds.delete(normalizedTourId);
 
   for (const oldTourId of cleanupTourIds) {
     updates[`drivers/${resolvedDriverId}/assignments/${oldTourId}`] = null;
     updates[`tour_manifests/${oldTourId}/assigned_drivers/${resolvedDriverId}`] = null;
     updates[`tour_manifests/${oldTourId}/assigned_driver_codes/${resolvedDriverId}`] = null;
+    updates[`tours/${oldTourId}/driverName`] = 'TBA';
+    updates[`tours/${oldTourId}/driverPhone`] = '';
   }
 
   // Explicit single-driver policy per tour: clear stale links for other drivers in target manifest.
   for (const existingDriverId of assignment.manifestDriverIds || []) {
     if (existingDriverId === resolvedDriverId) continue;
-    updates[`drivers/${existingDriverId}/assignments/${tourId}`] = null;
-    updates[`tour_manifests/${tourId}/assigned_drivers/${existingDriverId}`] = null;
-    updates[`tour_manifests/${tourId}/assigned_driver_codes/${existingDriverId}`] = null;
+    const staleProfile = assignment.staleManifestDriverProfiles?.[existingDriverId] || {};
+    const staleCurrentTourId = normalizeAssignmentTourId(staleProfile.currentTourId || staleProfile.activeTourId || '');
+
+    updates[`drivers/${existingDriverId}/assignments/${normalizedTourId}`] = null;
+    updates[`tour_manifests/${normalizedTourId}/assigned_drivers/${existingDriverId}`] = null;
+    updates[`tour_manifests/${normalizedTourId}/assigned_driver_codes/${existingDriverId}`] = null;
+
+    if (!staleCurrentTourId || staleCurrentTourId === normalizedTourId) {
+      updates[`drivers/${existingDriverId}/currentTourId`] = null;
+      updates[`drivers/${existingDriverId}/currentTourCode`] = null;
+      updates[`drivers/${existingDriverId}/activeTourId`] = null;
+    }
+
+    const staleAuthUid = typeof staleProfile.authUid === 'string' ? staleProfile.authUid.trim() : '';
+    if (staleAuthUid) {
+      updates[`users/${staleAuthUid}/driverAssignedTourId`] = null;
+      updates[`users/${staleAuthUid}/lastUpdated`] = Date.now();
+    }
   }
 
   Object.assign(
     updates,
     buildDriverAssignmentUpdates({
-      tourId,
+      tourId: normalizedTourId,
       driverId: resolvedDriverId,
       driverCode: resolvedDriverCode,
       tourCode: assignment.tourCode,
@@ -745,6 +869,23 @@ export const getTour = async (tourId) => {
   return snapshot.val();
 };
 
+const getNextDuplicateTourCode = async (baseTourCode) => {
+  const baseCode = trimTourCode(baseTourCode) || 'TOUR';
+
+  for (let copyNumber = 1; copyNumber <= 100; copyNumber += 1) {
+    const suffix = copyNumber === 1 ? '_COPY' : `_COPY_${copyNumber}`;
+    const candidateCode = `${baseCode}${suffix}`;
+    const candidateId = generateTourId(candidateCode);
+    const candidateSnapshot = await get(ref(db, `tours/${candidateId}`));
+
+    if (!candidateSnapshot?.exists?.()) {
+      return candidateCode;
+    }
+  }
+
+  throw new Error(`Could not find an available copy code for "${baseCode}".`);
+};
+
 /**
  * Duplicate an existing tour
  * @param {string} tourId - Tour ID to duplicate
@@ -757,7 +898,7 @@ export const duplicateTour = async (tourId, createdBy = 'admin') => {
   }
 
   // Generate new tour code
-  const newTourCode = `${existingTour.tourCode || tourId}_COPY`;
+  const newTourCode = await getNextDuplicateTourCode(existingTour.tourCode || tourId);
 
   const newTour = {
     ...existingTour,

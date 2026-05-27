@@ -112,6 +112,7 @@ test('assignDriverToTour clears previous manifest assignment when switching tour
   assert.equal(latestUpdates['users/dispatcher-uid-1/driverAssignedTourId'], '6000A_1');
   assert.equal(latestUpdates['users/dispatcher-uid-1/principalType'], 'driver');
   assert.equal(latestUpdates['tour_manifests/6000A_1/assigned_drivers/D-BONDY'], true);
+  assert.equal(latestUpdates['tour_manifests/6000A_1/assigned_driver_codes/D-BONDY'].driverId, 'D-BONDY');
   assert.equal(latestUpdates['tour_manifests/5112D_8/assigned_drivers/D-BONDY'], null);
   assert.equal(latestUpdates['tour_manifests/5112D_8/assigned_driver_codes/D-BONDY'], null);
 });

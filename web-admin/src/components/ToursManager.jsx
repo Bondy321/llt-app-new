@@ -666,14 +666,14 @@ function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
 
   useEffect(() => {
     if (tour) {
-      setFormData({ ...DEFAULT_TOUR, ...tour });
+      setFormData({ ...DEFAULT_TOUR, ...tour, tourCode: tour.tourCode || tourId || '' });
       // Convert pickup points to text format
       const ppText = (tour.pickupPoints || [])
         .map(pp => `${pp.time} - ${pp.location}`)
         .join('\n');
       setPickupPointsText(ppText);
     }
-  }, [tour]);
+  }, [tour, tourId]);
 
   const handleInputChange = (field, value) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -720,7 +720,6 @@ function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
 
       const updateData = {
         name: formData.name,
-        tourCode: formData.tourCode,
         days: formData.days,
         startDate: inputFormatToDDMMYYYY(startDateIso),
         endDate: inputFormatToDDMMYYYY(endDateIso),
@@ -797,8 +796,8 @@ function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
               <TextInput
                 label="Tour Code"
                 placeholder="e.g., 5209L 16"
-                value={formData.tourCode}
-                onChange={(e) => handleInputChange('tourCode', e.target.value)}
+                value={formData.tourCode || tourId || ''}
+                readOnly
               />
             </Grid.Col>
           </Grid>

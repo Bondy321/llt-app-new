@@ -2,7 +2,7 @@
 
 Welcome, Agent. This file is the operational source of truth for contributors working in this repo.
 
-**Last Updated:** May 23, 2026 (stable identity RTDB key hardening + chat image diagnostics)
+**Last Updated:** May 27, 2026 (web-admin tour identity guards + assignment coherence)
 
 ---
 
@@ -138,12 +138,18 @@ Primary Realtime DB roots (do **not** rename):
    - Never overwrite `reactions/{emoji}` for toggle logic
    - Legacy array/object reaction shapes are read-compatible only
 
-3. **Manifest sync conflict policy**
+3. **Tour identity contract**
+   - Web-admin-created `tours/{tourId}` keys are derived from `tourCode`
+   - Creating a tour must not overwrite an existing generated key
+   - `tourCode` is immutable after creation; renames require a deliberate multi-root migration
+   - Mobile may derive `tourId` from `tourCode`, so web-admin must not let those drift
+
+4. **Manifest sync conflict policy**
    - Compare local/server `lastUpdated`
    - Newer timestamp wins
    - Server-win path must reconcile local cache + user feedback
 
-4. **Sync-state taxonomy contract**
+5. **Sync-state taxonomy contract**
    - `OFFLINE_NO_NETWORK`
    - `ONLINE_BACKEND_DEGRADED`
    - `ONLINE_BACKLOG_PENDING`
@@ -433,6 +439,7 @@ npm --prefix functions run migrate:private-photo-owners
 - `docs/date-contract.md`
 - `docs/date-contract-web-admin.md`
 - `docs/data-contracts/driver-assignment.md`
+- `docs/data-contracts/tour-identity.md`
 - `docs/offline-tour-pack.md`
 - `docs/reactions-write-contract.md`
 - `docs/safe-logging-conventions.md`

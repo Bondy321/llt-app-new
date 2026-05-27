@@ -45,6 +45,15 @@ import {
   IconCalendar,
 } from '@tabler/icons-react';
 
+const normalizeAssignmentTourIdInput = (value) => {
+  if (typeof value !== 'string') return '';
+  return value
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '_')
+    .replace(/[.#$\[\]/]/g, '');
+};
+
 // Driver Card Component for the sidebar
 function DriverCard({ driverId, driver, isSelected, onClick }) {
   const assignedTours = driver.assignedTours || (driver.assignments ? Object.keys(driver.assignments) : []);
@@ -216,22 +225,67 @@ function DriverDetailsPanel({ driverId, driver }) {
   const handleSaveDetails = async () => {
     setSaving(true);
     try {
-      const updates = {
-        [`drivers/${driverId}/name`]: editName,
-        [`drivers/${driverId}/phone`]: editPhone,
-        [`drivers/${driverId}/currentTourId`]: editCurrentTourId || null,
-        [`drivers/${driverId}/currentTourCode`]: editCurrentTourId || null,
-        // Migration cleanup: canonicalize field name and remove legacy key on write.
-        [`drivers/${driverId}/activeTourId`]: null,
-      };
+      const nextName = editName.trim();
+      const nextPhone = editPhone.trim();
+      const currentTourId = normalizeAssignmentTourIdInput(driver.currentTourId || driver.activeTourId || '');
+      const nextTourId = normalizeAssignmentTourIdInput(editCurrentTourId);
 
-      // Sync name/phone to all assigned tours
-      assignments.forEach((tourId) => {
-        updates[`tours/${tourId}/driverName`] = editName;
-        updates[`tours/${tourId}/driverPhone`] = editPhone;
-      });
+      if (!nextName) {
+        notifications.show({
+          title: 'Missing Information',
+          message: 'Driver name is required',
+          color: 'red',
+        });
+        return;
+      }
 
-      await update(ref(db), updates);
+      if (nextTourId !== currentTourId) {
+        if (nextTourId) {
+          await applyDriverAssignmentMutation({
+            tourId: nextTourId,
+            driverId,
+            driverCode: driverId,
+            driverInfo: {
+              name: nextName,
+              phone: nextPhone,
+              authUid: driver.authUid || '',
+            },
+            isAssigned: true,
+            driverProfileUpdates: {
+              name: nextName,
+              phone: nextPhone,
+            },
+          });
+        } else if (currentTourId) {
+          await applyDriverAssignmentMutation({
+            tourId: currentTourId,
+            driverId,
+            driverCode: driverId,
+            driverInfo: { name: 'TBA', phone: '' },
+            isAssigned: false,
+            driverProfileUpdates: {
+              name: nextName,
+              phone: nextPhone,
+            },
+          });
+        }
+      } else {
+        const updates = {
+          [`drivers/${driverId}/name`]: nextName,
+          [`drivers/${driverId}/phone`]: nextPhone,
+          // Migration cleanup: canonicalize field name and remove legacy key on write.
+          [`drivers/${driverId}/activeTourId`]: null,
+        };
+
+        // Sync name/phone to all assigned tours without changing assignment ownership.
+        assignments.forEach((tourId) => {
+          updates[`tours/${tourId}/driverName`] = nextName;
+          updates[`tours/${tourId}/driverPhone`] = nextPhone;
+        });
+
+        await update(ref(db), updates);
+      }
+
       notifications.show({
         title: 'Changes Saved',
         message: 'Driver details updated successfully',
@@ -363,7 +417,7 @@ function DriverDetailsPanel({ driverId, driver }) {
               <TextInput
                 label="Assigned tour"
                 placeholder="Assigned tour ID (for example 5100D_138)"
-                description="Support note: ask the driver to reconnect once if assignment changes are not visible in app."
+                description="Changing this uses the same assignment contract as tour dispatch."
                 value={editCurrentTourId}
                 onChange={(e) => setEditCurrentTourId(e.target.value)}
                 leftSection={<IconBus size={16} />}

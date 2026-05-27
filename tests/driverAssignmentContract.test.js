@@ -8,6 +8,7 @@ const {
 
 test('buildAssignedDriverCodePayload returns canonical keys and casing', () => {
   const payload = buildAssignedDriverCodePayload({
+    driverId: 'D-BONDY',
     tourId: '5112D_8',
     tourCode: '5112D 8',
     assignedAt: '2026-02-01T10:15:00.000Z',
@@ -15,6 +16,7 @@ test('buildAssignedDriverCodePayload returns canonical keys and casing', () => {
   });
 
   assert.deepEqual(payload, {
+    driverId: 'D-BONDY',
     tourId: '5112D_8',
     tourCode: '5112D 8',
     assignedAt: '2026-02-01T10:15:00.000Z',
@@ -25,6 +27,7 @@ test('buildAssignedDriverCodePayload returns canonical keys and casing', () => {
 test('normalizeAssignedDriverCodeRecord accepts canonical object payload', () => {
   const normalized = normalizeAssignedDriverCodeRecord({
     value: {
+      driverId: 'D-BONDY',
       tourId: '5112D_8',
       tourCode: '5112D 8',
       assignedAt: '2026-02-01T10:15:00.000Z',
@@ -34,6 +37,7 @@ test('normalizeAssignedDriverCodeRecord accepts canonical object payload', () =>
   });
 
   assert.equal(normalized.legacy, false);
+  assert.equal(normalized.driverId, 'D-BONDY');
   assert.equal(normalized.tourId, '5112D_8');
   assert.equal(normalized.tourCode, '5112D 8');
   assert.equal(normalized.assignedBy, 'uid_mobile_1');

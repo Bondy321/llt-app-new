@@ -373,7 +373,8 @@ const isValidNormalizedTourId = (tourId) => {
   return typeof tourId === 'string' && /^[A-Z0-9][A-Z0-9_-]*$/.test(tourId);
 };
 
-const buildAssignedDriverCodePayload = ({ tourId, tourCode, assignedBy, assignedAt = new Date().toISOString() }) => ({
+const buildAssignedDriverCodePayload = ({ driverId, tourId, tourCode, assignedBy, assignedAt = new Date().toISOString() }) => ({
+  driverId,
   tourId,
   tourCode,
   assignedAt,
@@ -984,6 +985,7 @@ const assignDriverToTour = async (driverId, tourCode) => {
     // 2. Add to Tour Manifest's assigned drivers list
     updates[`tour_manifests/${tourId}/assigned_drivers/${validatedDriverId}`] = true;
     updates[`tour_manifests/${tourId}/assigned_driver_codes/${validatedDriverId}`] = buildAssignedDriverCodePayload({
+      driverId: validatedDriverId,
       tourId,
       tourCode: validatedTourCode,
       assignedAt: new Date().toISOString(),

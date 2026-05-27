@@ -77,13 +77,116 @@ describe('generateTourId normalization', () => {
   });
 });
 
+describe('tour identity invariants', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setMock.mockResolvedValue(undefined);
+    updateMock.mockResolvedValue(undefined);
+  });
+
+  it('refuses to create a tour when the generated Firebase key already exists', async () => {
+    getMock.mockResolvedValue(buildSnapshot({ name: 'Existing Highlands' }));
+
+    const { createTour } = await import('./tourService.js');
+
+    await expect(createTour({
+      name: 'New Highlands',
+      tourCode: '5112D 8',
+    })).rejects.toThrow(/already exists at tours\/5112D_8/);
+
+    expect(setMock).not.toHaveBeenCalled();
+  });
+
+  it('creates new tours at the generated key and stores a trimmed display code', async () => {
+    getMock.mockResolvedValue(buildSnapshot(null));
+
+    const { createTour } = await import('./tourService.js');
+    const result = await createTour({
+      name: 'Highlands',
+      tourCode: ' 5112D 8 ',
+    });
+
+    expect(result.id).toBe('5112D_8');
+    expect(result.tour.tourCode).toBe('5112D 8');
+    expect(setMock).toHaveBeenCalledWith(
+      { path: 'tours/5112D_8' },
+      expect.objectContaining({
+        name: 'Highlands',
+        tourCode: '5112D 8',
+      }),
+    );
+  });
+
+  it('rejects tourCode changes on existing tours', async () => {
+    getMock.mockResolvedValue(buildSnapshot({ tourCode: '5112D 8' }));
+
+    const { updateTour } = await import('./tourService.js');
+
+    await expect(updateTour('5112D_8', {
+      name: 'Changed Tour',
+      tourCode: '6000A 1',
+    })).rejects.toThrow(/Tour code cannot be changed/);
+
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('allows updates that keep the existing tourCode identity', async () => {
+    getMock.mockResolvedValue(buildSnapshot({ tourCode: '5112D 8' }));
+
+    const { updateTour } = await import('./tourService.js');
+    await updateTour('5112D_8', {
+      name: 'Highlands Updated',
+      tourCode: ' 5112d   8 ',
+    });
+
+    expect(updateMock).toHaveBeenCalledWith(
+      { path: 'tours/5112D_8' },
+      {
+        name: 'Highlands Updated',
+        tourCode: '5112D 8',
+      },
+    );
+  });
+
+  it('generates the next available copy code when duplicating a tour', async () => {
+    const pathValues = {
+      'tours/TOUR_A': {
+        name: 'Original Tour',
+        tourCode: 'TA 1',
+        driverName: 'Assigned Driver',
+        driverPhone: '+441234',
+        currentParticipants: 12,
+      },
+      'tours/TA_1_COPY': { name: 'Existing Copy' },
+      'tours/TA_1_COPY_2': null,
+    };
+    getMock.mockImplementation(async ({ path }) => buildSnapshot(pathValues[path]));
+
+    const { duplicateTour } = await import('./tourService.js');
+    const result = await duplicateTour('TOUR_A');
+
+    expect(result.id).toBe('TA_1_COPY_2');
+    expect(result.tour).toMatchObject({
+      name: 'Original Tour (Copy)',
+      tourCode: 'TA 1_COPY_2',
+      driverName: 'TBA',
+      driverPhone: '',
+      currentParticipants: 0,
+    });
+    expect(setMock).toHaveBeenCalledWith(
+      { path: 'tours/TA_1_COPY_2' },
+      expect.objectContaining({ tourCode: 'TA 1_COPY_2' }),
+    );
+  });
+});
+
 
 describe('buildDriverAssignmentUpdates', () => {
   it('writes canonical assigned_driver_codes payload on assignment', async () => {
     const { buildDriverAssignmentUpdates } = await import('./tourService.js');
 
     const updates = buildDriverAssignmentUpdates({
-      tourId: '5112D_8',
+      tourId: '5112d 8',
       driverId: 'D-BONDY',
       driverCode: 'D-BONDY',
       tourCode: '5112D 8',
@@ -162,7 +265,7 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
       'tours/TOUR_NEW': { tourCode: '5100D 2' },
       'tour_manifests/TOUR_NEW': { assigned_drivers: {} },
       'drivers/D-ALICE': {
-        currentTourId: 'TOUR_OLD',
+        currentTourId: 'TOUR OLD',
         assignments: { TOUR_OLD: true },
       },
     });
@@ -174,6 +277,8 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
     expect(updates['drivers/D-ALICE/assignments/TOUR_OLD']).toBeNull();
     expect(updates['tour_manifests/TOUR_OLD/assigned_drivers/D-ALICE']).toBeNull();
     expect(updates['tour_manifests/TOUR_OLD/assigned_driver_codes/D-ALICE']).toBeNull();
+    expect(updates['tours/TOUR_OLD/driverName']).toBe('TBA');
+    expect(updates['tours/TOUR_OLD/driverPhone']).toBe('');
     expect(updates['drivers/D-ALICE/currentTourId']).toBe('TOUR_NEW');
   });
 
@@ -207,6 +312,8 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
         assigned_drivers: { 'D-OLD': true, 'D-STALE': true },
       },
       'drivers/D-NEW': { assignments: {} },
+      'drivers/D-OLD': { currentTourId: 'TOUR_A', authUid: 'old-auth-uid' },
+      'drivers/D-STALE': { activeTourId: 'TOUR A' },
     });
 
     const { assignDriver } = await import('./tourService.js');
@@ -219,7 +326,33 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
     expect(updates['tour_manifests/TOUR_A/assigned_driver_codes/D-STALE']).toBeNull();
     expect(updates['drivers/D-OLD/assignments/TOUR_A']).toBeNull();
     expect(updates['drivers/D-STALE/assignments/TOUR_A']).toBeNull();
+    expect(updates['drivers/D-OLD/currentTourId']).toBeNull();
+    expect(updates['drivers/D-OLD/currentTourCode']).toBeNull();
+    expect(updates['drivers/D-STALE/activeTourId']).toBeNull();
+    expect(updates['users/old-auth-uid/driverAssignedTourId']).toBeNull();
     expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-NEW']).toBe(true);
+  });
+
+  it('can update driver profile details in the same assignment mutation', async () => {
+    setupPathSnapshots({
+      'tours/TOUR_A': { tourCode: '5100D 1' },
+      'tour_manifests/TOUR_A': { assigned_drivers: {} },
+      'drivers/D-ALICE': { assignments: {} },
+    });
+
+    const { applyDriverAssignmentMutation } = await import('./tourService.js');
+    await applyDriverAssignmentMutation({
+      tourId: 'TOUR_A',
+      driverId: 'D-ALICE',
+      driverInfo: { name: 'Alice Updated', phone: '+44 7000' },
+      isAssigned: true,
+      driverProfileUpdates: { name: 'Alice Updated', phone: '+44 7000' },
+    });
+
+    const [, updates] = updateMock.mock.calls[0];
+    expect(updates['drivers/D-ALICE/name']).toBe('Alice Updated');
+    expect(updates['drivers/D-ALICE/phone']).toBe('+44 7000');
+    expect(updates['tours/TOUR_A/driverName']).toBe('Alice Updated');
   });
 });
 
