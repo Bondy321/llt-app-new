@@ -1,303 +1,711 @@
-# Loch Lomond Travel (LLT) App - Agent Onboarding & Current System Status
+# Loch Lomond Travel (LLT) App - Agent Onboarding
 
-Welcome, Agent. This file is the operational source of truth for contributors working in this repo.
+Welcome, Agent. This file is the operational source of truth for contributors working in this repo. Keep it practical: update it whenever architecture, contracts, commands, or release assumptions materially change.
 
-**Last Updated:** May 27, 2026 (web-admin tour identity guards + assignment coherence)
-
----
-
-## Table of Contents
-
-1. [System Architecture Overview](#1-system-architecture-overview)
-2. [Technology Stack](#2-technology-stack)
-3. [Repository Structure](#3-repository-structure)
-4. [Data Model & Backend Contracts](#4-data-model--backend-contracts)
-5. [Authentication & Identity Model](#5-authentication--identity-model)
-6. [Mobile App Features & Screens](#6-mobile-app-features--screens)
-7. [Services Layer (Mobile)](#7-services-layer-mobile)
-8. [Web Admin Dashboard](#8-web-admin-dashboard)
-9. [Cloud Functions (Gen 2)](#9-cloud-functions-gen-2)
-10. [Security Rules & Access Constraints](#10-security-rules--access-constraints)
-11. [Testing Strategy & Commands](#11-testing-strategy--commands)
-12. [Build, Release, and Runtime Notes](#12-build-release-and-runtime-notes)
-13. [Engineering Contracts & Conventions](#13-engineering-contracts--conventions)
-14. [Known Risks / Watch List](#14-known-risks--watch-list)
-15. [Agent Directives (Must Follow)](#15-agent-directives-must-follow)
-16. [Quick Reference](#16-quick-reference)
+Last updated: May 27, 2026
 
 ---
 
-## 1. System Architecture Overview
+## 1. What This Repo Is
 
-LLT is a multi-surface system:
-- **Mobile app** (Expo / React Native) for passengers + drivers
-- **Web admin** (React + Vite + Mantine) for ops team
-- **Firebase Cloud Functions Gen 2** for notification fanout + verifier endpoints + migration helpers
+LLT is a production-oriented monorepo for Loch Lomond Travel:
 
-### Core data flow
+- Mobile app: Expo / React Native passenger and driver app.
+- Web admin: React + Vite + Mantine dashboard for the operations team.
+- Firebase backend: Realtime Database, Storage, Cloud Functions Gen 2, and security rules.
+
+High-level data flow:
 
 ```text
 Google Sheets CMS
-   -> Apps Script sync
-      -> Firebase Realtime Database (source of truth)
-         -> Mobile app
-         -> Web admin
-         -> Cloud Functions (notifications/verifiers/migrations)
+  -> Apps Script sync
+     -> Firebase Realtime Database
+        -> Mobile app
+        -> Web admin
+        -> Cloud Functions
+        -> Expo push notifications
 ```
 
-### Operational region
+Firebase project default: `loch-lomond-travel` from `.firebaserc`.
 
-**All Firebase resources are in `europe-west1`**. New backend code must explicitly keep this region.
+Backend region rule:
+
+- Most Cloud Functions and RTDB-triggered backend work must stay in `europe-west1`.
+- Intentional exception: `generatePhotoVariants` is in `us-east1` because Firebase Storage triggers must match the default Storage bucket region.
 
 ---
 
-## 2. Technology Stack
+## 2. Current Stack
 
-### Mobile app
-- React Native `0.81.5`
+Mobile:
+
 - Expo SDK `54` (`expo ~54.0.33`)
+- React Native `0.81.5`
 - React `19.1.0`
 - Firebase JS SDK `^12.10.0`
-- react-native-maps `1.20.1`
-- expo-notifications `~0.32.16`
-- expo-secure-store `~15.0.8`
-- @react-native-async-storage/async-storage `2.2.0`
-- @react-native-clipboard/clipboard `^1.16.3`
+- `expo-notifications ~0.32.16`
+- `expo-image ~3.0.11`
+- `expo-image-manipulator ~14.0.8`
+- `expo-file-system ~19.0.21`
+- `expo-secure-store ~15.0.8`
+- `@react-native-async-storage/async-storage 2.2.0`
+- `react-native-maps 1.20.1`
 
-### Web admin
+Web admin:
+
 - React `^19.2.0`
 - Vite `^7.2.4`
 - Mantine `^8.3.9`
-- Firebase `^12.6.0`
+- React Router `^7.13.0`
+- Firebase JS SDK `^12.6.0`
 - Vitest `^4.0.18`
 
-### Backend (Functions)
-- firebase-functions `^7.1.1` (Gen 2 APIs)
-- firebase-admin `^13.7.0`
-- expo-server-sdk `^4.0.0`
-- Functions runtime target: Node `24`
+Functions:
+
+- Cloud Functions Gen 2 only
+- Node runtime target `24`
+- `firebase-functions ^7.1.1`
+- `firebase-admin ^13.7.0`
+- `expo-server-sdk ^4.0.0`
+- `sharp ^0.33.5`
 
 ---
 
-## 3. Repository Structure
+## 3. Repository Map
 
 ```text
-/llt-app-new
-├── App.js
-├── app.config.js
-├── firebase.js
-├── theme.js
-├── screens/
-├── components/
-├── services/
-├── utils/
-├── hooks/
-├── tests/                 # Node test suites (mobile + contracts)
-├── __tests__/             # additional mobile/service tests
-├── docs/                  # architecture and contract docs
-├── functions/             # Firebase Functions Gen 2
-└── web-admin/             # Vite React admin dashboard
+App.js                         Mobile app shell, session restore, screen routing
+app.config.js                  Expo config, permissions, runtimeVersion policy
+firebase.js                    Mobile Firebase init, auth persistence, RTDB connectivity
+theme.js                       Mobile theme tokens
+database.rules.json            Realtime Database rules
+storage_rules.json             Firebase Storage rules
+eas.json                       EAS build/update profiles
+
+screens/                       Mobile screens
+components/                    Shared mobile components
+hooks/                         Mobile hooks
+services/                      Mobile service layer and local persistence
+utils/                         Pure mobile/shared logic utilities
+tests/                         Node test suites and contract tests
+__tests__/                     Additional service tests
+docs/                          Contracts and operational runbooks
+scripts/                       Root release/env helper scripts
+functions/                     Firebase Functions Gen 2 and migration scripts
+web-admin/                     Vite React admin dashboard
 ```
 
-### Notable additions since early 2026
-- `services/identityService.js` + identity migration helpers
-- `services/offlineLoginResolver.js` for offline login gating
-- `utils/unifiedSyncContract.js` shared sync-state taxonomy
-- `docs/reactions-write-contract.md` (canonical reaction write rules)
-- web-admin parity tests (`healthContractParity`, URL filter sync coverage)
+Core mobile screens:
+
+- `LoginScreen`, `TourHomeScreen`, `DriverHomeScreen`
+- `PassengerManifestScreen`
+- `ItineraryScreen`, `DriverItineraryScreen`
+- `ChatScreen`
+- `MapScreen` plus `MapScreen.web.js`
+- `PhotobookScreen`, `GroupPhotobookScreen`
+- `NotificationPreferencesScreen`
+- `SafetySupportScreen`
+
+Web admin routes:
+
+- `/` -> `Dashboard`
+- `/drivers` -> `DriversManager`
+- `/tours` -> `ToursManager`
+- `/broadcast` -> `BroadcastPanel`
+- `/settings` -> `Settings`
 
 ---
 
-## 4. Data Model & Backend Contracts
+## 4. Primary Data Roots
 
-Primary Realtime DB roots (do **not** rename):
-- `tours`
+Do not rename these Realtime Database roots without a full migration:
+
+- `drivers`
 - `bookings`
 - `tour_manifests`
-- `drivers`
-- `users`
+- `tours`
 - `chats`
 - `internal_chats`
 - `group_tour_photos`
 - `private_tour_photos`
+- `users`
 - `identity_bindings`
 - `identity_bindings_meta`
+- `logs`
+- `globalSafetyAlerts`
 - `broadcasts`
+- `web_admin_settings`
+- `booking_identities`
 
-### Important modernized contracts
+Admin UID hardcoded in rules:
 
-1. **Driver assignment contract**
-   - Canonical active assignment key is `drivers/{driverId}/currentTourId`
-   - `activeTourId` exists as legacy fallback only
-   - Multi-path updates must keep `drivers`, `tour_manifests`, and related context in sync
-   - Driver manifest authorization also depends on `users/{authUid}/driverId` plus `drivers/{driverId}/authUid`
+```text
+9CWQ4705gVRkfW5Xki5LyvrmVp23
+```
 
-2. **Chat reaction contract**
-   - Canonical write path:
-     - `chats/{tourId}/messages/{messageId}/reactions/{emoji}/{userId} = true`
-   - Never overwrite `reactions/{emoji}` for toggle logic
-   - Legacy array/object reaction shapes are read-compatible only
-
-3. **Tour identity contract**
-   - Web-admin-created `tours/{tourId}` keys are derived from `tourCode`
-   - Creating a tour must not overwrite an existing generated key
-   - `tourCode` is immutable after creation; renames require a deliberate multi-root migration
-   - Mobile may derive `tourId` from `tourCode`, so web-admin must not let those drift
-
-4. **Manifest sync conflict policy**
-   - Compare local/server `lastUpdated`
-   - Newer timestamp wins
-   - Server-win path must reconcile local cache + user feedback
-
-5. **Sync-state taxonomy contract**
-   - `OFFLINE_NO_NETWORK`
-   - `ONLINE_BACKEND_DEGRADED`
-   - `ONLINE_BACKLOG_PENDING`
-   - `ONLINE_HEALTHY`
+Admin-only roots include protected writes such as `bookings`, `broadcasts`, `booking_identities`, and many privileged mutations. The web admin may let any Firebase email/password user sign in, but non-admin users should hit rules denials on protected operations.
 
 ---
 
-## 5. Authentication & Identity Model
+## 5. Authentication and Identity
 
-Authentication remains anonymous Firebase auth at foundation, but login modes are more explicit:
+Firebase Auth foundation:
 
-### Passenger login
-- Booking reference + passenger email verifier flow
-- `validateBookingReference()` integrates Cloud Function verifier responses
-- Verifier reasons are mapped to deterministic UX reasons (`INVALID_CREDENTIALS`, `TRY_AGAIN_LATER`, `INTERNAL_ERROR`, `METHOD_NOT_ALLOWED`, etc.)
+- Mobile uses anonymous auth and durable local session state.
+- Web admin uses email/password auth.
+- Mobile Firebase initialization lives in `firebase.js` and exposes `authHelpers`, `firebaseInitHealth`, `updateNetworkState`, compat Firestore/RTDB handles, modular RTDB, and Storage.
 
-### Driver login
-- Driver codes (`D-*`) map to driver records and assignment context
-- Successful login hydrates immediate Driver Home tour context
+Passenger login:
 
-### Stable passenger identity (critical)
-- Canonical identity format: `pax_v1:{BOOKING_REF}:{normalized_email}`
-- Stored raw under user profile ownership fields
-- When used as an RTDB key segment, encode with `toRealtimeKeySegment(stablePassengerId)` because
-  email-style identities contain `.` characters. This applies to `identity_bindings`,
-  `identity_bindings_meta`, private photo owner buckets, and chat actor-scoped leaves.
-- User profiles should also persist encoded owner helpers (`stablePassengerKey`,
-  `privatePhotoOwnerKey`) so RTDB rules can authorize encoded private photo bucket paths even
-  when identity binding writes are delayed.
-- Used in chat/photo/rules ownership checks
+- Entry is booking reference plus booking email.
+- `services/bookingServiceRealtime.js` calls the `verifyPassengerLogin` HTTPS function.
+- The verifier reads `booking_identities/{bookingRef}` and returns deterministic reason codes.
+- Client env flags:
+  - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL`
+  - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS`
+  - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK`
+  - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK`
+- Backend App Check enforcement is controlled by `REQUIRE_APP_CHECK_FOR_LOGIN`.
+- App Check is intentionally off by default in `.env.example`.
 
-### Offline login behavior
-- Cached-session/Tour Pack identity permits offline re-entry for known users
-- Unknown first-time codes remain blocked offline with explicit reason mapping
+Driver login:
+
+- Driver codes use `D-*` style identifiers.
+- Driver login resolves driver profile, assignment context, and driver home tour context.
+- Canonical driver principal for identity-sensitive paths is `driver:{DRIVER_ID}`.
+
+Stable passenger identity:
+
+- Canonical raw ID: `pax_v1:{BOOKING_REF}:{normalized_email}`.
+- Raw stable IDs contain characters that are invalid in RTDB keys.
+- Use `toRealtimeKeySegment(stablePassengerId)` before using stable identities as path segments.
+- Encoded keys are required for:
+  - `identity_bindings/{stablePassengerKey}/{authUid}`
+  - `identity_bindings_meta/{stablePassengerKey}`
+  - `private_tour_photos/{tourId}/{stablePassengerKey}`
+  - chat actor-scoped leaves when the actor ID is not RTDB-safe.
+- User profiles should persist:
+  - `stablePassengerId`
+  - `stablePassengerKey`
+  - `privatePhotoOwnerId`
+  - `privatePhotoOwnerKey`
+  - `identityVersion: "pax_v1"`
+  - `normalizedPassengerEmail`
+
+Important helper:
+
+- `services/identityService.js`
+  - `getCanonicalIdentity`
+  - `resolveAuthScopedUserId`
+  - `resolveRealtimeActorId`
+  - `isRealtimeKeySegment`
+  - `toRealtimeKeySegment`
+
+Offline login:
+
+- `services/offlineLoginResolver.js` permits re-entry only for cached sessions or cached Tour Packs.
+- Unknown first-time users are blocked offline with explicit reason codes.
+- Passenger offline login requires normalized email match.
+- Offline cache TTL is 30 days.
 
 ---
 
-## 6. Mobile App Features & Screens
+## 6. Core Data Contracts
 
-Core screens (mobile):
-- `LoginScreen`, `TourHomeScreen`, `DriverHomeScreen`, `PassengerManifestScreen`
-- `ItineraryScreen`, `DriverItineraryScreen`
-- `ChatScreen`, `MapScreen`
-- `PhotobookScreen`, `GroupPhotobookScreen`
-- `NotificationPreferencesScreen`, `SafetySupportScreen`
+### Tour Identity
 
-### UX hardening that is now expected
-- Non-blocking sync feedback (banner-first, fewer blocking alerts)
-- Chat unread anchors + jump-to-unread behavior
-- Pull-to-refresh tied to real queue replay outcomes
-- Driver location freshness/staleness messaging for both driver and passenger surfaces
+Source doc: `docs/data-contracts/tour-identity.md`
+
+- Web-admin-created `tours/{tourId}` keys are generated from `tourCode`.
+- Example: `tourCode = "5112D 8"` -> `tourId = "5112D_8"`.
+- `tourCode` is immutable after creation.
+- Creating a tour must fail if `tours/{generateTourId(tourCode)}` already exists.
+- Duplicate/copy flows must generate a fresh tour code before writing.
+- Do not let `tourCode` and the Firebase key drift. Mobile often derives IDs from tour codes.
+- Renaming a tour code requires deliberate multi-root migration across tours, manifests, bookings, assignments, chats, photos, and caches.
+
+### Driver Assignment
+
+Source doc: `docs/data-contracts/driver-assignment.md`
+
+Canonical active assignment key:
+
+- `drivers/{driverId}/currentTourId`
+
+Legacy fallback:
+
+- `drivers/{driverId}/activeTourId`
+
+Canonical nodes to keep coherent in one multi-path update:
+
+- `drivers/{driverId}`
+- `tour_manifests/{tourId}/assigned_drivers/{driverId}`
+- `tour_manifests/{tourId}/assigned_driver_codes/{driverId}`
+- `users/{authUid}/driverId`
+- `users/{authUid}/driverPrincipalId`
+- `users/{authUid}/driverAssignedTourId`
+- `users/{authUid}/principalType`
+
+Canonical `assigned_driver_codes/{driverId}` payload:
+
+```ts
+{
+  driverId: string,
+  tourId: string,
+  tourCode: string,
+  assignedAt: string,
+  assignedBy: string
+}
+```
+
+Producers:
+
+- Mobile: `services/bookingServiceRealtime.js` (`assignDriverToTour`)
+- Web admin: `web-admin/src/services/tourService.js` (`buildDriverAssignmentUpdates`, `applyDriverAssignmentMutation`)
+
+Rules authorize assigned driver manifest writes only when:
+
+- `users/{authUid}/driverId` points to the driver.
+- `drivers/{driverId}/authUid` matches the caller.
+- `tour_manifests/{tourId}/assigned_drivers/{driverId}` is `true`.
+- The booking belongs to the tour by canonical `tourId` or compatible legacy `tourCode`.
+
+### Manifest Sync
+
+- Manifest updates live under `tour_manifests/{tourId}/bookings/{bookingRef}`.
+- Status values: `PENDING`, `BOARDED`, `NO_SHOW`, `PARTIAL`.
+- `passengerStatus` is an array-like child collection of per-passenger statuses.
+- Conflict policy compares local/server `lastUpdated`.
+- Newer server value wins; server-win path reconciles local cache and user feedback.
+- Offline manifest updates queue through `offlineSyncService` as `MANIFEST_UPDATE`.
+
+### Chat and Reactions
+
+Source doc: `docs/reactions-write-contract.md`
+
+Message roots:
+
+- Group chat: `chats/{tourId}/messages`
+- Internal driver chat: `internal_chats/{tourId}/messages`
+
+Modern messages must include stable sender fields:
+
+- `senderId`
+- `senderStableId`
+- `senderName`
+- `text`
+- `timestamp`
+
+Drivers may write as verified `driver:{DRIVER_ID}` principals.
+
+Canonical reaction path:
+
+```text
+chats/{tourId}/messages/{messageId}/reactions/{emoji}/{actorKey} = true
+```
+
+Rules:
+
+- Reaction writes are user-leaf only.
+- Never write to `reactions`, `reactions/{emoji}`, or the message parent for reaction toggles.
+- Legacy array/object reaction shapes are read-compatible only.
+- `typing`, `presence`, and `lastRead` actor keys must follow the same identity encoding rules.
+
+Chat UX utilities:
+
+- `utils/chatTimeline.js`
+- `utils/chatUnreadSummary.js`
+- `utils/chatReplyNavigation.js`
+- `utils/chatSearch.js`
+- `utils/chatRetry.js`
+- `services/chatSwipeReplyGesture.js`
+
+### Photos and Variants
+
+Source doc: `docs/photo-upload-variant-contract.md`
+
+Photo roots:
+
+- Group metadata: `group_tour_photos/{tourId}/{photoId}`
+- Private metadata: `private_tour_photos/{tourId}/{stablePassengerKey}/{photoId}`
+- Group Storage source objects: `group_tour_photos/{tourId}/{filename}`
+- Private Storage source objects: `private_tour_photos/{tourId}/{ownerKey}/{filename}`
+- Server variants are written under `thumbnails/` and `viewers/` subfolders.
+
+Current upload contract:
+
+- Queue action type: `PHOTO_UPLOAD`
+- `payloadVersion: 2`
+- Source-only durable payload:
+  - `idempotencyKey`
+  - `localAssets.sourceUri`
+  - optional `localAssets.previewUri`
+  - optional `metadata.caption`
+- Replay must call `photoService.uploadPhotoDirect(...)`.
+- Screen components should not bypass the service to do network upload replay.
+
+DB lifecycle fields for new uploads:
+
+- `variantStatus: "processing"`
+- `sourceUrl`
+- legacy-compatible `url` / `fullUrl`
+- `variantUpdatedAt`
+- `variantError`
+- `variantVersion: 2`
+
+Server variant generator:
+
+- Function: `generatePhotoVariants`
+- Region: `us-east1`
+- Uses `sharp` to create viewer and thumbnail JPEGs.
+- Updates photo records to `variantStatus: "ready"` with `viewerUrl` and `thumbnailUrl`, or `variantStatus: "failed"` with `variantError`.
+
+Compatibility:
+
+- Existing records without `variantStatus` are display-ready when they have a legacy display URL.
+- Legacy queue payloads without `payloadVersion` remain replay-compatible.
+
+Storage rules:
+
+- Authenticated image uploads only.
+- Max image size is 10 MB.
+- Private photo ownership is enforced in Realtime Database, not Storage rules.
+
+Expo FileSystem contract:
+
+- Files using old FileSystem APIs must import `expo-file-system/legacy`.
+- Static tests enforce this for `ImageViewer`, `PhotobookScreen`, `imageOptimizationService`, and `photoViewerCacheService`.
+
+### Offline Tour Pack and Sync
+
+Source doc: `docs/offline-tour-pack.md`
+
+Service:
+
+- `services/offlineSyncService.js`
+
+Persistence:
+
+- `services/persistenceProvider.js`
+- Storage order: SecureStore -> AsyncStorage -> memory fallback.
+- Test env defaults to memory unless an adapter is injected.
+
+Tour Pack keys:
+
+- `tour_pack_passenger_<tourId>`
+- `tour_pack_driver_<tourId>`
+- `tour_pack_meta_passenger_<tourId>`
+- `tour_pack_meta_driver_<tourId>`
+- `queue_v1`
+- `processed_action_ids_v1`
+
+Queue action types:
+
+- `MANIFEST_UPDATE`
+- `CHAT_MESSAGE`
+- `INTERNAL_CHAT_MESSAGE`
+- `PHOTO_UPLOAD`
+
+Replay policy:
+
+- FIFO by `createdAt`.
+- Single in-process replay lock.
+- Max attempts: 5.
+- Processed action IDs persisted to avoid duplicate replay.
+- Failed and retrying actions remain retryable.
+- Completed `PHOTO_UPLOAD` actions are pruned by TTL while preserving recent completed items.
+
+Canonical sync states:
+
+- `OFFLINE_NO_NETWORK`
+- `ONLINE_BACKEND_DEGRADED`
+- `ONLINE_BACKLOG_PENDING`
+- `ONLINE_HEALTHY`
+
+Shared metadata lives in:
+
+- Mobile: `utils/unifiedSyncContract.js`
+- Web admin copy: `web-admin/src/services/unifiedSyncContract.js`
+
+Canonical manual refresh text:
+
+```text
+{X} synced / {Y} pending / {Z} failed
+```
+
+Use `buildSyncSummary`, `formatSyncOutcome`, and `deriveUnifiedSyncStatus`. Do not invent per-screen sync wording.
+
+### Dates and Time
+
+Source docs:
+
+- `docs/date-contract.md`
+- `docs/date-contract-web-admin.md`
+
+Date-only accepted inputs:
+
+- UK: `dd/MM/yyyy`
+- ISO: `yyyy-MM-dd`
+
+Timestamp accepted inputs:
+
+- Epoch milliseconds as number or numeric string.
+- ISO-8601 datetime with timezone.
+
+Mandatory rules:
+
+- Never use `new Date(unvalidatedString)` on payload dates.
+- Never use `Date.parse(...)` outside strict utility gates.
+- Tour start/end dates persist as UK `dd/MM/yyyy`.
+- HTML date inputs use ISO and must convert through strict helpers.
+
+Key helpers:
+
+- Mobile: `services/itineraryDateParser.js`, `services/pickupTimeParser.js`, `services/timeUtils.js`
+- Web admin: `web-admin/src/utils/dateUtils.js`, `web-admin/src/utils/triageUtils.js`
+
+### Notifications
+
+Mobile service:
+
+- `services/notificationService.js`
+
+User profile fields:
+
+- `pushToken`
+- `pushTokenStatus`: `ACTIVE`, `INVALID`, `UNAVAILABLE`
+- `pushTokenProvider`
+- `pushTokenUpdatedAt`
+- `pushTokenInvalidReason`
+- `pushPermissionState`: `granted`, `denied`, `blocked`, `unavailable`
+- `pushPermissionCanAskAgain`
+- `pushPermissionUpdatedAt`
+- app/device metadata: `deviceOS`, `deviceModel`, `appVersion`, `appBuild`, `osVersion`
+
+Preference schema:
+
+```text
+users/{uid}/preferences/ops/driver_updates
+users/{uid}/preferences/ops/itinerary_changes
+users/{uid}/preferences/ops/group_chat
+users/{uid}/preferences/ops/group_photos
+users/{uid}/preferences/marketing/*
+```
+
+Legacy booleans remain normalized:
+
+- `chatNotifications`
+- `itineraryNotifications`
+
+Function fanout safeguards:
+
+- deterministic chunking
+- recipient cap: 1000
+- user fetch chunk size: 100
+- recipient chunk size: 200
+- token invalidation cleanup only if the stored token still matches the failed token
+- preference-aware routing
+
+### Safety and Location
+
+Safety service:
+
+- `services/safetyService.js`
+
+Safety roots:
+
+- `tours/{tourId}/safetyAlerts`
+- `tours/{tourId}/liveTracking`
+- `globalSafetyAlerts`
+- safety-related entries under `logs/{userKey}/safety`
+
+Driver location:
+
+- Canonical passenger/driver live bus path: `tours/{tourId}/driverLocation`.
+- Driver Home writes manual and auto-share location updates there.
+- Map screen listens there and presents freshness/staleness messaging.
+
+Safety UX:
+
+- `SafetySupportScreen` handles emergency options, trusted contacts, offline safety queue, and optional location sharing.
+- The app opens emergency options and does not call 999 automatically.
 
 ---
 
-## 7. Services Layer (Mobile)
+## 7. Mobile Service Layer
 
-Key services and responsibilities:
+High-signal services:
 
 - `bookingServiceRealtime.js`
-  - login validation
-  - join tour / driver assignment flows
   - passenger verifier integration
+  - driver login and assignment
+  - manifest fetch/update
+  - participant join transaction
+  - itinerary fetch
 - `offlineSyncService.js`
-  - Tour Pack caching
-  - queueing/replay for manifest/chat/internal chat/photo uploads
-  - `buildSyncSummary`, `formatSyncOutcome`, `lastSuccessAt`
+  - Tour Pack cache
+  - offline queue
+  - replay, retry, sync summary, staleness labels
 - `chatService.js`
-  - group/internal chat sends/subscriptions
-  - reaction leaf writes and normalization
-  - read-state + typing/presence paths
+  - group/internal chat send/subscribe
+  - reactions, typing, presence, read receipts
+  - bounded pagination
 - `photoService.js`
-  - group/private uploads + metadata handling
+  - upload, direct replay upload, pagination, subscriptions
+  - delete and caption update
+  - group/private owner scoping
+- `photoVariantService.js`
+  - display URL resolution and cache key derivation
+- `imageOptimizationService.js`
+  - source upload optimization
+  - legacy full/viewer/thumb generation compatibility
 - `notificationService.js`
-  - push token + preference persistence behavior
+  - Expo push token registration
+  - preference normalization and user profile metadata
 - `identityService.js`
-  - stable identity helpers and migration support
-- `itineraryDateParser.js`, `pickupTimeParser.js`, `timeUtils.js`
-  - strict date/time parsing contracts
+  - principal and RTDB key helpers
 - `loggerService.js`
-  - structured + safe logging conventions
+  - safe logging, redaction, local/server log queue
+- `crashDiagnosticsService.js`
+  - breadcrumbs and crash diagnostics under `logs`
+- `safetyService.js`
+  - safety events, live tracking, trusted contacts, offline safety queue
+- `optionalServiceLoader.js`
+  - safe optional requires for test/runtime boundaries
+- `appMetadata.js`
+  - app version/build/OS metadata for profile writes
+
+Most service functions return `{ success: true|false, data|error }`. Preserve that shape unless the existing function clearly throws by contract.
 
 ---
 
-## 8. Web Admin Dashboard
+## 8. Web Admin Surface
 
 Location: `web-admin/`
 
-Main surfaces:
-- `Dashboard`
-- `DriversManager`
-- `ToursManager`
-- `BroadcastPanel`
-- `Settings`
+Main services/utilities:
 
-### Current operational expectations
-- Tours status filter and URL query param are synchronized both directions
-- “All Tours” removes `status` query param (canonical URL behavior)
-- Driver assignment writes align with mobile’s canonical `currentTourId`
-- Health/sync semantics are mapped to same shared taxonomy as mobile
+- `src/services/tourService.js`
+  - tour CRUD
+  - templates
+  - driver assignment multi-path updates
+  - CSV import/export preview and execution
+  - immutable tour identity guards
+- `src/services/tourCsvService.js`
+  - CSV parser and row validation
+- `src/services/healthService.js`
+  - dashboard health snapshot mapped to shared sync state taxonomy
+- `src/services/unifiedSyncContract.js`
+  - web-admin copy of canonical sync metadata
+- `src/utils/dateUtils.js`
+  - strict date/timestamp parsing and formatting
+- `src/utils/triageUtils.js`
+  - date-based dashboard urgency metadata
+
+Operational expectations:
+
+- Tours status filter and URL query param stay synchronized.
+- Choosing "All Tours" removes the `status` query param.
+- Dashboard deep links use `/tours?status=unassigned`.
+- Tour identity guards reject create/update flows that would overwrite or mutate a generated tour key.
+- Driver assignment writes must align with the mobile canonical `currentTourId` contract and clean stale assignment links.
+- User-facing errors should be sanitized, especially auth and password reset errors.
+- Vite dev server adds basic security headers in `vite.config.js`; keep preview/deploy parity in mind.
 
 ---
 
-## 9. Cloud Functions (Gen 2)
+## 9. Cloud Functions
 
 Location: `functions/index.js`
 
-Current exported functions include:
-- `verifyPassengerLogin` (HTTPS verifier endpoint)
-- `processBroadcastWrite` (broadcast -> chat fanout)
-- `sendChatNotification` (DB trigger)
-- `sendItineraryNotification` (DB trigger)
+Exported functions:
 
-### Function-level requirements
-- Gen 2 syntax only
-- Explicit region `europe-west1`
-- Defensive validation for payloads and path params
-- Notification delivery protections:
-  - deterministic chunking
-  - recipient caps
-  - token invalidation handling
-  - preference-aware routing
+- `verifyPassengerLogin`
+  - HTTPS `POST`
+  - region `europe-west1`
+  - reads `booking_identities/{bookingRef}`
+  - optional backend App Check enforcement
+  - rate limited by client key
+- `processBroadcastWrite`
+  - RTDB create trigger on `/broadcasts/{tourId}/{broadcastId}`
+  - region `europe-west1`
+  - validates admin author and writes `ADMIN_BROADCAST` chat message
+- `sendChatNotification`
+  - RTDB create trigger on `/chats/{tourId}/messages/{messageId}`
+  - region `europe-west1`
+  - validates sender/participants/admin broadcast authenticity
+  - routes by `preferences.ops.group_chat` or `preferences.ops.driver_updates`
+- `generatePhotoVariants`
+  - Storage finalize trigger
+  - region `us-east1`
+  - creates server-owned viewer/thumbnail variants and updates photo metadata
+- `sendItineraryNotification`
+  - RTDB update trigger on `/tours/{tourId}/itinerary`
+  - region `europe-west1`
+  - sends to tour participants plus assigned driver auth users
+
+Testing hook:
+
+- `exports.__testables` exposes pure helpers for Node tests.
+
+Migration/maintenance scripts:
+
+- `npm --prefix functions run migrate:assigned-driver-codes`
+- `npm --prefix functions run migrate:private-photo-owners`
+- `npm --prefix functions run backfill:photo-variants`
+- `node functions/scripts/normalizeLegacyBroadcastTimestamps.js`
+
+Photo variant backfill example:
+
+```bash
+npm --prefix functions run backfill:photo-variants -- --dry-run --limit=50
+npm --prefix functions run backfill:photo-variants -- --apply --limit=50
+```
+
+Use `--visibility=group|private`, `--tourId=...`, and `--ownerKey=...` to narrow photo variant backfills.
 
 ---
 
-## 10. Security Rules & Access Constraints
+## 10. Security Rules and Access
 
-Source: `database.rules.json`
+Sources:
 
-Highlights:
-- Rules are now strict on schema validation for major collections
-- Identity-aware writes allow ownership through:
-  - raw `auth.uid`
-  - `users/{uid}/stablePassengerId`
-  - `users/{uid}/privatePhotoOwnerId`
-  - `identity_bindings/{stablePassengerKey}/{uid}` where `stablePassengerKey = toRealtimeKeySegment(stablePassengerId)`
-- Assigned drivers can update manifest booking rows when their user profile `driverId`,
-  matching driver `authUid`, and manifest `assigned_drivers/{driverId}` are all aligned.
-- Reactions are user-leaf writes only (parent reaction writes blocked)
-- `users` now validates push token state metadata and identity metadata fields
+- `database.rules.json`
+- `storage_rules.json`
 
-If changing data shape under any protected path, update:
-1) service code, 2) security rules, 3) tests, 4) docs contract(s).
+Important RTDB invariants:
+
+- Root read/write are denied by default.
+- `bookings/{bookingRef}` writes are admin-only.
+- `tour_manifests/{tourId}/bookings/{bookingRef}` writes allow admin, tour participants, and verified assigned drivers.
+- `assigned_driver_codes` must use the canonical object payload.
+- Chat message creates require ownership through auth UID, stable passenger identity binding, private owner identity, or verified driver principal.
+- Chat reaction, typing, presence, and read-state actor leaves are identity-scoped.
+- Private photos allow access by auth UID, raw stable identity, encoded stable key, raw private owner, encoded private owner key, or identity binding.
+- `identity_bindings_meta` writes are admin or caller-owned binding only.
+- `broadcasts` writes are admin-only and require numeric `createdAtMs`.
+- `users` validates push token metadata, identity metadata, driver helper fields, and notification preferences.
+- `globalSafetyAlerts` writes require admin or caller-owned pending event creation.
+
+Important Storage invariants:
+
+- `group_tour_photos/{tourId}/...` read/write requires authenticated user and image constraints for writes.
+- `private_tour_photos/{tourId}/{ownerId}/...` read/write requires authenticated user and image constraints for writes.
+- Ownership is intentionally enforced in RTDB metadata, because Storage rules cannot look up stable identity bindings.
+
+If changing any protected data shape, update all of:
+
+1. Service code
+2. Security rules
+3. Tests
+4. Contract docs
+5. This `AGENTS.md` when the operating model changes
 
 ---
 
-## 11. Testing Strategy & Commands
+## 11. Tests
 
-### Root test orchestration
+Root orchestration:
 
 ```bash
 npm test
@@ -307,9 +715,10 @@ npm run test:all:full
 npm run test:all:with-emulators
 ```
 
-### Mobile segmented suites
+Mobile suites:
 
 ```bash
+npm run test:mobile
 npm run test:mobile:auth
 npm run test:mobile:sync:contract
 npm run test:mobile:sync:engine
@@ -322,34 +731,73 @@ npm run test:mobile:ux
 npm run test:mobile:infra
 ```
 
-### Web admin tests
+Web admin:
 
 ```bash
 npm run test:web-admin
-# or
-cd web-admin && npm run test
+npm --prefix web-admin run test
+npm --prefix web-admin run test:all
 ```
 
-### Emulator-only rules tests
+Firebase emulator rules:
 
 ```bash
 npm run test:emulators
 ```
 
+Current `test:emulators` runs reactions and manifest rules. If you change photo variant/photo ownership rules, also run the photo variant rules test directly with the emulator:
+
+```bash
+firebase emulators:exec --project demo-llt-rules --only database "node --test tests/firebaseRules/photoVariants.rules.test.js"
+```
+
+High-value contract tests to know:
+
+- `tests/uxAndBackend.contracts.test.js`
+  - sync copy/taxonomy
+  - principal-owned chat writes
+  - identity binding meta least privilege
+  - private photo access invariants
+  - photo variant field allowance
+  - stable identity key encoding
+  - Expo FileSystem legacy import contract
+- `tests/driverAssignmentContract.test.js`
+- `tests/assignDriverToTour.cleanup.test.js`
+- `web-admin/src/services/tourService.test.js`
+- `web-admin/src/components/ToursManager.test.jsx`
+- `web-admin/src/services/healthContractParity.test.js`
+- `tests/functions.photoVariants.test.js`
+- `tests/stableIdentity.integration.test.js`
+- `tests/validateBookingReference.passengerVerifier.test.js`
+- `tests/offlineSyncService.test.js` and `__tests__/offlineSyncService.test.js`
+
+Many root npm scripts use POSIX-style `NODE_ENV=test`. CI runs on Linux. On native Windows shells, use the same npm script first; if the shell rejects inline env assignment, run the underlying `node --test ...` command with `$env:NODE_ENV='test'` for local verification.
+
 ---
 
-## 12. Build, Release, and Runtime Notes
+## 12. Build, Release, and Env
 
-### Mobile
-- Config is in `app.config.js` (not static `app.json`)
-- EAS profiles are in `eas.json`
-- Runtime version policy is `appVersion`
-- EAS profiles use explicit `development`, `preview`, and `production` environments.
-  Production GitHub Actions validate `EXPO_PUBLIC_*` values and sync them into the
-  EAS production environment before build/update; do not reintroduce `@secret`
-  placeholder aliases in `eas.json`.
+Mobile config:
 
-Build/update commands:
+- Use `app.config.js`; there is no static `app.json`.
+- Version: `1.0.2`
+- iOS build number: `3`
+- Android version code: `3`
+- Runtime version policy: `appVersion`
+- EAS project ID: `1b1ae41f-9096-4e7d-887c-b617613cf603`
+- Owner: `lochlomondtravel`
+
+Root mobile commands:
+
+```bash
+npm start
+npm run start:dev
+npm run ios
+npm run android
+npm run web
+```
+
+EAS builds:
 
 ```bash
 npm run build:dev:ios
@@ -357,11 +805,45 @@ npm run build:dev:android
 npm run build:dev:ios-device
 npm run build:preview
 npm run build:production
+```
+
+OTA updates:
+
+```bash
 npm run update:dev
 npm run update:prod
 ```
 
-### Web admin
+Environment validation:
+
+```bash
+npm run validate:expo-env
+npm run sync:eas-env:production
+```
+
+Root env facts:
+
+- Mobile uses `EXPO_PUBLIC_*`.
+- Web admin uses `VITE_*`.
+- Android builds require `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`.
+- Production GitHub Actions validate `EXPO_PUBLIC_*`, sync them into EAS production, then build/update.
+- Do not reintroduce unresolved `@secret` placeholder aliases in `eas.json`.
+- Do not commit real `.env` files or service account files.
+
+GitHub Actions:
+
+- `.github/workflows/eas-build.yml`
+  - manual production binary builds
+  - verifies commit is on `main`
+  - Node 22
+  - validates env and syncs EAS production env
+- `.github/workflows/eas-update.yml`
+  - production OTA update on `main` push or manual dispatch
+  - verifies commit is on `main`
+  - Node 22
+  - validates env and syncs EAS production env
+
+Web admin:
 
 ```bash
 cd web-admin
@@ -370,7 +852,7 @@ npm run build
 npm run preview
 ```
 
-### Functions
+Functions:
 
 ```bash
 cd functions
@@ -379,74 +861,137 @@ npm run deploy
 npm run logs
 ```
 
-Migration helpers:
+---
 
-```bash
-npm --prefix functions run migrate:assigned-driver-codes
-npm --prefix functions run migrate:private-photo-owners
-```
+## 13. Logging and Diagnostics
+
+Source doc: `docs/safe-logging-conventions.md`
+
+Use `services/loggerService.js` for mobile app logging:
+
+- Prefer `logger.debug/info/warn/error/fatal` over direct `console.*` in app logic.
+- Never log raw booking refs, driver codes, auth UIDs, stable passenger IDs, push tokens, passwords, session IDs, or authorization values.
+- Use `maskIdentifier` and `redactSensitiveData`.
+- Keep user-facing errors sanitized.
+
+Diagnostics:
+
+- `loggerService` persists a local queue and can upload to `logs/{userKey}/{sessionKey}`.
+- `crashDiagnosticsService` writes crash diagnostics under `logs`.
+- Safety events also write under `logs/{userKey}/safety`.
+- Current docs mention temporary verbose RTDB diagnostics; do not add new raw identifiers while that is enabled.
 
 ---
 
-## 13. Engineering Contracts & Conventions
+## 14. Engineering Conventions
 
-1. **Region**: Always `europe-west1` for backend resources.
-2. **Dates**: Never rely on locale parsing for itinerary/pickup dates.
-   - Accept only explicit UK (`dd/MM/yyyy`) or ISO (`yyyy-MM-dd`) formats.
-3. **Assignment writes**: Use service helpers + multi-path updates.
-4. **Sync contract**: Reuse shared taxonomy/formatters; do not fork wording by screen.
-5. **Reaction writes**: User-leaf writes only; no parent overwrite toggles.
-6. **Logging**: Use safe logging conventions (`docs/safe-logging-conventions.md`).
-7. **Service return shape**: preserve `{ success: true|false, data|error }` style.
-8. **Optional service loading**: use `optionalServiceLoader` pattern where applicable.
+Follow existing patterns first:
+
+- Reuse service helpers and contract utilities before adding abstractions.
+- Keep service return shapes stable.
+- Keep backend code Gen 2 and region-pinned.
+- Keep driver/tour/manifest writes as atomic multi-path updates.
+- Keep UX feedback non-blocking where established: banners, inline retry affordances, and refresh outcomes instead of blocking alerts.
+- Use strict date/time helpers.
+- Use identity helpers for RTDB key segments.
+- Use `optionalServiceLoader` for optional dependencies where the repo already does.
+- In photo code, preserve source-only `PHOTO_UPLOAD` v2 replay and server-owned variants.
+- In chat code, keep subscriptions bounded and reaction writes leaf-only.
+- In web-admin, keep status filters and URL query params synchronized.
+- Avoid broad listener scopes; subscribe to current-tour branches and clean up on unmount.
+- Do not rename core DB roots.
+- Do not commit secrets.
+
+When changing a data contract:
+
+- Update service code.
+- Update `database.rules.json` or `storage_rules.json`.
+- Update targeted tests.
+- Update the relevant doc under `docs/`.
+- Update this file if future agents need to know the new contract.
 
 ---
 
-## 14. Known Risks / Watch List
+## 15. Known Risks and Watch List
 
-1. **Date parsing drift risk**
-   - Avoid `new Date("dd/MM/yyyy")` and any locale-dependent parsing.
-2. **Identity migration edge cases**
-   - Legacy `privatePhotoOwnerId` and stable identity bindings must remain compatible during gradual rollout.
-3. **Offline queue growth**
-   - Retry-bounded and processed-ID trimming are mandatory; avoid unbounded local growth.
-4. **Function fanout scale**
-   - Keep recipient caps/chunk sizes and caching tuned as participant counts grow.
-5. **Rules/code divergence**
-   - Schema changes without parallel rule/test updates are the highest-risk regression source.
+Date parsing drift:
 
----
+- Locale parsing can break UK dates. Use strict helpers only.
 
-## 15. Agent Directives (Must Follow)
+Identity migration edge cases:
 
-1. Do **not** rename core DB roots (`drivers`, `tours`, `users`, `bookings`, `tour_manifests`, etc.).
-2. Use shared helpers/contracts before introducing new abstractions.
-3. Any data-shape change requires matching updates in:
-   - services
-   - security rules
-   - tests
-   - docs contract(s)
-4. New Cloud Functions must be Gen 2 and region-pinned.
-5. Keep UX feedback non-blocking where established (status banners + retry affordances).
-6. Never commit secrets; use EAS/Firebase managed secret channels.
+- Stable passenger IDs must stay raw in profile fields but encoded in path keys.
+- Private photo owner buckets must keep compatibility with legacy owner IDs during migration.
+
+Driver assignment coherence:
+
+- `currentTourId` is canonical, but readers still tolerate `activeTourId`.
+- Reassignment must clean stale manifest links in the same update.
+
+Photo variant lifecycle:
+
+- Client uploads source-only for v2; server variants may be processing or failed.
+- UI must tolerate legacy photos without variant metadata.
+
+Offline queue growth:
+
+- Keep retry limits, processed ID trimming, and completed photo upload pruning.
+
+Notification fanout scale:
+
+- Preserve caps, chunking, cache TTLs, invalid token cleanup checks, and preference filtering.
+
+Rules/code divergence:
+
+- Schema changes without parallel rules/tests/docs updates are the highest-risk regressions.
+
+Logging privacy:
+
+- Temporary verbose diagnostics increase the blast radius of unsafe logging. Mask identifiers.
+
+Expo SDK compatibility:
+
+- Legacy FileSystem API consumers must use `expo-file-system/legacy`.
 
 ---
 
 ## 16. Quick Reference
 
-### High-signal files
+High-signal docs:
+
 - `README.md`
 - `docs/date-contract.md`
 - `docs/date-contract-web-admin.md`
 - `docs/data-contracts/driver-assignment.md`
 - `docs/data-contracts/tour-identity.md`
 - `docs/offline-tour-pack.md`
+- `docs/photo-upload-variant-contract.md`
 - `docs/reactions-write-contract.md`
 - `docs/safe-logging-conventions.md`
-- `database.rules.json`
-- `functions/index.js`
+- `docs/stable-identity-rollout-checklist.md`
+- `docs/firebase-cost-optimization-playbook.md`
+- `docs/ux-improvement-task-backlog.md`
 
-### Common commands
+High-signal source:
+
+- `App.js`
+- `firebase.js`
+- `services/bookingServiceRealtime.js`
+- `services/offlineSyncService.js`
+- `services/chatService.js`
+- `services/photoService.js`
+- `services/identityService.js`
+- `services/notificationService.js`
+- `services/safetyService.js`
+- `utils/unifiedSyncContract.js`
+- `database.rules.json`
+- `storage_rules.json`
+- `functions/index.js`
+- `web-admin/src/services/tourService.js`
+- `web-admin/src/services/healthService.js`
+- `web-admin/src/utils/dateUtils.js`
+
+Common commands:
 
 ```bash
 # mobile
@@ -456,18 +1001,13 @@ npm run start:dev
 # tests
 npm test
 npm run test:web-admin
+npm run test:emulators
 
 # web admin
-cd web-admin && npm run dev
+cd web-admin
+npm run dev
 
 # functions
-cd functions && npm run serve
+cd functions
+npm run serve
 ```
-
-### Admin UID (hardcoded in rules)
-
-`9CWQ4705gVRkfW5Xki5LyvrmVp23`
-
----
-
-Update this document whenever architecture, contracts, or operating conventions change materially.
