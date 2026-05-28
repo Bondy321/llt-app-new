@@ -131,6 +131,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `users`
 - `identity_bindings`
 - `identity_bindings_meta`
+- `admin_users`
 - `logs`
 - `ops_alerts`
 - `globalSafetyAlerts`
@@ -145,6 +146,14 @@ Admin UID hardcoded in rules:
 ```
 
 Admin-only roots include protected writes such as `bookings`, `broadcasts`, `booking_identities`, and many privileged mutations. The web admin may let any Firebase email/password user sign in, but non-admin users should hit rules denials on protected operations.
+
+Additional web-admin operators can be allowed through:
+
+```text
+admin_users/{authUid} = true
+```
+
+The hardcoded admin UID or an existing allowlisted admin can manage this allowlist. Do not use user-owned settings or profile fields as privilege signals.
 
 ---
 
@@ -728,7 +737,8 @@ Important RTDB invariants:
 - `identity_bindings_meta` writes are admin or caller-owned binding only.
 - `broadcasts` writes are admin-only and require numeric `createdAtMs`.
 - `users` validates push token metadata, identity metadata, driver helper fields, and notification preferences.
-- `ops_alerts` reads are admin-only; mobile writes must be bounded, sanitised, fingerprinted, and schema-valid.
+- `admin_users` is the web-admin privilege allowlist; entries must be boolean `true`.
+- `ops_alerts` reads are admin-only through the hardcoded admin UID or `admin_users`; mobile writes must be bounded, sanitised, fingerprinted, and schema-valid.
 - `globalSafetyAlerts` writes require admin or caller-owned pending event creation.
 
 Important Storage invariants:

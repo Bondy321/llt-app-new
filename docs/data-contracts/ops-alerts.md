@@ -113,11 +113,13 @@ When an existing alert is seen again:
 
 `database.rules.json` protects `ops_alerts` with:
 
-- admin-only reads,
+- admin-only reads for the hardcoded admin UID or `admin_users/{authUid} = true`,
 - admin manage rights,
 - authenticated mobile create/update only for schema-valid, bounded records,
 - blocked unknown fields,
 - indexes on `createdAtMs`, `lastSeenAtMs`, `severity`, and `status`.
+
+The `admin_users` allowlist is admin-managed and must not be confused with user-owned web admin preferences.
 
 Mobile writes cannot acknowledge or resolve alerts. Web-admin status actions write only sanitised admin status fields.
 

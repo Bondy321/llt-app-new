@@ -31,11 +31,11 @@ export function deriveHealthState(signals, options = {}) {
   const lastSyncTs = lastSuccessfulSyncAt ? toEpochMsStrict(lastSuccessfulSyncAt) : null;
   const hasFreshSync = Number.isFinite(lastSyncTs) && now - lastSyncTs <= staleMs;
 
-  if (!isOnline || !listenerConnected) {
+  if (!isOnline) {
     return HEALTH_STATE.OFFLINE_NO_NETWORK;
   }
 
-  if (listenerErrorCount > 0 || pendingFailedOperations > 0) {
+  if (!listenerConnected || listenerErrorCount > 0 || pendingFailedOperations > 0) {
     return HEALTH_STATE.ONLINE_BACKEND_DEGRADED;
   }
 

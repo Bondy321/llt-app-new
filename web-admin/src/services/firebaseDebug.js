@@ -17,6 +17,19 @@ const redactDebugString = (value) => String(value)
   .replace(/\b(auth(?:uid)?|authorization|booking(?:ref|reference|id)?|drivercode|password|push(?:token)?|session(?:id)?|token|uid|userid)\b\s*[:=]\s*['"]?[^,\s'"}\]]+/gi, (_match, label) => `${label}=[redacted]`)
   .replace(/\b[A-Za-z0-9_]{24,}\b/g, '[identifier]');
 
+const redactDebugKey = (value) => {
+  const text = String(value);
+  if (
+    /@/.test(text)
+    || /^session[_-]/i.test(text)
+    || /^diag[_-]/i.test(text)
+    || /^[A-Za-z0-9_-]{28,}$/.test(text)
+  ) {
+    return redactDebugString(text);
+  }
+  return text;
+};
+
 export function maskDebugValue(value, start = 6, end = 4) {
   if (value === null || value === undefined || value === '') return value || null;
   const text = String(value);
@@ -48,7 +61,7 @@ export function sanitizeDebugValue(value, depth = 0) {
     return Object.fromEntries(
       Object.entries(value)
         .slice(0, 40)
-        .map(([key, item]) => [redactDebugString(key), sanitizeDebugValue(item, depth + 1)]),
+        .map(([key, item]) => [redactDebugKey(key), sanitizeDebugValue(item, depth + 1)]),
     );
   }
 

@@ -17,6 +17,8 @@ The dashboard listens to these bounded or operational roots:
 
 It does not subscribe to `/logs`. App and device errors must come from the curated `ops_alerts` layer.
 
+`ops_alerts` is admin-only. A web-admin operator must either be the hardcoded admin UID or have `admin_users/{authUid} = true`; otherwise the rest of the dashboard can load while the app/device error panel is rule-denied.
+
 ## Derived Metrics
 
 Driver coverage:
@@ -41,6 +43,7 @@ Safety:
 Broadcasts:
 
 - Broadcast activity is derived from `broadcasts/{tourId}/{broadcastId}`.
+- The dashboard reads the `broadcasts` root so it can summarize activity across tours.
 - The dashboard displays message summaries, tour IDs, sources, and timestamps only.
 - It never displays `createdByUid`.
 
