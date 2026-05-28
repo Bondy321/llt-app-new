@@ -1,4 +1,12 @@
 import { get, onValue, ref, update } from 'firebase/database';
+import {
+  logFirebaseDebug,
+  logFirebaseError,
+  startFirebaseDebugTimer,
+  summarizeDataValue,
+  summarizeDatabaseInstance,
+  summarizeFirebaseSnapshot,
+} from './firebaseDebug';
 import { nowAsISOString, toEpochMsStrict } from '../utils/dateUtils';
 import {
   calculateDayDelta,
@@ -110,29 +118,101 @@ export function sanitizeDashboardText(value, fallback = 'Unavailable', maxLength
 }
 
 export function subscribeToDashboardBranches(database, handlers = {}) {
-  return Object.entries(DASHBOARD_BRANCHES).map(([key, path]) => onValue(
-    ref(database, path),
-    (snapshot) => {
-      handlers.onData?.(key, snapshot.val() || {}, nowAsISOString());
-    },
-    (error) => {
-      handlers.onError?.(key, error);
-    },
-  ));
+  logFirebaseDebug('dashboard:subscribe-branches:start', {
+    database: summarizeDatabaseInstance(database),
+    branches: DASHBOARD_BRANCHES,
+  }, 'info');
+
+  return Object.entries(DASHBOARD_BRANCHES).map(([key, path]) => {
+    const startedAtMs = Date.now();
+    let eventCount = 0;
+    const branchRef = ref(database, path);
+
+    logFirebaseDebug('dashboard:listener:attach', {
+      key,
+      path,
+      database: summarizeDatabaseInstance(database),
+    });
+
+    return onValue(
+      branchRef,
+      (snapshot) => {
+        const value = snapshot.val() || {};
+        const syncedAt = nowAsISOString();
+        eventCount += 1;
+
+        logFirebaseDebug('dashboard:listener:data', {
+          key,
+          path,
+          eventCount,
+          firstEvent: eventCount === 1,
+          elapsedSinceAttachMs: Date.now() - startedAtMs,
+          syncedAt,
+          snapshot: summarizeFirebaseSnapshot(snapshot, value),
+        }, eventCount === 1 ? 'info' : 'debug');
+
+        handlers.onData?.(key, value, syncedAt);
+      },
+      (error) => {
+        logFirebaseError('dashboard:listener:error', error, {
+          key,
+          path,
+          eventCount,
+          elapsedSinceAttachMs: Date.now() - startedAtMs,
+          database: summarizeDatabaseInstance(database),
+        });
+        handlers.onError?.(key, error);
+      },
+    );
+  });
 }
 
 export async function revalidateDashboardBranches(database) {
-  const entries = await Promise.all(
-    Object.entries(DASHBOARD_BRANCHES).map(async ([key, path]) => {
-      const snapshot = await get(ref(database, path));
-      return [key, snapshot.val() || {}];
-    }),
-  );
+  const allTimer = startFirebaseDebugTimer('dashboard:manual-revalidate', {
+    database: summarizeDatabaseInstance(database),
+    branches: DASHBOARD_BRANCHES,
+  });
 
-  return {
-    ...Object.fromEntries(entries),
-    revalidatedAt: nowAsISOString(),
-  };
+  try {
+    const entries = await Promise.all(
+      Object.entries(DASHBOARD_BRANCHES).map(async ([key, path]) => {
+        const branchTimer = startFirebaseDebugTimer('dashboard:manual-revalidate:branch', {
+          key,
+          path,
+          database: summarizeDatabaseInstance(database),
+        });
+
+        try {
+          const snapshot = await get(ref(database, path));
+          const value = snapshot.val() || {};
+          branchTimer.success({
+            snapshot: summarizeFirebaseSnapshot(snapshot, value),
+          });
+          return [key, value];
+        } catch (error) {
+          branchTimer.failure(error);
+          throw error;
+        }
+      }),
+    );
+
+    const result = {
+      ...Object.fromEntries(entries),
+      revalidatedAt: nowAsISOString(),
+    };
+
+    allTimer.success({
+      branchSummaries: Object.fromEntries(
+        entries.map(([key, value]) => [key, summarizeDataValue(value)]),
+      ),
+      revalidatedAt: result.revalidatedAt,
+    });
+
+    return result;
+  } catch (error) {
+    allTimer.failure(error);
+    throw error;
+  }
 }
 
 export function resolveDriverCurrentTourId(driver) {
@@ -378,7 +458,35 @@ export async function updateSafetyAlertStatus(database, alert, status) {
     statusUpdatedBy: 'web-admin',
   };
 
-  await Promise.all(alert.paths.map((path) => update(ref(database, path), payload)));
+  const timer = startFirebaseDebugTimer('dashboard:safety-alert:update-status', {
+    alertId: alert.id,
+    requestedStatus: status,
+    normalizedStatus: nextStatus,
+    paths: alert.paths,
+    payloadSummary: payload,
+  });
+
+  try {
+    await Promise.all(alert.paths.map(async (path) => {
+      const pathTimer = startFirebaseDebugTimer('dashboard:safety-alert:update-status:path', {
+        alertId: alert.id,
+        path,
+        normalizedStatus: nextStatus,
+      });
+
+      try {
+        await update(ref(database, path), payload);
+        pathTimer.success();
+      } catch (error) {
+        pathTimer.failure(error);
+        throw error;
+      }
+    }));
+    timer.success();
+  } catch (error) {
+    timer.failure(error);
+    throw error;
+  }
 }
 
 export function buildBroadcastActivity(broadcasts = {}, options = {}) {

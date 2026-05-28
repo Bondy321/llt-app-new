@@ -1,4 +1,12 @@
 import { get, limitToLast, onValue, orderByChild, query, ref, update } from 'firebase/database';
+import {
+  logFirebaseDebug,
+  logFirebaseError,
+  startFirebaseDebugTimer,
+  summarizeDataValue,
+  summarizeDatabaseInstance,
+  summarizeFirebaseSnapshot,
+} from './firebaseDebug';
 
 export const OPS_ALERTS_ROOT = 'ops_alerts';
 
@@ -130,6 +138,15 @@ export function normalizeOpsAlert(id, value = {}) {
 const buildOpsAlertsQuery = (database, options = {}) => {
   const orderField = ALLOWED_ORDER_FIELDS.has(options.orderBy) ? options.orderBy : 'lastSeenAtMs';
   const safeLimit = Math.min(Math.max(Number(options.limit) || DEFAULT_LIMIT, 1), MAX_LIMIT);
+  logFirebaseDebug('ops-alerts:query:build', {
+    requestedOptions: options,
+    resolved: {
+      root: OPS_ALERTS_ROOT,
+      orderField,
+      safeLimit,
+    },
+    database: summarizeDatabaseInstance(database),
+  });
   return query(
     ref(database, OPS_ALERTS_ROOT),
     orderByChild(orderField),
@@ -137,27 +154,85 @@ const buildOpsAlertsQuery = (database, options = {}) => {
   );
 };
 
-const normalizeOpsAlertsSnapshot = (snapshot) => {
-  const raw = snapshot.val() || {};
+const NO_PRELOADED_VALUE = Symbol('NO_PRELOADED_VALUE');
+
+const normalizeOpsAlertsSnapshot = (snapshot, preloadedValue = NO_PRELOADED_VALUE) => {
+  const raw = (preloadedValue === NO_PRELOADED_VALUE ? snapshot.val() : preloadedValue) || {};
   return Object.entries(raw)
     .map(([id, value]) => normalizeOpsAlert(id, value || {}))
     .sort((a, b) => b.lastSeenAtMs - a.lastSeenAtMs);
 };
 
 export async function fetchOpsAlerts(database, options = {}) {
-  const snapshot = await get(buildOpsAlertsQuery(database, options));
-  return normalizeOpsAlertsSnapshot(snapshot);
+  const timer = startFirebaseDebugTimer('ops-alerts:fetch', {
+    options,
+    database: summarizeDatabaseInstance(database),
+  });
+
+  try {
+    const snapshot = await get(buildOpsAlertsQuery(database, options));
+    const raw = snapshot.val() || {};
+    const alerts = normalizeOpsAlertsSnapshot(snapshot, raw);
+    timer.success({
+      snapshot: summarizeFirebaseSnapshot(snapshot, raw),
+      normalizedAlertCount: alerts.length,
+      normalizedSummary: summarizeDataValue(Object.fromEntries(alerts.map((alert) => [alert.id, {
+        severity: alert.severity,
+        status: alert.status,
+        component: alert.component,
+        lastSeenAtMs: alert.lastSeenAtMs,
+      }]))),
+    });
+    return alerts;
+  } catch (error) {
+    timer.failure(error);
+    throw error;
+  }
 }
 
 export function subscribeToOpsAlerts(database, options = {}, onNext, onError) {
   const alertsQuery = buildOpsAlertsQuery(database, options);
+  const startedAtMs = Date.now();
+  let eventCount = 0;
+
+  logFirebaseDebug('ops-alerts:subscribe:start', {
+    options,
+    root: OPS_ALERTS_ROOT,
+    database: summarizeDatabaseInstance(database),
+  }, 'info');
 
   return onValue(
     alertsQuery,
     (snapshot) => {
-      onNext(normalizeOpsAlertsSnapshot(snapshot));
+      const raw = snapshot.val() || {};
+      const alerts = normalizeOpsAlertsSnapshot(snapshot, raw);
+      eventCount += 1;
+      logFirebaseDebug('ops-alerts:subscribe:data', {
+        eventCount,
+        firstEvent: eventCount === 1,
+        elapsedSinceAttachMs: Date.now() - startedAtMs,
+        snapshot: summarizeFirebaseSnapshot(snapshot, raw),
+        normalizedAlertCount: alerts.length,
+        newestAlert: alerts[0] ? {
+          id: alerts[0].id,
+          severity: alerts[0].severity,
+          status: alerts[0].status,
+          component: alerts[0].component,
+          lastSeenAtMs: alerts[0].lastSeenAtMs,
+        } : null,
+      }, eventCount === 1 ? 'info' : 'debug');
+      onNext(alerts);
     },
-    onError,
+    (error) => {
+      logFirebaseError('ops-alerts:subscribe:error', error, {
+        options,
+        root: OPS_ALERTS_ROOT,
+        eventCount,
+        elapsedSinceAttachMs: Date.now() - startedAtMs,
+        database: summarizeDatabaseInstance(database),
+      });
+      onError?.(error);
+    },
   );
 }
 
@@ -183,12 +258,40 @@ const buildStatusUpdate = (status) => {
 
 export async function acknowledgeOpsAlert(database, alertId) {
   if (!alertId) throw new Error('Missing alert id');
-  await update(ref(database, `${OPS_ALERTS_ROOT}/${alertId}`), buildStatusUpdate(OPS_ALERT_STATUS.ACKNOWLEDGED));
+  const path = `${OPS_ALERTS_ROOT}/${alertId}`;
+  const payload = buildStatusUpdate(OPS_ALERT_STATUS.ACKNOWLEDGED);
+  const timer = startFirebaseDebugTimer('ops-alerts:acknowledge', {
+    alertId,
+    path,
+    payload,
+  });
+
+  try {
+    await update(ref(database, path), payload);
+    timer.success();
+  } catch (error) {
+    timer.failure(error);
+    throw error;
+  }
 }
 
 export async function resolveOpsAlert(database, alertId) {
   if (!alertId) throw new Error('Missing alert id');
-  await update(ref(database, `${OPS_ALERTS_ROOT}/${alertId}`), buildStatusUpdate(OPS_ALERT_STATUS.RESOLVED));
+  const path = `${OPS_ALERTS_ROOT}/${alertId}`;
+  const payload = buildStatusUpdate(OPS_ALERT_STATUS.RESOLVED);
+  const timer = startFirebaseDebugTimer('ops-alerts:resolve', {
+    alertId,
+    path,
+    payload,
+  });
+
+  try {
+    await update(ref(database, path), payload);
+    timer.success();
+  } catch (error) {
+    timer.failure(error);
+    throw error;
+  }
 }
 
 export function filterOpsAlerts(alerts = [], filters = {}) {

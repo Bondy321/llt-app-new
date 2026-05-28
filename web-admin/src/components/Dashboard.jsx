@@ -71,6 +71,14 @@ import {
   subscribeToOpsAlerts,
 } from '../services/opsAlertService';
 import {
+  getRuntimeDebugContext,
+  logFirebaseDebug,
+  logFirebaseError,
+  startFirebaseDebugTimer,
+  summarizeDataValue,
+  summarizeDatabaseInstance,
+} from '../services/firebaseDebug';
+import {
   formatDateForDisplay,
   formatDateTimeForDisplay,
   formatLongDateForDisplay,
@@ -313,7 +321,30 @@ export default function Dashboard() {
   ).slice(0, 8), [dashboardModel.safetyAlerts, safetyStatusFilter]);
 
   useEffect(() => {
-    const recordSuccess = (key, syncedAt) => {
+    logFirebaseDebug('dashboard:health-signals:changed', {
+      healthSignals,
+      healthSnapshot,
+      branchLoading,
+      branchErrorKeys: Object.keys(branchErrors),
+      branchSyncedAt,
+    }, healthSnapshot.state === HEALTH_STATE.ONLINE_HEALTHY ? 'info' : 'warn');
+  }, [branchErrors, branchLoading, branchSyncedAt, healthSignals, healthSnapshot]);
+
+  useEffect(() => {
+    logFirebaseDebug('dashboard:component:mount', {
+      database: summarizeDatabaseInstance(db),
+      runtime: getRuntimeDebugContext(),
+      initialBrowserOnline: typeof navigator === 'undefined' ? null : navigator.onLine,
+      opsAlertQuery: OPS_ALERT_QUERY,
+      watchedBranches: Object.keys(BRANCH_LABELS),
+    }, 'info');
+
+    const recordSuccess = (key, syncedAt, value) => {
+      logFirebaseDebug('dashboard:component:record-success', {
+        key,
+        syncedAt,
+        valueSummary: summarizeDataValue(value || {}),
+      }, 'info');
       setBranchLoading((current) => ({ ...current, [key]: false }));
       setBranchSyncedAt((current) => ({ ...current, [key]: syncedAt }));
       setBranchErrors((current) => {
@@ -329,6 +360,11 @@ export default function Dashboard() {
     };
 
     const recordError = (key, error) => {
+      logFirebaseError('dashboard:component:record-error', error || new Error('Listener failed'), {
+        key,
+        database: summarizeDatabaseInstance(db),
+        runtime: getRuntimeDebugContext(),
+      });
       setBranchLoading((current) => ({ ...current, [key]: false }));
       setBranchErrors((current) => ({ ...current, [key]: error || new Error('Listener failed') }));
       setHealthSignals((current) => ({
@@ -342,7 +378,7 @@ export default function Dashboard() {
     const unsubscribeBranches = subscribeToDashboardBranches(db, {
       onData: (key, value, syncedAt) => {
         setBranchData((current) => ({ ...current, [key]: value }));
-        recordSuccess(key, syncedAt);
+        recordSuccess(key, syncedAt, value);
       },
       onError: recordError,
     });
@@ -352,16 +388,27 @@ export default function Dashboard() {
       OPS_ALERT_QUERY,
       (alerts) => {
         setOpsAlerts(alerts);
-        recordSuccess('opsAlerts', nowAsISOString());
+        recordSuccess('opsAlerts', nowAsISOString(), Object.fromEntries(alerts.map((alert) => [alert.id, {
+          severity: alert.severity,
+          status: alert.status,
+          component: alert.component,
+          lastSeenAtMs: alert.lastSeenAtMs,
+        }])));
       },
       (error) => recordError('opsAlerts', error),
     );
 
     const handleOnline = () => {
+      logFirebaseDebug('dashboard:browser-network:online', {
+        runtime: getRuntimeDebugContext(),
+      }, 'info');
       setHealthSignals((current) => ({ ...current, isOnline: true }));
     };
 
     const handleOffline = () => {
+      logFirebaseDebug('dashboard:browser-network:offline', {
+        runtime: getRuntimeDebugContext(),
+      }, 'warn');
       setHealthSignals((current) => ({ ...current, isOnline: false, listenerConnected: false }));
     };
 
@@ -369,6 +416,9 @@ export default function Dashboard() {
     window.addEventListener('offline', handleOffline);
 
     return () => {
+      logFirebaseDebug('dashboard:component:unmount', {
+        database: summarizeDatabaseInstance(db),
+      }, 'info');
       unsubscribeBranches.forEach((unsubscribe) => unsubscribe());
       unsubscribeOpsAlerts();
       window.removeEventListener('online', handleOnline);
@@ -378,6 +428,13 @@ export default function Dashboard() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
+    const refreshTimer = startFirebaseDebugTimer('dashboard:manual-refresh:ui', {
+      database: summarizeDatabaseInstance(db),
+      runtime: getRuntimeDebugContext(),
+      healthSignalsBeforeRefresh: healthSignals,
+      opsAlertQuery: OPS_ALERT_QUERY,
+    });
+
     try {
       const [branches, refreshedOpsAlerts] = await Promise.all([
         revalidateDashboardBranches(db),
@@ -410,12 +467,26 @@ export default function Dashboard() {
         backlogPendingCount: 0,
         lastSuccessfulSyncAt: branches.revalidatedAt,
       });
+      refreshTimer.success({
+        branchSummaries: {
+          drivers: summarizeDataValue(branches.drivers),
+          tours: summarizeDataValue(branches.tours),
+          tourManifests: summarizeDataValue(branches.tourManifests),
+          globalSafetyAlerts: summarizeDataValue(branches.globalSafetyAlerts),
+          broadcasts: summarizeDataValue(branches.broadcasts),
+        },
+        opsAlertsCount: refreshedOpsAlerts.length,
+        revalidatedAt: branches.revalidatedAt,
+      });
       notifications.show({
         title: 'Dashboard refreshed',
         message: 'Displayed operations data was revalidated from Firebase.',
         color: 'green',
       });
-    } catch {
+    } catch (error) {
+      refreshTimer.failure(error, {
+        healthSignalsBeforeRefresh: healthSignals,
+      });
       setHealthSignals((current) => ({
         ...current,
         pendingFailedOperations: current.pendingFailedOperations + 1,
@@ -433,6 +504,12 @@ export default function Dashboard() {
 
   const handleOpsAlertAction = async (alertId, action) => {
     setMutatingAlertId(alertId);
+    const actionTimer = startFirebaseDebugTimer('dashboard:ops-alert-action', {
+      alertId,
+      action,
+      database: summarizeDatabaseInstance(db),
+    });
+
     try {
       if (action === 'resolve') {
         await resolveOpsAlert(db, alertId);
@@ -440,12 +517,14 @@ export default function Dashboard() {
         await acknowledgeOpsAlert(db, alertId);
       }
 
+      actionTimer.success();
       notifications.show({
         title: action === 'resolve' ? 'Alert resolved' : 'Alert acknowledged',
         message: 'The operations alert status was updated.',
         color: action === 'resolve' ? 'green' : 'yellow',
       });
-    } catch {
+    } catch (error) {
+      actionTimer.failure(error);
       notifications.show({
         title: 'Alert update failed',
         message: 'Unable to update the operations alert status.',
@@ -458,14 +537,23 @@ export default function Dashboard() {
 
   const handleSafetyAction = async (alert, status) => {
     setMutatingSafetyId(alert.id);
+    const actionTimer = startFirebaseDebugTimer('dashboard:safety-alert-action', {
+      alertId: alert.id,
+      status,
+      paths: alert.paths,
+      database: summarizeDatabaseInstance(db),
+    });
+
     try {
       await updateSafetyAlertStatus(db, alert, status);
+      actionTimer.success();
       notifications.show({
         title: status === SAFETY_STATUS.RESOLVED ? 'Safety alert resolved' : 'Safety alert acknowledged',
         message: 'The safety alert status was updated.',
         color: status === SAFETY_STATUS.RESOLVED ? 'green' : 'yellow',
       });
-    } catch {
+    } catch (error) {
+      actionTimer.failure(error);
       notifications.show({
         title: 'Safety update failed',
         message: 'Unable to update the safety alert status.',
