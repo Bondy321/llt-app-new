@@ -9,6 +9,7 @@ const databaseMocks = vi.hoisted(() => ({
   query: vi.fn((baseRef, ...constraints) => ({ baseRef, constraints })),
   orderByChild: vi.fn((field) => ({ type: 'orderByChild', field })),
   limitToLast: vi.fn((limit) => ({ type: 'limitToLast', limit })),
+  get: vi.fn(),
   update: vi.fn(),
 }));
 
@@ -28,6 +29,7 @@ vi.mock('firebase/database', () => ({
   query: (...args) => databaseMocks.query(...args),
   orderByChild: (...args) => databaseMocks.orderByChild(...args),
   limitToLast: (...args) => databaseMocks.limitToLast(...args),
+  get: (...args) => databaseMocks.get(...args),
   update: (...args) => databaseMocks.update(...args),
 }));
 
@@ -66,6 +68,10 @@ beforeEach(() => {
 
     if (dbRef.path === 'tours') {
       callback({ val: () => ({ TOUR_1: { name: 'Tour One', driverName: 'Driver One', currentParticipants: 12, startDate: '28/05/2026' } }) });
+    }
+
+    if (['tour_manifests', 'globalSafetyAlerts', 'broadcasts'].includes(dbRef.path)) {
+      callback({ val: () => ({}) });
     }
 
     return vi.fn();

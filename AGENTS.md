@@ -619,6 +619,10 @@ Location: `web-admin/`
 
 Main services/utilities:
 
+- `src/services/dashboardService.js`
+  - live dashboard subscriptions
+  - dispatch, passenger load, safety, broadcast, and component alert derived metrics
+  - sanitised summaries for dashboard display
 - `src/services/tourService.js`
   - tour CRUD
   - templates
@@ -638,7 +642,12 @@ Main services/utilities:
 
 Operational expectations:
 
+- Dashboard metrics, panels, badges, buttons, filters, links, and status indicators must be backed by live Firebase data or deterministic helper-derived values. Remove fake trends and dead controls instead of displaying placeholders.
+- Dashboard app/device failures must come from bounded `ops_alerts` queries, never `/logs`.
+- Dashboard safety rows must display only sanitised summaries and must not expose booking refs, emails, auth UIDs, raw user/session IDs, tokens, push tokens, raw coordinates, or secrets.
+- Dashboard tour deep links use `/tours?q={tourId}`; unassigned queue links use `/tours?status=unassigned`.
 - Tours status filter and URL query param stay synchronized.
+- Tours search query param `q` stays synchronized with the search field for dashboard deep links.
 - Choosing "All Tours" removes the `status` query param.
 - Dashboard deep links use `/tours?status=unassigned`.
 - Tour identity guards reject create/update flows that would overwrite or mutate a generated tour key.
@@ -1012,6 +1021,7 @@ High-signal docs:
 - `docs/reactions-write-contract.md`
 - `docs/safe-logging-conventions.md`
 - `docs/stable-identity-rollout-checklist.md`
+- `docs/web-admin-live-operations-dashboard.md`
 - `docs/firebase-cost-optimization-playbook.md`
 - `docs/ux-improvement-task-backlog.md`
 
@@ -1031,6 +1041,7 @@ High-signal source:
 - `database.rules.json`
 - `storage_rules.json`
 - `functions/index.js`
+- `web-admin/src/services/dashboardService.js`
 - `web-admin/src/services/tourService.js`
 - `web-admin/src/services/healthService.js`
 - `web-admin/src/services/opsAlertService.js`

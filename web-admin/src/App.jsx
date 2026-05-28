@@ -22,8 +22,6 @@ import {
   Loader,
   Center,
   ThemeIcon,
-  Tooltip,
-  ActionIcon,
   Anchor,
   Modal,
 } from '@mantine/core';
@@ -38,8 +36,6 @@ import {
   IconUser,
   IconChevronDown,
   IconMap,
-  IconBell,
-  IconSearch,
 } from '@tabler/icons-react';
 
 // Import page components
@@ -290,22 +286,6 @@ function AppLayout({ user }) {
           </Group>
 
           <Group gap="md">
-            {/* Search */}
-            <TextInput
-              placeholder="Search..."
-              leftSection={<IconSearch size={16} />}
-              size="sm"
-              style={{ width: 200 }}
-              visibleFrom="md"
-            />
-
-            {/* Notifications */}
-            <Tooltip label="Notifications">
-              <ActionIcon variant="light" size="lg">
-                <IconBell size={18} />
-              </ActionIcon>
-            </Tooltip>
-
             {/* User Menu */}
             <Menu shadow="md" width={200} position="bottom-end">
               <Menu.Target>
@@ -322,13 +302,6 @@ function AppLayout({ user }) {
               </Menu.Target>
               <Menu.Dropdown>
                 <Menu.Label>Account</Menu.Label>
-                <Menu.Item leftSection={<IconUser size={14} />}>
-                  Profile
-                </Menu.Item>
-                <Menu.Item leftSection={<IconSettings size={14} />}>
-                  Preferences
-                </Menu.Item>
-                <Menu.Divider />
                 <Menu.Item
                   color="red"
                   leftSection={<IconLogout size={14} />}

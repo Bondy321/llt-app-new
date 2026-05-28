@@ -146,4 +146,27 @@ describe('ToursManager query-param status behavior', () => {
     expect(screen.getByTestId('location-search')).toHaveTextContent('?status=bogus');
     expect(screen.getByText('All Tours')).toBeInTheDocument();
   }, 15000);
+
+  it('hydrates search from ?q= and keeps deep links from the dashboard useful', async () => {
+    renderAt('?q=TC-13');
+
+    await screen.findByText('Showing 1 of 1 tours', {}, { timeout: asyncAssertionTimeoutMs });
+    expect(screen.getByTestId('location-search')).toHaveTextContent('?q=TC-13');
+    expect(screen.getByDisplayValue('TC-13')).toBeInTheDocument();
+    expect(screen.getByText('Tour 13')).toBeInTheDocument();
+  }, 15000);
+
+  it('writes search changes back to q while preserving status', async () => {
+    renderAt('?status=unassigned');
+
+    await screen.findByText('Showing 9 of 9 tours', {}, { timeout: asyncAssertionTimeoutMs });
+    fireEvent.change(screen.getByPlaceholderText('Search tours, codes, drivers...'), {
+      target: { value: 'TC-13' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-search')).toHaveTextContent('?status=unassigned&q=TC-13');
+    }, { timeout: asyncAssertionTimeoutMs });
+    expect(screen.getByText('Showing 1 of 1 tours')).toBeInTheDocument();
+  }, 15000);
 });

@@ -1,4 +1,4 @@
-import { limitToLast, onValue, orderByChild, query, ref, update } from 'firebase/database';
+import { get, limitToLast, onValue, orderByChild, query, ref, update } from 'firebase/database';
 
 export const OPS_ALERTS_ROOT = 'ops_alerts';
 
@@ -127,23 +127,35 @@ export function normalizeOpsAlert(id, value = {}) {
   };
 }
 
-export function subscribeToOpsAlerts(database, options = {}, onNext, onError) {
+const buildOpsAlertsQuery = (database, options = {}) => {
   const orderField = ALLOWED_ORDER_FIELDS.has(options.orderBy) ? options.orderBy : 'lastSeenAtMs';
   const safeLimit = Math.min(Math.max(Number(options.limit) || DEFAULT_LIMIT, 1), MAX_LIMIT);
-  const alertsQuery = query(
+  return query(
     ref(database, OPS_ALERTS_ROOT),
     orderByChild(orderField),
     limitToLast(safeLimit),
   );
+};
+
+const normalizeOpsAlertsSnapshot = (snapshot) => {
+  const raw = snapshot.val() || {};
+  return Object.entries(raw)
+    .map(([id, value]) => normalizeOpsAlert(id, value || {}))
+    .sort((a, b) => b.lastSeenAtMs - a.lastSeenAtMs);
+};
+
+export async function fetchOpsAlerts(database, options = {}) {
+  const snapshot = await get(buildOpsAlertsQuery(database, options));
+  return normalizeOpsAlertsSnapshot(snapshot);
+}
+
+export function subscribeToOpsAlerts(database, options = {}, onNext, onError) {
+  const alertsQuery = buildOpsAlertsQuery(database, options);
 
   return onValue(
     alertsQuery,
     (snapshot) => {
-      const raw = snapshot.val() || {};
-      const alerts = Object.entries(raw)
-        .map(([id, value]) => normalizeOpsAlert(id, value || {}))
-        .sort((a, b) => b.lastSeenAtMs - a.lastSeenAtMs);
-      onNext(alerts);
+      onNext(normalizeOpsAlertsSnapshot(snapshot));
     },
     onError,
   );

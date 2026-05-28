@@ -6,6 +6,7 @@ const firebaseMocks = vi.hoisted(() => ({
   orderByChild: vi.fn((field) => ({ type: 'orderByChild', field })),
   limitToLast: vi.fn((limit) => ({ type: 'limitToLast', limit })),
   onValue: vi.fn(),
+  get: vi.fn(),
   update: vi.fn(),
 }));
 

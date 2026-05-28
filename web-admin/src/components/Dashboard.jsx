@@ -1,20 +1,69 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ref, onValue } from 'firebase/database';
 import { notifications } from '@mantine/notifications';
-import { db } from '../firebase';
 import {
-  HEALTH_STATE,
-  buildDashboardStatusChips,
-  buildHealthSnapshot,
-  revalidateDashboardData,
-} from '../services/healthService';
+  ActionIcon,
+  Alert,
+  Badge,
+  Box,
+  Button,
+  Card,
+  Center,
+  Divider,
+  Flex,
+  Group,
+  Loader,
+  Paper,
+  Progress,
+  ScrollArea,
+  Select,
+  SimpleGrid,
+  Stack,
+  Table,
+  Text,
+  ThemeIcon,
+  Title,
+  Tooltip,
+} from '@mantine/core';
+import {
+  IconActivity,
+  IconAlertTriangle,
+  IconBolt,
+  IconBug,
+  IconCalendar,
+  IconCheck,
+  IconChecklist,
+  IconCircleCheck,
+  IconClock,
+  IconDeviceMobile,
+  IconExternalLink,
+  IconInfoCircle,
+  IconMap,
+  IconMessageCircle,
+  IconRefresh,
+  IconRoute,
+  IconShieldCheck,
+  IconSpeakerphone,
+  IconUsers,
+} from '@tabler/icons-react';
+import { db } from '../firebase';
+import { HEALTH_STATE, buildHealthSnapshot } from '../services/healthService';
+import {
+  SAFETY_STATUS,
+  SAFETY_STATUS_OPTIONS,
+  buildOperationsDashboardModel,
+  filterSafetyAlerts,
+  revalidateDashboardBranches,
+  subscribeToDashboardBranches,
+  updateSafetyAlertStatus,
+} from '../services/dashboardService';
 import {
   OPS_ALERT_SEVERITY_OPTIONS,
   OPS_ALERT_STATUS,
   OPS_ALERT_STATUS_OPTIONS,
   acknowledgeOpsAlert,
   buildOpsAlertStats,
+  fetchOpsAlerts,
   filterOpsAlerts,
   formatAffectedDevice,
   formatAffectedSession,
@@ -23,97 +72,13 @@ import {
 } from '../services/opsAlertService';
 import {
   formatDateForDisplay,
+  formatDateTimeForDisplay,
   formatLongDateForDisplay,
   formatTimeForDisplay,
   nowAsISOString,
-  toEpochMsStrict,
 } from '../utils/dateUtils';
-import { getTriageMeta, getUrgencyBadge } from '../utils/triageUtils';
-import {
-  SimpleGrid,
-  Card,
-  Text,
-  Title,
-  Group,
-  ThemeIcon,
-  Progress,
-  Stack,
-  Paper,
-  Badge,
-  Center,
-  Loader,
-  Box,
-  Table,
-  Avatar,
-  Divider,
-  ActionIcon,
-  Tooltip,
-  Button,
-  Flex,
-  Select,
-  ScrollArea,
-  Alert,
-} from '@mantine/core';
-import {
-  IconUsers,
-  IconMap,
-  IconMessageCircle,
-  IconClock,
-  IconCalendar,
-  IconRefresh,
-  IconArrowUpRight,
-  IconArrowDownRight,
-  IconActivity,
-  IconRoute,
-  IconAlertTriangle,
-  IconChecklist,
-  IconStars,
-  IconBolt,
-  IconBug,
-  IconCheck,
-  IconCircleCheck,
-  IconDeviceMobile,
-} from '@tabler/icons-react';
 
-function ExecutiveStatCard({ title, value, icon: Icon, color, subtitle, trend }) {
-  return (
-    <Card shadow="sm" padding="lg" radius="lg" withBorder>
-      <Group justify="space-between" align="flex-start">
-        <Stack gap={4}>
-          <Text size="xs" tt="uppercase" fw={700} c="dimmed">
-            {title}
-          </Text>
-          <Title order={2}>{value}</Title>
-          <Text size="xs" c="dimmed">
-            {subtitle}
-          </Text>
-        </Stack>
-        <ThemeIcon color={color} variant="light" radius="md" size={46}>
-          <Icon size={22} stroke={1.7} />
-        </ThemeIcon>
-      </Group>
-
-      {trend ? (
-        <Group mt="md" gap="xs">
-          <ThemeIcon
-            color={trend.direction === 'up' ? 'teal' : 'red'}
-            variant="light"
-            size="sm"
-            radius="xl"
-          >
-            {trend.direction === 'up' ? <IconArrowUpRight size={14} /> : <IconArrowDownRight size={14} />}
-          </ThemeIcon>
-          <Text size="xs" c={trend.direction === 'up' ? 'teal' : 'red'} fw={600}>
-            {trend.label}
-          </Text>
-          <Text size="xs" c="dimmed">
-            vs previous period
-          </Text>
-        </Group>
-      ) : null}
-    </Card>
-  );
-}
+const OPS_ALERT_QUERY = { orderBy: 'lastSeenAtMs', limit: 80 };
 
 const OPS_SEVERITY_COLOR = {
   critical: 'red',
@@ -128,6 +93,99 @@ const OPS_STATUS_COLOR = {
   [OPS_ALERT_STATUS.RESOLVED]: 'green',
 };
 
+const SAFETY_SEVERITY_COLOR = {
+  critical: 'red',
+  high: 'orange',
+  medium: 'yellow',
+  low: 'green',
+};
+
+const SAFETY_STATUS_COLOR = {
+  [SAFETY_STATUS.PENDING]: 'red',
+  [SAFETY_STATUS.ACKNOWLEDGED]: 'yellow',
+  [SAFETY_STATUS.IN_PROGRESS]: 'blue',
+  [SAFETY_STATUS.ESCALATED]: 'orange',
+  [SAFETY_STATUS.RESOLVED]: 'green',
+};
+
+const BRANCH_LABELS = {
+  drivers: {
+    label: 'Drivers',
+    description: 'Driver roster and assignment helpers',
+  },
+  tours: {
+    label: 'Tours',
+    description: 'Tour records, capacity, safety branches',
+  },
+  tourManifests: {
+    label: 'Manifests',
+    description: 'Assigned drivers and passenger manifests',
+  },
+  globalSafetyAlerts: {
+    label: 'Safety',
+    description: 'Global SOS and critical safety alerts',
+  },
+  broadcasts: {
+    label: 'Broadcasts',
+    description: 'Admin passenger announcements',
+  },
+  opsAlerts: {
+    label: 'App errors',
+    description: 'Curated mobile app/device failures',
+  },
+};
+
+const createBranchState = (value) => ({
+  drivers: value,
+  tours: value,
+  tourManifests: value,
+  globalSafetyAlerts: value,
+  broadcasts: value,
+  opsAlerts: value,
+});
+
+function formatPercent(value, fallback = 'No dated tours') {
+  return value === null || value === undefined ? fallback : `${value}%`;
+}
+
+function formatCount(value) {
+  return Number.isFinite(Number(value)) ? Number(value).toLocaleString('en-GB') : '0';
+}
+
+function openToursUrl(navigate, params = {}) {
+  const search = new URLSearchParams();
+  if (params.status) search.set('status', params.status);
+  if (params.q) search.set('q', params.q);
+  const suffix = search.toString();
+  navigate(`/tours${suffix ? `?${suffix}` : ''}`);
+}
+
+function MetricCard({ title, value, icon: Icon, color, subtitle, detail }) {
+  return (
+    <Card shadow="sm" padding="md" radius="md" withBorder>
+      <Group justify="space-between" align="flex-start" wrap="nowrap">
+        <Stack gap={4} style={{ minWidth: 0 }}>
+          <Text size="xs" tt="uppercase" fw={700} c="dimmed">
+            {title}
+          </Text>
+          <Title order={2}>{value}</Title>
+          <Text size="xs" c="dimmed">
+            {subtitle}
+          </Text>
+          {detail ? (
+            <Text size="xs" c="dimmed">
+              {detail}
+            </Text>
+          ) : null}
+        </Stack>
+        <ThemeIcon color={color} variant="light" radius="md" size={44}>
+          <Icon size={21} stroke={1.7} />
+        </ThemeIcon>
+      </Group>
+    </Card>
+  );
+}
+
 function OpsAlertBadge({ value, kind = 'severity' }) {
   const color = kind === 'status'
     ? OPS_STATUS_COLOR[value] || 'gray'
@@ -135,23 +193,101 @@ function OpsAlertBadge({ value, kind = 'severity' }) {
 
   return (
     <Badge size="sm" color={color} variant={kind === 'status' ? 'light' : 'filled'}>
-      {value}
+      {value || 'unknown'}
     </Badge>
+  );
+}
+
+function SafetyBadge({ value, kind = 'severity' }) {
+  const color = kind === 'status'
+    ? SAFETY_STATUS_COLOR[value] || 'gray'
+    : SAFETY_SEVERITY_COLOR[value] || 'gray';
+
+  return (
+    <Badge size="sm" color={color} variant={kind === 'status' ? 'light' : 'filled'}>
+      {String(value || 'unknown').replace(/_/g, ' ')}
+    </Badge>
+  );
+}
+
+function BranchHealthRow({ branchKey, loading, error, syncedAt }) {
+  const meta = BRANCH_LABELS[branchKey];
+  const color = error ? 'red' : loading ? 'yellow' : 'green';
+  const label = error ? 'Degraded' : loading ? 'Loading' : 'Loaded';
+
+  return (
+    <Paper p="sm" radius="md" withBorder>
+      <Group wrap="nowrap" align="center">
+        <ThemeIcon color={color} variant="light" size="md" radius="md">
+          {error ? <IconAlertTriangle size={15} /> : <IconActivity size={15} />}
+        </ThemeIcon>
+        <Box style={{ flex: 1, minWidth: 0 }}>
+          <Text size="sm" fw={600}>{meta.label}</Text>
+          <Text size="xs" c="dimmed" truncate="end">{meta.description}</Text>
+          <Text size="xs" c="dimmed">
+            Last update: {formatTimeForDisplay(syncedAt, 'awaiting data')}
+          </Text>
+        </Box>
+        <Badge size="sm" color={color} variant="light">{label}</Badge>
+      </Group>
+    </Paper>
+  );
+}
+
+function PanelHeader({ icon: Icon, title, description, right }) {
+  return (
+    <Group justify="space-between" align="flex-start" mb="md" gap="md">
+      <Group gap="sm" align="flex-start">
+        <ThemeIcon color="brand" variant="light" size="lg" radius="md">
+          <Icon size={18} />
+        </ThemeIcon>
+        <Box>
+          <Title order={4}>{title}</Title>
+          <Text size="sm" c="dimmed">{description}</Text>
+        </Box>
+      </Group>
+      {right}
+    </Group>
+  );
+}
+
+function EmptyState({ icon: Icon = IconCircleCheck, title, description, color = 'green' }) {
+  return (
+    <Center py="xl">
+      <Stack align="center" gap="xs">
+        <ThemeIcon color={color} variant="light" size="lg" radius="xl">
+          <Icon size={18} />
+        </ThemeIcon>
+        <Text size="sm" fw={600}>{title}</Text>
+        {description ? (
+          <Text size="xs" c="dimmed" ta="center" maw={360}>
+            {description}
+          </Text>
+        ) : null}
+      </Stack>
+    </Center>
   );
 }
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const [drivers, setDrivers] = useState({});
-  const [tours, setTours] = useState({});
-  const [loading, setLoading] = useState(true);
+  const [branchData, setBranchData] = useState({
+    drivers: {},
+    tours: {},
+    tourManifests: {},
+    globalSafetyAlerts: {},
+    broadcasts: {},
+  });
+  const [branchLoading, setBranchLoading] = useState(createBranchState(true));
+  const [branchErrors, setBranchErrors] = useState({});
+  const [branchSyncedAt, setBranchSyncedAt] = useState({});
   const [refreshing, setRefreshing] = useState(false);
   const [opsAlerts, setOpsAlerts] = useState([]);
-  const [opsAlertsLoading, setOpsAlertsLoading] = useState(true);
-  const [opsAlertsError, setOpsAlertsError] = useState(null);
   const [opsSeverityFilter, setOpsSeverityFilter] = useState('all');
   const [opsStatusFilter, setOpsStatusFilter] = useState('active');
+  const [safetyStatusFilter, setSafetyStatusFilter] = useState('attention');
   const [mutatingAlertId, setMutatingAlertId] = useState(null);
+  const [mutatingSafetyId, setMutatingSafetyId] = useState(null);
   const [healthSignals, setHealthSignals] = useState({
     isOnline: typeof navigator === 'undefined' ? true : navigator.onLine,
     listenerConnected: true,
@@ -162,76 +298,67 @@ export default function Dashboard() {
   });
 
   const healthSnapshot = useMemo(() => buildHealthSnapshot(healthSignals), [healthSignals]);
-  const statusChips = useMemo(() => buildDashboardStatusChips(healthSnapshot), [healthSnapshot]);
-  const databaseConnectionStatus = statusChips.DATABASE_CONNECTION;
-  const realtimeSyncStatus = statusChips.REALTIME_SYNC;
-  const broadcastStatus = statusChips.BROADCAST_SYSTEM;
   const opsAlertStats = useMemo(() => buildOpsAlertStats(opsAlerts), [opsAlerts]);
+  const dashboardModel = useMemo(() => buildOperationsDashboardModel({
+    ...branchData,
+    opsAlerts,
+  }), [branchData, opsAlerts]);
   const visibleOpsAlerts = useMemo(() => filterOpsAlerts(opsAlerts, {
     severity: opsSeverityFilter,
     status: opsStatusFilter,
-  }).slice(0, 10), [opsAlerts, opsSeverityFilter, opsStatusFilter]);
+  }).slice(0, 8), [opsAlerts, opsSeverityFilter, opsStatusFilter]);
+  const visibleSafetyAlerts = useMemo(() => filterSafetyAlerts(
+    dashboardModel.safetyAlerts,
+    safetyStatusFilter,
+  ).slice(0, 8), [dashboardModel.safetyAlerts, safetyStatusFilter]);
 
   useEffect(() => {
-    const updateLastSync = () => {
+    const recordSuccess = (key, syncedAt) => {
+      setBranchLoading((current) => ({ ...current, [key]: false }));
+      setBranchSyncedAt((current) => ({ ...current, [key]: syncedAt }));
+      setBranchErrors((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
       setHealthSignals((current) => ({
         ...current,
-        lastSuccessfulSyncAt: nowAsISOString(),
+        lastSuccessfulSyncAt: syncedAt,
         listenerConnected: true,
       }));
     };
 
-    const registerListenerError = () => {
+    const recordError = (key, error) => {
+      setBranchLoading((current) => ({ ...current, [key]: false }));
+      setBranchErrors((current) => ({ ...current, [key]: error || new Error('Listener failed') }));
       setHealthSignals((current) => ({
         ...current,
-        listenerErrorCount: current.listenerErrorCount + 1,
         listenerConnected: false,
+        listenerErrorCount: current.listenerErrorCount + 1,
         pendingFailedOperations: current.pendingFailedOperations + 1,
       }));
     };
 
-    const driversRef = ref(db, 'drivers');
-    const unsubDrivers = onValue(
-      driversRef,
-      (snapshot) => {
-        setDrivers(snapshot.val() || {});
-        updateLastSync();
+    const unsubscribeBranches = subscribeToDashboardBranches(db, {
+      onData: (key, value, syncedAt) => {
+        setBranchData((current) => ({ ...current, [key]: value }));
+        recordSuccess(key, syncedAt);
       },
-      registerListenerError,
-    );
+      onError: recordError,
+    });
 
-    const toursRef = ref(db, 'tours');
-    const unsubTours = onValue(
-      toursRef,
-      (snapshot) => {
-        setTours(snapshot.val() || {});
-        setLoading(false);
-        updateLastSync();
-      },
-      (error) => {
-        setLoading(false);
-        registerListenerError(error);
-      },
-    );
-
-    const unsubOpsAlerts = subscribeToOpsAlerts(
+    const unsubscribeOpsAlerts = subscribeToOpsAlerts(
       db,
-      { orderBy: 'lastSeenAtMs', limit: 80 },
+      OPS_ALERT_QUERY,
       (alerts) => {
         setOpsAlerts(alerts);
-        setOpsAlertsLoading(false);
-        setOpsAlertsError(null);
-        updateLastSync();
+        recordSuccess('opsAlerts', nowAsISOString());
       },
-      (error) => {
-        setOpsAlertsLoading(false);
-        setOpsAlertsError(error);
-        registerListenerError(error);
-      },
+      (error) => recordError('opsAlerts', error),
     );
 
     const handleOnline = () => {
-      setHealthSignals((current) => ({ ...current, isOnline: true, listenerConnected: true }));
+      setHealthSignals((current) => ({ ...current, isOnline: true }));
     };
 
     const handleOffline = () => {
@@ -242,9 +369,8 @@ export default function Dashboard() {
     window.addEventListener('offline', handleOffline);
 
     return () => {
-      unsubDrivers();
-      unsubTours();
-      unsubOpsAlerts();
+      unsubscribeBranches.forEach((unsubscribe) => unsubscribe());
+      unsubscribeOpsAlerts();
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
@@ -253,20 +379,40 @@ export default function Dashboard() {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      const result = await revalidateDashboardData(db);
-      setDrivers(result.drivers);
-      setTours(result.tours);
-      setHealthSignals((current) => ({
-        ...current,
+      const [branches, refreshedOpsAlerts] = await Promise.all([
+        revalidateDashboardBranches(db),
+        fetchOpsAlerts(db, OPS_ALERT_QUERY),
+      ]);
+
+      setBranchData({
+        drivers: branches.drivers,
+        tours: branches.tours,
+        tourManifests: branches.tourManifests,
+        globalSafetyAlerts: branches.globalSafetyAlerts,
+        broadcasts: branches.broadcasts,
+      });
+      setOpsAlerts(refreshedOpsAlerts);
+      setBranchLoading(createBranchState(false));
+      setBranchErrors({});
+      setBranchSyncedAt({
+        drivers: branches.revalidatedAt,
+        tours: branches.revalidatedAt,
+        tourManifests: branches.revalidatedAt,
+        globalSafetyAlerts: branches.revalidatedAt,
+        broadcasts: branches.revalidatedAt,
+        opsAlerts: branches.revalidatedAt,
+      });
+      setHealthSignals({
         isOnline: typeof navigator === 'undefined' ? true : navigator.onLine,
         listenerConnected: true,
+        listenerErrorCount: 0,
         pendingFailedOperations: 0,
         backlogPendingCount: 0,
-        lastSuccessfulSyncAt: result.revalidatedAt,
-      }));
+        lastSuccessfulSyncAt: branches.revalidatedAt,
+      });
       notifications.show({
         title: 'Dashboard refreshed',
-        message: 'Live data revalidated from Firebase successfully.',
+        message: 'Displayed operations data was revalidated from Firebase.',
         color: 'green',
       });
     } catch {
@@ -277,7 +423,7 @@ export default function Dashboard() {
       }));
       notifications.show({
         title: 'Refresh failed',
-        message: 'Unable to revalidate dashboard data from Firebase.',
+        message: 'Unable to revalidate one or more dashboard data sources.',
         color: 'red',
       });
     } finally {
@@ -310,215 +456,191 @@ export default function Dashboard() {
     }
   };
 
-  const resolveCurrentTourId = (driver) => driver?.currentTourId || driver?.activeTourId || '';
+  const handleSafetyAction = async (alert, status) => {
+    setMutatingSafetyId(alert.id);
+    try {
+      await updateSafetyAlertStatus(db, alert, status);
+      notifications.show({
+        title: status === SAFETY_STATUS.RESOLVED ? 'Safety alert resolved' : 'Safety alert acknowledged',
+        message: 'The safety alert status was updated.',
+        color: status === SAFETY_STATUS.RESOLVED ? 'green' : 'yellow',
+      });
+    } catch {
+      notifications.show({
+        title: 'Safety update failed',
+        message: 'Unable to update the safety alert status.',
+        color: 'red',
+      });
+    } finally {
+      setMutatingSafetyId(null);
+    }
+  };
 
-  const totalDrivers = Object.keys(drivers).length;
-  const totalTours = Object.keys(tours).length;
-  const activeDrivers = Object.values(drivers).filter((d) => !!resolveCurrentTourId(d)).length;
-  const assignedTours = Object.values(tours).filter((tour) => tour.driverName && tour.driverName !== 'TBA').length;
+  const primaryLoading = branchLoading.drivers || branchLoading.tours;
+  const opsAlertsError = branchErrors.opsAlerts;
+  const metrics = dashboardModel.metrics;
+  const broadcastActivity = dashboardModel.broadcastActivity;
+  const componentSummary = dashboardModel.componentAlertSummary.slice(0, 6);
+  const today = formatLongDateForDisplay(nowAsISOString(), '-');
+  const branchKeys = Object.keys(BRANCH_LABELS);
+  const branchErrorCount = Object.keys(branchErrors).length;
+  const branchLoadingCount = Object.values(branchLoading).filter(Boolean).length;
+  const syncSummaryCards = [
+    {
+      label: 'Browser network',
+      description: healthSignals.isOnline ? 'Browser reports an online network state' : 'Browser reports offline network state',
+      color: healthSignals.isOnline ? 'green' : 'red',
+      value: healthSignals.isOnline ? 'Online' : 'Offline',
+      icon: IconActivity,
+    },
+    {
+      label: 'Realtime listeners',
+      description: `${formatCount(branchKeys.length - branchLoadingCount - branchErrorCount)} loaded / ${formatCount(branchErrorCount)} degraded`,
+      color: branchErrorCount > 0 ? 'red' : branchLoadingCount > 0 ? 'yellow' : 'green',
+      value: branchErrorCount > 0 ? 'Degraded' : branchLoadingCount > 0 ? 'Loading' : 'Loaded',
+      icon: IconClock,
+    },
+    {
+      label: 'Manual refresh',
+      description: `${formatCount(healthSignals.pendingFailedOperations)} failed refresh/listener operations tracked this session`,
+      color: healthSignals.pendingFailedOperations > 0 ? 'orange' : 'green',
+      value: healthSignals.pendingFailedOperations > 0 ? 'Retryable' : 'Clear',
+      icon: IconRefresh,
+    },
+  ];
 
-  const driverUtilization = totalDrivers > 0 ? Math.round((activeDrivers / totalDrivers) * 100) : 0;
-  const tourAssignmentRate = totalTours > 0 ? Math.round((assignedTours / totalTours) * 100) : 0;
-
-  const toursWithPassengers = Object.values(tours).filter((tour) => (tour.currentParticipants || 0) > 0);
-  const totalPassengers = toursWithPassengers.reduce((sum, tour) => sum + (tour.currentParticipants || 0), 0);
-  const averagePassengersPerActiveTour = toursWithPassengers.length
-    ? Math.round(totalPassengers / toursWithPassengers.length)
-    : 0;
-
-  const recentDrivers = Object.entries(drivers)
-    .sort((a, b) => {
-      const dateA = toEpochMsStrict(a[1].createdAt) ?? 0;
-      const dateB = toEpochMsStrict(b[1].createdAt) ?? 0;
-      return dateB - dateA;
-    })
-    .slice(0, 5);
-
-  const unassignedUpcomingTours = useMemo(() => {
-    return Object.entries(tours)
-      .map(([id, tour]) => {
-        const isAssigned = tour.driverName && tour.driverName !== 'TBA';
-        if (isAssigned) return null;
-
-        const triage = getTriageMeta(tour.startDate);
-        if (!triage) return null;
-
-        return {
-          id,
-          name: tour.name || id,
-          startDate: tour.startDate,
-          participants: tour.currentParticipants || 0,
-          dayDelta: triage.dayDelta,
-          parsedDate: triage.parsedDate,
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => a.parsedDate - b.parsedDate)
-      .slice(0, 5);
-  }, [tours]);
-
-  const operationalReadiness = Math.round((driverUtilization * 0.45 + tourAssignmentRate * 0.55) || 0);
-
-  const today = formatLongDateForDisplay(new Date(), '-');
-
-  if (loading) {
+  if (primaryLoading) {
     return (
       <Center style={{ minHeight: 420 }}>
         <Stack align="center" gap="md">
           <Loader size="lg" color="brand" />
-          <Text c="dimmed">Preparing your dispatch command center…</Text>
+          <Text c="dimmed">Loading live operations data...</Text>
         </Stack>
       </Center>
     );
   }
 
   return (
-    <Stack gap="xl">
-      <Card
-        withBorder
-        radius="xl"
-        p="xl"
-        style={{
-          background: 'linear-gradient(135deg, var(--mantine-color-blue-9) 0%, var(--mantine-color-indigo-6) 55%, var(--mantine-color-cyan-6) 100%)',
-        }}
-      >
-        <Group justify="space-between" align="flex-start" wrap="wrap" gap="lg">
+    <Stack gap="lg">
+      <Card withBorder radius="md" p="lg">
+        <Group justify="space-between" align="flex-start" wrap="wrap" gap="md">
           <Stack gap={6}>
             <Group gap="xs">
-              <ThemeIcon color="white" variant="light" size="md" radius="xl">
-                <IconStars size={16} />
+              <ThemeIcon color={healthSnapshot.color} variant="light" size="md" radius="md">
+                <IconActivity size={16} />
               </ThemeIcon>
-              <Text size="xs" fw={700} c="white" style={{ letterSpacing: 0.8 }}>
-                OPERATIONS OVERVIEW
+              <Text size="xs" fw={700} c="dimmed" tt="uppercase">
+                Operations command hub
               </Text>
             </Group>
-            <Title order={2} c="white">
-              Dispatch Intelligence Dashboard
-            </Title>
-            <Text c="rgba(255,255,255,0.9)" maw={680}>
-              Unified real-time operations insight for LLT tours, staffing coverage, and health telemetry.
+            <Title order={2}>Live Operations Dashboard</Title>
+            <Text c="dimmed" maw={760}>
+              Firebase-backed view of app failures, dispatch coverage, passenger load, safety alerts,
+              broadcast activity, and realtime sync health.
             </Text>
             <Group gap="sm" mt="xs">
-              <Badge color={healthSnapshot.color} variant="white">
+              <Badge color={healthSnapshot.color} variant="light">
                 {healthSnapshot.label}
               </Badge>
-              <Badge color="white" variant="dot">
+              <Badge color="gray" variant="outline">
                 {today}
               </Badge>
-              <Badge color="white" variant="dot">
-                Last sync {formatTimeForDisplay(healthSignals.lastSuccessfulSyncAt, 'pending')}
+              <Badge color="gray" variant="outline">
+                Last sync {formatTimeForDisplay(healthSignals.lastSuccessfulSyncAt, 'awaiting data')}
               </Badge>
             </Group>
           </Stack>
 
-          <Flex align="center" gap="sm">
-            <Tooltip label="Refresh data">
-              <ActionIcon variant="white" size="xl" onClick={handleRefresh} loading={refreshing}>
-                <IconRefresh size={20} />
+          <Flex align="center" gap="sm" wrap="wrap">
+            <Tooltip label="Revalidate all dashboard data">
+              <ActionIcon variant="light" size="lg" onClick={handleRefresh} loading={refreshing}>
+                <IconRefresh size={18} />
               </ActionIcon>
             </Tooltip>
             <Button
-              variant="white"
+              variant="light"
               leftSection={<IconRoute size={16} />}
-              onClick={() => navigate('/tours?status=unassigned')}
+              onClick={() => openToursUrl(navigate, { status: 'unassigned' })}
             >
-              Dispatch Queue
+              Unassigned tours
+            </Button>
+            <Button
+              leftSection={<IconSpeakerphone size={16} />}
+              onClick={() => navigate('/broadcast')}
+            >
+              Broadcast
             </Button>
           </Flex>
         </Group>
       </Card>
 
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 5 }} spacing="lg">
-        <ExecutiveStatCard
-          title="Total Drivers"
-          value={totalDrivers}
-          icon={IconUsers}
-          color="blue"
-          subtitle={`${activeDrivers} currently active on route`}
-          trend={{ direction: 'up', label: '+12%' }}
-        />
-        <ExecutiveStatCard
-          title="Total Tours"
-          value={totalTours}
-          icon={IconMap}
-          color="teal"
-          subtitle={`${assignedTours} with assigned drivers`}
-          trend={{ direction: 'up', label: '+8%' }}
-        />
-        <ExecutiveStatCard
-          title="Operational Readiness"
-          value={`${operationalReadiness}%`}
-          icon={IconBolt}
-          color="violet"
-          subtitle="Weighted by assignment coverage and active staffing"
-        />
-        <ExecutiveStatCard
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="md">
+        <MetricCard
           title="Critical App Errors"
-          value={opsAlertStats.openCriticalCount}
+          value={formatCount(opsAlertStats.openCriticalCount)}
           icon={IconBug}
           color={opsAlertStats.openCriticalCount > 0 ? 'red' : 'green'}
-          subtitle={`${opsAlertStats.activeCount} active device/app alerts`}
+          subtitle={`${formatCount(opsAlertStats.activeCount)} active app/device alerts`}
+          detail={`${formatCount(opsAlertStats.openErrorCount)} open critical/error alerts`}
         />
-        <ExecutiveStatCard
-          title="Unassigned Tours"
-          value={Math.max(totalTours - assignedTours, 0)}
-          icon={IconAlertTriangle}
-          color="red"
-          subtitle="Requires dispatch assignment"
+        <MetricCard
+          title="Driver Coverage"
+          value={formatPercent(metrics.upcomingAssignmentCoveragePercent)}
+          icon={IconUsers}
+          color={metrics.unassignedUpcomingTours > 0 ? 'orange' : 'green'}
+          subtitle={`${formatCount(metrics.assignedUpcomingTours)} of ${formatCount(metrics.upcomingTours)} upcoming dated tours assigned`}
+          detail={`${formatCount(metrics.availableDrivers)} drivers without a current assignment`}
+        />
+        <MetricCard
+          title="Unassigned Queue"
+          value={formatCount(metrics.unassignedUpcomingTours)}
+          icon={IconChecklist}
+          color={metrics.unassignedUpcomingTours > 0 ? 'red' : 'green'}
+          subtitle="Active tours due soon or recently overdue"
+          detail={`${formatCount(metrics.missingDateOperationalTours)} active tours have no valid start date`}
+        />
+        <MetricCard
+          title="Passenger Load"
+          value={formatPercent(metrics.passengerLoadPercent, formatCount(metrics.totalPassengers))}
+          icon={IconBolt}
+          color={metrics.highLoadTours > 0 ? 'orange' : 'blue'}
+          subtitle={`${formatCount(metrics.totalPassengers)} passengers / ${formatCount(metrics.totalKnownCapacity)} known seats`}
+          detail={`${formatCount(metrics.unknownCapacityTours)} active tours missing capacity`}
+        />
+        <MetricCard
+          title="Safety Attention"
+          value={formatCount(metrics.safetyAttentionAlerts)}
+          icon={IconShieldCheck}
+          color={metrics.safetyAttentionAlerts > 0 ? 'red' : 'green'}
+          subtitle="Pending, acknowledged, in-progress, or escalated alerts"
+          detail={`${formatCount(dashboardModel.safetyAlerts.length)} safety alerts loaded`}
+        />
+        <MetricCard
+          title="Broadcast Activity"
+          value={formatCount(broadcastActivity.last24hCount)}
+          icon={IconSpeakerphone}
+          color="orange"
+          subtitle={`${formatCount(broadcastActivity.totalCount)} broadcasts loaded across ${formatCount(broadcastActivity.tourCount)} tours`}
+          detail={`Last sent ${formatDateTimeForDisplay(broadcastActivity.lastBroadcastAtMs, 'not available')}`}
         />
       </SimpleGrid>
 
-      <Card shadow="sm" padding="lg" radius="lg" withBorder>
-        <Group justify="space-between" align="flex-start" mb="md" gap="md">
-          <Stack gap={4}>
-            <Group gap="xs">
-              <ThemeIcon color={opsAlertStats.openCriticalCount > 0 ? 'red' : 'green'} variant="light" size="md" radius="md">
-                <IconDeviceMobile size={16} />
-              </ThemeIcon>
-              <Title order={4}>Operations / Health / Errors</Title>
+      <Card shadow="sm" padding="md" radius="md" withBorder>
+        <PanelHeader
+          icon={IconDeviceMobile}
+          title="Operations / Health / Errors"
+          description="Curated mobile app and device failures from ops_alerts. Raw logs are not read here."
+          right={(
+            <Group gap="xs" justify="flex-end">
+              <Badge color={opsAlertsError ? 'red' : branchLoading.opsAlerts ? 'yellow' : 'green'} variant="light">
+                {opsAlertsError ? 'Degraded' : branchLoading.opsAlerts ? 'Loading' : 'Loaded'}
+              </Badge>
+              <Badge color={opsAlertStats.openCriticalCount > 0 ? 'red' : 'gray'} variant="filled">
+                {formatCount(opsAlertStats.openCriticalCount)} critical
+              </Badge>
             </Group>
-            <Text size="sm" c="dimmed">
-              Live curated device and app failures from mobile diagnostics.
-            </Text>
-          </Stack>
-
-          <Group gap="xs" wrap="wrap" justify="flex-end">
-            <Badge color={opsAlertsError ? 'red' : 'green'} variant="light">
-              {opsAlertsError ? 'Degraded' : 'Live'}
-            </Badge>
-            <Badge color={opsAlertStats.openCriticalCount > 0 ? 'red' : 'gray'} variant="filled">
-              {opsAlertStats.openCriticalCount} critical
-            </Badge>
-            <Badge color={opsAlertStats.openErrorCount > 0 ? 'orange' : 'gray'} variant="light">
-              {opsAlertStats.openErrorCount} open major
-            </Badge>
-          </Group>
-        </Group>
-
-        <SimpleGrid cols={{ base: 1, md: 4 }} spacing="sm" mb="md">
-          <Paper p="sm" radius="md" withBorder>
-            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Active alerts</Text>
-            <Text fw={800} size="xl">{opsAlertStats.activeCount}</Text>
-          </Paper>
-          <Paper p="sm" radius="md" withBorder>
-            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Critical open</Text>
-            <Text fw={800} size="xl" c={opsAlertStats.openCriticalCount > 0 ? 'red' : 'green'}>
-              {opsAlertStats.openCriticalCount}
-            </Text>
-          </Paper>
-          <Paper p="sm" radius="md" withBorder>
-            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Top component</Text>
-            <Text fw={700} size="sm" truncate="end">
-              {Object.entries(opsAlertStats.byComponent).sort((a, b) => b[1] - a[1])[0]?.[0] || 'None'}
-            </Text>
-          </Paper>
-          <Paper p="sm" radius="md" withBorder>
-            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Most severe</Text>
-            <Text fw={700} size="sm" truncate="end">
-              {opsAlertStats.mostSevereActiveAlert?.component || 'No active alerts'}
-            </Text>
-          </Paper>
-        </SimpleGrid>
+          )}
+        />
 
         <Group justify="space-between" mb="md" align="flex-end" wrap="wrap">
           <Group gap="sm">
@@ -540,33 +662,33 @@ export default function Dashboard() {
             />
           </Group>
           <Text size="xs" c="dimmed">
-            Showing {visibleOpsAlerts.length} of {opsAlerts.length} recent curated alerts
+            Showing {formatCount(visibleOpsAlerts.length)} of {formatCount(opsAlerts.length)} recent curated alerts
           </Text>
         </Group>
 
         {opsAlertsError ? (
           <Alert color="red" icon={<IconAlertTriangle size={16} />} mb="md">
-            Device/app error alerts are temporarily unavailable. Driver and tour listeners remain separate.
+            App/device error alerts are unavailable. Other dashboard listeners continue independently.
           </Alert>
         ) : null}
 
-        {opsAlertsLoading ? (
+        {branchLoading.opsAlerts ? (
           <Center py="xl">
             <Stack align="center" gap="sm">
               <Loader size="md" color="brand" />
-              <Text size="sm" c="dimmed">Loading live device/app alerts...</Text>
+              <Text size="sm" c="dimmed">Loading app/device alerts...</Text>
             </Stack>
           </Center>
         ) : visibleOpsAlerts.length > 0 ? (
           <ScrollArea type="auto">
-            <Table highlightOnHover verticalSpacing="sm" miw={980}>
+            <Table highlightOnHover verticalSpacing="sm" miw={1060}>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Severity</Table.Th>
                   <Table.Th>Status</Table.Th>
-                  <Table.Th>Component / source</Table.Th>
+                  <Table.Th>Component</Table.Th>
                   <Table.Th>Message</Table.Th>
-                  <Table.Th>Affected device/session</Table.Th>
+                  <Table.Th>Affected context</Table.Th>
                   <Table.Th>Last seen</Table.Th>
                   <Table.Th>Actions</Table.Th>
                 </Table.Tr>
@@ -594,19 +716,30 @@ export default function Dashboard() {
                       </Text>
                     </Table.Td>
                     <Table.Td>
-                      <Text size="xs" fw={600} truncate="end" maw={220}>
+                      <Text size="xs" fw={600} truncate="end" maw={230}>
                         {formatAffectedDevice(alert)}
                       </Text>
-                      <Text size="xs" c="dimmed" truncate="end" maw={220}>
+                      <Text size="xs" c="dimmed" truncate="end" maw={230}>
                         {formatAffectedSession(alert)}
                       </Text>
                     </Table.Td>
                     <Table.Td>
-                      <Text size="sm" fw={600}>{formatTimeForDisplay(alert.lastSeenAtMs, 'unknown')}</Text>
-                      <Text size="xs" c="dimmed">Seen {alert.count}x</Text>
+                      <Text size="sm" fw={600}>{formatDateTimeForDisplay(alert.lastSeenAtMs, 'unknown')}</Text>
+                      <Text size="xs" c="dimmed">Seen {formatCount(alert.count)}x</Text>
                     </Table.Td>
                     <Table.Td>
                       <Group gap={6} wrap="nowrap">
+                        {alert.tourId ? (
+                          <Tooltip label="Open tour">
+                            <ActionIcon
+                              variant="light"
+                              color="blue"
+                              onClick={() => openToursUrl(navigate, { q: alert.tourId })}
+                            >
+                              <IconExternalLink size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        ) : null}
                         {alert.status === OPS_ALERT_STATUS.OPEN ? (
                           <Tooltip label="Acknowledge alert">
                             <ActionIcon
@@ -641,205 +774,423 @@ export default function Dashboard() {
             </Table>
           </ScrollArea>
         ) : (
-          <Center py="xl">
-            <Stack align="center" gap="xs">
-              <ThemeIcon color="green" variant="light" size="lg" radius="xl">
-                <IconCircleCheck size={18} />
-              </ThemeIcon>
-              <Text size="sm" fw={600}>No matching device/app alerts</Text>
-              <Text size="xs" c="dimmed" ta="center" maw={320}>
-                The curated operations alert stream is clear for the current filters.
-              </Text>
-            </Stack>
-          </Center>
+          <EmptyState
+            title="No matching app/device alerts"
+            description="The curated operations alert stream is clear for the current filters."
+          />
+        )}
+
+        <Divider my="md" />
+
+        <Title order={5} mb="sm">Recent Warnings And Errors By Component</Title>
+        {componentSummary.length > 0 ? (
+          <ScrollArea type="auto">
+            <Table verticalSpacing="sm" miw={760}>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Component</Table.Th>
+                  <Table.Th>Highest severity</Table.Th>
+                  <Table.Th>Active</Table.Th>
+                  <Table.Th>Latest message</Table.Th>
+                  <Table.Th>Latest seen</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {componentSummary.map((item) => (
+                  <Table.Tr key={item.component}>
+                    <Table.Td><Text size="sm" fw={700}>{item.component}</Text></Table.Td>
+                    <Table.Td><OpsAlertBadge value={item.maxSeverity} /></Table.Td>
+                    <Table.Td>
+                      <Text size="sm">
+                        {formatCount(item.activeCount)} total - {formatCount(item.criticalCount)} critical / {formatCount(item.errorCount)} error
+                      </Text>
+                    </Table.Td>
+                    <Table.Td><Text size="sm" lineClamp={2}>{item.latestMessage}</Text></Table.Td>
+                    <Table.Td><Text size="sm">{formatDateTimeForDisplay(item.latestSeenAtMs, 'unknown')}</Text></Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </ScrollArea>
+        ) : (
+          <EmptyState
+            icon={IconInfoCircle}
+            color="blue"
+            title="No active warning/error components"
+            description="No unresolved warning, error, or critical component groups are present in the loaded alert window."
+          />
         )}
       </Card>
 
-      <SimpleGrid cols={{ base: 1, lg: 3 }} spacing="lg">
-        <Card shadow="sm" padding="lg" radius="lg" withBorder>
-          <Group justify="space-between" mb="md">
-            <Text fw={600}>Resource Utilization</Text>
-            <Badge variant="light" color="blue">
-              Live
-            </Badge>
-          </Group>
+      <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
+        <Card shadow="sm" padding="md" radius="md" withBorder>
+          <PanelHeader
+            icon={IconRoute}
+            title="Driver Assignment Coverage"
+            description="Coverage is derived from tour driver fields, driver currentTourId, and manifest assignment links."
+            right={(
+              <Button
+                size="xs"
+                variant="light"
+                leftSection={<IconExternalLink size={14} />}
+                onClick={() => openToursUrl(navigate, { status: 'unassigned' })}
+              >
+                Open queue
+              </Button>
+            )}
+          />
 
           <Stack gap="md">
             <Box>
               <Group justify="space-between" mb={6}>
-                <Text size="sm" fw={500}>Driver utilization</Text>
-                <Text size="sm" c="dimmed">{driverUtilization}%</Text>
+                <Text size="sm" fw={600}>Upcoming dated tour coverage</Text>
+                <Text size="sm" c="dimmed">{formatPercent(metrics.upcomingAssignmentCoveragePercent)}</Text>
               </Group>
-              <Progress value={driverUtilization} color="blue" radius="xl" size="lg" />
+              <Progress value={metrics.upcomingAssignmentCoveragePercent || 0} color={metrics.unassignedUpcomingTours > 0 ? 'orange' : 'green'} radius="xl" size="lg" />
             </Box>
+            <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
+              <Paper p="sm" radius="md" withBorder>
+                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Drivers</Text>
+                <Text fw={800}>{formatCount(metrics.totalDrivers)}</Text>
+              </Paper>
+              <Paper p="sm" radius="md" withBorder>
+                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Assigned</Text>
+                <Text fw={800}>{formatCount(metrics.assignedDrivers)}</Text>
+              </Paper>
+              <Paper p="sm" radius="md" withBorder>
+                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Upcoming</Text>
+                <Text fw={800}>{formatCount(metrics.upcomingTours)}</Text>
+              </Paper>
+              <Paper p="sm" radius="md" withBorder>
+                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Unassigned</Text>
+                <Text fw={800} c={metrics.unassignedUpcomingTours > 0 ? 'red' : 'green'}>
+                  {formatCount(metrics.unassignedUpcomingTours)}
+                </Text>
+              </Paper>
+            </SimpleGrid>
 
-            <Box>
-              <Group justify="space-between" mb={6}>
-                <Text size="sm" fw={500}>Tour assignment rate</Text>
-                <Text size="sm" c="dimmed">{tourAssignmentRate}%</Text>
-              </Group>
-              <Progress value={tourAssignmentRate} color="green" radius="xl" size="lg" />
-            </Box>
-
-            <Divider />
-
-            <Group justify="space-between">
-              <Text size="sm" c="dimmed">Passengers on active tours</Text>
-              <Text fw={700}>{totalPassengers}</Text>
-            </Group>
-            <Group justify="space-between">
-              <Text size="sm" c="dimmed">Avg passengers / active tour</Text>
-              <Text fw={700}>{averagePassengersPerActiveTour}</Text>
-            </Group>
-          </Stack>
-        </Card>
-
-        <Card shadow="sm" padding="lg" radius="lg" withBorder>
-          <Group justify="space-between" mb="md">
-            <Text fw={600}>Dispatch Priority Queue</Text>
-            <Badge variant="light" color={unassignedUpcomingTours.length > 0 ? 'red' : 'green'}>
-              {unassignedUpcomingTours.length > 0 ? `${unassignedUpcomingTours.length} pending` : 'All covered'}
-            </Badge>
-          </Group>
-
-          {unassignedUpcomingTours.length > 0 ? (
-            <Stack gap="xs">
-              {unassignedUpcomingTours.map((tour) => {
-                const urgency = getUrgencyBadge(tour.dayDelta);
-                return (
+            {dashboardModel.unassignedUpcomingTours.length > 0 ? (
+              <Stack gap="xs">
+                {dashboardModel.unassignedUpcomingTours.map((tour) => (
                   <Paper key={tour.id} p="sm" radius="md" withBorder>
                     <Group justify="space-between" align="center" wrap="nowrap">
                       <Box style={{ flex: 1, minWidth: 0 }}>
-                        <Text fw={600} size="sm" truncate="end">{tour.name}</Text>
+                        <Text fw={700} size="sm" truncate="end">{tour.name}</Text>
                         <Text size="xs" c="dimmed">
-                          Starts {formatDateForDisplay(tour.startDate)} • {tour.participants} passengers
+                          Starts {formatDateForDisplay(tour.startDate)} - {formatCount(tour.passengerCount)} passengers
                         </Text>
                       </Box>
-                      <Badge size="sm" color={urgency.color} variant="filled">
-                        {urgency.label}
-                      </Badge>
+                      <Group gap="xs" wrap="nowrap">
+                        <Badge size="sm" color={tour.dateMeta.urgency?.color || 'gray'} variant="filled">
+                          {tour.dateMeta.urgency?.label || 'No date'}
+                        </Badge>
+                        <Tooltip label="Open tour">
+                          <ActionIcon variant="light" onClick={() => openToursUrl(navigate, { status: 'unassigned', q: tour.id })}>
+                            <IconExternalLink size={15} />
+                          </ActionIcon>
+                        </Tooltip>
+                      </Group>
                     </Group>
                   </Paper>
-                );
-              })}
+                ))}
+              </Stack>
+            ) : (
+              <EmptyState
+                title="No unassigned tours in the attention window"
+                description="Active tours due in the configured attention window currently have driver coverage."
+              />
+            )}
+          </Stack>
+        </Card>
+
+        <Card shadow="sm" padding="md" radius="md" withBorder>
+          <PanelHeader
+            icon={IconMap}
+            title="Passenger Load And Capacity"
+            description="Passenger load is derived from tour counts first, then participants or manifests when needed."
+            right={(
               <Button
-                mt="sm"
+                size="xs"
                 variant="light"
-                color="red"
-                leftSection={<IconChecklist size={16} />}
-                onClick={() => navigate('/tours?status=unassigned')}
+                leftSection={<IconExternalLink size={14} />}
+                onClick={() => openToursUrl(navigate)}
               >
-                Review and assign tours
+                Open tours
               </Button>
+            )}
+          />
+
+          <Stack gap="md">
+            <Box>
+              <Group justify="space-between" mb={6}>
+                <Text size="sm" fw={600}>Known seat utilization</Text>
+                <Text size="sm" c="dimmed">{formatPercent(metrics.passengerLoadPercent, 'No capacity data')}</Text>
+              </Group>
+              <Progress value={metrics.passengerLoadPercent || 0} color={metrics.highLoadTours > 0 ? 'orange' : 'blue'} radius="xl" size="lg" />
+            </Box>
+            <Group justify="space-between">
+              <Text size="sm" c="dimmed">Passengers on active tours</Text>
+              <Text fw={700}>{formatCount(metrics.totalPassengers)}</Text>
+            </Group>
+            <Group justify="space-between">
+              <Text size="sm" c="dimmed">Known active capacity</Text>
+              <Text fw={700}>{formatCount(metrics.totalKnownCapacity)}</Text>
+            </Group>
+            <Group justify="space-between">
+              <Text size="sm" c="dimmed">Tours missing capacity</Text>
+              <Badge color={metrics.unknownCapacityTours > 0 ? 'yellow' : 'green'} variant="light">
+                {formatCount(metrics.unknownCapacityTours)}
+              </Badge>
+            </Group>
+
+            <Divider />
+
+            <Text size="sm" fw={700}>High Load Tours</Text>
+            {dashboardModel.highLoadTours.length > 0 ? (
+              <Stack gap="xs">
+                {dashboardModel.highLoadTours.map((tour) => (
+                  <Paper key={tour.id} p="sm" radius="md" withBorder>
+                    <Group justify="space-between" align="center" wrap="nowrap">
+                      <Box style={{ flex: 1, minWidth: 0 }}>
+                        <Text fw={700} size="sm" truncate="end">{tour.name}</Text>
+                        <Text size="xs" c="dimmed">
+                          {formatCount(tour.passengerCount)} / {formatCount(tour.capacity)} passengers - source {tour.passengerCountSource}
+                        </Text>
+                      </Box>
+                      <Group gap="xs" wrap="nowrap">
+                        <Badge color={tour.loadPercent > 100 ? 'red' : 'orange'} variant="filled">
+                          {formatPercent(tour.loadPercent)}
+                        </Badge>
+                        <Tooltip label="Open tour">
+                          <ActionIcon variant="light" onClick={() => openToursUrl(navigate, { q: tour.id })}>
+                            <IconExternalLink size={15} />
+                          </ActionIcon>
+                        </Tooltip>
+                      </Group>
+                    </Group>
+                  </Paper>
+                ))}
+              </Stack>
+            ) : (
+              <EmptyState
+                icon={IconCircleCheck}
+                title="No high-load tours"
+                description="No active tour with known capacity is currently above the load threshold."
+              />
+            )}
+          </Stack>
+        </Card>
+
+        <Card shadow="sm" padding="md" radius="md" withBorder>
+          <PanelHeader
+            icon={IconShieldCheck}
+            title="Safety Alerts Requiring Attention"
+            description="Shows sanitized safety summaries only. User IDs, bookings, raw locations, and auth values stay hidden."
+            right={(
+              <Select
+                data={SAFETY_STATUS_OPTIONS}
+                value={safetyStatusFilter}
+                onChange={(value) => setSafetyStatusFilter(value || 'attention')}
+                w={190}
+                allowDeselect={false}
+              />
+            )}
+          />
+
+          {branchErrors.globalSafetyAlerts ? (
+            <Alert color="red" icon={<IconAlertTriangle size={16} />} mb="md">
+              Global safety alerts are unavailable. Tour safety branches may still be visible through the tours listener.
+            </Alert>
+          ) : null}
+
+          {visibleSafetyAlerts.length > 0 ? (
+            <Stack gap="xs">
+              {visibleSafetyAlerts.map((alert) => (
+                <Paper key={alert.id} p="sm" radius="md" withBorder>
+                  <Group justify="space-between" align="flex-start" gap="sm">
+                    <Box style={{ flex: 1, minWidth: 0 }}>
+                      <Group gap="xs" mb={4}>
+                        <SafetyBadge value={alert.severity} />
+                        <SafetyBadge value={alert.status} kind="status" />
+                        {alert.isSOS ? <Badge color="red" variant="filled">SOS</Badge> : null}
+                      </Group>
+                      <Text size="sm" fw={700} lineClamp={2}>{alert.message}</Text>
+                      <Text size="xs" c="dimmed">
+                        {alert.tourId ? `Tour ${alert.tourId}` : 'No tour attached'} - {alert.role || 'role unknown'} - {formatDateTimeForDisplay(alert.timestampMs, 'time unknown')}
+                      </Text>
+                    </Box>
+                    <Group gap={6} wrap="nowrap">
+                      {alert.tourId ? (
+                        <Tooltip label="Open tour">
+                          <ActionIcon variant="light" color="blue" onClick={() => openToursUrl(navigate, { q: alert.tourId })}>
+                            <IconExternalLink size={15} />
+                          </ActionIcon>
+                        </Tooltip>
+                      ) : null}
+                      {alert.status === SAFETY_STATUS.PENDING ? (
+                        <Tooltip label="Acknowledge safety alert">
+                          <ActionIcon
+                            variant="light"
+                            color="yellow"
+                            loading={mutatingSafetyId === alert.id}
+                            onClick={() => handleSafetyAction(alert, SAFETY_STATUS.ACKNOWLEDGED)}
+                          >
+                            <IconCheck size={15} />
+                          </ActionIcon>
+                        </Tooltip>
+                      ) : null}
+                      {alert.status !== SAFETY_STATUS.RESOLVED ? (
+                        <Tooltip label="Resolve safety alert">
+                          <ActionIcon
+                            variant="light"
+                            color="green"
+                            loading={mutatingSafetyId === alert.id}
+                            onClick={() => handleSafetyAction(alert, SAFETY_STATUS.RESOLVED)}
+                          >
+                            <IconCircleCheck size={15} />
+                          </ActionIcon>
+                        </Tooltip>
+                      ) : (
+                        <Badge color="green" variant="light">Closed</Badge>
+                      )}
+                    </Group>
+                  </Group>
+                </Paper>
+              ))}
             </Stack>
           ) : (
-            <Center py="xl">
-              <Stack align="center" gap="xs">
-                <ThemeIcon size="lg" radius="xl" color="green" variant="light">
-                  <IconChecklist size={18} />
-                </ThemeIcon>
-                <Text size="sm" fw={600}>Dispatch queue is clear</Text>
-                <Text size="xs" c="dimmed" ta="center" maw={260}>
-                  Every upcoming tour in the next 7 days currently has a confirmed driver assignment.
-                </Text>
-              </Stack>
-            </Center>
+            <EmptyState
+              title="No matching safety alerts"
+              description="No sanitized safety alert records match the current status filter."
+            />
           )}
         </Card>
 
-        <Card shadow="sm" padding="lg" radius="lg" withBorder>
-          <Group justify="space-between" mb="md">
-            <Text fw={600}>System Health</Text>
-            <Badge variant="light" color={healthSnapshot.color}>{healthSnapshot.label}</Badge>
-          </Group>
+        <Card shadow="sm" padding="md" radius="md" withBorder>
+          <PanelHeader
+            icon={IconSpeakerphone}
+            title="Broadcast Activity"
+            description="Recent admin broadcasts from the broadcasts root. Author UIDs are intentionally not shown."
+            right={(
+              <Button
+                size="xs"
+                leftSection={<IconMessageCircle size={14} />}
+                onClick={() => navigate('/broadcast')}
+              >
+                Compose
+              </Button>
+            )}
+          />
 
-          <Stack gap="sm">
-            {[databaseConnectionStatus, realtimeSyncStatus, broadcastStatus].map((status, index) => {
-              const Icon = index === 0 ? IconActivity : index === 1 ? IconClock : IconMessageCircle;
-              const label = index === 0 ? 'Database connection' : index === 1 ? 'Realtime sync' : 'Broadcast system';
-              return (
-                <Paper key={label} p="sm" radius="md" withBorder bg={`${status.color}.0`}>
-                  <Group wrap="nowrap" align="center">
-                    <ThemeIcon color={status.color} variant="light" size="md" radius="md">
-                      <Icon size={15} />
-                    </ThemeIcon>
-                    <Box style={{ flex: 1 }}>
-                      <Text size="sm" fw={500}>{label}</Text>
-                      <Text size="xs" c="dimmed">{status.description}</Text>
+          {branchErrors.broadcasts ? (
+            <Alert color="red" icon={<IconAlertTriangle size={16} />} mb="md">
+              Broadcast activity could not be loaded.
+            </Alert>
+          ) : null}
+
+          <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm" mb="md">
+            <Paper p="sm" radius="md" withBorder>
+              <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Last 24h</Text>
+              <Text fw={800}>{formatCount(broadcastActivity.last24hCount)}</Text>
+            </Paper>
+            <Paper p="sm" radius="md" withBorder>
+              <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Loaded</Text>
+              <Text fw={800}>{formatCount(broadcastActivity.totalCount)}</Text>
+            </Paper>
+            <Paper p="sm" radius="md" withBorder>
+              <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Tours</Text>
+              <Text fw={800}>{formatCount(broadcastActivity.tourCount)}</Text>
+            </Paper>
+          </SimpleGrid>
+
+          {broadcastActivity.recent.length > 0 ? (
+            <Stack gap="xs">
+              {broadcastActivity.recent.map((broadcast) => (
+                <Paper key={broadcast.id} p="sm" radius="md" withBorder>
+                  <Group justify="space-between" align="flex-start" wrap="nowrap">
+                    <Box style={{ flex: 1, minWidth: 0 }}>
+                      <Group gap="xs">
+                        <Badge size="sm" color="orange" variant="light">{broadcast.tourId}</Badge>
+                        <Text size="xs" c="dimmed">{broadcast.source}</Text>
+                      </Group>
+                      <Text size="sm" mt={4} lineClamp={2}>{broadcast.message}</Text>
                     </Box>
-                    <Badge size="sm" color={status.color} variant="filled">{status.label}</Badge>
+                    <Stack gap={4} align="flex-end">
+                      <Text size="xs" c="dimmed">
+                        {formatDateTimeForDisplay(broadcast.timestampMs, 'unknown')}
+                      </Text>
+                      <Tooltip label="Open tour">
+                        <ActionIcon variant="light" size="sm" onClick={() => openToursUrl(navigate, { q: broadcast.tourId })}>
+                          <IconExternalLink size={14} />
+                        </ActionIcon>
+                      </Tooltip>
+                    </Stack>
                   </Group>
                 </Paper>
-              );
-            })}
-
-            <Divider my="xs" />
-            <Group gap="xs">
-              <IconCalendar size={14} color="gray" />
-              <Text size="xs" c="dimmed">
-                Last successful sync: {formatTimeForDisplay(healthSignals.lastSuccessfulSyncAt, 'Awaiting first sync')}
-              </Text>
-            </Group>
-            <Text size="xs" c="dimmed">
-              Taxonomy: {HEALTH_STATE.OFFLINE_NO_NETWORK}, {HEALTH_STATE.ONLINE_BACKEND_DEGRADED},{' '}
-              {HEALTH_STATE.ONLINE_BACKLOG_PENDING}, {HEALTH_STATE.ONLINE_HEALTHY}
-            </Text>
-          </Stack>
+              ))}
+            </Stack>
+          ) : (
+            <EmptyState
+              icon={IconSpeakerphone}
+              color="gray"
+              title="No broadcasts loaded"
+              description="No broadcast records are present in the loaded Firebase branch."
+            />
+          )}
         </Card>
       </SimpleGrid>
 
-      <Card shadow="sm" padding="lg" radius="lg" withBorder>
-        <Group justify="space-between" mb="md">
-          <Title order={4}>Recently Added Drivers</Title>
-          <Badge variant="light" color="blue">Last 5</Badge>
-        </Group>
+      <Card shadow="sm" padding="md" radius="md" withBorder>
+        <PanelHeader
+          icon={IconCalendar}
+          title="Realtime And Backend Sync Health"
+          description="Health uses the shared LLT sync taxonomy and the actual listener state for each dashboard branch."
+          right={(
+            <Badge variant="light" color={healthSnapshot.color}>
+              {healthSnapshot.label}
+            </Badge>
+          )}
+        />
 
-        {recentDrivers.length > 0 ? (
-          <Table striped highlightOnHover verticalSpacing="sm">
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Driver</Table.Th>
-                <Table.Th>Driver ID</Table.Th>
-                <Table.Th>Status</Table.Th>
-                <Table.Th>Current Tour</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {recentDrivers.map(([id, driver]) => {
-                const currentTour = resolveCurrentTourId(driver);
-                return (
-                  <Table.Tr key={id}>
-                    <Table.Td>
-                      <Group gap="xs">
-                        <Avatar size="sm" radius="xl" color="brand">
-                          {driver.name?.charAt(0) || '?'}
-                        </Avatar>
-                        <Text size="sm" fw={600}>{driver.name || 'Unnamed Driver'}</Text>
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge variant="light" size="sm">{id}</Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge variant="dot" color={currentTour ? 'green' : 'gray'} size="sm">
-                        {currentTour ? 'On tour' : 'Available'}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="sm" c={currentTour ? 'dark' : 'dimmed'}>
-                        {currentTour || '—'}
-                      </Text>
-                    </Table.Td>
-                  </Table.Tr>
-                );
-              })}
-            </Table.Tbody>
-          </Table>
-        ) : (
-          <Center py="xl">
-            <Text c="dimmed" size="sm">No drivers found in the current environment.</Text>
-          </Center>
-        )}
+        <SimpleGrid cols={{ base: 1, md: 3 }} spacing="sm" mb="md">
+          {syncSummaryCards.map((status) => {
+            const Icon = status.icon;
+            return (
+              <Paper key={status.label} p="sm" radius="md" withBorder>
+                <Group wrap="nowrap">
+                  <ThemeIcon color={status.color} variant="light" size="md" radius="md">
+                    <Icon size={15} />
+                  </ThemeIcon>
+                  <Box style={{ flex: 1, minWidth: 0 }}>
+                    <Text size="sm" fw={600}>{status.label}</Text>
+                    <Text size="xs" c="dimmed">{status.description}</Text>
+                  </Box>
+                  <Badge size="sm" color={status.color} variant="light">{status.value}</Badge>
+                </Group>
+              </Paper>
+            );
+          })}
+        </SimpleGrid>
+
+        <SimpleGrid cols={{ base: 1, md: 2, xl: 3 }} spacing="sm">
+          {branchKeys.map((branchKey) => (
+            <BranchHealthRow
+              key={branchKey}
+              branchKey={branchKey}
+              loading={branchLoading[branchKey]}
+              error={branchErrors[branchKey]}
+              syncedAt={branchSyncedAt[branchKey]}
+            />
+          ))}
+        </SimpleGrid>
+
+        <Divider my="md" />
+        <Group gap="xs" wrap="wrap">
+          <Badge color="gray" variant="outline">{HEALTH_STATE.OFFLINE_NO_NETWORK}</Badge>
+          <Badge color="gray" variant="outline">{HEALTH_STATE.ONLINE_BACKEND_DEGRADED}</Badge>
+          <Badge color="gray" variant="outline">{HEALTH_STATE.ONLINE_BACKLOG_PENDING}</Badge>
+          <Badge color="gray" variant="outline">{HEALTH_STATE.ONLINE_HEALTHY}</Badge>
+        </Group>
       </Card>
     </Stack>
   );
