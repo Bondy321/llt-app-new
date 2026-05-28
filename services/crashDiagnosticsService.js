@@ -1,8 +1,13 @@
 import { Platform } from 'react-native';
 import { auth, realtimeDb } from '../firebase';
 import { createPersistenceProvider } from './persistenceProvider';
+import opsAlertModule from './opsAlertService';
 
 const diagnosticsStorage = createPersistenceProvider({ namespace: 'LLT_CRASH_DIAGNOSTICS' });
+const {
+  buildOpsAlertFromCrashSnapshot,
+  createOrUpdateOpsAlert,
+} = opsAlertModule;
 
 const MAX_BREADCRUMBS = 180;
 const MAX_SNAPSHOT_BREADCRUMBS = 80;
@@ -236,6 +241,11 @@ const persistRemoteSnapshot = async (snapshot) => {
         lastEvent: snapshot?.extra?.lastEvent || null,
       },
     });
+
+    const alert = buildOpsAlertFromCrashSnapshot(snapshot);
+    if (alert) {
+      await createOrUpdateOpsAlert(realtimeDb, alert);
+    }
   } catch {
     // RTDB may be unavailable during the crash path; local storage is still useful.
   }

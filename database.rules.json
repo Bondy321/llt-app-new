@@ -300,6 +300,64 @@
       }
     },
 
+    "ops_alerts": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".indexOn": ["createdAtMs", "lastSeenAtMs", "severity", "status"],
+      "$alertId": {
+        ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || (newData.exists() && newData.child('fingerprint').val() === $alertId && ((!data.exists() && newData.child('status').val() === 'open' && !newData.child('acknowledgedAtMs').exists() && !newData.child('resolvedAtMs').exists() && !newData.child('statusUpdatedBy').exists()) || (data.exists() && newData.child('createdAtMs').val() === data.child('createdAtMs').val() && newData.child('count').val() >= data.child('count').val() && newData.child('lastSeenAtMs').val() >= data.child('lastSeenAtMs').val() && (newData.child('status').val() === data.child('status').val() || (data.child('status').val() === 'resolved' && newData.child('status').val() === 'open')) && newData.child('acknowledgedAtMs').val() === data.child('acknowledgedAtMs').val() && newData.child('resolvedAtMs').val() === data.child('resolvedAtMs').val() && newData.child('statusUpdatedAt').val() === data.child('statusUpdatedAt').val() && newData.child('statusUpdatedAtMs').val() === data.child('statusUpdatedAtMs').val() && newData.child('statusUpdatedBy').val() === data.child('statusUpdatedBy').val()))))",
+        ".validate": "!newData.exists() || (newData.hasChildren(['alertVersion', 'fingerprint', 'createdAt', 'createdAtMs', 'lastSeenAt', 'lastSeenAtMs', 'severity', 'level', 'source', 'component', 'message', 'status', 'userKey', 'sessionKey', 'deviceInfo', 'summary', 'count']) && newData.child('alertVersion').val() === 1 && newData.child('fingerprint').isString() && newData.child('fingerprint').val() === $alertId && newData.child('fingerprint').val().matches(/^opa_[A-Za-z0-9]+$/) && newData.child('createdAt').isString() && newData.child('createdAt').val().length <= 40 && newData.child('createdAtMs').isNumber() && newData.child('createdAtMs').val() > 0 && newData.child('lastSeenAt').isString() && newData.child('lastSeenAt').val().length <= 40 && newData.child('lastSeenAtMs').isNumber() && newData.child('lastSeenAtMs').val() >= newData.child('createdAtMs').val() && (newData.child('severity').val() === 'info' || newData.child('severity').val() === 'warning' || newData.child('severity').val() === 'error' || newData.child('severity').val() === 'critical') && (newData.child('level').val() === 'ERROR' || newData.child('level').val() === 'FATAL') && (newData.child('source').val() === 'mobile_logger' || newData.child('source').val() === 'crash_diagnostics') && newData.child('component').isString() && newData.child('component').val().length > 0 && newData.child('component').val().length <= 80 && !newData.child('component').val().matches(/.*@.*/) && newData.child('message').isString() && newData.child('message').val().length > 0 && newData.child('message').val().length <= 240 && !newData.child('message').val().matches(/.*@.*/) && !newData.child('message').val().matches(/.*ExponentPushToken.*/) && !newData.child('message').val().matches(/.*session_[0-9]+.*/) && (newData.child('status').val() === 'open' || newData.child('status').val() === 'acknowledged' || newData.child('status').val() === 'resolved') && newData.child('userKey').isString() && newData.child('userKey').val().length > 0 && newData.child('userKey').val().length <= 80 && !newData.child('userKey').val().matches(/.*@.*/) && !newData.child('userKey').val().matches(/.*session_[0-9]+.*/) && newData.child('sessionKey').isString() && newData.child('sessionKey').val().length > 0 && newData.child('sessionKey').val().length <= 80 && !newData.child('sessionKey').val().matches(/.*session_[0-9]+.*/) && newData.child('summary').isString() && newData.child('summary').val().length <= 600 && !newData.child('summary').val().matches(/.*@.*/) && !newData.child('summary').val().matches(/.*ExponentPushToken.*/) && !newData.child('summary').val().matches(/.*session_[0-9]+.*/) && newData.child('count').isNumber() && newData.child('count').val() >= 1 && newData.child('count').val() <= 100000 && (!newData.child('tourId').exists() || (newData.child('tourId').isString() && newData.child('tourId').val().length <= 120 && !newData.child('tourId').val().matches(/.*@.*/))) && (!newData.child('role').exists() || (newData.child('role').isString() && newData.child('role').val().length <= 40)) && (!newData.child('statusUpdatedAt').exists() || (newData.child('statusUpdatedAt').isString() && newData.child('statusUpdatedAt').val().length <= 40)) && (!newData.child('statusUpdatedAtMs').exists() || newData.child('statusUpdatedAtMs').isNumber()) && (!newData.child('statusUpdatedBy').exists() || (newData.child('statusUpdatedBy').isString() && newData.child('statusUpdatedBy').val().length <= 80 && !newData.child('statusUpdatedBy').val().matches(/.*@.*/))) && (!newData.child('acknowledgedAtMs').exists() || newData.child('acknowledgedAtMs').isNumber()) && (!newData.child('resolvedAtMs').exists() || newData.child('resolvedAtMs').isNumber()) && (!newData.child('reopenedAtMs').exists() || newData.child('reopenedAtMs').isNumber()))",
+        "alertVersion": { ".validate": "!newData.exists() || newData.val() === 1" },
+        "fingerprint": { ".validate": "!newData.exists() || (newData.isString() && newData.val() === $alertId && newData.val().matches(/^opa_[A-Za-z0-9]+$/))" },
+        "createdAt": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 40)" },
+        "createdAtMs": { ".validate": "!newData.exists() || (newData.isNumber() && newData.val() > 0)" },
+        "lastSeenAt": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 40)" },
+        "lastSeenAtMs": { ".validate": "!newData.exists() || (newData.isNumber() && newData.val() > 0)" },
+        "severity": { ".validate": "!newData.exists() || newData.val() === 'info' || newData.val() === 'warning' || newData.val() === 'error' || newData.val() === 'critical'" },
+        "level": { ".validate": "!newData.exists() || newData.val() === 'ERROR' || newData.val() === 'FATAL'" },
+        "source": { ".validate": "!newData.exists() || newData.val() === 'mobile_logger' || newData.val() === 'crash_diagnostics'" },
+        "component": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length > 0 && newData.val().length <= 80 && !newData.val().matches(/.*@.*/))" },
+        "message": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length > 0 && newData.val().length <= 240 && !newData.val().matches(/.*@.*/) && !newData.val().matches(/.*ExponentPushToken.*/) && !newData.val().matches(/.*session_[0-9]+.*/))" },
+        "status": { ".validate": "!newData.exists() || newData.val() === 'open' || newData.val() === 'acknowledged' || newData.val() === 'resolved'" },
+        "userKey": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length > 0 && newData.val().length <= 80 && !newData.val().matches(/.*@.*/) && !newData.val().matches(/.*session_[0-9]+.*/))" },
+        "sessionKey": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length > 0 && newData.val().length <= 80 && !newData.val().matches(/.*session_[0-9]+.*/))" },
+        "summary": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 600 && !newData.val().matches(/.*@.*/) && !newData.val().matches(/.*ExponentPushToken.*/) && !newData.val().matches(/.*session_[0-9]+.*/))" },
+        "count": { ".validate": "!newData.exists() || (newData.isNumber() && newData.val() >= 1 && newData.val() <= 100000)" },
+        "tourId": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 120 && !newData.val().matches(/.*@.*/))" },
+        "role": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 40)" },
+        "statusUpdatedAt": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 40)" },
+        "statusUpdatedAtMs": { ".validate": "!newData.exists() || newData.isNumber()" },
+        "statusUpdatedBy": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 80 && !newData.val().matches(/.*@.*/))" },
+        "acknowledgedAtMs": { ".validate": "!newData.exists() || newData.isNumber()" },
+        "resolvedAtMs": { ".validate": "!newData.exists() || newData.isNumber()" },
+        "reopenedAtMs": { ".validate": "!newData.exists() || newData.isNumber()" },
+        "deviceInfo": {
+          ".validate": "newData.hasChildren(['platform', 'version', 'model'])",
+          "platform": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80" },
+          "version": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80" },
+          "model": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80 && !newData.val().matches(/.*@.*/)" },
+          "appVersion": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 80)" },
+          "appBuild": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 80)" },
+          "osVersion": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 80)" },
+          "$other": { ".validate": false }
+        },
+        "appContext": {
+          ".validate": "!newData.exists() || newData.hasChildren()",
+          "tourId": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 120 && !newData.val().matches(/.*@.*/))" },
+          "role": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 40)" },
+          "screen": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 80 && !newData.val().matches(/.*@.*/))" },
+          "isFatal": { ".validate": "!newData.exists() || newData.isBoolean()" },
+          "$other": { ".validate": false }
+        },
+        "crashBreadcrumbSummary": {
+          ".validate": "!newData.exists() || newData.hasChildren()",
+          "count": { ".validate": "!newData.exists() || (newData.isNumber() && newData.val() >= 0 && newData.val() <= 180)" },
+          "latest": { ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 420 && !newData.val().matches(/.*@.*/) && !newData.val().matches(/.*session_[0-9]+.*/))" },
+          "$other": { ".validate": false }
+        },
+        "$other": { ".validate": false }
+      }
+    },
+
     "globalSafetyAlerts": {
       ".read": "auth != null",
       "$eventId": {

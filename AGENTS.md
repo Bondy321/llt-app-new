@@ -2,7 +2,7 @@
 
 Welcome, Agent. This file is the operational source of truth for contributors working in this repo. Keep it practical: update it whenever architecture, contracts, commands, or release assumptions materially change.
 
-Last updated: May 27, 2026
+Last updated: May 28, 2026
 
 ---
 
@@ -132,6 +132,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `identity_bindings`
 - `identity_bindings_meta`
 - `logs`
+- `ops_alerts`
 - `globalSafetyAlerts`
 - `broadcasts`
 - `web_admin_settings`
@@ -506,6 +507,39 @@ Function fanout safeguards:
 - token invalidation cleanup only if the stored token still matches the failed token
 - preference-aware routing
 
+### Operations Alerts
+
+Source doc: `docs/data-contracts/ops-alerts.md`
+
+Curated operational alert root:
+
+```text
+ops_alerts/{fingerprint}
+```
+
+Purpose:
+
+- Web-admin live Operations / Health / Errors surface for major mobile device/app failures.
+- Raw diagnostics stay under `logs/{userKey}/{sessionKey}` and crash snapshots stay under `logs/{userKey}/{sessionKey}/crashDiagnostics`.
+- The browser dashboard must subscribe to bounded `ops_alerts` queries, not the whole `/logs` tree.
+
+Record requirements:
+
+- Required compact fields include `createdAt`, `createdAtMs`, `severity`, `level`, `source`, `component`, `message`, `status`, `userKey`, `sessionKey`, `deviceInfo`, `fingerprint`, `count`, `lastSeenAtMs`, and `summary`.
+- Optional safe context includes `tourId`, `role`, `appContext`, and `crashBreadcrumbSummary`.
+- Never store booking refs, emails, raw auth UIDs, raw session IDs, driver codes, tokens, push tokens, passwords, authorization values, or raw stack data.
+
+Producers:
+
+- `services/loggerService.js` creates/updates alerts for uploaded `ERROR` and `FATAL` logs.
+- `services/crashDiagnosticsService.js` creates/updates alerts for global error crash snapshots.
+- Pure sanitisation/fingerprinting helpers live in `services/opsAlertService.js`.
+
+Web admin:
+
+- Service helpers live in `web-admin/src/services/opsAlertService.js`.
+- Admins can acknowledge/resolve alerts through web-admin.
+
 ### Safety and Location
 
 Safety service:
@@ -685,6 +719,7 @@ Important RTDB invariants:
 - `identity_bindings_meta` writes are admin or caller-owned binding only.
 - `broadcasts` writes are admin-only and require numeric `createdAtMs`.
 - `users` validates push token metadata, identity metadata, driver helper fields, and notification preferences.
+- `ops_alerts` reads are admin-only; mobile writes must be bounded, sanitised, fingerprinted, and schema-valid.
 - `globalSafetyAlerts` writes require admin or caller-owned pending event creation.
 
 Important Storage invariants:
@@ -758,6 +793,7 @@ High-value contract tests to know:
   - principal-owned chat writes
   - identity binding meta least privilege
   - private photo access invariants
+  - ops alerts rules/schema boundary
   - photo variant field allowance
   - stable identity key encoding
   - Expo FileSystem legacy import contract
@@ -766,6 +802,9 @@ High-value contract tests to know:
 - `web-admin/src/services/tourService.test.js`
 - `web-admin/src/components/ToursManager.test.jsx`
 - `web-admin/src/services/healthContractParity.test.js`
+- `web-admin/src/services/opsAlertService.test.js`
+- `web-admin/src/components/Dashboard.test.jsx`
+- `tests/opsAlertService.test.js`
 - `tests/functions.photoVariants.test.js`
 - `tests/stableIdentity.integration.test.js`
 - `tests/validateBookingReference.passengerVerifier.test.js`
@@ -879,6 +918,7 @@ Diagnostics:
 - `loggerService` persists a local queue and can upload to `logs/{userKey}/{sessionKey}`.
 - `crashDiagnosticsService` writes crash diagnostics under `logs`.
 - Safety events also write under `logs/{userKey}/safety`.
+- `ops_alerts` is the sanitised, queryable operations layer for major device/app failures; do not put raw log payloads or raw stack data there.
 - Current docs mention temporary verbose RTDB diagnostics; do not add new raw identifiers while that is enabled.
 
 ---
@@ -898,6 +938,7 @@ Follow existing patterns first:
 - In photo code, preserve source-only `PHOTO_UPLOAD` v2 replay and server-owned variants.
 - In chat code, keep subscriptions bounded and reaction writes leaf-only.
 - In web-admin, keep status filters and URL query params synchronized.
+- In web-admin operations health UI, subscribe to bounded `ops_alerts` queries rather than `/logs`.
 - Avoid broad listener scopes; subscribe to current-tour branches and clean up on unmount.
 - Do not rename core DB roots.
 - Do not commit secrets.
@@ -948,6 +989,7 @@ Rules/code divergence:
 Logging privacy:
 
 - Temporary verbose diagnostics increase the blast radius of unsafe logging. Mask identifiers.
+- `ops_alerts` is safe for admin viewing only because records are compact and sanitised; preserve that boundary.
 
 Expo SDK compatibility:
 
@@ -963,6 +1005,7 @@ High-signal docs:
 - `docs/date-contract.md`
 - `docs/date-contract-web-admin.md`
 - `docs/data-contracts/driver-assignment.md`
+- `docs/data-contracts/ops-alerts.md`
 - `docs/data-contracts/tour-identity.md`
 - `docs/offline-tour-pack.md`
 - `docs/photo-upload-variant-contract.md`
@@ -982,6 +1025,7 @@ High-signal source:
 - `services/photoService.js`
 - `services/identityService.js`
 - `services/notificationService.js`
+- `services/opsAlertService.js`
 - `services/safetyService.js`
 - `utils/unifiedSyncContract.js`
 - `database.rules.json`
@@ -989,6 +1033,7 @@ High-signal source:
 - `functions/index.js`
 - `web-admin/src/services/tourService.js`
 - `web-admin/src/services/healthService.js`
+- `web-admin/src/services/opsAlertService.js`
 - `web-admin/src/utils/dateUtils.js`
 
 Common commands:

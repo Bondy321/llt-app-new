@@ -120,6 +120,30 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   assert.doesNotEqual(rules.rules.globalSafetyAlerts.$eventId['.write'], 'auth != null');
 });
 
+test('Static contract: curated ops alerts stay separate from raw logs and schema-gated', () => {
+  const rules = readJson('database.rules.json');
+  const opsAlerts = rules.rules.ops_alerts;
+
+  assert.equal(
+    rules.rules.logs.$userId['.read'],
+    "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
+  );
+  assert.equal(
+    opsAlerts['.read'],
+    "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+  );
+  assert.deepEqual(opsAlerts['.indexOn'], ['createdAtMs', 'lastSeenAtMs', 'severity', 'status']);
+  assert.match(opsAlerts.$alertId['.write'], /auth\.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'/);
+  assert.match(opsAlerts.$alertId['.write'], /newData\.child\('fingerprint'\)\.val\(\) === \$alertId/);
+  assert.match(opsAlerts.$alertId['.validate'], /newData\.hasChildren\(\['alertVersion', 'fingerprint', 'createdAt', 'createdAtMs'/);
+  assert.match(opsAlerts.$alertId['.validate'], /newData\.child\('message'\)\.val\(\)\.length <= 240/);
+  assert.match(opsAlerts.$alertId['.validate'], /newData\.child\('summary'\)\.val\(\)\.length <= 600/);
+  assert.match(opsAlerts.$alertId['.validate'], /newData\.child\('source'\)\.val\(\) === 'mobile_logger'/);
+  assert.match(opsAlerts.$alertId['.validate'], /newData\.child\('source'\)\.val\(\) === 'crash_diagnostics'/);
+  assert.equal(opsAlerts.$alertId.deviceInfo.$other['.validate'], false);
+  assert.equal(opsAlerts.$alertId.$other['.validate'], false);
+});
+
 test('Static contract: photo variant lifecycle fields stay allowed by database rules', () => {
   const rules = readJson('database.rules.json');
   const groupPhotoValidate = rules.rules.group_tour_photos.$tourId.$photoId['.validate'];

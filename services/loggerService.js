@@ -2,9 +2,15 @@
 import { Platform } from 'react-native';
 import { auth, realtimeDb } from '../firebase';
 import { createPersistenceProvider } from './persistenceProvider';
+import opsAlertModule from './opsAlertService';
 
 // Centralized persistence with SecureStore/AsyncStorage fallback for durable logs.
 const logStorage = createPersistenceProvider({ namespace: 'LLT_LOGS' });
+const {
+  buildOpsAlertFromLog,
+  createOrUpdateOpsAlert,
+  mergeOpsAlertRecord,
+} = opsAlertModule;
 
 const LOG_LEVELS = {
   DEBUG: 0,
@@ -356,6 +362,7 @@ class Logger {
         });
 
         await this.updateBatchWithRetry(batch);
+        await this.sendOpsAlertsForLogs(chunk);
       }
 
       return true;
@@ -364,6 +371,36 @@ class Logger {
         console.error('Failed to send logs to server:', redactSensitiveData({ error: error?.message || 'Unknown error' }));
       }
       return false;
+    }
+  }
+
+  async sendOpsAlertsForLogs(logs = []) {
+    if (!realtimeDb?.ref || !Array.isArray(logs) || logs.length === 0) {
+      return;
+    }
+
+    try {
+      const alertsByFingerprint = new Map();
+
+      logs.forEach((log) => {
+        if (LOG_LEVELS[log.level] < LOG_LEVELS.ERROR) return;
+        const alert = buildOpsAlertFromLog(log);
+        if (!alert?.fingerprint) return;
+
+        const existing = alertsByFingerprint.get(alert.fingerprint);
+        alertsByFingerprint.set(
+          alert.fingerprint,
+          existing ? mergeOpsAlertRecord(existing, alert) : alert,
+        );
+      });
+
+      for (const alert of alertsByFingerprint.values()) {
+        await createOrUpdateOpsAlert(realtimeDb, alert);
+      }
+    } catch (error) {
+      if (!this.isProduction) {
+        console.error('Failed to send ops alerts:', redactSensitiveData({ error: error?.message || 'Unknown error' }));
+      }
     }
   }
 

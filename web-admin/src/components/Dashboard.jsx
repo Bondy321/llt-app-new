@@ -10,6 +10,18 @@ import {
   revalidateDashboardData,
 } from '../services/healthService';
 import {
+  OPS_ALERT_SEVERITY_OPTIONS,
+  OPS_ALERT_STATUS,
+  OPS_ALERT_STATUS_OPTIONS,
+  acknowledgeOpsAlert,
+  buildOpsAlertStats,
+  filterOpsAlerts,
+  formatAffectedDevice,
+  formatAffectedSession,
+  resolveOpsAlert,
+  subscribeToOpsAlerts,
+} from '../services/opsAlertService';
+import {
   formatDateForDisplay,
   formatLongDateForDisplay,
   formatTimeForDisplay,
@@ -38,6 +50,9 @@ import {
   Tooltip,
   Button,
   Flex,
+  Select,
+  ScrollArea,
+  Alert,
 } from '@mantine/core';
 import {
   IconUsers,
@@ -54,6 +69,10 @@ import {
   IconChecklist,
   IconStars,
   IconBolt,
+  IconBug,
+  IconCheck,
+  IconCircleCheck,
+  IconDeviceMobile,
 } from '@tabler/icons-react';
 
 function ExecutiveStatCard({ title, value, icon: Icon, color, subtitle, trend }) {
@@ -96,12 +115,43 @@ function ExecutiveStatCard({ title, value, icon: Icon, color, subtitle, trend })
   );
 }
 
+const OPS_SEVERITY_COLOR = {
+  critical: 'red',
+  error: 'orange',
+  warning: 'yellow',
+  info: 'blue',
+};
+
+const OPS_STATUS_COLOR = {
+  [OPS_ALERT_STATUS.OPEN]: 'red',
+  [OPS_ALERT_STATUS.ACKNOWLEDGED]: 'yellow',
+  [OPS_ALERT_STATUS.RESOLVED]: 'green',
+};
+
+function OpsAlertBadge({ value, kind = 'severity' }) {
+  const color = kind === 'status'
+    ? OPS_STATUS_COLOR[value] || 'gray'
+    : OPS_SEVERITY_COLOR[value] || 'gray';
+
+  return (
+    <Badge size="sm" color={color} variant={kind === 'status' ? 'light' : 'filled'}>
+      {value}
+    </Badge>
+  );
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const [drivers, setDrivers] = useState({});
   const [tours, setTours] = useState({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [opsAlerts, setOpsAlerts] = useState([]);
+  const [opsAlertsLoading, setOpsAlertsLoading] = useState(true);
+  const [opsAlertsError, setOpsAlertsError] = useState(null);
+  const [opsSeverityFilter, setOpsSeverityFilter] = useState('all');
+  const [opsStatusFilter, setOpsStatusFilter] = useState('active');
+  const [mutatingAlertId, setMutatingAlertId] = useState(null);
   const [healthSignals, setHealthSignals] = useState({
     isOnline: typeof navigator === 'undefined' ? true : navigator.onLine,
     listenerConnected: true,
@@ -116,6 +166,11 @@ export default function Dashboard() {
   const databaseConnectionStatus = statusChips.DATABASE_CONNECTION;
   const realtimeSyncStatus = statusChips.REALTIME_SYNC;
   const broadcastStatus = statusChips.BROADCAST_SYSTEM;
+  const opsAlertStats = useMemo(() => buildOpsAlertStats(opsAlerts), [opsAlerts]);
+  const visibleOpsAlerts = useMemo(() => filterOpsAlerts(opsAlerts, {
+    severity: opsSeverityFilter,
+    status: opsStatusFilter,
+  }).slice(0, 10), [opsAlerts, opsSeverityFilter, opsStatusFilter]);
 
   useEffect(() => {
     const updateLastSync = () => {
@@ -159,6 +214,22 @@ export default function Dashboard() {
       },
     );
 
+    const unsubOpsAlerts = subscribeToOpsAlerts(
+      db,
+      { orderBy: 'lastSeenAtMs', limit: 80 },
+      (alerts) => {
+        setOpsAlerts(alerts);
+        setOpsAlertsLoading(false);
+        setOpsAlertsError(null);
+        updateLastSync();
+      },
+      (error) => {
+        setOpsAlertsLoading(false);
+        setOpsAlertsError(error);
+        registerListenerError(error);
+      },
+    );
+
     const handleOnline = () => {
       setHealthSignals((current) => ({ ...current, isOnline: true, listenerConnected: true }));
     };
@@ -173,6 +244,7 @@ export default function Dashboard() {
     return () => {
       unsubDrivers();
       unsubTours();
+      unsubOpsAlerts();
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
@@ -210,6 +282,31 @@ export default function Dashboard() {
       });
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const handleOpsAlertAction = async (alertId, action) => {
+    setMutatingAlertId(alertId);
+    try {
+      if (action === 'resolve') {
+        await resolveOpsAlert(db, alertId);
+      } else {
+        await acknowledgeOpsAlert(db, alertId);
+      }
+
+      notifications.show({
+        title: action === 'resolve' ? 'Alert resolved' : 'Alert acknowledged',
+        message: 'The operations alert status was updated.',
+        color: action === 'resolve' ? 'green' : 'yellow',
+      });
+    } catch {
+      notifications.show({
+        title: 'Alert update failed',
+        message: 'Unable to update the operations alert status.',
+        color: 'red',
+      });
+    } finally {
+      setMutatingAlertId(null);
     }
   };
 
@@ -331,7 +428,7 @@ export default function Dashboard() {
         </Group>
       </Card>
 
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="lg">
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 5 }} spacing="lg">
         <ExecutiveStatCard
           title="Total Drivers"
           value={totalDrivers}
@@ -356,6 +453,13 @@ export default function Dashboard() {
           subtitle="Weighted by assignment coverage and active staffing"
         />
         <ExecutiveStatCard
+          title="Critical App Errors"
+          value={opsAlertStats.openCriticalCount}
+          icon={IconBug}
+          color={opsAlertStats.openCriticalCount > 0 ? 'red' : 'green'}
+          subtitle={`${opsAlertStats.activeCount} active device/app alerts`}
+        />
+        <ExecutiveStatCard
           title="Unassigned Tours"
           value={Math.max(totalTours - assignedTours, 0)}
           icon={IconAlertTriangle}
@@ -363,6 +467,193 @@ export default function Dashboard() {
           subtitle="Requires dispatch assignment"
         />
       </SimpleGrid>
+
+      <Card shadow="sm" padding="lg" radius="lg" withBorder>
+        <Group justify="space-between" align="flex-start" mb="md" gap="md">
+          <Stack gap={4}>
+            <Group gap="xs">
+              <ThemeIcon color={opsAlertStats.openCriticalCount > 0 ? 'red' : 'green'} variant="light" size="md" radius="md">
+                <IconDeviceMobile size={16} />
+              </ThemeIcon>
+              <Title order={4}>Operations / Health / Errors</Title>
+            </Group>
+            <Text size="sm" c="dimmed">
+              Live curated device and app failures from mobile diagnostics.
+            </Text>
+          </Stack>
+
+          <Group gap="xs" wrap="wrap" justify="flex-end">
+            <Badge color={opsAlertsError ? 'red' : 'green'} variant="light">
+              {opsAlertsError ? 'Degraded' : 'Live'}
+            </Badge>
+            <Badge color={opsAlertStats.openCriticalCount > 0 ? 'red' : 'gray'} variant="filled">
+              {opsAlertStats.openCriticalCount} critical
+            </Badge>
+            <Badge color={opsAlertStats.openErrorCount > 0 ? 'orange' : 'gray'} variant="light">
+              {opsAlertStats.openErrorCount} open major
+            </Badge>
+          </Group>
+        </Group>
+
+        <SimpleGrid cols={{ base: 1, md: 4 }} spacing="sm" mb="md">
+          <Paper p="sm" radius="md" withBorder>
+            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Active alerts</Text>
+            <Text fw={800} size="xl">{opsAlertStats.activeCount}</Text>
+          </Paper>
+          <Paper p="sm" radius="md" withBorder>
+            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Critical open</Text>
+            <Text fw={800} size="xl" c={opsAlertStats.openCriticalCount > 0 ? 'red' : 'green'}>
+              {opsAlertStats.openCriticalCount}
+            </Text>
+          </Paper>
+          <Paper p="sm" radius="md" withBorder>
+            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Top component</Text>
+            <Text fw={700} size="sm" truncate="end">
+              {Object.entries(opsAlertStats.byComponent).sort((a, b) => b[1] - a[1])[0]?.[0] || 'None'}
+            </Text>
+          </Paper>
+          <Paper p="sm" radius="md" withBorder>
+            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Most severe</Text>
+            <Text fw={700} size="sm" truncate="end">
+              {opsAlertStats.mostSevereActiveAlert?.component || 'No active alerts'}
+            </Text>
+          </Paper>
+        </SimpleGrid>
+
+        <Group justify="space-between" mb="md" align="flex-end" wrap="wrap">
+          <Group gap="sm">
+            <Select
+              label="Severity"
+              data={OPS_ALERT_SEVERITY_OPTIONS}
+              value={opsSeverityFilter}
+              onChange={(value) => setOpsSeverityFilter(value || 'all')}
+              w={180}
+              allowDeselect={false}
+            />
+            <Select
+              label="Status"
+              data={OPS_ALERT_STATUS_OPTIONS}
+              value={opsStatusFilter}
+              onChange={(value) => setOpsStatusFilter(value || 'active')}
+              w={190}
+              allowDeselect={false}
+            />
+          </Group>
+          <Text size="xs" c="dimmed">
+            Showing {visibleOpsAlerts.length} of {opsAlerts.length} recent curated alerts
+          </Text>
+        </Group>
+
+        {opsAlertsError ? (
+          <Alert color="red" icon={<IconAlertTriangle size={16} />} mb="md">
+            Device/app error alerts are temporarily unavailable. Driver and tour listeners remain separate.
+          </Alert>
+        ) : null}
+
+        {opsAlertsLoading ? (
+          <Center py="xl">
+            <Stack align="center" gap="sm">
+              <Loader size="md" color="brand" />
+              <Text size="sm" c="dimmed">Loading live device/app alerts...</Text>
+            </Stack>
+          </Center>
+        ) : visibleOpsAlerts.length > 0 ? (
+          <ScrollArea type="auto">
+            <Table highlightOnHover verticalSpacing="sm" miw={980}>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Severity</Table.Th>
+                  <Table.Th>Status</Table.Th>
+                  <Table.Th>Component / source</Table.Th>
+                  <Table.Th>Message</Table.Th>
+                  <Table.Th>Affected device/session</Table.Th>
+                  <Table.Th>Last seen</Table.Th>
+                  <Table.Th>Actions</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {visibleOpsAlerts.map((alert) => (
+                  <Table.Tr key={alert.id}>
+                    <Table.Td>
+                      <Stack gap={4}>
+                        <OpsAlertBadge value={alert.severity} />
+                        <Text size="xs" c="dimmed">{alert.level}</Text>
+                      </Stack>
+                    </Table.Td>
+                    <Table.Td>
+                      <OpsAlertBadge value={alert.status} kind="status" />
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm" fw={700} truncate="end" maw={170}>{alert.component}</Text>
+                      <Text size="xs" c="dimmed" truncate="end" maw={170}>{alert.source}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm" fw={600} lineClamp={2}>{alert.message}</Text>
+                      <Text size="xs" c="dimmed" lineClamp={2}>
+                        {alert.crashBreadcrumbSummary?.latest || alert.summary || 'No summary'}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="xs" fw={600} truncate="end" maw={220}>
+                        {formatAffectedDevice(alert)}
+                      </Text>
+                      <Text size="xs" c="dimmed" truncate="end" maw={220}>
+                        {formatAffectedSession(alert)}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm" fw={600}>{formatTimeForDisplay(alert.lastSeenAtMs, 'unknown')}</Text>
+                      <Text size="xs" c="dimmed">Seen {alert.count}x</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Group gap={6} wrap="nowrap">
+                        {alert.status === OPS_ALERT_STATUS.OPEN ? (
+                          <Tooltip label="Acknowledge alert">
+                            <ActionIcon
+                              variant="light"
+                              color="yellow"
+                              loading={mutatingAlertId === alert.id}
+                              onClick={() => handleOpsAlertAction(alert.id, 'acknowledge')}
+                            >
+                              <IconCheck size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        ) : null}
+                        {alert.status !== OPS_ALERT_STATUS.RESOLVED ? (
+                          <Tooltip label="Resolve alert">
+                            <ActionIcon
+                              variant="light"
+                              color="green"
+                              loading={mutatingAlertId === alert.id}
+                              onClick={() => handleOpsAlertAction(alert.id, 'resolve')}
+                            >
+                              <IconCircleCheck size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        ) : (
+                          <Badge color="green" variant="light">Closed</Badge>
+                        )}
+                      </Group>
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </ScrollArea>
+        ) : (
+          <Center py="xl">
+            <Stack align="center" gap="xs">
+              <ThemeIcon color="green" variant="light" size="lg" radius="xl">
+                <IconCircleCheck size={18} />
+              </ThemeIcon>
+              <Text size="sm" fw={600}>No matching device/app alerts</Text>
+              <Text size="xs" c="dimmed" ta="center" maw={320}>
+                The curated operations alert stream is clear for the current filters.
+              </Text>
+            </Stack>
+          </Center>
+        )}
+      </Card>
 
       <SimpleGrid cols={{ base: 1, lg: 3 }} spacing="lg">
         <Card shadow="sm" padding="lg" radius="lg" withBorder>
