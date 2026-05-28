@@ -77,13 +77,20 @@ const validateMessageData = (messageData) => {
 /**
  * Validates and sanitizes push token
  */
+const normalizePushToken = (token) => {
+  if (typeof token !== 'string') return null;
+  const trimmed = token.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
 const isValidPushToken = (token) => {
-  return token && typeof token === 'string' && Expo.isExpoPushToken(token);
+  const normalizedToken = normalizePushToken(token);
+  return Boolean(normalizedToken && Expo.isExpoPushToken(normalizedToken));
 };
 
 const shouldRemoveInvalidToken = (userData, token) => {
-  const storedToken = typeof userData?.pushToken === 'string' ? userData.pushToken.trim() : '';
-  const failedToken = typeof token === 'string' ? token.trim() : '';
+  const storedToken = normalizePushToken(userData?.pushToken) || '';
+  const failedToken = normalizePushToken(token) || '';
   return Boolean(storedToken && failedToken && storedToken === failedToken);
 };
 
@@ -312,9 +319,22 @@ const selectNotificationRecipients = ({
 }) => {
   const validRecipients = [];
   const invalidTokens = [];
+  const seenPushTokens = new Set();
+  const excludedPushTokens = new Set();
+  let duplicateTokenRecipientCount = 0;
+  let excludedSenderTokenRecipientCount = 0;
   const excludedSenderIds = new Set(senderParticipantIds.filter(Boolean));
   if (senderId) {
     excludedSenderIds.add(senderId);
+  }
+
+  if (excludeSender) {
+    excludedSenderIds.forEach((excludedUserId) => {
+      const excludedToken = normalizePushToken(usersMap?.[excludedUserId]?.pushToken);
+      if (excludedToken && isValidPushToken(excludedToken)) {
+        excludedPushTokens.add(excludedToken);
+      }
+    });
   }
 
   for (const userId of participantIds) {
@@ -323,7 +343,8 @@ const selectNotificationRecipients = ({
     }
 
     const userData = usersMap[userId];
-    if (!userData || !userData.pushToken) {
+    const pushToken = normalizePushToken(userData?.pushToken);
+    if (!userData || !pushToken) {
       log.info('No token for user', { ...context, userId });
       continue;
     }
@@ -348,16 +369,41 @@ const selectNotificationRecipients = ({
       continue;
     }
 
-    if (!isValidPushToken(userData.pushToken)) {
+    if (!isValidPushToken(pushToken)) {
       log.warn('Invalid push token', { ...context, userId });
-      invalidTokens.push({ userId, token: userData.pushToken });
+      invalidTokens.push({ userId, token: pushToken });
       continue;
     }
 
-    validRecipients.push({ userId, userData });
+    if (excludeSender && excludedPushTokens.has(pushToken)) {
+      excludedSenderTokenRecipientCount += 1;
+      continue;
+    }
+
+    if (seenPushTokens.has(pushToken)) {
+      duplicateTokenRecipientCount += 1;
+      continue;
+    }
+
+    seenPushTokens.add(pushToken);
+    validRecipients.push({ userId, userData: { ...userData, pushToken } });
   }
 
-  return { validRecipients, invalidTokens };
+  if (duplicateTokenRecipientCount > 0 || excludedSenderTokenRecipientCount > 0) {
+    log.info('Deduplicated notification recipients by push token', {
+      ...context,
+      duplicateTokenRecipientCount,
+      excludedSenderTokenRecipientCount,
+      selectedRecipientCount: validRecipients.length,
+    });
+  }
+
+  return {
+    validRecipients,
+    invalidTokens,
+    duplicateTokenRecipientCount,
+    excludedSenderTokenRecipientCount,
+  };
 };
 
 const collectExpoTokenFailures = (ticketChunk = [], messageChunk = []) => {
