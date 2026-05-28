@@ -177,7 +177,15 @@ const toRealtimeKeySegment = (value) => {
 
 const normalizeTourKeyForComparison = (value) => {
   const trimmed = resolveTrimmedString(value);
-  return trimmed ? trimmed.replace(/\s+/g, '_') : null;
+  if (!trimmed) return null;
+
+  const normalized = trimmed
+    .toUpperCase()
+    .replace(/\s+/g, '_')
+    .replace(REALTIME_KEY_INVALID_GLOBAL_PATTERN, '')
+    .replace(/^_+|_+$/g, '');
+
+  return normalized || null;
 };
 
 const chunkArrayDeterministically = (items, size) => {

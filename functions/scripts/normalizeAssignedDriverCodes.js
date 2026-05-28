@@ -14,7 +14,8 @@ if (!admin.apps.length) {
 
 const db = admin.database();
 
-const toCanonicalPayload = ({ tourId, tourCode, assignedBy = 'migration_script' }) => ({
+const toCanonicalPayload = ({ driverId, tourId, tourCode, assignedBy = 'migration_script' }) => ({
+  driverId,
   tourId,
   tourCode,
   assignedAt: new Date().toISOString(),
@@ -40,6 +41,7 @@ const run = async () => {
       }
 
       updates[`tour_manifests/${tourId}/assigned_driver_codes/${driverId}`] = toCanonicalPayload({
+        driverId,
         tourId,
         tourCode: fallbackTourCode,
       });

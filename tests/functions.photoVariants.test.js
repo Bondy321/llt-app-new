@@ -269,6 +269,10 @@ test('isDriverProfileAssignedToTour accepts canonical and legacy active tour mat
     true,
   );
   assert.equal(
+    __testables.isDriverProfileAssignedToTour({ activeTourId: '5112d 8' }, '5112D_8'),
+    true,
+  );
+  assert.equal(
     __testables.isDriverProfileAssignedToTour({ currentTourId: 'OTHER_TOUR' }, '5112D_8'),
     false,
   );

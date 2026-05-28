@@ -243,10 +243,6 @@ test('allows admin actions per existing policy (message text edit)', async () =>
 });
 
 test('service-generated internal driver message payload is accepted by rules', async () => {
-  await testEnv.withSecurityRulesDisabled(async (context) => {
-    await context.database(dbUrl).ref(`identity_bindings/${DRIVER_PRINCIPAL_ID}/${DRIVER_AUTH_UID}`).set(true);
-  });
-
   const senderInfo = {
     name: 'Driver Bondy',
     principalId: DRIVER_PRINCIPAL_ID,
@@ -267,4 +263,12 @@ test('service-generated internal driver message payload is accepted by rules', a
   assert.equal(written.exists(), true);
   assert.equal(written.child('senderType').val(), 'driver');
   assert.equal(written.child('senderStableId').val(), DRIVER_PRINCIPAL_ID);
+});
+
+test('allows internal driver lastRead writes through canonical driver identity', async () => {
+  await assertSucceeds(
+    dbFor(DRIVER_AUTH_UID)
+      .ref(`internal_chats/${INTERNAL_TOUR_ID}/lastRead/${DRIVER_PRINCIPAL_ID}`)
+      .set(Date.now())
+  );
 });

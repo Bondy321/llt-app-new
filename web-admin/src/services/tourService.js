@@ -276,7 +276,17 @@ const normalizeAssignmentTourId = (tourId) => {
     .trim()
     .toUpperCase()
     .replace(/\s+/g, '_')
-    .replace(/[.#$\[\]/]/g, '');
+    .replace(/[.#$\[\]/]/g, '')
+    .replace(/^_+|_+$/g, '');
+};
+
+const resolveAssignmentTourId = (...candidates) => {
+  for (const candidate of candidates) {
+    const normalized = normalizeAssignmentTourId(candidate);
+    if (normalized) return normalized;
+  }
+
+  return '';
 };
 
 const getDriverSnapshotValue = async (driverId) => {
@@ -479,7 +489,7 @@ const getDriverAssignmentContext = async (tourId, explicitDriverId = null) => {
   const resolvedDriverId = explicitDriverId || manifestDriverIds[0] || null;
 
   const driver = await getDriverSnapshotValue(resolvedDriverId);
-  const currentTourId = normalizeAssignmentTourId(driver.currentTourId || driver.activeTourId || '');
+  const currentTourId = resolveAssignmentTourId(driver.currentTourId, driver.activeTourId);
   const assignments = driver.assignments || {};
 
   const knownTourIds = new Set([
@@ -622,7 +632,7 @@ export const applyDriverAssignmentMutation = async ({
   for (const existingDriverId of assignment.manifestDriverIds || []) {
     if (existingDriverId === resolvedDriverId) continue;
     const staleProfile = assignment.staleManifestDriverProfiles?.[existingDriverId] || {};
-    const staleCurrentTourId = normalizeAssignmentTourId(staleProfile.currentTourId || staleProfile.activeTourId || '');
+    const staleCurrentTourId = resolveAssignmentTourId(staleProfile.currentTourId, staleProfile.activeTourId);
 
     updates[`drivers/${existingDriverId}/assignments/${normalizedTourId}`] = null;
     updates[`tour_manifests/${normalizedTourId}/assigned_drivers/${existingDriverId}`] = null;

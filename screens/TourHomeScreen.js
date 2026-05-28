@@ -28,6 +28,7 @@ import { realtimeDb } from '../firebase';
 import offlineSyncService from '../services/offlineSyncService';
 import { parseTimestampMs } from '../services/timeUtils';
 import logger, { maskIdentifier } from '../services/loggerService';
+import { resolveTourId } from '../services/tourIdentityService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import { getPickupCountdownState } from '../services/pickupTimeParser';
 const { buildTourHomeActionPlan } = require('../utils/tourHomeActionPlanner');
@@ -503,6 +504,10 @@ export default function TourHomeScreen({
 
   const greeting = useMemo(() => getTimeBasedGreeting(), []);
   const bookingRef = useMemo(() => bookingData?.id, [bookingData?.id]);
+  const activeTourId = useMemo(
+    () => resolveTourId(tourData?.id, tourCode, tourData?.tourCode),
+    [tourData?.id, tourData?.tourCode, tourCode]
+  );
   const passengerName = useMemo(() => {
     if (bookingData?.passengerNames?.length > 0) {
       return bookingData.passengerNames[0].split(' ')[0]; // First name only
@@ -529,7 +534,7 @@ export default function TourHomeScreen({
 
   useEffect(() => {
     logger.trackScreen('TourHome', {
-      tourId: tourData?.id || null,
+      tourId: activeTourId || null,
       tourCode,
       bookingRef: maskIdentifier(bookingRef),
       isConnected,
@@ -537,10 +542,9 @@ export default function TourHomeScreen({
       manifestStatus,
       driverLocationActive,
     });
-  }, [bookingRef, driverLocationActive, isConnected, manifestStatus, tourCode, tourData, tourData?.id]);
+  }, [activeTourId, bookingRef, driverLocationActive, isConnected, manifestStatus, tourCode, tourData]);
 
   useEffect(() => {
-    const activeTourId = tourData?.id || tourCode?.replace(/\s+/g, '_');
     if (!activeTourId) {
       logger.warn('TourHome', 'Tour pack metadata load skipped without tour id', { tourCode });
       return;
@@ -562,12 +566,13 @@ export default function TourHomeScreen({
         });
       }
     });
-  }, [tourData?.id, tourCode]);
+  }, [activeTourId, tourCode]);
 
   useEffect(() => {
-    if (!realtimeDb || !tourCode || !bookingRef) {
+    if (!realtimeDb || !activeTourId || !bookingRef) {
       logger.warn('TourHome', 'Realtime readiness skipped', {
         hasRealtimeDb: Boolean(realtimeDb),
+        hasTourId: Boolean(activeTourId),
         hasTourCode: Boolean(tourCode),
         bookingRef: maskIdentifier(bookingRef),
       });
@@ -578,7 +583,7 @@ export default function TourHomeScreen({
 
     setManifestReady(false);
     setDriverReady(false);
-  }, [tourCode, bookingRef]);
+  }, [activeTourId, tourCode, bookingRef]);
 
   useEffect(() => {
     if (!manifestReady || !driverReady) {
@@ -591,9 +596,9 @@ export default function TourHomeScreen({
   }, [manifestReady, driverReady]);
 
   useEffect(() => {
-    if (!realtimeDb || !tourCode || !bookingRef) return undefined;
+    if (!realtimeDb || !activeTourId || !bookingRef) return undefined;
 
-    const sanitizedTourId = tourCode.replace(/\s+/g, '_');
+    const sanitizedTourId = activeTourId;
     const manifestRef = realtimeDb.ref(`tour_manifests/${sanitizedTourId}/bookings/${bookingRef}`);
     logger.info('TourHome', 'Passenger realtime listeners starting', {
       sanitizedTourId,
@@ -672,7 +677,7 @@ export default function TourHomeScreen({
       manifestRef.off('value', handleSnapshot);
       driverRef.off('value', handleDriverSnapshot);
     };
-  }, [tourCode, bookingRef]);
+  }, [activeTourId, bookingRef]);
 
   const clearRefreshStatusTimeout = useCallback(() => {
     if (refreshStatusTimeoutRef.current) {
@@ -705,7 +710,7 @@ export default function TourHomeScreen({
     setRefreshing(true);
     triggerHaptic('light');
 
-    const sanitizedTourId = tourData?.id || tourCode?.replace(/\s+/g, '_');
+    const sanitizedTourId = activeTourId;
     logger.info('TourHome', 'Manual refresh started', {
       sanitizedTourId,
       bookingRef: maskIdentifier(bookingRef),
@@ -823,7 +828,7 @@ export default function TourHomeScreen({
     } finally {
       setRefreshing(false);
     }
-  }, [tourData?.id, tourCode, bookingRef, showRefreshStatus, isConnected, lastSuccessfulSyncAt]);
+  }, [activeTourId, bookingRef, showRefreshStatus, isConnected, lastSuccessfulSyncAt]);
 
   useEffect(() => {
     let mounted = true;
@@ -939,7 +944,7 @@ export default function TourHomeScreen({
       logger.info('TourHome', 'Driver location active state changed', {
         previousActive: previousDriverLocationRef.current,
         nextActive: driverLocationActive,
-        tourId: tourData?.id || tourCode || null,
+        tourId: activeTourId || null,
       });
       appendRecentChange(
         driverLocationActive
@@ -949,12 +954,12 @@ export default function TourHomeScreen({
     }
 
     previousDriverLocationRef.current = driverLocationActive;
-  }, [appendRecentChange, driverLocationActive]);
+  }, [activeTourId, appendRecentChange, driverLocationActive]);
 
   const handleCallDriver = () => {
     triggerHaptic('medium');
     logger.info('TourHome', 'Driver call launched', {
-      tourId: tourData?.id || null,
+      tourId: activeTourId || null,
       source: isNoShow ? 'no_show_modal' : 'quick_action',
     });
     Linking.openURL('tel:+441414876737');
@@ -964,7 +969,7 @@ export default function TourHomeScreen({
     triggerHaptic('light');
     if (!tourData?.driverPhone) {
       logger.warn('TourHome', 'Driver message blocked without phone number', {
-        tourId: tourData?.id || null,
+        tourId: activeTourId || null,
         bookingRef: maskIdentifier(bookingRef),
       });
       Alert.alert('Driver contact unavailable', 'Please reach out to your operator.');
@@ -972,7 +977,7 @@ export default function TourHomeScreen({
     }
     const phone = tourData.driverPhone.replace(/[^+\d]/g, '');
     logger.info('TourHome', 'Driver message launched', {
-      tourId: tourData?.id || null,
+      tourId: activeTourId || null,
       phoneLength: phone.length,
     });
     Linking.openURL(`sms:${phone}`);
@@ -982,12 +987,12 @@ export default function TourHomeScreen({
     logger.info('TourHome', 'Navigation requested', {
       targetScreen: screen,
       source,
-      tourId: tourData?.id || null,
+      tourId: activeTourId || null,
       bookingRef: maskIdentifier(bookingRef),
       params,
     });
     onNavigate(screen, params);
-  }, [bookingRef, onNavigate, tourData?.id]);
+  }, [activeTourId, bookingRef, onNavigate]);
 
   const menuItems = [
     {
@@ -1146,7 +1151,7 @@ export default function TourHomeScreen({
                 onPress={() => {
                   triggerHaptic('light');
                   logger.info('TourHome', 'Logout requested from header', {
-                    tourId: tourData?.id || null,
+                    tourId: activeTourId || null,
                     bookingRef: maskIdentifier(bookingRef),
                   });
                   onLogout();
@@ -1502,7 +1507,7 @@ export default function TourHomeScreen({
                 style={styles.modalLogoutButton}
                 onPress={() => {
                   logger.info('TourHome', 'Logout requested from no-show modal', {
-                    tourId: tourData?.id || null,
+                    tourId: activeTourId || null,
                     bookingRef: maskIdentifier(bookingRef),
                   });
                   onLogout();

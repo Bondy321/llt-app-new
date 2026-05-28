@@ -42,6 +42,7 @@ import {
 import * as chatService from '../services/chatService';
 import offlineSyncService from '../services/offlineSyncService';
 import logger, { maskIdentifier } from '../services/loggerService';
+import { resolveTourId } from '../services/tourIdentityService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -511,29 +512,36 @@ export default function SafetySupportScreen({
   const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
   const [requestingDriverCall, setRequestingDriverCall] = useState(false);
 
+  // Derived values
+  const isDriver = mode === 'driver';
+  const emergencyNumber = '999';
+  const operationsNumber = '+441414876737';
+  const tourId = resolveTourId(tourData?.id, tourData?.tourCode);
+  const userName = bookingData?.passengerNames?.[0] || (isDriver ? tourData?.driverName : 'Passenger');
+
   useEffect(() => {
-    if (!tourData?.id) return;
+    if (!tourId) return;
     const role = mode === 'driver' ? 'driver' : 'passenger';
-    logger.debug('SafetySupportScreen', 'Tour pack metadata load started', { tourId: tourData.id, role });
-    offlineSyncService.getTourPackMeta(tourData.id, role).then((res) => {
+    logger.debug('SafetySupportScreen', 'Tour pack metadata load started', { tourId, role });
+    offlineSyncService.getTourPackMeta(tourId, role).then((res) => {
       if (res.success) {
         const label = offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label;
         setCacheStatusLabel(label);
         logger.info('SafetySupportScreen', 'Tour pack metadata loaded', {
-          tourId: tourData.id,
+          tourId,
           role,
           lastSyncedAt: res.data?.lastSyncedAt || null,
           label,
         });
       } else {
         logger.warn('SafetySupportScreen', 'Tour pack metadata load failed', {
-          tourId: tourData.id,
+          tourId,
           role,
           error: res.error || 'unknown',
         });
       }
     });
-  }, [tourData?.id, mode]);
+  }, [tourId, mode]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Tips expanded state
@@ -545,13 +553,6 @@ export default function SafetySupportScreen({
   // Animation
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(50)).current;
-
-  // Derived values
-  const isDriver = mode === 'driver';
-  const emergencyNumber = '999';
-  const operationsNumber = '+441414876737';
-  const tourId = tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
-  const userName = bookingData?.passengerNames?.[0] || (isDriver ? tourData?.driverName : 'Passenger');
 
   useEffect(() => {
     logger.trackScreen('SafetySupport', {
@@ -822,7 +823,7 @@ export default function SafetySupportScreen({
         await logSafetyEvent({
           userId,
           bookingId: bookingData?.id,
-          tourId: tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_'),
+          tourId,
           role: mode,
           category: SAFETY_CATEGORIES.SOS,
           severity: SEVERITY_LEVELS.CRITICAL,
@@ -919,7 +920,7 @@ export default function SafetySupportScreen({
             setCurrentCoords(location.coords);
             setLocationAccuracy(location.coords.accuracy);
             updateLiveLocationSharing(
-              tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_'),
+              tourId,
               userId,
               true,
               location.coords
@@ -934,7 +935,7 @@ export default function SafetySupportScreen({
 
         // Initial update
         await updateLiveLocationSharing(
-          tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_'),
+          tourId,
           userId,
           true,
           location.coords
@@ -966,7 +967,7 @@ export default function SafetySupportScreen({
       }
 
       await updateLiveLocationSharing(
-        tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_'),
+        tourId,
         userId,
         false
       );
@@ -1045,7 +1046,7 @@ export default function SafetySupportScreen({
       await logSafetyEvent({
         userId,
         bookingId: bookingData?.id,
-        tourId: tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_'),
+        tourId,
         role: mode,
         category: selectedCategory,
         severity: selectedSeverity,

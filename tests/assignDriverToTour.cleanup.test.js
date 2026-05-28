@@ -107,6 +107,7 @@ test('assignDriverToTour clears previous manifest assignment when switching tour
   const latestUpdates = mockDb.updatesHistory.at(-1);
   assert.equal(latestUpdates['drivers/D-BONDY/currentTourId'], '6000A_1');
   assert.equal(latestUpdates['drivers/D-BONDY/currentTourCode'], '6000A 1');
+  assert.equal(latestUpdates['drivers/D-BONDY/activeTourId'], null);
   assert.equal(latestUpdates['users/dispatcher-uid-1/driverId'], 'D-BONDY');
   assert.equal(latestUpdates['users/dispatcher-uid-1/driverPrincipalId'], 'driver:D-BONDY');
   assert.equal(latestUpdates['users/dispatcher-uid-1/driverAssignedTourId'], '6000A_1');
@@ -143,8 +144,47 @@ test('assignDriverToTour keeps assignment stable when re-assigning to the same t
     ),
     true
   );
+  assert.equal(latestUpdates['drivers/D-SMITH/activeTourId'], null);
   assert.equal(
-    Object.values(latestUpdates).some((value) => value === null),
+    Object.keys(latestUpdates).some((key) => key.startsWith('tour_manifests/5112D_8/') && latestUpdates[key] === null),
     false
   );
+});
+
+test('assignDriverToTour normalizes lowercase input and clears legacy activeTourId links', async () => {
+  const { service, mockDb } = loadServiceWithState({
+    drivers: {
+      'D-MAC': {
+        name: 'Mac',
+        activeTourId: '5112d 8',
+      },
+    },
+    tours: {
+      '5112D_8': { name: 'Highlands AM', tourCode: '5112D 8' },
+      '6000A_1': { name: 'Edinburgh PM', tourCode: '6000A 1' },
+    },
+    tour_manifests: {
+      '5112D_8': {
+        assigned_drivers: {
+          'D-MAC': true,
+        },
+        assigned_driver_codes: {
+          'D-MAC': '5112D 8',
+        },
+      },
+    },
+  });
+
+  const result = await service.assignDriverToTour('D-MAC', '6000a 1');
+
+  assert.equal(result.success, true);
+  assert.equal(result.tourId, '6000A_1');
+
+  const latestUpdates = mockDb.updatesHistory.at(-1);
+  assert.equal(latestUpdates['drivers/D-MAC/currentTourId'], '6000A_1');
+  assert.equal(latestUpdates['drivers/D-MAC/currentTourCode'], '6000A 1');
+  assert.equal(latestUpdates['drivers/D-MAC/activeTourId'], null);
+  assert.equal(latestUpdates['tour_manifests/5112D_8/assigned_drivers/D-MAC'], null);
+  assert.equal(latestUpdates['tour_manifests/5112D_8/assigned_driver_codes/D-MAC'], null);
+  assert.equal(latestUpdates['tour_manifests/6000A_1/assigned_driver_codes/D-MAC'].tourCode, '6000A 1');
 });

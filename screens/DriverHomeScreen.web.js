@@ -4,9 +4,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, RADIUS, SPACING } from '../theme';
+import { resolveTourId } from '../services/tourIdentityService';
 
 export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
-  const activeTourId = driverData?.assignedTourId || driverData?.currentTourId || null;
+  const activeTourId = resolveTourId(
+    driverData?.assignedTourId,
+    driverData?.currentTourId,
+    driverData?.driverAssignedTourId,
+    driverData?.activeTourId,
+    driverData?.assignedTourCode,
+    driverData?.currentTourCode
+  );
   const hasTour = Boolean(activeTourId);
 
   const quickActions = hasTour

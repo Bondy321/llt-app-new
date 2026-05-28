@@ -12,6 +12,7 @@ import {
   buildOperationsDashboardModel,
   buildSafetyAlerts,
   filterSafetyAlerts,
+  resolveDriverCurrentTourId,
   sanitizeDashboardText,
 } from './dashboardService';
 
@@ -71,6 +72,31 @@ describe('dashboardService operations model', () => {
     expect(model.metrics.passengerLoadPercent).toBe(63);
     expect(model.highLoadTours.map((tour) => tour.id)).toEqual(['TOUR_ASSIGNED']);
     expect(model.tourRows.find((tour) => tour.id === 'TOUR_MANIFEST').passengerCountSource).toBe('tour_manifests.bookings');
+  });
+
+  it('normalizes legacy driver assignment tour IDs before matching dashboard coverage', () => {
+    expect(resolveDriverCurrentTourId({ currentTourId: ' tour assigned ' })).toBe('TOUR_ASSIGNED');
+    expect(resolveDriverCurrentTourId({ activeTourId: '5112d 8' })).toBe('5112D_8');
+
+    const model = buildOperationsDashboardModel({
+      drivers: {
+        D1: { name: 'Alice', currentTourId: ' tour assigned ' },
+      },
+      tours: {
+        TOUR_ASSIGNED: {
+          name: 'Assigned Tour',
+          driverName: 'TBA',
+          startDate: '29/05/2026',
+          isActive: true,
+        },
+      },
+      tourManifests: {},
+    }, {
+      now: new Date(2026, 4, 28),
+    });
+
+    expect(model.metrics.assignedUpcomingTours).toBe(1);
+    expect(model.metrics.unassignedUpcomingTours).toBe(0);
   });
 
   it('deduplicates safety alerts and keeps sensitive identifiers out of summaries', () => {

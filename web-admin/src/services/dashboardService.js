@@ -79,6 +79,17 @@ const cleanString = (value, fallback = '') => {
   return trimmed || fallback;
 };
 
+const normalizeTourIdForKey = (value) => {
+  const trimmed = cleanString(value);
+  if (!trimmed) return '';
+
+  return trimmed
+    .toUpperCase()
+    .replace(/\s+/g, '_')
+    .replace(/[.#$\[\]/]/g, '')
+    .replace(/^_+|_+$/g, '');
+};
+
 const toFiniteNumber = (value, fallback = null) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
@@ -216,7 +227,7 @@ export async function revalidateDashboardBranches(database) {
 }
 
 export function resolveDriverCurrentTourId(driver) {
-  return cleanString(driver?.currentTourId || driver?.activeTourId || '');
+  return normalizeTourIdForKey(driver?.currentTourId) || normalizeTourIdForKey(driver?.activeTourId);
 }
 
 export function driverHasAssignment(driver) {

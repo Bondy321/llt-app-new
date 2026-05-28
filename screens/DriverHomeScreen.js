@@ -27,6 +27,7 @@ import offlineSyncService from '../services/offlineSyncService';
 import { createPersistenceProvider } from '../services/persistenceProvider';
 import logger, { maskIdentifier } from '../services/loggerService';
 import { getMinutesAgo } from '../services/timeUtils';
+import { normalizeTourId, resolveTourId } from '../services/tourIdentityService';
 import { COLORS as THEME } from '../theme';
 
 const { width } = Dimensions.get('window');
@@ -92,10 +93,17 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const persistenceRef = useRef(createPersistenceProvider({ namespace: 'LLT_DRIVER_HOME' }));
   const bannerTimerRef = useRef(null);
 
-  // Derive active tour from props (updates when driverData changes)
-  const activeTourId = driverData?.assignedTourId || '';
+  // Derive active tour from the canonical assignment, with legacy fallbacks for older sessions.
+  const activeTourId = resolveTourId(
+    driverData?.assignedTourId,
+    driverData?.currentTourId,
+    driverData?.driverAssignedTourId,
+    driverData?.activeTourId,
+    driverData?.assignedTourCode,
+    driverData?.currentTourCode
+  ) || '';
 
-  const sanitizeTourId = useCallback((tourCode) => (tourCode ? tourCode.replace(/\s+/g, '_') : null), []);
+  const sanitizeTourId = useCallback((tourCode) => normalizeTourId(tourCode), []);
   const autoSharePreferenceKey = `AUTO_SHARE_${driverData?.id || 'unknown'}`;
 
   useEffect(() => {
