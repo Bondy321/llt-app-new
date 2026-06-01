@@ -14,20 +14,14 @@ import { getTourDayContext } from '../services/itineraryDateParser';
 const COLORS = {
   primary: THEME.primary,
   primaryDark: THEME.primaryDark,
-  primaryLight: THEME.primaryLight,
   primaryMuted: THEME.primaryMuted,
-  accent: THEME.accent,
-  accentLight: THEME.accentLight,
   white: THEME.white,
   surface: THEME.surface,
   background: THEME.background,
   border: THEME.border,
   text: THEME.textPrimary,
-  textSecondary: THEME.textSecondary,
-  textMuted: THEME.textMuted,
   success: THEME.success,
   successLight: THEME.successLight,
-  warning: THEME.warning,
 };
 
 const splitAgendaLines = (content) => {
@@ -36,35 +30,6 @@ const splitAgendaLines = (content) => {
     .split(/(?:\n|•|-)/g)
     .map((item) => item.trim())
     .filter(Boolean);
-};
-
-const toMinutesFrom24Hour = (hours, minutes) => (hours * 60) + minutes;
-
-const parseTimeToken = (line) => {
-  const amPmMatch = line.match(/\b(1[0-2]|0?[1-9]):([0-5]\d)\s?(AM|PM)\b/i);
-  if (amPmMatch) {
-    const hoursRaw = Number(amPmMatch[1]);
-    const minutes = Number(amPmMatch[2]);
-    const period = amPmMatch[3].toUpperCase();
-    const normalizedHours = hoursRaw % 12;
-    const hours24 = period === 'PM' ? normalizedHours + 12 : normalizedHours;
-    return {
-      display: `${hoursRaw}:${amPmMatch[2]} ${period}`,
-      minutesFromMidnight: toMinutesFrom24Hour(hours24, minutes),
-    };
-  }
-
-  const twentyFourHourMatch = line.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
-  if (twentyFourHourMatch) {
-    const hours = Number(twentyFourHourMatch[1]);
-    const minutes = Number(twentyFourHourMatch[2]);
-    return {
-      display: `${String(hours).padStart(2, '0')}:${twentyFourHourMatch[2]}`,
-      minutesFromMidnight: toMinutesFrom24Hour(hours, minutes),
-    };
-  }
-
-  return null;
 };
 
 const getAgendaIcon = (line) => {
@@ -80,55 +45,11 @@ const getAgendaIcon = (line) => {
 const buildAgendaHighlights = (content) => {
   const lines = splitAgendaLines(content);
 
-  return lines.slice(0, 4).map((line, index) => {
-    const parsedTime = parseTimeToken(line);
-    return {
-      id: `${line}-${index}`,
-      text: line,
-      icon: getAgendaIcon(line),
-      time: parsedTime?.display || null,
-      minutesFromMidnight: typeof parsedTime?.minutesFromMidnight === 'number' ? parsedTime.minutesFromMidnight : null,
-    };
-  });
-};
-
-const getTimelineState = (highlights) => {
-  const now = new Date();
-  const nowMinutes = toMinutesFrom24Hour(now.getHours(), now.getMinutes());
-
-  const timedHighlights = highlights.filter((item) => typeof item.minutesFromMidnight === 'number');
-  if (!timedHighlights.length) {
-    return { activeId: null, nextId: null, label: 'No specific times published yet' };
-  }
-
-  let active = null;
-  let next = null;
-
-  timedHighlights.forEach((item) => {
-    if (item.minutesFromMidnight <= nowMinutes) {
-      if (!active || item.minutesFromMidnight > active.minutesFromMidnight) {
-        active = item;
-      }
-    } else if (!next || item.minutesFromMidnight < next.minutesFromMidnight) {
-      next = item;
-    }
-  });
-
-  if (!active && timedHighlights.length) {
-    next = timedHighlights.slice().sort((a, b) => a.minutesFromMidnight - b.minutesFromMidnight)[0];
-  }
-
-  const label = next
-    ? `Next: ${next.time}`
-    : active
-      ? 'Later events are flexible timing'
-      : 'Today starts soon';
-
-  return {
-    activeId: active?.id || null,
-    nextId: next?.id || null,
-    label,
-  };
+  return lines.slice(0, 4).map((line, index) => ({
+    id: `${line}-${index}`,
+    text: line,
+    icon: getAgendaIcon(line),
+  }));
 };
 
 export default function TodaysAgendaCard({ tourData, onNudge }) {
@@ -194,7 +115,6 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
   const { dayNumber, data } = dayContext;
   const dayContent = data?.content?.trim() || 'No detailed plan has been published for today yet.';
   const highlights = buildAgendaHighlights(data?.content);
-  const timelineState = getTimelineState(highlights);
 
   return (
     <View style={styles.container}>
@@ -232,64 +152,35 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
             </View>
           </View>
 
-          <View style={styles.timelineSummaryPill}>
-            <MaterialCommunityIcons name="clock-time-four-outline" size={14} color={COLORS.primary} />
-            <Text style={styles.timelineSummaryText}>{timelineState.label}</Text>
-          </View>
-
           {highlights.length ? (
             <View style={styles.highlightsWrap}>
-              {highlights.map((highlight) => {
-                const isActive = highlight.id === timelineState.activeId;
-                const isNext = highlight.id === timelineState.nextId;
-                return (
-                  <View
-                    key={highlight.id}
-                    style={[
-                      styles.highlightCard,
-                      isActive && styles.highlightCardActive,
-                      isNext && styles.highlightCardNext,
-                    ]}
-                  >
-                    <View style={styles.highlightLeading}>
-                      <View style={[styles.highlightIconWrap, isActive && styles.highlightIconWrapActive]}>
-                        <MaterialCommunityIcons
-                          name={highlight.icon}
-                          size={14}
-                          color={isActive ? COLORS.white : COLORS.primary}
-                        />
-                      </View>
-
-                      <View style={styles.highlightTextWrap}>
-                        <Text style={styles.highlightText} numberOfLines={2}>
-                          {highlight.text}
-                        </Text>
-                        {highlight.time ? (
-                          <Text style={styles.highlightTime}>{highlight.time}</Text>
-                        ) : null}
-                      </View>
+              {highlights.map((highlight) => (
+                <View key={highlight.id} style={styles.highlightCard}>
+                  <View style={styles.highlightLeading}>
+                    <View style={styles.highlightIconWrap}>
+                      <MaterialCommunityIcons
+                        name={highlight.icon}
+                        size={14}
+                        color={COLORS.primary}
+                      />
                     </View>
 
-                    {isActive ? (
-                      <View style={styles.highlightTagActive}>
-                        <Text style={styles.highlightTagText}>Now</Text>
-                      </View>
-                    ) : null}
-
-                    {!isActive && isNext ? (
-                      <View style={styles.highlightTagNext}>
-                        <Text style={styles.highlightTagNextText}>Next</Text>
-                      </View>
-                    ) : null}
+                    <View style={styles.highlightTextWrap}>
+                      <Text style={styles.highlightText} numberOfLines={2}>
+                        {highlight.text}
+                      </Text>
+                    </View>
                   </View>
-                );
-              })}
+                </View>
+              ))}
             </View>
           ) : null}
 
-          <Text style={styles.dayContent} numberOfLines={highlights.length ? 3 : 6}>
-            {dayContent}
-          </Text>
+          {!highlights.length ? (
+            <Text style={styles.dayContent} numberOfLines={6}>
+              {dayContent}
+            </Text>
+          ) : null}
         </LinearGradient>
       </TouchableOpacity>
     </View>
@@ -382,24 +273,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: FONT_WEIGHT.semibold,
   },
-  timelineSummaryPill: {
-    marginTop: SPACING.md,
-    borderRadius: RADIUS.full,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.xs,
-    alignSelf: 'flex-start',
-    backgroundColor: COLORS.primaryMuted,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: SPACING.xs,
-  },
-  timelineSummaryText: {
-    fontSize: 12,
-    color: COLORS.primaryDark,
-    fontWeight: FONT_WEIGHT.semibold,
-  },
   highlightsWrap: {
     marginTop: SPACING.md,
     gap: SPACING.sm,
@@ -416,14 +289,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: SPACING.sm,
   },
-  highlightCardActive: {
-    borderColor: COLORS.primaryLight,
-    backgroundColor: COLORS.primaryMuted,
-  },
-  highlightCardNext: {
-    borderColor: COLORS.accent,
-    backgroundColor: COLORS.accentLight,
-  },
   highlightLeading: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -438,9 +303,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: COLORS.primaryMuted,
   },
-  highlightIconWrapActive: {
-    backgroundColor: COLORS.primary,
-  },
   highlightTextWrap: {
     flex: 1,
   },
@@ -449,38 +311,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: FONT_WEIGHT.medium,
     lineHeight: 18,
-  },
-  highlightTime: {
-    marginTop: 2,
-    color: COLORS.textSecondary,
-    fontSize: 11,
-    fontWeight: FONT_WEIGHT.semibold,
-  },
-  highlightTagActive: {
-    borderRadius: RADIUS.full,
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: 4,
-  },
-  highlightTagText: {
-    color: COLORS.white,
-    fontSize: 10,
-    fontWeight: FONT_WEIGHT.bold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  highlightTagNext: {
-    borderRadius: RADIUS.full,
-    backgroundColor: COLORS.accent,
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: 4,
-  },
-  highlightTagNextText: {
-    color: COLORS.white,
-    fontSize: 10,
-    fontWeight: FONT_WEIGHT.bold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
   },
   dayContent: {
     marginTop: SPACING.md,
