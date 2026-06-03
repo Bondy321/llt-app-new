@@ -64,6 +64,7 @@ module.exports = {
     },
     plugins: [
       'expo-font',
+      'expo-image',
       'expo-secure-store',
       [
         'expo-build-properties',

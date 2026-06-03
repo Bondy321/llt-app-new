@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
+const path = require('node:path');
 
 require('@babel/register')({
   extensions: ['.js', '.jsx'],
@@ -10,6 +11,43 @@ require('@babel/register')({
 });
 
 const originalLoad = Module._load;
+const firebaseEnvKeys = [
+  'EXPO_PUBLIC_FIREBASE_API_KEY',
+  'EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN',
+  'EXPO_PUBLIC_FIREBASE_DATABASE_URL',
+  'EXPO_PUBLIC_FIREBASE_PROJECT_ID',
+  'EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET',
+  'EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID',
+  'EXPO_PUBLIC_FIREBASE_APP_ID',
+];
+
+const validFirebaseEnv = {
+  EXPO_PUBLIC_FIREBASE_API_KEY: `AIza${'a'.repeat(32)}`,
+  EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: 'loch-lomond-travel.firebaseapp.com',
+  EXPO_PUBLIC_FIREBASE_DATABASE_URL: 'https://loch-lomond-travel-default-rtdb.europe-west1.firebasedatabase.app',
+  EXPO_PUBLIC_FIREBASE_PROJECT_ID: 'loch-lomond-travel',
+  EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET: 'loch-lomond-travel.firebasestorage.app',
+  EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '500767842880',
+  EXPO_PUBLIC_FIREBASE_APP_ID: '1:500767842880:web:b27b5630eed50e6ea4f5a5',
+};
+
+const restoreFirebaseEnv = (backup) => {
+  firebaseEnvKeys.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(backup, key)) {
+      process.env[key] = backup[key];
+    } else {
+      delete process.env[key];
+    }
+  });
+};
+
+const clearFirebaseModuleCache = () => {
+  Object.keys(require.cache).forEach((cacheKey) => {
+    if (cacheKey.endsWith(`${path.sep}firebase.js`) || cacheKey.endsWith('/firebase.js')) {
+      delete require.cache[cacheKey];
+    }
+  });
+};
 
 test.after(() => {
   Module._load = originalLoad;
@@ -74,30 +112,28 @@ const loadFirebaseWithMocks = ({ missingConfig = false, placeholderConfig = fals
     return originalLoad(request, parent, isMain);
   };
 
-  const envBackup = { ...process.env };
+  const envBackup = {};
+  firebaseEnvKeys.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(process.env, key)) {
+      envBackup[key] = process.env[key];
+    }
+    delete process.env[key];
+  });
+
+  Object.assign(process.env, validFirebaseEnv);
   if (placeholderConfig) {
     process.env.EXPO_PUBLIC_FIREBASE_API_KEY = '@firebase_api_key';
-    process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN = 'd';
-    process.env.EXPO_PUBLIC_FIREBASE_DATABASE_URL = 'https://db';
-    process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = 'p';
-    process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET = 'bucket';
-    process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID = 'm';
-    process.env.EXPO_PUBLIC_FIREBASE_APP_ID = 'a';
   } else if (missingConfig) {
     process.env.EXPO_PUBLIC_FIREBASE_API_KEY = '';
-  } else {
-    process.env.EXPO_PUBLIC_FIREBASE_API_KEY = 'k';
-    process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN = 'd';
-    process.env.EXPO_PUBLIC_FIREBASE_DATABASE_URL = 'https://db';
-    process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = 'p';
-    process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET = 'bucket';
-    process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID = 'm';
-    process.env.EXPO_PUBLIC_FIREBASE_APP_ID = 'a';
   }
 
-  delete require.cache[require.resolve('../firebase')];
-  const firebaseModule = require('../firebase');
-  process.env = envBackup;
+  let firebaseModule;
+  try {
+    clearFirebaseModuleCache();
+    firebaseModule = require('../firebase');
+  } finally {
+    restoreFirebaseEnv(envBackup);
+  }
   return { firebaseModule, calls };
 };
 

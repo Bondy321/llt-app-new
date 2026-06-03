@@ -8,7 +8,7 @@ const {
 } = require('@firebase/rules-unit-testing');
 
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
-const PROJECT_ID = 'demo-llt-rules';
+const PROJECT_ID = 'demo-llt-manifest-rules';
 const TOUR_ID = '5203L_22';
 const TOUR_CODE = '5203L 22';
 const BOOKING_REF = 'T123456';

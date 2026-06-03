@@ -14,8 +14,15 @@ const LOG_LEVELS = {
   FATAL: 4
 };
 
-const VERBOSE_RTDB_LOGGING_ENABLED = true;
-const VERBOSE_RTDB_MIN_LEVEL = 'DEBUG';
+const IS_DEV =
+  typeof __DEV__ !== 'undefined'
+    ? __DEV__
+    : typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production';
+const CONFIGURED_SERVER_MIN_LEVEL =
+  typeof process !== 'undefined'
+    ? process.env?.EXPO_PUBLIC_REMOTE_LOG_MIN_LEVEL?.trim().toUpperCase()
+    : undefined;
+const DEFAULT_SERVER_MIN_LEVEL = IS_DEV ? 'DEBUG' : 'WARN';
 
 const LOG_COLORS = {
   DEBUG: '\x1b[36m',
@@ -106,7 +113,7 @@ export const redactSensitiveData = (input, contextKey = '', seen = new WeakSet()
 class Logger {
   constructor() {
     this.logQueue = [];
-    this.isProduction = !__DEV__;
+    this.isProduction = !IS_DEV;
     this.userId = null;
     this.sessionId = this.generateSessionId();
     this.deviceInfo = null;
@@ -120,7 +127,9 @@ class Logger {
     this.persistTimer = null;
     this.isFlushing = false;
     this.sequence = 0;
-    this.serverMinLevelName = VERBOSE_RTDB_LOGGING_ENABLED ? VERBOSE_RTDB_MIN_LEVEL : 'WARN';
+    this.serverMinLevelName = LOG_LEVELS[CONFIGURED_SERVER_MIN_LEVEL] !== undefined
+      ? CONFIGURED_SERVER_MIN_LEVEL
+      : DEFAULT_SERVER_MIN_LEVEL;
     this.serverMinLevel = LOG_LEVELS[this.serverMinLevelName] ?? LOG_LEVELS.WARN;
 
     this.initializeLogger();
@@ -428,7 +437,7 @@ export const logErrorBoundary = (error, errorInfo) => {
   });
 };
 
-if (!__DEV__) {
+if (!IS_DEV && typeof ErrorUtils !== 'undefined') {
   const originalHandler = ErrorUtils.getGlobalHandler();
   ErrorUtils.setGlobalHandler((error, isFatal) => {
     logger.fatal('GlobalError', `${isFatal ? 'Fatal' : 'Non-fatal'} error`, {

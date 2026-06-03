@@ -1108,7 +1108,7 @@ case 'Itinerary':
 
   return (
     <>
-      <StatusBar style="light" backgroundColor={COLORS.primaryBlue} />
+      <StatusBar style="light" />
       {loginTransition ? (
         <View style={[styles.loginTransitionOverlay, { top: insets.top + 8 }]}>
           <Text style={styles.loginTransitionText}>{loginTransition.message}</Text>

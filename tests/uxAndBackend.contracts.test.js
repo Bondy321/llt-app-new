@@ -117,7 +117,15 @@ test('Static contract: sensitive database writes remain ownership or admin gated
     rules.rules.globalSafetyAlerts.$eventId['.write'],
     /auth\.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'/,
   );
-  assert.doesNotEqual(rules.rules.globalSafetyAlerts.$eventId['.write'], 'auth != null');
+  assert.notEqual(rules.rules.globalSafetyAlerts.$eventId['.write'], 'auth != null');
+});
+
+test('Static contract: remote logger uploads stay warning-plus by default outside dev', () => {
+  const loggerSource = fs.readFileSync(path.join(__dirname, '..', 'services', 'loggerService.js'), 'utf8');
+
+  assert.match(loggerSource, /const DEFAULT_SERVER_MIN_LEVEL = IS_DEV \? 'DEBUG' : 'WARN';/);
+  assert.match(loggerSource, /CONFIGURED_SERVER_MIN_LEVEL/);
+  assert.doesNotMatch(loggerSource, /VERBOSE_RTDB_LOGGING_ENABLED\s*=\s*true/);
 });
 
 test('Static contract: photo variant lifecycle fields stay allowed by database rules', () => {
