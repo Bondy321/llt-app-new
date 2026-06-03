@@ -2,6 +2,13 @@ import { useState, useEffect } from 'react';
 import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { auth } from './firebase';
 import { signInWithEmailAndPassword, onAuthStateChanged, signOut, sendPasswordResetEmail } from 'firebase/auth';
+import {
+  getRuntimeDebugContext,
+  logFirebaseDebug,
+  maskDebugEmail,
+  startFirebaseDebugTimer,
+  summarizeAuthUser,
+} from './services/firebaseDebug';
 import { notifications } from '@mantine/notifications';
 import {
   AppShell,
@@ -22,8 +29,6 @@ import {
   Loader,
   Center,
   ThemeIcon,
-  Tooltip,
-  ActionIcon,
   Anchor,
   Modal,
 } from '@mantine/core';
@@ -38,8 +43,6 @@ import {
   IconUser,
   IconChevronDown,
   IconMap,
-  IconBell,
-  IconSearch,
 } from '@tabler/icons-react';
 
 // Import page components
@@ -79,14 +82,26 @@ function LoginPage() {
     }
 
     setLoading(true);
+    const loginTimer = startFirebaseDebugTimer('auth:sign-in', {
+      email: maskDebugEmail(email),
+      runtime: getRuntimeDebugContext(),
+    });
+
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      const credential = await signInWithEmailAndPassword(auth, email, password);
+      loginTimer.success({
+        user: summarizeAuthUser(credential.user),
+        operationType: credential.operationType || null,
+      });
       notifications.show({
         title: 'Welcome Back!',
         message: 'Successfully logged in to Loch Lomond Admin',
         color: 'green',
       });
     } catch (err) {
+      loginTimer.failure(err, {
+        email: maskDebugEmail(email),
+      });
       let message = 'Login failed. Please try again.';
       if (err.code === 'auth/invalid-credential') {
         message = 'Invalid email or password. Please check your credentials.';
@@ -117,8 +132,16 @@ function LoginPage() {
     }
 
     setResetLoading(true);
+    const resetTimer = startFirebaseDebugTimer('auth:password-reset', {
+      email: maskDebugEmail(resetEmail),
+      runtime: getRuntimeDebugContext(),
+    });
+
     try {
       await sendPasswordResetEmail(auth, resetEmail);
+      resetTimer.success({
+        email: maskDebugEmail(resetEmail),
+      });
       notifications.show({
         title: 'Reset Email Sent',
         message: 'Check your inbox for password reset instructions',
@@ -127,6 +150,9 @@ function LoginPage() {
       setResetModalOpen(false);
       setResetEmail('');
     } catch (err) {
+      resetTimer.failure(err, {
+        email: maskDebugEmail(resetEmail),
+      });
       let message = 'Unable to send reset email. Please try again later.';
       if (err.code === 'auth/invalid-email') {
         message = 'Please enter a valid email address.';
@@ -252,14 +278,21 @@ function AppLayout({ user }) {
   const location = useLocation();
 
   const handleLogout = async () => {
+    const logoutTimer = startFirebaseDebugTimer('auth:sign-out', {
+      currentUser: summarizeAuthUser(auth.currentUser),
+      runtime: getRuntimeDebugContext(),
+    });
+
     try {
       await signOut(auth);
+      logoutTimer.success();
       notifications.show({
         title: 'Logged Out',
         message: 'You have been successfully logged out',
         color: 'blue',
       });
-    } catch {
+    } catch (error) {
+      logoutTimer.failure(error);
       notifications.show({
         title: 'Error',
         message: 'Failed to log out. Please try again.',
@@ -290,22 +323,6 @@ function AppLayout({ user }) {
           </Group>
 
           <Group gap="md">
-            {/* Search */}
-            <TextInput
-              placeholder="Search..."
-              leftSection={<IconSearch size={16} />}
-              size="sm"
-              style={{ width: 200 }}
-              visibleFrom="md"
-            />
-
-            {/* Notifications */}
-            <Tooltip label="Notifications">
-              <ActionIcon variant="light" size="lg">
-                <IconBell size={18} />
-              </ActionIcon>
-            </Tooltip>
-
             {/* User Menu */}
             <Menu shadow="md" width={200} position="bottom-end">
               <Menu.Target>
@@ -322,13 +339,6 @@ function AppLayout({ user }) {
               </Menu.Target>
               <Menu.Dropdown>
                 <Menu.Label>Account</Menu.Label>
-                <Menu.Item leftSection={<IconUser size={14} />}>
-                  Profile
-                </Menu.Item>
-                <Menu.Item leftSection={<IconSettings size={14} />}>
-                  Preferences
-                </Menu.Item>
-                <Menu.Divider />
                 <Menu.Item
                   color="red"
                   leftSection={<IconLogout size={14} />}
@@ -404,11 +414,32 @@ function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    logFirebaseDebug('auth:state-listener:attach', {
+      currentUserBeforeAttach: summarizeAuthUser(auth.currentUser),
+      runtime: getRuntimeDebugContext(),
+    }, 'info');
+
     const unsubscribe = onAuthStateChanged(auth, (user) => {
+      logFirebaseDebug('auth:state-listener:changed', {
+        user: summarizeAuthUser(user),
+        runtime: getRuntimeDebugContext(),
+      }, user ? 'info' : 'warn');
       setUser(user);
       setLoading(false);
+    }, (error) => {
+      logFirebaseDebug('auth:state-listener:error', {
+        error,
+        runtime: getRuntimeDebugContext(),
+      }, 'error');
+      setLoading(false);
     });
-    return () => unsubscribe();
+
+    return () => {
+      logFirebaseDebug('auth:state-listener:unsubscribe', {
+        currentUserAtDetach: summarizeAuthUser(auth.currentUser),
+      });
+      unsubscribe();
+    };
   }, []);
 
   // Show loading while checking auth state

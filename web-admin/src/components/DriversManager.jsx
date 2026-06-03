@@ -51,14 +51,24 @@ const normalizeAssignmentTourIdInput = (value) => {
     .trim()
     .toUpperCase()
     .replace(/\s+/g, '_')
-    .replace(/[.#$\[\]/]/g, '');
+    .replace(/[.#$\[\]/]/g, '')
+    .replace(/^_+|_+$/g, '');
+};
+
+const resolveAssignmentTourIdInput = (...candidates) => {
+  for (const candidate of candidates) {
+    const normalized = normalizeAssignmentTourIdInput(candidate);
+    if (normalized) return normalized;
+  }
+
+  return '';
 };
 
 // Driver Card Component for the sidebar
 function DriverCard({ driverId, driver, isSelected, onClick }) {
   const assignedTours = driver.assignedTours || (driver.assignments ? Object.keys(driver.assignments) : []);
   const assignmentCount = assignedTours.length;
-  const resolvedCurrentTourId = driver.currentTourId || driver.activeTourId || '';
+  const resolvedCurrentTourId = resolveAssignmentTourIdInput(driver.currentTourId, driver.activeTourId);
   const isActive = !!resolvedCurrentTourId;
 
   return (
@@ -216,7 +226,7 @@ function DriverDetailsPanel({ driverId, driver }) {
       setEditName(driver.name || '');
       setEditPhone(driver.phone || '');
       // Legacy read fallback: display activeTourId if currentTourId is not populated yet.
-      setEditCurrentTourId(driver.currentTourId || driver.activeTourId || '');
+      setEditCurrentTourId(resolveAssignmentTourIdInput(driver.currentTourId, driver.activeTourId));
     }
   }, [driver]);
 
@@ -227,7 +237,7 @@ function DriverDetailsPanel({ driverId, driver }) {
     try {
       const nextName = editName.trim();
       const nextPhone = editPhone.trim();
-      const currentTourId = normalizeAssignmentTourIdInput(driver.currentTourId || driver.activeTourId || '');
+      const currentTourId = resolveAssignmentTourIdInput(driver.currentTourId, driver.activeTourId);
       const nextTourId = normalizeAssignmentTourIdInput(editCurrentTourId);
 
       if (!nextName) {
@@ -363,7 +373,7 @@ function DriverDetailsPanel({ driverId, driver }) {
   };
 
   const createdDate = formatDateTimeForDisplay(driver?.createdAt, 'Unknown');
-  const resolvedCurrentTourId = driver?.currentTourId || driver?.activeTourId || '';
+  const resolvedCurrentTourId = resolveAssignmentTourIdInput(driver?.currentTourId, driver?.activeTourId);
 
   return (
     <Box>
@@ -523,7 +533,7 @@ export function DriversManager() {
     return () => unsubscribe();
   }, []);
 
-  const resolveCurrentTourId = (driver) => driver?.currentTourId || driver?.activeTourId || '';
+  const resolveCurrentTourId = (driver) => resolveAssignmentTourIdInput(driver?.currentTourId, driver?.activeTourId);
 
   // Filter drivers by search term
   const filteredDrivers = useMemo(() => {

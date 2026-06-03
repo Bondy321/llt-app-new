@@ -137,6 +137,71 @@ test('selectNotificationRecipients skips explicit unavailable token states but k
   );
 });
 
+test('selectNotificationRecipients sends once per unique Expo push token', () => {
+  const result = __testables.selectNotificationRecipients({
+    participantIds: ['auth-uid-1', 'auth-uid-2', 'auth-uid-3'],
+    usersMap: {
+      'auth-uid-1': {
+        pushToken: ' ExponentPushToken[shared-token] ',
+        preferences: { ops: { group_chat: true } },
+      },
+      'auth-uid-2': {
+        pushToken: 'ExponentPushToken[shared-token]',
+        preferences: { ops: { group_chat: true } },
+      },
+      'auth-uid-3': {
+        pushToken: 'ExponentPushToken[unique-token]',
+        preferences: { ops: { group_chat: true } },
+      },
+    },
+    preferencePath: ['preferences', 'ops', 'group_chat'],
+    senderId: null,
+    excludeSender: false,
+    context: { tourId: 'tour-1', notificationType: 'chat' },
+  });
+
+  assert.deepEqual(
+    result.validRecipients.map((recipient) => recipient.userId),
+    ['auth-uid-1', 'auth-uid-3'],
+  );
+  assert.deepEqual(
+    result.validRecipients.map((recipient) => recipient.userData.pushToken),
+    ['ExponentPushToken[shared-token]', 'ExponentPushToken[unique-token]'],
+  );
+  assert.equal(result.duplicateTokenRecipientCount, 1);
+});
+
+test('selectNotificationRecipients excludes stale participant profiles sharing the sender push token', () => {
+  const result = __testables.selectNotificationRecipients({
+    participantIds: ['current-auth-uid', 'old-auth-uid', 'recipient-auth-uid'],
+    usersMap: {
+      'current-auth-uid': {
+        pushToken: 'ExponentPushToken[current-device]',
+        preferences: { ops: { group_chat: true } },
+      },
+      'old-auth-uid': {
+        pushToken: 'ExponentPushToken[current-device]',
+        preferences: { ops: { group_chat: true } },
+      },
+      'recipient-auth-uid': {
+        pushToken: 'ExponentPushToken[recipient-device]',
+        preferences: { ops: { group_chat: true } },
+      },
+    },
+    preferencePath: ['preferences', 'ops', 'group_chat'],
+    senderId: 'pax_v1:T123659:msandreayoung@yahoo.co.uk',
+    senderParticipantIds: ['current-auth-uid'],
+    excludeSender: true,
+    context: { tourId: 'tour-1', notificationType: 'chat' },
+  });
+
+  assert.deepEqual(
+    result.validRecipients.map((recipient) => recipient.userId),
+    ['recipient-auth-uid'],
+  );
+  assert.equal(result.excludedSenderTokenRecipientCount, 1);
+});
+
 test('getPushTokenIneligibilityReason reports token and permission suppression reasons', () => {
   assert.equal(
     __testables.getPushTokenIneligibilityReason({ pushTokenStatus: 'UNAVAILABLE' }),
@@ -201,6 +266,10 @@ test('isDriverProfileAssignedToTour accepts canonical and legacy active tour mat
   );
   assert.equal(
     __testables.isDriverProfileAssignedToTour({ activeTourId: '5112D_8' }, '5112D_8'),
+    true,
+  );
+  assert.equal(
+    __testables.isDriverProfileAssignedToTour({ activeTourId: '5112d 8' }, '5112D_8'),
     true,
   );
   assert.equal(

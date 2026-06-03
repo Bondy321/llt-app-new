@@ -126,3 +126,37 @@ test('offline passenger login succeeds when cached session uses legacy email key
   assert.equal(result.success, true);
   assert.equal(result.source, 'session');
 });
+
+test('offline tour-pack lookup normalizes cached tour identity before reading cache keys', async () => {
+  const seenTourIds = [];
+
+  const result = await resolveOfflineLoginFromCache({
+    reference: 'ABC123',
+    normalizedEmail: 'passenger@example.com',
+    sessionStorage: createSessionStorage(
+      { id: ' ///  ### ', tourCode: '5112d 8' },
+      { id: 'OTHER', normalizedPassengerEmail: 'other@example.com' }
+    ),
+    sessionKeys,
+    offlineSyncService: {
+      getTourPackMeta: async (tourId) => {
+        seenTourIds.push(tourId);
+        return { success: true, data: { lastSyncedAt: new Date().toISOString() } };
+      },
+      getTourPack: async (tourId) => {
+        seenTourIds.push(tourId);
+        return {
+          success: true,
+          data: {
+            tour: { id: tourId },
+            booking: { id: 'ABC123', normalizedPassengerEmail: 'passenger@example.com' },
+          },
+        };
+      },
+    },
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.source, 'tour-pack');
+  assert.deepEqual(seenTourIds, ['5112D_8', '5112D_8']);
+});

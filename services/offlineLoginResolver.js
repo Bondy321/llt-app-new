@@ -7,6 +7,7 @@ const OFFLINE_LOGIN_REASONS = {
 };
 
 const OFFLINE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
+const { resolveTourId } = require('./tourIdentityService');
 
 const normalizePassengerEmail = (email) => (typeof email === 'string' ? email.trim().toLowerCase() : '');
 
@@ -72,7 +73,7 @@ const resolveOfflineLoginFromCache = async ({
     const cachedSessionId = (cachedBookingData?.id || '').toUpperCase();
     const isDriverCode = normalizedReference.startsWith('D-');
     const expectedRole = isDriverCode ? 'driver' : 'passenger';
-    const cachedTourId = cachedTourData?.id || cachedBookingData?.assignedTourId || null;
+    const cachedTourId = resolveTourId(cachedTourData?.id, cachedBookingData?.assignedTourId, cachedTourData?.tourCode);
 
     const evaluatePassengerEmailMatch = (identity) => {
       if (expectedRole === 'driver') return { matches: true, reason: null };

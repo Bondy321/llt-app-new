@@ -16,6 +16,7 @@ import * as chatService from './services/chatService';
 import offlineLoginResolver from './services/offlineLoginResolver';
 import { migrateRecentChatMessagesForStableIdentity } from './services/chatIdentityMigrationService';
 import { getCanonicalIdentity, resolveAuthScopedUserId, toRealtimeKeySegment } from './services/identityService';
+import { normalizeTourId, resolveTourId } from './services/tourIdentityService';
 import {
   installGlobalCrashDiagnostics,
   recordBreadcrumb as recordCrashBreadcrumb,
@@ -182,7 +183,7 @@ function AppContent() {
     await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
   };
 
-  const diagnosticsTourId = tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
+  const diagnosticsTourId = resolveTourId(tourData?.id, tourData?.tourCode);
   const diagnosticsRole = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
   const { isConnected, firebaseConnected } = useDiagnostics({
     onForeground: refreshAppData,
@@ -307,15 +308,14 @@ function AppContent() {
       [`drivers/${normalizedDriverId}/lastActive`]: new Date(now).toISOString(),
     };
 
-    if (assignedTourId) {
-      updates[`users/${authUid}/driverAssignedTourId`] = assignedTourId;
-    }
+    const normalizedAssignedTourId = normalizeTourId(assignedTourId);
+    updates[`users/${authUid}/driverAssignedTourId`] = normalizedAssignedTourId;
 
     await realtimeDb.ref().update(updates);
     return {
       profilePersisted: true,
       driverId: normalizedDriverId,
-      assignedTourId: assignedTourId || null,
+      assignedTourId: normalizedAssignedTourId || null,
     };
   }, []);
 
@@ -323,7 +323,7 @@ function AppContent() {
     const driverId = typeof bookingData?.id === 'string' && bookingData.id.trim().toUpperCase().startsWith('D-')
       ? bookingData.id.trim().toUpperCase()
       : null;
-    const assignedTourId = tourData?.id || bookingData?.assignedTourId || null;
+    const assignedTourId = resolveTourId(tourData?.id, bookingData?.assignedTourId, tourData?.tourCode);
     const authUid = user?.uid || null;
 
     if (!authUid || !driverId) return undefined;
@@ -625,16 +625,17 @@ function AppContent() {
   };
 
   const handleDriverAssignmentChange = async ({ assignedTourId }) => {
-    if (!assignedTourId) return;
+    const normalizedAssignedTourId = normalizeTourId(assignedTourId);
+    if (!normalizedAssignedTourId) return;
 
     const updatedBookingData = {
       ...(bookingData || {}),
-      assignedTourId,
+      assignedTourId: normalizedAssignedTourId,
     };
 
     setBookingData((previous) => ({
       ...(previous || {}),
-      assignedTourId,
+      assignedTourId: normalizedAssignedTourId,
     }));
 
     try {
@@ -642,7 +643,7 @@ function AppContent() {
         [SESSION_KEYS.BOOKING_DATA, JSON.stringify(updatedBookingData)],
       ]);
     } catch (error) {
-      logger.error('Session', 'Failed to persist driver assignment', { error: error.message, assignedTourId });
+      logger.error('Session', 'Failed to persist driver assignment', { error: error.message, assignedTourId: normalizedAssignedTourId });
     }
   };
 
@@ -1057,7 +1058,7 @@ case 'Itinerary':
         const backScreen = isDriver ? 'DriverHome' : 'TourHome';
         
         // Use params if passed (from DriverHome), otherwise fall back to standard state
-        const chatTourId = screenParams.tourId || tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
+        const chatTourId = resolveTourId(screenParams.tourId, tourData?.id, tourData?.tourCode);
         
         // Construct booking data for chat if we are in driver mode (since driver doesn't have standard bookingData)
         const effectiveBookingData = isDriver 
@@ -1083,7 +1084,7 @@ case 'Itinerary':
         );
       case 'Map':
         // Use active tour ID if passed, else fall back to session data
-        const mapTourId = screenParams.tourId || tourData?.id || tourData?.tourCode?.replace(/\s+/g, '_');
+        const mapTourId = resolveTourId(screenParams.tourId, tourData?.id, tourData?.tourCode);
         return <MapScreen {...screenProps} onBack={() => navigateTo('TourHome')} tourId={mapTourId} tourData={tourData} />;
       case 'NotificationPreferences':
         const notificationReturnTarget = screenParams?.returnTo || (isDriverSession ? 'DriverHome' : 'TourHome');

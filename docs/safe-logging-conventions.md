@@ -20,6 +20,14 @@ All app logging must route through `services/loggerService.js` to prevent leakin
 Representative protected keys include:
 `bookingRef`, `reference`, `driverCode`, `token`, `pushToken`, `authUid`, `uid`, `userId`, `sessionId`, `authorization`, `password`.
 
+## Curated operations alerts
+
+Major mobile failures now also produce compact records under `ops_alerts/{fingerprint}` for the web-admin Operations / Health / Errors surface. Raw logs remain under `/logs` and are not scanned by the browser dashboard.
+
+Only `ERROR` and `FATAL` logger entries and global crash diagnostics create/update ops alerts. The curated record must contain bounded, sanitised fields only: severity, level, source, component, message, status, masked user/session display keys, device info, safe tour/role context, fingerprint, count, last seen timestamps, and a short summary or crash breadcrumb summary.
+
+Never add raw stack traces, raw auth UIDs, raw session IDs, booking references, emails, tokens, push tokens, passwords, driver codes, or authorization values to `ops_alerts`. Use `services/opsAlertService.js` helpers instead of hand-building alert records.
+
 ## Temporary verbose RTDB diagnostics
 
 For the current smoke-test pass, `loggerService` is configured to upload `DEBUG` and `INFO` logs to `/logs/{user}/{session}` as well as warnings and errors. Keep new diagnostic call sites routed through `loggerService` or the existing crash diagnostics helpers, and keep identifiers masked/summarized. After the smoke run has exposed the underlying issues, tune the server upload floor back down or gate it behind a runtime flag before release.

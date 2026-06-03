@@ -1372,7 +1372,7 @@ export default function ToursManager() {
   const [tours, setTours] = useState({});
   const [drivers, setDrivers] = useState({});
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState(searchParams.get('q') || '');
   const [viewMode, setViewMode] = useState('grid');
   const [currentPage, setCurrentPage] = useState(1);
   const [syncStatus, setSyncStatus] = useState('syncing');
@@ -1380,6 +1380,7 @@ export default function ToursManager() {
   const allowedStatusParams = useMemo(() => new Set(['all', 'assigned', 'unassigned', 'active', 'inactive']), []);
   const statusParam = searchParams.get('status');
   const filterStatus = statusParam && allowedStatusParams.has(statusParam) ? statusParam : 'all';
+  const queryParam = searchParams.get('q') || '';
 
   // Modal states
   const [createModalOpened, { open: openCreateModal, close: closeCreateModal }] = useDisclosure(false);
@@ -1414,6 +1415,32 @@ export default function ToursManager() {
     setSearchParams(nextParams);
   };
 
+  const handleSearchTermChange = (value) => {
+    const nextSearchTerm = value || '';
+    const currentQueryParam = searchParams.get('q') || '';
+
+    setSearchTerm(nextSearchTerm);
+    setCurrentPage(1);
+
+    if (currentQueryParam === nextSearchTerm.trim()) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    if (nextSearchTerm.trim()) {
+      nextParams.set('q', nextSearchTerm.trim());
+    } else {
+      nextParams.delete('q');
+    }
+
+    setSearchParams(nextParams);
+  };
+
+  useEffect(() => {
+    setSearchTerm(queryParam);
+    setCurrentPage(1);
+  }, [queryParam]);
+
   // Load data from Firebase
   useEffect(() => {
     const toursRef = ref(db, 'tours');
@@ -1422,8 +1449,7 @@ export default function ToursManager() {
     const unsubTours = onValue(toursRef, (snapshot) => {
       setTours(snapshot.val() || {});
       setSyncStatus('connected');
-    }, (error) => {
-      console.error('Tours sync error:', error);
+    }, () => {
       setSyncStatus('error');
     });
 
@@ -1698,10 +1724,7 @@ export default function ToursManager() {
               placeholder="Search tours, codes, drivers..."
               leftSection={<IconSearch size={16} />}
               value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setCurrentPage(1);
-              }}
+              onChange={(e) => handleSearchTermChange(e.target.value)}
               style={{ width: 280 }}
             />
             <Select

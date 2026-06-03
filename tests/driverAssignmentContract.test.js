@@ -5,6 +5,7 @@ const {
   buildAssignedDriverCodePayload,
   normalizeAssignedDriverCodeRecord,
 } = require('../services/bookingServiceRealtime');
+const { normalizeTourId, resolveTourId } = require('../services/tourIdentityService');
 
 test('buildAssignedDriverCodePayload returns canonical keys and casing', () => {
   const payload = buildAssignedDriverCodePayload({
@@ -52,4 +53,14 @@ test('normalizeAssignedDriverCodeRecord supports legacy string payloads temporar
   assert.equal(normalized.legacy, true);
   assert.equal(normalized.tourId, '5112D_8');
   assert.equal(normalized.tourCode, '5112D 8');
+});
+
+test('normalizeTourId matches admin tour key normalization for usable tour codes', () => {
+  assert.equal(normalizeTourId(' 5112d 8 '), '5112D_8');
+  assert.equal(normalizeTourId('ops.#$[]/ tour'), 'OPS_TOUR');
+  assert.equal(normalizeTourId(' ///  ###  '), null);
+});
+
+test('resolveTourId skips invalid candidates before falling back', () => {
+  assert.equal(resolveTourId(' ///  ###  ', ' 5112d 8 '), '5112D_8');
 });

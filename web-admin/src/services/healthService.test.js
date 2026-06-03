@@ -30,6 +30,19 @@ describe('healthService derivation', () => {
     expect(state).toBe(HEALTH_STATE.ONLINE_BACKEND_DEGRADED);
   });
 
+  it('returns ONLINE_BACKEND_DEGRADED when Firebase is reachable but a listener is denied', () => {
+    const state = deriveHealthState({
+      isOnline: true,
+      listenerConnected: false,
+      listenerErrorCount: 1,
+      pendingFailedOperations: 1,
+      backlogPendingCount: 0,
+      lastSuccessfulSyncAt: new Date().toISOString(),
+    });
+
+    expect(state).toBe(HEALTH_STATE.ONLINE_BACKEND_DEGRADED);
+  });
+
   it('returns ONLINE_BACKLOG_PENDING when sync is stale', () => {
     const staleDate = new Date('2026-01-01T10:00:00.000Z').toISOString();
     const state = deriveHealthState(

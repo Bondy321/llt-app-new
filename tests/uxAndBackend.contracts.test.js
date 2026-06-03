@@ -128,6 +128,55 @@ test('Static contract: remote logger uploads stay warning-plus by default outsid
   assert.doesNotMatch(loggerSource, /VERBOSE_RTDB_LOGGING_ENABLED\s*=\s*true/);
 });
 
+test('Static contract: curated ops alerts stay separate from raw logs and schema-gated', () => {
+  const rules = readJson('database.rules.json');
+  const opsAlerts = rules.rules.ops_alerts;
+  const adminUsers = rules.rules.admin_users;
+
+  assert.equal(
+    rules.rules.logs.$userId['.read'],
+    "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
+  );
+  assert.equal(
+    adminUsers['.read'],
+    "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+  );
+  assert.equal(
+    adminUsers.$uid['.write'],
+    "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+  );
+  assert.equal(adminUsers.$uid['.validate'], '!newData.exists() || newData.val() === true');
+  assert.equal(
+    opsAlerts['.read'],
+    "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+  );
+  assert.deepEqual(opsAlerts['.indexOn'], ['createdAtMs', 'lastSeenAtMs', 'severity', 'status']);
+  assert.match(opsAlerts.$alertId['.write'], /auth\.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'/);
+  assert.match(opsAlerts.$alertId['.write'], /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
+  assert.match(opsAlerts.$alertId['.write'], /newData\.child\('fingerprint'\)\.val\(\) === \$alertId/);
+  assert.match(opsAlerts.$alertId['.validate'], /newData\.hasChildren\(\['alertVersion', 'fingerprint', 'createdAt', 'createdAtMs'/);
+  assert.match(opsAlerts.$alertId['.validate'], /newData\.child\('message'\)\.val\(\)\.length <= 240/);
+  assert.match(opsAlerts.$alertId['.validate'], /newData\.child\('summary'\)\.val\(\)\.length <= 600/);
+  assert.match(opsAlerts.$alertId['.validate'], /newData\.child\('source'\)\.val\(\) === 'mobile_logger'/);
+  assert.match(opsAlerts.$alertId['.validate'], /newData\.child\('source'\)\.val\(\) === 'crash_diagnostics'/);
+  assert.equal(opsAlerts.$alertId.deviceInfo.$other['.validate'], false);
+  assert.equal(opsAlerts.$alertId.$other['.validate'], false);
+});
+
+test('Static contract: dashboard broadcast root reads and writes stay Firebase-backed', () => {
+  const rules = readJson('database.rules.json');
+  const broadcasts = rules.rules.broadcasts;
+
+  assert.equal(broadcasts['.read'], 'auth != null');
+  assert.equal(broadcasts.$tourId['.read'], 'auth != null');
+  assert.deepEqual(broadcasts.$tourId['.indexOn'], ['createdAtMs']);
+  assert.equal(
+    broadcasts.$tourId.$broadcastId['.write'],
+    "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+  );
+  assert.match(broadcasts.$tourId.$broadcastId['.validate'], /newData\.child\('createdByUid'\)\.val\(\) === auth\.uid/);
+});
+
 test('Static contract: photo variant lifecycle fields stay allowed by database rules', () => {
   const rules = readJson('database.rules.json');
   const groupPhotoValidate = rules.rules.group_tour_photos.$tourId.$photoId['.validate'];

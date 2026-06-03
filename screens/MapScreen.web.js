@@ -5,9 +5,11 @@ import { COLORS, SPACING, RADIUS } from '../theme';
 
 export default function MapScreen({ onBack, tourData }) {
   const driverLocation = tourData?.driverLocation;
-  const hasCoords = Number.isFinite(driverLocation?.lat) && Number.isFinite(driverLocation?.lng);
+  const latitude = Number(driverLocation?.latitude ?? driverLocation?.lat);
+  const longitude = Number(driverLocation?.longitude ?? driverLocation?.lng);
+  const hasCoords = Number.isFinite(latitude) && Number.isFinite(longitude);
   const mapsUrl = hasCoords
-    ? `https://www.google.com/maps?q=${driverLocation.lat},${driverLocation.lng}`
+    ? `https://www.google.com/maps?q=${latitude},${longitude}`
     : null;
 
   const handleOpenInMaps = async () => {
@@ -26,7 +28,7 @@ export default function MapScreen({ onBack, tourData }) {
         {hasCoords ? (
           <>
             <Text style={styles.coords}>
-              Driver coordinates: {driverLocation.lat.toFixed(5)}, {driverLocation.lng.toFixed(5)}
+              Driver coordinates: {latitude.toFixed(5)}, {longitude.toFixed(5)}
             </Text>
             <TouchableOpacity style={styles.primaryButton} onPress={handleOpenInMaps}>
               <Text style={styles.primaryButtonText}>Open in Google Maps</Text>

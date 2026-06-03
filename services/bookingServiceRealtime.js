@@ -8,6 +8,7 @@ let recordCrashBreadcrumb;
 let getCurrentAppCheckToken;
 let maskIdentifier = (value) => value;
 const { loadOptionalService } = require('./optionalServiceLoader');
+const { normalizeTourId, resolveTourId } = require('./tourIdentityService');
 
 // Status Enums for the Manifest
 const MANIFEST_STATUS = {
@@ -353,20 +354,11 @@ const validatePassengerStatuses = (statuses) => {
 
 // --- HELPER: Sanitize Tour IDs (e.g., "5112D 8" -> "5112D_8") ---
 const sanitizeTourId = (tourCode) => {
-  return tourCode ? tourCode.replace(/\s+/g, '_') : null;
+  return normalizeTourId(tourCode);
 };
 
 const normalizeTourIdentifier = (candidate) => {
-  if (typeof candidate !== 'string') return null;
-
-  const trimmed = candidate.trim();
-  if (!trimmed) return null;
-
-  const sanitized = sanitizeTourId(trimmed.toUpperCase());
-  if (!sanitized) return null;
-
-  const keySafe = sanitized.replace(/[.#$\[\]/]/g, '');
-  return keySafe || null;
+  return normalizeTourId(candidate);
 };
 
 const isValidNormalizedTourId = (tourId) => {
@@ -967,13 +959,18 @@ const assignDriverToTour = async (driverId, tourCode) => {
       throw new Error('Driver not found');
     }
 
+    const tourData = tourSnapshot.val() || {};
+    const canonicalTourCode = typeof tourData.tourCode === 'string' && tourData.tourCode.trim()
+      ? tourData.tourCode.trim()
+      : validatedTourCode;
     const driverData = driverSnapshot.val() || {};
-    const previousTourId = driverData.currentTourId ? sanitizeTourId(driverData.currentTourId) : null;
+    const previousTourId = resolveTourId(driverData.currentTourId, driverData.activeTourId);
     const updates = {};
 
     // 1. Update Driver's Profile
     updates[`drivers/${validatedDriverId}/currentTourId`] = tourId;
-    updates[`drivers/${validatedDriverId}/currentTourCode`] = validatedTourCode;
+    updates[`drivers/${validatedDriverId}/currentTourCode`] = canonicalTourCode;
+    updates[`drivers/${validatedDriverId}/activeTourId`] = null;
     updates[`drivers/${validatedDriverId}/lastActive`] = new Date().toISOString();
     updates[`drivers/${validatedDriverId}/authUid`] = currentUser.uid;
     updates[`users/${currentUser.uid}/driverId`] = validatedDriverId;
@@ -987,7 +984,7 @@ const assignDriverToTour = async (driverId, tourCode) => {
     updates[`tour_manifests/${tourId}/assigned_driver_codes/${validatedDriverId}`] = buildAssignedDriverCodePayload({
       driverId: validatedDriverId,
       tourId,
-      tourCode: validatedTourCode,
+      tourCode: canonicalTourCode,
       assignedAt: new Date().toISOString(),
       assignedBy: currentUser.uid,
     });
@@ -1040,7 +1037,7 @@ const validateBookingReference = async (reference, email) => {
 
     if (driverSnapshot.exists()) {
       const driverData = driverSnapshot.val();
-      let assignedTourId = sanitizeTourId(driverData.currentTourId) || null;
+      let assignedTourId = resolveTourId(driverData.currentTourId, driverData.activeTourId);
       let assignedTourCode = driverData.currentTourCode || null;
 
       if (!assignedTourId) {
@@ -1067,9 +1064,13 @@ const validateBookingReference = async (reference, email) => {
       if (assignedTourId) {
         const driverTourSnapshot = await realtimeDb.ref(`tours/${assignedTourId}`).once('value');
         if (driverTourSnapshot.exists()) {
+          const driverTourData = driverTourSnapshot.val() || {};
+          if (!assignedTourCode && typeof driverTourData.tourCode === 'string' && driverTourData.tourCode.trim()) {
+            assignedTourCode = driverTourData.tourCode.trim();
+          }
           resolvedTour = {
             id: assignedTourId,
-            ...driverTourSnapshot.val(),
+            ...driverTourData,
           };
         }
       }
