@@ -702,19 +702,22 @@ Testing hook:
 
 Migration/maintenance scripts:
 
-- `npm --prefix functions run migrate:assigned-driver-codes`
-- `npm --prefix functions run migrate:private-photo-owners`
-- `npm --prefix functions run backfill:photo-variants`
-- `node functions/scripts/normalizeLegacyBroadcastTimestamps.js`
+- `npm --prefix functions run migrate:assigned-driver-codes -- --dry-run`
+- `npm --prefix functions run migrate:assigned-driver-codes -- --apply --tourId=...`
+- `npm --prefix functions run migrate:private-photo-owners -- --dry-run --tourId=...`
+- `npm --prefix functions run migrate:private-photo-owners -- --apply --tourId=...`
+- `npm --prefix functions run backfill:photo-variants -- --dry-run --limit=50`
+- `node functions/scripts/normalizeLegacyBroadcastTimestamps.js --dry-run --tourId=...`
 
 Photo variant backfill example:
 
 ```bash
 npm --prefix functions run backfill:photo-variants -- --dry-run --limit=50
-npm --prefix functions run backfill:photo-variants -- --apply --limit=50
+npm --prefix functions run backfill:photo-variants -- --apply --tourId=5112D_8 --limit=50
 ```
 
 Use `--visibility=group|private`, `--tourId=...`, and `--ownerKey=...` to narrow photo variant backfills.
+Broad apply runs without `--tourId` require `--allow-full-scan`.
 
 ---
 

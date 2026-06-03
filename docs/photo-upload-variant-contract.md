@@ -58,3 +58,4 @@ npm --prefix functions run backfill:photo-variants -- --dry-run --limit=50
 ```
 
 Apply with `--apply` after reviewing the dry-run output. Use `--visibility=group|private`, `--tourId=...`, and `--ownerKey=...` to narrow the run.
+Apply runs across every tour require `--allow-full-scan`; prefer `--tourId=...` for production batches.

@@ -42,6 +42,8 @@ Legacy string values may still exist under `assigned_driver_codes/{driverId}`. R
 2. tolerate legacy strings while migration completes,
 3. never emit new legacy string writes.
 
+Use `npm --prefix functions run migrate:assigned-driver-codes -- --dry-run` to inspect legacy leaves, then rerun with `--apply --tourId=...` after reviewing the summary. Broad apply runs without `--tourId` require `--allow-full-scan`.
+
 ## Producers
 
 - Mobile: `services/bookingServiceRealtime.js` (`assignDriverToTour`)

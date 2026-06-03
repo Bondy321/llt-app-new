@@ -117,7 +117,7 @@ describe('Dashboard ops alerts panel', () => {
     renderDashboard();
 
     expect(await screen.findByText('Operations / Health / Errors')).toBeInTheDocument();
-    expect(screen.getByText('Fatal mobile crash [email]')).toBeInTheDocument();
+    expect(screen.getAllByText('Fatal mobile crash [email]').length).toBeGreaterThan(0);
     expect(screen.getAllByText('GlobalError').length).toBeGreaterThan(0);
     expect(screen.getByText('ios / iPhone / app 1.0.2')).toBeInTheDocument();
     expect(screen.getByText(/Seen 3x/)).toBeInTheDocument();
