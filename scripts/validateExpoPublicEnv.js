@@ -17,7 +17,6 @@ const ANDROID_REQUIRED_ENV_VARS = [
 const OPTIONAL_ENV_VARS = [
   'EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID',
   'EXPO_PUBLIC_SUPPORT_PHONE',
-  'EXPO_PUBLIC_SUPPORT_SMS',
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL',
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS',
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK',
@@ -73,10 +72,6 @@ const FORMAT_CHECKS = {
     message: 'expected a Google Maps API key that starts with AIza',
   },
   EXPO_PUBLIC_SUPPORT_PHONE: {
-    pattern: /^\+[1-9]\d{7,14}$/,
-    message: 'expected an E.164 phone number like +441414876737',
-  },
-  EXPO_PUBLIC_SUPPORT_SMS: {
     pattern: /^\+[1-9]\d{7,14}$/,
     message: 'expected an E.164 phone number like +441414876737',
   },

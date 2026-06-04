@@ -13,6 +13,7 @@ const validEnv = {
   EXPO_PUBLIC_FIREBASE_APP_ID: '1:500767842880:web:b27b5630eed50e6ea4f5a5',
   EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID: 'G-D46EKN8EDZ',
   EXPO_PUBLIC_GOOGLE_MAPS_API_KEY: `AIza${'b'.repeat(32)}`,
+  EXPO_PUBLIC_SUPPORT_PHONE: '+441414876737',
   EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: 'false',
   EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: 'false',
 };
@@ -46,17 +47,15 @@ test('validateExpoPublicEnv rejects unresolved EAS aliases and placeholders', ()
   assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN')));
 });
 
-test('validateExpoPublicEnv rejects placeholder or malformed optional support numbers', () => {
+test('validateExpoPublicEnv rejects placeholder optional support phone numbers', () => {
   const result = validateExpoPublicEnv(
     {
       ...validEnv,
       EXPO_PUBLIC_SUPPORT_PHONE: '+441234567890',
-      EXPO_PUBLIC_SUPPORT_SMS: '0141 487 6737',
     },
     { platform: 'all' }
   );
 
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_SUPPORT_PHONE')));
-  assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_SUPPORT_SMS')));
 });

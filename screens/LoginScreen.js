@@ -89,7 +89,6 @@ const FONT_WEIGHT = THEME_FONT_WEIGHT || {
 };
 
 const SUPPORT_PHONE = process.env.EXPO_PUBLIC_SUPPORT_PHONE?.trim();
-const SUPPORT_SMS = process.env.EXPO_PUBLIC_SUPPORT_SMS?.trim();
 
 const createErrorState = (message, options = {}) => ({
   title: options.title || 'Login issue',
@@ -209,15 +208,11 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
   };
 
   const handleContactSupport = async () => {
-    const trimmedCode = bookingReference.trim().toUpperCase();
-    const supportMessage = `Hi LLT Support, I need help logging in${trimmedCode ? ` with code ${trimmedCode}` : ''}.`;
-
     activeLogger?.trackEvent('offline_login_cta_clicked', {
       cta: 'contact_support',
       reason: errorState?.reason,
       isConnected,
       hasPhone: Boolean(SUPPORT_PHONE),
-      hasSms: Boolean(SUPPORT_SMS),
     });
 
     const openSupportUrl = async (url, method) => {
@@ -234,11 +229,6 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         return false;
       }
     };
-
-    if (SUPPORT_SMS) {
-      const smsUrl = `sms:${SUPPORT_SMS}?body=${encodeURIComponent(supportMessage)}`;
-      if (await openSupportUrl(smsUrl, 'sms')) return;
-    }
 
     if (SUPPORT_PHONE) {
       const telUrl = `tel:${SUPPORT_PHONE}`;
