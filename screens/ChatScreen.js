@@ -568,6 +568,7 @@ const MessageActionMenu = ({
   onCopyLink,
   onOpenLink,
   canDelete,
+  allowReactions = true,
   insets,
 }) => {
   if (!visible) return null;
@@ -607,31 +608,33 @@ const MessageActionMenu = ({
             </Text>
           </View>
 
-          <View style={styles.actionQuickReactionRow}>
-            {QUICK_REACTIONS.map((emoji) => (
+          {allowReactions && (
+            <View style={styles.actionQuickReactionRow}>
+              {QUICK_REACTIONS.map((emoji) => (
+                <TouchableOpacity
+                  key={`quick-reaction-${emoji}`}
+                  style={styles.actionQuickReaction}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    onReact(emoji);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.actionQuickReactionEmoji}>{emoji}</Text>
+                </TouchableOpacity>
+              ))}
               <TouchableOpacity
-                key={`quick-reaction-${emoji}`}
                 style={styles.actionQuickReaction}
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  onReact(emoji);
+                  onOpenReactionPicker();
                 }}
                 activeOpacity={0.7}
               >
-                <Text style={styles.actionQuickReactionEmoji}>{emoji}</Text>
+                <MaterialCommunityIcons name="dots-horizontal" size={20} color={COLORS.secondaryText} />
               </TouchableOpacity>
-            ))}
-            <TouchableOpacity
-              style={styles.actionQuickReaction}
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                onOpenReactionPicker();
-              }}
-              activeOpacity={0.7}
-            >
-              <MaterialCommunityIcons name="dots-horizontal" size={20} color={COLORS.secondaryText} />
-            </TouchableOpacity>
-          </View>
+            </View>
+          )}
 
           <TouchableOpacity
             style={styles.actionMenuItem}
@@ -1342,6 +1345,7 @@ const MessageBubble = React.memo(({
   highlightedReplyTargetMessageId,
   currentUserId,
   currentUserIds,
+  reactionsEnabled = true,
   canRetry,
   isRetrying,
   onRetry,
@@ -1534,13 +1538,15 @@ const MessageBubble = React.memo(({
             </TouchableOpacity>
           )}
 
-          <MessageReactions
-            reactions={message?.reactions}
-            onReactionPress={onReactionPress}
-            messageId={message?.id}
-            currentUserId={currentUserId}
-            currentUserIds={currentUserIds}
-          />
+          {reactionsEnabled && (
+            <MessageReactions
+              reactions={message?.reactions}
+              onReactionPress={onReactionPress}
+              messageId={message?.id}
+              currentUserId={currentUserId}
+              currentUserIds={currentUserIds}
+            />
+          )}
         </View>
       </View>
     </Pressable>
@@ -1651,6 +1657,7 @@ const ChatComposer = React.memo(({
   sending,
   replyingToMessage,
   showAttachmentMenu,
+  attachmentsEnabled = true,
   onComposerLayout,
   onCancelReply,
   onToggleAttachments,
@@ -1687,19 +1694,21 @@ const ChatComposer = React.memo(({
       )}
 
       <View style={styles.composerInputRow}>
-        <TouchableOpacity
-          style={styles.attachButton}
-          onPress={onToggleAttachments}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-          accessibilityLabel={showAttachmentMenu ? 'Close attachments' : 'Open attachments'}
-        >
-          <MaterialCommunityIcons
-            name={showAttachmentMenu ? 'close' : 'plus-circle'}
-            size={28}
-            color={showAttachmentMenu ? COLORS.secondaryText : COLORS.primaryBlue}
-          />
-        </TouchableOpacity>
+        {attachmentsEnabled && (
+          <TouchableOpacity
+            style={styles.attachButton}
+            onPress={onToggleAttachments}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={showAttachmentMenu ? 'Close attachments' : 'Open attachments'}
+          >
+            <MaterialCommunityIcons
+              name={showAttachmentMenu ? 'close' : 'plus-circle'}
+              size={28}
+              color={showAttachmentMenu ? COLORS.secondaryText : COLORS.primaryBlue}
+            />
+          </TouchableOpacity>
+        )}
 
         <TextInput
           style={[
@@ -1840,6 +1849,7 @@ export default function ChatScreen({
     };
   }, [identityBindingProp, bookingData?.identityBinding, bookingData?.stablePassengerId]);
   const isDriver = bookingData?.isDriver === true;
+  const chatScope = internalDriverChat ? 'internal' : 'group';
   const canonicalIdentity = useMemo(
     () => canonicalIdentityProp || getCanonicalIdentity({
       authUser: currentUser,
@@ -2005,6 +2015,12 @@ export default function ChatScreen({
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    if (!internalDriverChat) return;
+    setShowAttachmentMenu(false);
+    setShowReactionPicker(false);
+  }, [internalDriverChat]);
 
   const updateUnreadJumpVisibility = useCallback((scrollY, anchorY) => {
     if (anchorY == null) {
@@ -2272,17 +2288,23 @@ export default function ChatScreen({
   useEffect(() => {
     if (!tourId || !realtimeActorId) return;
 
-    const unsubscribe = subscribeToTypingIndicators(tourId, realtimeActorId, setTypingUsers);
+    const unsubscribe = subscribeToTypingIndicators(
+      tourId,
+      realtimeActorId,
+      setTypingUsers,
+      undefined,
+      { scope: chatScope }
+    );
     return () => unsubscribe();
-  }, [tourId, realtimeActorId]);
+  }, [chatScope, tourId, realtimeActorId]);
 
   // Subscribe to presence
   useEffect(() => {
     if (!tourId) return;
 
-    const unsubscribe = subscribeToPresence(tourId, setPresenceInfo);
+    const unsubscribe = subscribeToPresence(tourId, setPresenceInfo, undefined, { scope: chatScope });
     return () => unsubscribe();
-  }, [tourId]);
+  }, [chatScope, tourId]);
 
   const refreshQueueStats = useCallback(async () => {
     const statsResult = await offlineSyncService.getQueueStats();
@@ -2464,13 +2486,13 @@ export default function ChatScreen({
   useEffect(() => {
     if (!tourId || !realtimeActorId) return;
 
-    setOnlinePresence(tourId, realtimeActorId, userName, true, isDriver);
+    setOnlinePresence(tourId, realtimeActorId, userName, true, isDriver, undefined, { scope: chatScope });
 
     return () => {
-      setOnlinePresence(tourId, realtimeActorId, userName, false, isDriver);
-      setTypingStatus(tourId, realtimeActorId, userName, false, isDriver);
+      setOnlinePresence(tourId, realtimeActorId, userName, false, isDriver, undefined, { scope: chatScope });
+      setTypingStatus(tourId, realtimeActorId, userName, false, isDriver, undefined, { scope: chatScope });
     };
-  }, [tourId, realtimeActorId, userName, isDriver]);
+  }, [chatScope, tourId, realtimeActorId, userName, isDriver]);
 
   // Keyboard listeners
   useEffect(() => {
@@ -2517,17 +2539,17 @@ export default function ChatScreen({
 
       // Set typing status
       if (text.trim().length > 0) {
-        setTypingStatus(tourId, realtimeActorId, userName, true, isDriver);
+        setTypingStatus(tourId, realtimeActorId, userName, true, isDriver, undefined, { scope: chatScope });
 
         // Clear typing after 3 seconds of inactivity
         typingTimeoutRef.current = setTimeout(() => {
-          setTypingStatus(tourId, realtimeActorId, userName, false, isDriver);
+          setTypingStatus(tourId, realtimeActorId, userName, false, isDriver, undefined, { scope: chatScope });
         }, 3000);
       } else {
-        setTypingStatus(tourId, realtimeActorId, userName, false, isDriver);
+        setTypingStatus(tourId, realtimeActorId, userName, false, isDriver, undefined, { scope: chatScope });
       }
     },
-    [draftRestored, inputText, tourId, realtimeActorId, userName, isDriver]
+    [chatScope, draftRestored, inputText, tourId, realtimeActorId, userName, isDriver]
   );
 
   // Send message handler
@@ -2548,7 +2570,7 @@ export default function ChatScreen({
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
-    setTypingStatus(tourId, realtimeActorId, userName, false, isDriver);
+    setTypingStatus(tourId, realtimeActorId, userName, false, isDriver, undefined, { scope: chatScope });
 
     if (requiresPassengerStableIdForWrites && !passengerStableId) {
       setInputText(trimmed);
@@ -2697,6 +2719,7 @@ export default function ChatScreen({
     authUid,
     buildChatSenderInfo,
     canonicalIdentity?.principalType,
+    chatScope,
     requiresPassengerStableIdForWrites,
     sending,
     inputText,
@@ -2908,6 +2931,15 @@ export default function ChatScreen({
   const handleSendImage = useCallback(
     async (imageUri) => {
       if (!imageUri || isImageUploading) return;
+      if (internalDriverChat) {
+        setShowAttachmentMenu(false);
+        showTransientFeedback({
+          type: 'info',
+          icon: 'image-outline',
+          message: 'Photos can be shared in the group chat.',
+        });
+        return;
+      }
 
       let imageSendStage = 'start';
       traceChatImageSend('send_requested', {
@@ -3026,10 +3058,12 @@ export default function ChatScreen({
       buildChatSenderInfo,
       clearImageSendResetTimeout,
       isImageUploading,
+      internalDriverChat,
       logSenderIdentityPath,
       passengerStableId,
       principalId,
       requiresPassengerStableIdForWrites,
+      showTransientFeedback,
       traceChatImageSend,
       tourId,
       userName,
@@ -3111,6 +3145,16 @@ export default function ChatScreen({
     async (messageId, emoji, options = {}) => {
       if (!realtimeActorId) return;
       if (!messageId || !emoji) return;
+      if (internalDriverChat) {
+        setShowReactionPicker(false);
+        setSelectedMessage(null);
+        showTransientFeedback({
+          type: 'info',
+          icon: 'emoticon-outline',
+          message: 'Reactions are available in the group chat.',
+        });
+        return;
+      }
       const forceAction = options?.forceAction === 'add' ? 'add' : null;
       const reactionSource = options?.source || 'manual';
 
@@ -3251,7 +3295,15 @@ export default function ChatScreen({
         inFlightReactionKeysRef.current.delete(lockKey);
       }
     },
-    [currentReactionUserIds, realtimeActorId, selectedMessage, tourId, showReactionFailureFeedback]
+    [
+      currentReactionUserIds,
+      internalDriverChat,
+      realtimeActorId,
+      selectedMessage,
+      showReactionFailureFeedback,
+      showTransientFeedback,
+      tourId,
+    ]
   );
 
   const handleHeartReactionDoubleTap = useCallback(
@@ -3355,15 +3407,33 @@ export default function ChatScreen({
 
   // Handle delete message
   const handleDeleteMessage = useCallback(async () => {
+    if (internalDriverChat) {
+      setShowActionMenu(false);
+      setSelectedMessage(null);
+      showTransientFeedback({
+        type: 'info',
+        icon: 'delete-outline',
+        message: 'Internal driver chat messages cannot be deleted here.',
+      });
+      return;
+    }
+
     if (selectedMessage) {
       const result = await deleteMessage(tourId, selectedMessage.id, principalId, isDriver);
       if (result.success) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } else {
+        showTransientFeedback({
+          type: 'warning',
+          icon: 'delete-alert-outline',
+          message: 'Message could not be deleted. Please try again.',
+        });
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
     }
     setShowActionMenu(false);
     setSelectedMessage(null);
-  }, [tourId, selectedMessage, principalId, isDriver]);
+  }, [internalDriverChat, isDriver, principalId, selectedMessage, showTransientFeedback, tourId]);
 
   // Handle refresh
   const handleRefresh = useCallback(async () => {
@@ -3923,6 +3993,7 @@ export default function ChatScreen({
         highlightedReplyTargetMessageId={highlightedReplyTargetMessageId}
         currentUserId={realtimeActorId}
         currentUserIds={currentReactionUserIds}
+        reactionsEnabled={!internalDriverChat}
         canRetry={item.type === 'message' ? canRetryFailedMessageForCurrentSession(item.data) : false}
         isRetrying={item.type === 'message' ? !!retryingMessageIds[item.data?.id] : false}
         onRetry={handleRetryFailedMessage}
@@ -4219,7 +4290,7 @@ export default function ChatScreen({
         )}
 
         <AttachmentTray
-          visible={showAttachmentMenu}
+          visible={!internalDriverChat && showAttachmentMenu}
           onClose={() => setShowAttachmentMenu(false)}
           onPickImage={handlePickImage}
           onTakePhoto={handleTakePhoto}
@@ -4232,6 +4303,7 @@ export default function ChatScreen({
           sending={sending}
           replyingToMessage={replyingToMessage}
           showAttachmentMenu={showAttachmentMenu}
+          attachmentsEnabled={!internalDriverChat}
           onComposerLayout={(event) => {
             const nextHeight = Math.ceil(event.nativeEvent.layout.height);
             setComposerHeight((prev) => (prev === nextHeight ? prev : nextHeight));
@@ -4270,12 +4342,13 @@ export default function ChatScreen({
         onCopyLink={handleCopyFirstLink}
         onOpenLink={handleOpenFirstLink}
         onDelete={handleDeleteMessage}
-        canDelete={isMessageOwnedByCurrentSession(selectedMessage, canonicalIdentity) || isDriver}
+        canDelete={!internalDriverChat && (isMessageOwnedByCurrentSession(selectedMessage, canonicalIdentity) || isDriver)}
+        allowReactions={!internalDriverChat}
         insets={insets}
       />
 
       <ReactionPicker
-        visible={showReactionPicker}
+        visible={!internalDriverChat && showReactionPicker}
         onClose={() => {
           setShowReactionPicker(false);
           setSelectedMessage(null);

@@ -155,6 +155,30 @@ test('allows verified driver principals to create group chat messages without dr
   }));
 });
 
+test('allows verified sender to soft-delete a group chat message tombstone', async () => {
+  const softDeletePath = `chats/${TOUR_ID}/messages/MSG_SOFT_DELETE_DRIVER`;
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(softDeletePath).set({
+    senderId: DRIVER_PRINCIPAL_ID,
+    senderStableId: DRIVER_PRINCIPAL_ID,
+    senderName: 'Driver Bondy',
+    text: 'Delete me',
+    timestamp: 1710000000005,
+    isDriver: true,
+    status: 'sent',
+  }));
+
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(softDeletePath).update({
+    deleted: true,
+    text: '',
+    deletedAt: new Date(1710000000006).toISOString(),
+    deletedBy: DRIVER_PRINCIPAL_ID,
+  }));
+
+  const snapshot = await dbFor(DRIVER_AUTH_UID).ref(softDeletePath).get();
+  assert.equal(snapshot.child('deleted').val(), true);
+  assert.equal(snapshot.child('text').val(), '');
+});
+
 test('denies unverified callers creating group chat messages as a driver principal', async () => {
   await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`${DRIVER_MESSAGE_PATH}_foreign`).set({
     senderId: DRIVER_PRINCIPAL_ID,
@@ -301,5 +325,42 @@ test('allows internal driver lastRead writes through canonical driver identity',
     dbFor(DRIVER_AUTH_UID)
       .ref(`internal_chats/${INTERNAL_TOUR_ID}/lastRead/${DRIVER_PRINCIPAL_ID}`)
       .set(Date.now())
+  );
+  await assertFails(
+    dbFor(PASSENGER_AUTH_UID)
+      .ref(`internal_chats/${INTERNAL_TOUR_ID}/lastRead/${PASSENGER_PRINCIPAL_KEY}`)
+      .set(Date.now())
+  );
+});
+
+test('allows internal driver typing and presence only for assigned driver principals', async () => {
+  await assertSucceeds(
+    dbFor(DRIVER_AUTH_UID).ref(`internal_chats/${INTERNAL_TOUR_ID}/typing/${DRIVER_PRINCIPAL_ID}`).set({
+      name: 'Driver Bondy',
+      timestamp: Date.now(),
+      isDriver: true,
+    })
+  );
+  await assertSucceeds(
+    dbFor(DRIVER_AUTH_UID).ref(`internal_chats/${INTERNAL_TOUR_ID}/presence/${DRIVER_PRINCIPAL_ID}`).set({
+      name: 'Driver Bondy',
+      lastSeen: Date.now(),
+      online: true,
+      isDriver: true,
+    })
+  );
+
+  await assertFails(
+    dbFor(PASSENGER_AUTH_UID).ref(`internal_chats/${INTERNAL_TOUR_ID}/typing/${PASSENGER_PRINCIPAL_KEY}`).set({
+      name: 'Passenger One',
+      timestamp: Date.now(),
+    })
+  );
+  await assertFails(
+    dbFor(PASSENGER_AUTH_UID).ref(`internal_chats/${INTERNAL_TOUR_ID}/presence/${PASSENGER_PRINCIPAL_KEY}`).set({
+      name: 'Passenger One',
+      lastSeen: Date.now(),
+      online: true,
+    })
   );
 });

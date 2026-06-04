@@ -10,6 +10,10 @@ const {
   removeReaction,
   subscribeToChatMessages,
   subscribeToInternalDriverChat,
+  subscribeToTypingIndicators,
+  subscribeToPresence,
+  setTypingStatus,
+  setOnlinePresence,
   getChatMessagesPage,
 } = require('../services/chatService');
 
@@ -179,6 +183,12 @@ const createMockRealtimeDb = (initialData = {}) => {
         context.queryState.limitToLast = limit;
         return context;
       };
+      context.onDisconnect = () => ({
+        update: async (patch) => {
+          context.onDisconnectUpdate = cloneValue(patch);
+          return patch;
+        },
+      });
 
       context.push = () => {
         const key = `msg-${context.pushCalls.length + 1}`;
@@ -346,12 +356,83 @@ test('markChatAsRead writes timestamp to chat lastRead path', async () => {
 test('markInternalChatAsRead writes timestamp to internal chat lastRead path', async () => {
   const mockDb = createMockRealtimeDb();
 
-  const result = await markInternalChatAsRead('tour-88', 'driver-3', mockDb);
+  const result = await markInternalChatAsRead('tour-88', 'driver:D-3', mockDb);
 
   assert.equal(result.success, true);
   const refCall = mockDb.refCalls[0];
-  assert.equal(refCall.path, 'internal_chats/tour-88/lastRead/driver-3');
+  assert.equal(refCall.path, 'internal_chats/tour-88/lastRead/driver:D-3');
   assert.ok(new Date(refCall.setCalls[0]).getTime());
+});
+
+test('internal driver typing and presence use internal chat status paths', async () => {
+  const mockDb = createMockRealtimeDb();
+
+  const typingResult = await setTypingStatus(
+    'tour-internal',
+    'driver:BONDY',
+    'Driver Bondy',
+    true,
+    true,
+    mockDb,
+    { scope: 'internal' }
+  );
+  const presenceResult = await setOnlinePresence(
+    'tour-internal',
+    'driver:BONDY',
+    'Driver Bondy',
+    true,
+    true,
+    mockDb,
+    { scope: 'internal' }
+  );
+
+  assert.equal(typingResult.success, true);
+  assert.equal(presenceResult.success, true);
+  assert.equal(mockDb.refCalls[0].path, 'internal_chats/tour-internal/typing/driver:BONDY');
+  assert.equal(mockDb.refCalls[1].path, 'internal_chats/tour-internal/presence/driver:BONDY');
+  assert.equal(mockDb.refCalls[0].setCalls[0].isDriver, true);
+  assert.equal(mockDb.refCalls[1].setCalls[0].isDriver, true);
+});
+
+test('internal chat status subscriptions read internal typing and presence paths', () => {
+  const mockDb = createMockRealtimeDb({
+    internal_chats: {
+      'tour-internal': {
+        typing: {
+          'driver:BONDY': {
+            name: 'Driver Bondy',
+            isDriver: true,
+            timestamp: Date.now(),
+          },
+        },
+        presence: {
+          'driver:BONDY': {
+            name: 'Driver Bondy',
+            isDriver: true,
+            online: true,
+            lastSeen: Date.now(),
+          },
+        },
+      },
+    },
+  });
+
+  const typingUpdates = [];
+  const presenceUpdates = [];
+  const unsubscribeTyping = subscribeToTypingIndicators('tour-internal', 'driver:OTHER', (users) => {
+    typingUpdates.push(users);
+  }, mockDb, { scope: 'internal' });
+  const unsubscribePresence = subscribeToPresence('tour-internal', (presence) => {
+    presenceUpdates.push(presence);
+  }, mockDb, { scope: 'internal' });
+
+  assert.equal(mockDb.refCalls[0].path, 'internal_chats/tour-internal/typing');
+  assert.equal(mockDb.refCalls[1].path, 'internal_chats/tour-internal/presence');
+  assert.deepEqual(typingUpdates[0].map((user) => user.userId), ['driver:BONDY']);
+  assert.equal(presenceUpdates[0].onlineCount, 1);
+
+  unsubscribeTyping();
+  unsubscribePresence();
 });
 
 test('toggleReaction toggles exclusively from canonical user leaf and never writes message parent', async () => {

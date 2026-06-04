@@ -520,12 +520,20 @@ const buildMessagesFromSnapshot = (snapshot) => {
   return messages;
 };
 
-const getChatMessagesPath = (tourId, scope = 'group') => {
+const normalizeChatScope = (scope = 'group') => (scope === 'internal' ? 'internal' : 'group');
+
+const getChatRootPath = (tourId, scope = 'group') => {
   const validatedTourId = validateTourId(tourId);
-  return scope === 'internal'
-    ? `internal_chats/${validatedTourId}/messages`
-    : `chats/${validatedTourId}/messages`;
+  return normalizeChatScope(scope) === 'internal'
+    ? `internal_chats/${validatedTourId}`
+    : `chats/${validatedTourId}`;
 };
+
+const getChatMessagesPath = (tourId, scope = 'group') =>
+  `${getChatRootPath(tourId, scope)}/messages`;
+
+const getChatActorStatusPath = (tourId, statusType, scope = 'group') =>
+  `${getChatRootPath(tourId, scope)}/${statusType}`;
 
 const buildTimestampQuery = (messagesRef, {
   limit,
@@ -1222,14 +1230,18 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
 // ==================== TYPING INDICATORS ====================
 
 // Update typing status for a user
-const setTypingStatus = async (tourId, userId, userName, isTyping, isDriver = false, dbInstance = realtimeDb) => {
+const setTypingStatus = async (tourId, userId, userName, isTyping, isDriver = false, dbInstance = realtimeDb, options = {}) => {
   try {
     const validatedTourId = validateTourId(tourId);
     const { actorKey } = getRealtimeActorContext(userId);
+    const scope = normalizeChatScope(options.scope);
+    if (scope === 'internal' && !isDriver) {
+      return { success: false };
+    }
     const db = dbInstance || realtimeDb;
     if (!db) return { success: false };
 
-    const typingRef = db.ref(`chats/${validatedTourId}/typing/${actorKey}`);
+    const typingRef = db.ref(`${getChatActorStatusPath(validatedTourId, 'typing', scope)}/${actorKey}`);
 
     if (isTyping) {
       await typingRef.set({
@@ -1257,6 +1269,7 @@ const setTypingStatus = async (tourId, userId, userName, isTyping, isDriver = fa
   } catch (error) {
     logChatEvent('warn', 'typing_status_update_failed', {
       tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      scope: normalizeChatScope(options.scope),
       maskedUserId: maskUserId(userId),
       isTyping: Boolean(isTyping),
       error: summarizeErrorForDbLog(error),
@@ -1266,7 +1279,7 @@ const setTypingStatus = async (tourId, userId, userName, isTyping, isDriver = fa
 };
 
 // Subscribe to typing indicators
-const subscribeToTypingIndicators = (tourId, currentUserId, onTypingUpdate, dbInstance = realtimeDb) => {
+const subscribeToTypingIndicators = (tourId, currentUserId, onTypingUpdate, dbInstance = realtimeDb, options = {}) => {
   const db = dbInstance || realtimeDb;
 
   if (!db || !tourId || typeof onTypingUpdate !== 'function') {
@@ -1274,8 +1287,9 @@ const subscribeToTypingIndicators = (tourId, currentUserId, onTypingUpdate, dbIn
   }
 
   const validatedTourId = validateTourId(tourId);
+  const scope = normalizeChatScope(options.scope);
   const currentUserKeys = buildActorKeySet(currentUserId);
-  const typingRef = db.ref(`chats/${validatedTourId}/typing`);
+  const typingRef = db.ref(getChatActorStatusPath(validatedTourId, 'typing', scope));
 
   const listener = typingRef.on('value', (snapshot) => {
     const typingUsers = [];
@@ -1306,6 +1320,7 @@ const subscribeToTypingIndicators = (tourId, currentUserId, onTypingUpdate, dbIn
     } catch (error) {
       logChatEvent('warn', 'typing_subscription_unsubscribe_failed', {
         tourId: validatedTourId,
+        scope,
         error: summarizeErrorForDbLog(error),
       });
     }
@@ -1315,14 +1330,18 @@ const subscribeToTypingIndicators = (tourId, currentUserId, onTypingUpdate, dbIn
 // ==================== ONLINE PRESENCE ====================
 
 // Update user's online presence
-const setOnlinePresence = async (tourId, userId, userName, isOnline, isDriver = false, dbInstance = realtimeDb) => {
+const setOnlinePresence = async (tourId, userId, userName, isOnline, isDriver = false, dbInstance = realtimeDb, options = {}) => {
   try {
     const validatedTourId = validateTourId(tourId);
     const { actorKey } = getRealtimeActorContext(userId);
+    const scope = normalizeChatScope(options.scope);
+    if (scope === 'internal' && !isDriver) {
+      return { success: false };
+    }
     const db = dbInstance || realtimeDb;
     if (!db) return { success: false };
 
-    const presenceRef = db.ref(`chats/${validatedTourId}/presence/${actorKey}`);
+    const presenceRef = db.ref(`${getChatActorStatusPath(validatedTourId, 'presence', scope)}/${actorKey}`);
 
     if (isOnline) {
       await presenceRef.set({
@@ -1348,6 +1367,7 @@ const setOnlinePresence = async (tourId, userId, userName, isOnline, isDriver = 
   } catch (error) {
     logChatEvent('warn', 'presence_update_failed', {
       tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      scope: normalizeChatScope(options.scope),
       maskedUserId: maskUserId(userId),
       isOnline: Boolean(isOnline),
       error: summarizeErrorForDbLog(error),
@@ -1357,14 +1377,16 @@ const setOnlinePresence = async (tourId, userId, userName, isOnline, isDriver = 
 };
 
 // Subscribe to online presence
-const subscribeToPresence = (tourId, onPresenceUpdate, dbInstance = realtimeDb) => {
+const subscribeToPresence = (tourId, onPresenceUpdate, dbInstance = realtimeDb, options = {}) => {
   const db = dbInstance || realtimeDb;
 
   if (!db || !tourId || typeof onPresenceUpdate !== 'function') {
     return () => {};
   }
 
-  const presenceRef = db.ref(`chats/${tourId}/presence`);
+  const validatedTourId = validateTourId(tourId);
+  const scope = normalizeChatScope(options.scope);
+  const presenceRef = db.ref(getChatActorStatusPath(validatedTourId, 'presence', scope));
 
   const listener = presenceRef.on('value', (snapshot) => {
     const users = [];
@@ -1397,7 +1419,8 @@ const subscribeToPresence = (tourId, onPresenceUpdate, dbInstance = realtimeDb) 
       presenceRef.off('value', listener);
     } catch (error) {
       logChatEvent('warn', 'presence_subscription_unsubscribe_failed', {
-        tourId,
+        tourId: validatedTourId,
+        scope,
         error: summarizeErrorForDbLog(error),
       });
     }

@@ -75,6 +75,8 @@ test('Static contract: principal-owned chat reaction/typing/presence writes stay
   const chatRules = rules.rules.chats.$tourId;
   const internalChatRules = rules.rules.internal_chats.$tourId;
   const expectedPrincipalWrite = "auth != null && (auth.uid === $id || $id === root.child('users/' + auth.uid + '/stablePassengerId').val() || $id === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $id + '/' + auth.uid).val() === true || (root.child('users/' + auth.uid + '/driverId').isString() && $id === 'driver:' + root.child('users/' + auth.uid + '/driverId').val() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid))";
+  const expectedInternalDriverWrite = "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || (root.child('users/' + auth.uid + '/driverId').isString() && $id === 'driver:' + root.child('users/' + auth.uid + '/driverId').val() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))";
+  const expectedInternalDriverLastReadWrite = "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || (root.child('users/' + auth.uid + '/driverId').isString() && $principalId === 'driver:' + root.child('users/' + auth.uid + '/driverId').val() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))";
 
   assert.notEqual(chatRules['.read'], 'auth != null');
   assert.equal(chatRules['.read'], chatRules['.validate']);
@@ -88,6 +90,9 @@ test('Static contract: principal-owned chat reaction/typing/presence writes stay
   assert.equal(chatRules.messages.$messageId.reactions.$emoji.$id['.write'], expectedPrincipalWrite);
   assert.equal(chatRules.typing.$id['.write'], expectedPrincipalWrite);
   assert.equal(chatRules.presence.$id['.write'], expectedPrincipalWrite);
+  assert.equal(internalChatRules.lastRead.$principalId['.write'], expectedInternalDriverLastReadWrite);
+  assert.equal(internalChatRules.typing.$id['.write'], expectedInternalDriverWrite);
+  assert.equal(internalChatRules.presence.$id['.write'], expectedInternalDriverWrite);
 });
 
 test('Static contract: identity_bindings_meta writes are limited to admin or caller-owned binding', () => {
@@ -396,8 +401,8 @@ test('Static contract: email-style stable identities are encoded before identity
   assert.match(appSource, /identity_bindings\/\$\{stablePassengerKey\}\/\$\{authUid\}/);
   assert.doesNotMatch(appSource, /identity_bindings\/\$\{stablePassengerId\}/);
   assert.match(chatSource, /getRealtimeActorContext\(userId\)/);
-  assert.match(chatSource, /typing\/\$\{actorKey\}/);
-  assert.match(chatSource, /presence\/\$\{actorKey\}/);
+  assert.match(chatSource, /getChatActorStatusPath\(validatedTourId, 'typing', scope\)/);
+  assert.match(chatSource, /getChatActorStatusPath\(validatedTourId, 'presence', scope\)/);
   assert.match(chatSource, /lastRead\/\$\{actorKey\}/);
 });
 
