@@ -69,8 +69,10 @@ test('denies arbitrary driver record creation by authenticated clients', async (
   }));
 });
 
-test('allows exact driver-code reads but denies listing all drivers', async () => {
-  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`drivers/${DRIVER_ID}`).get());
+test('allows claimed driver self reads but denies unclaimed exact reads and driver listing', async () => {
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}`).get());
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(`drivers/${DRIVER_ID}`).get());
+  await assertFails(dbFor(OTHER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}`).get());
   await assertFails(dbFor(DRIVER_AUTH_UID).ref('drivers').get());
 });
 

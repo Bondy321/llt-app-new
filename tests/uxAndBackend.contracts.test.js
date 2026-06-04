@@ -105,16 +105,27 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   const rules = readJson('database.rules.json');
   const adminUid = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
   const privateOwnerAccess = "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || auth.uid === $ownerId || $ownerId === root.child('users/' + auth.uid + '/stablePassengerId').val() || $ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)";
-  const manifestBookingAccess = `auth != null && (auth.uid === '${adminUid}' || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true)) && (root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId || (root.child('bookings/' + $bookingRef + '/tourCode').isString() && root.child('tours/' + $tourId + '/tourCode').isString() && root.child('bookings/' + $bookingRef + '/tourCode').val() === root.child('tours/' + $tourId + '/tourCode').val()) || (root.child('bookings/' + $bookingRef + '/tourCode').isString() && root.child('tour_manifests/' + $tourId + '/tourCode').isString() && root.child('bookings/' + $bookingRef + '/tourCode').val() === root.child('tour_manifests/' + $tourId + '/tourCode').val()))`;
+  const manifestBookingAccess = `auth != null && (auth.uid === '${adminUid}' || (root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() && (root.child('users/' + auth.uid + '/bookingRef').val() === $bookingRef || (root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').val() > now))) || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true)) && (root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId || (root.child('bookings/' + $bookingRef + '/tourCode').isString() && root.child('tours/' + $tourId + '/tourCode').isString() && root.child('bookings/' + $bookingRef + '/tourCode').val() === root.child('tours/' + $tourId + '/tourCode').val()) || (root.child('bookings/' + $bookingRef + '/tourCode').isString() && root.child('tour_manifests/' + $tourId + '/tourCode').isString() && root.child('bookings/' + $bookingRef + '/tourCode').val() === root.child('tour_manifests/' + $tourId + '/tourCode').val()))`;
 
   assert.equal(
     rules.rules.bookings.$bookingRef['.write'],
     `auth != null && auth.uid === '${adminUid}'`,
   );
+  assert.equal(rules.rules.bookings['.read'], undefined);
+  assert.notEqual(rules.rules.bookings.$bookingRef['.read'], 'auth != null');
+  assert.match(rules.rules.bookings.$bookingRef['.read'], /booking_access_grants/);
+  assert.match(rules.rules.bookings.$bookingRef['.read'], /data\.child\('tourId'\)\.isString\(\)/);
+  assert.deepEqual(rules.rules.bookings['.indexOn'], ['tourCode', 'tourId']);
   assert.equal(
     rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.write'],
     manifestBookingAccess,
   );
+  assert.equal(rules.rules.tour_manifests['.read'], undefined);
+  assert.notEqual(rules.rules.tour_manifests.$tourId['.read'], 'auth != null');
+  assert.doesNotMatch(rules.rules.tour_manifests.$tourId['.read'], /participants\/' \+ auth\.uid/);
+  assert.match(rules.rules.tour_manifests.$tourId['.read'], /assigned_drivers/);
+  assert.match(rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.read'], /users\/' \+ auth\.uid \+ '\/bookingRef/);
+  assert.match(rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.read'], /booking_access_grants/);
   assert.equal(rules.rules.private_tour_photos.$tourId.$ownerId['.read'], privateOwnerAccess);
   assert.equal(rules.rules.private_tour_photos.$tourId.$ownerId['.write'], privateOwnerAccess);
   assert.notEqual(rules.rules.group_tour_photos.$tourId['.read'], 'auth != null');
@@ -140,8 +151,12 @@ test('Static contract: tour metadata writes stay least-privilege', () => {
   const rules = readJson('database.rules.json');
   const tourRules = rules.rules.tours.$tourId;
 
+  assert.equal(rules.rules.tours['.read'], undefined);
+  assert.match(tourRules['.read'], /tour_access_grants\/' \+ \$tourId \+ '\/' \+ auth\.uid \+ '\/expiresAtMs/);
   assert.notEqual(tourRules['.write'], 'auth != null');
   assert.match(tourRules['.write'], /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
+  assert.match(tourRules.participants.$userId['.write'], /tour_access_grants\/' \+ \$tourId \+ '\/' \+ auth\.uid \+ '\/expiresAtMs/);
+  assert.notEqual(tourRules.participants.$userId['.write'], "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')");
   assert.match(tourRules.currentParticipants['.write'], /root\.child\('tours\/' \+ \$tourId \+ '\/participants\/' \+ auth\.uid\)\.exists\(\)/);
   assert.match(tourRules.driverLocation['.write'], /tour_manifests\/' \+ \$tourId \+ '\/assigned_drivers\//);
   assert.match(tourRules.itinerary['.write'], /assigned_drivers/);
@@ -157,13 +172,62 @@ test('Static contract: tour metadata writes stay least-privilege', () => {
   assert.doesNotMatch(bookingSource, /update\(\{ isActive: true, participants: \{\}, currentParticipants: 0 \}\)/);
 });
 
+test('Static contract: verified login grants are scoped and short-lived', () => {
+  const rules = readJson('database.rules.json');
+  const tourGrant = rules.rules.tour_access_grants.$tourId.$userId;
+  const bookingGrant = rules.rules.booking_access_grants.$bookingRef.$userId;
+  const functionsSource = readText('functions/index.js');
+  const bookingServiceSource = readText('services/bookingServiceRealtime.js');
+
+  assert.match(tourGrant['.read'], /auth\.uid === \$userId/);
+  assert.match(tourGrant['.write'], /admin_users/);
+  assert.match(tourGrant['.validate'], /expiresAtMs'\)\.val\(\) > now/);
+  assert.match(bookingGrant['.read'], /auth\.uid === \$userId/);
+  assert.match(bookingGrant['.validate'], /bookingRef'\)\.val\(\) === \$bookingRef/);
+  assert.match(functionsSource, /tour_access_grants\/\$\{tourId\}\/\$\{authUid\}/);
+  assert.match(functionsSource, /booking_access_grants\/\$\{bookingRef\}\/\$\{authUid\}/);
+  assert.match(functionsSource, /verifyIdToken\(token\)/);
+  assert.match(bookingServiceSource, /headers\.Authorization = `Bearer \$\{firebaseAuthResult\.token\}`/);
+});
+
+test('Static contract: passenger manifests are assembled through verified backend endpoint', () => {
+  const bookingSource = readText('services/bookingServiceRealtime.js');
+  const functionsSource = readText('functions/index.js');
+  const packageJson = readText('package.json');
+
+  assert.match(bookingSource, /buildTourManifestEndpointUrl/);
+  assert.match(bookingSource, /fetchTourManifestFromFunction/);
+  assert.match(bookingSource, /headers,\s*\n\s*body: JSON\.stringify\(\{ tourId: tourCodeOriginal \}\)/);
+  assert.match(bookingSource, /Manifest fetch completed via function/);
+  assert.match(bookingSource, /Array\.isArray\(liveStatus\.passengerStatus\)/);
+  assert.match(functionsSource, /exports\.getTourManifest = onRequest/);
+  assert.match(functionsSource, /verifyTourManifestAccess/);
+  assert.match(functionsSource, /orderByChild\('tourId'\)\.equalTo\(canonicalTourId\)/);
+  assert.match(packageJson, /tests\/getTourManifest\.test\.js/);
+});
+
+test('Static contract: driver login legacy assignment scan stays server-side', () => {
+  const bookingSource = readText('services/bookingServiceRealtime.js');
+  const functionsSource = readText('functions/index.js');
+  const driverTestSource = readText('tests/validateBookingReference.driver.test.js');
+
+  assert.match(bookingSource, /buildDriverLoginVerifierUrl/);
+  assert.match(bookingSource, /verifyDriverLoginIdentity/);
+  assert.match(bookingSource, /Driver verifier accepted code/);
+  assert.match(functionsSource, /exports\.verifyDriverLogin = onRequest/);
+  assert.match(functionsSource, /resolveDriverAssignment/);
+  assert.match(functionsSource, /db\.ref\('tour_manifests'\)\.once\('value'\)/);
+  assert.match(driverTestSource, /uses verified driver endpoint when configured/);
+});
+
 test('Static contract: driver records cannot be created by arbitrary clients', () => {
   const rules = readJson('database.rules.json');
   const driverRootRules = rules.rules.drivers;
   const driverWriteRule = rules.rules.drivers.$driverId['.write'];
 
   assert.equal(driverRootRules['.read'], undefined);
-  assert.equal(driverRootRules.$driverId['.read'], 'auth != null');
+  assert.notEqual(driverRootRules.$driverId['.read'], 'auth != null');
+  assert.match(driverRootRules.$driverId['.read'], /data\.child\('authUid'\)\.val\(\) === auth\.uid/);
   assert.notEqual(driverWriteRule, "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || data.child('authUid').val() === auth.uid || newData.child('authUid').val() === auth.uid)");
   assert.match(driverWriteRule, /data\.exists\(\)/);
   assert.match(driverWriteRule, /!data\.child\('authUid'\)\.exists\(\) && newData\.child\('authUid'\)\.val\(\) === auth\.uid/);
@@ -497,6 +561,9 @@ test('Static contract: support and external link handoffs surface failures', () 
 });
 
 test('Static contract: production EAS workflows gate release on mobile/backend verification', () => {
+  const readinessDoc = readText('dependency-upgrade-prod-readiness.md');
+  const agentsDoc = readText('AGENTS.md');
+
   [
     '.github/workflows/eas-build.yml',
     '.github/workflows/eas-testflight.yml',
@@ -520,6 +587,10 @@ test('Static contract: production EAS workflows gate release on mobile/backend v
     assert.ok(testIndex >= 0 && envIndex > testIndex, 'tests must run before env validation');
     assert.ok(envIndex >= 0 && publishIndex > envIndex, 'env validation must run before EAS publish/build');
   });
+
+  assert.match(readinessDoc, /Deploy Firebase Functions and Firebase rules before any production EAS update\/build/);
+  assert.match(readinessDoc, /deploy Functions first, then Realtime Database\/Storage rules, then publish the EAS update\/build/);
+  assert.match(agentsDoc, /Current EAS workflows test backend changes but do not deploy Firebase backend artifacts/);
 });
 
 test('Static contract: production binary workflows verify EAS remote version state before building', () => {
@@ -621,6 +692,7 @@ test('Static contract: itinerary cache metadata cannot update stale screens', ()
 test('Static contract: preference and manifest screens guard stale async state', () => {
   const notificationSource = readText('screens/NotificationPreferencesScreen.js');
   const manifestSource = readText('screens/PassengerManifestScreen.js');
+  const imageViewerSource = readText('components/ImageViewer.js');
 
   assert.match(notificationSource, /mountedRef/);
   assert.match(notificationSource, /preferenceLoadSeqRef/);
@@ -632,6 +704,10 @@ test('Static contract: preference and manifest screens guard stale async state',
   assert.match(manifestSource, /queueScanSeqRef/);
   assert.match(manifestSource, /Alert\.alert\('Manifest unavailable'/);
   assert.doesNotMatch(manifestSource, /Failed to load manifest: ' \+ error\.message/);
+
+  assert.match(imageViewerSource, /scrollRetryTimeoutRef/);
+  assert.match(imageViewerSource, /clearTimeout\(scrollRetryTimeoutRef\.current\)/);
+  assert.match(imageViewerSource, /if \(!visibleRef\.current\) return/);
 });
 
 test('Static contract: safety support cleans up emergency timers and validates phone handoffs', () => {
@@ -661,6 +737,9 @@ test('Static contract: passenger login establishes participant access before ent
   assert.match(appSource, /if \(!options\?\.offlineMode && tourDetails\?\.id\) \{/);
   assert.match(appSource, /await joinTour\(tourDetails\.id, authUid\)/);
   assert.match(appSource, /joinFailure\.userMessage = 'We could not finish joining your tour session\. Please check your connection and try again\.'/);
+  assert.match(appSource, /profileError\.criticalIdentityPersistence = true/);
+  assert.match(appSource, /profileError\.userMessage = 'We could not finish securing your tour session\. Please check your connection and try again\.'/);
+  assert.match(appSource, /if \(error\?\.criticalIdentityPersistence\) \{\s*throw error;\s*\}/);
   assert.doesNotMatch(appSource, /catch \(error\) \{\s*logger\.error\('Tour', 'Error joining tour', \{ error: error\.message \}\);\s*\}/);
 
   assert.match(loginSource, /typeof error\?\.userMessage === 'string'/);

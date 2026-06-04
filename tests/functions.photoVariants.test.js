@@ -48,6 +48,165 @@ test('toRealtimeKeySegment encodes stable passenger IDs for RTDB paths', () => {
   );
 });
 
+test('buildVerifiedLoginGrantUpdates scopes passenger grants to booking, tour, and auth uid', () => {
+  const updates = __testables.buildVerifiedLoginGrantUpdates({
+    authUid: 'auth-uid-1',
+    bookingRef: 'ABC123',
+    normalizedPassengerEmail: 'traveller@example.com',
+    tourId: '5112D_8',
+    tourCode: '5112D 8',
+    nowMs: 1770000000000,
+  });
+
+  assert.deepEqual(Object.keys(updates).sort(), [
+    'booking_access_grants/ABC123/auth-uid-1',
+    'tour_access_grants/5112D_8/auth-uid-1',
+  ]);
+  assert.equal(updates['tour_access_grants/5112D_8/auth-uid-1'].expiresAtMs, 1770001800000);
+  assert.equal(updates['tour_access_grants/5112D_8/auth-uid-1'].bookingRef, 'ABC123');
+  assert.equal(updates['booking_access_grants/ABC123/auth-uid-1'].tourId, '5112D_8');
+});
+
+const createMockRealtimeDb = (state) => {
+  const getValue = (dbPath = '') => dbPath
+    .split('/')
+    .filter(Boolean)
+    .reduce((node, key) => (node || {})[key], state);
+
+  const snapshotFor = (value) => ({
+    exists: () => value !== undefined && value !== null,
+    val: () => value,
+  });
+
+  return {
+    ref(dbPath = '') {
+      const value = () => getValue(dbPath);
+      return {
+        async once() {
+          return snapshotFor(value());
+        },
+        orderByChild(childKey) {
+          return {
+            equalTo(expected) {
+              return {
+                async once() {
+                  const collection = value() || {};
+                  const filtered = Object.entries(collection).reduce((acc, [key, child]) => {
+                    if (child?.[childKey] === expected) {
+                      acc[key] = child;
+                    }
+                    return acc;
+                  }, {});
+                  return snapshotFor(Object.keys(filtered).length > 0 ? filtered : null);
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+};
+
+test('buildTourManifestPayload assembles normalized bookings and live passenger statuses', async () => {
+  const db = createMockRealtimeDb({
+    tours: {
+      '5112D_8': { name: 'Highlands', tourCode: '5112D 8' },
+    },
+    bookings: {
+      ABC123: {
+        tourCode: '5112D 8',
+        passengers: ['Alex', 'Sam'],
+        pickupLocation: 'Balloch',
+        pickupTime: '08:00',
+      },
+      BY_TOUR_ID: {
+        tourId: '5112D_8',
+        passengerNames: ['Jamie'],
+        pickupPoints: [{ location: 'Luss', time: '08:30' }],
+      },
+    },
+    tour_manifests: {
+      '5112D_8': {
+        bookings: {
+          ABC123: {
+            passengerStatus: ['BOARDED', 'NO_SHOW'],
+          },
+          BY_TOUR_ID: {
+            status: 'BOARDED',
+          },
+        },
+      },
+    },
+  });
+
+  const manifest = await __testables.buildTourManifestPayload({ tourId: '5112D_8', db });
+
+  assert.equal(manifest.bookings.length, 2);
+  const booking = manifest.bookings.find((item) => item.id === 'ABC123');
+  assert.deepEqual(booking.passengerNames, ['Alex', 'Sam']);
+  assert.deepEqual(booking.pickupPoints, [{ location: 'Balloch', time: '08:00' }]);
+  assert.equal(booking.status, 'PARTIAL');
+  assert.deepEqual(booking.passengerStatus, ['BOARDED', 'NO_SHOW']);
+  assert.equal(manifest.stats.totalPax, 3);
+  assert.equal(manifest.stats.checkedIn, 2);
+  assert.equal(manifest.stats.noShows, 1);
+});
+
+test('resolveDriverAssignment recovers legacy manifest driver-code assignments server-side', async () => {
+  const db = createMockRealtimeDb({
+    tour_manifests: {
+      '5112D_8': {
+        tourCode: '5112D 8',
+        assigned_driver_codes: {
+          'D-BONDY': {
+            driverId: 'D-BONDY',
+            tourId: '5112D_8',
+            tourCode: '5112D 8',
+          },
+        },
+      },
+    },
+  });
+
+  const assignment = await __testables.resolveDriverAssignment({
+    driverId: 'D-BONDY',
+    driverData: {},
+    db,
+  });
+
+  assert.equal(assignment.assignedTourId, '5112D_8');
+  assert.equal(assignment.assignedTourCode, '5112D 8');
+  assert.equal(assignment.assignmentSource, 'manifest_driver_code');
+});
+
+test('verifyTourManifestAccess denies ordinary passengers full manifest access', async () => {
+  const db = createMockRealtimeDb({
+    tours: {
+      '5112D_8': {
+        participants: {
+          'passenger-auth-1': { userId: 'passenger-auth-1' },
+        },
+      },
+    },
+    users: {
+      'passenger-auth-1': {
+        bookingRef: 'ABC123',
+        principalType: 'passenger',
+      },
+    },
+  });
+
+  const access = await __testables.verifyTourManifestAccess({
+    authUid: 'passenger-auth-1',
+    tourId: '5112D_8',
+    db,
+  });
+
+  assert.equal(access.allowed, false);
+  assert.equal(access.reason, 'NOT_TOUR_MEMBER');
+});
+
 test('resolveChatSenderParticipantIds maps stable passenger identity to participant auth uid', async () => {
   const stablePassengerId = 'pax_v1:T123659:msandreayoung@yahoo.co.uk';
   const lookups = [];

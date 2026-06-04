@@ -255,6 +255,7 @@ export default function ImageViewer({
   const pagerRef = useRef(null);
   const visibleRef = useRef(false);
   const lastInitialIndexRef = useRef(initialIndex);
+  const scrollRetryTimeoutRef = useRef(null);
 
   const safeInitialIndex = useMemo(
     () => clampPagerIndex(initialIndex, photos.length),
@@ -340,6 +341,13 @@ export default function ImageViewer({
     visibleRef.current = visible;
     lastInitialIndexRef.current = initialIndex;
   }, [initialIndex, safeInitialIndex, scrollToIndex, visible]);
+
+  useEffect(() => () => {
+    if (scrollRetryTimeoutRef.current) {
+      clearTimeout(scrollRetryTimeoutRef.current);
+      scrollRetryTimeoutRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (!visible || !photos.length) return;
@@ -435,7 +443,14 @@ export default function ImageViewer({
 
   const handleScrollToIndexFailed = useCallback((info) => {
     const targetIndex = clampPagerIndex(info?.index, photos.length);
-    setTimeout(() => {
+    if (scrollRetryTimeoutRef.current) {
+      clearTimeout(scrollRetryTimeoutRef.current);
+    }
+
+    scrollRetryTimeoutRef.current = setTimeout(() => {
+      scrollRetryTimeoutRef.current = null;
+      if (!visibleRef.current) return;
+
       pagerRef.current?.scrollToOffset({
         offset: targetIndex * runtimeWidth,
         animated: false,

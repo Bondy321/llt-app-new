@@ -5,7 +5,7 @@
 
     "drivers": {
       "$driverId": {
-        ".read": "auth != null",
+        ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || data.child('authUid').val() === auth.uid)",
         ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (data.exists() && (data.child('authUid').val() === auth.uid || (!data.child('authUid').exists() && newData.child('authUid').val() === auth.uid))))",
         ".validate": "!newData.exists() || (newData.hasChildren(['name']) && newData.child('name').isString() && newData.child('name').val().length > 0 && newData.child('name').val().length <= 120 && (!newData.child('id').exists() || (newData.child('id').isString() && newData.child('id').val() === $driverId)) && (!newData.child('phone').exists() || newData.child('phone').isString()) && (!newData.child('authUid').exists() || newData.child('authUid').isString()) && (!newData.child('currentTourId').exists() || newData.child('currentTourId').isString()) && (!newData.child('currentTourCode').exists() || newData.child('currentTourCode').isString()) && (!newData.child('activeTourId').exists() || newData.child('activeTourId').isString()) && (!newData.child('lastActive').exists() || newData.child('lastActive').isString() || newData.child('lastActive').isNumber()) && (!newData.child('createdAt').exists() || newData.child('createdAt').isString() || newData.child('createdAt').isNumber()) && (!newData.child('assignments').exists() || newData.child('assignments').hasChildren()))",
         "assignments": {
@@ -17,9 +17,9 @@
     },
 
     "bookings": {
-      ".read": "auth != null",
-      ".indexOn": ["tourCode"],
+      ".indexOn": ["tourCode", "tourId"],
       "$bookingRef": {
+        ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').val() > now) || (data.child('tourId').isString() && (root.child('tours/' + data.child('tourId').val() + '/participants/' + auth.uid).exists() || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + data.child('tourId').val() + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))))",
         ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
         ".validate": "!newData.exists() || (newData.hasChildren(['tourId']) && newData.child('tourId').isString() && (!newData.child('tourCode').exists() || newData.child('tourCode').isString()) && (!newData.child('passengerNames').exists() || newData.child('passengerNames').hasChildren()) && (!newData.child('passengers').exists() || newData.child('passengers').hasChildren()) && (!newData.child('pickupLocation').exists() || newData.child('pickupLocation').isString()) && (!newData.child('pickupTime').exists() || newData.child('pickupTime').isString()) && (!newData.child('pickupPoints').exists() || newData.child('pickupPoints').hasChildren()) && (!newData.child('seatNumbers').exists() || newData.child('seatNumbers').hasChildren()) && (!newData.child('status').exists() || newData.child('status').val() === 'PENDING' || newData.child('status').val() === 'BOARDED' || newData.child('status').val() === 'NO_SHOW' || newData.child('status').val() === 'PARTIAL'))",
         "pickupPoints": {
@@ -31,8 +31,8 @@
     },
 
     "tour_manifests": {
-      ".read": "auth != null",
       "$tourId": {
+        ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
         "assigned_drivers": {
           ".indexOn": [".value"],
           "$driverId": {
@@ -48,7 +48,8 @@
         },
         "bookings": {
           "$bookingRef": {
-            ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true)) && (root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId || (root.child('bookings/' + $bookingRef + '/tourCode').isString() && root.child('tours/' + $tourId + '/tourCode').isString() && root.child('bookings/' + $bookingRef + '/tourCode').val() === root.child('tours/' + $tourId + '/tourCode').val()) || (root.child('bookings/' + $bookingRef + '/tourCode').isString() && root.child('tour_manifests/' + $tourId + '/tourCode').isString() && root.child('bookings/' + $bookingRef + '/tourCode').val() === root.child('tour_manifests/' + $tourId + '/tourCode').val()))",
+            ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || root.child('users/' + auth.uid + '/bookingRef').val() === $bookingRef || (root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').val() > now) || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
+            ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || (root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() && (root.child('users/' + auth.uid + '/bookingRef').val() === $bookingRef || (root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').val() > now))) || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true)) && (root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId || (root.child('bookings/' + $bookingRef + '/tourCode').isString() && root.child('tours/' + $tourId + '/tourCode').isString() && root.child('bookings/' + $bookingRef + '/tourCode').val() === root.child('tours/' + $tourId + '/tourCode').val()) || (root.child('bookings/' + $bookingRef + '/tourCode').isString() && root.child('tour_manifests/' + $tourId + '/tourCode').isString() && root.child('bookings/' + $bookingRef + '/tourCode').val() === root.child('tour_manifests/' + $tourId + '/tourCode').val()))",
             ".validate": "!newData.exists() || ((!newData.child('status').exists() || newData.child('status').val() === 'PENDING' || newData.child('status').val() === 'BOARDED' || newData.child('status').val() === 'NO_SHOW' || newData.child('status').val() === 'PARTIAL') && (!newData.child('passengerStatus').exists() || newData.child('passengerStatus').hasChildren()) && (!newData.child('lastUpdated').exists() || newData.child('lastUpdated').isString() || newData.child('lastUpdated').isNumber()) && (!newData.child('idempotencyKey').exists() || newData.child('idempotencyKey').isString()))",
             "passengerStatus": {
               "$index": {
@@ -61,8 +62,8 @@
     },
 
     "tours": {
-      ".read": "auth != null",
       "$tourId": {
+        ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() || (root.child('tour_access_grants/' + $tourId + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('tour_access_grants/' + $tourId + '/' + auth.uid + '/expiresAtMs').val() > now) || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
         ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
         "currentParticipants": {
           ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists())",
@@ -90,7 +91,7 @@
         },
         "participants": {
           "$userId": {
-            ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
+            ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23') && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || data.exists() || (root.child('tour_access_grants/' + $tourId + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('tour_access_grants/' + $tourId + '/' + auth.uid + '/expiresAtMs').val() > now))",
             ".validate": "!newData.exists() || ((!newData.child('userId').exists() || newData.child('userId').val() === $userId) && (!newData.child('joinedAt').exists() || newData.child('joinedAt').isString() || newData.child('joinedAt').isNumber()) && (!newData.child('lastUpdated').exists() || newData.child('lastUpdated').isString() || newData.child('lastUpdated').isNumber()))"
           }
         },
@@ -266,6 +267,26 @@
             "vip_experiences": { ".validate": "!newData.exists() || newData.isBoolean()" },
             "hiking_nature": { ".validate": "!newData.exists() || newData.isBoolean()" }
           }
+        }
+      }
+    },
+
+    "tour_access_grants": {
+      "$tourId": {
+        "$userId": {
+          ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+          ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+          ".validate": "!newData.exists() || (newData.hasChildren(['source', 'bookingRef', 'tourId', 'grantedAt', 'grantedAtMs', 'expiresAtMs']) && newData.child('source').val() === 'verifyPassengerLogin' && newData.child('bookingRef').isString() && newData.child('bookingRef').val().length > 0 && newData.child('tourId').isString() && newData.child('tourId').val() === $tourId && newData.child('grantedAt').isString() && newData.child('grantedAtMs').isNumber() && newData.child('expiresAtMs').isNumber() && newData.child('expiresAtMs').val() > now && (!newData.child('normalizedPassengerEmail').exists() || (newData.child('normalizedPassengerEmail').isString() && newData.child('normalizedPassengerEmail').val().matches(/^[^A-Z @]+@[^A-Z @]+\\.[^A-Z @]+$/))) && (!newData.child('tourCode').exists() || newData.child('tourCode').isString()))"
+        }
+      }
+    },
+
+    "booking_access_grants": {
+      "$bookingRef": {
+        "$userId": {
+          ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+          ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+          ".validate": "!newData.exists() || (newData.hasChildren(['source', 'bookingRef', 'tourId', 'grantedAt', 'grantedAtMs', 'expiresAtMs']) && newData.child('source').val() === 'verifyPassengerLogin' && newData.child('bookingRef').isString() && newData.child('bookingRef').val() === $bookingRef && newData.child('tourId').isString() && newData.child('grantedAt').isString() && newData.child('grantedAtMs').isNumber() && newData.child('expiresAtMs').isNumber() && newData.child('expiresAtMs').val() > now && (!newData.child('normalizedPassengerEmail').exists() || (newData.child('normalizedPassengerEmail').isString() && newData.child('normalizedPassengerEmail').val().matches(/^[^A-Z @]+@[^A-Z @]+\\.[^A-Z @]+$/))) && (!newData.child('tourCode').exists() || newData.child('tourCode').isString()))"
         }
       }
     },

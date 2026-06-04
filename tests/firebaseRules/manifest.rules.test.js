@@ -66,6 +66,10 @@ test.before(async () => {
       userId: PASSENGER_AUTH_UID,
       joinedAt: '2026-05-23T19:40:00.000Z',
     });
+    await db.ref(`users/${PASSENGER_AUTH_UID}`).set({
+      bookingRef: BOOKING_REF,
+      principalType: 'passenger',
+    });
     await db.ref(`tour_manifests/${TOUR_ID}/assigned_drivers/${DRIVER_ID}`).set(true);
     await db.ref(`drivers/${DRIVER_ID}`).set({
       name: 'Driver Palmer',
@@ -102,6 +106,18 @@ test('allows assigned driver auth UID to update passenger manifest booking rows'
   await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(MANIFEST_PATH).update(manifestUpdate));
 });
 
+test('allows exact tour manifest reads but denies listing all manifests', async () => {
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`tour_manifests/${TOUR_ID}`).get());
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`tour_manifests/${TOUR_ID}/bookings/${BOOKING_REF}`).get());
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref('tour_manifests').get());
+});
+
+test('allows exact booking reads for tour members but denies listing all bookings', async () => {
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`bookings/${BOOKING_REF}`).get());
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`bookings/${BOOKING_REF}`).get());
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref('bookings').get());
+});
+
 test('allows assigned driver auth UID to update legacy tourCode-only booking rows', async () => {
   await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(LEGACY_MANIFEST_PATH).update({
     ...manifestUpdate,
@@ -113,6 +129,13 @@ test('keeps passenger participant manifest updates working', async () => {
   await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(MANIFEST_PATH).update({
     ...manifestUpdate,
     idempotencyKey: 'manifest-test-passenger',
+  }));
+});
+
+test('denies passenger manifest updates for another booking on the same tour', async () => {
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(LEGACY_MANIFEST_PATH).update({
+    ...manifestUpdate,
+    idempotencyKey: 'manifest-test-passenger-other-booking',
   }));
 });
 

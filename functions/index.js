@@ -27,6 +27,14 @@ const USER_PROFILE_CACHE_MAX_ENTRIES = 5000;
 const userProfileCache = new Map();
 const PHOTO_CACHE_CONTROL_HEADER = "public,max-age=31536000,immutable";
 const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
+const VERIFIED_LOGIN_GRANT_TTL_MS = 30 * 60 * 1000;
+const OPERATIONS_ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
+const MANIFEST_STATUS = {
+  PENDING: 'PENDING',
+  BOARDED: 'BOARDED',
+  NO_SHOW: 'NO_SHOW',
+  PARTIAL: 'PARTIAL',
+};
 
 // ==================== UTILITY FUNCTIONS ====================
 
@@ -943,6 +951,323 @@ const normalizeEmail = (email) => {
   return email.trim().toLowerCase();
 };
 
+const getBearerToken = (req) => {
+  const headerValue = req.headers?.authorization || req.headers?.Authorization;
+  if (typeof headerValue !== 'string') return null;
+
+  const match = headerValue.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : null;
+};
+
+const verifyRequestAuthUid = async (req) => {
+  const token = getBearerToken(req);
+  if (!token) {
+    return { success: false, reason: 'AUTH_TOKEN_MISSING' };
+  }
+
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    const uid = typeof decoded?.uid === 'string' ? decoded.uid.trim() : '';
+    if (!uid || !isValidFirebaseKey(uid)) {
+      return { success: false, reason: 'AUTH_UID_INVALID' };
+    }
+
+    return { success: true, uid };
+  } catch (error) {
+    log.warn('Request auth token verification failed', {
+      reason: error?.code || 'AUTH_TOKEN_INVALID',
+      error: error?.message || String(error),
+    });
+    return { success: false, reason: 'AUTH_TOKEN_INVALID' };
+  }
+};
+
+const buildVerifiedLoginGrantUpdates = ({
+  authUid,
+  bookingRef,
+  normalizedPassengerEmail,
+  tourId,
+  tourCode = null,
+  nowMs = Date.now(),
+}) => {
+  if (!isValidFirebaseKey(authUid) || !isValidFirebaseKey(bookingRef) || !isValidFirebaseKey(tourId)) {
+    return null;
+  }
+
+  const grantedAt = new Date(nowMs).toISOString();
+  const expiresAtMs = nowMs + VERIFIED_LOGIN_GRANT_TTL_MS;
+  const grantPayload = {
+    source: 'verifyPassengerLogin',
+    bookingRef,
+    tourId,
+    grantedAt,
+    grantedAtMs: nowMs,
+    expiresAtMs,
+  };
+
+  if (normalizedPassengerEmail) {
+    grantPayload.normalizedPassengerEmail = normalizedPassengerEmail;
+  }
+
+  if (tourCode) {
+    grantPayload.tourCode = tourCode;
+  }
+
+  return {
+    [`tour_access_grants/${tourId}/${authUid}`]: grantPayload,
+    [`booking_access_grants/${bookingRef}/${authUid}`]: grantPayload,
+  };
+};
+
+const normalizePassengerStatuses = (passengerStatuses, totalPax) => {
+  const baseStatuses = Array.isArray(passengerStatuses) ? passengerStatuses : [];
+  const padded = [...baseStatuses];
+
+  if (typeof totalPax === 'number' && totalPax > padded.length) {
+    padded.push(...Array(totalPax - padded.length).fill(MANIFEST_STATUS.PENDING));
+  } else if (typeof totalPax === 'number' && totalPax > 0 && padded.length > totalPax) {
+    padded.length = totalPax;
+  }
+
+  return padded.map((status) => (
+    Object.values(MANIFEST_STATUS).includes(status) ? status : MANIFEST_STATUS.PENDING
+  ));
+};
+
+const deriveParentStatusFromPassengers = (passengerStatuses = []) => {
+  if (!Array.isArray(passengerStatuses) || passengerStatuses.length === 0) return MANIFEST_STATUS.PENDING;
+
+  const normalized = passengerStatuses.map((status) => status || MANIFEST_STATUS.PENDING);
+  if (normalized.every((status) => status === MANIFEST_STATUS.BOARDED)) return MANIFEST_STATUS.BOARDED;
+  if (normalized.every((status) => status === MANIFEST_STATUS.NO_SHOW)) return MANIFEST_STATUS.NO_SHOW;
+  if (normalized.every((status) => status === MANIFEST_STATUS.PENDING)) return MANIFEST_STATUS.PENDING;
+  return MANIFEST_STATUS.PARTIAL;
+};
+
+const normalizeManifestBooking = (bookingRef, bookingData = {}) => {
+  const passengerNames = Array.isArray(bookingData.passengerNames)
+    ? bookingData.passengerNames
+    : Array.isArray(bookingData.passengers)
+      ? bookingData.passengers
+      : [];
+  const seatNumbers = Array.isArray(bookingData.seatNumbers) ? [...bookingData.seatNumbers] : [];
+
+  if (passengerNames.length > seatNumbers.length) {
+    seatNumbers.push(...Array(passengerNames.length - seatNumbers.length).fill('TBA'));
+  } else if (seatNumbers.length > passengerNames.length && passengerNames.length > 0) {
+    seatNumbers.length = passengerNames.length;
+  }
+
+  const pickupPoints = (Array.isArray(bookingData.pickupPoints) && bookingData.pickupPoints.length > 0)
+    ? bookingData.pickupPoints
+    : [{
+        location: bookingData.pickupLocation || 'To be confirmed',
+        time: bookingData.pickupTime || 'TBA',
+      }];
+
+  return {
+    id: bookingRef,
+    ...bookingData,
+    passengerNames,
+    seatNumbers,
+    pickupPoints,
+    pickupTime: bookingData.pickupTime || pickupPoints?.[0]?.time || 'TBA',
+    pickupLocation: bookingData.pickupLocation || pickupPoints?.[0]?.location || 'To be confirmed',
+  };
+};
+
+const verifyTourManifestAccess = async ({ authUid, tourId, db = admin.database() }) => {
+  if (!isValidFirebaseKey(authUid) || !isValidFirebaseKey(tourId)) {
+    return { allowed: false, reason: 'INVALID_INPUT' };
+  }
+
+  if (authUid === OPERATIONS_ADMIN_UID) {
+    return { allowed: true, role: 'admin' };
+  }
+
+  const [adminSnapshot, userSnapshot] = await Promise.all([
+    db.ref(`admin_users/${authUid}`).once('value'),
+    db.ref(`users/${authUid}`).once('value'),
+  ]);
+
+  if (adminSnapshot.val() === true) {
+    return { allowed: true, role: 'admin' };
+  }
+
+  const userProfile = userSnapshot.val() || {};
+  const driverId = resolveTrimmedString(userProfile.driverId);
+  if (!driverId || !isValidFirebaseKey(driverId)) {
+    return { allowed: false, reason: 'NOT_TOUR_MEMBER' };
+  }
+
+  const [driverSnapshot, assignedDriverSnapshot] = await Promise.all([
+    db.ref(`drivers/${driverId}/authUid`).once('value'),
+    db.ref(`tour_manifests/${tourId}/assigned_drivers/${driverId}`).once('value'),
+  ]);
+
+  if (driverSnapshot.val() === authUid && assignedDriverSnapshot.val() === true) {
+    return { allowed: true, role: 'assigned_driver', driverId };
+  }
+
+  return { allowed: false, reason: 'NOT_TOUR_MEMBER' };
+};
+
+const buildTourManifestPayload = async ({ tourId, requestedTourCode = null, db = admin.database() }) => {
+  const canonicalTourId = normalizeTourKeyForComparison(tourId || requestedTourCode);
+  if (!canonicalTourId || !isValidFirebaseKey(canonicalTourId)) {
+    throw new Error('Invalid tour id');
+  }
+
+  const tourSnapshot = await db.ref(`tours/${canonicalTourId}`).once('value');
+  if (!tourSnapshot.exists()) {
+    const error = new Error('Tour not found');
+    error.code = 'TOUR_NOT_FOUND';
+    throw error;
+  }
+
+  const tourData = tourSnapshot.val() || {};
+  const tourCodeForSearch = resolveTrimmedString(tourData.tourCode)
+    || resolveTrimmedString(requestedTourCode)
+    || canonicalTourId.replace(/_/g, ' ');
+
+  const [bookingsByTourCodeSnapshot, bookingsByTourIdSnapshot, manifestSnapshot] = await Promise.all([
+    db.ref('bookings').orderByChild('tourCode').equalTo(tourCodeForSearch).once('value'),
+    db.ref('bookings').orderByChild('tourId').equalTo(canonicalTourId).once('value'),
+    db.ref(`tour_manifests/${canonicalTourId}`).once('value'),
+  ]);
+
+  const rawBookings = {
+    ...(bookingsByTourCodeSnapshot.val() || {}),
+    ...(bookingsByTourIdSnapshot.val() || {}),
+  };
+  const manifestData = manifestSnapshot.val() || {};
+  const bookingStatuses = manifestData.bookings || {};
+  const bookings = Object.entries(rawBookings).map(([bookingRef, bookingData]) => {
+    const normalizedBooking = normalizeManifestBooking(bookingRef, bookingData || {});
+    const liveStatus = bookingStatuses[bookingRef] || {};
+    const totalPax = normalizedBooking.passengerNames.length;
+    const hasPassengerStatuses = Array.isArray(liveStatus.passengerStatus)
+      || Array.isArray(liveStatus.passengers);
+    const rawPassengerStatuses = Array.isArray(liveStatus.passengerStatus)
+      ? liveStatus.passengerStatus
+      : liveStatus.passengers;
+    const passengerStatus = normalizePassengerStatuses(rawPassengerStatuses, totalPax);
+    const derivedStatus = hasPassengerStatuses ? deriveParentStatusFromPassengers(passengerStatus) : null;
+
+    return {
+      ...normalizedBooking,
+      status: derivedStatus || liveStatus.status || MANIFEST_STATUS.PENDING,
+      hasPassengerStatuses,
+      passengerStatus,
+      notes: liveStatus.notes || '',
+    };
+  });
+
+  const stats = bookings.reduce((acc, booking) => {
+    const paxCount = booking.passengerNames.length;
+    acc.totalPax += paxCount;
+
+    if (booking.hasPassengerStatuses && Array.isArray(booking.passengerStatus) && booking.passengerStatus.length > 0) {
+      booking.passengerStatus.forEach((status) => {
+        if (status === MANIFEST_STATUS.BOARDED) acc.checkedIn += 1;
+        if (status === MANIFEST_STATUS.NO_SHOW) acc.noShows += 1;
+      });
+    } else if (booking.status === MANIFEST_STATUS.BOARDED) {
+      acc.checkedIn += paxCount;
+    } else if (booking.status === MANIFEST_STATUS.NO_SHOW) {
+      acc.noShows += paxCount;
+    }
+
+    return acc;
+  }, { totalBookings: bookings.length, totalPax: 0, checkedIn: 0, noShows: 0 });
+
+  return {
+    tourId: canonicalTourId,
+    tourCode: tourCodeForSearch,
+    bookings,
+    stats,
+  };
+};
+
+const normalizeDriverId = (driverId) => {
+  if (typeof driverId !== 'string') return '';
+  return driverId.trim().toUpperCase();
+};
+
+const normalizeAssignedDriverCodeRecord = ({ value, driverId, fallbackTourId = null, fallbackTourCode = null }) => {
+  if (!value) return null;
+
+  if (typeof value === 'string') {
+    const normalizedTourId = normalizeTourKeyForComparison(value) || fallbackTourId;
+    return normalizedTourId
+      ? {
+          tourId: normalizedTourId,
+          tourCode: fallbackTourCode || normalizedTourId.replace(/_/g, ' '),
+          driverId,
+          legacy: true,
+        }
+      : null;
+  }
+
+  if (typeof value !== 'object') return null;
+
+  const normalizedTourId = normalizeTourKeyForComparison(value.tourId) || fallbackTourId;
+  const tourCode = resolveTrimmedString(value.tourCode)
+    || fallbackTourCode
+    || (normalizedTourId ? normalizedTourId.replace(/_/g, ' ') : null);
+
+  return normalizedTourId && tourCode
+    ? {
+        tourId: normalizedTourId,
+        tourCode,
+        driverId,
+        legacy: false,
+      }
+    : null;
+};
+
+const resolveDriverAssignment = async ({ driverId, driverData = {}, db = admin.database() }) => {
+  let assignedTourId = normalizeTourKeyForComparison(driverData.currentTourId)
+    || normalizeTourKeyForComparison(driverData.activeTourId);
+  let assignedTourCode = resolveTrimmedString(driverData.currentTourCode);
+
+  if (assignedTourId) {
+    return {
+      assignedTourId,
+      assignedTourCode,
+      assignmentSource: driverData.currentTourId ? 'driver_profile' : 'legacy_active_tour',
+    };
+  }
+
+  const manifestsSnapshot = await db.ref('tour_manifests').once('value');
+  const manifests = manifestsSnapshot.val() || {};
+  for (const [manifestTourId, manifestData] of Object.entries(manifests)) {
+    const normalized = normalizeAssignedDriverCodeRecord({
+      value: manifestData?.assigned_driver_codes?.[driverId],
+      driverId,
+      fallbackTourId: normalizeTourKeyForComparison(manifestTourId),
+      fallbackTourCode: resolveTrimmedString(manifestData?.tourCode)
+        || normalizeTourKeyForComparison(manifestTourId)?.replace(/_/g, ' '),
+    });
+
+    if (normalized?.tourId) {
+      assignedTourId = normalized.tourId;
+      assignedTourCode = normalized.tourCode;
+      return {
+        assignedTourId,
+        assignedTourCode,
+        assignmentSource: normalized.legacy ? 'legacy_manifest_string' : 'manifest_driver_code',
+      };
+    }
+  }
+
+  return {
+    assignedTourId: null,
+    assignedTourCode: null,
+    assignmentSource: 'unassigned',
+  };
+};
+
 const getRequestClientKey = (req) => {
   const forwardedFor = req.headers['x-forwarded-for'];
   const clientIp = Array.isArray(forwardedFor)
@@ -984,6 +1309,16 @@ exports.verifyPassengerLogin = onRequest(
     }
 
     try {
+      const requestAuth = await verifyRequestAuthUid(req);
+      if (!requestAuth.success) {
+        log.warn('Passenger login rejected: missing or invalid Firebase auth token', {
+          bookingRef,
+          clientKey,
+          reason: requestAuth.reason,
+        });
+        return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
+      }
+
       const requireAppCheck = process.env.REQUIRE_APP_CHECK_FOR_LOGIN === 'true';
       const appCheckToken = req.headers['x-firebase-appcheck'];
 
@@ -1023,21 +1358,235 @@ exports.verifyPassengerLogin = onRequest(
       const resolvedBookingRef = normalizeBookingRef(identity.bookingRef || bookingRef);
       const resolvedTourId = typeof identity.tourId === 'string' ? identity.tourId.trim() : '';
       const resolvedTourCode = typeof identity.tourCode === 'string' ? identity.tourCode.trim() : '';
+      const canonicalTourId = normalizeTourKeyForComparison(resolvedTourId || resolvedTourCode);
 
-      if (!resolvedBookingRef || (!resolvedTourId && !resolvedTourCode)) {
+      if (!resolvedBookingRef || !canonicalTourId) {
         log.warn('Booking identity missing essential identifiers', { bookingRef });
         return res.status(200).json({ valid: false, reason: 'IDENTITY_INCOMPLETE' });
       }
+
+      const [bookingSnapshot, tourSnapshot] = await Promise.all([
+        admin.database().ref(`bookings/${resolvedBookingRef}`).once('value'),
+        admin.database().ref(`tours/${canonicalTourId}`).once('value'),
+      ]);
+
+      if (!bookingSnapshot.exists() || !tourSnapshot.exists()) {
+        log.warn('Booking identity points at missing booking or tour', {
+          bookingRef,
+          resolvedBookingRef,
+          tourId: canonicalTourId,
+          hasBooking: bookingSnapshot.exists(),
+          hasTour: tourSnapshot.exists(),
+        });
+        return res.status(200).json({ valid: false, reason: 'IDENTITY_INCOMPLETE' });
+      }
+
+      const tourData = tourSnapshot.val() || {};
+      if (tourData.isActive === false) {
+        log.warn('Passenger login rejected for inactive tour', {
+          bookingRef,
+          tourId: canonicalTourId,
+        });
+        return res.status(200).json({ valid: false, reason: 'TOUR_INACTIVE' });
+      }
+
+      const bookingData = bookingSnapshot.val() || {};
+      const canonicalTourCode = resolveTrimmedString(resolvedTourCode)
+        || resolveTrimmedString(tourData.tourCode)
+        || resolveTrimmedString(bookingData.tourCode)
+        || null;
+      const grantUpdates = buildVerifiedLoginGrantUpdates({
+        authUid: requestAuth.uid,
+        bookingRef: resolvedBookingRef,
+        normalizedPassengerEmail: email,
+        tourId: canonicalTourId,
+        tourCode: canonicalTourCode,
+      });
+
+      if (!grantUpdates) {
+        log.warn('Passenger login could not build verified access grant', {
+          bookingRef,
+          tourId: canonicalTourId,
+          authUid: requestAuth.uid,
+        });
+        return res.status(200).json({ valid: false, reason: 'IDENTITY_INCOMPLETE' });
+      }
+
+      await admin.database().ref().update(grantUpdates);
 
       return res.status(200).json({
         valid: true,
         reason: 'OK',
         bookingRef: resolvedBookingRef,
-        tourId: resolvedTourId || null,
-        tourCode: resolvedTourCode || null,
+        tourId: canonicalTourId,
+        tourCode: canonicalTourCode,
+        grantExpiresAtMs: grantUpdates[`tour_access_grants/${canonicalTourId}/${requestAuth.uid}`].expiresAtMs,
       });
     } catch (error) {
       log.error('Passenger login verification failed', error, { bookingRef });
+      return res.status(500).json({ valid: false, reason: 'INTERNAL_ERROR' });
+    }
+  }
+);
+
+exports.getTourManifest = onRequest(
+  {
+    region: 'europe-west1',
+    maxInstances: 10,
+  },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
+    }
+
+    const requestAuth = await verifyRequestAuthUid(req);
+    if (!requestAuth.success) {
+      return res.status(401).json({ success: false, reason: 'INVALID_CREDENTIALS' });
+    }
+
+    const requestedTour = resolveTrimmedString(req.body?.tourId) || resolveTrimmedString(req.body?.tourCode);
+    const tourId = normalizeTourKeyForComparison(requestedTour);
+    if (!tourId || !isValidFirebaseKey(tourId)) {
+      return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
+    }
+
+    const clientKey = getRequestClientKey(req);
+    if (!checkRateLimit(`get_tour_manifest_${requestAuth.uid}_${tourId}_${clientKey}`, 30, 60000)) {
+      log.warn('Tour manifest rate limit exceeded', {
+        authUid: requestAuth.uid,
+        tourId,
+        clientKey,
+      });
+      return res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' });
+    }
+
+    try {
+      const access = await verifyTourManifestAccess({ authUid: requestAuth.uid, tourId });
+      if (!access.allowed) {
+        log.warn('Tour manifest request denied', {
+          authUid: requestAuth.uid,
+          tourId,
+          reason: access.reason,
+        });
+        return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
+      }
+
+      const manifest = await buildTourManifestPayload({
+        tourId,
+        requestedTourCode: requestedTour,
+      });
+
+      log.info('Tour manifest response built', {
+        authUid: requestAuth.uid,
+        tourId,
+        role: access.role,
+        bookingCount: manifest.bookings.length,
+      });
+      return res.status(200).json({ success: true, ...manifest });
+    } catch (error) {
+      const reason = error?.code === 'TOUR_NOT_FOUND' ? 'TOUR_NOT_FOUND' : 'INTERNAL_ERROR';
+      log.error('Tour manifest request failed', error, {
+        authUid: requestAuth.uid,
+        tourId,
+        reason,
+      });
+      return res.status(reason === 'TOUR_NOT_FOUND' ? 404 : 500).json({ success: false, reason });
+    }
+  }
+);
+
+exports.verifyDriverLogin = onRequest(
+  {
+    region: 'europe-west1',
+    maxInstances: 10,
+  },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ valid: false, reason: 'METHOD_NOT_ALLOWED' });
+    }
+
+    const requestAuth = await verifyRequestAuthUid(req);
+    if (!requestAuth.success) {
+      return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
+    }
+
+    const driverId = normalizeDriverId(req.body?.driverId);
+    if (!driverId || !isValidFirebaseKey(driverId)) {
+      return res.status(400).json({ valid: false, reason: 'INVALID_INPUT' });
+    }
+
+    const clientKey = getRequestClientKey(req);
+    if (!checkRateLimit(`verify_driver_login_${requestAuth.uid}_${clientKey}`, 20, 60000)) {
+      log.warn('Driver login rate limit exceeded', {
+        authUid: requestAuth.uid,
+        driverId,
+        clientKey,
+      });
+      return res.status(429).json({ valid: false, reason: 'TRY_AGAIN_LATER' });
+    }
+
+    try {
+      const db = admin.database();
+      const driverSnapshot = await db.ref(`drivers/${driverId}`).once('value');
+      if (!driverSnapshot.exists()) {
+        log.warn('Driver login rejected: driver not found', { driverId, authUid: requestAuth.uid });
+        return res.status(200).json({ valid: false, reason: 'DRIVER_NOT_FOUND' });
+      }
+
+      const driverData = driverSnapshot.val() || {};
+      const claimedAuthUid = resolveTrimmedString(driverData.authUid);
+      if (claimedAuthUid && claimedAuthUid !== requestAuth.uid) {
+        log.warn('Driver login rejected: driver code already linked to another auth uid', {
+          driverId,
+          authUid: requestAuth.uid,
+        });
+        return res.status(403).json({ valid: false, reason: 'DRIVER_ALREADY_LINKED' });
+      }
+
+      const assignment = await resolveDriverAssignment({ driverId, driverData, db });
+      let assignedTourCode = assignment.assignedTourCode;
+      let resolvedTour = null;
+
+      if (assignment.assignedTourId) {
+        const tourSnapshot = await db.ref(`tours/${assignment.assignedTourId}`).once('value');
+        if (tourSnapshot.exists()) {
+          const tourData = tourSnapshot.val() || {};
+          assignedTourCode = assignedTourCode || resolveTrimmedString(tourData.tourCode);
+          resolvedTour = {
+            id: assignment.assignedTourId,
+            ...tourData,
+          };
+        }
+      }
+
+      log.info('Driver login reference validated', {
+        driverId,
+        authUid: requestAuth.uid,
+        assignedTourId: assignment.assignedTourId,
+        assignmentSource: assignment.assignmentSource,
+        hasResolvedTour: Boolean(resolvedTour),
+      });
+
+      return res.status(200).json({
+        valid: true,
+        type: 'driver',
+        driver: {
+          id: driverId,
+          name: driverData.name || null,
+          assignedTourId: assignment.assignedTourId,
+          assignedTourCode,
+          hasAssignedTour: Boolean(assignment.assignedTourId),
+        },
+        tour: resolvedTour,
+        assignmentStatus: assignment.assignedTourId
+          ? (resolvedTour ? 'ASSIGNED' : 'ASSIGNED_TOUR_NOT_FOUND')
+          : 'UNASSIGNED',
+      });
+    } catch (error) {
+      log.error('Driver login verification failed', error, {
+        driverId,
+        authUid: requestAuth.uid,
+      });
       return res.status(500).json({ valid: false, reason: 'INTERNAL_ERROR' });
     }
   }
@@ -1641,4 +2190,11 @@ exports.__testables = {
   buildFirebaseStorageDownloadUrl,
   generatePhotoVariantsForRecord,
   sanitizeLogText,
+  buildVerifiedLoginGrantUpdates,
+  verifyRequestAuthUid,
+  buildTourManifestPayload,
+  verifyTourManifestAccess,
+  normalizeManifestBooking,
+  resolveDriverAssignment,
+  normalizeAssignedDriverCodeRecord,
 };

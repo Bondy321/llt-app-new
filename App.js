@@ -276,17 +276,50 @@ function AppContent() {
       bindingMetaUpdates[`identity_bindings_meta/${stablePassengerKey}/lastSeenAt`] = now;
     }
 
-    await realtimeDb.ref().update(profileUpdates);
+    try {
+      await realtimeDb.ref().update(profileUpdates);
+    } catch (error) {
+      const profileError = new Error('Passenger identity profile persistence failed');
+      profileError.userMessage = 'We could not finish securing your tour session. Please check your connection and try again.';
+      profileError.criticalIdentityPersistence = true;
+      profileError.cause = error;
+      throw profileError;
+    }
+
+    let bindingPersisted = false;
+    let bindingMetaPersisted = false;
+
     if (Object.keys(bindingLinkUpdates).length > 0) {
-      await realtimeDb.ref().update(bindingLinkUpdates);
+      try {
+        await realtimeDb.ref().update(bindingLinkUpdates);
+        bindingPersisted = true;
+      } catch (error) {
+        logger.warn('Identity', 'identity_binding_link_persist_failure', {
+          authUid: maskIdentifier(authUid),
+          stablePassengerKey: stablePassengerKey ? maskIdentifier(stablePassengerKey) : null,
+          error: error?.message || String(error),
+          code: error?.code || null,
+        });
+      }
     }
     if (Object.keys(bindingMetaUpdates).length > 0) {
-      await realtimeDb.ref().update(bindingMetaUpdates);
+      try {
+        await realtimeDb.ref().update(bindingMetaUpdates);
+        bindingMetaPersisted = true;
+      } catch (error) {
+        logger.warn('Identity', 'identity_binding_meta_persist_failure', {
+          authUid: maskIdentifier(authUid),
+          stablePassengerKey: stablePassengerKey ? maskIdentifier(stablePassengerKey) : null,
+          error: error?.message || String(error),
+          code: error?.code || null,
+        });
+      }
     }
 
     return {
       profilePersisted: true,
-      bindingPersisted: Object.keys(bindingLinkUpdates).length > 0,
+      bindingPersisted,
+      bindingMetaPersisted,
       stablePassengerKey,
     };
   };
@@ -841,18 +874,32 @@ function AppContent() {
           stablePassengerKey: persisted.stablePassengerKey ? maskIdentifier(persisted.stablePassengerKey) : null,
         });
       } catch (error) {
-        const isIdentityBindingWriteRejected = error?.code === 'PERMISSION_DENIED'
-          || /permission_denied/i.test(error?.message || '')
-          || /Permission denied/i.test(error?.message || '');
+        if (error?.criticalIdentityPersistence) {
+          clearLoginTransitionArtifacts();
+          setLoginTransition(null);
+          loginProgress.setValue(0);
+        }
+
+        const sourceError = error?.cause || error;
+        const sourceErrorMessage = sourceError?.message || error?.message || '';
+        const sourceErrorCode = sourceError?.code || error?.code || null;
+        const isIdentityBindingWriteRejected = sourceErrorCode === 'PERMISSION_DENIED'
+          || /permission_denied/i.test(sourceErrorMessage)
+          || /Permission denied/i.test(sourceErrorMessage);
         logger.error('Identity', 'identity_binding_persist_failure', {
-          error: error.message,
-          code: error?.code || null,
+          error: sourceErrorMessage,
+          code: sourceErrorCode,
+          critical: Boolean(error?.criticalIdentityPersistence),
           reason: isIdentityBindingWriteRejected ? 'IDENTITY_BINDING_WRITE_DENIED_OR_INVALID' : 'IDENTITY_BINDING_WRITE_FAILED',
           authUid: maskIdentifier(authUid),
           bookingRef: maskIdentifier(normalizedBookingData.id),
           stablePassengerId: stablePassengerId ? maskIdentifier(stablePassengerId) : null,
           stablePassengerKey: stablePassengerId ? maskIdentifier(toRealtimeKeySegment(stablePassengerId)) : null,
         });
+
+        if (error?.criticalIdentityPersistence) {
+          throw error;
+        }
       }
     }
 

@@ -22,7 +22,7 @@ const createMockRealtimeDb = (state) => ({
   },
 });
 
-const loadServiceWithDb = (state) => {
+const loadServiceWithDb = (state, options = {}) => {
   const previousNodeEnv = process.env.NODE_ENV;
 
   delete require.cache[SERVICE_PATH];
@@ -35,7 +35,7 @@ const loadServiceWithDb = (state) => {
     loaded: true,
     exports: {
       realtimeDb: createMockRealtimeDb(state),
-      auth: { currentUser: { uid: 'test-user' } },
+      auth: options.auth || { currentUser: { uid: 'test-user', getIdToken: async () => 'mock-firebase-id-token' } },
     },
   };
 
@@ -120,4 +120,74 @@ test('validateBookingReference keeps driver auto-detect based on D- prefix', asy
   assert.equal(result.valid, true);
   assert.equal(result.type, 'driver');
   assert.equal(result.driver.id, 'D-MACLEOD');
+});
+
+test('validateBookingReference uses verified driver endpoint when configured', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL = 'https://example.test/verifyDriverLogin';
+
+  const originalFetch = global.fetch;
+  try {
+    let capturedRequest;
+    global.fetch = async (url, options) => {
+      capturedRequest = { url, options };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          valid: true,
+          type: 'driver',
+          driver: {
+            id: 'D-BONDY',
+            name: 'Bondy',
+            assignedTourId: '5112D_8',
+            assignedTourCode: '5112D 8',
+            hasAssignedTour: true,
+          },
+          tour: { id: '5112D_8', name: 'Highlands', tourCode: '5112D 8', isActive: true },
+          assignmentStatus: 'ASSIGNED',
+        }),
+      };
+    };
+
+    const service = loadServiceWithDb({
+      drivers: {
+        'D-BONDY': { name: 'Old direct record should not be used', currentTourId: null },
+      },
+      tours: {},
+      tour_manifests: {},
+    });
+
+    const result = await service.validateBookingReference('d-bondy');
+
+    assert.equal(capturedRequest.url, 'https://example.test/verifyDriverLogin');
+    assert.equal(capturedRequest.options.headers.Authorization, 'Bearer mock-firebase-id-token');
+    assert.deepEqual(JSON.parse(capturedRequest.options.body), { driverId: 'D-BONDY' });
+    assert.equal(result.valid, true);
+    assert.equal(result.tour.name, 'Highlands');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference maps claimed driver verifier failures to support copy', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL = 'https://example.test/verifyDriverLogin';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: false,
+      status: 403,
+      json: async () => ({ valid: false, reason: 'DRIVER_ALREADY_LINKED' }),
+    });
+
+    const service = loadServiceWithDb({ drivers: {}, tours: {}, tour_manifests: {} });
+    const result = await service.validateBookingReference('D-BONDY');
+
+    assert.equal(result.valid, false);
+    assert.equal(result.error, 'This driver code is already linked to another device. Please contact dispatch if this is unexpected.');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL;
+  }
 });

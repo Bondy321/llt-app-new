@@ -5,7 +5,7 @@ const path = require('node:path');
 const SERVICE_PATH = path.resolve(__dirname, '../services/bookingServiceRealtime.js');
 const FIREBASE_PATH = path.resolve(__dirname, '../firebase.js');
 
-const createMockRealtimeDb = (state) => {
+const createMockRealtimeDb = (state, options = {}) => {
   const buildRef = (dbPath = '') => {
     const segments = dbPath.split('/').filter(Boolean);
     const getValue = () => segments.reduce((node, key) => (node || {})[key], state);
@@ -35,6 +35,10 @@ const createMockRealtimeDb = (state) => {
         };
       },
       async update(updates) {
+        if (options.updateError) {
+          throw options.updateError;
+        }
+
         Object.entries(updates || {}).forEach(([pathKey, value]) => {
           const pathSegments = [...segments, ...pathKey.split('/').filter(Boolean)];
           setValue(pathSegments, value);
@@ -64,8 +68,8 @@ const loadServiceWithDb = (state, options = {}) => {
     filename: FIREBASE_PATH,
     loaded: true,
     exports: {
-      realtimeDb: createMockRealtimeDb(state),
-      auth: { currentUser: { uid: 'test-user' } },
+      realtimeDb: createMockRealtimeDb(state, options),
+      auth: options.auth || { currentUser: { uid: 'test-user', getIdToken: async () => 'mock-firebase-id-token' } },
       getCurrentAppCheckToken: options.getCurrentAppCheckToken,
     },
   };
@@ -473,6 +477,118 @@ test('validateBookingReference maps verifier endpoint-not-found to actionable co
 
     assert.equal(result.valid, false);
     assert.equal(result.error, 'Passenger verification is temporarily unavailable. Please try again shortly.');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference sends Firebase bearer token to passenger verifier', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    let capturedHeaders;
+    global.fetch = async (_url, options) => {
+      capturedHeaders = options.headers;
+      return {
+        ok: true,
+        json: async () => ({
+          valid: true,
+          bookingRef: 'ABC123',
+          tourId: '5112D_8',
+        }),
+      };
+    };
+
+    const service = loadServiceWithDb({
+      drivers: {},
+      bookings: {
+        ABC123: {
+          bookingRef: 'ABC123',
+          tourCode: '5112D 8',
+          passengerNames: ['Alex'],
+          pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+        },
+      },
+      tours: {
+        '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true, participants: {}, currentParticipants: 0 },
+      },
+    });
+
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, true);
+    assert.equal(capturedHeaders.Authorization, 'Bearer mock-firebase-id-token');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference maps missing Firebase auth token to retry copy before verifier call', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    let fetchCalled = false;
+    global.fetch = async () => {
+      fetchCalled = true;
+      throw new Error('fetch should not be called without Firebase auth');
+    };
+
+    const service = loadServiceWithDb({ drivers: {}, bookings: {}, tours: {} }, {
+      auth: { currentUser: null },
+    });
+
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, false);
+    assert.equal(result.error, 'Secure login is still starting. Please wait a moment and try again.');
+    assert.equal(fetchCalled, false);
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference continues when legacy booking normalization write is denied', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        valid: true,
+        bookingRef: 'ABC123',
+        tourId: '5112D_8',
+      }),
+    });
+
+    const service = loadServiceWithDb({
+      drivers: {},
+      bookings: {
+        ABC123: {
+          bookingRef: 'ABC123',
+          tourCode: '5112D 8',
+          passengers: ['Alex'],
+          pickupLocation: 'Balloch',
+          pickupTime: '08:00',
+        },
+      },
+      tours: {
+        '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true, participants: {}, currentParticipants: 0 },
+      },
+    }, {
+      updateError: new Error('permission_denied'),
+    });
+
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.booking.passengerNames, ['Alex']);
+    assert.deepEqual(result.booking.pickupPoints, [{ location: 'Balloch', time: '08:00' }]);
   } finally {
     global.fetch = originalFetch;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;

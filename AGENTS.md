@@ -731,8 +731,14 @@ Sources:
 Important RTDB invariants:
 
 - Root read/write are denied by default.
+- `drivers`, `bookings`, `tours`, and `tour_manifests` must not expose collection-level authenticated reads.
+- Passenger login uses `verifyPassengerLogin` to validate booking identity and create short-lived `tour_access_grants` / `booking_access_grants` before first tour access.
+- Online passenger login must persist `users/{authUid}/bookingRef` before entering the app; that caller-owned profile link keeps exact manifest-row access working after short-lived grants expire.
+- Driver-code login uses `verifyDriverLogin`; legacy manifest assignment scans must stay server-side.
+- Passenger manifest loading uses the `getTourManifest` HTTPS function; the mobile app must not scan `/bookings` to assemble manifests in production.
+- Release order matters for backend access changes: deploy Functions first, then Realtime Database/Storage rules, then EAS update/build. Current EAS workflows test backend changes but do not deploy Firebase backend artifacts.
 - `bookings/{bookingRef}` writes are admin-only.
-- `tour_manifests/{tourId}/bookings/{bookingRef}` writes allow admin, tour participants, and verified assigned drivers.
+- `tour_manifests/{tourId}/bookings/{bookingRef}` writes allow admin, verified assigned drivers, and passengers only for their own booking via `users/{authUid}/bookingRef` or a valid booking grant.
 - `assigned_driver_codes` must use the canonical object payload.
 - Chat message creates require ownership through auth UID, stable passenger identity binding, private owner identity, or verified driver principal.
 - Chat reaction, typing, presence, and read-state actor leaves are identity-scoped.

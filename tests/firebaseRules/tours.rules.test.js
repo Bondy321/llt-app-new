@@ -17,6 +17,15 @@ const DRIVER_ID = 'D-DPALMER';
 const DRIVER_AUTH_UID = 'driver-auth-1';
 const OTHER_DRIVER_ID = 'D-OTHER';
 const OTHER_DRIVER_AUTH_UID = 'driver-auth-2';
+const grantPayload = (uid) => ({
+  source: 'verifyPassengerLogin',
+  bookingRef: `BOOKING-${uid}`,
+  tourId: TOUR_ID,
+  tourCode: '5203L 22',
+  grantedAt: new Date().toISOString(),
+  grantedAtMs: Date.now(),
+  expiresAtMs: Date.now() + (30 * 60 * 1000),
+});
 
 const parseHost = () => {
   const value = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
@@ -83,6 +92,7 @@ test.before(async () => {
       driverAssignedTourId: 'OTHER_TOUR',
       principalType: 'driver',
     });
+    await db.ref(`tour_access_grants/${TOUR_ID}/${OTHER_PASSENGER_AUTH_UID}`).set(grantPayload(OTHER_PASSENGER_AUTH_UID));
   });
 });
 
@@ -102,6 +112,21 @@ test('allows passengers to write only their own participant row and participant 
   await assertSucceeds(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/currentParticipants`).set(2));
   await assertFails(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/name`).set('Changed by passenger'));
   await assertFails(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}`).update({ isActive: false }));
+});
+
+test('requires a verified login grant before a new passenger can join a tour', async () => {
+  await assertFails(dbFor(UNATTACHED_AUTH_UID).ref(`tours/${TOUR_ID}/participants/${UNATTACHED_AUTH_UID}`).set({
+    userId: UNATTACHED_AUTH_UID,
+    joinedAt: '2026-05-23T19:41:00.000Z',
+    lastUpdated: '2026-05-23T19:41:00.000Z',
+  }));
+});
+
+test('limits tour reads to participants, assigned drivers, admins, or verified login grants', async () => {
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}`).get());
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}`).get());
+  await assertSucceeds(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}`).get());
+  await assertFails(dbFor(UNATTACHED_AUTH_UID).ref(`tours/${TOUR_ID}`).get());
 });
 
 test('denies passengers from writing driver-only tour location fields', async () => {

@@ -98,6 +98,40 @@ const buildDerivedPassengerLoginVerifierUrl = () => {
   return `https://europe-west1-${projectId}.cloudfunctions.net/verifyPassengerLogin`;
 };
 
+const buildTourManifestEndpointUrl = () => {
+  const explicitUrl = process.env.EXPO_PUBLIC_GET_TOUR_MANIFEST_URL?.trim();
+  if (explicitUrl) return explicitUrl;
+
+  const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID?.trim();
+  if (!projectId) return null;
+
+  return `https://europe-west1-${projectId}.cloudfunctions.net/getTourManifest`;
+};
+
+const buildDerivedTourManifestEndpointUrl = () => {
+  const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID?.trim();
+  if (!projectId) return null;
+
+  return `https://europe-west1-${projectId}.cloudfunctions.net/getTourManifest`;
+};
+
+const buildDriverLoginVerifierUrl = () => {
+  const explicitUrl = process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL?.trim();
+  if (explicitUrl) return explicitUrl;
+
+  const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID?.trim();
+  if (!projectId) return null;
+
+  return `https://europe-west1-${projectId}.cloudfunctions.net/verifyDriverLogin`;
+};
+
+const buildDerivedDriverLoginVerifierUrl = () => {
+  const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID?.trim();
+  if (!projectId) return null;
+
+  return `https://europe-west1-${projectId}.cloudfunctions.net/verifyDriverLogin`;
+};
+
 const getPassengerLoginVerifierTimeoutMs = () => {
   const configured = Number(process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS);
   if (Number.isFinite(configured) && configured >= 1000) {
@@ -138,6 +172,180 @@ const getAppCheckHeaderValue = async () => {
   }
 };
 
+const getFirebaseAuthHeaderValue = async () => {
+  const currentUser = auth?.currentUser;
+  if (!currentUser || typeof currentUser.getIdToken !== 'function') {
+    return { success: false, reason: 'AUTH_USER_UNAVAILABLE' };
+  }
+
+  try {
+    const token = await currentUser.getIdToken();
+    if (typeof token === 'string' && token.trim()) {
+      return { success: true, token: token.trim() };
+    }
+
+    return { success: false, reason: 'AUTH_TOKEN_UNAVAILABLE' };
+  } catch (error) {
+    return {
+      success: false,
+      reason: 'AUTH_TOKEN_FETCH_FAILED',
+      error: error?.message || String(error),
+    };
+  }
+};
+
+const mapTourManifestFunctionReason = (reason) => {
+  const reasonToMessage = {
+    INVALID_CREDENTIALS: 'Secure manifest access is still starting. Please wait a moment and try again.',
+    INVALID_INPUT: 'This tour manifest could not be opened. Please return to your tour and try again.',
+    METHOD_NOT_ALLOWED: 'Manifest service is currently unavailable. Please update the app and try again shortly.',
+    NOT_AUTHORIZED: 'You do not have access to this passenger manifest.',
+    TOUR_NOT_FOUND: 'This tour manifest is no longer available.',
+    TRY_AGAIN_LATER: 'Too many manifest refreshes. Please wait a moment and try again.',
+    INTERNAL_ERROR: 'Manifest service is temporarily unavailable. Please try again shortly.',
+  };
+
+  return reasonToMessage[reason] || 'Manifest service is temporarily unavailable. Please try again shortly.';
+};
+
+const fetchTourManifestFromFunction = async (tourCodeOriginal) => {
+  const configuredEndpoint = buildTourManifestEndpointUrl();
+  const derivedEndpoint = buildDerivedTourManifestEndpointUrl();
+  const endpointCandidates = [configuredEndpoint, derivedEndpoint].filter((value, index, list) => {
+    if (typeof value !== 'string' || !value.trim()) return false;
+    return list.indexOf(value) === index;
+  });
+
+  if (endpointCandidates.length === 0) {
+    logBookingEvent('warn', 'Tour manifest function unavailable: no endpoint candidates', {
+      tourCode: maskIdentifier(tourCodeOriginal),
+    });
+    return null;
+  }
+
+  const firebaseAuthResult = await getFirebaseAuthHeaderValue();
+  if (!firebaseAuthResult.success) {
+    logBookingEvent('warn', 'Tour manifest function blocked without Firebase auth token', {
+      tourCode: maskIdentifier(tourCodeOriginal),
+      reason: firebaseAuthResult.reason,
+      error: firebaseAuthResult.error,
+    });
+    throw new Error('Secure manifest access is still starting. Please wait a moment and try again.');
+  }
+
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${firebaseAuthResult.token}`,
+  };
+
+  for (const endpoint of endpointCandidates) {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ tourId: tourCodeOriginal }),
+    });
+    const payload = await response.json().catch(() => null);
+
+    if (!payload) {
+      if (response.status === 404) {
+        continue;
+      }
+      throw new Error('Manifest service returned an unexpected response. Please try again.');
+    }
+
+    if (!response.ok || payload.success === false) {
+      if (response.status === 404 && endpoint !== endpointCandidates[endpointCandidates.length - 1]) {
+        continue;
+      }
+      throw new Error(mapTourManifestFunctionReason(payload.reason));
+    }
+
+    return {
+      tourId: payload.tourId,
+      tourCode: payload.tourCode || null,
+      bookings: Array.isArray(payload.bookings) ? payload.bookings : [],
+      stats: payload.stats || {},
+    };
+  }
+
+  throw new Error('Manifest service is temporarily unavailable. Please try again shortly.');
+};
+
+const mapDriverVerifierReason = (reason) => {
+  const reasonToMessage = {
+    DRIVER_ALREADY_LINKED: 'This driver code is already linked to another device. Please contact dispatch if this is unexpected.',
+    DRIVER_NOT_FOUND: 'Driver code not found',
+    INVALID_CREDENTIALS: 'Secure driver sign-in is still starting. Please wait a moment and try again.',
+    INVALID_INPUT: 'Invalid driver code provided',
+    METHOD_NOT_ALLOWED: 'Driver verification is currently unavailable. Please update the app and try again shortly.',
+    TRY_AGAIN_LATER: 'Too many driver sign-in attempts. Please wait a moment and try again.',
+    INTERNAL_ERROR: 'Driver verification is temporarily unavailable. Please try again shortly.',
+  };
+
+  return reasonToMessage[reason] || 'Unable to verify driver code. Please try again shortly.';
+};
+
+const verifyDriverLoginIdentity = async ({ driverId }) => {
+  const configuredEndpoint = buildDriverLoginVerifierUrl();
+  const derivedEndpoint = buildDerivedDriverLoginVerifierUrl();
+  const endpointCandidates = [configuredEndpoint, derivedEndpoint].filter((value, index, list) => {
+    if (typeof value !== 'string' || !value.trim()) return false;
+    return list.indexOf(value) === index;
+  });
+
+  if (endpointCandidates.length === 0) {
+    logBookingEvent('warn', 'Driver verifier unavailable: no endpoint candidates', {
+      driverId: maskIdentifier(driverId),
+    });
+    return null;
+  }
+
+  const firebaseAuthResult = await getFirebaseAuthHeaderValue();
+  if (!firebaseAuthResult.success) {
+    logBookingEvent('warn', 'Driver verifier blocked without Firebase auth token', {
+      driverId: maskIdentifier(driverId),
+      reason: firebaseAuthResult.reason,
+      error: firebaseAuthResult.error,
+    });
+    return {
+      valid: false,
+      error: mapDriverVerifierReason('INVALID_CREDENTIALS'),
+    };
+  }
+
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${firebaseAuthResult.token}`,
+  };
+
+  for (const endpoint of endpointCandidates) {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ driverId }),
+    });
+    const payload = await response.json().catch(() => null);
+
+    if (!payload) {
+      if (response.status === 404) {
+        continue;
+      }
+      return { valid: false, error: 'Driver verification returned an unexpected response. Please try again.' };
+    }
+
+    if (!response.ok || payload.valid === false) {
+      if (response.status === 404 && endpoint !== endpointCandidates[endpointCandidates.length - 1]) {
+        continue;
+      }
+      return { valid: false, error: mapDriverVerifierReason(payload.reason) };
+    }
+
+    return payload;
+  }
+
+  return { valid: false, error: 'Driver verification is temporarily unavailable. Please try again shortly.' };
+};
+
 const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
   const configuredEndpoint = buildPassengerLoginVerifierUrl();
   const derivedEndpoint = buildDerivedPassengerLoginVerifierUrl();
@@ -174,6 +382,20 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
     const appCheckResult = useAppCheck
       ? await getAppCheckHeaderValue()
       : { success: false, reason: 'APPCHECK_DISABLED' };
+    const firebaseAuthResult = await getFirebaseAuthHeaderValue();
+
+    if (!firebaseAuthResult.success) {
+      logBookingEvent('warn', 'Passenger verifier blocked without Firebase auth token', {
+        bookingRef: maskIdentifier(bookingRef),
+        reason: firebaseAuthResult.reason,
+        error: firebaseAuthResult.error,
+      });
+      return {
+        valid: false,
+        reason: 'VERIFIER_AUTH_UNAVAILABLE',
+        authFailureReason: firebaseAuthResult.reason,
+      };
+    }
 
     if (useAppCheck && !appCheckResult.success && strictAppCheck) {
       logBookingEvent('warn', 'Passenger verifier blocked by strict App Check', {
@@ -195,6 +417,7 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
     }
 
     const headers = { 'Content-Type': 'application/json' };
+    headers.Authorization = `Bearer ${firebaseAuthResult.token}`;
     if (useAppCheck && appCheckResult.success) {
       headers['x-firebase-appcheck'] = appCheckResult.token;
     }
@@ -493,7 +716,14 @@ const ensureBookingSchemaConsistency = async (bookingRef, bookingData, dbInstanc
   if (bookingData.pickupTime !== pickupTime) updates.pickupTime = pickupTime;
 
   if (Object.keys(updates).length > 0) {
-    await db.ref(`bookings/${bookingRef}`).update(updates);
+    try {
+      await db.ref(`bookings/${bookingRef}`).update(updates);
+    } catch (error) {
+      logBookingEvent('warn', 'Booking schema normalization update failed; continuing with normalized in-memory data', {
+        bookingRef: maskIdentifier(bookingRef),
+        error: error?.message || String(error),
+      });
+    }
   }
 
   return {
@@ -518,6 +748,16 @@ const getTourManifest = async (tourCodeOriginal) => {
     logBookingEvent('info', 'Manifest fetch started', {
       tourCode: maskIdentifier(validatedTourCode),
     });
+
+    const functionManifest = await fetchTourManifestFromFunction(validatedTourCode);
+    if (functionManifest) {
+      logBookingEvent('info', 'Manifest fetch completed via function', {
+        tourId: functionManifest.tourId,
+        bookingCount: functionManifest.bookings.length,
+        totalPax: functionManifest.stats?.totalPax || 0,
+      });
+      return functionManifest;
+    }
 
     if (!realtimeDb) {
       throw new Error('Realtime database not initialized');
@@ -570,8 +810,12 @@ const getTourManifest = async (tourCodeOriginal) => {
         const { normalizedBooking } = await ensureBookingSchemaConsistency(bookingRef, data);
         const liveStatus = bookingStatuses[bookingRef] || {};
         const totalPax = normalizedBooking.passengerNames.length;
-        const hasPassengerStatuses = Array.isArray(liveStatus.passengers);
-        const passengerStatus = normalizePassengerStatuses(liveStatus.passengers, totalPax);
+        const hasPassengerStatuses = Array.isArray(liveStatus.passengerStatus)
+          || Array.isArray(liveStatus.passengers);
+        const passengerStatus = normalizePassengerStatuses(
+          Array.isArray(liveStatus.passengerStatus) ? liveStatus.passengerStatus : liveStatus.passengers,
+          totalPax
+        );
         const derivedStatus = hasPassengerStatuses ? deriveParentStatusFromPassengers(passengerStatus) : null;
         const currentStatus = derivedStatus || liveStatus.status || MANIFEST_STATUS.PENDING;
 
@@ -1038,6 +1282,40 @@ const validateBookingReference = async (reference, email) => {
       hasEmail: Boolean(email),
     });
 
+    if (upperRef.startsWith('D-')) {
+      const driverVerification = await verifyDriverLoginIdentity({ driverId: upperRef });
+      if (driverVerification) {
+        if (!driverVerification.valid) {
+          logBookingEvent('warn', 'Driver verifier rejected code', {
+            driverId: maskIdentifier(upperRef),
+            error: driverVerification.error || 'unknown',
+          });
+          return {
+            valid: false,
+            error: driverVerification.error || 'Unable to verify driver code. Please try again.',
+          };
+        }
+
+        logBookingEvent('info', 'Driver verifier accepted code', {
+          driverId: maskIdentifier(upperRef),
+          assignedTourId: driverVerification.driver?.assignedTourId || null,
+          assignmentStatus: driverVerification.assignmentStatus || null,
+          hasResolvedTour: Boolean(driverVerification.tour),
+        });
+        return {
+          valid: true,
+          type: 'driver',
+          driver: driverVerification.driver,
+          tour: driverVerification.tour || null,
+          assignmentStatus: driverVerification.assignmentStatus || (
+            driverVerification.driver?.assignedTourId
+              ? (driverVerification.tour ? 'ASSIGNED' : 'ASSIGNED_TOUR_NOT_FOUND')
+              : 'UNASSIGNED'
+          ),
+        };
+      }
+    }
+
     // --- 1. CHECK: Is it a Driver? ---
     const driverSnapshot = await realtimeDb.ref(`drivers/${upperRef}`).once('value');
 
@@ -1137,6 +1415,8 @@ const validateBookingReference = async (reference, email) => {
         VERIFIER_INVALID_RESPONSE: 'Verification service returned an unexpected response. Please try again.',
         VERIFIER_NOT_FOUND: 'Passenger verification is temporarily unavailable. Please try again shortly.',
         VERIFIER_APPCHECK_UNAVAILABLE: 'App security check could not be completed. Update the app or reconnect and try again.',
+        VERIFIER_AUTH_UNAVAILABLE: 'Secure login is still starting. Please wait a moment and try again.',
+        TOUR_INACTIVE: 'This tour is no longer active',
       };
       return {
         valid: false,
