@@ -842,8 +842,8 @@ Mobile config:
 
 - Use `app.config.js`; there is no static `app.json`.
 - Version: `1.0.2`
-- iOS build number: `3`
-- Android version code: `3`
+- iOS build number: `3` local baseline; production increments are managed remotely by EAS
+- Android version code: `3` local baseline; production increments are managed remotely by EAS
 - Runtime version policy: `appVersion`
 - EAS project ID: `1b1ae41f-9096-4e7d-887c-b617613cf603`
 - Owner: `lochlomondtravel`
@@ -867,6 +867,15 @@ npm run build:dev:ios-device
 npm run build:preview
 npm run build:production
 ```
+
+Production EAS versioning:
+
+- `eas.json` uses remote EAS app version management with `build.production.autoIncrement: true`.
+- Production binary workflows must verify EAS remote version state before building; do not publish a store/TestFlight build if the remote counter cannot be read.
+- Local `app.config.js` build numbers remain as the current native baseline for config inspection and first-time remote initialization, but production builds should let EAS increment the remote values.
+- Current iOS submit profile stores only non-secret bundle metadata in `eas.json`; GitHub Actions injects App Store Connect IDs/API key material at runtime.
+- Production config runs `plugins/withProductionReleaseCleanup.js` to remove Expo Dev Launcher local-network iOS metadata and Android overlay permission from store/TestFlight native config.
+- The TestFlight workflow validates App Store Connect inputs before building, but only writes the `.p8` API key after the EAS build is complete so the key is never included in the build upload context.
 
 OTA updates:
 
@@ -907,6 +916,13 @@ GitHub Actions:
   - installs root and Functions dependencies
   - runs mobile, Functions script, and Firebase rules tests
   - validates env and syncs EAS production env
+- `.github/workflows/eas-testflight.yml`
+  - manual production iOS build followed by TestFlight submission
+  - verifies commit is on `main`
+  - runs the same mobile, Functions script, and Firebase rules tests as binary builds
+  - validates/syncs production Expo env for iOS
+  - requires `EXPO_ASC_APP_ID`; can use EAS-managed App Store Connect credentials or GitHub API-key secrets
+  - optional manual inputs: TestFlight notes, internal TestFlight groups, and clear EAS build cache
 
 Web admin:
 

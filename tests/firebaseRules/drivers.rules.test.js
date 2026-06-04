@@ -69,6 +69,11 @@ test('denies arbitrary driver record creation by authenticated clients', async (
   }));
 });
 
+test('allows exact driver-code reads but denies listing all drivers', async () => {
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`drivers/${DRIVER_ID}`).get());
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref('drivers').get());
+});
+
 test('allows admin driver record creation', async () => {
   await assertSucceeds(dbFor(ADMIN_UID).ref('drivers/D-ADMIN').set({
     name: 'Admin Created',

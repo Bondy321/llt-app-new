@@ -337,7 +337,10 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         error: error.message,
         code: error?.code || null,
       }, { remote: true, reason: 'Login:login_error' });
-      setSimpleError('Unable to verify booking. Please check your connection.');
+      const userMessage = typeof error?.userMessage === 'string' && error.userMessage.trim()
+        ? error.userMessage.trim()
+        : 'Unable to verify booking. Please check your connection.';
+      setSimpleError(userMessage);
     } finally {
       if (mountedRef.current) {
         setLoading(false);

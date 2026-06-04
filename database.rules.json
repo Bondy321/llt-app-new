@@ -4,8 +4,8 @@
     ".write": false,
 
     "drivers": {
-      ".read": "auth != null",
       "$driverId": {
+        ".read": "auth != null",
         ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (data.exists() && (data.child('authUid').val() === auth.uid || (!data.child('authUid').exists() && newData.child('authUid').val() === auth.uid))))",
         ".validate": "!newData.exists() || (newData.hasChildren(['name']) && newData.child('name').isString() && newData.child('name').val().length > 0 && newData.child('name').val().length <= 120 && (!newData.child('id').exists() || (newData.child('id').isString() && newData.child('id').val() === $driverId)) && (!newData.child('phone').exists() || newData.child('phone').isString()) && (!newData.child('authUid').exists() || newData.child('authUid').isString()) && (!newData.child('currentTourId').exists() || newData.child('currentTourId').isString()) && (!newData.child('currentTourCode').exists() || newData.child('currentTourCode').isString()) && (!newData.child('activeTourId').exists() || newData.child('activeTourId').isString()) && (!newData.child('lastActive').exists() || newData.child('lastActive').isString() || newData.child('lastActive').isNumber()) && (!newData.child('createdAt').exists() || newData.child('createdAt').isString() || newData.child('createdAt').isNumber()) && (!newData.child('assignments').exists() || newData.child('assignments').hasChildren()))",
         "assignments": {

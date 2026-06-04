@@ -159,8 +159,11 @@ test('Static contract: tour metadata writes stay least-privilege', () => {
 
 test('Static contract: driver records cannot be created by arbitrary clients', () => {
   const rules = readJson('database.rules.json');
+  const driverRootRules = rules.rules.drivers;
   const driverWriteRule = rules.rules.drivers.$driverId['.write'];
 
+  assert.equal(driverRootRules['.read'], undefined);
+  assert.equal(driverRootRules.$driverId['.read'], 'auth != null');
   assert.notEqual(driverWriteRule, "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || data.child('authUid').val() === auth.uid || newData.child('authUid').val() === auth.uid)");
   assert.match(driverWriteRule, /data\.exists\(\)/);
   assert.match(driverWriteRule, /!data\.child\('authUid'\)\.exists\(\) && newData\.child\('authUid'\)\.val\(\) === auth\.uid/);
@@ -446,6 +449,23 @@ test('Static contract: native location permissions stay foreground-only', () => 
   assert.doesNotMatch(source, /WRITE_EXTERNAL_STORAGE/);
 });
 
+test('Static contract: production native config strips dev-client release metadata', () => {
+  const appConfigSource = readText('app.config.js');
+  const pluginSource = readText('plugins/withProductionReleaseCleanup.js');
+
+  assert.match(appConfigSource, /const devClientAutolinkingExclusions = \[/);
+  assert.match(appConfigSource, /'expo-dev-client'/);
+  assert.match(appConfigSource, /'expo-dev-launcher'/);
+  assert.match(appConfigSource, /'expo-dev-menu'/);
+  assert.match(appConfigSource, /'\.\/plugins\/withProductionReleaseCleanup'/);
+
+  assert.match(pluginSource, /process\.env\.EAS_BUILD_PROFILE !== 'production'/);
+  assert.match(pluginSource, /delete pluginConfig\.modResults\.NSBonjourServices/);
+  assert.match(pluginSource, /delete pluginConfig\.modResults\.NSLocalNetworkUsageDescription/);
+  assert.match(pluginSource, /android\.permission\.SYSTEM_ALERT_WINDOW/);
+  assert.match(pluginSource, /removeAndroidPermission\(pluginConfig\.modResults, SYSTEM_ALERT_WINDOW\)/);
+});
+
 test('Static contract: live map and safety sharing guard stale or malformed location state', () => {
   const mapSource = readText('screens/MapScreen.js');
   assert.match(mapSource, /normalizeMapCoords/);
@@ -479,6 +499,7 @@ test('Static contract: support and external link handoffs surface failures', () 
 test('Static contract: production EAS workflows gate release on mobile/backend verification', () => {
   [
     '.github/workflows/eas-build.yml',
+    '.github/workflows/eas-testflight.yml',
     '.github/workflows/eas-update.yml',
   ].forEach((relativePath) => {
     const source = readText(relativePath);
@@ -499,6 +520,43 @@ test('Static contract: production EAS workflows gate release on mobile/backend v
     assert.ok(testIndex >= 0 && envIndex > testIndex, 'tests must run before env validation');
     assert.ok(envIndex >= 0 && publishIndex > envIndex, 'env validation must run before EAS publish/build');
   });
+});
+
+test('Static contract: production binary workflows verify EAS remote version state before building', () => {
+  const easConfig = JSON.parse(readText('eas.json'));
+  const appConfig = require('../app.config.js').expo;
+
+  assert.equal(easConfig.cli?.appVersionSource, 'remote');
+  assert.equal(easConfig.build?.production?.autoIncrement, true);
+  assert.equal(appConfig.ios?.buildNumber, '3');
+  assert.equal(appConfig.android?.versionCode, 3);
+
+  [
+    '.github/workflows/eas-build.yml',
+    '.github/workflows/eas-testflight.yml',
+  ].forEach((relativePath) => {
+    const source = readText(relativePath);
+    const versionIndex = source.indexOf('eas build:version:get');
+    const buildIndex = source.indexOf('Build production');
+
+    assert.ok(versionIndex >= 0, `${relativePath} must read EAS remote app version state`);
+    assert.ok(buildIndex > versionIndex, `${relativePath} must read EAS remote app version state before building`);
+    assert.doesNotMatch(source, /continue-on-error:\s*true[\s\S]{0,120}eas build:version:get/);
+  });
+});
+
+test('Static contract: TestFlight App Store Connect key is created only after EAS build', () => {
+  const source = readText('.github/workflows/eas-testflight.yml');
+  const validationIndex = source.indexOf('Validate iOS submit configuration inputs');
+  const buildIndex = source.indexOf('Build production iOS binary');
+  const configureIndex = source.indexOf('Configure iOS submit profile');
+  const p8WriteIndex = source.indexOf('printf \'%s\' "$EXPO_ASC_API_KEY_P8"');
+  const submitIndex = source.indexOf('Submit build to TestFlight');
+
+  assert.ok(validationIndex >= 0 && validationIndex < buildIndex, 'submit inputs should be validated before building');
+  assert.ok(configureIndex > buildIndex, 'iOS submit profile should be configured after the EAS build');
+  assert.ok(p8WriteIndex > buildIndex, 'App Store Connect key file should not exist before EAS build upload');
+  assert.ok(submitIndex > configureIndex, 'TestFlight submit should run after submit profile configuration');
 });
 
 test('Static contract: Android production submit profile targets customer release track', () => {
@@ -592,6 +650,21 @@ test('Static contract: safety support cleans up emergency timers and validates p
   assert.match(source, /const shareStarted = await updateLiveLocationSharing/);
   assert.match(source, /if \(!shareStarted\) \{/);
   assert.match(source, /const shareStopped = await updateLiveLocationSharing/);
+});
+
+test('Static contract: passenger login establishes participant access before entering the app', () => {
+  const appSource = readText('App.js');
+  const loginSource = readText('screens/LoginScreen.js');
+
+  assert.match(appSource, /const authUser = user \|\| auth\?\.currentUser \|\| null/);
+  assert.match(appSource, /const authUid = authUser\?\.uid \|\| null/);
+  assert.match(appSource, /if \(!options\?\.offlineMode && tourDetails\?\.id\) \{/);
+  assert.match(appSource, /await joinTour\(tourDetails\.id, authUid\)/);
+  assert.match(appSource, /joinFailure\.userMessage = 'We could not finish joining your tour session\. Please check your connection and try again\.'/);
+  assert.doesNotMatch(appSource, /catch \(error\) \{\s*logger\.error\('Tour', 'Error joining tour', \{ error: error\.message \}\);\s*\}/);
+
+  assert.match(loginSource, /typeof error\?\.userMessage === 'string'/);
+  assert.doesNotMatch(loginSource, /setSimpleError\(error\.message\)/);
 });
 
 test('Static contract: customer-facing error copy avoids raw backend messages', () => {

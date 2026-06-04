@@ -1,0 +1,277 @@
+name: EAS TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      what_to_test:
+        description: TestFlight "What to Test" notes
+        required: false
+        type: string
+      testflight_groups:
+        description: Comma-separated internal TestFlight groups
+        required: false
+        type: string
+      clear_cache:
+        description: Clear the EAS build cache before building
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: eas-testflight-production
+  cancel-in-progress: false
+
+jobs:
+  build-and-submit-testflight:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    env:
+      CI: true
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EXPO_PUBLIC_FIREBASE_API_KEY: ${{ secrets.EXPO_PUBLIC_FIREBASE_API_KEY }}
+      EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+      EXPO_PUBLIC_FIREBASE_DATABASE_URL: ${{ secrets.EXPO_PUBLIC_FIREBASE_DATABASE_URL }}
+      EXPO_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_PROJECT_ID }}
+      EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET: ${{ secrets.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET }}
+      EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID }}
+      EXPO_PUBLIC_FIREBASE_APP_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_APP_ID }}
+      EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID }}
+      EXPO_PUBLIC_GOOGLE_MAPS_API_KEY: ${{ secrets.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY }}
+      EXPO_PUBLIC_SUPPORT_PHONE: ${{ secrets.EXPO_PUBLIC_SUPPORT_PHONE }}
+      EXPO_PUBLIC_SUPPORT_SMS: ${{ secrets.EXPO_PUBLIC_SUPPORT_SMS }}
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL }}
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS }}
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK || 'false' }}
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK || 'false' }}
+      LLT_VALIDATE_PLATFORM: ios
+      EXPO_ASC_APP_ID: ${{ secrets.EXPO_ASC_APP_ID }}
+      EXPO_ASC_API_KEY_ID: ${{ secrets.EXPO_ASC_API_KEY_ID }}
+      EXPO_ASC_API_KEY_ISSUER_ID: ${{ secrets.EXPO_ASC_API_KEY_ISSUER_ID }}
+      EXPO_ASC_API_KEY_P8: ${{ secrets.EXPO_ASC_API_KEY_P8 }}
+      EXPO_APPLE_ID: ${{ secrets.EXPO_APPLE_ID }}
+      EXPO_APPLE_TEAM_ID: ${{ secrets.EXPO_APPLE_TEAM_ID }}
+      EXPO_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.EXPO_APPLE_APP_SPECIFIC_PASSWORD }}
+      EXPO_TESTFLIGHT_GROUPS: ${{ github.event.inputs.testflight_groups || vars.EXPO_TESTFLIGHT_GROUPS }}
+      TESTFLIGHT_WHAT_TO_TEST: ${{ github.event.inputs.what_to_test || format('CI TestFlight build from {0}', github.sha) }}
+      EAS_BUILD_CLEAR_CACHE: ${{ github.event.inputs.clear_cache }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release commit is on main
+        run: |
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor ${{ github.sha }} origin/main
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+
+      - name: Setup Java for Firebase emulators
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Functions dependencies
+        run: npm --prefix functions ci
+
+      - name: Run mobile tests
+        run: npm run test:mobile
+
+      - name: Run Functions script tests
+        run: npm run test:functions:scripts
+
+      - name: Run Firebase rules tests
+        run: npm run test:emulators
+
+      - name: Validate Expo public environment
+        run: npm run validate:expo-env -- --platform=ios
+
+      - name: Setup Expo and EAS CLI
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          eas-version: latest
+          token: ${{ env.EXPO_TOKEN }}
+
+      - name: Sync EAS production environment
+        run: npm run sync:eas-env:production -- --platform=ios
+
+      - name: Validate iOS submit configuration inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${EXPO_TOKEN:-}" ]]; then
+            echo "::error::Missing EXPO_TOKEN repository secret."
+            exit 1
+          fi
+
+          if [[ -z "${EXPO_ASC_APP_ID:-}" ]]; then
+            echo "::error::Missing EXPO_ASC_APP_ID repository secret. Add the App Store Connect app Apple ID for com.lochlomondtravel.tourapp."
+            exit 1
+          fi
+
+          api_key_values=0
+          [[ -n "${EXPO_ASC_API_KEY_ID:-}" ]] && api_key_values=$((api_key_values + 1))
+          [[ -n "${EXPO_ASC_API_KEY_ISSUER_ID:-}" ]] && api_key_values=$((api_key_values + 1))
+          [[ -n "${EXPO_ASC_API_KEY_P8:-}" ]] && api_key_values=$((api_key_values + 1))
+
+          if [[ "$api_key_values" -ne 0 && "$api_key_values" -ne 3 ]]; then
+            echo "::error::Provide all three App Store Connect API key secrets: EXPO_ASC_API_KEY_ID, EXPO_ASC_API_KEY_ISSUER_ID, and EXPO_ASC_API_KEY_P8."
+            exit 1
+          fi
+
+          if [[ "$api_key_values" -eq 3 ]]; then
+            echo "::notice::App Store Connect API key secrets are present and will be materialized after the EAS build completes."
+          else
+            echo "::notice::No App Store Connect API key secrets were provided; EAS Submit will use App Store Connect credentials configured in EAS, if available."
+          fi
+
+      - name: Log release context
+        run: |
+          echo "GitHub ref: ${{ github.ref }}"
+          echo "GitHub sha: ${{ github.sha }}"
+          node -e "const app=require('./app.config.js').expo; console.log('Expo app version:', app.version)"
+          eas whoami
+          eas project:info --non-interactive
+
+      - name: Verify EAS iOS version state
+        run: eas build:version:get --platform ios --profile production --non-interactive
+
+      - name: Build production iOS binary
+        id: eas-build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          build_args=(
+            --profile production
+            --platform ios
+            --non-interactive
+            --wait
+            --json
+            --message "TestFlight CI build $GITHUB_SHA"
+          )
+
+          if [[ "${EAS_BUILD_CLEAR_CACHE:-false}" == "true" ]]; then
+            build_args+=(--clear-cache)
+          fi
+
+          eas build "${build_args[@]}" > eas-build.json
+
+          node <<'NODE'
+          const fs = require('fs');
+
+          const parsed = JSON.parse(fs.readFileSync('eas-build.json', 'utf8'));
+          const builds = Array.isArray(parsed) ? parsed : [parsed];
+          const build = builds.find((item) => String(item.platform).toLowerCase() === 'ios') || builds[0];
+
+          if (!build || !build.id) {
+            throw new Error('EAS build output did not include an iOS build id.');
+          }
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `build_id=${build.id}\n`);
+          console.log(`EAS iOS build id: ${build.id}`);
+
+          if (build.buildDetailsPageUrl) {
+            console.log(`Build details: ${build.buildDetailsPageUrl}`);
+          }
+          NODE
+
+      - name: Configure iOS submit profile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${EXPO_ASC_API_KEY_ID:-}" && -n "${EXPO_ASC_API_KEY_ISSUER_ID:-}" && -n "${EXPO_ASC_API_KEY_P8:-}" ]]; then
+            mkdir -p .asc-api-key
+            printf '%s' "$EXPO_ASC_API_KEY_P8" > .asc-api-key/AuthKey.p8
+            chmod 600 .asc-api-key/AuthKey.p8
+          fi
+
+          node <<'NODE'
+          const fs = require('fs');
+
+          const eas = JSON.parse(fs.readFileSync('eas.json', 'utf8'));
+          const submit = eas.submit || {};
+          const production = submit.production || {};
+          const ios = {
+            ...(production.ios || {}),
+            bundleIdentifier: 'com.lochlomondtravel.tourapp',
+            ascAppId: process.env.EXPO_ASC_APP_ID,
+          };
+
+          if (process.env.EXPO_APPLE_ID) {
+            ios.appleId = process.env.EXPO_APPLE_ID;
+          }
+
+          if (process.env.EXPO_APPLE_TEAM_ID) {
+            ios.appleTeamId = process.env.EXPO_APPLE_TEAM_ID;
+          }
+
+          if (
+            process.env.EXPO_ASC_API_KEY_ID &&
+            process.env.EXPO_ASC_API_KEY_ISSUER_ID &&
+            process.env.EXPO_ASC_API_KEY_P8
+          ) {
+            ios.ascApiKeyId = process.env.EXPO_ASC_API_KEY_ID;
+            ios.ascApiKeyIssuerId = process.env.EXPO_ASC_API_KEY_ISSUER_ID;
+            ios.ascApiKeyPath = './.asc-api-key/AuthKey.p8';
+          }
+
+          eas.submit = {
+            ...submit,
+            production: {
+              ...production,
+              ios,
+            },
+          };
+
+          fs.writeFileSync('eas.json', `${JSON.stringify(eas, null, 2)}\n`);
+          console.log('Prepared iOS submit profile for TestFlight.');
+          NODE
+
+      - name: Submit build to TestFlight
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          submit_args=(
+            --platform ios
+            --profile production
+            --id "${{ steps.eas-build.outputs.build_id }}"
+            --non-interactive
+            --wait
+          )
+
+          if [[ -n "${TESTFLIGHT_WHAT_TO_TEST:-}" ]]; then
+            submit_args+=(--what-to-test "$TESTFLIGHT_WHAT_TO_TEST")
+          fi
+
+          if [[ -n "${EXPO_TESTFLIGHT_GROUPS:-}" ]]; then
+            IFS=',' read -ra groups <<< "$EXPO_TESTFLIGHT_GROUPS"
+            for group in "${groups[@]}"; do
+              trimmed="${group#"${group%%[![:space:]]*}"}"
+              trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+              if [[ -n "$trimmed" ]]; then
+                submit_args+=(--groups "$trimmed")
+              fi
+            done
+          fi
+
+          eas submit "${submit_args[@]}"

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 
 const { resolveAppVersionMetadata } = require('../services/appMetadata');
 
-test('resolveAppVersionMetadata prefers expoConfig version and build values', () => {
+test('resolveAppVersionMetadata prefers expoConfig version and native build value', () => {
   const result = resolveAppVersionMetadata({
     constants: {
       expoConfig: {
@@ -18,7 +18,26 @@ test('resolveAppVersionMetadata prefers expoConfig version and build values', ()
 
   assert.deepEqual(result, {
     appVersion: '2.5.1',
-    appBuild: '72',
+    appBuild: '42',
+    osVersion: '17.6',
+  });
+});
+
+test('resolveAppVersionMetadata falls back to expoConfig build values', () => {
+  const result = resolveAppVersionMetadata({
+    constants: {
+      expoConfig: {
+        version: '2.5.1',
+        android: { versionCode: 88 },
+      },
+      nativeBuildVersion: '',
+    },
+    platform: { Version: '17.6' },
+  });
+
+  assert.deepEqual(result, {
+    appVersion: '2.5.1',
+    appBuild: '88',
     osVersion: '17.6',
   });
 });

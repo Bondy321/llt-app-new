@@ -1,5 +1,11 @@
 const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 const isProductionBuild = process.env.EAS_BUILD_PROFILE === 'production';
+const devClientAutolinkingExclusions = [
+  'expo-dev-client',
+  'expo-dev-launcher',
+  'expo-dev-menu',
+  'expo-dev-menu-interface',
+];
 const appTransportSecurity = isProductionBuild
   ? { NSAllowsArbitraryLoads: false }
   : {
@@ -25,6 +31,12 @@ module.exports = {
       backgroundColor: '#007DC3',
     },
     assetBundlePatterns: ['**/*'],
+    autolinking: isProductionBuild
+      ? {
+          ios: { exclude: devClientAutolinkingExclusions },
+          android: { exclude: devClientAutolinkingExclusions },
+        }
+      : undefined,
     ios: {
       supportsTablet: true,
       bundleIdentifier: 'com.lochlomondtravel.tourapp',
@@ -118,6 +130,7 @@ module.exports = {
           defaultChannel: 'default',
         },
       ],
+      './plugins/withProductionReleaseCleanup',
     ],
     updates: {
       fallbackToCacheTimeout: 0,

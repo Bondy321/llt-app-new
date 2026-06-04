@@ -162,9 +162,9 @@ class Logger {
       }
 
       this.deviceInfo = {
-        platform: Platform.OS,
-        version: Platform.Version,
-        model: Platform.constants?.Model || 'Unknown',
+        platform: Platform?.OS || 'unknown',
+        version: Platform?.Version ?? 'unknown',
+        model: Platform?.constants?.Model || 'Unknown',
       };
     } catch (error) {
       if (!this.isProduction) {

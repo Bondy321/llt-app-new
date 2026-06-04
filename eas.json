@@ -2,7 +2,7 @@
   "cli": {
     "version": ">= 16.0.1",
     "promptToConfigurePushNotifications": false,
-    "appVersionSource": "local"
+    "appVersionSource": "remote"
   },
   "build": {
     "base": {},
@@ -46,6 +46,7 @@
     "production": {
       "extends": "base",
       "environment": "production",
+      "autoIncrement": true,
       "ios": {
         "resourceClass": "m-medium"
       },
@@ -57,6 +58,9 @@
   },
   "submit": {
     "production": {
+      "ios": {
+        "bundleIdentifier": "com.lochlomondtravel.tourapp"
+      },
       "android": {
         "serviceAccountKeyPath": "./google-service-account.json",
         "track": "production"

@@ -662,10 +662,12 @@ function AppContent() {
 
   const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger', options = {}) => {
     const targetScreen = userType === 'driver' ? 'DriverHome' : 'TourHome';
+    const authUser = user || auth?.currentUser || null;
+    const authUid = authUser?.uid || null;
     recordCrashBreadcrumb('Auth', 'login_success_handler_started', {
       userType,
       targetScreen,
-      hasAuthUid: Boolean(user?.uid),
+      hasAuthUid: Boolean(authUid),
       hasTourDetails: Boolean(tourDetails),
       tourId: tourDetails?.id || null,
       identityId: bookingOrDriverData?.id ? maskIdentifier(bookingOrDriverData.id) : null,
@@ -680,22 +682,22 @@ function AppContent() {
 
     const onboardingAudience = userType === 'driver' ? 'driver' : 'passenger';
     const shouldOnboardNotifications = await shouldShowNotificationOnboarding({
-      userId: user?.uid,
+      userId: authUid,
       audience: onboardingAudience,
     });
     const postLoginScreen = shouldOnboardNotifications ? 'NotificationPreferences' : targetScreen;
 
     if (userType === 'driver') {
       logger.info('Auth', 'Driver Logged In', { driverId: maskIdentifier(bookingOrDriverData.id) });
-      if (user?.uid) {
+      if (authUid) {
         try {
           const persisted = await persistDriverIdentityForUser({
-            authUid: user.uid,
+            authUid,
             driverId: bookingOrDriverData?.id,
             assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
           });
           logger.info('Identity', 'driver_identity_persist_success', {
-            authUid: maskIdentifier(user.uid),
+            authUid: maskIdentifier(authUid),
             driverId: maskIdentifier(persisted.driverId),
             assignedTourId: persisted.assignedTourId || null,
           });
@@ -706,7 +708,7 @@ function AppContent() {
           }, { remote: true, reason: 'Identity:driver_identity_persist_success' });
         } catch (error) {
           logger.error('Identity', 'driver_identity_persist_failure', {
-            authUid: maskIdentifier(user.uid),
+            authUid: maskIdentifier(authUid),
             driverId: maskIdentifier(bookingOrDriverData?.id),
             assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
             error: error.message,
@@ -732,7 +734,7 @@ function AppContent() {
       setCurrentScreen(postLoginScreen);
       recordCrashBreadcrumb('Auth', 'driver_login_session_established', {
         postLoginScreen,
-        hasAuthUid: Boolean(user?.uid),
+        hasAuthUid: Boolean(authUid),
         driverId: maskIdentifier(bookingOrDriverData?.id),
         tourId: tourDetails?.id || null,
       }, { remote: true, reason: 'Auth:driver_login_session_established' });
@@ -774,9 +776,37 @@ function AppContent() {
           identityVersion: identityVersion || IDENTITY_VERSION,
           bookingRef: normalizedBookingData?.id || null,
           normalizedPassengerEmail: normalizedBookingData?.normalizedPassengerEmail || null,
-          authUid: user?.uid || null,
+          authUid,
         }
       : null;
+
+    if (!options?.offlineMode && tourDetails?.id) {
+      if (!authUid) {
+        clearLoginTransitionArtifacts();
+        setLoginTransition(null);
+        loginProgress.setValue(0);
+        const authFailure = new Error('Authenticated tour session unavailable');
+        authFailure.userMessage = 'We could not start a secure tour session. Please check your connection and try again.';
+        throw authFailure;
+      }
+
+      try {
+        await joinTour(tourDetails.id, authUid);
+      } catch (error) {
+        clearLoginTransitionArtifacts();
+        setLoginTransition(null);
+        loginProgress.setValue(0);
+        logger.error('Tour', 'Error joining tour', {
+          error: error.message,
+          code: error?.code || null,
+          tourId: tourDetails.id,
+          authUid: maskIdentifier(authUid),
+        });
+        const joinFailure = new Error('Unable to join tour session');
+        joinFailure.userMessage = 'We could not finish joining your tour session. Please check your connection and try again.';
+        throw joinFailure;
+      }
+    }
 
     if (nextIdentityBinding) {
       setIdentityBinding(nextIdentityBinding);
@@ -787,33 +817,25 @@ function AppContent() {
     setTourData(tourDetails || null);
     setBookingData(normalizedBookingData);
 
-    if (user && tourDetails?.id) {
-      try {
-        await joinTour(tourDetails.id, user.uid);
-      } catch (error) {
-        logger.error('Tour', 'Error joining tour', { error: error.message });
-      }
-    }
-
-    if (user?.uid && normalizedBookingData?.id && realtimeDb) {
+    if (authUid && normalizedBookingData?.id && realtimeDb) {
       try {
         if (!stablePassengerId || !normalizedBookingData?.normalizedPassengerEmail) {
           logger.warn('Identity', 'Stable identity unavailable during passenger login', {
             reason: 'STABLE_ID_UNAVAILABLE',
-            authUid: maskIdentifier(user.uid),
+            authUid: maskIdentifier(authUid),
             bookingRef: maskIdentifier(normalizedBookingData.id),
           });
         }
 
         const persisted = await persistPassengerIdentityForUser({
-          authUid: user.uid,
+          authUid,
           stablePassengerId,
           identityVersion,
           bookingRef: normalizedBookingData.id,
           normalizedPassengerEmail: normalizedBookingData.normalizedPassengerEmail,
         });
         logger.info('Identity', 'identity_binding_persist_success', {
-          authUid: maskIdentifier(user.uid),
+          authUid: maskIdentifier(authUid),
           bookingRef: maskIdentifier(normalizedBookingData.id),
           stablePassengerId: stablePassengerId ? maskIdentifier(stablePassengerId) : null,
           stablePassengerKey: persisted.stablePassengerKey ? maskIdentifier(persisted.stablePassengerKey) : null,
@@ -826,7 +848,7 @@ function AppContent() {
           error: error.message,
           code: error?.code || null,
           reason: isIdentityBindingWriteRejected ? 'IDENTITY_BINDING_WRITE_DENIED_OR_INVALID' : 'IDENTITY_BINDING_WRITE_FAILED',
-          authUid: maskIdentifier(user.uid),
+          authUid: maskIdentifier(authUid),
           bookingRef: maskIdentifier(normalizedBookingData.id),
           stablePassengerId: stablePassengerId ? maskIdentifier(stablePassengerId) : null,
           stablePassengerKey: stablePassengerId ? maskIdentifier(toRealtimeKeySegment(stablePassengerId)) : null,
@@ -851,7 +873,7 @@ function AppContent() {
       identityBinding: nextIdentityBinding || identityBinding,
     });
 
-    if (stablePassengerId && user?.uid && tourDetails?.id) {
+    if (stablePassengerId && authUid && tourDetails?.id) {
       migrateRecentChatMessagesForStableIdentity({
         tourId: tourDetails.id,
         stablePassengerId,

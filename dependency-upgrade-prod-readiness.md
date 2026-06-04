@@ -33,6 +33,7 @@ The previous March dependency audit is obsolete. The mobile app has already move
 - `npm run test:mobile`: passed
 - `npm run test:functions:scripts`: passed
 - `npm run test:mobile:sync:contract`: passed after tightening chat, group-photo, broadcast, global safety, tour, and driver rules contracts
+- Production Expo config introspection confirms iOS App Transport Security disables arbitrary network loads, iOS Always Location usage copy is not generated, Android microphone permission is blocked, and location permissions remain foreground-only.
 
 ## Remaining release gates
 
@@ -53,6 +54,18 @@ The following areas still need a server-contract or data-model change before I w
 - Storage object rules now require writes to include matching caller auth metadata, but signed-in object reads and signed download URLs still mean effective photo visibility is enforced primarily by Realtime Database metadata.
 
 The GitHub production build/update workflows install Java 21, run mobile tests, Functions script tests, Firebase emulator rules tests, validate Expo public env, sync EAS production env, and only then build/update.
+
+## Native release metadata
+
+Production builds now explicitly close iOS App Transport Security (`NSAllowsArbitraryLoads: false`) while leaving the looser dev-client network posture available outside the production EAS build profile. The Expo location plugin is configured to avoid generating iOS Always Location usage strings because the app only requests foreground location access.
+
+Production binary workflows use EAS remote app version management with auto-increment, while `app.config.js` keeps the current local native build baselines (`ios.buildNumber: 3`, `android.versionCode: 3`). Binary workflows must read EAS remote version state before building so a missing or uninitialized remote counter cannot silently produce a duplicate or regressed store build number.
+
+Production config introspection now also confirms release metadata cleanup removes Expo Dev Launcher iOS local-network copy (`NSBonjourServices` / `NSLocalNetworkUsageDescription`) and the Android `SYSTEM_ALERT_WINDOW` permission from the generated production native config.
+
+The TestFlight workflow validates App Store Connect submit inputs before building, but only writes the `.p8` key and mutates the iOS submit profile after the EAS build completes. This keeps App Store Connect API key material out of the EAS build upload context.
+
+Realtime Database driver rules no longer allow authenticated clients to list `/drivers`; exact driver-code reads remain allowed for login, and emulator coverage has been added for exact-read/list-deny behavior.
 
 ## Future modernization
 

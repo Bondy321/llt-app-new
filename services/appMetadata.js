@@ -12,9 +12,9 @@ const resolveAppVersionMetadata = ({ constants = {}, platform = {} } = {}) => {
     'unknown';
 
   const appBuild =
+    normalizeString(constants?.nativeBuildVersion) ||
     normalizeString(constants?.expoConfig?.ios?.buildNumber) ||
     normalizeString(constants?.expoConfig?.android?.versionCode) ||
-    normalizeString(constants?.nativeBuildVersion) ||
     null;
 
   const osVersion = normalizeString(platform?.Version) || 'unknown';
