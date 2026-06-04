@@ -54,6 +54,15 @@ const isReactNativeRuntime = (runtime = {}) => {
   );
 };
 
+const resolveSecureStoreOptions = (secureStore) => {
+  const keychainAccessible =
+    secureStore?.WHEN_UNLOCKED_THIS_DEVICE_ONLY
+    ?? secureStore?.WHEN_UNLOCKED
+    ?? null;
+
+  return keychainAccessible ? { keychainAccessible } : undefined;
+};
+
 const createPersistenceProvider = ({
   namespace = 'LLT',
   logger = defaultLogger,
@@ -64,6 +73,7 @@ const createPersistenceProvider = ({
   const namespacedKey = (key) => `${namespace}_${key}`;
   const secureStore = secureStoreAdapter || SecureStore;
   const asyncStorage = asyncStorageAdapter || AsyncStorage;
+  const secureStoreOptions = resolveSecureStoreOptions(secureStore);
   const hasInjectedStorageAdapter = Boolean(secureStoreAdapter || asyncStorageAdapter);
   const inTestEnv = (runtime.nodeEnv || process?.env?.NODE_ENV) === 'test';
   const nativeRuntime = isReactNativeRuntime(runtime);
@@ -78,7 +88,7 @@ const createPersistenceProvider = ({
         return Boolean(secureStore?.setItemAsync && secureStore?.getItemAsync && secureStore?.deleteItemAsync);
       },
       async setItemAsync(key, value) {
-        return secureStore.setItemAsync(namespacedKey(key), value, { keychainAccessible: secureStore.ALWAYS_THIS_DEVICE_ONLY });
+        return secureStore.setItemAsync(namespacedKey(key), value, secureStoreOptions);
       },
       async getItemAsync(key) {
         return secureStore.getItemAsync(namespacedKey(key));

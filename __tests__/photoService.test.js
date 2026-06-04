@@ -10,6 +10,7 @@ require.cache[firebaseModulePath] = {
   exports: {
     storage: {},
     realtimeDbModular: {},
+    auth: { currentUser: { uid: 'auth-upload-1' } },
   },
 };
 
@@ -98,6 +99,7 @@ test('uploadPhoto stores group photo using group_tour_photos paths and rich meta
   assert.strictEqual(uploadCall.metadata.contentType, 'image/jpeg');
   assert.strictEqual(uploadCall.metadata.cacheControl, 'public,max-age=31536000,immutable');
   assert.strictEqual(uploadCall.metadata.customMetadata.uploadedBy, 'user-9');
+  assert.strictEqual(uploadCall.metadata.customMetadata.authUid, 'auth-upload-1');
 
   assert.deepStrictEqual(setPayload, {
     url: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
@@ -125,6 +127,17 @@ test('uploadPhoto stores group photo using group_tour_photos paths and rich meta
     uploaderName: 'Driver Bond',
   });
   assert.strictEqual(blob.closed, true);
+});
+
+test('uploadPhoto requires an auth uid for storage metadata', async () => {
+  await assert.rejects(
+    uploadPhoto('file://group.jpg', 'tour-77', 'user-9', '', {
+      storageInstance: {},
+      realtimeDbInstance: {},
+      authInstance: { currentUser: null },
+    }),
+    /Authenticated user required for photo upload/
+  );
 });
 
 test('uploadPhoto stores private photos in private_tour_photos namespaces', async (t) => {
@@ -323,9 +336,11 @@ test('uploadPhoto stores thumbnail and optimization metadata when provided', asy
   assert.strictEqual(uploaded[0].metadata.cacheControl, 'public,max-age=31536000,immutable');
   assert.strictEqual(uploaded[0].metadata.contentType, 'image/jpeg');
   assert.strictEqual(uploaded[0].metadata.customMetadata.uploadedBy, 'user-thumb');
+  assert.strictEqual(uploaded[0].metadata.customMetadata.authUid, 'auth-upload-1');
   assert.strictEqual(uploaded[1].metadata.cacheControl, 'public,max-age=31536000,immutable');
   assert.strictEqual(uploaded[1].metadata.contentType, 'image/jpeg');
   assert.strictEqual(uploaded[1].metadata.customMetadata.uploadedBy, 'user-thumb');
+  assert.strictEqual(uploaded[1].metadata.customMetadata.authUid, 'auth-upload-1');
   assert.strictEqual(uploaded[1].metadata.customMetadata.variant, 'thumbnail');
   assert.strictEqual(payload.thumbnailUrl, 'https://example.com/group_tour_photos/tour-thumb/thumbnails/1700000000000_user-thumb_thumb.jpg');
   assert.strictEqual(payload.thumbnailStoragePath, 'group_tour_photos/tour-thumb/thumbnails/1700000000000_user-thumb_thumb.jpg');
@@ -441,6 +456,8 @@ test('uploadPhoto stores viewer variant metadata when provided', async (t) => {
     'group_tour_photos/tour-viewer/1700000000000_user-viewer.jpg',
     'group_tour_photos/tour-viewer/viewers/1700000000000_user-viewer_viewer.jpg',
   ]);
+  assert.strictEqual(uploaded[0].metadata.customMetadata.authUid, 'auth-upload-1');
+  assert.strictEqual(uploaded[1].metadata.customMetadata.authUid, 'auth-upload-1');
   assert.strictEqual(uploaded[1].metadata.customMetadata.variant, 'viewer');
   assert.strictEqual(payload.viewerUrl, 'https://example.com/group_tour_photos/tour-viewer/viewers/1700000000000_user-viewer_viewer.jpg');
   assert.strictEqual(payload.viewerStoragePath, 'group_tour_photos/tour-viewer/viewers/1700000000000_user-viewer_viewer.jpg');

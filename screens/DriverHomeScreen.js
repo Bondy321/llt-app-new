@@ -19,7 +19,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import MapView, { Marker, PROVIDER_GOOGLE, PROVIDER_DEFAULT, Circle } from 'react-native-maps';
 import * as Location from 'expo-location';
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '../services/hapticsService';
 import { realtimeDb } from '../firebase';
 import { assignDriverToTour } from '../services/bookingServiceRealtime';
 import offlineSyncService from '../services/offlineSyncService';

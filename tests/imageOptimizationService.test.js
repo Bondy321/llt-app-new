@@ -22,14 +22,27 @@ const buildService = ({ sizeByCall }) => {
     if (request === 'expo-image-manipulator') {
       return {
         SaveFormat: { JPEG: 'jpeg' },
-        manipulateAsync: async (_uri, _actions, config) => {
-          callCount += 1;
-          return {
-            uri: `file://optimized-${callCount}.jpg`,
-            width: 1200,
-            height: 800,
-            compressUsed: config.compress,
-          };
+        ImageManipulator: {
+          manipulate: () => ({
+            resize: () => {},
+            rotate: () => {},
+            flip: () => {},
+            crop: () => {},
+            extent: () => {},
+            release: () => {},
+            renderAsync: async () => ({
+              release: () => {},
+              saveAsync: async (config) => {
+                callCount += 1;
+                return {
+                  uri: `file://optimized-${callCount}.jpg`,
+                  width: 1200,
+                  height: 800,
+                  compressUsed: config.compress,
+                };
+              },
+            }),
+          }),
         },
       };
     }

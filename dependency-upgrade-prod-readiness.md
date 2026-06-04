@@ -50,7 +50,7 @@ The following areas still need a server-contract or data-model change before I w
 - `bookings` reads are still available to any authenticated client because passenger login reads booking/tour details after the verifier returns identifiers.
 - `drivers` and `tour_manifests` reads are still broad because driver-code login currently reads `drivers/{code}` and scans manifests before the driver profile is claimed.
 - `tours` reads are still broad because passenger login and `joinTour` read the tour before the participant row exists.
-- Storage object rules still allow signed-in users to read/write image objects under photo paths, while effective ownership and visibility are enforced in Realtime Database metadata and download URLs.
+- Storage object rules now require writes to include matching caller auth metadata, but signed-in object reads and signed download URLs still mean effective photo visibility is enforced primarily by Realtime Database metadata.
 
 The GitHub production build/update workflows install Java 21, run mobile tests, Functions script tests, Firebase emulator rules tests, validate Expo public env, sync EAS production env, and only then build/update.
 

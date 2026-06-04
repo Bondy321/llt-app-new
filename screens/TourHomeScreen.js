@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
+import * as Haptics from '../services/hapticsService';
 import TodaysAgendaCard from '../components/TodaysAgendaCard';
 import { MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import * as bookingService from '../services/bookingServiceRealtime';
@@ -58,12 +59,13 @@ const COLORS = {
 
 // Haptic feedback helper
 const triggerHaptic = (type = 'light') => {
-  if (Platform.OS === 'ios') {
-    // On iOS, we'd use expo-haptics, but fallback to vibration
-    Vibration.vibrate(type === 'heavy' ? 50 : 10);
-  } else {
+  const style = type === 'heavy'
+    ? Haptics.ImpactFeedbackStyle.Heavy
+    : Haptics.ImpactFeedbackStyle.Light;
+
+  Haptics.impactAsync(style).catch(() => {
     Vibration.vibrate(type === 'heavy' ? 50 : 25);
-  }
+  });
 };
 
 // Get time-based greeting

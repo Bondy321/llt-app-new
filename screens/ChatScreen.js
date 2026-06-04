@@ -26,7 +26,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '../services/hapticsService';
 import {
   sendInternalDriverMessage,
   sendMessage,
@@ -2387,7 +2387,7 @@ export default function ChatScreen({
           contract: {
             ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKEND_DEGRADED,
             canRetry: true,
-            description: fallbackErrorMessage || replayResult?.error || offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKEND_DEGRADED.description,
+            description: fallbackErrorMessage || offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKEND_DEGRADED.description,
           },
           outcomeText: syncOutcome,
           autoDismissMs: 7000,
@@ -3040,7 +3040,7 @@ export default function ChatScreen({
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: false,
       quality: 0.8,
     });
@@ -3072,6 +3072,7 @@ export default function ChatScreen({
     }
 
     const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
       allowsEditing: false,
       quality: 0.8,
     });

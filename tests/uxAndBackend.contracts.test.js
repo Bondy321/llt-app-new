@@ -207,13 +207,14 @@ test('Static contract: early runtime console logging stays development-gated', (
 test('Static contract: user-facing runtime text has no mojibake artifacts', () => {
   const runtimeFiles = [
     'App.js',
+    'functions/index.js',
     ...fs.readdirSync(path.join(__dirname, '..', 'screens')).map((file) => path.join('screens', file)),
     ...fs.readdirSync(path.join(__dirname, '..', 'components')).map((file) => path.join('components', file)),
   ].filter((file) => file.endsWith('.js'));
 
   runtimeFiles.forEach((file) => {
     const source = readText(file);
-    assert.doesNotMatch(source, /[âÃ�]/, `${file} contains mojibake-looking text`);
+    assert.doesNotMatch(source, /[âÃ�ð]/, `${file} contains mojibake-looking text`);
   });
 });
 
@@ -295,6 +296,19 @@ test('Static contract: photo variant lifecycle fields stay allowed by database r
     assert.match(groupPhotoValidate, new RegExp(`newData\\.child\\('${field}'\\)`));
     assert.match(privatePhotoValidate, new RegExp(`newData\\.child\\('${field}'\\)`));
   });
+});
+
+test('Static contract: Storage photo writes require caller auth metadata', () => {
+  const storageRules = readText('storage_rules.json');
+  const photoSource = readText('services/photoService.js');
+
+  assert.match(storageRules, /function hasMatchingUploaderAuth\(\)/);
+  assert.match(storageRules, /request\.resource\.metadata\.authUid == request\.auth\.uid/);
+  assert.match(storageRules, /resource == null \|\| resource\.metadata\.authUid == request\.auth\.uid/);
+  assert.doesNotMatch(storageRules, /resource\.exists\(\)/);
+  assert.match(photoSource, /authInstance = auth/);
+  assert.match(photoSource, /throw new Error\('Authenticated user required for photo upload'\)/);
+  assert.match(photoSource, /customMetadata: \{\s+uploadedBy: validatedUserId,\s+authUid,/);
 });
 
 test('Static contract: email-style stable identities are encoded before identity binding path writes', () => {
@@ -415,7 +429,14 @@ test('Static contract: customer-facing date labels use strict shared timestamp p
 test('Static contract: native location permissions stay foreground-only', () => {
   const source = readText('app.config.js');
 
+  assert.match(source, /const isProductionBuild = process\.env\.EAS_BUILD_PROFILE === 'production';/);
+  assert.match(source, /NSAppTransportSecurity: appTransportSecurity/);
+  assert.match(source, /NSAllowsArbitraryLoads: false/);
   assert.match(source, /NSLocationWhenInUseUsageDescription/);
+  assert.match(source, /locationAlwaysAndWhenInUsePermission: false/);
+  assert.match(source, /locationAlwaysPermission: false/);
+  assert.match(source, /isIosBackgroundLocationEnabled: false/);
+  assert.match(source, /isAndroidBackgroundLocationEnabled: false/);
   assert.doesNotMatch(source, /ACCESS_BACKGROUND_LOCATION/);
   assert.doesNotMatch(source, /NSLocationAlwaysAndWhenInUseUsageDescription/);
   assert.doesNotMatch(source, /UIBackgroundModes:\s*\[/);
@@ -581,6 +602,7 @@ test('Static contract: customer-facing error copy avoids raw backend messages', 
     const source = readText(relativePath);
     assert.doesNotMatch(source, /message:\s*result\?\.error \|\|/, `${relativePath} surfaces result.error directly`);
     assert.doesNotMatch(source, /message:\s*replay\.error \?/, `${relativePath} surfaces replay.error directly`);
+    assert.doesNotMatch(source, /description:\s*fallbackErrorMessage \|\| replayResult\?\.error \|\|/, `${relativePath} surfaces replayResult.error directly`);
     assert.doesNotMatch(source, /Alert\.alert\([^)]*enqueueResult\.error \|\|/s, `${relativePath} surfaces enqueueResult.error directly`);
     assert.doesNotMatch(source, /Alert\.alert\([^)]*result\.error \|\|/s, `${relativePath} surfaces result.error directly`);
     assert.doesNotMatch(source, /\$\{error\.message\}/, `${relativePath} interpolates raw error.message into UI copy`);

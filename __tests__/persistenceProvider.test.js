@@ -16,9 +16,13 @@ const createMockLogger = () => {
 test('selects secure-store in native-like runtime when available', async () => {
   const logger = createMockLogger();
   const secureStore = {
-    ALWAYS_THIS_DEVICE_ONLY: 'always',
+    WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'when-unlocked-this-device',
     data: {},
-    async setItemAsync(key, value) { this.data[key] = value; },
+    optionsByKey: {},
+    async setItemAsync(key, value, options) {
+      this.data[key] = value;
+      this.optionsByKey[key] = options;
+    },
     async getItemAsync(key) { return this.data[key] || null; },
     async deleteItemAsync(key) { delete this.data[key]; },
   };
@@ -34,6 +38,9 @@ test('selects secure-store in native-like runtime when available', async () => {
   await provider.setItemAsync('token', 'abc');
   assert.equal(await provider.getItemAsync('token'), 'abc');
   assert.equal(secureStore.data.TEST_token, 'abc');
+  assert.deepEqual(secureStore.optionsByKey.TEST_token, {
+    keychainAccessible: 'when-unlocked-this-device',
+  });
 });
 
 test('uses memory-mock by default in NODE_ENV=test when no adapter is injected', async () => {

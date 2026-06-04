@@ -1,4 +1,15 @@
 const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+const isProductionBuild = process.env.EAS_BUILD_PROFILE === 'production';
+const appTransportSecurity = isProductionBuild
+  ? { NSAllowsArbitraryLoads: false }
+  : {
+      NSAllowsArbitraryLoads: true,
+      NSExceptionDomains: {
+        localhost: {
+          NSExceptionAllowsInsecureHTTPLoads: true,
+        },
+      },
+    };
 
 module.exports = {
   expo: {
@@ -27,6 +38,7 @@ module.exports = {
           'Loch Lomond Travel needs camera access to capture tour moments.',
         NSLocationWhenInUseUsageDescription:
           'Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.',
+        NSAppTransportSecurity: appTransportSecurity,
       },
       config: {
         usesNonExemptEncryption: false,
@@ -71,8 +83,12 @@ module.exports = {
       [
         'expo-location',
         {
+          locationAlwaysAndWhenInUsePermission: false,
+          locationAlwaysPermission: false,
           locationWhenInUsePermission:
             'Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.',
+          isIosBackgroundLocationEnabled: false,
+          isAndroidBackgroundLocationEnabled: false,
         },
       ],
       [
@@ -82,6 +98,7 @@ module.exports = {
             'Loch Lomond Travel needs access to your photo library to save and share tour memories.',
           cameraPermission:
             'Loch Lomond Travel needs camera access to capture tour moments.',
+          microphonePermission: false,
         },
       ],
       [
@@ -91,12 +108,14 @@ module.exports = {
             'Loch Lomond Travel needs access to your photo library to save and share tour memories.',
           savePhotosPermission:
             'Loch Lomond Travel needs permission to add saved tour photos to your library.',
+          granularPermissions: ['photo'],
         },
       ],
       [
         'expo-notifications',
         {
           color: '#007DC3',
+          defaultChannel: 'default',
         },
       ],
     ],

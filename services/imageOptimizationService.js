@@ -67,6 +67,37 @@ const buildResizeAction = (width, height, maxLongEdge) => {
   return { resize: { height: maxLongEdge } };
 };
 
+const manipulateImageAsync = async (uri, actions = [], saveOptions = {}) => {
+  const { format = ImageManipulator.SaveFormat.JPEG, ...restSaveOptions } = saveOptions;
+  const context = ImageManipulator.ImageManipulator.manipulate(uri);
+  let renderedImage = null;
+
+  try {
+    actions.forEach((action) => {
+      if (action.resize) {
+        context.resize(action.resize);
+      } else if (action.rotate) {
+        context.rotate(action.rotate);
+      } else if (action.flip) {
+        context.flip(action.flip);
+      } else if (action.crop) {
+        context.crop(action.crop);
+      } else if (action.extent && typeof context.extent === 'function') {
+        context.extent(action.extent);
+      }
+    });
+
+    renderedImage = await context.renderAsync();
+    return await renderedImage.saveAsync({
+      format,
+      ...restSaveOptions,
+    });
+  } finally {
+    renderedImage?.release?.();
+    context?.release?.();
+  }
+};
+
 const optimizeVariant = async (uri, profile, dimensions = {}) => {
   const resizeAction = buildResizeAction(dimensions.width, dimensions.height, profile.maxLongEdge);
   const actions = resizeAction ? [resizeAction] : [];
@@ -84,7 +115,7 @@ const optimizeVariant = async (uri, profile, dimensions = {}) => {
   let optimizationPasses = 0;
 
   for (let pass = 1; pass <= maxIterations; pass += 1) {
-    finalResult = await ImageManipulator.manipulateAsync(uri, actions, {
+    finalResult = await manipulateImageAsync(uri, actions, {
       compress: currentQuality,
       format: ImageManipulator.SaveFormat.JPEG,
       base64: false,

@@ -23,7 +23,7 @@ const {
   limitToLast,
   endAt,
 } = require('firebase/database');
-const { storage, realtimeDbModular } = require('../firebase');
+const { storage, realtimeDbModular, auth } = require('../firebase');
 const { normalizePhotoUri } = require('./photoVariantService');
 const { loadOptionalService } = require('./optionalServiceLoader');
 
@@ -661,6 +661,7 @@ const uploadPhoto = async (
     visibility = 'group',
     uploaderName = 'Tour Member',
     storageInstance = storage,
+    authInstance = auth,
     realtimeDbInstance = realtimeDbModular,
     storageRefFn = storageRef,
     uploadBytesFn = uploadBytes,
@@ -703,6 +704,13 @@ const uploadPhoto = async (
 
     if (!realtimeDbInstance) {
       throw new Error('Database instance not initialized');
+    }
+
+    const authUid = typeof authInstance?.currentUser?.uid === 'string' && authInstance.currentUser.uid.trim()
+      ? authInstance.currentUser.uid.trim()
+      : null;
+    if (!authUid) {
+      throw new Error('Authenticated user required for photo upload');
     }
 
     const isPrivate = validatedVisibility === 'private';
@@ -769,6 +777,7 @@ const uploadPhoto = async (
         cacheControl: PHOTO_CACHE_CONTROL_HEADER,
         customMetadata: {
           uploadedBy: validatedUserId,
+          authUid,
           uploadedAt: new Date().toISOString(),
           idempotencyKey: normalizedIdempotencyKey || '',
           tourId: validatedTourId,
@@ -834,6 +843,7 @@ const uploadPhoto = async (
             cacheControl: PHOTO_CACHE_CONTROL_HEADER,
             customMetadata: {
               uploadedBy: validatedUserId,
+              authUid,
               uploadedAt: new Date().toISOString(),
               variant: 'thumbnail',
             },
@@ -876,6 +886,7 @@ const uploadPhoto = async (
             cacheControl: PHOTO_CACHE_CONTROL_HEADER,
             customMetadata: {
               uploadedBy: validatedUserId,
+              authUid,
               uploadedAt: new Date().toISOString(),
               variant: 'viewer',
             },
