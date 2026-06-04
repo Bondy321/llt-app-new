@@ -31,10 +31,23 @@ import { usePhotoThumbnailPrefetch } from '../hooks/usePhotoThumbnailPrefetch';
 import { auth } from '../firebase';
 import { getCanonicalIdentity } from '../services/identityService';
 import logger, { maskIdentifier } from '../services/loggerService';
+import { parseTimestampMs } from '../services/timeUtils';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: windowWidth } = Dimensions.get('window');
 const THUMBNAIL_SIZE = (windowWidth - SPACING.lg * 2 - SPACING.sm * 2) / 3;
+
+const formatPhotoDate = (timestamp, options) => {
+  const parsedMs = parseTimestampMs(timestamp);
+  return Number.isFinite(parsedMs)
+    ? new Date(parsedMs).toLocaleDateString(undefined, options)
+    : null;
+};
+
+const getPhotoTimestampMs = (photo) => {
+  const parsedMs = parseTimestampMs(photo?.timestamp);
+  return Number.isFinite(parsedMs) ? parsedMs : 0;
+};
 
 export default function GroupPhotobookScreen({
   onBack,
@@ -70,6 +83,7 @@ export default function GroupPhotobookScreen({
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [pendingImage, setPendingImage] = useState(null);
   const [caption, setCaption] = useState('');
+  const [uploading, setUploading] = useState(false);
 
   const currentUser = auth.currentUser;
   const canonicalIdentity = useMemo(
@@ -151,8 +165,8 @@ export default function GroupPhotobookScreen({
   const visiblePhotos = useMemo(() => {
     const scoped = mineOnly ? photos.filter((photo) => photo.userId === principalId) : photos;
     return [...scoped].sort((a, b) => {
-      const aTs = a.timestamp || 0;
-      const bTs = b.timestamp || 0;
+      const aTs = getPhotoTimestampMs(a);
+      const bTs = getPhotoTimestampMs(b);
       return sortMode === 'oldest' ? aTs - bTs : bTs - aTs;
     });
   }, [photos, mineOnly, sortMode, principalId]);
@@ -161,13 +175,12 @@ export default function GroupPhotobookScreen({
     const grouped = new Map();
 
     visiblePhotos.forEach((photo) => {
-      const date = photo.timestamp
-        ? new Date(photo.timestamp).toLocaleDateString(undefined, {
-            weekday: 'long',
-            month: 'long',
-            day: 'numeric',
-          })
-        : 'Unknown Date';
+      const date = formatPhotoDate(photo.timestamp, {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+      })
+        || 'Unknown Date';
 
       if (!grouped.has(date)) {
         grouped.set(date, []);
@@ -317,11 +330,14 @@ export default function GroupPhotobookScreen({
   );
 
   const handleUpload = async () => {
+    if (uploading) return;
+
     if (!pendingImage?.uri) {
       logger.warn('GroupPhotobook', 'Upload blocked without pending image', { tourId });
       return;
     }
 
+    setUploading(true);
     try {
       logger.info('GroupPhotobook', 'Group photo enqueue started', {
         tourId,
@@ -413,6 +429,8 @@ export default function GroupPhotobookScreen({
         error: error?.message || String(error),
       });
       Alert.alert('Image preparation failed', 'Could not optimize this image. Please try a different photo.');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -452,6 +470,7 @@ export default function GroupPhotobookScreen({
   };
 
   const cancelUpload = () => {
+    if (uploading) return;
     logger.info('GroupPhotobook', 'Upload modal cancelled', {
       tourId,
       hadPendingImage: Boolean(pendingImage?.uri),
@@ -831,6 +850,7 @@ export default function GroupPhotobookScreen({
               placeholderTextColor={COLORS.textMuted}
               value={caption}
               onChangeText={setCaption}
+              editable={!uploading}
               multiline
               maxLength={200}
             />
@@ -839,18 +859,24 @@ export default function GroupPhotobookScreen({
 
             <View style={styles.uploadModalActions}>
               <TouchableOpacity
-                style={styles.cancelButton}
+                style={[styles.cancelButton, uploading && styles.uploadButtonDisabled]}
                 onPress={cancelUpload}
+                disabled={uploading}
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.uploadButton}
+                style={[styles.uploadButton, uploading && styles.uploadButtonDisabled]}
                 onPress={handleUpload}
+                disabled={uploading}
               >
-                <MaterialCommunityIcons name="share" size={20} color={COLORS.white} />
-                <Text style={styles.uploadButtonText}>Share</Text>
+                {uploading ? (
+                  <ActivityIndicator size="small" color={COLORS.white} />
+                ) : (
+                  <MaterialCommunityIcons name="share" size={20} color={COLORS.white} />
+                )}
+                <Text style={styles.uploadButtonText}>{uploading ? 'Preparing...' : 'Share'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1261,6 +1287,9 @@ const styles = StyleSheet.create({
     gap: SPACING.sm,
     borderRadius: RADIUS.md,
     backgroundColor: COLORS.success,
+  },
+  uploadButtonDisabled: {
+    opacity: 0.65,
   },
   uploadButtonText: {
     fontSize: 16,

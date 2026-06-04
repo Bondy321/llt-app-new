@@ -216,14 +216,29 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       hasSms: Boolean(SUPPORT_SMS),
     });
 
+    const openSupportUrl = async (url, method) => {
+      try {
+        const supported = await Linking.canOpenURL(url);
+        if (!supported) return false;
+        await Linking.openURL(url);
+        return true;
+      } catch (error) {
+        activeLogger?.warn?.('Login', 'Support contact launch failed', {
+          method,
+          reason: error?.message || String(error),
+        });
+        return false;
+      }
+    };
+
     if (SUPPORT_SMS) {
       const smsUrl = `sms:${SUPPORT_SMS}?body=${encodeURIComponent(supportMessage)}`;
-      if (await Linking.canOpenURL(smsUrl)) return Linking.openURL(smsUrl);
+      if (await openSupportUrl(smsUrl, 'sms')) return;
     }
 
     if (SUPPORT_PHONE) {
       const telUrl = `tel:${SUPPORT_PHONE}`;
-      if (await Linking.canOpenURL(telUrl)) return Linking.openURL(telUrl);
+      if (await openSupportUrl(telUrl, 'phone')) return;
     }
 
     Alert.alert(

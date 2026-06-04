@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Dimensions,
   Image,
@@ -62,6 +63,7 @@ import {
   toRealtimeKeySegment,
 } from '../services/identityService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
+import { parseTimestampMs as parseSharedTimestampMs } from '../services/timeUtils';
 import SyncStatusBanner from '../components/SyncStatusBanner';
 const { buildChatSearchResults, normalizeSearchQuery } = require('../utils/chatSearch');
 const { buildUnreadSummary } = require('../utils/chatUnreadSummary');
@@ -93,6 +95,34 @@ const SEARCH_RESULT_PREVIEW_LIMIT = 3;
 const CATCH_UP_BUBBLE_DISTANCE_THRESHOLD = 220;
 const SWIPE_REPLY_HINT_KEY_PREFIX = 'swipe_reply_hint_seen';
 const SCROLL_BOTTOM_THRESHOLD = 16;
+
+const getExternalLinkDomain = (url) => {
+  try {
+    return new URL(url).hostname.replace('www.', '') || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+};
+
+const openChatExternalLink = async (url) => {
+  if (!url) return false;
+
+  try {
+    const supported = await Linking.canOpenURL(url);
+    if (!supported) {
+      throw new Error('No app can open this link');
+    }
+    await Linking.openURL(url);
+    return true;
+  } catch (error) {
+    logger.warn('Chat', 'External link launch failed', {
+      domain: getExternalLinkDomain(url),
+      error: error?.message || String(error),
+    });
+    Alert.alert('Link unavailable', 'Could not open this link on your device.');
+    return false;
+  }
+};
 const LIVE_CHAT_MESSAGE_LIMIT = 80;
 const CHAT_PAGE_MESSAGE_LIMIT = 40;
 
@@ -181,15 +211,8 @@ const TypingIndicator = ({ typingUsers }) => {
 
 // ==================== DATE SEPARATOR COMPONENT ====================
 const normalizeTimestamp = (timestamp) => {
-  if (typeof timestamp === 'number' && Number.isFinite(timestamp)) return timestamp;
-  if (typeof timestamp === 'string') {
-    const numericTimestamp = Number(timestamp);
-    if (Number.isFinite(numericTimestamp)) return numericTimestamp;
-
-    const parsed = Date.parse(timestamp);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
+  const parsed = parseSharedTimestampMs(timestamp);
+  return Number.isFinite(parsed) ? parsed : null;
 };
 
 const isMessageOwnedByCurrentSession = (message, canonicalIdentity) => {
@@ -240,7 +263,7 @@ const buildReplyPreviewText = (message = {}) => {
 const DateSeparator = ({ date }) => {
   const formatDateLabel = (dateStr) => {
     const normalized = normalizeTimestamp(dateStr);
-    if (!normalized) return 'Unknown date';
+    if (!Number.isFinite(normalized)) return 'Unknown date';
 
     const msgDate = new Date(normalized);
     const today = new Date();
@@ -552,7 +575,7 @@ const MessageActionMenu = ({
 
   const safePreview = buildReplyPreviewText(message).slice(0, 120);
   const normalizedMessageTime = normalizeTimestamp(message?.timestamp);
-  const messageTimeLabel = normalizedMessageTime
+  const messageTimeLabel = Number.isFinite(normalizedMessageTime)
     ? new Date(normalizedMessageTime).toLocaleString([], {
       weekday: 'short',
       month: 'short',
@@ -725,7 +748,7 @@ const LinkPreview = ({ url }) => {
   return (
     <TouchableOpacity
       style={styles.linkPreview}
-      onPress={() => Linking.openURL(url)}
+      onPress={() => openChatExternalLink(url)}
       activeOpacity={0.7}
     >
       <MaterialCommunityIcons name="link-variant" size={16} color={COLORS.linkColor} />
@@ -1459,7 +1482,7 @@ const MessageBubble = React.memo(({
                   <Text
                     key={`${message.id}-link-${index}`}
                     style={[styles.linkInMessage, isSelf && styles.linkInMessageSelf]}
-                    onPress={() => Linking.openURL(part.content)}
+                    onPress={() => openChatExternalLink(part.content)}
                   >
                     {part.content}
                   </Text>
@@ -2477,6 +2500,7 @@ export default function ChatScreen({
 
     const trimmed = inputText.trim();
     if (!trimmed) return;
+    const pendingReply = replyingToMessage;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
@@ -2492,6 +2516,7 @@ export default function ChatScreen({
 
     if (requiresPassengerStableIdForWrites && !passengerStableId) {
       setInputText(trimmed);
+      setReplyingToMessage(pendingReply);
       setSending(false);
       showTransientFeedback({
         type: 'warning',
@@ -2523,7 +2548,7 @@ export default function ChatScreen({
       isDriver,
       status: 'sending',
       type: 'text',
-      ...(replyingToMessage ? { replyTo: replyingToMessage } : {}),
+      ...(pendingReply ? { replyTo: pendingReply } : {}),
     };
 
     setMessages((prev) => [...prev, optimisticMessage]);
@@ -2533,7 +2558,7 @@ export default function ChatScreen({
       chatScope: internalDriverChat ? 'internal' : 'group',
       messageId: maskIdentifier(optimisticId),
       textLength: trimmed.length,
-      hasReply: Boolean(replyingToMessage),
+      hasReply: Boolean(pendingReply),
       senderPrincipalType: senderInfo.principalType,
       senderId: maskIdentifier(senderInfo.principalId || senderInfo.userId),
       senderStableId: maskIdentifier(senderInfo.stablePassengerId || senderInfo.senderStableId),
@@ -2544,7 +2569,7 @@ export default function ChatScreen({
       const result = await sendFn(tourId, trimmed, senderInfo, undefined, {
         messageId: optimisticId,
         idempotencyKey: optimisticId,
-        replyTo: replyingToMessage || undefined,
+        replyTo: pendingReply || undefined,
       });
 
       if (!result?.success || !result?.message) {
@@ -2557,6 +2582,7 @@ export default function ChatScreen({
         });
         setMessages((prev) => prev.filter((msg) => msg.id !== optimisticId));
         setInputText(trimmed);
+        setReplyingToMessage(pendingReply);
         showTransientFeedback({
           type: 'warning',
           icon: 'message-alert-outline',
@@ -2619,6 +2645,7 @@ export default function ChatScreen({
       });
       setMessages((prev) => prev.filter((msg) => msg.id !== optimisticId));
       setInputText(trimmed);
+      setReplyingToMessage(pendingReply);
       showTransientFeedback({
         type: 'warning',
         icon: 'message-alert-outline',
@@ -3270,12 +3297,11 @@ export default function ChatScreen({
     }
 
     try {
-      const supported = await Linking.canOpenURL(firstLink);
-      if (!supported) {
+      const opened = await openChatExternalLink(firstLink);
+      if (!opened) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         return;
       }
-      await Linking.openURL(firstLink);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch (error) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -3740,7 +3766,7 @@ export default function ChatScreen({
                       <Text
                         key={index}
                         style={[styles.linkInMessage, isSelf && styles.linkInMessageSelf]}
-                        onPress={() => Linking.openURL(part.content)}
+                        onPress={() => openChatExternalLink(part.content)}
                       >
                         {part.content}
                       </Text>

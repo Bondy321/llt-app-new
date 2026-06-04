@@ -41,6 +41,7 @@ import {
   clampPagerIndex,
   resolvePagerIndexFromOffset,
 } from '../services/imageViewerPagerState';
+import { parseTimestampMs } from '../services/timeUtils';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const DETAILS_PANEL_MAX_HEIGHT = SCREEN_HEIGHT * 0.48;
@@ -460,9 +461,9 @@ export default function ImageViewer({
   }, [canRequestFullQuality, currentPhotoKey]);
 
   const formatDate = (timestamp) => {
-    if (!timestamp) return 'Unknown date';
-    const date = new Date(timestamp);
-    if (Number.isNaN(date.getTime())) return 'Unknown date';
+    const parsedMs = parseTimestampMs(timestamp);
+    if (!Number.isFinite(parsedMs)) return 'Unknown date';
+    const date = new Date(parsedMs);
     return new Intl.DateTimeFormat(undefined, {
       weekday: 'long',
       year: 'numeric',

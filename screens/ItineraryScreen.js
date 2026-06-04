@@ -25,6 +25,7 @@ import { COLORS as THEME, SPACING, RADIUS, SHADOWS, FONT_WEIGHT } from '../theme
 import offlineSyncService from '../services/offlineSyncService';
 import logger from '../services/loggerService';
 const { parseSupportedStartDate, getTourDayContext } = require('../services/itineraryDateParser');
+const { parseTimestampMs } = require('../services/timeUtils');
 const { buildItineraryItems } = require('../utils/itineraryPresentation');
 
 // Brand Colors
@@ -747,9 +748,9 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   const displayTitle = tourName || dataToRender?.title || itinerary?.title || 'Tour itinerary';
 
   const formatSyncClock = useCallback((timestamp) => {
-    if (!timestamp) return '';
-    const date = new Date(timestamp);
-    if (Number.isNaN(date.getTime())) return '';
+    const parsedMs = parseTimestampMs(timestamp);
+    if (!Number.isFinite(parsedMs)) return '';
+    const date = new Date(parsedMs);
     return date.toLocaleTimeString(undefined, {
       hour: '2-digit',
       minute: '2-digit',

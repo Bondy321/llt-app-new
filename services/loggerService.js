@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import { auth, realtimeDb } from '../firebase';
 import { createPersistenceProvider } from './persistenceProvider';
 import opsAlertModule from './opsAlertService';
+import { parseTimestampMs } from './timeUtils';
 
 // Centralized persistence with SecureStore/AsyncStorage fallback for durable logs.
 const logStorage = createPersistenceProvider({ namespace: 'LLT_LOGS' });
@@ -448,7 +449,11 @@ class Logger {
   async clearOldLogs(daysToKeep = 7) {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
-    this.logQueue = this.logQueue.filter(log => new Date(log.timestamp) > cutoffDate);
+    const cutoffMs = cutoffDate.getTime();
+    this.logQueue = this.logQueue.filter((log) => {
+      const timestampMs = parseTimestampMs(log?.timestamp);
+      return Number.isFinite(timestampMs) && timestampMs > cutoffMs;
+    });
     await this.saveLogsLocally();
   }
 

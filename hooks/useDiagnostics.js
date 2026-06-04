@@ -42,6 +42,11 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {})
     appState: AppState.currentState,
   });
   const lastProbeOutcomeRef = useRef({ connected: null, error: null });
+  const onForegroundRef = useRef(onForeground);
+
+  useEffect(() => {
+    onForegroundRef.current = onForeground;
+  }, [onForeground]);
 
   const refreshSyncMeta = async () => {
     const now = Date.now();
@@ -194,8 +199,9 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {})
       if (prevState.match(/inactive|background/) && nextAppState === 'active') {
         scheduleProbe('app_foreground');
         refreshSyncMeta();
-        if (typeof onForeground === 'function') {
-          onForeground();
+        const foregroundCallback = onForegroundRef.current;
+        if (typeof foregroundCallback === 'function') {
+          foregroundCallback();
         }
       }
     });

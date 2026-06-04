@@ -37,6 +37,7 @@ import {
 import { auth, realtimeDb } from '../firebase';
 import logger, { maskIdentifier } from '../services/loggerService';
 import { getCanonicalIdentity, toRealtimeKeySegment } from '../services/identityService';
+import { parseTimestampMs } from '../services/timeUtils';
 import {
   recordBreadcrumb as recordCrashBreadcrumb,
   setDiagnosticsContext,
@@ -48,6 +49,18 @@ import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: windowWidth } = Dimensions.get('window');
 const THUMBNAIL_SIZE = (windowWidth - SPACING.lg * 2 - SPACING.sm * 2) / 3;
+
+const formatPhotoDate = (timestamp, options) => {
+  const parsedMs = parseTimestampMs(timestamp);
+  return Number.isFinite(parsedMs)
+    ? new Date(parsedMs).toLocaleDateString(undefined, options)
+    : null;
+};
+
+const getPhotoTimestampMs = (photo) => {
+  const parsedMs = parseTimestampMs(photo?.timestamp);
+  return Number.isFinite(parsedMs) ? parsedMs : 0;
+};
 
 const resolveQueuedUploadSourceUri = (item) => {
   const sourceUri = item?.payload?.localAssets?.sourceUri || item?.payload?.uri;
@@ -146,6 +159,7 @@ export default function PhotobookScreen({
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [pendingImage, setPendingImage] = useState(null);
   const [caption, setCaption] = useState('');
+  const [uploading, setUploading] = useState(false);
   const renderStateSeqRef = useRef(0);
   const imageEventCountsRef = useRef({});
 
@@ -419,8 +433,8 @@ export default function PhotobookScreen({
 
   const visiblePhotos = useMemo(() => {
     const sorted = [...photos].sort((a, b) => {
-      const aTs = a.timestamp || 0;
-      const bTs = b.timestamp || 0;
+      const aTs = getPhotoTimestampMs(a);
+      const bTs = getPhotoTimestampMs(b);
       return sortMode === 'oldest' ? aTs - bTs : bTs - aTs;
     });
     return sorted;
@@ -439,13 +453,12 @@ export default function PhotobookScreen({
         photoIndexById[photo.id] = index;
       }
 
-      const dateKey = photo.timestamp
-        ? new Date(photo.timestamp).toLocaleDateString(undefined, {
-            weekday: 'long',
-            month: 'long',
-            day: 'numeric',
-          })
-        : 'Unknown Date';
+      const dateKey = formatPhotoDate(photo.timestamp, {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+      })
+        || 'Unknown Date';
 
       if (!grouped[dateKey]) {
         grouped[dateKey] = [];
@@ -475,9 +488,7 @@ export default function PhotobookScreen({
       dateKeys,
       photoIndexById,
       totalPhotos: visiblePhotos.length,
-      latestPhotoDate: visiblePhotos[0]?.timestamp
-        ? new Date(visiblePhotos[0].timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-        : null,
+      latestPhotoDate: formatPhotoDate(visiblePhotos[0]?.timestamp, { month: 'short', day: 'numeric' }),
     };
   }, [visiblePhotos]);
 
@@ -618,8 +629,9 @@ export default function PhotobookScreen({
   );
 
   const handleUpload = async () => {
-    if (!pendingImage?.uri) return;
+    if (uploading || !pendingImage?.uri) return;
 
+    setUploading(true);
     try {
       tracePrivatePhotos('upload_prepare_start', {
         pendingImage: {
@@ -734,6 +746,8 @@ export default function PhotobookScreen({
         stack: error?.stack,
       }, { flush: true });
       Alert.alert('Image preparation failed', 'Could not optimize this image. Please try a different photo.');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -771,6 +785,7 @@ export default function PhotobookScreen({
   };
 
   const cancelUpload = () => {
+    if (uploading) return;
     setShowUploadModal(false);
     setPendingImage(null);
     setCaption('');
@@ -1259,6 +1274,7 @@ export default function PhotobookScreen({
               placeholderTextColor={COLORS.textMuted}
               value={caption}
               onChangeText={setCaption}
+              editable={!uploading}
               multiline
               maxLength={200}
             />
@@ -1267,18 +1283,24 @@ export default function PhotobookScreen({
 
             <View style={styles.uploadModalActions}>
               <TouchableOpacity
-                style={styles.cancelButton}
+                style={[styles.cancelButton, uploading && styles.uploadButtonDisabled]}
                 onPress={cancelUpload}
+                disabled={uploading}
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.uploadButton}
+                style={[styles.uploadButton, uploading && styles.uploadButtonDisabled]}
                 onPress={handleUpload}
+                disabled={uploading}
               >
-                <MaterialCommunityIcons name="upload" size={20} color={COLORS.white} />
-                <Text style={styles.uploadButtonText}>Upload</Text>
+                {uploading ? (
+                  <ActivityIndicator size="small" color={COLORS.white} />
+                ) : (
+                  <MaterialCommunityIcons name="upload" size={20} color={COLORS.white} />
+                )}
+                <Text style={styles.uploadButtonText}>{uploading ? 'Preparing...' : 'Upload'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1772,6 +1794,9 @@ const styles = StyleSheet.create({
     gap: SPACING.sm,
     borderRadius: RADIUS.md,
     backgroundColor: COLORS.primary,
+  },
+  uploadButtonDisabled: {
+    opacity: 0.65,
   },
   uploadButtonText: {
     fontSize: 16,

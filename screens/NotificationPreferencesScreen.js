@@ -20,6 +20,7 @@ import {
   primeNotificationPermissions,
 } from '../services/notificationService';
 import logger from '../services/loggerService';
+import { parseTimestampMs } from '../services/timeUtils';
 import { COLORS as THEME, SHADOWS } from '../theme';
 
 // Brand Colors
@@ -269,8 +270,9 @@ export default function NotificationPreferencesScreen({
   }, [audience, isOnboarding, returnTo, userId]);
 
   const formatTimestamp = (isoDate) => {
-    const date = new Date(isoDate);
-    if (Number.isNaN(date.getTime())) return '';
+    const parsedMs = parseTimestampMs(isoDate);
+    if (!Number.isFinite(parsedMs)) return '';
+    const date = new Date(parsedMs);
     return date.toLocaleString('en-GB', {
       day: '2-digit',
       month: 'short',

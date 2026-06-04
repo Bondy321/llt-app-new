@@ -43,6 +43,7 @@ import * as chatService from '../services/chatService';
 import offlineSyncService from '../services/offlineSyncService';
 import logger, { maskIdentifier } from '../services/loggerService';
 import { resolveTourId } from '../services/tourIdentityService';
+import { parseTimestampMs } from '../services/timeUtils';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -51,6 +52,11 @@ const SOS_BUTTON_SIZE = Math.min(188, Math.max(160, SCREEN_WIDTH * 0.45));
 const SOS_GLOW_SIZE = SOS_BUTTON_SIZE + 28;
 const SOS_BUTTON_RADIUS = SOS_BUTTON_SIZE / 2;
 const SOS_GLOW_RADIUS = SOS_GLOW_SIZE / 2;
+
+const getSafetyEventTimestampMs = (event) => {
+  const parsed = parseTimestampMs(event?.timestamp || event?.queuedAt);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
 
 // Colors
 const COLORS = {
@@ -428,7 +434,9 @@ const HistoryItem = ({ event }) => {
   const isQueued = Boolean(event.isQueued);
 
   const formatDate = (timestamp) => {
-    const date = new Date(timestamp);
+    const parsedMs = parseTimestampMs(timestamp);
+    if (!Number.isFinite(parsedMs)) return 'Unknown time';
+    const date = new Date(parsedMs);
     return date.toLocaleDateString(undefined, {
       month: 'short',
       day: 'numeric',
@@ -639,19 +647,34 @@ export default function SafetySupportScreen({
     logger.info('SafetySupportScreen', 'Offline safety queue count loaded', { count });
   };
 
-  const openDialer = (phone) => {
+  const openDialer = async (phone) => {
     if (!phone) {
       logger.warn('SafetySupportScreen', 'Dialer blocked without phone', { mode, tourId });
       Alert.alert('Contact unavailable', 'No phone number is configured for this tour.');
       return;
     }
     const sanitized = phone.replace(/[^+\d]/g, '');
+    if (!sanitized) {
+      logger.warn('SafetySupportScreen', 'Dialer blocked with invalid phone', { mode, tourId });
+      Alert.alert('Contact unavailable', 'No valid phone number is configured for this tour.');
+      return;
+    }
     logger.info('SafetySupportScreen', 'Dialer opened', {
       mode,
       tourId,
       phoneLength: sanitized.length,
     });
-    Linking.openURL(`tel:${sanitized}`);
+    try {
+      await Linking.openURL(`tel:${sanitized}`);
+    } catch (error) {
+      logger.warn('SafetySupportScreen', 'Dialer launch failed', {
+        mode,
+        tourId,
+        phoneLength: sanitized.length,
+        error: error?.message || String(error),
+      });
+      Alert.alert('Could not open phone app', `Please dial ${sanitized} manually if this is urgent.`);
+    }
   };
 
   const confirmEmergencyCall = () => {
@@ -725,14 +748,30 @@ export default function SafetySupportScreen({
     );
   };
 
-  const sendSMS = (phone, message) => {
+  const sendSMS = async (phone, message) => {
+    const sanitized = typeof phone === 'string' ? phone.replace(/[^+\d]/g, '') : '';
+    if (!sanitized) {
+      logger.warn('SafetySupportScreen', 'Emergency SMS blocked with invalid phone', { tourId });
+      Alert.alert('Contact unavailable', 'No valid SMS number is available for this contact.');
+      return;
+    }
+
     const encoded = encodeURIComponent(message);
     logger.info('SafetySupportScreen', 'Emergency SMS compose opened', {
       tourId,
-      phoneLength: phone?.replace?.(/[^+\d]/g, '')?.length || 0,
+      phoneLength: sanitized.length,
       messageLength: message?.length || 0,
     });
-    Linking.openURL(`sms:${phone}?body=${encoded}`);
+    try {
+      await Linking.openURL(`sms:${sanitized}?body=${encoded}`);
+    } catch (error) {
+      logger.warn('SafetySupportScreen', 'Emergency SMS launch failed', {
+        tourId,
+        phoneLength: sanitized.length,
+        error: error?.message || String(error),
+      });
+      Alert.alert('Could not open messages', 'Please try again, or contact this person manually if it is urgent.');
+    }
   };
 
   // ==================== SOS HANDLERS ====================
@@ -894,6 +933,11 @@ export default function SafetySupportScreen({
 
     if (enabled) {
       try {
+        if (locationWatchRef.current) {
+          locationWatchRef.current.remove();
+          locationWatchRef.current = null;
+        }
+
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
           logger.warn('SafetySupportScreen', 'Live location permission denied', { tourId, status });
@@ -924,7 +968,13 @@ export default function SafetySupportScreen({
               userId,
               true,
               location.coords
-            );
+            ).catch((error) => {
+              logger.warn('SafetySupportScreen', 'Live location watch update failed', {
+                tourId,
+                userId: maskIdentifier(userId),
+                error: error?.message || String(error),
+              });
+            });
             logger.debug('SafetySupportScreen', 'Live location watch update sent', {
               tourId,
               userId: maskIdentifier(userId),
@@ -952,6 +1002,10 @@ export default function SafetySupportScreen({
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }
       } catch (error) {
+        if (locationWatchRef.current) {
+          locationWatchRef.current.remove();
+          locationWatchRef.current = null;
+        }
         logger.error('SafetySupportScreen', 'Live location sharing start failed', {
           tourId,
           userId: maskIdentifier(userId),
@@ -960,23 +1014,33 @@ export default function SafetySupportScreen({
         Alert.alert('Error', 'Could not start location sharing. Please try again.');
       }
     } else {
-      // Stop watching
-      if (locationWatchRef.current) {
-        locationWatchRef.current.remove();
-        locationWatchRef.current = null;
+      try {
+        // Stop watching
+        if (locationWatchRef.current) {
+          locationWatchRef.current.remove();
+          locationWatchRef.current = null;
+        }
+
+        await updateLiveLocationSharing(
+          tourId,
+          userId,
+          false
+        );
+
+        setLiveLocationSharing(false);
+        logger.info('SafetySupportScreen', 'Live location sharing stopped', {
+          tourId,
+          userId: maskIdentifier(userId),
+        });
+      } catch (error) {
+        setLiveLocationSharing(false);
+        logger.warn('SafetySupportScreen', 'Live location sharing stop write failed', {
+          tourId,
+          userId: maskIdentifier(userId),
+          error: error?.message || String(error),
+        });
+        Alert.alert('Location sharing stopped', 'Sharing was stopped on this device, but we could not update the server right now.');
       }
-
-      await updateLiveLocationSharing(
-        tourId,
-        userId,
-        false
-      );
-
-      setLiveLocationSharing(false);
-      logger.info('SafetySupportScreen', 'Live location sharing stopped', {
-        tourId,
-        userId: maskIdentifier(userId),
-      });
     }
 
     setLiveLocationUpdating(false);
@@ -1173,7 +1237,7 @@ export default function SafetySupportScreen({
     ]);
 
     const mergedHistory = [...queuedEvents, ...history].sort(
-      (a, b) => new Date(b.timestamp || b.queuedAt) - new Date(a.timestamp || a.queuedAt)
+      (a, b) => getSafetyEventTimestampMs(b) - getSafetyEventTimestampMs(a)
     );
 
     setSafetyHistory(mergedHistory);

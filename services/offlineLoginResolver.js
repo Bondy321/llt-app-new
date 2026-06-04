@@ -8,6 +8,7 @@ const OFFLINE_LOGIN_REASONS = {
 
 const OFFLINE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const { resolveTourId } = require('./tourIdentityService');
+const { parseTimestampMs } = require('./timeUtils');
 
 const normalizePassengerEmail = (email) => (typeof email === 'string' ? email.trim().toLowerCase() : '');
 
@@ -120,7 +121,7 @@ const resolveOfflineLoginFromCache = async ({
     const cachedPackMetaResult = await offlineSyncService.getTourPackMeta(cachedTourId, expectedRole);
     const lastSyncedAt = cachedPackMetaResult?.success ? cachedPackMetaResult?.data?.lastSyncedAt : null;
     if (lastSyncedAt) {
-      const lastSyncedTime = new Date(lastSyncedAt).getTime();
+      const lastSyncedTime = parseTimestampMs(lastSyncedAt);
       if (Number.isFinite(lastSyncedTime) && Date.now() - lastSyncedTime > OFFLINE_CACHE_TTL_MS) {
         return {
           success: false,

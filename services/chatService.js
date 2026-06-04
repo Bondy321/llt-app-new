@@ -4,6 +4,7 @@ const isTestEnv = process.env.NODE_ENV === 'test';
 let realtimeDb;
 const { loadOptionalService } = require('./optionalServiceLoader');
 const { toRealtimeKeySegment } = require('./identityService');
+const { parseTimestampMs: parseStrictTimestampMs } = require('./timeUtils');
 
 if (!isTestEnv) {
   try {
@@ -48,21 +49,8 @@ const normalizeMessageLimit = (limit, fallback) => {
 };
 
 const parseTimestampToMillis = (timestamp) => {
-  if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
-    return timestamp;
-  }
-
-  if (typeof timestamp === 'string') {
-    const numericTimestamp = Number(timestamp);
-    if (Number.isFinite(numericTimestamp)) {
-      return numericTimestamp;
-    }
-
-    const parsed = Date.parse(timestamp);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  return null;
+  const parsed = parseStrictTimestampMs(timestamp);
+  return Number.isFinite(parsed) ? parsed : null;
 };
 
 const normalizeReactionUsers = (users) => {

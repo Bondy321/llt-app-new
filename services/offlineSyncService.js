@@ -30,6 +30,11 @@ const RESPONSE = {
   fail: (error) => ({ success: false, error: typeof error === 'string' ? error : error?.message || 'Unknown offline sync error' }),
 };
 
+const toSortableTimestampMs = (value) => {
+  const parsed = parseTimestampMs(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
 const maskIdentifier = (value) => {
   if (value === null || value === undefined) return value;
   const asString = String(value).trim();
@@ -100,8 +105,9 @@ const sanitizePhotoUploadPayload = (payload = {}, action = {}) => {
   const normalizedPayloadVersion = Number.isFinite(Number(safePayload.payloadVersion))
     ? Number(safePayload.payloadVersion)
     : 1;
-  const createdAt = parseTimestampMs(safePayload.createdAt)
-    ? new Date(parseTimestampMs(safePayload.createdAt)).toISOString()
+  const payloadCreatedAtMs = parseTimestampMs(safePayload.createdAt);
+  const createdAt = Number.isFinite(payloadCreatedAtMs)
+    ? new Date(payloadCreatedAtMs).toISOString()
     : (action.createdAt || new Date().toISOString());
 
   return {
@@ -137,7 +143,7 @@ const pruneCompletedPhotoUploadActions = (queue = [], now = Date.now()) => {
 
   const completedPhotoActions = queue
     .filter((action) => action?.type === 'PHOTO_UPLOAD' && action?.status === 'completed')
-    .sort((a, b) => (parseTimestampMs(a.lastUpdatedAt) || 0) - (parseTimestampMs(b.lastUpdatedAt) || 0));
+    .sort((a, b) => toSortableTimestampMs(a.lastUpdatedAt) - toSortableTimestampMs(b.lastUpdatedAt));
 
   const keepIds = new Set(completedPhotoActions
     .slice(-PHOTO_UPLOAD_COMPLETED_KEEP_LAST)
@@ -147,7 +153,7 @@ const pruneCompletedPhotoUploadActions = (queue = [], now = Date.now()) => {
   const prunedQueue = queue.filter((action) => {
     if (action?.type !== 'PHOTO_UPLOAD' || action?.status !== 'completed') return true;
     if (keepIds.has(action.id)) return true;
-    const completedAtMs = parseTimestampMs(action.lastUpdatedAt) || parseTimestampMs(action.createdAt) || 0;
+    const completedAtMs = toSortableTimestampMs(action.lastUpdatedAt) || toSortableTimestampMs(action.createdAt);
     return completedAtMs >= cutoffMs;
   });
 
@@ -168,8 +174,9 @@ const sanitizeActionRecord = (action) => {
     return null;
   }
 
-  const normalizedCreatedAt = parseTimestampMs(action.createdAt)
-    ? new Date(parseTimestampMs(action.createdAt)).toISOString()
+  const createdAtMs = parseTimestampMs(action.createdAt);
+  const normalizedCreatedAt = Number.isFinite(createdAtMs)
+    ? new Date(createdAtMs).toISOString()
     : new Date().toISOString();
   const status = SUPPORTED_QUEUE_STATUSES.has(action.status) ? action.status : 'queued';
   const normalizedAttempts = Number.isFinite(action.attempts) ? Math.max(0, Math.trunc(action.attempts)) : 0;
@@ -311,7 +318,7 @@ const getQueueRaw = async () => {
     const sanitizedQueue = queue
       .map((item) => sanitizeActionRecord(item))
       .filter(Boolean)
-      .sort((a, b) => (parseTimestampMs(a.createdAt) || 0) - (parseTimestampMs(b.createdAt) || 0));
+      .sort((a, b) => toSortableTimestampMs(a.createdAt) - toSortableTimestampMs(b.createdAt));
 
     const pruneResult = pruneCompletedPhotoUploadActions(sanitizedQueue);
     const sanitizedAndPrunedQueue = pruneResult.queue;
@@ -670,7 +677,7 @@ const enqueueAction = async (action) => {
 
     const entry = buildAction(action);
     queue.push(entry);
-    queue.sort((a, b) => (parseTimestampMs(a.createdAt) || 0) - (parseTimestampMs(b.createdAt) || 0));
+    queue.sort((a, b) => toSortableTimestampMs(a.createdAt) - toSortableTimestampMs(b.createdAt));
     await setQueueRaw(queue);
     logger.info('OfflineSync', 'Queue enqueue completed', {
       action: summarizeQueueActionForLog(entry),
@@ -689,7 +696,7 @@ const enqueueAction = async (action) => {
 const getQueuedActions = async () => {
   try {
     const queue = await getQueueRaw();
-    return RESPONSE.ok(queue.sort((a, b) => (parseTimestampMs(a.createdAt) || 0) - (parseTimestampMs(b.createdAt) || 0)));
+    return RESPONSE.ok(queue.sort((a, b) => toSortableTimestampMs(a.createdAt) - toSortableTimestampMs(b.createdAt)));
   } catch (error) {
     return RESPONSE.fail(error);
   }
@@ -898,7 +905,7 @@ const replayQueue = async ({ db, services = {} } = {}) => {
       return RESPONSE.ok({ processed: 0, failed: 0 });
     }
 
-    const sortedQueue = [...queue].sort((a, b) => (parseTimestampMs(a.createdAt) || 0) - (parseTimestampMs(b.createdAt) || 0));
+    const sortedQueue = [...queue].sort((a, b) => toSortableTimestampMs(a.createdAt) - toSortableTimestampMs(b.createdAt));
     let processedActionIds = await getProcessedActionIds();
     let processed = 0;
     let failed = 0;
@@ -929,7 +936,7 @@ const replayQueue = async ({ db, services = {} } = {}) => {
       }
 
       const now = Date.now();
-      const nextAttemptAt = parseTimestampMs(action.nextAttemptAt) || 0;
+      const nextAttemptAt = toSortableTimestampMs(action.nextAttemptAt);
       if (nextAttemptAt && nextAttemptAt > now) {
         skipped += 1;
         logger.debug('OfflineSync', 'Queue replay skipped action until backoff expires', {

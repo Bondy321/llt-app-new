@@ -27,9 +27,6 @@ module.exports = {
           'Loch Lomond Travel needs camera access to capture tour moments.',
         NSLocationWhenInUseUsageDescription:
           'Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.',
-        NSLocationAlwaysAndWhenInUseUsageDescription:
-          'Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.',
-        UIBackgroundModes: ['location', 'fetch', 'remote-notification'],
       },
       config: {
         usesNonExemptEncryption: false,
@@ -49,7 +46,6 @@ module.exports = {
         'WRITE_EXTERNAL_STORAGE',
         'ACCESS_COARSE_LOCATION',
         'ACCESS_FINE_LOCATION',
-        'ACCESS_BACKGROUND_LOCATION',
         'RECEIVE_BOOT_COMPLETED',
         'VIBRATE',
       ],
@@ -77,8 +73,6 @@ module.exports = {
       [
         'expo-location',
         {
-          locationAlwaysAndWhenInUsePermission:
-            'Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.',
           locationWhenInUsePermission:
             'Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.',
         },

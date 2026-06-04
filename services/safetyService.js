@@ -2,6 +2,7 @@
 import { auth, realtimeDb } from '../firebase';
 import logger from './loggerService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { parseTimestampMs } from './timeUtils';
 
 // Safety event categories with metadata
 export const SAFETY_CATEGORIES = {
@@ -392,7 +393,7 @@ export function subscribeToSafetyAlerts(tourId, callback) {
       });
     }
     // Sort by timestamp descending (newest first)
-    alerts.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    alerts.sort((a, b) => (parseTimestampMs(b.timestamp) ?? 0) - (parseTimestampMs(a.timestamp) ?? 0));
     callback(alerts);
   };
 
@@ -444,7 +445,7 @@ export async function getSafetyHistory(userId, limit = 20) {
     }
 
     // Sort descending
-    return events.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    return events.sort((a, b) => (parseTimestampMs(b.timestamp) ?? 0) - (parseTimestampMs(a.timestamp) ?? 0));
   } catch (error) {
     await logger.error('Safety', 'Failed to get safety history', { error: error.message });
     return [];
@@ -527,7 +528,7 @@ export async function getOfflineQueuedSafetyEvents(limit = 20) {
     }));
 
     return mapped
-      .sort((a, b) => new Date(b.timestamp || b.queuedAt) - new Date(a.timestamp || a.queuedAt))
+      .sort((a, b) => (parseTimestampMs(b.timestamp || b.queuedAt) ?? 0) - (parseTimestampMs(a.timestamp || a.queuedAt) ?? 0))
       .slice(0, limit);
   } catch (error) {
     return [];

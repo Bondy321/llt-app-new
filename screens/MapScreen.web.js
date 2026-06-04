@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View, Linking } from 'react-native';
+import { Alert, StyleSheet, Text, TouchableOpacity, View, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { COLORS, SPACING, RADIUS } from '../theme';
 
@@ -14,7 +14,11 @@ export default function MapScreen({ onBack, tourData }) {
 
   const handleOpenInMaps = async () => {
     if (!mapsUrl) return;
-    await Linking.openURL(mapsUrl);
+    try {
+      await Linking.openURL(mapsUrl);
+    } catch {
+      Alert.alert('Maps unavailable', 'Could not open Google Maps from this browser.');
+    }
   };
 
   return (

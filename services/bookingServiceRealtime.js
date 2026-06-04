@@ -743,8 +743,10 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
     const bookingManifestRef = db.ref(`tour_manifests/${tourId}/bookings/${validatedBookingRef}`);
     const snapshot = await bookingManifestRef.once('value');
     const existing = snapshot.exists() ? snapshot.val() : {};
-    const serverUpdatedAt = parseTimestampMs(existing.lastUpdated) || 0;
-    const localUpdatedAt = parseTimestampMs(payload.lastUpdated) || Date.now();
+    const parsedServerUpdatedAt = parseTimestampMs(existing.lastUpdated);
+    const parsedLocalUpdatedAt = parseTimestampMs(payload.lastUpdated);
+    const serverUpdatedAt = Number.isFinite(parsedServerUpdatedAt) ? parsedServerUpdatedAt : 0;
+    const localUpdatedAt = Number.isFinite(parsedLocalUpdatedAt) ? parsedLocalUpdatedAt : Date.now();
 
     if (serverUpdatedAt > localUpdatedAt) {
       logger?.warn?.('Manifest', 'Queued update reconciled to newer server data', {

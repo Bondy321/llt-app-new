@@ -39,17 +39,17 @@ Backend region rule:
 
 Mobile:
 
-- Expo SDK `54` (`expo ~54.0.33`)
-- React Native `0.81.5`
-- React `19.1.0`
-- Firebase JS SDK `^12.10.0`
-- `expo-notifications ~0.32.16`
-- `expo-image ~3.0.11`
-- `expo-image-manipulator ~14.0.8`
-- `expo-file-system ~19.0.21`
-- `expo-secure-store ~15.0.8`
+- Expo SDK `55` (`expo ~55.0.0`)
+- React Native `0.83.6`
+- React `19.2.0`
+- Firebase JS SDK `^12.14.0`
+- `expo-notifications ~55.0.23`
+- `expo-image ~55.0.11`
+- `expo-image-manipulator ~55.0.17`
+- `expo-file-system ~55.0.22`
+- `expo-secure-store ~55.0.14`
 - `@react-native-async-storage/async-storage 2.2.0`
-- `react-native-maps 1.20.1`
+- `react-native-maps 1.27.2`
 
 Web admin:
 

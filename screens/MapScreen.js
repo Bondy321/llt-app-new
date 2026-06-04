@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   StyleSheet,
   Text,
@@ -66,14 +66,30 @@ const mapStyle = [
 
 const summarizeCoords = (coords) => {
   if (!coords) return { present: false };
-  const latitude = Number(coords.latitude);
-  const longitude = Number(coords.longitude);
+  const latitude = Number(coords.latitude ?? coords.lat);
+  const longitude = Number(coords.longitude ?? coords.lng);
   return {
     present: Number.isFinite(latitude) && Number.isFinite(longitude),
     latitudeApprox: Number.isFinite(latitude) ? Number(latitude.toFixed(3)) : null,
     longitudeApprox: Number.isFinite(longitude) ? Number(longitude.toFixed(3)) : null,
     hasAccuracy: Number.isFinite(Number(coords.accuracy)),
     accuracy: Number.isFinite(Number(coords.accuracy)) ? Math.round(Number(coords.accuracy)) : null,
+  };
+};
+
+const normalizeMapCoords = (coords) => {
+  if (!coords) return null;
+  const latitude = Number(coords.latitude ?? coords.lat);
+  const longitude = Number(coords.longitude ?? coords.lng);
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+
+  return {
+    ...coords,
+    latitude,
+    longitude,
   };
 };
 
@@ -94,6 +110,8 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   const slideAnim = useRef(new Animated.Value(100)).current;
   const markerScaleAnim = useRef(new Animated.Value(0)).current;
   const refreshRotation = useRef(new Animated.Value(0)).current;
+  const driverLocationPoint = useMemo(() => normalizeMapCoords(driverLocation), [driverLocation]);
+  const userLocationPoint = useMemo(() => normalizeMapCoords(userLocation), [userLocation]);
 
   useEffect(() => {
     logger.trackScreen('Map', {
@@ -142,7 +160,7 @@ export default function MapScreen({ onBack, tourId, tourData }) {
 
   // Marker scale animation when location updates
   useEffect(() => {
-    if (driverLocation) {
+    if (driverLocationPoint) {
       Animated.sequence([
         Animated.timing(markerScaleAnim, {
           toValue: 1.2,
@@ -157,13 +175,16 @@ export default function MapScreen({ onBack, tourId, tourData }) {
         }),
       ]).start();
     }
-  }, [driverLocation]);
+  }, [driverLocationPoint, markerScaleAnim]);
 
   // 1. Get User's Own Location
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
       logger.info('MapScreen', 'User location permission requested', { tourId });
       let { status } = await Location.requestForegroundPermissionsAsync();
+      if (cancelled) return;
       if (status !== 'granted') {
         logger.warn('MapScreen', 'User location permission denied', { tourId, status });
         setErrorMsg('Permission to access location was denied');
@@ -176,12 +197,14 @@ export default function MapScreen({ onBack, tourId, tourData }) {
         let location = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         });
+        if (cancelled) return;
         setUserLocation(location.coords);
         logger.info('MapScreen', 'User location lookup completed', {
           tourId,
           coords: summarizeCoords(location.coords),
         });
       } catch (err) {
+        if (cancelled) return;
         logger.error('MapScreen', 'User location lookup failed', {
           tourId,
           error: err?.message || String(err),
@@ -189,6 +212,10 @@ export default function MapScreen({ onBack, tourId, tourData }) {
         setErrorMsg('Could not get your location');
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [tourId]);
 
   // 2. Subscribe to Driver Location from Firebase
@@ -297,33 +324,36 @@ export default function MapScreen({ onBack, tourId, tourData }) {
     return 'old';
   };
 
-  const driverHasLocation = Boolean(driverLocation);
-  const formattedDriverTime = driverLocation ? formatTime(driverLocation.timestamp) : '';
-  const relativeUpdateTime = driverLocation ? formatRelativeTime(driverLocation.timestamp) : '';
-  const locationFreshness = driverLocation ? getLocationFreshness(driverLocation.timestamp) : 'unknown';
+  const driverLocationTimestamp = driverLocation
+    ? (driverLocation.timestamp || driverLocation.lastUpdated)
+    : null;
+  const driverHasLocation = Boolean(driverLocationPoint);
+  const formattedDriverTime = driverLocationTimestamp ? formatTime(driverLocationTimestamp) : '';
+  const relativeUpdateTime = driverLocationTimestamp ? formatRelativeTime(driverLocationTimestamp) : '';
+  const locationFreshness = driverLocationTimestamp ? getLocationFreshness(driverLocationTimestamp) : 'unknown';
   const isStale = locationFreshness === 'stale' || locationFreshness === 'old';
-  const distanceKm = driverLocation && userLocation
-    ? calculateDistanceKm(driverLocation, userLocation)
+  const distanceKm = driverLocationPoint && userLocationPoint
+    ? calculateDistanceKm(driverLocationPoint, userLocationPoint)
     : null;
   const etaMinutes = distanceKm ? estimateEtaMinutes(distanceKm) : null;
 
   // Auto-fit map to show both locations
   useEffect(() => {
-    if (mapRef.current && (driverLocation || userLocation)) {
+    if (mapRef.current && (driverLocationPoint || userLocationPoint)) {
       const coordinates = [];
-      if (driverLocation) {
-        coordinates.push({ latitude: driverLocation.latitude, longitude: driverLocation.longitude });
+      if (driverLocationPoint) {
+        coordinates.push({ latitude: driverLocationPoint.latitude, longitude: driverLocationPoint.longitude });
       }
-      if (userLocation) {
-        coordinates.push({ latitude: userLocation.latitude, longitude: userLocation.longitude });
+      if (userLocationPoint) {
+        coordinates.push({ latitude: userLocationPoint.latitude, longitude: userLocationPoint.longitude });
       }
 
       if (coordinates.length > 0) {
         logger.debug('MapScreen', 'Auto-fitting map coordinates', {
           tourId,
           coordinateCount: coordinates.length,
-          hasDriverLocation: Boolean(driverLocation),
-          hasUserLocation: Boolean(userLocation),
+          hasDriverLocation: Boolean(driverLocationPoint),
+          hasUserLocation: Boolean(userLocationPoint),
         });
         setTimeout(() => {
           mapRef.current?.fitToCoordinates(coordinates, {
@@ -333,14 +363,14 @@ export default function MapScreen({ onBack, tourId, tourData }) {
         }, 120);
       }
     }
-  }, [driverLocation, tourId, userLocation]);
+  }, [driverLocationPoint, tourId, userLocationPoint]);
 
   // Determine initial region
   const getInitialRegion = () => {
-    if (driverLocation) {
+    if (driverLocationPoint) {
       return {
-        latitude: driverLocation.latitude,
-        longitude: driverLocation.longitude,
+        latitude: driverLocationPoint.latitude,
+        longitude: driverLocationPoint.longitude,
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       };
@@ -362,16 +392,16 @@ export default function MapScreen({ onBack, tourId, tourData }) {
     logger.info('MapScreen', 'Recenter requested', {
       tourId,
       hasMapRef: Boolean(mapRef.current),
-      hasDriverLocation: Boolean(driverLocation),
-      hasUserLocation: Boolean(userLocation),
+      hasDriverLocation: Boolean(driverLocationPoint),
+      hasUserLocation: Boolean(userLocationPoint),
     });
 
     if (!mapRef.current) return;
 
-    if (driverLocation && userLocation) {
+    if (driverLocationPoint && userLocationPoint) {
       mapRef.current.fitToCoordinates([
-        { latitude: driverLocation.latitude, longitude: driverLocation.longitude },
-        { latitude: userLocation.latitude, longitude: userLocation.longitude },
+        { latitude: driverLocationPoint.latitude, longitude: driverLocationPoint.longitude },
+        { latitude: userLocationPoint.latitude, longitude: userLocationPoint.longitude },
       ], {
         edgePadding: { top: 120, right: 60, bottom: 320, left: 60 },
         animated: true,
@@ -381,7 +411,7 @@ export default function MapScreen({ onBack, tourId, tourData }) {
 
     const region = getInitialRegion();
     mapRef.current.animateToRegion(region, 750);
-  }, [driverLocation, userLocation]);
+  }, [driverLocationPoint, userLocationPoint, tourId]);
 
   const handleRefresh = useCallback(async () => {
     if (Platform.OS === 'ios') {
@@ -443,19 +473,19 @@ export default function MapScreen({ onBack, tourId, tourData }) {
     });
   }, [tourId]);
 
-  const handleGetDirections = useCallback(() => {
+  const handleGetDirections = useCallback(async () => {
     logger.info('MapScreen', 'Directions requested', {
       tourId,
-      hasDriverLocation: Boolean(driverLocation),
+      hasDriverLocation: Boolean(driverLocationPoint),
       freshness: locationFreshness,
     });
-    if (!driverLocation) return;
+    if (!driverLocationPoint) return;
 
     if (Platform.OS === 'ios') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
 
-    const { latitude, longitude } = driverLocation;
+    const { latitude, longitude } = driverLocationPoint;
     const label = 'Bus Pickup Point';
     const url = Platform.select({
       ios: `maps://app?daddr=${latitude},${longitude}&dirflg=d`,
@@ -464,41 +494,66 @@ export default function MapScreen({ onBack, tourId, tourData }) {
 
     const webUrl = `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`;
 
-    Linking.canOpenURL(url).then((supported) => {
+    let targetUrl = webUrl;
+
+    try {
+      const supported = await Linking.canOpenURL(url);
       logger.debug('MapScreen', 'Directions URL support checked', {
         tourId,
         supported,
         platform: Platform.OS,
       });
-      if (supported) {
-        Linking.openURL(url);
-      } else {
-        Linking.openURL(webUrl);
-      }
-    }).catch(() => {
-      logger.warn('MapScreen', 'Directions URL support check failed; falling back to web', { tourId, platform: Platform.OS });
-      Linking.openURL(webUrl);
-    });
-  }, [driverLocation, locationFreshness, tourId]);
+      targetUrl = supported ? url : webUrl;
+    } catch (error) {
+      logger.warn('MapScreen', 'Directions URL support check failed; falling back to web', {
+        tourId,
+        platform: Platform.OS,
+        error: error?.message || String(error),
+      });
+    }
 
-  const handleCallDriver = useCallback(() => {
+    try {
+      await Linking.openURL(targetUrl);
+    } catch (error) {
+      logger.warn('MapScreen', 'Directions launch failed', {
+        tourId,
+        platform: Platform.OS,
+        usedWebFallback: targetUrl === webUrl,
+        error: error?.message || String(error),
+      });
+      Alert.alert('Directions unavailable', 'Could not open maps on this device. Please try again in a moment.');
+    }
+  }, [driverLocationPoint, locationFreshness, tourId]);
+
+  const handleCallDriver = useCallback(async () => {
     if (Platform.OS === 'ios') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
 
-    if (!tourData?.driverPhone) {
+    const phone = typeof tourData?.driverPhone === 'string'
+      ? tourData.driverPhone.replace(/[^+\d]/g, '')
+      : '';
+
+    if (phone.length < 7) {
       logger.warn('MapScreen', 'Call driver blocked without phone number', { tourId });
       Alert.alert('Contact Unavailable', 'Driver contact information is not available. Please contact your tour operator.');
       return;
     }
 
-    const phone = tourData.driverPhone.replace(/[^+\d]/g, '');
     logger.info('MapScreen', 'Call driver launched', {
       tourId,
       hasPhoneNumber: Boolean(phone),
       phoneLength: phone.length,
     });
-    Linking.openURL(`tel:${phone}`);
+    try {
+      await Linking.openURL(`tel:${phone}`);
+    } catch (error) {
+      logger.warn('MapScreen', 'Call driver launch failed', {
+        tourId,
+        error: error?.message || String(error),
+      });
+      Alert.alert('Could not open phone app', 'Please try again, or contact your tour operator if you need help.');
+    }
   }, [tourData, tourId]);
 
   const getFreshnessConfig = (freshness) => {
@@ -572,15 +627,15 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   };
 
   const renderDriverMarker = () => {
-    if (!driverLocation) return null;
+    if (!driverLocationPoint) return null;
 
     return (
       <>
         {/* Pulse ring */}
         <Circle
           center={{
-            latitude: driverLocation.latitude,
-            longitude: driverLocation.longitude,
+            latitude: driverLocationPoint.latitude,
+            longitude: driverLocationPoint.longitude,
           }}
           radius={100}
           fillColor={`${COLORS.primaryBlue}15`}
@@ -590,8 +645,8 @@ export default function MapScreen({ onBack, tourId, tourData }) {
 
         <Marker
           coordinate={{
-            latitude: driverLocation.latitude,
-            longitude: driverLocation.longitude,
+            latitude: driverLocationPoint.latitude,
+            longitude: driverLocationPoint.longitude,
           }}
           title="Bus Pickup Point"
           description={`Updated ${relativeUpdateTime}`}
@@ -669,11 +724,11 @@ export default function MapScreen({ onBack, tourId, tourData }) {
               {renderDriverMarker()}
 
               {/* Draw line between user and driver */}
-              {driverLocation && userLocation && (
+              {driverLocationPoint && userLocationPoint && (
                 <Polyline
                   coordinates={[
-                    { latitude: userLocation.latitude, longitude: userLocation.longitude },
-                    { latitude: driverLocation.latitude, longitude: driverLocation.longitude },
+                    { latitude: userLocationPoint.latitude, longitude: userLocationPoint.longitude },
+                    { latitude: driverLocationPoint.latitude, longitude: driverLocationPoint.longitude },
                   ]}
                   strokeColor={`${COLORS.primaryBlue}80`}
                   strokeWidth={3}

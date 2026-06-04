@@ -17,6 +17,7 @@ import offlineLoginResolver from './services/offlineLoginResolver';
 import { migrateRecentChatMessagesForStableIdentity } from './services/chatIdentityMigrationService';
 import { getCanonicalIdentity, resolveAuthScopedUserId, toRealtimeKeySegment } from './services/identityService';
 import { normalizeTourId, resolveTourId } from './services/tourIdentityService';
+import { parseTimestampMs } from './services/timeUtils';
 import {
   installGlobalCrashDiagnostics,
   recordBreadcrumb as recordCrashBreadcrumb,
@@ -589,7 +590,7 @@ function AppContent() {
     }
 
     if (status === 'skipped' && sameUser && sameAudience) {
-      const skippedAtMs = Date.parse(savedState?.updatedAt || '');
+      const skippedAtMs = parseTimestampMs(savedState?.updatedAt);
       if (Number.isFinite(skippedAtMs)) {
         return (Date.now() - skippedAtMs) >= NOTIFICATION_ONBOARDING_REMINDER_MS;
       }

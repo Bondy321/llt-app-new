@@ -10,6 +10,8 @@ build/
 # Environment files (contain secrets)
 .env
 .env.local
+.env.*
+!.env.example
 .env.*.local
 
 # EAS Build artifacts

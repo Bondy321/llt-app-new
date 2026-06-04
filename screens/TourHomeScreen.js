@@ -956,18 +956,52 @@ export default function TourHomeScreen({
     previousDriverLocationRef.current = driverLocationActive;
   }, [activeTourId, appendRecentChange, driverLocationActive]);
 
+  const resolveDriverPhoneNumber = useCallback(() => {
+    const rawPhone = typeof tourData?.driverPhone === 'string' ? tourData.driverPhone : '';
+    const sanitizedPhone = rawPhone.replace(/[^+\d]/g, '');
+    return sanitizedPhone.length >= 7 ? sanitizedPhone : '';
+  }, [tourData?.driverPhone]);
+
+  const openDriverContactUrl = async (url, action) => {
+    try {
+      await Linking.openURL(url);
+    } catch (error) {
+      logger.warn('TourHome', 'Driver contact launch failed', {
+        tourId: activeTourId || null,
+        action,
+        error: error?.message || String(error),
+      });
+      Alert.alert(
+        'Could not open phone app',
+        'Please try again, or contact your operator if you need help reaching the driver.'
+      );
+    }
+  };
+
   const handleCallDriver = () => {
     triggerHaptic('medium');
+    const phone = resolveDriverPhoneNumber();
+    if (!phone) {
+      logger.warn('TourHome', 'Driver call blocked without phone number', {
+        tourId: activeTourId || null,
+        source: isNoShow ? 'no_show_modal' : 'quick_action',
+      });
+      Alert.alert('Driver contact unavailable', 'Please reach out to your operator.');
+      return;
+    }
+
     logger.info('TourHome', 'Driver call launched', {
       tourId: activeTourId || null,
       source: isNoShow ? 'no_show_modal' : 'quick_action',
+      phoneLength: phone.length,
     });
-    Linking.openURL('tel:+441414876737');
+    openDriverContactUrl(`tel:${phone}`, 'call');
   };
 
   const handleMessageDriver = () => {
     triggerHaptic('light');
-    if (!tourData?.driverPhone) {
+    const phone = resolveDriverPhoneNumber();
+    if (!phone) {
       logger.warn('TourHome', 'Driver message blocked without phone number', {
         tourId: activeTourId || null,
         bookingRef: maskIdentifier(bookingRef),
@@ -975,12 +1009,11 @@ export default function TourHomeScreen({
       Alert.alert('Driver contact unavailable', 'Please reach out to your operator.');
       return;
     }
-    const phone = tourData.driverPhone.replace(/[^+\d]/g, '');
     logger.info('TourHome', 'Driver message launched', {
       tourId: activeTourId || null,
       phoneLength: phone.length,
     });
-    Linking.openURL(`sms:${phone}`);
+    openDriverContactUrl(`sms:${phone}`, 'sms');
   };
 
   const navigateWithLog = useCallback((screen, params = {}, source = 'unknown') => {

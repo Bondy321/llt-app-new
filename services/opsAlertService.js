@@ -1,4 +1,5 @@
 const OPS_ALERT_VERSION = 1;
+const { parseTimestampMs } = require('./timeUtils');
 
 const OPS_ALERT_LEVELS = {
   ERROR: 'ERROR',
@@ -108,10 +109,8 @@ const sanitizeIdentifierForDisplay = (value, maxLength = MAX_CONTEXT_LENGTH) => 
 
 const toEpochMs = (value, fallback = Date.now()) => {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
+  const parsed = parseTimestampMs(value);
+  if (Number.isFinite(parsed)) return parsed;
   return fallback;
 };
 

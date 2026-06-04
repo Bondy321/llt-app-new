@@ -30,20 +30,73 @@ const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
 
 // ==================== UTILITY FUNCTIONS ====================
 
+const maskIdentifier = (value) => {
+  if (value === null || value === undefined) return value;
+  const asString = String(value);
+  if (asString.length <= 4) return '***';
+  return `${asString.slice(0, 2)}***${asString.slice(-2)}`;
+};
+
+const isSensitiveLogKey = (key) => {
+  const normalized = String(key || '').toLowerCase();
+  return /(token|bookingref|clientkey|userid|senderid|senderuid|authuid|participantid|recipientid|email|clientip|ipaddress)/.test(normalized);
+};
+
+const sanitizeLogValue = (key, value) => {
+  if (value === null || value === undefined) return value;
+
+  if (Array.isArray(value)) {
+    return value.map((item) => (
+      isSensitiveLogKey(key) && (typeof item !== 'object' || item === null)
+        ? maskIdentifier(item)
+        : sanitizeLogValue(key, item)
+    ));
+  }
+
+  if (typeof value === 'object') {
+    return Object.entries(value).reduce((sanitized, [childKey, childValue]) => {
+      sanitized[childKey] = sanitizeLogValue(childKey, childValue);
+      return sanitized;
+    }, {});
+  }
+
+  if (/token/.test(String(key || '').toLowerCase())) {
+    return '[redacted]';
+  }
+
+  if (isSensitiveLogKey(key)) {
+    return maskIdentifier(value);
+  }
+
+  return value;
+};
+
+const sanitizeLogData = (data = {}) => sanitizeLogValue('', data) || {};
+
 /**
  * Structured logger for better debugging and monitoring
  */
 const log = {
-  info: (message, data = {}) => console.log(JSON.stringify({ level: 'info', message, ...data, timestamp: new Date().toISOString() })),
+  info: (message, data = {}) => console.log(JSON.stringify({
+    level: 'info',
+    message,
+    ...sanitizeLogData(data),
+    timestamp: new Date().toISOString(),
+  })),
   error: (message, error = {}, data = {}) => console.error(JSON.stringify({
     level: 'error',
     message,
     error: error?.message || error || null,
     stack: error?.stack || null,
-    ...data,
+    ...sanitizeLogData(data),
     timestamp: new Date().toISOString(),
   })),
-  warn: (message, data = {}) => console.warn(JSON.stringify({ level: 'warn', message, ...data, timestamp: new Date().toISOString() })),
+  warn: (message, data = {}) => console.warn(JSON.stringify({
+    level: 'warn',
+    message,
+    ...sanitizeLogData(data),
+    timestamp: new Date().toISOString(),
+  })),
 };
 
 /**

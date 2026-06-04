@@ -1,14 +1,9 @@
 const DEFAULT_CLUSTER_WINDOW_MS = 5 * 60 * 1000;
+const { parseTimestampMs: parseStrictTimestampMs } = require('../services/timeUtils');
 
 const parseTimestampMs = (value) => {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string') {
-    const numeric = Number(value);
-    if (Number.isFinite(numeric)) return numeric;
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
+  const parsed = parseStrictTimestampMs(value);
+  return Number.isFinite(parsed) ? parsed : null;
 };
 
 const getMessageTimestampMs = (message) => (

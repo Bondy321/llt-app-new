@@ -6,6 +6,7 @@ const path = require('node:path');
 const offlineSyncService = require('../services/offlineSyncService');
 
 const readJson = (relativePath) => JSON.parse(fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8'));
+const readText = (relativePath) => fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
 
 test('buildSyncSummary and formatSyncOutcome normalize counts and copy contract text', () => {
   const summary = offlineSyncService.buildSyncSummary({
@@ -231,4 +232,111 @@ test('Static contract: chat message validation keeps image payload branch and th
 
   assert.match(messageValidate, /newData\.child\('type'\)\.val\(\) === 'image'/);
   assert.match(messageValidate, /newData\.child\('thumbnailUrl'\)/);
+});
+
+test('Static contract: photo upload modals guard duplicate enqueue taps', () => {
+  [
+    'screens/PhotobookScreen.js',
+    'screens/GroupPhotobookScreen.js',
+  ].forEach((relativePath) => {
+    const source = readText(relativePath);
+
+    assert.match(source, /const \[uploading, setUploading\] = useState\(false\);/);
+    assert.match(source, /if \(uploading(?: \|\| !pendingImage\?\.uri)?\) return;/);
+    assert.match(source, /setUploading\(true\);/);
+    assert.match(source, /finally \{\s*setUploading\(false\);\s*\}/);
+    assert.match(source, /disabled=\{uploading\}/);
+    assert.match(source, /uploadButtonDisabled/);
+  });
+});
+
+test('Static contract: passenger driver calls use tour contact data', () => {
+  const source = readText('screens/TourHomeScreen.js');
+
+  assert.match(source, /resolveDriverPhoneNumber/);
+  assert.match(source, /tourData\?\.driverPhone/);
+  assert.match(source, /openDriverContactUrl\(`tel:\$\{phone\}`, 'call'\)/);
+  assert.doesNotMatch(source, /tel:\+441414876737/);
+});
+
+test('Static contract: failed chat sends preserve reply composer context', () => {
+  const source = readText('screens/ChatScreen.js');
+
+  assert.match(source, /const pendingReply = replyingToMessage;/);
+  assert.match(source, /setReplyingToMessage\(pendingReply\);/);
+  assert.match(source, /replyTo: pendingReply \|\| undefined/);
+});
+
+test('Static contract: chat timestamp helpers use strict shared parser', () => {
+  [
+    'utils/chatTimeline.js',
+    'utils/chatUnreadSummary.js',
+    'services/chatService.js',
+  ].forEach((relativePath) => {
+    const source = readText(relativePath);
+
+    assert.match(source, /parseStrictTimestampMs|parseTimestampMs: parseStrictTimestampMs/);
+    assert.doesNotMatch(source, /Date\.parse\(timestamp\)/);
+    assert.doesNotMatch(source, /Date\.parse\(value\)/);
+  });
+});
+
+test('Static contract: customer-facing date labels use strict shared timestamp parsing', () => {
+  [
+    'screens/ChatScreen.js',
+    'screens/SafetySupportScreen.js',
+    'components/ImageViewer.js',
+    'screens/PhotobookScreen.js',
+    'screens/GroupPhotobookScreen.js',
+    'screens/NotificationPreferencesScreen.js',
+    'screens/ItineraryScreen.js',
+  ].forEach((relativePath) => {
+    const source = readText(relativePath);
+
+    assert.match(source, /parseTimestampMs|parseSharedTimestampMs/);
+    assert.doesNotMatch(source, /Date\.parse\(/);
+  });
+
+  ['screens/PhotobookScreen.js', 'screens/GroupPhotobookScreen.js'].forEach((relativePath) => {
+    const source = readText(relativePath);
+    assert.match(source, /getPhotoTimestampMs/);
+    assert.doesNotMatch(source, /const aTs = a\.timestamp \|\| 0;/);
+  });
+});
+
+test('Static contract: native location permissions stay foreground-only', () => {
+  const source = readText('app.config.js');
+
+  assert.match(source, /NSLocationWhenInUseUsageDescription/);
+  assert.doesNotMatch(source, /ACCESS_BACKGROUND_LOCATION/);
+  assert.doesNotMatch(source, /NSLocationAlwaysAndWhenInUseUsageDescription/);
+  assert.doesNotMatch(source, /UIBackgroundModes:\s*\[/);
+});
+
+test('Static contract: live map and safety sharing guard stale or malformed location state', () => {
+  const mapSource = readText('screens/MapScreen.js');
+  assert.match(mapSource, /normalizeMapCoords/);
+  assert.match(mapSource, /driverLocation\.timestamp \|\| driverLocation\.lastUpdated/);
+  assert.match(mapSource, /let cancelled = false;/);
+  assert.match(mapSource, /driverLocationPoint && userLocationPoint/);
+
+  const safetySource = readText('screens/SafetySupportScreen.js');
+  assert.match(safetySource, /locationWatchRef\.current\.remove\(\);/);
+  assert.match(safetySource, /Live location watch update failed/);
+  assert.match(safetySource, /Live location sharing stop write failed/);
+});
+
+test('Static contract: support and external link handoffs surface failures', () => {
+  [
+    'screens/TourHomeScreen.js',
+    'screens/MapScreen.js',
+    'screens/SafetySupportScreen.js',
+    'screens/LoginScreen.js',
+    'screens/ChatScreen.js',
+  ].forEach((relativePath) => {
+    const source = readText(relativePath);
+    assert.match(source, /Linking\.openURL/);
+    assert.match(source, /catch \(/);
+    assert.match(source, /Alert\.alert/);
+  });
 });

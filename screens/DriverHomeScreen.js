@@ -291,9 +291,11 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   useEffect(() => {
     if (!activeTourId) return;
 
+    let cancelled = false;
     const locationRef = realtimeDb.ref(`tours/${activeTourId}/driverLocation`);
     logger.debug('DriverHomeScreen', 'Existing driver location lookup started', { activeTourId });
     locationRef.once('value').then((snapshot) => {
+      if (cancelled) return;
       if (snapshot.exists()) {
         const data = snapshot.val();
         setLastLocationUpdate(data);
@@ -307,11 +309,16 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         logger.info('DriverHomeScreen', 'Existing driver location empty', { activeTourId });
       }
     }).catch((error) => {
+      if (cancelled) return;
       logger.warn('DriverHomeScreen', 'Existing driver location lookup failed', {
         activeTourId,
         error: error?.message || String(error),
       });
     });
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeTourId]);
 
   // Reverse geocode to get address
@@ -382,7 +389,11 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     return { success: true, location };
   };
 
-  const uploadLocationUpdate = async ({ latitude, longitude, accuracy, timestamp, address }, source = 'manual') => {
+  const uploadLocationUpdate = async (
+    { latitude, longitude, accuracy, timestamp, address },
+    source = 'manual',
+    { shouldUpdateLocalState = () => true } = {}
+  ) => {
     logger.info('DriverHomeScreen', 'Driver location upload started', {
       activeTourId,
       source,
@@ -406,15 +417,17 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       timestamp,
     });
 
-    setLastLocationUpdate({
-      latitude,
-      longitude,
-      timestamp,
-      updatedBy: driverData.name,
-      address: address || 'Address unavailable',
-      accuracy,
-      source,
-    });
+    if (shouldUpdateLocalState()) {
+      setLastLocationUpdate({
+        latitude,
+        longitude,
+        timestamp,
+        updatedBy: driverData.name,
+        address: address || 'Address unavailable',
+        accuracy,
+        source,
+      });
+    }
   };
 
   // Function to capture location and show preview
@@ -622,7 +635,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
           accuracy,
           timestamp,
           address: lastLocationUpdate?.address,
-        }, 'auto');
+        }, 'auto', { shouldUpdateLocalState: () => !cancelled });
 
         if (!cancelled) {
           setAutoShareLastRunAt(timestamp);
