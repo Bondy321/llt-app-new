@@ -36,6 +36,7 @@ export const COLORS = {
   textInverse: '#FFFFFF',    // Text on dark backgrounds
 
   // Special Purpose
+  statusBarBackground: '#475569',
   overlay: 'rgba(15, 23, 42, 0.5)',  // Modal overlays
   shadow: '#000000',
 

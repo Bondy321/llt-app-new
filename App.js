@@ -53,6 +53,7 @@ const COLORS = {
   darkText: THEME.textPrimary,
   errorRed: THEME.error,
   appBackground: THEME.background,
+  statusBarBackground: THEME.statusBarBackground,
 };
 
 const SESSION_KEYS = {
@@ -1173,7 +1174,14 @@ case 'Itinerary':
 
   return (
     <>
-      <StatusBar style="light" />
+      <StatusBar style="light" backgroundColor={COLORS.statusBarBackground} />
+      <View
+        pointerEvents="none"
+        style={[
+          styles.statusBarScrim,
+          { height: insets.top },
+        ]}
+      />
       {loginTransition ? (
         <View style={[styles.loginTransitionOverlay, { top: insets.top + 8 }]}>
           <Text style={styles.loginTransitionText}>{loginTransition.message}</Text>
@@ -1205,6 +1213,14 @@ const styles = StyleSheet.create({
   errorTitle: { fontSize: 22, fontWeight: 'bold', color: COLORS.errorRed, marginTop: 20, marginBottom: 10, textAlign: 'center' },
   errorIcon: { fontSize: 52 },
   screenContainer: { flex: 1 },
+  statusBarScrim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: COLORS.statusBarBackground,
+    zIndex: 1000,
+  },
   errorText: { fontSize: 16, color: COLORS.darkText, textAlign: 'center', marginBottom: 5 },
   errorDetail: { fontSize: 14, color: COLORS.darkText, opacity: 0.6, textAlign: 'center', marginTop: 15 },
   loginTransitionOverlay: {

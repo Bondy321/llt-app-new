@@ -1006,6 +1006,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
               <Text
                 style={styles.headerTitle}
                 numberOfLines={2}
+                maxFontSizeMultiplier={1.12}
               >
                 {tourName || 'Loading...'}
               </Text>
@@ -1042,6 +1043,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
             <Text
               style={[styles.headerTitle, isEditing && {color: COLORS.darkText}]}
               numberOfLines={2}
+              maxFontSizeMultiplier={1.12}
             >
               {displayTitle}
             </Text>
@@ -1398,7 +1400,7 @@ const styles = StyleSheet.create({
   headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerTitleContainer: { flex: 1, minWidth: 0, marginHorizontal: 10 },
   headerLabel: { color: COLORS.lightBlueAccent, fontSize: 12, letterSpacing: 1.2, textTransform: 'uppercase', fontWeight: '700' },
-  headerTitle: { flexShrink: 1, fontSize: 24, lineHeight: 29, fontWeight: '800', color: COLORS.white, marginTop: 2 },
+  headerTitle: { flexShrink: 1, fontSize: 20, lineHeight: 25, fontWeight: '800', color: COLORS.white, marginTop: 2 },
   headerButton: { padding: 8, minWidth: 40, alignItems: 'center' },
   headerIconButton: { padding: 8 },
   headerActions: { flexDirection: 'row', alignItems: 'center' },

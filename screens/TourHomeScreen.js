@@ -54,7 +54,7 @@ const COLORS = {
   error: THEME.error,
   errorLight: THEME.errorLight,
   overlay: THEME.overlay,
-  statusBarBackground: '#475569',
+  statusBarBackground: THEME.statusBarBackground,
 };
 
 // Haptic feedback helper
@@ -1099,7 +1099,7 @@ export default function TourHomeScreen({
   if (isLoading) {
     return (
       <View style={styles.screen}>
-        <StatusBar style="light" />
+        <StatusBar style="light" backgroundColor={COLORS.statusBarBackground} />
         <SafeAreaView style={styles.statusBarSafeArea} edges={['top']} />
         <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
           <LinearGradient colors={[`${COLORS.primaryBlue}0D`, COLORS.white]} style={styles.gradient}>
@@ -1125,7 +1125,7 @@ export default function TourHomeScreen({
 
   return (
     <View style={styles.screen}>
-      <StatusBar style="light" />
+      <StatusBar style="light" backgroundColor={COLORS.statusBarBackground} />
       <SafeAreaView style={styles.statusBarSafeArea} edges={['top']} />
       <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
         <LinearGradient colors={[`${COLORS.primaryBlue}0D`, COLORS.white]} style={styles.gradient}>
