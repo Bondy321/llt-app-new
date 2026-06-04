@@ -104,8 +104,8 @@ test('Static contract: identity_bindings_meta writes are limited to admin or cal
 test('Static contract: sensitive database writes remain ownership or admin gated', () => {
   const rules = readJson('database.rules.json');
   const adminUid = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
-  const privateOwnerAccess = "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || auth.uid === $ownerId || $ownerId === root.child('users/' + auth.uid + '/stablePassengerId').val() || $ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)";
-  const manifestBookingAccess = `auth != null && (auth.uid === '${adminUid}' || (root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() && (root.child('users/' + auth.uid + '/bookingRef').val() === $bookingRef || (root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').val() > now))) || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true)) && (root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId || (root.child('bookings/' + $bookingRef + '/tourCode').isString() && root.child('tours/' + $tourId + '/tourCode').isString() && root.child('bookings/' + $bookingRef + '/tourCode').val() === root.child('tours/' + $tourId + '/tourCode').val()) || (root.child('bookings/' + $bookingRef + '/tourCode').isString() && root.child('tour_manifests/' + $tourId + '/tourCode').isString() && root.child('bookings/' + $bookingRef + '/tourCode').val() === root.child('tour_manifests/' + $tourId + '/tourCode').val()))`;
+  const privateOwnerAccess = "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || $ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)";
+  const manifestBookingAccess = `auth != null && (auth.uid === '${adminUid}' || (root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() && (root.child('users/' + auth.uid + '/bookingRef').val() === $bookingRef || (root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').val() > now))) || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true)) && root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId`;
 
   assert.equal(
     rules.rules.bookings.$bookingRef['.write'],
@@ -115,7 +115,7 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   assert.notEqual(rules.rules.bookings.$bookingRef['.read'], 'auth != null');
   assert.match(rules.rules.bookings.$bookingRef['.read'], /booking_access_grants/);
   assert.match(rules.rules.bookings.$bookingRef['.read'], /data\.child\('tourId'\)\.isString\(\)/);
-  assert.deepEqual(rules.rules.bookings['.indexOn'], ['tourCode', 'tourId']);
+  assert.deepEqual(rules.rules.bookings['.indexOn'], ['tourId']);
   assert.equal(
     rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.write'],
     manifestBookingAccess,
@@ -182,8 +182,10 @@ test('Static contract: verified login grants are scoped and short-lived', () => 
   assert.match(tourGrant['.read'], /auth\.uid === \$userId/);
   assert.match(tourGrant['.write'], /admin_users/);
   assert.match(tourGrant['.validate'], /expiresAtMs'\)\.val\(\) > now/);
+  assert.doesNotMatch(tourGrant['.validate'], /tourCode/);
   assert.match(bookingGrant['.read'], /auth\.uid === \$userId/);
   assert.match(bookingGrant['.validate'], /bookingRef'\)\.val\(\) === \$bookingRef/);
+  assert.doesNotMatch(bookingGrant['.validate'], /tourCode/);
   assert.match(functionsSource, /tour_access_grants\/\$\{tourId\}\/\$\{authUid\}/);
   assert.match(functionsSource, /booking_access_grants\/\$\{bookingRef\}\/\$\{authUid\}/);
   assert.match(functionsSource, /verifyIdToken\(token\)/);
@@ -206,7 +208,7 @@ test('Static contract: passenger manifests are assembled through verified backen
   assert.match(packageJson, /tests\/getTourManifest\.test\.js/);
 });
 
-test('Static contract: driver login legacy assignment scan stays server-side', () => {
+test('Static contract: driver login uses verifier without client manifest scans', () => {
   const bookingSource = readText('services/bookingServiceRealtime.js');
   const functionsSource = readText('functions/index.js');
   const driverTestSource = readText('tests/validateBookingReference.driver.test.js');
@@ -216,7 +218,7 @@ test('Static contract: driver login legacy assignment scan stays server-side', (
   assert.match(bookingSource, /Driver verifier accepted code/);
   assert.match(functionsSource, /exports\.verifyDriverLogin = onRequest/);
   assert.match(functionsSource, /resolveDriverAssignment/);
-  assert.match(functionsSource, /db\.ref\('tour_manifests'\)\.once\('value'\)/);
+  assert.doesNotMatch(functionsSource, /db\.ref\('tour_manifests'\)\.once\('value'\)/);
   assert.match(driverTestSource, /uses verified driver endpoint when configured/);
 });
 
@@ -363,6 +365,10 @@ test('Static contract: photo variant lifecycle fields stay allowed by database r
     assert.match(groupPhotoValidate, new RegExp(`newData\\.child\\('${field}'\\)`));
     assert.match(privatePhotoValidate, new RegExp(`newData\\.child\\('${field}'\\)`));
   });
+  assert.match(groupPhotoValidate, /!newData\.child\('url'\)\.exists\(\)/);
+  assert.match(groupPhotoValidate, /!newData\.child\('fullUrl'\)\.exists\(\)/);
+  assert.match(privatePhotoValidate, /!newData\.child\('url'\)\.exists\(\)/);
+  assert.match(privatePhotoValidate, /!newData\.child\('fullUrl'\)\.exists\(\)/);
 });
 
 test('Static contract: Storage photo writes require caller auth metadata', () => {
@@ -381,19 +387,14 @@ test('Static contract: Storage photo writes require caller auth metadata', () =>
 test('Static contract: email-style stable identities are encoded before identity binding path writes', () => {
   const appSource = fs.readFileSync(path.join(__dirname, '..', 'App.js'), 'utf8');
   const chatSource = fs.readFileSync(path.join(__dirname, '..', 'services', 'chatService.js'), 'utf8');
-  const migrationSource = fs.readFileSync(path.join(__dirname, '..', 'services', 'chatIdentityMigrationService.js'), 'utf8');
-  const privatePhotoMigrationSource = fs.readFileSync(path.join(__dirname, '..', 'functions', 'scripts', 'migratePrivatePhotoOwnersToStablePassengerIds.js'), 'utf8');
 
-  assert.match(appSource, /stablePassengerKey = stablePassengerId \? toRealtimeKeySegment\(stablePassengerId\) : null/);
-  assert.match(appSource, /privatePhotoOwnerKey = toRealtimeKeySegment\(stablePassengerId \|\| bookingRef\)/);
+  assert.match(appSource, /!authUid \|\| !realtimeDb \|\| !bookingRef \|\| !stablePassengerId/);
+  assert.match(appSource, /stablePassengerKey = toRealtimeKeySegment\(stablePassengerId\)/);
+  assert.match(appSource, /privatePhotoOwnerKey = stablePassengerKey/);
   assert.match(appSource, /users\/\$\{authUid\}\/privatePhotoOwnerKey/);
   assert.match(appSource, /users\/\$\{authUid\}\/stablePassengerKey/);
   assert.match(appSource, /identity_bindings\/\$\{stablePassengerKey\}\/\$\{authUid\}/);
   assert.doesNotMatch(appSource, /identity_bindings\/\$\{stablePassengerId\}/);
-  assert.match(migrationSource, /identity_bindings\/\$\{stablePassengerKey\}/);
-  assert.match(privatePhotoMigrationSource, /stableOwnerKey = toRealtimeKeySegment\(stablePassengerId\)/);
-  assert.match(privatePhotoMigrationSource, /private_tour_photos\/\$\{tourId\}\/\$\{stableOwnerKey\}/);
-  assert.doesNotMatch(privatePhotoMigrationSource, /private_tour_photos\/\$\{tourId\}\/\$\{stableOwnerId\}/);
   assert.match(chatSource, /getRealtimeActorContext\(userId\)/);
   assert.match(chatSource, /typing\/\$\{actorKey\}/);
   assert.match(chatSource, /presence\/\$\{actorKey\}/);

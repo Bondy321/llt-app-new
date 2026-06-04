@@ -9,8 +9,6 @@
 - `localAssets.previewUri` (optional for optimistic tile)
 - `metadata.caption` (optional)
 
-Legacy queue payloads without `payloadVersion` remain replay-compatible and are treated as Phase 1 payloads.
-
 Mobile upload preparation should only optimize the source upload file for v2 payloads. Viewer and thumbnail variants are server-owned so the app does not spend client CPU generating files that are not uploaded in the v2 queue handoff.
 
 ## DB lifecycle fields
@@ -18,7 +16,7 @@ Mobile upload preparation should only optimize the source upload file for v2 pay
 New uploads should enter `group_tour_photos/*` or `private_tour_photos/*` with:
 
 - `variantStatus: "processing"`
-- `sourceUrl` (plus legacy-compatible `url` / `fullUrl`)
+- `sourceUrl`
 - `variantUpdatedAt`
 - `variantError` (nullable)
 - `variantVersion` (currently `2`)
@@ -38,10 +36,6 @@ Cloud Function variant generation updates records to:
 
 - `variantStatus: "ready"` with `viewerUrl` and `thumbnailUrl`; or
 - `variantStatus: "failed"` with `variantError`.
-
-Compatibility behavior:
-
-- Existing records without `variantStatus` are treated as display-ready if they already include a legacy display URL (`viewerUrl`, `url`, `fullUrl`, or `thumbnailUrl`).
 
 ## Deployment requirement (region alignment)
 

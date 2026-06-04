@@ -1836,7 +1836,7 @@ export default function ChatScreen({
         ...sourceBinding,
         stablePassengerId: normalizedStablePassengerId || null,
       },
-      identityBindingSource: hasIdentityBindingProp ? 'prop' : 'bookingData_fallback',
+      identityBindingSource: hasIdentityBindingProp ? 'prop' : 'bookingData',
     };
   }, [identityBindingProp, bookingData?.identityBinding, bookingData?.stablePassengerId]);
   const isDriver = bookingData?.isDriver === true;
@@ -1907,7 +1907,7 @@ export default function ChatScreen({
       return;
     }
 
-    logger.info('ChatScreen', 'chat_sender_uid_fallback_used', {
+    logger.warn('ChatScreen', 'chat_sender_identity_missing', {
       tourId,
       source: identityBindingSource,
       currentUserUidPresent: Boolean(currentUser?.uid),
@@ -2958,11 +2958,13 @@ export default function ChatScreen({
           }
         );
 
-        if (uploadResult && uploadResult.url) {
+        const uploadedSourceUrl = uploadResult?.sourceUrl;
+
+        if (uploadedSourceUrl) {
           traceChatImageSend('photo_upload_success', {
             photoIdMasked: maskIdentifier(uploadResult.id),
-            hasPhotoUrl: Boolean(uploadResult.url),
-            photoUrl: summarizeUri(uploadResult.url),
+            hasPhotoUrl: Boolean(uploadedSourceUrl),
+            photoUrl: summarizeUri(uploadedSourceUrl),
           });
           const senderInfo = buildChatSenderInfo();
           logSenderIdentityPath();
@@ -2974,7 +2976,7 @@ export default function ChatScreen({
             senderStableIdMasked: maskIdentifier(senderInfo.stablePassengerId || senderInfo.senderStableId),
             hasImageUrl: true,
           });
-          const result = await sendImageMessage(tourId, uploadResult.url, '', senderInfo);
+          const result = await sendImageMessage(tourId, uploadedSourceUrl, '', senderInfo);
           if (!result?.success) {
             throw new Error(result?.error || 'Image message could not be sent');
           }

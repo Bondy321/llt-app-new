@@ -90,12 +90,11 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const persistenceRef = useRef(createPersistenceProvider({ namespace: 'LLT_DRIVER_HOME' }));
   const bannerTimerRef = useRef(null);
 
-  // Derive active tour from the canonical assignment, with legacy fallbacks for older sessions.
+  // Derive active tour from canonical assignment fields.
   const activeTourId = resolveTourId(
     driverData?.assignedTourId,
     driverData?.currentTourId,
     driverData?.driverAssignedTourId,
-    driverData?.activeTourId,
     driverData?.assignedTourCode,
     driverData?.currentTourCode
   ) || '';
@@ -134,7 +133,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       bannerTimerRef.current = null;
     }
 
-    const legacyToSeverity = {
+    const typeToSeverity = {
       success: 'success',
       warning: 'warning',
       error: 'critical',
@@ -145,7 +144,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       label: type === 'success' ? 'Up to date' : type === 'warning' ? 'Attention needed' : type === 'error' ? 'Service issue' : 'Sync update',
       description: message || '',
       icon: type === 'success' ? 'check-circle-outline' : type === 'warning' ? 'alert-outline' : type === 'error' ? 'alert-circle-outline' : 'information-outline',
-      severity: legacyToSeverity[type] || 'info',
+      severity: typeToSeverity[type] || 'info',
       canRetry: Boolean(actionHandler),
       showLastSync: true,
     };

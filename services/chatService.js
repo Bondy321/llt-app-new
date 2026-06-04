@@ -62,14 +62,7 @@ const parseTimestampToMillis = (timestamp) => {
 const normalizeReactionUsers = (users) => {
   const normalizedUserIds = new Set();
 
-  if (Array.isArray(users)) {
-    users.forEach((userId) => {
-      if (typeof userId !== 'string') return;
-      const trimmedUserId = userId.trim();
-      if (!trimmedUserId) return;
-      normalizedUserIds.add(trimmedUserId);
-    });
-  } else if (users && typeof users === 'object') {
+  if (users && typeof users === 'object' && !Array.isArray(users)) {
     Object.entries(users).forEach(([userId, reacted]) => {
       if (reacted !== true || typeof userId !== 'string') return;
       const trimmedUserId = userId.trim();
@@ -928,7 +921,6 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
 // Canonical write contract source of truth:
 // docs/reactions-write-contract.md
 // Writes must only target chats/{tourId}/messages/{messageId}/reactions/{emoji}/{userId} leaf nodes.
-// Legacy formats are read-only compatible through normalizeReactionUsers/normalizeReactions.
 
 // Add a reaction to a message
 const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb) => {
@@ -1110,8 +1102,7 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       forceAction: options.forceAction || null,
     });
 
-    // Read-only parent ref for legacy-shape compatibility checks.
-    // All writes must remain user-leaf only: reactions/{emoji}/{userId}.
+    // Read-only parent ref; all writes must remain user-leaf only: reactions/{emoji}/{userId}.
     const emojiReadRef = getReactionEmojiReadRef(db, validatedTourId, validatedMessageId, sanitizedEmoji);
     const reactionLeafSnapshot = await getReactionLeafRef(
       db,

@@ -74,9 +74,8 @@ describe('dashboardService operations model', () => {
     expect(model.tourRows.find((tour) => tour.id === 'TOUR_MANIFEST').passengerCountSource).toBe('tour_manifests.bookings');
   });
 
-  it('normalizes legacy driver assignment tour IDs before matching dashboard coverage', () => {
+  it('normalizes current driver assignment tour IDs before matching dashboard coverage', () => {
     expect(resolveDriverCurrentTourId({ currentTourId: ' tour assigned ' })).toBe('TOUR_ASSIGNED');
-    expect(resolveDriverCurrentTourId({ activeTourId: '5112d 8' })).toBe('5112D_8');
 
     const model = buildOperationsDashboardModel({
       drivers: {

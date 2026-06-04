@@ -63,8 +63,6 @@ test.after(async () => {
 
 test('allows valid group photo variant processing fields', async () => {
   await assertSucceeds(dbFor(USER_UID).ref(GROUP_PATH).set({
-    url: 'https://example.com/source.jpg',
-    fullUrl: 'https://example.com/source.jpg',
     sourceUrl: 'https://example.com/source.jpg',
     userId: USER_UID,
     timestamp: Date.now(),
@@ -76,10 +74,21 @@ test('allows valid group photo variant processing fields', async () => {
   }));
 });
 
+test('denies old photo url aliases in new records', async () => {
+  await assertFails(dbFor(USER_UID).ref(`group_tour_photos/${TOUR_ID}/photo_old_aliases`).set({
+    url: 'https://example.com/source.jpg',
+    fullUrl: 'https://example.com/source.jpg',
+    sourceUrl: 'https://example.com/source.jpg',
+    userId: USER_UID,
+    timestamp: Date.now(),
+    variantStatus: 'processing',
+  }));
+});
+
 test('denies group photo metadata access for users outside the tour', async () => {
   await testEnv.withSecurityRulesDisabled(async (context) => {
     await context.database(dbUrl).ref(GROUP_PATH).set({
-      url: 'https://example.com/source.jpg',
+      sourceUrl: 'https://example.com/source.jpg',
       userId: USER_UID,
       timestamp: Date.now(),
       variantStatus: 'ready',
@@ -89,7 +98,7 @@ test('denies group photo metadata access for users outside the tour', async () =
   await assertSucceeds(dbFor(USER_UID).ref(GROUP_PATH).get());
   await assertFails(dbFor(FOREIGN_UID).ref(GROUP_PATH).get());
   await assertFails(dbFor(FOREIGN_UID).ref(`group_tour_photos/${TOUR_ID}/foreign_photo`).set({
-    url: 'https://example.com/foreign-group.jpg',
+    sourceUrl: 'https://example.com/foreign-group.jpg',
     userId: FOREIGN_UID,
     timestamp: Date.now(),
     variantStatus: 'ready',
@@ -98,7 +107,7 @@ test('denies group photo metadata access for users outside the tour', async () =
 
 test('denies invalid variantStatus values', async () => {
   await assertFails(dbFor(USER_UID).ref(GROUP_PATH).set({
-    url: 'https://example.com/source.jpg',
+    sourceUrl: 'https://example.com/source.jpg',
     userId: USER_UID,
     timestamp: Date.now(),
     variantStatus: 'queued',
@@ -117,8 +126,6 @@ test('allows private photo record with ready variants in valid shape', async () 
   });
 
   await assertSucceeds(dbFor(USER_UID).ref(PRIVATE_PATH).set({
-    url: 'https://example.com/source.jpg',
-    fullUrl: 'https://example.com/source.jpg',
     sourceUrl: 'https://example.com/source.jpg',
     userId: OWNER_ID,
     timestamp: Date.now(),
@@ -142,8 +149,6 @@ test('allows private photo access through encoded owner key on user profile', as
   });
 
   await assertSucceeds(dbFor(PROFILE_KEY_UID).ref(PROFILE_KEY_PRIVATE_PATH).set({
-    url: 'https://example.com/profile-key-source.jpg',
-    fullUrl: 'https://example.com/profile-key-source.jpg',
     sourceUrl: 'https://example.com/profile-key-source.jpg',
     userId: PROFILE_KEY_OWNER_ID,
     timestamp: Date.now(),
@@ -165,8 +170,6 @@ test('denies private photo access for a foreign authenticated user', async () =>
     });
     await context.database(dbUrl).ref(`identity_bindings/${OWNER_KEY}/${USER_UID}`).set(true);
     await context.database(dbUrl).ref(PRIVATE_PATH).set({
-      url: 'https://example.com/private.jpg',
-      fullUrl: 'https://example.com/private.jpg',
       sourceUrl: 'https://example.com/private.jpg',
       userId: OWNER_ID,
       timestamp: Date.now(),
@@ -181,8 +184,6 @@ test('denies private photo access for a foreign authenticated user', async () =>
   await assertSucceeds(dbFor(USER_UID).ref(PRIVATE_PATH).get());
   await assertFails(dbFor(FOREIGN_UID).ref(PRIVATE_PATH).get());
   await assertFails(dbFor(FOREIGN_UID).ref(PRIVATE_PATH).set({
-    url: 'https://example.com/foreign.jpg',
-    fullUrl: 'https://example.com/foreign.jpg',
     sourceUrl: 'https://example.com/foreign.jpg',
     userId: OWNER_ID,
     timestamp: Date.now(),

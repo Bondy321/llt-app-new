@@ -32,20 +32,16 @@ const resolveViewerDisplayUri = (photo) => firstPhotoUri(
   photo?.viewerUrl,
   photo?.thumbnailUrl,
   photo?.sourceUrl,
-  photo?.url,
-  photo?.fullUrl,
 );
 
 const resolveSaveUri = (photo) => firstPhotoUri(
-  photo?.fullUrl,
-  photo?.url,
+  photo?.sourceUrl,
   photo?.viewerUrl,
   photo?.thumbnailUrl,
 );
 
 const resolveFullQualityUri = (photo) => firstPhotoUri(
-  photo?.fullUrl,
-  photo?.url,
+  photo?.sourceUrl,
 );
 
 const isProcessingVariantRecord = (photo) => (
@@ -62,8 +58,6 @@ const resolveThumbnailDisplayUri = (photo) => {
       photo?.thumbnailUrl,
       photo?.viewerUrl,
       photo?.sourceUrl,
-      photo?.url,
-      photo?.fullUrl,
     )
   );
 };
@@ -100,7 +94,7 @@ const buildPhotoCacheKey = (photo, variant = 'viewer') => {
   const variantPrefix = normalizeCacheKeyPrefix(variant);
   const version = normalizeCacheKeyPart(photo.variantVersion)
     || normalizeCacheKeyPart(photo.variantUpdatedAt)
-    || 'legacy';
+    || 'current';
 
   const storagePathByVariant = {
     thumbnail: photo.thumbnailStoragePath,

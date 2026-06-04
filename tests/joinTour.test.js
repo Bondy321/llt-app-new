@@ -149,13 +149,12 @@ test('does not create missing tours from the customer app', async () => {
   assert.equal(mockDb.state.tours['missing-tour'], undefined);
 });
 
-test('normalizes legacy booking data into pickup points and seats', async () => {
+test('shapes canonical booking data for display without mutating the booking record', async () => {
   const mockDb = createMockRealtimeDb();
   mockDb.state.bookings = {
     ABC123: {
-      passengers: ['Alice', 'Bob'],
-      pickupLocation: 'Glasgow Central',
-      pickupTime: '08:00',
+      passengerNames: ['Alice', 'Bob'],
+      pickupPoints: [{ location: 'Glasgow Central', time: '08:00' }],
       seatNumbers: ['1']
     }
   };
@@ -166,15 +165,12 @@ test('normalizes legacy booking data into pickup points and seats', async () => 
     mockDb
   );
 
-  assert.equal(updated, true);
+  assert.equal(updated, false);
   assert.equal(normalizedBooking.pickupPoints[0].location, 'Glasgow Central');
   assert.equal(normalizedBooking.pickupPoints[0].time, '08:00');
-  assert.deepEqual(mockDb.state.bookings.ABC123.pickupPoints[0], {
-    location: 'Glasgow Central',
-    time: '08:00'
-  });
   assert.equal(normalizedBooking.seatNumbers.length, 2);
   assert.equal(normalizedBooking.seatNumbers[1], 'TBA');
+  assert.equal(mockDb.state.bookings.ABC123.seatNumbers.length, 1);
 });
 
 test('reconciles participant counts when missing currentParticipants', async () => {

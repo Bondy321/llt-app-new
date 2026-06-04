@@ -15,20 +15,7 @@ const normalizePassengerEmail = (email) => (typeof email === 'string' ? email.tr
 const resolveCachedPassengerEmail = (identity) => {
   if (!identity || typeof identity !== 'object') return '';
 
-  const directCandidate =
-    identity.normalizedPassengerEmail
-    || identity.passengerEmail
-    || identity.bookingEmail
-    || identity.email
-    || '';
-
-  if (directCandidate) return normalizePassengerEmail(directCandidate);
-
-  if (identity.passenger && typeof identity.passenger === 'object') {
-    return normalizePassengerEmail(identity.passenger.email || identity.passenger.passengerEmail);
-  }
-
-  return '';
+  return normalizePassengerEmail(identity.normalizedPassengerEmail);
 };
 
 const preserveStableIdentityFields = (identity) => {
@@ -74,7 +61,7 @@ const resolveOfflineLoginFromCache = async ({
     const cachedSessionId = (cachedBookingData?.id || '').toUpperCase();
     const isDriverCode = normalizedReference.startsWith('D-');
     const expectedRole = isDriverCode ? 'driver' : 'passenger';
-    const cachedTourId = resolveTourId(cachedTourData?.id, cachedBookingData?.assignedTourId, cachedTourData?.tourCode);
+    const cachedTourId = resolveTourId(cachedTourData?.id);
 
     const evaluatePassengerEmailMatch = (identity) => {
       if (expectedRole === 'driver') return { matches: true, reason: null };

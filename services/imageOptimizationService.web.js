@@ -3,31 +3,6 @@ const safeFileSize = async (asset) => {
   return null;
 };
 
-export const optimizeImageForUpload = async (asset) => {
-  if (!asset?.uri) {
-    throw new Error('Missing image asset URI');
-  }
-
-  const originalSizeBytes = await safeFileSize(asset);
-
-  return {
-    uploadUri: asset.uri,
-    viewerUri: asset.uri,
-    thumbnailUri: asset.uri,
-    metrics: {
-      originalSizeBytes,
-      optimizedSizeBytes: originalSizeBytes,
-      viewerSizeBytes: originalSizeBytes,
-      thumbnailSizeBytes: originalSizeBytes,
-      optimizationRatio: 0,
-      viewerOptimizationRatio: 0,
-      viewerOptimizationPasses: 1,
-      viewerFinalQualityUsed: 1,
-      viewerResizeApplied: false,
-    },
-  };
-};
-
 export const optimizeSourcePhotoForUpload = async (asset) => {
   if (!asset?.uri) {
     throw new Error('Missing image asset URI');

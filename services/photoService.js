@@ -316,7 +316,7 @@ const normalizePhotoRecordForClient = (id, value, extras = {}) => {
     timestamp: normalizeTimestamp(source?.timestamp),
   };
 
-  ['url', 'fullUrl', 'sourceUrl', 'thumbnailUrl', 'viewerUrl'].forEach((field) => {
+  ['sourceUrl', 'thumbnailUrl', 'viewerUrl'].forEach((field) => {
     const uri = normalizePhotoUri(source?.[field]);
     if (uri) {
       photo[field] = uri;
@@ -674,9 +674,6 @@ const uploadPhoto = async (
     serverTimestampFn = serverTimestamp,
     fetchFn = fetch,
     onProgress = null,
-    thumbnailUri = null,
-    viewerUri = null,
-    generateClientVariants = true,
     optimizationMetrics = null,
     idempotencyKey = null,
     nowFn = Date.now,
@@ -722,9 +719,6 @@ const uploadPhoto = async (
       ownerKeyMatchesUserId: validatedUserKey === validatedUserId,
       hasIdempotencyKey: Boolean(normalizedIdempotencyKey),
       idempotencyKey: summarizePrincipalForDbLog(normalizedIdempotencyKey),
-      generateClientVariants: Boolean(generateClientVariants),
-      hasThumbnailUri: Boolean(thumbnailUri),
-      hasViewerUri: Boolean(viewerUri),
       uri: summarizeUriForDbLog(validatedUri),
     };
     logPhotoDbEvent('info', 'photo_upload_start', uploadDiagnostics);
@@ -763,13 +757,6 @@ const uploadPhoto = async (
       storagePath: summarizePathForDbLog(storagePath),
     };
     const fileRef = storageRefFn(storageInstance, storagePath);
-
-    let thumbnailBlob = null;
-    let thumbnailPath = null;
-    let thumbnailDownloadURL = null;
-    let viewerBlob = null;
-    let viewerPath = null;
-    let viewerDownloadURL = null;
 
     try {
       const metadata = {
@@ -822,92 +809,6 @@ const uploadPhoto = async (
         downloadUrl: summarizeUriForDbLog(downloadURL),
       });
 
-      if (generateClientVariants && thumbnailUri && typeof thumbnailUri === 'string') {
-        try {
-          uploadStage = 'uploading_thumbnail_variant';
-          logPhotoDbEvent('debug', 'photo_upload_thumbnail_variant_start', {
-            ...uploadDiagnostics,
-            thumbnailUri: summarizeUriForDbLog(thumbnailUri),
-          });
-          thumbnailBlob = await createBlob(thumbnailUri, fetchFn);
-          validateBlob(thumbnailBlob);
-
-          const thumbnailFilename = `${uploadTimestamp}_${validatedUserId}_thumb.jpg`;
-          thumbnailPath = isPrivate
-            ? `private_tour_photos/${validatedTourId}/${validatedUserKey}/thumbnails/${thumbnailFilename}`
-            : `group_tour_photos/${validatedTourId}/thumbnails/${thumbnailFilename}`;
-
-          const thumbnailRef = storageRefFn(storageInstance, thumbnailPath);
-          await uploadBytesFn(thumbnailRef, thumbnailBlob, {
-            contentType: 'image/jpeg',
-            cacheControl: PHOTO_CACHE_CONTROL_HEADER,
-            customMetadata: {
-              uploadedBy: validatedUserId,
-              authUid,
-              uploadedAt: new Date().toISOString(),
-              variant: 'thumbnail',
-            },
-          });
-          thumbnailDownloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, thumbnailRef);
-          logPhotoDbEvent('debug', 'photo_upload_thumbnail_variant_success', {
-            ...uploadDiagnostics,
-            thumbnailPath: summarizePathForDbLog(thumbnailPath),
-            thumbnailUrl: summarizeUriForDbLog(thumbnailDownloadURL),
-          });
-        } catch (thumbnailError) {
-          thumbnailPath = null;
-          thumbnailDownloadURL = null;
-          logPhotoDbEvent('warn', 'photo_upload_thumbnail_variant_failed', {
-            ...uploadDiagnostics,
-            thumbnailUri: summarizeUriForDbLog(thumbnailUri),
-            error: summarizeErrorForDbLog(thumbnailError),
-          });
-        }
-      }
-
-      if (generateClientVariants && viewerUri && typeof viewerUri === 'string') {
-        try {
-          uploadStage = 'uploading_viewer_variant';
-          logPhotoDbEvent('debug', 'photo_upload_viewer_variant_start', {
-            ...uploadDiagnostics,
-            viewerUri: summarizeUriForDbLog(viewerUri),
-          });
-          viewerBlob = await createBlob(viewerUri, fetchFn);
-          validateBlob(viewerBlob);
-
-          const viewerFilename = `${uploadTimestamp}_${validatedUserId}_viewer.jpg`;
-          viewerPath = isPrivate
-            ? `private_tour_photos/${validatedTourId}/${validatedUserKey}/viewers/${viewerFilename}`
-            : `group_tour_photos/${validatedTourId}/viewers/${viewerFilename}`;
-
-          const viewerRef = storageRefFn(storageInstance, viewerPath);
-          await uploadBytesFn(viewerRef, viewerBlob, {
-            contentType: 'image/jpeg',
-            cacheControl: PHOTO_CACHE_CONTROL_HEADER,
-            customMetadata: {
-              uploadedBy: validatedUserId,
-              authUid,
-              uploadedAt: new Date().toISOString(),
-              variant: 'viewer',
-            },
-          });
-          viewerDownloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, viewerRef);
-          logPhotoDbEvent('debug', 'photo_upload_viewer_variant_success', {
-            ...uploadDiagnostics,
-            viewerPath: summarizePathForDbLog(viewerPath),
-            viewerUrl: summarizeUriForDbLog(viewerDownloadURL),
-          });
-        } catch (viewerError) {
-          viewerPath = null;
-          viewerDownloadURL = null;
-          logPhotoDbEvent('warn', 'photo_upload_viewer_variant_failed', {
-            ...uploadDiagnostics,
-            viewerUri: summarizeUriForDbLog(viewerUri),
-            error: summarizeErrorForDbLog(viewerError),
-          });
-        }
-      }
-
       const databasePath = isPrivate
         ? `private_tour_photos/${validatedTourId}/${validatedUserKey}`
         : `group_tour_photos/${validatedTourId}`;
@@ -930,7 +831,7 @@ const uploadPhoto = async (
           });
           return {
             id: existingId,
-            url: existingPhoto.url || existingPhoto.fullUrl || null,
+            sourceUrl: existingPhoto.sourceUrl || null,
             userId: existingPhoto.userId || validatedUserId,
             caption: existingPhoto.caption || validatedCaption,
             uploaderName: existingPhoto.uploaderName || uploaderName || 'Tour Member',
@@ -942,8 +843,6 @@ const uploadPhoto = async (
       const newPhotoRef = pushFn(photosRef);
 
       const photoData = {
-        url: downloadURL,
-        fullUrl: downloadURL,
         sourceUrl: downloadURL,
         userId: validatedUserId,
         caption: validatedCaption,
@@ -952,28 +851,18 @@ const uploadPhoto = async (
         fileSize: blob.size,
         fileType: blob.type,
         idempotencyKey: normalizedIdempotencyKey,
-        variantStatus: generateClientVariants ? 'ready' : 'processing',
+        variantStatus: 'processing',
         variantUpdatedAt: nowFn(),
         variantError: null,
         variantVersion: 2,
       };
 
-      if (thumbnailDownloadURL) {
-        photoData.thumbnailUrl = thumbnailDownloadURL;
-        photoData.thumbnailStoragePath = thumbnailPath;
-      }
-
-      if (viewerDownloadURL) {
-        photoData.viewerUrl = viewerDownloadURL;
-        photoData.viewerStoragePath = viewerPath;
-      }
-
       if (optimizationMetrics && typeof optimizationMetrics === 'object') {
         photoData.optimization = {
           originalSizeBytes: optimizationMetrics.originalSizeBytes || null,
           optimizedSizeBytes: optimizationMetrics.optimizedSizeBytes || blob.size,
-          viewerSizeBytes: optimizationMetrics.viewerSizeBytes || (viewerBlob ? viewerBlob.size : null),
-          thumbnailSizeBytes: optimizationMetrics.thumbnailSizeBytes || (thumbnailBlob ? thumbnailBlob.size : null),
+          viewerSizeBytes: optimizationMetrics.viewerSizeBytes || null,
+          thumbnailSizeBytes: optimizationMetrics.thumbnailSizeBytes || null,
           optimizationRatio: optimizationMetrics.optimizationRatio ?? null,
           viewerOptimizationRatio: optimizationMetrics.viewerOptimizationRatio ?? null,
         };
@@ -1000,7 +889,7 @@ const uploadPhoto = async (
 
       return {
         id: newPhotoRef.key,
-        url: downloadURL,
+        sourceUrl: downloadURL,
         userId: validatedUserId,
         caption: validatedCaption,
         uploaderName: uploaderName || 'Tour Member',
@@ -1018,27 +907,6 @@ const uploadPhoto = async (
         }
       }
 
-      if (thumbnailBlob && typeof thumbnailBlob.close === 'function') {
-        try {
-          thumbnailBlob.close();
-        } catch (error) {
-          logPhotoDbEvent('warn', 'photo_upload_thumbnail_blob_close_failed', {
-            stage: uploadStage,
-            error: summarizeErrorForDbLog(error),
-          });
-        }
-      }
-
-      if (viewerBlob && typeof viewerBlob.close === 'function') {
-        try {
-          viewerBlob.close();
-        } catch (error) {
-          logPhotoDbEvent('warn', 'photo_upload_viewer_blob_close_failed', {
-            stage: uploadStage,
-            error: summarizeErrorForDbLog(error),
-          });
-        }
-      }
     }
   } catch (error) {
     logPhotoDbEvent('error', 'photo_upload_failed', {
@@ -1585,7 +1453,6 @@ const uploadPhotoDirect = async (payload = {}) => {
       localAssets = null,
       metadata = null,
       idempotencyKey = null,
-      payloadVersion = 1,
     } = payload;
 
     const resolvedLocalAssets = localAssets && typeof localAssets === 'object' ? localAssets : {};
@@ -1597,9 +1464,8 @@ const uploadPhotoDirect = async (payload = {}) => {
     const sourceOptimizationMetrics = optimizationMetrics || resolvedLocalAssets.optimizationMetrics || null;
 
     const resolvedOwnerId = ownerId || userId;
-    const normalizedPayloadVersion = Number(payloadVersion) >= 2 ? 2 : 1;
     directDiagnostics = {
-      payloadVersion: normalizedPayloadVersion,
+      payloadVersion: 2,
       visibility,
       tourId: summarizePrincipalForDbLog(tourId),
       userId: summarizePrincipalForDbLog(userId),
@@ -1618,40 +1484,25 @@ const uploadPhotoDirect = async (payload = {}) => {
     };
     logPhotoDbEvent('info', 'photo_upload_direct_start', directDiagnostics);
 
-    if (normalizedPayloadVersion >= 2) {
-      const validatedTourId = validateTourId(tourId);
-      const validatedUserId = validateUserId(resolvedOwnerId);
-      const validatedCaption = validateCaption(sourceCaption);
-      const validatedVisibility = validateVisibility(visibility);
-      const normalizedIdempotencyKey = typeof idempotencyKey === 'string' && idempotencyKey.trim()
-        ? idempotencyKey.trim().slice(0, IDEMPOTENCY_KEY_MAX_LENGTH)
-        : null;
+    const validatedTourId = validateTourId(tourId);
+    const validatedUserId = validateUserId(resolvedOwnerId);
+    const validatedCaption = validateCaption(sourceCaption);
+    const validatedVisibility = validateVisibility(visibility);
+    const normalizedIdempotencyKey = typeof idempotencyKey === 'string' && idempotencyKey.trim()
+      ? idempotencyKey.trim().slice(0, IDEMPOTENCY_KEY_MAX_LENGTH)
+      : null;
 
-      if (!normalizedIdempotencyKey) {
-        logPhotoDbEvent('warn', 'photo_upload_direct_missing_idempotency_key', directDiagnostics);
-        return { success: false, error: 'idempotencyKey is required for payloadVersion 2 photo uploads' };
-      }
-
-      const data = await uploadPhoto(sourceUri, validatedTourId, validatedUserId, validatedCaption, {
-        visibility: validatedVisibility,
-        uploaderName,
-        optimizationMetrics: sourceOptimizationMetrics,
-        onProgress,
-        idempotencyKey: normalizedIdempotencyKey,
-        generateClientVariants: false,
-      });
-
-      return { success: true, data };
+    if (!normalizedIdempotencyKey) {
+      logPhotoDbEvent('warn', 'photo_upload_direct_missing_idempotency_key', directDiagnostics);
+      return { success: false, error: 'idempotencyKey is required for photo uploads' };
     }
 
-    const data = await uploadPhoto(sourceUri, tourId, resolvedOwnerId, sourceCaption, {
-      visibility,
+    const data = await uploadPhoto(sourceUri, validatedTourId, validatedUserId, validatedCaption, {
+      visibility: validatedVisibility,
       uploaderName,
-      thumbnailUri: resolvedLocalAssets.thumbnailUri || null,
-      viewerUri: resolvedLocalAssets.viewerUri || null,
       optimizationMetrics: sourceOptimizationMetrics,
       onProgress,
-      idempotencyKey,
+      idempotencyKey: normalizedIdempotencyKey,
     });
 
     return { success: true, data };

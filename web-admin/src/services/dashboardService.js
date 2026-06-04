@@ -227,7 +227,7 @@ export async function revalidateDashboardBranches(database) {
 }
 
 export function resolveDriverCurrentTourId(driver) {
-  return normalizeTourIdForKey(driver?.currentTourId) || normalizeTourIdForKey(driver?.activeTourId);
+  return normalizeTourIdForKey(driver?.currentTourId);
 }
 
 export function driverHasAssignment(driver) {
@@ -247,9 +247,6 @@ function getManifestPassengerCount(manifest) {
   return Object.values(asRecord(manifest?.bookings)).reduce((total, booking) => {
     const passengerStatusCount = countCollection(booking?.passengerStatus);
     if (passengerStatusCount > 0) return total + passengerStatusCount;
-
-    const passengerCount = countCollection(booking?.passengers);
-    if (passengerCount > 0) return total + passengerCount;
 
     const passengerNamesCount = countCollection(booking?.passengerNames);
     if (passengerNamesCount > 0) return total + passengerNamesCount;

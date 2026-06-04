@@ -117,7 +117,7 @@ test('fetchPrivatePhotosPage normalizes timestamps and returns empty contract fo
   assert.deepEqual(empty, { items: [], nextCursor: null, hasMore: false });
 });
 
-test('subscribeToTourPhotos remains backward compatible and bounded via limitToLast window', async () => {
+test('subscribeToTourPhotos stays bounded via limitToLast window', async () => {
   let seenLimit = null;
   let callbackRows = null;
 

@@ -69,7 +69,7 @@ typing, presence, or read markers. Email-style identities contain `.` characters
 ### Fail criteria
 - A new/different stable identity is unexpectedly generated.
 - Message ownership diverges between sessions for the same account.
-- UID-only fallback is used when stable identity should exist.
+- A message is written without the expected stable sender identity.
 
 ---
 

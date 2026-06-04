@@ -298,12 +298,12 @@ test('sendMessage rejects passenger writes without stable sender identity once p
   const mockDb = createMockRealtimeDb();
   const senderInfo = {
     name: 'Morgan',
-    userId: 'uid-legacy-1',
+    userId: 'uid-missing-stable-1',
     principalType: 'passenger',
     isDriver: false,
   };
 
-  const result = await sendMessage('tour-legacy', 'Hello', senderInfo, mockDb);
+  const result = await sendMessage('tour-missing-stable', 'Hello', senderInfo, mockDb);
 
   assert.equal(result.success, false);
   assert.match(result.error, /senderStableId is required/i);
@@ -362,7 +362,7 @@ test('toggleReaction toggles exclusively from canonical user leaf and never writ
           'msg-1': {
             text: 'Hello',
             reactions: {
-              '👍': ['user-1'],
+              '👍': { 'user-1': true },
             },
           },
         },
@@ -381,16 +381,17 @@ test('toggleReaction toggles exclusively from canonical user leaf and never writ
     )
   );
   assert.ok(addResult.users.includes('user-1'));
-  assert.deepEqual(addResult.reactions, { '👍': ['user-1'] });
+  assert.ok(addResult.users.includes('user-2'));
+  assert.deepEqual(addResult.reactions, { '👍': ['user-1', 'user-2'] });
 
   const removeResult = await toggleReaction('tour-1', 'msg-1', '👍', 'user-1', mockDb);
   assert.equal(removeResult.success, true);
-  assert.equal(removeResult.action, 'added');
+  assert.equal(removeResult.action, 'removed');
   assert.ok(
     mockDb.refCalls.some(
       (refCall) =>
         refCall.path === 'chats/tour-1/messages/msg-1/reactions/👍/user-1'
-        && refCall.setCalls.includes(true)
+        && refCall.removeCalls === 1
     )
   );
   assert.ok(
@@ -712,13 +713,13 @@ test('subscribeToChatMessages normalizes reaction maps for the UI', async () => 
   unsubscribe();
 });
 
-test('chat subscriptions normalize canonical maps, legacy arrays, and malformed reaction payloads', async () => {
+test('chat subscriptions normalize canonical maps and ignore malformed reaction payloads', async () => {
   const mockDb = createMockRealtimeDb({
     chats: {
       'tour-4': {
         messages: {
-          'msg-legacy': {
-            text: 'legacy',
+          'msg-array': {
+            text: 'array',
             timestamp: '2026-03-18T09:00:00.000Z',
             reactions: {
               '👍': ['user-2', '', ' user-1 ', 'user-2'],
@@ -775,9 +776,7 @@ test('chat subscriptions normalize canonical maps, legacy arrays, and malformed 
 
   assert.equal(groupUpdates.length, 1);
   const latestGroup = groupUpdates[0];
-  assert.deepEqual(latestGroup.find((msg) => msg.id === 'msg-legacy')?.reactions, {
-    '👍': ['user-1', 'user-2'],
-  });
+  assert.deepEqual(latestGroup.find((msg) => msg.id === 'msg-array')?.reactions, {});
   assert.deepEqual(latestGroup.find((msg) => msg.id === 'msg-map')?.reactions, {
     '❤️': ['user-3'],
   });

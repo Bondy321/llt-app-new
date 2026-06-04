@@ -23,7 +23,7 @@ It does not subscribe to `/logs`. App and device errors must come from the curat
 
 Driver coverage:
 
-- A tour is treated as assigned when its tour driver fields, a driver `currentTourId`/legacy `activeTourId`, or manifest `assigned_drivers`/`assigned_driver_codes` indicates coverage.
+- A tour is treated as assigned when its tour driver fields, a driver `currentTourId`, or manifest `assigned_drivers`/`assigned_driver_codes` indicates coverage.
 - Upcoming coverage is calculated for active tours with valid start dates in the dashboard attention window.
 - Unassigned queue entries are active tours due soon or recently overdue without detected driver coverage.
 

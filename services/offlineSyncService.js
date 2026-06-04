@@ -81,8 +81,6 @@ const summarizeQueueActionForLog = (action = {}) => {
     localAssets: {
       sourceUri: summarizeUriForLog(localAssets.sourceUri || payload.uri),
       previewUri: summarizeUriForLog(localAssets.previewUri),
-      thumbnailUri: summarizeUriForLog(localAssets.thumbnailUri),
-      viewerUri: summarizeUriForLog(localAssets.viewerUri),
     },
     payloadKeys: Object.keys(payload).slice(0, 20),
   };
@@ -102,9 +100,6 @@ const sanitizePhotoUploadPayload = (payload = {}, action = {}) => {
   const safePayload = payload && typeof payload === 'object' ? payload : {};
   const localAssets = safePayload.localAssets && typeof safePayload.localAssets === 'object' ? safePayload.localAssets : {};
   const metadata = safePayload.metadata && typeof safePayload.metadata === 'object' ? safePayload.metadata : {};
-  const normalizedPayloadVersion = Number.isFinite(Number(safePayload.payloadVersion))
-    ? Number(safePayload.payloadVersion)
-    : 1;
   const payloadCreatedAtMs = parseTimestampMs(safePayload.createdAt);
   const createdAt = Number.isFinite(payloadCreatedAtMs)
     ? new Date(payloadCreatedAtMs).toISOString()
@@ -112,7 +107,7 @@ const sanitizePhotoUploadPayload = (payload = {}, action = {}) => {
 
   return {
     ...safePayload,
-    payloadVersion: normalizedPayloadVersion >= 2 ? 2 : 1,
+    payloadVersion: 2,
     jobId: safePayload.jobId || action.id,
     idempotencyKey: typeof safePayload.idempotencyKey === 'string' ? safePayload.idempotencyKey : null,
     createdAt,
@@ -123,8 +118,6 @@ const sanitizePhotoUploadPayload = (payload = {}, action = {}) => {
     localAssets: {
       sourceUri: localAssets.sourceUri || safePayload.uri || null,
       previewUri: localAssets.previewUri || safePayload.previewUri || localAssets.sourceUri || safePayload.uri || null,
-      thumbnailUri: localAssets.thumbnailUri || safePayload.thumbnailUri || null,
-      viewerUri: localAssets.viewerUri || safePayload.viewerUri || null,
       optimizationMetrics: localAssets.optimizationMetrics || safePayload.optimizationMetrics || null,
     },
     metadata: {

@@ -6,16 +6,6 @@ require('@babel/register')({
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const loggerServicePath = require.resolve('../services/loggerService');
-require.cache[loggerServicePath] = {
-  id: loggerServicePath,
-  filename: loggerServicePath,
-  loaded: true,
-  exports: {
-    maskIdentifier: (value) => value,
-  },
-};
-const { migrateRecentChatMessagesForStableIdentity } = require('../services/chatIdentityMigrationService');
 const { toRealtimeKeySegment } = require('../services/identityService');
 
 const TOUR_ID = 'TOUR_STABLE_001';
@@ -188,7 +178,7 @@ const createRuleAssumptionHarness = ({
     async writePrivatePhoto(authUid, photoId, url) {
       ensureAllowed(authUid, stablePassengerId);
       await db.ref(`private_tour_photos/${tourId}/${stablePassengerKey}/${photoId}`).set({
-        url,
+        sourceUrl: url,
         userId: stablePassengerId,
         timestamp: Date.now(),
       });
@@ -223,11 +213,6 @@ const seedIdentity = () => ({
   chats: {
     [TOUR_ID]: {
       messages: {
-        legacy_from_device_a: {
-          senderId: DEVICE_A_UID,
-          text: 'legacy payload from uid only',
-          timestamp: 1710000000000,
-        },
         already_stable: {
           senderId: DEVICE_B_UID,
           senderStableId: STABLE_PASSENGER_ID,
@@ -259,6 +244,7 @@ test('integration: two devices sharing stable identity can collaborate across ch
   await harness.writePrivatePhoto(DEVICE_A_UID, 'photo_a', 'https://cdn.local/photo-a.jpg');
   const photosSeenByB = harness.readPrivatePhotos(DEVICE_B_UID);
   assert.equal(photosSeenByB.photo_a.userId, STABLE_PASSENGER_ID);
+  assert.equal(photosSeenByB.photo_a.sourceUrl, 'https://cdn.local/photo-a.jpg');
 
   await harness.writeReaction(DEVICE_B_UID, messageIdFromA, '🔥');
   await harness.writeTyping(DEVICE_A_UID);
@@ -270,39 +256,4 @@ test('integration: two devices sharing stable identity can collaborate across ch
   );
   assert.equal(db._state.chats[TOUR_ID].typing[STABLE_PASSENGER_KEY].online, true);
   assert.equal(db._state.chats[TOUR_ID].presence[STABLE_PASSENGER_KEY].online, true);
-});
-
-test('integration: migration backfills legacy UID-only messages to stable passenger identity', async () => {
-  const db = createMockRealtimeDb(seedIdentity());
-  const logs = [];
-  const logger = {
-    info: (component, message, data) => logs.push({ level: 'info', component, message, data }),
-    warn: (component, message, data) => logs.push({ level: 'warn', component, message, data }),
-  };
-
-  await db.ref(`chats/${TOUR_ID}/messages/foreign_legacy`).set({
-    senderId: 'auth:foreign',
-    text: 'should stay untouched',
-    timestamp: 1710000000500,
-  });
-
-  await migrateRecentChatMessagesForStableIdentity({
-    tourId: TOUR_ID,
-    stablePassengerId: STABLE_PASSENGER_ID,
-    realtimeDb: db,
-    logger,
-  });
-
-  const migrated = db._state.chats[TOUR_ID].messages.legacy_from_device_a;
-  const untouched = db._state.chats[TOUR_ID].messages.foreign_legacy;
-  const alreadyStable = db._state.chats[TOUR_ID].messages.already_stable;
-
-  assert.equal(migrated.senderStableId, STABLE_PASSENGER_ID);
-  assert.equal(migrated.senderType, 'passenger');
-  assert.equal(alreadyStable.senderStableId, STABLE_PASSENGER_ID);
-  assert.equal(untouched.senderStableId, undefined);
-
-  const metricLog = logs.find((entry) => entry.message === 'Migration metrics');
-  assert.ok(metricLog, 'Expected migration metrics log to be emitted');
-  assert.equal(metricLog.data.patchedCount, 1);
 });

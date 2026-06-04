@@ -102,8 +102,6 @@ test('uploadPhoto stores group photo using group_tour_photos paths and rich meta
   assert.strictEqual(uploadCall.metadata.customMetadata.authUid, 'auth-upload-1');
 
   assert.deepStrictEqual(setPayload, {
-    url: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
-    fullUrl: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
     sourceUrl: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
     userId: 'user-9',
     caption: 'Lovely day!',
@@ -112,7 +110,7 @@ test('uploadPhoto stores group photo using group_tour_photos paths and rich meta
     fileSize: 1024,
     fileType: 'image/jpeg',
     idempotencyKey: null,
-    variantStatus: 'ready',
+    variantStatus: 'processing',
     variantUpdatedAt: 1700000000000,
     variantError: null,
     variantVersion: 2,
@@ -121,7 +119,7 @@ test('uploadPhoto stores group photo using group_tour_photos paths and rich meta
 
   assert.deepStrictEqual(result, {
     id: 'group-photo-1',
-    url: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
+    sourceUrl: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
     userId: 'user-9',
     caption: 'Lovely day!',
     uploaderName: 'Driver Bond',
@@ -175,7 +173,7 @@ test('uploadPhoto stores private photos in private_tour_photos namespaces', asyn
 
   assert.strictEqual(writePath, 'private_tour_photos/tour-55/user-private');
   assert.strictEqual(dbPayload.storagePath, 'private_tour_photos/tour-55/user-private/1700000000000_user-private.webp');
-  assert.strictEqual(dbPayload.fullUrl, 'https://example.com/private_tour_photos/tour-55/user-private/1700000000000_user-private.webp');
+  assert.strictEqual(dbPayload.sourceUrl, 'https://example.com/private_tour_photos/tour-55/user-private/1700000000000_user-private.webp');
   assert.strictEqual(dbPayload.fileType, 'image/webp');
   assert.ok(!('uploaderName' in dbPayload));
   assert.strictEqual(blob.closed, true);
@@ -288,229 +286,7 @@ test('uploadPhoto surfaces fetch failures when response is not ok', async () => 
 });
 
 
-test('uploadPhoto stores thumbnail and optimization metadata when provided', async (t) => {
-  const originalNow = Date.now;
-  Date.now = () => 1700000000000;
-  t.after(() => {
-    Date.now = originalNow;
-  });
-
-  const mainBlob = createMockBlob({ size: 2048, type: 'image/jpeg' });
-  const thumbBlob = createMockBlob({ size: 512, type: 'image/jpeg' });
-
-  const mockFetch = async (uri) => ({
-    ok: true,
-    blob: async () => (uri.includes('thumb') ? thumbBlob : mainBlob),
-  });
-
-  const uploaded = [];
-  let payload;
-  await uploadPhoto('file://main.jpg', 'tour-thumb', 'user-thumb', 'Thumb test', {
-    thumbnailUri: 'file://thumb.jpg',
-    optimizationMetrics: {
-      originalSizeBytes: 4096,
-      optimizedSizeBytes: 2048,
-      thumbnailSizeBytes: 512,
-      optimizationRatio: 0.5,
-    },
-    storageInstance: {},
-    realtimeDbInstance: {},
-    storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async (ref, _blob, metadata) => {
-      uploaded.push({ path: ref.path, metadata });
-    },
-    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
-    dbRefFn: mockDbRef,
-    pushFn: () => ({ key: 'thumb-photo' }),
-    setFn: async (_ref, value) => {
-      payload = value;
-    },
-    serverTimestampFn: () => 42,
-    fetchFn: mockFetch,
-  });
-
-  assert.deepStrictEqual(uploaded.map((entry) => entry.path), [
-    'group_tour_photos/tour-thumb/1700000000000_user-thumb.jpg',
-    'group_tour_photos/tour-thumb/thumbnails/1700000000000_user-thumb_thumb.jpg',
-  ]);
-  assert.strictEqual(uploaded[0].metadata.cacheControl, 'public,max-age=31536000,immutable');
-  assert.strictEqual(uploaded[0].metadata.contentType, 'image/jpeg');
-  assert.strictEqual(uploaded[0].metadata.customMetadata.uploadedBy, 'user-thumb');
-  assert.strictEqual(uploaded[0].metadata.customMetadata.authUid, 'auth-upload-1');
-  assert.strictEqual(uploaded[1].metadata.cacheControl, 'public,max-age=31536000,immutable');
-  assert.strictEqual(uploaded[1].metadata.contentType, 'image/jpeg');
-  assert.strictEqual(uploaded[1].metadata.customMetadata.uploadedBy, 'user-thumb');
-  assert.strictEqual(uploaded[1].metadata.customMetadata.authUid, 'auth-upload-1');
-  assert.strictEqual(uploaded[1].metadata.customMetadata.variant, 'thumbnail');
-  assert.strictEqual(payload.thumbnailUrl, 'https://example.com/group_tour_photos/tour-thumb/thumbnails/1700000000000_user-thumb_thumb.jpg');
-  assert.strictEqual(payload.thumbnailStoragePath, 'group_tour_photos/tour-thumb/thumbnails/1700000000000_user-thumb_thumb.jpg');
-  assert.deepStrictEqual(payload.optimization, {
-    originalSizeBytes: 4096,
-    optimizedSizeBytes: 2048,
-    viewerSizeBytes: null,
-    thumbnailSizeBytes: 512,
-    optimizationRatio: 0.5,
-    viewerOptimizationRatio: null,
-  });
-  assert.strictEqual(mainBlob.closed, true);
-  assert.strictEqual(thumbBlob.closed, true);
-});
-
-
-
-test('uploadPhoto continues when thumbnail upload fails and still writes full photo record', async (t) => {
-  const originalNow = Date.now;
-  Date.now = () => 1700000000000;
-  t.after(() => {
-    Date.now = originalNow;
-  });
-
-  const mainBlob = createMockBlob({ size: 2048, type: 'image/jpeg' });
-  const thumbBlob = createMockBlob({ size: 512, type: 'image/jpeg' });
-
-  const mockFetch = async (uri) => ({
-    ok: true,
-    blob: async () => (uri.includes('thumb') ? thumbBlob : mainBlob),
-  });
-
-  let payload;
-  const uploaded = [];
-  await uploadPhoto('file://main.jpg', 'tour-thumb-fallback', 'user-thumb', 'Thumb optional', {
-    thumbnailUri: 'file://thumb.jpg',
-    storageInstance: {},
-    realtimeDbInstance: {},
-    storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async (ref, _blob, metadata) => {
-      uploaded.push({ path: ref.path, metadata });
-      if (ref.path.includes('/thumbnails/')) {
-        throw new Error('thumbnail path denied');
-      }
-    },
-    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
-    dbRefFn: mockDbRef,
-    pushFn: () => ({ key: 'thumb-fallback-photo' }),
-    setFn: async (_ref, value) => {
-      payload = value;
-    },
-    serverTimestampFn: () => 42,
-    fetchFn: mockFetch,
-  });
-
-  assert.deepStrictEqual(uploaded.map((entry) => entry.path), [
-    'group_tour_photos/tour-thumb-fallback/1700000000000_user-thumb.jpg',
-    'group_tour_photos/tour-thumb-fallback/thumbnails/1700000000000_user-thumb_thumb.jpg',
-  ]);
-  assert.strictEqual(uploaded[0].metadata.cacheControl, 'public,max-age=31536000,immutable');
-  assert.strictEqual(uploaded[1].metadata.cacheControl, 'public,max-age=31536000,immutable');
-  assert.strictEqual(payload.url, 'https://example.com/group_tour_photos/tour-thumb-fallback/1700000000000_user-thumb.jpg');
-  assert.ok(!('thumbnailUrl' in payload));
-  assert.ok(!('thumbnailStoragePath' in payload));
-  assert.strictEqual(mainBlob.closed, true);
-  assert.strictEqual(thumbBlob.closed, true);
-});
-
-test('uploadPhoto stores viewer variant metadata when provided', async (t) => {
-  const originalNow = Date.now;
-  Date.now = () => 1700000000000;
-  t.after(() => {
-    Date.now = originalNow;
-  });
-
-  const mainBlob = createMockBlob({ size: 2048, type: 'image/jpeg' });
-  const viewerBlob = createMockBlob({ size: 900, type: 'image/jpeg' });
-
-  const mockFetch = async (uri) => ({
-    ok: true,
-    blob: async () => (uri.includes('viewer') ? viewerBlob : mainBlob),
-  });
-
-  let payload;
-  const uploaded = [];
-
-  await uploadPhoto('file://main.jpg', 'tour-viewer', 'user-viewer', 'Viewer test', {
-    viewerUri: 'file://viewer.jpg',
-    optimizationMetrics: {
-      originalSizeBytes: 4096,
-      optimizedSizeBytes: 2048,
-      viewerSizeBytes: 900,
-      optimizationRatio: 0.5,
-      viewerOptimizationRatio: 0.78,
-    },
-    storageInstance: {},
-    realtimeDbInstance: {},
-    storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async (ref, _blob, metadata) => {
-      uploaded.push({ path: ref.path, metadata });
-    },
-    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
-    dbRefFn: mockDbRef,
-    pushFn: () => ({ key: 'viewer-photo' }),
-    setFn: async (_ref, value) => {
-      payload = value;
-    },
-    serverTimestampFn: () => 84,
-    fetchFn: mockFetch,
-  });
-
-  assert.deepStrictEqual(uploaded.map((entry) => entry.path), [
-    'group_tour_photos/tour-viewer/1700000000000_user-viewer.jpg',
-    'group_tour_photos/tour-viewer/viewers/1700000000000_user-viewer_viewer.jpg',
-  ]);
-  assert.strictEqual(uploaded[0].metadata.customMetadata.authUid, 'auth-upload-1');
-  assert.strictEqual(uploaded[1].metadata.customMetadata.authUid, 'auth-upload-1');
-  assert.strictEqual(uploaded[1].metadata.customMetadata.variant, 'viewer');
-  assert.strictEqual(payload.viewerUrl, 'https://example.com/group_tour_photos/tour-viewer/viewers/1700000000000_user-viewer_viewer.jpg');
-  assert.strictEqual(payload.viewerStoragePath, 'group_tour_photos/tour-viewer/viewers/1700000000000_user-viewer_viewer.jpg');
-  assert.strictEqual(payload.optimization.viewerSizeBytes, 900);
-  assert.strictEqual(payload.optimization.viewerOptimizationRatio, 0.78);
-  assert.strictEqual(mainBlob.closed, true);
-  assert.strictEqual(viewerBlob.closed, true);
-});
-
-test('uploadPhoto continues when viewer upload fails and still writes full record', async (t) => {
-  const originalNow = Date.now;
-  Date.now = () => 1700000000000;
-  t.after(() => {
-    Date.now = originalNow;
-  });
-
-  const mainBlob = createMockBlob({ size: 2048, type: 'image/jpeg' });
-  const viewerBlob = createMockBlob({ size: 900, type: 'image/jpeg' });
-
-  const mockFetch = async (uri) => ({
-    ok: true,
-    blob: async () => (uri.includes('viewer') ? viewerBlob : mainBlob),
-  });
-
-  let payload;
-  await uploadPhoto('file://main.jpg', 'tour-viewer-fallback', 'user-viewer', 'Viewer optional', {
-    viewerUri: 'file://viewer.jpg',
-    storageInstance: {},
-    realtimeDbInstance: {},
-    storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async (ref) => {
-      if (ref.path.includes('/viewers/')) {
-        throw new Error('viewer path denied');
-      }
-    },
-    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
-    dbRefFn: mockDbRef,
-    pushFn: () => ({ key: 'viewer-fallback-photo' }),
-    setFn: async (_ref, value) => {
-      payload = value;
-    },
-    serverTimestampFn: () => 42,
-    fetchFn: mockFetch,
-  });
-
-  assert.strictEqual(payload.url, 'https://example.com/group_tour_photos/tour-viewer-fallback/1700000000000_user-viewer.jpg');
-  assert.ok(!('viewerUrl' in payload));
-  assert.ok(!('viewerStoragePath' in payload));
-  assert.strictEqual(mainBlob.closed, true);
-  assert.strictEqual(viewerBlob.closed, true);
-});
-
-test('uploadPhoto source-only mode writes processing variant state without client variants', async (t) => {
+test('uploadPhoto writes processing variant state for server-owned variants', async (t) => {
   const originalNow = Date.now;
   Date.now = () => 1700000000000;
   t.after(() => {
@@ -522,7 +298,11 @@ test('uploadPhoto source-only mode writes processing variant state without clien
   let payload;
 
   await uploadPhoto('file://main.jpg', 'tour-source-only', 'user-source', 'Source-only', {
-    generateClientVariants: false,
+    optimizationMetrics: {
+      originalSizeBytes: 4096,
+      optimizedSizeBytes: 2048,
+      optimizationRatio: 0.5,
+    },
     storageInstance: {},
     realtimeDbInstance: {},
     storageRefFn: (_storage, path) => ({ path }),
@@ -545,6 +325,14 @@ test('uploadPhoto source-only mode writes processing variant state without clien
   assert.strictEqual(payload.variantStatus, 'processing');
   assert.strictEqual(payload.sourceUrl, 'https://example.com/group_tour_photos/tour-source-only/1700000000000_user-source.jpg');
   assert.strictEqual(payload.variantVersion, 2);
+  assert.deepStrictEqual(payload.optimization, {
+    originalSizeBytes: 4096,
+    optimizedSizeBytes: 2048,
+    viewerSizeBytes: null,
+    thumbnailSizeBytes: null,
+    optimizationRatio: 0.5,
+    viewerOptimizationRatio: null,
+  });
 });
 
 test('uploadPhoto retries getDownloadURL for transient storage errors before succeeding', async (t) => {
@@ -582,7 +370,7 @@ test('uploadPhoto retries getDownloadURL for transient storage errors before suc
   });
 
   assert.strictEqual(attempts, 3);
-  assert.strictEqual(payload.url, 'https://example.com/group_tour_photos/tour-retry/1700000000000_user-retry.jpg');
+  assert.strictEqual(payload.sourceUrl, 'https://example.com/group_tour_photos/tour-retry/1700000000000_user-retry.jpg');
 });
 
 test('uploadPhoto fails fast on non-retryable getDownloadURL errors', async () => {
@@ -747,10 +535,10 @@ test('fetchPrivatePhotosPage applies endBefore cursor and normalizes timestamps 
   assert.strictEqual(result.hasMore, false);
 });
 
-test('fetchPrivatePhotosPage normalizes malformed legacy photo fields', async () => {
+test('fetchPrivatePhotosPage normalizes malformed photo fields', async () => {
   const result = await fetchPrivatePhotosPage({
-    tourId: 'tour-legacy',
-    ownerId: 'pax_v1:ABC:legacy@example.com',
+    tourId: 'tour-current',
+    ownerId: 'pax_v1:ABC:current@example.com',
     limit: 5,
   }, {
     realtimeDbInstance: {},
@@ -759,11 +547,11 @@ test('fetchPrivatePhotosPage normalizes malformed legacy photo fields', async ()
     orderByChildFn: () => 'timestamp',
     limitToLastFn: (value) => value,
     getFn: async () => mockSnapshot({
-      legacy: {
+      malformed: {
         timestamp: 20,
         userId: { uid: 'bad-shape' },
         caption: { text: 'object captions crash React Text' },
-        url: { downloadURL: 'https://cdn/bad-object-url.jpg' },
+        sourceUrl: { downloadURL: 'https://cdn/bad-object-url.jpg' },
         viewerUrl: '  https://cdn/good-viewer.jpg  ',
         thumbnailUrl: 'undefined',
         storagePath: ['bad-storage-path'],
@@ -773,10 +561,10 @@ test('fetchPrivatePhotosPage normalizes malformed legacy photo fields', async ()
   });
 
   const [photo] = result.items;
-  assert.equal(photo.id, 'legacy');
+  assert.equal(photo.id, 'malformed');
   assert.equal(photo.viewerUrl, 'https://cdn/good-viewer.jpg');
   assert.equal('thumbnailUrl' in photo, false);
-  assert.equal('url' in photo, false);
+  assert.equal('sourceUrl' in photo, false);
   assert.equal('caption' in photo, false);
   assert.equal('userId' in photo, false);
   assert.equal('storagePath' in photo, false);
@@ -960,7 +748,7 @@ test('uploadPhoto reuses existing record when idempotency key already exists', a
     getFn: async () => mockSnapshot({
       existing_photo: {
         idempotencyKey: 'idem-123',
-        url: 'https://example.com/group_tour_photos/tour-77/existing.jpg',
+        sourceUrl: 'https://example.com/group_tour_photos/tour-77/existing.jpg',
         userId: 'user-9',
         caption: 'Already done',
         uploaderName: 'Driver Bond',

@@ -37,7 +37,7 @@ Screen actions
 
 Required normalized fields:
 
-- `payloadVersion` (`2` for source-only uploads; absent/`1` is legacy replay compatibility mode)
+- `payloadVersion` (`2` for source-only uploads)
 - `jobId` (stable queue item id)
 - `idempotencyKey` (deterministic per logical upload; reused on retry)
 - `createdAt`
@@ -53,11 +53,6 @@ Optional retained fields:
 
 - `localAssets.previewUri`
 - `localAssets.optimizationMetrics`
-
-Legacy compatibility fields still accepted in replay sanitizer:
-
-- `localAssets.thumbnailUri`
-- `localAssets.viewerUri`
 
 ## Replay policy
 

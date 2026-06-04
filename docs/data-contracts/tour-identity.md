@@ -1,6 +1,6 @@
 # Tour Identity Data Contract
 
-Use this contract for creating and updating tours across mobile, web-admin, imports, and migration helpers.
+Use this contract for creating and updating tours across mobile, web-admin, and imports.
 
 ## Canonical identity
 
@@ -24,7 +24,3 @@ Mobile services commonly derive `tourId` from `tourCode` before reading `tours/{
 - `tourCode` is immutable after creation.
 - Edit flows should omit `tourCode` from normal updates.
 - Service-level update helpers must reject writes that attempt to change an existing tour's identity.
-
-## Legacy tolerance
-
-Legacy tours may exist where `tourCode` and `{tourId}` do not normalize to the same key. Update flows may preserve the existing code for those records, but must not change it in place. Renaming a tour code requires a deliberate migration that moves all related roots, including `tour_manifests`, bookings, driver assignment helpers, chats, photos, and any cached references.

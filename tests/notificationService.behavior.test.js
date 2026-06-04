@@ -97,11 +97,18 @@ test.after(() => {
   Module._load = originalLoad;
 });
 
-test('saveUserPreferences normalizes legacy preference shape and persists token metadata', async () => {
+test('saveUserPreferences persists canonical preference schema and token metadata', async () => {
   const { service, updates } = buildNotificationService({ permission: 'granted' });
 
   const result = await service.saveUserPreferences('user-1', {
-    notifications: { messages: 'enabled', tripUpdates: 0 },
+    ops: {
+      group_chat: true,
+      itinerary_changes: false,
+      group_photos: true,
+    },
+    marketing: {
+      mystery_tours: true,
+    },
   });
 
   assert.equal(result.success, true);
@@ -114,8 +121,6 @@ test('saveUserPreferences normalizes legacy preference shape and persists token 
   assert.equal(updates[2].pushTokenInvalidReason, null);
   assert.equal(updates[2].pushPermissionState, 'granted');
   assert.deepEqual(updates[2].preferences, {
-    chatNotifications: true,
-    itineraryNotifications: false,
     ops: {
       driver_updates: true,
       itinerary_changes: false,
@@ -137,8 +142,10 @@ test('saveUserPreferences handles denied permission path without throwing and ma
   setPermission('denied');
 
   const result = await service.saveUserPreferences('user-2', {
-    chatNotifications: true,
-    itineraryNotifications: true,
+    ops: {
+      group_chat: true,
+      itinerary_changes: true,
+    },
   });
 
   assert.equal(result.success, true);
@@ -150,8 +157,6 @@ test('saveUserPreferences handles denied permission path without throwing and ma
   assert.equal(updates[1].pushTokenInvalidReason, null);
   assert.equal(updates.some((entry) => entry.__tokenRequestOptions), false);
   assert.equal(updates[1].pushPermissionState, 'denied');
-  assert.equal(updates[1].preferences.chatNotifications, true);
-  assert.equal(updates[1].preferences.itineraryNotifications, true);
   assert.equal(updates[1].preferences.ops.group_chat, true);
   assert.equal(updates[1].preferences.ops.itinerary_changes, true);
   assert.equal(updates[1].preferences.marketing.mystery_tours, true);
@@ -312,7 +317,7 @@ test('saveUserPreferences writes to authenticated uid when provided userId is pr
   const { service, refPaths } = buildNotificationService({ authUid: 'auth-uid-99' });
 
   const result = await service.saveUserPreferences('stable-passenger-123', {
-    notifications: { messages: true },
+    ops: { group_chat: true },
   });
 
   assert.equal(result.success, true);

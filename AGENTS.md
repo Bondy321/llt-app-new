@@ -91,7 +91,7 @@ tests/                         Node test suites and contract tests
 __tests__/                     Additional service tests
 docs/                          Contracts and operational runbooks
 scripts/                       Root release/env helper scripts
-functions/                     Firebase Functions Gen 2 and migration scripts
+functions/                     Firebase Functions Gen 2 and maintenance scripts
 web-admin/                     Vite React admin dashboard
 ```
 
@@ -242,10 +242,6 @@ Canonical active assignment key:
 
 - `drivers/{driverId}/currentTourId`
 
-Legacy fallback:
-
-- `drivers/{driverId}/activeTourId`
-
 Canonical nodes to keep coherent in one multi-path update:
 
 - `drivers/{driverId}`
@@ -278,7 +274,7 @@ Rules authorize assigned driver manifest writes only when:
 - `users/{authUid}/driverId` points to the driver.
 - `drivers/{driverId}/authUid` matches the caller.
 - `tour_manifests/{tourId}/assigned_drivers/{driverId}` is `true`.
-- The booking belongs to the tour by canonical `tourId` or compatible legacy `tourCode`.
+- The booking belongs to the tour by canonical `bookings/{bookingRef}/tourId`.
 
 ### Manifest Sync
 
@@ -318,7 +314,6 @@ Rules:
 
 - Reaction writes are user-leaf only.
 - Never write to `reactions`, `reactions/{emoji}`, or the message parent for reaction toggles.
-- Legacy array/object reaction shapes are read-compatible only.
 - `typing`, `presence`, and `lastRead` actor keys must follow the same identity encoding rules.
 
 Chat UX utilities:
@@ -358,7 +353,6 @@ DB lifecycle fields for new uploads:
 
 - `variantStatus: "processing"`
 - `sourceUrl`
-- legacy-compatible `url` / `fullUrl`
 - `variantUpdatedAt`
 - `variantError`
 - `variantVersion: 2`
@@ -369,11 +363,6 @@ Server variant generator:
 - Region: `us-east1`
 - Uses `sharp` to create viewer and thumbnail JPEGs.
 - Updates photo records to `variantStatus: "ready"` with `viewerUrl` and `thumbnailUrl`, or `variantStatus: "failed"` with `variantError`.
-
-Compatibility:
-
-- Existing records without `variantStatus` are display-ready when they have a legacy display URL.
-- Legacy queue payloads without `payloadVersion` remain replay-compatible.
 
 Storage rules:
 
@@ -502,11 +491,6 @@ users/{uid}/preferences/ops/group_photos
 users/{uid}/preferences/marketing/*
 ```
 
-Legacy booleans remain normalized:
-
-- `chatNotifications`
-- `itineraryNotifications`
-
 Function fanout safeguards:
 
 - deterministic chunking
@@ -601,7 +585,6 @@ High-signal services:
   - display URL resolution and cache key derivation
 - `imageOptimizationService.js`
   - source upload optimization
-  - legacy full/viewer/thumb generation compatibility
 - `notificationService.js`
   - Expo push token registration
   - preference normalization and user profile metadata
@@ -700,14 +683,9 @@ Testing hook:
 
 - `exports.__testables` exposes pure helpers for Node tests.
 
-Migration/maintenance scripts:
+Maintenance scripts:
 
-- `npm --prefix functions run migrate:assigned-driver-codes -- --dry-run`
-- `npm --prefix functions run migrate:assigned-driver-codes -- --apply --tourId=...`
-- `npm --prefix functions run migrate:private-photo-owners -- --dry-run --tourId=...`
-- `npm --prefix functions run migrate:private-photo-owners -- --apply --tourId=...`
 - `npm --prefix functions run backfill:photo-variants -- --dry-run --limit=50`
-- `node functions/scripts/normalizeLegacyBroadcastTimestamps.js --dry-run --tourId=...`
 
 Photo variant backfill example:
 
@@ -734,7 +712,7 @@ Important RTDB invariants:
 - `drivers`, `bookings`, `tours`, and `tour_manifests` must not expose collection-level authenticated reads.
 - Passenger login uses `verifyPassengerLogin` to validate booking identity and create short-lived `tour_access_grants` / `booking_access_grants` before first tour access.
 - Online passenger login must persist `users/{authUid}/bookingRef` before entering the app; that caller-owned profile link keeps exact manifest-row access working after short-lived grants expire.
-- Driver-code login uses `verifyDriverLogin`; legacy manifest assignment scans must stay server-side.
+- Driver-code login uses `verifyDriverLogin`; assignments resolve from `drivers/{driverId}/currentTourId`.
 - Passenger manifest loading uses the `getTourManifest` HTTPS function; the mobile app must not scan `/bookings` to assemble manifests in production.
 - Release order matters for backend access changes: deploy Functions first, then Realtime Database/Storage rules, then EAS update/build. Current EAS workflows test backend changes but do not deploy Firebase backend artifacts.
 - `bookings/{bookingRef}` writes are admin-only.
@@ -753,7 +731,7 @@ Important RTDB invariants:
 Important Storage invariants:
 
 - `group_tour_photos/{tourId}/...` read/write requires authenticated user and image constraints for writes.
-- `private_tour_photos/{tourId}/{ownerId}/...` read/write requires authenticated user and image constraints for writes.
+- `private_tour_photos/{tourId}/{ownerKey}/...` read/write requires the caller's encoded stable/private owner key or identity binding.
 - Ownership is intentionally enforced in RTDB metadata, because Storage rules cannot look up stable identity bindings.
 
 If changing any protected data shape, update all of:
@@ -1007,20 +985,19 @@ Date parsing drift:
 
 - Locale parsing can break UK dates. Use strict helpers only.
 
-Identity migration edge cases:
+Identity edge cases:
 
 - Stable passenger IDs must stay raw in profile fields but encoded in path keys.
-- Private photo owner buckets must keep compatibility with legacy owner IDs during migration.
 
 Driver assignment coherence:
 
-- `currentTourId` is canonical, but readers still tolerate `activeTourId`.
+- `currentTourId` is canonical.
 - Reassignment must clean stale manifest links in the same update.
 
 Photo variant lifecycle:
 
 - Client uploads source-only for v2; server variants may be processing or failed.
-- UI must tolerate legacy photos without variant metadata.
+- UI must tolerate current photos while server variants are still processing.
 
 Offline queue growth:
 

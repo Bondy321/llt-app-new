@@ -489,8 +489,12 @@ const getDriverAssignmentContext = async (tourId, explicitDriverId = null) => {
   const resolvedDriverId = explicitDriverId || manifestDriverIds[0] || null;
 
   const driver = await getDriverSnapshotValue(resolvedDriverId);
-  const currentTourId = resolveAssignmentTourId(driver.currentTourId, driver.activeTourId);
+  const currentTourId = resolveAssignmentTourId(driver.currentTourId);
   const assignments = driver.assignments || {};
+  const tourCode = trimTourCode(tour?.tourCode);
+  if (!tourCode) {
+    throw new Error('Tour code is required for driver assignment');
+  }
 
   const knownTourIds = new Set([
     ...Object.keys(assignments).map(normalizeAssignmentTourId).filter(Boolean),
@@ -508,7 +512,7 @@ const getDriverAssignmentContext = async (tourId, explicitDriverId = null) => {
 
   return {
     tourId: normalizedTourId,
-    tourCode: tour.tourCode || tour.code || tourId,
+    tourCode,
     driverId: resolvedDriverId,
     driverCode: resolvedDriverId,
     driverAuthUid: driver.authUid || null,
@@ -538,6 +542,10 @@ export const buildDriverAssignmentUpdates = ({
   if (!normalizedTourId) {
     throw new Error('Tour ID is required for driver assignment');
   }
+  const normalizedTourCode = trimTourCode(tourCode);
+  if (isAssigned && !normalizedTourCode) {
+    throw new Error('Tour code is required for driver assignment');
+  }
 
   const updates = {
     [`tours/${normalizedTourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',
@@ -549,8 +557,7 @@ export const buildDriverAssignmentUpdates = ({
   }
 
   updates[`drivers/${driverId}/currentTourId`] = isAssigned ? normalizedTourId : null;
-  updates[`drivers/${driverId}/currentTourCode`] = isAssigned ? (tourCode || normalizedTourId) : null;
-  updates[`drivers/${driverId}/activeTourId`] = null;
+  updates[`drivers/${driverId}/currentTourCode`] = isAssigned ? normalizedTourCode : null;
   updates[`drivers/${driverId}/assignments/${normalizedTourId}`] = isAssigned ? true : null;
 
   const driverAuthUid = typeof driverInfo?.authUid === 'string' ? driverInfo.authUid.trim() : '';
@@ -567,7 +574,7 @@ export const buildDriverAssignmentUpdates = ({
     ? {
         driverId,
         tourId: normalizedTourId,
-        tourCode: tourCode || normalizedTourId,
+        tourCode: normalizedTourCode,
         assignedAt,
         assignedBy: actorId,
       }
@@ -632,7 +639,7 @@ export const applyDriverAssignmentMutation = async ({
   for (const existingDriverId of assignment.manifestDriverIds || []) {
     if (existingDriverId === resolvedDriverId) continue;
     const staleProfile = assignment.staleManifestDriverProfiles?.[existingDriverId] || {};
-    const staleCurrentTourId = resolveAssignmentTourId(staleProfile.currentTourId, staleProfile.activeTourId);
+    const staleCurrentTourId = resolveAssignmentTourId(staleProfile.currentTourId);
 
     updates[`drivers/${existingDriverId}/assignments/${normalizedTourId}`] = null;
     updates[`tour_manifests/${normalizedTourId}/assigned_drivers/${existingDriverId}`] = null;
@@ -641,7 +648,6 @@ export const applyDriverAssignmentMutation = async ({
     if (!staleCurrentTourId || staleCurrentTourId === normalizedTourId) {
       updates[`drivers/${existingDriverId}/currentTourId`] = null;
       updates[`drivers/${existingDriverId}/currentTourCode`] = null;
-      updates[`drivers/${existingDriverId}/activeTourId`] = null;
     }
 
     const staleAuthUid = typeof staleProfile.authUid === 'string' ? staleProfile.authUid.trim() : '';

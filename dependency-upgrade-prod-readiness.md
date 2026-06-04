@@ -51,7 +51,7 @@ The high-risk login/manifest reads now move through verified backend contracts:
 
 - Passenger verification writes short-lived `tour_access_grants` and `booking_access_grants` before the app joins or reads a tour.
 - Passenger login now treats the caller-owned `users/{authUid}/bookingRef` profile write as critical before entering the app, so exact manifest-row access remains durable after the short-lived backend grants expire.
-- Driver-code verification resolves driver assignment server-side, including legacy manifest assignment recovery.
+- Driver-code verification resolves driver assignment server-side from canonical driver profile assignment.
 - Passenger manifests are assembled by the `getTourManifest` HTTPS function instead of by client-side `/bookings` scans.
 - The photo viewer now clears delayed scroll retry timers on close/unmount to avoid stale pager jumps after the viewer is dismissed.
 

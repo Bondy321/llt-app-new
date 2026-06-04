@@ -14,7 +14,6 @@ import offlineSyncService from './services/offlineSyncService';
 import * as bookingService from './services/bookingServiceRealtime';
 import * as chatService from './services/chatService';
 import offlineLoginResolver from './services/offlineLoginResolver';
-import { migrateRecentChatMessagesForStableIdentity } from './services/chatIdentityMigrationService';
 import { getCanonicalIdentity, resolveAuthScopedUserId, toRealtimeKeySegment } from './services/identityService';
 import { normalizeTourId, resolveTourId } from './services/tourIdentityService';
 import { parseTimestampMs } from './services/timeUtils';
@@ -249,21 +248,23 @@ function AppContent() {
     bookingRef,
     normalizedPassengerEmail,
   }) => {
-    if (!authUid || !realtimeDb || !bookingRef) return { profilePersisted: false, bindingPersisted: false };
+    if (!authUid || !realtimeDb || !bookingRef || !stablePassengerId) {
+      return { profilePersisted: false, bindingPersisted: false };
+    }
 
     const now = Date.now();
-    const stablePassengerKey = stablePassengerId ? toRealtimeKeySegment(stablePassengerId) : null;
-    const privatePhotoOwnerKey = toRealtimeKeySegment(stablePassengerId || bookingRef);
+    const stablePassengerKey = toRealtimeKeySegment(stablePassengerId);
+    const privatePhotoOwnerKey = stablePassengerKey;
     const profileUpdates = {
-      [`users/${authUid}/privatePhotoOwnerId`]: stablePassengerId || bookingRef,
+      [`users/${authUid}/privatePhotoOwnerId`]: stablePassengerId,
       [`users/${authUid}/privatePhotoOwnerKey`]: privatePhotoOwnerKey,
-      [`users/${authUid}/privatePhotoOwnerType`]: stablePassengerId ? 'stable_passenger' : 'booking',
+      [`users/${authUid}/privatePhotoOwnerType`]: 'stable_passenger',
       [`users/${authUid}/lastUpdated`]: now,
     };
     const bindingLinkUpdates = {};
     const bindingMetaUpdates = {};
 
-    if (stablePassengerId && normalizedPassengerEmail) {
+    if (normalizedPassengerEmail) {
       profileUpdates[`users/${authUid}/stablePassengerId`] = stablePassengerId;
       profileUpdates[`users/${authUid}/stablePassengerKey`] = stablePassengerKey;
       profileUpdates[`users/${authUid}/identityVersion`] = identityVersion || IDENTITY_VERSION;
@@ -919,15 +920,6 @@ function AppContent() {
       currentScreen: postLoginScreen,
       identityBinding: nextIdentityBinding || identityBinding,
     });
-
-    if (stablePassengerId && authUid && tourDetails?.id) {
-      migrateRecentChatMessagesForStableIdentity({
-        tourId: tourDetails.id,
-        stablePassengerId,
-        realtimeDb,
-        logger,
-      });
-    }
 
     if (shouldOnboardNotifications) {
       setScreenParams({

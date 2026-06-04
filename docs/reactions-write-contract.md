@@ -15,22 +15,6 @@ the leaf. Driver actors may use either the current auth UID or the canonical dri
 matches and `drivers/{driverId}/authUid` is the caller. Driver-authored group chat messages use
 the same proof, so reactions to newly sent driver messages target a server-backed message.
 
-## Legacy read compatibility (read-only)
-
-Readers must continue to support the following historical shapes under
-`chats/{tourId}/messages/{messageId}/reactions/{emoji}`:
-
-1. Array of user IDs:
-   - `["uid1", "uid2"]`
-2. Object map:
-   - `{ "uid1": true, "uid2": true }`
-
-These legacy shapes are read-compatible only. New writes must always use canonical user-leaf writes.
-
-Some older chat messages can also predate required identity fields such as `senderStableId`.
-Rules allow reaction leaf mutations on those existing messages only when the core message fields
-remain unchanged. Creating or editing messages still has to satisfy the current message schema.
-
 ## Canonical write behavior
 
 ### Add reaction
@@ -47,7 +31,7 @@ Remove only the user leaf node:
 
 ### Toggle reaction
 
-1. Read current emoji node (to support legacy shapes for decision-making).
+1. Read the current emoji node.
 2. Add/remove only the canonical user leaf.
 3. Never overwrite `reactions/{emoji}` as part of toggle.
 

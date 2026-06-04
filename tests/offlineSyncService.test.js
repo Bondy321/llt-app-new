@@ -535,7 +535,7 @@ test('PHOTO_UPLOAD enqueue payload is normalized with idempotency and local asse
   assert.equal(enqueue.success, true);
   assert.equal(enqueue.data.payload.jobId, 'photo-contract-1');
   assert.equal(enqueue.data.payload.idempotencyKey, 'idem-photo-1');
-  assert.equal(enqueue.data.payload.payloadVersion, 1);
+  assert.equal(enqueue.data.payload.payloadVersion, 2);
   assert.equal(enqueue.data.payload.localAssets.sourceUri, 'file:///tmp/source.jpg');
 });
 
@@ -559,14 +559,14 @@ test('PHOTO_UPLOAD enqueue normalizes payloadVersion=2 source-only payload', asy
   assert.equal(enqueue.data.payload.localAssets.previewUri, 'file:///tmp/preview-v2.jpg');
 });
 
-test('legacy PHOTO_UPLOAD payload keeps thumbnail/viewer fields for replay compatibility', async () => {
+test('PHOTO_UPLOAD enqueue drops obsolete thumbnail/viewer replay fields', async () => {
   await clearQueue();
   const enqueue = await offlineSyncService.enqueueAction({
-    id: 'photo-contract-legacy-variants',
+    id: 'photo-contract-current-variants',
     type: 'PHOTO_UPLOAD',
     tourId: 'tour-photo-contract',
     payload: {
-      idempotencyKey: 'idem-photo-legacy',
+      idempotencyKey: 'idem-photo-current',
       visibility: 'group',
       userId: 'user-1',
       localAssets: {
@@ -578,9 +578,10 @@ test('legacy PHOTO_UPLOAD payload keeps thumbnail/viewer fields for replay compa
   });
 
   assert.equal(enqueue.success, true);
-  assert.equal(enqueue.data.payload.payloadVersion, 1);
-  assert.equal(enqueue.data.payload.localAssets.thumbnailUri, 'file:///tmp/thumb.jpg');
-  assert.equal(enqueue.data.payload.localAssets.viewerUri, 'file:///tmp/viewer.jpg');
+  assert.equal(enqueue.data.payload.payloadVersion, 2);
+  assert.equal(enqueue.data.payload.localAssets.sourceUri, 'file:///tmp/source.jpg');
+  assert.equal('thumbnailUri' in enqueue.data.payload.localAssets, false);
+  assert.equal('viewerUri' in enqueue.data.payload.localAssets, false);
 });
 
 test('pruneCompletedPhotoUploadActions removes stale completed uploads but keeps failed entries', () => {

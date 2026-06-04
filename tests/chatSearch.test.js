@@ -32,19 +32,3 @@ test('buildChatSearchResults counts repeated matches', () => {
 
   assert.deepEqual(results, [{ id: 'm1', matchCount: 4 }]);
 });
-
-test('buildChatSearchResults supports sender fallbacks used by legacy messages', () => {
-  const results = buildChatSearchResults(
-    [
-      { id: 'm1', text: 'Ready to board', sender: 'Driver Alex' },
-      { id: 'm2', text: 'Photo drop soon', authorName: 'Alex (Guide)' },
-      { id: 'm3', text: 'No sender match here', senderName: 'Sam' },
-    ],
-    'alex'
-  );
-
-  assert.deepEqual(results, [
-    { id: 'm1', matchCount: 1 },
-    { id: 'm2', matchCount: 1 },
-  ]);
-});

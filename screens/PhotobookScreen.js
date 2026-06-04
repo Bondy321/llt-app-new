@@ -67,8 +67,6 @@ const resolveQueuedUploadSourceUri = (item) => {
 const resolveQueuedUploadPreviewUri = (item) => {
   const localAssets = item?.payload?.localAssets || {};
   const previewUri = localAssets.previewUri
-    || localAssets.thumbnailUri
-    || localAssets.viewerUri
     || resolveQueuedUploadSourceUri(item);
   return isLoadablePhotoUri(previewUri) ? previewUri : null;
 };
@@ -251,10 +249,11 @@ export default function PhotobookScreen({
 
   const ensurePrivatePhotoOwnerAccess = useCallback(async () => {
     const currentAuthUid = auth?.currentUser?.uid;
-    if (!currentAuthUid || !principalId || !realtimeDb) {
+    if (!currentAuthUid || !principalId || !stablePrivateOwnerId || !realtimeDb) {
       tracePrivatePhotos('ensure_owner_access_skipped', {
         hasCurrentAuthUid: Boolean(currentAuthUid),
         hasPrincipalId: Boolean(principalId),
+        hasStablePrivateOwnerId: Boolean(stablePrivateOwnerId),
         hasRealtimeDb: Boolean(realtimeDb),
       });
       return;
@@ -269,14 +268,11 @@ export default function PhotobookScreen({
       const updates = {
         privatePhotoOwnerId: principalId,
         privatePhotoOwnerKey,
-        privatePhotoOwnerType: stablePrivateOwnerId ? 'stable_passenger' : 'booking',
+        privatePhotoOwnerType: 'stable_passenger',
         lastUpdated: Date.now(),
+        stablePassengerId: stablePrivateOwnerId,
+        stablePassengerKey: stablePrivateOwnerKey,
       };
-
-      if (stablePrivateOwnerId) {
-        updates.stablePassengerId = stablePrivateOwnerId;
-        updates.stablePassengerKey = stablePrivateOwnerKey;
-      }
 
       await realtimeDb.ref(`users/${currentAuthUid}`).update(updates);
       tracePrivatePhotos('ensure_owner_access_success', {
@@ -313,11 +309,9 @@ export default function PhotobookScreen({
     };
 
     if (!hasDisplayVariant) {
-      delete nextPhoto.url;
-      delete nextPhoto.fullUrl;
       delete nextPhoto.sourceUrl;
       nextPhoto.variantStatus = sourcePhoto.variantStatus || 'processing';
-      nextPhoto.legacyDisplayUnavailable = true;
+      nextPhoto.displayVariantUnavailable = true;
     }
 
     tracePrivatePhotos('map_private_photo', {
@@ -1081,7 +1075,7 @@ export default function PhotobookScreen({
                 }, { remote: true });
                 return `row-${index}`;
               }
-              return rowPhotos.map((photo) => photo.id || photo.url || photo.viewerUrl || photo.thumbnailUrl).filter(Boolean).join('|') || `row-${index}`;
+              return rowPhotos.map((photo) => photo.id || photo.viewerUrl || photo.thumbnailUrl || photo.sourceUrl).filter(Boolean).join('|') || `row-${index}`;
             }}
             renderSectionHeader={({ section }) => (
               <View style={styles.dateHeader}>

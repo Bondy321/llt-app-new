@@ -168,7 +168,7 @@ test('validateBookingReference normalizes verifier tourId before tour lookup', a
   }
 });
 
-test('validateBookingReference derives tourId from verifier tourCode when tourId is invalid', async () => {
+test('validateBookingReference rejects invalid verifier tourId', async () => {
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
 
   const originalFetch = global.fetch;
@@ -179,7 +179,6 @@ test('validateBookingReference derives tourId from verifier tourCode when tourId
         valid: true,
         bookingRef: 'ABC123',
         tourId: '$$$',
-        tourCode: ' 5112d 8 ',
       }),
     });
 
@@ -188,6 +187,7 @@ test('validateBookingReference derives tourId from verifier tourCode when tourId
       bookings: {
         ABC123: {
           bookingRef: 'ABC123',
+          tourId: '5112D_8',
           tourCode: '5112D 8',
           passengerNames: ['Alex'],
           pickupPoints: [{ location: 'Balloch', time: '08:00' }],
@@ -200,8 +200,8 @@ test('validateBookingReference derives tourId from verifier tourCode when tourId
 
     const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
 
-    assert.equal(result.valid, true);
-    assert.equal(result.tour.id, '5112D_8');
+    assert.equal(result.valid, false);
+    assert.equal(result.error, 'Tour information not available');
   } finally {
     global.fetch = originalFetch;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
@@ -506,6 +506,7 @@ test('validateBookingReference sends Firebase bearer token to passenger verifier
       bookings: {
         ABC123: {
           bookingRef: 'ABC123',
+          tourId: '5112D_8',
           tourCode: '5112D 8',
           passengerNames: ['Alex'],
           pickupPoints: [{ location: 'Balloch', time: '08:00' }],
@@ -546,49 +547,6 @@ test('validateBookingReference maps missing Firebase auth token to retry copy be
     assert.equal(result.valid, false);
     assert.equal(result.error, 'Secure login is still starting. Please wait a moment and try again.');
     assert.equal(fetchCalled, false);
-  } finally {
-    global.fetch = originalFetch;
-    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
-  }
-});
-
-test('validateBookingReference continues when legacy booking normalization write is denied', async () => {
-  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
-
-  const originalFetch = global.fetch;
-  try {
-    global.fetch = async () => ({
-      ok: true,
-      json: async () => ({
-        valid: true,
-        bookingRef: 'ABC123',
-        tourId: '5112D_8',
-      }),
-    });
-
-    const service = loadServiceWithDb({
-      drivers: {},
-      bookings: {
-        ABC123: {
-          bookingRef: 'ABC123',
-          tourCode: '5112D 8',
-          passengers: ['Alex'],
-          pickupLocation: 'Balloch',
-          pickupTime: '08:00',
-        },
-      },
-      tours: {
-        '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true, participants: {}, currentParticipants: 0 },
-      },
-    }, {
-      updateError: new Error('permission_denied'),
-    });
-
-    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
-
-    assert.equal(result.valid, true);
-    assert.deepEqual(result.booking.passengerNames, ['Alex']);
-    assert.deepEqual(result.booking.pickupPoints, [{ location: 'Balloch', time: '08:00' }]);
   } finally {
     global.fetch = originalFetch;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
@@ -649,7 +607,15 @@ test('validateBookingReference keeps passenger flow for non D- codes', async () 
 
     const service = loadServiceWithDb({
       drivers: {},
-      bookings: { ABC123: { bookingRef: 'ABC123', tourCode: '5112D 8' } },
+      bookings: {
+        ABC123: {
+          bookingRef: 'ABC123',
+          tourId: '5112D_8',
+          tourCode: '5112D 8',
+          passengerNames: ['Alex'],
+          pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+        },
+      },
       tours: { '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true } },
     });
 

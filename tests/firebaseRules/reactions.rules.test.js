@@ -16,10 +16,10 @@ const TOUR_ID = 'TOUR_001';
 const MESSAGE_ID = 'MSG_001';
 const MESSAGE_PATH = `chats/${TOUR_ID}/messages/${MESSAGE_ID}`;
 const REACTION_PATH = `${MESSAGE_PATH}/reactions/👍`;
-const LEGACY_MESSAGE_ID = 'MSG_LEGACY_001';
-const LEGACY_MESSAGE_PATH = `chats/${TOUR_ID}/messages/${LEGACY_MESSAGE_ID}`;
-const LEGACY_REACTION_PATH = `${LEGACY_MESSAGE_PATH}/reactions/legacy_like`;
-const LEGACY_SENDER_UID = 'legacy-sender-1';
+const INCOMPLETE_MESSAGE_ID = 'MSG_INCOMPLETE_001';
+const INCOMPLETE_MESSAGE_PATH = `chats/${TOUR_ID}/messages/${INCOMPLETE_MESSAGE_ID}`;
+const INCOMPLETE_REACTION_PATH = `${INCOMPLETE_MESSAGE_PATH}/reactions/incomplete_like`;
+const INCOMPLETE_SENDER_UID = 'incomplete-sender-1';
 const DRIVER_MESSAGE_ID = 'MSG_DRIVER_001';
 const DRIVER_MESSAGE_PATH = `chats/${TOUR_ID}/messages/${DRIVER_MESSAGE_ID}`;
 const DRIVER_AUTH_UID = 'driver-auth-1';
@@ -59,10 +59,10 @@ const seedMessage = async () => {
       isDriver: false,
       status: 'sent',
     });
-    await context.database(dbUrl).ref(LEGACY_MESSAGE_PATH).set({
-      senderId: LEGACY_SENDER_UID,
-      senderName: 'Legacy Sender',
-      text: 'legacy message without stable sender identity',
+    await context.database(dbUrl).ref(INCOMPLETE_MESSAGE_PATH).set({
+      senderId: INCOMPLETE_SENDER_UID,
+      senderName: 'Incomplete Sender',
+      text: 'message without stable sender identity',
       timestamp: 1710000000001,
       isDriver: false,
       status: 'sent',
@@ -127,8 +127,8 @@ test('allows user A to remove own reaction leaf', async () => {
   await assertSucceeds(ownLeaf.remove());
 });
 
-test('allows reaction leaf writes on legacy messages that predate senderStableId', async () => {
-  await assertSucceeds(dbFor('userA').ref(`${LEGACY_REACTION_PATH}/userA`).set(true));
+test('denies reaction leaf writes on messages missing senderStableId', async () => {
+  await assertFails(dbFor('userA').ref(`${INCOMPLETE_REACTION_PATH}/userA`).set(true));
 });
 
 test('denies unattached signed-in users from reading or writing another tour chat', async () => {
@@ -139,8 +139,8 @@ test('denies unattached signed-in users from reading or writing another tour cha
   }));
 });
 
-test('denies editing legacy message text when modern required fields are missing', async () => {
-  await assertFails(dbFor(LEGACY_SENDER_UID).ref(`${LEGACY_MESSAGE_PATH}/text`).set('edited legacy text'));
+test('denies editing message text when required identity fields are missing', async () => {
+  await assertFails(dbFor(INCOMPLETE_SENDER_UID).ref(`${INCOMPLETE_MESSAGE_PATH}/text`).set('edited message text'));
 });
 
 test('allows verified driver principals to create group chat messages without driver identity bindings', async () => {

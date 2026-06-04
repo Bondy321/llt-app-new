@@ -68,7 +68,7 @@ const resolveAssignmentTourIdInput = (...candidates) => {
 function DriverCard({ driverId, driver, isSelected, onClick }) {
   const assignedTours = driver.assignedTours || (driver.assignments ? Object.keys(driver.assignments) : []);
   const assignmentCount = assignedTours.length;
-  const resolvedCurrentTourId = resolveAssignmentTourIdInput(driver.currentTourId, driver.activeTourId);
+  const resolvedCurrentTourId = resolveAssignmentTourIdInput(driver.currentTourId);
   const isActive = !!resolvedCurrentTourId;
 
   return (
@@ -225,8 +225,7 @@ function DriverDetailsPanel({ driverId, driver }) {
     if (driver) {
       setEditName(driver.name || '');
       setEditPhone(driver.phone || '');
-      // Legacy read fallback: display activeTourId if currentTourId is not populated yet.
-      setEditCurrentTourId(resolveAssignmentTourIdInput(driver.currentTourId, driver.activeTourId));
+      setEditCurrentTourId(resolveAssignmentTourIdInput(driver.currentTourId));
     }
   }, [driver]);
 
@@ -237,7 +236,7 @@ function DriverDetailsPanel({ driverId, driver }) {
     try {
       const nextName = editName.trim();
       const nextPhone = editPhone.trim();
-      const currentTourId = resolveAssignmentTourIdInput(driver.currentTourId, driver.activeTourId);
+      const currentTourId = resolveAssignmentTourIdInput(driver.currentTourId);
       const nextTourId = normalizeAssignmentTourIdInput(editCurrentTourId);
 
       if (!nextName) {
@@ -283,8 +282,6 @@ function DriverDetailsPanel({ driverId, driver }) {
         const updates = {
           [`drivers/${driverId}/name`]: nextName,
           [`drivers/${driverId}/phone`]: nextPhone,
-          // Migration cleanup: canonicalize field name and remove legacy key on write.
-          [`drivers/${driverId}/activeTourId`]: null,
         };
 
         // Sync name/phone to all assigned tours without changing assignment ownership.
@@ -373,7 +370,7 @@ function DriverDetailsPanel({ driverId, driver }) {
   };
 
   const createdDate = formatDateTimeForDisplay(driver?.createdAt, 'Unknown');
-  const resolvedCurrentTourId = resolveAssignmentTourIdInput(driver?.currentTourId, driver?.activeTourId);
+  const resolvedCurrentTourId = resolveAssignmentTourIdInput(driver?.currentTourId);
 
   return (
     <Box>
@@ -533,7 +530,7 @@ export function DriversManager() {
     return () => unsubscribe();
   }, []);
 
-  const resolveCurrentTourId = (driver) => resolveAssignmentTourIdInput(driver?.currentTourId, driver?.activeTourId);
+  const resolveCurrentTourId = (driver) => resolveAssignmentTourIdInput(driver?.currentTourId);
 
   // Filter drivers by search term
   const filteredDrivers = useMemo(() => {

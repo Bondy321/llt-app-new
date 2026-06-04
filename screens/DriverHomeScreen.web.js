@@ -11,7 +11,6 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
     driverData?.assignedTourId,
     driverData?.currentTourId,
     driverData?.driverAssignedTourId,
-    driverData?.activeTourId,
     driverData?.assignedTourCode,
     driverData?.currentTourCode
   );

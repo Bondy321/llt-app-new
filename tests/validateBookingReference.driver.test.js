@@ -85,28 +85,6 @@ test('validateBookingReference returns null tour and UNASSIGNED for drivers with
   assert.equal(result.assignmentStatus, 'UNASSIGNED');
 });
 
-test('validateBookingReference falls back to legacy activeTourId for driver assignment', async () => {
-  const service = loadServiceWithDb({
-    drivers: {
-      'D-LEGACY': { name: 'Legacy', activeTourId: '5112d 8' },
-    },
-    tours: {
-      '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true },
-    },
-  });
-
-  const result = await service.validateBookingReference('D-LEGACY');
-
-  assert.equal(result.valid, true);
-  assert.equal(result.type, 'driver');
-  assert.equal(result.driver.assignedTourId, '5112D_8');
-  assert.equal(result.driver.assignedTourCode, '5112D 8');
-  assert.equal(result.driver.hasAssignedTour, true);
-  assert.equal(result.assignmentStatus, 'ASSIGNED');
-  assert.equal(result.tour.id, '5112D_8');
-});
-
-
 test('validateBookingReference keeps driver auto-detect based on D- prefix', async () => {
   const service = loadServiceWithDb({
     drivers: {

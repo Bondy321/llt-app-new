@@ -84,23 +84,12 @@ const DEFAULT_NOTIFICATION_PREFERENCES = {
   },
 };
 
-const DEFAULT_LEGACY_NOTIFICATION_FLAGS = {
-  chatNotifications: true,
-  itineraryNotifications: true,
-};
-
-
 const extractPreferenceSource = (preferences = {}) => {
   if (!preferences || typeof preferences !== 'object') {
     return {};
   }
 
-  return (
-    preferences.preferences ||
-    preferences.notificationPreferences ||
-    preferences.notifications ||
-    preferences
-  );
+  return preferences.preferences || preferences;
 };
 
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj || {}, key);
@@ -234,12 +223,11 @@ export const primeNotificationPermissions = async ({ userId = null, requestIfNee
 };
 
 /**
- * Normalizes legacy preference payloads into one stable schema.
+ * Normalizes preference payloads into the stored schema.
  */
 const normalizeNotificationPreferences = (preferences = {}) => {
   if (!preferences || typeof preferences !== 'object') {
     return {
-      ...DEFAULT_LEGACY_NOTIFICATION_FLAGS,
       ops: { ...DEFAULT_NOTIFICATION_PREFERENCES.ops },
       marketing: { ...DEFAULT_NOTIFICATION_PREFERENCES.marketing },
     };
@@ -261,31 +249,17 @@ const normalizeNotificationPreferences = (preferences = {}) => {
     return fallback;
   };
 
-  const chatRaw =
-    source.chatNotifications ??
-    source.chatNotification ??
-    source.chat ??
-    source.messages ??
-    source.messageNotifications;
-
-  const itineraryRaw =
-    source.itineraryNotifications ??
-    source.itineraryNotification ??
-    source.itinerary ??
-    source.schedule ??
-    source.tripUpdates;
-
   const normalizedOps = {
     driver_updates: toBoolean(
       source?.ops?.driver_updates,
       DEFAULT_NOTIFICATION_PREFERENCES.ops.driver_updates
     ),
     itinerary_changes: toBoolean(
-      source?.ops?.itinerary_changes ?? itineraryRaw,
+      source?.ops?.itinerary_changes,
       DEFAULT_NOTIFICATION_PREFERENCES.ops.itinerary_changes
     ),
     group_chat: toBoolean(
-      source?.ops?.group_chat ?? chatRaw,
+      source?.ops?.group_chat,
       DEFAULT_NOTIFICATION_PREFERENCES.ops.group_chat
     ),
     group_photos: toBoolean(
@@ -317,13 +291,7 @@ const normalizeNotificationPreferences = (preferences = {}) => {
     ),
   };
 
-  const normalizedLegacy = {
-    chatNotifications: normalizedOps.group_chat,
-    itineraryNotifications: normalizedOps.itinerary_changes,
-  };
-
   return {
-    ...normalizedLegacy,
     ops: normalizedOps,
     marketing: normalizedMarketing,
   };
@@ -393,7 +361,8 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
     let token;
     const projectId = resolveExpoProjectId();
     if (!projectId) {
-      logger.warn('NotificationService', 'Push token project id missing; using legacy token fetch fallback');
+      logger.warn('NotificationService', 'Push token project id missing');
+      return null;
     }
 
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -401,10 +370,10 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
         logger.debug('NotificationService', 'Push token fetch attempt started', {
           attempt,
           retries,
-          hasProjectId: Boolean(projectId),
+          hasProjectId: true,
         });
         const tokenData = await Promise.race([
-          Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined),
+          Notifications.getExpoPushTokenAsync({ projectId }),
           new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Token fetch timeout')), 10000)
           )
@@ -512,19 +481,6 @@ export const saveUserPreferences = async (userId, preferences) => {
       });
     }
 
-    const includesLegacyChatToggle = ['chatNotifications', 'chatNotification', 'chat', 'messages', 'messageNotifications']
-      .some((key) => hasOwn(incomingSource, key));
-    const includesLegacyItineraryToggle = ['itineraryNotifications', 'itineraryNotification', 'itinerary', 'schedule', 'tripUpdates']
-      .some((key) => hasOwn(incomingSource, key));
-
-    if (includesLegacyChatToggle) {
-      mergedOps.group_chat = incomingPreferences.chatNotifications;
-    }
-
-    if (includesLegacyItineraryToggle) {
-      mergedOps.itinerary_changes = incomingPreferences.itineraryNotifications;
-    }
-
     const mergedMarketing = {
       ...DEFAULT_NOTIFICATION_PREFERENCES.marketing,
       ...(existingRemotePreferences.marketing || {}),
@@ -539,8 +495,6 @@ export const saveUserPreferences = async (userId, preferences) => {
     }
 
     const mergedPreferences = {
-      chatNotifications: mergedOps.group_chat,
-      itineraryNotifications: mergedOps.itinerary_changes,
       ops: mergedOps,
       marketing: mergedMarketing,
     };

@@ -313,7 +313,7 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
       },
       'drivers/D-NEW': { assignments: {} },
       'drivers/D-OLD': { currentTourId: 'TOUR_A', authUid: 'old-auth-uid' },
-      'drivers/D-STALE': { currentTourId: ' /// ### ', activeTourId: 'tour a' },
+      'drivers/D-STALE': { currentTourId: ' /// ### ' },
     });
 
     const { assignDriver } = await import('./tourService.js');
@@ -329,7 +329,6 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
     expect(updates['drivers/D-OLD/currentTourId']).toBeNull();
     expect(updates['drivers/D-OLD/currentTourCode']).toBeNull();
     expect(updates['drivers/D-STALE/currentTourId']).toBeNull();
-    expect(updates['drivers/D-STALE/activeTourId']).toBeNull();
     expect(updates['users/old-auth-uid/driverAssignedTourId']).toBeNull();
     expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-NEW']).toBe(true);
   });

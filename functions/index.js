@@ -215,15 +215,15 @@ const getPushTokenIneligibilityReason = (userData = {}) => {
   const tokenStatus = typeof userData?.pushTokenStatus === 'string'
     ? userData.pushTokenStatus.trim().toUpperCase()
     : '';
-  if (tokenStatus === 'INVALID' || tokenStatus === 'UNAVAILABLE') {
-    return `token_status_${tokenStatus.toLowerCase()}`;
+  if (tokenStatus !== 'ACTIVE') {
+    return tokenStatus ? `token_status_${tokenStatus.toLowerCase()}` : 'token_status_missing';
   }
 
   const permissionState = typeof userData?.pushPermissionState === 'string'
     ? userData.pushPermissionState.trim().toLowerCase()
     : '';
-  if (permissionState === 'denied' || permissionState === 'blocked' || permissionState === 'unavailable') {
-    return `permission_${permissionState}`;
+  if (permissionState !== 'granted') {
+    return permissionState ? `permission_${permissionState}` : 'permission_missing';
   }
 
   return null;
@@ -528,21 +528,8 @@ const resolveChatSenderParticipantIds = async ({
   const participantMap = participants && typeof participants === 'object'
     ? participants
     : {};
-  const candidatePrincipals = [
-    resolveTrimmedString(messageData.senderId),
-    resolveTrimmedString(messageData.senderStableId),
-    resolveTrimmedString(messageData.senderUid),
-  ].filter(Boolean);
-
-  candidatePrincipals.forEach((candidate) => {
-    if (participantMap[candidate]) {
-      senderParticipantIds.add(candidate);
-    }
-  });
-
-  if (senderParticipantIds.size > 0) {
-    return [...senderParticipantIds];
-  }
+  const senderStableId = resolveTrimmedString(messageData.senderStableId);
+  const candidatePrincipals = senderStableId ? [senderStableId] : [];
 
   const uniquePrincipals = [...new Set(candidatePrincipals)];
   for (const principalId of uniquePrincipals) {
@@ -593,13 +580,8 @@ const collectAssignedDriverIds = (manifestData = {}) => {
 const isDriverProfileAssignedToTour = (driverData = {}, tourId) => {
   const expectedTourId = normalizeTourKeyForComparison(tourId);
   const currentTourId = normalizeTourKeyForComparison(driverData?.currentTourId);
-  const legacyActiveTourId = normalizeTourKeyForComparison(driverData?.activeTourId);
 
-  if (!currentTourId && !legacyActiveTourId) {
-    return true;
-  }
-
-  return currentTourId === expectedTourId || legacyActiveTourId === expectedTourId;
+  return Boolean(currentTourId && currentTourId === expectedTourId);
 };
 
 const loadDriverProfile = async (driverId) => {
@@ -987,7 +969,6 @@ const buildVerifiedLoginGrantUpdates = ({
   bookingRef,
   normalizedPassengerEmail,
   tourId,
-  tourCode = null,
   nowMs = Date.now(),
 }) => {
   if (!isValidFirebaseKey(authUid) || !isValidFirebaseKey(bookingRef) || !isValidFirebaseKey(tourId)) {
@@ -1007,10 +988,6 @@ const buildVerifiedLoginGrantUpdates = ({
 
   if (normalizedPassengerEmail) {
     grantPayload.normalizedPassengerEmail = normalizedPassengerEmail;
-  }
-
-  if (tourCode) {
-    grantPayload.tourCode = tourCode;
   }
 
   return {
@@ -1045,11 +1022,7 @@ const deriveParentStatusFromPassengers = (passengerStatuses = []) => {
 };
 
 const normalizeManifestBooking = (bookingRef, bookingData = {}) => {
-  const passengerNames = Array.isArray(bookingData.passengerNames)
-    ? bookingData.passengerNames
-    : Array.isArray(bookingData.passengers)
-      ? bookingData.passengers
-      : [];
+  const passengerNames = Array.isArray(bookingData.passengerNames) ? bookingData.passengerNames : [];
   const seatNumbers = Array.isArray(bookingData.seatNumbers) ? [...bookingData.seatNumbers] : [];
 
   if (passengerNames.length > seatNumbers.length) {
@@ -1060,10 +1033,8 @@ const normalizeManifestBooking = (bookingRef, bookingData = {}) => {
 
   const pickupPoints = (Array.isArray(bookingData.pickupPoints) && bookingData.pickupPoints.length > 0)
     ? bookingData.pickupPoints
-    : [{
-        location: bookingData.pickupLocation || 'To be confirmed',
-        time: bookingData.pickupTime || 'TBA',
-      }];
+    : [];
+  const firstPickup = pickupPoints[0] || {};
 
   return {
     id: bookingRef,
@@ -1071,8 +1042,8 @@ const normalizeManifestBooking = (bookingRef, bookingData = {}) => {
     passengerNames,
     seatNumbers,
     pickupPoints,
-    pickupTime: bookingData.pickupTime || pickupPoints?.[0]?.time || 'TBA',
-    pickupLocation: bookingData.pickupLocation || pickupPoints?.[0]?.location || 'To be confirmed',
+    pickupTime: firstPickup.time || 'TBA',
+    pickupLocation: firstPickup.location || 'To be confirmed',
   };
 };
 
@@ -1126,31 +1097,24 @@ const buildTourManifestPayload = async ({ tourId, requestedTourCode = null, db =
   }
 
   const tourData = tourSnapshot.val() || {};
-  const tourCodeForSearch = resolveTrimmedString(tourData.tourCode)
+  const tourCode = resolveTrimmedString(tourData.tourCode)
     || resolveTrimmedString(requestedTourCode)
     || canonicalTourId.replace(/_/g, ' ');
 
-  const [bookingsByTourCodeSnapshot, bookingsByTourIdSnapshot, manifestSnapshot] = await Promise.all([
-    db.ref('bookings').orderByChild('tourCode').equalTo(tourCodeForSearch).once('value'),
+  const [bookingsByTourIdSnapshot, manifestSnapshot] = await Promise.all([
     db.ref('bookings').orderByChild('tourId').equalTo(canonicalTourId).once('value'),
     db.ref(`tour_manifests/${canonicalTourId}`).once('value'),
   ]);
 
-  const rawBookings = {
-    ...(bookingsByTourCodeSnapshot.val() || {}),
-    ...(bookingsByTourIdSnapshot.val() || {}),
-  };
+  const rawBookings = bookingsByTourIdSnapshot.val() || {};
   const manifestData = manifestSnapshot.val() || {};
   const bookingStatuses = manifestData.bookings || {};
   const bookings = Object.entries(rawBookings).map(([bookingRef, bookingData]) => {
     const normalizedBooking = normalizeManifestBooking(bookingRef, bookingData || {});
     const liveStatus = bookingStatuses[bookingRef] || {};
     const totalPax = normalizedBooking.passengerNames.length;
-    const hasPassengerStatuses = Array.isArray(liveStatus.passengerStatus)
-      || Array.isArray(liveStatus.passengers);
-    const rawPassengerStatuses = Array.isArray(liveStatus.passengerStatus)
-      ? liveStatus.passengerStatus
-      : liveStatus.passengers;
+    const hasPassengerStatuses = Array.isArray(liveStatus.passengerStatus);
+    const rawPassengerStatuses = liveStatus.passengerStatus;
     const passengerStatus = normalizePassengerStatuses(rawPassengerStatuses, totalPax);
     const derivedStatus = hasPassengerStatuses ? deriveParentStatusFromPassengers(passengerStatus) : null;
 
@@ -1183,7 +1147,7 @@ const buildTourManifestPayload = async ({ tourId, requestedTourCode = null, db =
 
   return {
     tourId: canonicalTourId,
-    tourCode: tourCodeForSearch,
+    tourCode,
     bookings,
     stats,
   };
@@ -1194,71 +1158,16 @@ const normalizeDriverId = (driverId) => {
   return driverId.trim().toUpperCase();
 };
 
-const normalizeAssignedDriverCodeRecord = ({ value, driverId, fallbackTourId = null, fallbackTourCode = null }) => {
-  if (!value) return null;
-
-  if (typeof value === 'string') {
-    const normalizedTourId = normalizeTourKeyForComparison(value) || fallbackTourId;
-    return normalizedTourId
-      ? {
-          tourId: normalizedTourId,
-          tourCode: fallbackTourCode || normalizedTourId.replace(/_/g, ' '),
-          driverId,
-          legacy: true,
-        }
-      : null;
-  }
-
-  if (typeof value !== 'object') return null;
-
-  const normalizedTourId = normalizeTourKeyForComparison(value.tourId) || fallbackTourId;
-  const tourCode = resolveTrimmedString(value.tourCode)
-    || fallbackTourCode
-    || (normalizedTourId ? normalizedTourId.replace(/_/g, ' ') : null);
-
-  return normalizedTourId && tourCode
-    ? {
-        tourId: normalizedTourId,
-        tourCode,
-        driverId,
-        legacy: false,
-      }
-    : null;
-};
-
-const resolveDriverAssignment = async ({ driverId, driverData = {}, db = admin.database() }) => {
-  let assignedTourId = normalizeTourKeyForComparison(driverData.currentTourId)
-    || normalizeTourKeyForComparison(driverData.activeTourId);
-  let assignedTourCode = resolveTrimmedString(driverData.currentTourCode);
+const resolveDriverAssignment = async ({ driverId, driverData = {} }) => {
+  const assignedTourId = normalizeTourKeyForComparison(driverData.currentTourId);
+  const assignedTourCode = resolveTrimmedString(driverData.currentTourCode);
 
   if (assignedTourId) {
     return {
       assignedTourId,
       assignedTourCode,
-      assignmentSource: driverData.currentTourId ? 'driver_profile' : 'legacy_active_tour',
+      assignmentSource: 'driver_profile',
     };
-  }
-
-  const manifestsSnapshot = await db.ref('tour_manifests').once('value');
-  const manifests = manifestsSnapshot.val() || {};
-  for (const [manifestTourId, manifestData] of Object.entries(manifests)) {
-    const normalized = normalizeAssignedDriverCodeRecord({
-      value: manifestData?.assigned_driver_codes?.[driverId],
-      driverId,
-      fallbackTourId: normalizeTourKeyForComparison(manifestTourId),
-      fallbackTourCode: resolveTrimmedString(manifestData?.tourCode)
-        || normalizeTourKeyForComparison(manifestTourId)?.replace(/_/g, ' '),
-    });
-
-    if (normalized?.tourId) {
-      assignedTourId = normalized.tourId;
-      assignedTourCode = normalized.tourCode;
-      return {
-        assignedTourId,
-        assignedTourCode,
-        assignmentSource: normalized.legacy ? 'legacy_manifest_string' : 'manifest_driver_code',
-      };
-    }
   }
 
   return {
@@ -1357,8 +1266,7 @@ exports.verifyPassengerLogin = onRequest(
 
       const resolvedBookingRef = normalizeBookingRef(identity.bookingRef || bookingRef);
       const resolvedTourId = typeof identity.tourId === 'string' ? identity.tourId.trim() : '';
-      const resolvedTourCode = typeof identity.tourCode === 'string' ? identity.tourCode.trim() : '';
-      const canonicalTourId = normalizeTourKeyForComparison(resolvedTourId || resolvedTourCode);
+      const canonicalTourId = normalizeTourKeyForComparison(resolvedTourId);
 
       if (!resolvedBookingRef || !canonicalTourId) {
         log.warn('Booking identity missing essential identifiers', { bookingRef });
@@ -1390,17 +1298,12 @@ exports.verifyPassengerLogin = onRequest(
         return res.status(200).json({ valid: false, reason: 'TOUR_INACTIVE' });
       }
 
-      const bookingData = bookingSnapshot.val() || {};
-      const canonicalTourCode = resolveTrimmedString(resolvedTourCode)
-        || resolveTrimmedString(tourData.tourCode)
-        || resolveTrimmedString(bookingData.tourCode)
-        || null;
+      const canonicalTourCode = resolveTrimmedString(tourData.tourCode) || null;
       const grantUpdates = buildVerifiedLoginGrantUpdates({
         authUid: requestAuth.uid,
         bookingRef: resolvedBookingRef,
         normalizedPassengerEmail: email,
         tourId: canonicalTourId,
-        tourCode: canonicalTourCode,
       });
 
       if (!grantUpdates) {
@@ -1444,7 +1347,7 @@ exports.getTourManifest = onRequest(
       return res.status(401).json({ success: false, reason: 'INVALID_CREDENTIALS' });
     }
 
-    const requestedTour = resolveTrimmedString(req.body?.tourId) || resolveTrimmedString(req.body?.tourCode);
+    const requestedTour = resolveTrimmedString(req.body?.tourId);
     const tourId = normalizeTourKeyForComparison(requestedTour);
     if (!tourId || !isValidFirebaseKey(tourId)) {
       return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
@@ -1551,7 +1454,6 @@ exports.verifyDriverLogin = onRequest(
         const tourSnapshot = await db.ref(`tours/${assignment.assignedTourId}`).once('value');
         if (tourSnapshot.exists()) {
           const tourData = tourSnapshot.val() || {};
-          assignedTourCode = assignedTourCode || resolveTrimmedString(tourData.tourCode);
           resolvedTour = {
             id: assignment.assignedTourId,
             ...tourData,
@@ -2196,5 +2098,4 @@ exports.__testables = {
   verifyTourManifestAccess,
   normalizeManifestBooking,
   resolveDriverAssignment,
-  normalizeAssignedDriverCodeRecord,
 };

@@ -22,11 +22,7 @@ const buildChatSearchResults = (messages, query) => {
   return messages
     .map((message) => {
       const textMatches = countMatches(message?.text, normalizedQuery);
-      const senderMatches = [
-        message?.senderName,
-        message?.sender,
-        message?.authorName,
-      ].reduce((sum, senderField) => sum + countMatches(senderField, normalizedQuery), 0);
+      const senderMatches = countMatches(message?.senderName, normalizedQuery);
       const matchCount = textMatches + senderMatches;
 
       return {

@@ -14,7 +14,7 @@ test('stripReplyIdDecorators normalizes prefixed and path-like ids', () => {
   assert.equal(stripReplyIdDecorators('chats/tour-1/messages/msg-99'), 'msg-99');
 });
 
-test('collectMessageIdCandidates supports legacy prefixed and canonical ids', () => {
+test('collectMessageIdCandidates supports decorated and canonical ids', () => {
   const candidates = collectMessageIdCandidates('message-msg-42');
   assert.deepEqual(candidates.sort(), ['message-msg-42', 'msg-42']);
 

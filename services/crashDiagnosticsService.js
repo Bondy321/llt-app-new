@@ -423,10 +423,8 @@ export const summarizePhotoRecord = (photo = {}) => ({
   storagePathHash: photo?.storagePath ? stableHash(photo.storagePath) : null,
   thumbnailStoragePathLength: typeof photo?.thumbnailStoragePath === 'string' ? photo.thumbnailStoragePath.length : null,
   viewerStoragePathLength: typeof photo?.viewerStoragePath === 'string' ? photo.viewerStoragePath.length : null,
-  legacyDisplayUnavailable: Boolean(photo?.legacyDisplayUnavailable),
+  displayVariantUnavailable: Boolean(photo?.displayVariantUnavailable),
   uriSummary: {
-    url: summarizeUri(photo?.url),
-    fullUrl: summarizeUri(photo?.fullUrl),
     sourceUrl: summarizeUri(photo?.sourceUrl),
     thumbnailUrl: summarizeUri(photo?.thumbnailUrl),
     viewerUrl: summarizeUri(photo?.viewerUrl),
@@ -450,8 +448,6 @@ export const summarizeQueueAction = (action = {}) => ({
   localAssets: {
     sourceUri: summarizeUri(action?.payload?.localAssets?.sourceUri || action?.payload?.uri),
     previewUri: summarizeUri(action?.payload?.localAssets?.previewUri),
-    thumbnailUri: summarizeUri(action?.payload?.localAssets?.thumbnailUri),
-    viewerUri: summarizeUri(action?.payload?.localAssets?.viewerUri),
   },
   lastError: action?.lastError || action?.payload?.lastError || null,
 });

@@ -54,7 +54,6 @@ test('buildVerifiedLoginGrantUpdates scopes passenger grants to booking, tour, a
     bookingRef: 'ABC123',
     normalizedPassengerEmail: 'traveller@example.com',
     tourId: '5112D_8',
-    tourCode: '5112D 8',
     nowMs: 1770000000000,
   });
 
@@ -65,6 +64,7 @@ test('buildVerifiedLoginGrantUpdates scopes passenger grants to booking, tour, a
   assert.equal(updates['tour_access_grants/5112D_8/auth-uid-1'].expiresAtMs, 1770001800000);
   assert.equal(updates['tour_access_grants/5112D_8/auth-uid-1'].bookingRef, 'ABC123');
   assert.equal(updates['booking_access_grants/ABC123/auth-uid-1'].tourId, '5112D_8');
+  assert.equal('tourCode' in updates['booking_access_grants/ABC123/auth-uid-1'], false);
 });
 
 const createMockRealtimeDb = (state) => {
@@ -115,10 +115,9 @@ test('buildTourManifestPayload assembles normalized bookings and live passenger 
     },
     bookings: {
       ABC123: {
-        tourCode: '5112D 8',
-        passengers: ['Alex', 'Sam'],
-        pickupLocation: 'Balloch',
-        pickupTime: '08:00',
+        tourId: '5112D_8',
+        passengerNames: ['Alex', 'Sam'],
+        pickupPoints: [{ location: 'Balloch', time: '08:00' }],
       },
       BY_TOUR_ID: {
         tourId: '5112D_8',
@@ -153,31 +152,18 @@ test('buildTourManifestPayload assembles normalized bookings and live passenger 
   assert.equal(manifest.stats.noShows, 1);
 });
 
-test('resolveDriverAssignment recovers legacy manifest driver-code assignments server-side', async () => {
-  const db = createMockRealtimeDb({
-    tour_manifests: {
-      '5112D_8': {
-        tourCode: '5112D 8',
-        assigned_driver_codes: {
-          'D-BONDY': {
-            driverId: 'D-BONDY',
-            tourId: '5112D_8',
-            tourCode: '5112D 8',
-          },
-        },
-      },
-    },
-  });
-
+test('resolveDriverAssignment reads canonical driver profile assignment', async () => {
   const assignment = await __testables.resolveDriverAssignment({
     driverId: 'D-BONDY',
-    driverData: {},
-    db,
+    driverData: {
+      currentTourId: '5112D 8',
+      currentTourCode: '5112D 8',
+    },
   });
 
   assert.equal(assignment.assignedTourId, '5112D_8');
   assert.equal(assignment.assignedTourCode, '5112D 8');
-  assert.equal(assignment.assignmentSource, 'manifest_driver_code');
+  assert.equal(assignment.assignmentSource, 'driver_profile');
 });
 
 test('verifyTourManifestAccess denies ordinary passengers full manifest access', async () => {
@@ -233,7 +219,7 @@ test('resolveChatSenderParticipantIds maps stable passenger identity to particip
   assert.deepEqual(lookups, [stablePassengerId]);
 });
 
-test('resolveChatSenderParticipantIds accepts legacy auth uid sender without binding lookup', async () => {
+test('resolveChatSenderParticipantIds ignores messages without stable sender identity', async () => {
   const lookups = [];
 
   const result = await __testables.resolveChatSenderParticipantIds({
@@ -249,7 +235,7 @@ test('resolveChatSenderParticipantIds accepts legacy auth uid sender without bin
     },
   });
 
-  assert.deepEqual(result, ['auth-uid-1']);
+  assert.deepEqual(result, []);
   assert.deepEqual(lookups, []);
 });
 
@@ -259,10 +245,14 @@ test('selectNotificationRecipients excludes sender auth uid resolved from stable
     usersMap: {
       'auth-uid-1': {
         pushToken: 'ExponentPushToken[sender]',
+        pushTokenStatus: 'ACTIVE',
+        pushPermissionState: 'granted',
         preferences: { ops: { group_chat: true } },
       },
       'auth-uid-2': {
         pushToken: 'ExponentPushToken[recipient]',
+        pushTokenStatus: 'ACTIVE',
+        pushPermissionState: 'granted',
         preferences: { ops: { group_chat: true } },
       },
     },
@@ -279,12 +269,12 @@ test('selectNotificationRecipients excludes sender auth uid resolved from stable
   );
 });
 
-test('selectNotificationRecipients skips explicit unavailable token states but keeps legacy token-only profiles', () => {
+test('selectNotificationRecipients skips unavailable, invalid, denied, and missing-status profiles', () => {
   const result = __testables.selectNotificationRecipients({
-    participantIds: ['legacy-user', 'unavailable-user', 'invalid-user', 'denied-user'],
+    participantIds: ['missing-status-user', 'unavailable-user', 'invalid-user', 'denied-user', 'active-user'],
     usersMap: {
-      'legacy-user': {
-        pushToken: 'ExponentPushToken[legacy]',
+      'missing-status-user': {
+        pushToken: 'ExponentPushToken[missing-status]',
         preferences: { ops: { group_chat: true } },
       },
       'unavailable-user': {
@@ -303,6 +293,12 @@ test('selectNotificationRecipients skips explicit unavailable token states but k
         pushPermissionState: 'denied',
         preferences: { ops: { group_chat: true } },
       },
+      'active-user': {
+        pushToken: 'ExponentPushToken[active]',
+        pushTokenStatus: 'ACTIVE',
+        pushPermissionState: 'granted',
+        preferences: { ops: { group_chat: true } },
+      },
     },
     preferencePath: ['preferences', 'ops', 'group_chat'],
     senderId: null,
@@ -312,7 +308,7 @@ test('selectNotificationRecipients skips explicit unavailable token states but k
 
   assert.deepEqual(
     result.validRecipients.map((recipient) => recipient.userId),
-    ['legacy-user'],
+    ['active-user'],
   );
 });
 
@@ -322,14 +318,20 @@ test('selectNotificationRecipients sends once per unique Expo push token', () =>
     usersMap: {
       'auth-uid-1': {
         pushToken: ' ExponentPushToken[shared-token] ',
+        pushTokenStatus: 'ACTIVE',
+        pushPermissionState: 'granted',
         preferences: { ops: { group_chat: true } },
       },
       'auth-uid-2': {
         pushToken: 'ExponentPushToken[shared-token]',
+        pushTokenStatus: 'ACTIVE',
+        pushPermissionState: 'granted',
         preferences: { ops: { group_chat: true } },
       },
       'auth-uid-3': {
         pushToken: 'ExponentPushToken[unique-token]',
+        pushTokenStatus: 'ACTIVE',
+        pushPermissionState: 'granted',
         preferences: { ops: { group_chat: true } },
       },
     },
@@ -356,14 +358,20 @@ test('selectNotificationRecipients excludes stale participant profiles sharing t
     usersMap: {
       'current-auth-uid': {
         pushToken: 'ExponentPushToken[current-device]',
+        pushTokenStatus: 'ACTIVE',
+        pushPermissionState: 'granted',
         preferences: { ops: { group_chat: true } },
       },
       'old-auth-uid': {
         pushToken: 'ExponentPushToken[current-device]',
+        pushTokenStatus: 'ACTIVE',
+        pushPermissionState: 'granted',
         preferences: { ops: { group_chat: true } },
       },
       'recipient-auth-uid': {
         pushToken: 'ExponentPushToken[recipient-device]',
+        pushTokenStatus: 'ACTIVE',
+        pushPermissionState: 'granted',
         preferences: { ops: { group_chat: true } },
       },
     },
@@ -383,6 +391,10 @@ test('selectNotificationRecipients excludes stale participant profiles sharing t
 
 test('getPushTokenIneligibilityReason reports token and permission suppression reasons', () => {
   assert.equal(
+    __testables.getPushTokenIneligibilityReason({ pushToken: 'ExponentPushToken[missing-status]' }),
+    'token_status_missing',
+  );
+  assert.equal(
     __testables.getPushTokenIneligibilityReason({ pushTokenStatus: 'UNAVAILABLE' }),
     'token_status_unavailable',
   );
@@ -391,7 +403,11 @@ test('getPushTokenIneligibilityReason reports token and permission suppression r
     'token_status_invalid',
   );
   assert.equal(
-    __testables.getPushTokenIneligibilityReason({ pushPermissionState: 'blocked' }),
+    __testables.getPushTokenIneligibilityReason({ pushTokenStatus: 'ACTIVE' }),
+    'permission_missing',
+  );
+  assert.equal(
+    __testables.getPushTokenIneligibilityReason({ pushTokenStatus: 'ACTIVE', pushPermissionState: 'blocked' }),
     'permission_blocked',
   );
   assert.equal(
@@ -419,7 +435,7 @@ test('shouldRemoveInvalidToken only allows cleanup for the currently stored toke
   );
 });
 
-test('collectAssignedDriverIds reads canonical and legacy manifest assignment leaves', () => {
+test('collectAssignedDriverIds reads canonical manifest assignment leaves', () => {
   assert.deepEqual(
     __testables.collectAssignedDriverIds({
       assigned_drivers: {
@@ -438,17 +454,9 @@ test('collectAssignedDriverIds reads canonical and legacy manifest assignment le
   );
 });
 
-test('isDriverProfileAssignedToTour accepts canonical and legacy active tour matches', () => {
+test('isDriverProfileAssignedToTour accepts canonical current tour matches only', () => {
   assert.equal(
     __testables.isDriverProfileAssignedToTour({ currentTourId: '5112D 8' }, '5112D_8'),
-    true,
-  );
-  assert.equal(
-    __testables.isDriverProfileAssignedToTour({ activeTourId: '5112D_8' }, '5112D_8'),
-    true,
-  );
-  assert.equal(
-    __testables.isDriverProfileAssignedToTour({ activeTourId: '5112d 8' }, '5112D_8'),
     true,
   );
   assert.equal(
@@ -462,10 +470,6 @@ test('resolveAssignedDriverRecipientIds maps assigned driver records to auth uid
     'D-BONDY': {
       authUid: 'driver-auth-1',
       currentTourId: '5112D_8',
-    },
-    'D-SMITH': {
-      authUid: 'driver-auth-2',
-      activeTourId: '5112D 8',
     },
     'D-STALE': {
       authUid: 'driver-auth-stale',
@@ -484,7 +488,6 @@ test('resolveAssignedDriverRecipientIds maps assigned driver records to auth uid
         'D-STALE': true,
       },
       assigned_driver_codes: {
-        'D-SMITH': { driverId: 'D-SMITH', tourId: '5112D_8' },
         'D-NOAUTH': { driverId: 'D-NOAUTH', tourId: '5112D_8' },
       },
     },
@@ -492,7 +495,7 @@ test('resolveAssignedDriverRecipientIds maps assigned driver records to auth uid
     context: { tourId: '5112D_8', notificationType: 'itinerary' },
   });
 
-  assert.deepEqual(result, ['driver-auth-1', 'driver-auth-2']);
+  assert.deepEqual(result, ['driver-auth-1']);
 });
 
 test('parseSourcePhotoPath resolves group and private source paths only', () => {

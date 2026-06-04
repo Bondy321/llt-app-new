@@ -27,7 +27,7 @@ const mergePhotoLists = (...photoLists) => {
     if (!photo || typeof photo !== 'object') return;
     const id = typeof photo.id === 'string' && photo.id.length > 0
       ? photo.id
-      : `${photo.timestamp || 0}:${photo.url || photo.sourceUrl || index}`;
+      : `${photo.timestamp || 0}:${photo.sourceUrl || photo.viewerUrl || photo.thumbnailUrl || index}`;
     byId.set(id, {
       ...(byId.get(id) || {}),
       ...photo,
