@@ -268,6 +268,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Setup Expo and EAS CLI
         uses: expo/expo-github-action@v8
