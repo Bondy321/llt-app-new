@@ -7,7 +7,6 @@ import {
   View,
   TouchableOpacity,
   SectionList,
-  Dimensions,
   Platform,
   ActivityIndicator,
   Alert,
@@ -16,6 +15,7 @@ import {
   Modal,
   KeyboardAvoidingView,
   Image as RNImage,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -46,9 +46,6 @@ import {
   summarizeUri,
 } from '../services/crashDiagnosticsService';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
-
-const { width: windowWidth } = Dimensions.get('window');
-const THUMBNAIL_SIZE = (windowWidth - SPACING.lg * 2 - SPACING.sm * 2) / 3;
 
 const formatPhotoDate = (timestamp, options) => {
   const parsedMs = parseTimestampMs(timestamp);
@@ -162,6 +159,15 @@ export default function PhotobookScreen({
   const [uploading, setUploading] = useState(false);
   const renderStateSeqRef = useRef(0);
   const imageEventCountsRef = useRef({});
+  const { width: windowWidth } = useWindowDimensions();
+  const thumbnailSize = useMemo(
+    () => Math.max(1, Math.floor(((windowWidth || 360) - SPACING.lg * 2 - SPACING.sm * 2) / 3)),
+    [windowWidth]
+  );
+  const thumbnailTileStyle = useMemo(
+    () => [styles.imageTouchable, { width: thumbnailSize, height: thumbnailSize }],
+    [thumbnailSize]
+  );
 
   const currentUser = auth.currentUser;
   const canonicalIdentity = useMemo(
@@ -689,7 +695,7 @@ export default function PhotobookScreen({
         ownerKey: summarizeRealtimeKey(privatePhotoOwnerKey),
       }, { flush: true });
       if (!enqueueResult.success) {
-        Alert.alert('Upload queue failed', enqueueResult.error || 'Could not queue upload.');
+        Alert.alert('Upload queue failed', 'Could not queue upload. Please try again.');
         return;
       }
       setShowUploadModal(false);
@@ -1103,7 +1109,7 @@ export default function PhotobookScreen({
                     <GalleryPhotoTile
                       key={photo.id || photo.viewerUrl || photo.thumbnailUrl}
                       photo={photo}
-                      style={styles.imageTouchable}
+                      style={thumbnailTileStyle}
                       onPress={() => openViewer(photo.id)}
                       useExpoImage={false}
                       onImageLoadStart={(itemPhoto) => recordTileImageEvent('load_start', itemPhoto)}
@@ -1136,7 +1142,7 @@ export default function PhotobookScreen({
                     const canRetry = Boolean(resolveQueuedUploadSourceUri(item));
 
                     return (
-                      <View key={item.id} style={styles.imageTouchable}>
+                      <View key={item.id} style={thumbnailTileStyle}>
                         {previewUri ? (
                           <RNImage
                             source={{ uri: previewUri }}
@@ -1657,8 +1663,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   imageTouchable: {
-    width: THUMBNAIL_SIZE,
-    height: THUMBNAIL_SIZE,
     borderRadius: RADIUS.md,
     overflow: 'hidden',
     backgroundColor: COLORS.border,

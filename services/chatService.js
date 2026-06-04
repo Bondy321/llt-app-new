@@ -1,6 +1,10 @@
 // services/chatService.js - Enhanced Chat Service with Premium Features
 // Improved with comprehensive validation, error handling, and security measures
 const isTestEnv = process.env.NODE_ENV === 'test';
+const IS_DEV_RUNTIME =
+  typeof __DEV__ !== 'undefined'
+    ? __DEV__
+    : typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production';
 let realtimeDb;
 const { loadOptionalService } = require('./optionalServiceLoader');
 const { toRealtimeKeySegment } = require('./identityService');
@@ -10,7 +14,9 @@ if (!isTestEnv) {
   try {
     ({ realtimeDb } = require('../firebase'));
   } catch (error) {
-    console.warn('Realtime database module not initialized during load:', error.message);
+    if (IS_DEV_RUNTIME) {
+      console.warn('Realtime database module not initialized during load:', error.message);
+    }
   }
 }
 
@@ -390,11 +396,13 @@ const REACTION_DEBUG_PERSIST_LEVEL = 'warn';
 
 const logReactionEvent = (level, eventName, payload) => {
   const message = `[ChatService] ${eventName}`;
-  try {
-    const consoleMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
-    console[consoleMethod](`[ReactionDebug] ${message}`, payload);
-  } catch (error) {
-    // Debug logging should never affect chat behavior.
+  if (IS_DEV_RUNTIME) {
+    try {
+      const consoleMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
+      console[consoleMethod](`[ReactionDebug] ${message}`, payload);
+    } catch (error) {
+      // Debug logging should never affect chat behavior.
+    }
   }
 
   const persistLevel = level === 'error' ? 'error' : REACTION_DEBUG_PERSIST_LEVEL;
@@ -403,12 +411,14 @@ const logReactionEvent = (level, eventName, payload) => {
     return;
   }
 
-  if (level === 'error') {
-    console.error(message, payload);
-  } else if (level === 'warn') {
-    console.warn(message, payload);
-  } else {
-    console.log(message, payload);
+  if (IS_DEV_RUNTIME) {
+    if (level === 'error') {
+      console.error(message, payload);
+    } else if (level === 'warn') {
+      console.warn(message, payload);
+    } else {
+      console.log(message, payload);
+    }
   }
 };
 
@@ -423,11 +433,13 @@ const logChatEvent = (level, eventName, payload = {}) => {
     // Diagnostics must never affect chat behavior.
   }
 
-  try {
-    const consoleMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
-    console[consoleMethod](`[ChatService] ${eventName}`, payload);
-  } catch (error) {
-    // Ignore diagnostic fallback failures.
+  if (IS_DEV_RUNTIME) {
+    try {
+      const consoleMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
+      console[consoleMethod](`[ChatService] ${eventName}`, payload);
+    } catch (error) {
+      // Ignore diagnostic fallback failures.
+    }
   }
 };
 

@@ -77,6 +77,14 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   const realtimeListener = useRef(null);
   const retryTimeoutRef = useRef(null);
   const loadRequestIdRef = useRef(0);
+  const mountedRef = useRef(false);
+  const activeTourIdRef = useRef(tourId);
+
+  activeTourIdRef.current = tourId;
+
+  const canUpdateForTour = useCallback((targetTourId = tourId) => (
+    mountedRef.current && activeTourIdRef.current === targetTourId
+  ), [tourId]);
 
   const clearRetryTimeout = useCallback(() => {
     if (retryTimeoutRef.current) {
@@ -102,6 +110,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
   // --- REAL-TIME SYNC ---
   useEffect(() => {
+    mountedRef.current = true;
     loadRequestIdRef.current += 1;
     logger.info('ItineraryScreen', 'Itinerary effect started', {
       tourId,
@@ -117,6 +126,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       logger.info('ItineraryScreen', 'Realtime itinerary listener starting', { tourId, isDriver: Boolean(isDriver) });
 
       const onUpdate = (snapshot) => {
+        if (!canUpdateForTour(tourId)) return;
         const data = snapshot.val();
         if (data) {
           setItinerary(data);
@@ -136,6 +146,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       realtimeListener.current = { ref: itineraryRef, listener: onUpdate };
 
       return () => {
+        mountedRef.current = false;
         clearRetryTimeout();
         loadRequestIdRef.current += 1;
         if (realtimeListener.current) {
@@ -145,28 +156,32 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       };
     }
     return () => {
+      mountedRef.current = false;
       clearRetryTimeout();
       loadRequestIdRef.current += 1;
       logger.debug('ItineraryScreen', 'Itinerary effect cleaned up without listener', { tourId });
     };
-  }, [tourId, isEditing, clearRetryTimeout]);
+  }, [tourId, isEditing, clearRetryTimeout, canUpdateForTour]);
 
   // --- OFFLINE CACHING ---
   const cacheItinerary = async (data) => {
+    const targetTourId = tourId;
     try {
       const syncedAt = new Date().toISOString();
-      await offlineSyncService.saveTourPack(tourId, isDriver ? 'driver' : 'passenger', { itinerary: data });
-      await offlineSyncService.setTourPackMeta(tourId, isDriver ? 'driver' : 'passenger', { lastSyncedAt: syncedAt });
-      setLastSyncedAt(syncedAt);
+      await offlineSyncService.saveTourPack(targetTourId, isDriver ? 'driver' : 'passenger', { itinerary: data });
+      await offlineSyncService.setTourPackMeta(targetTourId, isDriver ? 'driver' : 'passenger', { lastSyncedAt: syncedAt });
+      if (canUpdateForTour(targetTourId)) {
+        setLastSyncedAt(syncedAt);
+      }
       logger.info('ItineraryScreen', 'Itinerary cache saved', {
-        tourId,
+        tourId: targetTourId,
         isDriver: Boolean(isDriver),
         dayCount: Array.isArray(data?.days) ? data.days.length : null,
         syncedAt,
       });
     } catch (error) {
       logger.warn('ItineraryScreen', 'Failed to save itinerary cache', {
-        tourId,
+        tourId: targetTourId,
         isDriver,
         error: error?.message || String(error)
       });
@@ -174,28 +189,31 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   };
 
   const loadCachedItinerary = async () => {
+    const targetTourId = tourId;
     try {
-      const cached = await offlineSyncService.getTourPack(tourId, isDriver ? 'driver' : 'passenger');
+      const cached = await offlineSyncService.getTourPack(targetTourId, isDriver ? 'driver' : 'passenger');
       const data = cached?.success ? cached.data?.itinerary : null;
       if (data) {
         try {
-          const meta = await offlineSyncService.getTourPackMeta(tourId, isDriver ? 'driver' : 'passenger');
-          if (meta?.success && meta.data?.lastSyncedAt) {
+          const meta = await offlineSyncService.getTourPackMeta(targetTourId, isDriver ? 'driver' : 'passenger');
+          if (meta?.success && meta.data?.lastSyncedAt && canUpdateForTour(targetTourId)) {
             setLastSyncedAt(meta.data.lastSyncedAt);
           }
         } catch (metaError) {
           logger.warn('ItineraryScreen', 'Failed to load itinerary cache metadata', {
-            tourId,
+            tourId: targetTourId,
             isDriver,
             error: metaError?.message || String(metaError)
           });
         }
-        setCachedItinerary(data);
+        if (canUpdateForTour(targetTourId)) {
+          setCachedItinerary(data);
+        }
         return data;
       }
     } catch (error) {
       logger.warn('ItineraryScreen', 'Failed to load itinerary cache', {
-        tourId,
+        tourId: targetTourId,
         isDriver,
         error: error?.message || String(error)
       });

@@ -7,7 +7,6 @@ import {
   View,
   TouchableOpacity,
   SectionList,
-  Dimensions,
   Platform,
   ActivityIndicator,
   Alert,
@@ -15,6 +14,7 @@ import {
   TextInput,
   Modal,
   KeyboardAvoidingView,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -33,9 +33,6 @@ import { getCanonicalIdentity } from '../services/identityService';
 import logger, { maskIdentifier } from '../services/loggerService';
 import { parseTimestampMs } from '../services/timeUtils';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../theme';
-
-const { width: windowWidth } = Dimensions.get('window');
-const THUMBNAIL_SIZE = (windowWidth - SPACING.lg * 2 - SPACING.sm * 2) / 3;
 
 const formatPhotoDate = (timestamp, options) => {
   const parsedMs = parseTimestampMs(timestamp);
@@ -64,6 +61,15 @@ export default function GroupPhotobookScreen({
   // Image viewer state
   const [viewerVisible, setViewerVisible] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
+  const { width: windowWidth } = useWindowDimensions();
+  const thumbnailSize = useMemo(
+    () => Math.max(1, Math.floor(((windowWidth || 360) - SPACING.lg * 2 - SPACING.sm * 2) / 3)),
+    [windowWidth]
+  );
+  const thumbnailTileStyle = useMemo(
+    () => [styles.imageTouchable, { width: thumbnailSize, height: thumbnailSize }],
+    [thumbnailSize]
+  );
 
   useEffect(() => {
     if (typeof onViewerVisibilityChange === 'function') {
@@ -387,7 +393,7 @@ export default function GroupPhotobookScreen({
           jobId,
           error: enqueueResult.error || 'unknown',
         });
-        Alert.alert('Upload queued failed', enqueueResult.error || 'Could not queue upload. Please try again.');
+        Alert.alert('Upload queue failed', 'Could not queue upload. Please try again.');
         return;
       }
       logger.info('GroupPhotobook', 'Group photo enqueued', {
@@ -462,7 +468,7 @@ export default function GroupPhotobookScreen({
         actionId: pending.id,
         error: result.error || 'unknown',
       });
-      Alert.alert('Discard failed', result.error || 'Could not remove this photo from the upload queue.');
+      Alert.alert('Discard failed', 'Could not remove this photo from the upload queue.');
       return;
     }
     logger.info('GroupPhotobook', 'Group photo discarded', { tourId, actionId: pending.id });
@@ -759,7 +765,7 @@ export default function GroupPhotobookScreen({
                 <GalleryPhotoTile
                   key={photo.id}
                   photo={photo}
-                  style={styles.imageTouchable}
+                  style={thumbnailTileStyle}
                   onPress={() => openViewer(section.sectionIndex, photoIndexInSection)}
                 >
                   {photo.userId === principalId && (
@@ -1150,8 +1156,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   imageTouchable: {
-    width: THUMBNAIL_SIZE,
-    height: THUMBNAIL_SIZE,
     borderRadius: RADIUS.md,
     overflow: 'hidden',
     backgroundColor: COLORS.border,

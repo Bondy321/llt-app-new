@@ -46,14 +46,35 @@ jobs:
           git fetch origin main --depth=1
           git merge-base --is-ancestor ${{ github.sha }} origin/main
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+
+      - name: Setup Java for Firebase emulators
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Install Functions dependencies
+        run: npm --prefix functions ci
+
+      - name: Run mobile tests
+        run: npm run test:mobile
+
+      - name: Run Functions script tests
+        run: npm run test:functions:scripts
+
+      - name: Run Firebase rules tests
+        run: npm run test:emulators
 
       - name: Validate Expo public environment
         run: npm run validate:expo-env -- --platform=all

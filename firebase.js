@@ -18,6 +18,22 @@ import { createPersistenceProvider } from './services/persistenceProvider.js';
 // Initialize a resilient persistence layer for auth/session state.
 const authStorage = createPersistenceProvider({ namespace: 'LLT_AUTH' });
 const IS_DEV = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
+const formatFirebaseError = (error) => error?.message || String(error || 'Unknown error');
+const firebaseDebugLog = (...args) => {
+  if (IS_DEV) {
+    console.log(...args);
+  }
+};
+const firebaseWarnLog = (...args) => {
+  if (IS_DEV) {
+    console.warn(...args);
+  }
+};
+const firebaseErrorLog = (...args) => {
+  if (IS_DEV) {
+    console.error(...args);
+  }
+};
 
 // Firebase configuration - credentials loaded from environment variables
 // See .env.example for required environment variables
@@ -104,7 +120,7 @@ const resolveAuthRestoreReady = () => {
   if (!authRestoreReadyPromise) {
     if (typeof auth.authStateReady === 'function') {
       authRestoreReadyPromise = auth.authStateReady().catch((error) => {
-        console.warn('Auth state restoration readiness failed:', error?.message || error);
+        firebaseWarnLog('Auth state restoration readiness failed:', formatFirebaseError(error));
       });
     } else {
       authRestoreReadyPromise = new Promise((resolve) => {
@@ -130,7 +146,7 @@ class AuthPersistence {
   constructor() {
     this.AUTH_KEY = 'LLT_authUser';
     this.TOKEN_KEY = 'LLT_authToken';
-    console.log(`[AuthPersistence] Using storage mode: ${authStorage.mode}`);
+    firebaseDebugLog(`[AuthPersistence] Using storage mode: ${authStorage.mode}`);
   }
 
   async saveAuthState(user) {
@@ -144,12 +160,12 @@ class AuthPersistence {
           savedAt: new Date().toISOString()
         };
         await authStorage.setItemAsync(this.AUTH_KEY, JSON.stringify(authData));
-        console.log(`[AuthPersistence] Auth state saved (${authStorage.mode})`);
+        firebaseDebugLog(`[AuthPersistence] Auth state saved (${authStorage.mode})`);
       } else {
         await authStorage.deleteItemAsync(this.AUTH_KEY);
       }
     } catch (error) {
-      console.error(`[AuthPersistence] Error saving auth state via ${authStorage.mode}:`, error);
+      firebaseErrorLog(`[AuthPersistence] Error saving auth state via ${authStorage.mode}:`, formatFirebaseError(error));
     }
   }
 
@@ -158,7 +174,7 @@ class AuthPersistence {
       const stored = await authStorage.getItemAsync(this.AUTH_KEY);
       return stored ? JSON.parse(stored) : null;
     } catch (error) {
-      console.error(`[AuthPersistence] Error retrieving auth state via ${authStorage.mode}:`, error);
+      firebaseErrorLog(`[AuthPersistence] Error retrieving auth state via ${authStorage.mode}:`, formatFirebaseError(error));
       return null;
     }
   }
@@ -168,7 +184,7 @@ class AuthPersistence {
       await authStorage.deleteItemAsync(this.AUTH_KEY);
       await authStorage.deleteItemAsync(this.TOKEN_KEY);
     } catch (error) {
-      console.error(`[AuthPersistence] Error clearing auth state via ${authStorage.mode}:`, error);
+      firebaseErrorLog(`[AuthPersistence] Error clearing auth state via ${authStorage.mode}:`, formatFirebaseError(error));
     }
   }
 }
@@ -201,7 +217,7 @@ try {
     firebaseInitHealth.missingConfig = missingConfig;
     firebaseInitHealth.hasError = true;
     firebaseInitHealth.errorMessage = firebaseInitializationError.message;
-    console.warn(
+    firebaseWarnLog(
       '[Firebase] Initialization skipped because required configuration is missing.',
       missingConfig
     );
@@ -213,10 +229,10 @@ try {
 
   if (!firebase.apps.length) {
     app = firebase.initializeApp(firebaseConfig);
-    console.log('Firebase initialized successfully');
+    firebaseDebugLog('Firebase initialized successfully');
   } else {
     app = firebase.app();
-    console.log('Firebase already initialized');
+    firebaseDebugLog('Firebase already initialized');
   }
 
   // Initialize services
@@ -229,12 +245,12 @@ try {
     auth = initializeAuth(modularApp, {
       persistence: getReactNativePersistence(AsyncStorage),
     });
-    console.log('Firebase auth configured with React Native persistence');
+    firebaseDebugLog('Firebase auth configured with React Native persistence');
   } catch (authInitError) {
     auth = getAuth(modularApp);
-    console.warn(
+    firebaseWarnLog(
       'Firebase auth already initialized; reusing existing instance.',
-      authInitError?.message || authInitError
+      formatFirebaseError(authInitError)
     );
   }
 
@@ -250,10 +266,10 @@ try {
     cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED,
     merge: true
   });
-  console.log('Firestore configured with memory cache (persistence not available in React Native)');
+  firebaseDebugLog('Firestore configured with memory cache (persistence not available in React Native)');
 
   // Realtime DB connectivity is controlled by updateNetworkState; do not force offline/online churn at startup.
-  console.log('Realtime Database configured');
+  firebaseDebugLog('Realtime Database configured');
   firebaseInitHealth.initialized = true;
 
 } catch (error) {
@@ -266,7 +282,7 @@ try {
   firebaseInitHealth.initialized = false;
   firebaseInitHealth.hasError = true;
   firebaseInitHealth.errorMessage = error?.message || 'Unknown Firebase initialization error';
-  console.error('Firebase initialization error:', error);
+  firebaseErrorLog('Firebase initialization error:', formatFirebaseError(error));
 }
 
 // Create auth persistence instance
@@ -280,7 +296,7 @@ const notifyAuthStateListeners = (user) => {
     try {
       listener(user);
     } catch (error) {
-      console.error('Error in auth state listener:', error);
+      firebaseErrorLog('Error in auth state listener:', formatFirebaseError(error));
     }
   });
 };
@@ -289,7 +305,7 @@ const notifyAuthStateListeners = (user) => {
 if (hasAuthInstance()) {
   onAuthStateChanged(auth, async (user) => {
     if (IS_DEV) {
-      console.log('Global auth state changed');
+      firebaseDebugLog('Global auth state changed');
     }
 
     // Save auth state
@@ -299,7 +315,7 @@ if (hasAuthInstance()) {
     notifyAuthStateListeners(user);
   });
 } else {
-  console.error('Firebase auth is not available; skipping auth state listener setup');
+  firebaseErrorLog('Firebase auth is not available; skipping auth state listener setup');
 }
 
 const assertAuthAvailable = (actionName) => {
@@ -319,14 +335,14 @@ const authHelpers = {
       assertAuthAvailable('sign in anonymously');
 
       if (IS_DEV) {
-        console.log('Attempting anonymous sign in...');
+        firebaseDebugLog('Attempting anonymous sign in...');
       }
 
       await resolveAuthRestoreReady();
 
       if (auth.currentUser) {
         if (IS_DEV) {
-          console.log('Using existing auth session');
+          firebaseDebugLog('Using existing auth session');
         }
         return auth.currentUser;
       }
@@ -334,7 +350,7 @@ const authHelpers = {
       // Sign in anonymously
       const result = await signInAnonymously(auth);
       if (IS_DEV) {
-        console.log('Anonymous sign in successful');
+        firebaseDebugLog('Anonymous sign in successful');
       }
       
       // Save the auth state
@@ -342,7 +358,7 @@ const authHelpers = {
       
       return result.user;
     } catch (error) {
-      console.error('Anonymous sign in error:', error);
+      firebaseErrorLog('Anonymous sign in error:', formatFirebaseError(error));
       throw error;
     }
   },
@@ -361,7 +377,7 @@ const authHelpers = {
 
   onAuthStateChanged(callback) {
     if (!auth) {
-      console.warn('Firebase auth is not available; auth state listener will be inert');
+      firebaseWarnLog('Firebase auth is not available; auth state listener will be inert');
       return () => {};
     }
 
@@ -371,7 +387,7 @@ const authHelpers = {
       try {
         callback(auth.currentUser || null);
       } catch (error) {
-        console.error('Error in auth state listener:', error);
+        firebaseErrorLog('Error in auth state listener:', formatFirebaseError(error));
       }
     });
 
@@ -400,7 +416,7 @@ const getCurrentAppCheckToken = async () => {
     const result = await appCheckInstance.getToken(false);
     return typeof result?.token === 'string' ? result.token : null;
   } catch (error) {
-    console.warn('Unable to retrieve App Check token:', error?.message || error);
+    firebaseWarnLog('Unable to retrieve App Check token:', formatFirebaseError(error));
     throw error;
   }
 };
@@ -412,7 +428,7 @@ let lastRealtimeDbOnlineState = null;
 const updateNetworkState = (online) => {
   isOnline = online;
   if (!realtimeDb) {
-    console.warn('Realtime Database is not available; skipping network state sync');
+    firebaseWarnLog('Realtime Database is not available; skipping network state sync');
     return;
   }
 
@@ -421,10 +437,10 @@ const updateNetworkState = (online) => {
   }
 
   if (online) {
-    console.log('Network connected - syncing data');
+    firebaseDebugLog('Network connected - syncing data');
     realtimeDb.goOnline();
   } else {
-    console.log('Network disconnected - using offline mode');
+    firebaseDebugLog('Network disconnected - using offline mode');
     realtimeDb.goOffline();
   }
 

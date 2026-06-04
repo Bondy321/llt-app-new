@@ -12,7 +12,6 @@ import {
   Alert,
   Animated,
   RefreshControl,
-  Dimensions,
   Platform,
   Vibration,
 } from 'react-native';
@@ -32,8 +31,6 @@ import { resolveTourId } from '../services/tourIdentityService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import { getPickupCountdownState } from '../services/pickupTimeParser';
 const { buildTourHomeActionPlan } = require('../utils/tourHomeActionPlanner');
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // Brand Colors
 const COLORS = {
@@ -273,7 +270,7 @@ const QuickActionButton = ({ icon, label, color, onPress, badge, delay = 0 }) =>
   };
 
   return (
-    <Animated.View style={{ opacity: fadeAnim, transform: [{ scale: scaleAnim }] }}>
+    <Animated.View style={[styles.quickActionWrapper, { opacity: fadeAnim, transform: [{ scale: scaleAnim }] }]}>
       <TouchableOpacity
         style={styles.quickActionButton}
         onPress={() => {
@@ -1844,11 +1841,15 @@ const styles = StyleSheet.create({
   },
   quickActionsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: SPACING.sm,
+  },
+  quickActionWrapper: {
+    flex: 1,
+    minWidth: 0,
   },
   quickActionButton: {
     alignItems: 'center',
-    width: (SCREEN_WIDTH - SPACING.lg * 2 - SPACING.sm * 3 - 8) / 4,
+    width: '100%',
   },
   quickActionIconContainer: {
     width: 52,

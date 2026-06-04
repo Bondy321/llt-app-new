@@ -1,5 +1,5 @@
 // screens/LoginScreen.js
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { validateBookingReference } from '../services/bookingServiceRealtime';
 import {
   StyleSheet,
@@ -10,13 +10,13 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  Dimensions,
   Keyboard,
   ActivityIndicator,
   Animated,
   Image,
   Alert,
   Linking,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -40,8 +40,6 @@ const {
   shouldShowEmailField,
   resolveLoginIdentity,
 } = require('./loginFlow');
-
-const { height } = Dimensions.get('window');
 
 const COLORS = {
   primaryBlue: THEME_COLORS.primary,
@@ -102,6 +100,7 @@ const createErrorState = (message, options = {}) => ({
 });
 
 export default function LoginScreen({ onLoginSuccess, logger, isConnected, resolveOfflineLogin }) {
+  const { height } = useWindowDimensions();
   const [bookingReference, setBookingReference] = useState('');
   const [email, setEmail] = useState('');
   const [errorState, setErrorState] = useState(null);
@@ -118,7 +117,8 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
   const [logoAnimation] = useState(new Animated.Value(0));
   const [formAnimation] = useState(new Animated.Value(0));
   const [buttonAnimation] = useState(new Animated.Value(1));
-  const scrollRef = React.useRef(null);
+  const scrollRef = useRef(null);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     if (!Keyboard?.addListener) {
@@ -135,6 +135,10 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       showSubscription.remove();
       hideSubscription.remove();
     };
+  }, []);
+
+  useEffect(() => () => {
+    mountedRef.current = false;
   }, []);
 
   const clearErrorState = () => setErrorState(null);
@@ -254,7 +258,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     if (cta === 'verify_online') {
       if (!isConnected) {
         setErrorState(
-          createErrorState('No internet connection detected yet. Connect to mobile data or Wi-Fi, then tap “I’m connected, verify this code”.', {
+          createErrorState('No internet connection detected yet. Connect to mobile data or Wi-Fi, then tap "I\'m connected, verify this code".', {
             title: 'Still offline',
             reason: errorState?.reason,
             showOfflineActions: true,
@@ -335,7 +339,9 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       }, { remote: true, reason: 'Login:login_error' });
       setSimpleError('Unable to verify booking. Please check your connection.');
     } finally {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -370,7 +376,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
             showsVerticalScrollIndicator={false}
           >
             <View style={styles.container}>
-            <Animated.View style={[styles.logoSection, { opacity: logoAnimation }]}> 
+              <Animated.View style={[styles.logoSection, { marginTop: height * 0.065, opacity: logoAnimation }]}>
               <Image source={require('../assets/images/app-icon-llt.png')} style={styles.logoImage} resizeMode="contain" />
               <Text style={styles.appTitle}>Loch Lomond Travel</Text>
               <Text style={styles.appSubtitle}>Premium journeys, effortless access.</Text>
@@ -563,7 +569,6 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   logoSection: {
     alignItems: 'center',
-    marginTop: height * 0.065,
     marginBottom: SPACING.lg,
   },
   logoImage: { width: 240, height: 94, marginBottom: SPACING.xs },

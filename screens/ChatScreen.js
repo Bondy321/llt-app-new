@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
-  Dimensions,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -84,7 +83,7 @@ const {
   shouldTriggerSwipeReplyOnRelease,
 } = require('../services/chatSwipeReplyGesture');
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const DEFAULT_CHAT_WINDOW_WIDTH = 360;
 
 // Quick Reaction Emojis
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🎉'];
@@ -700,26 +699,34 @@ const MessageActionMenu = ({
 };
 
 // ==================== IMAGE MESSAGE COMPONENT ====================
-const ImageMessage = React.memo(({ imageUrl, onPress }) => {
+const ImageMessage = React.memo(({ imageUrl, onPress, imageSize = DEFAULT_CHAT_WINDOW_WIDTH * 0.55 }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const imageSquareStyle = useMemo(
+    () => ({ width: imageSize, height: imageSize }),
+    [imageSize]
+  );
+  const imageErrorStyle = useMemo(
+    () => ({ width: imageSize, height: Math.max(92, Math.round(imageSize * 0.64)) }),
+    [imageSize]
+  );
 
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.9} style={styles.imageMessageContainer}>
       {loading && (
-        <View style={styles.imageLoading}>
+        <View style={[styles.imageLoading, imageSquareStyle]}>
           <ActivityIndicator size="small" color={COLORS.primaryBlue} />
         </View>
       )}
       {error ? (
-        <View style={styles.imageError}>
+        <View style={[styles.imageError, imageErrorStyle]}>
           <MaterialCommunityIcons name="image-broken" size={40} color={COLORS.secondaryText} />
           <Text style={styles.imageErrorText}>Failed to load image</Text>
         </View>
       ) : (
         <Image
           source={{ uri: imageUrl, cache: 'force-cache' }}
-          style={styles.messageImage}
+          style={[styles.messageImage, imageSquareStyle]}
           onLoadStart={() => setLoading(true)}
           onLoadEnd={() => setLoading(false)}
           onError={() => {
@@ -923,7 +930,7 @@ const SwipeToReplyMessageWrapper = ({ children, onSwipeReply, disabled = false }
       if (triggerLatchRef.current) return;
 
       const dragState = getSwipeReplyDragState(gestureState, {
-        screenWidth: windowWidth || SCREEN_WIDTH,
+        screenWidth: windowWidth || DEFAULT_CHAT_WINDOW_WIDTH,
         peakDragX: peakDragRef.current,
       });
 
@@ -1043,7 +1050,7 @@ const AttachmentMenu = ({ visible, onClose, onPickImage, onTakePhoto }) => {
 };
 
 // ==================== IMAGE VIEWER MODAL ====================
-const ImageViewerModal = ({ visible, imageUrl, onClose }) => {
+const ImageViewerModal = ({ visible, imageUrl, onClose, imageStyle }) => {
   if (!visible) return null;
 
   return (
@@ -1054,7 +1061,7 @@ const ImageViewerModal = ({ visible, imageUrl, onClose }) => {
         </TouchableOpacity>
         <Image
           source={{ uri: imageUrl }}
-          style={styles.fullScreenImage}
+          style={[styles.fullScreenImage, imageStyle]}
           resizeMode="contain"
         />
       </View>
@@ -1346,6 +1353,8 @@ const MessageBubble = React.memo(({
   renderHighlightedText,
   formatTime,
   parseMessageText,
+  chatImageSize,
+  replyBubbleMinWidth,
 }) => {
   const isSelf = Boolean(presentation?.isOwnMessage);
   const isMsgDriver = !!message?.isDriver;
@@ -1415,7 +1424,7 @@ const MessageBubble = React.memo(({
             !isSelf && clusterPosition === 'last' && styles.theirMessageBubbleClusterLast,
             isMsgDriver && !isSelf && styles.driverMessageBubble,
             isImage && styles.imageMessageBubble,
-            hasReplyReference && styles.messageBubbleWithReply,
+            hasReplyReference && { minWidth: replyBubbleMinWidth },
             isSearchMatch && styles.searchFocusedBubble,
             isReplyJumpTarget && styles.replyJumpTargetBubble,
           ]}
@@ -1472,6 +1481,7 @@ const MessageBubble = React.memo(({
             <ImageMessage
               imageUrl={message.imageUrl}
               onPress={() => onOpenImage(message.imageUrl)}
+              imageSize={chatImageSize}
             />
           )}
 
@@ -1790,6 +1800,23 @@ export default function ChatScreen({
   const [highlightedReplyTargetMessageId, setHighlightedReplyTargetMessageId] = useState(null);
 
   const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
+  const resolvedWindowWidth = windowWidth || DEFAULT_CHAT_WINDOW_WIDTH;
+  const chatImageSize = useMemo(
+    () => Math.max(120, Math.min(260, resolvedWindowWidth * 0.55)),
+    [resolvedWindowWidth]
+  );
+  const replyBubbleMinWidth = useMemo(
+    () => Math.max(120, Math.min(260, resolvedWindowWidth * 0.58)),
+    [resolvedWindowWidth]
+  );
+  const fullScreenImageStyle = useMemo(
+    () => {
+      const size = Math.max(1, resolvedWindowWidth);
+      return { width: size, height: size };
+    },
+    [resolvedWindowWidth]
+  );
   const composerBottomInset = insets.bottom > 0 ? Math.max(insets.bottom, SPACING.md) : SPACING.md;
   const currentUser = auth.currentUser;
   const { identityBinding, identityBindingSource } = useMemo(() => {
@@ -2586,7 +2613,7 @@ export default function ChatScreen({
         showTransientFeedback({
           type: 'warning',
           icon: 'message-alert-outline',
-          message: result?.error || 'Message could not be sent. Please try again.',
+          message: 'Message could not be sent. Please try again.',
         });
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       } else {
@@ -2749,7 +2776,7 @@ export default function ChatScreen({
         showTransientFeedback({
           type: 'warning',
           icon: 'message-alert-outline',
-          message: result?.error || 'Message could not be retried. Please try again.',
+          message: 'Message could not be retried. Please try again.',
         });
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         return;
@@ -3381,7 +3408,7 @@ export default function ChatScreen({
         showTransientFeedback({
           type: 'warning',
           icon: 'cloud-alert-outline',
-          message: result?.error || 'Older messages could not be loaded right now.',
+          message: 'Older messages could not be loaded right now.',
         });
         return;
       }
@@ -3699,6 +3726,7 @@ export default function ChatScreen({
                 isSelf ? styles.myMessageBubble : styles.theirMessageBubble,
                 isMsgDriver && !isSelf && styles.driverMessageBubble,
                 isImage && styles.imageMessageBubble,
+                msg.replyTo?.messageId && { minWidth: replyBubbleMinWidth },
                 isSearchMatch && styles.searchFocusedBubble,
                 isReplyJumpTarget && styles.replyJumpTargetBubble,
               ]}
@@ -3755,6 +3783,7 @@ export default function ChatScreen({
                 <ImageMessage
                   imageUrl={msg.imageUrl}
                   onPress={() => setViewingImage(msg.imageUrl)}
+                  imageSize={chatImageSize}
                 />
               )}
 
@@ -3836,6 +3865,7 @@ export default function ChatScreen({
     },
     [
       canRetryFailedMessageForCurrentSession,
+      chatImageSize,
       identityBinding,
       principalId,
       realtimeActorId,
@@ -3849,6 +3879,7 @@ export default function ChatScreen({
       highlightedReplyTargetMessageId,
       startReplyComposer,
       retryingMessageIds,
+      replyBubbleMinWidth,
       handleRetryFailedMessage,
     ]
   );
@@ -3888,6 +3919,8 @@ export default function ChatScreen({
         renderHighlightedText={renderHighlightedText}
         formatTime={formatTime}
         parseMessageText={parseMessageText}
+        chatImageSize={chatImageSize}
+        replyBubbleMinWidth={replyBubbleMinWidth}
       />
     );
   }, [
@@ -3900,6 +3933,7 @@ export default function ChatScreen({
     handleReaction,
     handleRetryFailedMessage,
     highlightedReplyTargetMessageId,
+    chatImageSize,
     internalDriverChat,
     jumpToMessageById,
     parseMessageText,
@@ -3908,6 +3942,7 @@ export default function ChatScreen({
     currentReactionUserIds,
     renderHighlightedText,
     retryingMessageIds,
+    replyBubbleMinWidth,
     startReplyComposer,
     unreadAnchorMessageId,
   ]);
@@ -4241,6 +4276,7 @@ export default function ChatScreen({
         visible={!!viewingImage}
         imageUrl={viewingImage}
         onClose={() => setViewingImage(null)}
+        imageStyle={fullScreenImageStyle}
       />
     </SafeAreaView>
   );
@@ -4659,9 +4695,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.md,
     borderRadius: RADIUS.lg,
   },
-  messageBubbleWithReply: {
-    minWidth: Math.min(SCREEN_WIDTH * 0.58, 260),
-  },
   myMessageBubble: {
     backgroundColor: COLORS.myMessageBackground,
     borderBottomRightRadius: RADIUS.sm,
@@ -4890,8 +4923,6 @@ const styles = StyleSheet.create({
     marginVertical: 4,
   },
   messageImage: {
-    width: SCREEN_WIDTH * 0.55,
-    height: SCREEN_WIDTH * 0.55,
     borderRadius: RADIUS.md,
   },
   imageLoading: {
@@ -4903,13 +4934,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: COLORS.surfaceSecondary,
-    width: SCREEN_WIDTH * 0.55,
-    height: SCREEN_WIDTH * 0.55,
     borderRadius: RADIUS.md,
   },
   imageError: {
-    width: SCREEN_WIDTH * 0.55,
-    height: SCREEN_WIDTH * 0.35,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: COLORS.surfaceSecondary,
@@ -5577,8 +5604,5 @@ const styles = StyleSheet.create({
     zIndex: 10,
     padding: 10,
   },
-  fullScreenImage: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_WIDTH,
-  },
+  fullScreenImage: {},
 });

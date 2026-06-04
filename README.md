@@ -108,6 +108,10 @@ secrets named `EXPO_PUBLIC_FIREBASE_*` and `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` are
 validated and synced to EAS before the build starts, so placeholder EAS values cannot
 silently ship.
 
+Production binary and OTA workflows install root and Functions dependencies, then
+run the mobile test suite, Functions script tests, and Firebase rules emulator
+tests before syncing EAS environment values or publishing.
+
 ```bash
 npm run build:dev:ios
 npm run build:dev:android

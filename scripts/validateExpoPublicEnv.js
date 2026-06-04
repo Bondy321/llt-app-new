@@ -30,6 +30,7 @@ const PLACEHOLDER_PATTERNS = [
   /your[_-].*here/i,
   /placeholder/i,
   /replace_with/i,
+  /^\+?441234567890$/,
   /^undefined$/i,
   /^null$/i,
 ];
@@ -70,6 +71,14 @@ const FORMAT_CHECKS = {
   EXPO_PUBLIC_GOOGLE_MAPS_API_KEY: {
     pattern: /^AIza[0-9A-Za-z_-]{20,}$/,
     message: 'expected a Google Maps API key that starts with AIza',
+  },
+  EXPO_PUBLIC_SUPPORT_PHONE: {
+    pattern: /^\+[1-9]\d{7,14}$/,
+    message: 'expected an E.164 phone number like +441414876737',
+  },
+  EXPO_PUBLIC_SUPPORT_SMS: {
+    pattern: /^\+[1-9]\d{7,14}$/,
+    message: 'expected an E.164 phone number like +441414876737',
   },
   EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL: {
     pattern: /^https:\/\/.+/i,

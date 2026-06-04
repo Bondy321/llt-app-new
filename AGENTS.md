@@ -896,12 +896,16 @@ GitHub Actions:
 - `.github/workflows/eas-build.yml`
   - manual production binary builds
   - verifies commit is on `main`
-  - Node 22
+  - Node 24 plus Java 21 for Firebase emulators
+  - installs root and Functions dependencies
+  - runs mobile, Functions script, and Firebase rules tests
   - validates env and syncs EAS production env
 - `.github/workflows/eas-update.yml`
   - production OTA update on `main` push or manual dispatch
   - verifies commit is on `main`
-  - Node 22
+  - Node 24 plus Java 21 for Firebase emulators
+  - installs root and Functions dependencies
+  - runs mobile, Functions script, and Firebase rules tests
   - validates env and syncs EAS production env
 
 Web admin:
@@ -941,7 +945,7 @@ Diagnostics:
 - `crashDiagnosticsService` writes crash diagnostics under `logs`.
 - Safety events also write under `logs/{userKey}/safety`.
 - `ops_alerts` is the sanitised, queryable operations layer for major device/app failures; do not put raw log payloads or raw stack data there.
-- Current docs mention temporary verbose RTDB diagnostics; do not add new raw identifiers while that is enabled.
+- Production uploads are warning-plus by default; only change `EXPO_PUBLIC_REMOTE_LOG_MIN_LEVEL` as an explicit release decision.
 
 ---
 
@@ -1010,7 +1014,7 @@ Rules/code divergence:
 
 Logging privacy:
 
-- Temporary verbose diagnostics increase the blast radius of unsafe logging. Mask identifiers.
+- Lowering the remote log upload floor increases the blast radius of unsafe logging. Mask identifiers and keep verbose diagnostics temporary.
 - `ops_alerts` is safe for admin viewing only because records are compact and sanitised; preserve that boundary.
 
 Expo SDK compatibility:

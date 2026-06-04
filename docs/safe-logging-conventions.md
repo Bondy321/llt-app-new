@@ -28,9 +28,11 @@ Only `ERROR` and `FATAL` logger entries and global crash diagnostics create/upda
 
 Never add raw stack traces, raw auth UIDs, raw session IDs, booking references, emails, tokens, push tokens, passwords, driver codes, or authorization values to `ops_alerts`. Use `services/opsAlertService.js` helpers instead of hand-building alert records.
 
-## Temporary verbose RTDB diagnostics
+## Remote upload floor
 
-For the current smoke-test pass, `loggerService` is configured to upload `DEBUG` and `INFO` logs to `/logs/{user}/{session}` as well as warnings and errors. Keep new diagnostic call sites routed through `loggerService` or the existing crash diagnostics helpers, and keep identifiers masked/summarized. After the smoke run has exposed the underlying issues, tune the server upload floor back down or gate it behind a runtime flag before release.
+Outside development, `loggerService` uploads `WARN`, `ERROR`, and `FATAL` entries to `/logs/{user}/{session}` by default. Development builds keep the floor at `DEBUG` so smoke-test diagnostics stay visible without changing production behavior.
+
+Only lower or raise the upload floor with `EXPO_PUBLIC_REMOTE_LOG_MIN_LEVEL` as an explicit release decision, and keep any temporary verbose diagnostics routed through `loggerService` or the existing crash diagnostics helpers so identifiers stay masked/summarized.
 
 ## Safe call-site patterns
 

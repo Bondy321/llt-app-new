@@ -160,7 +160,7 @@ function AppContent() {
     loginProgress.setValue(0);
     setLoginTransition({
       targetScreen,
-      message: 'Tour synced — entering dashboard',
+      message: 'Tour synced - entering dashboard',
       durationMs,
     });
 

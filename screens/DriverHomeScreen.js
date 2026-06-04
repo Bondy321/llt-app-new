@@ -13,7 +13,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Animated,
-  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -29,8 +28,6 @@ import logger, { maskIdentifier } from '../services/loggerService';
 import { getMinutesAgo } from '../services/timeUtils';
 import { normalizeTourId, resolveTourId } from '../services/tourIdentityService';
 import { COLORS as THEME } from '../theme';
-
-const { width } = Dimensions.get('window');
 
 const COLORS = {
   primary: THEME.primary,
@@ -853,7 +850,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
       showBanner({
-        contract: { ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKEND_DEGRADED, canRetry: true, description: `Couldn’t join tour. Check the code and retry. ${error.message}` },
+        contract: { ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKEND_DEGRADED, canRetry: true, description: "Couldn't join tour. Check the code and retry." },
         outcomeText: offlineSyncService.formatSyncOutcome({ source: 'manual-refresh' }),
       });
     } finally {

@@ -45,3 +45,18 @@ test('validateExpoPublicEnv rejects unresolved EAS aliases and placeholders', ()
   assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_FIREBASE_API_KEY')));
   assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN')));
 });
+
+test('validateExpoPublicEnv rejects placeholder or malformed optional support numbers', () => {
+  const result = validateExpoPublicEnv(
+    {
+      ...validEnv,
+      EXPO_PUBLIC_SUPPORT_PHONE: '+441234567890',
+      EXPO_PUBLIC_SUPPORT_SMS: '0141 487 6737',
+    },
+    { platform: 'all' }
+  );
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_SUPPORT_PHONE')));
+  assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_SUPPORT_SMS')));
+});

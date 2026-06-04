@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -250,6 +250,8 @@ export default function NotificationPreferencesScreen({
   const [marketingPrefs, setMarketingPrefs] = useState(defaultMarketingPrefs);
   const [initialOpsPrefs, setInitialOpsPrefs] = useState(null);
   const [initialMarketingPrefs, setInitialMarketingPrefs] = useState(null);
+  const mountedRef = useRef(true);
+  const preferenceLoadSeqRef = useRef(0);
 
   const hasChanges =
     initialOpsPrefs !== null &&
@@ -269,6 +271,11 @@ export default function NotificationPreferencesScreen({
     });
   }, [audience, isOnboarding, returnTo, userId]);
 
+  useEffect(() => () => {
+    mountedRef.current = false;
+    preferenceLoadSeqRef.current += 1;
+  }, []);
+
   const formatTimestamp = (isoDate) => {
     const parsedMs = parseTimestampMs(isoDate);
     if (!Number.isFinite(parsedMs)) return '';
@@ -283,6 +290,9 @@ export default function NotificationPreferencesScreen({
   };
 
   const loadPreferences = async () => {
+    const requestSeq = ++preferenceLoadSeqRef.current;
+    const canApplyRequest = () => mountedRef.current && requestSeq === preferenceLoadSeqRef.current;
+
     setLoading(true);
     setLoadError('');
     setEmptyStateMessage('');
@@ -299,8 +309,10 @@ export default function NotificationPreferencesScreen({
         isOnboarding,
         audience,
       });
-      setEmptyStateMessage('Sign in to manage notifications.');
-      setLoading(false);
+      if (canApplyRequest()) {
+        setEmptyStateMessage('Sign in to manage notifications.');
+        setLoading(false);
+      }
       return;
     }
 
@@ -309,6 +321,7 @@ export default function NotificationPreferencesScreen({
         userId,
         requestIfNeeded: false,
       });
+      if (!canApplyRequest()) return;
       if (permissionProbe?.success) {
         setPermissionStatus(permissionProbe.data);
         logger.info('NotificationPreferences', 'Permission probe completed during load', {
@@ -325,6 +338,7 @@ export default function NotificationPreferencesScreen({
       }
 
       const saved = await getUserPreferences(userId, { throwOnError: true });
+      if (!canApplyRequest()) return;
       const nextOpsPrefs = saved?.ops
         ? { ...defaultOpsPrefs, ...saved.ops }
         : { ...defaultOpsPrefs };
@@ -346,9 +360,13 @@ export default function NotificationPreferencesScreen({
       logger.error('NotificationPreferences', 'Preference load failed', {
         error: error?.message || String(error),
       });
-      setLoadError('We could not load your notification settings. Please try again.');
+      if (canApplyRequest()) {
+        setLoadError('We could not load your notification settings. Please try again.');
+      }
     } finally {
-      setLoading(false);
+      if (canApplyRequest()) {
+        setLoading(false);
+      }
     }
   };
 
@@ -357,6 +375,7 @@ export default function NotificationPreferencesScreen({
   }, [userId]);
 
   const handleSave = async () => {
+    if (saving || !userId) return;
     setSaving(true);
     setStatusBanner(null);
     logger.info('NotificationPreferences', 'Preference save started', {
@@ -374,6 +393,7 @@ export default function NotificationPreferencesScreen({
       };
 
       const result = await saveUserPreferences(userId, fullPreferences);
+      if (!mountedRef.current) return;
 
       if (result.success) {
         logger.info('NotificationPreferences', 'Preference save completed', {
@@ -407,12 +427,16 @@ export default function NotificationPreferencesScreen({
       logger.error('NotificationPreferences', 'Preference save threw', {
         error: error?.message || String(error),
       });
-      setStatusBanner({
-        type: 'error',
-        message: 'Unexpected error while saving preferences. Please retry.',
-      });
+      if (mountedRef.current) {
+        setStatusBanner({
+          type: 'error',
+          message: 'Unexpected error while saving preferences. Please retry.',
+        });
+      }
     } finally {
-      setSaving(false);
+      if (mountedRef.current) {
+        setSaving(false);
+      }
     }
   };
 
@@ -434,7 +458,7 @@ export default function NotificationPreferencesScreen({
   };
 
   const handleEnableNow = async () => {
-    if (!userId) return;
+    if (!userId || onboardingActionBusy) return;
     setOnboardingActionBusy(true);
     setStatusBanner(null);
     logger.info('NotificationPreferences', 'Onboarding enable started', {
@@ -447,6 +471,7 @@ export default function NotificationPreferencesScreen({
       userId,
       requestIfNeeded: true,
     });
+    if (!mountedRef.current) return;
 
     if (!permissionProbe?.success) {
       logger.warn('NotificationPreferences', 'Onboarding permission probe failed', {
@@ -455,7 +480,7 @@ export default function NotificationPreferencesScreen({
       setOnboardingActionBusy(false);
       setStatusBanner({
         type: 'error',
-        message: permissionProbe?.error || 'Could not check permissions right now. Please try again.',
+        message: 'Could not check permissions right now. Please try again.',
       });
       return;
     }
@@ -474,6 +499,7 @@ export default function NotificationPreferencesScreen({
     };
 
     const saveResult = await saveUserPreferences(userId, fullPreferences);
+    if (!mountedRef.current) return;
 
     if (!saveResult.success) {
       logger.warn('NotificationPreferences', 'Onboarding preference save failed', {
@@ -605,9 +631,10 @@ export default function NotificationPreferencesScreen({
       logger.info('NotificationPreferences', 'Test notification started', {
         permissionState: permissionStatus?.state || 'unknown',
       });
-      setTestStatus({ type: 'progress', message: 'Checking notification permissions…' });
+      setTestStatus({ type: 'progress', message: 'Checking notification permissions...' });
       
       const token = await registerForPushNotificationsAsync();
+      if (!mountedRef.current) return;
       
       if (!token) {
         logger.warn('NotificationPreferences', 'Test notification blocked without token', {
@@ -620,16 +647,17 @@ export default function NotificationPreferencesScreen({
         return;
       }
 
-      setTestStatus({ type: 'progress', message: 'Sending a local test notification…' });
+      setTestStatus({ type: 'progress', message: 'Sending a local test notification...' });
 
       await Notifications.scheduleNotificationAsync({
         content: {
-          title: "System Check Passed! ✅",
+          title: 'System Check Passed',
           body: "Your device is correctly configured to receive Loch Lomond Travel updates.",
           sound: true,
         },
         trigger: null, // null means trigger immediately
       });
+      if (!mountedRef.current) return;
 
       setTestStatus({
         type: 'success',
@@ -643,10 +671,12 @@ export default function NotificationPreferencesScreen({
       logger.error('NotificationPreferences', 'Test notification failed', {
         error: error?.message || String(error),
       });
-      setTestStatus({
-        type: 'error',
-        message: `Test failed: ${error.message || 'Unknown error'}`,
-      });
+      if (mountedRef.current) {
+        setTestStatus({
+          type: 'error',
+          message: 'Test notification could not be sent. Check OS notification settings and try again.',
+        });
+      }
     }
   };
 

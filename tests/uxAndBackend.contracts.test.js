@@ -123,10 +123,51 @@ test('Static contract: sensitive database writes remain ownership or admin gated
 
 test('Static contract: remote logger uploads stay warning-plus by default outside dev', () => {
   const loggerSource = fs.readFileSync(path.join(__dirname, '..', 'services', 'loggerService.js'), 'utf8');
+  const loggingDocs = readText('docs/safe-logging-conventions.md');
 
   assert.match(loggerSource, /const DEFAULT_SERVER_MIN_LEVEL = IS_DEV \? 'DEBUG' : 'WARN';/);
   assert.match(loggerSource, /CONFIGURED_SERVER_MIN_LEVEL/);
   assert.doesNotMatch(loggerSource, /VERBOSE_RTDB_LOGGING_ENABLED\s*=\s*true/);
+  assert.match(loggingDocs, /Outside development, `loggerService` uploads `WARN`, `ERROR`, and `FATAL`/);
+  assert.doesNotMatch(loggingDocs, /Temporary verbose RTDB diagnostics/);
+});
+
+test('Static contract: early runtime console logging stays development-gated', () => {
+  const firebaseSource = readText('firebase.js');
+  const persistenceSource = readText('services/persistenceProvider.js');
+  const bookingSource = readText('services/bookingServiceRealtime.js');
+  const chatSource = readText('services/chatService.js');
+  const optionalLoaderSource = readText('services/optionalServiceLoader.js');
+  const firebaseConsoleCalls = firebaseSource.match(/console\.(log|warn|error)\(/g) || [];
+
+  assert.deepEqual(
+    firebaseConsoleCalls.sort(),
+    ['console.error(', 'console.log(', 'console.warn('].sort(),
+  );
+  assert.match(firebaseSource, /const firebaseDebugLog = \(\.\.\.args\) => \{\s+if \(IS_DEV\)/);
+  assert.match(firebaseSource, /const firebaseWarnLog = \(\.\.\.args\) => \{\s+if \(IS_DEV\)/);
+  assert.match(firebaseSource, /const firebaseErrorLog = \(\.\.\.args\) => \{\s+if \(IS_DEV\)/);
+  assert.match(persistenceSource, /const IS_DEV_RUNTIME =/);
+  assert.match(persistenceSource, /const writeDevConsole = \(method, \.\.\.args\) => \{/);
+  assert.doesNotMatch(persistenceSource, /debug: \(msg, data\) => console\.log/);
+  assert.match(bookingSource, /const IS_DEV_RUNTIME =/);
+  assert.match(chatSource, /const IS_DEV_RUNTIME =/);
+  assert.match(chatSource, /if \(IS_DEV_RUNTIME\) \{\s+try \{\s+const consoleMethod/);
+  assert.match(optionalLoaderSource, /const isDevelopmentRuntime = \(\) =>/);
+  assert.match(optionalLoaderSource, /shouldLog && isDevelopmentRuntime\(\)/);
+});
+
+test('Static contract: user-facing runtime text has no mojibake artifacts', () => {
+  const runtimeFiles = [
+    'App.js',
+    ...fs.readdirSync(path.join(__dirname, '..', 'screens')).map((file) => path.join('screens', file)),
+    ...fs.readdirSync(path.join(__dirname, '..', 'components')).map((file) => path.join('components', file)),
+  ].filter((file) => file.endsWith('.js'));
+
+  runtimeFiles.forEach((file) => {
+    const source = readText(file);
+    assert.doesNotMatch(source, /[âÃ�]/, `${file} contains mojibake-looking text`);
+  });
 });
 
 test('Static contract: curated ops alerts stay separate from raw logs and schema-gated', () => {
@@ -311,6 +352,8 @@ test('Static contract: native location permissions stay foreground-only', () => 
   assert.doesNotMatch(source, /ACCESS_BACKGROUND_LOCATION/);
   assert.doesNotMatch(source, /NSLocationAlwaysAndWhenInUseUsageDescription/);
   assert.doesNotMatch(source, /UIBackgroundModes:\s*\[/);
+  assert.doesNotMatch(source, /READ_EXTERNAL_STORAGE/);
+  assert.doesNotMatch(source, /WRITE_EXTERNAL_STORAGE/);
 });
 
 test('Static contract: live map and safety sharing guard stale or malformed location state', () => {
@@ -338,5 +381,132 @@ test('Static contract: support and external link handoffs surface failures', () 
     assert.match(source, /Linking\.openURL/);
     assert.match(source, /catch \(/);
     assert.match(source, /Alert\.alert/);
+  });
+});
+
+test('Static contract: production EAS workflows gate release on mobile/backend verification', () => {
+  [
+    '.github/workflows/eas-build.yml',
+    '.github/workflows/eas-update.yml',
+  ].forEach((relativePath) => {
+    const source = readText(relativePath);
+
+    assert.match(source, /node-version:\s*24/);
+    assert.match(source, /functions\/package-lock\.json/);
+    assert.match(source, /npm --prefix functions ci/);
+    assert.match(source, /actions\/setup-java@v4/);
+    assert.match(source, /java-version:\s*21/);
+    assert.match(source, /npm run test:mobile/);
+    assert.match(source, /npm run test:functions:scripts/);
+    assert.match(source, /npm run test:emulators/);
+    assert.match(source, /npm run validate:expo-env/);
+
+    const testIndex = source.indexOf('npm run test:mobile');
+    const envIndex = source.indexOf('npm run validate:expo-env');
+    const publishIndex = Math.max(source.indexOf('eas build'), source.indexOf('eas update'));
+    assert.ok(testIndex >= 0 && envIndex > testIndex, 'tests must run before env validation');
+    assert.ok(envIndex >= 0 && publishIndex > envIndex, 'env validation must run before EAS publish/build');
+  });
+});
+
+test('Static contract: Android production submit profile targets customer release track', () => {
+  const easConfig = JSON.parse(readText('eas.json'));
+  assert.equal(easConfig.cli?.version, '>= 16.0.1');
+  assert.equal(easConfig.submit?.production?.android?.track, 'production');
+});
+
+test('Static contract: customer-facing screens avoid startup-only window measurements', () => {
+  [
+    'components/ImageViewer.js',
+    'screens/ChatScreen.js',
+    'screens/DriverHomeScreen.js',
+    'screens/GroupPhotobookScreen.js',
+    'screens/LoginScreen.js',
+    'screens/MapScreen.js',
+    'screens/PhotobookScreen.js',
+    'screens/SafetySupportScreen.js',
+    'screens/TourHomeScreen.js',
+  ].forEach((relativePath) => {
+    const source = readText(relativePath);
+    assert.doesNotMatch(source, /\bDimensions\b/, `${relativePath} must not use static window dimensions`);
+  });
+
+  assert.match(readText('screens/LoginScreen.js'), /useWindowDimensions/);
+  assert.match(readText('screens/PhotobookScreen.js'), /thumbnailTileStyle/);
+  assert.match(readText('screens/GroupPhotobookScreen.js'), /thumbnailTileStyle/);
+  assert.match(readText('screens/SafetySupportScreen.js'), /useWindowDimensions/);
+  assert.match(readText('screens/TourHomeScreen.js'), /quickActionWrapper/);
+});
+
+test('Static contract: shared gallery data hook guards stale async updates', () => {
+  const source = readText('hooks/usePhotoGalleryData.js');
+
+  assert.match(source, /mountedRef/);
+  assert.match(source, /requestSeqRef\.current \+= 1/);
+  assert.match(source, /loadMoreSeqRef\.current \+= 1/);
+  assert.match(source, /!mountedRef\.current \|\| requestSeqRef\.current !== requestSeq/);
+  assert.match(source, /!mountedRef\.current \|\| loadMoreSeqRef\.current !== loadMoreSeq/);
+});
+
+test('Static contract: itinerary cache metadata cannot update stale screens', () => {
+  const source = readText('screens/ItineraryScreen.js');
+
+  assert.match(source, /mountedRef/);
+  assert.match(source, /activeTourIdRef/);
+  assert.match(source, /const canUpdateForTour = useCallback/);
+  assert.match(source, /if \(canUpdateForTour\(targetTourId\)\) \{\s+setLastSyncedAt\(syncedAt\);/);
+  assert.match(source, /if \(canUpdateForTour\(targetTourId\)\) \{\s+setCachedItinerary\(data\);/);
+});
+
+test('Static contract: preference and manifest screens guard stale async state', () => {
+  const notificationSource = readText('screens/NotificationPreferencesScreen.js');
+  const manifestSource = readText('screens/PassengerManifestScreen.js');
+
+  assert.match(notificationSource, /mountedRef/);
+  assert.match(notificationSource, /preferenceLoadSeqRef/);
+  assert.match(notificationSource, /const canApplyRequest = \(\) => mountedRef\.current && requestSeq === preferenceLoadSeqRef\.current/);
+  assert.doesNotMatch(notificationSource, /Test failed:/);
+
+  assert.match(manifestSource, /mountedRef/);
+  assert.match(manifestSource, /manifestLoadSeqRef/);
+  assert.match(manifestSource, /queueScanSeqRef/);
+  assert.match(manifestSource, /Alert\.alert\('Manifest unavailable'/);
+  assert.doesNotMatch(manifestSource, /Failed to load manifest: ' \+ error\.message/);
+});
+
+test('Static contract: safety support cleans up emergency timers and validates phone handoffs', () => {
+  const source = readText('screens/SafetySupportScreen.js');
+
+  assert.match(source, /const MIN_DIALABLE_DIGITS = 7/);
+  assert.match(source, /const hasDialableDigits = \(phone\) =>/);
+  assert.match(source, /clearInterval\(sosTimerRef\.current\)/);
+  assert.match(source, /locationWatchRef\.current\.remove\(\)/);
+  assert.match(source, /historyRequestSeqRef/);
+  assert.match(source, /Notify Contacts/);
+  assert.doesNotMatch(source, /Notify Emergency Contacts\?/);
+  assert.match(source, /!sanitized \|\| !hasDialableDigits\(sanitized\)/);
+  assert.match(source, /!hasDialableDigits\(newContactPhone\)/);
+  assert.match(source, /Live location toggle blocked without identity context/);
+  assert.match(source, /const shareStarted = await updateLiveLocationSharing/);
+  assert.match(source, /if \(!shareStarted\) \{/);
+  assert.match(source, /const shareStopped = await updateLiveLocationSharing/);
+});
+
+test('Static contract: customer-facing error copy avoids raw backend messages', () => {
+  [
+    'screens/ChatScreen.js',
+    'screens/DriverHomeScreen.js',
+    'screens/GroupPhotobookScreen.js',
+    'screens/NotificationPreferencesScreen.js',
+    'screens/PassengerManifestScreen.js',
+    'screens/PhotobookScreen.js',
+  ].forEach((relativePath) => {
+    const source = readText(relativePath);
+    assert.doesNotMatch(source, /message:\s*result\?\.error \|\|/, `${relativePath} surfaces result.error directly`);
+    assert.doesNotMatch(source, /message:\s*replay\.error \?/, `${relativePath} surfaces replay.error directly`);
+    assert.doesNotMatch(source, /Alert\.alert\([^)]*enqueueResult\.error \|\|/s, `${relativePath} surfaces enqueueResult.error directly`);
+    assert.doesNotMatch(source, /Alert\.alert\([^)]*result\.error \|\|/s, `${relativePath} surfaces result.error directly`);
+    assert.doesNotMatch(source, /\$\{error\.message\}/, `${relativePath} interpolates raw error.message into UI copy`);
+    assert.doesNotMatch(source, /Test failed:/, `${relativePath} surfaces raw test notification failure details`);
   });
 });

@@ -83,6 +83,7 @@ Module._load = function mockLoader(request, parent, isMain) {
       Linking: { canOpenURL: async () => false, openURL: async () => false },
       Platform: { OS: 'ios' },
       Dimensions: { get: () => ({ height: 900, width: 400 }) },
+      useWindowDimensions: () => ({ height: 900, width: 400 }),
       Animated: {
         Value: AnimatedValue,
         View: createHost('AnimatedView'),

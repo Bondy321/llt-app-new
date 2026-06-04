@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   Platform,
   ActivityIndicator,
-  Dimensions,
   Animated,
   Linking,
   Alert,
@@ -22,8 +21,6 @@ import { realtimeDb } from '../firebase';
 import { COLORS as THEME } from '../theme';
 import { getMinutesAgo, parseTimestampMs } from '../services/timeUtils';
 import logger from '../services/loggerService';
-
-const { width, height } = Dimensions.get('window');
 
 // Brand Colors
 const COLORS = {
@@ -968,7 +965,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   map: {
-    width: width,
+    width: '100%',
     height: '100%',
   },
 

@@ -42,8 +42,6 @@ module.exports = {
       permissions: [
         'CAMERA',
         'READ_MEDIA_IMAGES',
-        'READ_EXTERNAL_STORAGE',
-        'WRITE_EXTERNAL_STORAGE',
         'ACCESS_COARSE_LOCATION',
         'ACCESS_FINE_LOCATION',
         'RECEIVE_BOOT_COMPLETED',

@@ -67,6 +67,9 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const [conflictNote, setConflictNote] = useState('');
   const [statusFeedback, setStatusFeedback] = useState(null);
   const feedbackTimeoutRef = useRef(null);
+  const mountedRef = useRef(true);
+  const manifestLoadSeqRef = useRef(0);
+  const queueScanSeqRef = useRef(0);
 
   useEffect(() => {
     logger.trackScreen('PassengerManifest', { tourId });
@@ -80,6 +83,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
   };
 
   const showStatusFeedback = (feedback) => {
+    if (!mountedRef.current) return;
     clearFeedbackTimeout();
     setStatusFeedback(feedback);
 
@@ -92,9 +96,13 @@ export default function PassengerManifestScreen({ route, navigation }) {
   };
 
   const loadManifest = async () => {
+    const requestSeq = ++manifestLoadSeqRef.current;
+    const canApplyRequest = () => mountedRef.current && requestSeq === manifestLoadSeqRef.current;
+
     logger.info('PassengerManifest', 'Manifest load started', { tourId });
     try {
       const data = await getTourManifest(tourId);
+      if (!canApplyRequest()) return null;
       setManifestData(data);
       logger.info('PassengerManifest', 'Manifest load completed', {
         tourId,
@@ -107,11 +115,15 @@ export default function PassengerManifestScreen({ route, navigation }) {
         tourId,
         error: error?.message || String(error),
       });
-      Alert.alert('Error', 'Failed to load manifest: ' + error.message);
+      if (canApplyRequest()) {
+        Alert.alert('Manifest unavailable', 'Could not load the passenger manifest. Please check your connection and try again.');
+      }
       return null;
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (canApplyRequest()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   };
 
@@ -127,6 +139,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
   useEffect(() => {
     const unsubscribe = offlineSyncService.subscribeQueueState((stats) => {
+      if (!mountedRef.current) return;
       logger.debug('PassengerManifest', 'Queue state updated', {
         tourId,
         pending: stats?.pending || 0,
@@ -139,11 +152,18 @@ export default function PassengerManifestScreen({ route, navigation }) {
     return () => unsubscribe?.();
   }, [tourId]);
 
-  useEffect(() => () => clearFeedbackTimeout(), []);
+  useEffect(() => () => {
+    mountedRef.current = false;
+    manifestLoadSeqRef.current += 1;
+    queueScanSeqRef.current += 1;
+    clearFeedbackTimeout();
+  }, []);
 
   useEffect(() => {
+    const requestSeq = ++queueScanSeqRef.current;
     const map = {};
     offlineSyncService.getQueuedActions().then((res) => {
+      if (!mountedRef.current || requestSeq !== queueScanSeqRef.current) return;
       if (!res.success) {
         logger.warn('PassengerManifest', 'Queued manifest action scan failed', {
           tourId,
@@ -305,6 +325,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
         : selectedBooking.passengerNames.map(() => MANIFEST_STATUS.PENDING);
 
       const result = await updateManifestBooking(tourId, selectedBooking.id, statusesToPersist, { online: true });
+      if (!mountedRef.current) return;
       logger.info('PassengerManifest', 'Manifest update result received', {
         tourId,
         bookingRef: maskIdentifier(selectedBooking.id),
@@ -331,6 +352,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
       setPartialMode(false);
 
       const refreshedManifest = await loadManifest();
+      if (!mountedRef.current) return;
       if (refreshedManifest) {
         const afterStats = computeStats(refreshedManifest.bookings || []);
         const unresolvedCount = getUnresolvedBookingCount(refreshedManifest.bookings || []);
@@ -371,7 +393,9 @@ export default function PassengerManifestScreen({ route, navigation }) {
         onCtaPress: () => submitUpdate(passengerStatuses),
       });
     } finally {
-      setActionLoading(false);
+      if (mountedRef.current) {
+        setActionLoading(false);
+      }
     }
   };
 
@@ -403,6 +427,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
         isManualRefresh,
       });
       const replay = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+      if (!mountedRef.current) return;
       logger.info('PassengerManifest', 'Manifest sync replay completed', {
         tourId,
         isManualRefresh,
@@ -418,7 +443,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
         });
         showStatusFeedback({
           variant: 'error',
-          message: replay.error ? `Sync failed: ${replay.error}` : 'Sync failed. Retry now.',
+          message: 'Sync failed. Retry now.',
           ctaLabel: 'Retry now',
           onCtaPress: () => handleSyncNow(),
         });
@@ -427,6 +452,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
       }
 
       const queued = await offlineSyncService.getQueuedActions();
+      if (!mountedRef.current) return;
       if (queued.success) {
         const pendingActions = queued.data.filter((action) => action.status === 'queued').length;
         const failedActions = queued.data.filter((action) => action.status === 'failed').length;
@@ -475,13 +501,16 @@ export default function PassengerManifestScreen({ route, navigation }) {
         onCtaPress: () => handleSyncNow(),
       });
     } finally {
-      setRefreshing(false);
+      if (mountedRef.current) {
+        setRefreshing(false);
+      }
     }
   };
 
   const handleRetryFailed = async () => {
     logger.info('PassengerManifest', 'Retry failed manifest actions started', { tourId });
     await offlineSyncService.retryFailedActions({ types: ['MANIFEST_UPDATE'] });
+    if (!mountedRef.current) return;
     await handleSyncNow();
   };
 

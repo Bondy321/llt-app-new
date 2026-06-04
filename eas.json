@@ -1,6 +1,6 @@
 {
   "cli": {
-    "version": ">= 13.4.0",
+    "version": ">= 16.0.1",
     "promptToConfigurePushNotifications": false,
     "appVersionSource": "local"
   },
@@ -59,7 +59,7 @@
     "production": {
       "android": {
         "serviceAccountKeyPath": "./google-service-account.json",
-        "track": "internal"
+        "track": "production"
       }
     }
   }

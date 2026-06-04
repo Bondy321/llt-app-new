@@ -1,6 +1,10 @@
 // services/bookingServiceRealtime.js
 // Enhanced with comprehensive validation, transaction safety, and error handling
 const isTestEnv = process.env.NODE_ENV === 'test';
+const IS_DEV_RUNTIME =
+  typeof __DEV__ !== 'undefined'
+    ? __DEV__
+    : typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production';
 let realtimeDb;
 let auth;
 let logger;
@@ -41,7 +45,7 @@ if (!isTestEnv) {
   } catch (error) {
     if (logger?.warn) {
       logger.warn('BookingService', 'Realtime database module not initialized during load', { error: error.message });
-    } else if (isTestEnv || process.env.NODE_ENV !== 'production') {
+    } else if (IS_DEV_RUNTIME) {
       console.warn('Realtime database module not initialized during load:', error.message);
     }
   }

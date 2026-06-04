@@ -7,7 +7,6 @@ import {
   Text,
   Modal,
   TouchableOpacity,
-  Dimensions,
   useWindowDimensions,
   Platform,
   Animated,
@@ -43,8 +42,8 @@ import {
 } from '../services/imageViewerPagerState';
 import { parseTimestampMs } from '../services/timeUtils';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const DETAILS_PANEL_MAX_HEIGHT = SCREEN_HEIGHT * 0.48;
+const DEFAULT_VIEWER_WIDTH = 360;
+const DEFAULT_VIEWER_HEIGHT = 640;
 const DARK_BACKGROUND = '#020617';
 
 const normalizeKeyPart = (value) => {
@@ -250,8 +249,9 @@ export default function ImageViewer({
   useExpoImage = true,
 }) {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const runtimeWidth = windowWidth || SCREEN_WIDTH;
-  const runtimeHeight = windowHeight || SCREEN_HEIGHT;
+  const runtimeWidth = windowWidth || DEFAULT_VIEWER_WIDTH;
+  const runtimeHeight = windowHeight || DEFAULT_VIEWER_HEIGHT;
+  const detailsPanelMaxHeight = Math.max(220, runtimeHeight * 0.48);
   const pagerRef = useRef(null);
   const visibleRef = useRef(false);
   const lastInitialIndexRef = useRef(initialIndex);
@@ -599,7 +599,7 @@ export default function ImageViewer({
 
   const detailsTranslateY = detailsAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [DETAILS_PANEL_MAX_HEIGHT + 40, 0],
+    outputRange: [detailsPanelMaxHeight + 40, 0],
   });
 
   if (!visible) return null;
@@ -748,7 +748,10 @@ export default function ImageViewer({
           pointerEvents={detailsVisible ? 'auto' : 'none'}
           style={[
             styles.detailsPanel,
-            { transform: [{ translateY: detailsTranslateY }] },
+            {
+              maxHeight: detailsPanelMaxHeight,
+              transform: [{ translateY: detailsTranslateY }],
+            },
           ]}
         >
           <View style={styles.detailsHandle} />
@@ -765,7 +768,7 @@ export default function ImageViewer({
           </View>
 
           <ScrollView
-            style={styles.detailsScroll}
+            style={[styles.detailsScroll, { maxHeight: Math.max(124, detailsPanelMaxHeight - 96) }]}
             contentContainerStyle={styles.detailsContent}
             showsVerticalScrollIndicator={false}
           >
@@ -1023,7 +1026,6 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     zIndex: 13,
-    maxHeight: DETAILS_PANEL_MAX_HEIGHT,
     backgroundColor: COLORS.white,
     borderTopLeftRadius: RADIUS.xl,
     borderTopRightRadius: RADIUS.xl,
@@ -1059,9 +1061,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: COLORS.background,
   },
-  detailsScroll: {
-    maxHeight: DETAILS_PANEL_MAX_HEIGHT - 96,
-  },
+  detailsScroll: {},
   detailsContent: {
     paddingBottom: SPACING.sm,
   },

@@ -32,6 +32,8 @@ export const usePhotoGalleryData = ({
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState(null);
   const requestSeqRef = useRef(0);
+  const loadMoreSeqRef = useRef(0);
+  const mountedRef = useRef(true);
 
   const canLoad = Boolean(enabled && tourId && (visibility !== 'private' || ownerId));
   const emitTrace = useCallback((event, data = {}, options = {}) => {
@@ -48,6 +50,12 @@ export const usePhotoGalleryData = ({
       // Tracing must never affect gallery behavior.
     }
   }, [canLoad, ownerId, tourId, trace, visibility]);
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+    requestSeqRef.current += 1;
+    loadMoreSeqRef.current += 1;
+  }, []);
 
   const fetchPage = useCallback(async ({ cursor = null } = {}) => {
     emitTrace('fetch_page_start', {
@@ -76,7 +84,10 @@ export const usePhotoGalleryData = ({
     const requestSeq = requestSeqRef.current + 1;
     requestSeqRef.current = requestSeq;
 
+    if (!mountedRef.current) return;
+
     if (!canLoad) {
+      if (!mountedRef.current) return;
       emitTrace('load_initial_skipped', { refresh }, { remote: true });
       setPhotos([]);
       setNextCursor(null);
@@ -99,7 +110,7 @@ export const usePhotoGalleryData = ({
         emitTrace('before_load_success', { refresh });
       }
       const result = await fetchPage();
-      if (requestSeqRef.current !== requestSeq) return;
+      if (!mountedRef.current || requestSeqRef.current !== requestSeq) return;
 
       const mappedItems = mapPhotos(result?.items, mapPhoto);
       emitTrace('load_initial_success', {
@@ -114,7 +125,7 @@ export const usePhotoGalleryData = ({
       setHasMore(Boolean(result?.hasMore));
       setError(null);
     } catch (loadError) {
-      if (requestSeqRef.current === requestSeq) {
+      if (mountedRef.current && requestSeqRef.current === requestSeq) {
         emitTrace('load_initial_error', {
           refresh,
           error: loadError?.message,
@@ -123,7 +134,7 @@ export const usePhotoGalleryData = ({
         setError(loadError);
       }
     } finally {
-      if (requestSeqRef.current === requestSeq) {
+      if (mountedRef.current && requestSeqRef.current === requestSeq) {
         setLoading(false);
         setRefreshing(false);
       }
@@ -132,10 +143,16 @@ export const usePhotoGalleryData = ({
 
   const loadMore = useCallback(async () => {
     if (!canLoad || loadingMore || !hasMore || !nextCursor) return;
+    if (!mountedRef.current) return;
+
+    const loadMoreSeq = loadMoreSeqRef.current + 1;
+    loadMoreSeqRef.current = loadMoreSeq;
     setLoadingMore(true);
 
     try {
       const result = await fetchPage({ cursor: nextCursor });
+      if (!mountedRef.current || loadMoreSeqRef.current !== loadMoreSeq) return;
+
       const mappedItems = mapPhotos(result?.items, mapPhoto);
       emitTrace('load_more_success', {
         itemCount: result?.items?.length || 0,
@@ -148,13 +165,17 @@ export const usePhotoGalleryData = ({
       setHasMore(Boolean(result?.hasMore));
       setError(null);
     } catch (loadError) {
+      if (!mountedRef.current || loadMoreSeqRef.current !== loadMoreSeq) return;
+
       emitTrace('load_more_error', {
         error: loadError?.message,
         stack: loadError?.stack,
       }, { remote: true });
       setError(loadError);
     } finally {
-      setLoadingMore(false);
+      if (mountedRef.current && loadMoreSeqRef.current === loadMoreSeq) {
+        setLoadingMore(false);
+      }
     }
   }, [canLoad, emitTrace, fetchPage, hasMore, loadingMore, mapPhoto, nextCursor]);
 
@@ -180,6 +201,8 @@ export const usePhotoGalleryData = ({
         if (cancelled) return;
 
         const onLivePhotos = (livePhotos) => {
+          if (cancelled || !mountedRef.current) return;
+
           const mappedPhotos = mapPhotos(livePhotos, mapPhoto);
           emitTrace('live_photos_received', {
             liveCount: Array.isArray(livePhotos) ? livePhotos.length : 0,

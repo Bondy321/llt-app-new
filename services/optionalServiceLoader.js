@@ -1,3 +1,9 @@
+const isDevelopmentRuntime = () => (
+  typeof __DEV__ !== 'undefined'
+    ? __DEV__
+    : typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production'
+);
+
 const loadOptionalService = ({
   modulePath,
   loadModule,
@@ -20,7 +26,7 @@ const loadOptionalService = ({
 
     if (shouldLog && logger?.warn) {
       logger.warn(label, 'Optional service unavailable', { modulePath, error: message });
-    } else if (shouldLog) {
+    } else if (shouldLog && isDevelopmentRuntime()) {
       console.warn(`${label} unavailable:`, message);
     }
 

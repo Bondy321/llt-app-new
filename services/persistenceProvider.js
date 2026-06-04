@@ -15,11 +15,22 @@ try {
   AsyncStorage = null;
 }
 
+const IS_DEV_RUNTIME =
+  typeof __DEV__ !== 'undefined'
+    ? __DEV__
+    : typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production';
+
+const writeDevConsole = (method, ...args) => {
+  if (IS_DEV_RUNTIME && typeof console !== 'undefined' && typeof console[method] === 'function') {
+    console[method](...args);
+  }
+};
+
 const defaultLogger = {
-  debug: (msg, data) => console.log(`[Persistence][debug] ${msg}`, data || ''),
-  info: (msg, data) => console.log(`[Persistence][info] ${msg}`, data || ''),
-  warn: (msg, data) => console.warn(`[Persistence][warn] ${msg}`, data || ''),
-  error: (msg, data) => console.error(`[Persistence][error] ${msg}`, data || ''),
+  debug: (msg, data) => writeDevConsole('log', `[Persistence][debug] ${msg}`, data || ''),
+  info: (msg, data) => writeDevConsole('log', `[Persistence][info] ${msg}`, data || ''),
+  warn: (msg, data) => writeDevConsole('warn', `[Persistence][warn] ${msg}`, data || ''),
+  error: (msg, data) => writeDevConsole('error', `[Persistence][error] ${msg}`, data || ''),
 };
 
 const createStorageCandidate = (name, handlers) => ({
