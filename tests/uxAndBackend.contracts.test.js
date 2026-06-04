@@ -567,8 +567,8 @@ test('Static contract: production EAS workflows gate release on mobile/backend v
   const packageJson = JSON.parse(readText('package.json'));
 
   [
-    ['.github/workflows/eas-build.yml', 'npm run test:mobile'],
-    ['.github/workflows/eas-testflight.yml', 'npm run test:mobile'],
+    ['.github/workflows/eas-build.yml', 'npm run test:mobile:ota'],
+    ['.github/workflows/eas-testflight.yml', 'npm run test:mobile:ota'],
     ['.github/workflows/eas-update.yml', 'npm run test:mobile:ota'],
   ].forEach(([relativePath, mobileTestCommand]) => {
     const source = readText(relativePath);

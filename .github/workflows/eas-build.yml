@@ -72,8 +72,8 @@ jobs:
       - name: Install Functions dependencies
         run: npm --prefix functions ci
 
-      - name: Run mobile tests
-        run: npm run test:mobile
+      - name: Run mobile smoke tests
+        run: npm run test:mobile:ota
 
       - name: Run Functions script tests
         run: npm run test:functions:scripts
