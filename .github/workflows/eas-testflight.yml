@@ -3,8 +3,8 @@ name: EAS TestFlight
 on:
   workflow_dispatch:
     inputs:
-      what_to_test:
-        description: TestFlight "What to Test" notes
+      eas_build_id:
+        description: Existing completed EAS iOS build ID to submit without creating a new build
         required: false
         type: string
       testflight_groups:
@@ -22,11 +22,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-and-submit-testflight:
+  build-ios:
     runs-on: ubuntu-latest
     environment: production
     permissions:
       contents: read
+    outputs:
+      build_id: ${{ steps.select-build.outputs.build_id }}
     env:
       CI: true
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -45,16 +47,8 @@ jobs:
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK || 'false' }}
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK || 'false' }}
       LLT_VALIDATE_PLATFORM: ios
-      EXPO_ASC_APP_ID: ${{ secrets.EXPO_ASC_APP_ID }}
-      EXPO_ASC_API_KEY_ID: ${{ secrets.EXPO_ASC_API_KEY_ID }}
-      EXPO_ASC_API_KEY_ISSUER_ID: ${{ secrets.EXPO_ASC_API_KEY_ISSUER_ID }}
-      EXPO_ASC_API_KEY_P8: ${{ secrets.EXPO_ASC_API_KEY_P8 }}
-      EXPO_APPLE_ID: ${{ secrets.EXPO_APPLE_ID }}
-      EXPO_APPLE_TEAM_ID: ${{ secrets.EXPO_APPLE_TEAM_ID }}
-      EXPO_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.EXPO_APPLE_APP_SPECIFIC_PASSWORD }}
-      EXPO_TESTFLIGHT_GROUPS: ${{ github.event.inputs.testflight_groups || vars.EXPO_TESTFLIGHT_GROUPS }}
-      TESTFLIGHT_WHAT_TO_TEST: ${{ github.event.inputs.what_to_test || format('CI TestFlight build from {0}', github.sha) }}
-      EAS_BUILD_CLEAR_CACHE: ${{ github.event.inputs.clear_cache }}
+      EAS_BUILD_CLEAR_CACHE: ${{ inputs.clear_cache }}
+      EAS_BUILD_ID: ${{ inputs.eas_build_id }}
 
     steps:
       - name: Checkout repository
@@ -68,6 +62,7 @@ jobs:
           git merge-base --is-ancestor ${{ github.sha }} origin/main
 
       - name: Setup Node.js 24
+        if: ${{ !inputs.eas_build_id }}
         uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -77,40 +72,38 @@ jobs:
             functions/package-lock.json
 
       - name: Setup Java for Firebase emulators
+        if: ${{ !inputs.eas_build_id }}
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
 
       - name: Install dependencies
+        if: ${{ !inputs.eas_build_id }}
         run: npm ci
 
       - name: Install Functions dependencies
+        if: ${{ !inputs.eas_build_id }}
         run: npm --prefix functions ci
 
       - name: Run mobile smoke tests
+        if: ${{ !inputs.eas_build_id }}
         run: npm run test:mobile:ota
 
       - name: Run Functions script tests
+        if: ${{ !inputs.eas_build_id }}
         run: npm run test:functions:scripts
 
       - name: Run Firebase rules tests
+        if: ${{ !inputs.eas_build_id }}
         run: npm run test:emulators
 
       - name: Validate Expo public environment
+        if: ${{ !inputs.eas_build_id }}
         run: npm run validate:expo-env -- --platform=ios
 
-      - name: Setup Expo and EAS CLI
-        uses: expo/expo-github-action@v8
-        with:
-          expo-version: latest
-          eas-version: latest
-          token: ${{ env.EXPO_TOKEN }}
-
-      - name: Sync EAS production environment
-        run: npm run sync:eas-env:production -- --platform=ios
-
-      - name: Validate iOS submit configuration inputs
+      - name: Validate EAS build inputs
+        if: ${{ !inputs.eas_build_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -120,28 +113,20 @@ jobs:
             exit 1
           fi
 
-          if [[ -z "${EXPO_ASC_APP_ID:-}" ]]; then
-            echo "::error::Missing EXPO_ASC_APP_ID repository secret. Add the App Store Connect app Apple ID for com.lochlomondtravel.tourapp."
-            exit 1
-          fi
+      - name: Setup Expo and EAS CLI
+        if: ${{ !inputs.eas_build_id }}
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          eas-version: latest
+          token: ${{ env.EXPO_TOKEN }}
 
-          api_key_values=0
-          [[ -n "${EXPO_ASC_API_KEY_ID:-}" ]] && api_key_values=$((api_key_values + 1))
-          [[ -n "${EXPO_ASC_API_KEY_ISSUER_ID:-}" ]] && api_key_values=$((api_key_values + 1))
-          [[ -n "${EXPO_ASC_API_KEY_P8:-}" ]] && api_key_values=$((api_key_values + 1))
-
-          if [[ "$api_key_values" -ne 0 && "$api_key_values" -ne 3 ]]; then
-            echo "::error::Provide all three App Store Connect API key secrets: EXPO_ASC_API_KEY_ID, EXPO_ASC_API_KEY_ISSUER_ID, and EXPO_ASC_API_KEY_P8."
-            exit 1
-          fi
-
-          if [[ "$api_key_values" -eq 3 ]]; then
-            echo "::notice::App Store Connect API key secrets are present and will be materialized after the EAS build completes."
-          else
-            echo "::notice::No App Store Connect API key secrets were provided; EAS Submit will use App Store Connect credentials configured in EAS, if available."
-          fi
+      - name: Sync EAS production environment
+        if: ${{ !inputs.eas_build_id }}
+        run: npm run sync:eas-env:production -- --platform=ios
 
       - name: Log release context
+        if: ${{ !inputs.eas_build_id }}
         run: |
           echo "GitHub ref: ${{ github.ref }}"
           echo "GitHub sha: ${{ github.sha }}"
@@ -150,10 +135,12 @@ jobs:
           eas project:info --non-interactive
 
       - name: Verify EAS iOS version state
+        if: ${{ !inputs.eas_build_id }}
         run: eas build:version:get --platform ios --profile production --non-interactive
 
       - name: Build production iOS binary
         id: eas-build
+        if: ${{ !inputs.eas_build_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -191,6 +178,111 @@ jobs:
             console.log(`Build details: ${build.buildDetailsPageUrl}`);
           }
           NODE
+
+      - name: Select EAS build for submission
+        id: select-build
+        shell: bash
+        env:
+          BUILT_EAS_BUILD_ID: ${{ steps.eas-build.outputs.build_id }}
+        run: |
+          set -euo pipefail
+
+          manual_build_id="${EAS_BUILD_ID:-}"
+          manual_build_id="${manual_build_id#"${manual_build_id%%[![:space:]]*}"}"
+          manual_build_id="${manual_build_id%"${manual_build_id##*[![:space:]]}"}"
+
+          if [[ -n "$manual_build_id" ]]; then
+            echo "build_id=$manual_build_id" >> "$GITHUB_OUTPUT"
+            echo "Using existing EAS iOS build id: $manual_build_id"
+            exit 0
+          fi
+
+          if [[ -z "${BUILT_EAS_BUILD_ID:-}" ]]; then
+            echo "::error::No EAS build id was supplied or created."
+            exit 1
+          fi
+
+          echo "build_id=$BUILT_EAS_BUILD_ID" >> "$GITHUB_OUTPUT"
+          echo "Using newly-created EAS iOS build id: $BUILT_EAS_BUILD_ID"
+
+  submit-testflight:
+    needs: build-ios
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    env:
+      CI: true
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EXPO_ASC_APP_ID: ${{ secrets.EXPO_ASC_APP_ID }}
+      EXPO_ASC_API_KEY_ID: ${{ secrets.EXPO_ASC_API_KEY_ID }}
+      EXPO_ASC_API_KEY_ISSUER_ID: ${{ secrets.EXPO_ASC_API_KEY_ISSUER_ID }}
+      EXPO_ASC_API_KEY_P8: ${{ secrets.EXPO_ASC_API_KEY_P8 }}
+      EXPO_APPLE_ID: ${{ secrets.EXPO_APPLE_ID }}
+      EXPO_APPLE_TEAM_ID: ${{ secrets.EXPO_APPLE_TEAM_ID }}
+      EXPO_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.EXPO_APPLE_APP_SPECIFIC_PASSWORD }}
+      EXPO_TESTFLIGHT_GROUPS: ${{ inputs.testflight_groups || vars.EXPO_TESTFLIGHT_GROUPS }}
+      EAS_BUILD_ID: ${{ needs.build-ios.outputs.build_id }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate iOS submit configuration inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${EXPO_TOKEN:-}" ]]; then
+            echo "::error::Missing EXPO_TOKEN repository secret."
+            exit 1
+          fi
+
+          if [[ -z "${EAS_BUILD_ID:-}" ]]; then
+            echo "::error::Missing EAS build id from the build-ios job."
+            exit 1
+          fi
+
+          if [[ -z "${EXPO_ASC_APP_ID:-}" ]]; then
+            echo "::error::Missing EXPO_ASC_APP_ID repository secret. Add the App Store Connect app Apple ID for com.lochlomondtravel.tourapp."
+            exit 1
+          fi
+
+          api_key_values=0
+          [[ -n "${EXPO_ASC_API_KEY_ID:-}" ]] && api_key_values=$((api_key_values + 1))
+          [[ -n "${EXPO_ASC_API_KEY_ISSUER_ID:-}" ]] && api_key_values=$((api_key_values + 1))
+          [[ -n "${EXPO_ASC_API_KEY_P8:-}" ]] && api_key_values=$((api_key_values + 1))
+
+          if [[ "$api_key_values" -ne 0 && "$api_key_values" -ne 3 ]]; then
+            echo "::error::Provide all three App Store Connect API key secrets: EXPO_ASC_API_KEY_ID, EXPO_ASC_API_KEY_ISSUER_ID, and EXPO_ASC_API_KEY_P8."
+            exit 1
+          fi
+
+          if [[ "$api_key_values" -eq 3 ]]; then
+            echo "::notice::App Store Connect API key secrets are present and will be materialized before submitting."
+          else
+            echo "::notice::No App Store Connect API key secrets were provided; EAS Submit will use App Store Connect credentials configured in EAS, if available."
+          fi
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Setup Expo and EAS CLI
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          eas-version: latest
+          token: ${{ env.EXPO_TOKEN }}
+
+      - name: Log submit context
+        run: |
+          echo "GitHub ref: ${{ github.ref }}"
+          echo "GitHub sha: ${{ github.sha }}"
+          echo "EAS build id: $EAS_BUILD_ID"
+          eas whoami
+          eas project:info --non-interactive
 
       - name: Configure iOS submit profile
         shell: bash
@@ -253,14 +345,10 @@ jobs:
           submit_args=(
             --platform ios
             --profile production
-            --id "${{ steps.eas-build.outputs.build_id }}"
+            --id "$EAS_BUILD_ID"
             --non-interactive
             --wait
           )
-
-          if [[ -n "${TESTFLIGHT_WHAT_TO_TEST:-}" ]]; then
-            submit_args+=(--what-to-test "$TESTFLIGHT_WHAT_TO_TEST")
-          fi
 
           if [[ -n "${EXPO_TESTFLIGHT_GROUPS:-}" ]]; then
             IFS=',' read -ra groups <<< "$EXPO_TESTFLIGHT_GROUPS"
