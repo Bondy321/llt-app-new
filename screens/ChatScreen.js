@@ -1996,6 +1996,7 @@ export default function ChatScreen({
   const listContentHeightRef = useRef(0);
   const preserveScrollAfterPrependRef = useRef(null);
   const reactionFailureTimeoutRef = useRef(null);
+  const imageSendResetTimeoutRef = useRef(null);
   const inFlightReactionKeysRef = useRef(new Set());
   const pendingJumpIndexRef = useRef(null);
   const isAtBottomRef = useRef(true);
@@ -2311,6 +2312,13 @@ export default function ChatScreen({
     }
   }, []);
 
+  const clearImageSendResetTimeout = useCallback(() => {
+    if (imageSendResetTimeoutRef.current) {
+      clearTimeout(imageSendResetTimeoutRef.current);
+      imageSendResetTimeoutRef.current = null;
+    }
+  }, []);
+
   const showTransientFeedback = useCallback(({ type = 'info', message = '', icon = 'information-outline', autoDismissMs = 3600 } = {}) => {
     if (!message) return;
     clearTransientFeedbackTimeout();
@@ -2434,8 +2442,9 @@ export default function ChatScreen({
       clearSyncBannerTimeout();
       clearReactionFailureTimeout();
       clearTransientFeedbackTimeout();
+      clearImageSendResetTimeout();
     };
-  }, [clearReactionFailureTimeout, clearSyncBannerTimeout, clearTransientFeedbackTimeout]);
+  }, [clearImageSendResetTimeout, clearReactionFailureTimeout, clearSyncBannerTimeout, clearTransientFeedbackTimeout]);
 
   // Subscribe to offline queue state updates
   useEffect(() => {
@@ -2906,6 +2915,7 @@ export default function ChatScreen({
         isUploadAlreadyInFlight: isImageUploading,
       });
 
+      clearImageSendResetTimeout();
       setImageSendState({
         status: 'uploading',
         message: 'Preparing photo...',
@@ -2980,8 +2990,9 @@ export default function ChatScreen({
             message: 'Photo sent',
             retryUri: null,
           });
-          setTimeout(() => {
+          imageSendResetTimeoutRef.current = setTimeout(() => {
             setImageSendState((prev) => (prev.status === 'success' ? { status: 'idle', message: '', retryUri: null } : prev));
+            imageSendResetTimeoutRef.current = null;
           }, 2400);
         } else {
           imageSendStage = 'photo_upload';
@@ -3011,6 +3022,7 @@ export default function ChatScreen({
     },
     [
       buildChatSenderInfo,
+      clearImageSendResetTimeout,
       isImageUploading,
       logSenderIdentityPath,
       passengerStableId,

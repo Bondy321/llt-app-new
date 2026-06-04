@@ -336,30 +336,36 @@ export default function MapScreen({ onBack, tourId, tourData }) {
 
   // Auto-fit map to show both locations
   useEffect(() => {
-    if (mapRef.current && (driverLocationPoint || userLocationPoint)) {
-      const coordinates = [];
-      if (driverLocationPoint) {
-        coordinates.push({ latitude: driverLocationPoint.latitude, longitude: driverLocationPoint.longitude });
-      }
-      if (userLocationPoint) {
-        coordinates.push({ latitude: userLocationPoint.latitude, longitude: userLocationPoint.longitude });
-      }
-
-      if (coordinates.length > 0) {
-        logger.debug('MapScreen', 'Auto-fitting map coordinates', {
-          tourId,
-          coordinateCount: coordinates.length,
-          hasDriverLocation: Boolean(driverLocationPoint),
-          hasUserLocation: Boolean(userLocationPoint),
-        });
-        setTimeout(() => {
-          mapRef.current?.fitToCoordinates(coordinates, {
-            edgePadding: { top: 120, right: 60, bottom: 320, left: 60 },
-            animated: true,
-          });
-        }, 120);
-      }
+    if (!mapRef.current || (!driverLocationPoint && !userLocationPoint)) {
+      return undefined;
     }
+
+    const coordinates = [];
+    if (driverLocationPoint) {
+      coordinates.push({ latitude: driverLocationPoint.latitude, longitude: driverLocationPoint.longitude });
+    }
+    if (userLocationPoint) {
+      coordinates.push({ latitude: userLocationPoint.latitude, longitude: userLocationPoint.longitude });
+    }
+
+    if (coordinates.length === 0) {
+      return undefined;
+    }
+
+    logger.debug('MapScreen', 'Auto-fitting map coordinates', {
+      tourId,
+      coordinateCount: coordinates.length,
+      hasDriverLocation: Boolean(driverLocationPoint),
+      hasUserLocation: Boolean(userLocationPoint),
+    });
+    const fitTimer = setTimeout(() => {
+      mapRef.current?.fitToCoordinates(coordinates, {
+        edgePadding: { top: 120, right: 60, bottom: 320, left: 60 },
+        animated: true,
+      });
+    }, 120);
+
+    return () => clearTimeout(fitTimer);
   }, [driverLocationPoint, tourId, userLocationPoint]);
 
   // Determine initial region
