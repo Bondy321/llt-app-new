@@ -19,7 +19,7 @@ const appTransportSecurity = isProductionBuild
 
 module.exports = {
   expo: {
-    name: 'Loch Lomond Travel',
+    name: 'LLT',
     slug: 'loch-lomond-travel',
     version: '1.0.2',
     orientation: 'portrait',
