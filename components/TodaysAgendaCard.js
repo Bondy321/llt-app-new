@@ -80,7 +80,6 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
 
     return (
       <View style={styles.container}>
-        <Text style={styles.sectionTitle}>Tour countdown</Text>
         <LinearGradient colors={[COLORS.primary, COLORS.primaryDark]} style={styles.futureCard}>
           <View style={styles.futureHeaderRow}>
             <View style={styles.futureIconWrap}>
