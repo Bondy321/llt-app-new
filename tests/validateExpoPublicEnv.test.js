@@ -59,3 +59,18 @@ test('validateExpoPublicEnv rejects placeholder optional support phone numbers',
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_SUPPORT_PHONE')));
 });
+
+test('validateExpoPublicEnv rejects verifier URLs pasted into the wrong login slot', () => {
+  const result = validateExpoPublicEnv(
+    {
+      ...validEnv,
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL: 'https://europe-west1-demo.cloudfunctions.net/verifyDriverLogin',
+      EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL: 'https://europe-west1-demo.cloudfunctions.net/verifyPassengerLogin',
+    },
+    { platform: 'all' }
+  );
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL')));
+  assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL')));
+});

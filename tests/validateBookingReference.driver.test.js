@@ -184,6 +184,82 @@ test('validateBookingReference uses verified driver endpoint when configured', a
   }
 });
 
+test('validateBookingReference ignores driver verifier URL that points at passenger function', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL = 'https://europe-west1-demo-project.cloudfunctions.net/verifyPassengerLogin';
+  process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = 'demo-project';
+
+  const originalFetch = global.fetch;
+  try {
+    const fetchCalls = [];
+    global.fetch = async (url) => {
+      fetchCalls.push(url);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          valid: true,
+          type: 'driver',
+          driver: {
+            id: 'D-BONDY',
+            name: 'Bondy',
+            assignedTourId: '5112D_8',
+            assignedTourCode: '5112D 8',
+            hasAssignedTour: true,
+          },
+          tour: { id: '5112D_8', name: 'Highlands', tourCode: '5112D 8', isActive: true },
+          assignmentStatus: 'ASSIGNED',
+        }),
+      };
+    };
+
+    const service = loadServiceWithDb({
+      drivers: {
+        'D-BONDY': { name: 'Old direct record should not be used', currentTourId: null },
+      },
+      tours: {},
+      tour_manifests: {},
+    });
+
+    const result = await service.validateBookingReference('D-BONDY');
+
+    assert.deepEqual(fetchCalls, [
+      'https://europe-west1-demo-project.cloudfunctions.net/verifyDriverLogin',
+    ]);
+    assert.equal(result.valid, true);
+    assert.equal(result.type, 'driver');
+    assert.equal(result.tour.name, 'Highlands');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL;
+    delete process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
+  }
+});
+
+test('validateBookingReference does not send D-prefixed driver codes to passenger verifier', async () => {
+  delete process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL;
+  delete process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verifyPassengerLogin';
+
+  const originalFetch = global.fetch;
+  try {
+    let fetchCalled = false;
+    global.fetch = async () => {
+      fetchCalled = true;
+      throw new Error('D-prefixed driver codes must not reach passenger verifier');
+    };
+
+    const service = loadServiceWithDb({ drivers: {}, tours: {}, tour_manifests: {} });
+    const result = await service.validateBookingReference('D-UNKNOWN', 'driver@example.com');
+
+    assert.equal(result.valid, false);
+    assert.equal(result.error, 'Driver verification is temporarily unavailable. Please try again shortly.');
+    assert.equal(fetchCalled, false);
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
 test('validateBookingReference maps claimed driver verifier failures to support copy', async () => {
   process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL = 'https://example.test/verifyDriverLogin';
 

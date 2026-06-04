@@ -132,6 +132,46 @@ const buildDerivedDriverLoginVerifierUrl = () => {
   return `https://europe-west1-${projectId}.cloudfunctions.net/verifyDriverLogin`;
 };
 
+const endpointMentionsFunction = (endpoint, functionName) => (
+  typeof endpoint === 'string'
+  && typeof functionName === 'string'
+  && endpoint.toLowerCase().includes(functionName.toLowerCase())
+);
+
+const buildLoginVerifierEndpointCandidates = ({
+  configuredEndpoint,
+  derivedEndpoint,
+  expectedFunctionName,
+  unexpectedFunctionName,
+  loginType,
+}) => {
+  const configured = typeof configuredEndpoint === 'string' ? configuredEndpoint.trim() : '';
+  const derived = typeof derivedEndpoint === 'string' ? derivedEndpoint.trim() : '';
+  const candidates = [];
+
+  if (configured) {
+    const pointsAtUnexpectedVerifier = unexpectedFunctionName
+      && endpointMentionsFunction(configured, unexpectedFunctionName)
+      && !endpointMentionsFunction(configured, expectedFunctionName);
+
+    if (pointsAtUnexpectedVerifier) {
+      logBookingEvent('warn', `${loginType} verifier configured endpoint points at the wrong login function`, {
+        expectedFunctionName,
+        unexpectedFunctionName,
+        hasDerivedEndpoint: Boolean(derived),
+      });
+    } else {
+      candidates.push(configured);
+    }
+  }
+
+  if (derived && !candidates.includes(derived)) {
+    candidates.push(derived);
+  }
+
+  return candidates;
+};
+
 const getPassengerLoginVerifierTimeoutMs = () => {
   const configured = Number(process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS);
   if (Number.isFinite(configured) && configured >= 1000) {
@@ -288,9 +328,18 @@ const mapDriverVerifierReason = (reason) => {
 const verifyDriverLoginIdentity = async ({ driverId }) => {
   const configuredEndpoint = buildDriverLoginVerifierUrl();
   const derivedEndpoint = buildDerivedDriverLoginVerifierUrl();
-  const endpointCandidates = [configuredEndpoint, derivedEndpoint].filter((value, index, list) => {
-    if (typeof value !== 'string' || !value.trim()) return false;
-    return list.indexOf(value) === index;
+  logBookingEvent('info', 'Driver verifier request prepared', {
+    driverId: maskIdentifier(driverId),
+    configuredEndpointPresent: Boolean(configuredEndpoint),
+    derivedEndpointPresent: Boolean(derivedEndpoint),
+  });
+
+  const endpointCandidates = buildLoginVerifierEndpointCandidates({
+    configuredEndpoint,
+    derivedEndpoint,
+    expectedFunctionName: 'verifyDriverLogin',
+    unexpectedFunctionName: 'verifyPassengerLogin',
+    loginType: 'Driver',
   });
 
   if (endpointCandidates.length === 0) {
@@ -356,9 +405,12 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
     derivedEndpointPresent: Boolean(derivedEndpoint),
   });
 
-  const endpointCandidates = [configuredEndpoint, derivedEndpoint].filter((value, index, list) => {
-    if (typeof value !== 'string' || !value.trim()) return false;
-    return list.indexOf(value) === index;
+  const endpointCandidates = buildLoginVerifierEndpointCandidates({
+    configuredEndpoint,
+    derivedEndpoint,
+    expectedFunctionName: 'verifyPassengerLogin',
+    unexpectedFunctionName: 'verifyDriverLogin',
+    loginType: 'Passenger',
   });
 
   if (endpointCandidates.length === 0) {
@@ -1160,6 +1212,61 @@ const assignDriverToTour = async (driverId, tourCode) => {
   }
 };
 
+const resolveDriverLoginFromDatabase = async (driverId) => {
+  try {
+    const driverSnapshot = await realtimeDb.ref(`drivers/${driverId}`).once('value');
+
+    if (!driverSnapshot.exists()) {
+      return null;
+    }
+
+    const driverData = driverSnapshot.val();
+    const assignedTourId = resolveTourId(driverData.currentTourId);
+    const assignedTourCode = driverData.currentTourCode || null;
+
+    let resolvedTour = null;
+
+    if (assignedTourId) {
+      const driverTourSnapshot = await realtimeDb.ref(`tours/${assignedTourId}`).once('value');
+      if (driverTourSnapshot.exists()) {
+        const driverTourData = driverTourSnapshot.val() || {};
+        resolvedTour = {
+          id: assignedTourId,
+          ...driverTourData,
+        };
+      }
+    }
+
+    logBookingEvent('info', 'Driver login reference validated via direct database fallback', {
+      driverId: maskIdentifier(driverId),
+      assignedTourId,
+      hasResolvedTour: Boolean(resolvedTour),
+      assignmentStatus: assignedTourId ? (resolvedTour ? 'ASSIGNED' : 'ASSIGNED_TOUR_NOT_FOUND') : 'UNASSIGNED',
+    });
+
+    return {
+      valid: true,
+      type: 'driver',
+      driver: {
+        id: driverId,
+        name: driverData.name,
+        assignedTourId,
+        assignedTourCode,
+        hasAssignedTour: Boolean(assignedTourId),
+      },
+      tour: resolvedTour,
+      assignmentStatus: assignedTourId ? (resolvedTour ? 'ASSIGNED' : 'ASSIGNED_TOUR_NOT_FOUND') : 'UNASSIGNED',
+    };
+  } catch (error) {
+    logBookingEvent('warn', 'Driver direct database fallback unavailable', {
+      driverId: maskIdentifier(driverId),
+      error: error?.message || String(error),
+      code: error?.code || null,
+    });
+    return null;
+  }
+};
+
 // --- EXISTING: Validate Reference ---
 const validateBookingReference = async (reference, email) => {
   try {
@@ -1171,7 +1278,9 @@ const validateBookingReference = async (reference, email) => {
       hasEmail: Boolean(email),
     });
 
-    if (upperRef.startsWith('D-')) {
+    const isDriverReference = upperRef.startsWith('D-');
+
+    if (isDriverReference) {
       const driverVerification = await verifyDriverLoginIdentity({ driverId: upperRef });
       if (driverVerification) {
         if (!driverVerification.valid) {
@@ -1203,52 +1312,19 @@ const validateBookingReference = async (reference, email) => {
           ),
         };
       }
-    }
 
-    // --- 1. CHECK: Is it a Driver? ---
-    const driverSnapshot = await realtimeDb.ref(`drivers/${upperRef}`).once('value');
-
-    if (driverSnapshot.exists()) {
-      const driverData = driverSnapshot.val();
-      let assignedTourId = resolveTourId(driverData.currentTourId);
-      let assignedTourCode = driverData.currentTourCode || null;
-
-      let resolvedTour = null;
-
-      if (assignedTourId) {
-        const driverTourSnapshot = await realtimeDb.ref(`tours/${assignedTourId}`).once('value');
-        if (driverTourSnapshot.exists()) {
-          const driverTourData = driverTourSnapshot.val() || {};
-          resolvedTour = {
-            id: assignedTourId,
-            ...driverTourData,
-          };
-        }
+      const directDriverResult = await resolveDriverLoginFromDatabase(upperRef);
+      if (directDriverResult) {
+        return directDriverResult;
       }
 
-      logBookingEvent('info', 'Driver login reference validated', {
+      logBookingEvent('warn', 'Driver login reference was not validated by verifier or fallback', {
         driverId: maskIdentifier(upperRef),
-        assignedTourId,
-        hasResolvedTour: Boolean(resolvedTour),
-        assignmentStatus: assignedTourId ? (resolvedTour ? 'ASSIGNED' : 'ASSIGNED_TOUR_NOT_FOUND') : 'UNASSIGNED',
       });
-      
-      return {
-        valid: true,
-        type: 'driver',
-        driver: {
-          id: upperRef,
-          name: driverData.name,
-          assignedTourId,
-          assignedTourCode,
-          hasAssignedTour: Boolean(assignedTourId),
-        },
-        tour: resolvedTour,
-        assignmentStatus: assignedTourId ? (resolvedTour ? 'ASSIGNED' : 'ASSIGNED_TOUR_NOT_FOUND') : 'UNASSIGNED',
-      };
+      return { valid: false, error: 'Driver verification is temporarily unavailable. Please try again shortly.' };
     }
 
-    // --- 2. CHECK: Is it a Passenger Booking? ---
+    // --- Passenger Booking ---
     const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
     if (!normalizedEmail) {
       logBookingEvent('warn', 'Passenger login validation blocked without email', {

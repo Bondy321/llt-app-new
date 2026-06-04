@@ -18,6 +18,7 @@ const OPTIONAL_ENV_VARS = [
   'EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID',
   'EXPO_PUBLIC_SUPPORT_PHONE',
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL',
+  'EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL',
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS',
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK',
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK',
@@ -77,7 +78,13 @@ const FORMAT_CHECKS = {
   },
   EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL: {
     pattern: /^https:\/\/.+/i,
-    message: 'expected an HTTPS verifier URL',
+    validate: (value) => !/verifyDriverLogin/i.test(value.trim()) || /verifyPassengerLogin/i.test(value.trim()),
+    message: 'expected an HTTPS passenger verifier URL',
+  },
+  EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL: {
+    pattern: /^https:\/\/.+/i,
+    validate: (value) => !/verifyPassengerLogin/i.test(value.trim()) || /verifyDriverLogin/i.test(value.trim()),
+    message: 'expected an HTTPS driver verifier URL',
   },
   EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS: {
     validate: (value) => Number.isFinite(Number(value)) && Number(value) >= 1000,

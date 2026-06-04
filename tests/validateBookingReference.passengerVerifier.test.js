@@ -28,6 +28,11 @@ const createMockRealtimeDb = (state, options = {}) => {
 
     return {
       async once() {
+        const readError = options.readErrors?.[segments.join('/')];
+        if (readError) {
+          throw readError;
+        }
+
         const value = getValue();
         return {
           exists: () => value !== undefined && value !== null,
@@ -622,6 +627,50 @@ test('validateBookingReference keeps passenger flow for non D- codes', async () 
     const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
     assert.equal(result.valid, true);
     assert.equal(result.type, 'passenger');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference sends passenger refs to verifier without probing drivers', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verifyPassengerLogin';
+
+  const originalFetch = global.fetch;
+  try {
+    let capturedRequest;
+    global.fetch = async (url, options) => {
+      capturedRequest = { url, options };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ valid: true, bookingRef: 'ABC123', tourId: '5112D_8' }),
+      };
+    };
+
+    const service = loadServiceWithDb({
+      drivers: {},
+      bookings: {
+        ABC123: {
+          bookingRef: 'ABC123',
+          tourId: '5112D_8',
+          tourCode: '5112D 8',
+          passengerNames: ['Alex'],
+          pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+        },
+      },
+      tours: { '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true } },
+    }, {
+      readErrors: {
+        'drivers/ABC123': new Error('permission_denied'),
+      },
+    });
+
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, true);
+    assert.equal(result.type, 'passenger');
+    assert.equal(capturedRequest.url, 'https://example.test/verifyPassengerLogin');
   } finally {
     global.fetch = originalFetch;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
