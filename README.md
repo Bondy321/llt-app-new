@@ -74,6 +74,7 @@ npm run serve
 ```bash
 npm test
 npm run test:mobile
+npm run test:mobile:ota
 npm run test:web-admin
 npm run test:all:with-emulators
 ```

@@ -564,31 +564,37 @@ test('Static contract: support and external link handoffs surface failures', () 
 test('Static contract: production EAS workflows gate release on mobile/backend verification', () => {
   const readinessDoc = readText('dependency-upgrade-prod-readiness.md');
   const agentsDoc = readText('AGENTS.md');
+  const packageJson = JSON.parse(readText('package.json'));
 
   [
-    '.github/workflows/eas-build.yml',
-    '.github/workflows/eas-testflight.yml',
-    '.github/workflows/eas-update.yml',
-  ].forEach((relativePath) => {
+    ['.github/workflows/eas-build.yml', 'npm run test:mobile'],
+    ['.github/workflows/eas-testflight.yml', 'npm run test:mobile'],
+    ['.github/workflows/eas-update.yml', 'npm run test:mobile:ota'],
+  ].forEach(([relativePath, mobileTestCommand]) => {
     const source = readText(relativePath);
+    const workflowLines = source.split(/\r?\n/).map((line) => line.trim());
 
     assert.match(source, /node-version:\s*24/);
     assert.match(source, /functions\/package-lock\.json/);
     assert.match(source, /npm --prefix functions ci/);
     assert.match(source, /actions\/setup-java@v4/);
     assert.match(source, /java-version:\s*21/);
-    assert.match(source, /npm run test:mobile/);
+    assert.equal(workflowLines.includes(`run: ${mobileTestCommand}`), true);
     assert.match(source, /npm run test:functions:scripts/);
     assert.match(source, /npm run test:emulators/);
     assert.match(source, /npm run validate:expo-env/);
 
-    const testIndex = source.indexOf('npm run test:mobile');
+    const testIndex = source.indexOf(`run: ${mobileTestCommand}`);
     const envIndex = source.indexOf('npm run validate:expo-env');
     const publishIndex = Math.max(source.indexOf('eas build'), source.indexOf('eas update'));
     assert.ok(testIndex >= 0 && envIndex > testIndex, 'tests must run before env validation');
     assert.ok(envIndex >= 0 && publishIndex > envIndex, 'env validation must run before EAS publish/build');
   });
 
+  assert.equal(
+    packageJson.scripts['test:mobile:ota'],
+    'npm run test:mobile:auth && npm run test:mobile:services:booking',
+  );
   assert.match(readinessDoc, /Deploy Firebase Functions and Firebase rules before any production EAS update\/build/);
   assert.match(readinessDoc, /deploy Functions first, then Realtime Database\/Storage rules, then publish the EAS update\/build/);
   assert.match(agentsDoc, /Current EAS workflows test backend changes but do not deploy Firebase backend artifacts/);

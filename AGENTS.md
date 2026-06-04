@@ -754,6 +754,7 @@ npm run test:all
 npm run test:all:fast
 npm run test:all:full
 npm run test:all:with-emulators
+npm run test:mobile:ota
 ```
 
 Mobile suites:

@@ -16,6 +16,7 @@
     "test:all:full": "npm run test:mobile:extended && npm run test:functions:scripts",
     "test:all:with-emulators": "npm run test:all && npm run test:emulators",
     "test:mobile": "npm run test:mobile:core && npm run test:mobile:extended",
+    "test:mobile:ota": "npm run test:mobile:auth && npm run test:mobile:services:booking",
     "test:mobile:core": "npm run test:mobile:auth && npm run test:mobile:sync:contract && npm run test:mobile:services:booking && npm run test:mobile:ui:date-time",
     "test:mobile:extended": "npm run test:mobile:sync:engine && npm run test:mobile:services:chat && npm run test:mobile:services:photo && npm run test:mobile:services:notifications && npm run test:mobile:ux && npm run test:mobile:infra",
     "test:mobile:auth": "cross-env NODE_ENV=test node --test tests/loginFlow.test.js tests/LoginScreen.behavior.test.js tests/offlineLoginResolver.test.js tests/identityService.test.js tests/validateBookingReference.driver.test.js tests/validateBookingReference.passengerVerifier.test.js",
