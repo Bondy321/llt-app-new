@@ -1126,16 +1126,16 @@ const validateBookingReference = async (reference, email) => {
         BOOKING_NOT_FOUND: 'Booking reference not found',
         EMAIL_MISMATCH: 'Email does not match this booking reference',
         INVALID_CREDENTIALS: 'Login details could not be verified. Please check your details and try again.',
-        IDENTITY_INCOMPLETE: 'Booking identity record is incomplete',
+        IDENTITY_INCOMPLETE: 'We found this booking but could not complete login. Please contact support if this keeps happening.',
         INVALID_INPUT: 'Invalid login details provided',
         TRY_AGAIN_LATER: 'Too many verification attempts. Please wait a moment and try again.',
         INTERNAL_ERROR: 'Verification service is temporarily unavailable. Please try again shortly.',
         METHOD_NOT_ALLOWED: 'Verification service is currently unavailable. Please update the app and try again shortly.',
-        VERIFIER_NOT_CONFIGURED: 'Passenger verification service is not configured',
+        VERIFIER_NOT_CONFIGURED: 'Passenger verification is temporarily unavailable. Please try again shortly.',
         VERIFIER_TIMEOUT: 'Verification is taking longer than expected. Please check your connection and try again.',
         VERIFIER_REQUEST_FAILED: 'Unable to reach the verification service. Please try again shortly.',
         VERIFIER_INVALID_RESPONSE: 'Verification service returned an unexpected response. Please try again.',
-        VERIFIER_NOT_FOUND: 'Passenger verification service endpoint is unavailable. Please update app settings or try again later.',
+        VERIFIER_NOT_FOUND: 'Passenger verification is temporarily unavailable. Please try again shortly.',
         VERIFIER_APPCHECK_UNAVAILABLE: 'App security check could not be completed. Update the app or reconnect and try again.',
       };
       return {
@@ -1177,8 +1177,8 @@ const validateBookingReference = async (reference, email) => {
     }
 
     const tourData = tourSnapshot.val();
-    // We still use the public participant count for the passenger view
-    const reconciledParticipantCount = await ensureTourParticipantCount(tourId, realtimeDb);
+    // We still use the public participant count for the passenger view, without mutating tour data before joinTour.
+    const reconciledParticipantCount = await getTourParticipantCount(tourId, realtimeDb);
 
     if (!tourData.isActive) {
       logBookingEvent('warn', 'Passenger login blocked for inactive tour', {
@@ -1220,8 +1220,27 @@ const validateBookingReference = async (reference, email) => {
       reference: maskIdentifier(reference),
       error: error?.message || String(error),
     });
-    return { valid: false, error: 'Error checking booking reference' };
+    return { valid: false, error: 'Unable to check booking reference. Please try again.' };
   }
+};
+
+const getTourParticipantCount = async (tourId, dbInstance = realtimeDb) => {
+  const db = dbInstance || realtimeDb;
+  if (!db) throw new Error('Realtime database not initialized');
+
+  const tourRef = db.ref(`tours/${tourId}`);
+  const [participantsSnapshot, countSnapshot] = await Promise.all([
+    tourRef.child('participants').once('value'),
+    tourRef.child('currentParticipants').once('value')
+  ]);
+
+  const participantMap = participantsSnapshot.val() || {};
+  const recalculatedCount = Object.keys(participantMap).length;
+  const currentCount = countSnapshot.val();
+
+  return typeof currentCount === 'number' && currentCount === recalculatedCount
+    ? currentCount
+    : recalculatedCount;
 };
 
 // --- EXISTING: Reconcile participant counts ---
@@ -1240,7 +1259,7 @@ const ensureTourParticipantCount = async (tourId, dbInstance = realtimeDb) => {
   const recalculatedCount = Object.keys(participantMap).length;
 
   if (typeof currentCount !== 'number' || currentCount !== recalculatedCount) {
-    await tourRef.update({ currentParticipants: recalculatedCount });
+    await tourRef.child('currentParticipants').set(recalculatedCount);
     return recalculatedCount;
   }
   return currentCount;
@@ -1263,11 +1282,11 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
       throw new Error('Realtime database not initialized');
     }
 
-    // Verify tour exists and is active (create minimal tour shell in tests/local mocks)
+    // Verify tour exists and is active. Client joins must never create or rewrite tour metadata.
     const tourSnapshot = await db.ref(`tours/${validatedTourId}`).once('value');
     const tourData = tourSnapshot.exists() ? (tourSnapshot.val() || {}) : {};
     if (!tourSnapshot.exists()) {
-      await db.ref(`tours/${validatedTourId}`).update({ isActive: true, participants: {}, currentParticipants: 0 });
+      throw new Error('Tour not found');
     }
 
     if (tourData.isActive === false) {
@@ -1292,34 +1311,14 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
       return { success: true, currentParticipants: reconciledCount, alreadyJoined: true };
     }
 
-    // Join tour using transaction for safety
-    const tourRef = db.ref(`tours/${validatedTourId}`);
-    const transactionResult = await tourRef.transaction((tourState) => {
-      const currentTour = tourState || {};
-      const participants = currentTour.participants || {};
-
-      // Double-check user hasn't joined during transaction
-      if (participants[validatedUserId]) {
-        return undefined; // Abort transaction
-      }
-
-      const updatedParticipants = {
-        ...participants,
-        [validatedUserId]: {
-          joinedAt: new Date().toISOString(),
-          userId: validatedUserId
-        }
-      };
-
-      const currentCount = typeof currentTour.currentParticipants === 'number'
-        ? currentTour.currentParticipants
-        : Object.keys(participants).length;
-
+    // Join tour using a participant-row transaction so security rules can avoid broad tour writes.
+    const nowIso = new Date().toISOString();
+    const transactionResult = await participantRef.transaction((participantState) => {
+      if (participantState) return undefined;
       return {
-        ...currentTour,
-        participants: updatedParticipants,
-        currentParticipants: currentCount + 1,
-        lastUpdated: new Date().toISOString()
+        joinedAt: nowIso,
+        lastUpdated: nowIso,
+        userId: validatedUserId
       };
     });
 
@@ -1334,15 +1333,15 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
       return { success: true, currentParticipants: reconciledCount, alreadyJoined: true };
     }
 
-    const finalSnapshot = transactionResult.snapshot.val();
+    const currentParticipants = await ensureTourParticipantCount(validatedTourId, db);
     logBookingEvent('info', 'Join tour completed', {
       tourId: validatedTourId,
       userId: maskIdentifier(validatedUserId),
-      currentParticipants: finalSnapshot.currentParticipants,
+      currentParticipants,
     });
     return {
       success: true,
-      currentParticipants: finalSnapshot.currentParticipants,
+      currentParticipants,
       alreadyJoined: false
     };
   } catch (error) {

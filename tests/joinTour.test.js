@@ -71,8 +71,19 @@ const createMockRealtimeDb = () => {
   return db;
 };
 
-test('increments participant count using a transaction', async () => {
+const seedActiveTour = (mockDb, tourId, overrides = {}) => {
+  mockDb.state.tours[tourId] = {
+    isActive: true,
+    participants: {},
+    currentParticipants: 0,
+    ...overrides,
+  };
+};
+
+test('increments participant count using a participant-row transaction', async () => {
   const mockDb = createMockRealtimeDb();
+  seedActiveTour(mockDb, 'tour-1');
+
   const result = await joinTour('tour-1', 'user-1', mockDb);
 
   assert.equal(result.success, true);
@@ -82,6 +93,7 @@ test('increments participant count using a transaction', async () => {
 
 test('handles concurrent joins with reliable increments', async () => {
   const mockDb = createMockRealtimeDb();
+  seedActiveTour(mockDb, 'tour-abc');
 
   await Promise.all([
     joinTour('tour-abc', 'user-1', mockDb),
@@ -97,6 +109,7 @@ test('handles concurrent joins with reliable increments', async () => {
 
 test('returns existing count when user rejoins the same tour', async () => {
   const mockDb = createMockRealtimeDb();
+  seedActiveTour(mockDb, 'tour-rejoin');
 
   await joinTour('tour-rejoin', 'user-1', mockDb);
   const repeatJoin = await joinTour('tour-rejoin', 'user-1', mockDb);
@@ -109,6 +122,7 @@ test('returns existing count when user rejoins the same tour', async () => {
 
 test('keeps participant counts stable across repeated joins for the same user', async () => {
   const mockDb = createMockRealtimeDb();
+  seedActiveTour(mockDb, 'tour-repeat');
 
   await Promise.all([
     joinTour('tour-repeat', 'user-99', mockDb),
@@ -122,9 +136,17 @@ test('keeps participant counts stable across repeated joins for the same user', 
 
 test('surfaces transaction errors', async () => {
   const mockDb = createMockRealtimeDb();
+  seedActiveTour(mockDb, 'tour-2');
   mockDb.transactionError = new Error('transaction failed');
 
   await assert.rejects(joinTour('tour-2', 'user-3', mockDb), /transaction failed/);
+});
+
+test('does not create missing tours from the customer app', async () => {
+  const mockDb = createMockRealtimeDb();
+
+  await assert.rejects(joinTour('missing-tour', 'user-3', mockDb), /Tour not found/);
+  assert.equal(mockDb.state.tours['missing-tour'], undefined);
 });
 
 test('normalizes legacy booking data into pickup points and seats', async () => {

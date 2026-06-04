@@ -472,11 +472,22 @@ test('validateBookingReference maps verifier endpoint-not-found to actionable co
     const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
 
     assert.equal(result.valid, false);
-    assert.equal(result.error, 'Passenger verification service endpoint is unavailable. Please update app settings or try again later.');
+    assert.equal(result.error, 'Passenger verification is temporarily unavailable. Please try again shortly.');
   } finally {
     global.fetch = originalFetch;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
   }
+});
+
+test('validateBookingReference maps missing verifier configuration to customer-safe copy', async () => {
+  delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  delete process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
+
+  const service = loadServiceWithDb({ drivers: {}, bookings: {}, tours: {} });
+  const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+  assert.equal(result.valid, false);
+  assert.equal(result.error, 'Passenger verification is temporarily unavailable. Please try again shortly.');
 });
 
 test('validateBookingReference maps missing App Check token to actionable copy when strict mode is enabled', async () => {

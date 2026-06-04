@@ -73,6 +73,15 @@ const sanitizeLogValue = (key, value) => {
 
 const sanitizeLogData = (data = {}) => sanitizeLogValue('', data) || {};
 
+const sanitizeLogText = (value) => {
+  if (value === null || value === undefined) return value;
+  return String(value)
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted-email]')
+    .replace(/([?&]token=)[^&\s]+/gi, '$1[redacted]')
+    .replace(/\bExponentPushToken\[[^\]]+\]/g, 'ExponentPushToken[redacted]')
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[redacted-jwt]');
+};
+
 /**
  * Structured logger for better debugging and monitoring
  */
@@ -86,8 +95,8 @@ const log = {
   error: (message, error = {}, data = {}) => console.error(JSON.stringify({
     level: 'error',
     message,
-    error: error?.message || error || null,
-    stack: error?.stack || null,
+    error: sanitizeLogText(error?.message || error || null),
+    stack: error?.stack ? sanitizeLogText(error.stack) : null,
     ...sanitizeLogData(data),
     timestamp: new Date().toISOString(),
   })),
@@ -1631,4 +1640,5 @@ exports.__testables = {
   buildPhotoVariantPaths,
   buildFirebaseStorageDownloadUrl,
   generatePhotoVariantsForRecord,
+  sanitizeLogText,
 };

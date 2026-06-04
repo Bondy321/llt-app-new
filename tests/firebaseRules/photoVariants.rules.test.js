@@ -48,6 +48,13 @@ test.before(async () => {
       rules,
     },
   });
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref(`tours/${TOUR_ID}/participants/${USER_UID}`).set({
+      userId: USER_UID,
+      joinedAt: 1710000000000,
+    });
+  });
 });
 
 test.after(async () => {
@@ -66,6 +73,26 @@ test('allows valid group photo variant processing fields', async () => {
     variantUpdatedAt: Date.now(),
     variantError: null,
     variantVersion: 2,
+  }));
+});
+
+test('denies group photo metadata access for users outside the tour', async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref(GROUP_PATH).set({
+      url: 'https://example.com/source.jpg',
+      userId: USER_UID,
+      timestamp: Date.now(),
+      variantStatus: 'ready',
+    });
+  });
+
+  await assertSucceeds(dbFor(USER_UID).ref(GROUP_PATH).get());
+  await assertFails(dbFor(FOREIGN_UID).ref(GROUP_PATH).get());
+  await assertFails(dbFor(FOREIGN_UID).ref(`group_tour_photos/${TOUR_ID}/foreign_photo`).set({
+    url: 'https://example.com/foreign-group.jpg',
+    userId: FOREIGN_UID,
+    timestamp: Date.now(),
+    variantStatus: 'ready',
   }));
 });
 

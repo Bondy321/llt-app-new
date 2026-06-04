@@ -21,6 +21,26 @@ Module._load = function mockedLoad(request, parent, isMain) {
 const { __testables } = require('../functions/index.js');
 Module._load = originalLoad;
 
+test('sanitizeLogText redacts sensitive identifiers from Functions error text', () => {
+  const raw = [
+    'Failed for traveller@example.com',
+    'https://example.test/file.jpg?alt=media&token=secret-token-123',
+    'ExponentPushToken[abc123]',
+    'eyJaaaaaaaaaaaa.eyJbbbbbbbbbbbb.cccccccccccccc',
+  ].join(' ');
+
+  const sanitized = __testables.sanitizeLogText(raw);
+
+  assert.equal(sanitized.includes('traveller@example.com'), false);
+  assert.equal(sanitized.includes('secret-token-123'), false);
+  assert.equal(sanitized.includes('ExponentPushToken[abc123]'), false);
+  assert.equal(sanitized.includes('eyJaaaaaaaaaaaa.eyJbbbbbbbbbbbb.cccccccccccccc'), false);
+  assert.match(sanitized, /\[redacted-email\]/);
+  assert.match(sanitized, /token=\[redacted\]/);
+  assert.match(sanitized, /ExponentPushToken\[redacted\]/);
+  assert.match(sanitized, /\[redacted-jwt\]/);
+});
+
 test('toRealtimeKeySegment encodes stable passenger IDs for RTDB paths', () => {
   assert.equal(
     __testables.toRealtimeKeySegment('pax_v1:T123659:msandreayoung@yahoo.co.uk'),

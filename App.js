@@ -65,6 +65,8 @@ const SESSION_KEYS = {
 };
 
 const NOTIFICATION_ONBOARDING_REMINDER_MS = 24 * 60 * 60 * 1000;
+const STARTUP_CONNECTION_ERROR_MESSAGE =
+  'We could not connect to tour services. Please check your internet connection and restart the app.';
 
 const { normalizePassengerEmail, resolveOfflineLoginFromCache } = offlineLoginResolver;
 
@@ -488,7 +490,7 @@ function AppContent() {
       return unsubscribe;
     } catch (error) {
       logger.error('App', 'Initialization error', { error: error.message });
-      setAuthError(error.message);
+      setAuthError(STARTUP_CONNECTION_ERROR_MESSAGE);
       setInitializing(false);
       return null;
     }

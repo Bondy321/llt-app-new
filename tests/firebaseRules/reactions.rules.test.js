@@ -28,6 +28,7 @@ const DRIVER_PRINCIPAL_ID = `driver:${DRIVER_ID}`;
 const PASSENGER_AUTH_UID = 'passenger-auth-1';
 const PASSENGER_PRINCIPAL_ID = 'pax_v1:ABC123:demo@example.com';
 const PASSENGER_PRINCIPAL_KEY = toRealtimeKeySegment(PASSENGER_PRINCIPAL_ID);
+const UNATTACHED_AUTH_UID = 'unattached-auth-1';
 const INTERNAL_TOUR_ID = 'TOUR_INTERNAL_001';
 
 const parseHost = () => {
@@ -71,6 +72,16 @@ const seedMessage = async () => {
       name: 'Driver Bondy',
       authUid: DRIVER_AUTH_UID,
     });
+    await context.database(dbUrl).ref(`tours/${TOUR_ID}/participants/userA`).set({
+      userId: 'userA',
+      joinedAt: 1710000000000,
+    });
+    await context.database(dbUrl).ref(`tours/${TOUR_ID}/participants/${PASSENGER_AUTH_UID}`).set({
+      userId: PASSENGER_AUTH_UID,
+      joinedAt: 1710000000000,
+    });
+    await context.database(dbUrl).ref(`tour_manifests/${TOUR_ID}/assigned_drivers/${DRIVER_ID}`).set(true);
+    await context.database(dbUrl).ref(`tour_manifests/${INTERNAL_TOUR_ID}/assigned_drivers/${DRIVER_ID}`).set(true);
     await context.database(dbUrl).ref(`users/${DRIVER_AUTH_UID}`).set({
       driverId: DRIVER_ID,
       driverPrincipalId: DRIVER_PRINCIPAL_ID,
@@ -118,6 +129,14 @@ test('allows user A to remove own reaction leaf', async () => {
 
 test('allows reaction leaf writes on legacy messages that predate senderStableId', async () => {
   await assertSucceeds(dbFor('userA').ref(`${LEGACY_REACTION_PATH}/userA`).set(true));
+});
+
+test('denies unattached signed-in users from reading or writing another tour chat', async () => {
+  await assertFails(dbFor(UNATTACHED_AUTH_UID).ref(`chats/${TOUR_ID}/messages`).get());
+  await assertFails(dbFor(UNATTACHED_AUTH_UID).ref(`chats/${TOUR_ID}/typing/${UNATTACHED_AUTH_UID}`).set({
+    name: 'Unattached User',
+    timestamp: Date.now(),
+  }));
 });
 
 test('denies editing legacy message text when modern required fields are missing', async () => {
@@ -263,6 +282,18 @@ test('service-generated internal driver message payload is accepted by rules', a
   assert.equal(written.exists(), true);
   assert.equal(written.child('senderType').val(), 'driver');
   assert.equal(written.child('senderStableId').val(), DRIVER_PRINCIPAL_ID);
+});
+
+test('denies passenger principals from creating internal driver chat messages', async () => {
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`internal_chats/${INTERNAL_TOUR_ID}/messages/passenger_probe`).set({
+    senderId: PASSENGER_PRINCIPAL_ID,
+    senderStableId: PASSENGER_PRINCIPAL_ID,
+    senderName: 'Passenger One',
+    text: 'Passenger should not be in the internal driver chat',
+    timestamp: 1710000000004,
+    isDriver: true,
+    status: 'sent',
+  }));
 });
 
 test('allows internal driver lastRead writes through canonical driver identity', async () => {
