@@ -387,6 +387,8 @@ test('Static contract: failed chat sends preserve reply composer context', () =>
   assert.match(source, /const pendingReply = replyingToMessage;/);
   assert.match(source, /setReplyingToMessage\(pendingReply\);/);
   assert.match(source, /replyTo: pendingReply \|\| undefined/);
+  assert.match(source, /imageSendResetTimeoutRef/);
+  assert.match(source, /clearImageSendResetTimeout/);
 });
 
 test('Static contract: chat timestamp helpers use strict shared parser', () => {
@@ -450,6 +452,8 @@ test('Static contract: live map and safety sharing guard stale or malformed loca
   assert.match(mapSource, /driverLocation\.timestamp \|\| driverLocation\.lastUpdated/);
   assert.match(mapSource, /let cancelled = false;/);
   assert.match(mapSource, /driverLocationPoint && userLocationPoint/);
+  assert.match(mapSource, /const fitTimer = setTimeout/);
+  assert.match(mapSource, /return \(\) => clearTimeout\(fitTimer\);/);
 
   const safetySource = readText('screens/SafetySupportScreen.js');
   assert.match(safetySource, /locationWatchRef\.current\.remove\(\);/);
