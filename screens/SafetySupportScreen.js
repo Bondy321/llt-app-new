@@ -200,7 +200,6 @@ const SOSButton = ({ onActivate, isActive, countdown, onCancel }) => {
                   <Text
                     style={styles.sosText}
                     numberOfLines={1}
-                    adjustsFontSizeToFit
                   >
                     SOS
                   </Text>

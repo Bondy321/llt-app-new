@@ -372,7 +372,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
               <Animated.View style={[styles.logoSection, { marginTop: height * 0.065, opacity: logoAnimation }]}>
               <Image source={require('../assets/images/app-icon-llt.png')} style={styles.logoImage} resizeMode="contain" />
               <Text style={styles.appTitle}>Loch Lomond Travel</Text>
-              <Text style={styles.appSubtitle}>Premium journeys, effortless access.</Text>
+              <Text style={styles.appSubtitle}>The UK's Fastest Growing Coach Tour Operator</Text>
             </Animated.View>
 
             <Animated.View style={[styles.formCard, { opacity: formAnimation }]}> 
@@ -564,7 +564,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: SPACING.lg,
   },
-  logoImage: { width: 240, height: 94, marginBottom: SPACING.xs },
+  logoImage: { width: 300, height: 118, marginBottom: SPACING.xs },
   appTitle: {
     fontSize: 32,
     fontWeight: FONT_WEIGHT.extrabold,
