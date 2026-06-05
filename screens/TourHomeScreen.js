@@ -71,10 +71,10 @@ const triggerHaptic = (type = 'light') => {
 // Get time-based greeting
 const getTimeBasedGreeting = () => {
   const hour = new Date().getHours();
-  if (hour < 12) return { text: 'Good morning', icon: 'weather-sunny', color: '#F59E0B' };
-  if (hour < 17) return { text: 'Good afternoon', icon: 'weather-partly-cloudy', color: '#3B82F6' };
-  if (hour < 21) return { text: 'Good evening', icon: 'weather-sunset', color: '#F97316' };
-  return { text: 'Good night', icon: 'weather-night', color: '#6366F1' };
+  if (hour < 12) return { text: 'Good Morning', icon: 'weather-sunny', color: '#F59E0B' };
+  if (hour < 17) return { text: 'Good Afternoon', icon: 'weather-partly-cloudy', color: '#3B82F6' };
+  if (hour < 21) return { text: 'Good Evening', icon: 'weather-sunset', color: '#F97316' };
+  return { text: 'Good Night', icon: 'weather-night', color: '#6366F1' };
 };
 
 // Animated card component
@@ -497,6 +497,7 @@ export default function TourHomeScreen({
   const [refreshStatusOutcomeText, setRefreshStatusOutcomeText] = useState('');
   const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(null);
   const [recentChanges, setRecentChanges] = useState([]);
+  const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
   const refreshStatusTimeoutRef = useRef(null);
   const previousManifestStatusRef = useRef(null);
   const previousDriverLocationRef = useRef(null);
@@ -507,12 +508,6 @@ export default function TourHomeScreen({
     () => resolveTourId(tourData?.id, tourCode, tourData?.tourCode),
     [tourData?.id, tourData?.tourCode, tourCode]
   );
-  const passengerName = useMemo(() => {
-    if (bookingData?.passengerNames?.length > 0) {
-      return bookingData.passengerNames[0].split(' ')[0]; // First name only
-    }
-    return null;
-  }, [bookingData?.passengerNames]);
 
   // Get primary pickup time for countdown
   const primaryPickupTime = useMemo(() => {
@@ -1144,16 +1139,34 @@ export default function TourHomeScreen({
               />
             }
           >
-          {/* Header with personalized greeting */}
+          {/* Header */}
           <AnimatedCard style={styles.header} delay={0}>
-            <Image source={require('../assets/images/logo_for_tour_home.png')} style={styles.logoImage} />
+            <View style={styles.headerBrandMark}>
+              <Image source={require('../assets/images/logo_for_tour_home.png')} style={styles.logoImage} />
+            </View>
             <View style={styles.headerTextContainer}>
-              <View style={styles.greetingRow}>
-                <MaterialCommunityIcons name={greeting.icon} size={16} color={greeting.color} />
-                <Text style={styles.greetingText}>{`${greeting.text}${passengerName ? `, ${passengerName}` : ''}!`}</Text>
+              <View style={styles.greetingTitleRow}>
+                <View style={[styles.greetingIconBadge, { backgroundColor: `${greeting.color}14` }]}>
+                  <MaterialCommunityIcons name={greeting.icon} size={17} color={greeting.color} />
+                </View>
+                <Text style={styles.greetingText}>{`${greeting.text}!`}</Text>
               </View>
-              <Text style={styles.tourCodeDisplay}>{tourCode}</Text>
-              <Text style={styles.tourName} numberOfLines={1}>{tourData?.name || 'Active Tour'}</Text><Text style={styles.cacheLabel}>{cacheStatusLabel}</Text>
+              <View style={styles.cacheStatusPill}>
+                <MaterialCommunityIcons name="cloud-check-outline" size={14} color={COLORS.primaryBlue} />
+                <Text style={styles.cacheLabel}>{cacheStatusLabel}</Text>
+              </View>
+              {refreshStatusContract ? (
+                <View style={[
+                  styles.refreshStatusContainer,
+                  refreshStatusContract.severity === 'success' && styles.refreshStatusSuccess,
+                  refreshStatusContract.severity === 'warning' && styles.refreshStatusWarning,
+                  refreshStatusContract.severity === 'critical' && styles.refreshStatusError,
+                ]}>
+                  <Text style={styles.refreshStatusText}>
+                    {refreshStatusOutcomeText || refreshStatusContract.label}
+                  </Text>
+                </View>
+              ) : null}
               {recentChanges.length > 0 ? (
                 <View style={styles.recentChangesCard}>
                   <Text style={styles.recentChangesTitle}>Since your last check</Text>
@@ -1168,44 +1181,77 @@ export default function TourHomeScreen({
             </View>
             <View style={styles.headerActions}>
               <TouchableOpacity
-                style={styles.headerButton}
-                onPress={() => {
-                  navigateWithLog('AccountPrivacy', { from: 'TourHome' }, 'header_account');
-                }}
-                accessible={true}
-                accessibilityLabel="Account and privacy"
-                accessibilityRole="button"
-              >
-                <MaterialCommunityIcons name="account-cog-outline" size={22} color={COLORS.primaryBlue} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.headerButton}
-                onPress={() => {
-                  navigateWithLog('NotificationPreferences', {}, 'header_notifications');
-                }}
-                accessible={true}
-                accessibilityLabel="Notification settings"
-                accessibilityRole="button"
-              >
-                <MaterialCommunityIcons name="bell-ring-outline" size={22} color={COLORS.primaryBlue} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.headerButton}
+                style={[styles.headerMenuButton, isHeaderMenuOpen && styles.headerMenuButtonActive]}
                 onPress={() => {
                   triggerHaptic('light');
-                  logger.info('TourHome', 'Logout requested from header', {
-                    tourId: activeTourId || null,
-                    bookingRef: maskIdentifier(bookingRef),
-                  });
-                  onLogout();
+                  setIsHeaderMenuOpen((open) => !open);
                 }}
-                activeOpacity={0.7}
                 accessible={true}
-                accessibilityLabel="Log out"
+                accessibilityLabel="Open account menu"
                 accessibilityRole="button"
+                accessibilityState={{ expanded: isHeaderMenuOpen }}
               >
-                <MaterialCommunityIcons name="logout-variant" size={22} color={COLORS.primaryBlue} />
+                <MaterialCommunityIcons
+                  name={isHeaderMenuOpen ? 'chevron-up' : 'dots-horizontal'}
+                  size={24}
+                  color={COLORS.primaryBlue}
+                />
               </TouchableOpacity>
+              {isHeaderMenuOpen ? (
+                <View style={styles.headerMenuDropdown}>
+                  <TouchableOpacity
+                    style={styles.headerMenuItem}
+                    onPress={() => {
+                      setIsHeaderMenuOpen(false);
+                      navigateWithLog('AccountPrivacy', { from: 'TourHome' }, 'header_account');
+                    }}
+                    accessible={true}
+                    accessibilityLabel="Account and privacy"
+                    accessibilityRole="button"
+                  >
+                    <View style={styles.headerMenuIcon}>
+                      <MaterialCommunityIcons name="account-cog-outline" size={20} color={COLORS.primaryBlue} />
+                    </View>
+                    <Text style={styles.headerMenuItemText}>Account</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.headerMenuItem}
+                    onPress={() => {
+                      setIsHeaderMenuOpen(false);
+                      navigateWithLog('NotificationPreferences', {}, 'header_notifications');
+                    }}
+                    accessible={true}
+                    accessibilityLabel="Notification settings"
+                    accessibilityRole="button"
+                  >
+                    <View style={styles.headerMenuIcon}>
+                      <MaterialCommunityIcons name="bell-ring-outline" size={20} color={COLORS.primaryBlue} />
+                    </View>
+                    <Text style={styles.headerMenuItemText}>Notifications</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.headerMenuItem}
+                    onPress={() => {
+                      setIsHeaderMenuOpen(false);
+                      triggerHaptic('light');
+                      logger.info('TourHome', 'Logout requested from header', {
+                        tourId: activeTourId || null,
+                        bookingRef: maskIdentifier(bookingRef),
+                      });
+                      onLogout();
+                    }}
+                    activeOpacity={0.7}
+                    accessible={true}
+                    accessibilityLabel="Log out"
+                    accessibilityRole="button"
+                  >
+                    <View style={styles.headerMenuIcon}>
+                      <MaterialCommunityIcons name="logout-variant" size={20} color={COLORS.primaryBlue} />
+                    </View>
+                    <Text style={styles.headerMenuItemText}>Log out</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
             </View>
           </AnimatedCard>
 
@@ -1594,51 +1640,81 @@ const styles = StyleSheet.create({
   // Header styles
   header: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: SPACING.lg,
     backgroundColor: COLORS.white,
     borderRadius: RADIUS.xl,
-    paddingHorizontal: SPACING.lg,
+    paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.md,
     ...SHADOWS.lg,
     borderWidth: 1,
     borderColor: COLORS.border,
+    zIndex: 20,
+  },
+  headerBrandMark: {
+    width: 56,
+    height: 56,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: `${COLORS.primaryBlue}08`,
   },
   logoImage: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
+    width: 42,
+    height: 42,
+    borderRadius: 12,
   },
   headerTextContainer: {
     flex: 1,
     marginLeft: SPACING.md,
+    minWidth: 0,
   },
-  greetingRow: {
+  greetingTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  greetingIconBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  greetingText: {
+    flex: 1,
+    fontSize: 20,
+    color: COLORS.darkText,
+    fontWeight: '800',
+    lineHeight: 24,
+  },
+  cacheStatusPill: {
+    alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginBottom: 2,
+    backgroundColor: `${COLORS.primaryBlue}0B`,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}16`,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
-  greetingText: {
-    fontSize: 14,
+  cacheLabel: {
+    fontSize: 12,
     color: COLORS.subtleText,
-    fontWeight: '600',
+    fontWeight: '700',
   },
-  tourCodeDisplay: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: COLORS.primaryBlue,
-    letterSpacing: 0.35,
-  },
-  cacheLabel: { fontSize: 12, color: COLORS.subtleText, marginTop: 4 },
   refreshStatusContainer: {
-    marginTop: 6,
+    alignSelf: 'stretch',
+    marginTop: 8,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: `${COLORS.primaryBlue}30`,
     backgroundColor: `${COLORS.primaryBlue}10`,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
   },
   refreshStatusSuccess: {
     backgroundColor: THEME.sync.success.background,
@@ -1656,25 +1732,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: THEME.sync.info.foregroundMuted,
     fontWeight: '600',
-  },
-  refreshRetryButton: {
-    marginTop: 6,
-    alignSelf: 'flex-start',
-    paddingVertical: 2,
-    paddingHorizontal: 8,
-    borderRadius: 999,
-    backgroundColor: `${COLORS.primaryBlue}12`,
-  },
-  refreshRetryText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.primaryBlue,
-  },
-  tourName: {
-    fontSize: 12,
-    color: COLORS.subtleText,
-    fontWeight: '500',
-    marginTop: 2,
   },
   recentChangesCard: {
     marginTop: SPACING.sm,
@@ -1706,15 +1763,60 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   headerActions: {
-    flexDirection: 'row',
-    gap: SPACING.sm,
+    position: 'relative',
+    zIndex: 30,
   },
-  headerButton: {
-    padding: SPACING.sm + 2,
-    borderRadius: RADIUS.md,
+  headerMenuButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
     backgroundColor: `${COLORS.primaryBlue}0D`,
     borderWidth: 1,
     borderColor: `${COLORS.primaryBlue}14`,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerMenuButtonActive: {
+    backgroundColor: `${COLORS.primaryBlue}16`,
+    borderColor: `${COLORS.primaryBlue}28`,
+  },
+  headerMenuDropdown: {
+    position: 'absolute',
+    top: 52,
+    right: 0,
+    width: 210,
+    borderRadius: RADIUS.lg,
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}16`,
+    padding: 8,
+    gap: 6,
+    ...SHADOWS.xl,
+  },
+  headerMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: RADIUS.md,
+    backgroundColor: `${COLORS.primaryBlue}08`,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  headerMenuIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: COLORS.white,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: `${COLORS.primaryBlue}12`,
+  },
+  headerMenuItemText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.darkText,
   },
 
   // Countdown styles
