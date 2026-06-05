@@ -1,0 +1,20 @@
+version = 1
+name = "llt-app-new"
+
+[setup]
+script = ""
+
+[[actions]]
+name = "Run"
+icon = "run"
+command = "powershell -ExecutionPolicy Bypass -File ./scripts/expo-android-dev-client.ps1"
+
+[[actions]]
+name = "Run Android Emulator"
+icon = "run"
+command = "powershell -ExecutionPolicy Bypass -File ./scripts/android-emulator.ps1"
+
+[[actions]]
+name = "Android Screenshot"
+icon = "tool"
+command = "powershell -ExecutionPolicy Bypass -File ./scripts/android-screenshot.ps1"
