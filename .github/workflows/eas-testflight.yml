@@ -46,6 +46,10 @@ jobs:
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS }}
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK || 'false' }}
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK || 'false' }}
+      EXPO_ASC_APP_ID: ${{ secrets.EXPO_ASC_APP_ID }}
+      EXPO_ASC_API_KEY_ID: ${{ secrets.EXPO_ASC_API_KEY_ID }}
+      EXPO_ASC_API_KEY_ISSUER_ID: ${{ secrets.EXPO_ASC_API_KEY_ISSUER_ID }}
+      EXPO_ASC_API_KEY_P8: ${{ secrets.EXPO_ASC_API_KEY_P8 }}
       LLT_VALIDATE_PLATFORM: ios
       EAS_BUILD_CLEAR_CACHE: ${{ inputs.clear_cache }}
       EAS_BUILD_ID: ${{ inputs.eas_build_id }}
@@ -111,6 +115,33 @@ jobs:
           if [[ -z "${EXPO_TOKEN:-}" ]]; then
             echo "::error::Missing EXPO_TOKEN repository secret."
             exit 1
+          fi
+
+      - name: Validate iOS submit configuration inputs
+        if: ${{ !inputs.eas_build_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${EXPO_ASC_APP_ID:-}" ]]; then
+            echo "::error::Missing EXPO_ASC_APP_ID repository secret. Add the App Store Connect app Apple ID for com.lochlomondtravel.tourapp."
+            exit 1
+          fi
+
+          api_key_values=0
+          [[ -n "${EXPO_ASC_API_KEY_ID:-}" ]] && api_key_values=$((api_key_values + 1))
+          [[ -n "${EXPO_ASC_API_KEY_ISSUER_ID:-}" ]] && api_key_values=$((api_key_values + 1))
+          [[ -n "${EXPO_ASC_API_KEY_P8:-}" ]] && api_key_values=$((api_key_values + 1))
+
+          if [[ "$api_key_values" -ne 0 && "$api_key_values" -ne 3 ]]; then
+            echo "::error::Provide all three App Store Connect API key secrets: EXPO_ASC_API_KEY_ID, EXPO_ASC_API_KEY_ISSUER_ID, and EXPO_ASC_API_KEY_P8."
+            exit 1
+          fi
+
+          if [[ "$api_key_values" -eq 3 ]]; then
+            echo "::notice::App Store Connect API key secrets are present and will be materialized after the EAS build."
+          else
+            echo "::notice::No App Store Connect API key secrets were provided; EAS Submit will use App Store Connect credentials configured in EAS, if available."
           fi
 
       - name: Setup Expo and EAS CLI

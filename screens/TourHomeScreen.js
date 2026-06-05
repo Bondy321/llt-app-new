@@ -1170,6 +1170,17 @@ export default function TourHomeScreen({
               <TouchableOpacity
                 style={styles.headerButton}
                 onPress={() => {
+                  navigateWithLog('AccountPrivacy', { from: 'TourHome' }, 'header_account');
+                }}
+                accessible={true}
+                accessibilityLabel="Account and privacy"
+                accessibilityRole="button"
+              >
+                <MaterialCommunityIcons name="account-cog-outline" size={22} color={COLORS.primaryBlue} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.headerButton}
+                onPress={() => {
                   navigateWithLog('NotificationPreferences', {}, 'header_notifications');
                 }}
                 accessible={true}

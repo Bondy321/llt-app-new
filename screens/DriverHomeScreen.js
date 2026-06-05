@@ -896,23 +896,39 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                 <Text style={styles.driverName} numberOfLines={1}>{driverData?.name || 'Unknown Driver'}</Text>
               </View>
             </View>
-            <TouchableOpacity
-              onPress={() => {
-                if (Platform.OS === 'ios') {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                }
-                logger.info('DriverHomeScreen', 'Logout requested', {
-                  driverId: maskIdentifier(driverData?.id),
-                  activeTourId,
-                });
-                onLogout();
-              }}
-              style={styles.iconButton}
-              accessibilityLabel="Logout"
-              accessibilityRole="button"
-            >
-              <MaterialCommunityIcons name="logout" size={22} color={COLORS.primary} />
-            </TouchableOpacity>
+            <View style={styles.headerActions}>
+              <TouchableOpacity
+                onPress={() => {
+                  logger.info('DriverHomeScreen', 'Account privacy navigation requested', {
+                    driverId: maskIdentifier(driverData?.id),
+                    activeTourId,
+                  });
+                  onNavigate('AccountPrivacy', { from: 'DriverHome' });
+                }}
+                style={styles.iconButton}
+                accessibilityLabel="Account and privacy"
+                accessibilityRole="button"
+              >
+                <MaterialCommunityIcons name="account-cog-outline" size={22} color={COLORS.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  if (Platform.OS === 'ios') {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }
+                  logger.info('DriverHomeScreen', 'Logout requested', {
+                    driverId: maskIdentifier(driverData?.id),
+                    activeTourId,
+                  });
+                  onLogout();
+                }}
+                style={styles.iconButton}
+                accessibilityLabel="Logout"
+                accessibilityRole="button"
+              >
+                <MaterialCommunityIcons name="logout" size={22} color={COLORS.primary} />
+              </TouchableOpacity>
+            </View>
           </View>
 
           <ScrollView contentContainerStyle={styles.content}>
@@ -1434,6 +1450,11 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 12 },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   avatar: {
     width: 44,
     height: 44,

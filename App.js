@@ -34,6 +34,7 @@ import ItineraryScreen from './screens/ItineraryScreen';
 import ChatScreen from './screens/ChatScreen';
 import MapScreen from './screens/MapScreen';
 import NotificationPreferencesScreen from './screens/NotificationPreferencesScreen';
+import AccountPrivacyScreen from './screens/AccountPrivacyScreen';
 import DriverHomeScreen from './screens/DriverHomeScreen';
 import PassengerManifestScreen from './screens/PassengerManifestScreen';
 import SafetySupportScreen from './screens/SafetySupportScreen';
@@ -972,22 +973,45 @@ function AppContent() {
     onPanResponderTerminationRequest: () => true,
     });
 
+  const clearSessionState = async ({ includeNotificationOnboarding = false } = {}) => {
+    const keysToRemove = [
+      SESSION_KEYS.TOUR_DATA,
+      SESSION_KEYS.BOOKING_DATA,
+      SESSION_KEYS.LAST_SCREEN,
+      SESSION_KEYS.IDENTITY_BINDING,
+    ];
+    if (includeNotificationOnboarding) {
+      keysToRemove.push(SESSION_KEYS.NOTIFICATION_ONBOARDING);
+    }
+
+    await SessionStorage.multiRemove(keysToRemove);
+    setTourCode('');
+    setTourData(null);
+    setBookingData(null);
+    setIdentityBinding(null);
+    setScreenParams({});
+    setCurrentScreen('Login');
+  };
+
   const handleLogout = async () => {
     try {
-      await SessionStorage.multiRemove([
-        SESSION_KEYS.TOUR_DATA,
-        SESSION_KEYS.BOOKING_DATA,
-        SESSION_KEYS.LAST_SCREEN,
-        SESSION_KEYS.IDENTITY_BINDING,
-      ]);
-      setTourCode('');
-      setTourData(null);
-      setBookingData(null);
-      setIdentityBinding(null);
-      setScreenParams({});
-      setCurrentScreen('Login');
+      await clearSessionState();
     } catch (error) {
       logger.error('Auth', 'Logout error', { error: error.message });
+    }
+  };
+
+  const handleAccountDeleted = async (summary = {}) => {
+    try {
+      logger.info('Auth', 'Account deletion completed from UI', {
+        deletedAuthUid: maskIdentifier(summary.deletedAuthUid),
+        replacementAuthUid: maskIdentifier(summary.replacementAuthUid),
+        warningCount: Array.isArray(summary.warnings) ? summary.warnings.length : 0,
+      });
+      await clearSessionState({ includeNotificationOnboarding: true });
+      setUser(auth?.currentUser || null);
+    } catch (error) {
+      logger.error('Auth', 'Account deletion post-cleanup error', { error: error.message });
     }
   };
 
@@ -1165,6 +1189,21 @@ case 'Itinerary':
             audience={screenParams?.audience || (isDriverSession ? 'driver' : 'passenger')}
             returnTo={notificationReturnTarget}
             onComplete={handleNotificationOnboardingComplete}
+          />
+        );
+      case 'AccountPrivacy':
+        return (
+          <AccountPrivacyScreen
+            onBack={() => navigateTo(screenParams?.from || homeScreen)}
+            onLogout={handleLogout}
+            onAccountDeleted={handleAccountDeleted}
+            tourData={tourData}
+            bookingData={bookingData}
+            canonicalIdentity={canonicalIdentity}
+            identityBinding={identityBinding}
+            isDriverSession={isDriverSession}
+            sessionStorage={SessionStorage}
+            sessionKeys={SESSION_KEYS}
           />
         );
       default:
