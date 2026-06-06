@@ -29,7 +29,12 @@ const createMockRealtimeDb = (state, options = {}) => {
     return {
       async once() {
         const readError = options.readErrors?.[segments.join('/')];
-        if (readError) {
+        if (typeof readError === 'function') {
+          const nextError = readError();
+          if (nextError) {
+            throw nextError;
+          }
+        } else if (readError) {
           throw readError;
         }
 
@@ -529,6 +534,102 @@ test('validateBookingReference sends Firebase bearer token to passenger verifier
   } finally {
     global.fetch = originalFetch;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference retries transient post-verifier booking reads', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verifyPassengerLogin';
+  process.env.EXPO_PUBLIC_LOGIN_REALTIME_READ_RETRY_BASE_MS = '0';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ valid: true, bookingRef: 'ABC123', tourId: '5112D_8' }),
+    });
+
+    let bookingReadAttempts = 0;
+    const transientPermissionDenied = new Error('Permission denied');
+    transientPermissionDenied.code = 'PERMISSION_DENIED';
+
+    const service = loadServiceWithDb({
+      drivers: {},
+      bookings: {
+        ABC123: {
+          bookingRef: 'ABC123',
+          tourId: '5112D_8',
+          tourCode: '5112D 8',
+          passengerNames: ['Alex'],
+          pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+        },
+      },
+      tours: {
+        '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true, currentParticipants: 0 },
+      },
+    }, {
+      readErrors: {
+        'bookings/ABC123': () => {
+          bookingReadAttempts += 1;
+          return bookingReadAttempts === 1 ? transientPermissionDenied : null;
+        },
+      },
+    });
+
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, true);
+    assert.equal(bookingReadAttempts, 2);
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+    delete process.env.EXPO_PUBLIC_LOGIN_REALTIME_READ_RETRY_BASE_MS;
+  }
+});
+
+test('validateBookingReference continues when participant count reconciliation is unavailable', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verifyPassengerLogin';
+  process.env.EXPO_PUBLIC_LOGIN_REALTIME_READ_RETRY_BASE_MS = '0';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ valid: true, bookingRef: 'ABC123', tourId: '5112D_8' }),
+    });
+
+    const permissionDenied = new Error('Permission denied');
+    permissionDenied.code = 'PERMISSION_DENIED';
+
+    const service = loadServiceWithDb({
+      drivers: {},
+      bookings: {
+        ABC123: {
+          bookingRef: 'ABC123',
+          tourId: '5112D_8',
+          tourCode: '5112D 8',
+          passengerNames: ['Alex'],
+          pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+        },
+      },
+      tours: {
+        '5112D_8': { name: 'Highlands', tourCode: '5112D 8', isActive: true, currentParticipants: 7 },
+      },
+    }, {
+      readErrors: {
+        'tours/5112D_8/participants': permissionDenied,
+      },
+    });
+
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, true);
+    assert.equal(result.tour.currentParticipants, 7);
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+    delete process.env.EXPO_PUBLIC_LOGIN_REALTIME_READ_RETRY_BASE_MS;
   }
 });
 

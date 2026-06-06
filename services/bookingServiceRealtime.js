@@ -181,6 +181,60 @@ const getPassengerLoginVerifierTimeoutMs = () => {
   return 10000;
 };
 
+const LOGIN_REALTIME_READ_RETRY_ATTEMPTS = 3;
+const DEFAULT_LOGIN_REALTIME_READ_RETRY_BASE_MS = 250;
+
+const getLoginRealtimeReadRetryBaseMs = () => {
+  const configured = Number(process.env.EXPO_PUBLIC_LOGIN_REALTIME_READ_RETRY_BASE_MS);
+  if (Number.isFinite(configured) && configured >= 0) {
+    return configured;
+  }
+
+  return DEFAULT_LOGIN_REALTIME_READ_RETRY_BASE_MS;
+};
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRetryableRealtimeReadError = (error) => {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  const message = typeof error?.message === 'string' ? error.message : String(error || '');
+  const combined = `${code} ${message}`;
+
+  return /permission[_ -]?denied|network|offline|timeout|timed? out|disconnect|unavailable|cancelled|websocket|transport/i.test(combined);
+};
+
+const readRealtimeSnapshotWithLoginRetry = async (ref, { label, attempts = LOGIN_REALTIME_READ_RETRY_ATTEMPTS } = {}) => {
+  let lastError;
+  const retryBaseMs = getLoginRealtimeReadRetryBaseMs();
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await ref.once('value');
+    } catch (error) {
+      lastError = error;
+      const retryable = isRetryableRealtimeReadError(error);
+      if (!retryable || attempt >= attempts) {
+        throw error;
+      }
+
+      const delayMs = retryBaseMs * (2 ** (attempt - 1));
+      logBookingEvent('warn', 'Realtime read failed during login; retrying', {
+        label,
+        attempt,
+        maxAttempts: attempts,
+        delayMs,
+        code: error?.code || null,
+        error: error?.message || String(error),
+      });
+      if (delayMs > 0) {
+        await wait(delayMs);
+      }
+    }
+  }
+
+  throw lastError;
+};
+
 const shouldUseAppCheckForPassengerVerifier = () => {
   // Disabled by default until App Check rollout is explicitly enabled.
   return process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK === 'true';
@@ -1269,7 +1323,9 @@ const resolveDriverLoginFromDatabase = async (driverId) => {
 
 // --- EXISTING: Validate Reference ---
 const validateBookingReference = async (reference, email) => {
+  let validationPhase = 'start';
   try {
+    validationPhase = 'database_available';
     if (!realtimeDb) throw new Error('Realtime database not initialized');
 
     const upperRef = reference.toUpperCase().trim();
@@ -1325,6 +1381,7 @@ const validateBookingReference = async (reference, email) => {
     }
 
     // --- Passenger Booking ---
+    validationPhase = 'passenger_input';
     const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
     if (!normalizedEmail) {
       logBookingEvent('warn', 'Passenger login validation blocked without email', {
@@ -1333,6 +1390,7 @@ const validateBookingReference = async (reference, email) => {
       return { valid: false, error: 'Email is required for passenger login verification' };
     }
 
+    validationPhase = 'passenger_verifier';
     const passengerVerification = await verifyPassengerLoginIdentity({
       bookingRef: upperRef,
       email: normalizedEmail,
@@ -1369,7 +1427,11 @@ const validateBookingReference = async (reference, email) => {
 
     const resolvedBookingRef = validateBookingRef(passengerVerification.bookingRef || upperRef);
 
-    const bookingSnapshot = await realtimeDb.ref(`bookings/${resolvedBookingRef}`).once('value');
+    validationPhase = 'passenger_booking_read';
+    const bookingSnapshot = await readRealtimeSnapshotWithLoginRetry(
+      realtimeDb.ref(`bookings/${resolvedBookingRef}`),
+      { label: 'passenger_booking_after_verifier' }
+    );
 
     if (!bookingSnapshot.exists()) {
       logBookingEvent('warn', 'Passenger login booking missing after verifier success', {
@@ -1389,7 +1451,11 @@ const validateBookingReference = async (reference, email) => {
       return { valid: false, error: 'Tour information not available' };
     }
 
-    const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
+    validationPhase = 'passenger_tour_read';
+    const tourSnapshot = await readRealtimeSnapshotWithLoginRetry(
+      realtimeDb.ref(`tours/${tourId}`),
+      { label: 'passenger_tour_after_verifier' }
+    );
 
     if (!tourSnapshot.exists()) {
       logBookingEvent('warn', 'Passenger login tour missing after verifier success', {
@@ -1401,7 +1467,21 @@ const validateBookingReference = async (reference, email) => {
 
     const tourData = tourSnapshot.val();
     // We still use the public participant count for the passenger view, without mutating tour data before joinTour.
-    const reconciledParticipantCount = await getTourParticipantCount(tourId, realtimeDb);
+    validationPhase = 'passenger_participant_count_read';
+    let reconciledParticipantCount = typeof tourData.currentParticipants === 'number'
+      ? tourData.currentParticipants
+      : 0;
+
+    try {
+      reconciledParticipantCount = await getTourParticipantCount(tourId, realtimeDb);
+    } catch (countError) {
+      logBookingEvent('warn', 'Passenger login continuing without reconciled participant count', {
+        tourId,
+        fallbackCount: reconciledParticipantCount,
+        code: countError?.code || null,
+        error: countError?.message || String(countError),
+      });
+    }
 
     if (!tourData.isActive) {
       logBookingEvent('warn', 'Passenger login blocked for inactive tour', {
@@ -1441,7 +1521,9 @@ const validateBookingReference = async (reference, email) => {
   } catch (error) {
     logger?.error?.('Auth', 'Error validating booking reference', {
       reference: maskIdentifier(reference),
+      phase: validationPhase,
       error: error?.message || String(error),
+      code: error?.code || null,
     });
     return { valid: false, error: 'Unable to check booking reference. Please try again.' };
   }
@@ -1453,8 +1535,8 @@ const getTourParticipantCount = async (tourId, dbInstance = realtimeDb) => {
 
   const tourRef = db.ref(`tours/${tourId}`);
   const [participantsSnapshot, countSnapshot] = await Promise.all([
-    tourRef.child('participants').once('value'),
-    tourRef.child('currentParticipants').once('value')
+    readRealtimeSnapshotWithLoginRetry(tourRef.child('participants'), { label: 'tour_participants_count_read' }),
+    readRealtimeSnapshotWithLoginRetry(tourRef.child('currentParticipants'), { label: 'tour_current_participants_read' })
   ]);
 
   const participantMap = participantsSnapshot.val() || {};
@@ -1473,8 +1555,8 @@ const ensureTourParticipantCount = async (tourId, dbInstance = realtimeDb) => {
 
   const tourRef = db.ref(`tours/${tourId}`);
   const [participantsSnapshot, countSnapshot] = await Promise.all([
-    tourRef.child('participants').once('value'),
-    tourRef.child('currentParticipants').once('value')
+    readRealtimeSnapshotWithLoginRetry(tourRef.child('participants'), { label: 'tour_participants_reconcile_read' }),
+    readRealtimeSnapshotWithLoginRetry(tourRef.child('currentParticipants'), { label: 'tour_current_participants_reconcile_read' })
   ]);
 
   const participantMap = participantsSnapshot.val() || {};
@@ -1506,7 +1588,10 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
     }
 
     // Verify tour exists and is active. Client joins must never create or rewrite tour metadata.
-    const tourSnapshot = await db.ref(`tours/${validatedTourId}`).once('value');
+    const tourSnapshot = await readRealtimeSnapshotWithLoginRetry(
+      db.ref(`tours/${validatedTourId}`),
+      { label: 'join_tour_read' }
+    );
     const tourData = tourSnapshot.exists() ? (tourSnapshot.val() || {}) : {};
     if (!tourSnapshot.exists()) {
       throw new Error('Tour not found');
@@ -1521,7 +1606,10 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
     }
 
     const participantRef = db.ref(`tours/${validatedTourId}/participants/${validatedUserId}`);
-    const participantSnapshot = await participantRef.once('value');
+    const participantSnapshot = await readRealtimeSnapshotWithLoginRetry(
+      participantRef,
+      { label: 'join_tour_participant_read' }
+    );
 
     // User already joined - return current count
     if (participantSnapshot.exists()) {
