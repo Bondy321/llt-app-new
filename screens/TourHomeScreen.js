@@ -1433,7 +1433,7 @@ const styles = StyleSheet.create({
   // Header styles
   header: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     marginBottom: SPACING.lg,
     backgroundColor: COLORS.white,
     borderRadius: RADIUS.xl,
@@ -1460,13 +1460,15 @@ const styles = StyleSheet.create({
   headerTextContainer: {
     flex: 1,
     marginLeft: SPACING.md,
+    marginRight: SPACING.md,
     minWidth: 0,
+    justifyContent: 'center',
   },
   greetingTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    alignSelf: 'center',
     gap: 8,
-    marginBottom: 8,
   },
   greetingIconBadge: {
     width: 30,
