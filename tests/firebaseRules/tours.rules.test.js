@@ -189,3 +189,16 @@ test('allows admin tour metadata management', async () => {
   await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/name`).set('Admin updated tour'));
   await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}`).update({ isActive: false }));
 });
+
+test('allows hardcoded admin web console collection reads and root multi-path updates', async () => {
+  await assertSucceeds(dbFor(ADMIN_UID).ref('tours').get());
+  await assertSucceeds(dbFor(ADMIN_UID).ref('drivers').get());
+  await assertSucceeds(dbFor(ADMIN_UID).ref('tour_manifests').get());
+
+  await assertSucceeds(dbFor(ADMIN_UID).ref().update({
+    [`drivers/${DRIVER_ID}/phone`]: '07123 456789',
+    [`tours/${TOUR_ID}/driverName`]: 'Driver Palmer',
+    [`tours/${TOUR_ID}/driverPhone`]: '07123 456789',
+    [`tour_manifests/${TOUR_ID}/assigned_drivers/${DRIVER_ID}`]: true,
+  }));
+});

@@ -4,6 +4,8 @@
     ".write": false,
 
     "drivers": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$driverId": {
         ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || data.child('authUid').val() === auth.uid)",
         ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (data.exists() && (data.child('authUid').val() === auth.uid || (!data.child('authUid').exists() && newData.child('authUid').val() === auth.uid))))",
@@ -17,6 +19,8 @@
     },
 
     "bookings": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       ".indexOn": ["tourId"],
       "$bookingRef": {
         ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').val() > now) || (data.child('tourId').isString() && (root.child('tours/' + data.child('tourId').val() + '/participants/' + auth.uid).exists() || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + data.child('tourId').val() + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))))",
@@ -31,6 +35,8 @@
     },
 
     "tour_manifests": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$tourId": {
         ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
         "assigned_drivers": {
@@ -62,6 +68,8 @@
     },
 
     "tours": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$tourId": {
         ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() || (root.child('tour_access_grants/' + $tourId + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('tour_access_grants/' + $tourId + '/' + auth.uid + '/expiresAtMs').val() > now) || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
         ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
@@ -119,6 +127,8 @@
     },
 
     "chats": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$tourId": {
         ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
         ".validate": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
@@ -166,6 +176,8 @@
     },
 
     "internal_chats": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$tourId": {
         ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
         ".validate": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
@@ -201,6 +213,8 @@
     },
 
     "group_tour_photos": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$tourId": {
         ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
         ".validate": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
@@ -221,8 +235,8 @@
     "private_tour_photos": {
       "$tourId": {
         "$ownerId": {
-          ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || $ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)",
-          ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || $ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)",
+          ".read": "auth != null && ($ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)",
+          ".write": "auth != null && ($ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)",
           ".indexOn": ["timestamp"],
           "$photoId": {
             ".validate": "!newData.exists() || (newData.child('sourceUrl').isString() && !newData.child('url').exists() && !newData.child('fullUrl').exists() && newData.child('userId').isString() && (!newData.child('caption').exists() || newData.child('caption').isString()) && (!newData.child('timestamp').exists() || newData.child('timestamp').isNumber()) && (!newData.child('storagePath').exists() || newData.child('storagePath').isString()) && (!newData.child('fileSize').exists() || newData.child('fileSize').isNumber()) && (!newData.child('fileType').exists() || newData.child('fileType').isString()) && (!newData.child('thumbnailUrl').exists() || newData.child('thumbnailUrl').isString()) && (!newData.child('thumbnailStoragePath').exists() || newData.child('thumbnailStoragePath').isString()) && (!newData.child('viewerUrl').exists() || newData.child('viewerUrl').isString()) && (!newData.child('viewerStoragePath').exists() || newData.child('viewerStoragePath').isString()) && (!newData.child('variantStatus').exists() || newData.child('variantStatus').val() === 'processing' || newData.child('variantStatus').val() === 'ready' || newData.child('variantStatus').val() === 'failed') && (!newData.child('variantUpdatedAt').exists() || newData.child('variantUpdatedAt').isNumber()) && (!newData.child('variantError').exists() || newData.child('variantError').isString() || newData.child('variantError').val() === null) && (!newData.child('variantVersion').exists() || newData.child('variantVersion').isNumber()) && (!newData.child('captionUpdatedAt').exists() || newData.child('captionUpdatedAt').isNumber()) && (!newData.child('captionEditedBy').exists() || newData.child('captionEditedBy').isString()))",
@@ -235,6 +249,8 @@
     },
 
     "users": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$userId": {
         ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
         ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
@@ -283,6 +299,8 @@
     },
 
     "tour_access_grants": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$tourId": {
         "$userId": {
           ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
@@ -293,6 +311,8 @@
     },
 
     "booking_access_grants": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$bookingRef": {
         "$userId": {
           ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
@@ -304,6 +324,8 @@
 
 
     "identity_bindings": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$stablePassengerId": {
         ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
         "$uid": {
@@ -314,6 +336,8 @@
     },
 
     "identity_bindings_meta": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$stablePassengerId": {
         ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
         ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('identity_bindings/' + $stablePassengerId + '/' + auth.uid).val() === true)",
@@ -337,6 +361,8 @@
     },
 
     "logs": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$userId": {
         ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
         ".write": "$userId === 'anonymous' || (auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'))"
@@ -345,6 +371,7 @@
 
     "admin_users": {
       ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$uid": {
         ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
         ".validate": "!newData.exists() || newData.val() === true"
@@ -353,6 +380,7 @@
 
     "ops_alerts": {
       ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       ".indexOn": ["createdAtMs", "lastSeenAtMs", "severity", "status"],
       "$alertId": {
         ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (newData.exists() && newData.child('fingerprint').val() === $alertId && ((!data.exists() && newData.child('status').val() === 'open' && !newData.child('acknowledgedAtMs').exists() && !newData.child('resolvedAtMs').exists() && !newData.child('statusUpdatedBy').exists()) || (data.exists() && newData.child('createdAtMs').val() === data.child('createdAtMs').val() && newData.child('count').val() >= data.child('count').val() && newData.child('lastSeenAtMs').val() >= data.child('lastSeenAtMs').val() && (newData.child('status').val() === data.child('status').val() || (data.child('status').val() === 'resolved' && newData.child('status').val() === 'open')) && newData.child('acknowledgedAtMs').val() === data.child('acknowledgedAtMs').val() && newData.child('resolvedAtMs').val() === data.child('resolvedAtMs').val() && newData.child('statusUpdatedAt').val() === data.child('statusUpdatedAt').val() && newData.child('statusUpdatedAtMs').val() === data.child('statusUpdatedAtMs').val() && newData.child('statusUpdatedBy').val() === data.child('statusUpdatedBy').val()))))",
@@ -411,6 +439,7 @@
 
     "globalSafetyAlerts": {
       ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$eventId": {
         ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || (!data.exists() && newData.exists() && newData.child('status').val() === 'pending' && newData.child('userId').isString() && (newData.child('userId').val() === auth.uid || newData.child('userId').val() === root.child('users/' + auth.uid + '/stablePassengerId').val() || newData.child('userId').val() === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + newData.child('userId').val() + '/' + auth.uid).val() === true)))",
         ".validate": "!newData.exists() || (newData.child('timestamp').isString() && newData.child('status').isString() && newData.child('userId').isString())"
@@ -419,6 +448,7 @@
 
     "broadcasts": {
       ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$tourId": {
         ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
         ".indexOn": ["createdAtMs"],
@@ -430,6 +460,8 @@
     },
 
     "web_admin_settings": {
+      ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$userId": {
         ".read": "auth != null && auth.uid === $userId",
         ".write": "auth != null && auth.uid === $userId"

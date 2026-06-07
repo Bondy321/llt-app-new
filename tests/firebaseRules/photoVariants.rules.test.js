@@ -9,6 +9,7 @@ const {
 const { toRealtimeKeySegment } = require('../../services/identityService');
 
 const PROJECT_ID = 'demo-llt-photo-rules';
+const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const TOUR_ID = 'TOUR_001';
 const USER_UID = 'user-photo-1';
 const FOREIGN_UID = 'user-photo-foreign';
@@ -192,5 +193,31 @@ test('denies private photo access for a foreign authenticated user', async () =>
     thumbnailUrl: 'https://example.com/foreign-thumb.jpg',
     variantUpdatedAt: Date.now(),
     variantVersion: 2,
+  }));
+});
+
+test('allows hardcoded admin access to group photos but not private tour photos', async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref(GROUP_PATH).set({
+      sourceUrl: 'https://example.com/group-admin.jpg',
+      userId: USER_UID,
+      timestamp: Date.now(),
+      variantStatus: 'ready',
+    });
+    await context.database(dbUrl).ref(PRIVATE_PATH).set({
+      sourceUrl: 'https://example.com/private-admin-denied.jpg',
+      userId: OWNER_ID,
+      timestamp: Date.now(),
+      variantStatus: 'ready',
+    });
+  });
+
+  await assertSucceeds(dbFor(ADMIN_UID).ref('group_tour_photos').get());
+  await assertFails(dbFor(ADMIN_UID).ref(PRIVATE_PATH).get());
+  await assertFails(dbFor(ADMIN_UID).ref(PRIVATE_PATH).set({
+    sourceUrl: 'https://example.com/admin-private-write.jpg',
+    userId: OWNER_ID,
+    timestamp: Date.now(),
+    variantStatus: 'ready',
   }));
 });
