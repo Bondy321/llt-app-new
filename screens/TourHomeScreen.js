@@ -492,15 +492,7 @@ export default function TourHomeScreen({
   const [driverReady, setDriverReady] = useState(false);
   const [driverLocationActive, setDriverLocationActive] = useState(false);
   const scrollViewRef = useRef(null);
-  const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
-  const [refreshStatusContract, setRefreshStatusContract] = useState(null);
-  const [refreshStatusOutcomeText, setRefreshStatusOutcomeText] = useState('');
-  const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(null);
-  const [recentChanges, setRecentChanges] = useState([]);
   const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
-  const refreshStatusTimeoutRef = useRef(null);
-  const previousManifestStatusRef = useRef(null);
-  const previousDriverLocationRef = useRef(null);
 
   const greeting = useMemo(() => getTimeBasedGreeting(), []);
   const bookingRef = useMemo(() => bookingData?.id, [bookingData?.id]);
@@ -537,30 +529,6 @@ export default function TourHomeScreen({
       driverLocationActive,
     });
   }, [activeTourId, bookingRef, driverLocationActive, isConnected, manifestStatus, tourCode, tourData]);
-
-  useEffect(() => {
-    if (!activeTourId) {
-      logger.warn('TourHome', 'Tour pack metadata load skipped without tour id', { tourCode });
-      return;
-    }
-    logger.debug('TourHome', 'Tour pack metadata load started', { activeTourId });
-    offlineSyncService.getTourPackMeta(activeTourId, 'passenger').then((res) => {
-      if (res.success) {
-        const label = offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label;
-        setCacheStatusLabel(label);
-        logger.info('TourHome', 'Tour pack metadata loaded', {
-          activeTourId,
-          lastSyncedAt: res.data?.lastSyncedAt || null,
-          label,
-        });
-      } else {
-        logger.warn('TourHome', 'Tour pack metadata load failed', {
-          activeTourId,
-          error: res.error || 'unknown',
-        });
-      }
-    });
-  }, [activeTourId, tourCode]);
 
   useEffect(() => {
     if (!realtimeDb || !activeTourId || !bookingRef) {
@@ -673,33 +641,6 @@ export default function TourHomeScreen({
     };
   }, [activeTourId, bookingRef]);
 
-  const clearRefreshStatusTimeout = useCallback(() => {
-    if (refreshStatusTimeoutRef.current) {
-      clearTimeout(refreshStatusTimeoutRef.current);
-      refreshStatusTimeoutRef.current = null;
-    }
-  }, []);
-
-  const showRefreshStatus = useCallback(
-    ({ contract, outcomeText = '', autoDismissMs = 5000 }) => {
-      clearRefreshStatusTimeout();
-      setRefreshStatusContract(contract);
-      setRefreshStatusOutcomeText(outcomeText);
-
-      if (autoDismissMs > 0) {
-        refreshStatusTimeoutRef.current = setTimeout(() => {
-          setRefreshStatusContract(null);
-          setRefreshStatusOutcomeText('');
-        }, autoDismissMs);
-      }
-    },
-    [clearRefreshStatusTimeout]
-  );
-
-  useEffect(() => {
-    return () => clearRefreshStatusTimeout();
-  }, [clearRefreshStatusTimeout]);
-
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     triggerHaptic('light');
@@ -741,69 +682,17 @@ export default function TourHomeScreen({
           setDriverLocationActive(false);
         }
 
-        const metaResult = await offlineSyncService.getTourPackMeta(sanitizedTourId, 'passenger');
-        const metaLabel = offlineSyncService.getStalenessLabel(metaResult?.data?.lastSyncedAt).label;
-        setCacheStatusLabel(metaLabel);
         logger.info('TourHome', 'Manual refresh realtime snapshots loaded', {
           sanitizedTourId,
           bookingRef: maskIdentifier(bookingRef),
           manifestStatus: manifestSnapshot.val()?.status || null,
           driverLocationExists: driverSnapshot.exists(),
-          cacheLabel: metaLabel,
         });
       }
 
-      const afterStatsResult = await offlineSyncService.getQueueStats();
-      const afterStats = afterStatsResult?.success
-        ? afterStatsResult.data
-        : { pending: 0, failed: 0, syncing: 0, total: 0 };
-
-      const syncOutcome = offlineSyncService.formatSyncOutcome({
-        syncedCount: replayResult?.data?.processed,
-        pendingCount: afterStats.pending,
-        failedCount: afterStats.failed,
-        source: 'manual-refresh',
-      });
-
-      const unifiedStatus = offlineSyncService.deriveUnifiedSyncStatus({
-        network: { isOnline: isConnected },
-        backend: { isReachable: replayResult?.success !== false, isDegraded: !replayResult?.success },
-        queue: afterStats,
-        lastSyncAt: lastSuccessfulSyncAt,
-        syncSummary: {
-          syncedCount: replayResult?.data?.processed,
-          pendingCount: afterStats.pending,
-          failedCount: afterStats.failed,
-          source: 'manual-refresh',
-        },
-      });
-
-      if (afterStats.failed === 0) {
-        const lastSyncResult = await offlineSyncService.getLastSuccessAt();
-        if (lastSyncResult?.success) {
-          setLastSuccessfulSyncAt(lastSyncResult.data);
-        }
-      }
-
-      showRefreshStatus({
-        contract: {
-          label: unifiedStatus.label,
-          description: unifiedStatus.description,
-          icon: unifiedStatus.icon,
-          severity: unifiedStatus.severity,
-          canRetry: unifiedStatus.canRetry && Boolean(isConnected),
-          showLastSync: unifiedStatus.showLastSync,
-        },
-        outcomeText: syncOutcome,
-        autoDismissMs: afterStats.failed > 0 ? 8000 : afterStats.pending > 0 ? 6500 : 4000,
-      });
-      logger.info('TourHome', 'Manual refresh status derived', {
+      logger.info('TourHome', 'Manual refresh completed', {
         sanitizedTourId,
-        syncOutcome,
-        severity: unifiedStatus.severity,
-        pending: afterStats.pending,
-        failed: afterStats.failed,
-        syncing: afterStats.syncing,
+        success: replayResult?.success !== false,
       });
     } catch (error) {
       logger.error('TourHome', 'Manual refresh failed', {
@@ -811,31 +700,10 @@ export default function TourHomeScreen({
         bookingRef: maskIdentifier(bookingRef),
         error: error?.message || String(error),
       });
-      showRefreshStatus({
-        contract: {
-          ...offlineSyncService.UNIFIED_SYNC_STATES.ONLINE_BACKEND_DEGRADED,
-          canRetry: Boolean(isConnected),
-        },
-        outcomeText: offlineSyncService.formatSyncOutcome({ source: 'manual-refresh' }),
-        autoDismissMs: 8000,
-      });
     } finally {
       setRefreshing(false);
     }
-  }, [activeTourId, bookingRef, showRefreshStatus, isConnected, lastSuccessfulSyncAt]);
-
-  useEffect(() => {
-    let mounted = true;
-    offlineSyncService.getLastSuccessAt().then((result) => {
-      if (mounted && result?.success) {
-        setLastSuccessfulSyncAt(result.data);
-        logger.debug('TourHome', 'Last sync timestamp loaded', { lastSuccessAt: result.data || null });
-      }
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
+  }, [activeTourId, bookingRef, isConnected]);
 
   const manifestStatusMeta = useMemo(() => {
     switch (manifestStatus) {
@@ -901,54 +769,6 @@ export default function TourHomeScreen({
       }),
     [driverLocationActive, manifestStatus, pickupCountdownState]
   );
-
-  const appendRecentChange = useCallback((message) => {
-    if (!message) return;
-    setRecentChanges((current) => {
-      const next = [{ id: `${Date.now()}-${Math.random()}`, message }, ...current];
-      return next.slice(0, 3);
-    });
-  }, []);
-
-  useEffect(() => {
-    if (previousManifestStatusRef.current === null) {
-      previousManifestStatusRef.current = manifestStatus;
-      return;
-    }
-
-    if (manifestStatus && previousManifestStatusRef.current !== manifestStatus) {
-      logger.info('TourHome', 'Manifest status changed', {
-        previousStatus: previousManifestStatusRef.current,
-        nextStatus: manifestStatus,
-        bookingRef: maskIdentifier(bookingRef),
-      });
-      appendRecentChange(`Boarding status changed to ${manifestStatus.toLowerCase().replace('_', ' ')}.`);
-    }
-
-    previousManifestStatusRef.current = manifestStatus;
-  }, [appendRecentChange, manifestStatus]);
-
-  useEffect(() => {
-    if (previousDriverLocationRef.current === null) {
-      previousDriverLocationRef.current = driverLocationActive;
-      return;
-    }
-
-    if (previousDriverLocationRef.current !== driverLocationActive) {
-      logger.info('TourHome', 'Driver location active state changed', {
-        previousActive: previousDriverLocationRef.current,
-        nextActive: driverLocationActive,
-        tourId: activeTourId || null,
-      });
-      appendRecentChange(
-        driverLocationActive
-          ? 'Driver location is now live on the map.'
-          : 'Driver live location paused; map may show the last known point.'
-      );
-    }
-
-    previousDriverLocationRef.current = driverLocationActive;
-  }, [activeTourId, appendRecentChange, driverLocationActive]);
 
   const resolveDriverPhoneNumber = useCallback(() => {
     const rawPhone = typeof tourData?.driverPhone === 'string' ? tourData.driverPhone : '';
@@ -1151,33 +971,6 @@ export default function TourHomeScreen({
                 </View>
                 <Text style={styles.greetingText}>{`${greeting.text}!`}</Text>
               </View>
-              <View style={styles.cacheStatusPill}>
-                <MaterialCommunityIcons name="cloud-check-outline" size={14} color={COLORS.primaryBlue} />
-                <Text style={styles.cacheLabel}>{cacheStatusLabel}</Text>
-              </View>
-              {refreshStatusContract ? (
-                <View style={[
-                  styles.refreshStatusContainer,
-                  refreshStatusContract.severity === 'success' && styles.refreshStatusSuccess,
-                  refreshStatusContract.severity === 'warning' && styles.refreshStatusWarning,
-                  refreshStatusContract.severity === 'critical' && styles.refreshStatusError,
-                ]}>
-                  <Text style={styles.refreshStatusText}>
-                    {refreshStatusOutcomeText || refreshStatusContract.label}
-                  </Text>
-                </View>
-              ) : null}
-              {recentChanges.length > 0 ? (
-                <View style={styles.recentChangesCard}>
-                  <Text style={styles.recentChangesTitle}>Since your last check</Text>
-                  {recentChanges.map((change) => (
-                    <View key={change.id} style={styles.recentChangeRow}>
-                      <MaterialCommunityIcons name="check-circle-outline" size={14} color={COLORS.primaryBlue} />
-                      <Text style={styles.recentChangeText}>{change.message}</Text>
-                    </View>
-                  ))}
-                </View>
-              ) : null}
             </View>
             <View style={styles.headerActions}>
               <TouchableOpacity
@@ -1688,79 +1481,6 @@ const styles = StyleSheet.create({
     color: COLORS.darkText,
     fontWeight: '800',
     lineHeight: 24,
-  },
-  cacheStatusPill: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: `${COLORS.primaryBlue}0B`,
-    borderWidth: 1,
-    borderColor: `${COLORS.primaryBlue}16`,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  cacheLabel: {
-    fontSize: 12,
-    color: COLORS.subtleText,
-    fontWeight: '700',
-  },
-  refreshStatusContainer: {
-    alignSelf: 'stretch',
-    marginTop: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: `${COLORS.primaryBlue}30`,
-    backgroundColor: `${COLORS.primaryBlue}10`,
-    paddingHorizontal: 9,
-    paddingVertical: 7,
-  },
-  refreshStatusSuccess: {
-    backgroundColor: THEME.sync.success.background,
-    borderColor: THEME.sync.success.border,
-  },
-  refreshStatusWarning: {
-    backgroundColor: THEME.sync.warning.background,
-    borderColor: THEME.sync.warning.border,
-  },
-  refreshStatusError: {
-    backgroundColor: THEME.sync.critical.background,
-    borderColor: THEME.sync.critical.border,
-  },
-  refreshStatusText: {
-    fontSize: 12,
-    color: THEME.sync.info.foregroundMuted,
-    fontWeight: '600',
-  },
-  recentChangesCard: {
-    marginTop: SPACING.sm,
-    backgroundColor: `${COLORS.primaryBlue}09`,
-    borderWidth: 1,
-    borderColor: `${COLORS.primaryBlue}20`,
-    borderRadius: RADIUS.md,
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: SPACING.sm,
-    gap: 6,
-  },
-  recentChangesTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.primaryBlue,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  recentChangeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  recentChangeText: {
-    flex: 1,
-    fontSize: 12,
-    color: COLORS.darkText,
-    fontWeight: '500',
-    lineHeight: 16,
   },
   headerActions: {
     position: 'relative',
