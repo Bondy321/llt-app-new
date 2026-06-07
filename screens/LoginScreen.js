@@ -40,6 +40,7 @@ const {
   shouldShowEmailField,
   resolveLoginIdentity,
 } = require('./loginFlow');
+const loginDiagnostics = require('../services/loginDiagnosticsService');
 
 const COLORS = {
   primaryBlue: THEME_COLORS.primary,
@@ -89,6 +90,15 @@ const FONT_WEIGHT = THEME_FONT_WEIGHT || {
 };
 
 const SUPPORT_PHONE = process.env.EXPO_PUBLIC_SUPPORT_PHONE?.trim();
+
+const getNetInfoModule = () => {
+  try {
+    const netInfoModule = require('@react-native-community/netinfo');
+    return netInfoModule.default || netInfoModule;
+  } catch (error) {
+    return null;
+  }
+};
 
 const createErrorState = (message, options = {}) => ({
   title: options.title || 'Login issue',
@@ -263,13 +273,69 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
   };
 
   const handleLogin = async () => {
-    setFieldTouched({ bookingReference: true, email: true });
-    if (!applyValidation('submit')) return;
-
     const { trimmedReference, normalizedReference, normalizedEmail } = normalizedInput;
     const loginMode = normalizedReference.startsWith('D-') ? 'driver' : 'passenger';
+    const loginDiagnosticContext = loginDiagnostics.startLoginAttempt({
+      source: 'LoginScreen.handleLogin',
+      loginMode,
+      isConnected,
+      input: {
+        bookingReference: trimmedReference,
+        normalizedReference,
+        email: normalizedEmail,
+        referenceLength: trimmedReference.length,
+        emailLength: normalizedEmail.length,
+      },
+      uiState: {
+        modeHintFocus,
+        emailVisible,
+        loading,
+        activeInput,
+        isKeyboardVisible,
+        showPrimaryHelp,
+        showOfflineHelp,
+      },
+    });
+
+    let netInfoState = null;
+    try {
+      const NetInfo = getNetInfoModule();
+      if (typeof NetInfo?.fetch !== 'function') {
+        await loginDiagnostics.recordLoginDiagnostic('netinfo_snapshot_unavailable', {
+          reason: 'NETINFO_MODULE_UNAVAILABLE',
+        }, loginDiagnosticContext);
+      } else {
+        netInfoState = await NetInfo.fetch();
+        await loginDiagnostics.recordLoginDiagnostic('netinfo_snapshot', {
+          state: loginDiagnostics.summarizeNetworkState(netInfoState),
+        }, loginDiagnosticContext);
+      }
+    } catch (netInfoError) {
+      await loginDiagnostics.recordLoginDiagnostic('netinfo_snapshot_failed', {
+        error: loginDiagnostics.summarizeError(netInfoError),
+      }, loginDiagnosticContext);
+    }
+
+    setFieldTouched({ bookingReference: true, email: true });
+    if (!applyValidation('submit')) {
+      await loginDiagnostics.recordLoginDiagnostic('client_validation_blocked_submit', {
+        loginMode,
+        input: {
+          bookingReference: trimmedReference,
+          normalizedReference,
+          email: normalizedEmail,
+        },
+      }, loginDiagnosticContext);
+      return;
+    }
 
     activeLogger?.info('Login', 'Login attempt started', { hasBookingRef: !!bookingReference, isConnected });
+    await loginDiagnostics.recordLoginDiagnostic('login_attempt_started_online_state', {
+      loginMode,
+      isConnected,
+      netInfoState: loginDiagnostics.summarizeNetworkState(netInfoState),
+      submitDisabledAtPress: isSubmitDisabled,
+    }, loginDiagnosticContext);
     recordCrashBreadcrumb('Login', 'submit_started', {
       loginMode,
       isConnected,
@@ -278,17 +344,38 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     }, { remote: true, reason: 'Login:submit_started' });
 
     if (!isConnected) {
+      await loginDiagnostics.recordLoginDiagnostic('offline_login_resolution_started', {
+        loginMode,
+        input: {
+          bookingReference: trimmedReference,
+          email: normalizedEmail,
+        },
+      }, loginDiagnosticContext);
       const offlineCheck = await resolveOfflineLogin?.(trimmedReference, normalizedEmail);
       if (offlineCheck?.success) {
+        await loginDiagnostics.recordLoginDiagnostic('offline_login_resolution_succeeded', {
+          loginMode: offlineCheck.type || loginMode,
+          hasTour: Boolean(offlineCheck.tour),
+          identityId: offlineCheck.identity?.id || null,
+          tourId: offlineCheck.tour?.id || null,
+        }, loginDiagnosticContext);
         recordCrashBreadcrumb('Login', 'offline_login_resolved', {
           loginMode: offlineCheck.type || loginMode,
           hasTour: Boolean(offlineCheck.tour),
         }, { remote: true, reason: 'Login:offline_login_resolved' });
         await onLoginSuccess(normalizedReference, offlineCheck.tour, offlineCheck.identity, offlineCheck.type, {
           offlineMode: true,
+          loginDiagnostics: loginDiagnosticContext,
+          loginDiagnosticId: loginDiagnosticContext.attemptId,
         });
         return;
       }
+      await loginDiagnostics.recordLoginDiagnostic('offline_login_resolution_blocked', {
+        loginMode,
+        reason: offlineCheck?.reason || null,
+        error: offlineCheck?.error || null,
+        hasCachedSession: Boolean(offlineCheck?.hasCachedSession),
+      }, loginDiagnosticContext);
       recordCrashBreadcrumb('Login', 'offline_login_blocked', {
         loginMode,
         reason: offlineCheck?.reason || null,
@@ -304,7 +391,26 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     clearErrorState();
 
     try {
-      const result = await validateBookingReference(trimmedReference, normalizedEmail);
+      await loginDiagnostics.recordLoginDiagnostic('online_validation_call_started', {
+        loginMode,
+        input: {
+          bookingReference: trimmedReference,
+          email: normalizedEmail,
+        },
+      }, loginDiagnosticContext);
+      const result = await validateBookingReference(trimmedReference, normalizedEmail, {
+        loginDiagnostics: loginDiagnosticContext,
+      });
+      await loginDiagnostics.recordLoginDiagnostic('online_validation_call_returned', {
+        loginMode,
+        valid: Boolean(result?.valid),
+        type: result?.type || null,
+        error: result?.error || null,
+        hasTour: Boolean(result?.tour),
+        tourId: result?.tour?.id || null,
+        assignmentStatus: result?.assignmentStatus || null,
+        identityId: result?.booking?.id || result?.driver?.id || null,
+      }, loginDiagnosticContext);
       if (result.valid) {
         recordCrashBreadcrumb('Login', 'validation_succeeded', {
           loginMode: result.type || loginMode,
@@ -312,16 +418,38 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
           assignmentStatus: result.assignmentStatus || null,
         }, { remote: true, reason: 'Login:validation_succeeded' });
         const loginData = resolveLoginIdentity(result);
-        await onLoginSuccess(normalizedReference, result.tour, loginData, result.type);
+        await loginDiagnostics.recordLoginDiagnostic('login_success_handoff_started', {
+          loginMode: result.type || loginMode,
+          tourId: result.tour?.id || null,
+          identityId: loginData?.id || null,
+        }, loginDiagnosticContext);
+        await onLoginSuccess(normalizedReference, result.tour, loginData, result.type, {
+          loginDiagnostics: loginDiagnosticContext,
+          loginDiagnosticId: loginDiagnosticContext.attemptId,
+        });
+        await loginDiagnostics.recordLoginDiagnostic('login_success_handoff_completed', {
+          loginMode: result.type || loginMode,
+          tourId: result.tour?.id || null,
+          identityId: loginData?.id || null,
+        }, loginDiagnosticContext);
       } else {
         recordCrashBreadcrumb('Login', 'validation_failed', {
           loginMode,
           error: result.error || null,
         }, { remote: true, reason: 'Login:validation_failed' });
+        await loginDiagnostics.recordLoginDiagnostic('online_validation_rejected_user_visible', {
+          loginMode,
+          error: result.error || null,
+        }, loginDiagnosticContext);
         setSimpleError(result.error || 'Invalid booking reference. Please try again.');
       }
     } catch (error) {
       activeLogger?.error('Login', 'Login error', { error: error.message, bookingRef: maskIdentifier(trimmedReference) });
+      await loginDiagnostics.recordLoginDiagnostic('login_flow_threw', {
+        loginMode,
+        error: loginDiagnostics.summarizeError(error),
+        userMessage: error?.userMessage || null,
+      }, loginDiagnosticContext);
       recordCrashBreadcrumb('Login', 'login_error', {
         loginMode,
         error: error.message,
@@ -332,6 +460,10 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         : 'Unable to verify booking. Please check your connection.';
       setSimpleError(userMessage);
     } finally {
+      await loginDiagnostics.recordLoginDiagnostic('login_attempt_finished_client_finally', {
+        loginMode,
+        mounted: mountedRef.current,
+      }, loginDiagnosticContext);
       if (mountedRef.current) {
         setLoading(false);
       }

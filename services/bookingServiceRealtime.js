@@ -11,8 +11,15 @@ let logger;
 let recordCrashBreadcrumb;
 let getCurrentAppCheckToken;
 let maskIdentifier = (value) => value;
+let loginDiagnosticsService = null;
 const { loadOptionalService } = require('./optionalServiceLoader');
 const { normalizeTourId, resolveTourId } = require('./tourIdentityService');
+
+try {
+  loginDiagnosticsService = require('./loginDiagnosticsService');
+} catch (error) {
+  loginDiagnosticsService = null;
+}
 
 // Status Enums for the Manifest
 const MANIFEST_STATUS = {
@@ -203,17 +210,44 @@ const isRetryableRealtimeReadError = (error) => {
   return /permission[_ -]?denied|network|offline|timeout|timed? out|disconnect|unavailable|cancelled|websocket|transport/i.test(combined);
 };
 
-const readRealtimeSnapshotWithLoginRetry = async (ref, { label, attempts = LOGIN_REALTIME_READ_RETRY_ATTEMPTS } = {}) => {
+const readRealtimeSnapshotWithLoginRetry = async (ref, { label, attempts = LOGIN_REALTIME_READ_RETRY_ATTEMPTS, diagnostics } = {}) => {
   let lastError;
   const retryBaseMs = getLoginRealtimeReadRetryBaseMs();
+  const startedAt = Date.now();
+
+  recordLoginDiagnostic('rtdb_read_started', {
+    label,
+    attempts,
+  }, diagnostics);
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const attemptStartedAt = Date.now();
     try {
-      return await ref.once('value');
+      const snapshot = await ref.once('value');
+      recordLoginDiagnostic('rtdb_read_succeeded', {
+        label,
+        attempt,
+        attempts,
+        durationMs: Date.now() - attemptStartedAt,
+        totalDurationMs: Date.now() - startedAt,
+        exists: Boolean(snapshot?.exists?.()),
+      }, diagnostics);
+      return snapshot;
     } catch (error) {
       lastError = error;
       const retryable = isRetryableRealtimeReadError(error);
       if (!retryable || attempt >= attempts) {
+        recordLoginDiagnostic('rtdb_read_failed_final', {
+          label,
+          attempt,
+          attempts,
+          retryable,
+          durationMs: Date.now() - attemptStartedAt,
+          totalDurationMs: Date.now() - startedAt,
+          error: loginDiagnosticsService?.summarizeError
+            ? loginDiagnosticsService.summarizeError(error)
+            : { code: error?.code || null, message: error?.message || String(error) },
+        }, diagnostics);
         throw error;
       }
 
@@ -226,6 +260,17 @@ const readRealtimeSnapshotWithLoginRetry = async (ref, { label, attempts = LOGIN
         code: error?.code || null,
         error: error?.message || String(error),
       });
+      recordLoginDiagnostic('rtdb_read_failed_retrying', {
+        label,
+        attempt,
+        attempts,
+        retryable,
+        delayMs,
+        durationMs: Date.now() - attemptStartedAt,
+        error: loginDiagnosticsService?.summarizeError
+          ? loginDiagnosticsService.summarizeError(error)
+          : { code: error?.code || null, message: error?.message || String(error) },
+      }, diagnostics);
       if (delayMs > 0) {
         await wait(delayMs);
       }
@@ -263,6 +308,22 @@ const getAppCheckHeaderValue = async () => {
       reason: 'APPCHECK_TOKEN_FETCH_FAILED',
       error: error?.message || String(error),
     };
+  }
+};
+
+const resolveLoginDiagnosticsContext = (options = {}) => {
+  if (options?.loginDiagnostics) return options.loginDiagnostics;
+  if (options?.diagnostics) return options.diagnostics;
+  if (options?.loginDiagnosticId) return { attemptId: options.loginDiagnosticId };
+  return null;
+};
+
+const recordLoginDiagnostic = (event, payload = {}, context = null) => {
+  try {
+    if (!context || typeof loginDiagnosticsService?.recordLoginDiagnostic !== 'function') return;
+    loginDiagnosticsService.recordLoginDiagnostic(event, payload, context).catch(() => {});
+  } catch (error) {
+    // Diagnostics must never affect booking flows.
   }
 };
 
@@ -449,7 +510,7 @@ const verifyDriverLoginIdentity = async ({ driverId }) => {
   return { valid: false, error: 'Driver verification is temporarily unavailable. Please try again shortly.' };
 };
 
-const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
+const verifyPassengerLoginIdentity = async ({ bookingRef, email, diagnostics } = {}) => {
   const configuredEndpoint = buildPassengerLoginVerifierUrl();
   const derivedEndpoint = buildDerivedPassengerLoginVerifierUrl();
   logBookingEvent('info', 'Passenger verifier request prepared', {
@@ -467,10 +528,29 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
     loginType: 'Passenger',
   });
 
+  recordLoginDiagnostic('passenger_verifier_candidates_prepared', {
+    bookingRef,
+    email,
+    configuredEndpoint,
+    derivedEndpoint,
+    candidateCount: endpointCandidates.length,
+    candidates: endpointCandidates,
+    timeoutMs: getPassengerLoginVerifierTimeoutMs(),
+    appCheckEnabled: shouldUseAppCheckForPassengerVerifier(),
+    appCheckStrict: shouldRequireAppCheckForPassengerVerifier(),
+    hasAuthUser: Boolean(auth?.currentUser),
+    authUserIsAnonymous: Boolean(auth?.currentUser?.isAnonymous),
+  }, diagnostics);
+
   if (endpointCandidates.length === 0) {
     logBookingEvent('warn', 'Passenger verifier unavailable: no endpoint candidates', {
       bookingRef: maskIdentifier(bookingRef),
     });
+    recordLoginDiagnostic('passenger_verifier_no_endpoint_candidates', {
+      bookingRef,
+      configuredEndpoint,
+      derivedEndpoint,
+    }, diagnostics);
     return { valid: false, reason: 'VERIFIER_NOT_CONFIGURED' };
   }
 
@@ -489,6 +569,23 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
       ? await getAppCheckHeaderValue()
       : { success: false, reason: 'APPCHECK_DISABLED' };
     const firebaseAuthResult = await getFirebaseAuthHeaderValue();
+
+    recordLoginDiagnostic('passenger_verifier_security_headers_prepared', {
+      bookingRef,
+      email,
+      useAppCheck,
+      strictAppCheck,
+      appCheckSuccess: Boolean(appCheckResult.success),
+      appCheckFailureReason: appCheckResult.reason || null,
+      appCheckError: appCheckResult.error || null,
+      firebaseAuthSuccess: Boolean(firebaseAuthResult.success),
+      firebaseAuthFailureReason: firebaseAuthResult.reason || null,
+      firebaseAuthError: firebaseAuthResult.error || null,
+      hasFirebaseAuthToken: Boolean(firebaseAuthResult.token),
+      firebaseAuthTokenLength: firebaseAuthResult.token?.length || 0,
+      hasAppCheckToken: Boolean(appCheckResult.token),
+      appCheckTokenLength: appCheckResult.token?.length || 0,
+    }, diagnostics);
 
     if (!firebaseAuthResult.success) {
       logBookingEvent('warn', 'Passenger verifier blocked without Firebase auth token', {
@@ -535,6 +632,17 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
         timeoutMs,
         useAppCheck,
       });
+      const endpointStartedAt = Date.now();
+      recordLoginDiagnostic('passenger_verifier_fetch_started', {
+        bookingRef,
+        email,
+        endpoint,
+        timeoutMs,
+        useAppCheck,
+        hasAuthorizationHeader: Boolean(headers.Authorization),
+        hasAppCheckHeader: Boolean(headers['x-firebase-appcheck']),
+        bodyKeys: ['bookingRef', 'email'],
+      }, diagnostics);
       const response = await fetch(endpoint, {
         method: 'POST',
         headers,
@@ -543,12 +651,35 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
       });
 
       const payload = await response.json().catch(() => null);
+      recordLoginDiagnostic('passenger_verifier_fetch_completed', {
+        bookingRef,
+        endpoint,
+        durationMs: Date.now() - endpointStartedAt,
+        status: response.status,
+        ok: Boolean(response.ok),
+        payloadPresent: Boolean(payload),
+        payload: payload ? {
+          valid: Boolean(payload.valid),
+          reason: payload.reason || null,
+          bookingRef: payload.bookingRef || null,
+          tourId: payload.tourId || null,
+          tourCode: payload.tourCode || null,
+          hasGrantExpiry: Boolean(payload.grantExpiresAtMs),
+          grantExpiresInMs: typeof payload.grantExpiresAtMs === 'number'
+            ? payload.grantExpiresAtMs - Date.now()
+            : null,
+        } : null,
+      }, diagnostics);
       if (!payload) {
         if (response.status === 404) {
           logger?.warn?.('Auth', 'Passenger verifier endpoint returned 404', {
             endpoint,
             status: response.status,
           });
+          recordLoginDiagnostic('passenger_verifier_endpoint_404_try_next', {
+            endpoint,
+            status: response.status,
+          }, diagnostics);
           continue;
         }
         logBookingEvent('warn', 'Passenger verifier returned invalid response', {
@@ -565,6 +696,11 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
             endpoint,
             status: response.status,
           });
+          recordLoginDiagnostic('passenger_verifier_endpoint_404_try_next', {
+            endpoint,
+            status: response.status,
+            payloadReason: payload?.reason || null,
+          }, diagnostics);
           continue;
         }
         logBookingEvent('warn', 'Passenger verifier rejected request', {
@@ -573,6 +709,13 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
           status: response.status,
           reason: payload?.reason || 'VERIFIER_REQUEST_FAILED',
         });
+        recordLoginDiagnostic('passenger_verifier_rejected_request', {
+          bookingRef,
+          endpoint,
+          status: response.status,
+          reason: payload?.reason || 'VERIFIER_REQUEST_FAILED',
+          payload,
+        }, diagnostics);
         return { valid: false, reason: payload?.reason || 'VERIFIER_REQUEST_FAILED' };
       }
 
@@ -590,6 +733,10 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
       bookingRef: maskIdentifier(bookingRef),
       endpointCandidateCount: endpointCandidates.length,
     });
+    recordLoginDiagnostic('passenger_verifier_endpoint_not_found', {
+      bookingRef,
+      endpointCandidateCount: endpointCandidates.length,
+    }, diagnostics);
     return { valid: false, reason: 'VERIFIER_NOT_FOUND' };
   } catch (error) {
     if (error?.name === 'AbortError') {
@@ -597,12 +744,26 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email }) => {
         bookingRef: maskIdentifier(bookingRef),
         timeoutMs,
       });
+      recordLoginDiagnostic('passenger_verifier_timed_out', {
+        bookingRef,
+        timeoutMs,
+        error: loginDiagnosticsService?.summarizeError
+          ? loginDiagnosticsService.summarizeError(error)
+          : { message: error?.message || String(error) },
+      }, diagnostics);
       return { valid: false, reason: 'VERIFIER_TIMEOUT' };
     }
 
     logger?.error?.('Auth', 'Passenger login verification request failed', {
       error: error?.message || String(error),
     });
+    recordLoginDiagnostic('passenger_verifier_request_failed', {
+      bookingRef,
+      timeoutMs,
+      error: loginDiagnosticsService?.summarizeError
+        ? loginDiagnosticsService.summarizeError(error)
+        : { code: error?.code || null, message: error?.message || String(error) },
+    }, diagnostics);
     return { valid: false, reason: 'VERIFIER_REQUEST_FAILED' };
   } finally {
     if (timeoutHandle) {
@@ -1322,7 +1483,8 @@ const resolveDriverLoginFromDatabase = async (driverId) => {
 };
 
 // --- EXISTING: Validate Reference ---
-const validateBookingReference = async (reference, email) => {
+const validateBookingReference = async (reference, email, options = {}) => {
+  const loginDiagnosticsContext = resolveLoginDiagnosticsContext(options);
   let validationPhase = 'start';
   try {
     validationPhase = 'database_available';
@@ -1333,6 +1495,14 @@ const validateBookingReference = async (reference, email) => {
       reference: maskIdentifier(upperRef),
       hasEmail: Boolean(email),
     });
+    recordLoginDiagnostic('booking_validation_started', {
+      reference,
+      email,
+      hasRealtimeDb: Boolean(realtimeDb),
+      hasAuthUser: Boolean(auth?.currentUser),
+      authUserIsAnonymous: Boolean(auth?.currentUser?.isAnonymous),
+      authCurrentUserUid: auth?.currentUser?.uid || null,
+    }, loginDiagnosticsContext);
 
     const isDriverReference = upperRef.startsWith('D-');
 
@@ -1387,6 +1557,9 @@ const validateBookingReference = async (reference, email) => {
       logBookingEvent('warn', 'Passenger login validation blocked without email', {
         bookingRef: maskIdentifier(upperRef),
       });
+      recordLoginDiagnostic('booking_validation_blocked_without_email', {
+        bookingRef: upperRef,
+      }, loginDiagnosticsContext);
       return { valid: false, error: 'Email is required for passenger login verification' };
     }
 
@@ -1394,6 +1567,7 @@ const validateBookingReference = async (reference, email) => {
     const passengerVerification = await verifyPassengerLoginIdentity({
       bookingRef: upperRef,
       email: normalizedEmail,
+      diagnostics: loginDiagnosticsContext,
     });
 
     if (!passengerVerification?.valid) {
@@ -1401,6 +1575,12 @@ const validateBookingReference = async (reference, email) => {
         bookingRef: maskIdentifier(upperRef),
         reason: passengerVerification?.reason || 'unknown',
       });
+      recordLoginDiagnostic('booking_validation_verifier_rejected', {
+        bookingRef: upperRef,
+        reason: passengerVerification?.reason || 'unknown',
+        authFailureReason: passengerVerification?.authFailureReason || null,
+        appCheckFailureReason: passengerVerification?.appCheckFailureReason || null,
+      }, loginDiagnosticsContext);
       const reasonToMessage = {
         BOOKING_NOT_FOUND: 'Booking reference not found',
         EMAIL_MISMATCH: 'Email does not match this booking reference',
@@ -1430,31 +1610,47 @@ const validateBookingReference = async (reference, email) => {
     validationPhase = 'passenger_booking_read';
     const bookingSnapshot = await readRealtimeSnapshotWithLoginRetry(
       realtimeDb.ref(`bookings/${resolvedBookingRef}`),
-      { label: 'passenger_booking_after_verifier' }
+      { label: 'passenger_booking_after_verifier', diagnostics: loginDiagnosticsContext }
     );
 
     if (!bookingSnapshot.exists()) {
       logBookingEvent('warn', 'Passenger login booking missing after verifier success', {
         bookingRef: maskIdentifier(resolvedBookingRef),
       });
+      recordLoginDiagnostic('booking_validation_booking_missing_after_verifier', {
+        bookingRef: resolvedBookingRef,
+      }, loginDiagnosticsContext);
       return { valid: false, error: 'Booking reference not found' };
     }
 
     const bookingData = bookingSnapshot.val();
     const { normalizedBooking } = await ensureBookingSchemaConsistency(resolvedBookingRef, bookingData);
+    recordLoginDiagnostic('booking_validation_booking_loaded_after_verifier', {
+      bookingRef: resolvedBookingRef,
+      bookingFieldNames: Object.keys(bookingData || {}),
+      normalizedFieldNames: Object.keys(normalizedBooking || {}),
+      bookingTourId: bookingData?.tourId || null,
+      passengerNamesCount: Array.isArray(normalizedBooking?.passengerNames) ? normalizedBooking.passengerNames.length : null,
+      pickupPointsCount: Array.isArray(normalizedBooking?.pickupPoints) ? normalizedBooking.pickupPoints.length : null,
+      seatNumbersCount: Array.isArray(normalizedBooking?.seatNumbers) ? normalizedBooking.seatNumbers.length : null,
+    }, loginDiagnosticsContext);
 
     const tourId = resolveVerifierTourId(passengerVerification);
     if (!tourId) {
       logBookingEvent('warn', 'Passenger login tour id unavailable after verifier success', {
         bookingRef: maskIdentifier(resolvedBookingRef),
       });
+      recordLoginDiagnostic('booking_validation_tour_id_unavailable_after_verifier', {
+        bookingRef: resolvedBookingRef,
+        passengerVerification,
+      }, loginDiagnosticsContext);
       return { valid: false, error: 'Tour information not available' };
     }
 
     validationPhase = 'passenger_tour_read';
     const tourSnapshot = await readRealtimeSnapshotWithLoginRetry(
       realtimeDb.ref(`tours/${tourId}`),
-      { label: 'passenger_tour_after_verifier' }
+      { label: 'passenger_tour_after_verifier', diagnostics: loginDiagnosticsContext }
     );
 
     if (!tourSnapshot.exists()) {
@@ -1462,10 +1658,26 @@ const validateBookingReference = async (reference, email) => {
         bookingRef: maskIdentifier(resolvedBookingRef),
         tourId,
       });
+      recordLoginDiagnostic('booking_validation_tour_missing_after_verifier', {
+        bookingRef: resolvedBookingRef,
+        tourId,
+      }, loginDiagnosticsContext);
       return { valid: false, error: 'Tour information not available' };
     }
 
     const tourData = tourSnapshot.val();
+    recordLoginDiagnostic('booking_validation_tour_loaded_after_verifier', {
+      bookingRef: resolvedBookingRef,
+      tourId,
+      tourFieldNames: Object.keys(tourData || {}),
+      isActive: tourData?.isActive,
+      currentParticipants: tourData?.currentParticipants,
+      maxParticipants: tourData?.maxParticipants,
+      hasParticipantsBranch: Boolean(tourData?.participants),
+      participantsFieldType: typeof tourData?.participants,
+      hasItinerary: Boolean(tourData?.itinerary),
+      hasDriverItinerary: Boolean(tourData?.driver_itinerary),
+    }, loginDiagnosticsContext);
     // We still use the public participant count for the passenger view, without mutating tour data before joinTour.
     validationPhase = 'passenger_participant_count_read';
     let reconciledParticipantCount = typeof tourData.currentParticipants === 'number'
@@ -1473,7 +1685,9 @@ const validateBookingReference = async (reference, email) => {
       : 0;
 
     try {
-      reconciledParticipantCount = await getTourParticipantCount(tourId, realtimeDb);
+      reconciledParticipantCount = await getTourParticipantCount(tourId, realtimeDb, {
+        loginDiagnostics: loginDiagnosticsContext,
+      });
     } catch (countError) {
       logBookingEvent('warn', 'Passenger login continuing without reconciled participant count', {
         tourId,
@@ -1481,6 +1695,13 @@ const validateBookingReference = async (reference, email) => {
         code: countError?.code || null,
         error: countError?.message || String(countError),
       });
+      recordLoginDiagnostic('booking_validation_participant_count_unavailable', {
+        tourId,
+        fallbackCount: reconciledParticipantCount,
+        error: loginDiagnosticsService?.summarizeError
+          ? loginDiagnosticsService.summarizeError(countError)
+          : { code: countError?.code || null, message: countError?.message || String(countError) },
+      }, loginDiagnosticsContext);
     }
 
     if (!tourData.isActive) {
@@ -1488,6 +1709,11 @@ const validateBookingReference = async (reference, email) => {
         bookingRef: maskIdentifier(resolvedBookingRef),
         tourId,
       });
+      recordLoginDiagnostic('booking_validation_blocked_inactive_tour', {
+        bookingRef: resolvedBookingRef,
+        tourId,
+        isActive: tourData?.isActive,
+      }, loginDiagnosticsContext);
       return { valid: false, error: 'This tour is no longer active' };
     }
 
@@ -1502,6 +1728,14 @@ const validateBookingReference = async (reference, email) => {
       hasStablePassengerId: Boolean(stablePassengerId),
       participantCount: reconciledParticipantCount,
     });
+    recordLoginDiagnostic('booking_validation_succeeded', {
+      bookingRef: resolvedBookingRef,
+      email: normalizedEmail,
+      tourId,
+      hasStablePassengerId: Boolean(stablePassengerId),
+      identityVersion,
+      participantCount: reconciledParticipantCount,
+    }, loginDiagnosticsContext);
 
     return {
       valid: true,
@@ -1525,23 +1759,44 @@ const validateBookingReference = async (reference, email) => {
       error: error?.message || String(error),
       code: error?.code || null,
     });
+    recordLoginDiagnostic('booking_validation_threw', {
+      phase: validationPhase,
+      reference,
+      email,
+      error: loginDiagnosticsService?.summarizeError
+        ? loginDiagnosticsService.summarizeError(error)
+        : { code: error?.code || null, message: error?.message || String(error) },
+    }, loginDiagnosticsContext);
     return { valid: false, error: 'Unable to check booking reference. Please try again.' };
   }
 };
 
-const getTourParticipantCount = async (tourId, dbInstance = realtimeDb) => {
+const getTourParticipantCount = async (tourId, dbInstance = realtimeDb, options = {}) => {
+  const loginDiagnosticsContext = resolveLoginDiagnosticsContext(options);
   const db = dbInstance || realtimeDb;
   if (!db) throw new Error('Realtime database not initialized');
 
   const tourRef = db.ref(`tours/${tourId}`);
   const [participantsSnapshot, countSnapshot] = await Promise.all([
-    readRealtimeSnapshotWithLoginRetry(tourRef.child('participants'), { label: 'tour_participants_count_read' }),
-    readRealtimeSnapshotWithLoginRetry(tourRef.child('currentParticipants'), { label: 'tour_current_participants_read' })
+    readRealtimeSnapshotWithLoginRetry(tourRef.child('participants'), {
+      label: 'tour_participants_count_read',
+      diagnostics: loginDiagnosticsContext,
+    }),
+    readRealtimeSnapshotWithLoginRetry(tourRef.child('currentParticipants'), {
+      label: 'tour_current_participants_read',
+      diagnostics: loginDiagnosticsContext,
+    })
   ]);
 
   const participantMap = participantsSnapshot.val() || {};
   const recalculatedCount = Object.keys(participantMap).length;
   const currentCount = countSnapshot.val();
+  recordLoginDiagnostic('tour_participant_count_resolved', {
+    tourId,
+    currentCount,
+    recalculatedCount,
+    participantKeyCount: Object.keys(participantMap).length,
+  }, loginDiagnosticsContext);
 
   return typeof currentCount === 'number' && currentCount === recalculatedCount
     ? currentCount
@@ -1549,14 +1804,21 @@ const getTourParticipantCount = async (tourId, dbInstance = realtimeDb) => {
 };
 
 // --- EXISTING: Reconcile participant counts ---
-const ensureTourParticipantCount = async (tourId, dbInstance = realtimeDb) => {
+const ensureTourParticipantCount = async (tourId, dbInstance = realtimeDb, options = {}) => {
+  const loginDiagnosticsContext = resolveLoginDiagnosticsContext(options);
   const db = dbInstance || realtimeDb;
   if (!db) throw new Error('Realtime database not initialized');
 
   const tourRef = db.ref(`tours/${tourId}`);
   const [participantsSnapshot, countSnapshot] = await Promise.all([
-    readRealtimeSnapshotWithLoginRetry(tourRef.child('participants'), { label: 'tour_participants_reconcile_read' }),
-    readRealtimeSnapshotWithLoginRetry(tourRef.child('currentParticipants'), { label: 'tour_current_participants_reconcile_read' })
+    readRealtimeSnapshotWithLoginRetry(tourRef.child('participants'), {
+      label: 'tour_participants_reconcile_read',
+      diagnostics: loginDiagnosticsContext,
+    }),
+    readRealtimeSnapshotWithLoginRetry(tourRef.child('currentParticipants'), {
+      label: 'tour_current_participants_reconcile_read',
+      diagnostics: loginDiagnosticsContext,
+    })
   ]);
 
   const participantMap = participantsSnapshot.val() || {};
@@ -1565,13 +1827,25 @@ const ensureTourParticipantCount = async (tourId, dbInstance = realtimeDb) => {
 
   if (typeof currentCount !== 'number' || currentCount !== recalculatedCount) {
     await tourRef.child('currentParticipants').set(recalculatedCount);
+    recordLoginDiagnostic('tour_participant_count_reconciled', {
+      tourId,
+      previousCount: currentCount,
+      recalculatedCount,
+      wroteCurrentParticipants: true,
+    }, loginDiagnosticsContext);
     return recalculatedCount;
   }
+  recordLoginDiagnostic('tour_participant_count_reconcile_noop', {
+    tourId,
+    currentCount,
+    recalculatedCount,
+  }, loginDiagnosticsContext);
   return currentCount;
 };
 
 // --- EXISTING: Join tour (Passenger View) ---
-const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
+const joinTour = async (tourId, userId, dbInstance = realtimeDb, options = {}) => {
+  const loginDiagnosticsContext = resolveLoginDiagnosticsContext(options);
   try {
     // Validate inputs
     const validatedTourId = validateTourCode(tourId); // tourId follows same validation as tourCode
@@ -1581,6 +1855,11 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
       userId: maskIdentifier(validatedUserId),
       hasDbOverride: Boolean(dbInstance),
     });
+    recordLoginDiagnostic('join_tour_started', {
+      tourId: validatedTourId,
+      userId: validatedUserId,
+      hasDbOverride: Boolean(dbInstance),
+    }, loginDiagnosticsContext);
 
     const db = dbInstance || realtimeDb;
     if (!db) {
@@ -1590,10 +1869,14 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
     // Verify tour exists and is active. Client joins must never create or rewrite tour metadata.
     const tourSnapshot = await readRealtimeSnapshotWithLoginRetry(
       db.ref(`tours/${validatedTourId}`),
-      { label: 'join_tour_read' }
+      { label: 'join_tour_read', diagnostics: loginDiagnosticsContext }
     );
     const tourData = tourSnapshot.exists() ? (tourSnapshot.val() || {}) : {};
     if (!tourSnapshot.exists()) {
+      recordLoginDiagnostic('join_tour_missing_tour', {
+        tourId: validatedTourId,
+        userId: validatedUserId,
+      }, loginDiagnosticsContext);
       throw new Error('Tour not found');
     }
 
@@ -1602,23 +1885,35 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
         tourId: validatedTourId,
         userId: maskIdentifier(validatedUserId),
       });
+      recordLoginDiagnostic('join_tour_blocked_inactive_tour', {
+        tourId: validatedTourId,
+        userId: validatedUserId,
+        isActive: tourData?.isActive,
+      }, loginDiagnosticsContext);
       throw new Error('Tour is no longer active');
     }
 
     const participantRef = db.ref(`tours/${validatedTourId}/participants/${validatedUserId}`);
     const participantSnapshot = await readRealtimeSnapshotWithLoginRetry(
       participantRef,
-      { label: 'join_tour_participant_read' }
+      { label: 'join_tour_participant_read', diagnostics: loginDiagnosticsContext }
     );
 
     // User already joined - return current count
     if (participantSnapshot.exists()) {
-      const reconciledCount = await ensureTourParticipantCount(validatedTourId, db);
+      const reconciledCount = await ensureTourParticipantCount(validatedTourId, db, {
+        loginDiagnostics: loginDiagnosticsContext,
+      });
       logBookingEvent('info', 'Join tour skipped because user already joined', {
         tourId: validatedTourId,
         userId: maskIdentifier(validatedUserId),
         currentParticipants: reconciledCount,
       });
+      recordLoginDiagnostic('join_tour_already_joined', {
+        tourId: validatedTourId,
+        userId: validatedUserId,
+        currentParticipants: reconciledCount,
+      }, loginDiagnosticsContext);
       return { success: true, currentParticipants: reconciledCount, alreadyJoined: true };
     }
 
@@ -1632,10 +1927,18 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
         userId: validatedUserId
       };
     });
+    recordLoginDiagnostic('join_tour_participant_transaction_completed', {
+      tourId: validatedTourId,
+      userId: validatedUserId,
+      committed: Boolean(transactionResult?.committed),
+      snapshotExists: Boolean(transactionResult?.snapshot?.val?.()),
+    }, loginDiagnosticsContext);
 
     if (!transactionResult?.committed) {
       // Transaction aborted - likely user already joined
-      const reconciledCount = await ensureTourParticipantCount(validatedTourId, db);
+      const reconciledCount = await ensureTourParticipantCount(validatedTourId, db, {
+        loginDiagnostics: loginDiagnosticsContext,
+      });
       logBookingEvent('warn', 'Join tour transaction aborted', {
         tourId: validatedTourId,
         userId: maskIdentifier(validatedUserId),
@@ -1644,12 +1947,20 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
       return { success: true, currentParticipants: reconciledCount, alreadyJoined: true };
     }
 
-    const currentParticipants = await ensureTourParticipantCount(validatedTourId, db);
+    const currentParticipants = await ensureTourParticipantCount(validatedTourId, db, {
+      loginDiagnostics: loginDiagnosticsContext,
+    });
     logBookingEvent('info', 'Join tour completed', {
       tourId: validatedTourId,
       userId: maskIdentifier(validatedUserId),
       currentParticipants,
     });
+    recordLoginDiagnostic('join_tour_completed', {
+      tourId: validatedTourId,
+      userId: validatedUserId,
+      currentParticipants,
+      alreadyJoined: false,
+    }, loginDiagnosticsContext);
     return {
       success: true,
       currentParticipants,
@@ -1657,6 +1968,13 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb) => {
     };
   } catch (error) {
     logger?.error?.('Tour', 'Error joining tour', { tourId, userId: maskIdentifier(userId), error: error?.message || String(error) });
+    recordLoginDiagnostic('join_tour_threw', {
+      tourId,
+      userId,
+      error: loginDiagnosticsService?.summarizeError
+        ? loginDiagnosticsService.summarizeError(error)
+        : { code: error?.code || null, message: error?.message || String(error) },
+    }, loginDiagnosticsContext);
     throw error;
   }
 };

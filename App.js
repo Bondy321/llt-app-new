@@ -23,6 +23,7 @@ import {
   setDiagnosticsAuthUid,
   setDiagnosticsContext,
 } from './services/crashDiagnosticsService';
+import loginDiagnostics from './services/loginDiagnosticsService';
 import { COLORS as THEME } from './theme';
 
 // Import Screens
@@ -700,6 +701,23 @@ function AppContent() {
     const targetScreen = userType === 'driver' ? 'DriverHome' : 'TourHome';
     const authUser = user || auth?.currentUser || null;
     const authUid = authUser?.uid || null;
+    const loginDiagnosticsContext = options?.loginDiagnostics || (
+      options?.loginDiagnosticId ? { attemptId: options.loginDiagnosticId } : null
+    );
+    await loginDiagnostics.recordLoginDiagnostic('app_login_success_handler_started', {
+      userType,
+      targetScreen,
+      hasAuthUid: Boolean(authUid),
+      authUid,
+      authCurrentUserUid: auth?.currentUser?.uid || null,
+      stateUserUid: user?.uid || null,
+      hasTourDetails: Boolean(tourDetails),
+      tourId: tourDetails?.id || null,
+      tourCode: tourDetails?.tourCode || null,
+      identityId: bookingOrDriverData?.id || null,
+      alreadyHydrated: Boolean(options?.alreadyHydrated),
+      offlineMode: Boolean(options?.offlineMode),
+    }, loginDiagnosticsContext);
     recordCrashBreadcrumb('Auth', 'login_success_handler_started', {
       userType,
       targetScreen,
@@ -722,16 +740,33 @@ function AppContent() {
       audience: onboardingAudience,
     });
     const postLoginScreen = shouldOnboardNotifications ? 'NotificationPreferences' : targetScreen;
+    await loginDiagnostics.recordLoginDiagnostic('notification_onboarding_decision_resolved', {
+      userType,
+      onboardingAudience,
+      shouldOnboardNotifications,
+      postLoginScreen,
+      hasAuthUid: Boolean(authUid),
+    }, loginDiagnosticsContext);
 
     if (userType === 'driver') {
       logger.info('Auth', 'Driver Logged In', { driverId: maskIdentifier(bookingOrDriverData.id) });
       if (authUid) {
         try {
+          await loginDiagnostics.recordLoginDiagnostic('driver_identity_persist_started', {
+            authUid,
+            driverId: bookingOrDriverData?.id,
+            assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
+          }, loginDiagnosticsContext);
           const persisted = await persistDriverIdentityForUser({
             authUid,
             driverId: bookingOrDriverData?.id,
             assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
           });
+          await loginDiagnostics.recordLoginDiagnostic('driver_identity_persist_succeeded', {
+            authUid,
+            driverId: persisted.driverId,
+            assignedTourId: persisted.assignedTourId || null,
+          }, loginDiagnosticsContext);
           logger.info('Identity', 'driver_identity_persist_success', {
             authUid: maskIdentifier(authUid),
             driverId: maskIdentifier(persisted.driverId),
@@ -750,6 +785,12 @@ function AppContent() {
             error: error.message,
             code: error?.code || null,
           });
+          await loginDiagnostics.recordLoginDiagnostic('driver_identity_persist_failed', {
+            authUid,
+            driverId: bookingOrDriverData?.id,
+            assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
+            error: loginDiagnostics.summarizeError(error),
+          }, loginDiagnosticsContext);
           recordCrashBreadcrumb('Identity', 'driver_identity_persist_failure', {
             hasAuthUid: true,
             driverId: maskIdentifier(bookingOrDriverData?.id),
@@ -775,17 +816,35 @@ function AppContent() {
         tourId: tourDetails?.id || null,
       }, { remote: true, reason: 'Auth:driver_login_session_established' });
       if (tourDetails?.id) {
+        await loginDiagnostics.recordLoginDiagnostic('driver_offline_pack_save_started', {
+          tourId: tourDetails.id,
+          driverId: bookingOrDriverData?.id,
+        }, loginDiagnosticsContext);
         await offlineSyncService.saveTourPack(tourDetails.id, 'driver', {
           tour: tourDetails,
           driver: bookingOrDriverData,
         });
         await offlineSyncService.setTourPackMeta(tourDetails.id, 'driver', { lastSyncedAt: new Date().toISOString() });
+        await loginDiagnostics.recordLoginDiagnostic('driver_offline_pack_save_succeeded', {
+          tourId: tourDetails.id,
+          driverId: bookingOrDriverData?.id,
+        }, loginDiagnosticsContext);
       }
+      await loginDiagnostics.recordLoginDiagnostic('driver_session_save_started', {
+        postLoginScreen,
+        tourId: tourDetails?.id || null,
+        driverId: bookingOrDriverData?.id || null,
+      }, loginDiagnosticsContext);
       await saveSession({
         tourData: tourDetails || null,
         bookingData: bookingOrDriverData,
         currentScreen: postLoginScreen,
       });
+      await loginDiagnostics.recordLoginDiagnostic('driver_session_save_succeeded', {
+        postLoginScreen,
+        tourId: tourDetails?.id || null,
+        driverId: bookingOrDriverData?.id || null,
+      }, loginDiagnosticsContext);
 
       if (shouldOnboardNotifications) {
         setScreenParams({
@@ -794,6 +853,14 @@ function AppContent() {
           returnTo: 'DriverHome',
         });
       }
+      await loginDiagnostics.recordLoginDiagnostic('app_login_success_handler_completed', {
+        userType,
+        postLoginScreen,
+        targetScreen,
+        tourId: tourDetails?.id || null,
+        identityId: bookingOrDriverData?.id || null,
+        shouldOnboardNotifications,
+      }, loginDiagnosticsContext);
       return;
     }
 
@@ -823,11 +890,29 @@ function AppContent() {
         loginProgress.setValue(0);
         const authFailure = new Error('Authenticated tour session unavailable');
         authFailure.userMessage = 'We could not start a secure tour session. Please check your connection and try again.';
+        await loginDiagnostics.recordLoginDiagnostic('passenger_join_blocked_missing_auth_uid', {
+          tourId: tourDetails.id,
+          authCurrentUserUid: auth?.currentUser?.uid || null,
+          stateUserUid: user?.uid || null,
+        }, loginDiagnosticsContext);
         throw authFailure;
       }
 
       try {
-        await joinTour(tourDetails.id, authUid);
+        await loginDiagnostics.recordLoginDiagnostic('passenger_join_tour_started', {
+          tourId: tourDetails.id,
+          authUid,
+          bookingRef: normalizedBookingData?.id || null,
+        }, loginDiagnosticsContext);
+        const joinResult = await joinTour(tourDetails.id, authUid, undefined, {
+          loginDiagnostics: loginDiagnosticsContext,
+        });
+        await loginDiagnostics.recordLoginDiagnostic('passenger_join_tour_succeeded', {
+          tourId: tourDetails.id,
+          authUid,
+          currentParticipants: joinResult?.currentParticipants,
+          alreadyJoined: Boolean(joinResult?.alreadyJoined),
+        }, loginDiagnosticsContext);
       } catch (error) {
         clearLoginTransitionArtifacts();
         setLoginTransition(null);
@@ -838,6 +923,12 @@ function AppContent() {
           tourId: tourDetails.id,
           authUid: maskIdentifier(authUid),
         });
+        await loginDiagnostics.recordLoginDiagnostic('passenger_join_tour_failed', {
+          tourId: tourDetails.id,
+          authUid,
+          bookingRef: normalizedBookingData?.id || null,
+          error: loginDiagnostics.summarizeError(error),
+        }, loginDiagnosticsContext);
         const joinFailure = new Error('Unable to join tour session');
         joinFailure.userMessage = 'We could not finish joining your tour session. Please check your connection and try again.';
         throw joinFailure;
@@ -863,6 +954,13 @@ function AppContent() {
           });
         }
 
+        await loginDiagnostics.recordLoginDiagnostic('passenger_identity_persist_started', {
+          authUid,
+          bookingRef: normalizedBookingData.id,
+          normalizedPassengerEmail: normalizedBookingData.normalizedPassengerEmail,
+          stablePassengerId,
+          identityVersion,
+        }, loginDiagnosticsContext);
         const persisted = await persistPassengerIdentityForUser({
           authUid,
           stablePassengerId,
@@ -870,6 +968,12 @@ function AppContent() {
           bookingRef: normalizedBookingData.id,
           normalizedPassengerEmail: normalizedBookingData.normalizedPassengerEmail,
         });
+        await loginDiagnostics.recordLoginDiagnostic('passenger_identity_persist_succeeded', {
+          authUid,
+          bookingRef: normalizedBookingData.id,
+          stablePassengerId,
+          stablePassengerKey: persisted.stablePassengerKey || null,
+        }, loginDiagnosticsContext);
         logger.info('Identity', 'identity_binding_persist_success', {
           authUid: maskIdentifier(authUid),
           bookingRef: maskIdentifier(normalizedBookingData.id),
@@ -899,6 +1003,16 @@ function AppContent() {
           stablePassengerId: stablePassengerId ? maskIdentifier(stablePassengerId) : null,
           stablePassengerKey: stablePassengerId ? maskIdentifier(toRealtimeKeySegment(stablePassengerId)) : null,
         });
+        await loginDiagnostics.recordLoginDiagnostic('passenger_identity_persist_failed', {
+          authUid,
+          bookingRef: normalizedBookingData.id,
+          normalizedPassengerEmail: normalizedBookingData.normalizedPassengerEmail,
+          stablePassengerId,
+          stablePassengerKey: stablePassengerId ? toRealtimeKeySegment(stablePassengerId) : null,
+          critical: Boolean(error?.criticalIdentityPersistence),
+          reason: isIdentityBindingWriteRejected ? 'IDENTITY_BINDING_WRITE_DENIED_OR_INVALID' : 'IDENTITY_BINDING_WRITE_FAILED',
+          error: loginDiagnostics.summarizeError(sourceError),
+        }, loginDiagnosticsContext);
 
         if (error?.criticalIdentityPersistence) {
           throw error;
@@ -908,20 +1022,40 @@ function AppContent() {
 
     setCurrentScreen(postLoginScreen);
     if (tourDetails?.id) {
+      await loginDiagnostics.recordLoginDiagnostic('passenger_offline_pack_save_started', {
+        tourId: tourDetails.id,
+        bookingRef: normalizedBookingData?.id || null,
+      }, loginDiagnosticsContext);
       await offlineSyncService.saveTourPack(tourDetails.id, 'passenger', {
         tour: tourDetails,
         booking: normalizedBookingData,
         safety: { emergencyPhone: tourDetails?.driverPhone || null },
       });
       await offlineSyncService.setTourPackMeta(tourDetails.id, 'passenger', { lastSyncedAt: new Date().toISOString() });
+      await loginDiagnostics.recordLoginDiagnostic('passenger_offline_pack_save_succeeded', {
+        tourId: tourDetails.id,
+        bookingRef: normalizedBookingData?.id || null,
+      }, loginDiagnosticsContext);
     }
 
+    await loginDiagnostics.recordLoginDiagnostic('passenger_session_save_started', {
+      postLoginScreen,
+      tourId: tourDetails?.id || null,
+      bookingRef: normalizedBookingData?.id || null,
+      hasIdentityBinding: Boolean(nextIdentityBinding || identityBinding),
+    }, loginDiagnosticsContext);
     await saveSession({
       tourData: tourDetails || null,
       bookingData: normalizedBookingData,
       currentScreen: postLoginScreen,
       identityBinding: nextIdentityBinding || identityBinding,
     });
+    await loginDiagnostics.recordLoginDiagnostic('passenger_session_save_succeeded', {
+      postLoginScreen,
+      tourId: tourDetails?.id || null,
+      bookingRef: normalizedBookingData?.id || null,
+      hasIdentityBinding: Boolean(nextIdentityBinding || identityBinding),
+    }, loginDiagnosticsContext);
 
     if (shouldOnboardNotifications) {
       setScreenParams({
@@ -930,6 +1064,15 @@ function AppContent() {
         returnTo: 'TourHome',
       });
     }
+
+    await loginDiagnostics.recordLoginDiagnostic('app_login_success_handler_completed', {
+      userType,
+      postLoginScreen,
+      targetScreen,
+      tourId: tourDetails?.id || null,
+      identityId: normalizedBookingData?.id || bookingOrDriverData?.id || null,
+      shouldOnboardNotifications,
+    }, loginDiagnosticsContext);
 
   };
 
