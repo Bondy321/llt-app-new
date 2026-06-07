@@ -41,8 +41,8 @@ const buildTours = () => {
       name: `Tour ${i}`,
       tourCode: `TC-${i}`,
       days: 1,
-      startDate: '01/01/2026',
-      endDate: '02/01/2026',
+      startDate: '01/01/2099',
+      endDate: '02/01/2099',
       isActive: i % 2 === 0,
       driverName: i % 3 === 0 ? `Driver ${i}` : 'TBA',
       currentParticipants: i,
@@ -54,6 +54,7 @@ const buildTours = () => {
 
 const toursFixture = buildTours();
 const driversFixture = { D1: { name: 'Driver One' } };
+let currentToursFixture = toursFixture;
 
 function LocationSearchProbe() {
   const location = useLocation();
@@ -90,10 +91,19 @@ async function changeStatus(container, label) {
   fireEvent.click(options[0]);
 }
 
+async function changeDateScope(container, label) {
+  const dateScopeInput = container.querySelector('input[placeholder="Filter by date"]');
+
+  fireEvent.mouseDown(dateScopeInput);
+  const options = await screen.findAllByRole('option', { name: label, hidden: true });
+  fireEvent.click(options[0]);
+}
+
 beforeEach(() => {
   mockRef.mockClear();
+  currentToursFixture = toursFixture;
   mockOnValue.mockImplementation((dbRef, callback) => {
-    const value = dbRef.path === 'tours' ? toursFixture : driversFixture;
+    const value = dbRef.path === 'tours' ? currentToursFixture : driversFixture;
     callback({ val: () => value });
     return vi.fn();
   });
@@ -168,5 +178,78 @@ describe('ToursManager query-param status behavior', () => {
       expect(screen.getByTestId('location-search')).toHaveTextContent('?status=unassigned&q=TC-13');
     }, { timeout: asyncAssertionTimeoutMs });
     expect(screen.getByText('Showing 1 of 1 tours')).toBeInTheDocument();
+  }, 15000);
+
+  it('filters finished tours out by default', async () => {
+    currentToursFixture = {
+      FUTURE_TOUR: {
+        name: 'Future Tour',
+        tourCode: 'FUTURE-1',
+        days: 1,
+        startDate: '01/01/2099',
+        endDate: '02/01/2099',
+        isActive: true,
+        driverName: 'TBA',
+        currentParticipants: 1,
+        maxParticipants: 53,
+      },
+      PAST_TOUR: {
+        name: 'Past Tour',
+        tourCode: 'PAST-1',
+        days: 1,
+        startDate: '01/01/2020',
+        endDate: '02/01/2020',
+        isActive: false,
+        driverName: 'TBA',
+        currentParticipants: 1,
+        maxParticipants: 53,
+      },
+    };
+
+    renderAt();
+
+    await screen.findByText('Showing 1 of 1 tours', {}, { timeout: asyncAssertionTimeoutMs });
+    expect(screen.getByText('Future Tour')).toBeInTheDocument();
+    expect(screen.queryByText('Past Tour')).not.toBeInTheDocument();
+    expect(screen.getByText('Current & upcoming')).toBeInTheDocument();
+  }, 15000);
+
+  it('allows finished tours to be filtered back in', async () => {
+    currentToursFixture = {
+      FUTURE_TOUR: {
+        name: 'Future Tour',
+        tourCode: 'FUTURE-1',
+        days: 1,
+        startDate: '01/01/2099',
+        endDate: '02/01/2099',
+        isActive: true,
+        driverName: 'TBA',
+        currentParticipants: 1,
+        maxParticipants: 53,
+      },
+      PAST_TOUR: {
+        name: 'Past Tour',
+        tourCode: 'PAST-1',
+        days: 1,
+        startDate: '01/01/2020',
+        endDate: '02/01/2020',
+        isActive: false,
+        driverName: 'TBA',
+        currentParticipants: 1,
+        maxParticipants: 53,
+      },
+    };
+
+    const { container } = renderAt();
+
+    await screen.findByText('Showing 1 of 1 tours', {}, { timeout: asyncAssertionTimeoutMs });
+
+    await changeDateScope(container, 'All dates');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-search')).toHaveTextContent('?dateScope=all');
+    }, { timeout: asyncAssertionTimeoutMs });
+    expect(screen.getByText('Showing 2 of 2 tours')).toBeInTheDocument();
+    expect(screen.getByText('Past Tour')).toBeInTheDocument();
   }, 15000);
 });

@@ -126,6 +126,7 @@ import {
   inputFormatToDDMMYYYY,
 } from '../services/tourService';
 import {
+  parseUKDateStrict,
   parseISODateStrict,
   formatDateForDisplay,
   formatDateRangeForDisplay,
@@ -136,6 +137,28 @@ const getIsoDateFieldError = (value, fieldLabel) => {
   const parsed = parseISODateStrict(value);
   if (parsed.success) return null;
   return `${fieldLabel} must be a valid date (yyyy-MM-dd).`;
+};
+
+const getTodayAtNoon = () => {
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  return today;
+};
+
+const parseTourDate = (value) => {
+  const ukParsed = parseUKDateStrict(value);
+  if (ukParsed.success) return ukParsed.date;
+
+  const isoParsed = parseISODateStrict(value);
+  if (isoParsed.success) return isoParsed.date;
+
+  return null;
+};
+
+const hasTourFinished = (tour, today = getTodayAtNoon()) => {
+  const finishDate = parseTourDate(tour?.endDate || tour?.startDate);
+  if (!finishDate) return false;
+  return finishDate.getTime() < today.getTime();
 };
 
 // Tour Card Component for grid view
@@ -1372,15 +1395,18 @@ export default function ToursManager() {
   const [tours, setTours] = useState({});
   const [drivers, setDrivers] = useState({});
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState(searchParams.get('q') || '');
   const [viewMode, setViewMode] = useState('grid');
   const [currentPage, setCurrentPage] = useState(1);
   const [syncStatus, setSyncStatus] = useState('syncing');
   const itemsPerPage = 12;
   const allowedStatusParams = useMemo(() => new Set(['all', 'assigned', 'unassigned', 'active', 'inactive']), []);
+  const allowedDateScopeParams = useMemo(() => new Set(['current', 'past', 'all']), []);
   const statusParam = searchParams.get('status');
   const filterStatus = statusParam && allowedStatusParams.has(statusParam) ? statusParam : 'all';
+  const dateScopeParam = searchParams.get('dateScope');
+  const filterDateScope = dateScopeParam && allowedDateScopeParams.has(dateScopeParam) ? dateScopeParam : 'current';
   const queryParam = searchParams.get('q') || '';
+  const searchTerm = queryParam;
 
   // Modal states
   const [createModalOpened, { open: openCreateModal, close: closeCreateModal }] = useDisclosure(false);
@@ -1415,11 +1441,31 @@ export default function ToursManager() {
     setSearchParams(nextParams);
   };
 
+  const handleDateScopeChange = (value) => {
+    const nextDateScope = value || 'current';
+    const currentDateScopeParam = searchParams.get('dateScope') || 'current';
+
+    setCurrentPage(1);
+
+    if (currentDateScopeParam === nextDateScope) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+
+    if (nextDateScope === 'current') {
+      nextParams.delete('dateScope');
+    } else {
+      nextParams.set('dateScope', nextDateScope);
+    }
+
+    setSearchParams(nextParams);
+  };
+
   const handleSearchTermChange = (value) => {
     const nextSearchTerm = value || '';
     const currentQueryParam = searchParams.get('q') || '';
 
-    setSearchTerm(nextSearchTerm);
     setCurrentPage(1);
 
     if (currentQueryParam === nextSearchTerm.trim()) {
@@ -1435,11 +1481,6 @@ export default function ToursManager() {
 
     setSearchParams(nextParams);
   };
-
-  useEffect(() => {
-    setSearchTerm(queryParam);
-    setCurrentPage(1);
-  }, [queryParam]);
 
   // Load data from Firebase
   useEffect(() => {
@@ -1466,6 +1507,8 @@ export default function ToursManager() {
 
   // Filter and search tours
   const filteredTours = useMemo(() => {
+    const today = getTodayAtNoon();
+
     return Object.entries(tours).filter(([id, tour]) => {
       const matchesSearch =
         id.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -1481,9 +1524,15 @@ export default function ToursManager() {
         (filterStatus === 'active' && tour.isActive) ||
         (filterStatus === 'inactive' && !tour.isActive);
 
-      return matchesSearch && matchesStatus;
+      const isPastTour = hasTourFinished(tour, today);
+      const matchesDateScope =
+        filterDateScope === 'all' ||
+        (filterDateScope === 'past' && isPastTour) ||
+        (filterDateScope === 'current' && !isPastTour);
+
+      return matchesSearch && matchesStatus && matchesDateScope;
     });
-  }, [tours, searchTerm, filterStatus]);
+  }, [tours, searchTerm, filterStatus, filterDateScope]);
 
   // Pagination
   const totalPages = Math.ceil(filteredTours.length / itemsPerPage);
@@ -1740,6 +1789,19 @@ export default function ToursManager() {
               value={filterStatus}
               onChange={handleFilterStatusChange}
               style={{ width: 180 }}
+              clearable={false}
+            />
+            <Select
+              placeholder="Filter by date"
+              leftSection={<IconCalendar size={16} />}
+              data={[
+                { value: 'current', label: 'Current & upcoming' },
+                { value: 'past', label: 'Past only' },
+                { value: 'all', label: 'All dates' },
+              ]}
+              value={filterDateScope}
+              onChange={handleDateScopeChange}
+              style={{ width: 210 }}
               clearable={false}
             />
           </Group>
