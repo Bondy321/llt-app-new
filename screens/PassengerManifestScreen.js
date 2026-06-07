@@ -47,6 +47,12 @@ const STATUS_FILTERS = [
   { key: MANIFEST_STATUS.NO_SHOW, label: 'No-show' }
 ];
 
+const HEADER_WIDGETS_VISIBLE = {
+  completion: false,
+  syncStatus: false,
+  nextPassenger: false,
+};
+
 export default function PassengerManifestScreen({ route, navigation }) {
   const { tourId } = route.params;
   const [loading, setLoading] = useState(true);
@@ -285,6 +291,8 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const syncingQueueCount = queueStats.syncing || 0;
   const failedQueueCount = queueStats.failed || 0;
   const activeQueueCount = pendingQueueCount + syncingQueueCount + failedQueueCount;
+  const showHeaderProgressRow = (HEADER_WIDGETS_VISIBLE.completion && resolutionStats.unresolved > 0)
+    || (HEADER_WIDGETS_VISIBLE.syncStatus && activeQueueCount > 0);
   const isNarrowedView = searchQuery.trim().length > 0 || statusFilter !== 'ALL';
   const queueDescriptor = syncingQueueCount > 0
     ? `${pendingQueueCount} pending - ${syncingQueueCount} syncing - ${failedQueueCount} failed`
@@ -555,9 +563,9 @@ export default function PassengerManifestScreen({ route, navigation }) {
         </View>
       </View>
 
-      {(resolutionStats.unresolved > 0 || activeQueueCount > 0) ? (
+      {showHeaderProgressRow ? (
       <View style={styles.progressRow}>
-        {resolutionStats.unresolved > 0 ? (
+        {HEADER_WIDGETS_VISIBLE.completion && resolutionStats.unresolved > 0 ? (
         <View style={styles.progressShell}>
           <View style={styles.progressHeader}>
             <Text style={styles.progressTitle}>Completion</Text>
@@ -571,7 +579,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
           </Text>
         </View>
         ) : null}
-        {activeQueueCount > 0 ? (
+        {HEADER_WIDGETS_VISIBLE.syncStatus && activeQueueCount > 0 ? (
         <View style={[
           styles.syncStatusPill,
           failedQueueCount > 0 && styles.syncStatusPill_error,
@@ -592,7 +600,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
       {conflictNote ? <Text style={styles.conflictText}>{conflictNote}</Text> : null}
 
       <View style={styles.actionSearchRow}>
-        {nextPriorityBooking ? (
+        {HEADER_WIDGETS_VISIBLE.nextPassenger && nextPriorityBooking ? (
           <TouchableOpacity
             style={styles.nextActionCard}
             onPress={() => handleOpenBooking(nextPriorityBooking)}
@@ -876,10 +884,10 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: COLORS.primaryDark,
     paddingHorizontal: SPACING.lg,
-    paddingTop: SPACING.xs,
-    paddingBottom: SPACING.sm,
+    paddingTop: SPACING.sm,
+    paddingBottom: SPACING.md,
     justifyContent: 'space-between',
-    gap: SPACING.xs,
+    gap: SPACING.sm,
   },
   topBar: {
     flexDirection: 'row',
@@ -1036,8 +1044,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   filterToggle: {
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
     borderRadius: RADIUS.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1174,7 +1182,8 @@ const styles = StyleSheet.create({
   syncBtnText: { color: COLORS.textLight, fontWeight: FONT_WEIGHT.bold, fontSize: 11 },
   conflictText: { color: '#FDE68A', marginBottom: 2, fontSize: 11, fontWeight: FONT_WEIGHT.semibold },
   searchContainer: {
-    flex: 1.4,
+    flex: 1,
+    minHeight: 40,
     flexDirection: 'row',
     backgroundColor: COLORS.surface,
     borderRadius: RADIUS.md,
