@@ -90,6 +90,7 @@ const FONT_WEIGHT = THEME_FONT_WEIGHT || {
 };
 
 const SUPPORT_PHONE = process.env.EXPO_PUBLIC_SUPPORT_PHONE?.trim();
+const LOGIN_LOGO_ASPECT_RATIO = 355 / 886;
 
 const getNetInfoModule = () => {
   try {
@@ -109,7 +110,9 @@ const createErrorState = (message, options = {}) => ({
 });
 
 export default function LoginScreen({ onLoginSuccess, logger, isConnected, resolveOfflineLogin }) {
-  const { height } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
+  const logoWidth = Math.min(width - SPACING.xl * 2, 260);
+  const logoHeight = logoWidth * LOGIN_LOGO_ASPECT_RATIO;
   const [bookingReference, setBookingReference] = useState('');
   const [email, setEmail] = useState('');
   const [errorState, setErrorState] = useState(null);
@@ -501,11 +504,15 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
             showsVerticalScrollIndicator={false}
           >
             <View style={styles.container}>
-              <Animated.View style={[styles.logoSection, { marginTop: height * 0.065, opacity: logoAnimation }]}>
-              <Image source={require('../assets/images/app-icon-llt.png')} style={styles.logoImage} resizeMode="contain" />
-              <Text style={styles.appTitle}>Loch Lomond Travel</Text>
-              <Text style={styles.appSubtitle}>The UK's Fastest Growing Coach Tour Operator</Text>
-            </Animated.View>
+              <Animated.View style={[styles.logoSection, { opacity: logoAnimation }]}>
+                <Image
+                  source={require('../assets/images/app-logo-llt-cropped.png')}
+                  style={[styles.logoImage, { width: logoWidth, height: logoHeight }]}
+                  resizeMode="contain"
+                />
+                <Text style={styles.appTitle}>Loch Lomond Travel</Text>
+                <Text style={styles.appSubtitle}>The UK's Fastest Growing Coach Tour Operator</Text>
+              </Animated.View>
 
             <Animated.View style={[styles.formCard, { opacity: formAnimation }]}> 
               <Text style={styles.welcomeText}>Welcome aboard</Text>
@@ -689,25 +696,28 @@ const styles = StyleSheet.create({
   gradient: { flex: 1 },
   safeArea: { flex: 1, backgroundColor: 'transparent' },
   keyboardAvoidingContainer: { flex: 1 },
-  scrollContainer: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: SPACING.xl, paddingBottom: SPACING.xxl },
+  scrollContainer: { flexGrow: 1, justifyContent: 'flex-start', paddingTop: SPACING.xs, paddingHorizontal: SPACING.xl, paddingBottom: SPACING.xxl },
   scrollContainerKeyboardVisible: { justifyContent: 'flex-start', paddingBottom: SPACING.lg },
-  container: { flex: 1 },
+  container: { flexGrow: 1 },
   logoSection: {
     alignItems: 'center',
-    marginBottom: SPACING.lg,
+    marginBottom: SPACING.md,
   },
-  logoImage: { width: 600, height: 236, marginBottom: SPACING.xs },
+  logoImage: { marginBottom: 2 },
   appTitle: {
     fontSize: 32,
     fontWeight: FONT_WEIGHT.extrabold,
     color: COLORS.white,
     letterSpacing: 0.3,
+    lineHeight: 38,
+    textAlign: 'center',
   },
   appSubtitle: {
-    marginTop: SPACING.xs,
+    marginTop: 2,
     fontSize: 14,
     color: COLORS.lightBlue,
     fontWeight: FONT_WEIGHT.medium,
+    textAlign: 'center',
   },
   formCard: {
     backgroundColor: COLORS.white,
