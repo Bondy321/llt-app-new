@@ -1,5 +1,6 @@
 import { registerRootComponent } from 'expo';
 
+import './utils/installTextScalingDefaults';
 import App from './App';
 
 // registerRootComponent calls AppRegistry.registerComponent('main', () => App);

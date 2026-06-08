@@ -30,6 +30,12 @@ import {
 } from '../theme';
 import loggerService, { maskIdentifier } from '../services/loggerService';
 import { recordBreadcrumb as recordCrashBreadcrumb } from '../services/crashDiagnosticsService';
+import {
+  FONT_SCALE_LIMITS,
+  getResponsiveLayout,
+  responsiveFontSize,
+  responsiveLineHeight,
+} from '../utils/responsiveLayout';
 
 const {
   LOGIN_MODE_HINTS,
@@ -110,9 +116,97 @@ const createErrorState = (message, options = {}) => ({
 });
 
 export default function LoginScreen({ onLoginSuccess, logger, isConnected, resolveOfflineLogin }) {
-  const { width, height } = useWindowDimensions();
-  const logoWidth = Math.min(width - SPACING.xl * 2, 260);
+  const { width, height, fontScale } = useWindowDimensions();
+  const screenLayout = useMemo(
+    () => getResponsiveLayout({ width, height, fontScale }),
+    [fontScale, height, width]
+  );
+  const logoWidth = Math.min(
+    Math.max(width - screenLayout.horizontalPadding * 2, 180),
+    screenLayout.isLargeText || screenLayout.isCompact ? 230 : 260
+  );
   const logoHeight = logoWidth * LOGIN_LOGO_ASPECT_RATIO;
+  const responsiveStyles = useMemo(() => {
+    const appTitleSize = responsiveFontSize(32, screenLayout, {
+      min: 24,
+      max: 32,
+      compactAdjustment: -2,
+      largeTextAdjustment: -5,
+      veryLargeTextAdjustment: -7,
+    });
+    const subtitleSize = responsiveFontSize(14, screenLayout, {
+      min: 12,
+      max: 14,
+      compactAdjustment: -1,
+      largeTextAdjustment: -1,
+      veryLargeTextAdjustment: -2,
+    });
+    const welcomeSize = responsiveFontSize(24, screenLayout, {
+      min: 20,
+      max: 24,
+      compactAdjustment: -1,
+      largeTextAdjustment: -3,
+      veryLargeTextAdjustment: -4,
+    });
+
+    return {
+      scrollContainer: {
+        paddingHorizontal: screenLayout.horizontalPadding,
+        paddingTop: screenLayout.isLargeText ? SPACING.xs : SPACING.sm,
+      },
+      logoSection: {
+        marginBottom: screenLayout.isLargeText ? SPACING.sm : SPACING.md,
+      },
+      formCard: {
+        padding: screenLayout.cardPadding,
+      },
+      appTitle: {
+        fontSize: appTitleSize,
+        lineHeight: responsiveLineHeight(appTitleSize, 1.16),
+      },
+      appSubtitle: {
+        fontSize: subtitleSize,
+        lineHeight: responsiveLineHeight(subtitleSize, 1.22),
+      },
+      welcomeText: {
+        fontSize: welcomeSize,
+        lineHeight: responsiveLineHeight(welcomeSize, 1.14),
+      },
+      welcomeSubtext: {
+        fontSize: responsiveFontSize(13, screenLayout, {
+          min: 12,
+          max: 13,
+          compactAdjustment: 0,
+          largeTextAdjustment: -1,
+          veryLargeTextAdjustment: -1,
+        }),
+      },
+      hintsRow: screenLayout.isVeryLargeText || screenLayout.isTiny
+        ? { flexDirection: 'column' }
+        : null,
+      hintChip: screenLayout.isLargeText
+        ? { padding: SPACING.sm }
+        : null,
+      input: {
+        fontSize: responsiveFontSize(16, screenLayout, {
+          min: 14,
+          max: 16,
+          compactAdjustment: -1,
+          largeTextAdjustment: -1,
+          veryLargeTextAdjustment: -2,
+        }),
+      },
+      buttonText: {
+        fontSize: responsiveFontSize(17, screenLayout, {
+          min: 15,
+          max: 17,
+          compactAdjustment: -1,
+          largeTextAdjustment: -2,
+          veryLargeTextAdjustment: -2,
+        }),
+      },
+    };
+  }, [screenLayout]);
   const [bookingReference, setBookingReference] = useState('');
   const [email, setEmail] = useState('');
   const [errorState, setErrorState] = useState(null);
@@ -495,7 +589,11 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.keyboardAvoidingContainer}>
           <ScrollView
             ref={scrollRef}
-            contentContainerStyle={[styles.scrollContainer, isKeyboardVisible && styles.scrollContainerKeyboardVisible]}
+            contentContainerStyle={[
+              styles.scrollContainer,
+              responsiveStyles.scrollContainer,
+              isKeyboardVisible && styles.scrollContainerKeyboardVisible,
+            ]}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
@@ -504,32 +602,65 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
             showsVerticalScrollIndicator={false}
           >
             <View style={styles.container}>
-              <Animated.View style={[styles.logoSection, { opacity: logoAnimation }]}>
+              <Animated.View style={[styles.logoSection, responsiveStyles.logoSection, { opacity: logoAnimation }]}>
                 <Image
                   source={require('../assets/images/app-logo-llt-cropped.png')}
                   style={[styles.logoImage, { width: logoWidth, height: logoHeight }]}
                   resizeMode="contain"
                 />
-                <Text style={styles.appTitle}>Loch Lomond Travel</Text>
-                <Text style={styles.appSubtitle}>The UK's Fastest Growing Coach Tour Operator</Text>
+                <Text
+                  style={[styles.appTitle, responsiveStyles.appTitle]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  maxFontSizeMultiplier={FONT_SCALE_LIMITS.display}
+                >
+                  Loch Lomond Travel
+                </Text>
+                <Text
+                  style={[styles.appSubtitle, responsiveStyles.appSubtitle]}
+                  numberOfLines={2}
+                  adjustsFontSizeToFit
+                  maxFontSizeMultiplier={FONT_SCALE_LIMITS.caption}
+                >
+                  The UK's Fastest Growing Coach Tour Operator
+                </Text>
               </Animated.View>
 
-            <Animated.View style={[styles.formCard, { opacity: formAnimation }]}> 
-              <Text style={styles.welcomeText}>Welcome aboard</Text>
-              <Text style={styles.welcomeSubtext}>Sign in securely to access your live itinerary, pickup updates, and tour support.</Text>
+            <Animated.View style={[styles.formCard, responsiveStyles.formCard, { opacity: formAnimation }]}>
+              <Text
+                style={[styles.welcomeText, responsiveStyles.welcomeText]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                maxFontSizeMultiplier={FONT_SCALE_LIMITS.heading}
+              >
+                Welcome aboard
+              </Text>
+              <Text
+                style={[styles.welcomeSubtext, responsiveStyles.welcomeSubtext]}
+                maxFontSizeMultiplier={FONT_SCALE_LIMITS.body}
+              >
+                Sign in securely to access your live itinerary, pickup updates, and tour support.
+              </Text>
 
               <View style={[styles.networkPillBase, networkStateTone.container]}>
                 <MaterialCommunityIcons name={networkStateTone.icon} size={16} color={networkStateTone.iconColor} />
-                <Text style={[styles.networkPillText, { color: networkStateTone.textColor }]}>{networkStateTone.label}</Text>
+                <Text
+                  style={[styles.networkPillText, { color: networkStateTone.textColor }]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  maxFontSizeMultiplier={FONT_SCALE_LIMITS.caption}
+                >
+                  {networkStateTone.label}
+                </Text>
               </View>
 
-              <View style={styles.hintsRow}>
+              <View style={[styles.hintsRow, responsiveStyles.hintsRow]}>
                 {Object.entries(LOGIN_MODE_HINTS).map(([key, hint]) => {
                   const selected = modeHintFocus === key;
                   return (
                     <TouchableOpacity
                       key={key}
-                      style={[styles.hintChip, selected && styles.hintChipSelected]}
+                      style={[styles.hintChip, responsiveStyles.hintChip, selected && styles.hintChipSelected]}
                       onPress={() => setModeHintFocus(key)}
                       accessibilityRole="button"
                       accessibilityLabel={`Select ${hint.label} login hint`}
@@ -540,9 +671,20 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                           size={14}
                           color={selected ? COLORS.primaryBlue : COLORS.subtleText}
                         />
-                        <Text style={[styles.hintChipLabel, selected && styles.hintChipLabelSelected]}>{hint.label}</Text>
+                        <Text
+                          style={[styles.hintChipLabel, selected && styles.hintChipLabelSelected]}
+                          numberOfLines={1}
+                          maxFontSizeMultiplier={FONT_SCALE_LIMITS.caption}
+                        >
+                          {hint.label}
+                        </Text>
                       </View>
-                      <Text style={[styles.hintChipText, selected && styles.hintChipTextSelected]}>{hint.hint}</Text>
+                      <Text
+                        style={[styles.hintChipText, selected && styles.hintChipTextSelected]}
+                        maxFontSizeMultiplier={FONT_SCALE_LIMITS.caption}
+                      >
+                        {hint.hint}
+                      </Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -551,7 +693,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
               <View style={[styles.inputContainer, activeInput === 'reference' && styles.inputContainerFocused]}>
                 <MaterialCommunityIcons name="ticket-confirmation-outline" size={22} color={COLORS.primaryBlue} style={styles.inputIcon} />
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, responsiveStyles.input]}
                   value={bookingReference}
                   onChangeText={handleReferenceChange}
                   onFocus={() => {
@@ -571,6 +713,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                   onSubmitEditing={handleLogin}
                   editable={!loading}
                   accessibilityLabel="Booking reference or driver code"
+                  maxFontSizeMultiplier={FONT_SCALE_LIMITS.form}
                 />
               </View>
 
@@ -578,7 +721,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                 <View style={[styles.inputContainer, activeInput === 'email' && styles.inputContainerFocused]}>
                   <MaterialCommunityIcons name="email-outline" size={22} color={COLORS.primaryBlue} style={styles.inputIcon} />
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, responsiveStyles.input]}
                     value={email}
                     onChangeText={(text) => {
                       setEmail(text);
@@ -601,6 +744,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                     onSubmitEditing={handleLogin}
                     editable={!loading}
                     accessibilityLabel="Booking email address"
+                    maxFontSizeMultiplier={FONT_SCALE_LIMITS.form}
                   />
                 </View>
               ) : null}
@@ -649,11 +793,25 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                     {loading ? (
                       <View style={styles.loadingRow}>
                         <ActivityIndicator size="small" color={COLORS.white} />
-                        <Text style={styles.buttonText}>Verifying...</Text>
+                        <Text
+                          style={[styles.buttonText, responsiveStyles.buttonText]}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          maxFontSizeMultiplier={FONT_SCALE_LIMITS.title}
+                        >
+                          Verifying...
+                        </Text>
                       </View>
                     ) : (
                       <View style={styles.buttonContent}>
-                        <Text style={styles.buttonText}>Access My Tour</Text>
+                        <Text
+                          style={[styles.buttonText, responsiveStyles.buttonText]}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          maxFontSizeMultiplier={FONT_SCALE_LIMITS.title}
+                        >
+                          Access My Tour
+                        </Text>
                         <MaterialCommunityIcons name="arrow-right" size={18} color={COLORS.white} />
                       </View>
                     )}
@@ -705,6 +863,7 @@ const styles = StyleSheet.create({
   },
   logoImage: { marginBottom: 2 },
   appTitle: {
+    width: '100%',
     fontSize: 32,
     fontWeight: FONT_WEIGHT.extrabold,
     color: COLORS.white,
@@ -713,6 +872,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   appSubtitle: {
+    width: '100%',
     marginTop: 2,
     fontSize: 14,
     color: COLORS.lightBlue,

@@ -14,6 +14,7 @@ import {
   RefreshControl,
   Platform,
   Vibration,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -31,6 +32,12 @@ import logger, { maskIdentifier } from '../services/loggerService';
 import { resolveTourId } from '../services/tourIdentityService';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import { getPickupCountdownState } from '../services/pickupTimeParser';
+import {
+  FONT_SCALE_LIMITS,
+  getResponsiveLayout,
+  responsiveFontSize,
+  responsiveLineHeight,
+} from '../utils/responsiveLayout';
 const { buildTourHomeActionPlan } = require('../utils/tourHomeActionPlanner');
 
 // Brand Colors
@@ -242,7 +249,7 @@ const PickupCountdown = ({ pickupTime, pickupDate }) => {
 };
 
 // Quick action button component
-const QuickActionButton = ({ icon, label, color, onPress, badge, delay = 0 }) => {
+const QuickActionButton = ({ icon, label, color, onPress, badge, delay = 0, compact = false }) => {
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
@@ -272,7 +279,11 @@ const QuickActionButton = ({ icon, label, color, onPress, badge, delay = 0 }) =>
   };
 
   return (
-    <Animated.View style={[styles.quickActionWrapper, { opacity: fadeAnim, transform: [{ scale: scaleAnim }] }]}>
+    <Animated.View style={[
+      styles.quickActionWrapper,
+      compact && styles.quickActionWrapperCompact,
+      { opacity: fadeAnim, transform: [{ scale: scaleAnim }] },
+    ]}>
       <TouchableOpacity
         style={styles.quickActionButton}
         onPress={() => {
@@ -285,15 +296,26 @@ const QuickActionButton = ({ icon, label, color, onPress, badge, delay = 0 }) =>
         accessibilityLabel={label}
         accessibilityRole="button"
       >
-        <View style={[styles.quickActionIconContainer, { backgroundColor: `${color}15` }]}>
-          <MaterialCommunityIcons name={icon} size={22} color={color} />
+        <View style={[
+          styles.quickActionIconContainer,
+          compact && styles.quickActionIconContainerCompact,
+          { backgroundColor: `${color}15` },
+        ]}>
+          <MaterialCommunityIcons name={icon} size={compact ? 20 : 22} color={color} />
           {badge && (
             <View style={styles.quickActionBadge}>
               <Text style={styles.quickActionBadgeText}>{badge}</Text>
             </View>
           )}
         </View>
-        <Text style={styles.quickActionLabel} numberOfLines={1}>{label}</Text>
+        <Text
+          style={[styles.quickActionLabel, compact && styles.quickActionLabelCompact]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          maxFontSizeMultiplier={FONT_SCALE_LIMITS.caption}
+        >
+          {label}
+        </Text>
       </TouchableOpacity>
     </Animated.View>
   );
@@ -485,6 +507,121 @@ export default function TourHomeScreen({
   onLogout,
   isConnected = true,
 }) {
+  const { width, height, fontScale } = useWindowDimensions();
+  const screenLayout = useMemo(
+    () => getResponsiveLayout({ width, height, fontScale }),
+    [fontScale, height, width]
+  );
+  const responsiveStyles = useMemo(() => {
+    const greetingSize = responsiveFontSize(20, screenLayout, {
+      min: 16,
+      max: 20,
+      compactAdjustment: -1,
+      largeTextAdjustment: -3,
+      veryLargeTextAdjustment: -4,
+    });
+    const statusTitleSize = responsiveFontSize(18, screenLayout, {
+      min: 15,
+      max: 18,
+      compactAdjustment: -1,
+      largeTextAdjustment: -2,
+      veryLargeTextAdjustment: -3,
+    });
+    const titleSize = responsiveFontSize(20, screenLayout, {
+      min: 16,
+      max: 20,
+      compactAdjustment: -1,
+      largeTextAdjustment: -2,
+      veryLargeTextAdjustment: -3,
+    });
+    const isTightHeader = screenLayout.isCompact || screenLayout.isLargeText;
+    const compactActions = screenLayout.isTiny || screenLayout.isVeryLargeText;
+
+    return {
+      compactActions,
+      container: {
+        paddingHorizontal: screenLayout.horizontalPadding,
+        paddingTop: screenLayout.isLargeText ? SPACING.sm : SPACING.md,
+      },
+      header: {
+        paddingHorizontal: isTightHeader ? SPACING.sm : SPACING.md,
+        paddingVertical: isTightHeader ? SPACING.sm : SPACING.md,
+      },
+      headerBrandMark: isTightHeader
+        ? { width: 48, height: 48, borderRadius: 16 }
+        : null,
+      logoImage: isTightHeader
+        ? { width: 36, height: 36, borderRadius: 10 }
+        : null,
+      headerTextContainer: {
+        marginLeft: isTightHeader ? SPACING.sm : SPACING.md,
+        marginRight: isTightHeader ? SPACING.sm : SPACING.md,
+      },
+      greetingIconBadge: isTightHeader
+        ? { width: 26, height: 26, borderRadius: 13 }
+        : null,
+      greetingText: {
+        fontSize: greetingSize,
+        lineHeight: responsiveLineHeight(greetingSize, 1.16),
+      },
+      headerMenuButton: isTightHeader
+        ? { width: 40, height: 40, borderRadius: 14 }
+        : null,
+      statusCardGradient: screenLayout.isLargeText
+        ? { padding: SPACING.md }
+        : null,
+      statusTitle: {
+        fontSize: statusTitleSize,
+        lineHeight: responsiveLineHeight(statusTitleSize, 1.16),
+      },
+      statusMessage: {
+        fontSize: responsiveFontSize(14, screenLayout, {
+          min: 12,
+          max: 14,
+          compactAdjustment: -1,
+          largeTextAdjustment: -1,
+          veryLargeTextAdjustment: -2,
+        }),
+      },
+      quickActionsContainer: {
+        padding: screenLayout.isLargeText ? SPACING.md : SPACING.lg,
+      },
+      quickActionsRow: compactActions
+        ? { flexWrap: 'wrap', rowGap: SPACING.md }
+        : null,
+      quickActionsTitle: {
+        fontSize: responsiveFontSize(13, screenLayout, {
+          min: 11,
+          max: 13,
+          compactAdjustment: -1,
+          largeTextAdjustment: -1,
+          veryLargeTextAdjustment: -2,
+        }),
+      },
+      quickActionsSubtitle: {
+        fontSize: responsiveFontSize(13, screenLayout, {
+          min: 12,
+          max: 13,
+          compactAdjustment: 0,
+          largeTextAdjustment: -1,
+          veryLargeTextAdjustment: -1,
+        }),
+      },
+      boardingPassTour: {
+        fontSize: titleSize,
+        lineHeight: responsiveLineHeight(titleSize, 1.15),
+      },
+      pickupLocationText: {
+        fontSize: responsiveFontSize(14, screenLayout, {
+          min: 12,
+          max: 14,
+          compactAdjustment: -1,
+          largeTextAdjustment: -1,
+          veryLargeTextAdjustment: -2,
+        }),
+      },
+    };
+  }, [screenLayout]);
   const [manifestStatus, setManifestStatus] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -918,9 +1055,9 @@ export default function TourHomeScreen({
         <SafeAreaView style={styles.statusBarSafeArea} edges={['top']} />
         <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
           <LinearGradient colors={[`${COLORS.primaryBlue}0D`, COLORS.white]} style={styles.gradient}>
-            <View style={styles.container}>
+            <View style={[styles.container, responsiveStyles.container]}>
               {/* Skeleton header */}
-              <View style={styles.header}>
+              <View style={[styles.header, responsiveStyles.header]}>
                 <SkeletonLoader width={44} height={44} borderRadius={12} />
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <SkeletonLoader width={120} height={14} style={{ marginBottom: 8 }} />
@@ -946,7 +1083,7 @@ export default function TourHomeScreen({
         <LinearGradient colors={[`${COLORS.primaryBlue}0D`, COLORS.white]} style={styles.gradient}>
           <ScrollView
             ref={scrollViewRef}
-            contentContainerStyle={styles.container}
+            contentContainerStyle={[styles.container, responsiveStyles.container]}
             showsVerticalScrollIndicator={false}
             refreshControl={
               <RefreshControl
@@ -960,21 +1097,39 @@ export default function TourHomeScreen({
             }
           >
           {/* Header */}
-          <AnimatedCard style={styles.header} delay={0}>
-            <View style={styles.headerBrandMark}>
-              <Image source={require('../assets/images/logo_for_tour_home.png')} style={styles.logoImage} />
+          <AnimatedCard style={[styles.header, responsiveStyles.header]} delay={0}>
+            <View style={[styles.headerBrandMark, responsiveStyles.headerBrandMark]}>
+              <Image
+                source={require('../assets/images/logo_for_tour_home.png')}
+                style={[styles.logoImage, responsiveStyles.logoImage]}
+              />
             </View>
-            <View style={styles.headerTextContainer}>
+            <View style={[styles.headerTextContainer, responsiveStyles.headerTextContainer]}>
               <View style={styles.greetingTitleRow}>
-                <View style={[styles.greetingIconBadge, { backgroundColor: `${greeting.color}14` }]}>
+                <View style={[
+                  styles.greetingIconBadge,
+                  responsiveStyles.greetingIconBadge,
+                  { backgroundColor: `${greeting.color}14` },
+                ]}>
                   <MaterialCommunityIcons name={greeting.icon} size={17} color={greeting.color} />
                 </View>
-                <Text style={styles.greetingText}>{`${greeting.text}!`}</Text>
+                <Text
+                  style={[styles.greetingText, responsiveStyles.greetingText]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  maxFontSizeMultiplier={FONT_SCALE_LIMITS.heading}
+                >
+                  {`${greeting.text}!`}
+                </Text>
               </View>
             </View>
             <View style={styles.headerActions}>
               <TouchableOpacity
-                style={[styles.headerMenuButton, isHeaderMenuOpen && styles.headerMenuButtonActive]}
+                style={[
+                  styles.headerMenuButton,
+                  responsiveStyles.headerMenuButton,
+                  isHeaderMenuOpen && styles.headerMenuButtonActive,
+                ]}
                 onPress={() => {
                   triggerHaptic('light');
                   setIsHeaderMenuOpen((open) => !open);
@@ -1059,7 +1214,7 @@ export default function TourHomeScreen({
           <AnimatedCard style={styles.statusCard} delay={100}>
             <LinearGradient
               colors={[manifestStatusMeta.toneLight, COLORS.white]}
-              style={styles.statusCardGradient}
+              style={[styles.statusCardGradient, responsiveStyles.statusCardGradient]}
             >
               <View style={styles.statusIconContainer}>
                 <StatusPulse color={manifestStatusMeta.tone} />
@@ -1079,23 +1234,44 @@ export default function TourHomeScreen({
                     </Text>
                   </View>
                 </View>
-                <Text style={styles.statusTitle}>{manifestStatusMeta.title}</Text>
-                <Text style={styles.statusMessage}>{manifestStatusMeta.message}</Text>
+                <Text
+                  style={[styles.statusTitle, responsiveStyles.statusTitle]}
+                  maxFontSizeMultiplier={FONT_SCALE_LIMITS.title}
+                >
+                  {manifestStatusMeta.title}
+                </Text>
+                <Text
+                  style={[styles.statusMessage, responsiveStyles.statusMessage]}
+                  maxFontSizeMultiplier={FONT_SCALE_LIMITS.body}
+                >
+                  {manifestStatusMeta.message}
+                </Text>
               </View>
             </LinearGradient>
           </AnimatedCard>
 
           {/* Quick Actions Bar */}
           <AnimatedCard delay={150}>
-            <View style={styles.quickActionsContainer}>
-              <Text style={styles.quickActionsTitle}>{actionPlan.title}</Text>
-              <Text style={styles.quickActionsSubtitle}>{actionPlan.subtitle}</Text>
-              <View style={styles.quickActionsRow}>
+            <View style={[styles.quickActionsContainer, responsiveStyles.quickActionsContainer]}>
+              <Text
+                style={[styles.quickActionsTitle, responsiveStyles.quickActionsTitle]}
+                maxFontSizeMultiplier={FONT_SCALE_LIMITS.caption}
+              >
+                {actionPlan.title}
+              </Text>
+              <Text
+                style={[styles.quickActionsSubtitle, responsiveStyles.quickActionsSubtitle]}
+                maxFontSizeMultiplier={FONT_SCALE_LIMITS.body}
+              >
+                {actionPlan.subtitle}
+              </Text>
+              <View style={[styles.quickActionsRow, responsiveStyles.quickActionsRow]}>
                 {orderedQuickActions.map((action, index) => (
                   <QuickActionButton
                     key={`${action.label}-${index}`}
                     {...action}
                     delay={200 + index * 50}
+                    compact={responsiveStyles.compactActions}
                   />
                 ))}
               </View>
@@ -1115,7 +1291,14 @@ export default function TourHomeScreen({
                 <View style={styles.boardingPassHeaderContent}>
                   <View style={styles.boardingPassHeaderTextContainer}>
                     <Text style={styles.boardingPassLabel}>DIGITAL BOARDING PASS</Text>
-                    <Text style={styles.boardingPassTour}>{tourData.name || 'Scenic Tour'}</Text>
+                    <Text
+                      style={[styles.boardingPassTour, responsiveStyles.boardingPassTour]}
+                      numberOfLines={2}
+                      adjustsFontSizeToFit
+                      maxFontSizeMultiplier={FONT_SCALE_LIMITS.title}
+                    >
+                      {tourData.name || 'Scenic Tour'}
+                    </Text>
                   </View>
                   <View style={styles.boardingPassQR}>
                     <MaterialCommunityIcons name="qrcode" size={48} color="rgba(255,255,255,0.9)" />
@@ -1155,7 +1338,13 @@ export default function TourHomeScreen({
                         </View>
                         <View style={styles.pickupLocationInfo}>
                           <MaterialCommunityIcons name="map-marker" size={16} color={COLORS.coralAccent} />
-                          <Text style={styles.pickupLocationText} numberOfLines={2}>{pickup.location}</Text>
+                          <Text
+                            style={[styles.pickupLocationText, responsiveStyles.pickupLocationText]}
+                            numberOfLines={2}
+                            maxFontSizeMultiplier={FONT_SCALE_LIMITS.body}
+                          >
+                            {pickup.location}
+                          </Text>
                         </View>
                       </View>
                     ))}
@@ -1169,7 +1358,11 @@ export default function TourHomeScreen({
                       </View>
                       <View style={styles.pickupLocationInfo}>
                         <MaterialCommunityIcons name="map-marker" size={16} color={COLORS.coralAccent} />
-                        <Text style={styles.pickupLocationText} numberOfLines={2}>
+                        <Text
+                          style={[styles.pickupLocationText, responsiveStyles.pickupLocationText]}
+                          numberOfLines={2}
+                          maxFontSizeMultiplier={FONT_SCALE_LIMITS.body}
+                        >
                           {bookingData.pickupLocation}
                         </Text>
                       </View>
@@ -1467,8 +1660,9 @@ const styles = StyleSheet.create({
   greetingTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'center',
+    alignSelf: 'stretch',
     gap: 8,
+    minWidth: 0,
   },
   greetingIconBadge: {
     width: 30,
@@ -1479,6 +1673,7 @@ const styles = StyleSheet.create({
   },
   greetingText: {
     flex: 1,
+    minWidth: 0,
     fontSize: 20,
     color: COLORS.darkText,
     fontWeight: '800',
@@ -1487,6 +1682,7 @@ const styles = StyleSheet.create({
   headerActions: {
     position: 'relative',
     zIndex: 30,
+    flexShrink: 0,
   },
   headerMenuButton: {
     width: 44,
@@ -1684,6 +1880,10 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  quickActionWrapperCompact: {
+    flexBasis: '47%',
+    flexGrow: 1,
+  },
   quickActionButton: {
     alignItems: 'center',
     width: '100%',
@@ -1696,6 +1896,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 8,
     position: 'relative',
+  },
+  quickActionIconContainerCompact: {
+    width: 46,
+    height: 46,
+    borderRadius: RADIUS.md,
+    marginBottom: 6,
   },
   quickActionBadge: {
     position: 'absolute',
@@ -1718,6 +1924,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: COLORS.darkText,
     textAlign: 'center',
+  },
+  quickActionLabelCompact: {
+    fontSize: 11,
   },
 
   // Boarding pass styles
