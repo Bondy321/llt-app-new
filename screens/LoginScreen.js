@@ -154,7 +154,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     return {
       scrollContainer: {
         paddingHorizontal: screenLayout.horizontalPadding,
-        paddingTop: screenLayout.isLargeText ? SPACING.md : SPACING.xl,
+        paddingTop: screenLayout.isLargeText ? SPACING.lg : SPACING.xxl,
       },
       logoSection: {
         marginBottom: screenLayout.isLargeText ? SPACING.sm : SPACING.md,
@@ -632,7 +632,6 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
               <Text
                 style={[styles.welcomeText, responsiveStyles.welcomeText]}
                 numberOfLines={1}
-                adjustsFontSizeToFit
                 maxFontSizeMultiplier={FONT_SCALE_LIMITS.heading}
               >
                 Welcome aboard
@@ -863,7 +862,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: SPACING.md,
   },
-  logoImage: { marginBottom: SPACING.sm },
+  logoImage: { marginBottom: SPACING.md },
   appTitle: {
     width: '100%',
     fontSize: 32,
@@ -890,6 +889,7 @@ const styles = StyleSheet.create({
     ...SHADOWS.xl,
   },
   welcomeText: {
+    width: '100%',
     fontSize: 24,
     fontWeight: FONT_WEIGHT.extrabold,
     color: COLORS.darkText,
