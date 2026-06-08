@@ -696,7 +696,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: SPACING.lg,
   },
-  logoImage: { width: 300, height: 118, marginBottom: SPACING.xs },
+  logoImage: { width: 600, height: 236, marginBottom: SPACING.xs },
   appTitle: {
     fontSize: 32,
     fontWeight: FONT_WEIGHT.extrabold,
