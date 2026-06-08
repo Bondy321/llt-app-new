@@ -97,6 +97,7 @@ const FONT_WEIGHT = THEME_FONT_WEIGHT || {
 
 const SUPPORT_PHONE = process.env.EXPO_PUBLIC_SUPPORT_PHONE?.trim();
 const LOGIN_LOGO_ASPECT_RATIO = 355 / 886;
+const LOGIN_LOGO_SCALE = 0.67;
 
 const getNetInfoModule = () => {
   try {
@@ -121,10 +122,11 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     () => getResponsiveLayout({ width, height, fontScale }),
     [fontScale, height, width]
   );
-  const logoWidth = Math.min(
+  const baseLogoWidth = Math.min(
     Math.max(width - screenLayout.horizontalPadding * 2, 180),
     screenLayout.isLargeText || screenLayout.isCompact ? 230 : 260
   );
+  const logoWidth = Math.round(baseLogoWidth * LOGIN_LOGO_SCALE);
   const logoHeight = logoWidth * LOGIN_LOGO_ASPECT_RATIO;
   const responsiveStyles = useMemo(() => {
     const appTitleSize = responsiveFontSize(32, screenLayout, {
@@ -152,7 +154,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     return {
       scrollContainer: {
         paddingHorizontal: screenLayout.horizontalPadding,
-        paddingTop: screenLayout.isLargeText ? SPACING.xs : SPACING.sm,
+        paddingTop: screenLayout.isLargeText ? SPACING.md : SPACING.xl,
       },
       logoSection: {
         marginBottom: screenLayout.isLargeText ? SPACING.sm : SPACING.md,
@@ -861,7 +863,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: SPACING.md,
   },
-  logoImage: { marginBottom: 2 },
+  logoImage: { marginBottom: SPACING.sm },
   appTitle: {
     width: '100%',
     fontSize: 32,
