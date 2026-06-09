@@ -389,6 +389,79 @@ test('selectNotificationRecipients excludes stale participant profiles sharing t
   assert.equal(result.excludedSenderTokenRecipientCount, 1);
 });
 
+test('category broadcast preference resolver supports canonical and legacy tour interest opt-ins', () => {
+  assert.equal(
+    __testables.userWantsTourCategoryBroadcast({
+      preferences: { marketing: { day_trips: true } },
+    }, 'day_trips'),
+    true,
+  );
+  assert.equal(
+    __testables.userWantsTourCategoryBroadcast({
+      preferences: { marketing: { mystery_tours: true } },
+    }, 'mystery_breaks'),
+    true,
+  );
+  assert.equal(
+    __testables.userWantsTourCategoryBroadcast({
+      preferences: { marketing: { scotland_classics: true } },
+    }, 'scotland_highlands_islands'),
+    true,
+  );
+  assert.equal(
+    __testables.userWantsTourCategoryBroadcast({
+      preferences: { marketing: { steam_trains: 'on' } },
+    }, 'steam_train_tours'),
+    true,
+  );
+  assert.equal(
+    __testables.userWantsTourCategoryBroadcast({
+      preferences: { marketing: { theatre_concerts: false } },
+    }, 'theatre_concerts'),
+    false,
+  );
+  assert.equal(
+    __testables.userWantsTourCategoryBroadcast({
+      preferences: { marketing: { mystery_tours: true } },
+    }, 'day_trips'),
+    false,
+  );
+});
+
+test('category broadcast validator requires a supported matching category payload', () => {
+  const validPayload = {
+    message: 'New dates are now available.',
+    createdAtMs: 1780994000000,
+    createdByUid: 'admin-uid',
+    source: 'web_admin',
+    categoryKey: 'day_trips',
+    categoryLabel: 'Day Trips',
+  };
+
+  assert.deepEqual(
+    __testables.validateCategoryBroadcastData('day_trips', validPayload),
+    { valid: true, errors: [] },
+  );
+
+  const mismatch = __testables.validateCategoryBroadcastData('mystery_breaks', validPayload);
+  assert.equal(mismatch.valid, false);
+  assert.match(mismatch.errors.join(' '), /categoryKey must match/);
+
+  const unsupported = __testables.validateCategoryBroadcastData('not_a_category', {
+    ...validPayload,
+    categoryKey: 'not_a_category',
+  });
+  assert.equal(unsupported.valid, false);
+  assert.match(unsupported.errors.join(' '), /Unsupported tour notification category/);
+
+  const missingMessage = __testables.validateCategoryBroadcastData('day_trips', {
+    ...validPayload,
+    message: '',
+  });
+  assert.equal(missingMessage.valid, false);
+  assert.match(missingMessage.errors.join(' '), /Missing broadcast message/);
+});
+
 test('getPushTokenIneligibilityReason reports token and permission suppression reasons', () => {
   assert.equal(
     __testables.getPushTokenIneligibilityReason({ pushToken: 'ExponentPushToken[missing-status]' }),

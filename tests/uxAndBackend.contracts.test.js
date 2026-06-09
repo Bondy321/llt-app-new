@@ -109,14 +109,16 @@ test('Static contract: identity_bindings_meta writes are limited to admin or cal
 test('Static contract: sensitive database writes remain ownership or admin gated', () => {
   const rules = readJson('database.rules.json');
   const adminUid = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
-  const privateOwnerAccess = "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || $ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)";
+  const adminOnlyRootAccess = `auth != null && auth.uid === '${adminUid}'`;
+  const privateOwnerAccess = "auth != null && ($ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)";
   const manifestBookingAccess = `auth != null && (auth.uid === '${adminUid}' || (root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() && (root.child('users/' + auth.uid + '/bookingRef').val() === $bookingRef || (root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').val() > now))) || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true)) && root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId`;
 
   assert.equal(
     rules.rules.bookings.$bookingRef['.write'],
     `auth != null && auth.uid === '${adminUid}'`,
   );
-  assert.equal(rules.rules.bookings['.read'], undefined);
+  assert.equal(rules.rules.bookings['.read'], adminOnlyRootAccess);
+  assert.notEqual(rules.rules.bookings['.read'], 'auth != null');
   assert.notEqual(rules.rules.bookings.$bookingRef['.read'], 'auth != null');
   assert.match(rules.rules.bookings.$bookingRef['.read'], /booking_access_grants/);
   assert.match(rules.rules.bookings.$bookingRef['.read'], /data\.child\('tourId'\)\.isString\(\)/);
@@ -125,7 +127,8 @@ test('Static contract: sensitive database writes remain ownership or admin gated
     rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.write'],
     manifestBookingAccess,
   );
-  assert.equal(rules.rules.tour_manifests['.read'], undefined);
+  assert.equal(rules.rules.tour_manifests['.read'], adminOnlyRootAccess);
+  assert.notEqual(rules.rules.tour_manifests['.read'], 'auth != null');
   assert.notEqual(rules.rules.tour_manifests.$tourId['.read'], 'auth != null');
   assert.doesNotMatch(rules.rules.tour_manifests.$tourId['.read'], /participants\/' \+ auth\.uid/);
   assert.match(rules.rules.tour_manifests.$tourId['.read'], /assigned_drivers/);
@@ -156,7 +159,8 @@ test('Static contract: tour metadata writes stay least-privilege', () => {
   const rules = readJson('database.rules.json');
   const tourRules = rules.rules.tours.$tourId;
 
-  assert.equal(rules.rules.tours['.read'], undefined);
+  assert.equal(rules.rules.tours['.read'], "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'");
+  assert.notEqual(rules.rules.tours['.read'], 'auth != null');
   assert.match(tourRules['.read'], /tour_access_grants\/' \+ \$tourId \+ '\/' \+ auth\.uid \+ '\/expiresAtMs/);
   assert.notEqual(tourRules['.write'], 'auth != null');
   assert.match(tourRules['.write'], /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
@@ -232,7 +236,8 @@ test('Static contract: driver records cannot be created by arbitrary clients', (
   const driverRootRules = rules.rules.drivers;
   const driverWriteRule = rules.rules.drivers.$driverId['.write'];
 
-  assert.equal(driverRootRules['.read'], undefined);
+  assert.equal(driverRootRules['.read'], "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'");
+  assert.notEqual(driverRootRules['.read'], 'auth != null');
   assert.notEqual(driverRootRules.$driverId['.read'], 'auth != null');
   assert.match(driverRootRules.$driverId['.read'], /data\.child\('authUid'\)\.val\(\) === auth\.uid/);
   assert.notEqual(driverWriteRule, "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || data.child('authUid').val() === auth.uid || newData.child('authUid').val() === auth.uid)");
@@ -359,6 +364,42 @@ test('Static contract: dashboard broadcast root reads and writes stay Firebase-b
     "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
   );
   assert.match(broadcasts.$tourId.$broadcastId['.validate'], /newData\.child\('createdByUid'\)\.val\(\) === auth\.uid/);
+});
+
+test('Static contract: category broadcasts target canonical tour-interest preferences', () => {
+  const rules = readJson('database.rules.json');
+  const source = readText('functions/index.js');
+  const screenSource = readText('screens/NotificationPreferencesScreen.js');
+  const adminSource = readText('web-admin/src/components/BroadcastPanel.jsx');
+  const categoryBroadcasts = rules.rules.category_broadcasts;
+  const categoryKeys = [
+    'day_trips',
+    'mystery_breaks',
+    'scotland_highlands_islands',
+    'isle_of_ireland',
+    'european_breaks',
+    'steam_train_tours',
+    'cruises_ferries',
+    'theatre_concerts',
+    'sporting_breaks',
+    'history_military_breaks',
+  ];
+  const adminAccess = "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)";
+
+  assert.equal(categoryBroadcasts['.read'], adminAccess);
+  assert.deepEqual(categoryBroadcasts.$categoryKey['.indexOn'], ['createdAtMs']);
+  assert.equal(categoryBroadcasts.$categoryKey.$broadcastId['.write'], adminAccess);
+  assert.match(categoryBroadcasts.$categoryKey.$broadcastId['.validate'], /newData\.child\('categoryKey'\)\.val\(\) === \$categoryKey/);
+  assert.match(source, /exports\.processCategoryBroadcastWrite = onValueCreated/);
+  assert.match(source, /ref: '\/category_broadcasts\/\{categoryKey\}\/\{broadcastId\}'/);
+  assert.match(source, /orderByChild\(`preferences\/marketing\/\$\{preferenceKey\}`\)/);
+  assert.match(adminSource, /category_broadcasts\/\$\{targetId\}/);
+
+  categoryKeys.forEach((categoryKey) => {
+    assert.ok(rules.rules.users['.indexOn'].includes(`preferences/marketing/${categoryKey}`));
+    assert.match(screenSource, new RegExp(categoryKey));
+    assert.match(categoryBroadcasts.$categoryKey.$broadcastId['.validate'], new RegExp(categoryKey));
+  });
 });
 
 test('Static contract: photo variant lifecycle fields stay allowed by database rules', () => {
@@ -747,7 +788,8 @@ test('Static contract: passenger login establishes participant access before ent
   assert.match(appSource, /const authUser = user \|\| auth\?\.currentUser \|\| null/);
   assert.match(appSource, /const authUid = authUser\?\.uid \|\| null/);
   assert.match(appSource, /if \(!options\?\.offlineMode && tourDetails\?\.id\) \{/);
-  assert.match(appSource, /await joinTour\(tourDetails\.id, authUid\)/);
+  assert.match(appSource, /await joinTour\(\s*tourDetails\.id,\s*authUid,/);
+  assert.match(appSource, /loginDiagnostics: loginDiagnosticsContext/);
   assert.match(appSource, /joinFailure\.userMessage = 'We could not finish joining your tour session\. Please check your connection and try again\.'/);
   assert.match(appSource, /profileError\.criticalIdentityPersistence = true/);
   assert.match(appSource, /profileError\.userMessage = 'We could not finish securing your tour session\. Please check your connection and try again\.'/);

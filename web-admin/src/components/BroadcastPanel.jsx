@@ -16,6 +16,7 @@ import {
   ThemeIcon,
   SimpleGrid,
   Select,
+  SegmentedControl,
   Alert,
   ScrollArea,
   Loader,
@@ -43,6 +44,10 @@ import {
   IconSparkles,
   IconRefresh,
 } from '@tabler/icons-react';
+import {
+  TOUR_NOTIFICATION_CATEGORY_OPTIONS,
+  getTourNotificationCategoryLabel,
+} from '../utils/notificationCategories';
 
 const MAX_BROADCAST_LENGTH = 2000;
 const IDEAL_MAX_LENGTH = 240;
@@ -69,13 +74,21 @@ function normalizeBroadcastTimestamp(timestamp) {
   return toEpochMsStrict(timestamp);
 }
 
-function normalizeBroadcastMessage(tourId, broadcastId, payload = {}) {
+function normalizeBroadcastMessage(targetId, broadcastId, payload = {}, targetType = 'tour') {
   const message = typeof payload.message === 'string' ? payload.message : '';
   const normalizedTimestamp = normalizeBroadcastTimestamp(payload.createdAtMs);
+  const categoryKey = payload.categoryKey || targetId;
+  const targetLabel = targetType === 'category'
+    ? payload.categoryLabel || getTourNotificationCategoryLabel(categoryKey)
+    : targetId;
 
   return {
     id: broadcastId,
-    tourId,
+    tourId: targetType === 'tour' ? targetId : null,
+    categoryKey: targetType === 'category' ? categoryKey : null,
+    categoryLabel: targetType === 'category' ? targetLabel : null,
+    targetType,
+    targetLabel,
     message,
     timestamp: normalizedTimestamp ?? payload.createdAtMs ?? null,
     timestampMs: normalizedTimestamp,
@@ -86,15 +99,18 @@ function normalizeBroadcastMessage(tourId, broadcastId, payload = {}) {
 
 function BroadcastHistoryItem({ broadcast }) {
   const timestampMs = normalizeBroadcastTimestamp(broadcast.timestamp);
+  const isCategoryBroadcast = broadcast.targetType === 'category';
 
   return (
     <Paper p="sm" radius="md" withBorder>
       <Group justify="space-between" mb="xs">
         <Group gap="xs">
-          <ThemeIcon color="orange" variant="light" size="sm">
+          <ThemeIcon color={isCategoryBroadcast ? 'blue' : 'orange'} variant="light" size="sm">
             <IconSpeakerphone size={12} />
           </ThemeIcon>
-          <Badge size="sm" variant="light">{broadcast.tourId}</Badge>
+          <Badge size="sm" color={isCategoryBroadcast ? 'blue' : 'orange'} variant="light">
+            {broadcast.targetLabel}
+          </Badge>
         </Group>
         <Text size="xs" c="dimmed">
           {formatTimeForDisplay(timestampMs, 'Unknown time')}
@@ -144,6 +160,8 @@ const getMessageTone = (message) => {
 
 export function BroadcastPanel() {
   const [tourId, setTourId] = useState('');
+  const [targetMode, setTargetMode] = useState('tour');
+  const [categoryKey, setCategoryKey] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState('custom');
@@ -162,19 +180,26 @@ export function BroadcastPanel() {
   }, []);
 
   useEffect(() => {
-    if (!tourId) {
+    const targetId = targetMode === 'category'
+      ? categoryKey
+      : normalizeTourIdForPath(tourId);
+
+    if (!targetId) {
       setBroadcastHistory([]);
       return undefined;
     }
 
-    const normalizedTourId = normalizeTourIdForPath(tourId);
-    if (!isValidFirebaseKeySegment(normalizedTourId)) {
+    if (!isValidFirebaseKeySegment(targetId)) {
       setBroadcastHistory([]);
       return undefined;
     }
+
+    const rootPath = targetMode === 'category'
+      ? `category_broadcasts/${targetId}`
+      : `broadcasts/${targetId}`;
 
     const historyQuery = query(
-      ref(db, `broadcasts/${normalizedTourId}`),
+      ref(db, rootPath),
       orderByChild('createdAtMs'),
       limitToLast(25)
     );
@@ -182,18 +207,24 @@ export function BroadcastPanel() {
     const unsubscribe = onValue(historyQuery, (snapshot) => {
       const broadcasts = snapshot.val() || {};
       const history = Object.entries(broadcasts)
-        .map(([broadcastId, payload]) => normalizeBroadcastMessage(tourId, broadcastId, payload))
+        .map(([broadcastId, payload]) => normalizeBroadcastMessage(targetId, broadcastId, payload, targetMode))
         .sort((a, b) => (b.timestampMs ?? 0) - (a.timestampMs ?? 0));
 
       setBroadcastHistory(history);
     });
 
     return () => unsubscribe();
-  }, [tourId]);
+  }, [categoryKey, targetMode, tourId]);
 
   const totalTours = Object.keys(tours).length;
   const assignedTours = Object.values(tours).filter((t) => t.driverName && t.driverName !== 'TBA').length;
   const selectedTour = tours[tourId] || null;
+  const isCategoryMode = targetMode === 'category';
+  const selectedCategoryLabel = categoryKey ? getTourNotificationCategoryLabel(categoryKey) : '';
+  const selectedTargetLabel = isCategoryMode
+    ? selectedCategoryLabel
+    : tourId ? `Tour ${tourId}` : '';
+  const hasTarget = isCategoryMode ? Boolean(categoryKey) : Boolean(tourId);
 
   const quality = getMessageTone(message);
   const messageLength = message.trim().length;
@@ -233,9 +264,20 @@ export function BroadcastPanel() {
     e.preventDefault();
 
     const normalizedTourId = normalizeTourIdForPath(tourId);
+    const normalizedCategoryKey = typeof categoryKey === 'string' ? categoryKey.trim() : '';
+    const targetId = isCategoryMode ? normalizedCategoryKey : normalizedTourId;
+    const targetLabel = isCategoryMode
+      ? getTourNotificationCategoryLabel(normalizedCategoryKey)
+      : normalizedTourId;
 
-    if (!normalizedTourId) {
-      notifications.show({ title: 'Tour Required', message: 'Please select a tour to broadcast to', color: 'red' });
+    if (!targetId) {
+      notifications.show({
+        title: isCategoryMode ? 'Tour Type Required' : 'Tour Required',
+        message: isCategoryMode
+          ? 'Please select a tour type to broadcast to'
+          : 'Please select a tour to broadcast to',
+        color: 'red',
+      });
       return;
     }
 
@@ -244,10 +286,12 @@ export function BroadcastPanel() {
       return;
     }
 
-    if (!isValidFirebaseKeySegment(normalizedTourId)) {
+    if (!isValidFirebaseKeySegment(targetId)) {
       notifications.show({
-        title: 'Invalid Tour ID',
-        message: 'Selected tour ID cannot be used for broadcast delivery.',
+        title: isCategoryMode ? 'Invalid Tour Type' : 'Invalid Tour ID',
+        message: isCategoryMode
+          ? 'Selected tour type cannot be used for broadcast delivery.'
+          : 'Selected tour ID cannot be used for broadcast delivery.',
         color: 'red',
       });
       return;
@@ -270,19 +314,30 @@ export function BroadcastPanel() {
     setLoading(true);
 
     try {
-      const broadcastsRef = ref(db, `broadcasts/${normalizedTourId}`);
+      const rootPath = isCategoryMode
+        ? `category_broadcasts/${targetId}`
+        : `broadcasts/${targetId}`;
+      const broadcastsRef = ref(db, rootPath);
       const newBroadcastRef = push(broadcastsRef);
-
-      await set(newBroadcastRef, {
+      const broadcastPayload = {
         message: message.trim(),
         createdAtMs: Date.now(),
         createdByUid: auth.currentUser?.uid || null,
         source: 'web_admin',
-      });
+      };
+
+      if (isCategoryMode) {
+        broadcastPayload.categoryKey = targetId;
+        broadcastPayload.categoryLabel = targetLabel;
+      }
+
+      await set(newBroadcastRef, broadcastPayload);
 
       notifications.show({
         title: 'Broadcast Sent',
-        message: `Announcement sent to tour ${normalizedTourId}`,
+        message: isCategoryMode
+          ? `Announcement sent to ${targetLabel} subscribers`
+          : `Announcement sent to tour ${targetId}`,
         color: 'green',
         icon: <IconCheck size={16} />,
       });
@@ -301,7 +356,7 @@ export function BroadcastPanel() {
       <Group justify="space-between" mb="xl">
         <div>
           <Title order={2}>Broadcast System</Title>
-          <Text c="dimmed" size="sm">Premium passenger communication with delivery-safe checks</Text>
+          <Text c="dimmed" size="sm">Send tour announcements or future-tour alerts with delivery-safe checks</Text>
         </div>
       </Group>
 
@@ -355,20 +410,47 @@ export function BroadcastPanel() {
 
           <form onSubmit={handleSend}>
             <Stack gap="md">
-              <Select
-                label="Target Tour"
-                placeholder="Select a tour"
-                data={tourOptions}
-                value={tourId}
-                onChange={setTourId}
-                searchable
-                clearable
-                leftSection={loadingTours ? <Loader size={14} /> : <IconMap size={16} />}
-                disabled={loadingTours}
-                description="Choose the tour that should receive this push message"
-              />
+              <Box>
+                <Text size="sm" fw={600} mb={6}>Broadcast Target</Text>
+                <SegmentedControl
+                  fullWidth
+                  value={targetMode}
+                  onChange={setTargetMode}
+                  data={[
+                    { value: 'tour', label: 'Specific tour' },
+                    { value: 'category', label: 'Tour type' },
+                  ]}
+                />
+              </Box>
 
-              {selectedTour ? (
+              {isCategoryMode ? (
+                <Select
+                  label="Target Tour Type"
+                  placeholder="Select a tour type"
+                  data={TOUR_NOTIFICATION_CATEGORY_OPTIONS}
+                  value={categoryKey}
+                  onChange={setCategoryKey}
+                  searchable
+                  clearable
+                  leftSection={<IconSparkles size={16} />}
+                  description="Send to clients who opted in to this future-tour category"
+                />
+              ) : (
+                <Select
+                  label="Target Tour"
+                  placeholder="Select a tour"
+                  data={tourOptions}
+                  value={tourId}
+                  onChange={setTourId}
+                  searchable
+                  clearable
+                  leftSection={loadingTours ? <Loader size={14} /> : <IconMap size={16} />}
+                  disabled={loadingTours}
+                  description="Choose the tour that should receive this push message"
+                />
+              )}
+
+              {!isCategoryMode && selectedTour ? (
                 <Paper withBorder p="sm" radius="md" bg="gray.0">
                   <Group justify="space-between">
                     <div>
@@ -377,6 +459,18 @@ export function BroadcastPanel() {
                       <Text size="xs" c="dimmed">Tour code: {tourId}</Text>
                     </div>
                     <Badge color="blue" variant="light">{selectedTour.driverName || 'Driver unassigned'}</Badge>
+                  </Group>
+                </Paper>
+              ) : null}
+
+              {isCategoryMode && categoryKey ? (
+                <Paper withBorder p="sm" radius="md" bg="blue.0">
+                  <Group justify="space-between">
+                    <div>
+                      <Text size="xs" c="dimmed">Selected tour type</Text>
+                      <Text fw={600}>{selectedCategoryLabel}</Text>
+                    </div>
+                    <Badge color="blue" variant="light">Opt-in audience</Badge>
                   </Group>
                 </Paper>
               ) : null}
@@ -427,7 +521,9 @@ export function BroadcastPanel() {
               </Alert>
 
               <Alert icon={<IconInfoCircle size={16} />} color="blue" variant="light">
-                This message will be sent to passengers with notifications enabled for this tour.
+                {isCategoryMode
+                  ? 'This message will be sent to clients who enabled notifications for this tour type.'
+                  : 'This message will be sent to passengers with notifications enabled for this tour.'}
               </Alert>
 
               <Button
@@ -435,11 +531,11 @@ export function BroadcastPanel() {
                 loading={loading}
                 fullWidth
                 size="lg"
-                color="orange"
+                color={isCategoryMode ? 'blue' : 'orange'}
                 leftSection={<IconSend size={18} />}
-                disabled={!tourId || !message.trim() || loading || !auth.currentUser?.uid}
+                disabled={!hasTarget || !message.trim() || loading || !auth.currentUser?.uid}
               >
-                Send Broadcast
+                {isCategoryMode ? 'Send Tour Type Broadcast' : 'Send Broadcast'}
               </Button>
             </Stack>
           </form>
@@ -456,9 +552,13 @@ export function BroadcastPanel() {
             <Paper withBorder radius="lg" p="md" bg="dark.8">
               <Group justify="space-between" mb="xs">
                 <Text size="xs" c="gray.4">LLT App · now</Text>
-                <Badge size="xs" variant="light" color="orange">Push</Badge>
+                <Badge size="xs" variant="light" color={isCategoryMode ? 'blue' : 'orange'}>
+                  {isCategoryMode ? 'Tour type' : 'Push'}
+                </Badge>
               </Group>
-              <Text fw={700} c="white">{tourId ? `Tour ${tourId}` : 'Select a tour'}</Text>
+              <Text fw={700} c="white">
+                {selectedTargetLabel || (isCategoryMode ? 'Select a tour type' : 'Select a tour')}
+              </Text>
               <Text size="sm" c="gray.3" mt="xs">{message.trim() || 'Your broadcast preview appears here...'}</Text>
             </Paper>
 

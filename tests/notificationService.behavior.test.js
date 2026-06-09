@@ -128,11 +128,16 @@ test('saveUserPreferences persists canonical preference schema and token metadat
       group_photos: true,
     },
     marketing: {
-      steam_trains: false,
-      mystery_tours: true,
-      scotland_classics: false,
-      vip_experiences: false,
-      hiking_nature: false,
+      day_trips: false,
+      mystery_breaks: true,
+      scotland_highlands_islands: false,
+      isle_of_ireland: false,
+      european_breaks: false,
+      steam_train_tours: false,
+      cruises_ferries: false,
+      theatre_concerts: false,
+      sporting_breaks: false,
+      history_military_breaks: false,
     },
   });
 });
@@ -159,7 +164,7 @@ test('saveUserPreferences handles denied permission path without throwing and ma
   assert.equal(updates[1].pushPermissionState, 'denied');
   assert.equal(updates[1].preferences.ops.group_chat, true);
   assert.equal(updates[1].preferences.ops.itinerary_changes, true);
-  assert.equal(updates[1].preferences.marketing.mystery_tours, true);
+  assert.equal(updates[1].preferences.marketing.mystery_breaks, true);
 });
 
 test('primeNotificationPermissions reports denied state when permission can still be requested later', async () => {
@@ -311,6 +316,16 @@ test('getUserPreferences uses authenticated uid when provided userId is principa
 
   assert.ok(refPaths.includes('users/auth-uid-42/preferences'));
   assert.equal(refPaths.includes('users/driver:D-BONDY/preferences'), false);
+});
+
+test('getUserPreferences normalizes legacy marketing preference keys', async () => {
+  const { service } = buildNotificationService();
+
+  const preferences = await service.getUserPreferences('user-legacy', { throwOnError: true });
+
+  assert.equal(preferences.marketing.mystery_breaks, true);
+  assert.equal(preferences.marketing.mystery_tours, undefined);
+  assert.equal(Object.keys(preferences.marketing).length, 10);
 });
 
 test('saveUserPreferences writes to authenticated uid when provided userId is principal-scoped', async () => {

@@ -35,6 +35,24 @@ const MANIFEST_STATUS = {
   NO_SHOW: 'NO_SHOW',
   PARTIAL: 'PARTIAL',
 };
+const TOUR_NOTIFICATION_CATEGORY_LABELS = {
+  day_trips: 'Day Trips',
+  mystery_breaks: 'Mystery Breaks',
+  scotland_highlands_islands: 'Scotland, Highlands & Islands',
+  isle_of_ireland: 'Isle of Ireland',
+  european_breaks: 'European Breaks',
+  steam_train_tours: 'Steam Train Tours',
+  cruises_ferries: 'Cruises & Ferries',
+  theatre_concerts: 'Theatre & Concerts',
+  sporting_breaks: 'Sporting Breaks',
+  history_military_breaks: 'History & Military Breaks',
+};
+const TOUR_NOTIFICATION_CATEGORY_KEYS = Object.freeze(Object.keys(TOUR_NOTIFICATION_CATEGORY_LABELS));
+const LEGACY_TOUR_NOTIFICATION_CATEGORY_PREF_KEYS = {
+  mystery_breaks: ['mystery_tours'],
+  scotland_highlands_islands: ['scotland_classics', 'hiking_nature'],
+  steam_train_tours: ['steam_trains'],
+};
 
 // ==================== UTILITY FUNCTIONS ====================
 
@@ -209,6 +227,44 @@ const getPreferenceValue = (userData, prefPath, defaultValue = true) => {
     if (value === null || value === undefined || typeof value !== 'object') return undefined;
     return value[key];
   }, userData) ?? defaultValue;
+};
+
+const readBooleanPreference = (value, fallback = false) => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === 'enabled' || normalized === 'on') return true;
+    if (normalized === 'false' || normalized === 'disabled' || normalized === 'off') return false;
+  }
+  if (typeof value === 'number') {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  return fallback;
+};
+
+const isSupportedTourNotificationCategory = (categoryKey) => (
+  typeof categoryKey === 'string'
+  && Object.prototype.hasOwnProperty.call(TOUR_NOTIFICATION_CATEGORY_LABELS, categoryKey)
+);
+
+const resolveTourNotificationCategoryLabel = (categoryKey) => (
+  TOUR_NOTIFICATION_CATEGORY_LABELS[categoryKey] || categoryKey
+);
+
+const userWantsTourCategoryBroadcast = (userData = {}, categoryKey) => {
+  const marketingPrefs = userData?.preferences?.marketing;
+  if (!marketingPrefs || typeof marketingPrefs !== 'object') {
+    return false;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(marketingPrefs, categoryKey)) {
+    return readBooleanPreference(marketingPrefs[categoryKey], false);
+  }
+
+  return (LEGACY_TOUR_NOTIFICATION_CATEGORY_PREF_KEYS[categoryKey] || []).some((legacyKey) => (
+    readBooleanPreference(marketingPrefs[legacyKey], false)
+  ));
 };
 
 const getPushTokenIneligibilityReason = (userData = {}) => {
@@ -390,6 +446,7 @@ const selectNotificationRecipients = ({
   participantIds,
   usersMap,
   preferencePath,
+  preferenceResolver = null,
   senderId,
   senderParticipantIds = [],
   excludeSender,
@@ -437,12 +494,14 @@ const selectNotificationRecipients = ({
       continue;
     }
 
-    const wantsFeatureNotifications = getPreferenceValue(userData, preferencePath, true);
+    const wantsFeatureNotifications = typeof preferenceResolver === 'function'
+      ? preferenceResolver(userData, userId)
+      : getPreferenceValue(userData, preferencePath, true);
     if (!wantsFeatureNotifications) {
       log.info('User opted out of notification feature', {
         ...context,
         userId,
-        preferencePath: preferencePath.join('.'),
+        preferencePath: Array.isArray(preferencePath) ? preferencePath.join('.') : 'custom',
       });
       continue;
     }
@@ -1523,6 +1582,68 @@ const validateBroadcastData = (broadcastData) => {
   return { valid: errors.length === 0, errors };
 };
 
+const validateCategoryBroadcastData = (categoryKey, broadcastData) => {
+  const validation = validateBroadcastData(broadcastData);
+  const errors = [...validation.errors];
+
+  if (!isSupportedTourNotificationCategory(categoryKey)) {
+    errors.push('Unsupported tour notification category');
+  }
+
+  if (broadcastData?.categoryKey && broadcastData.categoryKey !== categoryKey) {
+    errors.push('categoryKey must match the broadcast path');
+  }
+
+  if (broadcastData?.categoryLabel && (
+    typeof broadcastData.categoryLabel !== 'string'
+    || broadcastData.categoryLabel.trim().length === 0
+    || broadcastData.categoryLabel.length > 120
+  )) {
+    errors.push('Invalid categoryLabel');
+  }
+
+  return { valid: errors.length === 0, errors };
+};
+
+const fetchCategoryBroadcastUsers = async (categoryKey, context = {}) => {
+  const usersMap = {};
+  const preferenceKeys = [
+    categoryKey,
+    ...(LEGACY_TOUR_NOTIFICATION_CATEGORY_PREF_KEYS[categoryKey] || []),
+  ];
+
+  for (const preferenceKey of preferenceKeys) {
+    const snapshot = await admin.database()
+      .ref('users')
+      .orderByChild(`preferences/marketing/${preferenceKey}`)
+      .equalTo(true)
+      .limitToFirst(NOTIFICATION_RECIPIENT_CAP + 1)
+      .once('value');
+
+    const users = snapshot.val() || {};
+    Object.entries(users).forEach(([userId, userData]) => {
+      usersMap[userId] = userData;
+      setCachedUserProfile(userId, userData);
+    });
+
+    if (Object.keys(users).length > NOTIFICATION_RECIPIENT_CAP) {
+      log.warn('Category broadcast preference query exceeded recipient cap', {
+        ...context,
+        preferenceKey,
+        cap: NOTIFICATION_RECIPIENT_CAP,
+      });
+    }
+  }
+
+  log.info('Fetched category broadcast users', {
+    ...context,
+    preferenceQueryCount: preferenceKeys.length,
+    resolvedUserCount: Object.keys(usersMap).length,
+  });
+
+  return usersMap;
+};
+
 /**
  * Trigger: When a new admin broadcast is written to /broadcasts/{tourId}/{broadcastId}
  * Writes a normalized system chat message so existing chat notification flow can fan out push notifications.
@@ -1577,6 +1698,189 @@ exports.processBroadcastWrite = onValueCreated(
       return null;
     } catch (error) {
       log.error('Failed to process broadcast write', error, { tourId, broadcastId });
+      return null;
+    }
+  }
+);
+
+/**
+ * Trigger: When a new admin category broadcast is written to
+ * /category_broadcasts/{categoryKey}/{broadcastId}
+ * Sends a direct push to clients who opted in to that future-tour category.
+ */
+exports.processCategoryBroadcastWrite = onValueCreated(
+  {
+    ref: '/category_broadcasts/{categoryKey}/{broadcastId}',
+    region: 'europe-west1',
+    instance: 'loch-lomond-travel-default-rtdb',
+    maxInstances: 10,
+  },
+  async (event) => {
+    const startTime = Date.now();
+    const { categoryKey, broadcastId } = event.params;
+
+    try {
+      if (!isValidFirebaseKey(categoryKey) || !isValidFirebaseKey(broadcastId)) {
+        log.warn('Invalid category broadcast path parameters', { categoryKey, broadcastId });
+        return null;
+      }
+
+      const broadcastData = event.data?.val();
+      const validation = validateCategoryBroadcastData(categoryKey, broadcastData);
+      if (!validation.valid) {
+        log.warn('Invalid category broadcast payload; skipping fanout', {
+          categoryKey,
+          broadcastId,
+          errors: validation.errors,
+        });
+        return null;
+      }
+
+      const adminRecord = await admin.auth().getUser(broadcastData.createdByUid);
+      const isAnonymous = adminRecord.providerData.length === 0;
+      if (adminRecord.disabled || isAnonymous) {
+        log.warn('Category broadcast author is not eligible for fanout', {
+          categoryKey,
+          broadcastId,
+          createdByUid: broadcastData.createdByUid,
+        });
+        return null;
+      }
+
+      const categoryLabel = resolveTourNotificationCategoryLabel(categoryKey);
+      const usersMap = await fetchCategoryBroadcastUsers(categoryKey, {
+        categoryKey,
+        notificationType: 'category_broadcast',
+      });
+      const candidateUserIds = applyRecipientCap(Object.keys(usersMap), NOTIFICATION_RECIPIENT_CAP, {
+        categoryKey,
+        notificationType: 'category_broadcast',
+      });
+
+      if (candidateUserIds.length === 0) {
+        log.info('No users opted in to category broadcast', { categoryKey, broadcastId });
+        return null;
+      }
+
+      const assemblyStart = Date.now();
+      const { validRecipients, invalidTokens } = selectNotificationRecipients({
+        participantIds: candidateUserIds,
+        usersMap,
+        preferencePath: ['preferences', 'marketing', categoryKey],
+        preferenceResolver: (userData) => userWantsTourCategoryBroadcast(userData, categoryKey),
+        senderId: null,
+        excludeSender: false,
+        context: { categoryKey, broadcastId, notificationType: 'category_broadcast' },
+      });
+
+      const messageText = broadcastData.message.trim();
+      const notificationBody = messageText.length > 200
+        ? `${messageText.substring(0, 197)}...`
+        : messageText;
+      const recipientChunks = chunkArrayDeterministically(
+        validRecipients.map((recipient) => recipient.userId),
+        RECIPIENT_CHUNK_SIZE,
+      );
+      const pushMessages = [];
+
+      log.info('Using deterministic recipient chunking for category broadcast notifications', {
+        categoryKey,
+        broadcastId,
+        chunks: recipientChunks.length,
+        chunkSize: RECIPIENT_CHUNK_SIZE,
+      });
+
+      for (const recipientChunk of recipientChunks) {
+        for (const userId of recipientChunk) {
+          const userData = usersMap[userId];
+          pushMessages.push({
+            to: userData.pushToken,
+            sound: 'default',
+            title: `New ${categoryLabel} tour alert`,
+            body: notificationBody,
+            data: {
+              screen: 'NotificationPreferences',
+              notificationType: 'category_broadcast',
+              categoryKey,
+              broadcastId,
+            },
+            priority: 'default',
+            channelId: 'default',
+          });
+        }
+      }
+      const payloadAssemblyDurationMs = Date.now() - assemblyStart;
+
+      if (invalidTokens.length > 0) {
+        Promise.all(invalidTokens.map(({ userId, token }) => removeInvalidToken(userId, token)))
+          .catch(err => log.error('Error cleaning invalid tokens', err));
+      }
+
+      if (pushMessages.length === 0) {
+        log.info('No valid recipients for category broadcast', { categoryKey, broadcastId });
+        return null;
+      }
+
+      const chunks = expo.chunkPushNotifications(pushMessages);
+      let successCount = 0;
+      let errorCount = 0;
+      const pushSendStart = Date.now();
+
+      for (const chunk of chunks) {
+        try {
+          const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+          const deviceNotRegisteredFailures = collectExpoTokenFailures(ticketChunk, chunk);
+
+          ticketChunk.forEach((ticket) => {
+            if (ticket.status === 'error') {
+              errorCount++;
+              log.error('Category broadcast notification ticket error', {
+                error: ticket.message,
+                details: ticket.details,
+              }, { categoryKey, broadcastId });
+            } else {
+              successCount++;
+            }
+          });
+
+          if (deviceNotRegisteredFailures.length > 0) {
+            await Promise.all(deviceNotRegisteredFailures.map(async ({ token, errorCode }) => {
+              const recipient = validRecipients.find((candidate) => candidate?.userData?.pushToken === token);
+              if (!recipient?.userId) return;
+              await removeInvalidToken(recipient.userId, token, { reason: errorCode || 'DEVICE_NOT_REGISTERED' });
+            }));
+          }
+        } catch (chunkError) {
+          errorCount += chunk.length;
+          log.error('Error sending category broadcast chunk', chunkError, {
+            categoryKey,
+            broadcastId,
+            chunkSize: chunk.length,
+          });
+        }
+      }
+
+      const pushSendDurationMs = Date.now() - pushSendStart;
+      const duration = Date.now() - startTime;
+      log.info('Category broadcast notification completed', {
+        categoryKey,
+        broadcastId,
+        recipients: pushMessages.length,
+        successCount,
+        errorCount,
+        payloadAssemblyDurationMs,
+        pushSendDurationMs,
+        duration: `${duration}ms`,
+      });
+
+      return null;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      log.error('Fatal error in processCategoryBroadcastWrite', error, {
+        categoryKey,
+        broadcastId,
+        duration: `${duration}ms`,
+      });
       return null;
     }
   }
@@ -2098,4 +2402,6 @@ exports.__testables = {
   verifyTourManifestAccess,
   normalizeManifestBooking,
   resolveDriverAssignment,
+  validateCategoryBroadcastData,
+  userWantsTourCategoryBroadcast,
 };

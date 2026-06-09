@@ -22,6 +22,11 @@ import {
 import logger from '../services/loggerService';
 import { parseTimestampMs } from '../services/timeUtils';
 import { COLORS as THEME, SHADOWS } from '../theme';
+import {
+  DEFAULT_MARKETING_PREFERENCES,
+  TOUR_NOTIFICATION_CATEGORIES,
+  TOUR_NOTIFICATION_CATEGORY_KEYS,
+} from '../utils/notificationCategories';
 
 // Brand Colors
 const COLORS = {
@@ -160,13 +165,7 @@ export default function NotificationPreferencesScreen({
     group_photos: false,
   };
 
-  const defaultMarketingPrefs = {
-    steam_trains: false,
-    mystery_tours: false,
-    scotland_classics: false,
-    vip_experiences: false,
-    hiking_nature: false,
-  };
+  const defaultMarketingPrefs = DEFAULT_MARKETING_PREFERENCES;
 
   const opsPreferenceMeta = {
     driver_updates: {
@@ -197,39 +196,28 @@ export default function NotificationPreferencesScreen({
     },
   };
 
-  const marketingPreferenceMeta = {
-    steam_trains: {
-      label: 'Steam Train Journeys',
-      description: 'Scenic heritage rail adventures across Scotland.',
-      icon: 'train',
-      color: COLORS.primaryBlue,
-    },
-    mystery_tours: {
-      label: 'Mystery Tours',
-      description: 'Surprise destinations with curated premium experiences.',
-      icon: 'incognito',
-      color: COLORS.primaryLight,
-    },
-    scotland_classics: {
-      label: 'Classic Scotland',
-      description: 'Castles, lochs, and signature heritage routes.',
-      icon: 'castle',
-      color: COLORS.primaryBlue,
-    },
-    vip_experiences: {
-      label: 'VIP & Luxury',
-      description: 'High-touch premium experiences and limited departures.',
-      icon: 'star-face',
-      color: COLORS.warning,
-      badge: 'Premium',
-    },
-    hiking_nature: {
-      label: 'Hiking & Nature',
-      description: 'Outdoor-focused trips through Highlands and scenic trails.',
-      icon: 'pine-tree',
-      color: COLORS.successGreen,
-    },
+  const marketingCategoryColors = {
+    day_trips: COLORS.successGreen,
+    mystery_breaks: COLORS.primaryLight,
+    scotland_highlands_islands: COLORS.primaryBlue,
+    isle_of_ireland: COLORS.successGreen,
+    european_breaks: COLORS.primaryLight,
+    steam_train_tours: COLORS.primaryBlue,
+    cruises_ferries: COLORS.primaryLight,
+    theatre_concerts: COLORS.warning,
+    sporting_breaks: COLORS.successGreen,
+    history_military_breaks: COLORS.warning,
   };
+
+  const marketingPreferenceMeta = TOUR_NOTIFICATION_CATEGORIES.reduce((meta, category) => {
+    meta[category.key] = {
+      label: category.label,
+      description: category.description,
+      icon: category.icon,
+      color: marketingCategoryColors[category.key] || COLORS.primaryBlue,
+    };
+    return meta;
+  }, {});
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -241,13 +229,14 @@ export default function NotificationPreferencesScreen({
   const [permissionStatus, setPermissionStatus] = useState({ state: 'unavailable', description: '' });
   const [onboardingActionBusy, setOnboardingActionBusy] = useState(false);
   const [activeOpsPreset, setActiveOpsPreset] = useState('essential');
-  const [activeMarketingPreset, setActiveMarketingPreset] = useState('recommended');
+  const [activeMarketingPreset, setActiveMarketingPreset] = useState('none');
+  const [marketingExpanded, setMarketingExpanded] = useState(false);
 
   // 1. Operational Alerts (During the tour)
   const [opsPrefs, setOpsPrefs] = useState(defaultOpsPrefs);
 
   // 2. Marketing Interests (Future tours)
-  const [marketingPrefs, setMarketingPrefs] = useState(defaultMarketingPrefs);
+  const [marketingPrefs, setMarketingPrefs] = useState(() => ({ ...defaultMarketingPrefs }));
   const [initialOpsPrefs, setInitialOpsPrefs] = useState(null);
   const [initialMarketingPrefs, setInitialMarketingPrefs] = useState(null);
   const mountedRef = useRef(true);
@@ -563,35 +552,33 @@ export default function NotificationPreferencesScreen({
   const applyMarketingPreset = (preset) => {
     logger.debug('NotificationPreferences', 'Marketing preset applied', { preset });
     setActiveMarketingPreset(preset);
-    if (preset === 'recommended') {
-      setMarketingPrefs({
-        steam_trains: true,
-        mystery_tours: true,
-        scotland_classics: true,
-        vip_experiences: false,
-        hiking_nature: true,
+    const buildMarketingPrefs = (enabledKeys = []) => {
+      const nextPrefs = { ...defaultMarketingPrefs };
+      enabledKeys.forEach((key) => {
+        if (Object.prototype.hasOwnProperty.call(nextPrefs, key)) {
+          nextPrefs[key] = true;
+        }
       });
+      return nextPrefs;
+    };
+
+    if (preset === 'recommended') {
+      setMarketingPrefs(buildMarketingPrefs([
+        'day_trips',
+        'mystery_breaks',
+        'scotland_highlands_islands',
+        'european_breaks',
+        'steam_train_tours',
+      ]));
       return;
     }
 
     if (preset === 'all') {
-      setMarketingPrefs({
-        steam_trains: true,
-        mystery_tours: true,
-        scotland_classics: true,
-        vip_experiences: true,
-        hiking_nature: true,
-      });
+      setMarketingPrefs(buildMarketingPrefs(TOUR_NOTIFICATION_CATEGORY_KEYS));
       return;
     }
 
-    setMarketingPrefs({
-      steam_trains: false,
-      mystery_tours: false,
-      scotland_classics: false,
-      vip_experiences: false,
-      hiking_nature: false,
-    });
+    setMarketingPrefs({ ...defaultMarketingPrefs });
   };
 
   const onboardingCopy = {
@@ -852,58 +839,93 @@ export default function NotificationPreferencesScreen({
         {/* SECTION 2: FUTURE TOURS */}
         <PreferenceSection
           title="Future Tour Interests"
-          subtitle="Tell us what you want to hear about after this trip."
+          subtitle="Choose the kinds of trips you want to hear about after this tour."
           enabledCount={marketingEnabledCount}
           totalCount={Object.keys(defaultMarketingPrefs).length}
         >
           <Text style={styles.subText}>
-            Be the first to know when we release dates for these specific experiences:
+            We will only send future-tour announcements for categories you switch on.
           </Text>
 
-          <View style={styles.presetRow}>
-            <TouchableOpacity
-              style={[styles.presetChip, activeMarketingPreset === 'recommended' && styles.presetChipActive]}
-              onPress={() => applyMarketingPreset('recommended')}
-            >
-              <Text
-                style={[
-                  styles.presetChipText,
-                  activeMarketingPreset === 'recommended' && styles.presetChipTextActive,
-                ]}
-              >
-                Recommended
+          <TouchableOpacity
+            style={styles.accordionTrigger}
+            onPress={() => setMarketingExpanded((expanded) => !expanded)}
+            activeOpacity={0.84}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: marketingExpanded }}
+          >
+            <View style={styles.accordionIconWrap}>
+              <MaterialCommunityIcons name="bell-plus-outline" size={20} color={COLORS.primaryBlue} />
+            </View>
+            <View style={styles.accordionTextWrap}>
+              <Text style={styles.accordionTitle}>Upcoming tour alerts</Text>
+              <Text style={styles.accordionSubtitle}>
+                {marketingExpanded
+                  ? 'Collapse your tour type choices.'
+                  : 'Expand to choose the tour types you want to hear about.'}
               </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.presetChip, activeMarketingPreset === 'all' && styles.presetChipActive]}
-              onPress={() => applyMarketingPreset('all')}
-            >
-              <Text style={[styles.presetChipText, activeMarketingPreset === 'all' && styles.presetChipTextActive]}>All on</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.presetChip, activeMarketingPreset === 'none' && styles.presetChipActive]}
-              onPress={() => applyMarketingPreset('none')}
-            >
-              <Text style={[styles.presetChipText, activeMarketingPreset === 'none' && styles.presetChipTextActive]}>All off</Text>
-            </TouchableOpacity>
-          </View>
+            </View>
+            <View style={styles.accordionMetaWrap}>
+              <Text style={styles.accordionCountText}>
+                {marketingEnabledCount > 0 ? `${marketingEnabledCount} selected` : 'None selected'}
+              </Text>
+              <MaterialCommunityIcons
+                name={marketingExpanded ? 'chevron-up' : 'chevron-down'}
+                size={22}
+                color={COLORS.secondaryText}
+              />
+            </View>
+          </TouchableOpacity>
 
-          {Object.entries(marketingPreferenceMeta).map(([key, meta]) => (
-            <ToggleRow
-              key={key}
-              label={meta.label}
-              description={meta.description}
-              icon={meta.icon}
-              value={marketingPrefs[key]}
-              onValueChange={(v) => {
-                logger.debug('NotificationPreferences', 'Marketing preference toggled', { key, enabled: v });
-                setMarketingPrefs({ ...marketingPrefs, [key]: v });
-              }}
-              color={meta.color}
-              badge={meta.badge}
-              disabled={saving || onboardingActionBusy}
-            />
-          ))}
+          {marketingExpanded ? (
+            <View style={styles.accordionContent}>
+              <View style={styles.presetRow}>
+                <TouchableOpacity
+                  style={[styles.presetChip, activeMarketingPreset === 'recommended' && styles.presetChipActive]}
+                  onPress={() => applyMarketingPreset('recommended')}
+                >
+                  <Text
+                    style={[
+                      styles.presetChipText,
+                      activeMarketingPreset === 'recommended' && styles.presetChipTextActive,
+                    ]}
+                  >
+                    Recommended
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.presetChip, activeMarketingPreset === 'all' && styles.presetChipActive]}
+                  onPress={() => applyMarketingPreset('all')}
+                >
+                  <Text style={[styles.presetChipText, activeMarketingPreset === 'all' && styles.presetChipTextActive]}>All on</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.presetChip, activeMarketingPreset === 'none' && styles.presetChipActive]}
+                  onPress={() => applyMarketingPreset('none')}
+                >
+                  <Text style={[styles.presetChipText, activeMarketingPreset === 'none' && styles.presetChipTextActive]}>All off</Text>
+                </TouchableOpacity>
+              </View>
+
+              {Object.entries(marketingPreferenceMeta).map(([key, meta]) => (
+                <ToggleRow
+                  key={key}
+                  label={meta.label}
+                  description={meta.description}
+                  icon={meta.icon}
+                  value={marketingPrefs[key]}
+                  onValueChange={(v) => {
+                    logger.debug('NotificationPreferences', 'Marketing preference toggled', { key, enabled: v });
+                    setActiveMarketingPreset('custom');
+                    setMarketingPrefs({ ...marketingPrefs, [key]: v });
+                  }}
+                  color={meta.color}
+                  badge={meta.badge}
+                  disabled={saving || onboardingActionBusy}
+                />
+              ))}
+            </View>
+          ) : null}
         </PreferenceSection>
 
         {!isOnboarding && hasChanges ? (
@@ -1461,6 +1483,51 @@ const styles = StyleSheet.create({
     gap: 8,
     flexWrap: 'wrap',
     marginBottom: 4,
+  },
+  accordionTrigger: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    backgroundColor: COLORS.appBackground,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  accordionIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: THEME.primaryMuted,
+  },
+  accordionTextWrap: {
+    flex: 1,
+  },
+  accordionTitle: {
+    color: COLORS.darkText,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  accordionSubtitle: {
+    marginTop: 3,
+    color: COLORS.secondaryText,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  accordionMetaWrap: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  accordionCountText: {
+    color: COLORS.secondaryText,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  accordionContent: {
+    gap: 16,
   },
   presetChip: {
     borderWidth: 1,

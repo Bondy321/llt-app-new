@@ -136,6 +136,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `ops_alerts`
 - `globalSafetyAlerts`
 - `broadcasts`
+- `category_broadcasts`
 - `web_admin_settings`
 - `booking_identities`
 
@@ -145,7 +146,7 @@ Admin UID hardcoded in rules:
 9CWQ4705gVRkfW5Xki5LyvrmVp23
 ```
 
-Admin-only roots include protected writes such as `bookings`, `broadcasts`, `booking_identities`, and many privileged mutations. The web admin may let any Firebase email/password user sign in, but non-admin users should hit rules denials on protected operations.
+Admin-only roots include protected writes such as `bookings`, `broadcasts`, `category_broadcasts`, `booking_identities`, and many privileged mutations. The web admin may let any Firebase email/password user sign in, but non-admin users should hit rules denials on protected operations.
 
 Additional web-admin operators can be allowed through:
 
@@ -723,6 +724,7 @@ Important RTDB invariants:
 - Private photos allow access by auth UID, raw stable identity, encoded stable key, raw private owner, encoded private owner key, or identity binding.
 - `identity_bindings_meta` writes are admin or caller-owned binding only.
 - `broadcasts` writes are admin-only and require numeric `createdAtMs`.
+- `category_broadcasts` writes are admin-only, require numeric `createdAtMs`, and target canonical future-tour preference keys under `users/{uid}/preferences/marketing`.
 - `users` validates push token metadata, identity metadata, driver helper fields, and notification preferences.
 - `admin_users` is the web-admin privilege allowlist; entries must be boolean `true`.
 - `ops_alerts` reads are admin-only through the hardcoded admin UID or `admin_users`; mobile writes must be bounded, sanitised, fingerprinted, and schema-valid.

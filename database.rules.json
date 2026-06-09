@@ -251,6 +251,7 @@
     "users": {
       ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      ".indexOn": ["preferences/marketing/day_trips", "preferences/marketing/mystery_breaks", "preferences/marketing/scotland_highlands_islands", "preferences/marketing/isle_of_ireland", "preferences/marketing/european_breaks", "preferences/marketing/steam_train_tours", "preferences/marketing/cruises_ferries", "preferences/marketing/theatre_concerts", "preferences/marketing/sporting_breaks", "preferences/marketing/history_military_breaks", "preferences/marketing/mystery_tours", "preferences/marketing/scotland_classics", "preferences/marketing/hiking_nature", "preferences/marketing/steam_trains"],
       "$userId": {
         ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
         ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
@@ -288,10 +289,19 @@
             "group_photos": { ".validate": "!newData.exists() || newData.isBoolean()" }
           },
           "marketing": {
+            "day_trips": { ".validate": "!newData.exists() || newData.isBoolean()" },
+            "mystery_breaks": { ".validate": "!newData.exists() || newData.isBoolean()" },
+            "scotland_highlands_islands": { ".validate": "!newData.exists() || newData.isBoolean()" },
+            "isle_of_ireland": { ".validate": "!newData.exists() || newData.isBoolean()" },
+            "european_breaks": { ".validate": "!newData.exists() || newData.isBoolean()" },
+            "steam_train_tours": { ".validate": "!newData.exists() || newData.isBoolean()" },
+            "cruises_ferries": { ".validate": "!newData.exists() || newData.isBoolean()" },
+            "theatre_concerts": { ".validate": "!newData.exists() || newData.isBoolean()" },
+            "sporting_breaks": { ".validate": "!newData.exists() || newData.isBoolean()" },
+            "history_military_breaks": { ".validate": "!newData.exists() || newData.isBoolean()" },
             "steam_trains": { ".validate": "!newData.exists() || newData.isBoolean()" },
             "mystery_tours": { ".validate": "!newData.exists() || newData.isBoolean()" },
             "scotland_classics": { ".validate": "!newData.exists() || newData.isBoolean()" },
-            "vip_experiences": { ".validate": "!newData.exists() || newData.isBoolean()" },
             "hiking_nature": { ".validate": "!newData.exists() || newData.isBoolean()" }
           }
         }
@@ -455,6 +465,19 @@
         "$broadcastId": {
           ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
           ".validate": "!newData.exists() || (newData.hasChildren(['message', 'createdAtMs', 'createdByUid', 'source']) && newData.child('message').isString() && newData.child('message').val().length > 0 && newData.child('message').val().length <= 2000 && newData.child('createdAtMs').isNumber() && newData.child('createdByUid').isString() && newData.child('createdByUid').val() === auth.uid && newData.child('source').isString())"
+        }
+      }
+    },
+
+    "category_broadcasts": {
+      ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+      ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+      "$categoryKey": {
+        ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+        ".indexOn": ["createdAtMs"],
+        "$broadcastId": {
+          ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+          ".validate": "!newData.exists() || (($categoryKey === 'day_trips' || $categoryKey === 'mystery_breaks' || $categoryKey === 'scotland_highlands_islands' || $categoryKey === 'isle_of_ireland' || $categoryKey === 'european_breaks' || $categoryKey === 'steam_train_tours' || $categoryKey === 'cruises_ferries' || $categoryKey === 'theatre_concerts' || $categoryKey === 'sporting_breaks' || $categoryKey === 'history_military_breaks') && newData.hasChildren(['message', 'createdAtMs', 'createdByUid', 'source', 'categoryKey', 'categoryLabel']) && newData.child('message').isString() && newData.child('message').val().length > 0 && newData.child('message').val().length <= 2000 && newData.child('createdAtMs').isNumber() && newData.child('createdByUid').isString() && newData.child('createdByUid').val() === auth.uid && newData.child('source').isString() && newData.child('categoryKey').isString() && newData.child('categoryKey').val() === $categoryKey && newData.child('categoryLabel').isString() && newData.child('categoryLabel').val().length > 0 && newData.child('categoryLabel').val().length <= 120)"
         }
       }
     },

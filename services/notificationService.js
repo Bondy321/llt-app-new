@@ -7,6 +7,13 @@ import { Platform } from 'react-native';
 import { auth, realtimeDb } from '../firebase';
 import appMetadataModule from './appMetadata';
 import logger, { maskIdentifier } from './loggerService';
+import {
+  DEFAULT_MARKETING_PREFERENCES,
+  TOUR_NOTIFICATION_CATEGORY_KEYS,
+  hasMarketingPreferenceInput,
+  normalizeMarketingPreferences,
+  parsePreferenceBoolean,
+} from '../utils/notificationCategories';
 
 // Configure how notifications behave when the app is open
 const { resolveAppVersionMetadata } = appMetadataModule;
@@ -75,13 +82,7 @@ const DEFAULT_NOTIFICATION_PREFERENCES = {
     group_chat: true,
     group_photos: false,
   },
-  marketing: {
-    steam_trains: false,
-    mystery_tours: false,
-    scotland_classics: false,
-    vip_experiences: false,
-    hiking_nature: false,
-  },
+  marketing: DEFAULT_MARKETING_PREFERENCES,
 };
 
 const extractPreferenceSource = (preferences = {}) => {
@@ -235,61 +236,29 @@ const normalizeNotificationPreferences = (preferences = {}) => {
 
   const source = extractPreferenceSource(preferences);
 
-  const toBoolean = (value, fallback) => {
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'string') {
-      const normalized = value.trim().toLowerCase();
-      if (normalized === 'true' || normalized === 'enabled' || normalized === 'on') return true;
-      if (normalized === 'false' || normalized === 'disabled' || normalized === 'off') return false;
-    }
-    if (typeof value === 'number') {
-      if (value === 1) return true;
-      if (value === 0) return false;
-    }
-    return fallback;
-  };
-
   const normalizedOps = {
-    driver_updates: toBoolean(
+    driver_updates: parsePreferenceBoolean(
       source?.ops?.driver_updates,
       DEFAULT_NOTIFICATION_PREFERENCES.ops.driver_updates
     ),
-    itinerary_changes: toBoolean(
+    itinerary_changes: parsePreferenceBoolean(
       source?.ops?.itinerary_changes,
       DEFAULT_NOTIFICATION_PREFERENCES.ops.itinerary_changes
     ),
-    group_chat: toBoolean(
+    group_chat: parsePreferenceBoolean(
       source?.ops?.group_chat,
       DEFAULT_NOTIFICATION_PREFERENCES.ops.group_chat
     ),
-    group_photos: toBoolean(
+    group_photos: parsePreferenceBoolean(
       source?.ops?.group_photos,
       DEFAULT_NOTIFICATION_PREFERENCES.ops.group_photos
     ),
   };
 
-  const normalizedMarketing = {
-    steam_trains: toBoolean(
-      source?.marketing?.steam_trains,
-      DEFAULT_NOTIFICATION_PREFERENCES.marketing.steam_trains
-    ),
-    mystery_tours: toBoolean(
-      source?.marketing?.mystery_tours,
-      DEFAULT_NOTIFICATION_PREFERENCES.marketing.mystery_tours
-    ),
-    scotland_classics: toBoolean(
-      source?.marketing?.scotland_classics,
-      DEFAULT_NOTIFICATION_PREFERENCES.marketing.scotland_classics
-    ),
-    vip_experiences: toBoolean(
-      source?.marketing?.vip_experiences,
-      DEFAULT_NOTIFICATION_PREFERENCES.marketing.vip_experiences
-    ),
-    hiking_nature: toBoolean(
-      source?.marketing?.hiking_nature,
-      DEFAULT_NOTIFICATION_PREFERENCES.marketing.hiking_nature
-    ),
-  };
+  const normalizedMarketing = normalizeMarketingPreferences(
+    source?.marketing,
+    DEFAULT_NOTIFICATION_PREFERENCES.marketing
+  );
 
   return {
     ops: normalizedOps,
@@ -487,8 +456,8 @@ export const saveUserPreferences = async (userId, preferences) => {
     };
 
     if (incomingSource?.marketing && typeof incomingSource.marketing === 'object') {
-      Object.keys(DEFAULT_NOTIFICATION_PREFERENCES.marketing).forEach((key) => {
-        if (hasOwn(incomingSource.marketing, key)) {
+      TOUR_NOTIFICATION_CATEGORY_KEYS.forEach((key) => {
+        if (hasMarketingPreferenceInput(incomingSource.marketing, key)) {
           mergedMarketing[key] = incomingPreferences.marketing[key];
         }
       });
@@ -642,11 +611,12 @@ export const getUserPreferences = async (userId, options = {}) => {
     ]);
 
     const preferences = snapshot.val() || null;
+    const normalizedPreferences = preferences ? normalizeNotificationPreferences(preferences) : null;
     logger.info('NotificationService', 'Preference fetch completed', {
       userId: maskIdentifier(validatedUserId),
       hasPreferences: Boolean(preferences),
     });
-    return preferences;
+    return normalizedPreferences;
   } catch (error) {
     logger.error('NotificationService', 'Preference fetch failed', {
       userId: maskIdentifier(userId),
