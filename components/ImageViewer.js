@@ -41,6 +41,7 @@ import {
   resolvePagerIndexFromOffset,
 } from '../services/imageViewerPagerState';
 import { parseTimestampMs } from '../services/timeUtils';
+import { REPORT_REASON_OPTIONS } from '../services/contentModerationService';
 
 const DEFAULT_VIEWER_WIDTH = 360;
 const DEFAULT_VIEWER_HEIGHT = 640;
@@ -241,6 +242,7 @@ export default function ImageViewer({
   initialIndex = 0,
   onClose,
   onDelete,
+  onReport = null,
   showUploaderInfo = false,
   canDelete = false,
   currentUserId = null,
@@ -266,6 +268,7 @@ export default function ImageViewer({
   const [chromeVisible, setChromeVisible] = useState(true);
   const [detailsVisible, setDetailsVisible] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [reporting, setReporting] = useState(false);
   const [editingCaption, setEditingCaption] = useState(false);
   const [draftCaption, setDraftCaption] = useState('');
   const [captionSaving, setCaptionSaving] = useState(false);
@@ -570,7 +573,43 @@ export default function ImageViewer({
   };
 
   const canDeleteThis = canDelete && currentPhoto.userId === currentUserId;
+  const canReportThis = typeof onReport === 'function'
+    && currentPhoto?.id
+    && currentPhoto.userId !== currentUserId;
   const canEditCaption = typeof onEditCaption === 'function' && currentPhoto.userId === currentUserId;
+
+  const submitReport = async (reason) => {
+    if (typeof onReport !== 'function' || !currentPhoto?.id) return;
+
+    try {
+      setReporting(true);
+      const result = await onReport(currentPhoto, reason);
+      if (!result?.success) {
+        throw new Error(result?.error || 'Report failed');
+      }
+      setDetailsVisible(false);
+      Alert.alert('Report sent', 'Loch Lomond Travel operations will review this photo.');
+    } catch (error) {
+      loggerService.warn('ImageViewer', 'Photo report failed', { message: error?.message });
+      Alert.alert('Report failed', 'Please try again or contact support.');
+    } finally {
+      setReporting(false);
+    }
+  };
+
+  const handleReport = () => {
+    Alert.alert(
+      'Report photo',
+      'Send this photo to Loch Lomond Travel operations for review.',
+      [
+        ...REPORT_REASON_OPTIONS.map((option) => ({
+          text: option.label,
+          onPress: () => submitReport(option.key),
+        })),
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  };
 
   const startEditCaption = () => {
     setDraftCaption(currentCaption);
@@ -741,6 +780,17 @@ export default function ImageViewer({
               accessibilityLabel="Show photo details"
             />
 
+            {canReportThis && (
+              <ViewerIconButton
+                icon="flag-outline"
+                onPress={handleReport}
+                disabled={reporting}
+                accessibilityLabel="Report photo"
+              >
+                {reporting ? <ActivityIndicator size="small" color={COLORS.white} /> : null}
+              </ViewerIconButton>
+            )}
+
             {canDeleteThis && (
               <ViewerIconButton
                 icon="delete-outline"
@@ -832,6 +882,21 @@ export default function ImageViewer({
                 <TouchableOpacity onPress={startEditCaption} style={styles.detailsActionButton}>
                   <MaterialCommunityIcons name="pencil" size={20} color={COLORS.primary} />
                   <Text style={styles.detailsActionText}>Edit caption</Text>
+                </TouchableOpacity>
+              )}
+
+              {canReportThis && (
+                <TouchableOpacity
+                  onPress={handleReport}
+                  style={styles.detailsActionButton}
+                  disabled={reporting}
+                >
+                  {reporting ? (
+                    <ActivityIndicator size="small" color={COLORS.primary} />
+                  ) : (
+                    <MaterialCommunityIcons name="flag-outline" size={20} color={COLORS.primary} />
+                  )}
+                  <Text style={styles.detailsActionText}>Report</Text>
                 </TouchableOpacity>
               )}
 

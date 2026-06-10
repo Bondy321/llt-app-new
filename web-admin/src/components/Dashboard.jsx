@@ -168,7 +168,7 @@ function openToursUrl(navigate, params = {}) {
   navigate(`/tours${suffix ? `?${suffix}` : ''}`);
 }
 
-function MetricCard({ title, value, icon: Icon, color, subtitle, detail }) {
+function MetricCard({ title, value, icon: _Icon, color, subtitle, detail }) {
   return (
     <Card shadow="sm" padding="md" radius="md" withBorder>
       <Group justify="space-between" align="flex-start" wrap="nowrap">
@@ -187,7 +187,7 @@ function MetricCard({ title, value, icon: Icon, color, subtitle, detail }) {
           ) : null}
         </Stack>
         <ThemeIcon color={color} variant="light" radius="md" size={44}>
-          <Icon size={21} stroke={1.7} />
+          <_Icon size={21} stroke={1.7} />
         </ThemeIcon>
       </Group>
     </Card>
@@ -242,12 +242,12 @@ function BranchHealthRow({ branchKey, loading, error, syncedAt }) {
   );
 }
 
-function PanelHeader({ icon: Icon, title, description, right }) {
+function PanelHeader({ icon: _Icon, title, description, right }) {
   return (
     <Group justify="space-between" align="flex-start" mb="md" gap="md">
       <Group gap="sm" align="flex-start">
         <ThemeIcon color="brand" variant="light" size="lg" radius="md">
-          <Icon size={18} />
+          <_Icon size={18} />
         </ThemeIcon>
         <Box>
           <Title order={4}>{title}</Title>
@@ -259,12 +259,12 @@ function PanelHeader({ icon: Icon, title, description, right }) {
   );
 }
 
-function EmptyState({ icon: Icon = IconCircleCheck, title, description, color = 'green' }) {
+function EmptyState({ icon: _Icon = IconCircleCheck, title, description, color = 'green' }) {
   return (
     <Center py="xl">
       <Stack align="center" gap="xs">
         <ThemeIcon color={color} variant="light" size="lg" radius="xl">
-          <Icon size={18} />
+          <_Icon size={18} />
         </ThemeIcon>
         <Text size="sm" fw={600}>{title}</Text>
         {description ? (

@@ -9,7 +9,7 @@ const { normalizeTourId } = require('./tourIdentityService');
 
 export const PRIVACY_POLICY_URL =
   process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL?.trim()
-  || 'https://www.lochlomondtravel.com/images/pdfs/Loch_Lomond_Travel_Privacy_Policy.pdf';
+  || 'https://lochlomondtravel.com/images/pdfs/Loch_Lomond_Travel_App_Privacy_Policy.pdf';
 
 export const DATA_REQUEST_EMAIL =
   process.env.EXPO_PUBLIC_DATA_REQUEST_EMAIL?.trim()

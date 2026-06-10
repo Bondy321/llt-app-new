@@ -417,6 +417,26 @@ test('Static contract: photo variant lifecycle fields stay allowed by database r
   assert.match(privatePhotoValidate, /!newData\.child\('fullUrl'\)\.exists\(\)/);
 });
 
+test('Static contract: user content reports stay scoped to tour users and admin review', () => {
+  const rules = readJson('database.rules.json');
+  const reports = rules.rules.content_reports;
+  const reportRule = reports.$reportId;
+  const adminAccess = "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)";
+
+  assert.equal(reports['.read'], adminAccess);
+  assert.deepEqual(reports['.indexOn'], ['createdAtMs', 'tourId', 'status', 'contentType']);
+  assert.match(reportRule['.write'], /newData\.child\('reporterAuthUid'\)\.val\(\) === auth\.uid/);
+  assert.match(reportRule['.write'], /tours\/' \+ newData\.child\('tourId'\)\.val\(\) \+ '\/participants\/' \+ auth\.uid/);
+  assert.match(reportRule['.write'], /assigned_drivers/);
+  assert.match(reportRule['.validate'], /newData\.child\('contentType'\)\.val\(\) === 'chat_message'/);
+  assert.match(reportRule['.validate'], /newData\.child\('contentType'\)\.val\(\) === 'group_photo'/);
+  assert.match(reportRule['.validate'], /newData\.child\('reason'\)\.val\(\) === 'harassment'/);
+  assert.match(reportRule['.validate'], /newData\.child\('contentPreview'\)\.val\(\)\.length <= 500/);
+  assert.match(rules.rules.chats.$tourId.messages.$messageId['.write'], /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
+  assert.match(rules.rules.internal_chats.$tourId.messages.$messageId['.write'], /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
+  assert.match(rules.rules.group_tour_photos.$tourId.$photoId['.write'], /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
+});
+
 test('Static contract: Storage photo writes require caller auth metadata', () => {
   const storageRules = readText('storage_rules.json');
   const photoSource = readText('services/photoService.js');

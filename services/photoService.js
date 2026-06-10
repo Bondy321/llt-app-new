@@ -26,6 +26,7 @@ const {
 const { storage, realtimeDbModular, auth } = require('../firebase');
 const { normalizePhotoUri } = require('./photoVariantService');
 const { loadOptionalService } = require('./optionalServiceLoader');
+const { assertTextPassesModeration } = require('./contentModerationService');
 
 const loggerServiceModule = loadOptionalService({
   modulePath: './loggerService',
@@ -615,7 +616,7 @@ const validateCaption = (caption) => {
     throw new Error(`Caption exceeds maximum length of ${MAX_CAPTION_LENGTH} characters`);
   }
 
-  return trimmed;
+  return assertTextPassesModeration(trimmed, 'Caption');
 };
 
 /**

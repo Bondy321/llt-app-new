@@ -51,7 +51,7 @@ const normalizeAssignmentTourIdInput = (value) => {
     .trim()
     .toUpperCase()
     .replace(/\s+/g, '_')
-    .replace(/[.#$\[\]/]/g, '')
+    .replace(/[.#$[\]/]/g, '')
     .replace(/^_+|_+$/g, '');
 };
 

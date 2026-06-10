@@ -67,7 +67,7 @@ const normalizeTourIdForPath = (value) => {
 };
 
 const isValidFirebaseKeySegment = (value) => {
-  return typeof value === 'string' && value.length > 0 && !/[./$#\[\]]/.test(value);
+  return typeof value === 'string' && value.length > 0 && !/[./$#[\]]/.test(value);
 };
 
 function normalizeBroadcastTimestamp(timestamp) {

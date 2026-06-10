@@ -86,7 +86,7 @@ const normalizeTourIdForKey = (value) => {
   return trimmed
     .toUpperCase()
     .replace(/\s+/g, '_')
-    .replace(/[.#$\[\]/]/g, '')
+    .replace(/[.#$[\]/]/g, '')
     .replace(/^_+|_+$/g, '');
 };
 

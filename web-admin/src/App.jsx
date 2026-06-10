@@ -38,6 +38,7 @@ import {
   IconUsers,
   IconBus,
   IconSpeakerphone,
+  IconFlag,
   IconSettings,
   IconLogout,
   IconUser,
@@ -50,6 +51,7 @@ import Dashboard from './components/Dashboard';
 import { DriversManager } from './components/DriversManager';
 import ToursManager from './components/ToursManager';
 import { BroadcastPanel } from './components/BroadcastPanel';
+import { ContentModerationPanel } from './components/ContentModerationPanel';
 import Settings from './components/Settings';
 
 // Navigation items configuration
@@ -58,6 +60,7 @@ const navItems = [
   { path: '/drivers', label: 'Driver Management', icon: IconUsers, color: 'blue' },
   { path: '/tours', label: 'Tours', icon: IconMap, color: 'green' },
   { path: '/broadcast', label: 'Broadcast', icon: IconSpeakerphone, color: 'orange' },
+  { path: '/moderation', label: 'Moderation', icon: IconFlag, color: 'red' },
   { path: '/settings', label: 'Settings', icon: IconSettings, color: 'gray' },
 ];
 
@@ -400,6 +403,7 @@ function AppLayout({ user }) {
           <Route path="/drivers" element={<DriversManager />} />
           <Route path="/tours" element={<ToursManager />} />
           <Route path="/broadcast" element={<BroadcastPanel />} />
+          <Route path="/moderation" element={<ContentModerationPanel />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

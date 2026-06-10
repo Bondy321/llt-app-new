@@ -43,13 +43,13 @@ module.exports = {
       buildNumber: '3',
       infoPlist: {
         NSPhotoLibraryUsageDescription:
-          'Loch Lomond Travel needs access to your photo library to save and share tour memories.',
+          'Loch Lomond Travel uses your photo library to choose and upload tour, chat, and private photos in the app.',
         NSPhotoLibraryAddUsageDescription:
-          'Loch Lomond Travel needs permission to add saved tour photos to your library.',
+          'Loch Lomond Travel uses this permission to save tour photos from the app to your photo library.',
         NSCameraUsageDescription:
-          'Loch Lomond Travel needs camera access to capture tour moments.',
+          'Loch Lomond Travel uses the camera to capture tour, chat, and private photos you choose to upload.',
         NSLocationWhenInUseUsageDescription:
-          'Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.',
+          'Loch Lomond Travel uses your location for bus finding, meeting points, driver pickup sharing, and optional safety reports or live location sharing.',
         NSAppTransportSecurity: appTransportSecurity,
       },
       config: {
@@ -98,7 +98,7 @@ module.exports = {
           locationAlwaysAndWhenInUsePermission: false,
           locationAlwaysPermission: false,
           locationWhenInUsePermission:
-            'Loch Lomond Travel uses your location to help you find your tour bus and navigate to meeting points.',
+            'Loch Lomond Travel uses your location for bus finding, meeting points, driver pickup sharing, and optional safety reports or live location sharing.',
           isIosBackgroundLocationEnabled: false,
           isAndroidBackgroundLocationEnabled: false,
         },
@@ -107,9 +107,9 @@ module.exports = {
         'expo-image-picker',
         {
           photosPermission:
-            'Loch Lomond Travel needs access to your photo library to save and share tour memories.',
+            'Loch Lomond Travel uses your photo library to choose and upload tour, chat, and private photos in the app.',
           cameraPermission:
-            'Loch Lomond Travel needs camera access to capture tour moments.',
+            'Loch Lomond Travel uses the camera to capture tour, chat, and private photos you choose to upload.',
           microphonePermission: false,
         },
       ],
@@ -117,9 +117,9 @@ module.exports = {
         'expo-media-library',
         {
           photosPermission:
-            'Loch Lomond Travel needs access to your photo library to save and share tour memories.',
+            'Loch Lomond Travel uses your photo library to choose and upload tour, chat, and private photos in the app.',
           savePhotosPermission:
-            'Loch Lomond Travel needs permission to add saved tour photos to your library.',
+            'Loch Lomond Travel uses this permission to save tour photos from the app to your photo library.',
           granularPermissions: ['photo'],
         },
       ],

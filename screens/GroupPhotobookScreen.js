@@ -23,6 +23,11 @@ import { Image as ExpoImage } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as offlineSyncService from '../services/offlineSyncService';
 import * as photoService from '../services/photoService';
+import {
+  checkTextForObjectionableContent,
+  createContentReport,
+} from '../services/contentModerationService';
+import { createPersistenceProvider } from '../services/persistenceProvider';
 import { optimizeSourcePhotoForUpload, formatBytes } from '../services/imageOptimizationService';
 import ImageViewer from '../components/ImageViewer';
 import GalleryPhotoTile from '../components/GalleryPhotoTile';
@@ -46,6 +51,22 @@ const getPhotoTimestampMs = (photo) => {
   return Number.isFinite(parsedMs) ? parsedMs : 0;
 };
 
+const parseModerationMap = (value) => {
+  if (!value || typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.entries(parsed).reduce((accumulator, [key, enabled]) => {
+      if (enabled === true && typeof key === 'string' && key.trim()) {
+        accumulator[key.trim()] = true;
+      }
+      return accumulator;
+    }, {});
+  } catch {
+    return {};
+  }
+};
+
 export default function GroupPhotobookScreen({
   onBack,
   userId,
@@ -57,6 +78,7 @@ export default function GroupPhotobookScreen({
   const [photoQueueItems, setPhotoQueueItems] = useState([]);
   const [sortMode, setSortMode] = useState('newest');
   const [mineOnly, setMineOnly] = useState(false);
+  const [hiddenPhotoIds, setHiddenPhotoIds] = useState({});
 
   // Image viewer state
   const [viewerVisible, setViewerVisible] = useState(false);
@@ -97,6 +119,11 @@ export default function GroupPhotobookScreen({
     [canonicalIdentityProp, currentUser, userId]
   );
   const principalId = canonicalIdentity?.principalId || userId;
+  const moderationStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CONTENT_MODERATION' }), []);
+  const hiddenPhotosStorageKey = useMemo(
+    () => (tourId && principalId ? `hidden_group_photos_${tourId}_${principalId}` : null),
+    [principalId, tourId],
+  );
 
   useEffect(() => {
     logger.trackScreen('GroupPhotobook', {
@@ -106,6 +133,51 @@ export default function GroupPhotobookScreen({
       stableIdentityAvailable: Boolean(canonicalIdentity?.stablePassengerId),
     });
   }, [canonicalIdentity?.principalId, canonicalIdentity?.stablePassengerId, principalId, tourId]);
+
+  useEffect(() => {
+    let active = true;
+    if (!hiddenPhotosStorageKey) {
+      setHiddenPhotoIds({});
+      return () => {
+        active = false;
+      };
+    }
+
+    moderationStorage.getItemAsync(hiddenPhotosStorageKey)
+      .then((storedValue) => {
+        if (active) setHiddenPhotoIds(parseModerationMap(storedValue));
+      })
+      .catch((error) => {
+        logger.warn('GroupPhotobook', 'Hidden photo state restore failed', {
+          tourId,
+          error: error?.message || String(error),
+        });
+        if (active) setHiddenPhotoIds({});
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [hiddenPhotosStorageKey, moderationStorage, tourId]);
+
+  const persistHiddenPhotoIds = useCallback((nextHiddenPhotoIds) => {
+    if (!hiddenPhotosStorageKey) return;
+    moderationStorage.setItemAsync(hiddenPhotosStorageKey, JSON.stringify(nextHiddenPhotoIds)).catch((error) => {
+      logger.warn('GroupPhotobook', 'Hidden photo state persist failed', {
+        tourId,
+        error: error?.message || String(error),
+      });
+    });
+  }, [hiddenPhotosStorageKey, moderationStorage, tourId]);
+
+  const hidePhotoLocally = useCallback((photoId) => {
+    if (!photoId) return;
+    setHiddenPhotoIds((prev) => {
+      const next = { ...prev, [photoId]: true };
+      persistHiddenPhotoIds(next);
+      return next;
+    });
+  }, [persistHiddenPhotoIds]);
 
   const addUploaderName = useCallback((photo) => ({
     ...photo,
@@ -169,13 +241,14 @@ export default function GroupPhotobookScreen({
   }, [tourId]);
 
   const visiblePhotos = useMemo(() => {
-    const scoped = mineOnly ? photos.filter((photo) => photo.userId === principalId) : photos;
+    const unhidden = photos.filter((photo) => !photo?.id || hiddenPhotoIds[photo.id] !== true);
+    const scoped = mineOnly ? unhidden.filter((photo) => photo.userId === principalId) : unhidden;
     return [...scoped].sort((a, b) => {
       const aTs = getPhotoTimestampMs(a);
       const bTs = getPhotoTimestampMs(b);
       return sortMode === 'oldest' ? aTs - bTs : bTs - aTs;
     });
-  }, [photos, mineOnly, sortMode, principalId]);
+  }, [photos, hiddenPhotoIds, mineOnly, sortMode, principalId]);
 
   const gallerySections = useMemo(() => {
     const grouped = new Map();
@@ -340,6 +413,12 @@ export default function GroupPhotobookScreen({
 
     if (!pendingImage?.uri) {
       logger.warn('GroupPhotobook', 'Upload blocked without pending image', { tourId });
+      return;
+    }
+
+    const moderationResult = checkTextForObjectionableContent(caption);
+    if (!moderationResult.allowed) {
+      Alert.alert('Caption needs editing', moderationResult.message);
       return;
     }
 
@@ -631,6 +710,43 @@ export default function GroupPhotobookScreen({
     }
   };
 
+  const handleReportPhoto = useCallback(async (photo, reason) => {
+    if (!photo?.id) {
+      return { success: false, error: 'Photo unavailable' };
+    }
+
+    const reportResult = await createContentReport({
+      tourId,
+      contentType: 'group_photo',
+      contentId: photo.id,
+      reason,
+      reporterId: principalId,
+      reporterAuthUid: auth?.currentUser?.uid || principalId,
+      reporterName: userName || 'Tour member',
+      contentOwnerId: photo.userId || '',
+      contentOwnerName: photo.uploaderName || 'Tour member',
+      contentPreview: photo.caption || 'Group photo',
+      sourcePath: `group_tour_photos/${tourId}/${photo.id}`,
+    });
+
+    if (reportResult.success) {
+      hidePhotoLocally(photo.id);
+      logger.info('GroupPhotobook', 'Group photo report submitted', {
+        tourId,
+        photoId: maskIdentifier(photo.id),
+        reportId: reportResult.reportId,
+      });
+    } else {
+      logger.warn('GroupPhotobook', 'Group photo report failed', {
+        tourId,
+        photoId: maskIdentifier(photo.id),
+        error: reportResult.error || 'unknown',
+      });
+    }
+
+    return reportResult;
+  }, [hidePhotoLocally, principalId, tourId, userName]);
+
   const onRefresh = useCallback(() => {
     logger.info('GroupPhotobook', 'Gallery refresh requested', { tourId });
     return refreshPhotos();
@@ -818,6 +934,7 @@ export default function GroupPhotobookScreen({
         initialIndex={viewerIndex}
         onClose={() => setViewerVisible(false)}
         onDelete={handleDeletePhoto}
+        onReport={handleReportPhoto}
         canDelete={true}
         currentUserId={principalId}
         showUploaderInfo={true}

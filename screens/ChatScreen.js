@@ -49,6 +49,11 @@ import offlineSyncService from '../services/offlineSyncService';
 import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
 import * as photoService from '../services/photoService';
+import {
+  REPORT_REASON_OPTIONS,
+  checkTextForObjectionableContent,
+  createContentReport,
+} from '../services/contentModerationService';
 import { auth } from '../firebase';
 import logger, { maskIdentifier } from '../services/loggerService';
 import {
@@ -246,6 +251,37 @@ const isMessageOwnedByCurrentSession = (message, canonicalIdentity) => {
   }
 
   return Boolean(senderPrincipalId && currentPrincipalId && senderPrincipalId === currentPrincipalId);
+};
+
+const parseModerationMap = (value) => {
+  if (!value || typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.entries(parsed).reduce((accumulator, [key, enabled]) => {
+      if (enabled === true && typeof key === 'string' && key.trim()) {
+        accumulator[key.trim()] = true;
+      }
+      return accumulator;
+    }, {});
+  } catch {
+    return {};
+  }
+};
+
+const getMessageModerationSenderKey = (message) => {
+  const candidates = [
+    message?.senderStableId,
+    message?.senderId,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    const normalized = candidate.trim();
+    if (normalized) return normalized;
+  }
+
+  return null;
 };
 
 const buildReplyPreviewText = (message = {}) => {
@@ -565,9 +601,13 @@ const MessageActionMenu = ({
   onReact,
   onOpenReactionPicker,
   onDelete,
+  onReport,
+  onMuteSender,
   onCopyLink,
   onOpenLink,
   canDelete,
+  canReport = false,
+  canMuteSender = false,
   allowReactions = true,
   insets,
 }) => {
@@ -681,6 +721,32 @@ const MessageActionMenu = ({
                 <Text style={styles.actionMenuText}>Copy Link</Text>
               </TouchableOpacity>
             </>
+          )}
+
+          {canReport && (
+            <TouchableOpacity
+              style={styles.actionMenuItem}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                onReport();
+              }}
+            >
+              <MaterialCommunityIcons name="flag-outline" size={22} color={THEME.error} />
+              <Text style={[styles.actionMenuText, { color: THEME.error }]}>Report</Text>
+            </TouchableOpacity>
+          )}
+
+          {canMuteSender && (
+            <TouchableOpacity
+              style={styles.actionMenuItem}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                onMuteSender();
+              }}
+            >
+              <MaterialCommunityIcons name="account-cancel-outline" size={22} color={COLORS.darkText} />
+              <Text style={styles.actionMenuText}>Mute sender</Text>
+            </TouchableOpacity>
           )}
 
           {canDelete && (
@@ -1804,6 +1870,8 @@ export default function ChatScreen({
   const [showActionMenu, setShowActionMenu] = useState(false);
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [viewingImage, setViewingImage] = useState(null);
+  const [hiddenMessageIds, setHiddenMessageIds] = useState({});
+  const [mutedSenderIds, setMutedSenderIds] = useState({});
   const [reactionFeedbackMessage, setReactionFeedbackMessage] = useState('');
   const [replyJumpFeedbackMessage, setReplyJumpFeedbackMessage] = useState('');
   const [highlightedReplyTargetMessageId, setHighlightedReplyTargetMessageId] = useState(null);
@@ -1965,6 +2033,7 @@ export default function ChatScreen({
   const draftStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_DRAFTS' }), []);
   const readStateStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_READ_STATE' }), []);
   const uxHintStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CHAT_UX_HINTS' }), []);
+  const moderationStorage = useMemo(() => createPersistenceProvider({ namespace: 'LLT_CONTENT_MODERATION' }), []);
   const draftStorageKey = useMemo(() => {
     if (!tourId) return null;
     const chatType = internalDriverChat ? 'internal' : 'group';
@@ -1979,6 +2048,16 @@ export default function ChatScreen({
     if (!tourId) return null;
     const chatType = internalDriverChat ? 'internal' : 'group';
     return `${SWIPE_REPLY_HINT_KEY_PREFIX}_${chatType}_${tourId}_${principalId}`;
+  }, [tourId, internalDriverChat, principalId]);
+  const hiddenMessagesStorageKey = useMemo(() => {
+    if (!tourId) return null;
+    const chatType = internalDriverChat ? 'internal' : 'group';
+    return `hidden_messages_${chatType}_${tourId}_${principalId}`;
+  }, [tourId, internalDriverChat, principalId]);
+  const mutedSendersStorageKey = useMemo(() => {
+    if (!tourId) return null;
+    const chatType = internalDriverChat ? 'internal' : 'group';
+    return `muted_senders_${chatType}_${tourId}_${principalId}`;
   }, [tourId, internalDriverChat, principalId]);
 
   const listBottomSpacerHeight = useMemo(() => {
@@ -2015,6 +2094,84 @@ export default function ChatScreen({
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    let active = true;
+    if (!hiddenMessagesStorageKey) {
+      setHiddenMessageIds({});
+      return () => {
+        active = false;
+      };
+    }
+
+    moderationStorage.getItemAsync(hiddenMessagesStorageKey)
+      .then((storedValue) => {
+        if (active) setHiddenMessageIds(parseModerationMap(storedValue));
+      })
+      .catch((error) => {
+        logger.warn('ChatScreen', 'Hidden message state restore failed', {
+          error: error?.message || String(error),
+        });
+        if (active) setHiddenMessageIds({});
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [hiddenMessagesStorageKey, moderationStorage]);
+
+  useEffect(() => {
+    let active = true;
+    if (!mutedSendersStorageKey) {
+      setMutedSenderIds({});
+      return () => {
+        active = false;
+      };
+    }
+
+    moderationStorage.getItemAsync(mutedSendersStorageKey)
+      .then((storedValue) => {
+        if (active) setMutedSenderIds(parseModerationMap(storedValue));
+      })
+      .catch((error) => {
+        logger.warn('ChatScreen', 'Muted sender state restore failed', {
+          error: error?.message || String(error),
+        });
+        if (active) setMutedSenderIds({});
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [moderationStorage, mutedSendersStorageKey]);
+
+  const persistModerationMap = useCallback((key, value) => {
+    if (!key) return;
+    moderationStorage.setItemAsync(key, JSON.stringify(value)).catch((error) => {
+      logger.warn('ChatScreen', 'Content moderation state persist failed', {
+        key,
+        error: error?.message || String(error),
+      });
+    });
+  }, [moderationStorage]);
+
+  const hideMessageLocally = useCallback((messageId) => {
+    if (!messageId) return;
+    setHiddenMessageIds((prev) => {
+      const next = { ...prev, [messageId]: true };
+      persistModerationMap(hiddenMessagesStorageKey, next);
+      return next;
+    });
+  }, [hiddenMessagesStorageKey, persistModerationMap]);
+
+  const muteSenderLocally = useCallback((senderKey) => {
+    if (!senderKey) return;
+    setMutedSenderIds((prev) => {
+      const next = { ...prev, [senderKey]: true };
+      persistModerationMap(mutedSendersStorageKey, next);
+      return next;
+    });
+  }, [mutedSendersStorageKey, persistModerationMap]);
 
   useEffect(() => {
     if (!internalDriverChat) return;
@@ -2055,6 +2212,17 @@ export default function ChatScreen({
     if (!message) return null;
     return normalizeTimestamp(message.timestamp);
   }, []);
+
+  const visibleMessages = useMemo(() => (
+    messages.filter((message) => {
+      if (!message?.id) return true;
+      if (hiddenMessageIds[message.id]) return false;
+      if (isMessageOwnedByCurrentSession(message, canonicalIdentity)) return true;
+
+      const senderKey = getMessageModerationSenderKey(message);
+      return !senderKey || mutedSenderIds[senderKey] !== true;
+    })
+  ), [canonicalIdentity, hiddenMessageIds, messages, mutedSenderIds]);
 
   const markActiveChatRead = useCallback(async ({ force = false } = {}) => {
     if (!tourId || !realtimeActorId) return;
@@ -2558,6 +2726,16 @@ export default function ChatScreen({
 
     const trimmed = inputText.trim();
     if (!trimmed) return;
+    const moderationResult = checkTextForObjectionableContent(trimmed);
+    if (!moderationResult.allowed) {
+      showTransientFeedback({
+        type: 'warning',
+        icon: 'shield-alert-outline',
+        message: moderationResult.message,
+      });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
     const pendingReply = replyingToMessage;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -3405,6 +3583,116 @@ export default function ChatScreen({
     }
   }, [getSelectedMessageFirstLink]);
 
+  const submitSelectedMessageReport = useCallback(async (reason) => {
+    const message = selectedMessage;
+    if (!message?.id) return;
+
+    setShowActionMenu(false);
+    setSelectedMessage(null);
+
+    const chatScopeForReport = internalDriverChat ? 'internal' : 'group';
+    const reportResult = await createContentReport({
+      tourId,
+      contentType: 'chat_message',
+      contentId: message.id,
+      chatScope: chatScopeForReport,
+      reason,
+      reporterId: principalId,
+      reporterAuthUid: authUid || auth?.currentUser?.uid || principalId,
+      reporterName: userName,
+      contentOwnerId: getMessageModerationSenderKey(message) || message.senderId || '',
+      contentOwnerName: message.senderName || 'Tour participant',
+      contentPreview: buildReplyPreviewText(message),
+      sourcePath: `${chatScopeForReport === 'internal' ? 'internal_chats' : 'chats'}/${tourId}/messages/${message.id}`,
+    });
+
+    if (reportResult.success) {
+      hideMessageLocally(message.id);
+      showTransientFeedback({
+        type: 'success',
+        icon: 'flag-checkered',
+        message: 'Report sent to Loch Lomond Travel operations.',
+      });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      return;
+    }
+
+    showTransientFeedback({
+      type: 'warning',
+      icon: 'flag-remove-outline',
+      message: 'Report could not be sent. Please try again or contact support.',
+    });
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+  }, [
+    authUid,
+    hideMessageLocally,
+    internalDriverChat,
+    principalId,
+    selectedMessage,
+    showTransientFeedback,
+    tourId,
+    userName,
+  ]);
+
+  const handleReportMessage = useCallback(() => {
+    if (!selectedMessage?.id) return;
+
+    Alert.alert(
+      'Report message',
+      'Send this message to Loch Lomond Travel operations for review.',
+      [
+        ...REPORT_REASON_OPTIONS.map((option) => ({
+          text: option.label,
+          onPress: () => submitSelectedMessageReport(option.key),
+        })),
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  }, [selectedMessage, submitSelectedMessageReport]);
+
+  const handleMuteSender = useCallback(() => {
+    if (!selectedMessage?.id) return;
+
+    const senderKey = getMessageModerationSenderKey(selectedMessage);
+    if (!senderKey || isMessageOwnedByCurrentSession(selectedMessage, canonicalIdentity)) {
+      setShowActionMenu(false);
+      setSelectedMessage(null);
+      showTransientFeedback({
+        type: 'info',
+        icon: 'account-alert-outline',
+        message: 'This sender cannot be muted from this message.',
+      });
+      return;
+    }
+
+    Alert.alert(
+      'Mute sender?',
+      'Future messages from this sender will be hidden on this device. Loch Lomond Travel can still review reports you submit.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Mute sender',
+          style: 'destructive',
+          onPress: () => {
+            muteSenderLocally(senderKey);
+            setShowActionMenu(false);
+            setSelectedMessage(null);
+            showTransientFeedback({
+              type: 'info',
+              icon: 'account-cancel-outline',
+              message: 'Sender muted on this device.',
+            });
+          },
+        },
+      ],
+    );
+  }, [
+    canonicalIdentity,
+    muteSenderLocally,
+    selectedMessage,
+    showTransientFeedback,
+  ]);
+
   // Handle delete message
   const handleDeleteMessage = useCallback(async () => {
     if (internalDriverChat) {
@@ -3548,20 +3836,20 @@ export default function ChatScreen({
   const unreadAnchorMessageId = useMemo(() => {
     if (!lastSeenTimestamp) return null;
 
-    const unreadMessage = messages.find((message) => {
+    const unreadMessage = visibleMessages.find((message) => {
       const timestamp = getMessageTimestamp(message);
       return timestamp && timestamp > lastSeenTimestamp;
     });
 
     return unreadMessage?.id || null;
-  }, [messages, lastSeenTimestamp, getMessageTimestamp]);
+  }, [visibleMessages, lastSeenTimestamp, getMessageTimestamp]);
 
   const groupedMessages = useMemo(() => {
-    return buildChatTimelineItems(messages, {
+    return buildChatTimelineItems(visibleMessages, {
       lastSeenTimestamp,
       isMessageOwned: (message) => isMessageOwnedByCurrentSession(message, canonicalIdentity),
     });
-  }, [messages, lastSeenTimestamp, canonicalIdentity]);
+  }, [visibleMessages, lastSeenTimestamp, canonicalIdentity]);
 
   const unreadAnchorIndex = useMemo(() => {
     if (!unreadAnchorMessageId) return -1;
@@ -3589,21 +3877,21 @@ export default function ChatScreen({
 
   const unreadSummary = useMemo(() => (
     buildUnreadSummary(
-      messages.filter((message) => !isMessageOwnedByCurrentSession(message, canonicalIdentity)),
+      visibleMessages.filter((message) => !isMessageOwnedByCurrentSession(message, canonicalIdentity)),
       {
         lastSeenTimestamp,
         currentUserId: null,
       }
     )
-  ), [messages, lastSeenTimestamp, canonicalIdentity]);
+  ), [visibleMessages, lastSeenTimestamp, canonicalIdentity]);
 
   const searchResults = useMemo(
-    () => buildChatSearchResults(messages, searchQuery),
-    [messages, searchQuery]
+    () => buildChatSearchResults(visibleMessages, searchQuery),
+    [visibleMessages, searchQuery]
   );
   const messageLookupById = useMemo(
-    () => new Map(messages.map((entry) => [entry?.id, entry])),
-    [messages]
+    () => new Map(visibleMessages.map((entry) => [entry?.id, entry])),
+    [visibleMessages]
   );
 
   const filteredSearchResults = useMemo(() => {
@@ -4194,7 +4482,7 @@ export default function ChatScreen({
       )}
 
       <SwipeReplyHint
-        visible={showSwipeReplyHint && messages.length > 0}
+        visible={showSwipeReplyHint && visibleMessages.length > 0}
         onDismiss={dismissSwipeReplyHint}
       />
 
@@ -4342,7 +4630,20 @@ export default function ChatScreen({
         onCopyLink={handleCopyFirstLink}
         onOpenLink={handleOpenFirstLink}
         onDelete={handleDeleteMessage}
+        onReport={handleReportMessage}
+        onMuteSender={handleMuteSender}
         canDelete={!internalDriverChat && (isMessageOwnedByCurrentSession(selectedMessage, canonicalIdentity) || isDriver)}
+        canReport={Boolean(
+          selectedMessage?.id
+          && !selectedMessage?.deleted
+          && !isMessageOwnedByCurrentSession(selectedMessage, canonicalIdentity)
+        )}
+        canMuteSender={Boolean(
+          selectedMessage?.id
+          && !selectedMessage?.deleted
+          && !isMessageOwnedByCurrentSession(selectedMessage, canonicalIdentity)
+          && getMessageModerationSenderKey(selectedMessage)
+        )}
         allowReactions={!internalDriverChat}
         insets={insets}
       />

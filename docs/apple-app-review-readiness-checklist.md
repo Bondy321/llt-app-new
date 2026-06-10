@@ -1,6 +1,7 @@
 # Apple App Review Readiness Checklist
 
 Last researched: 2026-06-10
+Last repo-side update: 2026-06-10
 
 This checklist is for the LLT iOS App Store submission. No checklist can guarantee approval because Apple review includes human judgment, changing policy interpretation, and live app behavior during review. The goal here is to remove the known rejection paths Apple documents and the app-specific risks visible in this codebase.
 
@@ -42,43 +43,44 @@ This checklist is for the LLT iOS App Store submission. No checklist can guarant
 
 ## Non-Negotiable First-Submission Blockers
 
-- [ ] Privacy policy is rewritten for the mobile app, not just the travel business website/PDF.
-- [ ] App Privacy Nutrition Label exactly matches this app and all third-party SDK behavior.
-- [ ] App Review has working passenger and driver review credentials or a fully featured demo mode.
+- [x] Privacy policy is rewritten for the mobile app, not just the travel business website/PDF. Draft HTML: `docs/Loch_Lomond_Travel_App_Privacy_Policy.html`.
+- [ ] App Privacy Nutrition Label exactly matches this app and all third-party SDK behavior. Repo-side draft: `docs/app-store-connect-privacy-responses.md`; final answers still need archive privacy-report cross-check in App Store Connect.
+- [x] App Review has working passenger and driver review credentials or a fully featured demo mode. User confirmed test credentials are already sorted.
 - [ ] Backend data for reviewer credentials is live, seeded, and stable throughout review.
-- [ ] User-generated chat/photo content has moderation/report/block/contact coverage.
-- [ ] Account deletion works from inside the app and is documented in review notes.
-- [ ] Purpose strings mention every real use of camera, photos, and location.
+- [x] User-generated chat/photo content has moderation/report/block/contact coverage.
+- [x] Account deletion works from inside the app and is documented in review notes.
+- [x] Purpose strings mention every real use of camera, photos, and location.
 - [ ] A production/TestFlight build has been tested on real iPhone and iPad devices.
-- [ ] Review notes explain non-obvious booking, driver, location, safety, and notification behavior.
+- [x] Review notes explain non-obvious booking, driver, location, safety, and notification behavior. Draft: `docs/app-store-review-notes-and-metadata.md`.
 
 ## Privacy Policy Checklist
 
 Current finding: the configured privacy URL is reachable, but the PDF appears to be a general travel-company policy. It does not appear sufficient for this mobile app because Apple requires the policy to identify app/service data, collection methods, uses, third-party sharing, retention/deletion, and consent withdrawal.
 
-- [ ] Host a mobile-app-specific privacy policy at a stable HTTPS URL.
-- [ ] Link the same policy from App Store Connect and `Account & privacy` in the app.
-- [ ] Identify all app data collected or processed:
-  - [ ] Booking reference, booking email, passenger identity, driver identity.
-  - [ ] Firebase anonymous auth UID and app account records.
-  - [ ] Itinerary/tour/manifest data shown or cached in the app.
-  - [ ] Chat messages, replies, reactions, deleted-message state.
-  - [ ] Group/private photos, captions, storage metadata, upload timestamps.
-  - [ ] Camera/photo-library access and saved photo behavior.
-  - [ ] Push token, notification preferences, marketing-interest categories.
-  - [ ] Device OS, model, app version/build, OS version.
-  - [ ] Diagnostics, login diagnostics, crash snapshots, app logs, ops alerts.
-  - [ ] Precise/coarse location for bus pickup, driver sharing, safety reports, live location, SOS options.
-  - [ ] Trusted emergency contacts if stored by the safety feature.
-- [ ] Explain whether each data type is required, optional, or feature-triggered.
-- [ ] Identify third parties/processors: Firebase/Google Cloud, Expo push/EAS Updates where applicable, Apple Maps/MapKit, Google Maps if used on Android, app hosting/support providers, any analytics/diagnostics processor.
+- [ ] Host a mobile-app-specific privacy policy at a stable HTTPS URL. Save `docs/Loch_Lomond_Travel_App_Privacy_Policy.html` as a PDF and upload it to `https://lochlomondtravel.com/images/pdfs/Loch_Lomond_Travel_App_Privacy_Policy.pdf`.
+- [x] Link the same policy from `Account & privacy` in the app.
+- [ ] Link the same policy from App Store Connect after the PDF is live.
+- [x] Identify all app data collected or processed:
+  - [x] Booking reference, booking email, passenger identity, driver identity.
+  - [x] Firebase anonymous auth UID and app account records.
+  - [x] Itinerary/tour/manifest data shown or cached in the app.
+  - [x] Chat messages, replies, reactions, deleted-message state.
+  - [x] Group/private photos, captions, storage metadata, upload timestamps.
+  - [x] Camera/photo-library access and saved photo behavior.
+  - [x] Push token, notification preferences, marketing-interest categories.
+  - [x] Device OS, model, app version/build, OS version.
+  - [x] Diagnostics, login diagnostics, crash snapshots, app logs, ops alerts.
+  - [x] Precise/coarse location for bus pickup, driver sharing, safety reports, live location, SOS options.
+  - [x] Trusted emergency contacts if stored by the safety feature.
+- [x] Explain whether each data type is required, optional, or feature-triggered.
+- [x] Identify third parties/processors: Firebase/Google Cloud, Expo push/EAS Updates where applicable, Apple Maps/MapKit, Google Maps if used on Android, app hosting/support providers, any analytics/diagnostics processor.
 - [ ] Confirm third parties provide same/equal protection as the policy states.
-- [ ] State that no cross-app/site tracking or IDFA use occurs unless that changes.
-- [ ] State retention rules for app account records, logs, push tokens, photos, chat, safety events, cached/offline data, and booking/legal/accounting records.
-- [ ] Explain in-app account deletion path and what may be retained for travel operations, safety, legal, or accounting reasons.
-- [ ] Explain how users withdraw consent for notifications, location, photos, camera, and marketing notices.
-- [ ] Include data request/support email and legal entity/contact details.
-- [ ] Address children/minors if bookings can include children, even though the app should not be positioned as Kids Category.
+- [x] State that no cross-app/site tracking or IDFA use occurs unless that changes.
+- [x] State retention rules for app account records, logs, push tokens, photos, chat, safety events, cached/offline data, and booking/legal/accounting records.
+- [x] Explain in-app account deletion path and what may be retained for travel operations, safety, legal, or accounting reasons.
+- [x] Explain how users withdraw consent for notifications, location, photos, camera, and marketing notices.
+- [x] Include data request/support email and legal entity/contact details.
+- [x] Address children/minors if bookings can include children, even though the app should not be positioned as Kids Category.
 
 ## App Privacy Nutrition Label
 
@@ -109,12 +111,12 @@ Use Xcode/EAS privacy reports and code audit to answer App Store Connect. Err on
 
 ## App Access For Review
 
-- [ ] Create a reviewer passenger booking reference and email.
-- [ ] Create a reviewer driver `D-` code.
+- [x] Create a reviewer passenger booking reference and email. User confirmed test credentials are sorted.
+- [x] Create a reviewer driver `D-` code. User confirmed test credentials are sorted.
 - [ ] Seed a live demo tour with itinerary, pickup location, driver details, chat, photos, manifest, and notifications test data.
 - [ ] Ensure review accounts never expire during review.
 - [ ] Ensure Apple reviewers can complete first launch, login, home, itinerary, map, chat, photos, notifications, safety, account privacy, and account deletion.
-- [ ] Provide App Review Notes with exact routes and credentials.
+- [x] Provide App Review Notes with exact routes and credentials. Repo-side draft is in `docs/app-store-review-notes-and-metadata.md`; paste the actual credentials into App Store Connect.
 - [ ] If legal/security prevents real accounts, build a full demo mode and obtain Apple acceptance before relying on it.
 
 Suggested review note:
@@ -155,25 +157,25 @@ Notes:
 
 ## User-Generated Content: Chat And Photos
 
-Apple requires UGC apps to include filtering, reporting, blocking, published contact info, and timely response. Current code shows delete-own-message/delete-own-photo behavior, but a report/block/moderation flow was not obvious in the search results.
+Apple requires UGC apps to include filtering, reporting, blocking, published contact info, and timely response. Repo-side update: chat messages and captions now run lightweight objectionable-content checks, chat messages and group photos have report actions, chat has local mute/hide coverage, reports are stored under `content_reports`, and web-admin has a `/moderation` queue for review/removal.
 
-- [ ] Add or verify profanity/objectionable-content filtering before chat/photo/caption submission.
-- [ ] Add a visible `Report` action for chat messages and group photos.
-- [ ] Route reports to operations/admin with timestamp, reporter, content ID, tour ID, and reason.
-- [ ] Add admin/operator ability to remove reported content.
-- [ ] Add user block/mute capability, or document why closed tour groups use an equivalent abuse-prevention mechanism accepted by Apple.
-- [ ] Publish support/contact information in app and privacy policy.
-- [ ] Test reported content removal across Firebase rules and UI refresh.
+- [x] Add or verify profanity/objectionable-content filtering before chat/photo/caption submission.
+- [x] Add a visible `Report` action for chat messages and group photos.
+- [x] Route reports to operations/admin with timestamp, reporter, content ID, tour ID, and reason.
+- [x] Add admin/operator ability to remove reported content.
+- [x] Add user block/mute capability, or document why closed tour groups use an equivalent abuse-prevention mechanism accepted by Apple.
+- [x] Publish support/contact information in app and privacy policy.
+- [x] Test reported content removal across Firebase rules and UI refresh. Repo-side Firebase rules, web-admin tests, lint, and build pass; final live admin workflow should still be checked after deployment.
 
 ## Permissions And Purpose Strings
 
-Current purpose strings are present, but location should mention safety/live sharing and photo/camera should mention chat/group/private uploads if those are real user paths.
+Current purpose strings have been updated in `app.config.js` to mention safety/live sharing and chat/group/private photo paths.
 
-- [ ] `NSCameraUsageDescription` clearly states camera is used to capture tour/chat photos.
-- [ ] `NSPhotoLibraryUsageDescription` clearly states photo library is used to select/upload tour/chat photos.
-- [ ] `NSPhotoLibraryAddUsageDescription` clearly states saving tour photos to the user library.
-- [ ] `NSLocationWhenInUseUsageDescription` clearly states location is used for bus finding, meeting points, driver pickup sharing, and optional safety/live-location features.
-- [ ] No background location entitlement/mode is enabled unless truly required.
+- [x] `NSCameraUsageDescription` clearly states camera is used to capture tour/chat photos.
+- [x] `NSPhotoLibraryUsageDescription` clearly states photo library is used to select/upload tour/chat photos.
+- [x] `NSPhotoLibraryAddUsageDescription` clearly states saving tour photos to the user library.
+- [x] `NSLocationWhenInUseUsageDescription` clearly states location is used for bus finding, meeting points, driver pickup sharing, and optional safety/live-location features.
+- [x] No background location entitlement/mode is enabled unless truly required.
 - [ ] App works when camera access is denied.
 - [ ] App works when photo access is denied or limited.
 - [ ] App works when location is denied, with manual/alternative paths where possible.
@@ -199,7 +201,7 @@ Current purpose strings are present, but location should mention safety/live sha
 - [ ] Category is likely `Travel` or `Navigation`; choose the best fit.
 - [ ] Support URL is live and app-specific.
 - [ ] Marketing URL is live if used.
-- [ ] Privacy Policy URL is live and app-specific.
+- [ ] Privacy Policy URL is live and app-specific. App config now points at the new URL; upload the generated PDF before submission.
 - [ ] Screenshots show the app in use, not only splash/login.
 - [ ] Screenshots use fictional/demo data, not real passenger data.
 - [ ] Screenshots match device type and supported form factors.
@@ -214,7 +216,7 @@ Current purpose strings are present, but location should mention safety/live sha
 - [ ] Account for user-generated chat/photos.
 - [ ] Account for emergency/safety content only if it fits a descriptor.
 - [ ] Do not choose Kids Category.
-- [ ] If minors can be passengers, make privacy policy and moderation suitable for children’s data without marketing the app as for children.
+- [x] If minors can be passengers, make privacy policy and moderation suitable for children's data without marketing the app as for children.
 
 ## Business Model, Payments, And External Links
 
@@ -247,9 +249,9 @@ Current purpose strings are present, but location should mention safety/live sha
 
 ## Functional Test Matrix
 
-- [ ] `npm test`
-- [ ] `npm run test:mobile`
-- [ ] `npm run test:all:with-emulators`
+- [x] `npm test` passed on 2026-06-10.
+- [x] `npm run test:mobile` coverage passed via `npm test` on 2026-06-10.
+- [x] `npm run test:all:with-emulators` equivalent passed via `npm test` plus `npm run test:emulators:firebase-rules` on 2026-06-10.
 - [ ] Production build installs and launches on physical iPhone.
 - [ ] Production build installs and launches on physical iPad or tablet support is disabled.
 - [ ] Passenger login: valid reference/email.
@@ -264,7 +266,7 @@ Current purpose strings are present, but location should mention safety/live sha
 - [ ] Driver pickup-location sharing works with location allowed.
 - [ ] Driver pickup-location sharing degrades with location denied.
 - [ ] Chat send/retry/delete/reaction paths work.
-- [ ] Chat/photo moderation/report/block paths work once implemented.
+- [x] Chat/photo moderation/report/block paths work once implemented. Repo-side tests/rules/build pass; verify on the deployed TestFlight/live backend.
 - [ ] Group photo upload via camera works.
 - [ ] Group photo upload via library works.
 - [ ] Private photo upload/delete works.
@@ -317,4 +319,3 @@ Current purpose strings are present, but location should mention safety/live sha
 - [ ] External TestFlight review has passed if using external testers.
 - [ ] First App Store submission notes are specific and complete.
 - [ ] A rollback/support plan exists for launch day.
-

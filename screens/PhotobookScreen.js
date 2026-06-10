@@ -24,6 +24,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as offlineSyncService from '../services/offlineSyncService';
 import * as photoService from '../services/photoService';
+import { checkTextForObjectionableContent } from '../services/contentModerationService';
 import { optimizeSourcePhotoForUpload, formatBytes } from '../services/imageOptimizationService';
 import ImageViewer from '../components/ImageViewer';
 import GalleryPhotoTile from '../components/GalleryPhotoTile';
@@ -630,6 +631,12 @@ export default function PhotobookScreen({
 
   const handleUpload = async () => {
     if (uploading || !pendingImage?.uri) return;
+
+    const moderationResult = checkTextForObjectionableContent(caption);
+    if (!moderationResult.allowed) {
+      Alert.alert('Caption needs editing', moderationResult.message);
+      return;
+    }
 
     setUploading(true);
     try {

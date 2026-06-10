@@ -9,6 +9,7 @@ let realtimeDb;
 const { loadOptionalService } = require('./optionalServiceLoader');
 const { toRealtimeKeySegment } = require('./identityService');
 const { parseTimestampMs: parseStrictTimestampMs } = require('./timeUtils');
+const { assertTextPassesModeration } = require('./contentModerationService');
 
 if (!isTestEnv) {
   try {
@@ -208,7 +209,7 @@ const validateMessageText = (text, maxLength = MAX_MESSAGE_LENGTH) => {
     throw new Error(`Message exceeds maximum length of ${maxLength} characters`);
   }
 
-  return trimmed;
+  return assertTextPassesModeration(trimmed, 'Message');
 };
 
 /**
