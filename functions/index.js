@@ -28,6 +28,7 @@ const userProfileCache = new Map();
 const PHOTO_CACHE_CONTROL_HEADER = "public,max-age=31536000,immutable";
 const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
 const VERIFIED_LOGIN_GRANT_TTL_MS = 30 * 60 * 1000;
+const MANUAL_BOOKING_LOCK_TTL_MS = 30 * 1000;
 const OPERATIONS_ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const MANIFEST_STATUS = {
   PENDING: 'PENDING',
@@ -992,6 +993,333 @@ const normalizeEmail = (email) => {
   return email.trim().toLowerCase();
 };
 
+const createManualPassengerError = (code, message) => {
+  const error = new Error(message || code);
+  error.code = code;
+  return error;
+};
+
+const parseStrictDateOnly = (value) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  const ukMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const match = ukMatch || isoMatch;
+  if (!match) return null;
+
+  const year = Number(ukMatch ? match[3] : match[1]);
+  const month = Number(match[2]);
+  const day = Number(ukMatch ? match[1] : match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== month - 1
+    || date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return {
+    date,
+    iso: `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+    uk: `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${String(year).padStart(4, '0')}`,
+  };
+};
+
+const normalizeManualPassengerPayload = (payload = {}, tourData = {}) => {
+  const tourId = normalizeTourKeyForComparison(payload.tourId);
+  const tourCode = resolveTrimmedString(tourData.tourCode);
+  const bookingRef = normalizeBookingRef(payload.bookingRef);
+  const email = normalizeEmail(payload.email);
+  const pickupDate = parseStrictDateOnly(payload.pickupDate);
+  const pickupTime = resolveTrimmedString(payload.pickupTime);
+  const pickupLocation = resolveTrimmedString(payload.pickupLocation);
+  const rawPassengers = Array.isArray(payload.passengers) ? payload.passengers : [];
+
+  if (!tourId || !isValidFirebaseKey(tourId)) {
+    throw createManualPassengerError('INVALID_TOUR', 'Select a valid tour.');
+  }
+  if (!tourCode || normalizeTourKeyForComparison(tourCode) !== tourId) {
+    throw createManualPassengerError('TOUR_IDENTITY_MISMATCH', 'The selected tour has inconsistent identity data.');
+  }
+  if (tourData.isActive === false) {
+    throw createManualPassengerError('TOUR_INACTIVE', 'Passengers cannot be added to an inactive tour.');
+  }
+  if (
+    !bookingRef
+    || bookingRef.length > 64
+    || bookingRef.startsWith('D-')
+    || !/^[A-Z0-9_-]+$/.test(bookingRef)
+    || !isValidFirebaseKey(bookingRef)
+  ) {
+    throw createManualPassengerError(
+      'INVALID_BOOKING_REFERENCE',
+      'Booking reference must use letters, numbers, hyphens, or underscores.',
+    );
+  }
+  if (
+    !email
+    || email.length > 254
+    || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  ) {
+    throw createManualPassengerError('INVALID_EMAIL', 'Enter a valid passenger email address.');
+  }
+  if (!pickupDate) {
+    throw createManualPassengerError('INVALID_PICKUP_DATE', 'Pickup date must be a valid date.');
+  }
+  if (!pickupTime || !/^([01]\d|2[0-3]):[0-5]\d$/.test(pickupTime)) {
+    throw createManualPassengerError('INVALID_PICKUP_TIME', 'Pickup time must use 24-hour HH:mm format.');
+  }
+  if (!pickupLocation || pickupLocation.length < 3 || pickupLocation.length > 250) {
+    throw createManualPassengerError(
+      'INVALID_PICKUP_LOCATION',
+      'Pickup location must be between 3 and 250 characters.',
+    );
+  }
+  if (rawPassengers.length < 1 || rawPassengers.length > 53) {
+    throw createManualPassengerError('INVALID_PASSENGERS', 'A booking must contain between 1 and 53 passengers.');
+  }
+
+  const tourStart = parseStrictDateOnly(tourData.startDate);
+  const tourEnd = parseStrictDateOnly(tourData.endDate || tourData.startDate);
+  if (!tourStart || !tourEnd) {
+    throw createManualPassengerError('TOUR_DATES_INVALID', 'The selected tour must have valid start and end dates.');
+  }
+  if (
+    pickupDate.date.getTime() < tourStart.date.getTime()
+    || pickupDate.date.getTime() > tourEnd.date.getTime()
+  ) {
+    throw createManualPassengerError(
+      'PICKUP_DATE_OUTSIDE_TOUR',
+      'Pickup date must fall within the selected tour dates.',
+    );
+  }
+
+  const maxParticipants = Number.isInteger(tourData.maxParticipants) && tourData.maxParticipants > 0
+    ? tourData.maxParticipants
+    : 53;
+  const seenSeats = new Set();
+  const passengers = rawPassengers.map((passenger, index) => {
+    const name = resolveTrimmedString(passenger?.name);
+    const phone = resolveTrimmedString(passenger?.phone);
+    const seatNumber = Number(passenger?.seatNumber);
+
+    if (!name || name.length < 2 || name.length > 120) {
+      throw createManualPassengerError(
+        'INVALID_PASSENGER_NAME',
+        `Passenger ${index + 1} must have a full name between 2 and 120 characters.`,
+      );
+    }
+    if (!Number.isInteger(seatNumber) || seatNumber < 1 || seatNumber > maxParticipants) {
+      throw createManualPassengerError(
+        'INVALID_SEAT_NUMBER',
+        `Passenger ${index + 1} must have a seat between 1 and ${maxParticipants}.`,
+      );
+    }
+    if (seenSeats.has(seatNumber)) {
+      throw createManualPassengerError(
+        'DUPLICATE_SEAT_IN_BOOKING',
+        `Seat ${seatNumber} is assigned more than once in this booking.`,
+      );
+    }
+    if (
+      !phone
+      || phone.length > 40
+      || !/^[+()\d\s-]+$/.test(phone)
+      || (phone.match(/\d/g) || []).length < 7
+    ) {
+      throw createManualPassengerError(
+        'INVALID_PHONE',
+        `Passenger ${index + 1} must have a valid phone number.`,
+      );
+    }
+
+    seenSeats.add(seatNumber);
+    return { name, phone, seatNumber, seatLabel: `S${seatNumber}` };
+  });
+
+  return {
+    tourId,
+    tourCode,
+    bookingRef,
+    email,
+    pickupDate: pickupDate.uk,
+    pickupDateISO: pickupDate.iso,
+    pickupTime,
+    pickupLocation,
+    passengers,
+  };
+};
+
+const getBookingPassengerCount = (booking = {}) => {
+  if (Array.isArray(booking.passengerDetails)) return booking.passengerDetails.length;
+  if (Array.isArray(booking.passengerNames)) return booking.passengerNames.length;
+  if (Array.isArray(booking.passengers)) return booking.passengers.length;
+  return 0;
+};
+
+const getBookingSeatNumbers = (booking = {}) => {
+  const seats = new Set();
+  if (Array.isArray(booking.seatNumbers)) {
+    booking.seatNumbers.forEach((seat) => {
+      const numericSeat = Number(seat);
+      if (Number.isInteger(numericSeat) && numericSeat > 0) seats.add(numericSeat);
+    });
+  }
+  if (Array.isArray(booking.passengerDetails)) {
+    booking.passengerDetails.forEach((passenger) => {
+      const numericSeat = Number(passenger?.seatNo);
+      if (Number.isInteger(numericSeat) && numericSeat > 0) seats.add(numericSeat);
+    });
+  }
+  return seats;
+};
+
+const findManualPassengerSeatConflicts = (bookings = {}, requestedPassengers = []) => {
+  const occupiedSeats = new Set();
+  Object.values(bookings || {}).forEach((booking) => {
+    getBookingSeatNumbers(booking).forEach((seat) => occupiedSeats.add(seat));
+  });
+  return requestedPassengers
+    .map((passenger) => passenger.seatNumber)
+    .filter((seatNumber) => occupiedSeats.has(seatNumber));
+};
+
+const mergePickupPoint = (existingPoints, pickupPoint) => {
+  const points = Array.isArray(existingPoints)
+    ? existingPoints.filter((point) => point && typeof point === 'object')
+    : [];
+  const alreadyExists = points.some((point) => (
+    point.date === pickupPoint.date
+    && point.time === pickupPoint.time
+    && point.location === pickupPoint.location
+  ));
+  return alreadyExists ? points : [...points, pickupPoint];
+};
+
+const buildManualPassengerBookingUpdates = ({
+  normalized,
+  actorUid,
+  tourData,
+  existingTourBookings = {},
+  existingTopLevelPickupPoints = [],
+  nowIso = new Date().toISOString(),
+  idempotencyKey = `manual-create:${randomUUID()}`,
+}) => {
+  const pickupPoint = {
+    date: normalized.pickupDate,
+    time: normalized.pickupTime,
+    location: normalized.pickupLocation,
+  };
+  const passengerDetails = normalized.passengers.map((passenger) => ({
+    name: passenger.name,
+    bookingRef: normalized.bookingRef,
+    tourId: normalized.tourId,
+    tourCode: normalized.tourCode,
+    seatLabel: passenger.seatLabel,
+    seatNo: passenger.seatNumber,
+    pickupPoint,
+    pickupDate: normalized.pickupDate,
+    phone: passenger.phone,
+  }));
+  const passengerNames = normalized.passengers.map((passenger) => passenger.name);
+  const seatNumbers = normalized.passengers.map((passenger) => passenger.seatNumber);
+  const seatLabels = normalized.passengers.map((passenger) => passenger.seatLabel);
+  const existingPassengerCount = Object.values(existingTourBookings || {})
+    .reduce((total, booking) => total + getBookingPassengerCount(booking), 0);
+  const totalPassengerCount = existingPassengerCount + passengerNames.length;
+
+  const booking = {
+    bookingRef: normalized.bookingRef,
+    tourId: normalized.tourId,
+    tourCode: normalized.tourCode,
+    passengerNames,
+    passengers: passengerNames,
+    passengerDetails,
+    pickupPoints: [pickupPoint],
+    seatNumbers,
+    seatLabels,
+    pickupDate: normalized.pickupDate,
+    pickupTime: normalized.pickupTime,
+    pickupLocation: normalized.pickupLocation,
+    source: 'web-admin-manual',
+    createdAt: nowIso,
+    createdBy: actorUid,
+  };
+  const identity = {
+    bookingRef: normalized.bookingRef,
+    normalizedBookingRef: normalized.bookingRef,
+    tourId: normalized.tourId,
+    tourCode: normalized.tourCode,
+    email: normalized.email,
+    normalizedEmail: normalized.email,
+  };
+  const manifest = {
+    status: MANIFEST_STATUS.PENDING,
+    passengerStatus: passengerNames.map(() => MANIFEST_STATUS.PENDING),
+    lastUpdated: nowIso,
+    idempotencyKey,
+  };
+
+  return {
+    booking,
+    identity,
+    manifest,
+    totalPassengerCount,
+    updates: {
+      [`bookings/${normalized.bookingRef}`]: booking,
+      [`booking_identities/${normalized.bookingRef}`]: identity,
+      [`tour_manifests/${normalized.tourId}/bookings/${normalized.bookingRef}`]: manifest,
+      [`tours/${normalized.tourId}/pickupPoints`]: mergePickupPoint(tourData.pickupPoints, pickupPoint),
+      [`pickupPoints/${normalized.tourId}`]: mergePickupPoint(existingTopLevelPickupPoints, pickupPoint),
+      [`tours/${normalized.tourId}/bookedPassengerCount`]: totalPassengerCount,
+      [`tours/${normalized.tourId}/manifestPassengerCount`]: totalPassengerCount,
+    },
+  };
+};
+
+const verifyOperationsAdminAccess = async ({ authUid, db = admin.database() }) => {
+  if (!isValidFirebaseKey(authUid)) return false;
+  if (authUid === OPERATIONS_ADMIN_UID) return true;
+  const snapshot = await db.ref(`admin_users/${authUid}`).once('value');
+  return snapshot.val() === true;
+};
+
+const applyAuthenticatedCors = (req, res) => {
+  const requestOrigin = typeof req.headers?.origin === 'string' ? req.headers.origin : '*';
+  res.set('Access-Control-Allow-Origin', requestOrigin);
+  res.set('Vary', 'Origin');
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.set('Access-Control-Max-Age', '3600');
+};
+
+const acquireManualBookingLock = async ({ db, path, owner, nowMs }) => {
+  const result = await db.ref(path).transaction((current) => {
+    const activeLock = current
+      && typeof current === 'object'
+      && Number(current.expiresAtMs) > nowMs
+      && current.owner !== owner;
+    if (activeLock) return undefined;
+    return {
+      owner,
+      acquiredAtMs: nowMs,
+      expiresAtMs: nowMs + MANUAL_BOOKING_LOCK_TTL_MS,
+    };
+  }, undefined, false);
+  return Boolean(result.committed && result.snapshot.val()?.owner === owner);
+};
+
+const releaseManualBookingLock = async ({ db, path, owner }) => {
+  try {
+    await db.ref(path).transaction((current) => (
+      current?.owner === owner ? null : current
+    ), undefined, false);
+  } catch (error) {
+    log.warn('Manual passenger lock release failed', { path, error: error?.message || String(error) });
+  }
+};
+
 const getBearerToken = (req) => {
   const headerValue = req.headers?.authorization || req.headers?.Authorization;
   if (typeof headerValue !== 'string') return null;
@@ -1389,6 +1717,187 @@ exports.verifyPassengerLogin = onRequest(
       return res.status(500).json({ valid: false, reason: 'INTERNAL_ERROR' });
     }
   }
+);
+
+exports.createManualPassengerBooking = onRequest(
+  {
+    region: 'europe-west1',
+    maxInstances: 10,
+  },
+  async (req, res) => {
+    applyAuthenticatedCors(req, res);
+    if (req.method === 'OPTIONS') {
+      return res.status(204).send('');
+    }
+    if (req.method !== 'POST') {
+      return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
+    }
+
+    const requestAuth = await verifyRequestAuthUid(req);
+    if (!requestAuth.success) {
+      return res.status(401).json({ success: false, reason: 'INVALID_CREDENTIALS' });
+    }
+
+    const db = admin.database();
+    const isAdmin = await verifyOperationsAdminAccess({ authUid: requestAuth.uid, db });
+    if (!isAdmin) {
+      log.warn('Manual passenger creation rejected for non-admin user', {
+        authUid: requestAuth.uid,
+      });
+      return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
+    }
+
+    const clientKey = getRequestClientKey(req);
+    if (!checkRateLimit(`create_manual_passenger_${requestAuth.uid}_${clientKey}`, 20, 60000)) {
+      return res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' });
+    }
+
+    const requestedTourId = normalizeTourKeyForComparison(req.body?.tourId);
+    const requestedBookingRef = normalizeBookingRef(req.body?.bookingRef);
+    const lockOwner = randomUUID();
+    const lockPaths = [
+      requestedBookingRef && isValidFirebaseKey(requestedBookingRef)
+        ? `manual_booking_creation_locks/bookings/${requestedBookingRef}`
+        : null,
+      requestedTourId && isValidFirebaseKey(requestedTourId)
+        ? `manual_booking_creation_locks/tours/${requestedTourId}`
+        : null,
+    ].filter(Boolean);
+    const acquiredLocks = [];
+
+    try {
+      if (lockPaths.length !== 2) {
+        throw createManualPassengerError('INVALID_INPUT', 'Tour and booking reference are required.');
+      }
+
+      for (const lockPath of lockPaths) {
+        const acquired = await acquireManualBookingLock({
+          db,
+          path: lockPath,
+          owner: lockOwner,
+          nowMs: Date.now(),
+        });
+        if (!acquired) {
+          throw createManualPassengerError(
+            'CREATE_IN_PROGRESS',
+            'Another passenger booking is currently being added. Try again shortly.',
+          );
+        }
+        acquiredLocks.push(lockPath);
+      }
+
+      const [
+        tourSnapshot,
+        bookingSnapshot,
+        identitySnapshot,
+        manifestSnapshot,
+        bookingsByTourSnapshot,
+        pickupPointsSnapshot,
+      ] = await Promise.all([
+        db.ref(`tours/${requestedTourId}`).once('value'),
+        db.ref(`bookings/${requestedBookingRef}`).once('value'),
+        db.ref(`booking_identities/${requestedBookingRef}`).once('value'),
+        db.ref(`tour_manifests/${requestedTourId}/bookings/${requestedBookingRef}`).once('value'),
+        db.ref('bookings').orderByChild('tourId').equalTo(requestedTourId).once('value'),
+        db.ref(`pickupPoints/${requestedTourId}`).once('value'),
+      ]);
+
+      if (!tourSnapshot.exists()) {
+        throw createManualPassengerError('TOUR_NOT_FOUND', 'The selected tour no longer exists.');
+      }
+      if (bookingSnapshot.exists() || identitySnapshot.exists() || manifestSnapshot.exists()) {
+        throw createManualPassengerError(
+          'BOOKING_REFERENCE_EXISTS',
+          'That booking reference is already in use.',
+        );
+      }
+
+      const tourData = tourSnapshot.val() || {};
+      const normalized = normalizeManualPassengerPayload(req.body, tourData);
+      const existingTourBookings = bookingsByTourSnapshot.val() || {};
+      const seatConflicts = findManualPassengerSeatConflicts(
+        existingTourBookings,
+        normalized.passengers,
+      );
+      if (seatConflicts.length > 0) {
+        throw createManualPassengerError(
+          'SEAT_ALREADY_ASSIGNED',
+          `Seat ${seatConflicts.join(', ')} is already assigned on this tour.`,
+        );
+      }
+
+      const writePlan = buildManualPassengerBookingUpdates({
+        normalized,
+        actorUid: requestAuth.uid,
+        tourData,
+        existingTourBookings,
+        existingTopLevelPickupPoints: pickupPointsSnapshot.val() || [],
+      });
+      await db.ref().update(writePlan.updates);
+
+      log.info('Manual passenger booking created', {
+        authUid: requestAuth.uid,
+        bookingRef: normalized.bookingRef,
+        tourId: normalized.tourId,
+        passengerCount: normalized.passengers.length,
+      });
+
+      return res.status(201).json({
+        success: true,
+        bookingRef: normalized.bookingRef,
+        tourId: normalized.tourId,
+        tourCode: normalized.tourCode,
+        email: normalized.email,
+        passengerCount: normalized.passengers.length,
+      });
+    } catch (error) {
+      const reason = error?.code || 'INTERNAL_ERROR';
+      const statusByReason = {
+        INVALID_INPUT: 400,
+        INVALID_TOUR: 400,
+        INVALID_BOOKING_REFERENCE: 400,
+        INVALID_EMAIL: 400,
+        INVALID_PICKUP_DATE: 400,
+        INVALID_PICKUP_TIME: 400,
+        INVALID_PICKUP_LOCATION: 400,
+        INVALID_PASSENGERS: 400,
+        INVALID_PASSENGER_NAME: 400,
+        INVALID_SEAT_NUMBER: 400,
+        INVALID_PHONE: 400,
+        DUPLICATE_SEAT_IN_BOOKING: 400,
+        PICKUP_DATE_OUTSIDE_TOUR: 400,
+        TOUR_DATES_INVALID: 409,
+        TOUR_IDENTITY_MISMATCH: 409,
+        TOUR_INACTIVE: 409,
+        TOUR_NOT_FOUND: 404,
+        BOOKING_REFERENCE_EXISTS: 409,
+        SEAT_ALREADY_ASSIGNED: 409,
+        CREATE_IN_PROGRESS: 409,
+      };
+      const status = statusByReason[reason] || 500;
+      if (status >= 500) {
+        log.error('Manual passenger booking creation failed', error, {
+          authUid: requestAuth.uid,
+          bookingRef: requestedBookingRef,
+          tourId: requestedTourId,
+        });
+      } else {
+        log.warn('Manual passenger booking creation rejected', {
+          authUid: requestAuth.uid,
+          bookingRef: requestedBookingRef,
+          tourId: requestedTourId,
+          reason,
+        });
+      }
+      return res.status(status).json({ success: false, reason });
+    } finally {
+      await Promise.all(acquiredLocks.map((path) => releaseManualBookingLock({
+        db,
+        path,
+        owner: lockOwner,
+      })));
+    }
+  },
 );
 
 exports.getTourManifest = onRequest(
@@ -2398,6 +2907,10 @@ exports.__testables = {
   sanitizeLogText,
   buildVerifiedLoginGrantUpdates,
   verifyRequestAuthUid,
+  normalizeManualPassengerPayload,
+  findManualPassengerSeatConflicts,
+  buildManualPassengerBookingUpdates,
+  verifyOperationsAdminAccess,
   buildTourManifestPayload,
   verifyTourManifestAccess,
   normalizeManifestBooking,

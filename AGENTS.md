@@ -139,6 +139,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `category_broadcasts`
 - `web_admin_settings`
 - `booking_identities`
+- `manual_booking_creation_locks`
 
 Admin UID hardcoded in rules:
 
@@ -171,6 +172,7 @@ Passenger login:
 - Entry is booking reference plus booking email.
 - `services/bookingServiceRealtime.js` calls the `verifyPassengerLogin` HTTPS function.
 - The verifier reads `booking_identities/{bookingRef}` and returns deterministic reason codes.
+- Web-admin manual passenger creation must write the same `booking_identities/{bookingRef}` shape as the sync upload so the verifier can grant access normally.
 - Client env flags:
   - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL`
   - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS`
@@ -622,6 +624,8 @@ Main services/utilities:
   - driver assignment multi-path updates
   - CSV import/export preview and execution
   - immutable tour identity guards
+- `src/services/passengerService.js`
+  - validated manual passenger booking creation through the `createManualPassengerBooking` Cloud Function
 - `src/services/tourCsvService.js`
   - CSV parser and row validation
 - `src/services/healthService.js`
@@ -645,6 +649,7 @@ Operational expectations:
 - Dashboard deep links use `/tours?status=unassigned`.
 - Tour identity guards reject create/update flows that would overwrite or mutate a generated tour key.
 - Driver assignment writes must align with the mobile canonical `currentTourId` contract and clean stale assignment links.
+- Manual passenger creation must go through `createManualPassengerBooking`; do not write `bookings`, `booking_identities`, and manifest rows directly from the browser.
 - User-facing errors should be sanitized, especially auth and password reset errors.
 - Vite dev server adds basic security headers in `vite.config.js`; keep preview/deploy parity in mind.
 
@@ -662,6 +667,12 @@ Exported functions:
   - reads `booking_identities/{bookingRef}`
   - optional backend App Check enforcement
   - rate limited by client key
+- `createManualPassengerBooking`
+  - HTTPS `POST`
+  - region `europe-west1`
+  - admin-only through the hardcoded admin UID or `admin_users`
+  - validates tour identity, booking reference, login email, pickup fields, passenger rows, and seat collisions
+  - atomically writes `bookings`, `booking_identities`, `tour_manifests`, pickup indexes, and tour passenger counts
 - `processBroadcastWrite`
   - RTDB create trigger on `/broadcasts/{tourId}/{broadcastId}`
   - region `europe-west1`
@@ -1033,6 +1044,7 @@ High-signal docs:
 - `docs/date-contract.md`
 - `docs/date-contract-web-admin.md`
 - `docs/data-contracts/driver-assignment.md`
+- `docs/data-contracts/manual-passenger-creation.md`
 - `docs/data-contracts/ops-alerts.md`
 - `docs/data-contracts/tour-identity.md`
 - `docs/offline-tour-pack.md`

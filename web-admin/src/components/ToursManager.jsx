@@ -108,7 +108,9 @@ import {
   IconChevronRight,
   IconCalendarEvent,
   IconListDetails,
+  IconUserPlus,
 } from '@tabler/icons-react';
+import AddPassengerModal from './AddPassengerModal';
 import {
   DEFAULT_TOUR,
   TOUR_TEMPLATES,
@@ -162,7 +164,7 @@ const hasTourFinished = (tour, today = getTodayAtNoon()) => {
 };
 
 // Tour Card Component for grid view
-function TourCard({ tourId, tour, drivers, onEdit, onDelete, onDuplicate, onViewDetails }) {
+function TourCard({ tourId, tour, drivers, onEdit, onDelete, onDuplicate, onViewDetails, onAddPassenger }) {
   const [assignModalOpened, { open: openAssignModal, close: closeAssignModal }] = useDisclosure(false);
   const [selectedDriver, setSelectedDriver] = useState('');
 
@@ -242,6 +244,9 @@ function TourCard({ tourId, tour, drivers, onEdit, onDelete, onDuplicate, onView
               </Menu.Item>
               <Menu.Item leftSection={<IconEdit size={14} />} onClick={() => onEdit(tourId)}>
                 Edit Tour
+              </Menu.Item>
+              <Menu.Item leftSection={<IconUserPlus size={14} />} onClick={() => onAddPassenger(tourId)}>
+                Add Passenger
               </Menu.Item>
               <Menu.Item leftSection={<IconCopy size={14} />} onClick={() => onDuplicate(tourId)}>
                 Duplicate
@@ -1414,6 +1419,7 @@ export default function ToursManager() {
   const [deleteModalOpened, { open: openDeleteModal, close: closeDeleteModal }] = useDisclosure(false);
   const [detailsModalOpened, { open: openDetailsModal, close: closeDetailsModal }] = useDisclosure(false);
   const [importExportModalOpened, { open: openImportExportModal, close: closeImportExportModal }] = useDisclosure(false);
+  const [addPassengerModalOpened, { open: openAddPassengerModal, close: closeAddPassengerModal }] = useDisclosure(false);
   const [helpExpanded, setHelpExpanded] = useState(false);
 
   // Selected tour for modals
@@ -1564,6 +1570,11 @@ export default function ToursManager() {
     openDetailsModal();
   };
 
+  const handleAddPassenger = (tourId = null) => {
+    setSelectedTourId(tourId);
+    openAddPassengerModal();
+  };
+
   const handleDuplicate = async (tourId) => {
     try {
       const result = await duplicateTour(tourId, 'admin');
@@ -1583,6 +1594,12 @@ export default function ToursManager() {
 
   const handleTourCreated = (_tourId) => {
     setCurrentPage(1);
+  };
+
+  const handlePassengerCreated = (result) => {
+    if (result?.tourId) {
+      setSelectedTourId(result.tourId);
+    }
   };
 
   const selectedTour = selectedTourId ? tours[selectedTourId] : null;
@@ -1618,6 +1635,9 @@ export default function ToursManager() {
         <Group gap="sm">
           <Button variant="light" leftSection={<IconDatabaseExport size={16} />} onClick={openImportExportModal}>
             Import/Export
+          </Button>
+          <Button variant="light" leftSection={<IconUserPlus size={16} />} onClick={() => handleAddPassenger(null)}>
+            Add Passenger
           </Button>
           <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
             Add Tour
@@ -1854,6 +1874,7 @@ export default function ToursManager() {
               onDelete={handleDelete}
               onDuplicate={handleDuplicate}
               onViewDetails={handleViewDetails}
+              onAddPassenger={handleAddPassenger}
             />
           ))}
         </SimpleGrid>
@@ -1928,6 +1949,11 @@ export default function ToursManager() {
                               <IconEdit size={14} />
                             </ActionIcon>
                           </Tooltip>
+                          <Tooltip label="Add Passenger">
+                            <ActionIcon variant="light" color="green" onClick={() => handleAddPassenger(id)}>
+                              <IconUserPlus size={14} />
+                            </ActionIcon>
+                          </Tooltip>
                           <Tooltip label="Delete">
                             <ActionIcon variant="light" color="red" onClick={() => handleDelete(id)}>
                               <IconTrash size={14} />
@@ -1986,6 +2012,14 @@ export default function ToursManager() {
         onClose={closeDetailsModal}
         tourId={selectedTourId}
         tour={selectedTour}
+      />
+
+      <AddPassengerModal
+        opened={addPassengerModalOpened}
+        onClose={closeAddPassengerModal}
+        tours={tours}
+        initialTourId={selectedTourId || ''}
+        onSuccess={handlePassengerCreated}
       />
 
       <ImportExportModal
