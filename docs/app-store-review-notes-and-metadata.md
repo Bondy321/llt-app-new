@@ -37,7 +37,7 @@ Suggested review path:
 Notes:
 - Public users need a valid booking reference/email or driver code because the app displays private tour operations data.
 - The SOS screen opens emergency options and can open the phone dialer or SMS composer after user action. It does not contact emergency services automatically.
-- Location is requested only for Find My Bus, meeting points/directions, driver pickup sharing, and optional safety/live-location features.
+- Location is requested only for Find My Bus, driver pickup sharing, and optional safety/live-location features.
 - Push notifications are optional and controlled in Notification Preferences.
 - Camera/photo-library access is optional and used only for chat, group album, private photo upload, and saving tour photos to the device.
 - User-generated chat/photo content can be reported to Loch Lomond Travel operations. Users can delete their own content where supported and can locally mute/hide reported chat/photo content.

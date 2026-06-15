@@ -168,7 +168,7 @@ export default function AccountPrivacyScreen({
           style={styles.hero}
         >
           <View style={styles.heroIcon}>
-            <MaterialCommunityIcons name="account-shield" size={28} color={COLORS.white} />
+            <MaterialCommunityIcons name="account" size={28} color={COLORS.white} />
           </View>
           <Text style={styles.heroTitle}>Your app account</Text>
           <Text style={styles.heroSubtitle}>{accountLabel}</Text>
