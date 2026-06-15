@@ -38,7 +38,7 @@ module.exports = {
         }
       : undefined,
     ios: {
-      supportsTablet: true,
+      supportsTablet: false,
       bundleIdentifier: 'com.lochlomondtravel.tourapp',
       buildNumber: '3',
       infoPlist: {
