@@ -21,7 +21,7 @@ module.exports = {
   expo: {
     name: 'LLT',
     slug: 'loch-lomond-travel',
-    version: '1.0.2',
+    version: '1.0.3',
     orientation: 'portrait',
     icon: './assets/images/outward_app_icon.png',
     userInterfaceStyle: 'light',

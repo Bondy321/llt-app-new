@@ -12,7 +12,15 @@ export const ImpactFeedbackStyle = ExpoHaptics.ImpactFeedbackStyle || {};
 export const NotificationFeedbackType = ExpoHaptics.NotificationFeedbackType || {};
 export const AndroidHaptics = ExpoHaptics.AndroidHaptics || {};
 
-const runFallback = (fallback) => (typeof fallback === 'function' ? fallback() : Promise.resolve());
+const runFallback = async (fallback) => {
+  if (typeof fallback !== 'function') return undefined;
+  try {
+    return await fallback();
+  } catch {
+    // Haptics are optional feedback and must never reject a user action.
+    return undefined;
+  }
+};
 
 const performAndroidOrFallback = async (androidType, fallback) => {
   if (

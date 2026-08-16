@@ -2,8 +2,9 @@ import { useState, useEffect, useMemo } from 'react';
 import { ref, onValue, update } from 'firebase/database';
 import { db } from '../firebase';
 import { applyDriverAssignmentMutation } from '../services/tourService';
+import { createDriver } from '../services/driverService';
 import { notifications } from '@mantine/notifications';
-import { formatDateTimeForDisplay, nowAsISOString } from '../utils/dateUtils';
+import { formatDateTimeForDisplay } from '../utils/dateUtils';
 import {
   Card,
   Text,
@@ -130,24 +131,15 @@ function CreateDriverModal({ opened, onClose, onSuccess }) {
     }
 
     setLoading(true);
-    const cleanCode = code.trim().toUpperCase();
-    const id = cleanCode.startsWith('D-') ? cleanCode : `D-${cleanCode}`;
-
     try {
-      await update(ref(db), {
-        [`drivers/${id}`]: {
-          name: name.trim(),
-          createdAt: nowAsISOString(),
-          assignments: {},
-        },
-      });
+      const result = await createDriver({ name, code });
 
       notifications.show({
         title: 'Driver Created',
         message: `${name} has been added successfully`,
         color: 'green',
       });
-      onSuccess(id);
+      onSuccess(result.id);
       setName('');
       setCode('');
       onClose();
@@ -213,23 +205,15 @@ function CreateDriverModal({ opened, onClose, onSuccess }) {
 
 // Driver Details Panel Component
 function DriverDetailsPanel({ driverId, driver }) {
-  const [editName, setEditName] = useState('');
-  const [editPhone, setEditPhone] = useState('');
-  const [editCurrentTourId, setEditCurrentTourId] = useState('');
+  const [editName, setEditName] = useState(() => driver?.name || '');
+  const [editPhone, setEditPhone] = useState(() => driver?.phone || '');
+  const [editCurrentTourId, setEditCurrentTourId] = useState(() => resolveAssignmentTourIdInput(driver?.currentTourId));
   const [newTourId, setNewTourId] = useState('');
   const [saving, setSaving] = useState(false);
   const [assigningTour, setAssigningTour] = useState(false);
 
-  // Update local state when driver changes
-  useEffect(() => {
-    if (driver) {
-      setEditName(driver.name || '');
-      setEditPhone(driver.phone || '');
-      setEditCurrentTourId(resolveAssignmentTourIdInput(driver.currentTourId));
-    }
-  }, [driver]);
-
-  const assignments = driver?.assignedTours || (driver?.assignments ? Object.keys(driver.assignments) : []);
+  const resolvedAssignedTourId = resolveAssignmentTourIdInput(driver?.currentTourId);
+  const assignments = resolvedAssignedTourId ? [resolvedAssignedTourId] : [];
 
   const handleSaveDetails = async () => {
     setSaving(true);
@@ -398,7 +382,7 @@ function DriverDetailsPanel({ driverId, driver }) {
             Details
           </Tabs.Tab>
           <Tabs.Tab value="tours" leftSection={<IconMap size={14} />}>
-            Tours ({assignments.length})
+            Assignment
           </Tabs.Tab>
         </Tabs.List>
 
@@ -452,7 +436,7 @@ function DriverDetailsPanel({ driverId, driver }) {
           <Card shadow="sm" padding="lg" radius="md" withBorder>
             <Stack gap="md">
               <Text size="sm" c="dimmed">
-                Manage assigned tours for this driver. Adding a tour updates app assignment data used during reconnect flows.
+                Each driver has one active tour. Assigning a new tour safely replaces the previous assignment everywhere the app reads it.
               </Text>
 
               <Group gap="sm">
@@ -476,7 +460,7 @@ function DriverDetailsPanel({ driverId, driver }) {
 
               {assignments.length > 0 ? (
                 <Box>
-                  <Text size="sm" fw={500} mb="sm">Assigned Tours</Text>
+                  <Text size="sm" fw={500} mb="sm">Assigned Tour</Text>
                   <Group gap="xs">
                     {assignments.map((tourId) => (
                       <Pill
@@ -523,10 +507,21 @@ export function DriversManager() {
   // Fetch drivers
   useEffect(() => {
     const driversRef = ref(db, 'drivers');
-    const unsubscribe = onValue(driversRef, (snapshot) => {
-      setDrivers(snapshot.val() || {});
-      setLoading(false);
-    });
+    const unsubscribe = onValue(
+      driversRef,
+      (snapshot) => {
+        setDrivers(snapshot.val() || {});
+        setLoading(false);
+      },
+      (error) => {
+        setLoading(false);
+        notifications.show({
+          title: 'Drivers unavailable',
+          message: error?.message || 'Could not load drivers. Refresh and try again.',
+          color: 'red',
+        });
+      },
+    );
     return () => unsubscribe();
   }, []);
 
@@ -665,6 +660,7 @@ export function DriversManager() {
           <Card shadow="sm" padding="lg" radius="md" withBorder style={{ minHeight: 'calc(100vh - 340px)' }}>
             {selectedDriverId && drivers[selectedDriverId] ? (
               <DriverDetailsPanel
+                key={selectedDriverId}
                 driverId={selectedDriverId}
                 driver={drivers[selectedDriverId]}
               />

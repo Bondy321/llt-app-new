@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { lazy, Suspense, useState, useEffect } from 'react';
 import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
-import { auth } from './firebase';
+import { auth, db } from './firebase';
 import { signInWithEmailAndPassword, onAuthStateChanged, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import {
   getRuntimeDebugContext,
@@ -46,13 +46,14 @@ import {
   IconMap,
 } from '@tabler/icons-react';
 
-// Import page components
-import Dashboard from './components/Dashboard';
-import { DriversManager } from './components/DriversManager';
-import ToursManager from './components/ToursManager';
-import { BroadcastPanel } from './components/BroadcastPanel';
-import { ContentModerationPanel } from './components/ContentModerationPanel';
-import Settings from './components/Settings';
+import { hasOperationsAdminAccess } from './services/adminAuthService';
+
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const DriversManager = lazy(() => import('./components/DriversManager').then((module) => ({ default: module.DriversManager })));
+const ToursManager = lazy(() => import('./components/ToursManager'));
+const BroadcastPanel = lazy(() => import('./components/BroadcastPanel').then((module) => ({ default: module.BroadcastPanel })));
+const ContentModerationPanel = lazy(() => import('./components/ContentModerationPanel').then((module) => ({ default: module.ContentModerationPanel })));
+const Settings = lazy(() => import('./components/Settings'));
 
 // Navigation items configuration
 const navItems = [
@@ -95,11 +96,6 @@ function LoginPage() {
       loginTimer.success({
         user: summarizeAuthUser(credential.user),
         operationType: credential.operationType || null,
-      });
-      notifications.show({
-        title: 'Welcome Back!',
-        message: 'Successfully logged in to Loch Lomond Admin',
-        color: 'green',
       });
     } catch (err) {
       loginTimer.failure(err, {
@@ -398,15 +394,24 @@ function AppLayout({ user }) {
 
       {/* Main Content */}
       <AppShell.Main style={{ backgroundColor: '#f8f9fa' }}>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/drivers" element={<DriversManager />} />
-          <Route path="/tours" element={<ToursManager />} />
-          <Route path="/broadcast" element={<BroadcastPanel />} />
-          <Route path="/moderation" element={<ContentModerationPanel />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <Suspense fallback={(
+          <Center style={{ minHeight: 360 }}>
+            <Stack align="center" gap="sm">
+              <Loader size="lg" color="brand" />
+              <Text c="dimmed">Loading admin workspace...</Text>
+            </Stack>
+          </Center>
+        )}>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/drivers" element={<DriversManager />} />
+            <Route path="/tours" element={<ToursManager />} />
+            <Route path="/broadcast" element={<BroadcastPanel />} />
+            <Route path="/moderation" element={<ContentModerationPanel />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </AppShell.Main>
     </AppShell>
   );
@@ -423,11 +428,34 @@ function App() {
       runtime: getRuntimeDebugContext(),
     }, 'info');
 
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    let active = true;
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       logFirebaseDebug('auth:state-listener:changed', {
         user: summarizeAuthUser(user),
         runtime: getRuntimeDebugContext(),
       }, user ? 'info' : 'warn');
+      if (!user) {
+        if (active) {
+          setUser(null);
+          setLoading(false);
+        }
+        return;
+      }
+
+      const isAdmin = await hasOperationsAdminAccess(db, user);
+      if (!active) return;
+      if (!isAdmin) {
+        setUser(null);
+        setLoading(false);
+        notifications.show({
+          title: 'Access denied',
+          message: 'This Firebase account is not authorized for the operations portal.',
+          color: 'red',
+        });
+        await signOut(auth).catch(() => undefined);
+        return;
+      }
+
       setUser(user);
       setLoading(false);
     }, (error) => {
@@ -439,6 +467,7 @@ function App() {
     });
 
     return () => {
+      active = false;
       logFirebaseDebug('auth:state-listener:unsubscribe', {
         currentUserAtDetach: summarizeAuthUser(auth.currentUser),
       });

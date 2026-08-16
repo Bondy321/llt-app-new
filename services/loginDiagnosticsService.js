@@ -262,11 +262,11 @@ const getAuthContext = () => {
 };
 
 const resolveRouteUserKey = (routeUserId) => {
-  if (routeUserId) return safeRealtimeKey(routeUserId, 'anonymous');
-
   const { auth } = getFirebase();
   const authUid = auth?.currentUser?.uid || null;
-  return safeRealtimeKey(authUid || 'anonymous', 'anonymous');
+  if (!authUid) return null;
+  if (routeUserId && routeUserId !== authUid) return null;
+  return safeRealtimeKey(authUid, 'authenticated_user');
 };
 
 const buildAttemptId = () => `attempt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -289,6 +289,9 @@ const writeDiagnosticEntry = async (entry, context = {}) => {
 
   const attemptContext = normalizeAttemptContext(context);
   const userKey = resolveRouteUserKey(attemptContext.routeUserId);
+  if (!userKey) {
+    return { success: false, error: 'AUTH_REQUIRED', localOnly: true };
+  }
   const sessionKey = safeRealtimeKey(diagnosticsSessionId, 'login_diag_session');
   const attemptKey = safeRealtimeKey(attemptContext.attemptId, 'attempt_unknown');
   const eventKey = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -312,23 +315,6 @@ const writeDiagnosticEntry = async (entry, context = {}) => {
     await realtimeDb.ref().update(primary.updates);
     return { success: true, path: primary.basePath };
   } catch (error) {
-    if (userKey !== 'anonymous') {
-      try {
-        const fallback = buildUpdates('anonymous');
-        await realtimeDb.ref().update(fallback.updates);
-        return {
-          success: true,
-          path: fallback.basePath,
-          primaryFailed: true,
-          primaryError: error?.message || String(error),
-        };
-      } catch (fallbackError) {
-        if (typeof console !== 'undefined' && console.warn) {
-          console.warn('[LoginDiagnostics] anonymous fallback write failed', fallbackError?.message || String(fallbackError));
-        }
-      }
-    }
-
     if (typeof console !== 'undefined' && console.warn) {
       console.warn('[LoginDiagnostics] RTDB write failed', error?.message || String(error));
     }
@@ -368,7 +354,7 @@ const startLoginAttempt = (data = {}) => {
   const { auth } = getFirebase();
   const context = {
     attemptId: buildAttemptId(),
-    routeUserId: auth?.currentUser?.uid || 'anonymous',
+    routeUserId: auth?.currentUser?.uid || null,
     startedAt: Date.now(),
   };
 

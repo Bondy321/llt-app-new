@@ -41,11 +41,75 @@ test('sanitizeLogText redacts sensitive identifiers from Functions error text', 
   assert.match(sanitized, /\[redacted-jwt\]/);
 });
 
+test('admin HTTPS actions allow only the deployed portal, explicit custom origins, or local development', () => {
+  assert.equal(__testables.isAllowedAdminOrigin('https://loch-lomond-travel-admin.web.app'), true);
+  assert.equal(__testables.isAllowedAdminOrigin('https://loch-lomond-travel-admin.firebaseapp.com'), true);
+  assert.equal(__testables.isAllowedAdminOrigin('http://localhost:5173'), true);
+  assert.equal(__testables.isAllowedAdminOrigin('http://127.0.0.1:4173'), true);
+  assert.equal(__testables.isAllowedAdminOrigin('', ''), true);
+  assert.equal(__testables.isAllowedAdminOrigin('https://admin.example.com', 'https://admin.example.com'), true);
+  assert.equal(__testables.isAllowedAdminOrigin('https://evil.example'), false);
+  assert.equal(__testables.isAllowedAdminOrigin('https://loch-lomond-travel-admin.web.app.evil.example'), false);
+  assert.equal(__testables.isAllowedAdminOrigin('null'), false);
+});
+
 test('toRealtimeKeySegment encodes stable passenger IDs for RTDB paths', () => {
   assert.equal(
     __testables.toRealtimeKeySegment('pax_v1:T123659:msandreayoung@yahoo.co.uk'),
     'pax_v1:T123659:msandreayoung@yahoo_2E_co_2E_uk',
   );
+});
+
+const createWindowLimiter = () => {
+  const counts = new Map();
+  return (key, maxRequests) => {
+    const next = (counts.get(key) || 0) + 1;
+    counts.set(key, next);
+    return next <= maxRequests;
+  };
+};
+
+test('passenger login limits allow launch cohorts behind one shared network', () => {
+  const limiter = createWindowLimiter();
+  for (let index = 0; index < 50; index += 1) {
+    const result = __testables.checkPassengerLoginRateLimits({
+      authUid: `auth-user-${index}`,
+      clientKey: '203.0.113.10:Expo/55 shared-agent',
+      bookingRef: `BOOKING-${index}`,
+      email: `passenger-${index}@example.test`,
+      limiter,
+    });
+    assert.equal(result.allowed, true);
+  }
+});
+
+test('passenger login limits still stop repeated credential guessing by one account', () => {
+  const credentialLimiter = createWindowLimiter();
+  let result;
+  for (let index = 0; index < 9; index += 1) {
+    result = __testables.checkPassengerLoginRateLimits({
+      authUid: 'one-auth-user',
+      clientKey: '203.0.113.20:Expo/55',
+      bookingRef: 'SAME-BOOKING',
+      email: 'same@example.test',
+      limiter: credentialLimiter,
+    });
+  }
+  assert.equal(result.allowed, false);
+  assert.equal(result.scope, 'credential');
+
+  const accountLimiter = createWindowLimiter();
+  for (let index = 0; index < 25; index += 1) {
+    result = __testables.checkPassengerLoginRateLimits({
+      authUid: 'one-auth-user',
+      clientKey: '203.0.113.20:Expo/55',
+      bookingRef: `BOOKING-${index}`,
+      email: `guess-${index}@example.test`,
+      limiter: accountLimiter,
+    });
+  }
+  assert.equal(result.allowed, false);
+  assert.equal(result.scope, 'account');
 });
 
 test('buildVerifiedLoginGrantUpdates scopes passenger grants to booking, tour, and auth uid', () => {
@@ -730,4 +794,184 @@ test('generatePhotoVariantsForRecord marks failed when source download fails', a
   assert.equal(updates[0].photoId, 'photo-2');
   assert.equal(updates[0].payload.variantStatus, 'failed');
   assert.equal(updates[0].payload.variantError, 'download failed');
+});
+
+test('tour deletion plan removes all tour-scoped app data and canonical assignment links', () => {
+  const updates = __testables.buildTourDeletionUpdates({
+    tourId: 'TOUR_1',
+    bookings: { BOOK_1: { tourId: 'TOUR_1' } },
+    drivers: {
+      'D-ALICE': { currentTourId: 'TOUR 1', authUid: 'driver-auth', assignments: { TOUR_1: true } },
+      'D-BOB': { currentTourId: 'OTHER', assignments: { TOUR_1: true, OTHER: true } },
+    },
+    contentReports: { report_1: { tourId: 'TOUR_1' }, report_2: { tourId: 'OTHER' } },
+    globalSafetyAlerts: { alert_1: { tourId: 'TOUR_1' }, alert_2: { tourId: 'OTHER' } },
+  });
+
+  for (const path of [
+    'tours/TOUR_1',
+    'tour_manifests/TOUR_1',
+    'pickupPoints/TOUR_1',
+    'chats/TOUR_1',
+    'internal_chats/TOUR_1',
+    'group_tour_photos/TOUR_1',
+    'private_tour_photos/TOUR_1',
+    'broadcasts/TOUR_1',
+    'tour_notifications/TOUR_1',
+    'notification_read_state/TOUR_1',
+    'tour_access_grants/TOUR_1',
+    'bookings/BOOK_1',
+    'booking_identities/BOOK_1',
+    'booking_access_grants/BOOK_1',
+    'drivers/D-ALICE/currentTourId',
+    'drivers/D-ALICE/currentTourCode',
+    'drivers/D-ALICE/assignments/TOUR_1',
+    'drivers/D-BOB/assignments/TOUR_1',
+    'content_reports/report_1',
+    'globalSafetyAlerts/alert_1',
+  ]) {
+    assert.equal(updates[path], null, `${path} must be deleted`);
+  }
+  assert.equal(updates['users/driver-auth/driverAssignedTourId'], null);
+  assert.equal(updates['drivers/D-BOB/currentTourId'], undefined);
+  assert.equal(updates['content_reports/report_2'], undefined);
+});
+
+test('tour deletion retry plan remains safe when the primary tour is already absent', () => {
+  const updates = __testables.buildTourDeletionUpdates({ tourId: 'TOUR_1' });
+  assert.equal(updates['tours/TOUR_1'], null);
+  assert.equal(updates['tour_manifests/TOUR_1'], null);
+  assert.equal(updates['group_tour_photos/TOUR_1'], null);
+  assert.equal(updates['private_tour_photos/TOUR_1'], null);
+  assert.equal(updates['tour_access_grants/TOUR_1'], null);
+});
+
+test('tour notification ids are deterministic, compact, and scoped by source', () => {
+  const first = __testables.buildTourNotificationId({
+    type: 'announcement',
+    tourId: 'TOUR_1',
+    sourceId: 'broadcast_1',
+  });
+  const repeated = __testables.buildTourNotificationId({
+    type: 'announcement',
+    tourId: 'TOUR_1',
+    sourceId: 'broadcast_1',
+  });
+  const other = __testables.buildTourNotificationId({
+    type: 'announcement',
+    tourId: 'TOUR_1',
+    sourceId: 'broadcast_2',
+  });
+
+  assert.equal(first, repeated);
+  assert.notEqual(first, other);
+  assert.match(first, /^ntf_[a-f0-9]{32}$/);
+});
+
+test('push navigation payloads preserve durable notice and exact destination context', () => {
+  assert.deepEqual(__testables.buildPushNavigationData({
+    screen: 'Chat',
+    tourId: 'TOUR_1',
+    noticeId: 'notice-1',
+    messageId: 'message-1',
+    notificationType: 'announcement',
+    timestamp: 100,
+  }), {
+    screen: 'Chat',
+    tourId: 'TOUR_1',
+    noticeId: 'notice-1',
+    messageId: 'message-1',
+    notificationType: 'announcement',
+    timestamp: 100,
+  });
+  assert.deepEqual(__testables.buildPushNavigationData({
+    screen: 'NotificationPreferences',
+    categoryKey: 'day_trips',
+    broadcastId: 'broadcast-1',
+    notificationType: 'category_broadcast',
+    timestamp: 200,
+  }), {
+    screen: 'NotificationPreferences',
+    categoryKey: 'day_trips',
+    broadcastId: 'broadcast-1',
+    notificationType: 'category_broadcast',
+    timestamp: 200,
+  });
+  assert.throws(
+    () => __testables.buildPushNavigationData({ screen: 'Chat' }),
+    /requires a tour id/,
+  );
+});
+
+test('itinerary notifications describe the specific schedule change', () => {
+  assert.deepEqual(
+    __testables.summarizeItineraryChange(
+      { days: [{ day: 1, content: 'Luss' }, { day: 2, content: 'Oban' }] },
+      { days: [{ day: 1, content: 'Luss' }, { day: 2, content: 'Glencoe' }] },
+    ),
+    {
+      body: 'Day 2 has changed. Tap to review the updated schedule.',
+      changedDayCount: 1,
+    },
+  );
+
+  assert.equal(
+    __testables.summarizeItineraryChange({}, { days: [{ day: 1 }, { day: 2 }, { day: 3 }] }).body,
+    'Your 3-day itinerary is now available. Tap to review the schedule.',
+  );
+});
+
+test('tour notification persistence is idempotent and retains only the newest 100 records', async () => {
+  let storedValue = Object.fromEntries(Array.from({ length: 100 }, (_, index) => [
+    `old_${index}`,
+    {
+      noticeId: `old_${index}`,
+      createdAtMs: index + 1,
+    },
+  ]));
+  const db = {
+    ref: (path) => ({
+      transaction: async (mutator) => {
+        assert.equal(path, 'tour_notifications/TOUR_1');
+        storedValue = mutator(storedValue);
+      },
+    }),
+  };
+  const record = __testables.buildTourNotificationRecord({
+    type: 'itinerary',
+    tourId: 'TOUR_1',
+    sourceId: 'event_101',
+    title: 'Itinerary updated',
+    body: 'Day 2 has changed.',
+    screen: 'Itinerary',
+    createdAtMs: 101,
+    messageId: 'message_101',
+  });
+
+  await __testables.persistTourNotification({ db, record });
+  await __testables.persistTourNotification({ db, record });
+
+  assert.equal(Object.keys(storedValue).length, 100);
+  assert.equal(storedValue.old_0, undefined);
+  assert.deepEqual(storedValue[record.noticeId], record);
+  assert.equal(record.messageId, 'message_101');
+});
+
+test('reported photo cleanup resolves source and generated variant storage objects', () => {
+  const paths = __testables.resolveReportedPhotoStoragePaths({
+    tourId: 'TOUR_1',
+    photo: { storagePath: 'group_tour_photos/TOUR_1/holiday.jpeg' },
+  });
+  assert.deepEqual(paths.sort(), [
+    'group_tour_photos/TOUR_1/holiday.jpeg',
+    'group_tour_photos/TOUR_1/thumbnails/holiday_thumb.jpg',
+    'group_tour_photos/TOUR_1/viewers/holiday_viewer.jpg',
+  ].sort());
+});
+
+test('broadcast delivery status distinguishes accepted, partial, failed, and empty fanout', () => {
+  assert.equal(__testables.resolveBroadcastDeliveryStatus({ recipientCount: 0 }), 'no_recipients');
+  assert.equal(__testables.resolveBroadcastDeliveryStatus({ recipientCount: 2, successCount: 2 }), 'delivered');
+  assert.equal(__testables.resolveBroadcastDeliveryStatus({ recipientCount: 2, successCount: 1, errorCount: 1 }), 'partial');
+  assert.equal(__testables.resolveBroadcastDeliveryStatus({ recipientCount: 2, successCount: 0, errorCount: 2 }), 'failed');
 });

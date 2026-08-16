@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   COLORS as THEME,

@@ -241,6 +241,7 @@ export default function AddPassengerModal({
               value={draft.tourId}
               onChange={handleTourChange}
               searchable
+              limit={50}
               required
               error={validation.errors.tourId}
             />

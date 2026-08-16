@@ -37,6 +37,8 @@ Cloud Function variant generation updates records to:
 - `variantStatus: "ready"` with `viewerUrl` and `thumbnailUrl`; or
 - `variantStatus: "failed"` with `variantError`.
 
+Admin moderation of a reported group photo must call `removeReportedPhoto`. The Function reads the trusted report and photo record, deletes the source, viewer, and thumbnail Storage objects, then atomically removes RTDB metadata and marks the report `actioned`. Browser code must not treat metadata-only deletion as complete photo removal.
+
 ## Deployment requirement (region alignment)
 
 - Cloud Storage triggers must run in the same region as the bucket they listen to.

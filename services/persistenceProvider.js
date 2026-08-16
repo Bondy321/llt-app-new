@@ -1,5 +1,5 @@
 // services/persistenceProvider.js
-// Centralized, crash-safe persistence layer with SecureStore -> AsyncStorage -> in-memory fallback.
+// Centralized persistence with an explicit storage policy per data class.
 let SecureStore;
 let AsyncStorage;
 
@@ -46,12 +46,28 @@ const isReactNativeRuntime = (runtime = {}) => {
   const globalObj = runtime.globalObject || globalThis;
   const navigatorObj = runtime.navigatorObject || (typeof navigator !== 'undefined' ? navigator : undefined);
 
+  // React Native Web deliberately installs throwing accessors for some bridge
+  // globals. Detect an actual browser before touching any native-only globals so
+  // a harmless capability check can never prevent the web bundle from starting.
+  if (globalObj?.window && globalObj?.document) {
+    return false;
+  }
+
   return Boolean(
     navigatorObj?.product === 'ReactNative'
     || globalObj?.nativeCallSyncHook
     || globalObj?.__fbBatchedBridgeConfig
     || globalObj?.HermesInternal
   );
+};
+
+const isBrowserRuntime = (runtime = {}) => {
+  if (typeof runtime.isWeb === 'boolean') {
+    return runtime.isWeb;
+  }
+
+  const globalObj = runtime.globalObject || globalThis;
+  return Boolean(globalObj?.window && globalObj?.document);
 };
 
 const resolveSecureStoreOptions = (secureStore) => {
@@ -68,6 +84,9 @@ const createPersistenceProvider = ({
   logger = defaultLogger,
   secureStoreAdapter,
   asyncStorageAdapter,
+  preferredStorage = 'secure-store',
+  allowMemoryFallback = true,
+  migrateFrom = [],
   runtime = {},
 } = {}) => {
   const namespacedKey = (key) => `${namespace}_${key}`;
@@ -77,6 +96,7 @@ const createPersistenceProvider = ({
   const hasInjectedStorageAdapter = Boolean(secureStoreAdapter || asyncStorageAdapter);
   const inTestEnv = (runtime.nodeEnv || process?.env?.NODE_ENV) === 'test';
   const nativeRuntime = isReactNativeRuntime(runtime);
+  const browserRuntime = isBrowserRuntime(runtime);
 
   const candidates = [
     createStorageCandidate('secure-store', {
@@ -99,7 +119,9 @@ const createPersistenceProvider = ({
     }),
     createStorageCandidate('async-storage', {
       isAvailable: () => {
-        if (!nativeRuntime && !asyncStorageAdapter) {
+        // AsyncStorage's web implementation is backed by browser localStorage,
+        // so it is a durable adapter there as well as on native devices.
+        if (!nativeRuntime && !browserRuntime && !asyncStorageAdapter) {
           return false;
         }
 
@@ -130,12 +152,28 @@ const createPersistenceProvider = ({
     })
   ];
 
+  const candidateByName = new Map(candidates.map((candidate) => [candidate.name, candidate]));
+  const normalizedPreferredStorage = candidateByName.has(preferredStorage)
+    ? preferredStorage
+    : 'secure-store';
+  const fallbackNames = normalizedPreferredStorage === 'secure-store'
+    ? ['async-storage']
+    : [];
+  if (allowMemoryFallback) fallbackNames.push('memory-mock');
+  const selectionOrder = [...new Set([normalizedPreferredStorage, ...fallbackNames])]
+    .map((name) => candidateByName.get(name))
+    .filter(Boolean);
+  const migrationCandidates = [...new Set(Array.isArray(migrateFrom) ? migrateFrom : [])]
+    .filter((name) => name !== normalizedPreferredStorage)
+    .map((name) => candidateByName.get(name))
+    .filter(Boolean);
+
   let active;
   if (inTestEnv && !hasInjectedStorageAdapter) {
     active = candidates[candidates.length - 1];
     logger.debug('Persistence provider forced to memory in test environment');
   } else {
-    active = candidates.find((candidate) => {
+    active = selectionOrder.find((candidate) => {
       try {
         return candidate.isAvailable();
       } catch (error) {
@@ -146,30 +184,105 @@ const createPersistenceProvider = ({
   }
 
   if (!active) {
-    active = candidates[candidates.length - 1];
+    if (!allowMemoryFallback) {
+      throw new Error(`No durable persistence adapter is available for ${namespace}`);
+    }
+    active = candidateByName.get('memory-mock');
   }
 
   logger.info('Persistence provider selected', { mode: active.name });
 
+  let lastError = null;
+  let degraded = active.name === 'memory-mock' && !inTestEnv;
+
+  const isAvailable = (candidate) => {
+    try {
+      return candidate?.isAvailable?.() === true;
+    } catch (error) {
+      logger.debug(`Storage candidate ${candidate?.name || 'unknown'} failed availability check`, {
+        error: error?.message,
+      });
+      return false;
+    }
+  };
+
+  const resolveFallback = () => {
+    const activeIndex = selectionOrder.findIndex((candidate) => candidate.name === active.name);
+    return selectionOrder
+      .slice(Math.max(0, activeIndex + 1))
+      .find((candidate) => candidate.name !== 'memory-mock' || allowMemoryFallback)
+      || null;
+  };
+
   const safeCall = async (fnName, key, value) => {
     try {
-      return await active[fnName](key, value);
-    } catch (error) {
-      if (active.name === 'memory-mock') {
-        logger.error(`Persistence provider ${active.name} failed for ${fnName}`, { key: namespacedKey(key), error: error?.message });
-      } else {
-        logger.warn(`Persistence provider ${active.name} failed for ${fnName}`, { key: namespacedKey(key), error: error?.message });
-        logger.info('Falling back to in-memory persistence after failure', { previousMode: active.name });
-        active = candidates[candidates.length - 1];
-      }
-    }
+      const result = await active[fnName](key, value);
 
-    return undefined;
+      if (fnName === 'getItemAsync' && result == null && active.name === normalizedPreferredStorage) {
+        for (const legacyCandidate of migrationCandidates) {
+          if (!isAvailable(legacyCandidate)) continue;
+          try {
+            const legacyValue = await legacyCandidate.getItemAsync(key);
+            if (legacyValue == null) continue;
+            await active.setItemAsync(key, legacyValue);
+            await legacyCandidate.deleteItemAsync(key);
+            logger.info('Migrated persisted value to preferred storage', {
+              key: namespacedKey(key),
+              from: legacyCandidate.name,
+              to: active.name,
+            });
+            return legacyValue;
+          } catch (migrationError) {
+            lastError = migrationError;
+            logger.warn('Persistence migration failed', {
+              key: namespacedKey(key),
+              from: legacyCandidate.name,
+              to: active.name,
+              error: migrationError?.message,
+            });
+          }
+        }
+      }
+
+      return result;
+    } catch (error) {
+      lastError = error;
+      degraded = true;
+      logger.warn(`Persistence provider ${active.name} failed for ${fnName}`, {
+        key: namespacedKey(key),
+        error: error?.message,
+      });
+
+      const fallback = resolveFallback();
+      if (fallback && isAvailable(fallback)) {
+        const previousMode = active.name;
+        active = fallback;
+        logger.warn('Persistence provider switched after failure', {
+          previousMode,
+          nextMode: active.name,
+        });
+        return active[fnName](key, value);
+      }
+
+      const persistenceError = new Error(`Durable persistence failed for ${namespace}`);
+      persistenceError.code = 'PERSISTENCE_UNAVAILABLE';
+      persistenceError.storageMode = active.name;
+      persistenceError.cause = error;
+      throw persistenceError;
+    }
   };
 
   return {
     get mode() {
       return active.name;
+    },
+    get health() {
+      return {
+        mode: active.name,
+        degraded,
+        durable: active.name !== 'memory-mock',
+        lastError: lastError?.message || null,
+      };
     },
     async setItemAsync(key, value) {
       return safeCall('setItemAsync', key, value);
@@ -216,5 +329,7 @@ const createPersistenceProvider = ({
 
 module.exports = {
   createPersistenceProvider,
+  isBrowserRuntime,
+  isReactNativeRuntime,
   default: createPersistenceProvider,
 };

@@ -24,9 +24,10 @@ const APP_SESSION_KEYS = [
 ];
 
 const SAFETY_LOCAL_KEYS = [
-  '@LLT:safetyOfflineQueue',
   '@LLT:trustedContacts',
 ];
+const SAFETY_QUEUE_KEY = '@LLT:safetyOfflineQueue';
+const TRUSTED_CONTACTS_KEY_PREFIX = '@LLT:trustedContacts:v2:';
 
 const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
 
@@ -101,6 +102,62 @@ const makeSummary = () => ({
   localStoresCleared: 0,
   warnings: [],
 });
+
+const parseStoredArray = (raw) => {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const matchesDeletedIdentity = (value, identitySet) => (
+  typeof value === 'string' && identitySet.has(value.trim())
+);
+
+const clearOwnedSafetyQueue = async (localStorage, identitySet) => {
+  if (typeof localStorage?.getItem !== 'function') return;
+  const raw = await localStorage.getItem(SAFETY_QUEUE_KEY);
+  if (!raw) return;
+  const queue = parseStoredArray(raw);
+  const retained = queue.filter((event) => !(
+    matchesDeletedIdentity(event?.sessionScope?.principalId, identitySet)
+    || matchesDeletedIdentity(event?.principalId, identitySet)
+    || matchesDeletedIdentity(event?.userId, identitySet)
+  ));
+  if (retained.length === 0) await localStorage.removeItem?.(SAFETY_QUEUE_KEY);
+  else if (retained.length !== queue.length) await localStorage.setItem?.(SAFETY_QUEUE_KEY, JSON.stringify(retained));
+};
+
+const clearOwnedOfflineActions = async (offlineStorage, identitySet) => {
+  if (typeof offlineStorage?.getItemAsync !== 'function') {
+    // Compatibility fallback for injected/older providers that do not expose
+    // reads. The production durable provider supports selective cleanup.
+    const deleted = await offlineStorage?.multiDeleteAsync?.(['queue_v1']);
+    if (deleted === false) {
+      throw new Error('The offline action queue could not be cleared.');
+    }
+    return;
+  }
+  const raw = await offlineStorage.getItemAsync('queue_v1');
+  if (!raw) return;
+  const queue = parseStoredArray(raw);
+  const retained = queue.filter((action) => !(
+    matchesDeletedIdentity(action?.scope?.principalId, identitySet)
+    || matchesDeletedIdentity(action?.payload?.principalId, identitySet)
+    || matchesDeletedIdentity(action?.payload?.userId, identitySet)
+    || matchesDeletedIdentity(action?.payload?.ownerId, identitySet)
+  ));
+  if (retained.length === queue.length) return;
+  if (retained.length === 0 && typeof offlineStorage.deleteItemAsync === 'function') {
+    await offlineStorage.deleteItemAsync('queue_v1');
+  } else {
+    await offlineStorage.setItemAsync('queue_v1', JSON.stringify(retained));
+  }
+};
 
 const warn = (summary, label, error) => {
   summary.warnings.push({
@@ -198,6 +255,8 @@ const buildChatScrubUpdates = ({
     if (senderMatches && !value?.deleted) {
       updates[`${messagePath}/deleted`] = true;
       updates[`${messagePath}/text`] = '';
+      updates[`${messagePath}/imageUrl`] = null;
+      updates[`${messagePath}/thumbnailUrl`] = null;
       updates[`${messagePath}/deletedAt`] = now;
       updates[`${messagePath}/deletedBy`] = deletedBy;
       summary.chatMessagesScrubbed += 1;
@@ -285,6 +344,8 @@ const clearLocalStores = async ({
   providerFactory,
   tourId,
   role,
+  packOwnerId,
+  identities,
   summary,
 }) => {
   const sessionKeyValues = sessionKeys ? Object.values(sessionKeys).filter(Boolean) : APP_SESSION_KEYS;
@@ -295,24 +356,68 @@ const clearLocalStores = async ({
   ].filter(Boolean);
 
   const authStorage = providerFactory({ namespace: 'LLT_AUTH' });
-  const logStorage = providerFactory({ namespace: 'LLT_LOGS' });
-  const offlineStorage = providerFactory({ namespace: 'LLT_OFFLINE' });
+  const logStorage = providerFactory({
+    namespace: 'LLT_LOGS',
+    preferredStorage: 'async-storage',
+    allowMemoryFallback: false,
+    migrateFrom: ['secure-store'],
+  });
+  const offlineStorage = providerFactory({
+    namespace: 'LLT_OFFLINE',
+    preferredStorage: 'async-storage',
+    allowMemoryFallback: false,
+    migrateFrom: ['secure-store'],
+  });
+  const identitySet = new Set(identities || []);
 
   clearTasks.push(authStorage.multiDeleteAsync(['LLT_authUser', 'LLT_authToken']));
   clearTasks.push(logStorage.multiDeleteAsync(['app_logs']));
 
-  const offlineKeys = ['queue_v1', 'processed_action_ids_v1', 'last_success_at_v1'];
+  const offlineKeys = [];
   if (tourId && role) {
     offlineKeys.push(`tour_pack_${role}_${tourId}`);
     offlineKeys.push(`tour_pack_meta_${role}_${tourId}`);
+    const normalizedPackOwnerId = typeof packOwnerId === 'string'
+      ? encodeURIComponent(packOwnerId.trim().toUpperCase())
+      : null;
+    if (normalizedPackOwnerId) {
+      offlineKeys.push(`tour_pack_v2_${role}_${tourId}_${normalizedPackOwnerId}`);
+      offlineKeys.push(`tour_pack_meta_v2_${role}_${tourId}_${normalizedPackOwnerId}`);
+    }
   }
-  clearTasks.push(offlineStorage.multiDeleteAsync(offlineKeys));
+  if (offlineKeys.length > 0) clearTasks.push(offlineStorage.multiDeleteAsync(offlineKeys));
+  clearTasks.push(clearOwnedOfflineActions(offlineStorage, identitySet));
+  clearTasks.push(clearOwnedSafetyQueue(localStorage, identitySet));
+  if (typeof localStorage?.multiRemove === 'function') {
+    clearTasks.push(localStorage.multiRemove((identities || []).map(
+      (identity) => `${TRUSTED_CONTACTS_KEY_PREFIX}${encodeURIComponent(identity)}`,
+    )));
+  }
 
   const results = await Promise.allSettled(clearTasks);
-  summary.localStoresCleared = results.filter((result) => result.status === 'fulfilled').length;
-  results
-    .filter((result) => result.status === 'rejected')
-    .forEach((result) => warn(summary, 'local_cleanup_failed', result.reason));
+  summary.localStoresCleared = results.filter(
+    (result) => result.status === 'fulfilled' && result.value !== false,
+  ).length;
+  results.forEach((result) => {
+    if (result.status === 'rejected') {
+      warn(summary, 'local_cleanup_failed', result.reason);
+    } else if (result.value === false) {
+      warn(summary, 'local_cleanup_failed', new Error('A local storage provider could not clear its records.'));
+    }
+  });
+};
+
+const getAccountDeletionErrorMessage = (error) => {
+  if (error?.code === 'auth/requires-recent-login') {
+    return 'Please restart the app and try Delete account again so we can refresh your secure session.';
+  }
+  if (/network|offline|timeout|timed out/i.test(`${error?.code || ''} ${error?.message || ''}`)) {
+    return 'Account deletion could not reach app services. Check your connection and try again.';
+  }
+  if (/permission|unauthori[sz]ed/i.test(`${error?.code || ''} ${error?.message || ''}`)) {
+    return 'Account deletion could not verify all required permissions. Sign in again and retry.';
+  }
+  return 'Account deletion could not be completed safely. Please try again.';
 };
 
 export const deleteCurrentAccount = async ({
@@ -426,6 +531,8 @@ export const deleteCurrentAccount = async ({
       providerFactory,
       tourId,
       role,
+      packOwnerId: bookingData?.id || null,
+      identities,
       summary,
     });
 
@@ -454,11 +561,15 @@ export const deleteCurrentAccount = async ({
     });
     return {
       ...summary,
-      error: error?.code === 'auth/requires-recent-login'
-        ? 'Please restart the app and try Delete account again so we can refresh your secure session.'
-        : (error?.message || 'Account deletion failed. Please try again.'),
+      error: getAccountDeletionErrorMessage(error),
     };
   }
+};
+
+export const __accountDeletionTestables = {
+  clearOwnedOfflineActions,
+  clearOwnedSafetyQueue,
+  getAccountDeletionErrorMessage,
 };
 
 export default {

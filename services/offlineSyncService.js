@@ -6,24 +6,41 @@ const logger = process.env.NODE_ENV === 'test'
       return loggerImport.default || loggerImport || console;
     })();
 const { parseTimestampMs } = require('./timeUtils');
+const { normalizeTourId } = require('./tourIdentityService');
 const { HEALTH_STATE, UNIFIED_SYNC_STATES } = require('../utils/unifiedSyncContract');
-const storage = createPersistenceProvider({ namespace: 'LLT_OFFLINE' });
+const storage = createPersistenceProvider({
+  namespace: 'LLT_OFFLINE',
+  preferredStorage: 'async-storage',
+  allowMemoryFallback: false,
+  migrateFrom: ['secure-store'],
+});
 
 const SCHEMA_VERSION = 1;
 const SUPPORTED_QUEUE_TYPES = new Set(['MANIFEST_UPDATE', 'CHAT_MESSAGE', 'INTERNAL_CHAT_MESSAGE', 'PHOTO_UPLOAD']);
 const SUPPORTED_QUEUE_STATUSES = new Set(['queued', 'uploading', 'retrying', 'failed', 'completed', 'syncing']);
 const MAX_ATTEMPTS = 5;
 const QUEUE_KEY = 'queue_v1';
+const QUEUE_CORRUPT_BACKUP_KEY = 'queue_v1_corrupt_backup';
 const PROCESSED_ACTIONS_KEY = 'processed_action_ids_v1';
 const LAST_SUCCESS_AT_KEY = 'last_success_at_v1';
 const MAX_PROCESSED_IDS = 500;
+const MAX_QUEUE_ACTIONS = 500;
 const PHOTO_UPLOAD_COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
 const PHOTO_UPLOAD_COMPLETED_KEEP_LAST = 20;
+const ACTION_SCOPE_VERSION = 1;
+const SUPPORTED_SCOPE_ROLES = new Set(['passenger', 'driver']);
 
 
+// Subscription records retain the scope captured at registration time. Storing
+// bare callback functions caused explicitly scoped observers to start receiving
+// another traveller's queue after the app changed its active session.
 const listeners = new Set();
 const queueListeners = new Set();
+const tourPackWriteLocks = new Map();
+let queueMutationTail = Promise.resolve();
 let replayLock = false;
+let activeSessionScope = null;
+let activeSessionGeneration = 0;
 
 const RESPONSE = {
   ok: (data) => ({ success: true, data }),
@@ -60,6 +77,7 @@ const summarizeUriForLog = (uri) => {
 const summarizeQueueActionForLog = (action = {}) => {
   const payload = action?.payload && typeof action.payload === 'object' ? action.payload : {};
   const localAssets = payload.localAssets && typeof payload.localAssets === 'object' ? payload.localAssets : {};
+  const scope = deriveActionScope(action);
 
   return {
     id: maskIdentifier(action?.id),
@@ -76,6 +94,9 @@ const summarizeQueueActionForLog = (action = {}) => {
     visibility: payload.visibility || null,
     ownerId: maskIdentifier(payload.ownerId),
     userId: maskIdentifier(payload.userId),
+    scopePrincipalId: maskIdentifier(scope?.principalId),
+    scopeRole: scope?.role || null,
+    hasSessionScope: Boolean(scope),
     hasIdempotencyKey: Boolean(payload.idempotencyKey),
     hasLocalAssets: Boolean(payload.localAssets),
     localAssets: {
@@ -84,6 +105,102 @@ const summarizeQueueActionForLog = (action = {}) => {
     },
     payloadKeys: Object.keys(payload).slice(0, 20),
   };
+};
+
+const normalizePrincipalId = (value) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed && trimmed !== 'anonymous' ? trimmed : null;
+};
+
+const normalizeSessionScope = (scope, fallbackTourId = null) => {
+  if (!scope || typeof scope !== 'object') return null;
+  const tourId = normalizeTourId(scope.tourId || fallbackTourId);
+  const principalId = normalizePrincipalId(scope.principalId || scope.actorPrincipalId || scope.ownerId);
+  const role = SUPPORTED_SCOPE_ROLES.has(scope.role) ? scope.role : null;
+  const authUid = normalizePrincipalId(scope.authUid);
+  const cacheOwnerId = normalizePrincipalId(scope.cacheOwnerId || scope.bookingRef || scope.principalId);
+  if (!tourId || !principalId || !role) return null;
+  return {
+    version: ACTION_SCOPE_VERSION,
+    tourId,
+    principalId,
+    role,
+    authUid,
+    cacheOwnerId,
+  };
+};
+
+const deriveActionScope = (action = {}) => {
+  const payload = action?.payload && typeof action.payload === 'object' ? action.payload : {};
+  const sender = payload.senderInfo && typeof payload.senderInfo === 'object' ? payload.senderInfo : {};
+  const explicit = normalizeSessionScope(action.scope, action.tourId);
+  if (explicit) return explicit;
+
+  const principalId = normalizePrincipalId(
+    action.principalId
+      || payload.actorPrincipalId
+      || payload.ownerId
+      || payload.ownerIdentity
+      || payload.userId
+      || sender.principalId
+      || sender.stablePassengerId
+      || sender.userId
+  );
+  const isDriver = action.role === 'driver'
+    || payload.actorRole === 'driver'
+    || sender.principalType === 'driver'
+    || sender.isDriver === true
+    || action.type === 'INTERNAL_CHAT_MESSAGE';
+  return normalizeSessionScope({
+    tourId: action.tourId || payload.tourId || payload.tourCode,
+    principalId,
+    role: isDriver ? 'driver' : 'passenger',
+    authUid: action.authUid || payload.authUid || null,
+  });
+};
+
+const actionMatchesScope = (action, scope) => {
+  const normalizedScope = normalizeSessionScope(scope);
+  const actionScope = deriveActionScope(action);
+  if (!normalizedScope || !actionScope) return false;
+  return actionScope.tourId === normalizedScope.tourId
+    && actionScope.principalId === normalizedScope.principalId
+    && actionScope.role === normalizedScope.role;
+};
+
+const filterActionsForScope = (actions = [], scope = activeSessionScope) => {
+  const normalizedScope = normalizeSessionScope(scope);
+  if (!normalizedScope) return [];
+  return (Array.isArray(actions) ? actions : []).filter((action) => actionMatchesScope(action, normalizedScope));
+};
+
+const isSameSessionScope = (left, right) => {
+  const normalizedLeft = normalizeSessionScope(left);
+  const normalizedRight = normalizeSessionScope(right);
+  if (!normalizedLeft || !normalizedRight) return normalizedLeft === normalizedRight;
+  return normalizedLeft.tourId === normalizedRight.tourId
+    && normalizedLeft.principalId === normalizedRight.principalId
+    && normalizedLeft.role === normalizedRight.role
+    && normalizedLeft.cacheOwnerId === normalizedRight.cacheOwnerId;
+};
+
+const isSameActionOwnerScope = (left, right) => {
+  const normalizedLeft = normalizeSessionScope(left);
+  const normalizedRight = normalizeSessionScope(right);
+  return Boolean(
+    normalizedLeft
+    && normalizedRight
+    && normalizedLeft.tourId === normalizedRight.tourId
+    && normalizedLeft.principalId === normalizedRight.principalId
+    && normalizedLeft.role === normalizedRight.role
+  );
+};
+
+const withQueueMutationLock = async (operation) => {
+  const current = queueMutationTail.catch(() => {}).then(operation);
+  queueMutationTail = current.catch(() => {});
+  return current;
 };
 
 const safeJsonParse = (raw, fallback) => {
@@ -156,6 +273,10 @@ const pruneCompletedPhotoUploadActions = (queue = [], now = Date.now()) => {
   };
 };
 
+const hasQueueCapacity = (queue) => (
+  Array.isArray(queue) && queue.length < MAX_QUEUE_ACTIONS
+);
+
 const sanitizeActionRecord = (action) => {
   if (!action || typeof action !== 'object') return null;
 
@@ -180,6 +301,7 @@ const sanitizeActionRecord = (action) => {
     ? new Date(normalizedLastUpdatedAtMs).toISOString()
     : new Date().toISOString();
 
+  const normalizedScope = deriveActionScope(action);
   return {
     ...action,
     id,
@@ -194,11 +316,43 @@ const sanitizeActionRecord = (action) => {
     nextAttemptAt: normalizedNextAttemptAt,
     lastUpdatedAt: normalizedLastUpdatedAt,
     lastError: action.lastError || null,
+    scope: normalizedScope,
   };
 };
 
-const cacheKey = (tourId, role) => `tour_pack_${role}_${tourId}`;
-const metaKey = (tourId, role) => `tour_pack_meta_${role}_${tourId}`;
+const normalizeTourPackOwnerId = (value) => {
+  const normalized = normalizePrincipalId(value);
+  return normalized ? encodeURIComponent(normalized.toUpperCase()) : null;
+};
+
+const resolveTourPackOwnerId = (tourId, role, options = {}) => {
+  const explicitOwnerId = options?.ownerId || options?.credentialId;
+  if (explicitOwnerId) return normalizeTourPackOwnerId(explicitOwnerId);
+  if (
+    activeSessionScope
+    && normalizeTourId(activeSessionScope.tourId) === normalizeTourId(tourId)
+    && activeSessionScope.role === role
+  ) {
+    return normalizeTourPackOwnerId(activeSessionScope.cacheOwnerId || activeSessionScope.principalId);
+  }
+  return null;
+};
+
+const cacheKey = (tourId, role, ownerId) => `tour_pack_v2_${role}_${tourId}_${ownerId}`;
+const metaKey = (tourId, role, ownerId) => `tour_pack_meta_v2_${role}_${tourId}_${ownerId}`;
+
+const withTourPackWriteLock = async (key, operation) => {
+  const previous = tourPackWriteLocks.get(key) || Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  tourPackWriteLocks.set(key, current);
+  try {
+    return await current;
+  } finally {
+    if (tourPackWriteLocks.get(key) === current) {
+      tourPackWriteLocks.delete(key);
+    }
+  }
+};
 
 const SYNC_SUMMARY_SOURCES = new Set(['unknown', 'manual-refresh', 'auto-replay', 'startup']);
 
@@ -279,32 +433,70 @@ const formatLastSyncRelative = (lastSuccessAt, now = Date.now()) => {
   return 'Never';
 };
 
+const buildQueueStats = (queue) => queue.reduce(
+  (acc, action) => {
+    if (action.status === 'uploading' || action.status === 'syncing') acc.syncing += 1;
+    else if (action.status === 'failed') acc.failed += 1;
+    else if (action.status !== 'completed') acc.pending += 1;
+    return acc;
+  },
+  { pending: 0, syncing: 0, failed: 0, total: queue.length },
+);
+
 const emitQueueState = async () => {
-  const stats = await getQueueStats();
-  listeners.forEach((listener) => {
+  const queue = await getQueueRaw();
+  listeners.forEach((subscription) => {
     try {
-      listener(stats.success ? stats.data : { pending: 0, syncing: 0, failed: 0, total: 0 });
+      const visibleQueue = filterActionsForScope(
+        queue,
+        subscription.usesActiveScope ? activeSessionScope : subscription.scope,
+      );
+      subscription.listener(buildQueueStats(visibleQueue));
     } catch (error) {
       logger.warn('OfflineSync', 'Queue listener failed', { error: error?.message });
     }
   });
 
-  const queue = await getQueueRaw();
-  queueListeners.forEach((listener) => {
+  queueListeners.forEach((subscription) => {
     try {
-      listener(queue);
+      subscription.listener(filterActionsForScope(
+        queue,
+        subscription.usesActiveScope ? activeSessionScope : subscription.scope,
+      ));
     } catch (error) {
       logger.warn('OfflineSync', 'Queue actions listener failed', { error: error?.message });
     }
   });
 };
 
-const getQueueRaw = async () => {
+// Reads are side-effect free by default so a background observer cannot write a
+// sanitized stale snapshot over a concurrent enqueue. Callers already holding
+// the mutation lock opt into durable repair.
+const getQueueRaw = async ({ persistRepairs = false } = {}) => {
   try {
     const raw = await storage.getItemAsync(QUEUE_KEY);
-    const queue = safeJsonParse(raw, []);
+    let queue = [];
+    if (typeof raw === 'string' && raw.trim()) {
+      try {
+        queue = JSON.parse(raw);
+      } catch (parseError) {
+        if (persistRepairs) {
+          await storage.setItemAsync(QUEUE_CORRUPT_BACKUP_KEY, raw);
+          await storage.setItemAsync(QUEUE_KEY, JSON.stringify([]));
+        }
+        logger.error('OfflineSync', 'Malformed queue backed up before recovery', {
+          error: parseError?.message,
+          rawLength: raw.length,
+          repairPersisted: persistRepairs,
+        });
+        return [];
+      }
+    }
     if (!Array.isArray(queue)) {
-      await storage.setItemAsync(QUEUE_KEY, JSON.stringify([]));
+      if (persistRepairs) {
+        await storage.setItemAsync(QUEUE_CORRUPT_BACKUP_KEY, JSON.stringify(queue));
+        await storage.setItemAsync(QUEUE_KEY, JSON.stringify([]));
+      }
       return [];
     }
 
@@ -322,14 +514,17 @@ const getQueueRaw = async () => {
         sanitizedCount: sanitizedQueue.length,
         prunedCompletedPhotoUploads: pruneResult.removedCount,
       });
-      await storage.setItemAsync(QUEUE_KEY, JSON.stringify(sanitizedAndPrunedQueue));
+      if (persistRepairs) {
+        await storage.setItemAsync(QUEUE_KEY, JSON.stringify(sanitizedAndPrunedQueue));
+      }
     }
 
     return sanitizedAndPrunedQueue;
   } catch (error) {
     logger.error('OfflineSync', 'Failed to read queue', { error: error?.message });
-    await storage.setItemAsync(QUEUE_KEY, JSON.stringify([]));
-    return [];
+    // Never turn a transient storage failure into an empty queue. Doing so lets
+    // the next enqueue overwrite pending actions that still exist on disk.
+    throw error;
   }
 };
 
@@ -363,7 +558,7 @@ const setQueueRaw = async (queue, options = {}) => {
       inputCount: Array.isArray(queue) ? queue.length : null,
       silent: Boolean(options.silent),
     });
-    return RESPONSE.fail(error);
+    throw error;
   }
 };
 
@@ -476,31 +671,40 @@ const deriveUnifiedSyncStatus = ({
   };
 };
 
-const saveTourPack = async (tourId, role, payload) => {
+const saveTourPack = async (tourId, role, payload, options = {}) => {
   try {
     if (!tourId || !role) return RESPONSE.fail('tourId and role are required');
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return RESPONSE.fail('tour pack payload must be an object');
+    }
+    const ownerId = resolveTourPackOwnerId(tourId, role, options);
+    if (!ownerId) return RESPONSE.fail('A tour-pack owner identity is required');
     logger.info('OfflineSync', 'Tour pack save started', {
       tourId: maskIdentifier(tourId),
       role,
       payloadKeys: payload && typeof payload === 'object' ? Object.keys(payload).slice(0, 20) : [],
       hasFetchedAt: Boolean(payload?.fetchedAt),
     });
-    const rawExistingPack = await storage.getItemAsync(cacheKey(tourId, role));
-    const existingPack = safeJsonParse(rawExistingPack, {});
-    const fetchedAt = payload?.fetchedAt || new Date().toISOString();
-    const sourceVersion = payload?.sourceVersion || SCHEMA_VERSION;
-    const nextPayload = {
-      ...(existingPack && typeof existingPack === 'object' ? existingPack : {}),
-      ...payload,
-      fetchedAt,
-      sourceVersion,
-    };
-    await storage.setItemAsync(cacheKey(tourId, role), JSON.stringify(nextPayload));
+    const key = cacheKey(tourId, role, ownerId);
+    const nextPayload = await withTourPackWriteLock(key, async () => {
+      const rawExistingPack = await storage.getItemAsync(key);
+      const existingPack = safeJsonParse(rawExistingPack, {});
+      const fetchedAt = payload.fetchedAt || new Date().toISOString();
+      const sourceVersion = payload.sourceVersion || SCHEMA_VERSION;
+      const mergedPayload = {
+        ...(existingPack && typeof existingPack === 'object' ? existingPack : {}),
+        ...payload,
+        fetchedAt,
+        sourceVersion,
+      };
+      await storage.setItemAsync(key, JSON.stringify(mergedPayload));
+      return mergedPayload;
+    });
     logger.info('OfflineSync', 'Tour pack save completed', {
       tourId: maskIdentifier(tourId),
       role,
-      fetchedAt,
-      sourceVersion,
+      fetchedAt: nextPayload.fetchedAt,
+      sourceVersion: nextPayload.sourceVersion,
       mergedKeys: Object.keys(nextPayload).slice(0, 30),
     });
     return RESPONSE.ok(nextPayload);
@@ -514,14 +718,16 @@ const saveTourPack = async (tourId, role, payload) => {
   }
 };
 
-const getTourPack = async (tourId, role) => {
+const getTourPack = async (tourId, role, options = {}) => {
   try {
     if (!tourId || !role) return RESPONSE.fail('tourId and role are required');
+    const ownerId = resolveTourPackOwnerId(tourId, role, options);
+    if (!ownerId) return RESPONSE.fail('A tour-pack owner identity is required');
     logger.debug('OfflineSync', 'Tour pack load started', {
       tourId: maskIdentifier(tourId),
       role,
     });
-    const raw = await storage.getItemAsync(cacheKey(tourId, role));
+    const raw = await storage.getItemAsync(cacheKey(tourId, role, ownerId));
     const pack = safeJsonParse(raw, null);
     if (!pack) {
       logger.info('OfflineSync', 'Tour pack load missed cache', {
@@ -548,9 +754,11 @@ const getTourPack = async (tourId, role) => {
   }
 };
 
-const setTourPackMeta = async (tourId, role, meta = {}) => {
+const setTourPackMeta = async (tourId, role, meta = {}, options = {}) => {
   try {
     if (!tourId || !role) return RESPONSE.fail('tourId and role are required');
+    const ownerId = resolveTourPackOwnerId(tourId, role, options);
+    if (!ownerId) return RESPONSE.fail('A tour-pack owner identity is required');
     logger.debug('OfflineSync', 'Tour pack metadata save started', {
       tourId: maskIdentifier(tourId),
       role,
@@ -561,7 +769,7 @@ const setTourPackMeta = async (tourId, role, meta = {}) => {
       lastSyncedAt: meta.lastSyncedAt || new Date().toISOString(),
       ...meta,
     };
-    await storage.setItemAsync(metaKey(tourId, role), JSON.stringify(payload));
+    await storage.setItemAsync(metaKey(tourId, role, ownerId), JSON.stringify(payload));
     logger.info('OfflineSync', 'Tour pack metadata save completed', {
       tourId: maskIdentifier(tourId),
       role,
@@ -579,14 +787,16 @@ const setTourPackMeta = async (tourId, role, meta = {}) => {
   }
 };
 
-const getTourPackMeta = async (tourId, role) => {
+const getTourPackMeta = async (tourId, role, options = {}) => {
   try {
     if (!tourId || !role) return RESPONSE.fail('tourId and role are required');
+    const ownerId = resolveTourPackOwnerId(tourId, role, options);
+    if (!ownerId) return RESPONSE.fail('A tour-pack owner identity is required');
     logger.debug('OfflineSync', 'Tour pack metadata load started', {
       tourId: maskIdentifier(tourId),
       role,
     });
-    const raw = await storage.getItemAsync(metaKey(tourId, role));
+    const raw = await storage.getItemAsync(metaKey(tourId, role, ownerId));
     const meta = safeJsonParse(raw, null);
     logger.info('OfflineSync', 'Tour pack metadata load completed', {
       tourId: maskIdentifier(tourId),
@@ -611,6 +821,7 @@ const buildAction = (action) => {
   const payload = action.type === 'PHOTO_UPLOAD'
     ? sanitizePhotoUploadPayload(action.payload, action)
     : (action.payload || {});
+  const scope = deriveActionScope({ ...action, payload });
   return {
     id: action.id || `action_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     type: action.type,
@@ -622,10 +833,11 @@ const buildAction = (action) => {
     lastError: action.lastError || null,
     nextAttemptAt: action.nextAttemptAt || null,
     lastUpdatedAt: nowIso,
+    scope,
   };
 };
 
-const enqueueAction = async (action) => {
+const enqueueAction = async (action) => withQueueMutationLock(async () => {
   try {
     logger.info('OfflineSync', 'Queue enqueue requested', {
       action: summarizeQueueActionForLog(action),
@@ -644,8 +856,30 @@ const enqueueAction = async (action) => {
       });
       return RESPONSE.fail(`Unsupported action type: ${action.type}`);
     }
-    const queue = await getQueueRaw();
-    const exists = queue.find((entry) => entry.id === action.id);
+    const actionScope = deriveActionScope(action)
+      || (normalizeTourId(activeSessionScope?.tourId) === normalizeTourId(action.tourId)
+        ? activeSessionScope
+        : null);
+    if (!actionScope) {
+      logger.warn('OfflineSync', 'Queue enqueue rejected without an owner scope', {
+        type: action.type,
+        tourId: maskIdentifier(action.tourId),
+      });
+      return RESPONSE.fail('A signed-in tour identity is required before an offline action can be queued.');
+    }
+    if (activeSessionScope && !isSameActionOwnerScope(activeSessionScope, actionScope)) {
+      logger.warn('OfflineSync', 'Queue enqueue rejected for a non-active session scope', {
+        type: action.type,
+        requestedTourId: maskIdentifier(actionScope.tourId),
+        requestedPrincipalId: maskIdentifier(actionScope.principalId),
+        activeTourId: maskIdentifier(activeSessionScope.tourId),
+        activePrincipalId: maskIdentifier(activeSessionScope.principalId),
+      });
+      return RESPONSE.fail('Offline actions can only be queued for the active signed-in tour session.');
+    }
+    const scopedAction = { ...action, scope: actionScope };
+    let queue = await getQueueRaw({ persistRepairs: true });
+    const exists = queue.find((entry) => entry.id === scopedAction.id);
     if (exists) {
       logger.info('OfflineSync', 'Queue enqueue skipped duplicate action', {
         action: summarizeQueueActionForLog(exists),
@@ -654,29 +888,55 @@ const enqueueAction = async (action) => {
       return RESPONSE.ok(exists);
     }
 
-    if (action.id) {
+    let supersededActionCount = 0;
+    if (scopedAction.type === 'MANIFEST_UPDATE' && scopedAction.payload?.bookingRef) {
+      const actionTourId = normalizeTourId(scopedAction.tourId);
+      const bookingRef = String(scopedAction.payload.bookingRef).trim().toUpperCase();
+      const filteredQueue = queue.filter((entry) => {
+        const isSupersededManifestUpdate = entry.type === 'MANIFEST_UPDATE'
+          && entry.status !== 'syncing'
+          && normalizeTourId(entry.tourId) === actionTourId
+          && actionMatchesScope(entry, actionScope)
+          && String(entry.payload?.bookingRef || '').trim().toUpperCase() === bookingRef;
+        if (isSupersededManifestUpdate) supersededActionCount += 1;
+        return !isSupersededManifestUpdate;
+      });
+      queue = filteredQueue;
+    }
+
+    if (!hasQueueCapacity(queue)) {
+      logger.error('OfflineSync', 'Queue enqueue rejected at capacity', {
+        queueCount: queue.length,
+        maxQueueActions: MAX_QUEUE_ACTIONS,
+        action: summarizeQueueActionForLog(scopedAction),
+      });
+      return RESPONSE.fail('Offline queue is full. Reconnect and sync pending items before trying again.');
+    }
+
+    if (scopedAction.id) {
       const processedActionIds = await getProcessedActionIds();
-      if (processedActionIds.includes(action.id)) {
-        const filteredProcessedIds = processedActionIds.filter((processedId) => processedId !== action.id);
+      if (processedActionIds.includes(scopedAction.id)) {
+        const filteredProcessedIds = processedActionIds.filter((processedId) => processedId !== scopedAction.id);
         const persistResult = await setProcessedActionIds(filteredProcessedIds);
         if (!persistResult.success) {
           logger.warn('OfflineSync', 'Failed to clear previously processed action id before re-enqueue', {
-            actionId: action.id,
+            actionId: scopedAction.id,
             error: persistResult.error,
           });
         }
       }
     }
 
-    const entry = buildAction(action);
+    const entry = buildAction(scopedAction);
     queue.push(entry);
     queue.sort((a, b) => toSortableTimestampMs(a.createdAt) - toSortableTimestampMs(b.createdAt));
     await setQueueRaw(queue);
     logger.info('OfflineSync', 'Queue enqueue completed', {
       action: summarizeQueueActionForLog(entry),
       queueCount: queue.length,
+      supersededActionCount,
     });
-    return RESPONSE.ok(entry);
+    return RESPONSE.ok({ ...entry, supersededActionCount });
   } catch (error) {
     logger.error('OfflineSync', 'Queue enqueue failed', {
       action: summarizeQueueActionForLog(action),
@@ -684,20 +944,21 @@ const enqueueAction = async (action) => {
     });
     return RESPONSE.fail(error);
   }
-};
+});
 
-const getQueuedActions = async () => {
+const getQueuedActions = async ({ scope = activeSessionScope, includeAll = false } = {}) => {
   try {
     const queue = await getQueueRaw();
-    return RESPONSE.ok(queue.sort((a, b) => toSortableTimestampMs(a.createdAt) - toSortableTimestampMs(b.createdAt)));
+    const visibleQueue = includeAll ? queue : filterActionsForScope(queue, scope);
+    return RESPONSE.ok(visibleQueue.sort((a, b) => toSortableTimestampMs(a.createdAt) - toSortableTimestampMs(b.createdAt)));
   } catch (error) {
-    return RESPONSE.fail(error);
+    throw error;
   }
 };
 
-const updateAction = async (id, patch = {}, options = {}) => {
+const updateAction = async (id, patch = {}, options = {}) => withQueueMutationLock(async () => {
   try {
-    const queue = await getQueueRaw();
+    const queue = await getQueueRaw({ persistRepairs: true });
     const index = queue.findIndex((item) => item.id === id);
     if (index === -1) {
       logger.warn('OfflineSync', 'Queue action update missed', {
@@ -706,9 +967,18 @@ const updateAction = async (id, patch = {}, options = {}) => {
       });
       return RESPONSE.fail('Action not found');
     }
+    const mutationScope = options.scope || activeSessionScope;
+    if (!options.includeAll && !actionMatchesScope(queue[index], mutationScope)) {
+      logger.warn('OfflineSync', 'Queue action update rejected outside active session scope', {
+        actionId: maskIdentifier(id),
+        action: summarizeQueueActionForLog(queue[index]),
+      });
+      return RESPONSE.fail('Action belongs to a different signed-in tour session.');
+    }
     queue[index] = {
       ...queue[index],
       ...patch,
+      scope: queue[index].scope,
       lastUpdatedAt: new Date().toISOString(),
     };
     await setQueueRaw(queue, options);
@@ -727,12 +997,19 @@ const updateAction = async (id, patch = {}, options = {}) => {
     });
     return RESPONSE.fail(error);
   }
-};
+});
 
-const removeAction = async (id, options = {}) => {
+const removeAction = async (id, options = {}) => withQueueMutationLock(async () => {
   try {
-    const queue = await getQueueRaw();
+    const queue = await getQueueRaw({ persistRepairs: true });
     const removed = queue.find((entry) => entry.id === id);
+    if (removed && !options.includeAll && !actionMatchesScope(removed, options.scope || activeSessionScope)) {
+      logger.warn('OfflineSync', 'Queue action removal rejected outside active session scope', {
+        actionId: maskIdentifier(id),
+        action: summarizeQueueActionForLog(removed),
+      });
+      return RESPONSE.fail('Action belongs to a different signed-in tour session.');
+    }
     const nextQueue = queue.filter((entry) => entry.id !== id);
     await setQueueRaw(nextQueue, options);
     logger.info('OfflineSync', 'Queue action removed', {
@@ -751,40 +1028,35 @@ const removeAction = async (id, options = {}) => {
     });
     return RESPONSE.fail(error);
   }
-};
+});
 
-const getQueueStats = async () => {
+const getQueueStats = async ({ scope = activeSessionScope, includeAll = false } = {}) => {
   try {
-    const queue = await getQueueRaw();
-    const stats = queue.reduce(
-      (acc, action) => {
-        if (action.status === 'uploading' || action.status === 'syncing') acc.syncing += 1;
-        else if (action.status === 'failed') acc.failed += 1;
-        else if (action.status === 'completed') {}
-        else acc.pending += 1;
-        return acc;
-      },
-      { pending: 0, syncing: 0, failed: 0, total: queue.length }
-    );
-    return RESPONSE.ok(stats);
+    const allActions = await getQueueRaw();
+    const queue = includeAll ? allActions : filterActionsForScope(allActions, scope);
+    return RESPONSE.ok(buildQueueStats(queue));
   } catch (error) {
     return RESPONSE.fail(error);
   }
 };
 
-const retryFailedActions = async ({ types, resetAttempts = false } = {}) => {
+const retryFailedActions = async ({ types, tourId, resetAttempts = false, scope = activeSessionScope, includeAll = false } = {}) => withQueueMutationLock(async () => {
   try {
     logger.info('OfflineSync', 'Retry failed queue actions requested', {
       types: Array.isArray(types) ? types : null,
+      tourId: maskIdentifier(tourId),
       resetAttempts,
     });
-    const queue = await getQueueRaw();
+    const queue = await getQueueRaw({ persistRepairs: true });
     const allowedTypes = Array.isArray(types) && types.length > 0 ? new Set(types) : null;
+    const normalizedTourId = tourId ? normalizeTourId(tourId) : null;
     let retriedCount = 0;
 
     const nextQueue = queue.map((action) => {
       const shouldRetryType = !allowedTypes || allowedTypes.has(action.type);
-      if (action.status !== 'failed' || !shouldRetryType) {
+      const shouldRetryTour = !normalizedTourId || normalizeTourId(action.tourId) === normalizedTourId;
+      const shouldRetryScope = includeAll || actionMatchesScope(action, scope);
+      if (action.status !== 'failed' || !shouldRetryType || !shouldRetryTour || !shouldRetryScope) {
         return action;
       }
 
@@ -815,42 +1087,96 @@ const retryFailedActions = async ({ types, resetAttempts = false } = {}) => {
     });
     return RESPONSE.fail(error);
   }
+});
+
+const getActiveSessionScope = () => (
+  activeSessionScope ? { ...activeSessionScope } : null
+);
+
+const setActiveSessionScope = async (scope) => {
+  const nextScope = normalizeSessionScope(scope);
+  if (isSameSessionScope(activeSessionScope, nextScope)) {
+    return RESPONSE.ok(getActiveSessionScope());
+  }
+
+  const previousScope = activeSessionScope;
+  activeSessionScope = nextScope;
+  activeSessionGeneration += 1;
+  logger.info('OfflineSync', 'Active offline session scope changed', {
+    previousTourId: maskIdentifier(previousScope?.tourId),
+    previousPrincipalId: maskIdentifier(previousScope?.principalId),
+    nextTourId: maskIdentifier(nextScope?.tourId),
+    nextPrincipalId: maskIdentifier(nextScope?.principalId),
+    nextRole: nextScope?.role || null,
+    generation: activeSessionGeneration,
+  });
+  await emitQueueState();
+  return RESPONSE.ok(getActiveSessionScope());
 };
 
-const subscribeQueueState = (listener) => {
+const getQueueIsolationSummary = async ({ scope = activeSessionScope } = {}) => {
+  try {
+    const allActions = await getQueueRaw();
+    const ownedActions = filterActionsForScope(allActions, scope);
+    const ownedIds = new Set(ownedActions.map((action) => action.id));
+    const otherSessionActions = allActions.filter((action) => !ownedIds.has(action.id));
+    return RESPONSE.ok({
+      ownedCount: ownedActions.length,
+      otherSessionCount: otherSessionActions.length,
+      unownedLegacyCount: otherSessionActions.filter((action) => !deriveActionScope(action)).length,
+    });
+  } catch (error) {
+    return RESPONSE.fail(error);
+  }
+};
+
+const subscribeQueueState = (listener, { scope } = {}) => {
   if (typeof listener !== 'function') {
     return () => {};
   }
 
-  listeners.add(listener);
+  const subscription = {
+    listener,
+    scope: scope ? normalizeSessionScope(scope) : null,
+    usesActiveScope: !scope,
+  };
+  listeners.add(subscription);
   logger.debug('OfflineSync', 'Queue state listener subscribed', {
     listenerCount: listeners.size,
   });
-  getQueueStats().then((stats) => {
+  getQueueStats({ scope: subscription.usesActiveScope ? activeSessionScope : subscription.scope }).then((stats) => {
     if (stats.success) listener(stats.data);
   });
 
   return () => {
-    listeners.delete(listener);
+    listeners.delete(subscription);
     logger.debug('OfflineSync', 'Queue state listener unsubscribed', {
       listenerCount: listeners.size,
     });
   };
 };
 
-const subscribeQueuedActions = (listener) => {
+const subscribeQueuedActions = (listener, { scope } = {}) => {
   if (typeof listener !== 'function') {
     return () => {};
   }
 
-  queueListeners.add(listener);
+  const subscription = {
+    listener,
+    scope: scope ? normalizeSessionScope(scope) : null,
+    usesActiveScope: !scope,
+  };
+  queueListeners.add(subscription);
   logger.debug('OfflineSync', 'Queue actions listener subscribed', {
     listenerCount: queueListeners.size,
   });
-  getQueueRaw().then((queue) => listener(queue));
+  getQueueRaw().then((queue) => listener(filterActionsForScope(
+    queue,
+    subscription.usesActiveScope ? activeSessionScope : subscription.scope,
+  )));
 
   return () => {
-    queueListeners.delete(listener);
+    queueListeners.delete(subscription);
     logger.debug('OfflineSync', 'Queue actions listener unsubscribed', {
       listenerCount: queueListeners.size,
     });
@@ -879,23 +1205,51 @@ const applyReplayAction = async (action, services = {}) => {
   return RESPONSE.fail(`Unsupported replay action type: ${action.type}`);
 };
 
-const replayQueue = async ({ db, services = {} } = {}) => {
+const replayQueue = async ({ db, services = {}, scope = activeSessionScope } = {}) => {
+  const replayScope = normalizeSessionScope(scope);
+  if (!replayScope) {
+    logger.info('OfflineSync', 'Queue replay skipped without an active signed-in tour scope');
+    return RESPONSE.ok({
+      skipped: true,
+      reason: 'No active signed-in tour scope',
+      processed: 0,
+      failed: 0,
+      outcomes: [],
+    });
+  }
+  if (activeSessionScope && !isSameSessionScope(activeSessionScope, replayScope)) {
+    logger.warn('OfflineSync', 'Queue replay rejected for a non-active session scope', {
+      requestedTourId: maskIdentifier(replayScope.tourId),
+      requestedPrincipalId: maskIdentifier(replayScope.principalId),
+      activeTourId: maskIdentifier(activeSessionScope.tourId),
+      activePrincipalId: maskIdentifier(activeSessionScope.principalId),
+    });
+    return RESPONSE.fail('Offline actions can only sync for the active signed-in tour session.');
+  }
   if (replayLock) {
     logger.info('OfflineSync', 'Queue replay skipped because another replay is active');
     return RESPONSE.ok({ skipped: true, reason: 'Replay already in progress' });
   }
 
   replayLock = true;
+  const replayGeneration = activeSessionGeneration;
 
   try {
     logger.info('OfflineSync', 'Queue replay started', {
       hasDbOverride: Boolean(db),
       serviceKeys: Object.keys(services || {}),
+      tourId: maskIdentifier(replayScope.tourId),
+      principalId: maskIdentifier(replayScope.principalId),
+      role: replayScope.role,
     });
-    const queue = await getQueueRaw();
+    const allActions = await getQueueRaw();
+    const queue = filterActionsForScope(allActions, replayScope);
+    const heldForOtherSessions = Math.max(0, allActions.length - queue.length);
     if (queue.length === 0) {
-      logger.info('OfflineSync', 'Queue replay completed with empty queue');
-      return RESPONSE.ok({ processed: 0, failed: 0 });
+      logger.info('OfflineSync', 'Queue replay completed with no actions for active scope', {
+        heldForOtherSessions,
+      });
+      return RESPONSE.ok({ processed: 0, failed: 0, outcomes: [], heldForOtherSessions });
     }
 
     const sortedQueue = [...queue].sort((a, b) => toSortableTimestampMs(a.createdAt) - toSortableTimestampMs(b.createdAt));
@@ -903,6 +1257,7 @@ const replayQueue = async ({ db, services = {} } = {}) => {
     let processed = 0;
     let failed = 0;
     let skipped = 0;
+    const outcomes = [];
 
     logger.info('OfflineSync', 'Queue replay loaded actions', {
       queueCount: sortedQueue.length,
@@ -911,12 +1266,24 @@ const replayQueue = async ({ db, services = {} } = {}) => {
     });
 
     for (const action of sortedQueue) {
+      if (
+        activeSessionGeneration !== replayGeneration
+        || (activeSessionScope && !isSameSessionScope(activeSessionScope, replayScope))
+      ) {
+        skipped += 1;
+        logger.warn('OfflineSync', 'Queue replay stopped because the signed-in tour session changed', {
+          action: summarizeQueueActionForLog(action),
+          replayGeneration,
+          activeSessionGeneration,
+        });
+        break;
+      }
       if (processedActionIds.includes(action.id)) {
         skipped += 1;
         logger.debug('OfflineSync', 'Queue replay removing already processed action', {
           action: summarizeQueueActionForLog(action),
         });
-        await removeAction(action.id, { silent: true });
+        await removeAction(action.id, { silent: true, scope: replayScope });
         continue;
       }
 
@@ -940,7 +1307,7 @@ const replayQueue = async ({ db, services = {} } = {}) => {
       }
 
       const inProgressStatus = action.type === 'PHOTO_UPLOAD' ? 'uploading' : 'syncing';
-      await updateAction(action.id, { status: inProgressStatus, lastError: null }, { silent: true });
+      await updateAction(action.id, { status: inProgressStatus, lastError: null }, { silent: true, scope: replayScope });
       logger.info('OfflineSync', 'Queue replay action started', {
         action: summarizeQueueActionForLog({ ...action, status: inProgressStatus, lastError: null }),
       });
@@ -948,6 +1315,17 @@ const replayQueue = async ({ db, services = {} } = {}) => {
 
       if (result?.success) {
         processed += 1;
+        outcomes.push({
+          actionId: action.id,
+          type: action.type,
+          tourId: action.tourId,
+          bookingRef: action.payload?.bookingRef || null,
+          success: true,
+          reconciled: Boolean(result.reconciled),
+          conflict: result.conflict || null,
+          status: result.status || null,
+          passengerStatus: result.passengerStatus || null,
+        });
         logger.info('OfflineSync', 'Queue replay action succeeded', {
           action: summarizeQueueActionForLog(action),
           hasResultData: Boolean(result.data),
@@ -959,14 +1337,22 @@ const replayQueue = async ({ db, services = {} } = {}) => {
             lastError: null,
             nextAttemptAt: null,
             result: result.data || null,
-          }, { silent: true });
+          }, { silent: true, scope: replayScope });
         } else {
-          await removeAction(action.id, { silent: true });
+          await removeAction(action.id, { silent: true, scope: replayScope });
           processedActionIds = [...processedActionIds, action.id];
           await setProcessedActionIds(processedActionIds);
         }
       } else {
         failed += 1;
+        outcomes.push({
+          actionId: action.id,
+          type: action.type,
+          tourId: action.tourId,
+          bookingRef: action.payload?.bookingRef || null,
+          success: false,
+          error: result?.error || 'Replay failed',
+        });
         const attempts = (action.attempts || 0) + 1;
         const shouldFail = attempts >= MAX_ATTEMPTS;
         const delayMinutes = Math.min(2 ** attempts, 60);
@@ -982,7 +1368,7 @@ const replayQueue = async ({ db, services = {} } = {}) => {
           status: shouldFail ? 'failed' : (action.type === 'PHOTO_UPLOAD' ? 'retrying' : 'queued'),
           lastError: result?.error || 'Replay failed',
           nextAttemptAt: new Date(Date.now() + delayMinutes * 60 * 1000).toISOString(),
-        }, { silent: true });
+        }, { silent: true, scope: replayScope });
       }
     }
 
@@ -1000,8 +1386,9 @@ const replayQueue = async ({ db, services = {} } = {}) => {
       failed,
       skipped,
       queueCount: sortedQueue.length,
+      heldForOtherSessions,
     });
-    return RESPONSE.ok({ processed, failed });
+    return RESPONSE.ok({ processed, failed, outcomes, heldForOtherSessions });
   } catch (error) {
     logger.error('OfflineSync', 'Queue replay failed', {
       error: error?.message,
@@ -1057,10 +1444,20 @@ module.exports = {
   getQueueStats,
   retryFailedActions,
   replayQueue,
+  setActiveSessionScope,
+  getActiveSessionScope,
+  getQueueIsolationSummary,
+  normalizeSessionScope,
+  deriveActionScope,
+  actionMatchesScope,
+  filterActionsForScope,
   subscribeQueueState,
   subscribeQueuedActions,
   getPhotoUploadActions,
   getStalenessBucket,
   getStalenessLabel,
   pruneCompletedPhotoUploadActions,
+  hasQueueCapacity,
+  MAX_QUEUE_ACTIONS,
+  ACTION_SCOPE_VERSION,
 };

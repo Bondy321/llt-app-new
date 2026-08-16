@@ -15,7 +15,7 @@ import {
   Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { LinearGradient } from 'expo-linear-gradient';
 import MapView, { Marker, PROVIDER_GOOGLE, PROVIDER_DEFAULT, Circle } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -27,6 +27,8 @@ import { createPersistenceProvider } from '../services/persistenceProvider';
 import logger, { maskIdentifier } from '../services/loggerService';
 import { getMinutesAgo } from '../services/timeUtils';
 import { normalizeTourId, resolveTourId } from '../services/tourIdentityService';
+import { publishDriverLocation, withdrawLiveDriverLocation } from '../services/driverLocationService';
+import { getDriverLocationPresentation } from '../utils/driverLocation';
 import { COLORS as THEME } from '../theme';
 
 const COLORS = {
@@ -55,7 +57,6 @@ const minimalMapStyle = [
   { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#c9c9c9' }] },
 ];
 
-const LOCATION_STALE_THRESHOLD_MINUTES = 12;
 const AUTO_SHARE_INTERVAL_MS = 3 * 60 * 1000;
 
 export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onDriverAssignmentChange }) {
@@ -71,12 +72,14 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const [confirmingLocation, setConfirmingLocation] = useState(false);
   const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
   const [autoShareEnabled, setAutoShareEnabled] = useState(false);
+  const [autoShareSaving, setAutoShareSaving] = useState(false);
   const [autoShareStatus, setAutoShareStatus] = useState('Auto-share is off');
   const [autoShareLastRunAt, setAutoShareLastRunAt] = useState(null);
   const [bannerContract, setBannerContract] = useState(null);
   const [bannerOutcomeText, setBannerOutcomeText] = useState('');
   const [bannerRetryHandler, setBannerRetryHandler] = useState(null);
   const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(null);
+  const [locationFreshnessNow, setLocationFreshnessNow] = useState(() => Date.now());
 
   // Modal State for Joining Tour
   const [joinModalVisible, setJoinModalVisible] = useState(false);
@@ -89,6 +92,11 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const persistenceRef = useRef(createPersistenceProvider({ namespace: 'LLT_DRIVER_HOME' }));
   const bannerTimerRef = useRef(null);
+  const autoShareInFlightRef = useRef(false);
+  const autoShareToggleInFlightRef = useRef(false);
+  const autoShareInitialLocationRef = useRef(null);
+  const locationBusyRef = useRef(false);
+  const lastLocationAddressRef = useRef('');
 
   // Derive active tour from canonical assignment fields.
   const activeTourId = resolveTourId(
@@ -111,13 +119,22 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     });
   }, [activeTourId, autoShareEnabled, driverData?.id]);
 
-  const getLastUpdateAgeMinutes = useCallback((timestamp) => {
-    const minutesAgo = getMinutesAgo(timestamp);
-    return Number.isFinite(minutesAgo) ? minutesAgo : Number.POSITIVE_INFINITY;
+  const lastLocationPresentation = getDriverLocationPresentation(lastLocationUpdate, locationFreshnessNow);
+  const isLocationStale = lastLocationPresentation.freshness === 'stale'
+    || lastLocationPresentation.freshness === 'expired';
+
+  useEffect(() => {
+    const freshnessTimer = setInterval(() => setLocationFreshnessNow(Date.now()), 30 * 1000);
+    return () => clearInterval(freshnessTimer);
   }, []);
 
-  const isLocationStale = Boolean(lastLocationUpdate?.timestamp)
-    && getLastUpdateAgeMinutes(lastLocationUpdate.timestamp) >= LOCATION_STALE_THRESHOLD_MINUTES;
+  useEffect(() => {
+    locationBusyRef.current = updatingLocation || confirmingLocation;
+  }, [confirmingLocation, updatingLocation]);
+
+  useEffect(() => {
+    lastLocationAddressRef.current = lastLocationUpdate?.address || '';
+  }, [lastLocationUpdate?.address]);
 
   const showBanner = useCallback(({
     contract,
@@ -197,7 +214,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         if (cancelled) return;
         const enabled = stored === 'true';
         setAutoShareEnabled(enabled);
-        setAutoShareStatus(enabled ? 'Waiting for next background location share' : 'Auto-share is off');
+        setAutoShareStatus(enabled ? 'Waiting for the next in-app location share' : 'Auto-share is off');
         logger.info('DriverHomeScreen', 'Auto-share preference loaded', {
           driverId: maskIdentifier(driverData?.id),
           enabled,
@@ -224,7 +241,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   useEffect(() => {
     if (!activeTourId) return;
     logger.debug('DriverHomeScreen', 'Tour pack metadata load started', { activeTourId });
-    offlineSyncService.getTourPackMeta(activeTourId, 'driver').then((res) => {
+    offlineSyncService.getTourPackMeta(activeTourId, 'driver', { ownerId: driverData?.id }).then((res) => {
       if (res.success) {
         const label = offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label;
         setCacheStatusLabel(label);
@@ -315,7 +332,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     return () => {
       cancelled = true;
     };
-  }, [activeTourId]);
+  }, [activeTourId, driverData?.id]);
 
   // Reverse geocode to get address
   const getAddressFromCoords = async (latitude, longitude) => {
@@ -398,14 +415,13 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       latitudeApprox: Number.isFinite(Number(latitude)) ? Number(Number(latitude).toFixed(3)) : null,
       longitudeApprox: Number.isFinite(Number(longitude)) ? Number(Number(longitude).toFixed(3)) : null,
     });
-    await realtimeDb.ref(`tours/${activeTourId}/driverLocation`).set({
-      latitude,
-      longitude,
-      timestamp,
+    const persistedLocation = await publishDriverLocation({
+      tourId: activeTourId,
+      location: { latitude, longitude, accuracy, timestamp },
       updatedBy: driverData.name,
       address: address || 'Address unavailable',
-      accuracy,
       source,
+      dbInstance: realtimeDb,
     });
     logger.info('DriverHomeScreen', 'Driver location upload completed', {
       activeTourId,
@@ -417,11 +433,14 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       setLastLocationUpdate({
         latitude,
         longitude,
-        timestamp,
+        timestamp: persistedLocation.timestamp,
         updatedBy: driverData.name,
         address: address || 'Address unavailable',
         accuracy,
         source,
+        mode: persistedLocation.mode,
+        isSharing: true,
+        schemaVersion: persistedLocation.schemaVersion,
       });
     }
   };
@@ -580,14 +599,55 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       return;
     }
 
-    setAutoShareEnabled(enabled);
-    setAutoShareStatus(enabled ? 'Waiting for next background location share' : 'Auto-share is off');
+    if (autoShareToggleInFlightRef.current) return;
+    autoShareToggleInFlightRef.current = true;
+    setAutoShareSaving(true);
+    try {
+      if (enabled) {
+        const permission = await captureCurrentLocationWithPermission(Location.Accuracy.Balanced);
+        if (!permission.success) {
+          setAutoShareStatus('Paused: location permission required');
+          showBanner({
+            type: 'warning',
+            message: 'Allow location access before enabling live bus sharing.',
+          });
+          return;
+        }
+        autoShareInitialLocationRef.current = permission.location;
+      } else if (activeTourId) {
+        const withdrawal = await withdrawLiveDriverLocation({ tourId: activeTourId, dbInstance: realtimeDb });
+        if (withdrawal.removed) setLastLocationUpdate(null);
+        setAutoShareLastRunAt(null);
+      }
 
-    await persistenceRef.current.setItemAsync(autoSharePreferenceKey, enabled ? 'true' : 'false');
-    logger.info('DriverHomeScreen', 'Auto-share preference saved', {
-      driverId: maskIdentifier(driverData?.id),
-      enabled,
-    });
+      await persistenceRef.current.setItemAsync(autoSharePreferenceKey, enabled ? 'true' : 'false');
+      setAutoShareEnabled(enabled);
+      setAutoShareStatus(enabled ? 'Waiting for the first live update' : 'Auto-share is off');
+      logger.info('DriverHomeScreen', 'Auto-share preference saved', {
+        driverId: maskIdentifier(driverData?.id),
+        enabled,
+      });
+    } catch (error) {
+      setAutoShareStatus(autoShareEnabled
+        ? 'Live sharing is still on: could not safely turn it off'
+        : 'Auto-share is off: change could not be saved');
+      showBanner({
+        type: 'error',
+        message: enabled
+          ? 'Live sharing could not be enabled safely. Try again.'
+          : 'Live sharing could not be withdrawn. Check your connection and try again.',
+        actionLabel: 'Retry',
+        actionHandler: () => handleToggleAutoShare(enabled),
+      });
+      logger.warn('DriverHomeScreen', 'Auto-share preference save failed', {
+        driverId: maskIdentifier(driverData?.id),
+        enabled,
+        error: error?.message || String(error),
+      });
+    } finally {
+      autoShareToggleInFlightRef.current = false;
+      setAutoShareSaving(false);
+    }
   };
 
   useEffect(() => {
@@ -601,16 +661,20 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     let intervalId;
 
     const runAutoShare = async () => {
-      if (cancelled || updatingLocation || confirmingLocation) return;
+      if (cancelled || locationBusyRef.current || autoShareInFlightRef.current) return;
 
+      autoShareInFlightRef.current = true;
       try {
         setAutoShareStatus('Auto-share running (battery-aware mode)');
         logger.debug('DriverHomeScreen', 'Auto-share location capture started', {
           activeTourId,
-          updatingLocation,
-          confirmingLocation,
+          locationBusy: locationBusyRef.current,
         });
-        const captureResult = await captureCurrentLocationWithPermission(Location.Accuracy.Balanced);
+        const primedLocation = autoShareInitialLocationRef.current;
+        autoShareInitialLocationRef.current = null;
+        const captureResult = primedLocation
+          ? { success: true, location: primedLocation }
+          : await captureCurrentLocationWithPermission(Location.Accuracy.Balanced);
 
         if (!captureResult.success) {
           setAutoShareStatus('Paused: location permission required');
@@ -630,7 +694,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
           longitude,
           accuracy,
           timestamp,
-          address: lastLocationUpdate?.address,
+          address: lastLocationAddressRef.current,
         }, 'auto', { shouldUpdateLocalState: () => !cancelled });
 
         if (!cancelled) {
@@ -651,6 +715,8 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
             error: error?.message || String(error),
           });
         }
+      } finally {
+        autoShareInFlightRef.current = false;
       }
     };
 
@@ -664,9 +730,6 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   }, [
     autoShareEnabled,
     activeTourId,
-    updatingLocation,
-    confirmingLocation,
-    lastLocationUpdate?.address,
   ]);
 
   // Refetch location in preview modal
@@ -815,7 +878,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       if (sanitizedTourId) {
         const [locationSnapshot, metaResult] = await Promise.all([
           realtimeDb.ref(`tours/${sanitizedTourId}/driverLocation`).once('value'),
-          offlineSyncService.getTourPackMeta(sanitizedTourId, 'driver'),
+          offlineSyncService.getTourPackMeta(sanitizedTourId, 'driver', { ownerId: driverData?.id }),
         ]);
 
         if (locationSnapshot.exists()) {
@@ -1004,6 +1067,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
               <Switch
                 value={autoShareEnabled}
                 onValueChange={handleToggleAutoShare}
+                disabled={autoShareSaving}
                 trackColor={{ false: `${COLORS.muted}50`, true: `${COLORS.primary}80` }}
                 thumbColor={autoShareEnabled ? COLORS.white : '#F4F4F5'}
                 accessibilityLabel="Toggle automatic location sharing"

@@ -236,13 +236,13 @@ export function subscribeToOpsAlerts(database, options = {}, onNext, onError) {
   );
 }
 
-const buildStatusUpdate = (status) => {
+const buildStatusUpdate = (status, actorId = 'admin') => {
   const nowMs = Date.now();
   const payload = {
     status,
     statusUpdatedAt: new Date(nowMs).toISOString(),
     statusUpdatedAtMs: nowMs,
-    statusUpdatedBy: 'admin',
+    statusUpdatedBy: String(actorId || 'admin').slice(0, 128),
   };
 
   if (status === OPS_ALERT_STATUS.ACKNOWLEDGED) {
@@ -256,10 +256,10 @@ const buildStatusUpdate = (status) => {
   return payload;
 };
 
-export async function acknowledgeOpsAlert(database, alertId) {
+export async function acknowledgeOpsAlert(database, alertId, actorId) {
   if (!alertId) throw new Error('Missing alert id');
   const path = `${OPS_ALERTS_ROOT}/${alertId}`;
-  const payload = buildStatusUpdate(OPS_ALERT_STATUS.ACKNOWLEDGED);
+  const payload = buildStatusUpdate(OPS_ALERT_STATUS.ACKNOWLEDGED, actorId);
   const timer = startFirebaseDebugTimer('ops-alerts:acknowledge', {
     alertId,
     path,
@@ -275,10 +275,10 @@ export async function acknowledgeOpsAlert(database, alertId) {
   }
 }
 
-export async function resolveOpsAlert(database, alertId) {
+export async function resolveOpsAlert(database, alertId, actorId) {
   if (!alertId) throw new Error('Missing alert id');
   const path = `${OPS_ALERTS_ROOT}/${alertId}`;
-  const payload = buildStatusUpdate(OPS_ALERT_STATUS.RESOLVED);
+  const payload = buildStatusUpdate(OPS_ALERT_STATUS.RESOLVED, actorId);
   const timer = startFirebaseDebugTimer('ops-alerts:resolve', {
     alertId,
     path,

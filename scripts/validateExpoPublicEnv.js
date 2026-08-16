@@ -21,6 +21,8 @@ const OPTIONAL_ENV_VARS = [
   'EXPO_PUBLIC_DATA_REQUEST_EMAIL',
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL',
   'EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL',
+  'EXPO_PUBLIC_ASSIGN_DRIVER_TO_TOUR_URL',
+  'EXPO_PUBLIC_SUBMIT_SAFETY_REPORT_URL',
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS',
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK',
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK',
@@ -95,6 +97,16 @@ const FORMAT_CHECKS = {
     pattern: /^https:\/\/.+/i,
     validate: (value) => !/verifyPassengerLogin/i.test(value.trim()) || /verifyDriverLogin/i.test(value.trim()),
     message: 'expected an HTTPS driver verifier URL',
+  },
+  EXPO_PUBLIC_ASSIGN_DRIVER_TO_TOUR_URL: {
+    pattern: /^https:\/\/.+/i,
+    validate: (value) => /assignDriverToTour/i.test(value.trim()),
+    message: 'expected an HTTPS assignDriverToTour Function URL',
+  },
+  EXPO_PUBLIC_SUBMIT_SAFETY_REPORT_URL: {
+    pattern: /^https:\/\/.+/i,
+    validate: (value) => /submitSafetyReport/i.test(value.trim()),
+    message: 'expected an HTTPS submitSafetyReport Function URL',
   },
   EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS: {
     validate: (value) => Number.isFinite(Number(value)) && Number(value) >= 1000,
@@ -187,6 +199,9 @@ const validateExpoPublicEnv = (env = process.env, options = {}) => {
 };
 
 if (require.main === module) {
+  // Match Expo CLI behaviour for local validation while preserving any values
+  // already supplied by EAS or CI. Keep this silent so credentials never reach logs.
+  require('@expo/env').loadProjectEnv(process.cwd(), { silent: true });
   const result = validateExpoPublicEnv();
 
   if (!result.ok) {

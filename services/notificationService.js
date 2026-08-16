@@ -14,18 +14,104 @@ import {
   normalizeMarketingPreferences,
   parsePreferenceBoolean,
 } from '../utils/notificationCategories';
+import notificationRouting from '../utils/notificationRouting';
 
 // Configure how notifications behave when the app is open
 const { resolveAppVersionMetadata } = appMetadataModule;
+const { resolveNotificationRoute } = notificationRouting;
+const handledNotificationResponseKeys = new Set();
+const inFlightNotificationResponseKeys = new Set();
+const MAX_HANDLED_NOTIFICATION_RESPONSES = 50;
+const NOTIFICATION_IO_TIMEOUT_MS = 10000;
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+const withTimeout = (promise, message, timeoutMs = NOTIFICATION_IO_TIMEOUT_MS) => {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise])
+    .finally(() => clearTimeout(timeoutId));
+};
+
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
+
+/**
+ * Routes both cold-start and foreground/background notification taps through the
+ * app's own navigation contract. Responses are deduplicated because Expo can
+ * surface the same response through both APIs during startup.
+ */
+export const subscribeToNotificationResponses = ({
+  getContext = () => ({}),
+  onNavigate,
+  onRejected = () => {},
+} = {}) => {
+  if (typeof onNavigate !== 'function') {
+    throw new Error('Notification response navigation callback is required');
+  }
+
+  if (Platform.OS === 'web') {
+    return () => {};
+  }
+
+  let active = true;
+  const handleResponse = async (response) => {
+    if (!active || !response) return;
+    const route = resolveNotificationRoute(response, getContext?.() || {});
+    if (!route.accepted) {
+      logger.info('NotificationService', 'Notification response ignored', { reason: route.reason });
+      onRejected(route.reason);
+      return;
+    }
+    if (handledNotificationResponseKeys.has(route.responseKey)
+      || inFlightNotificationResponseKeys.has(route.responseKey)) return;
+
+    inFlightNotificationResponseKeys.add(route.responseKey);
+
+    logger.info('NotificationService', 'Notification response routed', {
+      screen: route.screen,
+      hasNoticeId: Boolean(route.params?.noticeId),
+    });
+    try {
+      await onNavigate(route);
+      handledNotificationResponseKeys.add(route.responseKey);
+      if (handledNotificationResponseKeys.size > MAX_HANDLED_NOTIFICATION_RESPONSES) {
+        const oldestKey = handledNotificationResponseKeys.values().next().value;
+        handledNotificationResponseKeys.delete(oldestKey);
+      }
+    } catch (error) {
+      logger.error('NotificationService', 'Notification response navigation failed', {
+        screen: route.screen,
+        error: error?.message || String(error),
+      });
+    } finally {
+      inFlightNotificationResponseKeys.delete(route.responseKey);
+    }
+  };
+
+  const subscription = Notifications.addNotificationResponseReceivedListener?.(handleResponse);
+  Promise.resolve(Notifications.getLastNotificationResponseAsync?.())
+    .then(handleResponse)
+    .catch((error) => {
+      logger.warn('NotificationService', 'Cold-start notification response could not be read', {
+        error: error?.message || String(error),
+      });
+    });
+
+  return () => {
+    active = false;
+    subscription?.remove?.();
+  };
+};
 
 // ==================== VALIDATION HELPERS ====================
 
@@ -341,12 +427,10 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
           retries,
           hasProjectId: true,
         });
-        const tokenData = await Promise.race([
+        const tokenData = await withTimeout(
           Notifications.getExpoPushTokenAsync({ projectId }),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Token fetch timeout')), 10000)
-          )
-        ]);
+          'Token fetch timeout'
+        );
         token = tokenData.data;
         logger.info('NotificationService', 'Push token fetch succeeded', {
           attempt,
@@ -419,12 +503,10 @@ export const saveUserPreferences = async (userId, preferences) => {
 
     const userRef = realtimeDb.ref(`users/${validatedUserId}`);
 
-    const userSnapshot = await Promise.race([
+    const userSnapshot = await withTimeout(
       userRef.once('value'),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Existing preferences fetch timeout')), 10000)
-      )
-    ]);
+      'Existing preferences fetch timeout'
+    );
 
     const existingUserData = userSnapshot.val() || {};
     logger.debug('NotificationService', 'Existing notification preference record loaded', {
@@ -483,17 +565,15 @@ export const saveUserPreferences = async (userId, preferences) => {
     const nowIso = new Date().toISOString();
 
     if (!permissionState.granted) {
-      await Promise.race([
+      await withTimeout(
         userRef.update(buildUnavailableTokenPatch({
           nowIso,
           existingUserData,
           permissionState,
           mergedPreferences,
         })),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Preferences save timeout')), 10000)
-        )
-      ]);
+        'Preferences save timeout'
+      );
 
       logger.info('NotificationService', 'Preferences saved without active push token', {
         userId: maskIdentifier(validatedUserId),
@@ -511,17 +591,15 @@ export const saveUserPreferences = async (userId, preferences) => {
     const token = await registerForPushNotificationsAsync();
 
     if (!token) {
-      await Promise.race([
+      await withTimeout(
         userRef.update(buildUnavailableTokenPatch({
           nowIso,
           existingUserData,
           permissionState,
           mergedPreferences,
         })),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Preferences save timeout')), 10000)
-        )
-      ]);
+        'Preferences save timeout'
+      );
 
       logger.warn('NotificationService', 'Preferences saved but push token unavailable', {
         userId: maskIdentifier(validatedUserId),
@@ -558,12 +636,7 @@ export const saveUserPreferences = async (userId, preferences) => {
       osVersion: appVersionMetadata.osVersion,
     };
 
-    await Promise.race([
-      userRef.update(updateData),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Preferences save timeout')), 10000)
-      )
-    ]);
+    await withTimeout(userRef.update(updateData), 'Preferences save timeout');
 
     logger.info('NotificationService', 'Preferences saved with active push token', {
       userId: maskIdentifier(validatedUserId),
@@ -579,6 +652,105 @@ export const saveUserPreferences = async (userId, preferences) => {
       error: error?.message || String(error),
     });
     return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Removes this authenticated device from push delivery when its in-app session
+ * ends. Firebase Auth intentionally remains anonymous and signed in, so logout
+ * must explicitly deactivate the token stored under that auth uid.
+ */
+export const deactivatePushToken = async (userId) => {
+  try {
+    const validatedUserId = resolveNotificationUserId(userId);
+    if (!realtimeDb) {
+      throw new Error('Database not initialized');
+    }
+
+    const nowIso = new Date().toISOString();
+    await withTimeout(
+      realtimeDb.ref(`users/${validatedUserId}`).update({
+        pushToken: null,
+        pushTokenStatus: 'UNAVAILABLE',
+        pushTokenInvalidReason: 'SIGNED_OUT',
+        pushTokenUpdatedAt: nowIso,
+        lastUpdated: nowIso,
+      }),
+      'Push token deactivation timeout'
+    );
+
+    logger.info('NotificationService', 'Push token deactivated for signed-out session', {
+      userId: maskIdentifier(validatedUserId),
+    });
+    return { success: true };
+  } catch (error) {
+    logger.warn('NotificationService', 'Push token deactivation failed', {
+      userId: maskIdentifier(userId),
+      error: error?.message || String(error),
+    });
+    return { success: false, error: error?.message || String(error) };
+  }
+};
+
+/**
+ * Restores push delivery after a successful app login without prompting for
+ * permission or changing the traveller's saved preferences.
+ */
+export const restorePushTokenForSession = async (userId) => {
+  try {
+    const validatedUserId = resolveNotificationUserId(userId);
+    if (!realtimeDb) {
+      throw new Error('Database not initialized');
+    }
+
+    const userRef = realtimeDb.ref(`users/${validatedUserId}`);
+    const snapshot = await withTimeout(
+      userRef.once('value'),
+      'Push token restore fetch timeout'
+    );
+    const userData = snapshot.val() || {};
+    if (userData.pushTokenStatus === 'ACTIVE' && userData.pushToken) {
+      return { success: true, restored: false, reason: 'already_active' };
+    }
+    if (userData.pushTokenInvalidReason !== 'SIGNED_OUT' || !userData.preferences) {
+      return { success: true, restored: false, reason: 'not_signed_out' };
+    }
+
+    const permissionProbe = await primeNotificationPermissions({
+      userId: validatedUserId,
+      requestIfNeeded: false,
+    });
+    if (!permissionProbe?.success || !permissionProbe.data?.granted) {
+      return { success: true, restored: false, reason: 'permission_not_granted' };
+    }
+
+    const token = await registerForPushNotificationsAsync();
+    if (!token) {
+      return { success: false, restored: false, error: 'Push token is unavailable' };
+    }
+
+    const nowIso = new Date().toISOString();
+    await withTimeout(
+      userRef.update({
+        pushToken: token,
+        pushTokenStatus: 'ACTIVE',
+        pushTokenProvider: 'expo',
+        pushTokenInvalidReason: null,
+        pushTokenUpdatedAt: nowIso,
+        lastUpdated: nowIso,
+      }),
+      'Push token restore timeout'
+    );
+    logger.info('NotificationService', 'Push token restored for signed-in session', {
+      userId: maskIdentifier(validatedUserId),
+    });
+    return { success: true, restored: true };
+  } catch (error) {
+    logger.warn('NotificationService', 'Push token restore failed', {
+      userId: maskIdentifier(userId),
+      error: error?.message || String(error),
+    });
+    return { success: false, restored: false, error: error?.message || String(error) };
   }
 };
 
@@ -603,12 +775,10 @@ export const getUserPreferences = async (userId, options = {}) => {
 
     const prefsRef = realtimeDb.ref(`users/${validatedUserId}/preferences`);
 
-    const snapshot = await Promise.race([
+    const snapshot = await withTimeout(
       prefsRef.once('value'),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Preferences fetch timeout')), 10000)
-      )
-    ]);
+      'Preferences fetch timeout'
+    );
 
     const preferences = snapshot.val() || null;
     const normalizedPreferences = preferences ? normalizeNotificationPreferences(preferences) : null;

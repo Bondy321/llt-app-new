@@ -139,6 +139,16 @@ const buildDerivedDriverLoginVerifierUrl = () => {
   return `https://europe-west1-${projectId}.cloudfunctions.net/verifyDriverLogin`;
 };
 
+const buildDriverAssignmentEndpointUrl = () => {
+  const explicitUrl = process.env.EXPO_PUBLIC_ASSIGN_DRIVER_TO_TOUR_URL?.trim();
+  if (explicitUrl) return explicitUrl;
+
+  const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID?.trim();
+  if (!projectId) return null;
+
+  return `https://europe-west1-${projectId}.cloudfunctions.net/assignDriverToTour`;
+};
+
 const endpointMentionsFunction = (endpoint, functionName) => (
   typeof endpoint === 'string'
   && typeof functionName === 'string'
@@ -186,6 +196,16 @@ const getPassengerLoginVerifierTimeoutMs = () => {
   }
 
   return 10000;
+};
+
+const fetchWithTimeout = async (endpoint, options = {}, timeoutMs = getPassengerLoginVerifierTimeoutMs()) => {
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(endpoint, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
 };
 
 const LOGIN_REALTIME_READ_RETRY_ATTEMPTS = 3;
@@ -394,7 +414,7 @@ const fetchTourManifestFromFunction = async (tourCodeOriginal) => {
   };
 
   for (const endpoint of endpointCandidates) {
-    const response = await fetch(endpoint, {
+    const response = await fetchWithTimeout(endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify({ tourId: tourCodeOriginal }),
@@ -482,12 +502,35 @@ const verifyDriverLoginIdentity = async ({ driverId }) => {
     Authorization: `Bearer ${firebaseAuthResult.token}`,
   };
 
+  const useAppCheck = shouldUseAppCheckForPassengerVerifier();
+  const strictAppCheck = shouldRequireAppCheckForPassengerVerifier();
+  const appCheckResult = useAppCheck
+    ? await getAppCheckHeaderValue()
+    : { success: false, reason: 'APPCHECK_DISABLED' };
+  if (strictAppCheck && !appCheckResult.success) {
+    return {
+      valid: false,
+      error: 'App security check could not be completed. Update the app or reconnect and try again.',
+    };
+  }
+  if (appCheckResult.success) {
+    headers['x-firebase-appcheck'] = appCheckResult.token;
+  }
+
   for (const endpoint of endpointCandidates) {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ driverId }),
-    });
+    let response;
+    try {
+      response = await fetchWithTimeout(endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ driverId }),
+      });
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        return { valid: false, error: 'Driver verification timed out. Check your connection and try again.' };
+      }
+      return { valid: false, error: 'Driver verification is temporarily unavailable. Please try again shortly.' };
+    }
     const payload = await response.json().catch(() => null);
 
     if (!payload) {
@@ -1145,24 +1188,8 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
       });
     }
 
-    const bookingManifestRef = db.ref(`tour_manifests/${tourId}/bookings/${validatedBookingRef}`);
-    const snapshot = await bookingManifestRef.once('value');
-    const existing = snapshot.exists() ? snapshot.val() : {};
-    const parsedServerUpdatedAt = parseTimestampMs(existing.lastUpdated);
     const parsedLocalUpdatedAt = parseTimestampMs(payload.lastUpdated);
-    const serverUpdatedAt = Number.isFinite(parsedServerUpdatedAt) ? parsedServerUpdatedAt : 0;
     const localUpdatedAt = Number.isFinite(parsedLocalUpdatedAt) ? parsedLocalUpdatedAt : Date.now();
-
-    if (serverUpdatedAt > localUpdatedAt) {
-      logger?.warn?.('Manifest', 'Queued update reconciled to newer server data', {
-        bookingRef: maskIdentifier(validatedBookingRef),
-        tourId,
-        localUpdatedAt: payload.lastUpdated,
-        serverUpdatedAt: existing.lastUpdated,
-      });
-      return { success: true, reconciled: true, overwrite: 'server' };
-    }
-
     const parentStatus = deriveParentStatusFromPassengers(payload.passengerStatuses || []);
     const manifestUpdate = {
       passengerStatus: payload.passengerStatuses || [],
@@ -1170,11 +1197,56 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
       lastUpdated: payload.lastUpdated || new Date().toISOString(),
       idempotencyKey: payload.idempotencyKey || null,
     };
+    const bookingManifestRef = db.ref(`tour_manifests/${tourId}/bookings/${validatedBookingRef}`);
+    let observedServerValue = {};
+    let duplicateDelivery = false;
+    const transactionResult = await Promise.race([
+      bookingManifestRef.transaction((currentValue) => {
+        const current = currentValue || {};
+        observedServerValue = current;
+        duplicateDelivery = Boolean(
+          payload.idempotencyKey
+          && current.idempotencyKey === payload.idempotencyKey
+        );
+        if (duplicateDelivery) return current;
 
-    await Promise.race([
-      bookingManifestRef.update(manifestUpdate),
+        const parsedServerUpdatedAt = parseTimestampMs(current.lastUpdated);
+        const serverUpdatedAt = Number.isFinite(parsedServerUpdatedAt) ? parsedServerUpdatedAt : 0;
+        if (serverUpdatedAt > localUpdatedAt) return undefined;
+        return manifestUpdate;
+      }),
       new Promise((_, reject) => setTimeout(() => reject(new Error('Manifest update timeout')), 15000))
     ]);
+    const serverValue = transactionResult?.snapshot?.val?.() || observedServerValue || {};
+
+    if (!transactionResult?.committed) {
+      logger?.warn?.('Manifest', 'Queued update reconciled to newer server data', {
+        bookingRef: maskIdentifier(validatedBookingRef),
+        tourId,
+        localUpdatedAt: payload.lastUpdated,
+        serverUpdatedAt: serverValue.lastUpdated || null,
+        serverStatus: serverValue.status || MANIFEST_STATUS.PENDING,
+      });
+      return {
+        success: true,
+        reconciled: true,
+        overwrite: 'server',
+        bookingRef: validatedBookingRef,
+        status: serverValue.status || MANIFEST_STATUS.PENDING,
+        passengerStatus: Array.isArray(serverValue.passengerStatus) ? serverValue.passengerStatus : [],
+        lastUpdated: serverValue.lastUpdated || null,
+        conflict: {
+          reason: 'SERVER_NEWER',
+          bookingRef: validatedBookingRef,
+          serverStatus: serverValue.status || MANIFEST_STATUS.PENDING,
+          serverPassengerStatus: Array.isArray(serverValue.passengerStatus) ? serverValue.passengerStatus : [],
+          serverLastUpdated: serverValue.lastUpdated || null,
+          attemptedStatus: parentStatus,
+          attemptedPassengerStatus: payload.passengerStatuses || [],
+          attemptedLastUpdated: payload.lastUpdated || null,
+        },
+      };
+    }
     logBookingEvent('info', 'Direct manifest update completed', {
       tourId,
       bookingRef: maskIdentifier(validatedBookingRef),
@@ -1197,6 +1269,7 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
       passengerStatus: payload.passengerStatuses || [],
       lastUpdated: manifestUpdate.lastUpdated,
       idempotencyKey: manifestUpdate.idempotencyKey,
+      duplicateDelivery,
     };
   } catch (error) {
     logBookingEvent('error', 'Direct manifest update failed', {
@@ -1251,10 +1324,14 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
         success: true,
         queued: false,
         bookingRef: validatedBookingRef,
-        status: parentStatus,
-        passengerStatus: passengerStatuses,
+        status: onlineResult.status || parentStatus,
+        passengerStatus: onlineResult.passengerStatus || passengerStatuses,
         idempotencyKey,
-        conflictMessage: onlineResult.reconciled ? 'One update was reconciled with newer server data.' : null,
+        reconciled: Boolean(onlineResult.reconciled),
+        conflict: onlineResult.conflict || null,
+        conflictMessage: onlineResult.reconciled
+          ? `The server kept the newer ${String(onlineResult.status || MANIFEST_STATUS.PENDING).replace('_', ' ').toLowerCase()} status for booking ${validatedBookingRef}.`
+          : null,
       };
     }
 
@@ -1274,6 +1351,12 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
       id: idempotencyKey,
       type: 'MANIFEST_UPDATE',
       tourId: sanitizeTourId(validatedTourCode),
+      scope: {
+        tourId: sanitizeTourId(validatedTourCode),
+        principalId: options.actorPrincipalId,
+        role: 'driver',
+        authUid: options.authUid || auth?.currentUser?.uid || null,
+      },
       createdAt: nowIso,
       payload: directPayload,
       attempts: 0,
@@ -1315,20 +1398,33 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
   }
 };
 
-// --- UPDATED: Assign Driver to Tour (Uses existing Auth) ---
+const mapDriverAssignmentReason = (reason) => {
+  const reasonToMessage = {
+    ASSIGNMENT_IN_PROGRESS: 'Another assignment is being processed. Please wait a moment and try again.',
+    DRIVER_NOT_FOUND: 'Your driver profile could not be found. Please contact dispatch.',
+    INTERNAL_ERROR: 'The assignment service is temporarily unavailable. Please try again shortly.',
+    INVALID_CREDENTIALS: 'Secure driver access is still starting. Please wait a moment and try again.',
+    INVALID_INPUT: 'Enter a valid tour code.',
+    METHOD_NOT_ALLOWED: 'The assignment service is unavailable in this app version. Please update the app.',
+    NOT_AUTHORIZED: 'This device is not linked to that driver profile. Please sign in again or contact dispatch.',
+    TOUR_ALREADY_ASSIGNED: 'That tour already has another driver assigned. Contact dispatch before changing it.',
+    TOUR_INACTIVE: 'That tour is no longer active. Contact dispatch if this is unexpected.',
+    TOUR_NOT_FOUND: 'Tour not found. Check the code on your paperwork and try again.',
+    TRY_AGAIN_LATER: 'Too many assignment attempts. Please wait a moment and try again.',
+  };
+  return reasonToMessage[reason] || 'The assignment could not be completed. Please try again shortly.';
+};
+
+// Driver assignment is server-authorized so every related tour, driver, profile,
+// and manifest path changes atomically under one trusted operation.
 const assignDriverToTour = async (driverId, tourCode) => {
   try {
-    // Validate inputs
     const validatedDriverId = validateDriverId(driverId);
     const validatedTourCode = validateTourCode(tourCode);
     logBookingEvent('info', 'Driver assignment requested', {
       driverId: maskIdentifier(validatedDriverId),
       tourCode: maskIdentifier(validatedTourCode),
     });
-
-    if (!realtimeDb) {
-      throw new Error('Realtime database not initialized');
-    }
 
     if (!auth) {
       throw new Error('Auth module not initialized');
@@ -1342,80 +1438,55 @@ const assignDriverToTour = async (driverId, tourCode) => {
       });
       throw new Error('You must be logged in to assign a tour');
     }
+    const endpoint = buildDriverAssignmentEndpointUrl();
+    if (!endpoint) {
+      throw new Error('The assignment service is not configured. Please update the app or contact dispatch.');
+    }
+    const firebaseAuthResult = await getFirebaseAuthHeaderValue();
+    if (!firebaseAuthResult.success) {
+      throw new Error(mapDriverAssignmentReason('INVALID_CREDENTIALS'));
+    }
 
-    // Ensure we have a sanitized ID
-    const tourId = sanitizeTourId(validatedTourCode);
-
-    // Verify tour exists
-    const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
-    if (!tourSnapshot.exists()) {
-      logBookingEvent('warn', 'Driver assignment failed because tour was not found', {
-        driverId: maskIdentifier(validatedDriverId),
-        tourId,
+    let response;
+    try {
+      response = await fetchWithTimeout(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${firebaseAuthResult.token}`,
+        },
+        body: JSON.stringify({
+          driverId: validatedDriverId,
+          tourCode: validatedTourCode,
+        }),
       });
-      throw new Error('Tour not found');
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new Error('The assignment request timed out. Check your connection and try again.');
+      }
+      throw new Error('The assignment service could not be reached. Check your connection and try again.');
     }
 
-    // Verify driver exists
-    const driverSnapshot = await realtimeDb.ref(`drivers/${validatedDriverId}`).once('value');
-    if (!driverSnapshot.exists()) {
-      logBookingEvent('warn', 'Driver assignment failed because driver was not found', {
-        driverId: maskIdentifier(validatedDriverId),
-        tourId,
-      });
-      throw new Error('Driver not found');
+    const payload = await response.json().catch(() => null);
+    if (!payload) {
+      throw new Error('The assignment service returned an unexpected response. Please try again.');
+    }
+    if (!response.ok || payload.success !== true) {
+      throw new Error(mapDriverAssignmentReason(payload.reason));
     }
 
-    const tourData = tourSnapshot.val() || {};
-    const canonicalTourCode = typeof tourData.tourCode === 'string' && tourData.tourCode.trim()
-      ? tourData.tourCode.trim()
-      : validatedTourCode;
-    const driverData = driverSnapshot.val() || {};
-    const previousTourId = resolveTourId(driverData.currentTourId);
-    const updates = {};
-
-    // 1. Update Driver's Profile
-    updates[`drivers/${validatedDriverId}/currentTourId`] = tourId;
-    updates[`drivers/${validatedDriverId}/currentTourCode`] = canonicalTourCode;
-    updates[`drivers/${validatedDriverId}/lastActive`] = new Date().toISOString();
-    updates[`drivers/${validatedDriverId}/authUid`] = currentUser.uid;
-    updates[`users/${currentUser.uid}/driverId`] = validatedDriverId;
-    updates[`users/${currentUser.uid}/driverPrincipalId`] = `driver:${validatedDriverId}`;
-    updates[`users/${currentUser.uid}/driverAssignedTourId`] = tourId;
-    updates[`users/${currentUser.uid}/principalType`] = 'driver';
-    updates[`users/${currentUser.uid}/lastUpdated`] = Date.now();
-
-    // 2. Add to Tour Manifest's assigned drivers list
-    updates[`tour_manifests/${tourId}/assigned_drivers/${validatedDriverId}`] = true;
-    updates[`tour_manifests/${tourId}/assigned_driver_codes/${validatedDriverId}`] = buildAssignedDriverCodePayload({
-      driverId: validatedDriverId,
-      tourId,
-      tourCode: canonicalTourCode,
-      assignedAt: new Date().toISOString(),
-      assignedBy: currentUser.uid,
-    });
-
-    // 3. If driver is switching tours, clean previous manifest assignment atomically.
-    if (previousTourId && previousTourId !== tourId) {
-      updates[`tour_manifests/${previousTourId}/assigned_drivers/${validatedDriverId}`] = null;
-      updates[`tour_manifests/${previousTourId}/assigned_driver_codes/${validatedDriverId}`] = null;
-    }
-
-    // Use timeout protection
-    await Promise.race([
-      realtimeDb.ref().update(updates),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Driver assignment timeout')), 10000)
-      )
-    ]);
     logBookingEvent('info', 'Driver assignment completed', {
       driverId: maskIdentifier(validatedDriverId),
-      tourId,
-      previousTourId,
-      updatePathCount: Object.keys(updates).length,
+      tourId: payload.tourId,
+      previousTourId: payload.previousTourId || null,
     });
 
-    return { success: true, tourId };
+    return {
+      success: true,
+      tourId: payload.tourId,
+      tourCode: payload.tourCode || validatedTourCode,
+      previousTourId: payload.previousTourId || null,
+    };
 
   } catch (error) {
     logger?.error?.('Auth', 'Error assigning driver to tour', {
@@ -1798,12 +1869,13 @@ const getTourParticipantCount = async (tourId, dbInstance = realtimeDb, options 
     participantKeyCount: Object.keys(participantMap).length,
   }, loginDiagnosticsContext);
 
-  return typeof currentCount === 'number' && currentCount === recalculatedCount
-    ? currentCount
-    : recalculatedCount;
+  // currentParticipants is the booked passenger total maintained by trusted
+  // import/admin flows. The participants branch tracks app-session membership
+  // and must never replace that commercial passenger count.
+  return typeof currentCount === 'number' ? currentCount : recalculatedCount;
 };
 
-// --- EXISTING: Reconcile participant counts ---
+// Resolve the display count without mutating trusted tour capacity data.
 const ensureTourParticipantCount = async (tourId, dbInstance = realtimeDb, options = {}) => {
   const loginDiagnosticsContext = resolveLoginDiagnosticsContext(options);
   const db = dbInstance || realtimeDb;
@@ -1825,17 +1897,16 @@ const ensureTourParticipantCount = async (tourId, dbInstance = realtimeDb, optio
   const currentCount = countSnapshot.val();
   const recalculatedCount = Object.keys(participantMap).length;
 
-  if (typeof currentCount !== 'number' || currentCount !== recalculatedCount) {
-    await tourRef.child('currentParticipants').set(recalculatedCount);
-    recordLoginDiagnostic('tour_participant_count_reconciled', {
+  if (typeof currentCount !== 'number') {
+    recordLoginDiagnostic('tour_participant_count_fallback_resolved', {
       tourId,
       previousCount: currentCount,
       recalculatedCount,
-      wroteCurrentParticipants: true,
+      wroteCurrentParticipants: false,
     }, loginDiagnosticsContext);
     return recalculatedCount;
   }
-  recordLoginDiagnostic('tour_participant_count_reconcile_noop', {
+  recordLoginDiagnostic('tour_participant_count_trusted_value_preserved', {
     tourId,
     currentCount,
     recalculatedCount,
@@ -1917,7 +1988,8 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb, options = {}) =
       return { success: true, currentParticipants: reconciledCount, alreadyJoined: true };
     }
 
-    // Join tour using a participant-row transaction so security rules can avoid broad tour writes.
+    // Join tour using a participant-row transaction. Capacity/passenger totals
+    // are maintained by trusted booking producers, not by app-session joins.
     const nowIso = new Date().toISOString();
     const transactionResult = await participantRef.transaction((participantState) => {
       if (participantState) return undefined;
@@ -2002,11 +2074,8 @@ const getTourItinerary = async (tourId) => {
       return { ...itineraryData, title: itineraryData.title || tourData.name };
     }
 
-    logBookingEvent('warn', 'Passenger itinerary missing structured days; using fallback', { tourId });
-    return {
-      title: tourData.name,
-      days: [{ day: 1, content: 'Itinerary to be confirmed' }]
-    };
+    logBookingEvent('warn', 'Passenger itinerary missing structured days', { tourId });
+    return null;
   } catch (error) {
     logger?.error?.('Itinerary', 'Error getting itinerary', { tourId, error: error?.message || String(error) });
     return null;

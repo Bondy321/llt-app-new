@@ -155,6 +155,7 @@ const buildCreateManualPassengerUrl = () => {
 };
 
 const REASON_MESSAGES = {
+  ORIGIN_NOT_ALLOWED: 'This admin portal address is not authorized for passenger creation. Contact an administrator before retrying.',
   INVALID_CREDENTIALS: 'Your admin session has expired. Sign in again and retry.',
   NOT_AUTHORIZED: 'This account is not authorized to add passengers.',
   TRY_AGAIN_LATER: 'Too many requests were made. Wait a moment and retry.',
@@ -176,6 +177,7 @@ const REASON_MESSAGES = {
   INVALID_SEAT_NUMBER: 'One or more seat numbers are invalid.',
   DUPLICATE_SEAT_IN_BOOKING: 'A seat number is duplicated within this booking.',
   SEAT_ALREADY_ASSIGNED: 'One or more selected seats are already assigned on this tour.',
+  TOUR_CAPACITY_EXCEEDED: 'This booking would exceed the selected tour capacity.',
   INVALID_PHONE: 'One or more passenger phone numbers are invalid.',
   CREATE_IN_PROGRESS: 'Another booking is currently being added. Wait a moment and retry.',
   INTERNAL_ERROR: 'The passenger could not be added safely. No partial booking was created.',

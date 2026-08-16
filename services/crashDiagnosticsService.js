@@ -3,7 +3,12 @@ import { auth, realtimeDb } from '../firebase';
 import { createPersistenceProvider } from './persistenceProvider';
 import opsAlertModule from './opsAlertService';
 
-const diagnosticsStorage = createPersistenceProvider({ namespace: 'LLT_CRASH_DIAGNOSTICS' });
+const diagnosticsStorage = createPersistenceProvider({
+  namespace: 'LLT_CRASH_DIAGNOSTICS',
+  preferredStorage: 'async-storage',
+  allowMemoryFallback: false,
+  migrateFrom: ['secure-store'],
+});
 const {
   buildOpsAlertFromCrashSnapshot,
   createOrUpdateOpsAlert,
@@ -227,7 +232,8 @@ const persistLocalSnapshot = async (snapshot) => {
 const persistRemoteSnapshot = async (snapshot) => {
   if (!realtimeDb?.ref) return;
 
-  const { userKey, sessionKey } = getRouteKeys();
+  const { authUid, userKey, sessionKey } = getRouteKeys();
+  if (!authUid) return;
   const basePath = `logs/${userKey}/${sessionKey}/crashDiagnostics`;
   const eventKey = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   try {

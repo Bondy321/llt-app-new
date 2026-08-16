@@ -617,29 +617,51 @@ test('deleteGroupPhoto rejects delete when requesting user does not own photo', 
   );
 });
 
-test('deletePrivatePhoto succeeds even when storage object deletion fails', async () => {
+test('deletePrivatePhoto keeps its database record when storage deletion fails so the user can retry', async () => {
   const deletedDbPaths = [];
 
+  await assert.rejects(
+    deletePrivatePhoto('tour-2', 'user-2', 'photo-99', {
+      storageInstance: {},
+      realtimeDbInstance: {},
+      dbRefFn: (_db, path) => ({ path }),
+      getFn: async () => mockSnapshot({
+        storagePath: 'private_tour_photos/tour-2/user-2/file.jpg',
+        viewerStoragePath: 'private_tour_photos/tour-2/user-2/viewers/file_viewer.jpg',
+        thumbnailStoragePath: 'private_tour_photos/tour-2/user-2/thumbnails/file_thumb.jpg',
+      }),
+      storageRefFn: (_storage, path) => ({ path }),
+      deleteObjectFn: async () => {
+        throw new Error('storage down');
+      },
+      removeFn: async (ref) => {
+        deletedDbPaths.push(ref.path);
+      },
+    }),
+    /storage down/,
+  );
+
+  assert.deepStrictEqual(deletedDbPaths, []);
+});
+
+test('deletePrivatePhoto treats an already-missing Storage object as retry-safe', async () => {
+  const deletedDbPaths = [];
   const result = await deletePrivatePhoto('tour-2', 'user-2', 'photo-99', {
     storageInstance: {},
     realtimeDbInstance: {},
     dbRefFn: (_db, path) => ({ path }),
-    getFn: async () => mockSnapshot({
-      storagePath: 'private_tour_photos/tour-2/user-2/file.jpg',
-      viewerStoragePath: 'private_tour_photos/tour-2/user-2/viewers/file_viewer.jpg',
-      thumbnailStoragePath: 'private_tour_photos/tour-2/user-2/thumbnails/file_thumb.jpg',
-    }),
+    getFn: async () => mockSnapshot({ storagePath: 'private_tour_photos/tour-2/user-2/file.jpg' }),
     storageRefFn: (_storage, path) => ({ path }),
     deleteObjectFn: async () => {
-      throw new Error('storage down');
+      const error = new Error('missing');
+      error.code = 'storage/object-not-found';
+      throw error;
     },
-    removeFn: async (ref) => {
-      deletedDbPaths.push(ref.path);
-    },
+    removeFn: async (ref) => deletedDbPaths.push(ref.path),
   });
 
-  assert.deepStrictEqual(deletedDbPaths, ['private_tour_photos/tour-2/user-2/photo-99']);
   assert.deepStrictEqual(result, { success: true });
+  assert.deepStrictEqual(deletedDbPaths, ['private_tour_photos/tour-2/user-2/photo-99']);
 });
 
 
@@ -735,6 +757,8 @@ test('uploadPhoto reuses existing record when idempotency key already exists', a
   const blob = createMockBlob();
   let pushCalls = 0;
   let setCalls = 0;
+  let fetchCalls = 0;
+  let queryConstraints;
 
   const result = await uploadPhoto('file://group.jpg', 'tour-77', 'user-9', 'Lovely day!', {
     idempotencyKey: 'idem-123',
@@ -744,7 +768,14 @@ test('uploadPhoto reuses existing record when idempotency key already exists', a
     storageRefFn: (_storage, path) => ({ path }),
     uploadBytesFn: async () => {},
     getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
-    dbRefFn: mockDbRef,
+    dbRefFn: (_db, path) => ({ path, key: path.split('/').pop() }),
+    queryFn: (ref, ...constraints) => {
+      queryConstraints = constraints;
+      return { ...ref, queried: true };
+    },
+    orderByChildFn: (field) => ({ orderByChild: field }),
+    equalToFn: (value) => ({ equalTo: value }),
+    limitToFirstFn: (value) => ({ limitToFirst: value }),
     getFn: async () => mockSnapshot({
       existing_photo: {
         idempotencyKey: 'idem-123',
@@ -762,13 +793,56 @@ test('uploadPhoto reuses existing record when idempotency key already exists', a
       setCalls += 1;
     },
     serverTimestampFn: () => 123,
-    fetchFn: async () => ({ ok: true, blob: async () => blob }),
+    fetchFn: async () => {
+      fetchCalls += 1;
+      return { ok: true, blob: async () => blob };
+    },
   });
 
+  assert.deepStrictEqual(queryConstraints, [
+    { orderByChild: 'idempotencyKey' },
+    { equalTo: 'idem-123' },
+    { limitToFirst: 1 },
+  ]);
+  assert.equal(fetchCalls, 0);
   assert.equal(pushCalls, 0);
   assert.equal(setCalls, 0);
   assert.equal(result.id, 'existing_photo');
   assert.equal(result.deduped, true);
+});
+
+test('uploadPhoto uses a deterministic database key for a new idempotent upload', async () => {
+  const blob = createMockBlob();
+  let writtenRef;
+  let pushCalls = 0;
+
+  const result = await uploadPhoto('file://group.jpg', 'tour-77', 'user-9', 'New photo', {
+    idempotencyKey: 'queue.item#1',
+    storageInstance: {},
+    realtimeDbInstance: {},
+    storageRefFn: (_storage, path) => ({ path }),
+    uploadBytesFn: async () => {},
+    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
+    dbRefFn: (_db, path) => ({ path, key: path.split('/').pop() }),
+    queryFn: (ref) => ref,
+    orderByChildFn: () => ({}),
+    equalToFn: () => ({}),
+    limitToFirstFn: () => ({}),
+    getFn: async () => mockSnapshot(null),
+    pushFn: () => {
+      pushCalls += 1;
+      return { key: 'unexpected-push' };
+    },
+    setFn: async (ref) => {
+      writtenRef = ref;
+    },
+    serverTimestampFn: () => 123,
+    fetchFn: async () => ({ ok: true, blob: async () => blob }),
+  });
+
+  assert.equal(pushCalls, 0);
+  assert.equal(writtenRef.path, 'group_tour_photos/tour-77/queue_2E_item_23_1');
+  assert.equal(result.id, 'queue_2E_item_23_1');
 });
 
 test('uploadPhotoDirect rejects payloadVersion=2 payloads without idempotencyKey', async () => {

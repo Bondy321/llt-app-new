@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "loch-lomond-travel"
-  }
+  },
+  "targets": {
+    "loch-lomond-travel": {
+      "hosting": {
+        "web-admin": [
+          "loch-lomond-travel-admin"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

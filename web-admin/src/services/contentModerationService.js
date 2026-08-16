@@ -1,4 +1,5 @@
-import { get, limitToLast, onValue, orderByChild, query, ref, remove, update } from 'firebase/database';
+import { get, limitToLast, onValue, orderByChild, query, ref, update } from 'firebase/database';
+import { postAdminAction } from './adminActionService';
 import {
   logFirebaseDebug,
   logFirebaseError,
@@ -179,7 +180,6 @@ export async function updateContentReportStatus(database, reportId, status) {
 }
 
 const resolveReportedContentPath = (report) => {
-  if (report.sourcePath) return report.sourcePath;
   if (report.contentType === 'group_photo') {
     return `group_tour_photos/${report.tourId}/${report.contentId}`;
   }
@@ -202,7 +202,28 @@ export async function removeReportedContent(database, report) {
     throw new Error('Unsupported or unsafe reported content path');
   }
 
-  await remove(ref(database, contentPath));
-  await updateContentReportStatus(database, report.id, CONTENT_REPORT_STATUS.ACTIONED);
-  return { contentPath };
+  if (report.contentType === 'group_photo' || contentPath.startsWith('group_tour_photos/')) {
+    const result = await postAdminAction('removeReportedPhoto', { reportId: report.id }, {
+      configurationError: 'Safe photo moderation is not configured for this deployment.',
+      fallbackError: 'The photo could not be removed safely from both the app and Storage.',
+      reasonMessages: {
+        ORIGIN_NOT_ALLOWED: 'This admin portal address is not authorized for photo moderation. Contact an administrator before retrying.',
+        INVALID_CREDENTIALS: 'Your admin session has expired. Sign in again and retry.',
+        NOT_AUTHORIZED: 'This account is not authorized to remove reported photos.',
+        INVALID_REPORT: 'The report is invalid or no longer exists.',
+        UNSUPPORTED_CONTENT: 'This report does not point to a removable group photo.',
+        INTERNAL_ERROR: 'The photo could not be removed safely from both the app and Storage.',
+      },
+    });
+    return { contentPath: result.contentPath || contentPath, deletedStorageObjects: result.deletedStorageObjects || 0 };
+  }
+
+  const now = Date.now();
+  await update(ref(database), {
+    [contentPath]: null,
+    [`${CONTENT_REPORTS_ROOT}/${report.id}/status`]: CONTENT_REPORT_STATUS.ACTIONED,
+    [`${CONTENT_REPORTS_ROOT}/${report.id}/updatedAt`]: new Date(now).toISOString(),
+    [`${CONTENT_REPORTS_ROOT}/${report.id}/updatedAtMs`]: now,
+  });
+  return { contentPath, deletedStorageObjects: 0 };
 }

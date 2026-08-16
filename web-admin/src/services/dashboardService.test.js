@@ -1,11 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('firebase/database', () => ({
+const firebaseMocks = vi.hoisted(() => ({
   get: vi.fn(),
   onValue: vi.fn(),
-  ref: vi.fn(),
+  ref: vi.fn((_database, path) => ({ path })),
   update: vi.fn(),
 }));
+
+vi.mock('firebase/database', () => firebaseMocks);
 
 import {
   buildBroadcastActivity,
@@ -14,9 +16,12 @@ import {
   filterSafetyAlerts,
   resolveDriverCurrentTourId,
   sanitizeDashboardText,
+  updateSafetyAlertStatus,
 } from './dashboardService';
 
 describe('dashboardService operations model', () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it('derives dispatch coverage and passenger load from real tour, driver, and manifest data', () => {
     const model = buildOperationsDashboardModel({
       drivers: {
@@ -103,6 +108,8 @@ describe('dashboardService operations model', () => {
       globalSafetyAlerts: {
         global1: {
           eventId: 'event-1',
+          clientEventId: 'event-1',
+          userId: 'auth-user-1',
           severity: 'critical',
           status: 'pending',
           isSOS: true,
@@ -117,6 +124,8 @@ describe('dashboardService operations model', () => {
           safetyAlerts: {
             tour1: {
               eventId: 'event-1',
+              clientEventId: 'event-1',
+              userId: 'auth-user-1',
               severity: 'critical',
               status: 'pending',
               timestamp: '2026-05-28T10:00:00.000Z',
@@ -128,11 +137,69 @@ describe('dashboardService operations model', () => {
     });
 
     expect(alerts).toHaveLength(1);
-    expect(alerts[0].paths).toEqual(['globalSafetyAlerts/global1', 'tours/TOUR_1/safetyAlerts/tour1']);
+    expect(alerts[0].paths).toEqual([
+      'globalSafetyAlerts/global1',
+      'logs/auth-user-1/safety/event-1',
+      'tours/TOUR_1/safetyAlerts/tour1',
+    ]);
     expect(alerts[0].message).not.toContain('jane@example.com');
     expect(alerts[0].message).not.toContain('ABC123');
     expect(alerts[0].message).not.toContain('session_1779960000_secret');
     expect(filterSafetyAlerts(alerts, 'attention')).toHaveLength(1);
+  });
+
+  it('updates every mirrored safety alert path in one atomic root write', async () => {
+    firebaseMocks.update.mockResolvedValue();
+    await updateSafetyAlertStatus({}, {
+      id: 'event-1',
+      paths: ['globalSafetyAlerts/global1', 'tours/TOUR_1/safetyAlerts/tour1'],
+    }, 'resolved');
+
+    expect(firebaseMocks.update).toHaveBeenCalledTimes(1);
+    expect(firebaseMocks.update).toHaveBeenCalledWith({ path: undefined }, expect.objectContaining({
+      'globalSafetyAlerts/global1/status': 'resolved',
+      'globalSafetyAlerts/global1/statusUpdatedAt': expect.any(String),
+      'globalSafetyAlerts/global1/statusUpdatedBy': 'web-admin',
+      'tours/TOUR_1/safetyAlerts/tour1/status': 'resolved',
+      'tours/TOUR_1/safetyAlerts/tour1/statusUpdatedAt': expect.any(String),
+      'tours/TOUR_1/safetyAlerts/tour1/statusUpdatedBy': 'web-admin',
+    }));
+  });
+
+  it('updates the reporter private safety history together with operations mirrors', async () => {
+    firebaseMocks.update.mockResolvedValue();
+    const [alert] = buildSafetyAlerts({
+      globalSafetyAlerts: {
+        event1: {
+          eventId: 'event1',
+          clientEventId: 'event1',
+          userId: 'auth-user-1',
+          tourId: 'TOUR_1',
+          timestamp: '2026-05-28T10:00:00.000Z',
+          status: 'pending',
+        },
+      },
+      tours: {
+        TOUR_1: {
+          safetyAlerts: {
+            event1: {
+              eventId: 'event1',
+              clientEventId: 'event1',
+              userId: 'auth-user-1',
+              timestamp: '2026-05-28T10:00:00.000Z',
+              status: 'pending',
+            },
+          },
+        },
+      },
+    });
+
+    await updateSafetyAlertStatus({}, alert, 'acknowledged');
+    expect(firebaseMocks.update.mock.calls[0][1]).toEqual(expect.objectContaining({
+      'logs/auth-user-1/safety/event1/status': 'acknowledged',
+      'logs/auth-user-1/safety/event1/statusUpdatedAt': expect.any(String),
+      'logs/auth-user-1/safety/event1/statusUpdatedBy': 'web-admin',
+    }));
   });
 
   it('summarizes broadcast activity without exposing author UIDs or raw tokens', () => {

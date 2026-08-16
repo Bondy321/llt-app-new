@@ -55,6 +55,9 @@ Module._load = function mockLoader(request, parent, isMain) {
   if (request === '@expo/vector-icons') {
     return { MaterialCommunityIcons: createHost('MaterialCommunityIcons') };
   }
+  if (request === '@expo/vector-icons/build/MaterialCommunityIcons.js') {
+    return createHost('MaterialCommunityIcons');
+  }
 
   if (request.endsWith('/theme') || request === '../theme') {
     return {
@@ -176,6 +179,11 @@ test('PHOTO_UPLOAD queue actions replay through injected photoService behavior',
     payload: { uri: 'file://photo.jpg', tourId: 'TOUR-1', userId: 'USER-1' },
   });
   assert.equal(enqueue.success, true);
+  await offlineSyncService.setActiveSessionScope({
+    tourId: 'TOUR-1',
+    principalId: 'USER-1',
+    role: 'passenger',
+  });
 
   const replay = await offlineSyncService.replayQueue({
     services: {

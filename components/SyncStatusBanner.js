@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import offlineSyncService from '../services/offlineSyncService';
 import { COLORS as THEME, RADIUS, SPACING, SHADOWS, FONT_WEIGHT } from '../theme';
 

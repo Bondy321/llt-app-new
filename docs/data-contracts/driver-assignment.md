@@ -1,10 +1,13 @@
 # Driver Assignment Data Contract
 
-Use this contract for all driver-to-tour assignment writes (mobile + web-admin).
+Use this contract for all driver-to-tour assignment writes (Functions + web-admin).
 
 ## Canonical nodes involved
 
 - `drivers/{driverId}`
+- `tours/{tourId}/driverId`
+- `tours/{tourId}/driverName`
+- `tours/{tourId}/driverPhone`
 - `tour_manifests/{tourId}/assigned_drivers/{driverId}`
 - `tour_manifests/{tourId}/assigned_driver_codes/{driverId}`
 - `users/{authUid}/driverId`
@@ -13,6 +16,8 @@ Use this contract for all driver-to-tour assignment writes (mobile + web-admin).
 - `users/{authUid}/principalType`
 
 Assignments must be written as one multi-path update to keep these nodes consistent.
+
+Each driver has at most one canonical active assignment, stored in `drivers/{driverId}/currentTourId`. Reassignment removes stale manifest and tour display links in the same update. The web admin UI must describe this as a single assignment, not as a multi-tour list.
 
 ## Canonical payload shape
 
@@ -34,12 +39,17 @@ interface AssignedDriverCodeRecord {
 - `assignedAt`: required ISO datetime with timezone.
 - `assignedBy`: required non-empty actor identifier.
 
-## Producers
+## Producers and authority
 
-- Mobile: `services/bookingServiceRealtime.js` (`assignDriverToTour`)
-- Web admin: `web-admin/src/services/tourService.js` (`buildDriverAssignmentUpdates`)
+- Mobile calls the authenticated `assignDriverToTour` HTTPS Function through
+  `services/bookingServiceRealtime.js`; it does not write assignment paths directly.
+- The Function validates that `drivers/{driverId}/authUid` is the caller, rejects an
+  inactive or already-occupied tour, serializes competing assignments with short-lived
+  driver/tour locks, and applies the canonical multi-path update with the Admin SDK.
+- Web admin uses `web-admin/src/services/tourService.js`
+  (`buildDriverAssignmentUpdates`) under an operations-admin identity.
 
-Both producers must emit identical field names and casing.
+Both server and web-admin producers must emit identical field names and casing.
 
 ## Driver manifest authorization
 
@@ -54,4 +64,9 @@ Security rules authorize that write when all of the following are true:
 3. `tour_manifests/{tourId}/assigned_drivers/{driverId}` is `true`.
 4. The booking belongs to `{tourId}` by canonical `bookings/{bookingRef}/tourId`.
 
-Mobile driver login and driver assignment writes must therefore persist the driver profile helper fields above. Web-admin assignment writes should also persist them when the driver profile already has an `authUid`.
+`verifyDriverLogin` transactionally claims an unclaimed driver code for the authenticated
+Firebase UID and persists the driver profile helper fields. Clients cannot claim a driver,
+change assignment authority fields, or add their own manifest assignment. A claimed driver
+may update only its activity timestamp and may remove its own `authUid` as part of account
+deletion. Web-admin assignment writes should also persist the profile helper fields when the
+driver profile already has an `authUid`.

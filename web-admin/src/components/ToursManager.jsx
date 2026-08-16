@@ -111,6 +111,7 @@ import {
   IconUserPlus,
 } from '@tabler/icons-react';
 import AddPassengerModal from './AddPassengerModal';
+import { parseTourPickupPointsText } from '../services/tourFormService';
 import {
   DEFAULT_TOUR,
   TOUR_TEMPLATES,
@@ -430,16 +431,7 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
     setLoading(true);
     try {
       // Parse pickup points from text
-      const pickupPoints = pickupPointsText
-        .split('\n')
-        .filter(line => line.trim())
-        .map(line => {
-          const match = line.match(/^(\d{1,2}:\d{2})\s*[-–]\s*(.+)$/);
-          if (match) {
-            return { time: match[1], location: match[2].trim() };
-          }
-          return { time: '', location: line.trim() };
-        });
+      const pickupPoints = parseTourPickupPointsText(pickupPointsText);
 
       const tourData = {
         ...formData,
@@ -578,7 +570,7 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
               </Grid>
 
               <Grid>
-                <Grid.Col span={6}>
+                <Grid.Col span={12}>
                   <NumberInput
                     label="Max Participants"
                     value={formData.maxParticipants}
@@ -588,16 +580,11 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
                     leftSection={<IconUsers size={16} />}
                   />
                 </Grid.Col>
-                <Grid.Col span={6}>
-                  <NumberInput
-                    label="Current Participants"
-                    value={formData.currentParticipants}
-                    onChange={(val) => handleInputChange('currentParticipants', val)}
-                    min={0}
-                    max={formData.maxParticipants}
-                  />
-                </Grid.Col>
               </Grid>
+
+              <Alert icon={<IconUsers size={16} />} color="gray" variant="light">
+                Booked participants starts at 0 and is maintained automatically when bookings are added.
+              </Alert>
 
               <Switch
                 label="Tour is Active"
@@ -616,7 +603,7 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
 
               <Alert icon={<IconInfoCircle size={16} />} color="blue" variant="light">
                 The tour will be created with driver set to "TBA". You can assign a driver after creation.
-                Itinerary details can be edited after the tour is created.
+                The itinerary starts empty and remains unchanged by this form.
               </Alert>
 
               <Group justify="flex-end" mt="md">
@@ -689,19 +676,16 @@ function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
 // Edit Tour Modal Component
 function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
   const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({ ...DEFAULT_TOUR });
-  const [pickupPointsText, setPickupPointsText] = useState('');
-
-  useEffect(() => {
-    if (tour) {
-      setFormData({ ...DEFAULT_TOUR, ...tour, tourCode: tour.tourCode || tourId || '' });
-      // Convert pickup points to text format
-      const ppText = (tour.pickupPoints || [])
-        .map(pp => `${pp.time} - ${pp.location}`)
-        .join('\n');
-      setPickupPointsText(ppText);
-    }
-  }, [tour, tourId]);
+  const [formData, setFormData] = useState(() => ({
+    ...DEFAULT_TOUR,
+    ...tour,
+    tourCode: tour?.tourCode || tourId || '',
+  }));
+  const [pickupPointsText, setPickupPointsText] = useState(() => (
+    (tour?.pickupPoints || [])
+      .map(pp => `${pp.time} - ${pp.location}`)
+      .join('\n')
+  ));
 
   const handleInputChange = (field, value) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -735,16 +719,7 @@ function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
     setLoading(true);
     try {
       // Parse pickup points from text
-      const pickupPoints = pickupPointsText
-        .split('\n')
-        .filter(line => line.trim())
-        .map(line => {
-          const match = line.match(/^(\d{1,2}:\d{2})\s*[-–]\s*(.+)$/);
-          if (match) {
-            return { time: match[1], location: match[2].trim() };
-          }
-          return { time: '', location: line.trim() };
-        });
+      const pickupPoints = parseTourPickupPointsText(pickupPointsText);
 
       const updateData = {
         name: formData.name,
@@ -753,7 +728,6 @@ function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
         endDate: inputFormatToDDMMYYYY(endDateIso),
         isActive: formData.isActive,
         maxParticipants: formData.maxParticipants,
-        currentParticipants: formData.currentParticipants,
         pickupPoints,
       };
 
@@ -870,18 +844,18 @@ function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
                 label="Max Participants"
                 value={formData.maxParticipants}
                 onChange={(val) => handleInputChange('maxParticipants', val)}
-                min={1}
+                min={Math.max(1, Number(formData.currentParticipants) || 0)}
                 max={100}
                 leftSection={<IconUsers size={16} />}
+                description="Cannot be lower than booked participants"
               />
             </Grid.Col>
             <Grid.Col span={6}>
               <NumberInput
-                label="Current Participants"
+                label="Booked Participants"
                 value={formData.currentParticipants}
-                onChange={(val) => handleInputChange('currentParticipants', val)}
-                min={0}
-                max={formData.maxParticipants}
+                readOnly
+                description="Managed automatically from booking operations"
               />
             </Grid.Col>
           </Grid>
@@ -1128,7 +1102,7 @@ function TourDetailsModal({ opened, onClose, tourId, tour }) {
 }
 
 // Import/Export Modal
-function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
+function ImportExportModal({ opened, onClose, tours, drivers, onImportSuccess }) {
   const [activeTab, setActiveTab] = useState('export');
   const [importing, setImporting] = useState(false);
   const [importMode, setImportMode] = useState('upsert');
@@ -1137,7 +1111,7 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
   const [rawCsvContent, setRawCsvContent] = useState('');
 
   const handleExport = () => {
-    const csv = exportToursToCSV(tours);
+    const csv = exportToursToCSV(tours, { drivers });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
@@ -1206,7 +1180,9 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
 
       notifications.show({
         title: 'Import Complete',
-        message: `Created ${result.created.length}, updated ${result.updated.length}, failed ${result.errors.length}`,
+        message: result.errors.length > 0
+          ? `Created ${result.created.length}, updated ${result.updated.length}, failed ${result.errors.length}. First issue: ${result.errors[0].error}`
+          : `Created ${result.created.length}, updated ${result.updated.length}, failed 0`,
         color: result.errors.length > 0 ? 'orange' : 'green',
       });
 
@@ -1326,6 +1302,7 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
                     <Badge color="blue">{importPreview.summary.total} rows</Badge>
                     <Badge color="green">{importPreview.summary.valid} valid</Badge>
                     <Badge color="red">{importPreview.summary.invalid} invalid</Badge>
+                    {importPreview.summary.warnings > 0 ? <Badge color="yellow">{importPreview.summary.warnings} warnings</Badge> : null}
                   </Group>
                 </Group>
 
@@ -1344,7 +1321,7 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
                         <Table.Th>Tour Code</Table.Th>
                         <Table.Th>Name</Table.Th>
                         <Table.Th>Status</Table.Th>
-                        <Table.Th>Errors</Table.Th>
+                        <Table.Th>Checks</Table.Th>
                       </Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
@@ -1358,7 +1335,9 @@ function ImportExportModal({ opened, onClose, tours, onImportSuccess }) {
                             <Badge color={row.isValid ? 'green' : 'red'} size="xs">{row.isValid ? 'Valid' : 'Invalid'}</Badge>
                           </Table.Td>
                           <Table.Td>
-                            {row.errors.length === 0 ? '-' : row.errors.join(' ')}
+                            {[...row.errors, ...(row.warnings || [])].length === 0
+                              ? '-'
+                              : [...row.errors, ...(row.warnings || [])].join(' ')}
                           </Table.Td>
                         </Table.Tr>
                       ))}
@@ -1500,10 +1479,18 @@ export default function ToursManager() {
       setSyncStatus('error');
     });
 
-    const unsubDrivers = onValue(driversRef, (snapshot) => {
-      setDrivers(snapshot.val() || {});
-      setLoading(false);
-    });
+    const unsubDrivers = onValue(
+      driversRef,
+      (snapshot) => {
+        setDrivers(snapshot.val() || {});
+        setLoading(false);
+      },
+      (error) => {
+        setLoading(false);
+        setSyncStatus('error');
+        notifications.show({ title: 'Drivers unavailable', message: error?.message || 'Could not load driver assignments.', color: 'red' });
+      },
+    );
 
     return () => {
       unsubTours();
@@ -1991,13 +1978,16 @@ export default function ToursManager() {
         userEmail="admin"
       />
 
-      <EditTourModal
-        opened={editModalOpened}
-        onClose={closeEditModal}
-        tourId={selectedTourId}
-        tour={selectedTour}
-        onSuccess={() => {}}
-      />
+      {editModalOpened && (
+        <EditTourModal
+          key={selectedTourId || 'new-selection'}
+          opened={editModalOpened}
+          onClose={closeEditModal}
+          tourId={selectedTourId}
+          tour={selectedTour}
+          onSuccess={() => {}}
+        />
+      )}
 
       <DeleteTourModal
         opened={deleteModalOpened}
@@ -2026,6 +2016,7 @@ export default function ToursManager() {
         opened={importExportModalOpened}
         onClose={closeImportExportModal}
         tours={tours}
+        drivers={drivers}
         onImportSuccess={() => {}}
       />
     </Box>

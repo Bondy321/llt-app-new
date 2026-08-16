@@ -110,6 +110,7 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   const rules = readJson('database.rules.json');
   const adminUid = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
   const adminOnlyRootAccess = `auth != null && auth.uid === '${adminUid}'`;
+  const portalAdminRootAccess = `auth != null && (auth.uid === '${adminUid}' || root.child('admin_users/' + auth.uid).val() === true)`;
   const privateOwnerAccess = "auth != null && ($ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)";
   const manifestBookingAccess = `auth != null && (auth.uid === '${adminUid}' || (root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() && (root.child('users/' + auth.uid + '/bookingRef').val() === $bookingRef || (root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').val() > now))) || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true)) && root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId`;
 
@@ -127,7 +128,7 @@ test('Static contract: sensitive database writes remain ownership or admin gated
     rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.write'],
     manifestBookingAccess,
   );
-  assert.equal(rules.rules.tour_manifests['.read'], adminOnlyRootAccess);
+  assert.equal(rules.rules.tour_manifests['.read'], portalAdminRootAccess);
   assert.notEqual(rules.rules.tour_manifests['.read'], 'auth != null');
   assert.notEqual(rules.rules.tour_manifests.$tourId['.read'], 'auth != null');
   assert.doesNotMatch(rules.rules.tour_manifests.$tourId['.read'], /participants\/' \+ auth\.uid/);
@@ -140,12 +141,17 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   assert.equal(rules.rules.group_tour_photos.$tourId['.read'], rules.rules.group_tour_photos.$tourId['.validate']);
   assert.match(rules.rules.group_tour_photos.$tourId['.read'], /tours\/' \+ \$tourId \+ '\/participants\/' \+ auth\.uid/);
   assert.match(rules.rules.group_tour_photos.$tourId['.read'], /assigned_drivers/);
-  assert.deepEqual(rules.rules.users.$userId.privatePhotoOwnerKey, { '.validate': '!newData.exists() || newData.isString()' });
-  assert.deepEqual(rules.rules.users.$userId.stablePassengerKey, { '.validate': '!newData.exists() || newData.isString()' });
-  assert.deepEqual(rules.rules.users.$userId.driverId, { '.validate': '!newData.exists() || newData.isString()' });
-  assert.deepEqual(rules.rules.users.$userId.driverPrincipalId, { '.validate': '!newData.exists() || newData.isString()' });
-  assert.deepEqual(rules.rules.users.$userId.driverAssignedTourId, { '.validate': '!newData.exists() || newData.isString() || newData.val() === null' });
-  assert.deepEqual(rules.rules.users.$userId.principalType, { '.validate': "!newData.exists() || newData.val() === 'passenger' || newData.val() === 'driver'" });
+  ['privatePhotoOwnerKey', 'stablePassengerKey'].forEach((field) => {
+    assert.equal(rules.rules.users.$userId[field]['.validate'], '!newData.exists() || newData.isString()');
+    assert.match(rules.rules.users.$userId[field]['.write'], /auth\.uid === \$userId/);
+  });
+  assert.equal(rules.rules.users.$userId.driverId['.validate'], '!newData.exists() || newData.isString()');
+  assert.equal(rules.rules.users.$userId.driverPrincipalId['.validate'], '!newData.exists() || newData.isString()');
+  assert.equal(rules.rules.users.$userId.driverAssignedTourId['.validate'], '!newData.exists() || newData.isString() || newData.val() === null');
+  assert.equal(rules.rules.users.$userId.principalType['.validate'], "!newData.exists() || newData.val() === 'passenger' || newData.val() === 'driver'");
+  ['driverId', 'driverPrincipalId', 'driverAssignedTourId', 'principalType', 'lastUpdated'].forEach((field) => {
+    assert.match(rules.rules.users.$userId[field]['.write'], /admin_users/);
+  });
   assert.match(
     rules.rules.globalSafetyAlerts.$eventId['.write'],
     /auth\.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'/,
@@ -159,18 +165,21 @@ test('Static contract: tour metadata writes stay least-privilege', () => {
   const rules = readJson('database.rules.json');
   const tourRules = rules.rules.tours.$tourId;
 
-  assert.equal(rules.rules.tours['.read'], "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'");
+  assert.match(rules.rules.tours['.read'], /admin_users/);
   assert.notEqual(rules.rules.tours['.read'], 'auth != null');
   assert.match(tourRules['.read'], /tour_access_grants\/' \+ \$tourId \+ '\/' \+ auth\.uid \+ '\/expiresAtMs/);
   assert.notEqual(tourRules['.write'], 'auth != null');
   assert.match(tourRules['.write'], /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
   assert.match(tourRules.participants.$userId['.write'], /tour_access_grants\/' \+ \$tourId \+ '\/' \+ auth\.uid \+ '\/expiresAtMs/);
   assert.notEqual(tourRules.participants.$userId['.write'], "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')");
-  assert.match(tourRules.currentParticipants['.write'], /root\.child\('tours\/' \+ \$tourId \+ '\/participants\/' \+ auth\.uid\)\.exists\(\)/);
+  assert.doesNotMatch(tourRules.currentParticipants['.write'], /participants/);
+  assert.match(tourRules.currentParticipants['.write'], /admin_users/);
   assert.match(tourRules.driverLocation['.write'], /tour_manifests\/' \+ \$tourId \+ '\/assigned_drivers\//);
   assert.match(tourRules.itinerary['.write'], /assigned_drivers/);
   assert.match(tourRules.driver_itinerary['.write'], /assigned_drivers/);
   assert.match(tourRules.safetyAlerts.$eventId['.write'], /participants\/' \+ auth\.uid/);
+  assert.match(tourRules.safetyAlerts.$eventId['.write'], /!data\.exists\(\)/);
+  assert.match(tourRules.safetyAlerts.$eventId['.write'], /newData\.child\('status'\)\.val\(\) === 'pending'/);
   assert.match(tourRules.liveTracking.$userId['.write'], /auth\.uid === \$userId/);
   assert.match(readText('package.json'), /tests\/firebaseRules\/tours\.rules\.test\.js/);
 
@@ -231,19 +240,29 @@ test('Static contract: driver login uses verifier without client manifest scans'
   assert.match(driverTestSource, /uses verified driver endpoint when configured/);
 });
 
-test('Static contract: driver records cannot be created by arbitrary clients', () => {
+test('Static contract: driver identity and assignment authority are server-owned', () => {
   const rules = readJson('database.rules.json');
+  const functionsSource = readText('functions/index.js');
   const driverRootRules = rules.rules.drivers;
   const driverWriteRule = rules.rules.drivers.$driverId['.write'];
+  const authUidWriteRule = rules.rules.drivers.$driverId.authUid['.write'];
+  const lastActiveWriteRule = rules.rules.drivers.$driverId.lastActive['.write'];
+  const assignedDriverWriteRule = rules.rules.tour_manifests.$tourId.assigned_drivers.$driverId['.write'];
+  const assignedDriverCodeWriteRule = rules.rules.tour_manifests.$tourId.assigned_driver_codes.$driverId['.write'];
 
-  assert.equal(driverRootRules['.read'], "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'");
+  assert.match(driverRootRules['.read'], /admin_users/);
   assert.notEqual(driverRootRules['.read'], 'auth != null');
   assert.notEqual(driverRootRules.$driverId['.read'], 'auth != null');
   assert.match(driverRootRules.$driverId['.read'], /data\.child\('authUid'\)\.val\(\) === auth\.uid/);
-  assert.notEqual(driverWriteRule, "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || data.child('authUid').val() === auth.uid || newData.child('authUid').val() === auth.uid)");
-  assert.match(driverWriteRule, /data\.exists\(\)/);
-  assert.match(driverWriteRule, /!data\.child\('authUid'\)\.exists\(\) && newData\.child\('authUid'\)\.val\(\) === auth\.uid/);
   assert.match(driverWriteRule, /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
+  assert.doesNotMatch(driverWriteRule, /authUid.*auth\.uid/);
+  assert.match(authUidWriteRule, /data\.val\(\) === auth\.uid && !newData\.exists\(\)/);
+  assert.doesNotMatch(authUidWriteRule, /!data\.child\('authUid'\)\.exists\(\)/);
+  assert.match(lastActiveWriteRule, /root\.child\('drivers\/' \+ \$driverId \+ '\/authUid'\)\.val\(\) === auth\.uid/);
+  assert.doesNotMatch(assignedDriverWriteRule, /drivers\//);
+  assert.doesNotMatch(assignedDriverCodeWriteRule, /drivers\//);
+  assert.match(functionsSource, /exports\.assignDriverToTour = onRequest/);
+  assert.match(functionsSource, /claimDriverAuthUid/);
   assert.match(readText('package.json'), /tests\/firebaseRules\/drivers\.rules\.test\.js/);
 });
 
@@ -320,7 +339,7 @@ test('Static contract: curated ops alerts stay separate from raw logs and schema
   );
   assert.equal(
     adminUsers.$uid['.write'],
-    "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+    "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
   );
   assert.equal(adminUsers.$uid['.validate'], '!newData.exists() || newData.val() === true');
   assert.equal(
@@ -400,6 +419,23 @@ test('Static contract: category broadcasts target canonical tour-interest prefer
     assert.match(screenSource, new RegExp(categoryKey));
     assert.match(categoryBroadcasts.$categoryKey.$broadcastId['.validate'], new RegExp(categoryKey));
   });
+});
+
+test('Static contract: notification taps preserve exact destination context end to end', () => {
+  const appSource = readText('App.js');
+  const chatSource = readText('screens/ChatScreen.js');
+  const preferencesSource = readText('screens/NotificationPreferencesScreen.js');
+  const routingSource = readText('utils/notificationRouting.js');
+
+  assert.match(appSource, /const hasAppSession = Boolean\(bookingData\?\.id\)/);
+  assert.match(appSource, /initialMessageId=\{screenParams\.messageId \|\| null\}/);
+  assert.match(appSource, /initialMarketingCategoryKey=\{screenParams\?\.categoryKey \|\| null\}/);
+  assert.match(chatSource, /getChatMessageById/);
+  assert.match(chatSource, /initialMessageId/);
+  assert.match(preferencesSource, /initialMarketingCategoryKey/);
+  assert.match(routingSource, /GLOBAL_NOTIFICATION_SCREENS/);
+  assert.match(routingSource, /messageId/);
+  assert.match(routingSource, /categoryKey/);
 });
 
 test('Static contract: photo variant lifecycle fields stay allowed by database rules', () => {
@@ -599,12 +635,19 @@ test('Static contract: production native config strips dev-client release metada
 
 test('Static contract: live map and safety sharing guard stale or malformed location state', () => {
   const mapSource = readText('screens/MapScreen.js');
+  const locationSource = readText('utils/driverLocation.js');
   assert.match(mapSource, /normalizeMapCoords/);
-  assert.match(mapSource, /driverLocation\.timestamp \|\| driverLocation\.lastUpdated/);
+  assert.match(mapSource, /getDriverLocationPresentation/);
+  assert.match(mapSource, /Location\.getForegroundPermissionsAsync/);
+  assert.match(mapSource, /setDriverLocation\(null\)/);
+  assert.match(mapSource, /disabled=\{!driverLocationPresentation\.actionable\}/);
   assert.match(mapSource, /let cancelled = false;/);
   assert.match(mapSource, /driverLocationPoint && userLocationPoint/);
   assert.match(mapSource, /const fitTimer = setTimeout/);
   assert.match(mapSource, /return \(\) => clearTimeout\(fitTimer\);/);
+  assert.match(locationSource, /DRIVER_LOCATION_STALE_MS = 30 \* 60 \* 1000/);
+  assert.match(locationSource, /freshness: 'invalid'/);
+  assert.match(locationSource, /timestamp: \{ '\.sv': 'timestamp' \}/);
 
   const safetySource = readText('screens/SafetySupportScreen.js');
   assert.match(safetySource, /locationWatchRef\.current\.remove\(\);/);
@@ -774,7 +817,9 @@ test('Static contract: preference and manifest screens guard stale async state',
 
   assert.match(manifestSource, /mountedRef/);
   assert.match(manifestSource, /manifestLoadSeqRef/);
-  assert.match(manifestSource, /queueScanSeqRef/);
+  assert.match(manifestSource, /subscribeQueuedActions/);
+  assert.match(manifestSource, /normalizeTourId\(action\.tourId\) === activeTourId/);
+  assert.match(manifestSource, /return \(\) => unsubscribe\?\.\(\)/);
   assert.match(manifestSource, /Alert\.alert\('Manifest unavailable'/);
   assert.doesNotMatch(manifestSource, /Failed to load manifest: ' \+ error\.message/);
 
@@ -791,7 +836,9 @@ test('Static contract: safety support cleans up emergency timers and validates p
   assert.match(source, /clearInterval\(sosTimerRef\.current\)/);
   assert.match(source, /locationWatchRef\.current\.remove\(\)/);
   assert.match(source, /historyRequestSeqRef/);
-  assert.match(source, /Notify Contacts/);
+  assert.match(source, /Text \$\{primaryContact\.name\}/);
+  assert.match(source, /sosCoordsRef/);
+  assert.match(source, /network must never delay access to the phone dialler/);
   assert.doesNotMatch(source, /Notify Emergency Contacts\?/);
   assert.match(source, /!sanitized \|\| !hasDialableDigits\(sanitized\)/);
   assert.match(source, /!hasDialableDigits\(newContactPhone\)/);
@@ -838,4 +885,103 @@ test('Static contract: customer-facing error copy avoids raw backend messages', 
     assert.doesNotMatch(source, /\$\{error\.message\}/, `${relativePath} interpolates raw error.message into UI copy`);
     assert.doesNotMatch(source, /Test failed:/, `${relativePath} surfaces raw test notification failure details`);
   });
+});
+
+test('Static contract: offline data stays scoped to the signed-in tour identity', () => {
+  const appSource = readText('App.js');
+  const offlineSource = readText('services/offlineSyncService.js');
+  const safetySource = readText('services/safetyService.js');
+  const driverItinerarySource = readText('screens/DriverItineraryScreen.js');
+
+  assert.match(appSource, /cacheOwnerId: bookingData\?\.id \|\| principalId/);
+  assert.match(appSource, /setActiveSessionScope\(offlineSessionScope\)/);
+  assert.match(appSource, /setActiveSessionScope\(null\)/);
+  assert.match(offlineSource, /tour_pack_v2_/);
+  assert.match(offlineSource, /actionMatchesScope\(action, scope\)/);
+  assert.match(offlineSource, /withQueueMutationLock/);
+  assert.match(safetySource, /filterSafetyQueueForScope/);
+  assert.match(safetySource, /TRUSTED_CONTACTS_KEY_PREFIX = '@LLT:trustedContacts:v2:'/);
+  assert.match(driverItinerarySource, /Unscoped legacy cache removed without reuse/);
+  assert.match(driverItinerarySource, /\.on\('value', onUpdate, onListenerError\)/);
+  assert.doesNotMatch(driverItinerarySource, /const migrated = JSON\.parse\(legacyCached\)/);
+});
+
+test('Static contract: mobile icon imports do not bundle unused font families', () => {
+  for (const directory of ['screens', 'components']) {
+    const filenames = fs.readdirSync(path.join(__dirname, '..', directory))
+      .filter((filename) => /\.js$/.test(filename));
+    filenames.forEach((filename) => {
+      const relativePath = `${directory}/${filename}`;
+      const source = readText(relativePath);
+      assert.doesNotMatch(source, /from ['"]@expo\/vector-icons['"]/, `${relativePath} uses the all-font icon barrel`);
+      if (source.includes('MaterialCommunityIcons')) {
+        assert.match(
+          source,
+          /from ['"]@expo\/vector-icons\/build\/MaterialCommunityIcons\.js['"]/,
+          `${relativePath} must import the single font module`,
+        );
+      }
+    });
+  }
+});
+
+test('Static contract: driver auto-share is in-app, non-overlapping, and durably enabled', () => {
+  const source = readText('screens/DriverHomeScreen.js');
+  assert.match(source, /autoShareInFlightRef\.current/);
+  assert.match(source, /locationBusyRef\.current/);
+  assert.match(source, /withdrawLiveDriverLocation/);
+  assert.match(source, /publishDriverLocation/);
+  assert.match(source, /change could not be saved/);
+  assert.match(source, /every 3 minutes while active and tour-assigned/);
+  assert.doesNotMatch(source, /background location share/);
+});
+
+test('Static contract: optional haptics cannot reject app actions and pickup countdown avoids second-by-second churn', () => {
+  const hapticsSource = readText('services/hapticsService.js');
+  const tourHomeSource = readText('screens/TourHomeScreen.js');
+  assert.match(hapticsSource, /Haptics are optional feedback and must never reject a user action/);
+  assert.match(hapticsSource, /return await fallback\(\)/);
+  assert.match(tourHomeSource, /PICKUP_COUNTDOWN_REFRESH_MS = 30 \* 1000/);
+  assert.doesNotMatch(tourHomeSource, /setInterval\([\s\S]*?}, 1000\)/);
+});
+
+test('Static contract: safety delivery is operations-visible and Firebase maintenance is request-driven', () => {
+  const safetySource = readText('services/safetyService.js');
+  const functionsSource = readText('functions/index.js');
+  const webDebugSource = readText('web-admin/src/services/firebaseDebug.js');
+
+  assert.match(safetySource, /writeSafetyEventAtomically/);
+  assert.match(safetySource, /cloudfunctions\.net\/submitSafetyReport/);
+  assert.match(safetySource, /Authorization: `Bearer \$\{token\}`/);
+  assert.match(functionsSource, /exports\.submitSafetyReport = onRequest/);
+  assert.match(functionsSource, /buildSafetySubmissionUpdates/);
+  assert.match(functionsSource, /exports\.sendSafetyAlertNotification = onValueCreated/);
+  assert.doesNotMatch(safetySource, /Promise\.allSettled\(auxiliaryWrites\)/);
+  assert.match(functionsSource, /runLazyRateLimitMaintenance\(now\)/);
+  assert.doesNotMatch(functionsSource, /const maintenanceInterval = setInterval/);
+  assert.match(webDebugSource, /if \(explicitSetting === 'true'\) return true/);
+  assert.doesNotMatch(webDebugSource, /VITE_FIREBASE_DEBUG_LOGS !== 'false'/);
+});
+
+test('Static contract: web-admin release shell is non-cacheable, hardened, and large selectors are bounded', () => {
+  const firebaseConfig = JSON.parse(readText('firebase.json'));
+  const headers = firebaseConfig.hosting?.headers || [];
+  const defaultHeaders = Object.fromEntries(
+    (headers.find((entry) => entry.source === '**')?.headers || [])
+      .map(({ key, value }) => [key, value]),
+  );
+  const assetHeaders = Object.fromEntries(
+    (headers.find((entry) => entry.source === '/assets/**')?.headers || [])
+      .map(({ key, value }) => [key, value]),
+  );
+  assert.equal(defaultHeaders['Cache-Control'], 'no-cache, no-store, must-revalidate');
+  assert.equal(assetHeaders['Cache-Control'], 'public, max-age=31536000, immutable');
+  assert.match(defaultHeaders['Content-Security-Policy'], /default-src 'self'/);
+  assert.match(defaultHeaders['Content-Security-Policy'], /frame-ancestors 'none'/);
+  assert.equal(defaultHeaders['Permissions-Policy'], 'camera=(), geolocation=(), microphone=(), payment=(), usb=()');
+
+  const broadcastSource = readText('web-admin/src/components/BroadcastPanel.jsx');
+  const passengerModalSource = readText('web-admin/src/components/AddPassengerModal.jsx');
+  assert.match(broadcastSource, /label="Target Tour"[\s\S]*?searchable[\s\S]*?limit=\{50\}/);
+  assert.match(passengerModalSource, /placeholder="Select the passenger's tour"[\s\S]*?searchable[\s\S]*?limit=\{50\}/);
 });

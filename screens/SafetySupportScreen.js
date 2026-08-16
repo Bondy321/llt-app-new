@@ -20,7 +20,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import * as Location from 'expo-location';
 import * as Haptics from '../services/hapticsService';
 import {
@@ -39,8 +39,6 @@ import {
   getOfflineQueueCount,
   getOfflineQueuedSafetyEvents,
 } from '../services/safetyService';
-import * as chatService from '../services/chatService';
-import offlineSyncService from '../services/offlineSyncService';
 import logger, { maskIdentifier } from '../services/loggerService';
 import { resolveTourId } from '../services/tourIdentityService';
 import { parseTimestampMs } from '../services/timeUtils';
@@ -216,7 +214,7 @@ const SOSButton = ({ onActivate, isActive, countdown, onCancel }) => {
             <MaterialCommunityIcons name="gesture-tap-hold" size={18} color={COLORS.sosRed} />
           </View>
           <Text style={styles.sosHelpText}>
-            Hold SOS for emergency call options. The app does not contact 999 automatically.
+            Hold SOS for emergency call options. The app attempts to attach your location, but does not contact 999 automatically.
           </Text>
         </View>
       ) : (
@@ -334,7 +332,6 @@ const LiveLocationCard = ({
   lastUpdate,
   accuracy,
   isUpdating,
-  statusLabel,
 }) => {
   const getAccuracyLabel = () => {
     if (!accuracy) return { text: 'Unknown', color: COLORS.textMuted };
@@ -360,8 +357,8 @@ const LiveLocationCard = ({
           <Text style={styles.liveLocationTitle}>Live Location Sharing</Text>
           <Text style={styles.liveLocationSubtitle}>
             {isSharing
-              ? 'Your location is being shared with operations'
-              : 'Enable to share your real-time location'}
+              ? 'Shared with operations while this screen is open'
+              : 'Share with operations while this screen is open'}
           </Text>
         </View>
         {isUpdating ? (
@@ -372,6 +369,7 @@ const LiveLocationCard = ({
             onValueChange={onToggle}
             trackColor={{ true: COLORS.success, false: COLORS.border }}
             thumbColor={COLORS.white}
+            accessibilityLabel="Share live location with operations while this screen is open"
           />
         )}
       </View>
@@ -391,7 +389,7 @@ const LiveLocationCard = ({
           {lastUpdate && (
             <View style={styles.liveLocationStatusItem}>
               <MaterialCommunityIcons name="clock-outline" size={14} color={COLORS.textMuted} />
-              <Text style={styles.statusText}>{statusLabel || 'Not synced yet'}</Text>
+              <Text style={styles.statusText}>Updated just now</Text>
             </View>
           )}
         </View>
@@ -496,6 +494,7 @@ export default function SafetySupportScreen({
   tourData,
   bookingData,
   userId,
+  principalId,
   mode = 'passenger',
   isConnected = true,
 }) {
@@ -510,6 +509,8 @@ export default function SafetySupportScreen({
   const [sosActive, setSosActive] = useState(false);
   const [sosCountdown, setSosCountdown] = useState(SOS_COUNTDOWN_SECONDS);
   const sosTimerRef = useRef(null);
+  const sosCountdownRef = useRef(SOS_COUNTDOWN_SECONDS);
+  const sosCoordsRef = useRef(null);
   const mountedRef = useRef(true);
   const historyRequestSeqRef = useRef(0);
 
@@ -518,7 +519,9 @@ export default function SafetySupportScreen({
   const [liveLocationUpdating, setLiveLocationUpdating] = useState(false);
   const [currentCoords, setCurrentCoords] = useState(null);
   const [locationAccuracy, setLocationAccuracy] = useState(null);
+  const [liveLocationLastUpdate, setLiveLocationLastUpdate] = useState(null);
   const locationWatchRef = useRef(null);
+  const liveLocationSharingRef = useRef(false);
 
   useEffect(() => () => {
     mountedRef.current = false;
@@ -531,6 +534,10 @@ export default function SafetySupportScreen({
       locationWatchRef.current.remove();
       locationWatchRef.current = null;
     }
+    if (liveLocationSharingRef.current && tourId && userId) {
+      updateLiveLocationSharing(tourId, userId, false).catch(() => {});
+      liveLocationSharingRef.current = false;
+    }
   }, []);
 
   // Contacts state
@@ -538,6 +545,7 @@ export default function SafetySupportScreen({
   const [showAddContactModal, setShowAddContactModal] = useState(false);
   const [newContactName, setNewContactName] = useState('');
   const [newContactPhone, setNewContactPhone] = useState('');
+  const [contactSaving, setContactSaving] = useState(false);
 
   // Report modal state
   const [showReportModal, setShowReportModal] = useState(false);
@@ -545,7 +553,6 @@ export default function SafetySupportScreen({
   // History state
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [safetyHistory, setSafetyHistory] = useState([]);
-  const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
   const [requestingDriverCall, setRequestingDriverCall] = useState(false);
 
   // Derived values
@@ -554,31 +561,12 @@ export default function SafetySupportScreen({
   const operationsNumber = '+441414876737';
   const tourId = resolveTourId(tourData?.id, tourData?.tourCode);
   const userName = bookingData?.passengerNames?.[0] || (isDriver ? tourData?.driverName : 'Passenger');
+  const safetyQueueScope = useMemo(() => ({
+    tourId,
+    principalId: principalId || userId,
+    role: mode === 'driver' ? 'driver' : 'passenger',
+  }), [mode, principalId, tourId, userId]);
 
-  useEffect(() => {
-    if (!tourId) return;
-    const role = mode === 'driver' ? 'driver' : 'passenger';
-    logger.debug('SafetySupportScreen', 'Tour pack metadata load started', { tourId, role });
-    offlineSyncService.getTourPackMeta(tourId, role).then((res) => {
-      if (!mountedRef.current) return;
-      if (res.success) {
-        const label = offlineSyncService.getStalenessLabel(res.data?.lastSyncedAt).label;
-        setCacheStatusLabel(label);
-        logger.info('SafetySupportScreen', 'Tour pack metadata loaded', {
-          tourId,
-          role,
-          lastSyncedAt: res.data?.lastSyncedAt || null,
-          label,
-        });
-      } else {
-        logger.warn('SafetySupportScreen', 'Tour pack metadata load failed', {
-          tourId,
-          role,
-          error: res.error || 'unknown',
-        });
-      }
-    });
-  }, [tourId, mode]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Tips expanded state
@@ -628,11 +616,16 @@ export default function SafetySupportScreen({
     ]).start();
   }, []);
 
+  const safetyPrincipalId = principalId || userId;
+
   // Load trusted contacts
   useEffect(() => {
     loadTrustedContacts();
+  }, [safetyPrincipalId]);
+
+  useEffect(() => {
     checkOfflineQueue();
-  }, []);
+  }, [safetyQueueScope]);
 
   // Process offline queue when connected
   useEffect(() => {
@@ -641,7 +634,7 @@ export default function SafetySupportScreen({
         userId: maskIdentifier(userId),
         offlineQueueCount,
       });
-      processOfflineQueue(userId).then(({ processed, failed }) => {
+      processOfflineQueue(safetyQueueScope).then(async ({ processed, failed }) => {
         if (!mountedRef.current) return;
         logger.info('SafetySupportScreen', 'Offline safety queue processed', {
           userId: maskIdentifier(userId),
@@ -653,8 +646,8 @@ export default function SafetySupportScreen({
             'Reports Synced',
             `${processed} pending safety report(s) have been submitted.`
           );
-          setOfflineQueueCount(failed || 0);
         }
+        await checkOfflineQueue();
       }).catch((error) => {
         logger.error('SafetySupportScreen', 'Offline safety queue processing failed', {
           userId: maskIdentifier(userId),
@@ -662,18 +655,18 @@ export default function SafetySupportScreen({
         });
       });
     }
-  }, [isConnected, offlineQueueCount, userId]);
+  }, [isConnected, offlineQueueCount, safetyQueueScope, userId]);
 
   const loadTrustedContacts = async () => {
     logger.debug('SafetySupportScreen', 'Trusted contacts load started');
-    const contacts = await getTrustedContacts();
+    const contacts = await getTrustedContacts(safetyPrincipalId);
     if (!mountedRef.current) return;
     setTrustedContacts(contacts);
     logger.info('SafetySupportScreen', 'Trusted contacts loaded', { contactCount: contacts.length });
   };
 
   const checkOfflineQueue = async () => {
-    const count = await getOfflineQueueCount();
+    const count = await getOfflineQueueCount(safetyQueueScope);
     if (!mountedRef.current) return;
     setOfflineQueueCount(count);
     logger.info('SafetySupportScreen', 'Offline safety queue count loaded', { count });
@@ -739,41 +732,47 @@ export default function SafetySupportScreen({
       return;
     }
 
-    const bookingRef = bookingData?.bookingRef || bookingData?.id || 'Not provided';
-    const callbackRequestMessage = `Driver callback request: ${userName} (${bookingRef}) has requested a call as soon as possible.`;
-
     setRequestingDriverCall(true);
     logger.info('SafetySupportScreen', 'Driver callback request started', {
       tourId,
-      bookingRef: maskIdentifier(bookingRef),
       userId: maskIdentifier(userId),
       isConnected,
     });
-    const result = await chatService.sendInternalDriverMessage(
-      tourId,
-      callbackRequestMessage,
-      { userId: userId || 'anonymous', name: userName || 'Passenger', isDriver: false },
-      undefined,
-      { online: isConnected }
-    );
+    let result;
+    try {
+      result = await logSafetyEvent({
+        userId,
+        principalId: principalId || userId,
+        tourId,
+        role: 'passenger',
+        category: SAFETY_CATEGORIES.CUSTOM,
+        severity: SEVERITY_LEVELS.MEDIUM,
+        message: 'Driver callback requested',
+        customMessage: 'A passenger requested a callback from the assigned driver.',
+        online: isConnected,
+      });
+    } catch (error) {
+      result = { success: false, error: error?.code || error?.message || 'unknown' };
+    }
     if (!mountedRef.current) return;
     setRequestingDriverCall(false);
 
     if (result?.success) {
       logger.info('SafetySupportScreen', 'Driver callback request sent', {
         tourId,
-        bookingRef: maskIdentifier(bookingRef),
+        queued: Boolean(result.queued),
       });
       Alert.alert(
-        'Callback requested',
-        'Your request has been sent privately to the driver team. Please keep your phone nearby.'
+        result.queued ? 'Callback request saved' : 'Callback requested',
+        result.queued
+          ? 'Your request is stored on this device and will be sent to the driver team when you reconnect.'
+          : 'Your request was securely received for the assigned driver team. Please keep your phone nearby.'
       );
       return;
     }
 
     logger.warn('SafetySupportScreen', 'Driver callback request failed', {
       tourId,
-      bookingRef: maskIdentifier(bookingRef),
       error: result?.error || 'unknown',
     });
     Alert.alert(
@@ -810,6 +809,7 @@ export default function SafetySupportScreen({
 
   // ==================== SOS HANDLERS ====================
   const startSOS = async () => {
+    if (sosActive) return;
     logger.warn('SafetySupportScreen', 'SOS countdown activated', {
       mode,
       tourId,
@@ -823,8 +823,24 @@ export default function SafetySupportScreen({
 
     setSosActive(true);
     setSosCountdown(SOS_COUNTDOWN_SECONDS);
+    sosCountdownRef.current = SOS_COUNTDOWN_SECONDS;
+    sosCoordsRef.current = currentCoords;
 
-    // Get location immediately
+    if (sosTimerRef.current) clearInterval(sosTimerRef.current);
+    sosTimerRef.current = setInterval(() => {
+      if (!mountedRef.current) return;
+      sosCountdownRef.current = Math.max(0, sosCountdownRef.current - 1);
+      setSosCountdown(sosCountdownRef.current);
+      if (sosCountdownRef.current === 0) {
+        clearInterval(sosTimerRef.current);
+        sosTimerRef.current = null;
+        executeSOS(sosCoordsRef.current);
+        return;
+      }
+      Vibration.vibrate(100);
+    }, 1000);
+
+    // Capture location in parallel so emergency call options never wait on GPS.
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status === 'granted') {
@@ -832,6 +848,7 @@ export default function SafetySupportScreen({
           accuracy: Location.Accuracy.High,
         });
         if (!mountedRef.current) return;
+        sosCoordsRef.current = location.coords;
         setCurrentCoords(location.coords);
         setLocationAccuracy(location.coords.accuracy);
         logger.info('SafetySupportScreen', 'SOS location captured', {
@@ -847,22 +864,6 @@ export default function SafetySupportScreen({
         error: error?.message || String(error),
       });
     }
-
-    // Start countdown
-    if (!mountedRef.current) return;
-    sosTimerRef.current = setInterval(() => {
-      if (!mountedRef.current) return;
-      setSosCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(sosTimerRef.current);
-          executeSOS();
-          return 0;
-        }
-        // Vibrate each second
-        Vibration.vibrate(100);
-        return prev - 1;
-      });
-    }, 1000);
   };
 
   const cancelSOS = () => {
@@ -872,21 +873,24 @@ export default function SafetySupportScreen({
     });
     if (sosTimerRef.current) {
       clearInterval(sosTimerRef.current);
+      sosTimerRef.current = null;
     }
+    sosCoordsRef.current = null;
     setSosActive(false);
     setSosCountdown(SOS_COUNTDOWN_SECONDS);
+    sosCountdownRef.current = SOS_COUNTDOWN_SECONDS;
     if (Platform.OS === 'ios') {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
   };
 
-  const executeSOS = async () => {
+  const executeSOS = (capturedCoords = null) => {
     if (!mountedRef.current) return;
     setSosActive(false);
     logger.warn('SafetySupportScreen', 'SOS countdown completed', {
       tourId,
       userId: maskIdentifier(userId),
-      hasLocation: Boolean(currentCoords),
+      hasLocation: Boolean(capturedCoords),
       trustedContactCount: trustedContacts.length,
     });
 
@@ -895,37 +899,10 @@ export default function SafetySupportScreen({
     }
     Vibration.vibrate([0, 500, 200, 500]);
 
-    if (currentCoords) {
-      try {
-        await logSafetyEvent({
-          userId,
-          bookingId: bookingData?.id,
-          tourId,
-          role: mode,
-          category: SAFETY_CATEGORIES.SOS,
-          severity: SEVERITY_LEVELS.CRITICAL,
-          message: 'SOS quick action opened by user (no emergency dispatch performed)',
-          coords: currentCoords,
-          isSOS: true,
-        });
-        logger.info('SafetySupportScreen', 'SOS safety event logged', {
-          tourId,
-          userId: maskIdentifier(userId),
-          hasLocation: true,
-        });
-      } catch (error) {
-        logger.error('SafetySupportScreen', 'SOS safety event log failed', {
-          tourId,
-          userId: maskIdentifier(userId),
-          error: error?.message || String(error),
-        });
-        // Keep emergency call flow non-blocking even if logging fails.
-      }
-    }
-
-    const canNotifyTrustedContacts = trustedContacts.length > 0 && currentCoords;
-    const smsMessage = canNotifyTrustedContacts
-      ? generateEmergencySMS(currentCoords, tourData, userName)
+    const canNotifyPrimaryContact = trustedContacts.length > 0 && capturedCoords;
+    const primaryContact = canNotifyPrimaryContact ? trustedContacts[0] : null;
+    const smsMessage = primaryContact
+      ? generateEmergencySMS(capturedCoords, tourData, userName)
       : null;
     const emergencyActions = [
       {
@@ -939,17 +916,12 @@ export default function SafetySupportScreen({
       },
     ];
 
-    if (canNotifyTrustedContacts) {
+    if (primaryContact) {
       emergencyActions.push({
-        text: 'Notify Contacts',
-        onPress: () => {
-          trustedContacts.forEach((contact) => {
-            sendSMS(contact.phone, smsMessage);
-          });
-        },
+        text: `Text ${primaryContact.name}`,
+        onPress: () => sendSMS(primaryContact.phone, smsMessage),
       });
     }
-
     emergencyActions.push({ text: 'Cancel', style: 'cancel' });
 
     Alert.alert(
@@ -957,6 +929,35 @@ export default function SafetySupportScreen({
       `This app does not notify emergency services for you. If you need urgent help, call ${emergencyNumber} now.`,
       emergencyActions
     );
+
+    // Recording and alert fanout run after options are shown. A slow or failed
+    // network must never delay access to the phone dialler.
+    logSafetyEvent({
+        userId,
+        principalId: principalId || userId,
+        bookingId: bookingData?.id,
+        tourId,
+        role: mode,
+        category: SAFETY_CATEGORIES.SOS,
+        severity: SEVERITY_LEVELS.CRITICAL,
+        message: 'SOS quick action opened by user (no emergency dispatch performed)',
+        coords: capturedCoords,
+        isSOS: true,
+        online: isConnected,
+      }).then((sosSubmission) => {
+      logger.info('SafetySupportScreen', sosSubmission.queued ? 'SOS safety event queued' : 'SOS safety event logged', {
+        tourId,
+        userId: maskIdentifier(userId),
+        hasLocation: Boolean(capturedCoords),
+        queued: Boolean(sosSubmission.queued),
+      });
+    }).catch((error) => {
+      logger.error('SafetySupportScreen', 'SOS safety event log failed', {
+        tourId,
+        userId: maskIdentifier(userId),
+        error: error?.message || String(error),
+      });
+    });
   };
 
   // ==================== LIVE LOCATION HANDLERS ====================
@@ -1023,6 +1024,8 @@ export default function SafetySupportScreen({
                   tourId,
                   userId: maskIdentifier(userId),
                 });
+              } else if (mountedRef.current) {
+                setLiveLocationLastUpdate(Date.now());
               }
             }).catch((error) => {
               logger.warn('SafetySupportScreen', 'Live location watch update failed', {
@@ -1052,6 +1055,8 @@ export default function SafetySupportScreen({
         }
 
         setLiveLocationSharing(true);
+        liveLocationSharingRef.current = true;
+        setLiveLocationLastUpdate(Date.now());
         logger.info('SafetySupportScreen', 'Live location sharing started', {
           tourId,
           userId: maskIdentifier(userId),
@@ -1090,6 +1095,8 @@ export default function SafetySupportScreen({
         if (!mountedRef.current) return;
 
         setLiveLocationSharing(false);
+        liveLocationSharingRef.current = false;
+        setLiveLocationLastUpdate(null);
         if (shareStopped) {
           logger.info('SafetySupportScreen', 'Live location sharing stopped', {
             tourId,
@@ -1105,6 +1112,8 @@ export default function SafetySupportScreen({
       } catch (error) {
         if (mountedRef.current) {
           setLiveLocationSharing(false);
+          liveLocationSharingRef.current = false;
+          setLiveLocationLastUpdate(null);
         }
         logger.warn('SafetySupportScreen', 'Live location sharing stop write failed', {
           tourId,
@@ -1184,8 +1193,9 @@ export default function SafetySupportScreen({
 
       const meta = CATEGORY_META[selectedCategory];
 
-      await logSafetyEvent({
+      const submission = await logSafetyEvent({
         userId,
+        principalId: principalId || userId,
         bookingId: bookingData?.id,
         tourId,
         role: mode,
@@ -1194,13 +1204,15 @@ export default function SafetySupportScreen({
         message: meta?.description || 'Safety report',
         customMessage: customMessage.trim() || null,
         coords,
+        online: isConnected,
       });
       if (!mountedRef.current) return;
-      logger.info('SafetySupportScreen', 'Safety report submitted', {
+      logger.info('SafetySupportScreen', submission.queued ? 'Safety report queued' : 'Safety report submitted', {
         tourId,
         category: selectedCategory,
         severity: selectedSeverity,
         includedLocation: Boolean(coords),
+        queued: Boolean(submission.queued),
       });
 
       if (Platform.OS === 'ios') {
@@ -1208,43 +1220,35 @@ export default function SafetySupportScreen({
       }
 
       Alert.alert(
-        'Report Submitted',
-        'Thank you for letting us know. Operations have been notified and will respond shortly.',
-        [{ text: 'OK', onPress: () => setShowReportModal(false) }]
+        submission.queued ? 'Report Saved for Retry' : 'Report Submitted',
+        submission.queued
+          ? 'Your report is safely stored on this device and will be submitted when the connection is available.'
+          : 'Your report was securely received. Operations and the assigned driver team can now review it.',
+        [{
+          text: 'OK',
+          onPress: () => {
+            setShowReportModal(false);
+            setSelectedCategory(null);
+            setSelectedSeverity(SEVERITY_LEVELS.MEDIUM);
+            setCustomMessage('');
+          },
+        }]
       );
-
-      // Reset form
-      setSelectedCategory(null);
-      setSelectedSeverity(SEVERITY_LEVELS.MEDIUM);
-      setCustomMessage('');
     } catch (error) {
       if (!mountedRef.current) return;
-      if (!isConnected) {
-        logger.warn('SafetySupportScreen', 'Safety report queued offline', {
-          tourId,
-          category: selectedCategory,
-          severity: selectedSeverity,
-          error: error?.message || String(error),
-        });
+      logger.error('SafetySupportScreen', 'Safety report was not submitted or stored', {
+        tourId,
+        category: selectedCategory,
+        severity: selectedSeverity,
+        isConnected,
+        code: error?.code || null,
+        error: error?.message || String(error),
+      });
+      if (mountedRef.current) {
         Alert.alert(
-          'Report Queued',
-          'You appear to be offline. Your report has been saved and will be submitted when you reconnect.',
-          [{ text: 'OK', onPress: () => setShowReportModal(false) }]
+          'Report Not Saved',
+          'The report could not be submitted or stored on this device. Please try again or call operations directly.'
         );
-        checkOfflineQueue();
-      } else {
-        logger.error('SafetySupportScreen', 'Safety report submit failed', {
-          tourId,
-          category: selectedCategory,
-          severity: selectedSeverity,
-          error: error?.message || String(error),
-        });
-        if (mountedRef.current) {
-          Alert.alert(
-            'Error',
-            'Could not submit report. Please try again or call operations directly.'
-          );
-        }
       }
     } finally {
       if (mountedRef.current) {
@@ -1255,6 +1259,7 @@ export default function SafetySupportScreen({
 
   // ==================== CONTACT HANDLERS ====================
   const handleAddContact = async () => {
+    if (contactSaving) return;
     if (!newContactName.trim() || !newContactPhone.trim()) {
       logger.warn('SafetySupportScreen', 'Trusted contact add blocked by missing fields', {
         hasName: Boolean(newContactName.trim()),
@@ -1271,25 +1276,40 @@ export default function SafetySupportScreen({
       return;
     }
 
+    setContactSaving(true);
     logger.info('SafetySupportScreen', 'Trusted contact add started', {
       nameLength: newContactName.trim().length,
       phoneLength: newContactPhone.replace(/[^+\d]/g, '').length,
     });
-    await addTrustedContact({
-      name: newContactName.trim(),
-      phone: newContactPhone.trim(),
-    });
-
-    await loadTrustedContacts();
-    if (!mountedRef.current) return;
-    setShowAddContactModal(false);
-    setNewContactName('');
-    setNewContactPhone('');
-
-    if (Platform.OS === 'ios') {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    try {
+      await addTrustedContact(safetyPrincipalId, {
+        name: newContactName.trim(),
+        phone: newContactPhone.trim(),
+      });
+      await loadTrustedContacts();
+      if (!mountedRef.current) return;
+      setShowAddContactModal(false);
+      setNewContactName('');
+      setNewContactPhone('');
+      if (Platform.OS === 'ios') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+      logger.info('SafetySupportScreen', 'Trusted contact add completed');
+    } catch (error) {
+      if (!mountedRef.current) return;
+      logger.warn('SafetySupportScreen', 'Trusted contact add failed', {
+        code: error?.code || null,
+        error: error?.message || String(error),
+      });
+      Alert.alert(
+        error?.code === 'TRUSTED_CONTACT_LIMIT' ? 'Contact limit reached' : 'Contact not saved',
+        error?.code === 'TRUSTED_CONTACT_LIMIT'
+          ? error.message
+          : 'This contact could not be stored safely on this device. Please try again.',
+      );
+    } finally {
+      if (mountedRef.current) setContactSaving(false);
     }
-    logger.info('SafetySupportScreen', 'Trusted contact add completed');
   };
 
   const handleRemoveContact = async (contactId) => {
@@ -1305,12 +1325,21 @@ export default function SafetySupportScreen({
           text: 'Remove',
           style: 'destructive',
           onPress: async () => {
-            await removeTrustedContact(contactId);
-            await loadTrustedContacts();
-            if (!mountedRef.current) return;
-            logger.info('SafetySupportScreen', 'Trusted contact removed', {
-              contactId: maskIdentifier(contactId),
-            });
+            try {
+              await removeTrustedContact(safetyPrincipalId, contactId);
+              await loadTrustedContacts();
+              if (!mountedRef.current) return;
+              logger.info('SafetySupportScreen', 'Trusted contact removed', {
+                contactId: maskIdentifier(contactId),
+              });
+            } catch (error) {
+              if (!mountedRef.current) return;
+              logger.warn('SafetySupportScreen', 'Trusted contact removal failed', {
+                contactId: maskIdentifier(contactId),
+                error: error?.message || String(error),
+              });
+              Alert.alert('Contact not removed', 'The change could not be stored on this device. Please try again.');
+            }
           },
         },
       ]
@@ -1327,7 +1356,7 @@ export default function SafetySupportScreen({
     try {
       const [history, queuedEvents] = await Promise.all([
         getSafetyHistory(userId),
-        getOfflineQueuedSafetyEvents(),
+        getOfflineQueuedSafetyEvents(safetyQueueScope),
       ]);
       if (!mountedRef.current || requestSeq !== historyRequestSeqRef.current) return;
 
@@ -1402,7 +1431,7 @@ export default function SafetySupportScreen({
             <View style={styles.offlineBanner}>
               <MaterialCommunityIcons name="wifi-off" size={18} color={COLORS.white} />
               <Text style={styles.offlineBannerText}>
-                You're offline. Reports will be queued.
+                You're offline. Reports can be saved on this device for retry.
               </Text>
             </View>
           )}
@@ -1468,10 +1497,9 @@ export default function SafetySupportScreen({
           <LiveLocationCard
             isSharing={liveLocationSharing}
             onToggle={toggleLiveLocation}
-            lastUpdate={currentCoords ? new Date().toISOString() : null}
+            lastUpdate={liveLocationLastUpdate}
             accuracy={locationAccuracy}
             isUpdating={liveLocationUpdating}
-            statusLabel={cacheStatusLabel}
           />
 
           {/* Report Issues Card */}
@@ -1494,6 +1522,7 @@ export default function SafetySupportScreen({
                 onValueChange={setIncludeLocation}
                 trackColor={{ true: COLORS.primary, false: COLORS.border }}
                 thumbColor={COLORS.white}
+                accessibilityLabel="Include my location with this safety report"
               />
             </View>
 
@@ -1678,6 +1707,7 @@ export default function SafetySupportScreen({
                 onChangeText={setCustomMessage}
                 multiline
                 numberOfLines={3}
+                maxLength={1000}
                 textAlignVertical="top"
               />
             </View>
@@ -1744,6 +1774,7 @@ export default function SafetySupportScreen({
                 value={newContactName}
                 onChangeText={setNewContactName}
                 autoCapitalize="words"
+                maxLength={80}
               />
 
               <Text style={styles.inputLabel}>Phone Number</Text>
@@ -1755,6 +1786,7 @@ export default function SafetySupportScreen({
                 onChangeText={setNewContactPhone}
                 keyboardType="phone-pad"
                 autoComplete="tel"
+                maxLength={40}
               />
             </View>
 
@@ -1774,11 +1806,18 @@ export default function SafetySupportScreen({
               <TouchableOpacity
                 style={styles.submitButton}
                 onPress={handleAddContact}
+                disabled={contactSaving}
                 accessibilityLabel="Add contact"
                 accessibilityRole="button"
               >
-                <MaterialCommunityIcons name="account-plus" size={18} color={COLORS.white} />
-                <Text style={styles.submitButtonText}>Add Contact</Text>
+                {contactSaving ? (
+                  <ActivityIndicator color={COLORS.white} />
+                ) : (
+                  <>
+                    <MaterialCommunityIcons name="account-plus" size={18} color={COLORS.white} />
+                    <Text style={styles.submitButtonText}>Add Contact</Text>
+                  </>
+                )}
               </TouchableOpacity>
             </View>
           </View>

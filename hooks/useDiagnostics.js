@@ -16,7 +16,7 @@ const SYNC_META_REFRESH_WINDOW_MS = 5000;
 
 const { deriveUnifiedSyncStatus, buildSyncSummary, getLastSuccessAt } = offlineSyncService;
 
-const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {}) => {
+const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlineCacheOwnerId = null } = {}) => {
   const [isConnected, setIsConnected] = useState(true);
   const [firebaseConnected, setFirebaseConnected] = useState(true);
   const [lastFirebaseError, setLastFirebaseError] = useState(null);
@@ -63,7 +63,11 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {})
 
     try {
       if (activeTourId) {
-        const metaResult = await offlineSyncService.getTourPackMeta(activeTourId, role);
+        const metaResult = await offlineSyncService.getTourPackMeta(
+          activeTourId,
+          role,
+          { ownerId: offlineCacheOwnerId },
+        );
         if (metaResult.success && metaResult.data?.lastSyncedAt) {
           setLastSyncAt(metaResult.data.lastSyncedAt);
           return;
@@ -160,6 +164,10 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {})
   };
 
   useEffect(() => {
+    // Identity changes must not retain or throttle against the previous
+    // traveller's last-sync label.
+    lastSyncMetaRefreshAtRef.current = 0;
+    setLastSyncAt(null);
     const unsubscribeQueue = offlineSyncService.subscribeQueueState((stats) => {
       setQueueStats(stats);
     });
@@ -248,7 +256,7 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger' } = {})
         firebaseListenerRef.current.off();
       }
     };
-  }, [activeTourId, role]);
+  }, [activeTourId, offlineCacheOwnerId, role]);
 
   const unifiedSyncStatus = deriveUnifiedSyncStatus({
     network: { isOnline: isConnected },

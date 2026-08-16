@@ -11,7 +11,7 @@ const { onObjectFinalized } = require("firebase-functions/v2/storage");
 const admin = require("firebase-admin");
 const { Expo } = require("expo-server-sdk");
 const sharp = require("sharp");
-const { randomUUID } = require("crypto");
+const { createHash, randomUUID } = require("crypto");
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -24,11 +24,15 @@ const RECIPIENT_CHUNK_SIZE = 200;
 const USER_PROFILE_FETCH_CHUNK_SIZE = 100;
 const USER_PROFILE_CACHE_TTL_MS = 2 * 60 * 1000;
 const USER_PROFILE_CACHE_MAX_ENTRIES = 5000;
+const TOUR_NOTIFICATION_MAX_RECORDS = 100;
 const userProfileCache = new Map();
 const PHOTO_CACHE_CONTROL_HEADER = "public,max-age=31536000,immutable";
 const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
 const VERIFIED_LOGIN_GRANT_TTL_MS = 30 * 60 * 1000;
 const MANUAL_BOOKING_LOCK_TTL_MS = 30 * 1000;
+const DRIVER_ASSIGNMENT_LOCK_TTL_MS = 30 * 1000;
+const TOUR_DELETION_LOCK_TTL_MS = 10 * 60 * 1000;
+const SAFETY_SUBMISSION_LOCK_TTL_MS = 30 * 1000;
 const OPERATIONS_ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const MANIFEST_STATUS = {
   PENDING: 'PENDING',
@@ -49,6 +53,19 @@ const TOUR_NOTIFICATION_CATEGORY_LABELS = {
   history_military_breaks: 'History & Military Breaks',
 };
 const TOUR_NOTIFICATION_CATEGORY_KEYS = Object.freeze(Object.keys(TOUR_NOTIFICATION_CATEGORY_LABELS));
+const PUSH_NOTIFICATION_SCREENS = new Set(['Chat', 'Itinerary', 'GroupPhotobook', 'NotificationPreferences', 'SafetySupport']);
+const SAFETY_CATEGORIES = new Set([
+  'delay',
+  'incident',
+  'medical',
+  'lost_passenger',
+  'vehicle_issue',
+  'sos',
+  'harassment',
+  'weather',
+  'custom',
+]);
+const SAFETY_SEVERITIES = new Set(['low', 'medium', 'high', 'critical']);
 const LEGACY_TOUR_NOTIFICATION_CATEGORY_PREF_KEYS = {
   mystery_breaks: ['mystery_tours'],
   scotland_highlands_islands: ['scotland_classics', 'hiking_nature'],
@@ -154,10 +171,19 @@ const validateMessageData = (messageData) => {
     errors.push('Invalid or missing senderName');
   }
 
-  if (!messageData.text || typeof messageData.text !== 'string') {
+  const messageType = resolveTrimmedString(messageData.type) || 'text';
+  if (typeof messageData.text !== 'string') {
     errors.push('Invalid or missing message text');
   } else if (messageData.text.length > 10000) {
     errors.push('Message text exceeds maximum length (10000 characters)');
+  } else if (messageType !== 'image' && messageData.text.trim().length === 0) {
+    errors.push('Message text cannot be empty');
+  }
+
+  if (messageType === 'image' && !resolveTrimmedString(messageData.imageUrl)) {
+    errors.push('Image messages require an imageUrl');
+  } else if (messageType !== 'text' && messageType !== 'image' && messageType !== 'system') {
+    errors.push('Unsupported message type');
   }
 
   return { valid: errors.length === 0, errors };
@@ -228,6 +254,36 @@ const getPreferenceValue = (userData, prefPath, defaultValue = true) => {
     if (value === null || value === undefined || typeof value !== 'object') return undefined;
     return value[key];
   }, userData) ?? defaultValue;
+};
+
+const buildChatNotificationContent = ({ messageData = {}, tourName = 'Tour Chat', isAdmin = false } = {}) => {
+  const senderName = compactNotificationText(messageData.senderName || 'Tour participant', 100);
+  const messageType = resolveTrimmedString(messageData.type) || 'text';
+  const rawText = resolveTrimmedString(messageData.text);
+  const previewText = messageType === 'image' && !rawText ? 'Shared a photo' : rawText;
+  const truncatedMessage = compactNotificationText(previewText, 200);
+
+  return {
+    title: isAdmin ? `📢 ${tourName} Announcement` : `New message in ${tourName}`,
+    body: isAdmin
+      ? truncatedMessage.replace(/^ANNOUNCEMENT:\s*/i, '')
+      : `${senderName}: ${truncatedMessage}`,
+  };
+};
+
+const buildSafetyNotificationContent = ({ alert = {}, tourName = 'your tour' } = {}) => {
+  const isCritical = alert.isSOS === true || alert.severity === 'critical';
+  const category = compactNotificationText(
+    String(alert.category || 'safety report').replace(/_/g, ' '),
+    60,
+  );
+  return {
+    title: isCritical ? `Urgent safety alert · ${tourName}` : `Safety report · ${tourName}`,
+    body: isCritical
+      ? `A critical ${category} report needs immediate attention. Open the app for details.`
+      : `A ${category} report was submitted. Open the app for details.`,
+    priority: isCritical ? 'high' : 'default',
+  };
 };
 
 const readBooleanPreference = (value, fallback = false) => {
@@ -644,6 +700,158 @@ const isDriverProfileAssignedToTour = (driverData = {}, tourId) => {
   return Boolean(currentTourId && currentTourId === expectedTourId);
 };
 
+const compactNotificationText = (value, maxLength = 220) => {
+  const compact = String(value || '').replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+};
+
+const buildTourNotificationId = ({ type, tourId, sourceId }) => {
+  const digest = createHash('sha256')
+    .update(`${type || 'update'}:${tourId || 'unknown'}:${sourceId || 'unknown'}`)
+    .digest('hex')
+    .slice(0, 32);
+  return `ntf_${digest}`;
+};
+
+const normalizeItineraryDaysForDiff = (itinerary = {}) => {
+  const days = Array.isArray(itinerary?.days) ? itinerary.days : [];
+  const normalized = new Map();
+  days.forEach((day, index) => {
+    const dayNumber = Number.isFinite(Number(day?.day)) ? Number(day.day) : index + 1;
+    normalized.set(dayNumber, compactNotificationText(JSON.stringify(day || {}), 4000));
+  });
+  return normalized;
+};
+
+const summarizeItineraryChange = (before = {}, after = {}) => {
+  const beforeDays = normalizeItineraryDaysForDiff(before);
+  const afterDays = normalizeItineraryDaysForDiff(after);
+  const allDayNumbers = [...new Set([...beforeDays.keys(), ...afterDays.keys()])].sort((a, b) => a - b);
+  const changedDays = allDayNumbers.filter((dayNumber) => beforeDays.get(dayNumber) !== afterDays.get(dayNumber));
+  const titleChanged = compactNotificationText(before?.title, 160) !== compactNotificationText(after?.title, 160);
+
+  if (beforeDays.size === 0 && afterDays.size > 0) {
+    return {
+      body: `Your ${afterDays.size}-day itinerary is now available. Tap to review the schedule.`,
+      changedDayCount: afterDays.size,
+    };
+  }
+
+  if (afterDays.size === 0) {
+    return {
+      body: 'The itinerary is being revised. Open the app for the latest tour information.',
+      changedDayCount: beforeDays.size,
+    };
+  }
+
+  if (changedDays.length === 1) {
+    return {
+      body: `Day ${changedDays[0]} has changed. Tap to review the updated schedule.`,
+      changedDayCount: 1,
+    };
+  }
+
+  if (changedDays.length > 1) {
+    return {
+      body: `${changedDays.length} itinerary days have changed. Tap to review the updated schedule.`,
+      changedDayCount: changedDays.length,
+    };
+  }
+
+  return {
+    body: titleChanged
+      ? 'Your itinerary details have changed. Tap to review the latest schedule.'
+      : 'Your itinerary has been refreshed. Tap to review the latest schedule.',
+    changedDayCount: 0,
+  };
+};
+
+const buildTourNotificationRecord = ({
+  type,
+  tourId,
+  sourceId,
+  title,
+  body,
+  screen,
+  createdAtMs = Date.now(),
+  priority = 'normal',
+  messageId = null,
+}) => {
+  const noticeId = buildTourNotificationId({ type, tourId, sourceId });
+  return {
+    noticeId,
+    version: 1,
+    type,
+    title: compactNotificationText(title, 120),
+    body: compactNotificationText(body, 300),
+    tourId,
+    screen,
+    sourceId: compactNotificationText(sourceId, 160),
+    ...(resolveTrimmedString(messageId) ? { messageId: resolveTrimmedString(messageId) } : {}),
+    priority: priority === 'high' ? 'high' : 'normal',
+    createdAt: new Date(createdAtMs).toISOString(),
+    createdAtMs,
+  };
+};
+
+const buildPushNavigationData = ({
+  screen,
+  tourId = null,
+  noticeId = null,
+  messageId = null,
+  notificationType = null,
+  internalDriverChat = false,
+  categoryKey = null,
+  broadcastId = null,
+  timestamp = Date.now(),
+} = {}) => {
+  if (!PUSH_NOTIFICATION_SCREENS.has(screen)) {
+    throw new Error('Unsupported notification destination');
+  }
+
+  const safeTourId = resolveTrimmedString(tourId);
+  if (screen !== 'NotificationPreferences' && !safeTourId) {
+    throw new Error('Tour-scoped notification requires a tour id');
+  }
+
+  return {
+    screen,
+    ...(safeTourId ? { tourId: safeTourId } : {}),
+    ...(resolveTrimmedString(noticeId) ? { noticeId: resolveTrimmedString(noticeId) } : {}),
+    ...(resolveTrimmedString(messageId) ? { messageId: resolveTrimmedString(messageId) } : {}),
+    ...(resolveTrimmedString(notificationType) ? { notificationType: resolveTrimmedString(notificationType) } : {}),
+    ...(internalDriverChat === true ? { internalDriverChat: true } : {}),
+    ...(resolveTrimmedString(categoryKey) ? { categoryKey: resolveTrimmedString(categoryKey) } : {}),
+    ...(resolveTrimmedString(broadcastId) ? { broadcastId: resolveTrimmedString(broadcastId) } : {}),
+    timestamp,
+  };
+};
+
+const persistTourNotification = async ({ db = admin.database(), record }) => {
+  if (!record || !isValidFirebaseKey(record.tourId) || !isValidFirebaseKey(record.noticeId)) {
+    throw new Error('Invalid tour notification record');
+  }
+
+  const noticesRef = db.ref(`tour_notifications/${record.tourId}`);
+  await noticesRef.transaction((currentValue) => {
+    const nextValue = currentValue && typeof currentValue === 'object' ? { ...currentValue } : {};
+    nextValue[record.noticeId] = record;
+
+    const sorted = Object.entries(nextValue).sort(([, left], [, right]) => {
+      const timeDelta = Number(left?.createdAtMs || 0) - Number(right?.createdAtMs || 0);
+      return timeDelta || String(left?.noticeId || '').localeCompare(String(right?.noticeId || ''));
+    });
+    while (sorted.length > TOUR_NOTIFICATION_MAX_RECORDS) {
+      const [oldestId] = sorted.shift();
+      delete nextValue[oldestId];
+    }
+    return nextValue;
+  });
+
+  return record;
+};
+
 const loadDriverProfile = async (driverId) => {
   const snapshot = await admin.database().ref(`drivers/${driverId}`).once('value');
   return snapshot.val() || null;
@@ -698,6 +906,51 @@ const resolveAssignedDriverRecipientIds = async ({
   });
 
   return [...recipientIds].sort((a, b) => a.localeCompare(b));
+};
+
+const resolveChatSenderDeliveryIds = async ({
+  tourId,
+  participants = {},
+  manifestData = {},
+  messageData = {},
+  loadProfile = loadDriverProfile,
+  loadIdentityBindings = loadIdentityBindingsForPrincipal,
+  context = {},
+}) => {
+  const senderStableId = resolveTrimmedString(messageData.senderStableId);
+  const senderId = resolveTrimmedString(messageData.senderId);
+  const driverPrincipal = senderStableId?.startsWith('driver:')
+    ? senderStableId
+    : (senderId?.startsWith('driver:') ? senderId : null);
+
+  if (!driverPrincipal) {
+    return resolveChatSenderParticipantIds({
+      participants,
+      messageData,
+      loadIdentityBindings,
+      context,
+    });
+  }
+
+  const driverId = driverPrincipal.slice('driver:'.length).trim();
+  if (!driverId || !collectAssignedDriverIds(manifestData).includes(driverId)) {
+    return [];
+  }
+
+  try {
+    const driverData = await loadProfile(driverId);
+    if (!driverData || !isDriverProfileAssignedToTour(driverData, tourId)) {
+      return [];
+    }
+    const authUid = resolveTrimmedString(driverData.authUid);
+    return authUid && isValidFirebaseKey(authUid) ? [authUid] : [];
+  } catch (error) {
+    log.warn('Failed to resolve chat sender driver profile', {
+      ...context,
+      error: error?.message || String(error),
+    });
+    return [];
+  }
 };
 
 /**
@@ -939,12 +1192,150 @@ const isValidFirebaseKey = (key) => {
   return !/[./$#\[\]]/.test(key);
 };
 
+const createSafetySubmissionError = (code, message = code) => {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+};
+
+const normalizeSafetyCoordinate = (value, minimum, maximum) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= minimum && numeric <= maximum
+    ? numeric
+    : null;
+};
+
+const normalizeSafetySubmissionInput = (input = {}, nowMs = Date.now()) => {
+  const clientEventId = resolveTrimmedString(input.clientEventId);
+  const tourId = normalizeTourKeyForComparison(input.tourId);
+  const role = resolveTrimmedString(input.role)?.toLowerCase();
+  const category = resolveTrimmedString(input.category)?.toLowerCase();
+  const requestedSeverity = resolveTrimmedString(input.severity)?.toLowerCase() || 'medium';
+  const message = resolveTrimmedString(input.message);
+  const customMessage = resolveTrimmedString(input.customMessage);
+  const clientCreatedAtMs = Number(input.clientCreatedAtMs);
+
+  if (!clientEventId || clientEventId.length > 160 || !isValidFirebaseKey(clientEventId)) {
+    throw createSafetySubmissionError('INVALID_EVENT_ID');
+  }
+  if (!tourId || tourId.length > 160 || !isValidFirebaseKey(tourId)) {
+    throw createSafetySubmissionError('INVALID_TOUR');
+  }
+  if (role !== 'passenger' && role !== 'driver') {
+    throw createSafetySubmissionError('INVALID_ROLE');
+  }
+  if (!SAFETY_CATEGORIES.has(category)) {
+    throw createSafetySubmissionError('INVALID_CATEGORY');
+  }
+  if (!SAFETY_SEVERITIES.has(requestedSeverity)) {
+    throw createSafetySubmissionError('INVALID_SEVERITY');
+  }
+  if (!message || message.length > 240) {
+    throw createSafetySubmissionError('INVALID_MESSAGE');
+  }
+  if (customMessage && customMessage.length > 1000) {
+    throw createSafetySubmissionError('INVALID_DETAILS');
+  }
+  if (
+    !Number.isFinite(clientCreatedAtMs)
+    || clientCreatedAtMs < Date.UTC(2020, 0, 1)
+    || clientCreatedAtMs > nowMs + 5 * 60 * 1000
+  ) {
+    throw createSafetySubmissionError('INVALID_CLIENT_TIME');
+  }
+
+  let coords = null;
+  if (input.coords !== null && input.coords !== undefined) {
+    const latitude = normalizeSafetyCoordinate(input.coords?.latitude, -90, 90);
+    const longitude = normalizeSafetyCoordinate(input.coords?.longitude, -180, 180);
+    const accuracy = Number(input.coords?.accuracy);
+    if (latitude === null || longitude === null || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > 100000) {
+      throw createSafetySubmissionError('INVALID_LOCATION');
+    }
+    coords = { latitude, longitude, accuracy };
+  }
+
+  const isSOS = category === 'sos';
+  const severity = isSOS ? 'critical' : requestedSeverity;
+  if (input.isSOS === true && !isSOS) {
+    throw createSafetySubmissionError('INVALID_SOS_STATE');
+  }
+
+  return {
+    clientEventId,
+    tourId,
+    role,
+    category,
+    severity,
+    message,
+    customMessage,
+    coords,
+    isSOS,
+    clientCreatedAtMs,
+    processedFromQueue: input.processedFromQueue === true,
+  };
+};
+
+const buildCanonicalSafetyRecord = ({ input, authUid, principalId, nowMs = Date.now() }) => ({
+  schemaVersion: 2,
+  eventId: input.clientEventId,
+  clientEventId: input.clientEventId,
+  tourId: input.tourId,
+  reporterAuthUid: authUid,
+  userId: authUid,
+  principalId,
+  role: input.role,
+  category: input.category,
+  severity: input.severity,
+  message: input.message,
+  customMessage: input.customMessage,
+  coords: input.coords,
+  isSOS: input.isSOS,
+  status: 'pending',
+  timestamp: new Date(nowMs).toISOString(),
+  timestampMs: nowMs,
+  clientCreatedAt: new Date(input.clientCreatedAtMs).toISOString(),
+  clientCreatedAtMs: input.clientCreatedAtMs,
+  receivedAt: new Date(nowMs).toISOString(),
+  receivedAtMs: nowMs,
+  processedFromQueue: input.processedFromQueue,
+});
+
+const buildSafetySubmissionUpdates = ({ record, lockPath }) => {
+  const eventId = record.eventId;
+  const updates = {
+    [`logs/${record.reporterAuthUid}/safety/${eventId}`]: record,
+    [`tours/${record.tourId}/safetyAlerts/${eventId}`]: record,
+    [lockPath]: null,
+  };
+  if (record.isSOS || record.severity === 'critical') {
+    updates[`globalSafetyAlerts/${eventId}`] = {
+      ...record,
+      tourAlertId: `tours/${record.tourId}/safetyAlerts/${eventId}`,
+    };
+  }
+  return updates;
+};
+
 /**
  * Rate limiting check (simple implementation)
  */
 const rateLimitCache = new Map();
+const RATE_LIMIT_MAINTENANCE_INTERVAL_MS = 300000;
+let lastRateLimitMaintenanceAt = 0;
+
+const runLazyRateLimitMaintenance = (now = Date.now()) => {
+  if (now - lastRateLimitMaintenanceAt < RATE_LIMIT_MAINTENANCE_INTERVAL_MS) return;
+  lastRateLimitMaintenanceAt = now;
+  for (const [key, record] of rateLimitCache.entries()) {
+    if (now > record.resetTime) rateLimitCache.delete(key);
+  }
+  cleanupUserProfileCache(now);
+};
+
 const checkRateLimit = (key, maxRequests = 10, windowMs = 60000) => {
   const now = Date.now();
+  runLazyRateLimitMaintenance(now);
   const record = rateLimitCache.get(key) || { count: 0, resetTime: now + windowMs };
 
   // Reset if window expired
@@ -963,25 +1354,6 @@ const checkRateLimit = (key, maxRequests = 10, windowMs = 60000) => {
   rateLimitCache.set(key, record);
   return true;
 };
-
-/**
- * Cleanup old rate limit entries (called periodically)
- */
-const maintenanceInterval = setInterval(() => {
-  const now = Date.now();
-  for (const [key, record] of rateLimitCache.entries()) {
-    if (now > record.resetTime) {
-      rateLimitCache.delete(key);
-    }
-  }
-
-  cleanupUserProfileCache(now);
-}, 300000); // Clean up every 5 minutes
-if (typeof maintenanceInterval.unref === 'function') {
-  maintenanceInterval.unref();
-}
-
-
 
 const normalizeBookingRef = (bookingRef) => {
   if (typeof bookingRef !== 'string') return '';
@@ -1228,6 +1600,15 @@ const buildManualPassengerBookingUpdates = ({
   const existingPassengerCount = Object.values(existingTourBookings || {})
     .reduce((total, booking) => total + getBookingPassengerCount(booking), 0);
   const totalPassengerCount = existingPassengerCount + passengerNames.length;
+  const maxParticipants = Number.isInteger(tourData?.maxParticipants) && tourData.maxParticipants > 0
+    ? tourData.maxParticipants
+    : 53;
+  if (totalPassengerCount > maxParticipants) {
+    throw createManualPassengerError(
+      'TOUR_CAPACITY_EXCEEDED',
+      `This booking would exceed the tour capacity of ${maxParticipants}.`,
+    );
+  }
 
   const booking = {
     bookingRef: normalized.bookingRef,
@@ -1272,6 +1653,7 @@ const buildManualPassengerBookingUpdates = ({
       [`tour_manifests/${normalized.tourId}/bookings/${normalized.bookingRef}`]: manifest,
       [`tours/${normalized.tourId}/pickupPoints`]: mergePickupPoint(tourData.pickupPoints, pickupPoint),
       [`pickupPoints/${normalized.tourId}`]: mergePickupPoint(existingTopLevelPickupPoints, pickupPoint),
+      [`tours/${normalized.tourId}/currentParticipants`]: totalPassengerCount,
       [`tours/${normalized.tourId}/bookedPassengerCount`]: totalPassengerCount,
       [`tours/${normalized.tourId}/manifestPassengerCount`]: totalPassengerCount,
     },
@@ -1285,16 +1667,153 @@ const verifyOperationsAdminAccess = async ({ authUid, db = admin.database() }) =
   return snapshot.val() === true;
 };
 
+const DEFAULT_ADMIN_PORTAL_ORIGINS = new Set([
+  'https://loch-lomond-travel-admin.web.app',
+  'https://loch-lomond-travel-admin.firebaseapp.com',
+]);
+
+const isAllowedAdminOrigin = (origin, configuredOrigins = process.env.ADMIN_PORTAL_ALLOWED_ORIGINS) => {
+  if (!origin) return true;
+  let parsedOrigin;
+  try {
+    parsedOrigin = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (parsedOrigin.origin !== origin || !['http:', 'https:'].includes(parsedOrigin.protocol)) return false;
+  if (
+    parsedOrigin.protocol === 'http:'
+    && ['localhost', '127.0.0.1'].includes(parsedOrigin.hostname)
+  ) return true;
+
+  const extraOrigins = String(configuredOrigins || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return DEFAULT_ADMIN_PORTAL_ORIGINS.has(parsedOrigin.origin) || extraOrigins.includes(parsedOrigin.origin);
+};
+
 const applyAuthenticatedCors = (req, res) => {
-  const requestOrigin = typeof req.headers?.origin === 'string' ? req.headers.origin : '*';
-  res.set('Access-Control-Allow-Origin', requestOrigin);
+  const requestOrigin = typeof req.headers?.origin === 'string' ? req.headers.origin.trim() : '';
+  const allowed = isAllowedAdminOrigin(requestOrigin);
+  if (requestOrigin && allowed) res.set('Access-Control-Allow-Origin', requestOrigin);
   res.set('Vary', 'Origin');
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
   res.set('Access-Control-Max-Age', '3600');
+  return allowed;
 };
 
-const acquireManualBookingLock = async ({ db, path, owner, nowMs }) => {
+const deleteStoragePrefixes = async ({ bucket = admin.storage().bucket(), prefixes = [] }) => {
+  let deleted = 0;
+  for (const prefix of [...new Set(prefixes.filter(Boolean))]) {
+    const [files] = await bucket.getFiles({ prefix });
+    await Promise.all(files.map(async (file) => {
+      await file.delete({ ignoreNotFound: true });
+      deleted += 1;
+    }));
+  }
+  return deleted;
+};
+
+const deleteStoragePaths = async ({ bucket = admin.storage().bucket(), paths = [] }) => {
+  const uniquePaths = [...new Set(paths.filter((path) => typeof path === 'string' && path.trim()))];
+  await Promise.all(uniquePaths.map((path) => bucket.file(path).delete({ ignoreNotFound: true })));
+  return uniquePaths.length;
+};
+
+const buildTourDeletionUpdates = ({
+  tourId,
+  bookings = {},
+  drivers = {},
+  driverUsers = {},
+  contentReports = {},
+  globalSafetyAlerts = {},
+}) => {
+  const updates = {
+    [`tours/${tourId}`]: null,
+    [`tour_manifests/${tourId}`]: null,
+    [`pickupPoints/${tourId}`]: null,
+    [`chats/${tourId}`]: null,
+    [`internal_chats/${tourId}`]: null,
+    [`group_tour_photos/${tourId}`]: null,
+    [`private_tour_photos/${tourId}`]: null,
+    [`broadcasts/${tourId}`]: null,
+    [`tour_notifications/${tourId}`]: null,
+    [`notification_read_state/${tourId}`]: null,
+    [`tour_access_grants/${tourId}`]: null,
+    [`manual_booking_creation_locks/tours/${tourId}`]: null,
+    [`driver_assignment_locks/tours/${tourId}`]: null,
+    [`safety_submission_locks/${tourId}`]: null,
+  };
+
+  Object.keys(bookings).forEach((bookingRef) => {
+    updates[`bookings/${bookingRef}`] = null;
+    updates[`booking_identities/${bookingRef}`] = null;
+    updates[`booking_access_grants/${bookingRef}`] = null;
+    updates[`manual_booking_creation_locks/bookings/${bookingRef}`] = null;
+  });
+
+  Object.entries(drivers).forEach(([driverId, driver = {}]) => {
+    const currentTourId = normalizeTourKeyForComparison(driver.currentTourId);
+    const assignmentKeys = Object.keys(driver.assignments || {});
+    assignmentKeys.forEach((candidate) => {
+      if (normalizeTourKeyForComparison(candidate) === tourId) {
+        updates[`drivers/${driverId}/assignments/${candidate}`] = null;
+      }
+    });
+    if (currentTourId !== tourId) return;
+    updates[`drivers/${driverId}/currentTourId`] = null;
+    updates[`drivers/${driverId}/currentTourCode`] = null;
+    const authUid = resolveTrimmedString(driver.authUid);
+    if (authUid && isValidFirebaseKey(authUid)) {
+      updates[`users/${authUid}/driverAssignedTourId`] = null;
+      updates[`users/${authUid}/lastUpdated`] = Date.now();
+    }
+  });
+  Object.keys(driverUsers).forEach((authUid) => {
+    if (!isValidFirebaseKey(authUid)) return;
+    updates[`users/${authUid}/driverAssignedTourId`] = null;
+    updates[`users/${authUid}/lastUpdated`] = Date.now();
+  });
+
+  Object.entries(contentReports).forEach(([reportId, report = {}]) => {
+    if (normalizeTourKeyForComparison(report.tourId) === tourId) {
+      updates[`content_reports/${reportId}`] = null;
+    }
+  });
+  Object.entries(globalSafetyAlerts).forEach(([eventId, alert = {}]) => {
+    if (normalizeTourKeyForComparison(alert.tourId) === tourId) {
+      updates[`globalSafetyAlerts/${eventId}`] = null;
+    }
+  });
+
+  return updates;
+};
+
+const getBookingsForTour = async ({ db, tourId, tourCode }) => {
+  const bookings = {};
+  const candidates = [...new Set([tourId, resolveTrimmedString(tourCode)].filter(Boolean))];
+  const snapshots = await Promise.all(candidates.map((candidate) => (
+    db.ref('bookings').orderByChild('tourId').equalTo(candidate).once('value')
+  )));
+  snapshots.forEach((snapshot) => Object.assign(bookings, snapshot.val() || {}));
+  return bookings;
+};
+
+const resolveReportedPhotoStoragePaths = ({ tourId, photo = {} }) => {
+  const prefix = `group_tour_photos/${tourId}/`;
+  const paths = [photo.storagePath, photo.viewerStoragePath, photo.thumbnailStoragePath]
+    .filter((path) => typeof path === 'string' && path.startsWith(prefix));
+  const parsedSource = parseSourcePhotoPath(photo.storagePath);
+  if (parsedSource?.visibility === 'group' && parsedSource.tourId === tourId) {
+    const variants = buildPhotoVariantPaths(parsedSource);
+    paths.push(variants.viewerPath, variants.thumbnailPath);
+  }
+  return [...new Set(paths)];
+};
+
+const acquireManualBookingLock = async ({ db, path, owner, nowMs, ttlMs = MANUAL_BOOKING_LOCK_TTL_MS }) => {
   const result = await db.ref(path).transaction((current) => {
     const activeLock = current
       && typeof current === 'object'
@@ -1304,7 +1823,7 @@ const acquireManualBookingLock = async ({ db, path, owner, nowMs }) => {
     return {
       owner,
       acquiredAtMs: nowMs,
-      expiresAtMs: nowMs + MANUAL_BOOKING_LOCK_TTL_MS,
+      expiresAtMs: nowMs + ttlMs,
     };
   }, undefined, false);
   return Boolean(result.committed && result.snapshot.val()?.owner === owner);
@@ -1318,6 +1837,24 @@ const releaseManualBookingLock = async ({ db, path, owner }) => {
   } catch (error) {
     log.warn('Manual passenger lock release failed', { path, error: error?.message || String(error) });
   }
+};
+
+const cleanupInvalidTokens = async (invalidTokens = [], remover = removeInvalidToken) => {
+  if (!Array.isArray(invalidTokens) || invalidTokens.length === 0) {
+    return { attempted: 0, failed: 0 };
+  }
+
+  const results = await Promise.allSettled(invalidTokens.map(({ userId, token, reason }) => (
+    remover(userId, token, reason ? { reason } : undefined)
+  )));
+  const failed = results.filter((result) => result.status === 'rejected');
+  if (failed.length > 0) {
+    log.error('Invalid push token cleanup completed with failures', {
+      attempted: results.length,
+      failed: failed.length,
+    });
+  }
+  return { attempted: results.length, failed: failed.length };
 };
 
 const getBearerToken = (req) => {
@@ -1349,6 +1886,36 @@ const verifyRequestAuthUid = async (req) => {
     });
     return { success: false, reason: 'AUTH_TOKEN_INVALID' };
   }
+};
+
+const resolveSafetyReporterAccess = async ({ db, authUid, tourId, requestedRole }) => {
+  const [participantSnapshot, userSnapshot, manifestSnapshot] = await Promise.all([
+    db.ref(`tours/${tourId}/participants/${authUid}`).once('value'),
+    db.ref(`users/${authUid}`).once('value'),
+    db.ref(`tour_manifests/${tourId}`).once('value'),
+  ]);
+  const userData = userSnapshot.val() || {};
+  const manifestData = manifestSnapshot.val() || {};
+  const driverId = resolveTrimmedString(userData.driverId);
+  let isAssignedDriver = false;
+  let driverData = {};
+  if (driverId && isValidFirebaseKey(driverId) && manifestData?.assigned_drivers?.[driverId] === true) {
+    const driverSnapshot = await db.ref(`drivers/${driverId}`).once('value');
+    driverData = driverSnapshot.val() || {};
+    isAssignedDriver = resolveTrimmedString(driverData.authUid) === authUid
+      && isDriverProfileAssignedToTour(driverData, tourId);
+  }
+
+  if (requestedRole === 'driver' && isAssignedDriver) {
+    return { allowed: true, role: 'driver', principalId: `driver:${driverId}` };
+  }
+  if (requestedRole === 'passenger' && participantSnapshot.exists()) {
+    const principalId = resolveTrimmedString(userData.stablePassengerId)
+      || resolveTrimmedString(userData.privatePhotoOwnerId)
+      || authUid;
+    return { allowed: true, role: 'passenger', principalId };
+  }
+  return { allowed: false, role: requestedRole, principalId: null };
 };
 
 const buildVerifiedLoginGrantUpdates = ({
@@ -1564,6 +2131,107 @@ const resolveDriverAssignment = async ({ driverId, driverData = {} }) => {
   };
 };
 
+const claimDriverAuthUid = async ({ db, driverId, authUid }) => {
+  const claimRef = db.ref(`drivers/${driverId}/authUid`);
+  const result = await claimRef.transaction((currentValue) => {
+    const currentAuthUid = resolveTrimmedString(currentValue);
+    if (currentAuthUid && currentAuthUid !== authUid) return undefined;
+    return authUid;
+  }, undefined, false);
+  const claimedAuthUid = resolveTrimmedString(result?.snapshot?.val?.());
+
+  return {
+    claimed: Boolean(result?.committed && claimedAuthUid === authUid),
+    authUid: claimedAuthUid || null,
+  };
+};
+
+const buildDriverIdentityProfileUpdates = ({
+  driverId,
+  authUid,
+  assignedTourId = null,
+  nowMs = Date.now(),
+}) => ({
+  [`drivers/${driverId}/lastActive`]: new Date(nowMs).toISOString(),
+  [`users/${authUid}/driverId`]: driverId,
+  [`users/${authUid}/driverPrincipalId`]: `driver:${driverId}`,
+  [`users/${authUid}/driverAssignedTourId`]: assignedTourId || null,
+  [`users/${authUid}/principalType`]: 'driver',
+  [`users/${authUid}/lastUpdated`]: nowMs,
+});
+
+const collectDriverAssignmentConflicts = ({ driverId, tourData = {}, manifestData = {} }) => {
+  const conflicts = new Set();
+  const tourDriverId = normalizeDriverId(tourData.driverId);
+  if (tourDriverId && tourDriverId !== driverId) conflicts.add(tourDriverId);
+
+  Object.entries(manifestData.assigned_drivers || {}).forEach(([candidateDriverId, assigned]) => {
+    const normalizedCandidate = normalizeDriverId(candidateDriverId);
+    if (assigned === true && normalizedCandidate && normalizedCandidate !== driverId) {
+      conflicts.add(normalizedCandidate);
+    }
+  });
+
+  return [...conflicts].sort();
+};
+
+const buildDriverSelfAssignmentUpdates = ({
+  driverId,
+  authUid,
+  driverData = {},
+  tourId,
+  tourData = {},
+  previousTourData = {},
+  nowMs = Date.now(),
+}) => {
+  const canonicalTourCode = resolveTrimmedString(tourData.tourCode) || tourId.replace(/_/g, ' ');
+  const previousTourId = normalizeTourKeyForComparison(driverData.currentTourId);
+  const assignedAt = new Date(nowMs).toISOString();
+  const driverName = resolveTrimmedString(driverData.name) || driverId;
+  const driverPhone = resolveTrimmedString(driverData.phone);
+  const updates = {
+    [`tours/${tourId}/driverId`]: driverId,
+    [`tours/${tourId}/driverName`]: driverName,
+    [`tours/${tourId}/driverPhone`]: driverPhone || null,
+    [`drivers/${driverId}/currentTourId`]: tourId,
+    [`drivers/${driverId}/currentTourCode`]: canonicalTourCode,
+    [`drivers/${driverId}/assignments/${tourId}`]: true,
+    [`drivers/${driverId}/lastActive`]: assignedAt,
+    [`users/${authUid}/driverId`]: driverId,
+    [`users/${authUid}/driverPrincipalId`]: `driver:${driverId}`,
+    [`users/${authUid}/driverAssignedTourId`]: tourId,
+    [`users/${authUid}/principalType`]: 'driver',
+    [`users/${authUid}/lastUpdated`]: nowMs,
+    [`tour_manifests/${tourId}/assigned_drivers/${driverId}`]: true,
+    [`tour_manifests/${tourId}/assigned_driver_codes/${driverId}`]: {
+      driverId,
+      tourId,
+      tourCode: canonicalTourCode,
+      assignedAt,
+      assignedBy: authUid,
+    },
+  };
+
+  if (normalizeDriverId(tourData.driverId) !== driverId) {
+    updates[`tours/${tourId}/driverLocation`] = null;
+  }
+
+  if (previousTourId && previousTourId !== tourId) {
+    updates[`drivers/${driverId}/assignments/${previousTourId}`] = null;
+    updates[`tour_manifests/${previousTourId}/assigned_drivers/${driverId}`] = null;
+    updates[`tour_manifests/${previousTourId}/assigned_driver_codes/${driverId}`] = null;
+
+    if (normalizeDriverId(previousTourData.driverId) === driverId) {
+      updates[`tours/${previousTourId}/driverId`] = null;
+      updates[`tours/${previousTourId}/driverName`] = null;
+      updates[`tours/${previousTourId}/driverPhone`] = null;
+      updates[`tours/${previousTourId}/driverLocation`] = null;
+    }
+  }
+
+  return { updates, previousTourId, canonicalTourCode };
+};
+
 const getRequestClientKey = (req) => {
   const forwardedFor = req.headers['x-forwarded-for'];
   const clientIp = Array.isArray(forwardedFor)
@@ -1581,6 +2249,94 @@ const getRequestClientKey = (req) => {
   return `${clientIp}:${normalizedClientId}`;
 };
 
+const hashRateLimitDimension = (value) => createHash('sha256')
+  .update(String(value || 'unknown'))
+  .digest('hex')
+  .slice(0, 24);
+
+const checkPassengerLoginRateLimits = ({
+  authUid,
+  clientKey,
+  bookingRef,
+  email,
+  limiter = checkRateLimit,
+}) => {
+  const authDimension = hashRateLimitDimension(authUid);
+  const networkDimension = hashRateLimitDimension(clientKey);
+  const credentialDimension = hashRateLimitDimension(`${bookingRef}:${email}`);
+  const checks = [
+    {
+      scope: 'credential',
+      key: `verify_passenger_login_credential_${authDimension}_${credentialDimension}`,
+      maxRequests: 8,
+    },
+    {
+      scope: 'account',
+      key: `verify_passenger_login_account_${authDimension}`,
+      maxRequests: 24,
+    },
+    {
+      scope: 'network',
+      key: `verify_passenger_login_network_${networkDimension}`,
+      maxRequests: 300,
+    },
+  ];
+
+  for (const check of checks) {
+    if (!limiter(check.key, check.maxRequests, 60000)) {
+      return {
+        allowed: false,
+        scope: check.scope,
+        authDimension,
+        networkDimension,
+      };
+    }
+  }
+
+  return { allowed: true, authDimension, networkDimension };
+};
+
+const checkDriverLoginRateLimits = ({
+  authUid,
+  clientKey,
+  driverId,
+  limiter = checkRateLimit,
+}) => {
+  const authDimension = hashRateLimitDimension(authUid);
+  const networkDimension = hashRateLimitDimension(clientKey);
+  const credentialDimension = hashRateLimitDimension(driverId);
+  const checks = [
+    {
+      scope: 'credential',
+      key: `verify_driver_login_credential_${authDimension}_${credentialDimension}`,
+      maxRequests: 8,
+    },
+    {
+      scope: 'account',
+      key: `verify_driver_login_account_${authDimension}`,
+      maxRequests: 24,
+    },
+    {
+      scope: 'network',
+      key: `verify_driver_login_network_${networkDimension}`,
+      maxRequests: 200,
+    },
+  ];
+
+  for (const check of checks) {
+    if (!limiter(check.key, check.maxRequests, 60000)) {
+      return {
+        allowed: false,
+        scope: check.scope,
+        authDimension,
+        networkDimension,
+      };
+    }
+  }
+
+  return { allowed: true, authDimension, networkDimension };
+};
+
 exports.verifyPassengerLogin = onRequest(
   {
     region: 'europe-west1',
@@ -1589,12 +2345,6 @@ exports.verifyPassengerLogin = onRequest(
   async (req, res) => {
     if (req.method !== 'POST') {
       return res.status(405).json({ valid: false, reason: 'METHOD_NOT_ALLOWED' });
-    }
-
-    const clientKey = getRequestClientKey(req);
-    if (!checkRateLimit(`verify_passenger_login_${clientKey}`, 12, 60000)) {
-      log.warn('Passenger login rate limit exceeded', { clientKey });
-      return res.status(429).json({ valid: false, reason: 'TRY_AGAIN_LATER' });
     }
 
     const bookingRef = normalizeBookingRef(req.body?.bookingRef);
@@ -1606,10 +2356,12 @@ exports.verifyPassengerLogin = onRequest(
 
     try {
       const requestAuth = await verifyRequestAuthUid(req);
+      const clientKey = getRequestClientKey(req);
+      const networkDimension = hashRateLimitDimension(clientKey);
       if (!requestAuth.success) {
         log.warn('Passenger login rejected: missing or invalid Firebase auth token', {
           bookingRef,
-          clientKey,
+          networkDimension,
           reason: requestAuth.reason,
         });
         return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
@@ -1620,7 +2372,7 @@ exports.verifyPassengerLogin = onRequest(
 
       if (requireAppCheck) {
         if (typeof appCheckToken !== 'string' || !appCheckToken.trim()) {
-          log.warn('Passenger login rejected: missing App Check token', { clientKey, bookingRef });
+          log.warn('Passenger login rejected: missing App Check token', { networkDimension, bookingRef });
           return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
         }
 
@@ -1628,7 +2380,7 @@ exports.verifyPassengerLogin = onRequest(
           await admin.appCheck().verifyToken(appCheckToken.trim());
         } catch (appCheckError) {
           log.warn('Passenger login rejected: invalid App Check token', {
-            clientKey,
+            networkDimension,
             bookingRef,
             error: appCheckError.message,
           });
@@ -1636,10 +2388,25 @@ exports.verifyPassengerLogin = onRequest(
         }
       }
 
+      const rateLimit = checkPassengerLoginRateLimits({
+        authUid: requestAuth.uid,
+        clientKey,
+        bookingRef,
+        email,
+      });
+      if (!rateLimit.allowed) {
+        log.warn('Passenger login rate limit exceeded', {
+          scope: rateLimit.scope,
+          authDimension: rateLimit.authDimension,
+          networkDimension: rateLimit.networkDimension,
+        });
+        return res.status(429).json({ valid: false, reason: 'TRY_AGAIN_LATER' });
+      }
+
       const identitySnapshot = await admin.database().ref(`booking_identities/${bookingRef}`).once('value');
 
       if (!identitySnapshot.exists()) {
-        log.warn('Passenger login verification failed', { bookingRef, clientKey, cause: 'BOOKING_NOT_FOUND' });
+        log.warn('Passenger login verification failed', { bookingRef, networkDimension, cause: 'BOOKING_NOT_FOUND' });
         return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
       }
 
@@ -1647,7 +2414,7 @@ exports.verifyPassengerLogin = onRequest(
       const storedEmail = normalizeEmail(identity.email);
 
       if (!storedEmail || storedEmail !== email) {
-        log.warn('Passenger login verification failed', { bookingRef, clientKey, cause: 'EMAIL_MISMATCH' });
+        log.warn('Passenger login verification failed', { bookingRef, networkDimension, cause: 'EMAIL_MISMATCH' });
         return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
       }
 
@@ -1725,10 +2492,13 @@ exports.createManualPassengerBooking = onRequest(
     maxInstances: 10,
   },
   async (req, res) => {
-    applyAuthenticatedCors(req, res);
+    const corsAllowed = applyAuthenticatedCors(req, res);
     if (req.method === 'OPTIONS') {
-      return res.status(204).send('');
+      return corsAllowed
+        ? res.status(204).send('')
+        : res.status(403).json({ success: false, reason: 'ORIGIN_NOT_ALLOWED' });
     }
+    if (!corsAllowed) return res.status(403).json({ success: false, reason: 'ORIGIN_NOT_ALLOWED' });
     if (req.method !== 'POST') {
       return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
     }
@@ -1872,6 +2642,7 @@ exports.createManualPassengerBooking = onRequest(
         TOUR_NOT_FOUND: 404,
         BOOKING_REFERENCE_EXISTS: 409,
         SEAT_ALREADY_ASSIGNED: 409,
+        TOUR_CAPACITY_EXCEEDED: 409,
         CREATE_IN_PROGRESS: 409,
       };
       const status = statusByReason[reason] || 500;
@@ -1896,6 +2667,143 @@ exports.createManualPassengerBooking = onRequest(
         path,
         owner: lockOwner,
       })));
+    }
+  },
+);
+
+exports.deleteTourData = onRequest(
+  {
+    region: 'europe-west1',
+    maxInstances: 5,
+    timeoutSeconds: 300,
+  },
+  async (req, res) => {
+    const corsAllowed = applyAuthenticatedCors(req, res);
+    if (req.method === 'OPTIONS') return corsAllowed
+      ? res.status(204).send('')
+      : res.status(403).json({ success: false, reason: 'ORIGIN_NOT_ALLOWED' });
+    if (!corsAllowed) return res.status(403).json({ success: false, reason: 'ORIGIN_NOT_ALLOWED' });
+    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
+
+    const requestAuth = await verifyRequestAuthUid(req);
+    if (!requestAuth.success) return res.status(401).json({ success: false, reason: 'INVALID_CREDENTIALS' });
+    const db = admin.database();
+    if (!(await verifyOperationsAdminAccess({ authUid: requestAuth.uid, db }))) {
+      return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
+    }
+
+    const tourId = normalizeTourKeyForComparison(req.body?.tourId);
+    if (!tourId || !isValidFirebaseKey(tourId)) {
+      return res.status(400).json({ success: false, reason: 'INVALID_TOUR' });
+    }
+
+    const lockPath = `tour_deletion_locks/${tourId}`;
+    const lockOwner = randomUUID();
+    const lockAcquired = await acquireManualBookingLock({
+      db,
+      path: lockPath,
+      owner: lockOwner,
+      nowMs: Date.now(),
+      ttlMs: TOUR_DELETION_LOCK_TTL_MS,
+    });
+    if (!lockAcquired) return res.status(409).json({ success: false, reason: 'DELETE_IN_PROGRESS' });
+
+    try {
+      const [tourSnapshot, driversSnapshot, driverUsersSnapshot, reportsSnapshot, safetySnapshot] = await Promise.all([
+        db.ref(`tours/${tourId}`).once('value'),
+        db.ref('drivers').once('value'),
+        db.ref('users').orderByChild('driverAssignedTourId').equalTo(tourId).once('value'),
+        db.ref('content_reports').once('value'),
+        db.ref('globalSafetyAlerts').once('value'),
+      ]);
+      const tourExisted = tourSnapshot.exists();
+      const tour = tourSnapshot.val() || {};
+      const bookings = await getBookingsForTour({ db, tourId, tourCode: tour.tourCode || tourId });
+      const updates = buildTourDeletionUpdates({
+        tourId,
+        bookings,
+        drivers: driversSnapshot.val() || {},
+        driverUsers: driverUsersSnapshot.val() || {},
+        contentReports: reportsSnapshot.val() || {},
+        globalSafetyAlerts: safetySnapshot.val() || {},
+      });
+      const deletedStorageObjects = await deleteStoragePrefixes({
+        prefixes: [`group_tour_photos/${tourId}/`, `private_tour_photos/${tourId}/`],
+      });
+      await db.ref().update(updates);
+
+      const summary = {
+        bookingsDeleted: Object.keys(bookings).length,
+        storageObjectsDeleted: deletedStorageObjects,
+        databasePathsDeleted: Object.keys(updates).filter((path) => updates[path] === null).length,
+        alreadyDeleted: !tourExisted,
+      };
+      log.info('Tour deletion completed', { tourId, ...summary });
+      return res.status(200).json({ success: true, tourId, alreadyDeleted: !tourExisted, summary });
+    } catch (error) {
+      log.error('Tour deletion failed', error, { tourId });
+      return res.status(500).json({ success: false, reason: 'INTERNAL_ERROR' });
+    } finally {
+      await releaseManualBookingLock({ db, path: lockPath, owner: lockOwner });
+    }
+  },
+);
+
+exports.removeReportedPhoto = onRequest(
+  {
+    region: 'europe-west1',
+    maxInstances: 10,
+    timeoutSeconds: 120,
+  },
+  async (req, res) => {
+    const corsAllowed = applyAuthenticatedCors(req, res);
+    if (req.method === 'OPTIONS') return corsAllowed
+      ? res.status(204).send('')
+      : res.status(403).json({ success: false, reason: 'ORIGIN_NOT_ALLOWED' });
+    if (!corsAllowed) return res.status(403).json({ success: false, reason: 'ORIGIN_NOT_ALLOWED' });
+    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
+
+    const requestAuth = await verifyRequestAuthUid(req);
+    if (!requestAuth.success) return res.status(401).json({ success: false, reason: 'INVALID_CREDENTIALS' });
+    const db = admin.database();
+    if (!(await verifyOperationsAdminAccess({ authUid: requestAuth.uid, db }))) {
+      return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
+    }
+
+    const reportId = resolveTrimmedString(req.body?.reportId);
+    if (!reportId || !isValidFirebaseKey(reportId)) {
+      return res.status(400).json({ success: false, reason: 'INVALID_REPORT' });
+    }
+
+    try {
+      const reportSnapshot = await db.ref(`content_reports/${reportId}`).once('value');
+      if (!reportSnapshot.exists()) return res.status(404).json({ success: false, reason: 'INVALID_REPORT' });
+      const report = reportSnapshot.val() || {};
+      const tourId = normalizeTourKeyForComparison(report.tourId);
+      const photoId = resolveTrimmedString(report.contentId);
+      if (report.contentType !== 'group_photo' || !tourId || !photoId || !isValidFirebaseKey(photoId)) {
+        return res.status(409).json({ success: false, reason: 'UNSUPPORTED_CONTENT' });
+      }
+
+      const contentPath = `group_tour_photos/${tourId}/${photoId}`;
+      const photoSnapshot = await db.ref(contentPath).once('value');
+      const photo = photoSnapshot.val() || {};
+      const storagePaths = resolveReportedPhotoStoragePaths({ tourId, photo });
+      const deletedStorageObjects = await deleteStoragePaths({ paths: storagePaths });
+      const now = Date.now();
+      await db.ref().update({
+        [contentPath]: null,
+        [`content_reports/${reportId}/status`]: 'actioned',
+        [`content_reports/${reportId}/updatedAt`]: new Date(now).toISOString(),
+        [`content_reports/${reportId}/updatedAtMs`]: now,
+        [`content_reports/${reportId}/moderationAction`]: 'photo_and_storage_removed',
+      });
+
+      log.info('Reported photo removed', { reportId, tourId, deletedStorageObjects });
+      return res.status(200).json({ success: true, contentPath, deletedStorageObjects });
+    } catch (error) {
+      log.error('Reported photo removal failed', error, { reportId });
+      return res.status(500).json({ success: false, reason: 'INTERNAL_ERROR' });
     }
   },
 );
@@ -1926,7 +2834,7 @@ exports.getTourManifest = onRequest(
       log.warn('Tour manifest rate limit exceeded', {
         authUid: requestAuth.uid,
         tourId,
-        clientKey,
+        networkDimension: hashRateLimitDimension(clientKey),
       });
       return res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' });
     }
@@ -1986,12 +2894,36 @@ exports.verifyDriverLogin = onRequest(
       return res.status(400).json({ valid: false, reason: 'INVALID_INPUT' });
     }
 
+    const requireAppCheck = process.env.REQUIRE_APP_CHECK_FOR_LOGIN === 'true';
+    const appCheckToken = req.headers['x-firebase-appcheck'];
+    if (requireAppCheck) {
+      if (typeof appCheckToken !== 'string' || !appCheckToken.trim()) {
+        return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
+      }
+      try {
+        await admin.appCheck().verifyToken(appCheckToken.trim());
+      } catch (appCheckError) {
+        log.warn('Driver login rejected: invalid App Check token', {
+          driverId,
+          authUid: requestAuth.uid,
+          error: appCheckError?.message || String(appCheckError),
+        });
+        return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
+      }
+    }
+
     const clientKey = getRequestClientKey(req);
-    if (!checkRateLimit(`verify_driver_login_${requestAuth.uid}_${clientKey}`, 20, 60000)) {
+    const rateLimit = checkDriverLoginRateLimits({
+      authUid: requestAuth.uid,
+      clientKey,
+      driverId,
+    });
+    if (!rateLimit.allowed) {
       log.warn('Driver login rate limit exceeded', {
-        authUid: requestAuth.uid,
+        scope: rateLimit.scope,
+        authDimension: rateLimit.authDimension,
         driverId,
-        clientKey,
+        networkDimension: rateLimit.networkDimension,
       });
       return res.status(429).json({ valid: false, reason: 'TRY_AGAIN_LATER' });
     }
@@ -2014,6 +2946,19 @@ exports.verifyDriverLogin = onRequest(
         return res.status(403).json({ valid: false, reason: 'DRIVER_ALREADY_LINKED' });
       }
 
+      const claimResult = await claimDriverAuthUid({
+        db,
+        driverId,
+        authUid: requestAuth.uid,
+      });
+      if (!claimResult.claimed) {
+        log.warn('Driver login rejected: driver claim lost to another auth uid', {
+          driverId,
+          authUid: requestAuth.uid,
+        });
+        return res.status(403).json({ valid: false, reason: 'DRIVER_ALREADY_LINKED' });
+      }
+
       const assignment = await resolveDriverAssignment({ driverId, driverData, db });
       let assignedTourCode = assignment.assignedTourCode;
       let resolvedTour = null;
@@ -2028,6 +2973,14 @@ exports.verifyDriverLogin = onRequest(
           };
         }
       }
+
+      const nowMs = Date.now();
+      await db.ref().update(buildDriverIdentityProfileUpdates({
+        driverId,
+        authUid: requestAuth.uid,
+        assignedTourId: assignment.assignedTourId,
+        nowMs,
+      }));
 
       log.info('Driver login reference validated', {
         driverId,
@@ -2051,6 +3004,7 @@ exports.verifyDriverLogin = onRequest(
         assignmentStatus: assignment.assignedTourId
           ? (resolvedTour ? 'ASSIGNED' : 'ASSIGNED_TOUR_NOT_FOUND')
           : 'UNASSIGNED',
+        identityClaimed: true,
       });
     } catch (error) {
       log.error('Driver login verification failed', error, {
@@ -2060,6 +3014,256 @@ exports.verifyDriverLogin = onRequest(
       return res.status(500).json({ valid: false, reason: 'INTERNAL_ERROR' });
     }
   }
+);
+
+exports.assignDriverToTour = onRequest(
+  {
+    region: 'europe-west1',
+    maxInstances: 10,
+  },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
+    }
+
+    const requestAuth = await verifyRequestAuthUid(req);
+    if (!requestAuth.success) {
+      return res.status(401).json({ success: false, reason: 'INVALID_CREDENTIALS' });
+    }
+
+    const driverId = normalizeDriverId(req.body?.driverId);
+    const requestedTour = resolveTrimmedString(req.body?.tourCode || req.body?.tourId);
+    const tourId = normalizeTourKeyForComparison(requestedTour);
+    if (!driverId || !isValidFirebaseKey(driverId) || !tourId || !isValidFirebaseKey(tourId)) {
+      return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
+    }
+
+    const clientKey = getRequestClientKey(req);
+    if (!checkRateLimit(`assign_driver_${requestAuth.uid}_${hashRateLimitDimension(clientKey)}`, 12, 60000)) {
+      return res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' });
+    }
+
+    const db = admin.database();
+    const lockOwner = randomUUID();
+    const lockPaths = [
+      `driver_assignment_locks/drivers/${driverId}`,
+      `driver_assignment_locks/tours/${tourId}`,
+    ].sort();
+    const acquiredLocks = [];
+
+    try {
+      for (const lockPath of lockPaths) {
+        const acquired = await acquireManualBookingLock({
+          db,
+          path: lockPath,
+          owner: lockOwner,
+          nowMs: Date.now(),
+          ttlMs: DRIVER_ASSIGNMENT_LOCK_TTL_MS,
+        });
+        if (!acquired) {
+          return res.status(409).json({ success: false, reason: 'ASSIGNMENT_IN_PROGRESS' });
+        }
+        acquiredLocks.push(lockPath);
+      }
+
+      const [driverSnapshot, tourSnapshot, manifestSnapshot] = await Promise.all([
+        db.ref(`drivers/${driverId}`).once('value'),
+        db.ref(`tours/${tourId}`).once('value'),
+        db.ref(`tour_manifests/${tourId}`).once('value'),
+      ]);
+
+      if (!driverSnapshot.exists()) {
+        return res.status(404).json({ success: false, reason: 'DRIVER_NOT_FOUND' });
+      }
+      const driverData = driverSnapshot.val() || {};
+      if (resolveTrimmedString(driverData.authUid) !== requestAuth.uid) {
+        return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
+      }
+
+      if (!tourSnapshot.exists()) {
+        return res.status(404).json({ success: false, reason: 'TOUR_NOT_FOUND' });
+      }
+      const tourData = tourSnapshot.val() || {};
+      if (tourData.isActive === false) {
+        return res.status(409).json({ success: false, reason: 'TOUR_INACTIVE' });
+      }
+
+      const conflicts = collectDriverAssignmentConflicts({
+        driverId,
+        tourData,
+        manifestData: manifestSnapshot.val() || {},
+      });
+      if (conflicts.length > 0) {
+        log.warn('Driver self-assignment rejected because tour already has another driver', {
+          driverId,
+          authUid: requestAuth.uid,
+          tourId,
+          conflictCount: conflicts.length,
+        });
+        return res.status(409).json({ success: false, reason: 'TOUR_ALREADY_ASSIGNED' });
+      }
+
+      const previousTourId = normalizeTourKeyForComparison(driverData.currentTourId);
+      const previousTourSnapshot = previousTourId && previousTourId !== tourId
+        ? await db.ref(`tours/${previousTourId}`).once('value')
+        : null;
+      const assignment = buildDriverSelfAssignmentUpdates({
+        driverId,
+        authUid: requestAuth.uid,
+        driverData,
+        tourId,
+        tourData,
+        previousTourData: previousTourSnapshot?.val?.() || {},
+      });
+
+      await db.ref().update(assignment.updates);
+      log.info('Driver self-assignment completed', {
+        driverId,
+        authUid: requestAuth.uid,
+        tourId,
+        previousTourId: assignment.previousTourId,
+        updatePathCount: Object.keys(assignment.updates).length,
+      });
+      return res.status(200).json({
+        success: true,
+        tourId,
+        tourCode: assignment.canonicalTourCode,
+        previousTourId: assignment.previousTourId,
+      });
+    } catch (error) {
+      log.error('Driver self-assignment failed', error, {
+        driverId,
+        authUid: requestAuth.uid,
+        tourId,
+      });
+      return res.status(500).json({ success: false, reason: 'INTERNAL_ERROR' });
+    } finally {
+      await Promise.all(acquiredLocks.map((path) => releaseManualBookingLock({
+        db,
+        path,
+        owner: lockOwner,
+      })));
+    }
+  }
+);
+
+exports.submitSafetyReport = onRequest(
+  {
+    region: 'europe-west1',
+    maxInstances: 20,
+    timeoutSeconds: 30,
+  },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
+    }
+
+    const requestAuth = await verifyRequestAuthUid(req);
+    if (!requestAuth.success) {
+      return res.status(401).json({ success: false, reason: 'INVALID_CREDENTIALS' });
+    }
+    const clientKey = getRequestClientKey(req);
+    if (!checkRateLimit(`submit_safety_${requestAuth.uid}_${hashRateLimitDimension(clientKey)}`, 20, 60000)) {
+      return res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' });
+    }
+
+    let input;
+    try {
+      input = normalizeSafetySubmissionInput(req.body, Date.now());
+    } catch (error) {
+      return res.status(400).json({ success: false, reason: error?.code || 'INVALID_INPUT' });
+    }
+
+    const db = admin.database();
+    const lockPath = `safety_submission_locks/${input.tourId}/${input.clientEventId}`;
+    const lockOwner = randomUUID();
+    let lockAcquired = false;
+    try {
+      const existingSnapshot = await db.ref(`tours/${input.tourId}/safetyAlerts/${input.clientEventId}`).once('value');
+      if (existingSnapshot.exists()) {
+        const existing = existingSnapshot.val() || {};
+        if (resolveTrimmedString(existing.reporterAuthUid || existing.userId) !== requestAuth.uid) {
+          return res.status(409).json({ success: false, reason: 'EVENT_ID_CONFLICT' });
+        }
+        return res.status(200).json({
+          success: true,
+          eventId: input.clientEventId,
+          alreadySubmitted: true,
+          receivedAtMs: Number(existing.receivedAtMs || existing.timestampMs) || null,
+        });
+      }
+
+      const access = await resolveSafetyReporterAccess({
+        db,
+        authUid: requestAuth.uid,
+        tourId: input.tourId,
+        requestedRole: input.role,
+      });
+      if (!access.allowed) {
+        return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
+      }
+
+      lockAcquired = await acquireManualBookingLock({
+        db,
+        path: lockPath,
+        owner: lockOwner,
+        nowMs: Date.now(),
+        ttlMs: SAFETY_SUBMISSION_LOCK_TTL_MS,
+      });
+      if (!lockAcquired) {
+        const retrySnapshot = await db.ref(`tours/${input.tourId}/safetyAlerts/${input.clientEventId}`).once('value');
+        if (retrySnapshot.exists() && resolveTrimmedString(retrySnapshot.val()?.reporterAuthUid || retrySnapshot.val()?.userId) === requestAuth.uid) {
+          return res.status(200).json({ success: true, eventId: input.clientEventId, alreadySubmitted: true });
+        }
+        return res.status(409).json({ success: false, reason: 'SUBMISSION_IN_PROGRESS' });
+      }
+
+      const lockedExistingSnapshot = await db.ref(`tours/${input.tourId}/safetyAlerts/${input.clientEventId}`).once('value');
+      if (lockedExistingSnapshot.exists()) {
+        const lockedExisting = lockedExistingSnapshot.val() || {};
+        if (resolveTrimmedString(lockedExisting.reporterAuthUid || lockedExisting.userId) !== requestAuth.uid) {
+          return res.status(409).json({ success: false, reason: 'EVENT_ID_CONFLICT' });
+        }
+        return res.status(200).json({ success: true, eventId: input.clientEventId, alreadySubmitted: true });
+      }
+
+      const nowMs = Date.now();
+      const record = buildCanonicalSafetyRecord({
+        input,
+        authUid: requestAuth.uid,
+        principalId: access.principalId,
+        nowMs,
+      });
+      await db.ref().update(buildSafetySubmissionUpdates({ record, lockPath }));
+      lockAcquired = false;
+      log.warn('Safety report submitted', {
+        authUid: requestAuth.uid,
+        tourId: input.tourId,
+        eventId: input.clientEventId,
+        category: input.category,
+        severity: input.severity,
+        isSOS: input.isSOS,
+        processedFromQueue: input.processedFromQueue,
+      });
+      return res.status(201).json({
+        success: true,
+        eventId: input.clientEventId,
+        alreadySubmitted: false,
+        receivedAtMs: nowMs,
+      });
+    } catch (error) {
+      log.error('Safety report submission failed', error, {
+        authUid: requestAuth.uid,
+        tourId: input.tourId,
+        eventId: input.clientEventId,
+      });
+      return res.status(500).json({ success: false, reason: 'INTERNAL_ERROR' });
+    } finally {
+      if (lockAcquired) {
+        await releaseManualBookingLock({ db, path: lockPath, owner: lockOwner });
+      }
+    }
+  },
 );
 
 const validateBroadcastData = (broadcastData) => {
@@ -2112,6 +3316,27 @@ const validateCategoryBroadcastData = (categoryKey, broadcastData) => {
   }
 
   return { valid: errors.length === 0, errors };
+};
+
+const BROADCAST_TERMINAL_STATUSES = new Set(['delivered', 'partial', 'failed', 'no_recipients']);
+
+const resolveBroadcastDeliveryStatus = ({ successCount = 0, errorCount = 0, recipientCount = 0 } = {}) => {
+  if (recipientCount <= 0) return 'no_recipients';
+  if (successCount > 0 && errorCount > 0) return 'partial';
+  if (successCount > 0) return 'delivered';
+  return 'failed';
+};
+
+const updateBroadcastDelivery = async ({ root, targetId, broadcastId, status, details = {} }) => {
+  if (!isValidFirebaseKey(targetId) || !isValidFirebaseKey(broadcastId)) return;
+  const now = Date.now();
+  const payload = {
+    deliveryStatus: status,
+    deliveryUpdatedAtMs: now,
+    ...details,
+  };
+  if (BROADCAST_TERMINAL_STATUSES.has(status)) payload.deliveryCompletedAtMs = now;
+  await admin.database().ref(`${root}/${targetId}/${broadcastId}`).update(payload);
 };
 
 const fetchCategoryBroadcastUsers = async (categoryKey, context = {}) => {
@@ -2177,8 +3402,13 @@ exports.processBroadcastWrite = onValueCreated(
       const validation = validateBroadcastData(broadcastData);
       if (!validation.valid) {
         log.warn('Invalid broadcast payload; skipping fanout', { tourId, broadcastId, errors: validation.errors });
+        await updateBroadcastDelivery({
+          root: 'broadcasts', targetId: tourId, broadcastId, status: 'failed', details: { deliveryErrorCode: 'INVALID_PAYLOAD' },
+        });
         return null;
       }
+
+      await updateBroadcastDelivery({ root: 'broadcasts', targetId: tourId, broadcastId, status: 'processing' });
 
       const adminRecord = await admin.auth().getUser(broadcastData.createdByUid);
       const isAnonymous = adminRecord.providerData.length === 0;
@@ -2187,6 +3417,9 @@ exports.processBroadcastWrite = onValueCreated(
           tourId,
           broadcastId,
           createdByUid: broadcastData.createdByUid,
+        });
+        await updateBroadcastDelivery({
+          root: 'broadcasts', targetId: tourId, broadcastId, status: 'failed', details: { deliveryErrorCode: 'INVALID_AUTHOR' },
         });
         return null;
       }
@@ -2203,10 +3436,28 @@ exports.processBroadcastWrite = onValueCreated(
         broadcastId,
       });
 
+      await persistTourNotification({
+        record: buildTourNotificationRecord({
+          type: 'announcement',
+          tourId,
+          sourceId: broadcastId,
+          title: 'Loch Lomond Travel update',
+          body: broadcastData.message,
+          screen: 'Chat',
+          messageId: broadcastId,
+          createdAtMs: broadcastData.createdAtMs,
+          priority: 'high',
+        }),
+      });
+
+      await updateBroadcastDelivery({ root: 'broadcasts', targetId: tourId, broadcastId, status: 'chat_queued' });
       log.info('Broadcast fanout to chat completed', { tourId, broadcastId });
       return null;
     } catch (error) {
       log.error('Failed to process broadcast write', error, { tourId, broadcastId });
+      await updateBroadcastDelivery({
+        root: 'broadcasts', targetId: tourId, broadcastId, status: 'failed', details: { deliveryErrorCode: 'FANOUT_FAILED' },
+      }).catch((statusError) => log.error('Failed to persist broadcast failure status', statusError, { tourId, broadcastId }));
       return null;
     }
   }
@@ -2242,8 +3493,13 @@ exports.processCategoryBroadcastWrite = onValueCreated(
           broadcastId,
           errors: validation.errors,
         });
+        await updateBroadcastDelivery({
+          root: 'category_broadcasts', targetId: categoryKey, broadcastId, status: 'failed', details: { deliveryErrorCode: 'INVALID_PAYLOAD' },
+        });
         return null;
       }
+
+      await updateBroadcastDelivery({ root: 'category_broadcasts', targetId: categoryKey, broadcastId, status: 'processing' });
 
       const adminRecord = await admin.auth().getUser(broadcastData.createdByUid);
       const isAnonymous = adminRecord.providerData.length === 0;
@@ -2252,6 +3508,9 @@ exports.processCategoryBroadcastWrite = onValueCreated(
           categoryKey,
           broadcastId,
           createdByUid: broadcastData.createdByUid,
+        });
+        await updateBroadcastDelivery({
+          root: 'category_broadcasts', targetId: categoryKey, broadcastId, status: 'failed', details: { deliveryErrorCode: 'INVALID_AUTHOR' },
         });
         return null;
       }
@@ -2268,6 +3527,9 @@ exports.processCategoryBroadcastWrite = onValueCreated(
 
       if (candidateUserIds.length === 0) {
         log.info('No users opted in to category broadcast', { categoryKey, broadcastId });
+        await updateBroadcastDelivery({
+          root: 'category_broadcasts', targetId: categoryKey, broadcastId, status: 'no_recipients', details: { recipientCount: 0, successCount: 0, errorCount: 0 },
+        });
         return null;
       }
 
@@ -2291,6 +3553,7 @@ exports.processCategoryBroadcastWrite = onValueCreated(
         RECIPIENT_CHUNK_SIZE,
       );
       const pushMessages = [];
+      const notificationContent = buildChatNotificationContent({ messageData, tourName, isAdmin });
 
       log.info('Using deterministic recipient chunking for category broadcast notifications', {
         categoryKey,
@@ -2307,12 +3570,12 @@ exports.processCategoryBroadcastWrite = onValueCreated(
             sound: 'default',
             title: `New ${categoryLabel} tour alert`,
             body: notificationBody,
-            data: {
+            data: buildPushNavigationData({
               screen: 'NotificationPreferences',
               notificationType: 'category_broadcast',
               categoryKey,
               broadcastId,
-            },
+            }),
             priority: 'default',
             channelId: 'default',
           });
@@ -2321,12 +3584,14 @@ exports.processCategoryBroadcastWrite = onValueCreated(
       const payloadAssemblyDurationMs = Date.now() - assemblyStart;
 
       if (invalidTokens.length > 0) {
-        Promise.all(invalidTokens.map(({ userId, token }) => removeInvalidToken(userId, token)))
-          .catch(err => log.error('Error cleaning invalid tokens', err));
+        await cleanupInvalidTokens(invalidTokens);
       }
 
       if (pushMessages.length === 0) {
         log.info('No valid recipients for category broadcast', { categoryKey, broadcastId });
+        await updateBroadcastDelivery({
+          root: 'category_broadcasts', targetId: categoryKey, broadcastId, status: 'no_recipients', details: { recipientCount: 0, successCount: 0, errorCount: 0 },
+        });
         return null;
       }
 
@@ -2371,6 +3636,13 @@ exports.processCategoryBroadcastWrite = onValueCreated(
 
       const pushSendDurationMs = Date.now() - pushSendStart;
       const duration = Date.now() - startTime;
+      await updateBroadcastDelivery({
+        root: 'category_broadcasts',
+        targetId: categoryKey,
+        broadcastId,
+        status: resolveBroadcastDeliveryStatus({ successCount, errorCount, recipientCount: pushMessages.length }),
+        details: { recipientCount: pushMessages.length, successCount, errorCount },
+      });
       log.info('Category broadcast notification completed', {
         categoryKey,
         broadcastId,
@@ -2390,6 +3662,9 @@ exports.processCategoryBroadcastWrite = onValueCreated(
         broadcastId,
         duration: `${duration}ms`,
       });
+      await updateBroadcastDelivery({
+        root: 'category_broadcasts', targetId: categoryKey, broadcastId, status: 'failed', details: { deliveryErrorCode: 'FANOUT_FAILED' },
+      }).catch((statusError) => log.error('Failed to persist category broadcast failure status', statusError, { categoryKey, broadcastId }));
       return null;
     }
   }
@@ -2410,6 +3685,13 @@ exports.sendChatNotification = onValueCreated(
     const startTime = Date.now();
     const tourId = event.params.tourId;
     const messageId = event.params.messageId;
+    const initialMessageData = event.data?.val?.() || {};
+    const trackedBroadcastId = resolveTrimmedString(initialMessageData.broadcastId);
+    const updateTrackedBroadcast = (status, details = {}) => (
+      trackedBroadcastId
+        ? updateBroadcastDelivery({ root: 'broadcasts', targetId: tourId, broadcastId: trackedBroadcastId, status, details })
+        : Promise.resolve()
+    );
 
     try {
       // 0. Validate path parameters
@@ -2425,21 +3707,23 @@ exports.sendChatNotification = onValueCreated(
         return null;
       }
 
-      const messageData = snapshot.val();
+      const messageData = initialMessageData;
 
       // 2. Validate message data
       const validation = validateMessageData(messageData);
       if (!validation.valid) {
         log.error("Invalid message data", { errors: validation.errors }, { tourId, messageId });
+        await updateTrackedBroadcast('failed', { deliveryErrorCode: 'INVALID_CHAT_MESSAGE' });
         return null;
       }
 
-      const { senderId, text: messageText, senderName } = messageData;
+      const { senderId, senderName } = messageData;
 
       // 3. Rate limiting check (prevent spam)
       const rateLimitKey = `chat_notify_${tourId}_${senderId}`;
       if (!checkRateLimit(rateLimitKey, 20, 60000)) {
         log.warn("Rate limit exceeded", { tourId, senderId });
+        if (isAdminBroadcast(senderId)) await updateTrackedBroadcast('failed', { deliveryErrorCode: 'RATE_LIMITED' });
         return null;
       }
 
@@ -2450,6 +3734,7 @@ exports.sendChatNotification = onValueCreated(
         const isVerifiedAdmin = await verifyAdminBroadcast(messageData);
         if (!isVerifiedAdmin) {
           log.error("Spoofed admin broadcast rejected - invalid or missing senderUid", null, { tourId, senderId });
+          await updateTrackedBroadcast('failed', { deliveryErrorCode: 'INVALID_AUTHOR' });
           return null;
         }
       }
@@ -2457,33 +3742,36 @@ exports.sendChatNotification = onValueCreated(
       log.info("Processing chat notification", { tourId, senderId, senderName, isAdmin });
 
       // 5. Get only the fields needed for notifications.
-      const [tourNameSnapshot, participantsSnapshot] = await Promise.all([
+      const [tourNameSnapshot, participantsSnapshot, manifestSnapshot] = await Promise.all([
         admin.database().ref(`tours/${tourId}/name`).once("value"),
-        admin.database().ref(`tours/${tourId}/participants`).once("value")
+        admin.database().ref(`tours/${tourId}/participants`).once("value"),
+        admin.database().ref(`tour_manifests/${tourId}`).once("value"),
       ]);
 
       const tourName = tourNameSnapshot.val() || "Tour Chat";
-
-      if (!participantsSnapshot.exists()) {
-        log.info("No participants found", { tourId });
-        return null;
-      }
-
-      const participants = participantsSnapshot.val();
+      const participants = participantsSnapshot.val() || {};
+      const manifestData = manifestSnapshot.val() || {};
       const participantIds = Object.keys(participants);
-      let senderParticipantIds = [];
+      const assignedDriverRecipientIds = await resolveAssignedDriverRecipientIds({
+        tourId,
+        manifestData,
+        context: { tourId, messageId, notificationType: 'chat' },
+      });
+      let senderDeliveryIds = [];
 
       // Security: regular chat messages must be sent by a participant.
       if (!isAdmin) {
-        senderParticipantIds = await resolveChatSenderParticipantIds({
+        senderDeliveryIds = await resolveChatSenderDeliveryIds({
+          tourId,
           participants,
+          manifestData,
           messageData,
           context: { tourId, messageId, notificationType: 'chat' },
         });
       }
 
-      if (!isAdmin && senderParticipantIds.length === 0) {
-        log.error("Sender is not a participant of the tour", null, {
+      if (!isAdmin && senderDeliveryIds.length === 0) {
+        log.error("Sender is not an active participant or assigned driver of the tour", null, {
           tourId,
           senderId,
           senderStableId: toRealtimeKeySegment(messageData.senderStableId),
@@ -2491,7 +3779,8 @@ exports.sendChatNotification = onValueCreated(
         return null;
       }
 
-      const cappedParticipantIds = applyRecipientCap(participantIds, NOTIFICATION_RECIPIENT_CAP, {
+      const audienceIds = [...new Set([...participantIds, ...assignedDriverRecipientIds])];
+      const cappedParticipantIds = applyRecipientCap(audienceIds, NOTIFICATION_RECIPIENT_CAP, {
         tourId,
         notificationType: 'chat',
       });
@@ -2508,21 +3797,17 @@ exports.sendChatNotification = onValueCreated(
         usersMap,
         preferencePath,
         senderId,
-        senderParticipantIds,
+        senderParticipantIds: senderDeliveryIds,
         excludeSender: true,
         context: { tourId, notificationType: 'chat' },
       });
 
+      const notificationContent = buildChatNotificationContent({
+        messageData,
+        tourName,
+        isAdmin,
+      });
       const pushMessages = [];
-      const truncatedMessage = messageText.length > 200
-        ? `${messageText.substring(0, 197)}...`
-        : messageText;
-      const notificationTitle = isAdmin
-        ? `📢 ${tourName} Announcement`
-        : `New message in ${tourName}`;
-      const notificationBody = isAdmin
-        ? truncatedMessage.replace(/^ANNOUNCEMENT:\s*/i, '')
-        : `${senderName}: ${truncatedMessage}`;
 
       const recipientChunks = chunkArrayDeterministically(
         validRecipients.map((recipient) => recipient.userId),
@@ -2540,14 +3825,17 @@ exports.sendChatNotification = onValueCreated(
           pushMessages.push({
             to: userData.pushToken,
             sound: "default",
-            title: notificationTitle,
-            body: notificationBody,
-            data: {
-              tourId: tourId,
+            title: notificationContent.title,
+            body: notificationContent.body,
+            data: buildPushNavigationData({
+              tourId,
               screen: "Chat",
-              messageId: messageId,
-              isAdminBroadcast: isAdmin,
-            },
+              messageId,
+              noticeId: isAdmin && trackedBroadcastId
+                ? buildTourNotificationId({ type: 'announcement', tourId, sourceId: trackedBroadcastId })
+                : null,
+              notificationType: isAdmin ? 'announcement' : 'chat_message',
+            }),
             priority: isAdmin ? "high" : "default",
             channelId: "default",
           });
@@ -2555,15 +3843,15 @@ exports.sendChatNotification = onValueCreated(
       }
       const payloadAssemblyDurationMs = Date.now() - assemblyStart;
 
-      // 7. Clean up invalid tokens (async, don't wait)
+      // 7. Complete invalid-token cleanup before the serverless invocation exits.
       if (invalidTokens.length > 0) {
-        Promise.all(invalidTokens.map(({ userId, token }) => removeInvalidToken(userId, token)))
-          .catch(err => log.error("Error cleaning invalid tokens", err));
+        await cleanupInvalidTokens(invalidTokens);
       }
 
       // 8. Send notifications via Expo
       if (pushMessages.length === 0) {
         log.info("No valid recipients found", { tourId });
+        if (isAdmin) await updateTrackedBroadcast('no_recipients', { recipientCount: 0, successCount: 0, errorCount: 0 });
         return null;
       }
 
@@ -2605,9 +3893,17 @@ exports.sendChatNotification = onValueCreated(
       const pushSendDurationMs = Date.now() - pushSendStart;
 
       const duration = Date.now() - startTime;
+      if (isAdmin) {
+        await updateTrackedBroadcast(
+          resolveBroadcastDeliveryStatus({ successCount, errorCount, recipientCount: pushMessages.length }),
+          { recipientCount: pushMessages.length, successCount, errorCount },
+        );
+      }
       log.info("Chat notification completed", {
         tourId,
         recipients: pushMessages.length,
+        passengerRecipientCount: participantIds.length,
+        assignedDriverRecipientCount: assignedDriverRecipientIds.length,
         successCount,
         errorCount,
         isAdminBroadcast: isAdmin,
@@ -2622,9 +3918,267 @@ exports.sendChatNotification = onValueCreated(
     } catch (error) {
       const duration = Date.now() - startTime;
       log.error("Fatal error in sendChatNotification", error, { tourId, messageId, duration: `${duration}ms` });
+      await updateTrackedBroadcast('failed', { deliveryErrorCode: 'NOTIFICATION_FAILED' })
+        .catch((statusError) => log.error('Failed to persist tour broadcast failure status', statusError, { tourId, messageId }));
       return null;
     }
   }
+);
+
+/** Notify the other assigned drivers when an internal driver-chat message is created. */
+exports.sendInternalChatNotification = onValueCreated(
+  {
+    ref: "/internal_chats/{tourId}/messages/{messageId}",
+    region: "europe-west1",
+    instance: "loch-lomond-travel-default-rtdb",
+    maxInstances: 10,
+  },
+  async (event) => {
+    const tourId = event.params.tourId;
+    const messageId = event.params.messageId;
+    const messageData = event.data?.val?.() || {};
+
+    try {
+      if (!isValidFirebaseKey(tourId) || !isValidFirebaseKey(messageId)) return null;
+      const validation = validateMessageData(messageData);
+      if (!validation.valid || messageData.isDriver !== true) {
+        log.warn('Invalid internal chat message skipped', { tourId, messageId, errors: validation.errors });
+        return null;
+      }
+      if (!checkRateLimit(`internal_chat_notify_${tourId}_${messageData.senderId}`, 20, 60000)) {
+        log.warn('Internal chat notification rate limit exceeded', { tourId });
+        return null;
+      }
+
+      const [tourNameSnapshot, manifestSnapshot] = await Promise.all([
+        admin.database().ref(`tours/${tourId}/name`).once('value'),
+        admin.database().ref(`tour_manifests/${tourId}`).once('value'),
+      ]);
+      const manifestData = manifestSnapshot.val() || {};
+      const assignedDriverRecipientIds = await resolveAssignedDriverRecipientIds({
+        tourId,
+        manifestData,
+        context: { tourId, messageId, notificationType: 'internal_chat' },
+      });
+      const senderDeliveryIds = await resolveChatSenderDeliveryIds({
+        tourId,
+        manifestData,
+        messageData,
+        context: { tourId, messageId, notificationType: 'internal_chat' },
+      });
+      if (senderDeliveryIds.length === 0) {
+        log.warn('Internal chat sender is not an active assigned driver', { tourId, messageId });
+        return null;
+      }
+
+      const cappedRecipientIds = applyRecipientCap(
+        assignedDriverRecipientIds,
+        NOTIFICATION_RECIPIENT_CAP,
+        { tourId, notificationType: 'internal_chat' },
+      );
+      const usersMap = await fetchUsersSnapshot(cappedRecipientIds, { tourId, notificationType: 'internal_chat' });
+      const { validRecipients, invalidTokens } = selectNotificationRecipients({
+        participantIds: cappedRecipientIds,
+        usersMap,
+        preferencePath: ['preferences', 'ops', 'group_chat'],
+        senderId: messageData.senderId,
+        senderParticipantIds: senderDeliveryIds,
+        excludeSender: true,
+        context: { tourId, notificationType: 'internal_chat' },
+      });
+      if (invalidTokens.length > 0) await cleanupInvalidTokens(invalidTokens);
+
+      const tourName = tourNameSnapshot.val() || 'Tour Chat';
+      const content = buildChatNotificationContent({ messageData, tourName });
+      const pushMessages = validRecipients.map(({ userId }) => ({
+        to: usersMap[userId].pushToken,
+        sound: 'default',
+        title: `Driver team · ${tourName}`,
+        body: content.body,
+        data: buildPushNavigationData({
+          tourId,
+          screen: 'Chat',
+          messageId,
+          notificationType: 'internal_chat_message',
+          internalDriverChat: true,
+        }),
+        priority: 'default',
+        channelId: 'default',
+      }));
+
+      let successCount = 0;
+      let errorCount = 0;
+      for (const chunk of expo.chunkPushNotifications(pushMessages)) {
+        try {
+          const tickets = await expo.sendPushNotificationsAsync(chunk);
+          const deviceFailures = collectExpoTokenFailures(tickets, chunk);
+          successCount += tickets.filter((ticket) => ticket.status !== 'error').length;
+          errorCount += tickets.filter((ticket) => ticket.status === 'error').length;
+          await Promise.all(deviceFailures.map(async ({ token, errorCode }) => {
+            const recipient = validRecipients.find((candidate) => candidate?.userData?.pushToken === token);
+            if (recipient?.userId) {
+              await removeInvalidToken(recipient.userId, token, { reason: errorCode || 'DEVICE_NOT_REGISTERED' });
+            }
+          }));
+        } catch (error) {
+          errorCount += chunk.length;
+          log.error('Internal chat notification chunk failed', error, { tourId, chunkSize: chunk.length });
+        }
+      }
+
+      log.info('Internal chat notification completed', {
+        tourId,
+        messageId,
+        recipients: pushMessages.length,
+        successCount,
+        errorCount,
+      });
+      return null;
+    } catch (error) {
+      log.error('Fatal error in sendInternalChatNotification', error, { tourId, messageId });
+      return null;
+    }
+  },
+);
+
+exports.sendSafetyAlertNotification = onValueCreated(
+  {
+    ref: '/tours/{tourId}/safetyAlerts/{eventId}',
+    region: 'europe-west1',
+    instance: 'loch-lomond-travel-default-rtdb',
+    maxInstances: 20,
+  },
+  async (event) => {
+    const tourId = event.params.tourId;
+    const eventId = event.params.eventId;
+    const alert = event.data?.val?.() || {};
+    if (!isValidFirebaseKey(tourId) || !isValidFirebaseKey(eventId)) return null;
+    if (
+      resolveTrimmedString(alert.tourId) !== tourId
+      || resolveTrimmedString(alert.status) !== 'pending'
+      || !SAFETY_CATEGORIES.has(resolveTrimmedString(alert.category)?.toLowerCase())
+      || !SAFETY_SEVERITIES.has(resolveTrimmedString(alert.severity)?.toLowerCase())
+      || (alert.schemaVersion === 2 && resolveTrimmedString(alert.eventId) !== eventId)
+    ) {
+      log.warn('Invalid safety alert skipped for notification', { tourId, eventId });
+      return null;
+    }
+
+    const db = admin.database();
+    try {
+      const [tourNameSnapshot, manifestSnapshot, adminUsersSnapshot] = await Promise.all([
+        db.ref(`tours/${tourId}/name`).once('value'),
+        db.ref(`tour_manifests/${tourId}`).once('value'),
+        db.ref('admin_users').once('value'),
+      ]);
+      const assignedDriverRecipientIds = await resolveAssignedDriverRecipientIds({
+        tourId,
+        manifestData: manifestSnapshot.val() || {},
+        context: { tourId, eventId, notificationType: 'safety_alert' },
+      });
+      const delegatedAdminIds = Object.entries(adminUsersSnapshot.val() || {})
+        .filter(([, enabled]) => enabled === true)
+        .map(([uid]) => uid);
+      const audienceIds = applyRecipientCap(
+        [...new Set([OPERATIONS_ADMIN_UID, ...delegatedAdminIds, ...assignedDriverRecipientIds])],
+        NOTIFICATION_RECIPIENT_CAP,
+        { tourId, notificationType: 'safety_alert' },
+      );
+      const usersMap = await fetchUsersSnapshot(audienceIds, { tourId, notificationType: 'safety_alert' });
+      const reporterAuthUid = resolveTrimmedString(alert.reporterAuthUid || alert.userId);
+      const { validRecipients, invalidTokens } = selectNotificationRecipients({
+        participantIds: audienceIds,
+        usersMap,
+        preferenceResolver: () => true,
+        senderId: reporterAuthUid,
+        senderParticipantIds: reporterAuthUid ? [reporterAuthUid] : [],
+        excludeSender: true,
+        context: { tourId, notificationType: 'safety_alert' },
+      });
+      if (invalidTokens.length > 0) await cleanupInvalidTokens(invalidTokens);
+
+      const content = buildSafetyNotificationContent({
+        alert,
+        tourName: tourNameSnapshot.val() || tourId,
+      });
+      const pushMessages = validRecipients.map(({ userId }) => ({
+        to: usersMap[userId].pushToken,
+        sound: 'default',
+        title: content.title,
+        body: content.body,
+        data: buildPushNavigationData({
+          tourId,
+          screen: 'SafetySupport',
+          notificationType: alert.isSOS === true || alert.severity === 'critical'
+            ? 'critical_safety_alert'
+            : 'safety_alert',
+        }),
+        priority: content.priority,
+        channelId: 'default',
+      }));
+
+      let successCount = 0;
+      let errorCount = 0;
+      for (const chunk of expo.chunkPushNotifications(pushMessages)) {
+        try {
+          const tickets = await expo.sendPushNotificationsAsync(chunk);
+          const deviceFailures = collectExpoTokenFailures(tickets, chunk);
+          successCount += tickets.filter((ticket) => ticket.status !== 'error').length;
+          errorCount += tickets.filter((ticket) => ticket.status === 'error').length;
+          await Promise.all(deviceFailures.map(async ({ token, errorCode }) => {
+            const recipient = validRecipients.find((candidate) => candidate?.userData?.pushToken === token);
+            if (recipient?.userId) {
+              await removeInvalidToken(recipient.userId, token, { reason: errorCode || 'DEVICE_NOT_REGISTERED' });
+            }
+          }));
+        } catch (error) {
+          errorCount += chunk.length;
+          log.error('Safety notification chunk failed', error, { tourId, eventId, chunkSize: chunk.length });
+        }
+      }
+
+      const deliveryStatus = pushMessages.length === 0
+        ? 'no_recipients'
+        : errorCount === 0
+          ? 'accepted'
+          : successCount > 0
+            ? 'partial'
+            : 'failed';
+      const deliveryUpdate = {
+        notificationDeliveryStatus: deliveryStatus,
+        notificationRecipientCount: pushMessages.length,
+        notificationSuccessCount: successCount,
+        notificationErrorCount: errorCount,
+        notificationUpdatedAtMs: Date.now(),
+      };
+      const mirrorUpdates = Object.fromEntries(
+        Object.entries(deliveryUpdate).flatMap(([key, value]) => [
+          [`tours/${tourId}/safetyAlerts/${eventId}/${key}`, value],
+          ...(alert.isSOS === true || alert.severity === 'critical'
+            ? [[`globalSafetyAlerts/${eventId}/${key}`, value]]
+            : []),
+        ]),
+      );
+      await db.ref().update(mirrorUpdates);
+      log.info('Safety notification completed', {
+        tourId,
+        eventId,
+        recipients: pushMessages.length,
+        assignedDriverRecipientCount: assignedDriverRecipientIds.length,
+        successCount,
+        errorCount,
+        deliveryStatus,
+      });
+      return null;
+    } catch (error) {
+      log.error('Fatal error in sendSafetyAlertNotification', error, { tourId, eventId });
+      await db.ref(`tours/${tourId}/safetyAlerts/${eventId}`).update({
+        notificationDeliveryStatus: 'failed',
+        notificationUpdatedAtMs: Date.now(),
+      }).catch(() => {});
+      return null;
+    }
+  },
 );
 
 const processPhotoVariantObject = async (event) => {
@@ -2726,6 +4280,10 @@ exports.sendItineraryNotification = onValueUpdated(
 
       log.info("Processing itinerary update notification", { tourId });
 
+      const itineraryChange = summarizeItineraryChange(
+        event.data?.before?.val?.() || {},
+        event.data?.after?.val?.() || {},
+      );
       // 1. Rate limiting check (prevent notification spam on rapid updates)
       const rateLimitKey = `itinerary_notify_${tourId}`;
       if (!checkRateLimit(rateLimitKey, 5, 300000)) { // Max 5 updates per 5 minutes
@@ -2734,8 +4292,7 @@ exports.sendItineraryNotification = onValueUpdated(
       }
 
       // 2. Get only fields required for itinerary notifications.
-      const [nameSnapshot, isActiveSnapshot, participantsSnapshot, manifestSnapshot] = await Promise.all([
-        admin.database().ref(`tours/${tourId}/name`).once("value"),
+      const [isActiveSnapshot, participantsSnapshot, manifestSnapshot] = await Promise.all([
         admin.database().ref(`tours/${tourId}/isActive`).once("value"),
         admin.database().ref(`tours/${tourId}/participants`).once("value"),
         admin.database().ref(`tour_manifests/${tourId}`).once("value"),
@@ -2747,7 +4304,19 @@ exports.sendItineraryNotification = onValueUpdated(
         return null;
       }
 
-      const tourName = nameSnapshot.val() || "Your Tour";
+      const itineraryNotice = buildTourNotificationRecord({
+          type: 'itinerary',
+          tourId,
+          sourceId: event.id || `${Date.now()}`,
+          title: 'Itinerary updated',
+          body: itineraryChange.body,
+          screen: 'Itinerary',
+          createdAtMs: Date.now(),
+          priority: 'high',
+        });
+      await persistTourNotification({
+        record: itineraryNotice,
+      });
 
       const participants = participantsSnapshot.exists() ? (participantsSnapshot.val() || {}) : {};
       const participantIds = Object.keys(participants);
@@ -2801,13 +4370,14 @@ exports.sendItineraryNotification = onValueUpdated(
           pushMessages.push({
             to: userData.pushToken,
             sound: "default",
-            title: "📅 Itinerary Update",
-            body: `The schedule for ${tourName} has been updated. Tap to see the changes.`,
-            data: {
-              tourId: tourId,
+            title: "Itinerary updated",
+            body: itineraryChange.body,
+            data: buildPushNavigationData({
+              tourId,
               screen: "Itinerary",
-              timestamp: Date.now(),
-            },
+              noticeId: itineraryNotice.noticeId,
+              notificationType: 'itinerary',
+            }),
             priority: "default",
             channelId: "default",
           });
@@ -2815,10 +4385,9 @@ exports.sendItineraryNotification = onValueUpdated(
       }
       const payloadAssemblyDurationMs = Date.now() - assemblyStart;
 
-      // 4. Clean up invalid tokens (async, don't wait)
+      // 4. Complete invalid-token cleanup before the serverless invocation exits.
       if (invalidTokens.length > 0) {
-        Promise.all(invalidTokens.map(({ userId, token }) => removeInvalidToken(userId, token)))
-          .catch(err => log.error("Error cleaning invalid tokens", err));
+        await cleanupInvalidTokens(invalidTokens);
       }
 
       // 5. Send notifications via Expo
@@ -2890,12 +4459,21 @@ exports.sendItineraryNotification = onValueUpdated(
 
 exports.__testables = {
   toRealtimeKeySegment,
+  validateMessageData,
+  buildChatNotificationContent,
+  buildSafetyNotificationContent,
+  normalizeSafetySubmissionInput,
+  buildCanonicalSafetyRecord,
+  buildSafetySubmissionUpdates,
+  resolveSafetyReporterAccess,
   resolveChatSenderParticipantIds,
+  resolveChatSenderDeliveryIds,
   collectAssignedDriverIds,
   isDriverProfileAssignedToTour,
   resolveAssignedDriverRecipientIds,
   getPushTokenIneligibilityReason,
   shouldRemoveInvalidToken,
+  cleanupInvalidTokens,
   selectNotificationRecipients,
   parseSourcePhotoPath,
   buildPhotoCollectionPath,
@@ -2911,10 +4489,25 @@ exports.__testables = {
   findManualPassengerSeatConflicts,
   buildManualPassengerBookingUpdates,
   verifyOperationsAdminAccess,
+  isAllowedAdminOrigin,
   buildTourManifestPayload,
   verifyTourManifestAccess,
   normalizeManifestBooking,
   resolveDriverAssignment,
+  claimDriverAuthUid,
+  buildDriverIdentityProfileUpdates,
+  collectDriverAssignmentConflicts,
+  buildDriverSelfAssignmentUpdates,
+  checkDriverLoginRateLimits,
   validateCategoryBroadcastData,
   userWantsTourCategoryBroadcast,
+  resolveBroadcastDeliveryStatus,
+  buildTourDeletionUpdates,
+  resolveReportedPhotoStoragePaths,
+  checkPassengerLoginRateLimits,
+  buildTourNotificationId,
+  buildTourNotificationRecord,
+  buildPushNavigationData,
+  summarizeItineraryChange,
+  persistTourNotification,
 };

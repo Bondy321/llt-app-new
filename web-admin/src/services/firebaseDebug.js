@@ -7,7 +7,10 @@ export const FIREBASE_DEBUG_SESSION_ID = `web-admin-${Date.now().toString(36)}-$
   .slice(2, 8)}`;
 
 export function isFirebaseDebugEnabled() {
-  return import.meta.env.VITE_FIREBASE_DEBUG_LOGS !== 'false';
+  const explicitSetting = import.meta.env.VITE_FIREBASE_DEBUG_LOGS;
+  if (explicitSetting === 'true') return true;
+  if (explicitSetting === 'false') return false;
+  return import.meta.env.DEV === true;
 }
 
 const redactDebugString = (value) => String(value)
@@ -29,6 +32,10 @@ const redactDebugKey = (value) => {
   }
   return text;
 };
+
+const isSensitiveDebugValueKey = (key) => (
+  /^(?:apiKey|authorization|authUid|bookingId|bookingRef|bookingReference|driverCode|password|pushToken|sessionId|token|uid|userId)$/i.test(String(key))
+);
 
 export function maskDebugValue(value, start = 6, end = 4) {
   if (value === null || value === undefined || value === '') return value || null;
@@ -61,7 +68,10 @@ export function sanitizeDebugValue(value, depth = 0) {
     return Object.fromEntries(
       Object.entries(value)
         .slice(0, 40)
-        .map(([key, item]) => [redactDebugKey(key), sanitizeDebugValue(item, depth + 1)]),
+        .map(([key, item]) => [
+          redactDebugKey(key),
+          isSensitiveDebugValueKey(key) ? '[redacted]' : sanitizeDebugValue(item, depth + 1),
+        ]),
     );
   }
 

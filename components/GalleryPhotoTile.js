@@ -1,7 +1,7 @@
 import React from 'react';
 import { Image as RNImage, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import {
   buildPhotoCacheKey,
   resolveThumbnailDisplayUri,

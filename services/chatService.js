@@ -41,6 +41,8 @@ const logger = loggerServiceModule?.default || loggerServiceModule;
 
 const MAX_MESSAGE_LENGTH = 10000;
 const MAX_CAPTION_LENGTH = 500;
+const CHAT_MESSAGE_SCHEMA_VERSION = 2;
+const CHAT_MESSAGE_ID_MAX_LENGTH = 160;
 const MAX_TYPING_INDICATOR_AGE_MS = 10000;
 const MAX_PRESENCE_AGE_MS = 300000; // 5 minutes
 const CLEANUP_TYPING_DELAY_MS = 10000;
@@ -186,7 +188,9 @@ const validateUserId = (userId) => {
  * Validates message ID
  */
 const validateMessageId = (messageId) => {
-  if (!messageId || typeof messageId !== 'string' || messageId.trim().length === 0) {
+  if (!messageId || typeof messageId !== 'string' || messageId.trim().length === 0
+    || messageId.trim().length > CHAT_MESSAGE_ID_MAX_LENGTH
+    || /[.#$/\[\]]/.test(messageId.trim())) {
     throw new Error('Invalid message ID');
   }
   return messageId.trim();
@@ -212,6 +216,62 @@ const validateMessageText = (text, maxLength = MAX_MESSAGE_LENGTH) => {
   return assertTextPassesModeration(trimmed, 'Message');
 };
 
+const createLocalMessageId = (prefix = 'msg') =>
+  `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+const resolveMessageWriteIdentity = (payload = {}, prefix = 'msg') => {
+  const requestedMessageId = typeof payload.messageId === 'string' && payload.messageId.trim()
+    ? payload.messageId.trim()
+    : '';
+  const requestedIdempotencyKey = typeof payload.idempotencyKey === 'string' && payload.idempotencyKey.trim()
+    ? payload.idempotencyKey.trim()
+    : '';
+  const messageId = validateMessageId(requestedMessageId || requestedIdempotencyKey || createLocalMessageId(prefix));
+
+  if (requestedIdempotencyKey && requestedIdempotencyKey !== messageId) {
+    throw new Error('Message idempotency key must match the message ID');
+  }
+
+  return { messageId, idempotencyKey: messageId };
+};
+
+const resolveClientCreatedAt = (timestamp) => {
+  const parsed = parseTimestampToMillis(timestamp);
+  return Number.isFinite(parsed) ? parsed : Date.now();
+};
+
+const writeMessageOnce = async (messageRef, payloadForDb) => {
+  if (!messageRef || typeof messageRef.transaction !== 'function') {
+    throw new Error('Realtime database transaction support is required for chat delivery');
+  }
+
+  const result = await messageRef.transaction((currentValue) => (
+    currentValue === null || currentValue === undefined ? payloadForDb : undefined
+  ));
+  const storedMessage = result?.snapshot?.val?.();
+
+  if (!storedMessage || typeof storedMessage !== 'object') {
+    throw new Error('Message delivery could not be confirmed');
+  }
+  if (
+    storedMessage.idempotencyKey !== payloadForDb.idempotencyKey
+    || storedMessage.senderId !== payloadForDb.senderId
+    || storedMessage.senderStableId !== payloadForDb.senderStableId
+  ) {
+    throw new Error('Message ID is already in use by another delivery');
+  }
+
+  return storedMessage;
+};
+
+const withTimeout = (promise, timeoutMs, message) => {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+};
+
 /**
  * Validates sender info object
  */
@@ -226,6 +286,9 @@ const validateSenderInfo = (senderInfo) => {
 
   if (!principalId) {
     throw new Error('Sender must have a valid principalId');
+  }
+  if (principalId.length > 160) {
+    throw new Error('Sender principalId exceeds the maximum length');
   }
 
   const normalizedStablePassengerId = typeof senderInfo.stablePassengerId === 'string'
@@ -247,12 +310,19 @@ const validateSenderInfo = (senderInfo) => {
 
   const resolvedStablePassengerId = normalizedStablePassengerId
     || (normalizedPrincipalType === 'driver' ? principalId : '');
+  if (resolvedStablePassengerId.length > 160) {
+    throw new Error('Sender stable identity exceeds the maximum length');
+  }
+  const normalizedName = sanitizeInput(String(senderInfo.name || 'Anonymous').trim());
+  if (!normalizedName || normalizedName.length > 100) {
+    throw new Error('Sender name must be between 1 and 100 characters');
+  }
 
   return {
     userId: principalId,
     principalId,
     principalType: normalizedPrincipalType || 'passenger',
-    name: (senderInfo.name || 'Anonymous').trim(),
+    name: normalizedName,
     isDriver: !!senderInfo.isDriver,
     ...(normalizedAuthUid ? { authUid: normalizedAuthUid } : {}),
     ...(resolvedStablePassengerId ? { stablePassengerId: resolvedStablePassengerId } : {}),
@@ -480,9 +550,10 @@ const sanitizeReplyContext = (replyTo) => {
   if (!replyMessageId) {
     return null;
   }
+  validateMessageId(replyMessageId);
 
   const replySenderName = typeof replyTo.senderName === 'string' && replyTo.senderName.trim().length > 0
-    ? sanitizeInput(replyTo.senderName.trim())
+    ? sanitizeInput(replyTo.senderName.trim()).slice(0, 100)
     : 'Participant';
 
   const replyPreview = typeof replyTo.previewText === 'string'
@@ -491,6 +562,7 @@ const sanitizeReplyContext = (replyTo) => {
   const replyIdempotencyKey = typeof replyTo.idempotencyKey === 'string'
     ? replyTo.idempotencyKey.trim()
     : '';
+  if (replyIdempotencyKey) validateMessageId(replyIdempotencyKey);
 
   return {
     messageId: replyMessageId,
@@ -569,31 +641,39 @@ const sendMessageDirect = async (payload, dbInstance = realtimeDb) => {
     const validatedMessage = validateMessageText(payload.text);
     const validatedSender = validateSenderInfo(payload.senderInfo || {});
 
-    const messagesRef = db.ref(`chats/${validatedTourId}/messages`);
-    const pushedRef = typeof messagesRef?.push === 'function' && !payload.messageId ? messagesRef.push() : null;
-    const messageId = payload.messageId || pushedRef?.key || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const { messageId, idempotencyKey } = resolveMessageWriteIdentity(payload, 'msg');
+    const clientCreatedAt = resolveClientCreatedAt(payload.timestamp);
     const payloadForDb = {
+      schemaVersion: CHAT_MESSAGE_SCHEMA_VERSION,
       text: validatedMessage,
       senderName: validatedSender.name,
       senderId: validatedSender.principalId,
       senderType: validatedSender.principalType,
       ...(validatedSender.stablePassengerId ? { senderStableId: validatedSender.stablePassengerId } : {}),
-      timestamp: payload.timestamp || new Date().toISOString(),
+      timestamp: { '.sv': 'timestamp' },
+      clientCreatedAt,
       isDriver: validatedSender.isDriver,
       status: 'sent',
-      idempotencyKey: payload.idempotencyKey || messageId,
+      type: 'text',
+      idempotencyKey,
     };
     const replyContext = sanitizeReplyContext(payload.replyTo);
     if (replyContext) {
       payloadForDb.replyTo = replyContext;
     }
 
-    if (pushedRef?.set) {
-      await pushedRef.set(payloadForDb);
-    } else {
-      await db.ref(`chats/${validatedTourId}/messages/${messageId}`).set(payloadForDb);
-    }
-    return { success: true, message: { id: messageId, ...payloadForDb } };
+    const storedMessage = await writeMessageOnce(
+      db.ref(`chats/${validatedTourId}/messages/${messageId}`),
+      payloadForDb,
+    );
+    return {
+      success: true,
+      message: normalizeMessageTimestamp({
+        id: messageId,
+        ...storedMessage,
+        timestamp: parseTimestampToMillis(storedMessage.timestamp) ?? clientCreatedAt,
+      }),
+    };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -608,31 +688,39 @@ const sendInternalMessageDirect = async (payload, dbInstance = realtimeDb) => {
     const validatedMessage = validateMessageText(payload.text);
     const validatedSender = validateSenderInfo(payload.senderInfo || {});
 
-    const messagesRef = db.ref(`internal_chats/${validatedTourId}/messages`);
-    const pushedRef = typeof messagesRef?.push === 'function' && !payload.messageId ? messagesRef.push() : null;
-    const messageId = payload.messageId || pushedRef?.key || `int_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const { messageId, idempotencyKey } = resolveMessageWriteIdentity(payload, 'int');
+    const clientCreatedAt = resolveClientCreatedAt(payload.timestamp);
     const payloadForDb = {
+      schemaVersion: CHAT_MESSAGE_SCHEMA_VERSION,
       text: validatedMessage,
       senderName: validatedSender.name,
       senderId: validatedSender.principalId,
       senderType: validatedSender.principalType,
       ...(validatedSender.stablePassengerId ? { senderStableId: validatedSender.stablePassengerId } : {}),
-      timestamp: payload.timestamp || new Date().toISOString(),
+      timestamp: { '.sv': 'timestamp' },
+      clientCreatedAt,
       isDriver: true,
       status: 'sent',
-      idempotencyKey: payload.idempotencyKey || messageId,
+      type: 'text',
+      idempotencyKey,
     };
     const replyContext = sanitizeReplyContext(payload.replyTo);
     if (replyContext) {
       payloadForDb.replyTo = replyContext;
     }
 
-    if (pushedRef?.set) {
-      await pushedRef.set(payloadForDb);
-    } else {
-      await db.ref(`internal_chats/${validatedTourId}/messages/${messageId}`).set(payloadForDb);
-    }
-    return { success: true, message: { id: messageId, ...payloadForDb } };
+    const storedMessage = await writeMessageOnce(
+      db.ref(`internal_chats/${validatedTourId}/messages/${messageId}`),
+      payloadForDb,
+    );
+    return {
+      success: true,
+      message: normalizeMessageTimestamp({
+        id: messageId,
+        ...storedMessage,
+        timestamp: parseTimestampToMillis(storedMessage.timestamp) ?? clientCreatedAt,
+      }),
+    };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -653,11 +741,11 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb,
       hasReplyTo: Boolean(options.replyTo),
     });
 
-    const localMessageId = options.messageId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const localMessageId = validateMessageId(options.messageId || createLocalMessageId('msg'));
     const idempotencyKey = options.idempotencyKey || localMessageId;
     const payload = {
       tourId: validatedTourId,
-      messageId: options.messageId || null,
+      messageId: localMessageId,
       text: validatedMessage,
       senderInfo: validatedSender,
       timestamp: new Date().toISOString(),
@@ -708,6 +796,12 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb,
       id: idempotencyKey,
       type: 'CHAT_MESSAGE',
       tourId: validatedTourId,
+      scope: {
+        tourId: validatedTourId,
+        principalId: validatedSender.principalId,
+        role: validatedSender.principalType === 'driver' ? 'driver' : 'passenger',
+        authUid: validatedSender.authUid || null,
+      },
       createdAt: payload.timestamp,
       payload,
       attempts: 0,
@@ -744,7 +838,7 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb,
 };
 
 // Send an image message to the tour chat
-const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstance = realtimeDb) => {
+const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstance = realtimeDb, options = {}) => {
   try {
     // Validate inputs
     const validatedTourId = validateTourId(tourId);
@@ -757,9 +851,14 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
       });
       return { success: false, error: 'Image URL is required' };
     }
+    if (imageUrl.trim().length > 2048) {
+      return { success: false, error: 'Image URL exceeds the maximum length' };
+    }
 
     // Validate caption length if provided
-    const sanitizedCaption = caption ? sanitizeInput(caption.trim()) : '';
+    const sanitizedCaption = caption
+      ? assertTextPassesModeration(sanitizeInput(caption.trim()), 'Caption')
+      : '';
     if (sanitizedCaption.length > MAX_CAPTION_LENGTH) {
       logChatImageDbEvent('warn', 'chat_image_message_caption_too_long', {
         tourId: validatedTourId,
@@ -779,25 +878,41 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
       return { success: false, error: 'Realtime database unavailable' };
     }
 
-    const messagesRef = db.ref(`chats/${validatedTourId}/messages`);
-    const newMessageRef = messagesRef.push();
-    const optimisticMessage = buildImageMessagePayload(imageUrl.trim(), sanitizedCaption, validatedSender, newMessageRef.key);
-
-    const { id, status, ...payloadForDb } = optimisticMessage;
-    payloadForDb.status = 'sent';
+    const { messageId, idempotencyKey } = resolveMessageWriteIdentity({
+      messageId: options.messageId,
+      idempotencyKey: options.idempotencyKey,
+    }, 'img');
+    const clientCreatedAt = Date.now();
+    const newMessageRef = db.ref(`chats/${validatedTourId}/messages/${messageId}`);
+    const optimisticMessage = buildImageMessagePayload(imageUrl.trim(), sanitizedCaption, validatedSender, messageId);
+    const payloadForDb = {
+      schemaVersion: CHAT_MESSAGE_SCHEMA_VERSION,
+      text: sanitizedCaption,
+      senderName: validatedSender.name,
+      senderId: validatedSender.principalId,
+      senderType: validatedSender.principalType,
+      ...(validatedSender.stablePassengerId ? { senderStableId: validatedSender.stablePassengerId } : {}),
+      timestamp: { '.sv': 'timestamp' },
+      clientCreatedAt,
+      isDriver: validatedSender.isDriver,
+      status: 'sent',
+      type: 'image',
+      idempotencyKey,
+      imageUrl: imageUrl.trim(),
+      thumbnailUrl: imageUrl.trim(),
+    };
 
     // Send to database with timeout protection
-    const serverPromise = Promise.race([
-      newMessageRef.set(payloadForDb),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Image message send timeout')), 30000)
-      )
-    ]);
+    const serverPromise = withTimeout(
+      writeMessageOnce(newMessageRef, payloadForDb),
+      30000,
+      'Image message send timeout',
+    );
 
     serverPromise.catch((error) => {
       logChatImageDbEvent('error', 'chat_image_message_write_failed', {
         tourId: validatedTourId,
-        messageId: newMessageRef.key || null,
+        messageId,
         sender: summarizeSenderForDbLog(validatedSender),
         captionLength: sanitizedCaption.length,
         imageUrlLength: imageUrl.trim().length,
@@ -808,7 +923,16 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
       }
     });
 
-    return { success: true, message: optimisticMessage, serverPromise };
+    return {
+      success: true,
+      message: {
+        ...optimisticMessage,
+        schemaVersion: CHAT_MESSAGE_SCHEMA_VERSION,
+        clientCreatedAt,
+        idempotencyKey,
+      },
+      serverPromise,
+    };
   } catch (error) {
     logChatImageDbEvent('error', 'chat_image_message_build_failed', {
       tourId: typeof tourId === 'string' ? tourId.trim() : null,
@@ -837,11 +961,11 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
 
     const db = dbInstance || realtimeDb;
 
-    const localMessageId = options.messageId || `int_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const localMessageId = validateMessageId(options.messageId || createLocalMessageId('int'));
     const idempotencyKey = options.idempotencyKey || localMessageId;
     const payload = {
       tourId: validatedTourId,
-      messageId: options.messageId || null,
+      messageId: localMessageId,
       text: validatedMessage,
       senderInfo: { ...validatedSender, isDriver: true },
       timestamp: new Date().toISOString(),
@@ -891,6 +1015,12 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
       id: idempotencyKey,
       type: 'INTERNAL_CHAT_MESSAGE',
       tourId: validatedTourId,
+      scope: {
+        tourId: validatedTourId,
+        principalId: validatedSender.principalId,
+        role: 'driver',
+        authUid: validatedSender.authUid || null,
+      },
       createdAt: payload.timestamp,
       payload,
       attempts: 0,
@@ -1313,6 +1443,13 @@ const subscribeToTypingIndicators = (tourId, currentUserId, onTypingUpdate, dbIn
     }
 
     onTypingUpdate(typingUsers);
+  }, (error) => {
+    logChatEvent('warn', 'typing_subscription_failed', {
+      tourId: validatedTourId,
+      scope,
+      error: summarizeErrorForDbLog(error),
+    });
+    options.onError?.(error);
   });
 
   return () => {
@@ -1353,7 +1490,7 @@ const setOnlinePresence = async (tourId, userId, userName, isOnline, isDriver = 
       });
 
       // Set up disconnect handler to mark user as offline
-      presenceRef.onDisconnect().update({
+      await presenceRef.onDisconnect().update({
         online: false,
         lastSeen: Date.now(),
       });
@@ -1413,6 +1550,13 @@ const subscribeToPresence = (tourId, onPresenceUpdate, dbInstance = realtimeDb, 
     }
 
     onPresenceUpdate({ users, onlineCount, totalCount: users.length });
+  }, (error) => {
+    logChatEvent('warn', 'presence_subscription_failed', {
+      tourId: validatedTourId,
+      scope,
+      error: summarizeErrorForDbLog(error),
+    });
+    options.onError?.(error);
   });
 
   return () => {
@@ -1476,6 +1620,7 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtime
         error: summarizeErrorForDbLog(error),
       });
       onMessagesUpdate([]); // Provide empty array on error
+      options.onError?.(error);
     });
 
     // Return unsubscribe function
@@ -1513,34 +1658,62 @@ const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance = re
     return () => {};
   }
 
-  const messagesRef = db.ref(`internal_chats/${tourId}/messages`);
+  let validatedTourId;
+  try {
+    validatedTourId = validateTourId(tourId);
+  } catch (error) {
+    logChatEvent('error', 'internal_chat_subscription_setup_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      error: summarizeErrorForDbLog(error),
+    });
+    options.onError?.(error);
+    return () => {};
+  }
+
+  const messagesRef = db.ref(`internal_chats/${validatedTourId}/messages`);
   const messagesQuery = buildTimestampQuery(messagesRef, {
     limit: normalizeMessageLimit(options.limit, DEFAULT_LIVE_MESSAGE_LIMIT),
   });
   logChatEvent('info', 'internal_chat_subscription_started', {
-    tourId,
+    tourId: validatedTourId,
     limit: normalizeMessageLimit(options.limit, DEFAULT_LIVE_MESSAGE_LIMIT),
   });
 
   const listener = messagesQuery.on('value', (snapshot) => {
-    const messages = readMessagesFromSnapshot(snapshot);
-    const reactionSummary = summarizeMessagesForReactionDebug(messages);
-    logReactionEvent('info', 'reaction_subscription_snapshot', {
-      tourId,
-      chatType: 'internal',
-      ...reactionSummary,
+    try {
+      const messages = readMessagesFromSnapshot(snapshot);
+      const reactionSummary = summarizeMessagesForReactionDebug(messages);
+      logReactionEvent('info', 'reaction_subscription_snapshot', {
+        tourId: validatedTourId,
+        chatType: 'internal',
+        ...reactionSummary,
+      });
+      onMessagesUpdate(messages);
+    } catch (error) {
+      logChatEvent('error', 'internal_chat_subscription_snapshot_processing_failed', {
+        tourId: validatedTourId,
+        error: summarizeErrorForDbLog(error),
+      });
+      onMessagesUpdate([]);
+      options.onError?.(error);
+    }
+  }, (error) => {
+    logChatEvent('error', 'internal_chat_subscription_failed', {
+      tourId: validatedTourId,
+      error: summarizeErrorForDbLog(error),
     });
-    onMessagesUpdate(messages);
+    onMessagesUpdate([]);
+    options.onError?.(error);
   });
 
   return () => {
     try {
       const refForOff = typeof messagesQuery?.off === 'function' ? messagesQuery : messagesRef;
       refForOff.off('value', listener);
-      logChatEvent('debug', 'internal_chat_subscription_stopped', { tourId });
+      logChatEvent('debug', 'internal_chat_subscription_stopped', { tourId: validatedTourId });
     } catch (error) {
       logChatEvent('warn', 'internal_chat_subscription_unsubscribe_failed', {
-        tourId,
+        tourId: validatedTourId,
         error: summarizeErrorForDbLog(error),
       });
     }
@@ -1667,6 +1840,43 @@ const getChatMessages = async (tourId, limit = 50, dbInstance = realtimeDb) => {
   }
 };
 
+const getChatMessageById = async ({
+  tourId,
+  messageId,
+  scope = 'group',
+  dbInstance = realtimeDb,
+} = {}) => {
+  try {
+    const db = dbInstance || realtimeDb;
+    if (!db) return { success: false, error: 'Realtime database unavailable', message: null };
+
+    const safeMessageId = validateMessageId(messageId);
+    const messagePath = `${getChatMessagesPath(tourId, scope)}/${safeMessageId}`;
+    const snapshot = await db.ref(messagePath).once('value');
+    if (!snapshot?.exists?.()) {
+      return { success: true, message: null };
+    }
+
+    const raw = snapshot.val();
+    if (!raw || typeof raw !== 'object') {
+      return { success: true, message: null };
+    }
+
+    return {
+      success: true,
+      message: normalizeMessageTimestamp({ id: safeMessageId, ...raw }),
+    };
+  } catch (error) {
+    logChatEvent('warn', 'chat_message_target_fetch_failed', {
+      tourId: typeof tourId === 'string' ? tourId.trim() : null,
+      messageId: maskUserId(messageId),
+      scope: normalizeChatScope(scope),
+      error: summarizeErrorForDbLog(error),
+    });
+    return { success: false, error: 'Message could not be loaded', message: null };
+  }
+};
+
 const getChatMessagesPage = async ({
   tourId,
   scope = 'group',
@@ -1743,8 +1953,8 @@ const getMessageTextForCopy = (message) => {
   return message.text || '';
 };
 
-// Delete a message (only for message owner or driver)
-const deleteMessage = async (tourId, messageId, requestingUserId, isDriver = false, dbInstance = realtimeDb) => {
+// Soft-delete a group message owned by the active principal.
+const deleteMessage = async (tourId, messageId, requestingUserId, _isDriver = false, dbInstance = realtimeDb) => {
   try {
     // Validate inputs
     const validatedTourId = validateTourId(tourId);
@@ -1759,14 +1969,14 @@ const deleteMessage = async (tourId, messageId, requestingUserId, isDriver = fal
 
     const messageRef = db.ref(`chats/${validatedTourId}/messages/${validatedMessageId}`);
 
-    // Verify the requesting user owns the message or is a driver
+    // Firebase rules intentionally allow only the original sender to mutate a message.
     const snapshot = await messageRef.once('value');
     if (!snapshot.exists()) {
       return { success: false, error: 'Message not found' };
     }
 
     const messageData = snapshot.val();
-    if (messageData.senderId !== requestingUserId && !isDriver) {
+    if (messageData.senderId !== requestingUserId && messageData.senderStableId !== requestingUserId) {
       return { success: false, error: 'You can only delete your own messages' };
     }
 
@@ -1774,6 +1984,8 @@ const deleteMessage = async (tourId, messageId, requestingUserId, isDriver = fal
     await messageRef.update({
       deleted: true,
       text: '',
+      imageUrl: null,
+      thumbnailUrl: null,
       deletedAt: new Date().toISOString(),
       deletedBy: requestingUserId,
     });
@@ -1784,7 +1996,7 @@ const deleteMessage = async (tourId, messageId, requestingUserId, isDriver = fal
       tourId: typeof tourId === 'string' ? tourId.trim() : null,
       messageId: typeof messageId === 'string' ? messageId.trim() : null,
       maskedUserId: maskUserId(requestingUserId),
-      isDriver: Boolean(isDriver),
+      isDriver: Boolean(_isDriver),
       error: summarizeErrorForDbLog(error),
     });
     return { success: false, error: error.message };
@@ -1821,6 +2033,7 @@ module.exports = {
 
   // Utilities
   getChatMessages,
+  getChatMessageById,
   getChatMessagesPage,
   getMessageTextForCopy,
   deleteMessage,

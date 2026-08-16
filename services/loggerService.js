@@ -5,8 +5,13 @@ import { createPersistenceProvider } from './persistenceProvider';
 import opsAlertModule from './opsAlertService';
 import { parseTimestampMs } from './timeUtils';
 
-// Centralized persistence with SecureStore/AsyncStorage fallback for durable logs.
-const logStorage = createPersistenceProvider({ namespace: 'LLT_LOGS' });
+// Logs can grow beyond secure key/value limits, so keep them in durable AsyncStorage.
+const logStorage = createPersistenceProvider({
+  namespace: 'LLT_LOGS',
+  preferredStorage: 'async-storage',
+  allowMemoryFallback: false,
+  migrateFrom: ['secure-store'],
+});
 const {
   buildOpsAlertFromLog,
   createOrUpdateOpsAlert,
@@ -340,7 +345,7 @@ class Logger {
 
   isServerRouteWritable(log) {
     const routeUserId = log?.routeUserId || 'anonymous';
-    if (routeUserId === 'anonymous') return true;
+    if (routeUserId === 'anonymous') return false;
     const currentAuthUid = this.getCurrentAuthUid();
     return Boolean(currentAuthUid && routeUserId === currentAuthUid);
   }

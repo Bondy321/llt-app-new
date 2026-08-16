@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 const {
   sendMessage,
+  sendMessageDirect,
+  sendImageMessage,
   sendInternalDriverMessage,
   markChatAsRead,
   markInternalChatAsRead,
@@ -14,8 +16,52 @@ const {
   subscribeToPresence,
   setTypingStatus,
   setOnlinePresence,
+  getChatMessageById,
   getChatMessagesPage,
+  deleteMessage,
 } = require('../services/chatService');
+
+test('sendImageMessage applies the same moderation gate as text chat', async () => {
+  const result = await sendImageMessage(
+    'tour-123',
+    'https://example.com/photo.jpg',
+    'kys',
+    { name: 'Alex', userId: 'driver:alex', principalType: 'driver', isDriver: true },
+    createMockRealtimeDb(),
+  );
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /Caption contains wording/);
+});
+
+test('sendImageMessage writes a captionless photo once at its deterministic versioned path', async () => {
+  const mockDb = createMockRealtimeDb();
+  const sender = {
+    name: 'Alex',
+    principalId: 'driver:alex',
+    principalType: 'driver',
+    isDriver: true,
+  };
+  const result = await sendImageMessage(
+    'tour-photo',
+    'https://example.com/photo.jpg',
+    '',
+    sender,
+    mockDb,
+    { messageId: 'img-stable-1', idempotencyKey: 'img-stable-1' },
+  );
+  await result.serverPromise;
+
+  assert.equal(result.success, true);
+  const writeRef = mockDb.refCalls.find((call) => call.path === 'chats/tour-photo/messages/img-stable-1');
+  assert.ok(writeRef);
+  const payload = writeRef.transactionCalls[0].next;
+  assert.equal(payload.schemaVersion, 2);
+  assert.equal(payload.type, 'image');
+  assert.equal(payload.text, '');
+  assert.equal(payload.idempotencyKey, 'img-stable-1');
+  assert.deepEqual(payload.timestamp, { '.sv': 'timestamp' });
+});
 
 const createMockRealtimeDb = (initialData = {}) => {
   const refCalls = [];
@@ -118,7 +164,7 @@ const createMockRealtimeDb = (initialData = {}) => {
     refCalls,
     data,
     ref(path) {
-      const context = { path, setCalls: [], removeCalls: 0, updateCalls: [], pushCalls: [] };
+      const context = { path, setCalls: [], removeCalls: 0, updateCalls: [], transactionCalls: [], pushCalls: [] };
 
       context.set = async (value) => {
         context.setCalls.push(cloneValue(value));
@@ -146,6 +192,7 @@ const createMockRealtimeDb = (initialData = {}) => {
       context.transaction = async (updater) => {
         const current = cloneValue(getValue(path));
         const next = updater(current);
+        context.transactionCalls.push({ current, next: cloneValue(next) });
         if (next === undefined) {
           return { committed: false, snapshot: buildSnapshot(path) };
         }
@@ -212,6 +259,40 @@ const createMockRealtimeDb = (initialData = {}) => {
   };
 };
 
+test('notification target lookup reads one exact message without scanning chat history', async () => {
+  const mockDb = createMockRealtimeDb({
+    chats: {
+      'tour-target': {
+        messages: {
+          'message-target': {
+            text: 'Important pickup update',
+            timestamp: '2026-08-13T08:00:00.000Z',
+          },
+        },
+      },
+    },
+  });
+
+  const result = await getChatMessageById({
+    tourId: 'tour-target',
+    messageId: 'message-target',
+    dbInstance: mockDb,
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.message.id, 'message-target');
+  assert.equal(result.message.text, 'Important pickup update');
+  assert.equal(mockDb.refCalls.length, 1);
+  assert.equal(mockDb.refCalls[0].path, 'chats/tour-target/messages/message-target');
+
+  const unsafe = await getChatMessageById({
+    tourId: 'tour-target',
+    messageId: '../message-target',
+    dbInstance: mockDb,
+  });
+  assert.equal(unsafe.success, false);
+});
+
 const assertNoReactionParentWrites = (refCalls, tourId, messageId, emoji) => {
   const forbiddenPaths = new Set([
     `chats/${tourId}/messages/${messageId}`,
@@ -252,12 +333,15 @@ test('sendMessage builds payload with sender info and driver flag', async () => 
 
   const refCall = mockDb.refCalls[0];
   assert.ok(refCall);
-  assert.equal(refCall.setCalls[0].text, 'Hello');
-  assert.equal(refCall.setCalls[0].senderName, 'Alex');
-  assert.equal(refCall.setCalls[0].senderId, 'driver:alex');
-  assert.equal(refCall.setCalls[0].senderStableId, 'driver:alex');
-  assert.equal(refCall.setCalls[0].timestamp, result.message.timestamp);
-  assert.equal(refCall.setCalls[0].isDriver, true);
+  const written = refCall.transactionCalls[0].next;
+  assert.equal(written.schemaVersion, 2);
+  assert.equal(written.text, 'Hello');
+  assert.equal(written.senderName, 'Alex');
+  assert.equal(written.senderId, 'driver:alex');
+  assert.equal(written.senderStableId, 'driver:alex');
+  assert.deepEqual(written.timestamp, { '.sv': 'timestamp' });
+  assert.equal(written.idempotencyKey, result.message.id);
+  assert.equal(written.isDriver, true);
 });
 
 test('sendMessage rejects empty content', async () => {
@@ -296,7 +380,7 @@ test('sendMessage persists sanitized reply context metadata', async () => {
 
   const refCall = mockDb.refCalls[0];
   assert.ok(refCall);
-  assert.deepEqual(refCall.setCalls[0].replyTo, {
+  assert.deepEqual(refCall.transactionCalls[0].next.replyTo, {
     messageId: 'msg-42',
     idempotencyKey: 'offline-msg-42',
     senderName: 'Driver Bondy',
@@ -336,9 +420,9 @@ test('sendInternalDriverMessage writes senderStableId for driver principals when
   assert.equal(result.success, true);
   const writeRef = mockDb.refCalls.find((refCall) => refCall.path === 'internal_chats/tour-internal/messages/int-driver-1');
   assert.ok(writeRef);
-  assert.equal(writeRef.setCalls.length, 1);
-  assert.equal(writeRef.setCalls[0].senderType, 'driver');
-  assert.equal(writeRef.setCalls[0].senderStableId, 'driver:BONDY');
+  assert.equal(writeRef.transactionCalls.length, 1);
+  assert.equal(writeRef.transactionCalls[0].next.senderType, 'driver');
+  assert.equal(writeRef.transactionCalls[0].next.senderStableId, 'driver:BONDY');
 });
 
 
@@ -362,6 +446,90 @@ test('markInternalChatAsRead writes timestamp to internal chat lastRead path', a
   const refCall = mockDb.refCalls[0];
   assert.equal(refCall.path, 'internal_chats/tour-88/lastRead/driver:D-3');
   assert.ok(new Date(refCall.setCalls[0]).getTime());
+});
+
+test('chat replay uses one deterministic Firebase key and never duplicates an acknowledged message', async () => {
+  const mockDb = createMockRealtimeDb();
+  const senderInfo = {
+    name: 'Jamie',
+    principalId: 'passenger-9',
+    principalType: 'passenger',
+    stablePassengerId: 'passenger-9',
+  };
+  const payload = {
+    tourId: 'tour-idempotent',
+    messageId: 'msg-stable-1',
+    idempotencyKey: 'msg-stable-1',
+    text: 'Only once',
+    timestamp: '2026-08-13T09:00:00.000Z',
+    senderInfo,
+  };
+
+  const first = await sendMessageDirect(payload, mockDb);
+  const replay = await sendMessageDirect(payload, mockDb);
+
+  assert.equal(first.success, true);
+  assert.equal(replay.success, true);
+  assert.deepEqual(Object.keys(mockDb.data.chats['tour-idempotent'].messages), ['msg-stable-1']);
+  const writes = mockDb.refCalls.filter((call) => call.path === 'chats/tour-idempotent/messages/msg-stable-1');
+  assert.equal(writes.length, 2);
+  assert.equal(writes[0].transactionCalls[0].next.idempotencyKey, 'msg-stable-1');
+  assert.equal(writes[1].transactionCalls[0].next, null);
+});
+
+test('chat rejects mismatched message and idempotency identities before writing', async () => {
+  const mockDb = createMockRealtimeDb();
+  const result = await sendMessageDirect({
+    tourId: 'tour-idempotent',
+    messageId: 'msg-one',
+    idempotencyKey: 'msg-two',
+    text: 'Mismatch',
+    senderInfo: {
+      name: 'Jamie',
+      principalId: 'passenger-9',
+      principalType: 'passenger',
+      stablePassengerId: 'passenger-9',
+    },
+  }, mockDb);
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /idempotency key must match/i);
+  assert.equal(mockDb.refCalls.length, 0);
+});
+
+test('message deletion is owner-only and clears retained photo download URLs', async () => {
+  const mockDb = createMockRealtimeDb({
+    chats: {
+      'tour-delete': {
+        messages: {
+          'img-1': {
+            senderId: 'passenger-1',
+            senderStableId: 'passenger-1',
+            text: '',
+            type: 'image',
+            imageUrl: 'https://example.com/full.jpg',
+            thumbnailUrl: 'https://example.com/thumb.jpg',
+          },
+        },
+      },
+    },
+  });
+
+  const denied = await deleteMessage('tour-delete', 'img-1', 'driver:BONDY', true, mockDb);
+  assert.equal(denied.success, false);
+
+  const allowed = await deleteMessage('tour-delete', 'img-1', 'passenger-1', false, mockDb);
+  assert.equal(allowed.success, true);
+  const messageRefs = mockDb.refCalls.filter((call) => call.path === 'chats/tour-delete/messages/img-1');
+  assert.equal(messageRefs[0].updateCalls.length, 0);
+  assert.deepEqual(messageRefs[1].updateCalls[0], {
+    deleted: true,
+    text: '',
+    imageUrl: null,
+    thumbnailUrl: null,
+    deletedAt: messageRefs[1].updateCalls[0].deletedAt,
+    deletedBy: 'passenger-1',
+  });
 });
 
 test('internal driver typing and presence use internal chat status paths', async () => {

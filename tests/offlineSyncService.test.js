@@ -2,12 +2,48 @@ const test = require('node:test');
 const assert = require('node:assert');
 const offlineSyncService = require('../services/offlineSyncService');
 
+const testScope = (tourId, principalId = 'test-principal', role = 'passenger') => ({
+  tourId,
+  principalId,
+  role,
+  authUid: 'test-auth-uid',
+});
+const rawQueueApi = {
+  enqueueAction: offlineSyncService.enqueueAction,
+  getQueuedActions: offlineSyncService.getQueuedActions,
+  getQueueStats: offlineSyncService.getQueueStats,
+  updateAction: offlineSyncService.updateAction,
+  removeAction: offlineSyncService.removeAction,
+  retryFailedActions: offlineSyncService.retryFailedActions,
+  replayQueue: offlineSyncService.replayQueue,
+};
+
+// Most tests in this file predate session isolation and intentionally exercise
+// whole-queue mechanics. Keep those assertions explicit while the isolation
+// tests below call the raw scoped API directly.
+offlineSyncService.enqueueAction = async (action) => {
+  const scope = action.scope || testScope(action.tourId);
+  await offlineSyncService.setActiveSessionScope(scope);
+  return rawQueueApi.enqueueAction({ ...action, scope });
+};
+offlineSyncService.getQueuedActions = (options = {}) => rawQueueApi.getQueuedActions({ includeAll: true, ...options });
+offlineSyncService.getQueueStats = (options = {}) => rawQueueApi.getQueueStats({ includeAll: true, ...options });
+offlineSyncService.updateAction = (id, patch, options = {}) => rawQueueApi.updateAction(id, patch, { includeAll: true, ...options });
+offlineSyncService.removeAction = (id, options = {}) => rawQueueApi.removeAction(id, { includeAll: true, ...options });
+offlineSyncService.retryFailedActions = (options = {}) => rawQueueApi.retryFailedActions({ includeAll: true, ...options });
+offlineSyncService.replayQueue = async (options = {}) => {
+  const queued = await rawQueueApi.getQueuedActions({ includeAll: true });
+  const scope = options.scope || queued.data?.find((action) => action.status !== 'failed')?.scope || testScope('tour-1');
+  await offlineSyncService.setActiveSessionScope(scope);
+  return rawQueueApi.replayQueue({ ...options, scope });
+};
+
 const clearQueue = async () => {
-  const queued = await offlineSyncService.getQueuedActions();
+  const queued = await rawQueueApi.getQueuedActions({ includeAll: true });
   if (!queued.success) return;
 
   for (const action of queued.data) {
-    await offlineSyncService.removeAction(action.id);
+    await rawQueueApi.removeAction(action.id, { includeAll: true });
   }
 };
 
@@ -380,25 +416,332 @@ test('staleness label buckets are derived correctly', async () => {
 test('saveTourPack merges partial payloads without losing existing keys', async () => {
   const tourId = 'tour-merge-1';
   const role = 'passenger';
+  const packOptions = { ownerId: 'BOOKING-PACK-1' };
 
   const firstWrite = await offlineSyncService.saveTourPack(tourId, role, {
     tour: { id: tourId, name: 'Loch Tour' },
     booking: { reference: 'ABC123' },
-  });
+  }, packOptions);
   assert.equal(firstWrite.success, true);
 
   const secondWrite = await offlineSyncService.saveTourPack(tourId, role, {
     itinerary: { stops: [{ name: 'Luss' }] },
-  });
+  }, packOptions);
   assert.equal(secondWrite.success, true);
 
-  const cached = await offlineSyncService.getTourPack(tourId, role);
+  const cached = await offlineSyncService.getTourPack(tourId, role, packOptions);
   assert.equal(cached.success, true);
   assert.deepEqual(cached.data.tour, { id: tourId, name: 'Loch Tour' });
   assert.deepEqual(cached.data.booking, { reference: 'ABC123' });
   assert.deepEqual(cached.data.itinerary, { stops: [{ name: 'Luss' }] });
   assert.equal(typeof cached.data.fetchedAt, 'string');
   assert.equal(typeof cached.data.sourceVersion, 'number');
+});
+
+test('queue mutations serialize concurrent enqueues without dropping actions', async () => {
+  await clearQueue();
+  const scope = testScope('tour-concurrent', 'passenger-concurrent');
+  await offlineSyncService.setActiveSessionScope(scope);
+
+  const results = await Promise.all(Array.from({ length: 24 }, (_, index) => rawQueueApi.enqueueAction({
+    id: `concurrent-${index}`,
+    type: 'CHAT_MESSAGE',
+    tourId: scope.tourId,
+    scope,
+    payload: { text: `message-${index}` },
+  })));
+
+  assert.equal(results.every((result) => result.success), true);
+  const queued = await rawQueueApi.getQueuedActions({ scope });
+  assert.equal(queued.data.length, 24);
+  assert.equal(new Set(queued.data.map((action) => action.id)).size, 24);
+});
+
+test('replay processes only the active principal and retains another session queue', async () => {
+  await clearQueue();
+  const scopeA = testScope('tour-shared-device', 'passenger-a');
+  const scopeB = testScope('tour-shared-device', 'passenger-b');
+  await offlineSyncService.setActiveSessionScope(null);
+  await rawQueueApi.enqueueAction({
+    id: 'scope-a-message',
+    type: 'CHAT_MESSAGE',
+    tourId: scopeA.tourId,
+    scope: scopeA,
+    payload: { text: 'from-a' },
+  });
+  await rawQueueApi.enqueueAction({
+    id: 'scope-b-message',
+    type: 'CHAT_MESSAGE',
+    tourId: scopeB.tourId,
+    scope: scopeB,
+    payload: { text: 'from-b' },
+  });
+  await offlineSyncService.setActiveSessionScope(scopeB);
+
+  const delivered = [];
+  const replay = await rawQueueApi.replayQueue({
+    scope: scopeB,
+    services: {
+      chatService: {
+        sendMessageDirect: async (payload) => {
+          delivered.push(payload.text);
+          return { success: true };
+        },
+      },
+    },
+  });
+
+  assert.equal(replay.success, true);
+  assert.deepEqual(delivered, ['from-b']);
+  assert.equal(replay.data.heldForOtherSessions, 1);
+  const remaining = await rawQueueApi.getQueuedActions({ includeAll: true });
+  assert.deepEqual(remaining.data.map((action) => action.id), ['scope-a-message']);
+});
+
+test('active session cannot mutate or enqueue actions owned by another principal', async () => {
+  await clearQueue();
+  const scopeA = testScope('tour-shared-device', 'passenger-a');
+  const scopeB = testScope('tour-shared-device', 'passenger-b');
+  await offlineSyncService.setActiveSessionScope(scopeA);
+  await rawQueueApi.enqueueAction({
+    id: 'scope-a-protected',
+    type: 'CHAT_MESSAGE',
+    tourId: scopeA.tourId,
+    scope: scopeA,
+    payload: { text: 'owned-by-a' },
+  });
+
+  await offlineSyncService.setActiveSessionScope(scopeB);
+  const update = await rawQueueApi.updateAction('scope-a-protected', { status: 'failed' });
+  const remove = await rawQueueApi.removeAction('scope-a-protected');
+  const foreignEnqueue = await rawQueueApi.enqueueAction({
+    id: 'forged-a-action',
+    type: 'CHAT_MESSAGE',
+    tourId: scopeA.tourId,
+    scope: scopeA,
+    payload: { text: 'forged' },
+  });
+
+  assert.equal(update.success, false);
+  assert.equal(remove.success, false);
+  assert.equal(foreignEnqueue.success, false);
+  const remaining = await rawQueueApi.getQueuedActions({ includeAll: true });
+  assert.deepEqual(remaining.data.map((action) => action.id), ['scope-a-protected']);
+});
+
+test('queue ownership remains canonical when tour-pack owner uses a booking reference', async () => {
+  await clearQueue();
+  const principalScope = testScope('tour-cache-owner', 'pax_v1:booking-a:alice@example.com');
+  await offlineSyncService.setActiveSessionScope({
+    ...principalScope,
+    cacheOwnerId: 'BOOKING-A',
+  });
+
+  const result = await rawQueueApi.enqueueAction({
+    id: 'cache-owner-action',
+    type: 'CHAT_MESSAGE',
+    tourId: principalScope.tourId,
+    scope: principalScope,
+    payload: { text: 'still mine' },
+  });
+
+  assert.equal(result.success, true);
+  const queued = await rawQueueApi.getQueuedActions({ scope: principalScope });
+  assert.deepEqual(queued.data.map((action) => action.id), ['cache-owner-action']);
+});
+
+test('replay stops before the next action when the signed-in session changes', async () => {
+  await clearQueue();
+  const scopeA = testScope('tour-session-change', 'passenger-a');
+  const scopeB = testScope('tour-session-change', 'passenger-b');
+  await offlineSyncService.setActiveSessionScope(scopeA);
+  for (const id of ['session-change-1', 'session-change-2']) {
+    await rawQueueApi.enqueueAction({
+      id,
+      type: 'CHAT_MESSAGE',
+      tourId: scopeA.tourId,
+      scope: scopeA,
+      payload: { text: id },
+    });
+  }
+
+  const delivered = [];
+  const replay = await rawQueueApi.replayQueue({
+    scope: scopeA,
+    services: {
+      chatService: {
+        sendMessageDirect: async (payload) => {
+          delivered.push(payload.text);
+          await offlineSyncService.setActiveSessionScope(scopeB);
+          return { success: true };
+        },
+      },
+    },
+  });
+
+  assert.equal(replay.success, true);
+  assert.deepEqual(delivered, ['session-change-1']);
+  const remaining = await rawQueueApi.getQueuedActions({ includeAll: true });
+  assert.deepEqual(remaining.data.map((action) => action.id), ['session-change-2']);
+});
+
+test('explicitly scoped queue subscribers never follow a later active session', async () => {
+  await clearQueue();
+  const scopeA = testScope('tour-subscription', 'passenger-a');
+  const scopeB = testScope('tour-subscription', 'passenger-b');
+  await offlineSyncService.setActiveSessionScope(null);
+  await rawQueueApi.enqueueAction({
+    id: 'subscription-a',
+    type: 'CHAT_MESSAGE',
+    tourId: scopeA.tourId,
+    scope: scopeA,
+    payload: { text: 'private-a' },
+  });
+
+  const queueSnapshots = [];
+  const statSnapshots = [];
+  const unsubscribeQueue = offlineSyncService.subscribeQueuedActions(
+    (actions) => queueSnapshots.push(actions.map((action) => action.id)),
+    { scope: scopeA },
+  );
+  const unsubscribeStats = offlineSyncService.subscribeQueueState(
+    (stats) => statSnapshots.push(stats),
+    { scope: scopeA },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await offlineSyncService.setActiveSessionScope(scopeB);
+  await rawQueueApi.enqueueAction({
+    id: 'subscription-b',
+    type: 'CHAT_MESSAGE',
+    tourId: scopeB.tourId,
+    scope: scopeB,
+    payload: { text: 'private-b' },
+  });
+  unsubscribeQueue();
+  unsubscribeStats();
+
+  assert.deepEqual(queueSnapshots.at(-1), ['subscription-a']);
+  assert.equal(statSnapshots.at(-1).total, 1);
+});
+
+test('saveTourPack serializes concurrent partial writes for the same tour pack', async () => {
+  const tourId = `tour-concurrent-${Date.now()}`;
+  const role = 'driver';
+  const packOptions = { ownerId: 'D-CONCURRENT' };
+
+  const [tourWrite, itineraryWrite, safetyWrite] = await Promise.all([
+    offlineSyncService.saveTourPack(tourId, role, { tour: { id: tourId, name: 'Concurrent tour' } }, packOptions),
+    offlineSyncService.saveTourPack(tourId, role, { itinerary: { days: [{ day: 1, content: 'Luss' }] } }, packOptions),
+    offlineSyncService.saveTourPack(tourId, role, { safety: { supportPhone: '01234 567890' } }, packOptions),
+  ]);
+
+  assert.equal(tourWrite.success, true);
+  assert.equal(itineraryWrite.success, true);
+  assert.equal(safetyWrite.success, true);
+  const cached = await offlineSyncService.getTourPack(tourId, role, packOptions);
+  assert.equal(cached.success, true);
+  assert.equal(cached.data.tour.name, 'Concurrent tour');
+  assert.equal(cached.data.itinerary.days[0].content, 'Luss');
+  assert.equal(cached.data.safety.supportPhone, '01234 567890');
+});
+
+test('tour packs and sync metadata are isolated by login identity on the same tour', async () => {
+  const tourId = `tour-shared-pack-${Date.now()}`;
+  const ownerA = { ownerId: 'BOOKING-A' };
+  const ownerB = { ownerId: 'BOOKING-B' };
+
+  await offlineSyncService.saveTourPack(tourId, 'passenger', {
+    booking: { id: 'BOOKING-A', passengerNames: ['Alice'] },
+  }, ownerA);
+  await offlineSyncService.setTourPackMeta(
+    tourId,
+    'passenger',
+    { lastSyncedAt: '2026-08-01T10:00:00.000Z' },
+    ownerA,
+  );
+  await offlineSyncService.saveTourPack(tourId, 'passenger', {
+    booking: { id: 'BOOKING-B', passengerNames: ['Bob'] },
+  }, ownerB);
+  await offlineSyncService.setTourPackMeta(
+    tourId,
+    'passenger',
+    { lastSyncedAt: '2026-08-02T10:00:00.000Z' },
+    ownerB,
+  );
+
+  const [packA, packB, missingPack, metaA, metaB] = await Promise.all([
+    offlineSyncService.getTourPack(tourId, 'passenger', ownerA),
+    offlineSyncService.getTourPack(tourId, 'passenger', ownerB),
+    offlineSyncService.getTourPack(tourId, 'passenger', { ownerId: 'BOOKING-C' }),
+    offlineSyncService.getTourPackMeta(tourId, 'passenger', ownerA),
+    offlineSyncService.getTourPackMeta(tourId, 'passenger', ownerB),
+  ]);
+
+  assert.equal(packA.data.booking.passengerNames[0], 'Alice');
+  assert.equal(packB.data.booking.passengerNames[0], 'Bob');
+  assert.equal(missingPack.data, null);
+  assert.equal(metaA.data.lastSyncedAt, '2026-08-01T10:00:00.000Z');
+  assert.equal(metaB.data.lastSyncedAt, '2026-08-02T10:00:00.000Z');
+});
+
+test('new manifest queue entries supersede stale pending updates only within the same tour and booking', async () => {
+  await clearQueue();
+  const baseAction = {
+    type: 'MANIFEST_UPDATE',
+    tourId: 'TOUR_1',
+    payload: { tourCode: 'TOUR_1', bookingRef: 'ABC123', passengerStatuses: ['PENDING'] },
+  };
+  await offlineSyncService.enqueueAction({ ...baseAction, id: 'manifest-old' });
+  await offlineSyncService.enqueueAction({
+    ...baseAction,
+    id: 'manifest-other-tour',
+    tourId: 'TOUR_2',
+    payload: { ...baseAction.payload, tourCode: 'TOUR_2' },
+  });
+  const latest = await offlineSyncService.enqueueAction({
+    ...baseAction,
+    id: 'manifest-latest',
+    payload: { ...baseAction.payload, passengerStatuses: ['BOARDED'] },
+  });
+
+  assert.equal(latest.success, true);
+  assert.equal(latest.data.supersededActionCount, 1);
+  const queued = await offlineSyncService.getQueuedActions();
+  assert.equal(queued.data.some((action) => action.id === 'manifest-old'), false);
+  assert.equal(queued.data.some((action) => action.id === 'manifest-latest'), true);
+  assert.equal(queued.data.some((action) => action.id === 'manifest-other-tour'), true);
+  await clearQueue();
+});
+
+test('manifest replay reports reconciliation outcomes before removing processed queue entries', async () => {
+  await clearQueue();
+  await offlineSyncService.enqueueAction({
+    id: 'manifest-conflict-outcome',
+    type: 'MANIFEST_UPDATE',
+    tourId: 'TOUR_1',
+    payload: { tourCode: 'TOUR_1', bookingRef: 'ABC123', passengerStatuses: ['BOARDED'] },
+  });
+
+  const replay = await offlineSyncService.replayQueue({
+    services: {
+      bookingService: {
+        applyManifestUpdateDirect: async () => ({
+          success: true,
+          reconciled: true,
+          status: 'NO_SHOW',
+          conflict: { bookingRef: 'ABC123', serverStatus: 'NO_SHOW', attemptedStatus: 'BOARDED' },
+        }),
+      },
+    },
+  });
+
+  assert.equal(replay.success, true);
+  assert.equal(replay.data.outcomes.length, 1);
+  assert.equal(replay.data.outcomes[0].reconciled, true);
+  assert.equal(replay.data.outcomes[0].conflict.serverStatus, 'NO_SHOW');
+  const queued = await offlineSyncService.getQueuedActions();
+  assert.equal(queued.data.some((action) => action.id === 'manifest-conflict-outcome'), false);
 });
 
 test('subscribeQueueState emits queue stats that drive Pending badge text', async () => {

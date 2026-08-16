@@ -1,7 +1,7 @@
 # Apple App Review Readiness Checklist
 
 Last researched: 2026-06-10
-Last repo-side update: 2026-06-10
+Last repo-side update: 2026-08-12
 
 This checklist is for the LLT iOS App Store submission. No checklist can guarantee approval because Apple review includes human judgment, changing policy interpretation, and live app behavior during review. The goal here is to remove the known rejection paths Apple documents and the app-specific risks visible in this codebase.
 
@@ -11,7 +11,7 @@ This checklist is for the LLT iOS App Store submission. No checklist can guarant
 - Bundle ID: `com.lochlomondtravel.tourapp`
 - Stack: Expo SDK 55 / React Native 0.83 / Firebase / EAS
 - iOS config: portrait, tablet support enabled, iOS deployment target `15.1`
-- Current app version/build in config: `1.0.2` / `3`
+- Current app version/build in config: `1.0.3` / `3` (latest completed iOS production binary remains `1.0.2` build `7`)
 - Account model: Firebase anonymous auth plus passenger booking reference/email or driver `D-` code
 - Apple-sensitive features found in code: account deletion, camera, photo library, photo saving, foreground location, live location sharing, push notifications, chat, user-uploaded photos, diagnostics/logs, Firebase backend, Expo Updates
 - Likely no IAP, ads, ATT, social login, HealthKit, Apple Pay, gambling, VPN, or Kids Category functionality based on current dependencies and searches

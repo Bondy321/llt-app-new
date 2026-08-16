@@ -24,7 +24,7 @@ import {
 import Clipboard from '@react-native-clipboard/clipboard';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from '../services/hapticsService';
 import {
@@ -35,6 +35,7 @@ import {
   subscribeToInternalDriverChat,
   subscribeToTypingIndicators,
   subscribeToPresence,
+  getChatMessageById,
   getChatMessagesPage,
   setTypingStatus,
   setOnlinePresence,
@@ -1825,6 +1826,7 @@ export default function ChatScreen({
   bookingData,
   tourData,
   internalDriverChat = false,
+  initialMessageId = null,
   identityBinding: identityBindingProp = null,
   canonicalIdentity: canonicalIdentityProp = null,
 }) {
@@ -1832,6 +1834,8 @@ export default function ChatScreen({
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
+  const [chatLoadError, setChatLoadError] = useState('');
+  const [subscriptionRevision, setSubscriptionRevision] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [sending, setSending] = useState(false);
   const [queueStats, setQueueStats] = useState({ pending: 0, syncing: 0, failed: 0, total: 0 });
@@ -2086,8 +2090,10 @@ export default function ChatScreen({
   const preserveScrollAfterPrependRef = useRef(null);
   const reactionFailureTimeoutRef = useRef(null);
   const imageSendResetTimeoutRef = useRef(null);
+  const imageSendAttemptRef = useRef(null);
   const inFlightReactionKeysRef = useRef(new Set());
   const pendingJumpIndexRef = useRef(null);
+  const notificationTargetRef = useRef({ key: null, status: 'idle' });
   const isAtBottomRef = useRef(true);
   const currentScrollYRef = useRef(0);
 
@@ -2332,8 +2338,10 @@ export default function ChatScreen({
     setHasMoreHistory(false);
     setNewMessagesCount(0);
     setLoading(true);
+    setChatLoadError('');
     const subscribeFn = internalDriverChat ? subscribeToInternalDriverChat : subscribeToChatMessages;
     const unsubscribe = subscribeFn(tourId, (newMessages) => {
+      setChatLoadError('');
       const reactionSummary = summarizeMessagesForReactionDebug(newMessages, currentReactionUserIds);
       logChatReactionDebug('chat_reaction_subscription_received', {
         tourId,
@@ -2367,10 +2375,21 @@ export default function ChatScreen({
       if (isAtBottomRef.current) {
         scrollToBottom(true);
       }
-    }, undefined, { limit: LIVE_CHAT_MESSAGE_LIMIT });
+    }, undefined, {
+      limit: LIVE_CHAT_MESSAGE_LIMIT,
+      onError: (error) => {
+        logger.warn('ChatScreen', 'Chat live subscription failed', {
+          tourId,
+          chatType: internalDriverChat ? 'internal' : 'group',
+          error: error?.message || String(error),
+        });
+        setLoading(false);
+        setChatLoadError('Messages are temporarily unavailable. Check your connection and retry.');
+      },
+    });
 
     return () => unsubscribe();
-  }, [tourId, internalDriverChat, scrollToBottom, getMessageTimestamp, currentReactionUserIds]);
+  }, [tourId, internalDriverChat, scrollToBottom, getMessageTimestamp, currentReactionUserIds, subscriptionRevision]);
 
   // Restore persisted chat draft for this tour/user context
   useEffect(() => {
@@ -2971,6 +2990,8 @@ export default function ChatScreen({
     try {
       const sendFn = internalDriverChat ? sendInternalDriverMessage : sendMessage;
       const result = await sendFn(tourId, trimmed, senderInfo, undefined, {
+        messageId: message.id,
+        idempotencyKey: message.idempotencyKey || message.id,
         replyTo: message.replyTo || undefined,
       });
 
@@ -3120,6 +3141,11 @@ export default function ChatScreen({
       }
 
       let imageSendStage = 'start';
+      const previousAttempt = imageSendAttemptRef.current;
+      const imageMessageId = previousAttempt?.imageUri === imageUri
+        ? previousAttempt.messageId
+        : `img_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      imageSendAttemptRef.current = { imageUri, messageId: imageMessageId };
       traceChatImageSend('send_requested', {
         imageUri: summarizeUri(imageUri),
         isUploadAlreadyInFlight: isImageUploading,
@@ -3165,6 +3191,7 @@ export default function ChatScreen({
           {
             visibility: 'group',
             uploaderName: userName,
+            idempotencyKey: `chat_photo_${imageMessageId}`,
           }
         );
 
@@ -3186,7 +3213,10 @@ export default function ChatScreen({
             senderStableIdMasked: maskIdentifier(senderInfo.stablePassengerId || senderInfo.senderStableId),
             hasImageUrl: true,
           });
-          const result = await sendImageMessage(tourId, uploadedSourceUrl, '', senderInfo);
+          const result = await sendImageMessage(tourId, uploadedSourceUrl, '', senderInfo, undefined, {
+            messageId: imageMessageId,
+            idempotencyKey: imageMessageId,
+          });
           if (!result?.success) {
             throw new Error(result?.error || 'Image message could not be sent');
           }
@@ -3202,6 +3232,7 @@ export default function ChatScreen({
             message: 'Photo sent',
             retryUri: null,
           });
+          imageSendAttemptRef.current = null;
           imageSendResetTimeoutRef.current = setTimeout(() => {
             setImageSendState((prev) => (prev.status === 'success' ? { status: 'idle', message: '', retryUri: null } : prev));
             imageSendResetTimeoutRef.current = null;
@@ -3958,7 +3989,7 @@ export default function ChatScreen({
       .filter(Boolean);
   }, [filteredSearchResults, messageLookupById, searchQuery, activeSearchResultMessageId]);
 
-  const jumpToMessageById = useCallback((messageId, fallbackId = null) => {
+  const jumpToMessageById = useCallback((messageId, fallbackId = null, { showMissingFeedback = true } = {}) => {
     const targetCandidates = [
       ...collectMessageIdCandidates(messageId),
       ...collectMessageIdCandidates(fallbackId),
@@ -3986,7 +4017,9 @@ export default function ChatScreen({
     }
 
     if (targetIndex < 0) {
-      setReplyJumpFeedbackMessage('Could not find the original message in this chat history.');
+      if (showMissingFeedback) {
+        setReplyJumpFeedbackMessage('Could not find the original message in this chat history.');
+      }
       return false;
     }
 
@@ -3999,6 +4032,63 @@ export default function ChatScreen({
     messageListRef.current?.scrollToIndex({ index: targetIndex, animated: true, viewPosition: 0.45 });
     return true;
   }, [groupedMessages, replyTargetIndex]);
+
+  const notificationTargetKey = initialMessageId && tourId
+    ? `${internalDriverChat ? 'internal' : 'group'}:${tourId}:${initialMessageId}`
+    : null;
+
+  useEffect(() => {
+    notificationTargetRef.current = { key: notificationTargetKey, status: 'idle' };
+  }, [notificationTargetKey]);
+
+  useEffect(() => {
+    let active = true;
+    if (!notificationTargetKey || loading) return undefined;
+
+    const targetState = notificationTargetRef.current;
+    if (targetState.key !== notificationTargetKey || targetState.status === 'complete'
+      || targetState.status === 'fetching' || targetState.status === 'missing') {
+      return undefined;
+    }
+
+    if (jumpToMessageById(initialMessageId, null, { showMissingFeedback: false })) {
+      notificationTargetRef.current = { key: notificationTargetKey, status: 'complete' };
+      return undefined;
+    }
+
+    if (targetState.status === 'loaded') {
+      notificationTargetRef.current = { key: notificationTargetKey, status: 'missing' };
+      setReplyJumpFeedbackMessage('This notification message is no longer available in the chat.');
+      return undefined;
+    }
+
+    notificationTargetRef.current = { key: notificationTargetKey, status: 'fetching' };
+    getChatMessageById({
+      tourId,
+      messageId: initialMessageId,
+      scope: internalDriverChat ? 'internal' : 'group',
+    }).then((result) => {
+      if (!active || notificationTargetRef.current.key !== notificationTargetKey) return;
+      if (!result?.success || !result.message) {
+        notificationTargetRef.current = { key: notificationTargetKey, status: 'missing' };
+        setReplyJumpFeedbackMessage('This notification message is no longer available in the chat.');
+        return;
+      }
+      notificationTargetRef.current = { key: notificationTargetKey, status: 'loaded' };
+      setMessages((current) => mergeMessagesById(current, [result.message]));
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    initialMessageId,
+    internalDriverChat,
+    jumpToMessageById,
+    loading,
+    notificationTargetKey,
+    tourId,
+  ]);
 
 
   useEffect(() => {
@@ -4333,11 +4423,21 @@ export default function ChatScreen({
           color={COLORS.primaryBlue}
         />
       </LinearGradient>
-      <Text style={styles.emptyText}>No messages yet</Text>
+      <Text style={styles.emptyText}>{chatLoadError ? 'Messages unavailable' : 'No messages yet'}</Text>
       <Text style={styles.emptySubtext}>
-        Say hello, share a useful update, or send a photo from the tour.
+        {chatLoadError || 'Say hello, share a useful update, or send a photo from the tour.'}
       </Text>
-      <View style={styles.emptyTips}>
+      {chatLoadError ? (
+        <TouchableOpacity
+          style={styles.emptyRetryButton}
+          onPress={() => setSubscriptionRevision((current) => current + 1)}
+          accessibilityRole="button"
+          accessibilityLabel="Retry loading messages"
+        >
+          <MaterialCommunityIcons name="refresh" size={18} color={COLORS.white} />
+          <Text style={styles.emptyRetryButtonText}>Retry</Text>
+        </TouchableOpacity>
+      ) : <View style={styles.emptyTips}>
         <View style={styles.emptyTip}>
           <MaterialCommunityIcons name="image" size={20} color={COLORS.primaryBlue} />
           <Text style={styles.emptyTipText}>Share photos</Text>
@@ -4346,9 +4446,9 @@ export default function ChatScreen({
           <MaterialCommunityIcons name="emoticon" size={20} color={COLORS.coralAccent} />
           <Text style={styles.emptyTipText}>React to messages</Text>
         </View>
-      </View>
+      </View>}
     </View>
-  ), []);
+  ), [chatLoadError]);
 
   // Error state
   if (!tourId) {
@@ -4632,7 +4732,7 @@ export default function ChatScreen({
         onDelete={handleDeleteMessage}
         onReport={handleReportMessage}
         onMuteSender={handleMuteSender}
-        canDelete={!internalDriverChat && (isMessageOwnedByCurrentSession(selectedMessage, canonicalIdentity) || isDriver)}
+        canDelete={!internalDriverChat && isMessageOwnedByCurrentSession(selectedMessage, canonicalIdentity)}
         canReport={Boolean(
           selectedMessage?.id
           && !selectedMessage?.deleted
@@ -5313,6 +5413,21 @@ const styles = StyleSheet.create({
   },
   messageImage: {
     borderRadius: RADIUS.md,
+  },
+  emptyRetryButton: {
+    marginTop: SPACING.md,
+    minHeight: 44,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: RADIUS.md,
+    backgroundColor: COLORS.primaryBlue,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.xs,
+  },
+  emptyRetryButtonText: {
+    color: COLORS.white,
+    fontWeight: '700',
   },
   imageLoading: {
     position: 'absolute',

@@ -80,15 +80,16 @@ const seedActiveTour = (mockDb, tourId, overrides = {}) => {
   };
 };
 
-test('increments participant count using a participant-row transaction', async () => {
+test('registers app membership without changing the trusted booked-passenger total', async () => {
   const mockDb = createMockRealtimeDb();
   seedActiveTour(mockDb, 'tour-1');
 
   const result = await joinTour('tour-1', 'user-1', mockDb);
 
   assert.equal(result.success, true);
-  assert.equal(result.currentParticipants, 1);
+  assert.equal(result.currentParticipants, 0);
   assert.ok(mockDb.state.tours['tour-1'].participants['user-1']);
+  assert.equal(mockDb.state.tours['tour-1'].currentParticipants, 0);
 });
 
 test('handles concurrent joins with reliable increments', async () => {
@@ -100,7 +101,7 @@ test('handles concurrent joins with reliable increments', async () => {
     joinTour('tour-abc', 'user-2', mockDb)
   ]);
 
-  assert.equal(mockDb.state.tours['tour-abc'].currentParticipants, 2);
+  assert.equal(mockDb.state.tours['tour-abc'].currentParticipants, 0);
   assert.deepEqual(
     Object.keys(mockDb.state.tours['tour-abc'].participants).sort(),
     ['user-1', 'user-2']
@@ -115,8 +116,8 @@ test('returns existing count when user rejoins the same tour', async () => {
   const repeatJoin = await joinTour('tour-rejoin', 'user-1', mockDb);
 
   assert.equal(repeatJoin.success, true);
-  assert.equal(repeatJoin.currentParticipants, 1);
-  assert.equal(mockDb.state.tours['tour-rejoin'].currentParticipants, 1);
+  assert.equal(repeatJoin.currentParticipants, 0);
+  assert.equal(mockDb.state.tours['tour-rejoin'].currentParticipants, 0);
   assert.equal(Object.keys(mockDb.state.tours['tour-rejoin'].participants).length, 1);
 });
 
@@ -130,7 +131,7 @@ test('keeps participant counts stable across repeated joins for the same user', 
     joinTour('tour-repeat', 'user-99', mockDb)
   ]);
 
-  assert.equal(mockDb.state.tours['tour-repeat'].currentParticipants, 1);
+  assert.equal(mockDb.state.tours['tour-repeat'].currentParticipants, 0);
   assert.deepEqual(Object.keys(mockDb.state.tours['tour-repeat'].participants), ['user-99']);
 });
 
@@ -173,7 +174,7 @@ test('shapes canonical booking data for display without mutating the booking rec
   assert.equal(mockDb.state.bookings.ABC123.seatNumbers.length, 1);
 });
 
-test('reconciles participant counts when missing currentParticipants', async () => {
+test('uses app-membership count only as a read-only fallback when booked count is missing', async () => {
   const mockDb = createMockRealtimeDb();
   mockDb.state.tours['tour-99'] = {
     participants: {
@@ -185,5 +186,22 @@ test('reconciles participant counts when missing currentParticipants', async () 
   const reconciled = await ensureTourParticipantCount('tour-99', mockDb);
 
   assert.equal(reconciled, 2);
-  assert.equal(mockDb.state.tours['tour-99'].currentParticipants, 2);
+  assert.equal(mockDb.state.tours['tour-99'].currentParticipants, undefined);
+});
+
+test('preserves trusted booked-passenger totals when app membership differs', async () => {
+  const mockDb = createMockRealtimeDb();
+  seedActiveTour(mockDb, 'tour-booked-total', {
+    currentParticipants: 42,
+    participants: { 'user-existing': { joinedAt: 'ts' } },
+  });
+
+  const result = await joinTour('tour-booked-total', 'user-new', mockDb);
+
+  assert.equal(result.currentParticipants, 42);
+  assert.equal(mockDb.state.tours['tour-booked-total'].currentParticipants, 42);
+  assert.deepEqual(Object.keys(mockDb.state.tours['tour-booked-total'].participants).sort(), [
+    'user-existing',
+    'user-new',
+  ]);
 });

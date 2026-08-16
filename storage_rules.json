@@ -17,6 +17,12 @@ service firebase.storage {
         && (resource == null || resource.metadata.authUid == request.auth.uid);
     }
 
+    function isUploaderDelete() {
+      return request.resource == null
+        && resource != null
+        && resource.metadata.authUid == request.auth.uid;
+    }
+
     // NOTE:
     // Private photo ownership is enforced in Realtime Database using stable identity bindings
     // (booking refs / stable passenger IDs), which Storage rules cannot query directly.
@@ -25,13 +31,15 @@ service firebase.storage {
     // Realtime Database rules.
     match /private_tour_photos/{tourId}/{ownerId}/{allPaths=**} {
       allow read: if isSignedIn();
-      allow write: if isSignedIn() && isImageUpload() && hasMatchingUploaderAuth();
+      allow write: if isSignedIn()
+        && ((isImageUpload() && hasMatchingUploaderAuth()) || isUploaderDelete());
     }
 
     // Group tour photos (including nested thumbnails folders).
     match /group_tour_photos/{tourId}/{allPaths=**} {
       allow read: if isSignedIn();
-      allow write: if isSignedIn() && isImageUpload() && hasMatchingUploaderAuth();
+      allow write: if isSignedIn()
+        && ((isImageUpload() && hasMatchingUploaderAuth()) || isUploaderDelete());
     }
   }
 }

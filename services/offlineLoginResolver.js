@@ -105,7 +105,8 @@ const resolveOfflineLoginFromCache = async ({
       };
     }
 
-    const cachedPackMetaResult = await offlineSyncService.getTourPackMeta(cachedTourId, expectedRole);
+    const packOwnerOptions = { ownerId: normalizedReference };
+    const cachedPackMetaResult = await offlineSyncService.getTourPackMeta(cachedTourId, expectedRole, packOwnerOptions);
     const lastSyncedAt = cachedPackMetaResult?.success ? cachedPackMetaResult?.data?.lastSyncedAt : null;
     if (lastSyncedAt) {
       const lastSyncedTime = parseTimestampMs(lastSyncedAt);
@@ -118,7 +119,7 @@ const resolveOfflineLoginFromCache = async ({
       }
     }
 
-    const cachedPackResult = await offlineSyncService.getTourPack(cachedTourId, expectedRole);
+    const cachedPackResult = await offlineSyncService.getTourPack(cachedTourId, expectedRole, packOwnerOptions);
     if (cachedPackResult?.success && cachedPackResult?.data) {
       const packIdentity = expectedRole === 'driver'
         ? cachedPackResult.data.driver

@@ -371,10 +371,22 @@ function normalizeSafetyAlert({ id, path, source, tourIdHint, payload }) {
   const status = normalizeSafetyStatus(payload?.status);
   const message = payload?.customMessage || payload?.message || payload?.category || 'Safety event';
 
+  const mirroredPaths = [path];
+  const privateUserId = cleanString(payload?.reporterAuthUid || payload?.userId || '');
+  const privateEventId = cleanString(payload?.clientEventId || payload?.eventId || id);
+  if (
+    privateUserId
+    && privateEventId
+    && !/[.#$/[\]]/.test(privateUserId)
+    && !/[.#$/[\]]/.test(privateEventId)
+  ) {
+    mirroredPaths.push(`logs/${privateUserId}/safety/${privateEventId}`);
+  }
+
   return {
     id: `${source}:${id}`,
     eventId: cleanString(payload?.eventId || ''),
-    paths: [path],
+    paths: mirroredPaths,
     source,
     tourId: cleanString(payload?.tourId || tourIdHint || ''),
     category: sanitizeDashboardText(payload?.category || 'safety', 'safety', 60, { redactLongIdentifiers: false }),
@@ -457,13 +469,13 @@ export function filterSafetyAlerts(alerts = [], status = 'attention') {
   });
 }
 
-export async function updateSafetyAlertStatus(database, alert, status) {
+export async function updateSafetyAlertStatus(database, alert, status, actorId = 'web-admin') {
   if (!alert?.paths?.length) throw new Error('Missing safety alert path');
   const nextStatus = normalizeSafetyStatus(status);
   const payload = {
     status: nextStatus,
     statusUpdatedAt: nowAsISOString(),
-    statusUpdatedBy: 'web-admin',
+    statusUpdatedBy: String(actorId || 'web-admin').slice(0, 128),
   };
 
   const timer = startFirebaseDebugTimer('dashboard:safety-alert:update-status', {
@@ -475,21 +487,13 @@ export async function updateSafetyAlertStatus(database, alert, status) {
   });
 
   try {
-    await Promise.all(alert.paths.map(async (path) => {
-      const pathTimer = startFirebaseDebugTimer('dashboard:safety-alert:update-status:path', {
-        alertId: alert.id,
-        path,
-        normalizedStatus: nextStatus,
-      });
-
-      try {
-        await update(ref(database, path), payload);
-        pathTimer.success();
-      } catch (error) {
-        pathTimer.failure(error);
-        throw error;
-      }
-    }));
+    const updates = {};
+    alert.paths.forEach((path) => {
+      updates[`${path}/status`] = payload.status;
+      updates[`${path}/statusUpdatedAt`] = payload.statusUpdatedAt;
+      updates[`${path}/statusUpdatedBy`] = payload.statusUpdatedBy;
+    });
+    await update(ref(database), updates);
     timer.success();
   } catch (error) {
     timer.failure(error);
@@ -510,6 +514,8 @@ export function buildBroadcastActivity(broadcasts = {}, options = {}) {
         tourId: sanitizeDashboardText(tourId, tourId, 120, { redactLongIdentifiers: false }),
         message: sanitizeDashboardText(payload?.message, 'Broadcast message', 180),
         source: sanitizeDashboardText(payload?.source || 'unknown', 'unknown', 40, { redactLongIdentifiers: false }),
+        deliveryStatus: sanitizeDashboardText(payload?.deliveryStatus || 'queued', 'queued', 40, { redactLongIdentifiers: false }),
+        recipientCount: Number.isFinite(Number(payload?.recipientCount)) ? Number(payload.recipientCount) : null,
         timestampMs,
       });
     });

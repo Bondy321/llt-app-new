@@ -45,10 +45,11 @@ const mockManifest = {
 };
 
 const mockQueueActions = [
-  { id: '1', type: 'MANIFEST_UPDATE', status: 'queued', payload: { bookingRef: bookingRefs.queued } },
-  { id: '2', type: 'MANIFEST_UPDATE', status: 'syncing', payload: { bookingRef: bookingRefs.syncing } },
-  { id: '3', type: 'MANIFEST_UPDATE', status: 'failed', payload: { bookingRef: bookingRefs.failed } },
-  { id: '4', type: 'MANIFEST_UPDATE', status: 'bad-state-value', payload: { bookingRef: bookingRefs.malformed } },
+  { id: '1', type: 'MANIFEST_UPDATE', status: 'queued', tourId: 'TOUR-1', payload: { bookingRef: bookingRefs.queued } },
+  { id: '2', type: 'MANIFEST_UPDATE', status: 'syncing', tourId: 'TOUR-1', payload: { bookingRef: bookingRefs.syncing } },
+  { id: '3', type: 'MANIFEST_UPDATE', status: 'failed', tourId: 'TOUR-1', payload: { bookingRef: bookingRefs.failed } },
+  { id: '4', type: 'MANIFEST_UPDATE', status: 'bad-state-value', tourId: 'TOUR-1', payload: { bookingRef: bookingRefs.malformed } },
+  { id: '5', type: 'MANIFEST_UPDATE', status: 'failed', tourId: 'OTHER-TOUR', payload: { bookingRef: 'REF-OTHER' } },
 ];
 
 let replayQueueCalls = 0;
@@ -102,6 +103,9 @@ Module._load = function mockLoader(request, parent, isMain) {
   if (request === '@expo/vector-icons') {
     return { MaterialCommunityIcons: createHost('MaterialCommunityIcons') };
   }
+  if (request === '@expo/vector-icons/build/MaterialCommunityIcons.js') {
+    return createHost('MaterialCommunityIcons');
+  }
 
   if (request.endsWith('/services/bookingServiceRealtime') || request === '../services/bookingServiceRealtime') {
     return {
@@ -123,6 +127,10 @@ Module._load = function mockLoader(request, parent, isMain) {
       __esModule: true,
       default: {
         subscribeQueueState: () => () => {},
+        subscribeQueuedActions: (callback) => {
+          callback(mockQueueActions);
+          return () => {};
+        },
         getQueuedActions: async () => ({ success: true, data: mockQueueActions }),
         replayQueue: async () => {
           replayQueueCalls += 1;
@@ -131,6 +139,10 @@ Module._load = function mockLoader(request, parent, isMain) {
         updateAction: async () => ({ success: true }),
       },
       subscribeQueueState: () => () => {},
+      subscribeQueuedActions: (callback) => {
+        callback(mockQueueActions);
+        return () => {};
+      },
       getQueuedActions: async () => ({ success: true, data: mockQueueActions }),
       replayQueue: async () => {
         replayQueueCalls += 1;

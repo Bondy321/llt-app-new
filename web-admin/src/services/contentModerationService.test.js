@@ -10,8 +10,10 @@ const firebaseMocks = vi.hoisted(() => ({
   remove: vi.fn(),
   update: vi.fn(),
 }));
+const adminActionMocks = vi.hoisted(() => ({ postAdminAction: vi.fn() }));
 
 vi.mock('firebase/database', () => firebaseMocks);
+vi.mock('./adminActionService', () => adminActionMocks);
 
 import {
   CONTENT_REPORT_STATUS,
@@ -86,21 +88,63 @@ describe('contentModerationService', () => {
   });
 
   it('removes only supported reported content paths and marks the report actioned', async () => {
-    firebaseMocks.remove.mockResolvedValue();
-    firebaseMocks.update.mockResolvedValue();
+    adminActionMocks.postAdminAction.mockResolvedValue({
+      success: true,
+      contentPath: 'group_tour_photos/TOUR_1/photo_1',
+      deletedStorageObjects: 3,
+    });
 
     const result = await removeReportedContent({}, {
       id: 'report-1',
+      contentType: 'group_photo',
+      tourId: 'TOUR_1',
+      contentId: 'photo_1',
       sourcePath: 'group_tour_photos/TOUR_1/photo_1',
     });
 
-    expect(result).toEqual({ contentPath: 'group_tour_photos/TOUR_1/photo_1' });
-    expect(firebaseMocks.remove).toHaveBeenCalledWith({ path: 'group_tour_photos/TOUR_1/photo_1' });
-    expect(firebaseMocks.update).toHaveBeenCalledWith({ path: 'content_reports/report-1' }, {
-      status: CONTENT_REPORT_STATUS.ACTIONED,
-      updatedAt: expect.any(String),
-      updatedAtMs: expect.any(Number),
+    expect(result).toEqual({ contentPath: 'group_tour_photos/TOUR_1/photo_1', deletedStorageObjects: 3 });
+    expect(adminActionMocks.postAdminAction).toHaveBeenCalledWith(
+      'removeReportedPhoto',
+      { reportId: 'report-1' },
+      expect.any(Object),
+    );
+  });
+
+  it('removes chat content and actions its report in one atomic root update', async () => {
+    firebaseMocks.update.mockResolvedValue();
+    await removeReportedContent({}, {
+      id: 'report-chat',
+      contentType: 'chat_message',
+      tourId: 'TOUR_1',
+      contentId: 'message_1',
+      sourcePath: 'chats/TOUR_1/messages/message_1',
     });
+
+    expect(firebaseMocks.update).toHaveBeenCalledWith({ path: undefined }, expect.objectContaining({
+      'chats/TOUR_1/messages/message_1': null,
+      'content_reports/report-chat/status': CONTENT_REPORT_STATUS.ACTIONED,
+      'content_reports/report-chat/updatedAt': expect.any(String),
+      'content_reports/report-chat/updatedAtMs': expect.any(Number),
+    }));
+  });
+
+  it('derives chat removal paths from canonical report fields and ignores a forged sourcePath', async () => {
+    firebaseMocks.update.mockResolvedValue();
+    await removeReportedContent({}, {
+      id: 'report-chat-safe',
+      contentType: 'chat_message',
+      chatScope: 'internal',
+      tourId: 'TOUR_SAFE',
+      contentId: 'message_safe',
+      sourcePath: 'chats/OTHER_TOUR/messages/other_message',
+    });
+
+    expect(firebaseMocks.update).toHaveBeenCalledWith({ path: undefined }, expect.objectContaining({
+      'internal_chats/TOUR_SAFE/messages/message_safe': null,
+      'content_reports/report-chat-safe/status': CONTENT_REPORT_STATUS.ACTIONED,
+    }));
+    expect(firebaseMocks.update.mock.calls[0][1])
+      .not.toHaveProperty('chats/OTHER_TOUR/messages/other_message');
   });
 
   it('rejects unsupported removal paths', async () => {

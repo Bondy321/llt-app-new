@@ -2,13 +2,14 @@ import React from 'react';
 import { Alert, StyleSheet, Text, TouchableOpacity, View, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { COLORS, SPACING, RADIUS } from '../theme';
+import { getDriverLocationPresentation } from '../utils/driverLocation';
 
 export default function MapScreen({ onBack, tourData }) {
   const driverLocation = tourData?.driverLocation;
-  const latitude = Number(driverLocation?.latitude ?? driverLocation?.lat);
-  const longitude = Number(driverLocation?.longitude ?? driverLocation?.lng);
-  const hasCoords = Number.isFinite(latitude) && Number.isFinite(longitude);
-  const mapsUrl = hasCoords
+  const presentation = getDriverLocationPresentation(driverLocation);
+  const latitude = presentation.coordinates?.latitude;
+  const longitude = presentation.coordinates?.longitude;
+  const mapsUrl = presentation.actionable
     ? `https://www.google.com/maps?q=${latitude},${longitude}`
     : null;
 
@@ -29,17 +30,25 @@ export default function MapScreen({ onBack, tourData }) {
           Web preview currently shows a lightweight fallback. Use iOS/Android builds for full live map tracking.
         </Text>
 
-        {hasCoords ? (
+        {presentation.available ? (
           <>
             <Text style={styles.coords}>
-              Driver coordinates: {latitude.toFixed(5)}, {longitude.toFixed(5)}
+              {presentation.mode === 'pickup' ? 'Driver pickup point' : 'Driver live location'}: {latitude.toFixed(5)}, {longitude.toFixed(5)}
             </Text>
-            <TouchableOpacity style={styles.primaryButton} onPress={handleOpenInMaps}>
-              <Text style={styles.primaryButtonText}>Open in Google Maps</Text>
-            </TouchableOpacity>
+            {presentation.actionable ? (
+              <TouchableOpacity style={styles.primaryButton} onPress={handleOpenInMaps}>
+                <Text style={styles.primaryButtonText}>Open in Google Maps</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.description}>This live update is too old to navigate to safely. Wait for the driver to share again.</Text>
+            )}
           </>
         ) : (
-          <Text style={styles.description}>No live driver location has been published yet.</Text>
+          <Text style={styles.description}>
+            {presentation.freshness === 'expired'
+              ? 'The previous live location has expired. Wait for a fresh driver update.'
+              : 'No driver pickup point or live location has been published yet.'}
+          </Text>
         )}
 
         <TouchableOpacity style={styles.secondaryButton} onPress={onBack}>

@@ -109,7 +109,7 @@ test('allows passengers to write only their own participant row and participant 
     lastUpdated: '2026-05-23T19:41:00.000Z',
   }));
 
-  await assertSucceeds(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/currentParticipants`).set(2));
+  await assertFails(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/currentParticipants`).set(2));
   await assertFails(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/name`).set('Changed by passenger'));
   await assertFails(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}`).update({ isActive: false }));
 });
@@ -150,10 +150,81 @@ test('allows assigned drivers, but not unassigned drivers, to write driver tour 
     days: [{ day: 1, content: 'Welcome' }],
   }));
 
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/driver_itinerary`).set(
+    '07:30 vehicle checks\n08:00 depart depot',
+  ));
+
   await assertFails(dbFor(OTHER_DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/driverLocation`).set({
     latitude: 56.0,
     longitude: -4.6,
     timestamp: '2026-05-23T19:42:00.000Z',
+  }));
+});
+
+test('validates versioned driver location records and accepts server timestamps', async () => {
+  const locationRef = dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/driverLocation`);
+  await assertSucceeds(locationRef.set({
+    schemaVersion: 1,
+    isSharing: true,
+    mode: 'live',
+    source: 'auto',
+    latitude: 56.0,
+    longitude: -4.6,
+    timestamp: { '.sv': 'timestamp' },
+    accuracy: 12,
+    updatedBy: 'Driver Palmer',
+  }));
+
+  await assertFails(locationRef.set({
+    schemaVersion: 1,
+    isSharing: true,
+    mode: 'live',
+    source: 'manual',
+    latitude: 56.0,
+    longitude: -4.6,
+    timestamp: { '.sv': 'timestamp' },
+  }));
+
+  await assertFails(locationRef.set({
+    schemaVersion: 1,
+    isSharing: true,
+    mode: 'live',
+    source: 'auto',
+    latitude: 56.0,
+    longitude: -4.6,
+    timestamp: Date.now() + (10 * 60 * 1000),
+  }));
+
+  await assertFails(locationRef.set({
+    schemaVersion: 1,
+    isSharing: true,
+    mode: 'pickup',
+    source: 'manual',
+    latitude: 56.0,
+    longitude: -4.6,
+    timestamp: { '.sv': 'timestamp' },
+    unexpectedField: 'not allowed',
+  }));
+
+  await assertSucceeds(locationRef.remove());
+});
+
+test('validates itinerary content, revision metadata, and driver-only text shape', async () => {
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/itinerary`).set({
+    title: 'Conflict-safe itinerary',
+    days: [{ day: 1, content: 'Meet at the coach park.' }],
+    revision: 2,
+    updatedAt: Date.now() - 1000,
+    updatedBy: DRIVER_AUTH_UID,
+  }));
+
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/itinerary`).set({
+    title: 'Malformed itinerary',
+    days: [{ day: 0, content: 'Invalid day number' }],
+  }));
+
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/driver_itinerary`).set({
+    text: 'Object payloads are not supported by the mobile driver view',
   }));
 });
 
@@ -185,9 +256,33 @@ test('limits live tracking and tour safety alerts to tour-attached users', async
   }));
 });
 
+test('versioned live sharing uses bounded coordinates, server time, and owner-only removal', async () => {
+  const ref = dbFor(PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/liveTracking/${PASSENGER_AUTH_UID}`);
+  await assertSucceeds(ref.set({
+    schemaVersion: 2,
+    userId: PASSENGER_AUTH_UID,
+    isSharing: true,
+    lastUpdate: { '.sv': 'timestamp' },
+    clientUpdatedAtMs: Date.now(),
+    coords: { latitude: 56.0, longitude: -4.6, accuracy: 12 },
+  }));
+  await assertFails(ref.set({
+    schemaVersion: 2,
+    userId: PASSENGER_AUTH_UID,
+    isSharing: true,
+    lastUpdate: { '.sv': 'timestamp' },
+    clientUpdatedAtMs: Date.now(),
+    coords: { latitude: 96.0, longitude: -4.6, accuracy: 12 },
+  }));
+  await assertFails(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/liveTracking/${PASSENGER_AUTH_UID}`).remove());
+  await assertSucceeds(ref.remove());
+});
+
 test('allows admin tour metadata management', async () => {
   await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/name`).set('Admin updated tour'));
   await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}`).update({ isActive: false }));
+  await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/driverId`).set(DRIVER_ID));
+  await assertFails(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/driverId`).set('D-MISSING'));
 });
 
 test('allows hardcoded admin web console collection reads and root multi-path updates', async () => {

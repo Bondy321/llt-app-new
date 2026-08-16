@@ -42,9 +42,10 @@
  *   });
  */
 
-import { ref, set, update, remove, get, onValue } from 'firebase/database';
+import { ref, update, get, onValue, runTransaction } from 'firebase/database';
 import { db } from '../firebase';
 import { validateTourCsvRows } from './tourCsvService';
+import { postAdminAction } from './adminActionService';
 import {
   parseUKDateStrict,
   parseISODateStrict,
@@ -236,14 +237,7 @@ const buildTourCodeConflictMessage = (tourCode, tourId) => (
   `Tour code "${tourCode}" already exists at tours/${tourId}. Choose a unique tour code.`
 );
 
-const assertTourCodeCanBeCreated = async (tourId, tourCode) => {
-  const existingSnapshot = await get(ref(db, `tours/${tourId}`));
-  if (existingSnapshot?.exists?.()) {
-    throw new Error(buildTourCodeConflictMessage(tourCode, tourId));
-  }
-};
-
-const assertTourCodeUnchanged = async (tourId, updates) => {
+const assertTourCodeUnchanged = (tourId, updates, existingTour = {}) => {
   if (!hasOwn(updates, 'tourCode')) return;
 
   const nextTourCode = trimTourCode(updates.tourCode);
@@ -251,9 +245,6 @@ const assertTourCodeUnchanged = async (tourId, updates) => {
     throw new Error('Tour code cannot be cleared after creation.');
   }
 
-  const tourRef = ref(db, `tours/${tourId}`);
-  const snapshot = await get(tourRef);
-  const existingTour = snapshot?.val?.() || null;
   const existingTourCode = trimTourCode(existingTour?.tourCode);
 
   if (existingTourCode) {
@@ -268,6 +259,49 @@ const assertTourCodeUnchanged = async (tourId, updates) => {
     throw new Error('Tour code must match the Firebase tour ID when setting it for the first time.');
   }
   updates.tourCode = nextTourCode;
+};
+
+const parseTourServiceDate = (value) => {
+  const uk = parseUKDateStrict(value);
+  if (uk.success) return uk.date;
+  const iso = parseISODateStrict(value);
+  return iso.success ? iso.date : null;
+};
+
+const assertChronologicalTourDates = (tourData = {}) => {
+  const hasStartDate = hasOwn(tourData, 'startDate') && String(tourData.startDate || '').trim();
+  const hasEndDate = hasOwn(tourData, 'endDate') && String(tourData.endDate || '').trim();
+  if (!hasStartDate && !hasEndDate) return;
+  if (!hasStartDate || !hasEndDate) {
+    throw new Error('Tour start and end dates must be provided together.');
+  }
+  const startDate = parseTourServiceDate(tourData.startDate);
+  const endDate = parseTourServiceDate(tourData.endDate);
+  if (!startDate || !endDate) {
+    throw new Error('Tour start and end dates must be valid calendar dates.');
+  }
+  if (endDate.getTime() < startDate.getTime()) {
+    throw new Error('Tour end date cannot be before its start date.');
+  }
+};
+
+const assertValidTourCapacity = (tourData = {}) => {
+  const maxParticipants = Number(tourData.maxParticipants);
+  const currentParticipants = Number(tourData.currentParticipants);
+  if (!Number.isInteger(maxParticipants) || maxParticipants < 1 || maxParticipants > 500) {
+    throw new Error('Tour capacity must be a whole number between 1 and 500.');
+  }
+  if (!Number.isInteger(currentParticipants) || currentParticipants < 0) {
+    throw new Error('Booked participant count must be a non-negative whole number.');
+  }
+  if (currentParticipants > maxParticipants) {
+    throw new Error('Tour capacity cannot be lower than the booked participant count.');
+  }
+};
+
+const assertTourCapacityUpdate = (existingTour, updates) => {
+  if (!hasOwn(updates, 'maxParticipants') && !hasOwn(updates, 'currentParticipants')) return;
+  assertValidTourCapacity({ ...DEFAULT_TOUR, ...existingTour, ...updates });
 };
 
 const normalizeAssignmentTourId = (tourId) => {
@@ -355,8 +389,8 @@ export const createTour = async (tourData, _createdBy = 'admin') => {
   }
 
   const tourId = generateTourId(tourCode);
-  await assertTourCodeCanBeCreated(tourId, tourCode);
-
+  assertChronologicalTourDates(tourData);
+  assertValidTourCapacity({ ...DEFAULT_TOUR, ...tourData });
   const newTour = {
     ...DEFAULT_TOUR,
     ...tourData,
@@ -369,7 +403,14 @@ export const createTour = async (tourData, _createdBy = 'admin') => {
   };
 
   const tourRef = ref(db, `tours/${tourId}`);
-  await set(tourRef, newTour);
+  const creation = await runTransaction(
+    tourRef,
+    (existingTour) => (existingTour === null ? newTour : undefined),
+    { applyLocally: false },
+  );
+  if (!creation.committed) {
+    throw new Error(buildTourCodeConflictMessage(tourCode, tourId));
+  }
 
   return { id: tourId, tour: newTour };
 };
@@ -421,9 +462,18 @@ export const createTourFromTemplate = async (templateKey, overrides = {}, create
  * @param {Object} updates - Fields to update
  */
 export const updateTour = async (tourId, updates) => {
-  await assertTourCodeUnchanged(tourId, updates);
-
   const tourRef = ref(db, `tours/${tourId}`);
+  const snapshot = await get(tourRef);
+  if (!snapshot?.exists?.()) {
+    throw new Error(`Tour "${tourId}" no longer exists. Refresh the tour list before retrying.`);
+  }
+  const existingTour = snapshot.val() || {};
+  if (hasOwn(updates, 'startDate') || hasOwn(updates, 'endDate')) {
+    assertChronologicalTourDates({ ...existingTour, ...updates });
+  }
+  assertTourCapacityUpdate(existingTour, updates);
+  assertTourCodeUnchanged(tourId, updates, existingTour);
+
   await update(tourRef, updates);
 
   return { id: tourId, updates };
@@ -434,10 +484,28 @@ export const updateTour = async (tourId, updates) => {
  * @param {string} tourId - Tour ID to delete
  */
 export const deleteTour = async (tourId) => {
-  const tourRef = ref(db, `tours/${tourId}`);
-  await remove(tourRef);
+  const normalizedTourId = normalizeAssignmentTourId(tourId);
+  if (!normalizedTourId) throw new Error('A valid tour ID is required.');
 
-  return { id: tourId, deleted: true };
+  const result = await postAdminAction('deleteTourData', { tourId: normalizedTourId }, {
+    configurationError: 'Safe tour deletion is not configured for this web admin deployment.',
+    fallbackError: 'The tour could not be deleted safely. No deletion result was confirmed.',
+    reasonMessages: {
+      ORIGIN_NOT_ALLOWED: 'This admin portal address is not authorized for tour deletion. Contact an administrator before retrying.',
+      INVALID_CREDENTIALS: 'Your admin session has expired. Sign in again and retry.',
+      NOT_AUTHORIZED: 'This account is not authorized to delete tours.',
+      INVALID_TOUR: 'The tour ID is invalid.',
+      DELETE_IN_PROGRESS: 'This tour is already being deleted. Wait a moment and retry.',
+      INTERNAL_ERROR: 'The tour could not be deleted safely. Retry before making further changes.',
+    },
+  });
+
+  return {
+    id: normalizedTourId,
+    deleted: true,
+    alreadyDeleted: Boolean(result.alreadyDeleted || result.summary?.alreadyDeleted),
+    summary: result.summary || {},
+  };
 };
 
 /**
@@ -514,6 +582,7 @@ const getDriverAssignmentContext = async (tourId, explicitDriverId = null) => {
     tourId: normalizedTourId,
     tourCode,
     driverId: resolvedDriverId,
+    existingTourDriverId: typeof tour.driverId === 'string' ? tour.driverId.trim() : null,
     driverCode: resolvedDriverId,
     driverAuthUid: driver.authUid || null,
     manifestDriverIds,
@@ -550,6 +619,7 @@ export const buildDriverAssignmentUpdates = ({
   const updates = {
     [`tours/${normalizedTourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',
     [`tours/${normalizedTourId}/driverPhone`]: isAssigned ? (driverInfo.phone || '') : '',
+    [`tours/${normalizedTourId}/driverId`]: isAssigned ? (driverId || null) : null,
   };
 
   if (!driverId) {
@@ -604,6 +674,7 @@ export const applyDriverAssignmentMutation = async ({
   const updates = {
     [`tours/${normalizedTourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',
     [`tours/${normalizedTourId}/driverPhone`]: isAssigned ? (driverInfo.phone || '') : '',
+    [`tours/${normalizedTourId}/driverId`]: isAssigned ? (resolvedDriverId || null) : null,
   };
 
   if (!resolvedDriverId) {
@@ -633,6 +704,8 @@ export const applyDriverAssignmentMutation = async ({
     updates[`tour_manifests/${oldTourId}/assigned_driver_codes/${resolvedDriverId}`] = null;
     updates[`tours/${oldTourId}/driverName`] = 'TBA';
     updates[`tours/${oldTourId}/driverPhone`] = '';
+    updates[`tours/${oldTourId}/driverId`] = null;
+    updates[`tours/${oldTourId}/driverLocation`] = null;
   }
 
   // Explicit single-driver policy per tour: clear stale links for other drivers in target manifest.
@@ -672,6 +745,10 @@ export const applyDriverAssignmentMutation = async ({
       actorId,
     }),
   );
+
+  if (!isAssigned || assignment.existingTourDriverId !== resolvedDriverId) {
+    updates[`tours/${normalizedTourId}/driverLocation`] = null;
+  }
 
   await update(ref(db), updates);
 };
@@ -746,7 +823,7 @@ export const bulkCreateTours = async (toursData, createdBy = 'admin') => {
  * @param {Object} tours - Tours object from Firebase
  * @returns {string} - CSV string
  */
-export const exportToursToCSV = (tours) => {
+export const exportToursToCSV = (tours, { drivers = {} } = {}) => {
   const headers = [
     'ID',
     'Tour Code',
@@ -756,26 +833,37 @@ export const exportToursToCSV = (tours) => {
     'End Date',
     'Active',
     'Driver',
+    'Driver ID',
     'Driver Phone',
     'Max Participants',
     'Current Participants',
     'Pickup Points',
   ];
 
-  const rows = Object.entries(tours).map(([id, tour]) => [
-    id,
-    tour.tourCode || '',
-    tour.name || '',
-    tour.days || 1,
-    tour.startDate || '',
-    tour.endDate || '',
-    tour.isActive ? 'Yes' : 'No',
-    tour.driverName || 'TBA',
-    tour.driverPhone || '',
-    tour.maxParticipants || 53,
-    tour.currentParticipants || 0,
-    (tour.pickupPoints || []).map(p => `${p.time} - ${p.location}`).join('; '),
-  ]);
+  const driverByTourId = new Map();
+  Object.entries(drivers || {}).forEach(([driverId, driver]) => {
+    const currentTourId = normalizeAssignmentTourId(driver?.currentTourId);
+    if (currentTourId) driverByTourId.set(currentTourId, driverId);
+  });
+
+  const rows = Object.entries(tours).map(([id, tour]) => {
+    const resolvedDriverId = tour.driverId || driverByTourId.get(normalizeAssignmentTourId(id)) || '';
+    return [
+      id,
+      tour.tourCode || '',
+      tour.name || '',
+      tour.days || 1,
+      tour.startDate || '',
+      tour.endDate || '',
+      tour.isActive ? 'Yes' : 'No',
+      resolvedDriverId ? (tour.driverName || drivers[resolvedDriverId]?.name || 'TBA') : 'TBA',
+      resolvedDriverId,
+      resolvedDriverId ? (tour.driverPhone || drivers[resolvedDriverId]?.phone || '') : '',
+      tour.maxParticipants || 53,
+      tour.currentParticipants || 0,
+      JSON.stringify(Array.isArray(tour.pickupPoints) ? tour.pickupPoints : []),
+    ];
+  });
 
   const csvContent = [
     headers.join(','),
@@ -811,13 +899,18 @@ export const parseCSVToTours = (csvContent) => {
 };
 
 export const previewTourCSVImport = async (csvContent, { mode = 'upsert' } = {}) => {
-  const snapshot = await get(ref(db, 'tours'));
+  const [snapshot, driversSnapshot] = await Promise.all([
+    get(ref(db, 'tours')),
+    get(ref(db, 'drivers')),
+  ]);
   const tours = snapshot.exists() ? snapshot.val() : {};
+  const drivers = driversSnapshot.exists() ? driversSnapshot.val() : {};
   const existingIndex = getExistingTourCodeIndex(tours);
 
   return validateTourCsvRows(csvContent, {
     mode,
     ...existingIndex,
+    existingDrivers: new Map(Object.entries(drivers)),
   });
 };
 
@@ -842,20 +935,53 @@ export const executeTourCSVImport = async (previewRows, options = {}) => {
       continue;
     }
 
+    let baseMutationApplied = false;
     try {
       if (mode === 'create-only' || row.action === 'create') {
         const createdTour = await createTour(row.tour, createdBy);
         created.push(createdTour);
+        baseMutationApplied = true;
+        if (row.assignment?.driverId) {
+          await applyDriverAssignmentMutation({
+            tourId: createdTour.id,
+            driverId: row.assignment.driverId,
+            driverInfo: row.assignment.driverInfo,
+            isAssigned: true,
+            actorId: createdBy,
+          });
+        }
         continue;
       }
 
       if (mode === 'update-existing' || row.action === 'update') {
         const tourId = row.existingTourId || generateTourId(row.tour.tourCode);
-        await updateTour(tourId, row.tour);
-        updated.push({ id: tourId, tour: row.tour });
+        const updates = row.updates || {};
+        if (Object.keys(updates).length > 0) {
+          await updateTour(tourId, updates);
+          baseMutationApplied = true;
+        }
+        const updatedResult = { id: tourId, updates, assignment: row.assignment || null };
+        updated.push(updatedResult);
+        if (row.assignment?.action === 'assign') {
+          await applyDriverAssignmentMutation({
+            tourId,
+            driverId: row.assignment.driverId,
+            driverInfo: row.assignment.driverInfo,
+            isAssigned: true,
+            actorId: createdBy,
+          });
+        } else if (row.assignment?.action === 'unassign') {
+          await unassignDriver(tourId);
+        }
       }
     } catch (error) {
-      errors.push({ rowNumber: row.rowNumber, error: error.message });
+      errors.push({
+        rowNumber: row.rowNumber,
+        error: baseMutationApplied
+          ? `${error.message} The tour fields were saved, but the assignment step did not complete.`
+          : error.message,
+        partial: baseMutationApplied,
+      });
     }
   }
 
@@ -867,11 +993,13 @@ export const executeTourCSVImport = async (previewRows, options = {}) => {
  * @param {Function} callback - Callback function (tours) => void
  * @returns {Function} - Unsubscribe function
  */
-export const subscribeToTours = (callback) => {
+export const subscribeToTours = (callback, onError) => {
   const toursRef = ref(db, 'tours');
-  return onValue(toursRef, (snapshot) => {
-    callback(snapshot.val() || {});
-  });
+  return onValue(
+    toursRef,
+    (snapshot) => callback(snapshot.val() || {}),
+    (error) => onError?.(error),
+  );
 };
 
 /**
@@ -916,14 +1044,39 @@ export const duplicateTour = async (tourId, createdBy = 'admin') => {
   // Generate new tour code
   const newTourCode = await getNextDuplicateTourCode(existingTour.tourCode || tourId);
 
-  const newTour = {
-    ...existingTour,
-    name: `${existingTour.name} (Copy)`,
+  const definitionFields = [
+    'name',
+    'days',
+    'startDate',
+    'endDate',
+    'isActive',
+    'maxParticipants',
+    'pickupPoints',
+    'itinerary',
+    'driver_itinerary',
+  ];
+  const newTour = definitionFields.reduce((copy, field) => {
+    if (hasOwn(existingTour, field)) copy[field] = structuredClone(existingTour[field]);
+    return copy;
+  }, {});
+  if (newTour.startDate && !newTour.endDate) {
+    const startDate = parseTourServiceDate(newTour.startDate);
+    if (startDate) {
+      const durationDays = Number.isInteger(newTour.days) && newTour.days > 0 ? newTour.days : DEFAULT_TOUR.days;
+      const derivedEndDate = new Date(startDate);
+      derivedEndDate.setDate(derivedEndDate.getDate() + durationDays - 1);
+      newTour.endDate = formatDateToUK(derivedEndDate);
+    }
+  } else if (newTour.endDate && !newTour.startDate) {
+    delete newTour.endDate;
+  }
+  Object.assign(newTour, {
+    name: `${existingTour.name || 'Tour'} (Copy)`,
     tourCode: newTourCode,
     driverName: 'TBA',
     driverPhone: '',
     currentParticipants: 0,
-  };
+  });
 
   return createTour(newTour, createdBy);
 };

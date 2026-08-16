@@ -88,3 +88,10 @@ test('deriveUnifiedSyncStatus reports offline state when network is unavailable'
   assert.equal(status.stateKey, 'OFFLINE_NO_NETWORK');
   assert.equal(status.canRetry, false);
 });
+
+test('offline action queue has an explicit capacity instead of growing without bound', () => {
+  const { hasQueueCapacity, MAX_QUEUE_ACTIONS } = require('../services/offlineSyncService');
+  assert.equal(hasQueueCapacity(Array.from({ length: MAX_QUEUE_ACTIONS - 1 })), true);
+  assert.equal(hasQueueCapacity(Array.from({ length: MAX_QUEUE_ACTIONS })), false);
+  assert.equal(hasQueueCapacity(Array.from({ length: MAX_QUEUE_ACTIONS + 1 })), false);
+});

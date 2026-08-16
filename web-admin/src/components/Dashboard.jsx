@@ -46,7 +46,7 @@ import {
   IconSpeakerphone,
   IconUsers,
 } from '@tabler/icons-react';
-import { db } from '../firebase';
+import { auth, db } from '../firebase';
 import { HEALTH_STATE, buildHealthSnapshot } from '../services/healthService';
 import {
   SAFETY_STATUS,
@@ -512,9 +512,9 @@ export default function Dashboard() {
 
     try {
       if (action === 'resolve') {
-        await resolveOpsAlert(db, alertId);
+        await resolveOpsAlert(db, alertId, auth.currentUser?.uid);
       } else {
-        await acknowledgeOpsAlert(db, alertId);
+        await acknowledgeOpsAlert(db, alertId, auth.currentUser?.uid);
       }
 
       actionTimer.success();
@@ -545,7 +545,7 @@ export default function Dashboard() {
     });
 
     try {
-      await updateSafetyAlertStatus(db, alert, status);
+      await updateSafetyAlertStatus(db, alert, status, auth.currentUser?.uid);
       actionTimer.success();
       notifications.show({
         title: status === SAFETY_STATUS.RESOLVED ? 'Safety alert resolved' : 'Safety alert acknowledged',
@@ -1200,8 +1200,12 @@ export default function Dashboard() {
                       <Group gap="xs">
                         <Badge size="sm" color="orange" variant="light">{broadcast.tourId}</Badge>
                         <Text size="xs" c="dimmed">{broadcast.source}</Text>
+                        <Badge size="xs" color={broadcast.deliveryStatus === 'delivered' ? 'green' : broadcast.deliveryStatus === 'failed' ? 'red' : 'blue'} variant="light">
+                          {broadcast.deliveryStatus.replaceAll('_', ' ')}
+                        </Badge>
                       </Group>
                       <Text size="sm" mt={4} lineClamp={2}>{broadcast.message}</Text>
+                      {broadcast.recipientCount !== null ? <Text size="xs" c="dimmed">{broadcast.recipientCount} eligible recipients</Text> : null}
                     </Box>
                     <Stack gap={4} align="flex-end">
                       <Text size="xs" c="dimmed">

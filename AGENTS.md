@@ -2,7 +2,7 @@
 
 Welcome, Agent. This file is the operational source of truth for contributors working in this repo. Keep it practical: update it whenever architecture, contracts, commands, or release assumptions materially change.
 
-Last updated: May 28, 2026
+Last updated: August 12, 2026
 
 ---
 
@@ -39,32 +39,33 @@ Backend region rule:
 
 Mobile:
 
-- Expo SDK `55` (`expo ~55.0.0`)
-- React Native `0.83.6`
+- Expo SDK `55` (`expo ~55.0.28`)
+- React Native `0.83.10`
 - React `19.2.0`
-- Firebase JS SDK `^12.14.0`
-- `expo-notifications ~55.0.23`
+- Firebase JS SDK `^12.17.1`
+- `expo-notifications ~55.0.25`
 - `expo-image ~55.0.11`
-- `expo-image-manipulator ~55.0.17`
-- `expo-file-system ~55.0.22`
-- `expo-secure-store ~55.0.14`
+- `expo-image-manipulator ~55.0.19`
+- `expo-file-system ~55.0.24`
+- `expo-secure-store ~55.0.16`
 - `@react-native-async-storage/async-storage 2.2.0`
 - `react-native-maps 1.27.2`
+- Import `MaterialCommunityIcons` from `@expo/vector-icons/build/MaterialCommunityIcons.js`; the package barrel causes Metro to emit every icon font family and the package shim is not directly resolvable by Node 24 tests.
 
 Web admin:
 
 - React `^19.2.0`
-- Vite `^7.2.4`
+- Vite `^7.3.6`
 - Mantine `^8.3.9`
-- React Router `^7.13.0`
-- Firebase JS SDK `^12.6.0`
-- Vitest `^4.0.18`
+- React Router `^7.18.2`
+- Firebase JS SDK `^12.17.1`
+- Vitest `^4.1.10`
 
 Functions:
 
 - Cloud Functions Gen 2 only
-- Node runtime target `24`
-- `firebase-functions ^7.1.1`
+- Node runtime target `22`
+- `firebase-functions ^7.3.2`
 - `firebase-admin ^13.7.0`
 - `expo-server-sdk ^4.0.0`
 - `sharp ^0.33.5`
@@ -137,6 +138,8 @@ Do not rename these Realtime Database roots without a full migration:
 - `globalSafetyAlerts`
 - `broadcasts`
 - `category_broadcasts`
+- `tour_notifications`
+- `notification_read_state`
 - `web_admin_settings`
 - `booking_identities`
 - `manual_booking_creation_locks`
@@ -147,7 +150,7 @@ Admin UID hardcoded in rules:
 9CWQ4705gVRkfW5Xki5LyvrmVp23
 ```
 
-Admin-only roots include protected writes such as `bookings`, `broadcasts`, `category_broadcasts`, `booking_identities`, and many privileged mutations. The web admin may let any Firebase email/password user sign in, but non-admin users should hit rules denials on protected operations.
+Admin-only roots include protected writes such as `bookings`, `broadcasts`, `category_broadcasts`, `booking_identities`, and many privileged mutations. The web admin signs out authenticated users who are not operations admins, and Realtime Database rules independently deny their protected operations as defense in depth.
 
 Additional web-admin operators can be allowed through:
 
@@ -155,7 +158,9 @@ Additional web-admin operators can be allowed through:
 admin_users/{authUid} = true
 ```
 
-The hardcoded admin UID or an existing allowlisted admin can manage this allowlist. Do not use user-owned settings or profile fields as privilege signals.
+Only the hardcoded primary admin UID can manage this allowlist. Existing allowlisted admins
+cannot grant or revoke admin access. Do not use user-owned settings or profile fields as
+privilege signals.
 
 ---
 
@@ -184,7 +189,11 @@ Passenger login:
 Driver login:
 
 - Driver codes use `D-*` style identifiers.
+- `verifyDriverLogin` validates the code, transactionally claims an unclaimed driver record
+  for the authenticated Firebase UID, and writes the server-owned driver identity fields.
 - Driver login resolves driver profile, assignment context, and driver home tour context.
+- `assignDriverToTour` is the only mobile assignment mutation path; mobile clients never
+  write driver, user-authority, tour-driver, or manifest-assignment nodes directly.
 - Canonical driver principal for identity-sensitive paths is `driver:{DRIVER_ID}`.
 
 Stable passenger identity:
@@ -232,10 +241,14 @@ Source doc: `docs/data-contracts/tour-identity.md`
 - Web-admin-created `tours/{tourId}` keys are generated from `tourCode`.
 - Example: `tourCode = "5112D 8"` -> `tourId = "5112D_8"`.
 - `tourCode` is immutable after creation.
-- Creating a tour must fail if `tours/{generateTourId(tourCode)}` already exists.
+- Creating a tour must use a transaction that commits only when
+  `tours/{generateTourId(tourCode)}` is absent, preventing concurrent duplicate
+  creates from overwriting an existing tour.
 - Duplicate/copy flows must generate a fresh tour code before writing.
+- Duplicate/copy flows use an explicit definition-field allowlist and never copy live participants, safety, tracking, counts, or assignments.
 - Do not let `tourCode` and the Firebase key drift. Mobile often derives IDs from tour codes.
 - Renaming a tour code requires deliberate multi-root migration across tours, manifests, bookings, assignments, chats, photos, and caches.
+- `tours/{tourId}/currentParticipants` is an admin-owned operational count. Passenger login/join may use membership size only as a read-only fallback and must not rewrite the booked/admin total.
 
 ### Driver Assignment
 
@@ -248,6 +261,7 @@ Canonical active assignment key:
 Canonical nodes to keep coherent in one multi-path update:
 
 - `drivers/{driverId}`
+- `tours/{tourId}/driverId` plus `driverName` and `driverPhone`
 - `tour_manifests/{tourId}/assigned_drivers/{driverId}`
 - `tour_manifests/{tourId}/assigned_driver_codes/{driverId}`
 - `users/{authUid}/driverId`
@@ -269,7 +283,8 @@ Canonical `assigned_driver_codes/{driverId}` payload:
 
 Producers:
 
-- Mobile: `services/bookingServiceRealtime.js` (`assignDriverToTour`)
+- Backend: `functions/index.js` (`assignDriverToTour`); mobile invokes it from
+  `services/bookingServiceRealtime.js`
 - Web admin: `web-admin/src/services/tourService.js` (`buildDriverAssignmentUpdates`, `applyDriverAssignmentMutation`)
 
 Rules authorize assigned driver manifest writes only when:
@@ -281,16 +296,22 @@ Rules authorize assigned driver manifest writes only when:
 
 ### Manifest Sync
 
+Source doc: `docs/data-contracts/operational-update-integrity.md`
+
 - Manifest updates live under `tour_manifests/{tourId}/bookings/{bookingRef}`.
 - Status values: `PENDING`, `BOARDED`, `NO_SHOW`, `PARTIAL`.
 - `passengerStatus` is an array-like child collection of per-passenger statuses.
-- Conflict policy compares local/server `lastUpdated`.
-- Newer server value wins; server-win path reconciles local cache and user feedback.
+- Manifest writes use an RTDB transaction; conflict policy compares local/server `lastUpdated` inside that transaction.
+- Newer server value wins. The service returns the exact preserved status, passenger statuses, and timestamp for operator feedback.
 - Offline manifest updates queue through `offlineSyncService` as `MANIFEST_UPDATE`.
+- Identity-scoped Tour Packs are the only offline source for driver itineraries. Delete legacy `driver_itinerary_{tourId}` entries without displaying or migrating their unscoped contents.
+- A newer queued update supersedes an older non-syncing update only for the same canonical tour and booking.
+- Manifest queue badges, counts, failed retries, and conflict results must be scoped to the active tour.
 
 ### Chat and Reactions
 
 Source doc: `docs/reactions-write-contract.md`
+Delivery source doc: `docs/data-contracts/chat-delivery.md`
 
 Message roots:
 
@@ -304,6 +325,8 @@ Modern messages must include stable sender fields:
 - `senderName`
 - `text`
 - `timestamp`
+
+Version 2 messages also require `schemaVersion: 2`, `clientCreatedAt`, `senderType`, `status: sent`, `type`, and an `idempotencyKey` equal to the Firebase message key. Create them transactionally at that deterministic key; direct send, offline replay, and manual retry must never allocate different keys for one logical message.
 
 Drivers may write as verified `driver:{DRIVER_ID}` principals.
 
@@ -344,6 +367,7 @@ Current upload contract:
 
 - Queue action type: `PHOTO_UPLOAD`
 - `payloadVersion: 2`
+- New idempotent uploads use a deterministic Realtime Database record key; legacy push-key records remain discoverable through an indexed exact `idempotencyKey` query.
 - Source-only durable payload:
   - `idempotencyKey`
   - `localAssets.sourceUri`
@@ -389,15 +413,24 @@ Service:
 Persistence:
 
 - `services/persistenceProvider.js`
-- Storage order: SecureStore -> AsyncStorage -> memory fallback.
+- Operational queues and Tour Packs require durable AsyncStorage. They may migrate legacy SecureStore values but must never silently fall back to process memory.
+- Partial Tour Pack writes are serialized per tour/role/login identity before read-merge-write; parallel screen caches must not clobber one another or cross a shared-device login boundary.
+- Passenger itinerary is stored as `itinerary`; driver operational text is stored as `driverItinerary` in the driver Tour Pack. The old `driver_itinerary_<tourId>` AsyncStorage key is migration-only.
+- SecureStore remains appropriate only for small secret/session material explicitly configured for it.
+- Browser AsyncStorage is durable through its localStorage-backed adapter.
 - Test env defaults to memory unless an adapter is injected.
+
+Queue safety:
+
+- The sync queue is capped at 500 actions and must preserve the existing queue when a storage read fails.
+- Every action is owned by a canonical tour/principal/role scope. Replay, mutation, retry, counts, and subscriptions must never expose or process another session's actions.
+- Corrupt queue payloads are backed up before reset.
+- The safety retry queue is capped at 250 events, prioritises critical/SOS events, and is principal scoped. Trusted contacts are stored per principal.
 
 Tour Pack keys:
 
-- `tour_pack_passenger_<tourId>`
-- `tour_pack_driver_<tourId>`
-- `tour_pack_meta_passenger_<tourId>`
-- `tour_pack_meta_driver_<tourId>`
+- `tour_pack_v2_<role>_<tourId>_<encodedBookingOrDriverId>`
+- `tour_pack_meta_v2_<role>_<tourId>_<encodedBookingOrDriverId>`
 - `queue_v1`
 - `processed_action_ids_v1`
 
@@ -468,9 +501,28 @@ Key helpers:
 
 ### Notifications
 
+Source doc: `docs/data-contracts/operational-update-integrity.md`
+
 Mobile service:
 
 - `services/notificationService.js`
+- `services/notificationInboxService.js`
+- `utils/notificationRouting.js`
+
+Durable tour update roots:
+
+```text
+tour_notifications/{tourId}/{noticeId}
+notification_read_state/{tourId}/{authUid}/{noticeId}
+```
+
+- Functions own notice creation; mobile clients cannot forge notices.
+- Tour members and verified assigned drivers can read only their attached tour feed.
+- Users can write read timestamps only below their own auth UID.
+- Tour-scoped notification taps are accepted only for the active canonical tour. Global marketing taps may open `NotificationPreferences` after an app session is restored, even when no tour is active.
+- Push payloads and durable notices preserve `noticeId` plus destination context such as `messageId`, `categoryKey`, and `broadcastId`. Chat opens the exact message, including an on-demand lookup when it is outside the live 80-message window.
+- Cold/foreground responses are deduplicated only after navigation succeeds; concurrent delivery is suppressed while a response is in flight and a failed navigation remains retryable.
+- The tour feed is capped server-side at the newest 100 notices and queried client-side at the newest 50.
 
 User profile fields:
 
@@ -538,6 +590,8 @@ Web admin:
 
 ### Safety and Location
 
+Safety delivery source contract: `docs/data-contracts/safety-delivery.md`.
+
 Safety service:
 
 - `services/safetyService.js`
@@ -549,16 +603,33 @@ Safety roots:
 - `globalSafetyAlerts`
 - safety-related entries under `logs/{userKey}/safety`
 
+Safety report creation uses one idempotent root multi-path update across the
+private log, tour alert, and (for SOS/critical events) global alert. Do not
+return a submitted result or remove an offline retry item after only the private
+log succeeds; operations-visible delivery is part of the contract.
+
+New clients submit through the authenticated `submitSafetyReport` Function. The
+client event ID is stable across timeout/offline replay, the Function verifies
+tour/role membership and serializes that ID, and an already-written matching
+event is an idempotent success. `sendSafetyAlertNotification` fans out
+privacy-preserving operational alerts to assigned drivers and eligible admin
+mobile profiles without including free-text incident details on the lock screen.
+
 Driver location:
 
 - Canonical passenger/driver live bus path: `tours/{tourId}/driverLocation`.
-- Driver Home writes manual and auto-share location updates there.
-- Map screen listens there and presents freshness/staleness messaging.
+- Source contract: `docs/data-contracts/driver-location.md`.
+- Versioned records use a server timestamp and distinguish fixed `pickup` points from foreground `live` sharing.
+- Driver Home writes manual and auto-share location updates through `services/driverLocationService.js`; turning auto-share off transactionally withdraws only live state.
+- Map and Tour Home derive presentation through `utils/driverLocation.js`. Live points become non-actionable when stale and disappear after 30 minutes; manual pickup points remain destinations without a live label.
+- Find My Bus does not require passenger location permission to show the driver point. Permission is requested only when the passenger chooses to show/refresh their own position.
+- Driver reassignment/unassignment clears the former tour's location atomically so passengers never inherit another driver's coordinates.
 
 Safety UX:
 
 - `SafetySupportScreen` handles emergency options, trusted contacts, offline safety queue, and optional location sharing.
 - The app opens emergency options and does not call 999 automatically.
+- UI must distinguish a remotely submitted report from one durably saved for retry; it must never claim an event was queued when persistence failed.
 
 ---
 
@@ -648,7 +719,13 @@ Operational expectations:
 - Choosing "All Tours" removes the `status` query param.
 - Dashboard deep links use `/tours?status=unassigned`.
 - Tour identity guards reject create/update flows that would overwrite or mutate a generated tour key.
+- Tour updates perform one authoritative read, reject a missing target, and
+  validate partial date/capacity patches against the stored tour before writing.
 - Driver assignment writes must align with the mobile canonical `currentTourId` contract and clean stale assignment links.
+- Driver creation must use a transaction and fail on an existing driver code; never replace a driver record during create.
+- CSV updates are field-preserving patches. Missing columns must not clear itinerary, pickup, assignment, or other state; driver assignment requires a canonical existing Driver ID.
+- Destructive tour and reported-photo actions must use authenticated Functions so RTDB and Storage cleanup is coordinated.
+- Broadcast UI must say queued until Functions publish a terminal delivery status; Expo acceptance is not a device-display receipt.
 - Manual passenger creation must go through `createManualPassengerBooking`; do not write `bookings`, `booking_identities`, and manifest rows directly from the browser.
 - User-facing errors should be sanitized, especially auth and password reset errors.
 - Vite dev server adds basic security headers in `vite.config.js`; keep preview/deploy parity in mind.
@@ -659,6 +736,8 @@ Operational expectations:
 
 Location: `functions/index.js`
 
+Runtime: Node.js 22. Firebase deployment runtime must stay on a currently supported Functions runtime.
+
 Exported functions:
 
 - `verifyPassengerLogin`
@@ -666,22 +745,51 @@ Exported functions:
   - region `europe-west1`
   - reads `booking_identities/{bookingRef}`
   - optional backend App Check enforcement
-  - rate limited by client key
+  - rate limited in separate credential-, account-, and broad network-level buckets after auth/App Check validation
+- `verifyDriverLogin`
+  - HTTPS `POST`, authenticated, region `europe-west1`
+  - validates driver credentials and optionally App Check, then transactionally binds an
+    unclaimed driver record to the caller and persists server-owned identity helpers
+  - rate limited in separate credential-, account-, and broad network-level buckets
+- `assignDriverToTour`
+  - HTTPS `POST`, authenticated driver-only, region `europe-west1`
+  - serializes competing driver/tour mutations, rejects occupied or inactive tours, and
+    atomically updates the canonical driver, tour, manifest, and user-profile links
 - `createManualPassengerBooking`
   - HTTPS `POST`
   - region `europe-west1`
   - admin-only through the hardcoded admin UID or `admin_users`
   - validates tour identity, booking reference, login email, pickup fields, passenger rows, and seat collisions
   - atomically writes `bookings`, `booking_identities`, `tour_manifests`, pickup indexes, and tour passenger counts
+- `deleteTourData`
+  - HTTPS `POST`, authenticated admin-only, region `europe-west1`
+  - removes all tour-owned RTDB branches, booking identities/grants, canonical driver links, and group/private Storage prefixes
+  - remains idempotent after the primary tour node is gone; retries repeat
+    deterministic cleanup and return `alreadyDeleted: true`
+- `removeReportedPhoto`
+  - HTTPS `POST`, authenticated admin-only, region `europe-west1`
+  - deletes source/viewer/thumbnail Storage objects before atomically removing metadata and actioning the report
+- Admin HTTPS Functions accept browser CORS requests only from the deployed
+  `web.app`/`firebaseapp.com` portal origins or localhost development. Additional
+  custom admin domains require an exact comma-separated
+  `ADMIN_PORTAL_ALLOWED_ORIGINS` environment value; bearer authentication and
+  the operations-admin check remain mandatory.
 - `processBroadcastWrite`
   - RTDB create trigger on `/broadcasts/{tourId}/{broadcastId}`
   - region `europe-west1`
   - validates admin author and writes `ADMIN_BROADCAST` chat message
+  - persists queued/processing and terminal delivery status on the broadcast record
 - `sendChatNotification`
   - RTDB create trigger on `/chats/{tourId}/messages/{messageId}`
   - region `europe-west1`
-  - validates sender/participants/admin broadcast authenticity
+  - validates sender/participant/assigned-driver/admin broadcast authenticity
+  - sends to participants plus coherently assigned driver auth users
   - routes by `preferences.ops.group_chat` or `preferences.ops.driver_updates`
+  - writes eligible/accepted/failed counts back for admin broadcasts
+- `sendInternalChatNotification`
+  - RTDB create trigger on `/internal_chats/{tourId}/messages/{messageId}`
+  - notifies the other coherently assigned drivers
+  - routes to the exact internal-driver chat message
 - `generatePhotoVariants`
   - Storage finalize trigger
   - region `us-east1`
@@ -690,6 +798,14 @@ Exported functions:
   - RTDB update trigger on `/tours/{tourId}/itinerary`
   - region `europe-west1`
   - sends to tour participants plus assigned driver auth users
+- `submitSafetyReport`
+  - authenticated HTTPS `POST`, region `europe-west1`
+  - validates caller tour/role access and bounded report/location input
+  - atomically writes private, tour, critical-global, and idempotency-lock paths
+- `sendSafetyAlertNotification`
+  - RTDB create trigger on `/tours/{tourId}/safetyAlerts/{eventId}`
+  - alerts coherently assigned drivers and eligible operations-admin mobile profiles
+  - stores Expo acceptance counts without exposing sensitive report text in push copy
 
 Testing hook:
 
@@ -725,6 +841,9 @@ Important RTDB invariants:
 - Passenger login uses `verifyPassengerLogin` to validate booking identity and create short-lived `tour_access_grants` / `booking_access_grants` before first tour access.
 - Online passenger login must persist `users/{authUid}/bookingRef` before entering the app; that caller-owned profile link keeps exact manifest-row access working after short-lived grants expire.
 - Driver-code login uses `verifyDriverLogin`; assignments resolve from `drivers/{driverId}/currentTourId`.
+- Driver identity and assignment authority are server-owned. Claimed clients can update only
+  `drivers/{driverId}/lastActive` and remove their own `authUid` during account deletion;
+  they cannot self-assign through manifest or profile helper paths.
 - Passenger manifest loading uses the `getTourManifest` HTTPS function; the mobile app must not scan `/bookings` to assemble manifests in production.
 - Release order matters for backend access changes: deploy Functions first, then Realtime Database/Storage rules, then EAS update/build. Current EAS workflows test backend changes but do not deploy Firebase backend artifacts.
 - `bookings/{bookingRef}` writes are admin-only.
@@ -733,11 +852,12 @@ Important RTDB invariants:
 - Chat message creates require ownership through auth UID, stable passenger identity binding, private owner identity, or verified driver principal.
 - Chat reaction, typing, presence, and read-state actor leaves are identity-scoped.
 - Private photos allow access by auth UID, raw stable identity, encoded stable key, raw private owner, encoded private owner key, or identity binding.
+- Passenger profile creation and new `identity_bindings` writes must match the caller's canonical short-lived `booking_access_grants` identity; an authenticated client cannot self-assert an arbitrary passenger identity.
 - `identity_bindings_meta` writes are admin or caller-owned binding only.
 - `broadcasts` writes are admin-only and require numeric `createdAtMs`.
 - `category_broadcasts` writes are admin-only, require numeric `createdAtMs`, and target canonical future-tour preference keys under `users/{uid}/preferences/marketing`.
 - `users` validates push token metadata, identity metadata, driver helper fields, and notification preferences.
-- `admin_users` is the web-admin privilege allowlist; entries must be boolean `true`.
+- `admin_users` is the web-admin privilege allowlist; entries must be boolean `true`, and only the primary operations-admin UID may grant or revoke entries.
 - `ops_alerts` reads are admin-only through the hardcoded admin UID or `admin_users`; mobile writes must be bounded, sanitised, fingerprinted, and schema-valid.
 - `globalSafetyAlerts` writes require admin or caller-owned pending event creation.
 
@@ -781,6 +901,7 @@ npm run test:mobile:services:booking
 npm run test:mobile:services:chat
 npm run test:mobile:services:photo
 npm run test:mobile:services:notifications
+npm run test:mobile:services:itinerary
 npm run test:mobile:ui:date-time
 npm run test:mobile:ux
 npm run test:mobile:infra
@@ -800,11 +921,13 @@ Firebase emulator rules:
 npm run test:emulators
 ```
 
-Current `test:emulators` runs reactions and manifest rules. If you change photo variant/photo ownership rules, also run the photo variant rules test directly with the emulator:
+Current `test:emulators` runs the complete Realtime Database and Storage rules matrix: reactions, manifests, photo variants, tours, drivers, account deletion, content reports, broadcasts, logs, notifications, safety alerts, and authenticated photo object ownership/deletion. To isolate photo variant/photo ownership rules while diagnosing a failure, run:
 
 ```bash
 firebase emulators:exec --project demo-llt-rules --only database "node --test tests/firebaseRules/photoVariants.rules.test.js"
 ```
+
+Client photo deletion is Storage-first and retry-safe: Storage rules allow only the object's `metadata.authUid` owner to delete it, `storage/object-not-found` is an idempotent success, and the RTDB photo record must remain when any other Storage failure occurs.
 
 High-value contract tests to know:
 
@@ -839,7 +962,7 @@ Many root npm scripts use POSIX-style `NODE_ENV=test`. CI runs on Linux. On nati
 Mobile config:
 
 - Use `app.config.js`; there is no static `app.json`.
-- Version: `1.0.2`
+- Version: `1.0.3`
 - iOS build number: `3` local baseline; production increments are managed remotely by EAS
 - Android version code: `3` local baseline; production increments are managed remotely by EAS
 - Runtime version policy: `appVersion`
@@ -933,10 +1056,10 @@ npm run preview
 
 Functions:
 
-```bash
+```powershell
 cd functions
 npm run serve
-npm run deploy
+$env:FUNCTIONS_DISCOVERY_TIMEOUT='60'; npm run deploy  # PowerShell; large bundle discovery
 npm run logs
 ```
 
@@ -958,6 +1081,7 @@ Diagnostics:
 - `loggerService` persists a local queue and can upload to `logs/{userKey}/{sessionKey}`.
 - `crashDiagnosticsService` writes crash diagnostics under `logs`.
 - Safety events also write under `logs/{userKey}/safety`.
+- Remote diagnostic and safety log writes require an authenticated identity; anonymous sessions stay local and must not write to `/logs`.
 - `ops_alerts` is the sanitised, queryable operations layer for major device/app failures; do not put raw log payloads or raw stack data there.
 - Production uploads are warning-plus by default; only change `EXPO_PUBLIC_REMOTE_LOG_MIN_LEVEL` as an explicit release decision.
 
@@ -1044,6 +1168,9 @@ High-signal docs:
 - `docs/date-contract.md`
 - `docs/date-contract-web-admin.md`
 - `docs/data-contracts/driver-assignment.md`
+- `docs/data-contracts/chat-delivery.md`
+- `docs/data-contracts/driver-location.md`
+- `docs/data-contracts/safety-delivery.md`
 - `docs/data-contracts/manual-passenger-creation.md`
 - `docs/data-contracts/ops-alerts.md`
 - `docs/data-contracts/tour-identity.md`

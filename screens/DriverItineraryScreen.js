@@ -11,12 +11,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { getDriverItinerary } from '../services/bookingServiceRealtime';
 import { realtimeDb } from '../firebase';
 import { COLORS as THEME } from '../theme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import logger from '../services/loggerService';
+import offlineSyncService from '../services/offlineSyncService';
 
 const COLORS = {
   primaryBlue: THEME.primary,
@@ -32,7 +33,7 @@ const COLORS = {
   danger: THEME.error,
 };
 
-export default function DriverItineraryScreen({ onBack, tourId, tourName }) {
+export default function DriverItineraryScreen({ onBack, tourId, tourName, offlineCacheOwnerId }) {
   const [driverItinerary, setDriverItinerary] = useState(null);
   const [tourInfo, setTourInfo] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -99,7 +100,18 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName }) {
         logger.warn('DriverItineraryScreen', 'Realtime driver itinerary snapshot empty', { tourId });
       };
 
-      driverItinRef.on('value', onUpdate);
+      const onListenerError = (error) => {
+        logger.warn('DriverItineraryScreen', 'Realtime driver itinerary listener failed', {
+          tourId,
+          error: error?.message || String(error),
+        });
+        if (mountedRef.current) {
+          setIsOnline(false);
+          setErrorMessage((current) => current || 'Live itinerary updates are unavailable. Pull to refresh to retry.');
+        }
+      };
+
+      driverItinRef.on('value', onUpdate, onListenerError);
       realtimeListener.current = { ref: driverItinRef, listener: onUpdate };
 
       return () => {
@@ -117,11 +129,28 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName }) {
       clearRetryTimeout();
       logger.debug('DriverItineraryScreen', 'Driver itinerary effect cleaned up without listener', { tourId });
     };
-  }, [tourId, tourName]);
+  }, [offlineCacheOwnerId, tourId, tourName]);
 
   const cacheDriverItinerary = async (data) => {
     try {
-      await AsyncStorage.setItem(`driver_itinerary_${tourId}`, JSON.stringify(data));
+      const syncedAt = new Date().toISOString();
+      const [packResult, metaResult] = await Promise.all([
+        offlineSyncService.saveTourPack(
+          tourId,
+          'driver',
+          { driverItinerary: data ?? null },
+          { ownerId: offlineCacheOwnerId },
+        ),
+        offlineSyncService.setTourPackMeta(
+          tourId,
+          'driver',
+          { lastSyncedAt: syncedAt },
+          { ownerId: offlineCacheOwnerId },
+        ),
+      ]);
+      if (!packResult?.success || !metaResult?.success) {
+        throw new Error(packResult?.error || metaResult?.error || 'Driver itinerary cache write failed');
+      }
       logger.info('DriverItineraryScreen', 'Cache save completed', {
         tourId,
         characterCount: typeof data === 'string' ? data.length : null,
@@ -133,6 +162,12 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName }) {
 
   const clearCachedDriverItinerary = async () => {
     try {
+      await offlineSyncService.saveTourPack(
+        tourId,
+        'driver',
+        { driverItinerary: null },
+        { ownerId: offlineCacheOwnerId },
+      );
       await AsyncStorage.removeItem(`driver_itinerary_${tourId}`);
     } catch (error) {
       logger.warn('DriverItineraryScreen', 'Cache clear failed', { error: error?.message || String(error), tourId });
@@ -141,13 +176,28 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName }) {
 
   const loadCachedDriverItinerary = async () => {
     try {
-      const cached = await AsyncStorage.getItem(`driver_itinerary_${tourId}`);
-      if (cached) {
+      const packResult = await offlineSyncService.getTourPack(tourId, 'driver', { ownerId: offlineCacheOwnerId });
+      const pack = packResult?.success ? packResult.data : null;
+      if (pack && Object.prototype.hasOwnProperty.call(pack, 'driverItinerary')) {
+        const cached = pack.driverItinerary;
+        const metaResult = await offlineSyncService.getTourPackMeta(tourId, 'driver', { ownerId: offlineCacheOwnerId });
+        if (metaResult?.success && metaResult.data?.lastSyncedAt) {
+          setLastSync(new Date(metaResult.data.lastSyncedAt));
+        }
         logger.info('DriverItineraryScreen', 'Cache load hit', {
           tourId,
-          characterCount: cached.length,
+          characterCount: typeof cached === 'string' ? cached.length : null,
+          source: 'tour-pack',
         });
-        return JSON.parse(cached);
+        return cached;
+      }
+
+      const legacyCached = await AsyncStorage.getItem(`driver_itinerary_${tourId}`);
+      if (legacyCached) {
+        await AsyncStorage.removeItem(`driver_itinerary_${tourId}`);
+        logger.info('DriverItineraryScreen', 'Unscoped legacy cache removed without reuse', {
+          tourId,
+        });
       }
       logger.debug('DriverItineraryScreen', 'Cache load miss', { tourId });
     } catch (error) {
@@ -222,6 +272,8 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName }) {
 
         if (result.driverItinerary) {
           await cacheDriverItinerary(result.driverItinerary);
+        } else {
+          await clearCachedDriverItinerary();
         }
       } else {
         logger.warn('DriverItineraryScreen', 'Driver itinerary network load returned empty', {

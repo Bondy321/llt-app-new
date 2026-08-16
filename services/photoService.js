@@ -20,6 +20,8 @@ const {
   update,
   query,
   orderByChild,
+  equalTo,
+  limitToFirst,
   limitToLast,
   endAt,
 } = require('firebase/database');
@@ -179,6 +181,7 @@ const deleteStoredPhotoObject = async ({
   const storagePath = typeof path === 'string' ? path.trim() : '';
   if (!storagePath) return;
 
+  let timeoutId = null;
   try {
     logPhotoDbEvent('debug', 'photo_storage_delete_start', {
       label,
@@ -189,7 +192,7 @@ const deleteStoredPhotoObject = async ({
     await Promise.race([
       deleteObjectFn(fileRef),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`${label} deletion timeout`)), timeoutMs)
+        { timeoutId = setTimeout(() => reject(new Error(`${label} deletion timeout`)), timeoutMs); }
       ),
     ]);
     logPhotoDbEvent('debug', 'photo_storage_delete_success', {
@@ -197,11 +200,21 @@ const deleteStoredPhotoObject = async ({
       path: summarizePathForDbLog(storagePath),
     });
   } catch (error) {
+    if (error?.code === 'storage/object-not-found') {
+      logPhotoDbEvent('debug', 'photo_storage_delete_already_absent', {
+        label,
+        path: summarizePathForDbLog(storagePath),
+      });
+      return;
+    }
     logPhotoDbEvent('warn', 'photo_storage_delete_failed', {
       label,
       path: summarizePathForDbLog(storagePath),
       error: summarizeErrorForDbLog(error),
     });
+    throw error;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 };
 
@@ -672,6 +685,10 @@ const uploadPhoto = async (
     pushFn = push,
     setFn = set,
     getFn = get,
+    queryFn = query,
+    orderByChildFn = orderByChild,
+    equalToFn = equalTo,
+    limitToFirstFn = limitToFirst,
     serverTimestampFn = serverTimestamp,
     fetchFn = fetch,
     onProgress = null,
@@ -723,6 +740,47 @@ const uploadPhoto = async (
       uri: summarizeUriForDbLog(validatedUri),
     };
     logPhotoDbEvent('info', 'photo_upload_start', uploadDiagnostics);
+
+    const databasePath = isPrivate
+      ? `private_tour_photos/${validatedTourId}/${validatedUserKey}`
+      : `group_tour_photos/${validatedTourId}`;
+    uploadDiagnostics = {
+      ...uploadDiagnostics,
+      databasePath: summarizePathForDbLog(databasePath),
+    };
+    const photosRef = dbRefFn(realtimeDbInstance, databasePath);
+
+    // Look up only the matching idempotency record. The previous implementation
+    // downloaded the complete album on every queued-photo retry, which became
+    // progressively slower and more expensive as a tour's album grew.
+    if (normalizedIdempotencyKey) {
+      uploadStage = 'checking_existing_photo_idempotency';
+      logPhotoDbEvent('debug', 'photo_upload_db_lookup_start', uploadDiagnostics);
+      const existingQuery = queryFn(
+        photosRef,
+        orderByChildFn('idempotencyKey'),
+        equalToFn(normalizedIdempotencyKey),
+        limitToFirstFn(1),
+      );
+      const existingSnapshot = await getFn(existingQuery);
+      const existingData = existingSnapshot.val() || {};
+      const existingEntry = Object.entries(existingData)[0];
+      if (existingEntry) {
+        const [existingId, existingPhoto] = existingEntry;
+        logPhotoDbEvent('info', 'photo_upload_deduped_existing_record', {
+          ...uploadDiagnostics,
+          photoId: summarizePrincipalForDbLog(existingId),
+        });
+        return {
+          id: existingId,
+          sourceUrl: existingPhoto.sourceUrl || null,
+          userId: existingPhoto.userId || validatedUserId,
+          caption: existingPhoto.caption || validatedCaption,
+          uploaderName: existingPhoto.uploaderName || uploaderName || 'Tour Member',
+          deduped: true,
+        };
+      }
+    }
 
     // Create blob and validate
     uploadStage = 'fetching_source_blob';
@@ -810,38 +868,12 @@ const uploadPhoto = async (
         downloadUrl: summarizeUriForDbLog(downloadURL),
       });
 
-      const databasePath = isPrivate
-        ? `private_tour_photos/${validatedTourId}/${validatedUserKey}`
-        : `group_tour_photos/${validatedTourId}`;
-      uploadDiagnostics = {
-        ...uploadDiagnostics,
-        databasePath: summarizePathForDbLog(databasePath),
-      };
-      const photosRef = dbRefFn(realtimeDbInstance, databasePath);
-      if (normalizedIdempotencyKey) {
-        uploadStage = 'checking_existing_photo_idempotency';
-        logPhotoDbEvent('debug', 'photo_upload_db_lookup_start', uploadDiagnostics);
-        const existingSnapshot = await getFn(photosRef);
-        const existingData = existingSnapshot.val() || {};
-        const existingEntry = Object.entries(existingData).find(([, value]) => value?.idempotencyKey === normalizedIdempotencyKey);
-        if (existingEntry) {
-          const [existingId, existingPhoto] = existingEntry;
-          logPhotoDbEvent('info', 'photo_upload_deduped_existing_record', {
-            ...uploadDiagnostics,
-            photoId: summarizePrincipalForDbLog(existingId),
-          });
-          return {
-            id: existingId,
-            sourceUrl: existingPhoto.sourceUrl || null,
-            userId: existingPhoto.userId || validatedUserId,
-            caption: existingPhoto.caption || validatedCaption,
-            uploaderName: existingPhoto.uploaderName || uploaderName || 'Tour Member',
-            deduped: true,
-          };
-        }
-      }
-
-      const newPhotoRef = pushFn(photosRef);
+      // New idempotent uploads use a deterministic record key as a second line
+      // of defence against concurrent queue replays. Legacy push-key records are
+      // still discovered by the indexed query above.
+      const newPhotoRef = normalizedIdempotencyKey
+        ? dbRefFn(realtimeDbInstance, `${databasePath}/${sanitizeRealtimeKeySegment(normalizedIdempotencyKey)}`)
+        : pushFn(photosRef);
 
       const photoData = {
         sourceUrl: downloadURL,
@@ -1248,13 +1280,18 @@ const deleteGroupPhoto = async (
       label: 'thumbnail',
     });
 
-    // Delete from database (with timeout)
-    await Promise.race([
-      removeFn(photoRef),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Database deletion timeout')), 10000)
-      )
-    ]);
+    // Delete from the database only after every known Storage object is gone.
+    let databaseTimeoutId = null;
+    try {
+      await Promise.race([
+        removeFn(photoRef),
+        new Promise((_, reject) => {
+          databaseTimeoutId = setTimeout(() => reject(new Error('Database deletion timeout')), 10000);
+        }),
+      ]);
+    } finally {
+      if (databaseTimeoutId) clearTimeout(databaseTimeoutId);
+    }
 
     logPhotoDbEvent('info', 'photo_delete_success', {
       visibility: 'group',

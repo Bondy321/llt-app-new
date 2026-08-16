@@ -3,6 +3,7 @@ import { auth, realtimeDb } from '../firebase';
 import logger from './loggerService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { parseTimestampMs } from './timeUtils';
+import { normalizeTourId } from './tourIdentityService';
 
 // Safety event categories with metadata
 export const SAFETY_CATEGORIES = {
@@ -130,6 +131,13 @@ export const EVENT_STATUS = {
 
 // Offline queue storage key
 const OFFLINE_QUEUE_KEY = '@LLT:safetyOfflineQueue';
+const OFFLINE_QUEUE_CORRUPT_BACKUP_KEY = '@LLT:safetyOfflineQueue:corruptBackup';
+const MAX_OFFLINE_SAFETY_EVENTS = 250;
+const SAFETY_QUEUE_SCOPE_VERSION = 1;
+const SAFETY_SUBMISSION_TIMEOUT_MS = 12000;
+let safetyQueueMutationTail = Promise.resolve();
+let trustedContactsMutationTail = Promise.resolve();
+const activeSafetyQueueReplays = new Set();
 
 const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
 
@@ -147,51 +155,252 @@ const resolveAuthUid = () => {
   return typeof currentUid === 'string' && currentUid.trim() ? currentUid.trim() : null;
 };
 
-const resolveSafetyLogUserKey = (userId) => safeRealtimeKey(resolveAuthUid() || userId || 'anonymous', 'anonymous');
+const resolveSafetyLogUserKey = () => {
+  const authUid = resolveAuthUid();
+  return authUid ? safeRealtimeKey(authUid, 'authenticated_user') : null;
+};
 
-const writeAuxiliarySafetyLogs = async (payload, eventId) => {
-  const auxiliaryWrites = [];
+const isCriticalSafetyEvent = (event) => (
+  event?.isSOS === true || event?.severity === SEVERITY_LEVELS.CRITICAL
+);
 
-  if (payload.tourId) {
-    const tourRef = realtimeDb.ref(`tours/${payload.tourId}/safetyAlerts`).push();
-    auxiliaryWrites.push(
-      tourRef.set({
-        ...payload,
-        eventId,
-      })
-    );
+const normalizeSafetyQueueScope = (scope) => {
+  if (!scope || typeof scope !== 'object' || Array.isArray(scope)) return null;
+  const tourId = normalizeTourId(scope.tourId);
+  const principalId = typeof (scope.principalId || scope.userId) === 'string'
+    ? (scope.principalId || scope.userId).trim()
+    : '';
+  const role = typeof scope.role === 'string' ? scope.role.trim().toLowerCase() : '';
+  if (!tourId || !principalId || (role !== 'passenger' && role !== 'driver')) return null;
+  return {
+    version: SAFETY_QUEUE_SCOPE_VERSION,
+    tourId,
+    principalId,
+    role,
+  };
+};
+
+const deriveSafetyQueueScope = (event) => normalizeSafetyQueueScope(
+  event?.sessionScope || {
+    tourId: event?.tourId,
+    principalId: event?.principalId || event?.userId,
+    role: event?.role,
+  },
+);
+
+const safetyEventMatchesScope = (event, scope) => {
+  const eventScope = deriveSafetyQueueScope(event);
+  const normalizedScope = normalizeSafetyQueueScope(scope);
+  return Boolean(
+    eventScope
+    && normalizedScope
+    && eventScope.tourId === normalizedScope.tourId
+    && eventScope.principalId === normalizedScope.principalId
+    && eventScope.role === normalizedScope.role
+  );
+};
+
+const filterSafetyQueueForScope = (queue, scope) => (
+  Array.isArray(queue) ? queue.filter((event) => safetyEventMatchesScope(event, scope)) : []
+);
+
+const withSafetyQueueMutationLock = async (operation) => {
+  const current = safetyQueueMutationTail.catch(() => {}).then(operation);
+  safetyQueueMutationTail = current.catch(() => {});
+  return current;
+};
+
+const getSafetyQueueScopeKey = (scope) => {
+  const normalized = normalizeSafetyQueueScope(scope);
+  return normalized
+    ? `${normalized.tourId}|${normalized.role}|${normalized.principalId}`
+    : null;
+};
+
+const getSafetyQueueEventId = (event) => {
+  if (typeof event?.queueId === 'string' && event.queueId.trim()) return event.queueId.trim();
+  const source = [
+    event?.queuedAt,
+    event?.timestamp,
+    event?.tourId,
+    event?.principalId || event?.userId,
+    event?.role,
+    event?.category,
+    event?.message,
+  ].map((value) => String(value ?? '')).join('|');
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
   }
+  return `safety_${(hash >>> 0).toString(36)}`;
+};
 
-  if (payload.isSOS || payload.severity === SEVERITY_LEVELS.CRITICAL) {
-    const globalRef = realtimeDb.ref('globalSafetyAlerts').push();
-    auxiliaryWrites.push(
-      globalRef.set({
-        ...payload,
-        eventId,
-        tourAlertId: payload.tourId ? `tours/${payload.tourId}/safetyAlerts` : null,
-      })
-    );
-  }
+const normalizeOfflineSafetyEvent = (event) => {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return null;
+  const timestampMs = parseTimestampMs(event.queuedAt || event.timestamp);
+  return {
+    ...event,
+    queueId: getSafetyQueueEventId(event),
+    sessionScope: deriveSafetyQueueScope(event),
+    queuedAt: Number.isFinite(timestampMs)
+      ? new Date(timestampMs).toISOString()
+      : new Date().toISOString(),
+    retryCount: Number.isFinite(Number(event.retryCount))
+      ? Math.max(0, Math.trunc(Number(event.retryCount)))
+      : 0,
+  };
+};
 
-  if (!auxiliaryWrites.length) return;
+const boundOfflineSafetyQueue = (events) => {
+  const normalized = Array.isArray(events)
+    ? events.map(normalizeOfflineSafetyEvent).filter(Boolean)
+    : [];
+  if (normalized.length <= MAX_OFFLINE_SAFETY_EVENTS) return normalized;
 
-  const results = await Promise.allSettled(auxiliaryWrites);
-  const rejectedCount = results.filter((result) => result.status === 'rejected').length;
+  // Preserve the newest critical reports first, then use remaining capacity for
+  // the newest routine reports. The final queue is restored to chronological
+  // order so replay remains fair and deterministic.
+  const critical = normalized.filter(isCriticalSafetyEvent).slice(-MAX_OFFLINE_SAFETY_EVENTS);
+  const routineCapacity = Math.max(0, MAX_OFFLINE_SAFETY_EVENTS - critical.length);
+  const routine = normalized.filter((event) => !isCriticalSafetyEvent(event)).slice(-routineCapacity);
+  return [...critical, ...routine]
+    .sort((left, right) => (
+      (parseTimestampMs(left.queuedAt) ?? 0) - (parseTimestampMs(right.queuedAt) ?? 0)
+    ));
+};
 
-  if (rejectedCount > 0) {
-    await logger.warn('Safety', 'Safety event logged with partial visibility', {
-      eventId,
-      rejectedCount,
-      tourId: payload.tourId,
-      severity: payload.severity,
-      isSOS: payload.isSOS,
+const readOfflineSafetyQueue = async () => {
+  const raw = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
+  if (!raw) return [];
+
+  try {
+    return boundOfflineSafetyQueue(JSON.parse(raw));
+  } catch (error) {
+    // Retain the damaged payload for support diagnostics before replacing the
+    // active queue. A corrupt JSON value must never make all future reports
+    // impossible to save.
+    await AsyncStorage.setItem(OFFLINE_QUEUE_CORRUPT_BACKUP_KEY, raw);
+    await logger.warn('Safety', 'Recovered malformed offline safety queue', {
+      error: error?.message || 'Invalid queue JSON',
+      rawLength: raw.length,
     });
+    return [];
   }
+};
+
+const writeOfflineSafetyQueue = async (events) => {
+  const bounded = boundOfflineSafetyQueue(events);
+  if (bounded.length === 0) {
+    await AsyncStorage.removeItem(OFFLINE_QUEUE_KEY);
+  } else {
+    await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(bounded));
+  }
+  return bounded;
+};
+
+const createSafetyEventId = () => (
+  `safety_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+);
+
+const buildSafetySubmissionEndpoint = () => {
+  const explicitUrl = process.env.EXPO_PUBLIC_SUBMIT_SAFETY_REPORT_URL?.trim();
+  if (explicitUrl) return explicitUrl;
+  const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID?.trim();
+  return projectId
+    ? `https://europe-west1-${projectId}.cloudfunctions.net/submitSafetyReport`
+    : null;
+};
+
+const fetchSafetySubmission = async (endpoint, options) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SAFETY_SUBMISSION_TIMEOUT_MS);
+  try {
+    return await fetch(endpoint, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const toRemoteSafetyPayload = (payload, { processedFromQueue = false } = {}) => {
+  const {
+    queueId: _queueId,
+    queuedAt: _queuedAt,
+    retryCount: _retryCount,
+    lastRetryAt: _lastRetryAt,
+    lastErrorCode: _lastErrorCode,
+    sessionScope: _sessionScope,
+    ...remotePayload
+  } = payload || {};
+  return {
+    ...remotePayload,
+    ...(processedFromQueue ? {
+      processedFromQueue: true,
+      originalTimestamp: payload?.timestamp || null,
+      timestamp: new Date().toISOString(),
+    } : {}),
+  };
+};
+
+const writeSafetyEventAtomically = async (payload, options = {}) => {
+  const currentUser = auth?.currentUser;
+  if (!currentUser || typeof currentUser.getIdToken !== 'function') {
+    const error = new Error('Authenticated safety identity is still starting');
+    error.code = 'SAFETY_AUTH_REQUIRED';
+    error.retryable = true;
+    throw error;
+  }
+  const endpoint = buildSafetySubmissionEndpoint();
+  if (!endpoint) {
+    const error = new Error('Safety submission service is not configured');
+    error.code = 'SAFETY_SERVICE_UNAVAILABLE';
+    error.retryable = true;
+    throw error;
+  }
+
+  const token = await currentUser.getIdToken();
+  if (typeof token !== 'string' || !token.trim()) {
+    const error = new Error('Authenticated safety identity is not ready');
+    error.code = 'SAFETY_AUTH_REQUIRED';
+    error.retryable = true;
+    throw error;
+  }
+  const requestPayload = toRemoteSafetyPayload(payload, options);
+  const response = await fetchSafetySubmission(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      ...requestPayload,
+      clientEventId: safeRealtimeKey(
+        requestPayload.clientEventId || requestPayload.queueId || createSafetyEventId(),
+        createSafetyEventId(),
+      ),
+      clientCreatedAtMs: parseTimestampMs(requestPayload.clientCreatedAt || requestPayload.timestamp) || Date.now(),
+      processedFromQueue: options.processedFromQueue === true,
+    }),
+  });
+  const result = await response.json().catch(() => null);
+  if (!response.ok || result?.success !== true) {
+    const reason = result?.reason || `HTTP_${response.status}`;
+    const error = new Error('Safety report was not accepted by the submission service');
+    error.code = reason;
+    error.retryable = response.status === 409 || response.status === 429 || response.status >= 500;
+    throw error;
+  }
+  return {
+    eventId: result.eventId,
+    alreadySubmitted: result.alreadySubmitted === true,
+    receivedAtMs: Number(result.receivedAtMs) || null,
+  };
 };
 
 // Build standardized payload
 const buildPayload = ({
   userId,
+  principalId,
   bookingId,
   tourId,
   role,
@@ -202,6 +411,7 @@ const buildPayload = ({
   coords,
   attachments,
   isSOS,
+  online = true,
 }) => ({
   category,
   severity: severity || SEVERITY_LEVELS.MEDIUM,
@@ -211,6 +421,7 @@ const buildPayload = ({
   tourId: tourId || null,
   bookingId: bookingId || null,
   timestamp: new Date().toISOString(),
+  clientCreatedAt: new Date().toISOString(),
   coords: coords
     ? {
         latitude: coords.latitude,
@@ -225,13 +436,17 @@ const buildPayload = ({
   isSOS: isSOS || false,
   status: EVENT_STATUS.PENDING,
   clientVersion: 'app-2.0',
+  clientEventId: createSafetyEventId(),
   userId: userId || 'anonymous',
+  principalId: principalId || userId || 'anonymous',
+  online: online !== false,
 });
 
 // Log a safety event to Firebase
 export async function logSafetyEvent(params) {
   const {
     userId,
+    principalId,
     bookingId,
     tourId,
     role,
@@ -242,11 +457,13 @@ export async function logSafetyEvent(params) {
     coords = null,
     attachments = [],
     isSOS = false,
+    online = true,
   } = params;
 
   const sanitizedUserId = userId || 'anonymous';
   const payload = buildPayload({
     userId: sanitizedUserId,
+    principalId: principalId || sanitizedUserId,
     bookingId,
     tourId,
     role,
@@ -257,14 +474,16 @@ export async function logSafetyEvent(params) {
     coords,
     attachments,
     isSOS,
+    online,
   });
 
   try {
-    // Write to user's safety log
-    const userRef = realtimeDb.ref(`logs/${resolveSafetyLogUserKey(sanitizedUserId)}/safety`).push();
-    await userRef.set(payload);
+    if (online === false || !resolveSafetyLogUserKey()) {
+      const queueResult = await queueOfflineSafetyEvent(payload);
+      return { success: true, queued: true, payload, queueLength: queueResult.queueLength };
+    }
 
-    await writeAuxiliarySafetyLogs(payload, userRef.key);
+    const { eventId } = await writeSafetyEventAtomically(payload);
 
     await logger.warn('Safety', 'Safety event recorded', {
       category,
@@ -273,99 +492,181 @@ export async function logSafetyEvent(params) {
       tourId,
     });
 
-    return { success: true, eventId: userRef.key, payload };
+    return { success: true, eventId, payload };
   } catch (error) {
     await logger.error('Safety', 'Failed to log safety event', { error: error.message });
 
-    // Queue for offline retry
-    await queueOfflineSafetyEvent(payload);
+    if (error?.retryable === false) {
+      throw error;
+    }
 
-    throw error;
+    // Queue for offline retry
+    try {
+      const queueResult = await queueOfflineSafetyEvent(payload);
+      return {
+        success: true,
+        queued: true,
+        payload,
+        queueLength: queueResult.queueLength,
+        deferredReason: error?.code || 'REMOTE_WRITE_FAILED',
+      };
+    } catch (queueError) {
+      const combinedError = new Error('The safety report could not be submitted or saved on this device');
+      combinedError.code = 'SAFETY_REPORT_NOT_SAVED';
+      combinedError.remoteError = error;
+      combinedError.storageError = queueError;
+      throw combinedError;
+    }
   }
 }
 
 // Queue safety events when offline
 export async function queueOfflineSafetyEvent(payload) {
-  try {
-    const existingQueue = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
-    const queue = existingQueue ? JSON.parse(existingQueue) : [];
-    queue.push({
+  return withSafetyQueueMutationLock(async () => {
+    const sessionScope = deriveSafetyQueueScope(payload);
+    if (!sessionScope) {
+      const scopeError = new Error('A signed-in tour identity is required before a safety report can be queued');
+      scopeError.code = 'SAFETY_QUEUE_SCOPE_REQUIRED';
+      throw scopeError;
+    }
+    try {
+    const queue = await readOfflineSafetyQueue();
+    const nextQueue = await writeOfflineSafetyQueue([...queue, {
       ...payload,
+      sessionScope,
+      queueId: `safety_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
       queuedAt: new Date().toISOString(),
-    });
-    await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
-    await logger.info('Safety', 'Event queued for offline retry', { queueLength: queue.length });
-  } catch (error) {
-    await logger.error('Safety', 'Failed to queue offline event', { error: error.message });
-  }
+      retryCount: 0,
+    }]);
+      const ownedQueueLength = filterSafetyQueueForScope(nextQueue, sessionScope).length;
+      await logger.info('Safety', 'Event queued for offline retry', {
+        queueLength: ownedQueueLength,
+        retainedForOtherSessions: nextQueue.length - ownedQueueLength,
+      });
+      return { success: true, queueLength: ownedQueueLength };
+    } catch (error) {
+      await logger.error('Safety', 'Failed to queue offline event', { error: error.message });
+      throw error;
+    }
+  });
 }
 
 // Process offline queue when back online
-export async function processOfflineQueue(userId) {
-  try {
-    const existingQueue = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
-    if (!existingQueue) return { processed: 0, failed: 0 };
+export async function processOfflineQueue(scope) {
+  const normalizedScope = normalizeSafetyQueueScope(scope);
+  const replayScopeKey = getSafetyQueueScopeKey(normalizedScope);
+  if (!normalizedScope || !replayScopeKey) {
+    return { processed: 0, failed: 0, deferred: true, reason: 'scope_required' };
+  }
+  if (activeSafetyQueueReplays.has(replayScopeKey)) {
+    return { processed: 0, failed: 0, deferred: true, reason: 'replay_in_progress' };
+  }
 
-    const queue = JSON.parse(existingQueue);
-    if (queue.length === 0) return { processed: 0, failed: 0 };
+  activeSafetyQueueReplays.add(replayScopeKey);
+  try {
+    const safetyLogUserKey = resolveSafetyLogUserKey();
+    if (!safetyLogUserKey) return { processed: 0, failed: 0, deferred: true };
+
+    const queue = await withSafetyQueueMutationLock(() => readOfflineSafetyQueue());
+    const ownedQueue = filterSafetyQueueForScope(queue, normalizedScope);
+    const retainedQueue = queue.filter((event) => !safetyEventMatchesScope(event, normalizedScope));
+    if (ownedQueue.length === 0) {
+      return { processed: 0, failed: 0, retainedForOtherSessions: retainedQueue.length };
+    }
 
     let processed = 0;
     let failed = 0;
-    const failedEvents = [];
+    const processedEventIds = new Set();
+    const failedEventsById = new Map();
 
-    for (const event of queue) {
+    for (const event of ownedQueue) {
       try {
-        const sanitizedUserId = userId || event.userId || 'anonymous';
-        const ref = realtimeDb.ref(`logs/${resolveSafetyLogUserKey(sanitizedUserId)}/safety`).push();
-        await ref.set({
-          ...event,
-          processedFromQueue: true,
-          originalTimestamp: event.timestamp,
-          timestamp: new Date().toISOString(),
-        });
-
-        await writeAuxiliarySafetyLogs(event, ref.key);
+        await writeSafetyEventAtomically(event, { processedFromQueue: true });
         processed++;
+        processedEventIds.add(getSafetyQueueEventId(event));
       } catch (error) {
         failed++;
-        failedEvents.push(event);
+        failedEventsById.set(getSafetyQueueEventId(event), {
+          ...event,
+          retryCount: (event.retryCount || 0) + 1,
+          lastRetryAt: new Date().toISOString(),
+          lastErrorCode: error?.code || 'REMOTE_WRITE_FAILED',
+        });
       }
     }
 
-    // Update queue with only failed events
-    if (failedEvents.length > 0) {
-      await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(failedEvents));
-    } else {
-      await AsyncStorage.removeItem(OFFLINE_QUEUE_KEY);
-    }
+    // Re-read under the mutation lock so reports queued while network writes
+    // were in flight are preserved. Only records from this exact snapshot are
+    // removed or updated.
+    await withSafetyQueueMutationLock(async () => {
+      const latestQueue = await readOfflineSafetyQueue();
+      const reconciledQueue = latestQueue.flatMap((event) => {
+        if (!safetyEventMatchesScope(event, normalizedScope)) return [event];
+        const eventId = getSafetyQueueEventId(event);
+        if (processedEventIds.has(eventId)) return [];
+        if (failedEventsById.has(eventId)) return [failedEventsById.get(eventId)];
+        return [event];
+      });
+      await writeOfflineSafetyQueue(reconciledQueue);
+    });
 
-    await logger.info('Safety', 'Offline queue processed', { processed, failed });
-    return { processed, failed };
+    await logger.info('Safety', 'Offline queue processed', {
+      processed,
+      failed,
+      retainedForOtherSessions: retainedQueue.length,
+    });
+    return { processed, failed, retainedForOtherSessions: retainedQueue.length };
   } catch (error) {
     await logger.error('Safety', 'Failed to process offline queue', { error: error.message });
     return { processed: 0, failed: 0, error: error.message };
+  } finally {
+    activeSafetyQueueReplays.delete(replayScopeKey);
   }
 }
 
 // Update live location sharing status
 export async function updateLiveLocationSharing(tourId, userId, isSharing, coords = null) {
-  if (!tourId || !userId) return false;
+  const authUid = resolveAuthUid();
+  if (!tourId || !userId || !authUid || userId !== authUid) return false;
 
   try {
-    const ref = realtimeDb.ref(`tours/${tourId}/liveTracking/${userId}`);
+    const ref = realtimeDb.ref(`tours/${tourId}/liveTracking/${authUid}`);
+    const disconnectHandler = typeof ref.onDisconnect === 'function' ? ref.onDisconnect() : null;
 
     if (isSharing && coords) {
-      await ref.set({
-        isSharing: true,
-        coords: {
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-          accuracy: coords.accuracy,
-        },
-        lastUpdate: new Date().toISOString(),
-        userId,
-      });
+      const latitude = Number(coords.latitude);
+      const longitude = Number(coords.longitude);
+      const accuracy = Number(coords.accuracy);
+      if (
+        !Number.isFinite(latitude) || latitude < -90 || latitude > 90
+        || !Number.isFinite(longitude) || longitude < -180 || longitude > 180
+        || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > 100000
+      ) {
+        return false;
+      }
+      if (!disconnectHandler || typeof disconnectHandler.remove !== 'function') {
+        throw new Error('Live location disconnect cleanup is unavailable');
+      }
+      await disconnectHandler.remove();
+      try {
+        await ref.set({
+          schemaVersion: 2,
+          isSharing: true,
+          coords: {
+            latitude,
+            longitude,
+            accuracy,
+          },
+          lastUpdate: { '.sv': 'timestamp' },
+          clientUpdatedAtMs: Date.now(),
+          userId: authUid,
+        });
+      } catch (error) {
+        await disconnectHandler.cancel?.().catch(() => {});
+        throw error;
+      }
     } else {
+      await disconnectHandler?.cancel?.();
       await ref.remove();
     }
 
@@ -377,7 +678,7 @@ export async function updateLiveLocationSharing(tourId, userId, isSharing, coord
 }
 
 // Subscribe to safety alerts for a tour (for drivers/operations)
-export function subscribeToSafetyAlerts(tourId, callback) {
+export function subscribeToSafetyAlerts(tourId, callback, onError) {
   if (!tourId) return () => {};
 
   const ref = realtimeDb.ref(`tours/${tourId}/safetyAlerts`);
@@ -397,7 +698,15 @@ export function subscribeToSafetyAlerts(tourId, callback) {
     callback(alerts);
   };
 
-  ref.on('value', handleData);
+  const handleError = (error) => {
+    logger.error('Safety', 'Safety alert subscription failed', {
+      tourId,
+      error: error?.message || String(error),
+    });
+    onError?.(error);
+  };
+
+  ref.on('value', handleData, handleError);
 
   return () => ref.off('value', handleData);
 }
@@ -428,8 +737,10 @@ export async function getSafetyHistory(userId, limit = 20) {
   if (!userId) return [];
 
   try {
+    const safetyLogUserKey = resolveSafetyLogUserKey();
+    if (!safetyLogUserKey) return [];
     const snapshot = await realtimeDb
-      .ref(`logs/${resolveSafetyLogUserKey(userId)}/safety`)
+      .ref(`logs/${safetyLogUserKey}/safety`)
       .orderByChild('timestamp')
       .limitToLast(limit)
       .once('value');
@@ -453,43 +764,103 @@ export async function getSafetyHistory(userId, limit = 20) {
 }
 
 // Trusted contacts storage
-const TRUSTED_CONTACTS_KEY = '@LLT:trustedContacts';
+const LEGACY_TRUSTED_CONTACTS_KEY = '@LLT:trustedContacts';
+const TRUSTED_CONTACTS_KEY_PREFIX = '@LLT:trustedContacts:v2:';
+const MAX_TRUSTED_CONTACTS = 5;
 
-export async function getTrustedContacts() {
+const getTrustedContactsStorageKey = (principalId) => {
+  const normalized = typeof principalId === 'string' ? principalId.trim() : '';
+  return normalized ? `${TRUSTED_CONTACTS_KEY_PREFIX}${encodeURIComponent(normalized)}` : null;
+};
+
+const readTrustedContactsStrict = async (principalId) => {
+  const storageKey = getTrustedContactsStorageKey(principalId);
+  if (!storageKey) return [];
+  const data = await AsyncStorage.getItem(storageKey);
+  if (!data) return [];
+  const parsed = JSON.parse(data);
+  if (!Array.isArray(parsed)) throw new Error('Trusted contacts payload is invalid');
+  const contactsAreValid = parsed.every((contact) => (
+    contact
+    && typeof contact.id === 'string'
+    && typeof contact.name === 'string'
+    && typeof contact.phone === 'string'
+  ));
+  if (!contactsAreValid || parsed.length > MAX_TRUSTED_CONTACTS) {
+    throw new Error('Trusted contacts payload is invalid');
+  }
+  return parsed;
+};
+
+export async function getTrustedContacts(principalId) {
   try {
-    const data = await AsyncStorage.getItem(TRUSTED_CONTACTS_KEY);
-    return data ? JSON.parse(data) : [];
+    return await readTrustedContactsStrict(principalId);
   } catch (error) {
+    await logger.warn('Safety', 'Trusted contacts could not be loaded', {
+      error: error?.message || String(error),
+    });
     return [];
   }
 }
 
-export async function saveTrustedContacts(contacts) {
+export async function saveTrustedContacts(principalId, contacts) {
   try {
-    await AsyncStorage.setItem(TRUSTED_CONTACTS_KEY, JSON.stringify(contacts));
+    const storageKey = getTrustedContactsStorageKey(principalId);
+    if (!storageKey) return false;
+    await AsyncStorage.setItem(storageKey, JSON.stringify(contacts));
     return true;
   } catch (error) {
     return false;
   }
 }
 
-export async function addTrustedContact(contact) {
-  const contacts = await getTrustedContacts();
-  const newContact = {
-    id: Date.now().toString(),
-    ...contact,
-    addedAt: new Date().toISOString(),
-  };
-  contacts.push(newContact);
-  await saveTrustedContacts(contacts);
-  return newContact;
+export async function addTrustedContact(principalId, contact) {
+  const operation = trustedContactsMutationTail.catch(() => {}).then(async () => {
+    const name = typeof contact?.name === 'string' ? contact.name.trim().slice(0, 80) : '';
+    const phone = typeof contact?.phone === 'string' ? contact.phone.trim().slice(0, 40) : '';
+    if (!name || (phone.match(/\d/g) || []).length < 7) {
+      const error = new Error('Trusted contact details are invalid');
+      error.code = 'TRUSTED_CONTACT_INVALID';
+      throw error;
+    }
+    const contacts = await readTrustedContactsStrict(principalId);
+    if (contacts.length >= MAX_TRUSTED_CONTACTS) {
+      const error = new Error(`You can save up to ${MAX_TRUSTED_CONTACTS} trusted contacts`);
+      error.code = 'TRUSTED_CONTACT_LIMIT';
+      throw error;
+    }
+    const newContact = {
+      id: `contact_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      phone,
+      addedAt: new Date().toISOString(),
+    };
+    const saved = await saveTrustedContacts(principalId, [...contacts, newContact]);
+    if (!saved) {
+      const error = new Error('Trusted contact could not be saved on this device');
+      error.code = 'TRUSTED_CONTACT_SAVE_FAILED';
+      throw error;
+    }
+    return newContact;
+  });
+  trustedContactsMutationTail = operation.catch(() => {});
+  return operation;
 }
 
-export async function removeTrustedContact(contactId) {
-  const contacts = await getTrustedContacts();
-  const filtered = contacts.filter(c => c.id !== contactId);
-  await saveTrustedContacts(filtered);
-  return true;
+export async function removeTrustedContact(principalId, contactId) {
+  const operation = trustedContactsMutationTail.catch(() => {}).then(async () => {
+    const contacts = await readTrustedContactsStrict(principalId);
+    const filtered = contacts.filter(c => c.id !== contactId);
+    const saved = await saveTrustedContacts(principalId, filtered);
+    if (!saved) {
+      const error = new Error('Trusted contact could not be removed from this device');
+      error.code = 'TRUSTED_CONTACT_SAVE_FAILED';
+      throw error;
+    }
+    return true;
+  });
+  trustedContactsMutationTail = operation.catch(() => {});
+  return operation;
 }
 
 // Emergency SMS template
@@ -502,23 +873,18 @@ export function generateEmergencySMS(coords, tourData, userName) {
 }
 
 // Get offline queue count
-export async function getOfflineQueueCount() {
+export async function getOfflineQueueCount(scope) {
   try {
-    const existingQueue = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
-    if (!existingQueue) return 0;
-    const queue = JSON.parse(existingQueue);
-    return queue.length;
+    const queue = await readOfflineSafetyQueue();
+    return filterSafetyQueueForScope(queue, scope).length;
   } catch (error) {
     return 0;
   }
 }
 
-export async function getOfflineQueuedSafetyEvents(limit = 20) {
+export async function getOfflineQueuedSafetyEvents(scope, limit = 20) {
   try {
-    const existingQueue = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
-    if (!existingQueue) return [];
-
-    const queue = JSON.parse(existingQueue);
+    const queue = filterSafetyQueueForScope(await readOfflineSafetyQueue(), scope);
     if (!Array.isArray(queue) || queue.length === 0) return [];
 
     const mapped = queue.map((event, index) => ({
@@ -534,3 +900,17 @@ export async function getOfflineQueuedSafetyEvents(limit = 20) {
     return [];
   }
 }
+
+export const __testables = {
+  MAX_OFFLINE_SAFETY_EVENTS,
+  boundOfflineSafetyQueue,
+  normalizeOfflineSafetyEvent,
+  normalizeSafetyQueueScope,
+  deriveSafetyQueueScope,
+  safetyEventMatchesScope,
+  getSafetyQueueEventId,
+  writeSafetyEventAtomically,
+  toRemoteSafetyPayload,
+  getTrustedContactsStorageKey,
+  LEGACY_TRUSTED_CONTACTS_KEY,
+};

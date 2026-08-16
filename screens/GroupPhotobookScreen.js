@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { Image as ExpoImage } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as offlineSyncService from '../services/offlineSyncService';
@@ -443,6 +443,12 @@ export default function GroupPhotobookScreen({
         id: jobId,
         type: 'PHOTO_UPLOAD',
         tourId,
+        scope: {
+          tourId,
+          principalId,
+          role: canonicalIdentity?.principalType === 'driver' ? 'driver' : 'passenger',
+          authUid: canonicalIdentity?.authUid || null,
+        },
         createdAt,
         payload: {
           payloadVersion: 2,

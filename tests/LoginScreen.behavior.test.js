@@ -100,6 +100,9 @@ Module._load = function mockLoader(request, parent, isMain) {
   if (request === '@expo/vector-icons') {
     return { MaterialCommunityIcons: createHost('MaterialCommunityIcons') };
   }
+  if (request === '@expo/vector-icons/build/MaterialCommunityIcons.js') {
+    return createHost('MaterialCommunityIcons');
+  }
 
   if (request === 'expo-linear-gradient') {
     return { LinearGradient: createHost('LinearGradient') };

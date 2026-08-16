@@ -193,8 +193,8 @@ test('deleteCurrentAccount clears app account records, active-tour content, loca
   assert.equal(updatePayload['tours/TOUR_1/liveTracking/stable-pax-1'], undefined);
   assert.equal(updatePayload['chats/TOUR_1/messages/mine/deleted'], true);
   assert.equal(updatePayload['chats/TOUR_1/messages/mine/text'], '');
-  assert.equal(updatePayload['chats/TOUR_1/messages/mine/imageUrl'], undefined);
-  assert.equal(updatePayload['chats/TOUR_1/messages/mine/thumbnailUrl'], undefined);
+  assert.equal(updatePayload['chats/TOUR_1/messages/mine/imageUrl'], null);
+  assert.equal(updatePayload['chats/TOUR_1/messages/mine/thumbnailUrl'], null);
   assert.equal(updatePayload['chats/TOUR_1/messages/mine/reactions/wave/stable-pax-1'], null);
   assert.equal(updatePayload['chats/TOUR_1/messages/reacted/reactions/thumbs/stable-pax-1'], null);
   assert.equal(db.refs.includes('private_tour_photos/TOUR_1/auth-1'), false);
@@ -270,4 +270,84 @@ test('deleteCurrentAccount returns a user-facing error when there is no signed-i
 
   assert.equal(result.success, false);
   assert.match(result.error, /No signed-in app account/);
+});
+
+test('deleteCurrentAccount does not expose raw backend errors to the account screen', async () => {
+  const { deleteCurrentAccount } = loadService();
+  const db = buildDb({});
+  db.ref = () => ({
+    once: async () => makeSnapshot(null),
+    update: async () => {
+      const error = new Error('permission_denied at /users/auth-secret with credential detail');
+      error.code = 'PERMISSION_DENIED';
+      throw error;
+    },
+  });
+
+  const result = await deleteCurrentAccount({
+    currentUser: { uid: 'auth-secret' },
+    db,
+    canonicalIdentity: { principalId: 'passenger-secret' },
+    sessionStorage: { multiRemove: async () => {} },
+    localStorage: { multiRemove: async () => {} },
+    providerFactory: () => ({ multiDeleteAsync: async () => true }),
+    photoApi: {},
+  });
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /verify all required permissions/i);
+  assert.doesNotMatch(result.error, /auth-secret|credential detail|\/users\//);
+});
+
+test('account deletion records local provider false results as cleanup warnings', async () => {
+  const { deleteCurrentAccount } = loadService();
+  const result = await deleteCurrentAccount({
+    currentUser: { uid: 'auth-1' },
+    db: buildDb({}),
+    sessionStorage: { multiRemove: async () => {} },
+    localStorage: { multiRemove: async () => {} },
+    providerFactory: () => ({ multiDeleteAsync: async () => false }),
+    photoApi: {},
+    authHelpersOverride: {
+      clearAuthData: async () => {},
+      ensureAuthenticated: async () => ({ uid: 'fresh-auth' }),
+    },
+    deleteUserFn: async () => {},
+  });
+
+  assert.equal(result.success, true);
+  assert.ok(result.warnings.some((warning) => warning.label === 'local_cleanup_failed'));
+  assert.ok(result.localStoresCleared < 5);
+});
+
+test('account-local cleanup removes only the deleted principal from shared-device queues', async () => {
+  const { __accountDeletionTestables } = loadService();
+  const offlineValues = new Map([
+    ['queue_v1', JSON.stringify([
+      { id: 'mine', scope: { principalId: 'passenger-a' } },
+      { id: 'theirs', scope: { principalId: 'passenger-b' } },
+    ])],
+  ]);
+  const localValues = new Map([
+    ['@LLT:safetyOfflineQueue', JSON.stringify([
+      { id: 'safety-mine', sessionScope: { principalId: 'passenger-a' } },
+      { id: 'safety-theirs', sessionScope: { principalId: 'passenger-b' } },
+    ])],
+  ]);
+  const offlineStorage = {
+    getItemAsync: async (key) => offlineValues.get(key) ?? null,
+    setItemAsync: async (key, value) => offlineValues.set(key, value),
+    deleteItemAsync: async (key) => offlineValues.delete(key),
+  };
+  const localStorage = {
+    getItem: async (key) => localValues.get(key) ?? null,
+    setItem: async (key, value) => localValues.set(key, value),
+    removeItem: async (key) => localValues.delete(key),
+  };
+
+  await __accountDeletionTestables.clearOwnedOfflineActions(offlineStorage, new Set(['passenger-a']));
+  await __accountDeletionTestables.clearOwnedSafetyQueue(localStorage, new Set(['passenger-a']));
+
+  assert.deepEqual(JSON.parse(offlineValues.get('queue_v1')).map((action) => action.id), ['theirs']);
+  assert.deepEqual(JSON.parse(localValues.get('@LLT:safetyOfflineQueue')).map((event) => event.id), ['safety-theirs']);
 });

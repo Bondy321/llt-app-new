@@ -18,6 +18,7 @@ import { createPersistenceProvider } from './services/persistenceProvider.js';
 // Initialize a resilient persistence layer for auth/session state.
 const authStorage = createPersistenceProvider({ namespace: 'LLT_AUTH' });
 const IS_DEV = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
+const IS_WEB_RUNTIME = typeof window !== 'undefined' && typeof document !== 'undefined';
 const formatFirebaseError = (error) => error?.message || String(error || 'Unknown error');
 const firebaseDebugLog = (...args) => {
   if (IS_DEV) {
@@ -242,10 +243,18 @@ try {
   const modularApp = app._delegate || app;
 
   try {
-    auth = initializeAuth(modularApp, {
-      persistence: getReactNativePersistence(AsyncStorage),
-    });
-    firebaseDebugLog('Firebase auth configured with React Native persistence');
+    if (IS_WEB_RUNTIME) {
+      // The web SDK selects its own IndexedDB/localStorage persistence. Calling
+      // getReactNativePersistence on web is unsupported and can leave the app in
+      // a noisy fallback path even though authentication itself is healthy.
+      auth = getAuth(modularApp);
+      firebaseDebugLog('Firebase auth configured with web persistence');
+    } else {
+      auth = initializeAuth(modularApp, {
+        persistence: getReactNativePersistence(AsyncStorage),
+      });
+      firebaseDebugLog('Firebase auth configured with React Native persistence');
+    }
   } catch (authInitError) {
     auth = getAuth(modularApp);
     firebaseWarnLog(

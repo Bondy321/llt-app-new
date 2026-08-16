@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, RADIUS, SPACING } from '../theme';
 import { resolveTourId } from '../services/tourIdentityService';

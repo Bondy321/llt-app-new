@@ -1,7 +1,7 @@
 // App.js
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, Text, StyleSheet, Animated, Easing, PanResponder } from 'react-native';
+import { View, ActivityIndicator, Text, StyleSheet, Animated, Easing, PanResponder, TouchableOpacity } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -24,7 +24,13 @@ import {
   setDiagnosticsContext,
 } from './services/crashDiagnosticsService';
 import loginDiagnostics from './services/loginDiagnosticsService';
+import {
+  deactivatePushToken,
+  restorePushTokenForSession,
+  subscribeToNotificationResponses,
+} from './services/notificationService';
 import { COLORS as THEME } from './theme';
+import AppErrorBoundary from './components/AppErrorBoundary';
 
 // Import Screens
 import LoginScreen from './screens/LoginScreen';
@@ -42,6 +48,7 @@ import SafetySupportScreen from './screens/SafetySupportScreen';
 import DriverItineraryScreen from './screens/DriverItineraryScreen';
 const { getLoginTransitionDurationMs } = require('./screens/loginFlow');
 const { isEligibleEdgeSwipe, shouldCommitEdgeSwipeHome } = require('./services/swipeHomeNavigation');
+const { markNotificationRead } = require('./services/notificationInboxService');
 
 const IDENTITY_VERSION = 'pax_v1';
 const IDENTITY_SESSION_KEYS = {
@@ -72,7 +79,7 @@ const STARTUP_CONNECTION_ERROR_MESSAGE =
 
 const { normalizePassengerEmail, resolveOfflineLoginFromCache } = offlineLoginResolver;
 
-// --- SESSION STORAGE SETUP (AsyncStorage fallback to mock for tests/web) ---
+// --- SESSION STORAGE SETUP ---
 const createSessionStorage = () => {
   const mockStorage = {
     _data: {},
@@ -97,15 +104,39 @@ const createSessionStorage = () => {
     logger.warn('SessionStorage', 'AsyncStorage unavailable, falling back to mock', { error: error.message });
   }
 
-  return { storage: mockStorage, mode: 'mock', enabled: true };
+  if (process.env.NODE_ENV === 'test') {
+    return { storage: mockStorage, mode: 'memory-test', enabled: true };
+  }
+
+  const unavailable = async () => {
+    const error = new Error('Durable session storage is unavailable');
+    error.code = 'SESSION_STORAGE_UNAVAILABLE';
+    throw error;
+  };
+  return {
+    storage: {
+      multiGet: unavailable,
+      multiSet: unavailable,
+      multiRemove: unavailable,
+    },
+    mode: 'unavailable',
+    enabled: false,
+  };
 };
 
 const { storage: SessionStorage, mode: storageMode } = createSessionStorage();
 
 export default function App() {
+  const [appEpoch, setAppEpoch] = useState(0);
+
   return (
     <SafeAreaProvider>
-      <AppContent />
+      <AppErrorBoundary
+        resetKey={appEpoch}
+        onReset={() => setAppEpoch((value) => value + 1)}
+      >
+        <AppContent key={appEpoch} />
+      </AppErrorBoundary>
     </SafeAreaProvider>
   );
 }
@@ -128,7 +159,9 @@ function AppContent() {
   const loginTransitionTimerRef = useRef(null);
   const loginTransitionAnimationRef = useRef(null);
   const driverIdentityPersistKeyRef = useRef(null);
+  const authUnsubscribeRef = useRef(null);
   const loginProgress = useRef(new Animated.Value(0)).current;
+  const notificationNavigateRef = useRef(null);
 
   const isDriverSession = bookingData?.id && bookingData.id.startsWith('D-');
   const canonicalIdentity = useMemo(
@@ -182,20 +215,47 @@ function AppContent() {
       loginProgress.setValue(0);
     }, durationMs);
   };
+  const diagnosticsTourId = resolveTourId(tourData?.id, tourData?.tourCode);
+  const diagnosticsRole = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
+  const offlineSessionScope = useMemo(() => {
+    const principalId = canonicalIdentity?.principalId;
+    if (!diagnosticsTourId || !principalId || principalId === 'anonymous') return null;
+    return {
+      tourId: diagnosticsTourId,
+      principalId,
+      role: diagnosticsRole,
+      authUid: canonicalIdentity?.authUid || null,
+      cacheOwnerId: bookingData?.id || principalId,
+    };
+  }, [bookingData?.id, canonicalIdentity?.authUid, canonicalIdentity?.principalId, diagnosticsRole, diagnosticsTourId]);
+  const offlineSessionScopeKey = offlineSessionScope
+    ? `${offlineSessionScope.tourId}|${offlineSessionScope.role}|${offlineSessionScope.principalId}|${offlineSessionScope.cacheOwnerId}`
+    : 'none';
+
   const refreshAppData = async () => {
     logger.info('App', 'Refreshing app data');
     if (!isConnected) return;
-    await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+    await offlineSyncService.replayQueue({
+      services: { bookingService, chatService },
+      scope: offlineSessionScope,
+    });
   };
 
-  const diagnosticsTourId = resolveTourId(tourData?.id, tourData?.tourCode);
-  const diagnosticsRole = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
   const { isConnected, firebaseConnected } = useDiagnostics({
     onForeground: refreshAppData,
     activeTourId: diagnosticsTourId,
     role: diagnosticsRole,
+    offlineCacheOwnerId: bookingData?.id || null,
   });
   const insets = useSafeAreaInsets();
+
+  useEffect(() => {
+    offlineSyncService.setActiveSessionScope(offlineSessionScope).catch((error) => {
+      logger.warn('OfflineSync', 'Could not update active offline session scope', {
+        error: error?.message || String(error),
+      });
+    });
+  }, [offlineSessionScopeKey]);
 
   useEffect(() => {
     installGlobalCrashDiagnostics();
@@ -209,17 +269,17 @@ function AppContent() {
       storageMode
     });
 
-    let authUnsubscribe = null;
-
     const bootstrap = async () => {
-      authUnsubscribe = await initializeApp();
+      await initializeApp();
     };
 
     bootstrap().catch((error) => logger.error('App', 'Bootstrap failure', { error: error.message }));
 
     return () => {
       clearLoginTransitionArtifacts();
-      if (typeof authUnsubscribe === 'function') authUnsubscribe();
+      offlineSyncService.setActiveSessionScope(null).catch(() => {});
+      if (typeof authUnsubscribeRef.current === 'function') authUnsubscribeRef.current();
+      authUnsubscribeRef.current = null;
     };
   }, []);
 
@@ -340,16 +400,10 @@ function AppContent() {
 
     const now = Date.now();
     const updates = {
-      [`users/${authUid}/driverId`]: normalizedDriverId,
-      [`users/${authUid}/driverPrincipalId`]: `driver:${normalizedDriverId}`,
-      [`users/${authUid}/principalType`]: 'driver',
-      [`users/${authUid}/lastUpdated`]: now,
-      [`drivers/${normalizedDriverId}/authUid`]: authUid,
       [`drivers/${normalizedDriverId}/lastActive`]: new Date(now).toISOString(),
     };
 
     const normalizedAssignedTourId = normalizeTourId(assignedTourId);
-    updates[`users/${authUid}/driverAssignedTourId`] = normalizedAssignedTourId;
 
     await realtimeDb.ref().update(updates);
     return {
@@ -505,9 +559,13 @@ function AppContent() {
   };
 
   const initializeApp = async () => {
+    let unsubscribe = null;
     try {
+      setAuthError(null);
       await restoreSession();
-      const unsubscribe = authHelpers.onAuthStateChanged(handleAuthStateChange);
+      if (typeof authUnsubscribeRef.current === 'function') authUnsubscribeRef.current();
+      unsubscribe = authHelpers.onAuthStateChanged(handleAuthStateChange);
+      authUnsubscribeRef.current = unsubscribe;
 
       const currentUser = await authHelpers.ensureAuthenticated();
       if (currentUser) {
@@ -526,11 +584,19 @@ function AppContent() {
       setInitializing(false);
       return unsubscribe;
     } catch (error) {
+      if (typeof unsubscribe === 'function') unsubscribe();
+      if (authUnsubscribeRef.current === unsubscribe) authUnsubscribeRef.current = null;
       logger.error('App', 'Initialization error', { error: error.message });
       setAuthError(STARTUP_CONNECTION_ERROR_MESSAGE);
       setInitializing(false);
       return null;
     }
+  };
+
+  const retryInitialization = async () => {
+    setAuthError(null);
+    setInitializing(true);
+    await initializeApp();
   };
 
   const handleAuthStateChange = async (currentUser) => {
@@ -823,8 +889,13 @@ function AppContent() {
         await offlineSyncService.saveTourPack(tourDetails.id, 'driver', {
           tour: tourDetails,
           driver: bookingOrDriverData,
-        });
-        await offlineSyncService.setTourPackMeta(tourDetails.id, 'driver', { lastSyncedAt: new Date().toISOString() });
+        }, { ownerId: bookingOrDriverData?.id });
+        await offlineSyncService.setTourPackMeta(
+          tourDetails.id,
+          'driver',
+          { lastSyncedAt: new Date().toISOString() },
+          { ownerId: bookingOrDriverData?.id },
+        );
         await loginDiagnostics.recordLoginDiagnostic('driver_offline_pack_save_succeeded', {
           tourId: tourDetails.id,
           driverId: bookingOrDriverData?.id,
@@ -1030,8 +1101,13 @@ function AppContent() {
         tour: tourDetails,
         booking: normalizedBookingData,
         safety: { emergencyPhone: tourDetails?.driverPhone || null },
-      });
-      await offlineSyncService.setTourPackMeta(tourDetails.id, 'passenger', { lastSyncedAt: new Date().toISOString() });
+      }, { ownerId: normalizedBookingData?.id });
+      await offlineSyncService.setTourPackMeta(
+        tourDetails.id,
+        'passenger',
+        { lastSyncedAt: new Date().toISOString() },
+        { ownerId: normalizedBookingData?.id },
+      );
       await loginDiagnostics.recordLoginDiagnostic('passenger_offline_pack_save_succeeded', {
         tourId: tourDetails.id,
         bookingRef: normalizedBookingData?.id || null,
@@ -1094,6 +1170,54 @@ function AppContent() {
     setCurrentScreen(screen);
     saveSession({ currentScreen: screen });
   };
+  notificationNavigateRef.current = navigateTo;
+
+  useEffect(() => {
+    const activeTourId = tourData?.id;
+    const authUserId = user?.uid;
+    const hasAppSession = Boolean(bookingData?.id);
+    if (!authUserId || !hasAppSession) return undefined;
+
+    return subscribeToNotificationResponses({
+      getContext: () => ({
+        activeTourId,
+        isDriver: Boolean(isDriverSession),
+      }),
+      onNavigate: async ({ screen, params }) => {
+        const responseTourId = params?.tourId || activeTourId;
+        if (params?.noticeId && responseTourId) {
+          try {
+            await markNotificationRead({
+              tourId: responseTourId,
+              userId: authUserId,
+              noticeId: params.noticeId,
+            });
+          } catch (error) {
+            logger.warn('Navigation', 'Notification read state could not be persisted', {
+              screen,
+              error: error?.message || String(error),
+            });
+          }
+        }
+        const navigate = notificationNavigateRef.current;
+        if (typeof navigate !== 'function') {
+          throw new Error('Notification navigation is not ready');
+        }
+        navigate(screen, params);
+      },
+    });
+  }, [bookingData?.id, isDriverSession, tourData?.id, user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid || !tourData?.id) return;
+    restorePushTokenForSession(user.uid).then((result) => {
+      if (!result?.success) {
+        logger.warn('NotificationService', 'Signed-in push token restore was deferred', {
+          error: result?.error || 'unknown',
+        });
+      }
+    });
+  }, [tourData?.id, user?.uid]);
 
   const edgeSwipeResponder = PanResponder.create({
     onStartShouldSetPanResponder: () => false,
@@ -1127,21 +1251,43 @@ function AppContent() {
       keysToRemove.push(SESSION_KEYS.NOTIFICATION_ONBOARDING);
     }
 
-    await SessionStorage.multiRemove(keysToRemove);
-    setTourCode('');
-    setTourData(null);
-    setBookingData(null);
-    setIdentityBinding(null);
-    setScreenParams({});
-    setCurrentScreen('Login');
+    try {
+      await SessionStorage.multiRemove(keysToRemove);
+    } catch (error) {
+      logger.warn('Auth', 'Persisted session cleanup failed; clearing in-memory session', {
+        error: error?.message || String(error),
+      });
+    } finally {
+      setTourCode('');
+      setTourData(null);
+      setBookingData(null);
+      setIdentityBinding(null);
+      setScreenParams({});
+      setCurrentScreen('Login');
+    }
   };
 
   const handleLogout = async () => {
-    try {
-      await clearSessionState();
-    } catch (error) {
-      logger.error('Auth', 'Logout error', { error: error.message });
+    const authUid = user?.uid || auth?.currentUser?.uid || null;
+    const [scopeResult, tokenResult] = await Promise.allSettled([
+      offlineSyncService.setActiveSessionScope(null),
+      authUid ? deactivatePushToken(authUid) : Promise.resolve({ success: true }),
+    ]);
+
+    if (scopeResult.status === 'rejected') {
+      logger.warn('Auth', 'Offline session scope could not be cleared during logout', {
+        error: scopeResult.reason?.message || String(scopeResult.reason),
+      });
     }
+    if (tokenResult.status === 'rejected' || tokenResult.value?.success === false) {
+      logger.warn('Auth', 'Push token could not be deactivated during logout', {
+        error: tokenResult.status === 'rejected'
+          ? (tokenResult.reason?.message || String(tokenResult.reason))
+          : tokenResult.value?.error,
+      });
+    }
+
+    await clearSessionState();
   };
 
   const handleAccountDeleted = async (summary = {}) => {
@@ -1151,6 +1297,11 @@ function AppContent() {
         replacementAuthUid: maskIdentifier(summary.replacementAuthUid),
         warningCount: Array.isArray(summary.warnings) ? summary.warnings.length : 0,
       });
+      await offlineSyncService.setActiveSessionScope(null).catch((error) => {
+        logger.warn('Auth', 'Offline session scope could not be cleared after account deletion', {
+          error: error?.message || String(error),
+        });
+      });
       await clearSessionState({ includeNotificationOnboarding: true });
       setUser(auth?.currentUser || null);
     } catch (error) {
@@ -1159,9 +1310,12 @@ function AppContent() {
   };
 
   useEffect(() => {
-    if (!isConnected || !firebaseConnected) return;
-    offlineSyncService.replayQueue({ services: { bookingService, chatService } });
-  }, [isConnected, firebaseConnected, user?.uid]);
+    if (!isConnected || !firebaseConnected || !offlineSessionScope) return;
+    offlineSyncService.replayQueue({
+      services: { bookingService, chatService },
+      scope: offlineSessionScope,
+    });
+  }, [isConnected, firebaseConnected, offlineSessionScopeKey]);
 
   if (initializing) {
     return (
@@ -1178,7 +1332,15 @@ function AppContent() {
         <Text style={styles.errorIcon}>⚠️</Text>
         <Text style={styles.errorTitle}>Connection Error</Text>
         <Text style={styles.errorText}>{authError}</Text>
-        <Text style={styles.errorDetail}>Please check your internet connection and restart the app.</Text>
+        <Text style={styles.errorDetail}>Check your internet connection, then try again. Your saved tour remains on this device.</Text>
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Retry connecting to tour services"
+          style={styles.retryButton}
+          onPress={retryInitialization}
+        >
+          <Text style={styles.retryButtonText}>Try again</Text>
+        </TouchableOpacity>
       </SafeAreaView>
     );
   }
@@ -1205,6 +1367,8 @@ function AppContent() {
             tourData={tourData}
             bookingData={bookingData}
             userId={user?.uid}
+            principalId={canonicalIdentity?.principalId}
+            offlineCacheOwnerId={bookingData?.id}
             mode={screenParams?.mode || 'passenger'}
             isConnected={isConnected}
           />
@@ -1213,7 +1377,13 @@ function AppContent() {
         return (
           <PassengerManifestScreen
             // 1. Pass the global 'screenParams' as 'route.params' so the screen can read 'tourId'
-            route={{ params: screenParams }}
+            route={{
+              params: {
+                ...screenParams,
+                actorPrincipalId: canonicalIdentity?.principalId,
+                authUid: canonicalIdentity?.authUid,
+              },
+            }}
             
             // 2. Mock the 'navigation' object so the screen's logic works without changing it
             navigation={{
@@ -1273,6 +1443,7 @@ case 'Itinerary':
             tourName={tourData?.name}
             startDate={tourData?.startDate}
             isDriver={isDriverUser} // NEW PROP
+            offlineCacheOwnerId={bookingData?.id}
           />
         );
       case 'DriverItinerary':
@@ -1282,6 +1453,7 @@ case 'Itinerary':
             onBack={() => navigateTo('DriverHome')}
             tourId={screenParams.tourId || tourData?.id}
             tourName={tourData?.name}
+            offlineCacheOwnerId={bookingData?.id}
           />
         );
       case 'Chat':
@@ -1310,6 +1482,7 @@ case 'Itinerary':
             bookingData={effectiveBookingData}
             tourData={tourData || { name: 'Tour Chat' }}
             internalDriverChat={screenParams.internalDriverChat === true}
+            initialMessageId={screenParams.messageId || null}
             identityBinding={identityBinding}
             canonicalIdentity={canonicalIdentity}
           />
@@ -1332,6 +1505,9 @@ case 'Itinerary':
             audience={screenParams?.audience || (isDriverSession ? 'driver' : 'passenger')}
             returnTo={notificationReturnTarget}
             onComplete={handleNotificationOnboardingComplete}
+            tourId={tourData?.id}
+            initialMarketingCategoryKey={screenParams?.categoryKey || null}
+            onNavigate={navigateTo}
           />
         );
       case 'AccountPrivacy':
@@ -1405,6 +1581,17 @@ const styles = StyleSheet.create({
   },
   errorText: { fontSize: 16, color: COLORS.darkText, textAlign: 'center', marginBottom: 5 },
   errorDetail: { fontSize: 14, color: COLORS.darkText, opacity: 0.6, textAlign: 'center', marginTop: 15 },
+  retryButton: {
+    minHeight: 48,
+    minWidth: 160,
+    marginTop: 24,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: COLORS.primaryBlue,
+  },
+  retryButtonText: { color: COLORS.white, fontSize: 16, fontWeight: '700' },
   loginTransitionOverlay: {
     position: 'absolute',
     left: 12,

@@ -1,6 +1,6 @@
 # Web Admin Live Operations Dashboard
 
-Last updated: May 28, 2026
+Last updated: August 11, 2026
 
 The web-admin dashboard is the central live command hub for LLT operations. It must show only data that is backed by Firebase branches or deterministic derived metrics. Do not add placeholder trends, fake percentages, decorative status cards, or controls that do not perform a real action.
 
@@ -39,13 +39,16 @@ Safety:
 - Safety rows combine `globalSafetyAlerts` and `tours/{tourId}/safetyAlerts`.
 - Duplicate global/tour safety records are merged by `eventId` when available.
 - Status actions update every merged Firebase path with safe admin metadata.
+- Status actions use one root multi-path update so mirrored global/tour records cannot diverge after a partial write.
 
 Broadcasts:
 
 - Broadcast activity is derived from `broadcasts/{tourId}/{broadcastId}`.
 - The dashboard reads the `broadcasts` root so it can summarize activity across tours.
-- The dashboard displays message summaries, tour IDs, sources, and timestamps only.
+- The dashboard displays message summaries, tour IDs, sources, timestamps, and backend delivery status.
 - It never displays `createdByUid`.
+
+Broadcast records move through `queued`, `processing`/`chat_queued`, and a terminal `delivered`, `partial`, `no_recipients`, or `failed` state. `delivered` means Expo accepted every eligible push request; it is not a device-display receipt. The composer reports “queued” after the browser write and relies on Functions to publish recipient and acceptance counts.
 
 ## Actions And Links
 

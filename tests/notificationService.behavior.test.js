@@ -15,10 +15,14 @@ const buildNotificationService = ({
   permission = 'granted',
   token = 'ExponentPushToken[test-token]',
   authUid = null,
+  lastNotificationResponse = null,
+  existingUserData = null,
 } = {}) => {
   const updates = [];
   const refPaths = [];
   let permissionStatus = permission;
+  let responseHandler = null;
+  let responseListenerRemoved = false;
 
   Module._load = function mocked(request, parent, isMain) {
     if (request === 'expo-device') {
@@ -36,6 +40,11 @@ const buildNotificationService = ({
         setNotificationChannelAsync: async () => {},
         getPermissionsAsync: async () => ({ status: permissionStatus }),
         requestPermissionsAsync: async () => ({ status: permissionStatus }),
+        getLastNotificationResponseAsync: async () => lastNotificationResponse,
+        addNotificationResponseReceivedListener: (handler) => {
+          responseHandler = handler;
+          return { remove: () => { responseListenerRemoved = true; } };
+        },
         getExpoPushTokenAsync: async (options) => {
           updates.push({ __tokenRequestOptions: options ?? null });
           return { data: token };
@@ -68,7 +77,7 @@ const buildNotificationService = ({
             refPaths.push(path);
             return {
               once: async () => ({
-                val: () => ({
+                val: () => existingUserData || ({
                   preferences: {
                     ops: { group_photos: true },
                     marketing: { mystery_tours: true },
@@ -90,7 +99,14 @@ const buildNotificationService = ({
 
   delete require.cache[require.resolve('../services/notificationService')];
   const service = require('../services/notificationService');
-  return { service, updates, refPaths, setPermission: (next) => { permissionStatus = next; } };
+  return {
+    service,
+    updates,
+    refPaths,
+    setPermission: (next) => { permissionStatus = next; },
+    emitNotificationResponse: (response) => responseHandler?.(response),
+    wasResponseListenerRemoved: () => responseListenerRemoved,
+  };
 };
 
 test.after(() => {
@@ -338,4 +354,96 @@ test('saveUserPreferences writes to authenticated uid when provided userId is pr
   assert.equal(result.success, true);
   assert.ok(refPaths.includes('users/auth-uid-99'));
   assert.equal(refPaths.includes('users/stable-passenger-123'), false);
+});
+
+test('deactivatePushToken suppresses delivery for the authenticated signed-out session', async () => {
+  const { service, updates, refPaths } = buildNotificationService({ authUid: 'auth-logout-1' });
+
+  const result = await service.deactivatePushToken('stable-passenger-ignored');
+
+  assert.equal(result.success, true);
+  assert.ok(refPaths.includes('users/auth-logout-1'));
+  assert.equal(refPaths.includes('users/stable-passenger-ignored'), false);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].pushToken, null);
+  assert.equal(updates[0].pushTokenStatus, 'UNAVAILABLE');
+  assert.equal(updates[0].pushTokenInvalidReason, 'SIGNED_OUT');
+  assert.match(updates[0].pushTokenUpdatedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test('restorePushTokenForSession silently reactivates a token after the next successful login', async () => {
+  const { service, updates } = buildNotificationService({
+    authUid: 'auth-restore-1',
+    existingUserData: {
+      preferences: { ops: { group_chat: true } },
+      pushTokenStatus: 'UNAVAILABLE',
+      pushTokenInvalidReason: 'SIGNED_OUT',
+    },
+  });
+
+  const result = await service.restorePushTokenForSession('auth-restore-1');
+
+  assert.equal(result.success, true);
+  assert.equal(result.restored, true);
+  const restoredPatch = updates.at(-1);
+  assert.equal(restoredPatch.pushToken, 'ExponentPushToken[test-token]');
+  assert.equal(restoredPatch.pushTokenStatus, 'ACTIVE');
+  assert.equal(restoredPatch.pushTokenInvalidReason, null);
+});
+
+test('notification response subscription routes active-tour taps once and removes its listener', async () => {
+  const response = {
+    notification: {
+      request: {
+        identifier: 'tap-contract-1',
+        content: { data: { screen: 'Itinerary', tourId: 'TOUR_1', noticeId: 'notice-1' } },
+      },
+    },
+  };
+  const harness = buildNotificationService({ lastNotificationResponse: response });
+  const routes = [];
+  const rejected = [];
+  const unsubscribe = harness.service.subscribeToNotificationResponses({
+    getContext: () => ({ activeTourId: 'TOUR_1', isDriver: false }),
+    onNavigate: async (route) => routes.push(route),
+    onRejected: (reason) => rejected.push(reason),
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await harness.emitNotificationResponse(response);
+
+  assert.equal(routes.length, 1);
+  assert.equal(routes[0].screen, 'Itinerary');
+  assert.equal(routes[0].params.noticeId, 'notice-1');
+  assert.deepEqual(rejected, []);
+
+  unsubscribe();
+  assert.equal(harness.wasResponseListenerRemoved(), true);
+});
+
+test('notification response can retry after navigation fails and deduplicates only after success', async () => {
+  const response = {
+    notification: {
+      request: {
+        identifier: 'tap-retry-contract-1',
+        content: { data: { screen: 'Chat', tourId: 'TOUR_1', messageId: 'message-1' } },
+      },
+    },
+  };
+  const harness = buildNotificationService();
+  let attempts = 0;
+  const unsubscribe = harness.service.subscribeToNotificationResponses({
+    getContext: () => ({ activeTourId: 'TOUR_1', isDriver: false }),
+    onNavigate: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('navigation not ready');
+    },
+  });
+
+  await harness.emitNotificationResponse(response);
+  await harness.emitNotificationResponse(response);
+  await harness.emitNotificationResponse(response);
+
+  assert.equal(attempts, 2);
+  unsubscribe();
 });

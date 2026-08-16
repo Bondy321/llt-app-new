@@ -195,6 +195,7 @@ test('buildManualPassengerBookingUpdates creates the same effective booking and 
   });
   assert.equal(plan.updates['tours/5112D_8/bookedPassengerCount'], 3);
   assert.equal(plan.updates['tours/5112D_8/manifestPassengerCount'], 3);
+  assert.equal(plan.updates['tours/5112D_8/currentParticipants'], 3);
   assert.deepEqual(plan.updates['tours/5112D_8/pickupPoints'], [
     { date: '15/06/2026', time: '07:30', location: 'Existing' },
     { date: '15/06/2026', time: '08:30', location: 'Buchanan Bus Station' },
@@ -267,4 +268,34 @@ test('findManualPassengerSeatConflicts catches seats already assigned on the tou
   ]);
 
   assert.deepEqual(conflicts, [19]);
+});
+
+test('manual passenger write plan rejects a booking that exceeds tour capacity', () => {
+  const normalized = __testables.normalizeManualPassengerPayload({
+    tourId: 'SMALL_1',
+    bookingRef: 'NEWBOOKING',
+    email: 'guest@example.com',
+    pickupDate: '2026-06-15',
+    pickupTime: '08:30',
+    pickupLocation: 'Buchanan Bus Station',
+    passengers: [{ name: 'New Guest', seatNumber: 2, phone: '+44 7700 900000' }],
+  }, {
+    tourCode: 'SMALL 1',
+    startDate: '15/06/2026',
+    endDate: '15/06/2026',
+    isActive: true,
+    maxParticipants: 2,
+  });
+
+  assert.throws(
+    () => __testables.buildManualPassengerBookingUpdates({
+      normalized,
+      actorUid: 'admin-uid-1',
+      tourData: { maxParticipants: 2 },
+      existingTourBookings: {
+        EXISTING: { passengerNames: ['One', 'Two'] },
+      },
+    }),
+    (error) => error?.code === 'TOUR_CAPACITY_EXCEEDED',
+  );
 });

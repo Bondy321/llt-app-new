@@ -3,6 +3,7 @@ import { getAuth } from "firebase/auth";
 import { getDatabase, onValue, ref } from "firebase/database";
 import {
   getRuntimeDebugContext,
+  isFirebaseDebugEnabled,
   logFirebaseDebug,
   logFirebaseError,
   startFirebaseDebugTimer,
@@ -28,7 +29,7 @@ logFirebaseDebug('module:loaded', {
     mode: import.meta.env.MODE,
     dev: import.meta.env.DEV,
     prod: import.meta.env.PROD,
-    firebaseDebugLogs: import.meta.env.VITE_FIREBASE_DEBUG_LOGS ?? '(default enabled)',
+    firebaseDebugLogs: import.meta.env.VITE_FIREBASE_DEBUG_LOGS ?? '(development only)',
   },
   runtime: getRuntimeDebugContext(),
   config: summarizeFirebaseConfig(firebaseConfig),
@@ -62,7 +63,7 @@ try {
 }
 
 const startRealtimeConnectionDiagnostics = () => {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || !isFirebaseDebugEnabled()) return;
 
   try {
     logFirebaseDebug('realtime-diagnostics:start', {

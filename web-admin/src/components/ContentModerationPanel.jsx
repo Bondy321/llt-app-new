@@ -8,6 +8,7 @@ import {
   Center,
   Group,
   Loader,
+  Modal,
   ScrollArea,
   Select,
   Stack,
@@ -69,6 +70,7 @@ export function ContentModerationPanel() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [mutatingReportId, setMutatingReportId] = useState(null);
+  const [pendingRemovalReport, setPendingRemovalReport] = useState(null);
 
   useEffect(() => {
     const unsubscribe = subscribeToContentReports(
@@ -163,6 +165,7 @@ export function ContentModerationPanel() {
       });
     } finally {
       setMutatingReportId(null);
+      setPendingRemovalReport(null);
     }
   };
 
@@ -309,7 +312,7 @@ export function ContentModerationPanel() {
                               variant="light"
                               leftSection={<IconTrash size={14} />}
                               loading={mutating}
-                              onClick={() => handleRemoveContent(report)}
+                              onClick={() => setPendingRemovalReport(report)}
                             >
                               Remove
                             </Button>
@@ -346,6 +349,43 @@ export function ContentModerationPanel() {
           </Center>
         )}
       </Card>
+
+      <Modal
+        opened={Boolean(pendingRemovalReport)}
+        onClose={() => !mutatingReportId && setPendingRemovalReport(null)}
+        title="Confirm permanent content removal"
+        centered
+        closeOnClickOutside={!mutatingReportId}
+        closeOnEscape={!mutatingReportId}
+      >
+        <Stack gap="md">
+          <Alert color="red" icon={<IconAlertTriangle size={16} />}>
+            This permanently removes the reported {pendingRemovalReport?.contentType === 'group_photo' ? 'photo' : 'message'} from the app.
+          </Alert>
+          <Text size="sm">
+            Tour <strong>{pendingRemovalReport?.tourId || '-'}</strong>
+            {' / '}
+            {pendingRemovalReport?.contentPreview || pendingRemovalReport?.contentId || 'Reported content'}
+          </Text>
+          <Group justify="flex-end">
+            <Button
+              variant="light"
+              onClick={() => setPendingRemovalReport(null)}
+              disabled={Boolean(mutatingReportId)}
+            >
+              Cancel
+            </Button>
+            <Button
+              color="red"
+              leftSection={<IconTrash size={14} />}
+              loading={Boolean(mutatingReportId)}
+              onClick={() => pendingRemovalReport && handleRemoveContent(pendingRemovalReport)}
+            >
+              Permanently remove
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   );
 }

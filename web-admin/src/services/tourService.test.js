@@ -2,21 +2,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getMock = vi.fn();
 const updateMock = vi.fn();
-const setMock = vi.fn();
+const runTransactionMock = vi.fn();
 const refMock = vi.fn((_db, path = '') => ({ path }));
+const postAdminActionMock = vi.fn();
 
 vi.mock('firebase/database', () => ({
   ref: refMock,
   push: vi.fn(),
-  set: setMock,
   update: updateMock,
   remove: vi.fn(),
   get: getMock,
   onValue: vi.fn(),
+  runTransaction: runTransactionMock,
 }));
 
 vi.mock('../firebase', () => ({
   db: { __mock: true },
+}));
+vi.mock('./adminActionService', () => ({
+  postAdminAction: postAdminActionMock,
 }));
 
 const buildSnapshot = (value) => ({
@@ -30,13 +34,13 @@ describe('tourService CSV preview integration', () => {
   });
 
   it('builds existing tour indices and returns update/create actions', async () => {
-    getMock.mockResolvedValue({
+    getMock.mockImplementation(async ({ path }) => ({
       exists: () => true,
-      val: () => ({
+      val: () => path === 'tours' ? ({
         tour_alpha: { tourCode: 'AB12 1', name: 'Alpha' },
         tour_beta: { tourCode: 'CD34 2', name: 'Beta' },
-      }),
-    });
+      }) : ({ 'D-ALICE': { name: 'Alice' } }),
+    }));
 
     const { previewTourCSVImport } = await import('./tourService.js');
 
@@ -49,7 +53,8 @@ describe('tourService CSV preview integration', () => {
     const result = await previewTourCSVImport(csv, { mode: 'upsert' });
 
     expect(refMock).toHaveBeenCalledWith({ __mock: true }, 'tours');
-    expect(getMock).toHaveBeenCalledTimes(1);
+    expect(refMock).toHaveBeenCalledWith({ __mock: true }, 'drivers');
+    expect(getMock).toHaveBeenCalledTimes(2);
     expect(result.summary.total).toBe(2);
 
     expect(result.rows[0].existsInDb).toBe(true);
@@ -80,12 +85,16 @@ describe('generateTourId normalization', () => {
 describe('tour identity invariants', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    setMock.mockResolvedValue(undefined);
     updateMock.mockResolvedValue(undefined);
+    runTransactionMock.mockImplementation(async (_target, updater) => ({
+      committed: updater(null) !== undefined,
+    }));
   });
 
   it('refuses to create a tour when the generated Firebase key already exists', async () => {
-    getMock.mockResolvedValue(buildSnapshot({ name: 'Existing Highlands' }));
+    runTransactionMock.mockImplementation(async (_target, updater) => ({
+      committed: updater({ name: 'Existing Highlands' }) !== undefined,
+    }));
 
     const { createTour } = await import('./tourService.js');
 
@@ -94,12 +103,14 @@ describe('tour identity invariants', () => {
       tourCode: '5112D 8',
     })).rejects.toThrow(/already exists at tours\/5112D_8/);
 
-    expect(setMock).not.toHaveBeenCalled();
+    expect(runTransactionMock).toHaveBeenCalledWith(
+      { path: 'tours/5112D_8' },
+      expect.any(Function),
+      { applyLocally: false },
+    );
   });
 
   it('creates new tours at the generated key and stores a trimmed display code', async () => {
-    getMock.mockResolvedValue(buildSnapshot(null));
-
     const { createTour } = await import('./tourService.js');
     const result = await createTour({
       name: 'Highlands',
@@ -108,13 +119,14 @@ describe('tour identity invariants', () => {
 
     expect(result.id).toBe('5112D_8');
     expect(result.tour.tourCode).toBe('5112D 8');
-    expect(setMock).toHaveBeenCalledWith(
+    expect(runTransactionMock).toHaveBeenCalledWith(
       { path: 'tours/5112D_8' },
-      expect.objectContaining({
-        name: 'Highlands',
-        tourCode: '5112D 8',
-      }),
+      expect.any(Function),
+      { applyLocally: false },
     );
+    const updater = runTransactionMock.mock.calls[0][1];
+    expect(updater(null)).toEqual(expect.objectContaining({ name: 'Highlands', tourCode: '5112D 8' }));
+    expect(updater({ name: 'Existing' })).toBeUndefined();
   });
 
   it('rejects tourCode changes on existing tours', async () => {
@@ -173,10 +185,122 @@ describe('tour identity invariants', () => {
       driverPhone: '',
       currentParticipants: 0,
     });
-    expect(setMock).toHaveBeenCalledWith(
+    expect(runTransactionMock).toHaveBeenCalledWith(
       { path: 'tours/TA_1_COPY_2' },
-      expect.objectContaining({ tourCode: 'TA 1_COPY_2' }),
+      expect.any(Function),
+      { applyLocally: false },
     );
+  });
+
+  it('rejects create and edit operations whose end date precedes the start date', async () => {
+    getMock.mockResolvedValue(buildSnapshot({
+      tourCode: 'BAD 1',
+      startDate: '20/08/2026',
+      endDate: '21/08/2026',
+    }));
+    const { createTour, updateTour } = await import('./tourService.js');
+
+    await expect(createTour({
+      name: 'Impossible Tour',
+      tourCode: 'BAD 1',
+      startDate: '20/08/2026',
+      endDate: '19/08/2026',
+    })).rejects.toThrow(/end date cannot be before/i);
+    await expect(updateTour('BAD_1', {
+      startDate: '2026-08-20',
+      endDate: '2026-08-19',
+    })).rejects.toThrow(/end date cannot be before/i);
+
+    expect(runTransactionMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('validates partial date patches against the stored counterpart and rejects missing tours', async () => {
+    getMock.mockResolvedValueOnce(buildSnapshot({
+      tourCode: 'DATE 1',
+      startDate: '10/08/2026',
+      endDate: '12/08/2026',
+    }));
+    const { updateTour } = await import('./tourService.js');
+
+    await expect(updateTour('DATE_1', { endDate: '09/08/2026' }))
+      .rejects.toThrow(/end date cannot be before/i);
+    expect(updateMock).not.toHaveBeenCalled();
+
+    getMock.mockResolvedValueOnce(buildSnapshot(null));
+    await expect(updateTour('MISSING_1', { name: 'Ghost tour' }))
+      .rejects.toThrow(/no longer exists/i);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('does not let an edit lower capacity below the trusted booked count', async () => {
+    getMock.mockResolvedValue(buildSnapshot({
+      tourCode: 'FULL 1',
+      maxParticipants: 53,
+      currentParticipants: 12,
+    }));
+    const { updateTour } = await import('./tourService.js');
+
+    await expect(updateTour('FULL_1', { maxParticipants: 10 }))
+      .rejects.toThrow(/cannot be lower than the booked participant count/i);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('duplicates only reusable tour definition fields and drops live operational state', async () => {
+    const pathValues = {
+      'tours/TOUR_A': {
+        name: 'Original Tour',
+        tourCode: 'TA 1',
+        startDate: '01/09/2026',
+        itinerary: { title: 'Plan', days: [{ day: 1 }] },
+        participants: { user_1: true },
+        safetyAlerts: { alert_1: { status: 'pending' } },
+        liveTracking: { user_1: { isSharing: true } },
+        driverLocation: { latitude: 1, longitude: 2 },
+        bookedPassengerCount: 8,
+      },
+      'tours/TA_1_COPY': null,
+    };
+    getMock.mockImplementation(async ({ path }) => buildSnapshot(pathValues[path]));
+
+    const { duplicateTour } = await import('./tourService.js');
+    const result = await duplicateTour('TOUR_A');
+
+    expect(result.tour.itinerary).toEqual({ title: 'Plan', days: [{ day: 1 }] });
+    expect(result.tour.endDate).toBe('01/09/2026');
+    expect(result.tour).not.toHaveProperty('participants');
+    expect(result.tour).not.toHaveProperty('safetyAlerts');
+    expect(result.tour).not.toHaveProperty('liveTracking');
+    expect(result.tour).not.toHaveProperty('driverLocation');
+    expect(result.tour).not.toHaveProperty('bookedPassengerCount');
+  });
+
+  it('routes tour deletion through the authenticated cleanup function', async () => {
+    postAdminActionMock.mockResolvedValue({ success: true, alreadyDeleted: false, summary: { bookingsDeleted: 2 } });
+    const { deleteTour } = await import('./tourService.js');
+
+    await expect(deleteTour(' tour a ')).resolves.toEqual({
+      id: 'TOUR_A',
+      deleted: true,
+      alreadyDeleted: false,
+      summary: { bookingsDeleted: 2 },
+    });
+    expect(postAdminActionMock).toHaveBeenCalledWith('deleteTourData', { tourId: 'TOUR_A' }, expect.any(Object));
+  });
+
+  it('treats a retry after a completed server deletion as successful', async () => {
+    postAdminActionMock.mockResolvedValue({
+      success: true,
+      alreadyDeleted: true,
+      summary: { alreadyDeleted: true, storageObjectsDeleted: 0 },
+    });
+    const { deleteTour } = await import('./tourService.js');
+
+    await expect(deleteTour('TOUR_A')).resolves.toMatchObject({
+      id: 'TOUR_A',
+      deleted: true,
+      alreadyDeleted: true,
+    });
   });
 });
 
@@ -258,6 +382,21 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
     });
     expect(updates['users/driver-auth-alice/driverId']).toBe('D-ALICE');
     expect(updates['users/driver-auth-alice/driverAssignedTourId']).toBe('TOUR_A');
+    expect(updates['tours/TOUR_A/driverLocation']).toBeNull();
+  });
+
+  it('keeps a current driver location when reapplying the same assignment', async () => {
+    setupPathSnapshots({
+      'tours/TOUR_A': { tourCode: '5100D 1', driverId: 'D-ALICE' },
+      'tour_manifests/TOUR_A': { assigned_drivers: { 'D-ALICE': true } },
+      'drivers/D-ALICE': { currentTourId: 'TOUR_A', assignments: { TOUR_A: true } },
+    });
+
+    const { assignDriver } = await import('./tourService.js');
+    await assignDriver('TOUR_A', 'D-ALICE', { name: 'Alice', phone: '+44' });
+
+    const [, updates] = updateMock.mock.calls[0];
+    expect(updates['tours/TOUR_A/driverLocation']).toBeUndefined();
   });
 
   it('reassign old->new clears old manifest links in same multi-path update', async () => {
@@ -279,6 +418,8 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
     expect(updates['tour_manifests/TOUR_OLD/assigned_driver_codes/D-ALICE']).toBeNull();
     expect(updates['tours/TOUR_OLD/driverName']).toBe('TBA');
     expect(updates['tours/TOUR_OLD/driverPhone']).toBe('');
+    expect(updates['tours/TOUR_OLD/driverLocation']).toBeNull();
+    expect(updates['tours/TOUR_NEW/driverLocation']).toBeNull();
     expect(updates['drivers/D-ALICE/currentTourId']).toBe('TOUR_NEW');
   });
 
@@ -303,6 +444,7 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
     expect(updates['tour_manifests/TOUR_A/assigned_driver_codes/D-ALICE']).toBeNull();
     expect(updates['tours/TOUR_A/driverName']).toBe('TBA');
     expect(updates['tours/TOUR_A/driverPhone']).toBe('');
+    expect(updates['tours/TOUR_A/driverLocation']).toBeNull();
   });
 
   it('stale manifest cleanup enforces single-driver policy on target tour', async () => {
@@ -360,10 +502,12 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
 describe('createTourFromTemplate date anchoring', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    runTransactionMock.mockImplementation(async (_target, updater) => ({
+      committed: updater(null) !== undefined,
+    }));
   });
 
   it('derives endDate from override startDate instead of current date', async () => {
-    setMock.mockResolvedValue(undefined);
     const { createTourFromTemplate } = await import('./tourService.js');
     const result = await createTourFromTemplate('highlands', {
       startDate: '10/02/2026',
@@ -372,6 +516,6 @@ describe('createTourFromTemplate date anchoring', () => {
 
     expect(result.tour.startDate).toBe('10/02/2026');
     expect(result.tour.endDate).toBe('11/02/2026');
-    expect(setMock).toHaveBeenCalledTimes(1);
+    expect(runTransactionMock).toHaveBeenCalledTimes(1);
   });
 });

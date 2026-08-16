@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { ref, push, set, onValue, query, orderByChild, limitToLast } from 'firebase/database';
 import { db, auth } from '../firebase';
 import { notifications } from '@mantine/notifications';
@@ -20,6 +20,7 @@ import {
   Alert,
   ScrollArea,
   Loader,
+  Modal,
   Progress,
   Divider,
   RingProgress,
@@ -51,6 +52,16 @@ import {
 
 const MAX_BROADCAST_LENGTH = 2000;
 const IDEAL_MAX_LENGTH = 240;
+const EMPTY_BROADCAST_HISTORY = Object.freeze([]);
+const DELIVERY_STATUS_META = {
+  queued: { label: 'Queued', color: 'gray' },
+  processing: { label: 'Processing', color: 'blue' },
+  chat_queued: { label: 'Preparing push', color: 'blue' },
+  delivered: { label: 'Push accepted', color: 'green' },
+  partial: { label: 'Partially accepted', color: 'yellow' },
+  no_recipients: { label: 'No eligible recipients', color: 'gray' },
+  failed: { label: 'Failed', color: 'red' },
+};
 
 const messageTemplates = [
   { value: 'arriving', label: 'Bus Arriving', message: 'The bus is arriving in 5 minutes. Please make your way to the pickup point.' },
@@ -94,12 +105,17 @@ function normalizeBroadcastMessage(targetId, broadcastId, payload = {}, targetTy
     timestampMs: normalizedTimestamp,
     createdByUid: payload.createdByUid || null,
     source: payload.source || null,
+    deliveryStatus: payload.deliveryStatus || 'queued',
+    recipientCount: Number.isFinite(Number(payload.recipientCount)) ? Number(payload.recipientCount) : null,
+    successCount: Number.isFinite(Number(payload.successCount)) ? Number(payload.successCount) : null,
+    errorCount: Number.isFinite(Number(payload.errorCount)) ? Number(payload.errorCount) : null,
   };
 }
 
 function BroadcastHistoryItem({ broadcast }) {
   const timestampMs = normalizeBroadcastTimestamp(broadcast.timestamp);
   const isCategoryBroadcast = broadcast.targetType === 'category';
+  const delivery = DELIVERY_STATUS_META[broadcast.deliveryStatus] || DELIVERY_STATUS_META.queued;
 
   return (
     <Paper p="sm" radius="md" withBorder>
@@ -117,6 +133,14 @@ function BroadcastHistoryItem({ broadcast }) {
         </Text>
       </Group>
       <Text size="sm">{broadcast.message}</Text>
+      <Group gap="xs" mt="xs">
+        <Badge size="xs" color={delivery.color} variant="light">{delivery.label}</Badge>
+        {broadcast.recipientCount !== null ? (
+          <Text size="xs" c="dimmed">
+            {broadcast.successCount || 0} accepted / {broadcast.errorCount || 0} failed / {broadcast.recipientCount} eligible
+          </Text>
+        ) : null}
+      </Group>
     </Paper>
   );
 }
@@ -167,54 +191,61 @@ export function BroadcastPanel() {
   const [selectedTemplate, setSelectedTemplate] = useState('custom');
   const [tours, setTours] = useState({});
   const [loadingTours, setLoadingTours] = useState(true);
-  const [broadcastHistory, setBroadcastHistory] = useState([]);
+  const [broadcastHistoryState, setBroadcastHistoryState] = useState({ rootPath: '', items: [] });
   const [historyFilter, setHistoryFilter] = useState('');
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const sendInFlightRef = useRef(false);
 
   useEffect(() => {
     const toursRef = ref(db, 'tours');
-    const unsubscribe = onValue(toursRef, (snapshot) => {
-      setTours(snapshot.val() || {});
-      setLoadingTours(false);
-    });
+    const unsubscribe = onValue(
+      toursRef,
+      (snapshot) => {
+        setTours(snapshot.val() || {});
+        setLoadingTours(false);
+      },
+      (error) => {
+        setLoadingTours(false);
+        notifications.show({ title: 'Tours unavailable', message: error?.message || 'Could not load broadcast targets.', color: 'red' });
+      },
+    );
     return () => unsubscribe();
   }, []);
 
+  const historyTargetId = targetMode === 'category'
+    ? categoryKey
+    : normalizeTourIdForPath(tourId);
+  const historyRootPath = historyTargetId && isValidFirebaseKeySegment(historyTargetId)
+    ? `${targetMode === 'category' ? 'category_broadcasts' : 'broadcasts'}/${historyTargetId}`
+    : '';
+  const broadcastHistory = broadcastHistoryState.rootPath === historyRootPath
+    ? broadcastHistoryState.items
+    : EMPTY_BROADCAST_HISTORY;
+
   useEffect(() => {
-    const targetId = targetMode === 'category'
-      ? categoryKey
-      : normalizeTourIdForPath(tourId);
-
-    if (!targetId) {
-      setBroadcastHistory([]);
-      return undefined;
-    }
-
-    if (!isValidFirebaseKeySegment(targetId)) {
-      setBroadcastHistory([]);
-      return undefined;
-    }
-
-    const rootPath = targetMode === 'category'
-      ? `category_broadcasts/${targetId}`
-      : `broadcasts/${targetId}`;
+    if (!historyRootPath) return undefined;
 
     const historyQuery = query(
-      ref(db, rootPath),
+      ref(db, historyRootPath),
       orderByChild('createdAtMs'),
       limitToLast(25)
     );
 
-    const unsubscribe = onValue(historyQuery, (snapshot) => {
-      const broadcasts = snapshot.val() || {};
-      const history = Object.entries(broadcasts)
-        .map(([broadcastId, payload]) => normalizeBroadcastMessage(targetId, broadcastId, payload, targetMode))
-        .sort((a, b) => (b.timestampMs ?? 0) - (a.timestampMs ?? 0));
+    const unsubscribe = onValue(
+      historyQuery,
+      (snapshot) => {
+        const broadcasts = snapshot.val() || {};
+        const history = Object.entries(broadcasts)
+          .map(([broadcastId, payload]) => normalizeBroadcastMessage(historyTargetId, broadcastId, payload, targetMode))
+          .sort((a, b) => (b.timestampMs ?? 0) - (a.timestampMs ?? 0));
 
-      setBroadcastHistory(history);
-    });
+        setBroadcastHistoryState({ rootPath: historyRootPath, items: history });
+      },
+      (error) => notifications.show({ title: 'History unavailable', message: error?.message || 'Could not load broadcast history.', color: 'red' }),
+    );
 
     return () => unsubscribe();
-  }, [categoryKey, targetMode, tourId]);
+  }, [historyRootPath, historyTargetId, targetMode]);
 
   const totalTours = Object.keys(tours).length;
   const assignedTours = Object.values(tours).filter((t) => t.driverName && t.driverName !== 'TBA').length;
@@ -260,8 +291,8 @@ export function BroadcastPanel() {
     }
   };
 
-  const handleSend = async (e) => {
-    e.preventDefault();
+  const handleSend = async (e, confirmed = false) => {
+    e?.preventDefault?.();
 
     const normalizedTourId = normalizeTourIdForPath(tourId);
     const normalizedCategoryKey = typeof categoryKey === 'string' ? categoryKey.trim() : '';
@@ -311,6 +342,14 @@ export function BroadcastPanel() {
       return;
     }
 
+    if (!confirmed) {
+      setConfirmationOpen(true);
+      return;
+    }
+
+    if (sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
+
     setLoading(true);
 
     try {
@@ -324,6 +363,8 @@ export function BroadcastPanel() {
         createdAtMs: Date.now(),
         createdByUid: auth.currentUser?.uid || null,
         source: 'web_admin',
+        deliveryStatus: 'queued',
+        deliveryUpdatedAtMs: Date.now(),
       };
 
       if (isCategoryMode) {
@@ -334,11 +375,11 @@ export function BroadcastPanel() {
       await set(newBroadcastRef, broadcastPayload);
 
       notifications.show({
-        title: 'Broadcast Sent',
+        title: 'Broadcast Queued',
         message: isCategoryMode
-          ? `Announcement sent to ${targetLabel} subscribers`
-          : `Announcement sent to tour ${targetId}`,
-        color: 'green',
+          ? `Delivery is being processed for ${targetLabel} subscribers`
+          : `Delivery is being processed for tour ${targetId}`,
+        color: 'blue',
         icon: <IconCheck size={16} />,
       });
 
@@ -347,7 +388,9 @@ export function BroadcastPanel() {
     } catch (error) {
       notifications.show({ title: 'Broadcast Failed', message: error.message, color: 'red' });
     } finally {
+      sendInFlightRef.current = false;
       setLoading(false);
+      setConfirmationOpen(false);
     }
   };
 
@@ -375,7 +418,7 @@ export function BroadcastPanel() {
         <Paper p="md" radius="md" withBorder>
           <Group justify="space-between">
             <div>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Active Tours</Text>
+              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Assigned Tours</Text>
               <Text size="xl" fw={700} c="green">{assignedTours}</Text>
             </div>
             <ThemeIcon color="green" variant="light" size="xl" radius="md">
@@ -431,6 +474,7 @@ export function BroadcastPanel() {
                   value={categoryKey}
                   onChange={setCategoryKey}
                   searchable
+                  limit={50}
                   clearable
                   leftSection={<IconSparkles size={16} />}
                   description="Send to clients who opted in to this future-tour category"
@@ -443,6 +487,7 @@ export function BroadcastPanel() {
                   value={tourId}
                   onChange={setTourId}
                   searchable
+                  limit={50}
                   clearable
                   leftSection={loadingTours ? <Loader size={14} /> : <IconMap size={16} />}
                   disabled={loadingTours}
@@ -522,8 +567,8 @@ export function BroadcastPanel() {
 
               <Alert icon={<IconInfoCircle size={16} />} color="blue" variant="light">
                 {isCategoryMode
-                  ? 'This message will be sent to clients who enabled notifications for this tour type.'
-                  : 'This message will be sent to passengers with notifications enabled for this tour.'}
+                  ? 'The delivery result will appear in Recent Broadcasts. “Push accepted” means Expo accepted the notification request, not that every device displayed it.'
+                  : 'The delivery result will appear in Recent Broadcasts. Only eligible tour participants with a valid push token are counted.'}
               </Alert>
 
               <Button
@@ -620,6 +665,37 @@ export function BroadcastPanel() {
           </Card>
         </Stack>
       </SimpleGrid>
+
+      <Modal
+        opened={confirmationOpen}
+        onClose={() => !loading && setConfirmationOpen(false)}
+        title="Confirm broadcast delivery"
+        centered
+        closeOnClickOutside={!loading}
+        closeOnEscape={!loading}
+      >
+        <Stack gap="md">
+          <Alert color={isCategoryMode ? 'blue' : 'orange'} icon={<IconAlertCircle size={16} />}>
+            This sends an external notification to the eligible audience for <strong>{selectedTargetLabel}</strong>.
+          </Alert>
+          <Paper withBorder p="md" radius="md">
+            <Text size="sm">{message.trim()}</Text>
+          </Paper>
+          <Group justify="flex-end">
+            <Button variant="light" onClick={() => setConfirmationOpen(false)} disabled={loading}>
+              Cancel
+            </Button>
+            <Button
+              color={isCategoryMode ? 'blue' : 'orange'}
+              leftSection={<IconSend size={16} />}
+              loading={loading}
+              onClick={() => handleSend(null, true)}
+            >
+              Confirm and send
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Box>
   );
 }

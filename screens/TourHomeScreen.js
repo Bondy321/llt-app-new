@@ -17,7 +17,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import * as Haptics from '../services/hapticsService';
@@ -27,9 +27,9 @@ import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
 import { realtimeDb } from '../firebase';
 import offlineSyncService from '../services/offlineSyncService';
-import { parseTimestampMs } from '../services/timeUtils';
 import logger, { maskIdentifier } from '../services/loggerService';
 import { resolveTourId } from '../services/tourIdentityService';
+import { getDriverLocationPresentation } from '../utils/driverLocation';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 import { getPickupCountdownState } from '../services/pickupTimeParser';
 import {
@@ -63,6 +63,8 @@ const COLORS = {
   overlay: THEME.overlay,
   statusBarBackground: THEME.statusBarBackground,
 };
+
+const PICKUP_COUNTDOWN_REFRESH_MS = 30 * 1000;
 
 // Haptic feedback helper
 const triggerHaptic = (type = 'light') => {
@@ -197,7 +199,7 @@ const PickupCountdown = ({ pickupTime, pickupDate }) => {
     setTimeLeft(calculateTimeLeft());
     const interval = setInterval(() => {
       setTimeLeft(calculateTimeLeft());
-    }, 1000);
+    }, PICKUP_COUNTDOWN_REFRESH_MS);
 
     return () => clearInterval(interval);
   }, [pickupDate, pickupTime]);
@@ -627,7 +629,8 @@ export default function TourHomeScreen({
   const [isLoading, setIsLoading] = useState(true);
   const [manifestReady, setManifestReady] = useState(false);
   const [driverReady, setDriverReady] = useState(false);
-  const [driverLocationActive, setDriverLocationActive] = useState(false);
+  const [driverLocationRecord, setDriverLocationRecord] = useState(null);
+  const [driverLocationNow, setDriverLocationNow] = useState(() => Date.now());
   const scrollViewRef = useRef(null);
   const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
 
@@ -637,6 +640,18 @@ export default function TourHomeScreen({
     () => resolveTourId(tourData?.id, tourCode, tourData?.tourCode),
     [tourData?.id, tourData?.tourCode, tourCode]
   );
+  const driverLocationPresentation = useMemo(
+    () => getDriverLocationPresentation(driverLocationRecord, driverLocationNow),
+    [driverLocationNow, driverLocationRecord]
+  );
+  const driverLocationActive = driverLocationPresentation.mode === 'live'
+    && driverLocationPresentation.actionable;
+  const driverLocationAvailable = driverLocationPresentation.available;
+
+  useEffect(() => {
+    const freshnessTimer = setInterval(() => setDriverLocationNow(Date.now()), 30 * 1000);
+    return () => clearInterval(freshnessTimer);
+  }, []);
 
   // Get primary pickup time for countdown
   const primaryPickupTime = useMemo(() => {
@@ -734,24 +749,20 @@ export default function TourHomeScreen({
     const handleDriverSnapshot = (snapshot) => {
       const value = snapshot.val();
       if (!value) {
-        setDriverLocationActive(false);
+        setDriverLocationRecord(null);
         setDriverReady(true);
         logger.info('TourHome', 'Driver location snapshot empty', { sanitizedTourId });
         return;
       }
 
-      const lastUpdatedValue = value.timestamp ?? value.lastUpdated;
-      const lastUpdatedMs = parseTimestampMs(lastUpdatedValue);
-      const isFreshLocation =
-        Number.isFinite(lastUpdatedMs) && Date.now() - lastUpdatedMs <= 10 * 60 * 1000;
-
-      setDriverLocationActive(isFreshLocation);
+      const presentation = getDriverLocationPresentation(value);
+      setDriverLocationRecord(value);
       setDriverReady(true);
       logger.info('TourHome', 'Driver location status snapshot received', {
         sanitizedTourId,
-        hasTimestamp: Boolean(lastUpdatedValue),
-        ageMs: Number.isFinite(lastUpdatedMs) ? Date.now() - lastUpdatedMs : null,
-        isFreshLocation,
+        hasTimestamp: Boolean(value.timestamp ?? value.lastUpdated),
+        freshness: presentation.freshness,
+        actionable: presentation.actionable,
         source: value?.source || null,
       });
     };
@@ -763,7 +774,7 @@ export default function TourHomeScreen({
         code: error?.code || null,
       });
       setDriverReady(true);
-      setDriverLocationActive(false);
+      setDriverLocationRecord(null);
     };
 
     driverRef.on('value', handleDriverSnapshot, handleDriverError);
@@ -809,15 +820,7 @@ export default function TourHomeScreen({
           .ref(`tours/${sanitizedTourId}/driverLocation`)
           .once('value');
         const driverValue = driverSnapshot.val();
-        if (driverValue) {
-          const lastUpdatedValue = driverValue.timestamp ?? driverValue.lastUpdated;
-          const lastUpdatedMs = parseTimestampMs(lastUpdatedValue);
-          const isFreshLocation =
-            Number.isFinite(lastUpdatedMs) && Date.now() - lastUpdatedMs <= 10 * 60 * 1000;
-          setDriverLocationActive(isFreshLocation);
-        } else {
-          setDriverLocationActive(false);
-        }
+        setDriverLocationRecord(driverValue || null);
 
         logger.info('TourHome', 'Manual refresh realtime snapshots loaded', {
           sanitizedTourId,
@@ -1465,8 +1468,10 @@ export default function TourHomeScreen({
                   <Text style={styles.findBusTitle}>Find My Bus</Text>
                   <Text style={styles.findBusSubtitle}>
                     {driverLocationActive
-                      ? 'Driver location is being shared'
-                      : 'See where your driver is on the map'}
+                      ? 'Driver live location is being shared'
+                      : driverLocationAvailable
+                        ? 'Driver pickup point is available'
+                        : 'See where your driver is on the map'}
                   </Text>
                 </View>
                 <View style={styles.findBusArrow}>

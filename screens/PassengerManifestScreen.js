@@ -4,16 +4,18 @@ import {
   TouchableOpacity, ActivityIndicator, Modal, Alert
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { getTourManifest, updateManifestBooking, MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import offlineSyncService from '../services/offlineSyncService';
 import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
 import ManifestBookingCard from '../components/ManifestBookingCard';
+import ManifestConflictCard from '../components/ManifestConflictCard';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS, FONT_WEIGHT } from '../theme';
 import logger, { maskIdentifier } from '../services/loggerService';
 const { getBookingSyncState, normalizeSyncState } = require('../utils/manifestSyncState');
 const { pickupTimeToMinutes } = require('../services/pickupTimeParser');
+const { normalizeTourId } = require('../services/tourIdentityService');
 
 const COLORS = {
   primary: THEME.primary,
@@ -48,13 +50,13 @@ const STATUS_FILTERS = [
 ];
 
 const HEADER_WIDGETS_VISIBLE = {
-  completion: false,
-  syncStatus: false,
-  nextPassenger: false,
+  completion: true,
+  syncStatus: true,
+  nextPassenger: true,
 };
 
 export default function PassengerManifestScreen({ route, navigation }) {
-  const { tourId } = route.params;
+  const { tourId, actorPrincipalId, authUid } = route.params;
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [manifestData, setManifestData] = useState({ bookings: [], stats: {} });
@@ -70,12 +72,11 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const [actionLoading, setActionLoading] = useState(false);
   const [queueStats, setQueueStats] = useState({ pending: 0, syncing: 0, failed: 0, total: 0 });
   const [bookingSyncState, setBookingSyncState] = useState({});
-  const [conflictNote, setConflictNote] = useState('');
+  const [manifestConflict, setManifestConflict] = useState(null);
   const [statusFeedback, setStatusFeedback] = useState(null);
   const feedbackTimeoutRef = useRef(null);
   const mountedRef = useRef(true);
   const manifestLoadSeqRef = useRef(0);
-  const queueScanSeqRef = useRef(0);
 
   useEffect(() => {
     logger.trackScreen('PassengerManifest', { tourId });
@@ -144,16 +145,39 @@ export default function PassengerManifestScreen({ route, navigation }) {
   }, [tourId]);
 
   useEffect(() => {
-    const unsubscribe = offlineSyncService.subscribeQueueState((stats) => {
+    const activeTourId = normalizeTourId(tourId);
+    const unsubscribe = offlineSyncService.subscribeQueuedActions((actions = []) => {
       if (!mountedRef.current) return;
-      logger.debug('PassengerManifest', 'Queue state updated', {
-        tourId,
-        pending: stats?.pending || 0,
-        syncing: stats?.syncing || 0,
-        failed: stats?.failed || 0,
-        total: stats?.total || 0,
+      const scopedActions = actions.filter((action) => (
+        action.type === 'MANIFEST_UPDATE'
+        && normalizeTourId(action.tourId) === activeTourId
+      ));
+      const stats = scopedActions.reduce((summary, action) => {
+        if (action.status === 'syncing') summary.syncing += 1;
+        else if (action.status === 'failed') summary.failed += 1;
+        else summary.pending += 1;
+        summary.total += 1;
+        return summary;
+      }, { pending: 0, syncing: 0, failed: 0, total: 0 });
+      const statePriority = { synced: 0, queued: 1, syncing: 2, failed: 3 };
+      const syncMap = {};
+      scopedActions.forEach((action) => {
+        const bookingRef = action.payload?.bookingRef;
+        if (!bookingRef) return;
+        const nextState = normalizeSyncState(action.status);
+        const currentState = syncMap[bookingRef] || 'synced';
+        if (statePriority[nextState] >= statePriority[currentState]) syncMap[bookingRef] = nextState;
       });
+
       setQueueStats(stats);
+      setBookingSyncState(syncMap);
+      logger.debug('PassengerManifest', 'Scoped manifest queue state updated', {
+        tourId: activeTourId,
+        pending: stats.pending,
+        syncing: stats.syncing,
+        failed: stats.failed,
+        bookingCount: Object.keys(syncMap).length,
+      });
     });
     return () => unsubscribe?.();
   }, [tourId]);
@@ -161,36 +185,8 @@ export default function PassengerManifestScreen({ route, navigation }) {
   useEffect(() => () => {
     mountedRef.current = false;
     manifestLoadSeqRef.current += 1;
-    queueScanSeqRef.current += 1;
     clearFeedbackTimeout();
   }, []);
-
-  useEffect(() => {
-    const requestSeq = ++queueScanSeqRef.current;
-    const map = {};
-    offlineSyncService.getQueuedActions().then((res) => {
-      if (!mountedRef.current || requestSeq !== queueScanSeqRef.current) return;
-      if (!res.success) {
-        logger.warn('PassengerManifest', 'Queued manifest action scan failed', {
-          tourId,
-          error: res.error || 'unknown',
-        });
-        return;
-      }
-      res.data.forEach((action) => {
-        if (action.type !== 'MANIFEST_UPDATE') return;
-        const bookingRef = action.payload?.bookingRef;
-        if (!bookingRef) return;
-        map[bookingRef] = normalizeSyncState(action.status);
-      });
-      setBookingSyncState(map);
-      logger.debug('PassengerManifest', 'Queued manifest action map refreshed', {
-        tourId,
-        queuedBookingCount: Object.keys(map).length,
-        queueTotal: res.data.length,
-      });
-    });
-  }, [manifestData.bookings.length, queueStats.pending, queueStats.failed, queueStats.syncing, tourId]);
 
   const computeStats = (bookings = []) => bookings.reduce((acc, booking) => {
     const paxCount = booking.passengerNames?.length || 0;
@@ -332,7 +328,11 @@ export default function PassengerManifestScreen({ route, navigation }) {
         ? passengerStatuses
         : selectedBooking.passengerNames.map(() => MANIFEST_STATUS.PENDING);
 
-      const result = await updateManifestBooking(tourId, selectedBooking.id, statusesToPersist, { online: true });
+      const result = await updateManifestBooking(tourId, selectedBooking.id, statusesToPersist, {
+        online: true,
+        actorPrincipalId,
+        authUid,
+      });
       if (!mountedRef.current) return;
       logger.info('PassengerManifest', 'Manifest update result received', {
         tourId,
@@ -340,13 +340,15 @@ export default function PassengerManifestScreen({ route, navigation }) {
         queued: Boolean(result?.queued),
         hasConflictMessage: Boolean(result?.conflictMessage),
       });
-      if (result?.conflictMessage) {
+      if (result?.conflict) {
         logger.warn('PassengerManifest', 'Manifest update conflict surfaced', {
           tourId,
           bookingRef: maskIdentifier(selectedBooking.id),
           conflictMessage: result.conflictMessage,
+          serverStatus: result.conflict.serverStatus,
+          attemptedStatus: result.conflict.attemptedStatus,
         });
-        setConflictNote(result.conflictMessage);
+        setManifestConflict(result.conflict);
       }
       if (result?.queued) {
         setBookingSyncState((prev) => ({ ...prev, [selectedBooking.id]: normalizeSyncState('queued') }));
@@ -358,6 +360,31 @@ export default function PassengerManifestScreen({ route, navigation }) {
       setModalVisible(false);
       setSelectedBooking(null);
       setPartialMode(false);
+
+      if (result?.queued) {
+        const optimisticStatus = result.localStatus || MANIFEST_STATUS.PENDING;
+        setManifestData((current) => ({
+          ...current,
+          bookings: current.bookings.map((booking) => (
+            booking.id === selectedBooking.id
+              ? {
+                  ...booking,
+                  status: optimisticStatus,
+                  passengerStatus: statusesToPersist,
+                  hasPassengerStatuses: true,
+                  pendingServerConfirmation: true,
+                }
+              : booking
+          )),
+        }));
+        showStatusFeedback({
+          variant: 'warning',
+          message: `${selectedBooking.id} is saved on this device and queued for the server. A newer change for this booking will replace this queued one.`,
+          ctaLabel: 'Sync now',
+          onCtaPress: () => handleSyncNow(),
+        });
+        return;
+      }
 
       const refreshedManifest = await loadManifest();
       if (!mountedRef.current) return;
@@ -380,8 +407,8 @@ export default function PassengerManifestScreen({ route, navigation }) {
         const syncSuffix = result?.queued ? ` (${syncStateLabel})` : '';
 
         showStatusFeedback({
-          variant: 'success',
-          message: `${parts.join(' - ')}. ${unresolvedSummary}${syncSuffix}`,
+          variant: result?.conflict ? 'warning' : 'success',
+          message: result?.conflictMessage || `${parts.join(' - ')}. ${unresolvedSummary}${syncSuffix}`,
           nextBooking,
           unresolvedDelta,
           syncStateLabel,
@@ -459,16 +486,34 @@ export default function PassengerManifestScreen({ route, navigation }) {
         return;
       }
 
+      const reconciledOutcome = (replay?.data?.outcomes || []).find((outcome) => (
+        outcome.type === 'MANIFEST_UPDATE'
+        && normalizeTourId(outcome.tourId) === normalizeTourId(tourId)
+        && outcome.reconciled
+        && outcome.conflict
+      ));
+      if (reconciledOutcome) {
+        setManifestConflict(reconciledOutcome.conflict);
+        showStatusFeedback({
+          variant: 'warning',
+          message: `Booking ${reconciledOutcome.bookingRef} kept the newer server status. Review the protected update below.`,
+        });
+      }
+
       const queued = await offlineSyncService.getQueuedActions();
       if (!mountedRef.current) return;
       if (queued.success) {
-        const pendingActions = queued.data.filter((action) => action.status === 'queued').length;
-        const failedActions = queued.data.filter((action) => action.status === 'failed').length;
+        const scopedManifestActions = queued.data.filter((action) => (
+          action.type === 'MANIFEST_UPDATE'
+          && normalizeTourId(action.tourId) === normalizeTourId(tourId)
+        ));
+        const pendingActions = scopedManifestActions.filter((action) => action.status === 'queued').length;
+        const failedActions = scopedManifestActions.filter((action) => action.status === 'failed').length;
         logger.info('PassengerManifest', 'Manifest sync queue scan completed', {
           tourId,
           pendingActions,
           failedActions,
-          totalActions: queued.data.length,
+          totalActions: scopedManifestActions.length,
         });
 
         if (failedActions > 0) {
@@ -517,7 +562,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
   const handleRetryFailed = async () => {
     logger.info('PassengerManifest', 'Retry failed manifest actions started', { tourId });
-    await offlineSyncService.retryFailedActions({ types: ['MANIFEST_UPDATE'] });
+    await offlineSyncService.retryFailedActions({ types: ['MANIFEST_UPDATE'], tourId });
     if (!mountedRef.current) return;
     await handleSyncNow();
   };
@@ -597,7 +642,18 @@ export default function PassengerManifestScreen({ route, navigation }) {
         ) : null}
       </View>
       ) : null}
-      {conflictNote ? <Text style={styles.conflictText}>{conflictNote}</Text> : null}
+      <ManifestConflictCard
+        conflict={manifestConflict}
+        onDismiss={() => setManifestConflict(null)}
+        onReview={() => {
+          const booking = manifestData.bookings.find((item) => item.id === manifestConflict?.bookingRef);
+          if (booking) {
+            handleOpenBooking(booking);
+          } else if (manifestConflict?.bookingRef) {
+            setSearchQuery(manifestConflict.bookingRef);
+          }
+        }}
+      />
 
       <View style={styles.actionSearchRow}>
         {HEADER_WIDGETS_VISIBLE.nextPassenger && nextPriorityBooking ? (

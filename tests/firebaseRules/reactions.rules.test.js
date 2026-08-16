@@ -155,6 +155,121 @@ test('allows verified driver principals to create group chat messages without dr
   }));
 });
 
+test('allows the versioned chat contract with a server timestamp and deterministic message identity', async () => {
+  const messageId = 'MSG_V2_PASSENGER_001';
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/messages/${messageId}`).set({
+    schemaVersion: 2,
+    senderId: PASSENGER_PRINCIPAL_ID,
+    senderStableId: PASSENGER_PRINCIPAL_ID,
+    senderName: 'Passenger One',
+    senderType: 'passenger',
+    text: 'Where is the pickup point?',
+    timestamp: { '.sv': 'timestamp' },
+    clientCreatedAt: Date.now(),
+    isDriver: false,
+    status: 'sent',
+    idempotencyKey: messageId,
+    type: 'text',
+  }));
+});
+
+test('allows captionless versioned image chat messages with bounded URLs', async () => {
+  const messageId = 'MSG_V2_IMAGE_001';
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/messages/${messageId}`).set({
+    schemaVersion: 2,
+    senderId: PASSENGER_PRINCIPAL_ID,
+    senderStableId: PASSENGER_PRINCIPAL_ID,
+    senderName: 'Passenger One',
+    senderType: 'passenger',
+    text: '',
+    timestamp: { '.sv': 'timestamp' },
+    clientCreatedAt: Date.now(),
+    isDriver: false,
+    status: 'sent',
+    idempotencyKey: messageId,
+    type: 'image',
+    imageUrl: 'https://example.com/photo.jpg',
+    thumbnailUrl: 'https://example.com/photo-thumb.jpg',
+  }));
+});
+
+test('allows the owner to tombstone a versioned image without retaining download URLs', async () => {
+  const messageId = 'MSG_V2_IMAGE_001';
+  const messageRef = dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/messages/${messageId}`);
+  await assertSucceeds(messageRef.update({
+    deleted: true,
+    text: '',
+    imageUrl: null,
+    thumbnailUrl: null,
+    deletedAt: new Date().toISOString(),
+    deletedBy: PASSENGER_PRINCIPAL_ID,
+  }));
+  const snapshot = await messageRef.get();
+  assert.equal(snapshot.child('imageUrl').exists(), false);
+  assert.equal(snapshot.child('thumbnailUrl').exists(), false);
+});
+
+test('rejects versioned messages whose idempotency identity or claimed role is inconsistent', async () => {
+  const base = {
+    schemaVersion: 2,
+    senderId: PASSENGER_PRINCIPAL_ID,
+    senderStableId: PASSENGER_PRINCIPAL_ID,
+    senderName: 'Passenger One',
+    senderType: 'passenger',
+    text: 'Hello',
+    timestamp: { '.sv': 'timestamp' },
+    clientCreatedAt: Date.now(),
+    isDriver: false,
+    status: 'sent',
+    type: 'text',
+  };
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/messages/MSG_V2_BAD_ID`).set({
+    ...base,
+    idempotencyKey: 'A_DIFFERENT_ID',
+  }));
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/messages/MSG_V2_BAD_ROLE`).set({
+    ...base,
+    idempotencyKey: 'MSG_V2_BAD_ROLE',
+    isDriver: true,
+  }));
+});
+
+test('rejects client-controlled future timestamps in versioned chat messages', async () => {
+  const messageId = 'MSG_V2_FUTURE_001';
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/messages/${messageId}`).set({
+    schemaVersion: 2,
+    senderId: PASSENGER_PRINCIPAL_ID,
+    senderStableId: PASSENGER_PRINCIPAL_ID,
+    senderName: 'Passenger One',
+    senderType: 'passenger',
+    text: 'Future message',
+    timestamp: Date.now() + 60 * 60 * 1000,
+    clientCreatedAt: Date.now(),
+    isDriver: false,
+    status: 'sent',
+    idempotencyKey: messageId,
+    type: 'text',
+  }));
+});
+
+test('allows versioned internal driver messages only for coherently assigned drivers', async () => {
+  const messageId = 'INT_V2_DRIVER_001';
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`internal_chats/${INTERNAL_TOUR_ID}/messages/${messageId}`).set({
+    schemaVersion: 2,
+    senderId: DRIVER_PRINCIPAL_ID,
+    senderStableId: DRIVER_PRINCIPAL_ID,
+    senderName: 'Driver Bondy',
+    senderType: 'driver',
+    text: 'Arrived at pickup',
+    timestamp: { '.sv': 'timestamp' },
+    clientCreatedAt: Date.now(),
+    isDriver: true,
+    status: 'sent',
+    idempotencyKey: messageId,
+    type: 'text',
+  }));
+});
+
 test('allows verified sender to soft-delete a group chat message tombstone', async () => {
   const softDeletePath = `chats/${TOUR_ID}/messages/MSG_SOFT_DELETE_DRIVER`;
   await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(softDeletePath).set({

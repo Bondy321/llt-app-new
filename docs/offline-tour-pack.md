@@ -9,20 +9,44 @@
 ```text
 Screen actions
   -> offlineSyncService
-      -> persistenceProvider (SecureStore -> AsyncStorage -> memory)
-      -> Tour Pack cache (role + tour scoped)
-      -> action queue (manifest/chat/internal-chat/photo)
+      -> persistenceProvider (durable AsyncStorage; legacy SecureStore migration; memory in tests only)
+      -> Tour Pack cache (role + tour + login identity scoped)
+      -> action queue (manifest/chat/internal-chat/photo, principal owned)
   -> replay triggers (foreground, reconnect, manual refresh, login restore)
 ```
 
 ## Cache keys
 
-- `tour_pack_passenger_<tourId>`
-- `tour_pack_driver_<tourId>`
-- `tour_pack_meta_passenger_<tourId>`
-- `tour_pack_meta_driver_<tourId>`
+- `tour_pack_v2_<role>_<tourId>_<encodedBookingOrDriverId>`
+- `tour_pack_meta_v2_<role>_<tourId>_<encodedBookingOrDriverId>`
 - `queue_v1`
 - `processed_action_ids_v1`
+
+The unversioned Tour Pack keys are cleanup-only legacy data. Every read and
+write must provide an owner identity, either explicitly or through the active
+session scope. This is required because a Tour Pack contains booking/driver
+identity data, not just shared itinerary content.
+
+## Shared-device ownership
+
+Every queue action stores a versioned `scope` containing canonical `tourId`,
+`principalId`, and `role`. Replay, counts, retries, removal, mutation, and
+subscriptions filter on the complete scope. A session change increments the
+generation and stops an in-flight replay before its next action. Entries for a
+different login remain durable and invisible.
+
+All queue read-modify-write operations are serialized. Observer reads never
+persist sanitation repairs, preventing a stale observer snapshot from
+overwriting a concurrent enqueue. Explicitly scoped subscriptions retain the
+scope captured when they subscribe.
+
+The separate safety retry queue follows the same identity boundary and uses a
+stable queue event ID for snapshot/reconcile replay. Network writes do not hold
+the storage lock, so a newly raised safety report is never blocked behind an
+older upload. Remote submission is one idempotent multi-path write covering the
+private log, tour alert, and critical global alert; the local item is removed
+only after that commit succeeds. Trusted contacts use principal-specific v2
+storage keys.
 
 ## Queue action types
 
@@ -99,3 +123,5 @@ Never build per-screen ad-hoc summary strings.
 3. Manual refresh reports canonical summary and state taxonomy.
 4. Retry failed actions only retries failed subset.
 5. Restart app mid-backlog and verify no duplicate replays.
+6. Switch between two identities on one device and verify neither queue,
+   Tour Pack, safety report, nor trusted contact crosses the session boundary.

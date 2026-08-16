@@ -18,15 +18,20 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { getTourItinerary } from '../services/bookingServiceRealtime';
-import { realtimeDb } from '../firebase';
+import { auth, realtimeDb } from '../firebase';
 import { COLORS as THEME, SPACING, RADIUS, SHADOWS, FONT_WEIGHT } from '../theme';
 import offlineSyncService from '../services/offlineSyncService';
 import logger from '../services/loggerService';
 const { parseSupportedStartDate, getTourDayContext } = require('../services/itineraryDateParser');
 const { parseTimestampMs } = require('../services/timeUtils');
 const { buildItineraryItems } = require('../utils/itineraryPresentation');
+const {
+  createItineraryContentSignature,
+  saveItineraryWithConflictGuard,
+  validateItineraryDraft,
+} = require('../services/itineraryService');
 
 // Brand Colors
 const COLORS = {
@@ -49,7 +54,7 @@ const COLORS = {
   mutedText: THEME.textMuted,
 };
 
-export default function ItineraryScreen({ onBack, tourId, tourName, startDate, isDriver }) {
+export default function ItineraryScreen({ onBack, tourId, tourName, startDate, isDriver, offlineCacheOwnerId }) {
   const [itinerary, setItinerary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -79,6 +84,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   const loadRequestIdRef = useRef(0);
   const mountedRef = useRef(false);
   const activeTourIdRef = useRef(tourId);
+  const editBaseSignatureRef = useRef(createItineraryContentSignature(null));
 
   activeTourIdRef.current = tourId;
 
@@ -131,6 +137,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
         if (data) {
           setItinerary(data);
           setEditedItinerary(JSON.parse(JSON.stringify(data)));
+          editBaseSignatureRef.current = createItineraryContentSignature(data);
           cacheItinerary(data);
           logger.info('ItineraryScreen', 'Realtime itinerary snapshot received', {
             tourId,
@@ -138,11 +145,27 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
             hasTitle: Boolean(data?.title),
           });
         } else {
+          setItinerary(null);
+          setEditedItinerary(null);
+          setCachedItinerary(null);
+          editBaseSignatureRef.current = createItineraryContentSignature(null);
+          cacheItinerary(null);
           logger.warn('ItineraryScreen', 'Realtime itinerary snapshot empty', { tourId });
         }
       };
 
-      itineraryRef.on('value', onUpdate);
+      const onListenerError = (error) => {
+        logger.warn('ItineraryScreen', 'Realtime itinerary listener failed', {
+          tourId,
+          isDriver: Boolean(isDriver),
+          error: error?.message || String(error),
+        });
+        if (canUpdateForTour(tourId)) {
+          setErrorMessage((current) => current || 'Live itinerary updates are unavailable. Pull to refresh to retry.');
+        }
+      };
+
+      itineraryRef.on('value', onUpdate, onListenerError);
       realtimeListener.current = { ref: itineraryRef, listener: onUpdate };
 
       return () => {
@@ -161,17 +184,32 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       loadRequestIdRef.current += 1;
       logger.debug('ItineraryScreen', 'Itinerary effect cleaned up without listener', { tourId });
     };
-  }, [tourId, isEditing, clearRetryTimeout, canUpdateForTour]);
+  }, [tourId, isEditing, clearRetryTimeout, canUpdateForTour, offlineCacheOwnerId]);
 
   // --- OFFLINE CACHING ---
   const cacheItinerary = async (data) => {
     const targetTourId = tourId;
     try {
       const syncedAt = new Date().toISOString();
-      await offlineSyncService.saveTourPack(targetTourId, isDriver ? 'driver' : 'passenger', { itinerary: data });
-      await offlineSyncService.setTourPackMeta(targetTourId, isDriver ? 'driver' : 'passenger', { lastSyncedAt: syncedAt });
+      const role = isDriver ? 'driver' : 'passenger';
+      const cacheResult = await offlineSyncService.saveTourPack(
+        targetTourId,
+        role,
+        { itinerary: data ?? null },
+        { ownerId: offlineCacheOwnerId },
+      );
+      const metaResult = await offlineSyncService.setTourPackMeta(
+        targetTourId,
+        role,
+        { lastSyncedAt: syncedAt },
+        { ownerId: offlineCacheOwnerId },
+      );
+      if (!cacheResult?.success || !metaResult?.success) {
+        throw new Error(cacheResult?.error || metaResult?.error || 'Itinerary cache write failed');
+      }
       if (canUpdateForTour(targetTourId)) {
         setLastSyncedAt(syncedAt);
+        setCachedItinerary(data ?? null);
       }
       logger.info('ItineraryScreen', 'Itinerary cache saved', {
         tourId: targetTourId,
@@ -191,11 +229,19 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
   const loadCachedItinerary = async () => {
     const targetTourId = tourId;
     try {
-      const cached = await offlineSyncService.getTourPack(targetTourId, isDriver ? 'driver' : 'passenger');
+      const cached = await offlineSyncService.getTourPack(
+        targetTourId,
+        isDriver ? 'driver' : 'passenger',
+        { ownerId: offlineCacheOwnerId },
+      );
       const data = cached?.success ? cached.data?.itinerary : null;
       if (data) {
         try {
-          const meta = await offlineSyncService.getTourPackMeta(targetTourId, isDriver ? 'driver' : 'passenger');
+          const meta = await offlineSyncService.getTourPackMeta(
+            targetTourId,
+            isDriver ? 'driver' : 'passenger',
+            { ownerId: offlineCacheOwnerId },
+          );
           if (meta?.success && meta.data?.lastSyncedAt && canUpdateForTour(targetTourId)) {
             setLastSyncedAt(meta.data.lastSyncedAt);
           }
@@ -342,6 +388,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       if (!isCurrentRequest()) return;
       setItinerary(tourItinerary || null);
       setEditedItinerary(JSON.parse(JSON.stringify(tourItinerary || {})));
+      editBaseSignatureRef.current = createItineraryContentSignature(tourItinerary || null);
       logger.info('ItineraryScreen', 'Itinerary network load completed', {
         tourId,
         requestId,
@@ -351,6 +398,8 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
       if (tourItinerary) {
         await cacheItinerary(tourItinerary);
+      } else {
+        await cacheItinerary(null);
       }
 
       setRetryCount(0);
@@ -544,8 +593,27 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
     );
   };
 
+  const beginEditing = (draft = itinerary) => {
+    editBaseSignatureRef.current = createItineraryContentSignature(itinerary || null);
+    setEditedItinerary(JSON.parse(JSON.stringify(draft || {
+      title: tourName || 'Tour',
+      days: [{ day: 1, content: '' }],
+    })));
+    setIsEditing(true);
+    logger.info('ItineraryScreen', 'Itinerary edit session started', {
+      tourId,
+      revision: itinerary?.revision || 0,
+      dayCount: Array.isArray(draft?.days) ? draft.days.length : 1,
+    });
+  };
+
   // --- SAVE WITH RETRY ---
   const handleSaveChanges = async (retryAttempt = 0) => {
+    const validation = validateItineraryDraft(editedItinerary);
+    if (!validation.valid) {
+      Alert.alert('Check the itinerary', validation.error);
+      return;
+    }
     setSaving(true);
     logger.info('ItineraryScreen', 'Itinerary save started', {
       tourId,
@@ -553,15 +621,60 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       dayCount: Array.isArray(editedItinerary?.days) ? editedItinerary.days.length : null,
     });
     try {
-      await realtimeDb.ref(`tours/${tourId}/itinerary`).update(editedItinerary);
+      const result = await saveItineraryWithConflictGuard({
+        tourId,
+        draft: editedItinerary,
+        expectedContentSignature: editBaseSignatureRef.current,
+        updatedBy: auth?.currentUser?.uid || 'driver',
+        db: realtimeDb,
+      });
 
-      setItinerary(editedItinerary);
-      await cacheItinerary(editedItinerary);
+      if (result.validationError) {
+        Alert.alert('Check the itinerary', result.validationError);
+        return;
+      }
+
+      if (result.conflict) {
+        const serverItinerary = result.serverItinerary || null;
+        setItinerary(serverItinerary);
+        editBaseSignatureRef.current = createItineraryContentSignature(serverItinerary);
+        await cacheItinerary(serverItinerary);
+        logger.warn('ItineraryScreen', 'Itinerary save prevented a stale overwrite', {
+          tourId,
+          serverRevision: serverItinerary?.revision || 0,
+          draftDayCount: Array.isArray(editedItinerary?.days) ? editedItinerary.days.length : null,
+        });
+        Alert.alert(
+          'Newer itinerary found',
+          'Another operator changed this itinerary while you were editing. The newer server version is protected. Your draft is still open; review it before choosing to save again.',
+          [
+            {
+              text: 'Use server version',
+              onPress: () => {
+                setEditedItinerary(JSON.parse(JSON.stringify(serverItinerary || {})));
+                setIsEditing(false);
+              },
+            },
+            { text: 'Keep reviewing my draft', style: 'cancel' },
+          ],
+        );
+        return;
+      }
+
+      if (!result.success || !result.itinerary) {
+        throw new Error('Itinerary save did not complete');
+      }
+
+      setItinerary(result.itinerary);
+      setEditedItinerary(JSON.parse(JSON.stringify(result.itinerary)));
+      editBaseSignatureRef.current = createItineraryContentSignature(result.itinerary);
+      await cacheItinerary(result.itinerary);
       setIsEditing(false);
       logger.info('ItineraryScreen', 'Itinerary save completed', {
         tourId,
         retryAttempt,
-        dayCount: Array.isArray(editedItinerary?.days) ? editedItinerary.days.length : null,
+        dayCount: Array.isArray(result.itinerary?.days) ? result.itinerary.days.length : null,
+        revision: result.itinerary?.revision || null,
       });
       Alert.alert("Success", "Itinerary updated. Passengers will be notified shortly.");
     } catch (error) {
@@ -739,7 +852,6 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
           <TouchableOpacity
             style={styles.emptyButton}
             onPress={() => {
-              setIsEditing(true);
               const emptyItinerary = {
                 title: tourName || 'Tour',
                 days: [
@@ -749,7 +861,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
                   }
                 ]
               };
-              setEditedItinerary(emptyItinerary);
+              beginEditing(emptyItinerary);
             }}
           >
             <MaterialCommunityIcons name="plus" size={20} color={COLORS.white} />
@@ -1054,7 +1166,7 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
               <TouchableOpacity onPress={toggleSearch} style={[styles.headerIconButton, { marginRight: 8 }]}>
                 <MaterialCommunityIcons name="magnify" size={22} color={COLORS.white} />
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => setIsEditing(true)} style={[styles.headerButton, styles.editButton]}>
+              <TouchableOpacity onPress={() => beginEditing()} style={[styles.headerButton, styles.editButton]}>
                 <MaterialCommunityIcons name="pencil" size={22} color={COLORS.primaryBlue} />
               </TouchableOpacity>
             </View>

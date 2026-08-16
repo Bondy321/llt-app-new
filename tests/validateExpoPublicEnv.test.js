@@ -1,5 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { mkdtempSync, rmSync, writeFileSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { join, resolve } = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const { validateExpoPublicEnv } = require('../scripts/validateExpoPublicEnv');
 
@@ -73,4 +77,34 @@ test('validateExpoPublicEnv rejects verifier URLs pasted into the wrong login sl
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL')));
   assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL')));
+});
+
+test('CLI validation loads Expo-compatible .env.local values without printing secrets', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'llt-expo-env-'));
+  const secretApiKey = validEnv.EXPO_PUBLIC_FIREBASE_API_KEY;
+
+  try {
+    writeFileSync(
+      join(projectRoot, '.env.local'),
+      `${Object.entries(validEnv)
+        .map(([name, value]) => `${name}=${value}`)
+        .join('\n')}\n`,
+      'utf8'
+    );
+
+    const childEnv = { ...process.env, NODE_ENV: 'development' };
+    delete childEnv.__EXPO_ENV;
+
+    const result = spawnSync(
+      process.execPath,
+      [resolve(__dirname, '../scripts/validateExpoPublicEnv.js'), '--platform=all'],
+      { cwd: projectRoot, encoding: 'utf8', env: childEnv }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /validation passed for platform "all"/);
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(secretApiKey));
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
 });

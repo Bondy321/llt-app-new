@@ -10,7 +10,7 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Notifications from 'expo-notifications';
 import {
@@ -22,11 +22,18 @@ import {
 import logger from '../services/loggerService';
 import { parseTimestampMs } from '../services/timeUtils';
 import { COLORS as THEME, SHADOWS } from '../theme';
+import NotificationFeedCard from '../components/NotificationFeedCard';
 import {
   DEFAULT_MARKETING_PREFERENCES,
   TOUR_NOTIFICATION_CATEGORIES,
   TOUR_NOTIFICATION_CATEGORY_KEYS,
 } from '../utils/notificationCategories';
+
+const {
+  markAllNotificationsRead,
+  markNotificationRead,
+  subscribeToNotificationFeed,
+} = require('../services/notificationInboxService');
 
 // Brand Colors
 const COLORS = {
@@ -157,6 +164,9 @@ export default function NotificationPreferencesScreen({
   audience = 'passenger',
   onComplete,
   returnTo,
+  tourId,
+  onNavigate,
+  initialMarketingCategoryKey = null,
 }) {
   const defaultOpsPrefs = {
     driver_updates: true,
@@ -231,6 +241,11 @@ export default function NotificationPreferencesScreen({
   const [activeOpsPreset, setActiveOpsPreset] = useState('essential');
   const [activeMarketingPreset, setActiveMarketingPreset] = useState('none');
   const [marketingExpanded, setMarketingExpanded] = useState(false);
+  const [notificationFeed, setNotificationFeed] = useState([]);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+  const [notificationFeedLoading, setNotificationFeedLoading] = useState(false);
+  const [notificationFeedError, setNotificationFeedError] = useState('');
+  const [notificationFeedBusy, setNotificationFeedBusy] = useState(false);
 
   // 1. Operational Alerts (During the tour)
   const [opsPrefs, setOpsPrefs] = useState(defaultOpsPrefs);
@@ -241,6 +256,7 @@ export default function NotificationPreferencesScreen({
   const [initialMarketingPrefs, setInitialMarketingPrefs] = useState(null);
   const mountedRef = useRef(true);
   const preferenceLoadSeqRef = useRef(0);
+  const initialCategoryHandledRef = useRef(null);
 
   const hasChanges =
     initialOpsPrefs !== null &&
@@ -264,6 +280,102 @@ export default function NotificationPreferencesScreen({
     mountedRef.current = false;
     preferenceLoadSeqRef.current += 1;
   }, []);
+
+  useEffect(() => {
+    if (loading || isOnboarding || !initialMarketingCategoryKey) return;
+    if (!TOUR_NOTIFICATION_CATEGORY_KEYS.includes(initialMarketingCategoryKey)) return;
+    if (initialCategoryHandledRef.current === initialMarketingCategoryKey) return;
+
+    initialCategoryHandledRef.current = initialMarketingCategoryKey;
+    setMarketingExpanded(true);
+    const category = TOUR_NOTIFICATION_CATEGORIES.find((item) => item.key === initialMarketingCategoryKey);
+    setStatusBanner({
+      type: 'info',
+      message: category
+        ? `Opened ${category.label} notification settings.`
+        : 'Opened future-tour notification settings.',
+    });
+  }, [initialMarketingCategoryKey, isOnboarding, loading]);
+
+  useEffect(() => {
+    if (isOnboarding || !tourId || !userId) {
+      setNotificationFeed([]);
+      setNotificationUnreadCount(0);
+      setNotificationFeedLoading(false);
+      setNotificationFeedError('');
+      return undefined;
+    }
+
+    setNotificationFeedLoading(true);
+    setNotificationFeedError('');
+    try {
+      return subscribeToNotificationFeed({
+        tourId,
+        userId,
+        onUpdate: ({ items, unreadCount }) => {
+          if (!mountedRef.current) return;
+          setNotificationFeed(items);
+          setNotificationUnreadCount(unreadCount);
+          setNotificationFeedLoading(false);
+          setNotificationFeedError('');
+        },
+        onError: (error) => {
+          if (!mountedRef.current) return;
+          logger.warn('NotificationPreferences', 'Tour update feed failed', {
+            error: error?.message || String(error),
+          });
+          setNotificationFeedLoading(false);
+          setNotificationFeedError('Tour updates could not be refreshed. Your alert preferences are still available below.');
+        },
+      });
+    } catch (error) {
+      logger.warn('NotificationPreferences', 'Tour update feed could not start', {
+        error: error?.message || String(error),
+      });
+      setNotificationFeedLoading(false);
+      setNotificationFeedError('Tour updates are temporarily unavailable.');
+      return undefined;
+    }
+  }, [isOnboarding, tourId, userId]);
+
+  const handleOpenNotification = async (item) => {
+    if (!item) return;
+    if (!item.isRead) {
+      try {
+        await markNotificationRead({ tourId, userId, noticeId: item.noticeId });
+      } catch (error) {
+        logger.warn('NotificationPreferences', 'Tour update read state could not be saved', {
+          noticeType: item.type,
+          error: error?.message || String(error),
+        });
+      }
+    }
+    onNavigate?.(item.screen, {
+      tourId: item.tourId,
+      noticeId: item.noticeId,
+      messageId: item.messageId,
+      fromNotification: true,
+    });
+  };
+
+  const handleMarkAllNotificationsRead = async () => {
+    if (notificationFeedBusy || notificationUnreadCount === 0) return;
+    setNotificationFeedBusy(true);
+    try {
+      await markAllNotificationsRead({
+        tourId,
+        userId,
+        noticeIds: notificationFeed.filter((item) => !item.isRead).map((item) => item.noticeId),
+      });
+    } catch (error) {
+      logger.warn('NotificationPreferences', 'Mark-all-read failed', {
+        error: error?.message || String(error),
+      });
+      setNotificationFeedError('Updates could not be marked as read. Please retry.');
+    } finally {
+      if (mountedRef.current) setNotificationFeedBusy(false);
+    }
+  };
 
   const formatTimestamp = (isoDate) => {
     const parsedMs = parseTimestampMs(isoDate);
@@ -641,6 +753,11 @@ export default function NotificationPreferencesScreen({
           title: 'System Check Passed',
           body: "Your device is correctly configured to receive Loch Lomond Travel updates.",
           sound: true,
+          data: {
+            screen: 'NotificationPreferences',
+            notificationType: 'local_test',
+            timestamp: Date.now(),
+          },
         },
         trigger: null, // null means trigger immediately
       });
@@ -750,7 +867,14 @@ export default function NotificationPreferencesScreen({
         ) : null}
 
         {statusBanner ? (
-          <View style={[styles.statusBanner, statusBanner.type === 'error' ? styles.errorBanner : styles.successBanner]}>
+          <View style={[
+            styles.statusBanner,
+            statusBanner.type === 'error'
+              ? styles.errorBanner
+              : statusBanner.type === 'info'
+                ? styles.infoBanner
+                : styles.successBanner,
+          ]}>
             <Text style={styles.statusBannerText}>{statusBanner.message}</Text>
             {statusBanner.type === 'error' ? (
               <TouchableOpacity style={styles.inlineActionButton} onPress={handleSave} disabled={saving}>
@@ -789,6 +913,18 @@ export default function NotificationPreferencesScreen({
               <Text style={styles.permissionSummaryBody}>{permissionStatus.description}</Text>
             ) : null}
           </View>
+        ) : null}
+
+        {!isOnboarding ? (
+          <NotificationFeedCard
+            items={notificationFeed}
+            unreadCount={notificationUnreadCount}
+            loading={notificationFeedLoading}
+            error={notificationFeedError}
+            busy={notificationFeedBusy}
+            onOpen={handleOpenNotification}
+            onMarkAll={handleMarkAllNotificationsRead}
+          />
         ) : null}
 
         {/* SECTION 1: ON TOUR */}

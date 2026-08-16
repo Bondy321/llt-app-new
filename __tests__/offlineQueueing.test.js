@@ -5,19 +5,24 @@ const { sendMessage } = require('../services/chatService');
 const offlineSyncService = require('../services/offlineSyncService');
 
 const clearQueue = async () => {
-  const queued = await offlineSyncService.getQueuedActions();
+  const queued = await offlineSyncService.getQueuedActions({ includeAll: true });
   if (queued.success) {
-    await Promise.all(queued.data.map((action) => offlineSyncService.removeAction(action.id)));
+    await Promise.all(queued.data.map((action) => offlineSyncService.removeAction(action.id, { includeAll: true })));
   }
 };
 
 test('manifest update queues when offline option is false', async () => {
   await clearQueue();
-  const result = await updateManifestBooking('TOUR 1', 'ABC123', [MANIFEST_STATUS.BOARDED], { online: false, db: null });
+  const result = await updateManifestBooking('TOUR 1', 'ABC123', [MANIFEST_STATUS.BOARDED], {
+    online: false,
+    db: null,
+    actorPrincipalId: 'driver:D-TEST',
+    authUid: 'driver-auth-test',
+  });
   assert.equal(result.success, true);
   assert.equal(result.queued, true);
 
-  const queued = await offlineSyncService.getQueuedActions();
+  const queued = await offlineSyncService.getQueuedActions({ includeAll: true });
   assert.equal(queued.data.some((a) => a.type === 'MANIFEST_UPDATE'), true);
 });
 
@@ -34,6 +39,6 @@ test('chat send queues when offline option is false', async () => {
   assert.equal(result.queued, true);
   assert.equal(result.message.status, 'queued');
 
-  const queued = await offlineSyncService.getQueuedActions();
+  const queued = await offlineSyncService.getQueuedActions({ includeAll: true });
   assert.equal(queued.data.some((a) => a.type === 'CHAT_MESSAGE'), true);
 });

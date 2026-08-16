@@ -21,7 +21,7 @@ import {
   Image as RNImage,
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { Image as ExpoImage } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
