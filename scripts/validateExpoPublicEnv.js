@@ -198,10 +198,25 @@ const validateExpoPublicEnv = (env = process.env, options = {}) => {
   return { ok: errors.length === 0, errors, platform };
 };
 
+const loadProjectEnvIfAvailable = (projectRoot = process.cwd(), requireFn = require) => {
+  try {
+    const expoEnv = requireFn('@expo/env');
+    expoEnv.loadProjectEnv(projectRoot, { silent: true });
+    return true;
+  } catch (error) {
+    const missingExpoEnv = error?.code === 'MODULE_NOT_FOUND'
+      && String(error?.message || '').includes("'@expo/env'");
+    if (missingExpoEnv) return false;
+    throw error;
+  }
+};
+
 if (require.main === module) {
   // Match Expo CLI behaviour for local validation while preserving any values
-  // already supplied by EAS or CI. Keep this silent so credentials never reach logs.
-  require('@expo/env').loadProjectEnv(process.cwd(), { silent: true });
+  // already supplied by EAS or CI. EAS runs eas-build-pre-install before npm
+  // installs dependencies, so a missing optional loader must not block validation.
+  // Keep this silent so credentials never reach logs.
+  loadProjectEnvIfAvailable();
   const result = validateExpoPublicEnv();
 
   if (!result.ok) {
@@ -217,5 +232,6 @@ module.exports = {
   REQUIRED_ENV_VARS,
   ANDROID_REQUIRED_ENV_VARS,
   OPTIONAL_ENV_VARS,
+  loadProjectEnvIfAvailable,
   validateExpoPublicEnv,
 };

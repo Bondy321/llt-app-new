@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtempSync, rmSync, writeFileSync } = require('node:fs');
+const { copyFileSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { spawnSync } = require('node:child_process');
@@ -104,6 +104,30 @@ test('CLI validation loads Expo-compatible .env.local values without printing se
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /validation passed for platform "all"/);
     assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(secretApiKey));
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('EAS pre-install validation works before @expo/env is installed', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'llt-eas-preinstall-'));
+  const isolatedValidator = join(projectRoot, 'validateExpoPublicEnv.js');
+
+  try {
+    copyFileSync(resolve(__dirname, '../scripts/validateExpoPublicEnv.js'), isolatedValidator);
+    const childEnv = { ...process.env, ...validEnv, NODE_ENV: 'production' };
+    delete childEnv.NODE_PATH;
+    delete childEnv.__EXPO_ENV;
+
+    const result = spawnSync(
+      process.execPath,
+      [isolatedValidator, '--platform=ios'],
+      { cwd: projectRoot, encoding: 'utf8', env: childEnv }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /validation passed for platform "ios"/);
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, /Cannot find module '@expo\/env'/);
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }
