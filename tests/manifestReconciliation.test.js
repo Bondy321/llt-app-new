@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   applyManifestUpdateDirect,
+  ensureBookingSchemaConsistency,
   MANIFEST_STATUS,
   updateManifestBooking,
 } = require('../services/bookingServiceRealtime');
@@ -96,4 +97,27 @@ test('updateManifestBooking exposes server-preserved status instead of attempted
   assert.equal(result.status, MANIFEST_STATUS.NO_SHOW);
   assert.equal(result.conflict.serverStatus, MANIFEST_STATUS.NO_SHOW);
   assert.match(result.conflictMessage, /server kept the newer no show status/i);
+});
+
+test('mobile manifest fallback removes duplicated sync rows without collapsing real same-name passengers', async () => {
+  const duplicated = await ensureBookingSchemaConsistency('T139956', {
+    passengerNames: ['Patricia', 'Emily', 'Patricia', 'Emily'],
+    passengerDetails: [
+      { name: 'Patricia', seatNo: 13, seatLabel: 'S13' },
+      { name: 'Emily', seatNo: 14, seatLabel: 'S14' },
+      { name: 'Patricia', seatNo: 13, seatLabel: 'S13' },
+      { name: 'Emily', seatNo: 14, seatLabel: 'S14' },
+    ],
+    seatNumbers: [13, 14, 13, 14],
+    seatLabels: ['S13', 'S14', 'S13', 'S14'],
+  });
+  assert.deepEqual(duplicated.normalizedBooking.passengerNames, ['Patricia', 'Emily']);
+  assert.deepEqual(duplicated.passengerSourceIndexes, [[0, 2], [1, 3]]);
+  assert.equal(duplicated.duplicatePassengerCount, 2);
+
+  const sameName = await ensureBookingSchemaConsistency('TWINS', {
+    passengerNames: ['Alex Smith', 'Alex Smith'],
+    seatNumbers: [7, 8],
+  });
+  assert.deepEqual(sameName.normalizedBooking.passengerNames, ['Alex Smith', 'Alex Smith']);
 });

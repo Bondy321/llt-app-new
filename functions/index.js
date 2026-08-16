@@ -12,6 +12,7 @@ const admin = require("firebase-admin");
 const { Expo } = require("expo-server-sdk");
 const sharp = require("sharp");
 const { createHash, randomUUID } = require("crypto");
+const { normalizeManifestPassengerRows } = require('./lib/manifestPassengers');
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -1976,8 +1977,11 @@ const deriveParentStatusFromPassengers = (passengerStatuses = []) => {
 };
 
 const normalizeManifestBooking = (bookingRef, bookingData = {}) => {
-  const passengerNames = Array.isArray(bookingData.passengerNames) ? bookingData.passengerNames : [];
-  const seatNumbers = Array.isArray(bookingData.seatNumbers) ? [...bookingData.seatNumbers] : [];
+  const { rows, duplicateCount } = normalizeManifestPassengerRows(bookingData);
+  const passengerNames = rows.map((row) => row.name);
+  const seatNumbers = rows.map((row) => row.seatNumber ?? 'TBA');
+  const seatLabels = rows.map((row) => row.seatLabel || 'TBA');
+  const passengerDetails = rows.map((row) => row.detail).filter(Boolean);
 
   if (passengerNames.length > seatNumbers.length) {
     seatNumbers.push(...Array(passengerNames.length - seatNumbers.length).fill('TBA'));
@@ -1990,15 +1994,27 @@ const normalizeManifestBooking = (bookingRef, bookingData = {}) => {
     : [];
   const firstPickup = pickupPoints[0] || {};
 
-  return {
+  const normalizedBooking = {
     id: bookingRef,
     ...bookingData,
     passengerNames,
+    passengers: passengerNames,
+    ...(Array.isArray(bookingData.passengerDetails) ? { passengerDetails } : {}),
     seatNumbers,
+    ...(Array.isArray(bookingData.seatLabels) ? { seatLabels } : {}),
     pickupPoints,
     pickupTime: firstPickup.time || 'TBA',
     pickupLocation: firstPickup.location || 'To be confirmed',
   };
+  Object.defineProperty(normalizedBooking, '_manifestPassengerSourceIndexes', {
+    value: rows.map((row) => row.sourceIndexes),
+    enumerable: false,
+  });
+  Object.defineProperty(normalizedBooking, '_manifestDuplicatePassengerCount', {
+    value: duplicateCount,
+    enumerable: false,
+  });
+  return normalizedBooking;
 };
 
 const verifyTourManifestAccess = async ({ authUid, tourId, db = admin.database() }) => {
@@ -2068,7 +2084,15 @@ const buildTourManifestPayload = async ({ tourId, requestedTourCode = null, db =
     const liveStatus = bookingStatuses[bookingRef] || {};
     const totalPax = normalizedBooking.passengerNames.length;
     const hasPassengerStatuses = Array.isArray(liveStatus.passengerStatus);
-    const rawPassengerStatuses = liveStatus.passengerStatus;
+    const rawPassengerStatuses = hasPassengerStatuses
+      ? normalizedBooking._manifestPassengerSourceIndexes.map((indexes) => {
+        const statuses = indexes
+          .map((index) => liveStatus.passengerStatus[index])
+          .filter((status) => Object.values(MANIFEST_STATUS).includes(status));
+        const resolved = statuses.find((status) => status !== MANIFEST_STATUS.PENDING);
+        return resolved || statuses[0] || MANIFEST_STATUS.PENDING;
+      })
+      : liveStatus.passengerStatus;
     const passengerStatus = normalizePassengerStatuses(rawPassengerStatuses, totalPax);
     const derivedStatus = hasPassengerStatuses ? deriveParentStatusFromPassengers(passengerStatus) : null;
 
@@ -4492,6 +4516,7 @@ exports.__testables = {
   isAllowedAdminOrigin,
   buildTourManifestPayload,
   verifyTourManifestAccess,
+  normalizeManifestPassengerRows,
   normalizeManifestBooking,
   resolveDriverAssignment,
   claimDriverAuthUid,

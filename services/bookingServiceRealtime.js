@@ -948,10 +948,67 @@ const normalizePassengerStatuses = (passengerStatuses, totalPax) => {
   return padded.map((status) => status || MANIFEST_STATUS.PENDING);
 };
 
-const ensureBookingSchemaConsistency = async (bookingRef, bookingData) => {
-  const passengerNames = Array.isArray(bookingData.passengerNames) ? bookingData.passengerNames : [];
+const normalizeManifestPassengerRows = (bookingData = {}) => {
+  const details = Array.isArray(bookingData.passengerDetails) ? bookingData.passengerDetails : [];
+  const names = Array.isArray(bookingData.passengerNames)
+    ? bookingData.passengerNames
+    : (Array.isArray(bookingData.passengers) ? bookingData.passengers : []);
+  const seatNumbers = Array.isArray(bookingData.seatNumbers) ? bookingData.seatNumbers : [];
+  const seatLabels = Array.isArray(bookingData.seatLabels) ? bookingData.seatLabels : [];
+  const rowCount = Math.max(details.length, names.length, seatNumbers.length, seatLabels.length);
+  const strongIdentityRows = new Map();
+  const rows = [];
+  const toTrimmedString = (value) => (typeof value === 'string' ? value.trim() : '');
 
-  const seatNumbers = Array.isArray(bookingData.seatNumbers) ? [...bookingData.seatNumbers] : [];
+  for (let index = 0; index < rowCount; index += 1) {
+    const detail = details[index] && typeof details[index] === 'object' && !Array.isArray(details[index])
+      ? details[index]
+      : {};
+    const name = toTrimmedString(detail.name) || toTrimmedString(names[index]) || 'Unknown Passenger';
+    const rawSeatNumber = detail.seatNo ?? detail.seatNumber ?? seatNumbers[index] ?? null;
+    const numericSeat = Number(rawSeatNumber);
+    const hasNumericSeat = rawSeatNumber !== null
+      && rawSeatNumber !== ''
+      && Number.isInteger(numericSeat)
+      && numericSeat >= 0;
+    const seatNumber = hasNumericSeat ? numericSeat : rawSeatNumber;
+    const seatLabel = toTrimmedString(detail.seatLabel) || toTrimmedString(seatLabels[index]);
+    const labelSeatMatch = seatLabel.match(/^S?0*(\d+)$/i);
+    const seatIdentity = hasNumericSeat
+      ? `number:${numericSeat}`
+      : (labelSeatMatch ? `number:${Number(labelSeatMatch[1])}` : (seatLabel ? `label:${seatLabel.toUpperCase()}` : null));
+    const strongIdentity = seatIdentity
+      ? `${name.replace(/\s+/g, ' ').trim().toLowerCase()}|${seatIdentity}`
+      : null;
+
+    if (strongIdentity && strongIdentityRows.has(strongIdentity)) {
+      rows[strongIdentityRows.get(strongIdentity)].sourceIndexes.push(index);
+      continue;
+    }
+    if (strongIdentity) strongIdentityRows.set(strongIdentity, rows.length);
+
+    rows.push({
+      sourceIndex: index,
+      sourceIndexes: [index],
+      name,
+      seatNumber,
+      seatLabel,
+      detail: details.length > 0 ? { ...detail, name } : null,
+    });
+  }
+
+  return {
+    rows,
+    duplicateCount: Math.max(0, rowCount - rows.length),
+  };
+};
+
+const ensureBookingSchemaConsistency = async (bookingRef, bookingData) => {
+  const { rows, duplicateCount } = normalizeManifestPassengerRows(bookingData);
+  const passengerNames = rows.map((row) => row.name);
+  const seatNumbers = rows.map((row) => row.seatNumber ?? 'TBA');
+  const seatLabels = rows.map((row) => row.seatLabel || 'TBA');
+  const passengerDetails = rows.map((row) => row.detail).filter(Boolean);
 
   if (passengerNames.length > seatNumbers.length) {
     const missingSeats = passengerNames.length - seatNumbers.length;
@@ -970,11 +1027,16 @@ const ensureBookingSchemaConsistency = async (bookingRef, bookingData) => {
       id: bookingRef,
       ...bookingData,
       passengerNames,
+      passengers: passengerNames,
+      ...(Array.isArray(bookingData.passengerDetails) ? { passengerDetails } : {}),
       seatNumbers,
+      ...(Array.isArray(bookingData.seatLabels) ? { seatLabels } : {}),
       pickupPoints,
       pickupTime: firstPickup.time || 'TBA',
       pickupLocation: firstPickup.location || 'To be confirmed',
     },
+    passengerSourceIndexes: rows.map((row) => row.sourceIndexes),
+    duplicatePassengerCount: duplicateCount,
     updated: false,
   };
 };
@@ -1028,12 +1090,21 @@ const getTourManifest = async (tourCodeOriginal) => {
       const rawBookings = bookingsSnapshot.val();
 
       for (const [bookingRef, data] of Object.entries(rawBookings)) {
-        const { normalizedBooking } = await ensureBookingSchemaConsistency(bookingRef, data);
+        const { normalizedBooking, passengerSourceIndexes } = await ensureBookingSchemaConsistency(bookingRef, data);
         const liveStatus = bookingStatuses[bookingRef] || {};
         const totalPax = normalizedBooking.passengerNames.length;
         const hasPassengerStatuses = Array.isArray(liveStatus.passengerStatus);
         const passengerStatus = normalizePassengerStatuses(
-          liveStatus.passengerStatus,
+          hasPassengerStatuses
+            ? passengerSourceIndexes.map((indexes) => {
+              const statuses = indexes
+                .map((index) => liveStatus.passengerStatus[index])
+                .filter((status) => Object.values(MANIFEST_STATUS).includes(status));
+              return statuses.find((status) => status !== MANIFEST_STATUS.PENDING)
+                || statuses[0]
+                || MANIFEST_STATUS.PENDING;
+            })
+            : liveStatus.passengerStatus,
           totalPax
         );
         const derivedStatus = hasPassengerStatuses ? deriveParentStatusFromPassengers(passengerStatus) : null;
@@ -2114,6 +2185,7 @@ const getDriverItinerary = async (tourId) => {
 
 module.exports = {
   MANIFEST_STATUS,
+  normalizeManifestPassengerRows,
   ensureBookingSchemaConsistency,
   ensureTourParticipantCount,
   buildPassengerStableIdentity,

@@ -19,6 +19,7 @@ Module._load = function mockedLoad(request, parent, isMain) {
   return originalLoad.apply(this, arguments);
 };
 const { __testables } = require('../functions/index.js');
+const { buildBookingRepairPlan } = require('../functions/scripts/repairDuplicateManifestPassengers.js');
 Module._load = originalLoad;
 
 test('sanitizeLogText redacts sensitive identifiers from Functions error text', () => {
@@ -214,6 +215,90 @@ test('buildTourManifestPayload assembles normalized bookings and live passenger 
   assert.equal(manifest.stats.totalPax, 3);
   assert.equal(manifest.stats.checkedIn, 2);
   assert.equal(manifest.stats.noShows, 1);
+});
+
+test('buildTourManifestPayload removes sync duplicates by passenger and seat identity', async () => {
+  const duplicatedDetails = [
+    { name: 'Ms Patricia Saunders', seatNo: 13, seatLabel: 'S13', pickupDate: '20/08/2026' },
+    { name: 'Mrs Emily Mckay', seatNo: 14, seatLabel: 'S14', pickupDate: '20/08/2026' },
+    { name: 'Ms Patricia Saunders', seatNo: 13, seatLabel: 'S13', pickupDate: '20/08/2026 00:00:00' },
+    { name: 'Mrs Emily Mckay', seatNo: 14, seatLabel: 'S14', pickupDate: '20/08/2026 00:00:00' },
+  ];
+  const db = createMockRealtimeDb({
+    tours: { '5155D_10': { name: 'Highlands', tourCode: '5155D 10' } },
+    bookings: {
+      T139956: {
+        tourId: '5155D_10',
+        passengerDetails: duplicatedDetails,
+        passengerNames: duplicatedDetails.map((passenger) => passenger.name),
+        passengers: duplicatedDetails.map((passenger) => passenger.name),
+        seatNumbers: duplicatedDetails.map((passenger) => passenger.seatNo),
+        seatLabels: duplicatedDetails.map((passenger) => passenger.seatLabel),
+        pickupPoints: [{ location: 'Dundee', time: '09:30' }],
+      },
+    },
+    tour_manifests: {
+      '5155D_10': {
+        bookings: {
+          T139956: { passengerStatus: ['BOARDED', 'NO_SHOW', 'PENDING', 'PENDING'] },
+        },
+      },
+    },
+  });
+
+  const manifest = await __testables.buildTourManifestPayload({ tourId: '5155D_10', db });
+  const booking = manifest.bookings[0];
+
+  assert.deepEqual(booking.passengerNames, ['Ms Patricia Saunders', 'Mrs Emily Mckay']);
+  assert.deepEqual(booking.seatNumbers, [13, 14]);
+  assert.equal(booking.passengerDetails.length, 2);
+  assert.deepEqual(booking.passengerStatus, ['BOARDED', 'NO_SHOW']);
+  assert.equal(booking.status, 'PARTIAL');
+  assert.equal(manifest.stats.totalPax, 2);
+  assert.equal(manifest.stats.checkedIn, 1);
+  assert.equal(manifest.stats.noShows, 1);
+});
+
+test('manifest normalization preserves matching names when their seats differ', () => {
+  const booking = __testables.normalizeManifestBooking('TWINS', {
+    passengerNames: ['Alex Smith', 'Alex Smith'],
+    seatNumbers: [7, 8],
+  });
+
+  assert.deepEqual(booking.passengerNames, ['Alex Smith', 'Alex Smith']);
+  assert.deepEqual(booking.seatNumbers, [7, 8]);
+});
+
+test('duplicate manifest repair plan is reversible and preserves resolved status', () => {
+  const booking = {
+    tourId: '5155D_10',
+    passengerNames: ['Patricia', 'Emily', 'Patricia', 'Emily'],
+    passengerDetails: [
+      { name: 'Patricia', seatNo: 13, seatLabel: 'S13' },
+      { name: 'Emily', seatNo: 14, seatLabel: 'S14' },
+      { name: 'Patricia', seatNo: 13, seatLabel: 'S13' },
+      { name: 'Emily', seatNo: 14, seatLabel: 'S14' },
+    ],
+    seatNumbers: [13, 14, 13, 14],
+    seatLabels: ['S13', 'S14', 'S13', 'S14'],
+    pickupPoints: [
+      { date: '20/08/2026', location: 'Dundee', time: '09:30' },
+      { date: '20/08/2026 00:00:00', location: 'Dundee', time: '09:30' },
+    ],
+  };
+  const manifestRecord = {
+    passengerStatus: ['PENDING', 'NO_SHOW', 'BOARDED', 'NO_SHOW'],
+    status: 'PARTIAL',
+  };
+  const plan = buildBookingRepairPlan({ bookingRef: 'T139956', booking, manifestRecord });
+
+  assert.equal(plan.duplicateCount, 2);
+  assert.deepEqual(plan.repairedBooking.passengerNames, ['Patricia', 'Emily']);
+  assert.equal(plan.repairedBooking.pickupPoints.length, 1);
+  assert.deepEqual(plan.repairedManifest.passengerStatus, ['BOARDED', 'NO_SHOW']);
+  assert.equal(plan.repairedManifest.status, 'PARTIAL');
+  assert.deepEqual(plan.originalBooking, booking);
+  assert.deepEqual(plan.originalManifest, manifestRecord);
 });
 
 test('resolveDriverAssignment reads canonical driver profile assignment', async () => {
