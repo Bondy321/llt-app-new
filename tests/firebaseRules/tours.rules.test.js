@@ -223,6 +223,38 @@ test('validates itinerary content, revision metadata, and driver-only text shape
     days: [{ day: 0, content: 'Invalid day number' }],
   }));
 
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/itinerary`).set({
+    title: 'Legacy structured itinerary',
+    days: [{
+      day: 1,
+      title: 'Arrival',
+      activities: [{ time: '09:00', description: 'Meet the coach' }],
+    }],
+    warnings: ['Pickup time is provisional'],
+    revision: 3,
+    updatedAt: Date.now() - 500,
+    updatedBy: DRIVER_AUTH_UID,
+  }));
+
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/itinerary`).set({
+    title: 'Unexpected payload',
+    days: [{ day: 1, content: 'Luss', executablePayload: true }],
+  }));
+
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/itinerary`).set({
+    title: 'Unexpected root payload',
+    days: [{ day: 1, content: 'Luss' }],
+    unboundedMetadata: { nested: 'not allowed' },
+  }));
+
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/itinerary`).set({
+    title: 'Revision rollback',
+    days: [{ day: 1, content: 'Luss' }],
+    revision: 2,
+    updatedAt: Date.now() - 250,
+    updatedBy: DRIVER_AUTH_UID,
+  }));
+
   await assertFails(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/driver_itinerary`).set({
     text: 'Object payloads are not supported by the mobile driver view',
   }));

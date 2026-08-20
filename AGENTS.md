@@ -308,6 +308,15 @@ Source doc: `docs/data-contracts/operational-update-integrity.md`
 - A newer queued update supersedes an older non-syncing update only for the same canonical tour and booking.
 - Manifest queue badges, counts, failed retries, and conflict results must be scoped to the active tour.
 
+### Itinerary Reliability
+
+- `getTourItinerary` reads only `tours/{tourId}/itinerary`; an absent snapshot returns `null`, while a failed read throws so callers never erase a valid Tour Pack as if the itinerary were deleted.
+- Itinerary Tour Pack metadata uses `itineraryLastSyncedAt` and `itineraryRevision`; driver operational text uses `driverItineraryLastSyncedAt`. Metadata writes merge serially and keep the global `lastSyncedAt` monotonic.
+- The client itinerary UI distinguishes `live`, `cache`, and `none`. Cached data must never be labelled live, and freshness must continue recalculating while the screen is open.
+- Entering edit mode pauses realtime replacement. A conflict keeps the draft intact and disables publishing until the driver explicitly loads the server version or confirms their draft as the next base.
+- `sendItineraryNotification` uses `onValueWritten` to cover first publication, meaningful updates, and withdrawal; metadata-only writes are silent.
+- Legacy day `activities` remain accepted and are normalized to readable `content` at the mobile service boundary.
+
 ### Chat and Reactions
 
 Source doc: `docs/reactions-write-contract.md`

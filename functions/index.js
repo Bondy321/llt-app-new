@@ -5,7 +5,7 @@
  * Enhanced with comprehensive error handling, validation, and performance improvements
  */
 
-const { onValueCreated, onValueUpdated } = require("firebase-functions/v2/database");
+const { onValueCreated, onValueWritten } = require("firebase-functions/v2/database");
 const { onRequest } = require("firebase-functions/v2/https");
 const { onObjectFinalized } = require("firebase-functions/v2/storage");
 const admin = require("firebase-admin");
@@ -734,37 +734,52 @@ const summarizeItineraryChange = (before = {}, after = {}) => {
 
   if (beforeDays.size === 0 && afterDays.size > 0) {
     return {
+      title: 'Itinerary available',
       body: `Your ${afterDays.size}-day itinerary is now available. Tap to review the schedule.`,
       changedDayCount: afterDays.size,
+      changeType: 'published',
+      hasMeaningfulChange: true,
     };
   }
 
   if (afterDays.size === 0) {
     return {
+      title: 'Itinerary being revised',
       body: 'The itinerary is being revised. Open the app for the latest tour information.',
       changedDayCount: beforeDays.size,
+      changeType: 'withdrawn',
+      hasMeaningfulChange: beforeDays.size > 0,
     };
   }
 
   if (changedDays.length === 1) {
     return {
+      title: 'Itinerary updated',
       body: `Day ${changedDays[0]} has changed. Tap to review the updated schedule.`,
       changedDayCount: 1,
+      changeType: 'updated',
+      hasMeaningfulChange: true,
     };
   }
 
   if (changedDays.length > 1) {
     return {
+      title: 'Itinerary updated',
       body: `${changedDays.length} itinerary days have changed. Tap to review the updated schedule.`,
       changedDayCount: changedDays.length,
+      changeType: 'updated',
+      hasMeaningfulChange: true,
     };
   }
 
   return {
+    title: titleChanged ? 'Itinerary updated' : null,
     body: titleChanged
       ? 'Your itinerary details have changed. Tap to review the latest schedule.'
-      : 'Your itinerary has been refreshed. Tap to review the latest schedule.',
+      : null,
     changedDayCount: 0,
+    changeType: titleChanged ? 'updated' : 'metadata_only',
+    hasMeaningfulChange: titleChanged,
   };
 };
 
@@ -4281,10 +4296,10 @@ exports.generatePhotoVariants = onObjectFinalized(
   processPhotoVariantObject,
 );
 /**
- * Trigger: When the itinerary is updated at /tours/{tourId}/itinerary
+ * Trigger: When the itinerary is published, updated, or withdrawn.
  * Enhanced with validation, better error handling, and performance tracking
  */
-exports.sendItineraryNotification = onValueUpdated(
+exports.sendItineraryNotification = onValueWritten(
   {
     ref: "/tours/{tourId}/itinerary",
     region: "europe-west1",
@@ -4308,6 +4323,10 @@ exports.sendItineraryNotification = onValueUpdated(
         event.data?.before?.val?.() || {},
         event.data?.after?.val?.() || {},
       );
+      if (!itineraryChange.hasMeaningfulChange) {
+        log.info('Skipping metadata-only itinerary notification', { tourId });
+        return null;
+      }
       // 1. Rate limiting check (prevent notification spam on rapid updates)
       const rateLimitKey = `itinerary_notify_${tourId}`;
       if (!checkRateLimit(rateLimitKey, 5, 300000)) { // Max 5 updates per 5 minutes
@@ -4332,7 +4351,7 @@ exports.sendItineraryNotification = onValueUpdated(
           type: 'itinerary',
           tourId,
           sourceId: event.id || `${Date.now()}`,
-          title: 'Itinerary updated',
+          title: itineraryChange.title,
           body: itineraryChange.body,
           screen: 'Itinerary',
           createdAtMs: Date.now(),
@@ -4394,7 +4413,7 @@ exports.sendItineraryNotification = onValueUpdated(
           pushMessages.push({
             to: userData.pushToken,
             sound: "default",
-            title: "Itinerary updated",
+            title: itineraryChange.title,
             body: itineraryChange.body,
             data: buildPushNavigationData({
               tourId,

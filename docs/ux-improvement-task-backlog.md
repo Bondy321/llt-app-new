@@ -6,6 +6,14 @@ This document tracks shipped UX hardening work and next execution priorities for
 
 ## Recently shipped (high impact)
 
+### Offline-first itinerary reliability
+
+- Firebase read failures retain the identity-scoped saved itinerary instead of being mistaken for a remote deletion.
+- Live, checking, saved-offline, and unavailable states now communicate truthful provenance with freshness and retry actions.
+- Driver drafts cannot be replaced by realtime snapshots while editing; conflicts require an explicit version decision before publishing.
+- First publication and withdrawal now create durable itinerary notices, while metadata-only writes stay quiet.
+- Legacy activity-based itinerary days render as readable mobile content.
+
 ### Sync + refresh clarity
 
 - Canonical sync taxonomy adopted across app shell and screens:
@@ -40,15 +48,13 @@ This document tracks shipped UX hardening work and next execution priorities for
 
 ## Current priorities (next sprint)
 
-1. **Offline-first itinerary + ticketing polish**
-   - Expand cache hydration feedback and stale-data indicators.
-2. **Driver manifest conflict transparency**
+1. **Driver manifest conflict transparency**
    - Richer UI detail when server wins a reconciliation.
-3. **Unified sync diagnostics panel**
+2. **Unified sync diagnostics panel**
    - Optional detail drawer for queue depth, last sync, and failed action reasons.
-4. **Accessibility pass**
+3. **Accessibility pass**
    - Screen reader labels, touch target audit, and contrast checks on banners/status chips.
-5. **Web-admin operational feedback polish**
+4. **Web-admin operational feedback polish**
    - Consistent inline feedback for assignment + broadcast operations.
 
 ## Backlog candidates

@@ -797,12 +797,21 @@ test('Static contract: shared gallery data hook guards stale async updates', () 
 
 test('Static contract: itinerary cache metadata cannot update stale screens', () => {
   const source = readText('screens/ItineraryScreen.js');
+  const bookingSource = readText('services/bookingServiceRealtime.js');
+  const functionsSource = readText('functions/index.js');
 
   assert.match(source, /mountedRef/);
   assert.match(source, /activeTourIdRef/);
   assert.match(source, /const canUpdateForTour = useCallback/);
   assert.match(source, /if \(canUpdateForTour\(targetTourId\)\) \{\s+setLastSyncedAt\(syncedAt\);/);
   assert.match(source, /if \(canUpdateForTour\(targetTourId\)\) \{\s+setCachedItinerary\(data\);/);
+  assert.match(source, /setDataSource\(ITINERARY_DATA_SOURCE\.CACHE\)/);
+  assert.match(source, /disabled=\{saving \|\| Boolean\(editConflict\)\}/);
+  assert.match(source, /A newer itinerary is already live/);
+  assert.match(bookingSource, /tours\/\$\{normalizedTourId\}\/itinerary/);
+  assert.match(bookingSource, /throw error;/);
+  assert.match(functionsSource, /sendItineraryNotification = onValueWritten/);
+  assert.match(functionsSource, /Skipping metadata-only itinerary notification/);
 });
 
 test('Static contract: preference and manifest screens guard stale async state', () => {

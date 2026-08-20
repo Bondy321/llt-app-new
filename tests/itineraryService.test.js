@@ -3,9 +3,11 @@ const assert = require('node:assert/strict');
 
 const {
   createItineraryContentSignature,
+  normalizeItineraryDocument,
   saveItineraryWithConflictGuard,
   validateItineraryDraft,
 } = require('../services/itineraryService');
+const { getTourItinerary } = require('../services/bookingServiceRealtime');
 
 const createDb = (initialValue) => {
   let value = initialValue;
@@ -90,4 +92,50 @@ test('itinerary validation blocks empty, malformed, and excessive content before
     title: 'Tour',
     days: [{ day: 1, content: 'x'.repeat(12001) }],
   }).valid, false);
+});
+
+test('normalizes legacy activity-only days into readable mobile content without losing fields', () => {
+  const normalized = normalizeItineraryDocument({
+    title: '  Highland tour  ',
+    days: [{
+      day: 8,
+      title: 'Arrival',
+      activities: [
+        { time: '09:00', description: 'Meet the coach' },
+        { description: 'Travel to Luss' },
+      ],
+    }],
+  });
+
+  assert.equal(normalized.title, 'Highland tour');
+  assert.equal(normalized.days[0].day, 1);
+  assert.equal(normalized.days[0].content, '09:00 Meet the coach\nTravel to Luss');
+  assert.equal(normalized.days[0].activities[0].description, 'Meet the coach');
+});
+
+test('itinerary repository reads only the itinerary branch and distinguishes absence from failure', async () => {
+  let readPath = null;
+  const stored = { title: 'Tour', days: [{ day: 1, content: 'Luss' }] };
+  const db = {
+    ref: (path) => {
+      readPath = path;
+      return { once: async () => ({ exists: () => true, val: () => stored }) };
+    },
+  };
+
+  const loaded = await getTourItinerary('tour 1', db);
+  assert.equal(readPath, 'tours/TOUR_1/itinerary');
+  assert.deepEqual(loaded, stored);
+
+  const missing = await getTourItinerary('TOUR_1', {
+    ref: () => ({ once: async () => ({ exists: () => false, val: () => null }) }),
+  });
+  assert.equal(missing, null);
+
+  await assert.rejects(
+    getTourItinerary('TOUR_1', {
+      ref: () => ({ once: async () => { throw new Error('network unavailable'); } }),
+    }),
+    /network unavailable/,
+  );
 });

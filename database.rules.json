@@ -129,24 +129,42 @@
         },
         "itinerary": {
           ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
-          ".validate": "!newData.exists() || newData.hasChildren()",
+          ".validate": "!newData.exists() || (newData.hasChildren(['title']) && (!newData.child('days').exists() || newData.child('days').hasChildren()))",
           "title": {
             ".validate": "newData.isString() && newData.val().length <= 200"
           },
           "days": {
             "$dayIndex": {
-              ".validate": "newData.hasChildren() && newData.child('day').isNumber() && newData.child('day').val() >= 1 && newData.child('day').val() <= 60 && (!newData.child('content').exists() || (newData.child('content').isString() && newData.child('content').val().length <= 12000))"
+              ".validate": "$dayIndex.matches(/^(0|[1-9]|[1-5][0-9])$/) && newData.hasChildren(['day']) && newData.child('day').isNumber() && newData.child('day').val() >= 1 && newData.child('day').val() <= 60 && (!newData.child('content').exists() || (newData.child('content').isString() && newData.child('content').val().length <= 12000)) && (!newData.child('title').exists() || (newData.child('title').isString() && newData.child('title').val().length <= 200))",
+              "day": { ".validate": "true" },
+              "content": { ".validate": "true" },
+              "title": { ".validate": "true" },
+              "activities": {
+                "$activityIndex": {
+                  ".validate": "$activityIndex.matches(/^(0|[1-9]|[1-4][0-9])$/) && newData.hasChildren(['description']) && newData.child('description').isString() && newData.child('description').val().length > 0 && newData.child('description').val().length <= 1000 && (!newData.child('time').exists() || (newData.child('time').isString() && newData.child('time').val().length <= 40))",
+                  "description": { ".validate": "true" },
+                  "time": { ".validate": "true" },
+                  "$other": { ".validate": "false" }
+                }
+              },
+              "$other": { ".validate": "false" }
+            }
+          },
+          "warnings": {
+            "$warningIndex": {
+              ".validate": "$warningIndex.matches(/^(0|[1-9]|1[0-9])$/) && newData.isString() && newData.val().length > 0 && newData.val().length <= 1000"
             }
           },
           "revision": {
-            ".validate": "newData.isNumber() && newData.val() >= 1"
+            ".validate": "newData.isNumber() && newData.val() >= 1 && (!data.exists() || newData.val() >= data.val())"
           },
           "updatedAt": {
             ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= now + 300000"
           },
           "updatedBy": {
             ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 128"
-          }
+          },
+          "$other": { ".validate": "false" }
         },
         "driver_itinerary": {
           ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",

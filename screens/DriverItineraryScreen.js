@@ -144,7 +144,7 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName, offlin
         offlineSyncService.setTourPackMeta(
           tourId,
           'driver',
-          { lastSyncedAt: syncedAt },
+          { lastSyncedAt: syncedAt, driverItineraryLastSyncedAt: syncedAt },
           { ownerId: offlineCacheOwnerId },
         ),
       ]);
@@ -181,8 +181,11 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName, offlin
       if (pack && Object.prototype.hasOwnProperty.call(pack, 'driverItinerary')) {
         const cached = pack.driverItinerary;
         const metaResult = await offlineSyncService.getTourPackMeta(tourId, 'driver', { ownerId: offlineCacheOwnerId });
-        if (metaResult?.success && metaResult.data?.lastSyncedAt) {
-          setLastSync(new Date(metaResult.data.lastSyncedAt));
+        const driverItineraryLastSyncedAt = metaResult?.success
+          ? (metaResult.data?.driverItineraryLastSyncedAt || metaResult.data?.lastSyncedAt)
+          : null;
+        if (driverItineraryLastSyncedAt) {
+          setLastSync(new Date(driverItineraryLastSyncedAt));
         }
         logger.info('DriverItineraryScreen', 'Cache load hit', {
           tourId,

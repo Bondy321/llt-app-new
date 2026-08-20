@@ -14,6 +14,7 @@ let maskIdentifier = (value) => value;
 let loginDiagnosticsService = null;
 const { loadOptionalService } = require('./optionalServiceLoader');
 const { normalizeTourId, resolveTourId } = require('./tourIdentityService');
+const { normalizeItineraryDocument } = require('./itineraryService');
 
 try {
   loginDiagnosticsService = require('./loginDiagnosticsService');
@@ -2123,33 +2124,42 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb, options = {}) =
 };
 
 // --- Get Itinerary (day-by-day content format) ---
-const getTourItinerary = async (tourId) => {
+const getTourItinerary = async (tourId, db = realtimeDb) => {
+  const normalizedTourId = normalizeTourId(tourId);
   try {
-    if (!realtimeDb) throw new Error('Realtime database not initialized');
-    logBookingEvent('info', 'Passenger itinerary fetch started', { tourId });
+    if (!db) throw new Error('Realtime database not initialized');
+    if (!normalizedTourId || !isValidNormalizedTourId(normalizedTourId)) {
+      throw new Error('Invalid tour identifier');
+    }
+    logBookingEvent('info', 'Passenger itinerary fetch started', { tourId: normalizedTourId });
 
-    const tourSnapshot = await realtimeDb.ref(`tours/${tourId}`).once('value');
-    if (!tourSnapshot.exists()) {
-      logBookingEvent('warn', 'Passenger itinerary fetch returned missing tour', { tourId });
+    const itinerarySnapshot = await db.ref(`tours/${normalizedTourId}/itinerary`).once('value');
+    if (!itinerarySnapshot.exists()) {
+      logBookingEvent('warn', 'Passenger itinerary fetch returned no published itinerary', {
+        tourId: normalizedTourId,
+      });
       return null;
     }
 
-    const tourData = tourSnapshot.val();
-    const itineraryData = tourData.itinerary;
+    const itineraryData = itinerarySnapshot.val();
+    const normalizedItinerary = normalizeItineraryDocument(itineraryData);
 
-    if (itineraryData && typeof itineraryData === 'object' && Array.isArray(itineraryData.days)) {
+    if (normalizedItinerary) {
       logBookingEvent('info', 'Passenger itinerary fetch completed with stored itinerary', {
-        tourId,
-        dayCount: itineraryData.days.length,
+        tourId: normalizedTourId,
+        dayCount: normalizedItinerary.days.length,
       });
-      return { ...itineraryData, title: itineraryData.title || tourData.name };
+      return normalizedItinerary;
     }
 
-    logBookingEvent('warn', 'Passenger itinerary missing structured days', { tourId });
+    logBookingEvent('warn', 'Passenger itinerary missing structured days', { tourId: normalizedTourId });
     return null;
   } catch (error) {
-    logger?.error?.('Itinerary', 'Error getting itinerary', { tourId, error: error?.message || String(error) });
-    return null;
+    logger?.error?.('Itinerary', 'Error getting itinerary', {
+      tourId: normalizedTourId || tourId,
+      error: error?.message || String(error),
+    });
+    throw error;
   }
 };
 

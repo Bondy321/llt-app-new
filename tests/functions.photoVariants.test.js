@@ -995,8 +995,11 @@ test('itinerary notifications describe the specific schedule change', () => {
       { days: [{ day: 1, content: 'Luss' }, { day: 2, content: 'Glencoe' }] },
     ),
     {
+      title: 'Itinerary updated',
       body: 'Day 2 has changed. Tap to review the updated schedule.',
       changedDayCount: 1,
+      changeType: 'updated',
+      hasMeaningfulChange: true,
     },
   );
 
@@ -1004,6 +1007,21 @@ test('itinerary notifications describe the specific schedule change', () => {
     __testables.summarizeItineraryChange({}, { days: [{ day: 1 }, { day: 2 }, { day: 3 }] }).body,
     'Your 3-day itinerary is now available. Tap to review the schedule.',
   );
+
+  const firstPublication = __testables.summarizeItineraryChange(
+    {},
+    { title: 'Tour', days: [{ day: 1, content: 'Luss' }] },
+  );
+  assert.equal(firstPublication.title, 'Itinerary available');
+  assert.equal(firstPublication.changeType, 'published');
+  assert.equal(firstPublication.hasMeaningfulChange, true);
+
+  const metadataOnly = __testables.summarizeItineraryChange(
+    { title: 'Tour', days: [{ day: 1, content: 'Luss' }], revision: 1 },
+    { title: 'Tour', days: [{ day: 1, content: 'Luss' }], revision: 2, updatedAt: 100 },
+  );
+  assert.equal(metadataOnly.hasMeaningfulChange, false);
+  assert.equal(metadataOnly.body, null);
 });
 
 test('tour notification persistence is idempotent and retains only the newest 100 records', async () => {

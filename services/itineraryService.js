@@ -25,6 +25,41 @@ const normalizeRevision = (value) => (
   Number.isInteger(value) && value >= 0 ? value : 0
 );
 
+const normalizeLegacyActivities = (activities) => {
+  if (!Array.isArray(activities)) return '';
+  return activities
+    .map((activity) => {
+      if (!activity || typeof activity !== 'object' || Array.isArray(activity)) return '';
+      const time = typeof activity.time === 'string' ? activity.time.trim() : '';
+      const description = typeof activity.description === 'string' ? activity.description.trim() : '';
+      return [time, description].filter(Boolean).join(' ');
+    })
+    .filter(Boolean)
+    .join('\n');
+};
+
+const normalizeItineraryDocument = (itinerary, { fallbackTitle = '' } = {}) => {
+  if (!itinerary || typeof itinerary !== 'object' || Array.isArray(itinerary)) return null;
+  if (!Array.isArray(itinerary.days)) return null;
+
+  return {
+    ...itinerary,
+    title: typeof itinerary.title === 'string' && itinerary.title.trim()
+      ? itinerary.title.trim()
+      : String(fallbackTitle || '').trim(),
+    days: itinerary.days.map((day, index) => {
+      const safeDay = day && typeof day === 'object' && !Array.isArray(day) ? day : {};
+      return {
+        ...safeDay,
+        day: index + 1,
+        content: typeof safeDay.content === 'string'
+          ? safeDay.content
+          : normalizeLegacyActivities(safeDay.activities),
+      };
+    }),
+  };
+};
+
 const validateItineraryDraft = (draft) => {
   if (!draft || typeof draft !== 'object' || Array.isArray(draft)) {
     return { valid: false, error: 'The itinerary is not in a supported format.' };
@@ -121,6 +156,8 @@ module.exports = {
   MAX_ITINERARY_DAYS,
   buildItineraryDocument,
   createItineraryContentSignature,
+  normalizeItineraryDocument,
+  normalizeLegacyActivities,
   saveItineraryWithConflictGuard,
   validateItineraryDraft,
 };

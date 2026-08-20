@@ -764,12 +764,28 @@ const setTourPackMeta = async (tourId, role, meta = {}, options = {}) => {
       role,
       metaKeys: meta && typeof meta === 'object' ? Object.keys(meta).slice(0, 20) : [],
     });
-    const payload = {
-      schemaVersion: SCHEMA_VERSION,
-      lastSyncedAt: meta.lastSyncedAt || new Date().toISOString(),
-      ...meta,
-    };
-    await storage.setItemAsync(metaKey(tourId, role, ownerId), JSON.stringify(payload));
+    const key = metaKey(tourId, role, ownerId);
+    const payload = await withTourPackWriteLock(key, async () => {
+      const rawExistingMeta = await storage.getItemAsync(key);
+      const existingMeta = safeJsonParse(rawExistingMeta, {});
+      const requestedLastSyncedAt = meta.lastSyncedAt || new Date().toISOString();
+      const existingLastSyncedMs = parseTimestampMs(existingMeta?.lastSyncedAt);
+      const requestedLastSyncedMs = parseTimestampMs(requestedLastSyncedAt);
+      const lastSyncedAt = Number.isFinite(existingLastSyncedMs)
+        && (!Number.isFinite(requestedLastSyncedMs) || existingLastSyncedMs > requestedLastSyncedMs)
+        ? existingMeta.lastSyncedAt
+        : requestedLastSyncedAt;
+      const nextMeta = {
+        ...(existingMeta && typeof existingMeta === 'object' && !Array.isArray(existingMeta)
+          ? existingMeta
+          : {}),
+        ...meta,
+        schemaVersion: SCHEMA_VERSION,
+        lastSyncedAt,
+      };
+      await storage.setItemAsync(key, JSON.stringify(nextMeta));
+      return nextMeta;
+    });
     logger.info('OfflineSync', 'Tour pack metadata save completed', {
       tourId: maskIdentifier(tourId),
       role,

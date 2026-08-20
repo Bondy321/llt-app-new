@@ -685,6 +685,37 @@ test('tour packs and sync metadata are isolated by login identity on the same to
   assert.equal(metaB.data.lastSyncedAt, '2026-08-02T10:00:00.000Z');
 });
 
+test('concurrent Tour Pack metadata writes preserve resource-specific sync provenance', async () => {
+  const tourId = `tour-meta-${Date.now()}`;
+  const options = { ownerId: 'D-META' };
+  await Promise.all([
+    offlineSyncService.setTourPackMeta(tourId, 'driver', {
+      lastSyncedAt: '2026-08-20T09:00:00.000Z',
+      itineraryLastSyncedAt: '2026-08-20T09:00:00.000Z',
+      itineraryRevision: 4,
+    }, options),
+    offlineSyncService.setTourPackMeta(tourId, 'driver', {
+      lastSyncedAt: '2026-08-20T09:01:00.000Z',
+      driverItineraryLastSyncedAt: '2026-08-20T09:01:00.000Z',
+    }, options),
+  ]);
+
+  const meta = await offlineSyncService.getTourPackMeta(tourId, 'driver', options);
+  assert.equal(meta.success, true);
+  assert.equal(meta.data.itineraryLastSyncedAt, '2026-08-20T09:00:00.000Z');
+  assert.equal(meta.data.itineraryRevision, 4);
+  assert.equal(meta.data.driverItineraryLastSyncedAt, '2026-08-20T09:01:00.000Z');
+  assert.equal(meta.data.lastSyncedAt, '2026-08-20T09:01:00.000Z');
+
+  await offlineSyncService.setTourPackMeta(tourId, 'driver', {
+    lastSyncedAt: '2026-08-20T08:00:00.000Z',
+    safetyLastSyncedAt: '2026-08-20T08:00:00.000Z',
+  }, options);
+  const afterOlderWrite = await offlineSyncService.getTourPackMeta(tourId, 'driver', options);
+  assert.equal(afterOlderWrite.data.lastSyncedAt, '2026-08-20T09:01:00.000Z');
+  assert.equal(afterOlderWrite.data.safetyLastSyncedAt, '2026-08-20T08:00:00.000Z');
+});
+
 test('new manifest queue entries supersede stale pending updates only within the same tour and booking', async () => {
   await clearQueue();
   const baseAction = {

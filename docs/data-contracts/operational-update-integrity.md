@@ -38,7 +38,15 @@ tours/{tourId}/itinerary
 
 The mobile edit service validates a non-empty day array, content and payload bounds, then uses an RTDB transaction. The transaction compares a canonical content signature captured when editing started. Metadata-only changes do not create false conflicts. A successful write adds/increments `revision` and records numeric `updatedAt` plus `updatedBy`.
 
-If the server content changed, the transaction aborts. The newer server itinerary is loaded and cached while the driver's draft remains open until they explicitly choose the server copy or continue reviewing their draft. A stale edit never silently overwrites the server.
+If the server content changed, the transaction aborts. The newer server itinerary is loaded and cached while the driver's draft remains intact. Publishing is disabled until the driver explicitly loads the protected server version or confirms that their reviewed draft should become the next revision. A stale edit never silently overwrites the server, and entering edit mode pauses realtime replacement so an incoming snapshot cannot erase typed changes.
+
+Read semantics are deliberately three-state:
+
+- A missing itinerary snapshot is an authoritative unpublished/withdrawn result and may store a cache tombstone.
+- A failed Firebase read throws and must retain any identity-scoped cached itinerary.
+- A successful snapshot is normalized at the service boundary. Legacy `activities` rows are converted into readable day content without dropping their original structured fields.
+
+The mobile UI tracks source provenance as `live`, `cache`, or `none`. A saved copy is never labelled live, exposes its age, and provides a direct retry when live refresh fails. Freshness recalculates while the screen remains open instead of waiting for another render.
 
 Passenger and driver caches share the Tour Pack contract:
 
@@ -49,6 +57,12 @@ tour_pack_v2_driver_<tourId>_<encodedDriverId>.driverItinerary
 ```
 
 Tour Pack partial writes are serialized per tour, role, and login identity. A remote deletion stores a null tombstone for that field without deleting the rest of the pack. The legacy `driver_itinerary_<tourId>` key is read once, migrated into the active driver's pack, and removed.
+
+Tour Pack metadata writes are also serialized and merged. `lastSyncedAt` is monotonic, while resource-specific provenance uses `itineraryLastSyncedAt`, `itineraryRevision`, and `driverItineraryLastSyncedAt`. One screen must not erase or falsely refresh another resource's metadata.
+
+Itinerary notification delivery uses an `onValueWritten` trigger so first publication, meaningful edits, and withdrawal all create durable notices and pushes. Metadata-only revision/timestamp writes do not notify. First publication uses “Itinerary available”; withdrawal uses “Itinerary being revised”.
+
+Realtime Database validation permits the production formats (`title`, bounded `days`, optional importer `warnings`, optional legacy `title`/`activities`, and revision metadata) and rejects unbounded or unknown itinerary/day/activity fields. Numeric child-index validation caps days, activities, and warnings without relying on unsupported rule APIs.
 
 Driver operational itinerary text remains a bounded string at `tours/{tourId}/driver_itinerary`; the RTDB rule intentionally matches that mobile contract.
 
