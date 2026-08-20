@@ -54,6 +54,9 @@ const mockQueueActions = [
 
 let replayQueueCalls = 0;
 let getTourManifestCalls = 0;
+let manifestLoader = async () => mockManifest;
+let cachedManifest = null;
+let cachedReplacements = [];
 
 const originalLoad = Module._load;
 Module._load = function mockLoader(request, parent, isMain) {
@@ -111,7 +114,7 @@ Module._load = function mockLoader(request, parent, isMain) {
     return {
       getTourManifest: async () => {
         getTourManifestCalls += 1;
-        return mockManifest;
+        return manifestLoader();
       },
       updateManifestBooking: async () => ({ success: true }),
       MANIFEST_STATUS: {
@@ -152,6 +155,18 @@ Module._load = function mockLoader(request, parent, isMain) {
     };
   }
 
+  if (request.endsWith('/services/driverManifestCacheService') || request === '../services/driverManifestCacheService') {
+    return {
+      get: async () => ({ success: true, data: cachedManifest }),
+      replace: async ({ manifest, tourId, driverId }) => {
+        const data = { ...manifest, tourId, driverId, fetchedAtMs: 1, schemaVersion: 1 };
+        cachedReplacements.push(data);
+        return { success: true, data };
+      },
+      applyOptimisticUpdate: async () => ({ success: true }),
+    };
+  }
+
   if (request.endsWith('/services/chatService') || request === '../services/chatService') {
     return {};
   }
@@ -162,6 +177,9 @@ Module._load = function mockLoader(request, parent, isMain) {
 test('PassengerManifestScreen only surfaces booking sync labels that need attention', async () => {
   replayQueueCalls = 0;
   getTourManifestCalls = 0;
+  cachedManifest = null;
+  cachedReplacements = [];
+  manifestLoader = async () => mockManifest;
   const PassengerManifestScreen = require('../screens/PassengerManifestScreen').default;
 
   let renderer;
@@ -196,4 +214,34 @@ test('PassengerManifestScreen only surfaces booking sync labels that need attent
 
   assert.equal(replayQueueCalls, 1);
   assert.ok(getTourManifestCalls > baselineManifestCalls);
+});
+
+test('PassengerManifestScreen renders an identity-scoped cached manifest before a remote replacement', async () => {
+  getTourManifestCalls = 0;
+  cachedReplacements = [];
+  cachedManifest = {
+    tourId: 'TOUR-1', driverId: 'D-CACHE', bookings: [{
+      id: 'CACHED-1', passengerNames: ['Cached Passenger'], passengerStatus: ['PENDING'],
+      status: 'PENDING', pickupLocation: 'Cached stop', pickupTime: '08:00', hasPassengerStatuses: true,
+    }], stats: { totalBookings: 1, totalPax: 1, checkedIn: 0, noShows: 0 },
+  };
+  let resolveRemote;
+  manifestLoader = () => new Promise((resolve) => { resolveRemote = resolve; });
+  const PassengerManifestScreen = require('../screens/PassengerManifestScreen').default;
+  let renderer;
+  await act(async () => {
+    renderer = TestRenderer.create(React.createElement(PassengerManifestScreen, {
+      route: { params: { tourId: 'TOUR-1', offlineCacheOwnerId: 'D-CACHE', sessionGeneration: 4 } },
+      navigation: { goBack: () => {} },
+    }));
+  });
+  await waitForEffects();
+  const cachedText = renderer.root.findAll((node) => node.type === 'Text')
+    .map((node) => String(node.props.children || '')).join(' ');
+  assert.match(cachedText, /Cached Passenger/);
+  assert.match(cachedText, /Saved offline copy/i);
+  await act(async () => { resolveRemote(mockManifest); await Promise.resolve(); });
+  await waitForEffects();
+  assert.equal(cachedReplacements.length, 1);
+  assert.equal(cachedReplacements[0].driverId, 'D-CACHE');
 });

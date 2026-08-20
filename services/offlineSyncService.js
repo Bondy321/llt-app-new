@@ -853,6 +853,34 @@ const buildAction = (action) => {
   };
 };
 
+const purgeTourPack = async (tourId, role, options = {}) => {
+  try {
+    if (!tourId || !role) return RESPONSE.fail('tourId and role are required');
+    const ownerId = resolveTourPackOwnerId(tourId, role, options);
+    if (!ownerId) return RESPONSE.fail('A tour-pack owner identity is required');
+    const packStorageKey = cacheKey(tourId, role, ownerId);
+    const metaStorageKey = metaKey(tourId, role, ownerId);
+
+    await withTourPackWriteLock(packStorageKey, () => withTourPackWriteLock(metaStorageKey, async () => {
+      await storage.deleteItemAsync(packStorageKey);
+      await storage.deleteItemAsync(metaStorageKey);
+    }));
+
+    logger.info('OfflineSync', 'Purged one exact identity-scoped Tour Pack', {
+      tourId: maskIdentifier(tourId),
+      role,
+    });
+    return RESPONSE.ok({ purged: true });
+  } catch (error) {
+    logger.error('OfflineSync', 'Identity-scoped Tour Pack purge failed', {
+      tourId: maskIdentifier(tourId),
+      role,
+      error: error?.message,
+    });
+    return RESPONSE.fail(error);
+  }
+};
+
 const enqueueAction = async (action) => withQueueMutationLock(async () => {
   try {
     logger.info('OfflineSync', 'Queue enqueue requested', {
@@ -1099,6 +1127,56 @@ const retryFailedActions = async ({ types, tourId, resetAttempts = false, scope 
     logger.error('OfflineSync', 'Retry failed queue actions failed', {
       types: Array.isArray(types) ? types : null,
       resetAttempts,
+      error: error?.message,
+    });
+    return RESPONSE.fail(error);
+  }
+});
+
+const purgeActionsForScope = async ({ scope, types } = {}) => withQueueMutationLock(async () => {
+  try {
+    const normalizedScope = normalizeSessionScope(scope);
+    if (!normalizedScope) {
+      return RESPONSE.fail('A complete signed-in tour scope is required');
+    }
+
+    const allowedTypes = Array.isArray(types) && types.length > 0
+      ? new Set(types.filter((type) => SUPPORTED_QUEUE_TYPES.has(type)))
+      : null;
+    if (Array.isArray(types) && types.length > 0 && allowedTypes.size !== types.length) {
+      return RESPONSE.fail('One or more queue action types are unsupported');
+    }
+
+    const queue = await getQueueRaw({ persistRepairs: true });
+    const removed = [];
+    const retained = queue.filter((action) => {
+      const matchesOwner = actionMatchesScope(action, normalizedScope);
+      const matchesType = !allowedTypes || allowedTypes.has(action.type);
+      if (matchesOwner && matchesType) {
+        removed.push(action);
+        return false;
+      }
+      return true;
+    });
+
+    if (removed.length > 0) {
+      await setQueueRaw(retained);
+    }
+
+    logger.info('OfflineSync', 'Purged queued actions for an exact signed-in tour scope', {
+      tourId: maskIdentifier(normalizedScope.tourId),
+      principalId: maskIdentifier(normalizedScope.principalId),
+      role: normalizedScope.role,
+      requestedTypes: allowedTypes ? [...allowedTypes] : null,
+      removedCount: removed.length,
+      retainedCount: retained.length,
+    });
+    return RESPONSE.ok({
+      removedCount: removed.length,
+      removedIds: removed.map((action) => action.id),
+    });
+  } catch (error) {
+    logger.error('OfflineSync', 'Failed to purge queued actions for a signed-in tour scope', {
       error: error?.message,
     });
     return RESPONSE.fail(error);
@@ -1453,12 +1531,14 @@ module.exports = {
   getTourPack,
   setTourPackMeta,
   getTourPackMeta,
+  purgeTourPack,
   enqueueAction,
   getQueuedActions,
   updateAction,
   removeAction,
   getQueueStats,
   retryFailedActions,
+  purgeActionsForScope,
   replayQueue,
   setActiveSessionScope,
   getActiveSessionScope,

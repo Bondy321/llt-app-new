@@ -2,7 +2,7 @@
 
 Welcome, Agent. This file is the operational source of truth for contributors working in this repo. Keep it practical: update it whenever architecture, contracts, commands, or release assumptions materially change.
 
-Last updated: August 12, 2026
+Last updated: August 20, 2026
 
 ---
 
@@ -144,6 +144,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `booking_identities`
 - `manual_booking_creation_locks`
 - `driver_tour_packs`
+- `driver_tour_pack_actions`
 - `driver_tour_pack_tombstones`
 - `driver_tour_pack_ingestion`
 
@@ -463,8 +464,20 @@ Replay policy:
 - Completed `PHOTO_UPLOAD` actions are pruned by TTL while preserving recent completed items.
 
 The existing identity-scoped device Tour Pack cache is separate from the new server-owned Driver
-Tour Pack source. Gate 5 adds only the private ingestion boundary; mobile pack reads,
-subscriptions, and cache replacement belong to Gates 6-7.
+Tour Pack source. `driverTourPackService` owns the server-projected, auth UID + driver ID +
+departure-key scoped cache; it never merges with the existing screen cache. `useDriverTourPack`
+shows valid cache first, subscribes only to the exact assigned pack revision, fetches full content
+only when the semantic revision changes, and validates the complete payload before atomic
+replacement. Failed/malformed responses preserve valid cache; expired/withdrawn packs purge PII.
+
+`driverManifestCacheService` separately stores only explicit, complete v1 `getTourManifest`
+responses so a driver can cold-start the full boarding manifest offline. `tour_manifests` remains
+authoritative and queued updates patch the device snapshot only after durable enqueue.
+
+Logout, driver identity change, reassignment, assignment validation failure, cancellation/withdrawal,
+and expiry must call the exact-scope lifecycle purge. It stops old replay, removes both Tour Pack
+caches, the complete manifest and that scope's actions, and uses generation guards so late old-tour
+responses cannot repopulate storage.
 
 Canonical sync states:
 
@@ -860,10 +873,17 @@ Sources:
 Important RTDB invariants:
 
 - Root read/write are denied by default.
-- Gate 5 explicitly denies all client reads/writes to `driver_tour_packs`,
-  `driver_tour_pack_tombstones`, and `driver_tour_pack_ingestion`, including operations admins and
-  assigned drivers. Gate 6 will open only exact coherently assigned-driver pack reads; ingestion
-  audit and tombstone roots stay server-private.
+- Gate 6 permits only an exact `driver_tour_packs/{departureKey}` leaf read when all three facts
+  agree: `users/{authUid}/driverId`, `drivers/{driverId}/authUid === authUid`, and
+  `tour_manifests/{pack.tourId}/assigned_drivers/{driverId} === true`. Root/list reads, passenger,
+  anonymous, stale, forged, and cross-tour reads remain denied; source-pack writes always remain
+  denied. `driver_tour_pack_tombstones` and `driver_tour_pack_ingestion` stay server-private.
+- `driver_tour_pack_actions/{departureKey}/{driverId}` is separate driver state. A client can
+  access only its own leaf under the same coherent assignment and must satisfy the versioned,
+  closed, bounded action schema. Never add actions to the management publisher write roots.
+- `cleanupExpiredDriverTourPacks` is a Gen 2 scheduled server cleanup. It deletes expired pack PII,
+  driver actions, and metadata in batches of 50, leaving only a PII-free expiry tombstone. Deploy
+  Functions first, then RTDB rules, then the mobile reader/cache release.
 - `drivers`, `bookings`, `tours`, and `tour_manifests` must not expose collection-level authenticated reads.
 - Passenger login uses `verifyPassengerLogin` to validate booking identity and create short-lived `tour_access_grants` / `booking_access_grants` before first tour access.
 - Online passenger login must persist `users/{authUid}/bookingRef` before entering the app; that caller-owned profile link keeps exact manifest-row access working after short-lived grants expire.

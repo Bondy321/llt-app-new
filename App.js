@@ -14,6 +14,9 @@ import offlineSyncService from './services/offlineSyncService';
 import * as bookingService from './services/bookingServiceRealtime';
 import * as chatService from './services/chatService';
 import offlineLoginResolver from './services/offlineLoginResolver';
+import driverOperationalLifecycleService from './services/driverOperationalLifecycleService';
+import driverTourPackService from './services/driverTourPackService';
+import useDriverTourPack from './hooks/useDriverTourPack';
 import { getCanonicalIdentity, resolveAuthScopedUserId, toRealtimeKeySegment } from './services/identityService';
 import { normalizeTourId, resolveTourId } from './services/tourIdentityService';
 import { parseTimestampMs } from './services/timeUtils';
@@ -156,12 +159,17 @@ function AppContent() {
   const [screenParams, setScreenParams] = useState({});
   const [isImageViewerVisible, setIsImageViewerVisible] = useState(false);
   const [loginTransition, setLoginTransition] = useState(null);
+  const [driverSessionGeneration, setDriverSessionGeneration] = useState(0);
   const loginTransitionTimerRef = useRef(null);
   const loginTransitionAnimationRef = useRef(null);
   const driverIdentityPersistKeyRef = useRef(null);
   const authUnsubscribeRef = useRef(null);
   const loginProgress = useRef(new Animated.Value(0)).current;
   const notificationNavigateRef = useRef(null);
+  const previousDriverOperationalScopeRef = useRef(null);
+  const driverLifecyclePurgeRef = useRef(null);
+  const driverAssignmentChangeRef = useRef(null);
+  const assignmentValidationSeqRef = useRef(0);
 
   const isDriverSession = bookingData?.id && bookingData.id.startsWith('D-');
   const canonicalIdentity = useMemo(
@@ -215,7 +223,9 @@ function AppContent() {
       loginProgress.setValue(0);
     }, durationMs);
   };
-  const diagnosticsTourId = resolveTourId(tourData?.id, tourData?.tourCode);
+  const diagnosticsTourId = isDriverSession
+    ? resolveTourId(bookingData?.assignedTourId, tourData?.id, tourData?.tourCode)
+    : resolveTourId(tourData?.id, tourData?.tourCode);
   const diagnosticsRole = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
   const offlineSessionScope = useMemo(() => {
     const principalId = canonicalIdentity?.principalId;
@@ -230,6 +240,54 @@ function AppContent() {
   }, [bookingData?.id, canonicalIdentity?.authUid, canonicalIdentity?.principalId, diagnosticsRole, diagnosticsTourId]);
   const offlineSessionScopeKey = offlineSessionScope
     ? `${offlineSessionScope.tourId}|${offlineSessionScope.role}|${offlineSessionScope.principalId}|${offlineSessionScope.cacheOwnerId}`
+    : 'none';
+  const driverOperationalScope = useMemo(() => {
+    if (!isDriverSession || !diagnosticsTourId) return null;
+    const normalized = driverTourPackService.normalizeScope({
+      authUid: user?.uid,
+      driverId: bookingData?.id,
+      departureKey: bookingData?.assignedDepartureKey,
+      tourId: diagnosticsTourId,
+      startDate: tourData?.startDate,
+    });
+    return normalized.ok ? normalized : null;
+  }, [
+    bookingData?.assignedDepartureKey,
+    bookingData?.id,
+    diagnosticsTourId,
+    isDriverSession,
+    tourData?.startDate,
+    user?.uid,
+  ]);
+  const driverTourPackState = useDriverTourPack(driverOperationalScope || {}, {
+    enabled: Boolean(driverOperationalScope),
+  });
+  const currentDriverLifecycleScope = useMemo(() => (
+    isDriverSession && diagnosticsTourId
+      ? {
+          authUid: user?.uid || null,
+          driverId: bookingData?.id,
+          departureKey: bookingData?.assignedDepartureKey || driverOperationalScope?.departureKey || null,
+          tourId: diagnosticsTourId,
+          startDate: tourData?.startDate || null,
+        }
+      : null
+  ), [
+    bookingData?.assignedDepartureKey,
+    bookingData?.id,
+    diagnosticsTourId,
+    driverOperationalScope?.departureKey,
+    isDriverSession,
+    tourData?.startDate,
+    user?.uid,
+  ]);
+  const currentDriverLifecycleScopeKey = currentDriverLifecycleScope
+    ? [
+        currentDriverLifecycleScope.authUid || '',
+        currentDriverLifecycleScope.driverId || '',
+        currentDriverLifecycleScope.departureKey || '',
+        currentDriverLifecycleScope.tourId || '',
+      ].join('|')
     : 'none';
 
   const refreshAppData = async () => {
@@ -256,6 +314,62 @@ function AppContent() {
       });
     });
   }, [offlineSessionScopeKey]);
+
+  useEffect(() => {
+    const previous = previousDriverOperationalScopeRef.current;
+    const previousNormalized = previous
+      ? driverOperationalLifecycleService.normalizeScope(previous)
+      : null;
+    const currentNormalized = currentDriverLifecycleScope
+      ? driverOperationalLifecycleService.normalizeScope(currentDriverLifecycleScope)
+      : null;
+    const previousKey = previousNormalized?.ok
+      ? `${previousNormalized.driverId}|${previousNormalized.departureKey || previousNormalized.tourId}`
+      : null;
+    const currentKey = currentNormalized?.ok
+      ? `${currentNormalized.driverId}|${currentNormalized.departureKey || currentNormalized.tourId}`
+      : null;
+
+    if (previousKey && currentKey && previousKey !== currentKey) {
+      driverOperationalLifecycleService.purge(previous).then((result) => {
+        if (!result.success) {
+          logger.warn('DriverTourPack', 'Previous driver operational scope was only partially purged', {
+            failedOperations: result.failures?.map((failure) => failure.name) || [],
+          });
+        }
+      }).finally(() => {
+        // The purge deliberately invalidates the previous replay generation. Restore
+        // the newly-derived session scope only after that invalidation has finished.
+        if (offlineSessionScope) {
+          offlineSyncService.setActiveSessionScope(offlineSessionScope).catch(() => {});
+        }
+      });
+      setDriverSessionGeneration((value) => value + 1);
+    }
+    previousDriverOperationalScopeRef.current = currentDriverLifecycleScope;
+  }, [currentDriverLifecycleScopeKey]);
+
+  useEffect(() => {
+    if (!currentDriverLifecycleScope) return;
+    if (driverTourPackState.state !== 'expired' && driverTourPackState.state !== 'withdrawn') return;
+    const purgeKey = `${currentDriverLifecycleScopeKey}|${driverTourPackState.state}|${driverTourPackState.revision || 0}`;
+    if (driverLifecyclePurgeRef.current === purgeKey) return;
+    driverLifecyclePurgeRef.current = purgeKey;
+
+    driverOperationalLifecycleService.purge(currentDriverLifecycleScope).then((result) => {
+      if (!result.success) {
+        logger.warn('DriverTourPack', 'Expired or withdrawn operational data was only partially purged', {
+          state: driverTourPackState.state,
+          failedOperations: result.failures?.map((failure) => failure.name) || [],
+        });
+      }
+      setDriverSessionGeneration((value) => value + 1);
+    });
+  }, [
+    currentDriverLifecycleScopeKey,
+    driverTourPackState.revision,
+    driverTourPackState.state,
+  ]);
 
   useEffect(() => {
     installGlobalCrashDiagnostics();
@@ -732,26 +846,154 @@ function AppContent() {
 
   const handleDriverAssignmentChange = async ({ assignedTourId }) => {
     const normalizedAssignedTourId = normalizeTourId(assignedTourId);
-    if (!normalizedAssignedTourId) return;
+    if (!normalizedAssignedTourId || !realtimeDb) {
+      throw new Error('A valid assigned tour is required.');
+    }
+
+    const nextTourSnapshot = await realtimeDb.ref(`tours/${normalizedAssignedTourId}`).once('value');
+    if (!nextTourSnapshot.exists()) {
+      throw new Error('The assigned tour could not be loaded securely.');
+    }
+    const nextTourData = {
+      id: normalizedAssignedTourId,
+      ...(nextTourSnapshot.val() || {}),
+    };
+    const nextDeparture = driverTourPackService.resolveExactDepartureKey({
+      tourId: normalizedAssignedTourId,
+      startDate: nextTourData.startDate,
+    });
+    if (!nextDeparture.ok) {
+      throw new Error('The assigned tour is missing a valid departure date. Dispatch must correct it before offline use.');
+    }
 
     const updatedBookingData = {
       ...(bookingData || {}),
       assignedTourId: normalizedAssignedTourId,
+      assignedTourCode: nextTourData.tourCode || bookingData?.assignedTourCode || null,
+      assignedDepartureKey: nextDeparture.departureKey,
     };
 
-    setBookingData((previous) => ({
-      ...(previous || {}),
-      assignedTourId: normalizedAssignedTourId,
-    }));
+    const previousScope = currentDriverLifecycleScope;
+    const previousNormalized = previousScope
+      ? driverOperationalLifecycleService.normalizeScope(previousScope)
+      : null;
+    const nextScope = {
+      authUid: user?.uid || auth?.currentUser?.uid || null,
+      driverId: updatedBookingData.id,
+      departureKey: nextDeparture.departureKey,
+      tourId: normalizedAssignedTourId,
+      startDate: nextTourData.startDate,
+    };
+    const nextNormalized = driverOperationalLifecycleService.normalizeScope(nextScope);
+    const changedDeparture = previousNormalized?.ok
+      && nextNormalized.ok
+      && (previousNormalized.driverId !== nextNormalized.driverId
+        || previousNormalized.departureKey !== nextNormalized.departureKey);
+
+    if (changedDeparture) {
+      const purgeResult = await driverOperationalLifecycleService.purge(previousScope);
+      if (!purgeResult.success) {
+        logger.warn('DriverTourPack', 'Previous assignment data was only partially purged', {
+          failedOperations: purgeResult.failures?.map((failure) => failure.name) || [],
+        });
+      }
+    }
+
+    previousDriverOperationalScopeRef.current = nextScope;
+    driverLifecyclePurgeRef.current = null;
+    setBookingData(updatedBookingData);
+    setTourData(nextTourData);
+    setTourCode(nextTourData.tourCode || '');
+    setDriverSessionGeneration((value) => value + 1);
 
     try {
       await SessionStorage.multiSet([
         [SESSION_KEYS.BOOKING_DATA, JSON.stringify(updatedBookingData)],
+        [SESSION_KEYS.TOUR_DATA, JSON.stringify(nextTourData)],
       ]);
     } catch (error) {
       logger.error('Session', 'Failed to persist driver assignment', { error: error.message, assignedTourId: normalizedAssignedTourId });
     }
+
+    return {
+      tour: nextTourData,
+      departureKey: nextDeparture.departureKey,
+    };
   };
+  driverAssignmentChangeRef.current = handleDriverAssignmentChange;
+
+  useEffect(() => {
+    const scope = currentDriverLifecycleScope;
+    const currentAuthUid = user?.uid || null;
+    if (!scope || !currentAuthUid || !realtimeDb) return undefined;
+
+    const validationSeq = ++assignmentValidationSeqRef.current;
+    const assignmentRef = realtimeDb.ref(`tour_manifests/${scope.tourId}/assigned_drivers/${scope.driverId}`);
+    let handlingInvalidation = false;
+
+    const handleInvalidAssignment = async (reason) => {
+      if (handlingInvalidation || validationSeq !== assignmentValidationSeqRef.current) return;
+      handlingInvalidation = true;
+      try {
+        const profileSnapshot = await realtimeDb.ref(`users/${currentAuthUid}/driverAssignedTourId`).once('value');
+        const authoritativeTourId = normalizeTourId(profileSnapshot.val());
+        if (authoritativeTourId && authoritativeTourId !== scope.tourId) {
+          await driverAssignmentChangeRef.current?.({ assignedTourId: authoritativeTourId });
+          return;
+        }
+
+        const purgeResult = await driverOperationalLifecycleService.purge(scope);
+        if (!purgeResult.success) {
+          logger.warn('DriverTourPack', 'Assignment validation failure only partially purged local data', {
+            reason,
+            failedOperations: purgeResult.failures?.map((failure) => failure.name) || [],
+          });
+        }
+        if (validationSeq !== assignmentValidationSeqRef.current) return;
+
+        const clearedBookingData = {
+          ...(bookingData || {}),
+          assignedTourId: null,
+          assignedTourCode: null,
+          assignedDepartureKey: null,
+        };
+        previousDriverOperationalScopeRef.current = null;
+        setBookingData(clearedBookingData);
+        setTourData(null);
+        setTourCode('');
+        setScreenParams({});
+        setCurrentScreen('DriverHome');
+        setDriverSessionGeneration((value) => value + 1);
+        await SessionStorage.multiSet([
+          [SESSION_KEYS.BOOKING_DATA, JSON.stringify(clearedBookingData)],
+          [SESSION_KEYS.TOUR_DATA, JSON.stringify(null)],
+          [SESSION_KEYS.LAST_SCREEN, 'DriverHome'],
+        ]);
+      } catch (error) {
+        logger.warn('DriverTourPack', 'Could not reconcile failed driver assignment validation', {
+          reason,
+          error: error?.message || String(error),
+        });
+      } finally {
+        handlingInvalidation = false;
+      }
+    };
+
+    const onValue = (snapshot) => {
+      if (snapshot.val() !== true) {
+        handleInvalidAssignment('MANIFEST_ASSIGNMENT_MISSING');
+      }
+    };
+    const onCancelled = () => {
+      handleInvalidAssignment('MANIFEST_ASSIGNMENT_DENIED');
+    };
+    assignmentRef.on('value', onValue, onCancelled);
+
+    return () => {
+      assignmentValidationSeqRef.current += 1;
+      assignmentRef.off('value', onValue);
+    };
+  }, [currentDriverLifecycleScopeKey, user?.uid]);
 
   const resolveOfflineLogin = async (reference, normalizedEmail) => resolveOfflineLoginFromCache({
     reference,
@@ -815,6 +1057,18 @@ function AppContent() {
     }, loginDiagnosticsContext);
 
     if (userType === 'driver') {
+      const assignedTourId = resolveTourId(tourDetails?.id, bookingOrDriverData?.assignedTourId);
+      const departureIdentity = assignedTourId && tourDetails
+        ? driverTourPackService.resolveExactDepartureKey({
+            tourId: assignedTourId,
+            startDate: tourDetails.startDate,
+          })
+        : { ok: false };
+      const driverSessionData = {
+        ...bookingOrDriverData,
+        assignedTourId: assignedTourId || null,
+        assignedDepartureKey: departureIdentity.ok ? departureIdentity.departureKey : null,
+      };
       logger.info('Auth', 'Driver Logged In', { driverId: maskIdentifier(bookingOrDriverData.id) });
       if (authUid) {
         try {
@@ -873,7 +1127,8 @@ function AppContent() {
       }
       setTourCode(tourDetails?.tourCode || '');
       setTourData(tourDetails || null);
-      setBookingData(bookingOrDriverData);
+      setBookingData(driverSessionData);
+      driverLifecyclePurgeRef.current = null;
       setCurrentScreen(postLoginScreen);
       recordCrashBreadcrumb('Auth', 'driver_login_session_established', {
         postLoginScreen,
@@ -888,7 +1143,7 @@ function AppContent() {
         }, loginDiagnosticsContext);
         await offlineSyncService.saveTourPack(tourDetails.id, 'driver', {
           tour: tourDetails,
-          driver: bookingOrDriverData,
+          driver: driverSessionData,
         }, { ownerId: bookingOrDriverData?.id });
         await offlineSyncService.setTourPackMeta(
           tourDetails.id,
@@ -908,7 +1163,7 @@ function AppContent() {
       }, loginDiagnosticsContext);
       await saveSession({
         tourData: tourDetails || null,
-        bookingData: bookingOrDriverData,
+        bookingData: driverSessionData,
         currentScreen: postLoginScreen,
       });
       await loginDiagnostics.recordLoginDiagnostic('driver_session_save_succeeded', {
@@ -1269,9 +1524,12 @@ function AppContent() {
 
   const handleLogout = async () => {
     const authUid = user?.uid || auth?.currentUser?.uid || null;
-    const [scopeResult, tokenResult] = await Promise.allSettled([
+    const [scopeResult, tokenResult, operationalPurgeResult] = await Promise.allSettled([
       offlineSyncService.setActiveSessionScope(null),
       authUid ? deactivatePushToken(authUid) : Promise.resolve({ success: true }),
+      currentDriverLifecycleScope
+        ? driverOperationalLifecycleService.purge(currentDriverLifecycleScope)
+        : Promise.resolve({ success: true }),
     ]);
 
     if (scopeResult.status === 'rejected') {
@@ -1286,7 +1544,21 @@ function AppContent() {
           : tokenResult.value?.error,
       });
     }
+    if (operationalPurgeResult.status === 'rejected' || operationalPurgeResult.value?.success === false) {
+      const failures = operationalPurgeResult.status === 'fulfilled'
+        ? operationalPurgeResult.value?.failures?.map((failure) => failure.name) || []
+        : [];
+      logger.warn('Auth', 'Driver operational data could not be completely purged during logout', {
+        failedOperations: failures,
+        error: operationalPurgeResult.status === 'rejected'
+          ? (operationalPurgeResult.reason?.message || String(operationalPurgeResult.reason))
+          : operationalPurgeResult.value?.error,
+      });
+    }
 
+    previousDriverOperationalScopeRef.current = null;
+    driverLifecyclePurgeRef.current = null;
+    setDriverSessionGeneration((value) => value + 1);
     await clearSessionState();
   };
 
@@ -1297,11 +1569,17 @@ function AppContent() {
         replacementAuthUid: maskIdentifier(summary.replacementAuthUid),
         warningCount: Array.isArray(summary.warnings) ? summary.warnings.length : 0,
       });
-      await offlineSyncService.setActiveSessionScope(null).catch((error) => {
-        logger.warn('Auth', 'Offline session scope could not be cleared after account deletion', {
+      const operationalPurge = currentDriverLifecycleScope
+        ? driverOperationalLifecycleService.purge(currentDriverLifecycleScope)
+        : offlineSyncService.setActiveSessionScope(null);
+      await operationalPurge.catch((error) => {
+        logger.warn('Auth', 'Offline operational data could not be cleared after account deletion', {
           error: error?.message || String(error),
         });
       });
+      previousDriverOperationalScopeRef.current = null;
+      driverLifecyclePurgeRef.current = null;
+      setDriverSessionGeneration((value) => value + 1);
       await clearSessionState({ includeNotificationOnboarding: true });
       setUser(auth?.currentUser || null);
     } catch (error) {
@@ -1382,6 +1660,8 @@ function AppContent() {
                 ...screenParams,
                 actorPrincipalId: canonicalIdentity?.principalId,
                 authUid: canonicalIdentity?.authUid,
+                offlineCacheOwnerId: bookingData?.id,
+                sessionGeneration: driverSessionGeneration,
               },
             }}
             

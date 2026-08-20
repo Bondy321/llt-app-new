@@ -436,8 +436,10 @@ const fetchTourManifestFromFunction = async (tourCodeOriginal) => {
       throw new Error(mapTourManifestFunctionReason(payload.reason));
     }
 
-    return {
-      tourId: payload.tourId,
+      return {
+        schemaVersion: payload.schemaVersion,
+        complete: payload.complete === true,
+        tourId: payload.tourId,
       tourCode: payload.tourCode || null,
       bookings: Array.isArray(payload.bookings) ? payload.bookings : [],
       stats: payload.stats || {},
@@ -1149,6 +1151,8 @@ const getTourManifest = async (tourCodeOriginal) => {
     });
 
     return {
+      schemaVersion: 1,
+      complete: true,
       tourId,
       bookings,
       stats

@@ -1,0 +1,10 @@
+const text = (value) => String(value ?? '');
+const sequence = (value) => Number.isSafeInteger(value) ? value : Number.MAX_SAFE_INTEGER;
+const natural = (left, right) => text(left).localeCompare(text(right), undefined, { numeric: true, sensitivity: 'base' });
+const values = (record) => Object.values(record && typeof record === 'object' ? record : {});
+const selectOrderedPickups = (pack) => values(pack?.pickups).sort((a,b)=>sequence(a.sequence)-sequence(b.sequence)||natural(a.time,b.time)||natural(a.pickupId,b.pickupId));
+const selectOrderedPassengers = (pack, pickupId = null) => values(pack?.passengers).filter((p)=>!pickupId||p.pickupId===pickupId).sort((a,b)=>natural(a.seatLabel,b.seatLabel)||natural(a.name,b.name)||natural(a.passengerKey,b.passengerKey));
+const selectPassengersByPickup = (pack) => selectOrderedPickups(pack).map((pickup)=>({pickup,passengers:selectOrderedPassengers(pack,pickup.pickupId)}));
+const selectOrderedSeats = (pack) => values(pack?.seats).sort((a,b)=>natural(a.label,b.label)||natural(a.seatId,b.seatId));
+const selectOrderedTimeline = (pack) => values(pack?.timeline).sort((a,b)=>natural(a.dateISO,b.dateISO)||natural(a.time,b.time)||sequence(a.sequence)-sequence(b.sequence)||natural(a.eventId,b.eventId));
+module.exports={selectOrderedPickups,selectOrderedPassengers,selectPassengersByPickup,selectOrderedSeats,selectOrderedTimeline};

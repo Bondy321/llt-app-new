@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { getTourManifest, updateManifestBooking, MANIFEST_STATUS } from '../services/bookingServiceRealtime';
 import offlineSyncService from '../services/offlineSyncService';
+import * as driverManifestCache from '../services/driverManifestCacheService';
 import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
 import ManifestBookingCard from '../components/ManifestBookingCard';
@@ -56,10 +57,11 @@ const HEADER_WIDGETS_VISIBLE = {
 };
 
 export default function PassengerManifestScreen({ route, navigation }) {
-  const { tourId, actorPrincipalId, authUid } = route.params;
+  const { tourId, actorPrincipalId, authUid, offlineCacheOwnerId, sessionGeneration = 0 } = route.params;
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [manifestData, setManifestData] = useState({ bookings: [], stats: {} });
+  const [manifestSource, setManifestSource] = useState('none');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -77,6 +79,14 @@ export default function PassengerManifestScreen({ route, navigation }) {
   const feedbackTimeoutRef = useRef(null);
   const mountedRef = useRef(true);
   const manifestLoadSeqRef = useRef(0);
+  const scopeKey = `${normalizeTourId(tourId)}|${String(offlineCacheOwnerId || '').trim().toUpperCase()}|${sessionGeneration}`;
+  const activeScopeKeyRef = useRef(scopeKey);
+  const manifestSourceRef = useRef('none');
+  const cacheScopeEnabled = /^D-[A-Z0-9_-]+$/.test(String(offlineCacheOwnerId || '').trim().toUpperCase());
+
+  useEffect(() => {
+    manifestSourceRef.current = manifestSource;
+  }, [manifestSource]);
 
   useEffect(() => {
     logger.trackScreen('PassengerManifest', { tourId });
@@ -104,13 +114,31 @@ export default function PassengerManifestScreen({ route, navigation }) {
 
   const loadManifest = async () => {
     const requestSeq = ++manifestLoadSeqRef.current;
-    const canApplyRequest = () => mountedRef.current && requestSeq === manifestLoadSeqRef.current;
+    const requestScope = scopeKey;
+    const canApplyRequest = () => mountedRef.current
+      && requestSeq === manifestLoadSeqRef.current
+      && activeScopeKeyRef.current === requestScope;
 
     logger.info('PassengerManifest', 'Manifest load started', { tourId });
     try {
       const data = await getTourManifest(tourId);
       if (!canApplyRequest()) return null;
-      setManifestData(data);
+      const cacheResult = cacheScopeEnabled
+        ? await driverManifestCache.replace({ tourId, driverId: offlineCacheOwnerId, manifest: data })
+        : null;
+      if (cacheScopeEnabled && !cacheResult.success) {
+        logger.warn('PassengerManifest', 'Remote manifest was not cached because it failed strict local validation', {
+          tourId,
+          error: cacheResult.error,
+        });
+        // A malformed response must never replace either the cache or the
+        // visible last-known-good snapshot.
+        throw new Error('The server returned an incomplete manifest. Please try again.');
+      }
+      if (!canApplyRequest()) return null;
+      setManifestData(cacheResult?.data || data);
+      manifestSourceRef.current = 'live';
+      setManifestSource('live');
       logger.info('PassengerManifest', 'Manifest load completed', {
         tourId,
         bookingCount: data?.bookings?.length || 0,
@@ -122,7 +150,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
         tourId,
         error: error?.message || String(error),
       });
-      if (canApplyRequest()) {
+      if (canApplyRequest() && manifestSourceRef.current !== 'cache') {
         Alert.alert('Manifest unavailable', 'Could not load the passenger manifest. Please check your connection and try again.');
       }
       return null;
@@ -141,8 +169,27 @@ export default function PassengerManifestScreen({ route, navigation }) {
   };
 
   useEffect(() => {
-    loadManifest();
-  }, [tourId]);
+    activeScopeKeyRef.current = scopeKey;
+    manifestLoadSeqRef.current += 1;
+    let cancelled = false;
+    const loadCacheThenRemote = async () => {
+      const cached = cacheScopeEnabled
+        ? await driverManifestCache.get({ tourId, driverId: offlineCacheOwnerId })
+        : { success: true, data: null };
+      if (!cancelled && activeScopeKeyRef.current === scopeKey && cached.success && cached.data) {
+        setManifestData(cached.data);
+        manifestSourceRef.current = 'cache';
+        setManifestSource('cache');
+        setLoading(false);
+      }
+      if (!cancelled && activeScopeKeyRef.current === scopeKey) await loadManifest();
+    };
+    loadCacheThenRemote();
+    return () => {
+      cancelled = true;
+      manifestLoadSeqRef.current += 1;
+    };
+  }, [scopeKey]);
 
   useEffect(() => {
     const activeTourId = normalizeTourId(tourId);
@@ -377,6 +424,18 @@ export default function PassengerManifestScreen({ route, navigation }) {
               : booking
           )),
         }));
+        const cachePatch = cacheScopeEnabled
+          ? await driverManifestCache.applyOptimisticUpdate({
+            tourId, driverId: offlineCacheOwnerId, bookingRef: selectedBooking.id, passengerStatuses: statusesToPersist,
+          })
+          : null;
+        if (cacheScopeEnabled && !cachePatch.success) {
+          logger.warn('PassengerManifest', 'Queued manifest update could not be mirrored to the local snapshot', {
+            tourId,
+            bookingRef: maskIdentifier(selectedBooking.id),
+            error: cachePatch.error,
+          });
+        }
         showStatusFeedback({
           variant: 'warning',
           message: `${selectedBooking.id} is saved on this device and queued for the server. A newer change for this booking will replace this queued one.`,
@@ -581,6 +640,7 @@ export default function PassengerManifestScreen({ route, navigation }) {
         <View style={styles.topBarTitleWrap}>
           <Text style={styles.headerTitle}>Passenger Manifest</Text>
           <Text style={styles.headerSubtitle} numberOfLines={1}>Tour {tourId}</Text>
+          {manifestSource === 'cache' && <Text style={styles.headerSubtitle}>Saved offline copy - refreshing when available</Text>}
         </View>
         <TouchableOpacity onPress={() => handleSyncNow()} style={styles.syncBtn} disabled={refreshing}>
           <Text style={styles.syncBtnText}>{refreshing ? 'Syncing...' : 'Sync'}</Text>

@@ -49,6 +49,8 @@ test('getTourManifest loads passenger manifest through verified HTTPS endpoint',
         status: 200,
         json: async () => ({
           success: true,
+          schemaVersion: 1,
+          complete: true,
           tourId: '5112D_8',
           tourCode: '5112D 8',
           bookings: [
@@ -66,6 +68,8 @@ test('getTourManifest loads passenger manifest through verified HTTPS endpoint',
     assert.equal(capturedRequest.options.headers.Authorization, 'Bearer mock-firebase-id-token');
     assert.deepEqual(JSON.parse(capturedRequest.options.body), { tourId: '5112D_8' });
     assert.equal(manifest.tourId, '5112D_8');
+    assert.equal(manifest.schemaVersion, 1);
+    assert.equal(manifest.complete, true);
     assert.equal(manifest.bookings.length, 1);
     assert.equal(manifest.stats.totalPax, 1);
   } finally {

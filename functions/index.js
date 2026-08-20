@@ -7,6 +7,7 @@
 
 const { onValueCreated, onValueWritten } = require("firebase-functions/v2/database");
 const { onRequest } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onObjectFinalized } = require("firebase-functions/v2/storage");
 const admin = require("firebase-admin");
 const { Expo } = require("expo-server-sdk");
@@ -22,6 +23,7 @@ const {
   validateDriverTourPackHttpRequest,
   verifyManagementOidcRequest,
 } = require('./lib/managementOidc');
+const { cleanupExpiredDriverTourPacks } = require('./lib/driverTourPackExpiryCleanup');
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -2148,6 +2150,8 @@ const buildTourManifestPayload = async ({ tourId, requestedTourCode = null, db =
   }, { totalBookings: bookings.length, totalPax: 0, checkedIn: 0, noShows: 0 });
 
   return {
+    schemaVersion: 1,
+    complete: true,
     tourId: canonicalTourId,
     tourCode,
     bookings,
@@ -4507,6 +4511,29 @@ exports.sendItineraryNotification = onValueWritten(
       return null;
     }
   }
+);
+
+/**
+ * Purges expired Driver Tour Pack operational data. The pack root is indexed
+ * by expiresAtMs, so each scheduled invocation reads and deletes one bounded
+ * batch. A PII-free expiry tombstone is retained for audit and client cache
+ * invalidation; retries are naturally idempotent because deleted packs no
+ * longer match the query.
+ */
+exports.cleanupExpiredDriverTourPacks = onSchedule(
+  {
+    schedule: 'every 6 hours',
+    timeZone: 'Europe/London',
+    region: 'europe-west1',
+    memory: '256MiB',
+    timeoutSeconds: 120,
+    maxInstances: 1,
+  },
+  async () => {
+    const result = await cleanupExpiredDriverTourPacks({ database: admin.database() });
+    log.info('Driver Tour Pack expiry cleanup completed', result);
+    return result;
+  },
 );
 
 /**

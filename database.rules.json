@@ -5,7 +5,12 @@
 
     "driver_tour_packs": {
       ".read": false,
-      ".write": false
+      ".write": false,
+      ".indexOn": ["expiresAtMs"],
+      "$departureKey": {
+        ".read": "auth != null && data.child('tourId').isString() && data.child('expiresAtMs').isNumber() && data.child('expiresAtMs').val() > now && root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + data.child('tourId').val() + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true",
+        ".write": false
+      }
     },
     "driver_tour_pack_tombstones": {
       ".read": false,
@@ -14,6 +19,37 @@
     "driver_tour_pack_ingestion": {
       ".read": false,
       ".write": false
+    },
+    "driver_tour_pack_actions": {
+      ".read": false,
+      ".write": false,
+      "$departureKey": {
+        ".read": false,
+        ".write": false,
+        "$driverId": {
+          ".read": "auth != null && root.child('driver_tour_packs/' + $departureKey + '/tourId').isString() && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').isNumber() && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').val() > now && root.child('users/' + auth.uid + '/driverId').val() === $driverId && root.child('drivers/' + $driverId + '/authUid').val() === auth.uid && root.child('tour_manifests/' + root.child('driver_tour_packs/' + $departureKey + '/tourId').val() + '/assigned_drivers/' + $driverId).val() === true",
+          ".write": false,
+          "schemaVersion": { ".write": "auth != null && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').isNumber() && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').val() > now && root.child('users/' + auth.uid + '/driverId').val() === $driverId && root.child('drivers/' + $driverId + '/authUid').val() === auth.uid && root.child('tour_manifests/' + root.child('driver_tour_packs/' + $departureKey + '/tourId').val() + '/assigned_drivers/' + $driverId).val() === true", ".validate": "newData.val() === 1" },
+          "packRevision": { ".write": "auth != null && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').isNumber() && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').val() > now && root.child('users/' + auth.uid + '/driverId').val() === $driverId && root.child('drivers/' + $driverId + '/authUid').val() === auth.uid && root.child('tour_manifests/' + root.child('driver_tour_packs/' + $departureKey + '/tourId').val() + '/assigned_drivers/' + $driverId).val() === true", ".validate": "newData.isNumber() && newData.val() >= 1" },
+          "updatedAtMs": { ".write": "auth != null && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').isNumber() && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').val() > now && root.child('users/' + auth.uid + '/driverId').val() === $driverId && root.child('drivers/' + $driverId + '/authUid').val() === auth.uid && root.child('tour_manifests/' + root.child('driver_tour_packs/' + $departureKey + '/tourId').val() + '/assigned_drivers/' + $driverId).val() === true", ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 300000" },
+          "revisionAcknowledged": { ".write": "auth != null && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').isNumber() && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').val() > now && root.child('users/' + auth.uid + '/driverId').val() === $driverId && root.child('drivers/' + $driverId + '/authUid').val() === auth.uid && root.child('tour_manifests/' + root.child('driver_tour_packs/' + $departureKey + '/tourId').val() + '/assigned_drivers/' + $driverId).val() === true", ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= newData.parent().child('packRevision').val()" },
+          "pickupStops": {
+            "$pickupId": {
+              ".write": false,
+              "state": { ".write": "auth != null && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').isNumber() && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').val() > now && root.child('driver_tour_packs/' + $departureKey + '/pickups/' + $pickupId).exists() && root.child('users/' + auth.uid + '/driverId').val() === $driverId && root.child('drivers/' + $driverId + '/authUid').val() === auth.uid && root.child('tour_manifests/' + root.child('driver_tour_packs/' + $departureKey + '/tourId').val() + '/assigned_drivers/' + $driverId).val() === true", ".validate": "newData.isString() && (newData.val() === 'PENDING' || newData.val() === 'ARRIVED' || newData.val() === 'COMPLETED' || newData.val() === 'SKIPPED')" },
+              "updatedAtMs": { ".write": "auth != null && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').isNumber() && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').val() > now && root.child('driver_tour_packs/' + $departureKey + '/pickups/' + $pickupId).exists() && root.child('users/' + auth.uid + '/driverId').val() === $driverId && root.child('drivers/' + $driverId + '/authUid').val() === auth.uid && root.child('tour_manifests/' + root.child('driver_tour_packs/' + $departureKey + '/tourId').val() + '/assigned_drivers/' + $driverId).val() === true", ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 300000" }
+            }
+          },
+          "serviceCompletion": {
+            "$serviceId": {
+              ".write": false,
+              "state": { ".write": "auth != null && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').isNumber() && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').val() > now && root.child('driver_tour_packs/' + $departureKey + '/services/' + $serviceId).exists() && root.child('users/' + auth.uid + '/driverId').val() === $driverId && root.child('drivers/' + $driverId + '/authUid').val() === auth.uid && root.child('tour_manifests/' + root.child('driver_tour_packs/' + $departureKey + '/tourId').val() + '/assigned_drivers/' + $driverId).val() === true", ".validate": "newData.isString() && (newData.val() === 'PENDING' || newData.val() === 'COMPLETED' || newData.val() === 'SKIPPED')" },
+              "updatedAtMs": { ".write": "auth != null && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').isNumber() && root.child('driver_tour_packs/' + $departureKey + '/expiresAtMs').val() > now && root.child('driver_tour_packs/' + $departureKey + '/services/' + $serviceId).exists() && root.child('users/' + auth.uid + '/driverId').val() === $driverId && root.child('drivers/' + $driverId + '/authUid').val() === auth.uid && root.child('tour_manifests/' + root.child('driver_tour_packs/' + $departureKey + '/tourId').val() + '/assigned_drivers/' + $driverId).val() === true", ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 300000" }
+            }
+          },
+          "issues": { ".write": false }
+        }
+      }
     },
 
     "drivers": {

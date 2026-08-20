@@ -2,7 +2,13 @@
 
 ## Scope
 
-`services/offlineSyncService.js` manages local Tour Pack cache + offline action queue for passenger and driver flows.
+The mobile app has three deliberately separate durable stores:
+
+- `services/offlineSyncService.js` owns the existing passenger/driver screen cache and offline action queue;
+- `services/driverTourPackService.js` owns the server-projected Driver Tour Pack cache;
+- `services/driverManifestCacheService.js` owns the complete boarding-manifest snapshot.
+
+They share an identity boundary but do not merge facts. Report facts never become boarding state, and queued boarding changes never modify the source Driver Tour Pack.
 
 ## Architecture
 
@@ -13,6 +19,16 @@ Screen actions
       -> Tour Pack cache (role + tour + login identity scoped)
       -> action queue (manifest/chat/internal-chat/photo, principal owned)
   -> replay triggers (foreground, reconnect, manual refresh, login restore)
+
+Driver Tour Pack reader
+  -> exact assigned departure revision listener
+  -> strict full-pack validator
+  -> identity-scoped atomic replacement cache
+
+Passenger manifest
+  -> getTourManifest (schemaVersion=1, complete=true)
+  -> identity-scoped complete snapshot cache
+  -> tour_manifests remains authoritative for updates
 ```
 
 ## Cache keys
@@ -21,6 +37,8 @@ Screen actions
 - `tour_pack_meta_v2_<role>_<tourId>_<encodedBookingOrDriverId>`
 - `queue_v1`
 - `processed_action_ids_v1`
+- `LLT_DRIVER_TOUR_PACK` entries scoped by auth UID + driver ID + departure key
+- `LLT_DRIVER_MANIFEST` entries scoped by driver ID + tour ID
 
 The unversioned Tour Pack keys are cleanup-only legacy data. Every read and
 write must provide an owner identity, either explicitly or through the active
@@ -47,6 +65,24 @@ older upload. Remote submission is one idempotent multi-path write covering the
 private log, tour alert, and critical global alert; the local item is removed
 only after that commit succeeds. Trusted contacts use principal-specific v2
 storage keys.
+
+Driver logout, driver identity change, reassignment, assignment validation failure, source-pack withdrawal, and source-pack expiry purge the exact old operational scope. Purge stops queue replay first, removes the complete manifest, both Tour Pack caches and metadata, and removes only that scope's queued operational actions. A reassignment generation guard prevents late network responses from restoring data for the old tour.
+
+## Driver Tour Pack reader contract
+
+- `departureKey` is always `YYYY-MM-DD::NORMALIZED_TOUR_ID`; ambiguous or date-less assignments fail closed.
+- A valid cache is shown immediately. The app subscribes only to the exact assigned pack's revision and fetches the full pack only when the semantic revision changes.
+- Remote and cached packs pass the same recursive schema/privacy/relationship validation before use.
+- A malformed or failed remote response never erases a valid cache.
+- `missing`, `failed`, `stale`, `incomplete`, `expired`, and `withdrawn` are distinct states.
+- Expired and withdrawn packs delete cached PII immediately and retain only safe state metadata.
+- Listener generations make late responses from an old assignment inert.
+
+## Complete manifest cold-start contract
+
+`getTourManifest` returns an explicit `schemaVersion: 1` and `complete: true`. Only such a non-empty, internally consistent response can atomically replace the driver manifest cache. Unknown fields are dropped by construction and stats are recomputed locally. A partial, empty, malformed, duplicate-booking, failed, or wrong-tour response cannot replace a valid snapshot.
+
+The Passenger Manifest screen renders a valid snapshot before attempting the network, so an airplane-mode cold start can show the complete manifest. Offline boarding changes are patched into that snapshot only after the existing durable `MANIFEST_UPDATE` queue accepts them. Reconciliation and server writes still target `tour_manifests`; the cache is never a second authority.
 
 ## Queue action types
 
@@ -125,3 +161,6 @@ Never build per-screen ad-hoc summary strings.
 5. Restart app mid-backlog and verify no duplicate replays.
 6. Switch between two identities on one device and verify neither queue,
    Tour Pack, safety report, nor trusted contact crosses the session boundary.
+7. Cache a complete driver manifest, force-close, enable airplane mode, and verify a cold start shows every cached booking.
+8. Reassign a driver while the previous pack is open and verify the old listener, caches, and queued operational actions are removed without touching the new scope.
+9. Expire and withdraw a pack and verify cached PII is removed immediately while boarding authority remains unchanged.

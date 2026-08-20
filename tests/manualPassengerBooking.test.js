@@ -236,6 +236,8 @@ test('manual passenger write plan appears in app manifest payload as a normal pe
   });
 
   const manualBooking = manifest.bookings.find((booking) => booking.id === 'T123456');
+  assert.equal(manifest.schemaVersion, 1);
+  assert.equal(manifest.complete, true);
   assert.ok(manualBooking);
   assert.deepEqual(manualBooking.passengerNames, ['Apple Reviewer', 'Second Reviewer']);
   assert.deepEqual(manualBooking.seatNumbers, [19, 20]);

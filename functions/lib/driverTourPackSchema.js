@@ -100,6 +100,25 @@ function validateDriverTourPack(pack) {
         errors.push(`$.${field} must be empty for a tombstone.`);
       }
     });
+    if (isObject(pack.tour) && ['name', 'destination', 'routeCode'].some((field) => pack.tour[field] !== '')) {
+      errors.push('$.tour operational text must be empty for a tombstone.');
+    }
+    if (isObject(pack.coach)
+      && (pack.coach.seatMapAvailable !== false
+        || pack.coach.layoutSeatCount !== 0
+        || (isObject(pack.coach.details) && Object.keys(pack.coach.details).length))) {
+      errors.push('$.coach must contain no operational data for a tombstone.');
+    }
+    if (isObject(pack.contacts)
+      && ((isObject(pack.contacts.bookingLeads) && Object.keys(pack.contacts.bookingLeads).length)
+        || (isObject(pack.contacts.operational) && Object.keys(pack.contacts.operational).length))) {
+      errors.push('$.contacts must be empty for a tombstone.');
+    }
+    if (isObject(pack.itineraries)
+      && ['client', 'driver'].some((field) => isObject(pack.itineraries[field])
+        && (pack.itineraries[field].title !== '' || pack.itineraries[field].text !== ''))) {
+      errors.push('$.itineraries must contain no operational text for a tombstone.');
+    }
   }
   inspectPrivacy(pack, '$', errors);
   if (FINGERPRINT_PATTERN.test(String(pack.contentFingerprint || ''))) {

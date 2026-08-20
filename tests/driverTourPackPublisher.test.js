@@ -431,6 +431,21 @@ test('changed content increments revision and explicit tombstones remove operati
   assert.equal(database.state.driver_tour_pack_tombstones[departureKey].status, 'cancelled');
 });
 
+test('tombstones fail closed if any coach, contact, itinerary, or tour text remains', () => {
+  const tombstone = validPack({
+    status: 'cancelled',
+    pickups: {}, passengers: {}, seats: {}, timeline: {}, hotels: {}, services: {},
+    tour: { name: '', destination: '', routeCode: '', endDateISO: '2026-09-10', days: 1, status: 'cancelled' },
+    coach: { seatMapAvailable: false, layoutSeatCount: 0, details: {} },
+    contacts: { bookingLeads: {}, operational: {} },
+    itineraries: { client: { title: '', text: '' }, driver: { title: '', text: 'private instruction' } },
+  });
+  tombstone.contentFingerprint = computeDriverTourPackContentFingerprint(tombstone);
+  const result = validateDriverTourPack(tombstone);
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join('\n'), /itineraries must contain no operational text/);
+});
+
 test('a missing departure is never interpreted as deletion', async () => {
   const database = createMockDatabase();
   let nowMs = 1787227200000;

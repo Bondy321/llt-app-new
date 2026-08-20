@@ -5,11 +5,32 @@ const test = require('node:test');
 
 const repositoryRoot = path.resolve(__dirname, '..');
 
-test('new Driver Tour Pack roots remain private until Gate 6 rules are deployed', () => {
+test('Gate 6 opens only exact coherent-driver pack reads and keeps server roots private', () => {
   const rules = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'database.rules.json'), 'utf8')).rules;
-  ['driver_tour_packs', 'driver_tour_pack_tombstones', 'driver_tour_pack_ingestion'].forEach((root) => {
+  const packs = rules.driver_tour_packs;
+  assert.equal(packs['.read'], false);
+  assert.equal(packs['.write'], false);
+  assert.ok(packs['.indexOn'].includes('expiresAtMs'));
+  assert.match(packs.$departureKey['.read'], /users\/' \+ auth\.uid \+ '\/driverId/);
+  assert.match(packs.$departureKey['.read'], /drivers\/' \+ root\.child\('users\/' \+ auth\.uid \+ '\/driverId'\)\.val\(\) \+ '\/authUid/);
+  assert.match(packs.$departureKey['.read'], /tour_manifests\/' \+ data\.child\('tourId'\)\.val\(\) \+ '\/assigned_drivers/);
+  assert.equal(packs.$departureKey['.write'], false);
+  ['driver_tour_pack_tombstones', 'driver_tour_pack_ingestion'].forEach((root) => {
     assert.deepEqual(rules[root], { '.read': false, '.write': false });
   });
+});
+
+test('Gate 6 action state is closed, bounded and exact-driver scoped', () => {
+  const actions = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'database.rules.json'), 'utf8')).rules.driver_tour_pack_actions;
+  assert.equal(actions['.read'], false);
+  assert.equal(actions['.write'], false);
+  const action = actions.$departureKey.$driverId;
+  assert.equal(action['.write'], false);
+  assert.match(action.schemaVersion['.write'], /root\.child\('users\/' \+ auth\.uid \+ '\/driverId'\)\.val\(\) === \$driverId/);
+  assert.match(action.schemaVersion['.write'], /drivers\/' \+ \$driverId \+ '\/authUid/);
+  assert.match(action.schemaVersion['.write'], /tour_manifests/);
+  assert.equal(action.issues['.write'], false);
+  assert.equal(action.pickupStops.$pickupId['.write'], false);
 });
 
 test('the ingestion export is private to the exact management runtime service account', () => {
@@ -26,5 +47,17 @@ test('the publisher code can write only pack, tombstone and ingestion roots', ()
     'utf8',
   );
   assert.match(source, /assertWriteRoots\(updates\)/);
+  assert.doesNotMatch(source, /(?:bookings|tour_manifests|booking_identities)\//);
+});
+
+test('expiry cleanup is bounded and only removes driver pack lifecycle roots', () => {
+  const source = fs.readFileSync(
+    path.join(repositoryRoot, 'functions', 'lib', 'driverTourPackExpiryCleanup.js'),
+    'utf8',
+  );
+  assert.match(source, /maxPacksPerRun:\s*50/);
+  assert.match(source, /orderByChild\('expiresAtMs'\)/);
+  assert.match(source, /driver_tour_pack_actions/);
+  assert.match(source, /driver_tour_pack_tombstones/);
   assert.doesNotMatch(source, /(?:bookings|tour_manifests|booking_identities)\//);
 });
