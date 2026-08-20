@@ -13,6 +13,15 @@ const { Expo } = require("expo-server-sdk");
 const sharp = require("sharp");
 const { createHash, randomUUID } = require("crypto");
 const { normalizeManifestPassengerRows } = require('./lib/manifestPassengers');
+const {
+  INGESTION_LIMITS: DRIVER_TOUR_PACK_INGESTION_LIMITS,
+  createDriverTourPackPublisher,
+} = require('./lib/driverTourPackPublisher');
+const {
+  DEFAULT_MANAGEMENT_SYNC_SERVICE_ACCOUNT,
+  validateDriverTourPackHttpRequest,
+  verifyManagementOidcRequest,
+} = require('./lib/managementOidc');
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -4500,6 +4509,69 @@ exports.sendItineraryNotification = onValueWritten(
   }
 );
 
+/**
+ * Private cross-project boundary for management-generated Driver Tour Packs.
+ * Cloud Run IAM and a second in-process Google OIDC check both restrict the
+ * caller to the management sync service account.
+ */
+exports.ingestDriverTourPacks = onRequest(
+  {
+    region: 'europe-west1',
+    cors: false,
+    invoker: [DEFAULT_MANAGEMENT_SYNC_SERVICE_ACCOUNT],
+    memory: '512MiB',
+    timeoutSeconds: 120,
+    maxInstances: 4,
+    concurrency: 4,
+  },
+  async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Referrer-Policy', 'no-referrer');
+
+    const requestGate = validateDriverTourPackHttpRequest(req, {
+      maxBodyBytes: DRIVER_TOUR_PACK_INGESTION_LIMITS.maxBodyBytes,
+    });
+    if (!requestGate.valid) {
+      if (requestGate.status === 405) res.set('Allow', 'POST');
+      res.status(requestGate.status).json({ ok: false, error: { code: requestGate.code } });
+      return;
+    }
+
+    try {
+      await verifyManagementOidcRequest(req);
+      const publisher = createDriverTourPackPublisher({ database: admin.database() });
+      const result = await publisher.handle(req.body);
+      log.info('Driver Tour Pack ingestion request completed', {
+        action: result.action,
+        runId: result.runId,
+        packCount: result.packCount ?? result.expectedPackCount ?? 0,
+        batchIndex: result.batchIndex,
+        aggregateFingerprint: result.aggregateFingerprint,
+        batchFingerprint: result.batchFingerprint,
+        idempotent: result.idempotent,
+      });
+      res.status(200).json(result);
+    } catch (error) {
+      const status = Number.isInteger(error?.status) ? error.status : 500;
+      const code = error?.code || 'INGESTION_FAILED';
+      log.warn('Driver Tour Pack ingestion request rejected', {
+        action: req.body?.action,
+        runId: req.body?.runId,
+        status,
+        code,
+      });
+      res.status(status).json({
+        ok: false,
+        error: {
+          code,
+          message: status >= 500 ? 'Driver Tour Pack ingestion failed.' : String(error.message || code),
+        },
+      });
+    }
+  },
+);
+
 exports.__testables = {
   toRealtimeKeySegment,
   validateMessageData,
@@ -4554,4 +4626,7 @@ exports.__testables = {
   buildPushNavigationData,
   summarizeItineraryChange,
   persistTourNotification,
+  createDriverTourPackPublisher,
+  validateDriverTourPackHttpRequest,
+  verifyManagementOidcRequest,
 };

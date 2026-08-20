@@ -143,6 +143,9 @@ Do not rename these Realtime Database roots without a full migration:
 - `web_admin_settings`
 - `booking_identities`
 - `manual_booking_creation_locks`
+- `driver_tour_packs`
+- `driver_tour_pack_tombstones`
+- `driver_tour_pack_ingestion`
 
 Admin UID hardcoded in rules:
 
@@ -458,6 +461,10 @@ Replay policy:
 - Processed action IDs persisted to avoid duplicate replay.
 - Failed and retrying actions remain retryable.
 - Completed `PHOTO_UPLOAD` actions are pruned by TTL while preserving recent completed items.
+
+The existing identity-scoped device Tour Pack cache is separate from the new server-owned Driver
+Tour Pack source. Gate 5 adds only the private ingestion boundary; mobile pack reads,
+subscriptions, and cache replacement belong to Gates 6-7.
 
 Canonical sync states:
 
@@ -815,6 +822,13 @@ Exported functions:
   - RTDB create trigger on `/tours/{tourId}/safetyAlerts/{eventId}`
   - alerts coherently assigned drivers and eligible operations-admin mobile profiles
   - stores Expo acceptance counts without exposing sensitive report text in push copy
+- `ingestDriverTourPacks`
+  - private HTTPS `POST`, region `europe-west1`, CORS disabled
+  - Cloud Run IAM and in-process Google OIDC restrict the exact management sync service account
+  - validates bounded versioned packs and semantic fingerprints before staging
+  - uses begin/upload/finalize so partial or stale runs cannot become current
+  - writes only `driver_tour_packs`, `driver_tour_pack_tombstones`, and `driver_tour_pack_ingestion`
+  - records only identities, counts, hashes, and reason codes in logs and audit metadata
 
 Testing hook:
 
@@ -846,6 +860,10 @@ Sources:
 Important RTDB invariants:
 
 - Root read/write are denied by default.
+- Gate 5 explicitly denies all client reads/writes to `driver_tour_packs`,
+  `driver_tour_pack_tombstones`, and `driver_tour_pack_ingestion`, including operations admins and
+  assigned drivers. Gate 6 will open only exact coherently assigned-driver pack reads; ingestion
+  audit and tombstone roots stay server-private.
 - `drivers`, `bookings`, `tours`, and `tour_manifests` must not expose collection-level authenticated reads.
 - Passenger login uses `verifyPassengerLogin` to validate booking identity and create short-lived `tour_access_grants` / `booking_access_grants` before first tour access.
 - Online passenger login must persist `users/{authUid}/bookingRef` before entering the app; that caller-owned profile link keeps exact manifest-row access working after short-lived grants expire.
@@ -958,6 +976,9 @@ High-value contract tests to know:
 - `web-admin/src/components/Dashboard.test.jsx`
 - `tests/opsAlertService.test.js`
 - `tests/functions.photoVariants.test.js`
+- `tests/driverTourPackPublisher.test.js`
+- `tests/driverTourPackBoundary.contract.test.js`
+- `tests/firebaseRules/driverTourPacks.rules.test.js`
 - `tests/stableIdentity.integration.test.js`
 - `tests/validateBookingReference.passengerVerifier.test.js`
 - `tests/offlineSyncService.test.js` and `__tests__/offlineSyncService.test.js`
@@ -1183,6 +1204,7 @@ High-signal docs:
 - `docs/data-contracts/manual-passenger-creation.md`
 - `docs/data-contracts/ops-alerts.md`
 - `docs/data-contracts/tour-identity.md`
+- `docs/data-contracts/driver-tour-pack-ingestion.md`
 - `docs/offline-tour-pack.md`
 - `docs/photo-upload-variant-contract.md`
 - `docs/reactions-write-contract.md`
@@ -1208,6 +1230,9 @@ High-signal source:
 - `database.rules.json`
 - `storage_rules.json`
 - `functions/index.js`
+- `functions/lib/driverTourPackSchema.js`
+- `functions/lib/driverTourPackPublisher.js`
+- `functions/lib/managementOidc.js`
 - `web-admin/src/services/dashboardService.js`
 - `web-admin/src/services/tourService.js`
 - `web-admin/src/services/healthService.js`

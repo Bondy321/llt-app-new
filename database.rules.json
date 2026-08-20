@@ -3,6 +3,19 @@
     ".read": false,
     ".write": false,
 
+    "driver_tour_packs": {
+      ".read": false,
+      ".write": false
+    },
+    "driver_tour_pack_tombstones": {
+      ".read": false,
+      ".write": false
+    },
+    "driver_tour_pack_ingestion": {
+      ".read": false,
+      ".write": false
+    },
+
     "drivers": {
       ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
       ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
