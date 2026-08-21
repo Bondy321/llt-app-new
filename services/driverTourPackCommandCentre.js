@@ -22,6 +22,59 @@ const normalizeBookingRef = (value) => String(value || '').trim().toUpperCase();
 const normalizeSeatLabel = (value) => String(value || '').trim().toUpperCase();
 const manifestKey = (bookingRef, seatLabel) => `${normalizeBookingRef(bookingRef)}::${normalizeSeatLabel(seatLabel)}`;
 
+function numberedSeat(label) {
+  const match = /^S?(\d+)$/.exec(normalizeSeatLabel(label));
+  return match ? Number(match[1]) : null;
+}
+
+function pairedSeatRows(seats, startingRow = 1) {
+  const rows = [];
+  for (let index = 0; index < seats.length; index += 4) {
+    const rowSeats = seats.slice(index, index + 4);
+    rows.push({
+      rowNumber: startingRow + rows.length,
+      kind: 'standard',
+      left: rowSeats.slice(0, 2),
+      right: rowSeats.slice(2, 4),
+    });
+  }
+  return rows;
+}
+
+function buildCoachSeatRows(seatsInput) {
+  const seats = Array.isArray(seatsInput) ? seatsInput : [];
+  const byNumber = new Map();
+  const extras = [];
+
+  seats.forEach((seat) => {
+    const number = numberedSeat(seat?.label);
+    if (number !== null && number >= 1 && number <= 53 && !byNumber.has(number)) byNumber.set(number, seat);
+    else extras.push(seat);
+  });
+
+  const hasStandard53Layout = Array.from({ length: 53 }, (_, index) => index + 1)
+    .every((number) => byNumber.has(number));
+  if (!hasStandard53Layout) {
+    const hasFiveSeatBackRow = seats.length >= 5 && seats.length % 4 === 1;
+    const standardSeats = hasFiveSeatBackRow ? seats.slice(0, -5) : seats;
+    const rows = pairedSeatRows(standardSeats);
+    if (hasFiveSeatBackRow) {
+      rows.push({ rowNumber: rows.length + 1, kind: 'back', seats: seats.slice(-5) });
+    }
+    return rows;
+  }
+
+  const numbered = (from, to) => Array.from({ length: to - from + 1 }, (_, index) => byNumber.get(from + index));
+  const rows = [
+    ...pairedSeatRows(numbered(1, 24), 1),
+    { rowNumber: 7, kind: 'standard', left: numbered(25, 26), right: [] },
+    { rowNumber: 8, kind: 'standard', left: numbered(27, 28), right: [] },
+    ...pairedSeatRows(numbered(29, 48), 9),
+    { rowNumber: 14, kind: 'back', seats: numbered(49, 53) },
+  ];
+  return extras.length ? [...rows, ...pairedSeatRows(extras, 15)] : rows;
+}
+
 function manifestStatusIndex(manifest) {
   const index = new Map();
   Object.values(manifest?.bookings || {}).forEach((booking) => {
@@ -172,6 +225,7 @@ function commandCentreModel(pack, manifest, { nowMs = Date.now() } = {}) {
     pickups,
     passengers,
     seats,
+    seatRows: buildCoachSeatRows(seats),
     timeline,
     qualityIssues: qualityIssues(pack),
     unresolved,
@@ -189,5 +243,6 @@ module.exports = {
   qualityIssues,
   selectNextEvent,
   progressForPassengers,
+  buildCoachSeatRows,
   commandCentreModel,
 };

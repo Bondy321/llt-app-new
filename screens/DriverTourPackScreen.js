@@ -79,6 +79,43 @@ function EmptyMessage({ children }) {
   return <View style={styles.emptyCard}><Text style={styles.muted}>{children}</Text></View>;
 }
 
+function SeatCard({ seat, backRow = false }) {
+  return (
+    <View
+      accessible
+      accessibilityLabel={`Seat ${seat.label}: ${seat.displayState}${seat.passenger ? `, ${seat.passenger.name}` : ''}`}
+      style={[styles.seat, backRow && styles.backSeat, { borderColor: SEAT_COLOURS[seat.displayState] }]}
+    >
+      <Text style={styles.cardTitle}>{seat.label}</Text>
+      <Text style={[styles.seatState, { color: SEAT_COLOURS[seat.displayState] }]}>{seat.displayState}</Text>
+    </View>
+  );
+}
+
+function CoachSeatMap({ rows }) {
+  return (
+    <View style={styles.seatMap}>
+      <Text style={styles.coachDirection}>FRONT OF COACH</Text>
+      {rows.map((row) => row.kind === 'back' ? (
+        <View key={`row-${row.rowNumber}`} style={styles.backSeatRow} accessibilityLabel={`Coach back row ${row.rowNumber}`}>
+          {row.seats.map((seat) => <SeatCard key={seat.seatId} seat={seat} backRow />)}
+        </View>
+      ) : (
+        <View key={`row-${row.rowNumber}`} style={styles.seatRow} accessibilityLabel={`Coach row ${row.rowNumber}`}>
+          <View style={styles.seatSide}>
+            {row.left.map((seat) => <SeatCard key={seat.seatId} seat={seat} />)}
+          </View>
+          <View style={styles.aisle} accessibilityLabel="Coach aisle" />
+          <View style={styles.seatSide}>
+            {row.right.map((seat) => <SeatCard key={seat.seatId} seat={seat} />)}
+          </View>
+        </View>
+      ))}
+      <Text style={styles.coachDirection}>REAR OF COACH</Text>
+    </View>
+  );
+}
+
 function ProgressText({ progress }) {
   return (
     <Text style={styles.muted}>
@@ -169,9 +206,12 @@ export default function DriverTourPackScreen({ packState, actionState, isConnect
     setActionFeedback(null);
     try {
       const result = await operation();
-      setActionFeedback(result?.success
-        ? (result.data?.queued ? `${successMessage} Saved offline and queued.` : successMessage)
-        : (result?.error || 'The action could not be saved.'));
+      setActionFeedback({
+        kind: result?.success ? 'success' : 'error',
+        message: result?.success
+          ? (result.data?.queued ? `${successMessage} Saved offline and queued.` : successMessage)
+          : (result?.error || 'The action could not be saved.'),
+      });
       return result;
     } finally {
       setWorkingKey(null);
@@ -319,8 +359,6 @@ export default function DriverTourPackScreen({ packState, actionState, isConnect
             if (result?.success) setIssueText('');
           }}
         />
-        {actionFeedback ? <Text accessibilityLiveRegion="polite" style={styles.feedback}>{actionFeedback}</Text> : null}
-        {actionState?.error ? <Text accessibilityRole="alert" style={styles.criticalText}>{actionState.error}</Text> : null}
       </Section>
       <Section title="Driver tools">
         <View style={styles.row}>
@@ -412,17 +450,7 @@ export default function DriverTourPackScreen({ packState, actionState, isConnect
         ) : null}
         {!model.seats.length ? <EmptyMessage>No seat layout is published.</EmptyMessage> : null}
         {model.seats.length && seatView === 'visual' && !pack.quality?.suppressSeatMap ? (
-          <View style={styles.seatGrid}>{model.seats.map((seat) => (
-            <View
-              key={seat.seatId}
-              accessible
-              accessibilityLabel={`Seat ${seat.label}: ${seat.displayState}${seat.passenger ? `, ${seat.passenger.name}` : ''}`}
-              style={[styles.seat, { borderColor: SEAT_COLOURS[seat.displayState] }]}
-            >
-              <Text style={styles.cardTitle}>{seat.label}</Text>
-              <Text style={[styles.seatState, { color: SEAT_COLOURS[seat.displayState] }]}>{seat.displayState}</Text>
-            </View>
-          ))}</View>
+          <CoachSeatMap rows={model.seatRows} />
         ) : model.seats.length ? (
           <View>{model.seats.map((seat) => (
             <View key={seat.seatId} accessible accessibilityLabel={`Seat ${seat.label}: ${seat.displayState}`} style={styles.seatList}>
@@ -537,6 +565,19 @@ export default function DriverTourPackScreen({ packState, actionState, isConnect
           </TouchableOpacity>
         ))}
       </View>
+      {actionFeedback ? (
+        <View
+          accessibilityLiveRegion="polite"
+          accessibilityRole={actionFeedback.kind === 'error' ? 'alert' : undefined}
+          style={[styles.actionFeedback, actionFeedback.kind === 'error' ? styles.critical : styles.ok]}
+        >
+          <Text style={actionFeedback.kind === 'error' ? styles.criticalText : styles.feedback}>{actionFeedback.message}</Text>
+        </View>
+      ) : actionState?.error ? (
+        <View accessibilityRole="alert" style={[styles.actionFeedback, styles.critical]}>
+          <Text style={styles.criticalText}>{actionState.error}</Text>
+        </View>
+      ) : null}
       <ScrollView contentContainerStyle={styles.content}>{contents[tab]}</ScrollView>
     </SafeAreaView>
   );
@@ -589,8 +630,15 @@ const styles = StyleSheet.create({
   feedback: { color: '#166534', fontWeight: '700', lineHeight: 20 },
   itineraryLabel: { color: COLORS.textSecondary, fontWeight: '800', fontSize: 11 },
   person: { flexDirection: 'row', gap: 8, justifyContent: 'space-between', paddingVertical: 9, borderTopWidth: 1, borderColor: '#EEF0F3' },
-  seatGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  seat: { width: 78, minHeight: 64, borderWidth: 2, borderRadius: 10, alignItems: 'center', justifyContent: 'center', padding: 4 },
+  actionFeedback: { marginHorizontal: 16, marginTop: 10 },
+  seatMap: { gap: 8 },
+  coachDirection: { color: COLORS.textSecondary, fontSize: 11, fontWeight: '800', letterSpacing: 0.8, textAlign: 'center' },
+  seatRow: { flexDirection: 'row', alignItems: 'stretch', width: '100%' },
+  seatSide: { flex: 1, flexDirection: 'row', gap: 6 },
+  aisle: { width: 26 },
+  backSeatRow: { flexDirection: 'row', gap: 5, width: '100%' },
+  seat: { flex: 1, minWidth: 0, minHeight: 64, borderWidth: 2, borderRadius: 10, alignItems: 'center', justifyContent: 'center', padding: 4 },
+  backSeat: { minHeight: 60 },
   seatState: { fontSize: 11, fontWeight: '800', textAlign: 'center' },
   seatList: { backgroundColor: '#FFFFFF', borderRadius: 10, padding: 12, minHeight: 48, marginBottom: 7 },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 28, gap: 14 },

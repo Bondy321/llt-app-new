@@ -2,10 +2,32 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   seatState,
+  buildCoachSeatRows,
   commandCentreModel,
   manifestStatusIndex,
   selectNextEvent,
 } = require('../services/driverTourPackCommandCentre');
+
+const seats = (from, to) => Array.from({ length: to - from + 1 }, (_, index) => {
+  const number = from + index;
+  return { seatId: `seat_${number}`, label: `S${number}`, displayState: 'Empty' };
+});
+
+test('builds the 53-seat coach with an aisle, left-only rows 7 and 8, and a five-seat back row', () => {
+  const rows = buildCoachSeatRows(seats(1, 53));
+
+  assert.equal(rows.length, 14);
+  assert.deepEqual(rows[0].left.map((seat) => seat.label), ['S1', 'S2']);
+  assert.deepEqual(rows[0].right.map((seat) => seat.label), ['S3', 'S4']);
+  assert.deepEqual(rows[6].left.map((seat) => seat.label), ['S25', 'S26']);
+  assert.deepEqual(rows[6].right, []);
+  assert.deepEqual(rows[7].left.map((seat) => seat.label), ['S27', 'S28']);
+  assert.deepEqual(rows[7].right, []);
+  assert.deepEqual(rows[8].left.map((seat) => seat.label), ['S29', 'S30']);
+  assert.deepEqual(rows[8].right.map((seat) => seat.label), ['S31', 'S32']);
+  assert.equal(rows[13].kind, 'back');
+  assert.deepEqual(rows[13].seats.map((seat) => seat.label), ['S49', 'S50', 'S51', 'S52', 'S53']);
+});
 
 test('maps authoritative per-seat manifest status without using names', () => {
   const index = manifestStatusIndex({ bookings: [{ id: 'B1', seatLabels: ['1A', '1B'], passengerStatus: ['boarded', 'no_show'] }] });
