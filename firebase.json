@@ -60,7 +60,7 @@
           },
           {
             "key": "Content-Security-Policy",
-            "value": "default-src 'self'; base-uri 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://*.firebasedatabase.app wss://*.firebasedatabase.app https://*.cloudfunctions.net https://*.run.app; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src https://loch-lomond-travel.firebaseapp.com; img-src 'self' data: blob: https:; object-src 'none'; script-src 'self'; script-src-elem 'self' https://loch-lomond-travel-default-rtdb.europe-west1.firebasedatabase.app; style-src 'self' 'unsafe-inline'; upgrade-insecure-requests"
+            "value": "default-src 'self'; base-uri 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://*.firebasedatabase.app wss://*.firebasedatabase.app https://*.cloudfunctions.net https://*.run.app; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src https://loch-lomond-travel.firebaseapp.com https://*.firebasedatabase.app; img-src 'self' data: blob: https:; object-src 'none'; script-src 'self'; script-src-elem 'self' https://*.firebasedatabase.app; style-src 'self' 'unsafe-inline'; upgrade-insecure-requests"
           }
         ]
       },

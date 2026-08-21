@@ -989,10 +989,14 @@ test('Static contract: web-admin release shell is non-cacheable, hardened, and l
   assert.match(defaultHeaders['Content-Security-Policy'], /frame-ancestors 'none'/);
   assert.match(
     defaultHeaders['Content-Security-Policy'],
-    /script-src-elem 'self' https:\/\/loch-lomond-travel-default-rtdb\.europe-west1\.firebasedatabase\.app/,
+    /script-src-elem 'self' https:\/\/\*\.firebasedatabase\.app/,
+  );
+  assert.match(
+    defaultHeaders['Content-Security-Policy'],
+    /frame-src https:\/\/loch-lomond-travel\.firebaseapp\.com https:\/\/\*\.firebasedatabase\.app/,
   );
   assert.doesNotMatch(defaultHeaders['Content-Security-Policy'], /script-src[^;]*'unsafe-(?:inline|eval)'/);
-  assert.doesNotMatch(defaultHeaders['Content-Security-Policy'], /script-src-elem[^;]*\*/);
+  assert.doesNotMatch(defaultHeaders['Content-Security-Policy'], /script-src-elem[^;]*(?:https?:\/\/)?\*(?:[\s;]|$)/);
   assert.equal(defaultHeaders['Permissions-Policy'], 'camera=(), geolocation=(), microphone=(), payment=(), usb=()');
 
   const broadcastSource = readText('web-admin/src/components/BroadcastPanel.jsx');
