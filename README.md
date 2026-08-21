@@ -109,9 +109,11 @@ secrets named `EXPO_PUBLIC_FIREBASE_*` and `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` are
 validated and synced to EAS before the build starts, so placeholder EAS values cannot
 silently ship.
 
-Production binary and OTA workflows install root and Functions dependencies, then
-run the mobile test suite, Functions script tests, and Firebase rules emulator
-tests before syncing EAS environment values or publishing.
+Production binary workflows install root and Functions dependencies, then run the
+mobile test suite, Functions script tests, and Firebase rules emulator tests before
+syncing EAS environment values or publishing. The default `main` push workflow is a
+fast iOS OTA-only path to the isolated `testflight` channel; run the repository's
+affected tests and final complete verification before merging to `main`.
 
 ```bash
 npm run build:dev:ios
@@ -125,7 +127,11 @@ npm run build:production
 
 ```bash
 npm run update:dev
+npm run update:testflight
 npm run update:prod
 ```
+
+TestFlight builds and OTA updates use the dedicated `testflight` channel. Production
+OTA publication remains an explicit manual command and is never triggered by a push.
 
 > `runtimeVersion` uses Expo `appVersion` policy, so runtime-incompatible native changes still require shipping a new binary build.

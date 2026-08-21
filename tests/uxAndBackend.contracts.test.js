@@ -670,7 +670,7 @@ test('Static contract: support and external link handoffs surface failures', () 
   });
 });
 
-test('Static contract: production EAS workflows gate release on mobile/backend verification', () => {
+test('Static contract: production binary EAS workflows gate release on mobile/backend verification', () => {
   const readinessDoc = readText('dependency-upgrade-prod-readiness.md');
   const agentsDoc = readText('AGENTS.md');
   const packageJson = JSON.parse(readText('package.json'));
@@ -678,7 +678,6 @@ test('Static contract: production EAS workflows gate release on mobile/backend v
   [
     ['.github/workflows/eas-build.yml', 'npm run test:mobile:ota'],
     ['.github/workflows/eas-testflight.yml', 'npm run test:mobile'],
-    ['.github/workflows/eas-update.yml', 'npm run test:mobile:ota'],
   ].forEach(([relativePath, mobileTestCommand]) => {
     const source = readText(relativePath);
     const workflowLines = source.split(/\r?\n/).map((line) => line.trim());
@@ -706,7 +705,22 @@ test('Static contract: production EAS workflows gate release on mobile/backend v
   );
   assert.match(readinessDoc, /Deploy Firebase Functions and Firebase rules before any production EAS update\/build/);
   assert.match(readinessDoc, /deploy Functions first, then Realtime Database\/Storage rules, then publish the EAS update\/build/);
-  assert.match(agentsDoc, /Current EAS workflows test backend changes but do not deploy Firebase backend artifacts/);
+  assert.match(agentsDoc, /Production binary EAS workflows test backend changes but do not deploy Firebase backend artifacts/);
+});
+
+test('Static contract: main pushes publish an iOS OTA only to the TestFlight channel', () => {
+  const source = readText('.github/workflows/eas-update.yml');
+  const easConfig = JSON.parse(readText('eas.json'));
+  const packageJson = JSON.parse(readText('package.json'));
+
+  assert.match(source, /push:\s*\n\s*branches:\s*\n\s*- main/);
+  assert.match(source, /EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT:\s*'true'/);
+  assert.match(source, /eas update --channel testflight --platform ios --environment production/);
+  assert.doesNotMatch(source, /eas update --channel production/);
+  assert.doesNotMatch(source, /npm run test:emulators/);
+  assert.doesNotMatch(source, /npm run test:functions:scripts/);
+  assert.equal(easConfig.build?.testflight?.channel, 'testflight');
+  assert.match(packageJson.scripts['update:testflight'], /--channel testflight --platform ios/);
 });
 
 test('Static contract: production binary workflows verify EAS remote version state before building', () => {

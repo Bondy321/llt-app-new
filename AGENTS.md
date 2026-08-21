@@ -900,7 +900,7 @@ Important RTDB invariants:
   `drivers/{driverId}/lastActive` and remove their own `authUid` during account deletion;
   they cannot self-assign through manifest or profile helper paths.
 - Passenger manifest loading uses the `getTourManifest` HTTPS function; the mobile app must not scan `/bookings` to assemble manifests in production.
-- Release order matters for backend access changes: deploy Functions first, then Realtime Database/Storage rules, then EAS update/build. Current EAS workflows test backend changes but do not deploy Firebase backend artifacts.
+- Release order matters for backend access changes: deploy Functions first, then Realtime Database/Storage rules, then EAS update/build. Production binary EAS workflows test backend changes but do not deploy Firebase backend artifacts; the fast TestFlight OTA workflow assumes verification was completed before merge.
 - `bookings/{bookingRef}` writes are admin-only.
 - `tour_manifests/{tourId}/bookings/{bookingRef}` writes allow admin, verified assigned drivers, and passengers only for their own booking via `users/{authUid}/bookingRef` or a valid booking grant.
 - `assigned_driver_codes` must use the canonical object payload.
@@ -1075,6 +1075,7 @@ OTA updates:
 
 ```bash
 npm run update:dev
+npm run update:testflight
 npm run update:prod
 ```
 
@@ -1090,7 +1091,7 @@ Root env facts:
 - Mobile uses `EXPO_PUBLIC_*`.
 - Web admin uses `VITE_*`.
 - Android builds require `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`.
-- Production GitHub Actions validate `EXPO_PUBLIC_*`, sync them into EAS production, then build/update.
+- Production GitHub Actions validate `EXPO_PUBLIC_*` and sync them into EAS production before binary builds or TestFlight updates.
 - Do not reintroduce unresolved `@secret` placeholder aliases in `eas.json`.
 - Do not commit real `.env` files or service account files.
 
@@ -1104,12 +1105,11 @@ GitHub Actions:
   - runs mobile, Functions script, and Firebase rules tests
   - validates env and syncs EAS production env
 - `.github/workflows/eas-update.yml`
-  - production OTA update on `main` push or manual dispatch
+  - iOS OTA update to the isolated `testflight` channel on `main` push or manual dispatch
   - verifies commit is on `main`
-  - Node 24 plus Java 21 for Firebase emulators
-  - installs root and Functions dependencies
-  - runs mobile, Functions script, and Firebase rules tests
-  - validates env and syncs EAS production env
+  - Node 24, root dependencies, iOS env validation and production EAS env sync
+  - intentionally does not repeat the full test matrix; affected tests and one complete repository pass must be green before merge
+  - never publishes the `production` channel; production OTA remains an explicit manual action
 - `.github/workflows/eas-testflight.yml`
   - manual production iOS build followed by TestFlight submission
   - verifies commit is on `main`

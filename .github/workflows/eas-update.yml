@@ -1,4 +1,4 @@
-name: EAS Update
+name: EAS Update — TestFlight
 
 on:
   push:
@@ -7,13 +7,15 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: eas-update-production
+  group: eas-update-testflight
   cancel-in-progress: true
 
 jobs:
-  publish-production-update:
+  publish-testflight-update:
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      contents: read
     env:
       CI: true
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -25,14 +27,13 @@ jobs:
       EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID }}
       EXPO_PUBLIC_FIREBASE_APP_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_APP_ID }}
       EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID }}
-      EXPO_PUBLIC_GOOGLE_MAPS_API_KEY: ${{ secrets.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY }}
       EXPO_PUBLIC_SUPPORT_PHONE: '+441414876737'
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL }}
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS }}
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK || 'false' }}
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK || 'false' }}
       EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT: 'true'
-      LLT_VALIDATE_PLATFORM: all
+      LLT_VALIDATE_PLATFORM: ios
 
     steps:
       - name: Checkout repository at triggering commit
@@ -51,33 +52,13 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            functions/package-lock.json
-
-      - name: Setup Java for Firebase emulators
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Functions dependencies
-        run: npm --prefix functions ci
-
-      - name: Run OTA smoke tests
-        run: npm run test:mobile:ota
-
-      - name: Run Functions script tests
-        run: npm run test:functions:scripts
-
-      - name: Run Firebase rules tests
-        run: npm run test:emulators
-
       - name: Validate Expo public environment
-        run: npm run validate:expo-env -- --platform=all
+        run: npm run validate:expo-env -- --platform=ios
 
       - name: Setup Expo and EAS CLI
         uses: expo/expo-github-action@v8
@@ -87,7 +68,7 @@ jobs:
           token: ${{ env.EXPO_TOKEN }}
 
       - name: Sync EAS production environment
-        run: npm run sync:eas-env:production -- --platform=all
+        run: npm run sync:eas-env:production -- --platform=ios
 
       - name: Log release context
         run: |
@@ -97,6 +78,6 @@ jobs:
           eas whoami
           eas project:info --non-interactive
 
-      - name: Publish production channel update (single group)
+      - name: Publish TestFlight channel update
         run: |
-          eas update --channel production --platform all --environment production --non-interactive --message "CI update: ${{ github.sha }}"
+          eas update --channel testflight --platform ios --environment production --non-interactive --message "TestFlight CI update: ${{ github.sha }}"
