@@ -21,6 +21,23 @@ const integer = (value, path, errors, positive = false) => { if (!Number.isSafeI
 const record = (value, limit, path, errors, validator) => { if (!object(value)) { errors.push(`${path} must be an object`); return; } const entries = Object.entries(value); if (entries.length > limit) errors.push(`${path} exceeds limit`); entries.forEach(([key,item]) => { if (!safeKey(key)) errors.push(`${path} contains unsafe key`); validator(item,key,`${path}.${key}`,errors); }); };
 const privacy = (value, path, errors) => { if (typeof value === 'string') { if (EMAIL.test(value)) errors.push(`${path} contains email`); return; } if (Array.isArray(value)) return value.forEach((x,i) => privacy(x,`${path}[${i}]`,errors)); if (object(value)) Object.entries(value).forEach(([k,v]) => { if (FORBIDDEN.test(k)) errors.push(`${path}.${k} is prohibited`); privacy(v,`${path}.${k}`,errors); }); };
 
+function rehydrateDriverTourPackFromFirebase(value) {
+  if (!object(value)) return value;
+  const pack = { ...value };
+  ['pickups','passengers','seats','timeline','hotels','services'].forEach((field) => {
+    if (!Object.hasOwn(pack, field)) pack[field] = {};
+  });
+  if (object(pack.coach) && !Object.hasOwn(pack.coach, 'details')) pack.coach = { ...pack.coach, details: {} };
+  if (!Object.hasOwn(pack, 'contacts')) {
+    pack.contacts = { bookingLeads: {}, operational: {} };
+  } else if (object(pack.contacts)) {
+    pack.contacts = { ...pack.contacts };
+    if (!Object.hasOwn(pack.contacts, 'bookingLeads')) pack.contacts.bookingLeads = {};
+    if (!Object.hasOwn(pack.contacts, 'operational')) pack.contacts.operational = {};
+  }
+  return pack;
+}
+
 function validateDriverTourPack(pack) {
   const errors = [];
   if (!errorsForExact(pack, TOP, '$', errors)) return { valid: false, errors };
@@ -60,4 +77,4 @@ function validateContacts(v,e){if(!errorsForExact(v,['bookingLeads','operational
 function validateItineraries(v,e){if(errorsForExact(v,['client','driver'],'$.itineraries',e))['client','driver'].forEach(k=>{if(errorsForExact(v[k],['title','text'],`$.itineraries.${k}`,e)){string(v[k].title,`$.itineraries.${k}.title`,e,{max:300});string(v[k].text,`$.itineraries.${k}.text`,e,{max:24000});}});}
 function validateRelationships(p,e){if(![p.pickups,p.passengers,p.seats,p.coach,p.contacts].every(object))return;const counts={};const refs={};Object.entries(p.passengers).forEach(([key,x])=>{if(x.pickupId){if(!p.pickups[x.pickupId])e.push(`${key} unknown pickup`);counts[x.pickupId]=(counts[x.pickupId]||0)+1;(refs[x.pickupId] ||= new Set()).add(x.bookingRef);}if(x.bookingLeadContactId&&p.contacts.bookingLeads?.[x.bookingLeadContactId]?.bookingRef!==x.bookingRef)e.push(`${key} invalid booking lead`);});Object.entries(p.pickups).forEach(([key,x])=>{if(x.passengerCount!==(counts[key]||0)||x.bookingCount!==(refs[key]?.size||0))e.push(`${key} pickup totals mismatch`);});Object.entries(p.seats).forEach(([key,x])=>{const pax=x.passengerKey?p.passengers[x.passengerKey]:null;if(x.passengerKey&&!pax)e.push(`${key} unknown passenger`);if(pax&&pax.seatLabel!==x.label)e.push(`${key} seat mismatch`);if(['empty','blocked'].includes(x.state)&&x.passengerKey)e.push(`${key} forbidden passenger`);});if(p.coach.layoutSeatCount!==Object.keys(p.seats).length)e.push('seat count mismatch');if((p.coach.seatMapAvailable===false&&Object.keys(p.seats).length)||(p.coach.seatMapAvailable===true&&p.quality?.suppressSeatMap))e.push('seat map availability mismatch');}
 
-module.exports = { DRIVER_TOUR_PACK_SCHEMA_VERSION, DRIVER_TOUR_PACK_READABLE_SCHEMA_VERSIONS, validateDriverTourPack };
+module.exports = { DRIVER_TOUR_PACK_SCHEMA_VERSION, DRIVER_TOUR_PACK_READABLE_SCHEMA_VERSIONS, rehydrateDriverTourPackFromFirebase, validateDriverTourPack };

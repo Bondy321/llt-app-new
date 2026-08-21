@@ -1,6 +1,6 @@
 const { createPersistenceProvider } = require('./persistenceProvider');
 const { normalizeTourId } = require('./tourIdentityService');
-const { validateDriverTourPack } = require('./driverTourPackSchema');
+const { rehydrateDriverTourPackFromFirebase, validateDriverTourPack } = require('./driverTourPackSchema');
 const { getDriverTourPackFreshness } = require('./driverTourPackFreshness');
 
 const CACHE_VERSION = 'v1';
@@ -83,7 +83,7 @@ function createDriverTourPackService({ storage = createPersistenceProvider({ nam
   const purge = async (scopeInput) => { const scope=normalizeScope(scopeInput); if(!scope.ok)return response(false,null,scope.reason,IDENTITY_ERROR); try { await deleteKey(scope); return response(true,{purged:true}); } catch(error){return response(false,null,error?.message || String(error),'DRIVER_TOUR_PACK_PURGE_FAILED');} };
   const fetchRemote = async (scopeInput) => {
     const scope=normalizeScope(scopeInput); const activeDb=database(); if(!scope.ok)return response(false,null,scope.reason,IDENTITY_ERROR); if(!activeDb?.ref)return response(false,null,'Driver Tour Pack database unavailable','DRIVER_TOUR_PACK_DB_UNAVAILABLE');
-    try { const snapshot=await activeDb.ref(`driver_tour_packs/${scope.departureKey}`).once('value'); const pack=snapshot?.val?.(); if(!pack)return response(false,null,'Driver Tour Pack is unavailable','DRIVER_TOUR_PACK_REMOTE_MISSING'); const check=validator(pack); if(!check.valid)return response(false,null,'Driver Tour Pack failed validation',REMOTE_ERROR); const freshness=getDriverTourPackFreshness(pack,{now:now()}); if(['expired','withdrawn'].includes(freshness.state)){await purge(scope);return response(true,{pack:null,revision:pack.revision,freshness,source:'remote'});} const saved=await replace(scope,pack); if(!saved.success)return saved; return response(true,{...saved.data, source:'remote', freshness}); } catch(error) { return response(false,null,error?.message || String(error),'DRIVER_TOUR_PACK_REMOTE_FETCH_FAILED'); }
+    try { const snapshot=await activeDb.ref(`driver_tour_packs/${scope.departureKey}`).once('value'); const remote=snapshot?.val?.(); if(!remote)return response(false,null,'Driver Tour Pack is unavailable','DRIVER_TOUR_PACK_REMOTE_MISSING'); const pack=rehydrateDriverTourPackFromFirebase(remote); const check=validator(pack); if(!check.valid)return response(false,null,'Driver Tour Pack failed validation',REMOTE_ERROR); const freshness=getDriverTourPackFreshness(pack,{now:now()}); if(['expired','withdrawn'].includes(freshness.state)){await purge(scope);return response(true,{pack:null,revision:pack.revision,freshness,source:'remote'});} const saved=await replace(scope,pack); if(!saved.success)return saved; return response(true,{...saved.data, source:'remote', freshness}); } catch(error) { return response(false,null,error?.message || String(error),'DRIVER_TOUR_PACK_REMOTE_FETCH_FAILED'); }
   };
   const subscribeRevision = (scopeInput, onChange, onError) => {
     const scope=normalizeScope(scopeInput); const activeDb=database(); if(!scope.ok){onError?.(new Error(scope.reason));return ()=>{};} if(!activeDb?.ref){onError?.(new Error('Driver Tour Pack database unavailable'));return ()=>{};}

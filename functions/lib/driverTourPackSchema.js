@@ -499,6 +499,25 @@ function isObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function rehydrateDriverTourPackFromFirebase(value) {
+  if (!isObject(value)) return value;
+  const pack = { ...value };
+  ['pickups', 'passengers', 'seats', 'timeline', 'hotels', 'services'].forEach((field) => {
+    if (!Object.hasOwn(pack, field)) pack[field] = {};
+  });
+  if (isObject(pack.coach) && !Object.hasOwn(pack.coach, 'details')) {
+    pack.coach = { ...pack.coach, details: {} };
+  }
+  if (!Object.hasOwn(pack, 'contacts')) {
+    pack.contacts = { bookingLeads: {}, operational: {} };
+  } else if (isObject(pack.contacts)) {
+    pack.contacts = { ...pack.contacts };
+    if (!Object.hasOwn(pack.contacts, 'bookingLeads')) pack.contacts.bookingLeads = {};
+    if (!Object.hasOwn(pack.contacts, 'operational')) pack.contacts.operational = {};
+  }
+  return pack;
+}
+
 function isFirebaseKeyText(value) {
   return [...value].every((character) => {
     const codePoint = character.codePointAt(0);
@@ -515,6 +534,7 @@ module.exports = {
   DriverTourPackValidationError,
   canonicalJson,
   computeDriverTourPackContentFingerprint,
+  rehydrateDriverTourPackFromFirebase,
   validateDriverTourPack,
   assertValidDriverTourPack,
 };

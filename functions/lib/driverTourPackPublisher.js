@@ -5,6 +5,7 @@ const {
   DRIVER_TOUR_PACK_SCHEMA_VERSION,
   assertValidDriverTourPack,
   canonicalJson,
+  rehydrateDriverTourPackFromFirebase,
 } = require('./driverTourPackSchema');
 
 const DRIVER_TOUR_PACK_ROOTS = Object.freeze({
@@ -248,7 +249,9 @@ async function finalizeRun({ database, now, body }) {
     if (!batch || batch.batchFingerprint !== run.batches[index].batchFingerprint) {
       throw publisherError('STAGED_BATCH_INVALID', `Staged batch ${index} is missing or inconsistent.`, 409);
     }
-    const batchPacks = Object.values(batch.packs || {}).map((pack) => validatePackAgainstRun(pack, run));
+    const batchPacks = Object.values(batch.packs || {})
+      .map(rehydrateDriverTourPackFromFirebase)
+      .map((pack) => validatePackAgainstRun(pack, run));
     if (batchPacks.length !== batch.packCount || batchPacks.length !== run.batches[index].packCount) {
       throw publisherError('STAGED_BATCH_COUNT_MISMATCH', `Staged batch ${index} has the wrong pack count.`, 409);
     }

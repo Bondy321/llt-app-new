@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
-const { validateDriverTourPack } = require('../services/driverTourPackSchema');
+const { rehydrateDriverTourPackFromFirebase, validateDriverTourPack } = require('../services/driverTourPackSchema');
 const { getDriverTourPackFreshness } = require('../services/driverTourPackFreshness');
 const { createDriverTourPackService, resolveExactDepartureKey, validateDriverTourPackAssignment } = require('../services/driverTourPackService');
 const { selectOrderedPickups, selectPassengersByPickup, selectOrderedSeats, selectOrderedTimeline } = require('../services/driverTourPackSelectors');
@@ -44,6 +44,25 @@ test('client rejects a cancelled pack that retains operational text', () => {
     itineraries: { client: { title: '', text: '' }, driver: { title: '', text: 'private instruction' } },
   });
   assert.equal(validateDriverTourPack(tombstone).valid, false);
+});
+test('client rehydrates only Firebase-omitted empty collection fields before validation', async () => {
+  const sparse = pack();
+  delete sparse.timeline;
+  delete sparse.hotels;
+  delete sparse.services;
+  delete sparse.coach.details;
+  delete sparse.contacts.operational;
+  const restored = rehydrateDriverTourPackFromFirebase(sparse);
+  assert.equal(validateDriverTourPack(restored).valid, true);
+  assert.deepEqual(restored.hotels, {});
+  assert.deepEqual(restored.coach.details, {});
+  assert.deepEqual(restored.contacts.operational, {});
+
+  const store = memory();
+  const service = createDriverTourPackService({ storage: store, db: fakeDb(sparse), now: () => 1787227200000 });
+  const fetched = await service.fetchRemote(scope);
+  assert.equal(fetched.success, true);
+  assert.deepEqual(fetched.data.pack.services, {});
 });
 test('exact departure identity uses explicit canonical keys or strict date plus normalized tour id', () => {
   assert.deepEqual(resolveExactDepartureKey({tourId:'5001d 1',startDate:'10/09/2026'}),{ok:true,departureKey:'2026-09-10::5001D_1',tourId:'5001D_1',dateISO:'2026-09-10',source:'derived'});

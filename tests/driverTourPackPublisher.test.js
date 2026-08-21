@@ -403,6 +403,41 @@ test('finalize survives an RTDB initial-null lease transition and moves current 
   assert.equal(database.state.driver_tour_packs[departureKey].departureKey, departureKey);
 });
 
+test('finalize rehydrates Firebase-omitted empty collections before schema and hash checks', async () => {
+  const database = createMockDatabase();
+  let nowMs = 1787227200000;
+  const publisher = createDriverTourPackPublisher({ database, now: () => nowMs++ });
+  const value = validPack();
+  const prepared = await beginUploadFinalize({
+    publisher,
+    pack: value,
+    runId: 'run_sparse_staging',
+    startedAtMs: 1787227000000,
+    batch: false,
+  });
+  const materialized = prepared.materialized;
+  const batchFingerprint = fingerprintPackBatch([materialized]);
+  await publisher.handle({
+    action: 'upload',
+    runId: 'run_sparse_staging',
+    batchIndex: 0,
+    packs: [materialized],
+    batchFingerprint,
+  });
+  const staged = database.state.driver_tour_pack_ingestion.staging.run_sparse_staging.batches[0].packs[departureKey];
+  delete staged.hotels;
+  delete staged.services;
+  delete staged.coach.details;
+  delete staged.contacts.operational;
+
+  const finalized = await publisher.handle({
+    action: 'finalize',
+    runId: 'run_sparse_staging',
+    aggregateFingerprint: prepared.aggregateFingerprint,
+  });
+  assert.equal(finalized.counts.created, 1);
+});
+
 test('identical retries and identical later runs are idempotent without revision churn', async () => {
   const database = createMockDatabase();
   let nowMs = 1787227200000;
