@@ -78,9 +78,30 @@ test('writes a bounded pickup action directly while online', async () => {
 
   assert.equal(result.success, true);
   assert.equal(path, `driver_tour_pack_actions/${SCOPE.departureKey}/${SCOPE.driverId}`);
-  assert.equal(update['pickupStops/stop_1'].state, 'ARRIVED');
+  assert.equal(update['pickupStops/stop_1/state'], 'ARRIVED');
+  assert.equal(update['pickupStops/stop_1/updatedAtMs'], 100);
+  assert.equal(update['pickupStops/stop_1'], undefined);
   assert.equal(update.packRevision, 2);
   assert.equal(update.updatedAtMs, 100);
+});
+
+test('writes service and hotel progress through rule-approved leaf paths', async () => {
+  const updates = [];
+  const service = createDriverTourPackActionService({
+    db: { ref: () => ({ update: async (value) => updates.push(value) }) },
+    storage: memoryStorage(),
+    now: () => 100,
+  });
+
+  await service.submit(SCOPE, { packRevision: 2, kind: 'service', targetId: 'service_1', state: 'SKIPPED' });
+  await service.submit(SCOPE, { packRevision: 2, kind: 'hotel', targetId: 'hotel_1', state: 'COMPLETED' });
+
+  assert.equal(updates[0]['serviceCompletion/service_1/state'], 'SKIPPED');
+  assert.equal(updates[0]['serviceCompletion/service_1/updatedAtMs'], 100);
+  assert.equal(updates[0]['serviceCompletion/service_1'], undefined);
+  assert.equal(updates[1]['hotelCompletion/hotel_1/state'], 'COMPLETED');
+  assert.equal(updates[1]['hotelCompletion/hotel_1/updatedAtMs'], 100);
+  assert.equal(updates[1]['hotelCompletion/hotel_1'], undefined);
 });
 
 test('writes structured issue fields as an atomic leaf update and allocates a bounded slot', async () => {

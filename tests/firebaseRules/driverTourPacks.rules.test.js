@@ -1,11 +1,14 @@
 const test = require('node:test');
+const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+process.env.NODE_ENV = 'test';
 const {
   initializeTestEnvironment,
   assertFails,
   assertSucceeds,
 } = require('@firebase/rules-unit-testing');
+const { createDriverTourPackActionService } = require('../../services/driverTourPackActionService');
 
 const PROJECT_ID = 'demo-llt-driver-tour-pack-rules';
 const rules = fs.readFileSync(path.resolve(__dirname, '../../database.rules.json'), 'utf8');
@@ -287,4 +290,23 @@ test('driver action writes are exact-principal, bounded, closed-schema records',
     await assertFails(testEnv.authenticatedContext(uid).database(databaseURL)
       .ref(`driver_tour_pack_actions/${DEPARTURE_KEY}/${DRIVER_ID}/schemaVersion`).set(1));
   }
+});
+
+test('the mobile action service writes progress through the permitted leaves', async () => {
+  const assigned = testEnv.authenticatedContext(DRIVER_UID).database(databaseURL);
+  const service = createDriverTourPackActionService({ now: () => Date.now() });
+  const result = await service.submitDirect({
+    authUid: DRIVER_UID,
+    driverId: DRIVER_ID,
+    departureKey: DEPARTURE_KEY,
+    tourId: '5001D_1',
+    packRevision: 1,
+    kind: 'pickup',
+    targetId: 'stop_1',
+    state: 'SKIPPED',
+    clientUpdatedAtMs: Date.now(),
+  }, assigned);
+
+  assert.equal(result.success, true);
+  assert.equal((await assigned.ref(`driver_tour_pack_actions/${DEPARTURE_KEY}/${DRIVER_ID}/pickupStops/stop_1/state`).get()).val(), 'SKIPPED');
 });

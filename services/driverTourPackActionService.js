@@ -187,9 +187,18 @@ function createDriverTourPackActionService({
     const root = `driver_tour_pack_actions/${payload.departureKey}/${payload.driverId}`;
     const update = { schemaVersion: 1, packRevision: payload.packRevision, updatedAtMs: stamp };
     if (payload.kind === 'acknowledge') update.revisionAcknowledged = payload.packRevision;
-    if (payload.kind === 'pickup') update[`pickupStops/${payload.targetId}`] = { state: payload.state, updatedAtMs: stamp };
-    if (payload.kind === 'service') update[`serviceCompletion/${payload.targetId}`] = { state: payload.state, updatedAtMs: stamp };
-    if (payload.kind === 'hotel') update[`hotelCompletion/${payload.targetId}`] = { state: payload.state, updatedAtMs: stamp };
+    if (payload.kind === 'pickup') {
+      update[`pickupStops/${payload.targetId}/state`] = payload.state;
+      update[`pickupStops/${payload.targetId}/updatedAtMs`] = stamp;
+    }
+    if (payload.kind === 'service') {
+      update[`serviceCompletion/${payload.targetId}/state`] = payload.state;
+      update[`serviceCompletion/${payload.targetId}/updatedAtMs`] = stamp;
+    }
+    if (payload.kind === 'hotel') {
+      update[`hotelCompletion/${payload.targetId}/state`] = payload.state;
+      update[`hotelCompletion/${payload.targetId}/updatedAtMs`] = stamp;
+    }
     if (payload.kind === 'issue') Object.entries(payload.issue).forEach(([field, value]) => {
       update[`issues/${payload.targetId}/${field}`] = value;
     });

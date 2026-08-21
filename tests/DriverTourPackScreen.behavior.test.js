@@ -164,12 +164,15 @@ test('surfaces semantic acknowledgement and records offline progress and structu
   await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Run tab' }).props.onPress());
   const pickupControls = renderer.root.findByProps({ accessibilityLabel: 'Main Street progress controls' });
   await act(async () => pickupControls.findByProps({ accessibilityLabel: 'Arrived' }).props.onPress());
+  assert.ok(allText(renderer.root).includes('Main Street marked arrived. Saved offline and queued.'));
 
   await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Tour tab' }).props.onPress());
   const hotelControls = renderer.root.findByProps({ accessibilityLabel: 'Operations Hotel progress controls' });
   await act(async () => hotelControls.findByProps({ accessibilityLabel: 'Complete' }).props.onPress());
+  assert.ok(allText(renderer.root).includes('Operations Hotel marked completed. Saved offline and queued.'));
   const serviceControls = renderer.root.findByProps({ accessibilityLabel: 'Castle visit progress controls' });
   await act(async () => serviceControls.findByProps({ accessibilityLabel: 'Complete' }).props.onPress());
+  assert.ok(allText(renderer.root).includes('Castle visit marked completed. Saved offline and queued.'));
 
   assert.deepEqual(calls, [
     ['acknowledge'],
