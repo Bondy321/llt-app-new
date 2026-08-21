@@ -496,13 +496,23 @@ async function requireActiveLease(database, runId, nowMs) {
 }
 
 async function transitionLeaseToFinalizing(database, runId, nowMs) {
+  const existingLease = await readValue(database, `${DRIVER_TOUR_PACK_ROOTS.ingestion}/activeRun`);
+  if (!existingLease
+    || existingLease.runId !== runId
+    || Number(existingLease.leaseExpiresAtMs || 0) <= nowMs) {
+    throw publisherError('RUN_LEASE_LOST', 'The ingestion run cannot enter finalization.', 409);
+  }
   let conflict = false;
   const result = await database.ref(`${DRIVER_TOUR_PACK_ROOTS.ingestion}/activeRun`).transaction((current) => {
-    if (!current || current.runId !== runId || Number(current.leaseExpiresAtMs || 0) <= nowMs) {
+    // As with batch claims, seed an initial empty local-cache callback with the
+    // lease that was just read. The server transaction still retries against the
+    // authoritative current lease before it can commit FINALIZING.
+    const currentLease = current || existingLease;
+    if (currentLease.runId !== runId || Number(currentLease.leaseExpiresAtMs || 0) <= nowMs) {
       conflict = true;
       return undefined;
     }
-    return { ...current, state: 'FINALIZING', leaseExpiresAtMs: nowMs + INGESTION_LIMITS.leaseMs };
+    return { ...currentLease, state: 'FINALIZING', leaseExpiresAtMs: nowMs + INGESTION_LIMITS.leaseMs };
   }, undefined, false);
   if (!result?.committed || conflict) throw publisherError('RUN_LEASE_LOST', 'The ingestion run cannot enter finalization.', 409);
 }

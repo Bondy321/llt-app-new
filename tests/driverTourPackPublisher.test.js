@@ -145,9 +145,13 @@ function secondValidPack() {
   return pack;
 }
 
-function createMockDatabase(initialState = {}, { initialNullTransactionPaths = [] } = {}) {
+function createMockDatabase(initialState = {}, {
+  initialNullTransactionPaths = [],
+  initialNullTransactionCalls = {},
+} = {}) {
   const state = structuredClone(initialState);
   const pendingInitialNullPaths = new Set(initialNullTransactionPaths);
+  const transactionCallCounts = new Map();
   const partsFor = (path) => String(path || '').split('/').filter(Boolean);
   const read = (path) => partsFor(path).reduce((node, part) => node?.[part], state);
   const write = (path, value) => {
@@ -177,8 +181,11 @@ function createMockDatabase(initialState = {}, { initialNullTransactionPaths = [
           Object.entries(updates).forEach(([updatePath, value]) => write(updatePath, value));
         },
         async transaction(updater) {
+          const transactionCall = (transactionCallCounts.get(path) || 0) + 1;
+          transactionCallCounts.set(path, transactionCall);
           const current = structuredClone(read(path) ?? null);
-          if (pendingInitialNullPaths.delete(path)) {
+          const configuredInitialNull = initialNullTransactionCalls[path]?.includes(transactionCall);
+          if (pendingInitialNullPaths.delete(path) || configuredInitialNull) {
             const speculative = updater(null);
             if (speculative === undefined) return { committed: false, snapshot: snapshot(current) };
           }
@@ -374,6 +381,26 @@ test('upload survives RTDB initial-null transaction callbacks without opening pa
   assert.equal(result.finalized.counts.created, 1);
   assert.equal(database.state.driver_tour_pack_ingestion.runs.run_initial_null.status, 'FINALIZED');
   assert.equal(database.state.driver_tour_pack_ingestion.latestSuccessfulRun.runId, 'run_initial_null');
+});
+
+test('finalize survives an RTDB initial-null lease transition and moves current atomically', async () => {
+  const activeRunPath = 'driver_tour_pack_ingestion/activeRun';
+  const database = createMockDatabase({}, {
+    initialNullTransactionCalls: { [activeRunPath]: [2] },
+  });
+  let nowMs = 1787227200000;
+  const publisher = createDriverTourPackPublisher({ database, now: () => nowMs++ });
+  const result = await beginUploadFinalize({
+    publisher,
+    pack: validPack(),
+    runId: 'run_finalize_initial_null',
+    startedAtMs: 1787227000000,
+  });
+
+  assert.equal(result.finalized.counts.created, 1);
+  assert.equal(database.state.driver_tour_pack_ingestion.activeRun, undefined);
+  assert.equal(database.state.driver_tour_pack_ingestion.latestSuccessfulRun.runId, 'run_finalize_initial_null');
+  assert.equal(database.state.driver_tour_packs[departureKey].departureKey, departureKey);
 });
 
 test('identical retries and identical later runs are idempotent without revision churn', async () => {
