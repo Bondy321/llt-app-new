@@ -11,6 +11,7 @@ const DRIVER_TOUR_PACK_ROOTS = Object.freeze({
   packs: 'driver_tour_packs',
   tombstones: 'driver_tour_pack_tombstones',
   ingestion: 'driver_tour_pack_ingestion',
+  adminStatus: 'driver_tour_pack_admin_status',
 });
 const ALLOWED_WRITE_ROOTS = new Set(Object.values(DRIVER_TOUR_PACK_ROOTS));
 const INGESTION_LIMITS = Object.freeze({
@@ -290,6 +291,7 @@ async function finalizeRun({ database, now, body }) {
       contentFingerprint: pack.contentFingerprint,
       runId: request.runId,
     };
+    updates[`${DRIVER_TOUR_PACK_ROOTS.adminStatus}/${pack.departureKey}`] = buildAdminStatus(pack, request.runId);
     if (pack.status === 'active') {
       updates[`${DRIVER_TOUR_PACK_ROOTS.tombstones}/${pack.departureKey}`] = null;
     } else {
@@ -349,6 +351,26 @@ async function finalizeRun({ database, now, body }) {
   assertWriteRoots(updates);
   await database.ref('/').update(updates);
   return result;
+}
+
+// This is deliberately a separate root from ingestion metadata. It is the
+// only Driver Tour Pack publication data readable by operations admins and is
+// constrained to fields needed for dispatch, never operational payloads.
+function buildAdminStatus(pack, runId) {
+  return {
+    schemaVersion: pack.schemaVersion,
+    departureKey: pack.departureKey,
+    tourId: pack.tourId,
+    tourCode: pack.tourCode,
+    dateISO: pack.dateISO,
+    status: pack.status,
+    qualityState: pack.quality.state,
+    revision: pack.revision,
+    publishedAtMs: pack.publishedAtMs,
+    expiresAtMs: pack.expiresAtMs,
+    sourceSnapshotDate: pack.sourceSnapshotDate,
+    runId,
+  };
 }
 
 function normalizeBeginRequest(body) {
@@ -628,4 +650,5 @@ module.exports = {
   fingerprintPackBatch,
   hashValue,
   assertWriteRoots,
+  buildAdminStatus,
 };

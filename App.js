@@ -17,6 +17,7 @@ import offlineLoginResolver from './services/offlineLoginResolver';
 import driverOperationalLifecycleService from './services/driverOperationalLifecycleService';
 import driverTourPackService from './services/driverTourPackService';
 import useDriverTourPack from './hooks/useDriverTourPack';
+import useDriverTourPackFeatureFlag from './hooks/useDriverTourPackFeatureFlag';
 import { getCanonicalIdentity, resolveAuthScopedUserId, toRealtimeKeySegment } from './services/identityService';
 import { normalizeTourId, resolveTourId } from './services/tourIdentityService';
 import { parseTimestampMs } from './services/timeUtils';
@@ -49,6 +50,7 @@ import DriverHomeScreen from './screens/DriverHomeScreen';
 import PassengerManifestScreen from './screens/PassengerManifestScreen';
 import SafetySupportScreen from './screens/SafetySupportScreen';
 import DriverItineraryScreen from './screens/DriverItineraryScreen';
+import DriverTourPackScreen from './screens/DriverTourPackScreen';
 const { getLoginTransitionDurationMs } = require('./screens/loginFlow');
 const { isEligibleEdgeSwipe, shouldCommitEdgeSwipeHome } = require('./services/swipeHomeNavigation');
 const { markNotificationRead } = require('./services/notificationInboxService');
@@ -262,6 +264,13 @@ function AppContent() {
   const driverTourPackState = useDriverTourPack(driverOperationalScope || {}, {
     enabled: Boolean(driverOperationalScope),
   });
+  const driverTourPackFeature = useDriverTourPackFeatureFlag(isDriverSession ? bookingData?.id : null);
+  useEffect(() => {
+    if (currentScreen !== 'DriverTourPack' || driverTourPackFeature.loading || driverTourPackFeature.enabled) return;
+    setCurrentScreen('DriverHome');
+    setScreenParams({});
+    SessionStorage.setItem(SESSION_KEYS.LAST_SCREEN, 'DriverHome').catch(() => undefined);
+  }, [currentScreen, driverTourPackFeature.enabled, driverTourPackFeature.loading]);
   const currentDriverLifecycleScope = useMemo(() => (
     isDriverSession && diagnosticsTourId
       ? {
@@ -1636,8 +1645,24 @@ function AppContent() {
             onLogout={handleLogout}
             onNavigate={navigateTo} // Pass navigation prop
             onDriverAssignmentChange={handleDriverAssignmentChange}
+            driverTourPackState={driverTourPackState}
+            driverTourPackFeature={driverTourPackFeature}
           />
         );
+      case 'DriverTourPack':
+        if (!driverTourPackFeature.enabled) {
+          return (
+            <DriverHomeScreen
+              driverData={bookingData}
+              onLogout={handleLogout}
+              onNavigate={navigateTo}
+              onDriverAssignmentChange={handleDriverAssignmentChange}
+              driverTourPackState={driverTourPackState}
+              driverTourPackFeature={driverTourPackFeature}
+            />
+          );
+        }
+        return <DriverTourPackScreen packState={driverTourPackState} tourData={tourData} driverData={bookingData} onBack={() => navigateTo('DriverHome')} onNavigate={navigateTo} />;
       case 'SafetySupport':
         return (
           <SafetySupportScreen
@@ -1668,7 +1693,7 @@ function AppContent() {
             // 2. Mock the 'navigation' object so the screen's logic works without changing it
             navigation={{
               navigate: navigateTo,
-              goBack: () => navigateTo('DriverHome') // Ensure back button returns to Driver Console
+              goBack: () => navigateTo(screenParams?.from || 'DriverHome')
             }}
           />
         );
@@ -1770,7 +1795,8 @@ case 'Itinerary':
       case 'Map':
         // Use active tour ID if passed, else fall back to session data
         const mapTourId = resolveTourId(screenParams.tourId, tourData?.id, tourData?.tourCode);
-        return <MapScreen {...screenProps} onBack={() => navigateTo('TourHome')} tourId={mapTourId} tourData={tourData} />;
+        const mapReturnTarget = screenParams?.from || (isDriverSession ? 'DriverHome' : 'TourHome');
+        return <MapScreen {...screenProps} onBack={() => navigateTo(mapReturnTarget)} tourId={mapTourId} tourData={tourData} />;
       case 'NotificationPreferences':
         const notificationReturnTarget = screenParams?.returnTo || (isDriverSession ? 'DriverHome' : 'TourHome');
         const notificationPreferencesUserId = resolveAuthScopedUserId({

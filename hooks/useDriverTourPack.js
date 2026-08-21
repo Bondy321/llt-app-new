@@ -61,6 +61,18 @@ export default function useDriverTourPack(scope, { service = driverTourPackServi
     })().catch((error) => { if (token === generation.current) setState((p) => p.pack ? { ...p, error: error?.message || String(error), loading: false } : { ...p, state: 'failed', error: error?.message || String(error), loading: false }); });
     return () => { generation.current += 1; unsubscribe?.(); };
   }, [enabled, normalized, service]);
+  useEffect(() => {
+    if (!state.pack) return undefined;
+    const updateFreshness = () => {
+      const next = getDriverTourPackFreshness(state.pack);
+      setState((previous) => previous.pack === state.pack && previous.state !== next.state
+        ? { ...previous, state: next.state }
+        : previous);
+    };
+    updateFreshness();
+    const timer = setInterval(updateFreshness, 30 * 1000);
+    return () => clearInterval(timer);
+  }, [state.pack]);
   const purge = useCallback(() => normalized.ok ? service.purge(normalized) : Promise.resolve({ success: false, error: normalized.reason }), [normalized, service]);
   return { ...state, freshness: state.pack ? getDriverTourPackFreshness(state.pack) : { state: state.state }, refresh, purge, scope: normalized.ok ? normalized : null };
 }

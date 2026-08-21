@@ -429,6 +429,12 @@ test('changed content increments revision and explicit tombstones remove operati
   assert.equal(database.state.driver_tour_packs[departureKey].status, 'cancelled');
   assert.deepEqual(database.state.driver_tour_packs[departureKey].passengers, {});
   assert.equal(database.state.driver_tour_pack_tombstones[departureKey].status, 'cancelled');
+  assert.deepEqual(database.state.driver_tour_pack_admin_status[departureKey], {
+    schemaVersion: 1, departureKey, tourId: '5001D_1', tourCode: '5001D 1', dateISO: '2026-09-10',
+    status: 'cancelled', qualityState: 'complete', revision: 3,
+    publishedAtMs: cancelled.materialized.publishedAtMs, expiresAtMs: tombstone.expiresAtMs,
+    sourceSnapshotDate: tombstone.sourceSnapshotDate, runId: 'run_003',
+  });
 });
 
 test('tombstones fail closed if any coach, contact, itinerary, or tour text remains', () => {

@@ -20,6 +20,29 @@
       ".read": false,
       ".write": false
     },
+    "driver_tour_pack_admin_status": {
+      ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+      ".write": false,
+      ".indexOn": ["publishedAtMs"]
+    },
+    "driver_tour_pack_feature_flags": {
+      ".read": false,
+      ".write": false,
+      "global": {
+        ".read": "auth != null",
+        ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+        ".validate": "!newData.exists() || newData.isBoolean()"
+      },
+      "drivers": {
+        ".read": false,
+        ".write": false,
+        "$driverId": {
+          ".read": "auth != null && root.child('users/' + auth.uid + '/driverId').val() === $driverId && root.child('drivers/' + $driverId + '/authUid').val() === auth.uid",
+          ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+          ".validate": "!newData.exists() || newData.isBoolean()"
+        }
+      }
+    },
     "driver_tour_pack_actions": {
       ".read": false,
       ".write": false,

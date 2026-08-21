@@ -52,13 +52,15 @@ test('expiry cleanup removes only expired operational packs/actions and writes a
   const database = createMockDatabase({
     driver_tour_packs: {
       [expiredKey]: {
-        schemaVersion: 1, departureKey: expiredKey, tourId: 'TOUR_1', dateISO: '2027-01-01',
+        schemaVersion: 1, departureKey: expiredKey, tourId: 'TOUR_1', tourCode: 'TOUR 1', dateISO: '2027-01-01',
+        sourceSnapshotDate: '2026-12-31', publishedAtMs: nowMs - 2, quality: { state: 'complete' },
         revision: 4, expiresAtMs: nowMs - 1, passengers: { pax: { name: 'Private name' } },
       },
       [liveKey]: { schemaVersion: 1, departureKey: liveKey, tourId: 'TOUR_2', dateISO: '2027-01-02', revision: 1, expiresAtMs: nowMs + 1 },
     },
     driver_tour_pack_actions: { [expiredKey]: { 'D-1': { issues: { secret: true } } } },
     driver_tour_pack_ingestion: { packMetadata: { [expiredKey]: { contentFingerprint: 'sha256:deadbeef' } } },
+    driver_tour_pack_admin_status: { [expiredKey]: { departureKey: expiredKey, status: 'active' } },
   });
 
   const result = await cleanupExpiredDriverTourPacks({ database, nowMs });
@@ -66,6 +68,11 @@ test('expiry cleanup removes only expired operational packs/actions and writes a
   assert.equal(database.state.driver_tour_packs[expiredKey], undefined);
   assert.equal(database.state.driver_tour_pack_actions[expiredKey], undefined);
   assert.equal(database.state.driver_tour_pack_ingestion.packMetadata[expiredKey], undefined);
+  assert.deepEqual(database.state.driver_tour_pack_admin_status[expiredKey], {
+    schemaVersion: 1, departureKey: expiredKey, tourId: 'TOUR_1', tourCode: 'TOUR 1', dateISO: '2027-01-01',
+    status: 'expired', qualityState: 'complete', revision: 4, publishedAtMs: nowMs - 2,
+    expiresAtMs: nowMs - 1, sourceSnapshotDate: '2026-12-31', purgedAtMs: nowMs,
+  });
   assert.deepEqual(database.state.driver_tour_pack_tombstones[expiredKey], {
     schemaVersion: 1, departureKey: expiredKey, tourId: 'TOUR_1', dateISO: '2027-01-01',
     status: 'expired', revision: 4, expiresAtMs: nowMs - 1, purgedAtMs: nowMs, reason: 'RETENTION_EXPIRED',

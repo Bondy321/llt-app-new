@@ -2,7 +2,7 @@
 
 Welcome, Agent. This file is the operational source of truth for contributors working in this repo. Keep it practical: update it whenever architecture, contracts, commands, or release assumptions materially change.
 
-Last updated: August 20, 2026
+Last updated: August 21, 2026
 
 ---
 
@@ -100,6 +100,7 @@ Core mobile screens:
 
 - `LoginScreen`, `TourHomeScreen`, `DriverHomeScreen`
 - `PassengerManifestScreen`
+- `DriverTourPackScreen` (feature-flagged Driver Command Centre)
 - `ItineraryScreen`, `DriverItineraryScreen`
 - `ChatScreen`
 - `MapScreen` plus `MapScreen.web.js`
@@ -147,6 +148,8 @@ Do not rename these Realtime Database roots without a full migration:
 - `driver_tour_pack_actions`
 - `driver_tour_pack_tombstones`
 - `driver_tour_pack_ingestion`
+- `driver_tour_pack_admin_status`
+- `driver_tour_pack_feature_flags`
 
 Admin UID hardcoded in rules:
 
@@ -998,6 +1001,9 @@ High-value contract tests to know:
 - `tests/functions.photoVariants.test.js`
 - `tests/driverTourPackPublisher.test.js`
 - `tests/driverTourPackBoundary.contract.test.js`
+- `tests/driverTourPackCommandCentre.test.js`
+- `tests/DriverTourPackScreen.behavior.test.js`
+- `web-admin/src/services/driverTourPackAdminStatusService.test.js`
 - `tests/firebaseRules/driverTourPacks.rules.test.js`
 - `tests/stableIdentity.integration.test.js`
 - `tests/validateBookingReference.passengerVerifier.test.js`
@@ -1226,6 +1232,7 @@ High-signal docs:
 - `docs/data-contracts/tour-identity.md`
 - `docs/data-contracts/driver-tour-pack-ingestion.md`
 - `docs/offline-tour-pack.md`
+- `docs/driver-command-centre-operations.md`
 - `docs/photo-upload-variant-contract.md`
 - `docs/reactions-write-contract.md`
 - `docs/safe-logging-conventions.md`

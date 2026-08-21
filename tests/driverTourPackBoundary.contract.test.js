@@ -41,13 +41,27 @@ test('the ingestion export is private to the exact management runtime service ac
   assert.doesNotMatch(source, /ingestDriverTourPacks[\s\S]{0,500}invoker:\s*["']public["']/);
 });
 
-test('the publisher code can write only pack, tombstone and ingestion roots', () => {
+test('the publisher code can write only pack, tombstone, ingestion and PII-free admin-status roots', () => {
   const source = fs.readFileSync(
     path.join(repositoryRoot, 'functions', 'lib', 'driverTourPackPublisher.js'),
     'utf8',
   );
   assert.match(source, /assertWriteRoots\(updates\)/);
+  assert.match(source, /adminStatus:\s*'driver_tour_pack_admin_status'/);
   assert.doesNotMatch(source, /(?:bookings|tour_manifests|booking_identities)\//);
+});
+
+test('the rollout flag denies listing and permits only exact coherent-driver canary reads', () => {
+  const rules = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'database.rules.json'), 'utf8')).rules;
+  const flags = rules.driver_tour_pack_feature_flags;
+  assert.equal(flags['.read'], false);
+  assert.equal(flags['.write'], false);
+  assert.equal(flags.drivers['.read'], false);
+  assert.match(flags.drivers.$driverId['.read'], /users\/.*driverId/);
+  assert.match(flags.drivers.$driverId['.read'], /drivers\/.*authUid/);
+  assert.match(flags.drivers.$driverId['.write'], /admin_users/);
+  assert.match(flags.global['.write'], /admin_users/);
+  assert.match(flags.global['.validate'], /isBoolean/);
 });
 
 test('expiry cleanup is bounded and only removes driver pack lifecycle roots', () => {

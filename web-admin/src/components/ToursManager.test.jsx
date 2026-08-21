@@ -15,6 +15,9 @@ vi.mock('../firebase', () => ({
 vi.mock('firebase/database', () => ({
   ref: (...args) => mockRef(...args),
   onValue: (...args) => mockOnValue(...args),
+  orderByChild: (path) => ({ type: 'orderByChild', path }),
+  limitToLast: (limit) => ({ type: 'limitToLast', limit }),
+  query: (dbRef, ...constraints) => ({ ...dbRef, constraints }),
 }));
 
 vi.mock('../services/tourService', () => ({
@@ -55,6 +58,7 @@ const buildTours = () => {
 const toursFixture = buildTours();
 const driversFixture = { D1: { name: 'Driver One' } };
 let currentToursFixture = toursFixture;
+let currentPackStatusFixture = {};
 
 function LocationSearchProbe() {
   const location = useLocation();
@@ -102,9 +106,13 @@ async function changeDateScope(container, label) {
 beforeEach(() => {
   mockRef.mockClear();
   currentToursFixture = toursFixture;
+  currentPackStatusFixture = {};
   mockOnValue.mockImplementation((dbRef, callback) => {
-    const value = dbRef.path === 'tours' ? currentToursFixture : driversFixture;
-    callback({ val: () => value });
+    const value = dbRef.path === 'tours'
+      ? currentToursFixture
+      : dbRef.path === 'drivers' ? driversFixture
+        : dbRef.path === 'driver_tour_pack_admin_status' ? currentPackStatusFixture : {};
+    callback({ val: () => value, size: Object.keys(value).length });
     return vi.fn();
   });
 });
@@ -178,6 +186,28 @@ describe('ToursManager query-param status behavior', () => {
       expect(screen.getByTestId('location-search')).toHaveTextContent('?status=unassigned&q=TC-13');
     }, { timeout: asyncAssertionTimeoutMs });
     expect(screen.getByText('Showing 1 of 1 tours')).toBeInTheDocument();
+  }, 15000);
+
+  it('shows exact departure pack readiness, revision and publication time beside the tour', async () => {
+    currentPackStatusFixture = {
+      '2099-01-01::TOUR_1': {
+        schemaVersion: 1,
+        departureKey: '2099-01-01::TOUR_1',
+        tourId: 'TOUR_1',
+        tourCode: 'TC-1',
+        dateISO: '2099-01-01',
+        status: 'active',
+        qualityState: 'complete',
+        revision: 5,
+        publishedAtMs: 4_071_004_800_000,
+        expiresAtMs: 4_071_091_200_000,
+        sourceSnapshotDate: '2098-12-31',
+        runId: 'run_1',
+      },
+    };
+    renderAt('?q=Tour%201');
+    expect(await screen.findByText('Pack ready', {}, { timeout: asyncAssertionTimeoutMs })).toBeInTheDocument();
+    expect(screen.getByText(/Rev 5/)).toBeInTheDocument();
   }, 15000);
 
   it('filters finished tours out by default', async () => {

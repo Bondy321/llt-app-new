@@ -25,6 +25,11 @@ Driver Tour Pack reader
   -> strict full-pack validator
   -> identity-scoped atomic replacement cache
 
+Driver Command Centre rollout
+  -> exact global + coherent-own-driver feature-flag listeners
+  -> fail closed on missing/denied/malformed state
+  -> validated Tour Pack facts + authoritative cached/live manifest status
+
 Passenger manifest
   -> getTourManifest (schemaVersion=1, complete=true)
   -> identity-scoped complete snapshot cache
@@ -83,6 +88,14 @@ Driver logout, driver identity change, reassignment, assignment validation failu
 `getTourManifest` returns an explicit `schemaVersion: 1` and `complete: true`. Only such a non-empty, internally consistent response can atomically replace the driver manifest cache. Unknown fields are dropped by construction and stats are recomputed locally. A partial, empty, malformed, duplicate-booking, failed, or wrong-tour response cannot replace a valid snapshot.
 
 The Passenger Manifest screen renders a valid snapshot before attempting the network, so an airplane-mode cold start can show the complete manifest. Offline boarding changes are patched into that snapshot only after the existing durable `MANIFEST_UPDATE` queue accepts them. Reconciliation and server writes still target `tour_manifests`; the cache is never a second authority.
+
+The Driver Command Centre follows the same cache-first rule. It shows a complete cached manifest immediately, then caches a strictly validated live manifest before replacing the visible copy. Its People, pickup-progress and seat-state views derive `Pending`, `Boarded` and `No-show` only from that manifest. Report-only discrepancies add `Unmatched` or `Conflict`; they never rewrite boarding state.
+
+## Command Centre rollout flag
+
+The feature is hidden unless either `driver_tour_pack_feature_flags/global` is boolean `true` or the coherent signed-in driver's exact `driver_tour_pack_feature_flags/drivers/{driverId}` leaf is boolean `true`. The client listens to those two leaves only. It never lists the cohort. A missing value, invalid driver ID, permission failure or listener failure disables the feature immediately, and disabling the flag while the screen is open returns the driver to Driver Home.
+
+Only operations admins may write boolean flag leaves. The per-driver leaf is readable only when `users/{authUid}/driverId` and `drivers/{driverId}/authUid` agree. This is a rollout control, not authorization to a pack; Gate 6 assignment rules still independently protect every pack read.
 
 ## Queue action types
 
@@ -164,3 +177,5 @@ Never build per-screen ad-hoc summary strings.
 7. Cache a complete driver manifest, force-close, enable airplane mode, and verify a cold start shows every cached booking.
 8. Reassign a driver while the previous pack is open and verify the old listener, caches, and queued operational actions are removed without touching the new scope.
 9. Expire and withdraw a pack and verify cached PII is removed immediately while boarding authority remains unchanged.
+10. Enable one driver canary, verify no other driver can read/list that cohort, then disable it while the Command Centre is open and verify immediate rollback to Driver Home.
+11. Compare Run/People/seat states with `tour_manifests`, board offline, and verify the Command Centre uses the updated complete manifest snapshot without changing report facts.

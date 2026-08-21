@@ -8,6 +8,7 @@ const PACKS_ROOT = 'driver_tour_packs';
 const ACTIONS_ROOT = 'driver_tour_pack_actions';
 const TOMBSTONES_ROOT = 'driver_tour_pack_tombstones';
 const INGESTION_ROOT = 'driver_tour_pack_ingestion';
+const ADMIN_STATUS_ROOT = 'driver_tour_pack_admin_status';
 
 /**
  * Removes expired operational payloads in small, idempotent batches.  The
@@ -39,6 +40,7 @@ async function cleanupExpiredDriverTourPacks({
     updates[`${PACKS_ROOT}/${departureKey}`] = null;
     updates[`${ACTIONS_ROOT}/${departureKey}`] = null;
     updates[`${INGESTION_ROOT}/packMetadata/${departureKey}`] = null;
+    updates[`${ADMIN_STATUS_ROOT}/${departureKey}`] = buildExpiryAdminStatus(pack, nowMs);
     updates[`${TOMBSTONES_ROOT}/${departureKey}`] = buildExpiryTombstone(pack, nowMs);
     removed += 1;
   });
@@ -50,6 +52,23 @@ async function cleanupExpiredDriverTourPacks({
     removed,
     hasMore: Object.keys(candidates).length >= limit,
     cleanedAtMs: nowMs,
+  };
+}
+
+function buildExpiryAdminStatus(pack, purgedAtMs) {
+  return {
+    schemaVersion: Number.isSafeInteger(pack.schemaVersion) ? pack.schemaVersion : 1,
+    departureKey: pack.departureKey,
+    tourId: pack.tourId,
+    tourCode: pack.tourCode,
+    dateISO: pack.dateISO,
+    status: 'expired',
+    qualityState: pack.quality?.state === 'degraded' ? 'degraded' : 'complete',
+    revision: Number.isSafeInteger(pack.revision) ? pack.revision : 1,
+    publishedAtMs: Number.isSafeInteger(pack.publishedAtMs) ? pack.publishedAtMs : 0,
+    expiresAtMs: pack.expiresAtMs,
+    sourceSnapshotDate: pack.sourceSnapshotDate,
+    purgedAtMs,
   };
 }
 
@@ -86,4 +105,5 @@ module.exports = {
   cleanupExpiredDriverTourPacks,
   isExpiredPack,
   buildExpiryTombstone,
+  buildExpiryAdminStatus,
 };

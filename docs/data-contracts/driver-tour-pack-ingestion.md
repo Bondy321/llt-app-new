@@ -25,6 +25,7 @@ Optional server-only environment overrides are `DRIVER_TOUR_PACK_AUDIENCE` and `
 driver_tour_packs/{departureKey}
 driver_tour_pack_actions/{departureKey}/{driverId}
 driver_tour_pack_tombstones/{departureKey}
+driver_tour_pack_admin_status/{departureKey}
 driver_tour_pack_ingestion/activeRun
 driver_tour_pack_ingestion/runs/{runId}
 driver_tour_pack_ingestion/staging/{runId}
@@ -32,7 +33,9 @@ driver_tour_pack_ingestion/packMetadata/{departureKey}
 driver_tour_pack_ingestion/latestSuccessfulRun
 ```
 
-`departureKey` is `YYYY-MM-DD::NORMALIZED_TOUR_ID`. Gate 5 rules denied every client read and write. Gate 6 permits a read of exactly one `driver_tour_packs/{departureKey}` leaf only when all three independent records agree:
+`departureKey` is `YYYY-MM-DD::NORMALIZED_TOUR_ID`. `driver_tour_pack_admin_status` is a separate, server-written, PII-free status index for Gate 9. Only operations admins may list/read it; no client may write it. Its fixed allowlist is identity (`departureKey`, `tourId`, `tourCode`, `dateISO`), `status`, `qualityState`, revision/publication/expiry/source-snapshot timing and run ID. It must never contain counts, fingerprints, passenger data or any operational pack section. The expiry job replaces an expired entry with the same PII-free lifecycle metadata.
+
+Gate 5 rules denied every client read and write. Gate 6 permits a read of exactly one `driver_tour_packs/{departureKey}` leaf only when all three independent records agree:
 
 1. `users/{authUid}/driverId` exists;
 2. `drivers/{driverId}/authUid === authUid`;
@@ -44,11 +47,11 @@ Rules also require `expiresAtMs > now` for source-pack reads and action writes. 
 
 `driver_tour_pack_actions` is deliberately separate from the publisher roots. An assigned driver may read/write only their own exact action leaf under a readable assigned pack. Gate 6 exposes only acknowledgement plus pickup/service progress leaves; pickup and service keys must already exist in the bounded source pack, so they cannot be expanded beyond projection limits. All writes are leaf-only so RTDB can deny every unknown path; callers must not replace an action object. Invalid enum values and timestamps more than five minutes in the future are denied. Structured issue reports remain server-closed until Gate 10 defines their final workflow and notification contract. Actions cannot be written beneath a different driver ID.
 
-The publisher module asserts that its final multi-location update contains only the three root families above. It has no code path for `tours`, `bookings`, `booking_identities`, `tour_manifests`, driver actions, chat or photos.
+The publisher module asserts that its final multi-location update contains only the Driver Tour Pack, tombstone, ingestion-audit and PII-free admin-status root families above. It has no code path for `tours`, `bookings`, `booking_identities`, `tour_manifests`, driver actions, chat or photos.
 
 ## Retention and expiry cleanup
 
-`expiresAtMs` is the authoritative retention deadline. `cleanupExpiredDriverTourPacks` is a Gen 2 scheduled Function in `europe-west1`, every six hours. It uses the server-only `expiresAtMs` index and handles no more than 50 expired packs per invocation. For each eligible pack it atomically removes the full pack, all driver action state, and the publisher metadata index, then writes a PII-free `RETENTION_EXPIRED` tombstone containing only departure identity, revision and timing.
+`expiresAtMs` is the authoritative retention deadline. `cleanupExpiredDriverTourPacks` is a Gen 2 scheduled Function in `europe-west1`, every six hours. It uses the server-only `expiresAtMs` index and handles no more than 50 expired packs per invocation. For each eligible pack it atomically removes the full pack, all driver action state, and the publisher metadata index, then writes a PII-free `RETENTION_EXPIRED` tombstone and replaces the admin-status entry with an `expired` lifecycle record.
 
 The operation is retry-safe: after the pack node is gone it cannot be selected again. Removing metadata means an otherwise-identical future republish is treated as a fresh source pack rather than an unsafe no-op. The cleanup never accesses bookings, manifests, passengers or identity roots.
 

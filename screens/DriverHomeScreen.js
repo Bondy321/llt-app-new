@@ -59,7 +59,7 @@ const minimalMapStyle = [
 
 const AUTO_SHARE_INTERVAL_MS = 3 * 60 * 1000;
 
-export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onDriverAssignmentChange }) {
+export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onDriverAssignmentChange, driverTourPackState, driverTourPackFeature }) {
   const [updatingLocation, setUpdatingLocation] = useState(false);
   const [lastLocationUpdate, setLastLocationUpdate] = useState(null);
   const [locationAccuracy, setLocationAccuracy] = useState(null);
@@ -1122,6 +1122,22 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
 
             {/* Secondary Actions */}
             <View style={styles.stackButtons}>
+              {driverTourPackFeature?.enabled && Boolean(activeTourId) && (
+                <TouchableOpacity
+                  style={[styles.wideButton, styles.infoButton]}
+                  onPress={() => onNavigate('DriverTourPack', { tourId: activeTourId, from: 'DriverHome', isDriver: true })}
+                  activeOpacity={0.9}
+                  accessibilityLabel={`Open Driver Command Centre. ${driverTourPackState?.state || 'pack status unavailable'}`}
+                  accessibilityRole="button"
+                >
+                  <MaterialCommunityIcons name="briefcase-account-outline" size={22} color={COLORS.primary} style={{ marginRight: 10 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.wideTitle}>Driver Command Centre</Text>
+                    <Text style={styles.wideSubtitle}>{driverTourPackState?.state === 'ready' ? 'Tour pack ready offline' : 'Open operational tour pack'}</Text>
+                  </View>
+                  <MaterialCommunityIcons name="chevron-right" size={20} color={COLORS.primary} />
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
                 style={[styles.wideButton, styles.outlineButton]}
                 onPress={handleOpenDriverChat}

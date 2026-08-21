@@ -65,12 +65,24 @@ test.before(async () => {
       },
       driver_tour_pack_tombstones: { [DEPARTURE_KEY]: { status: 'expired' } },
       driver_tour_pack_ingestion: { latestSuccessfulRun: { runId: 'server-owned-run' } },
+      driver_tour_pack_admin_status: {
+        [DEPARTURE_KEY]: {
+          schemaVersion: 1, departureKey: DEPARTURE_KEY, tourId: '5001D_1', tourCode: '5001D 1',
+          dateISO: '2026-09-10', status: 'active', qualityState: 'complete', revision: 1,
+          publishedAtMs: Date.now(), expiresAtMs: Date.now() + 60_000, sourceSnapshotDate: '2026-08-20', runId: 'server-owned-run',
+        },
+      },
+      driver_tour_pack_feature_flags: {
+        global: false,
+        drivers: { [DRIVER_ID]: true, 'D-OTHER': false },
+      },
       users: {
         [DRIVER_UID]: { driverId: DRIVER_ID },
         'forged-driver': { driverId: DRIVER_ID },
         'stale-driver': { driverId: 'D-STALE' },
         'other-driver': { driverId: 'D-OTHER' },
       },
+      admin_users: { 'allowlisted-admin': true },
       drivers: {
         [DRIVER_ID]: { authUid: DRIVER_UID },
         'D-STALE': { authUid: 'stale-driver' },
@@ -116,6 +128,47 @@ test('clients can never write source packs or read server-only ingestion and tom
     await assertFails(db.ref('driver_tour_pack_ingestion/latestSuccessfulRun').get());
     await assertFails(db.ref('driver_tour_pack_ingestion/latestSuccessfulRun').set({ forged: true }));
   }
+});
+
+test('only operations admins can list the PII-free driver Tour Pack admin status index', async () => {
+  const primaryAdmin = testEnv.authenticatedContext('9CWQ4705gVRkfW5Xki5LyvrmVp23').database(databaseURL);
+  await assertSucceeds(primaryAdmin.ref('driver_tour_pack_admin_status').get());
+  await assertSucceeds(primaryAdmin.ref(`driver_tour_pack_admin_status/${DEPARTURE_KEY}`).get());
+  await assertFails(primaryAdmin.ref(`driver_tour_pack_admin_status/${DEPARTURE_KEY}`).set({ forged: true }));
+  await assertSucceeds(testEnv.authenticatedContext('allowlisted-admin').database(databaseURL)
+    .ref('driver_tour_pack_admin_status').get());
+
+  for (const uid of [DRIVER_UID, 'passenger', 'forged-driver']) {
+    await assertFails(testEnv.authenticatedContext(uid).database(databaseURL).ref('driver_tour_pack_admin_status').get());
+  }
+  await assertFails(testEnv.unauthenticatedContext().database(databaseURL).ref('driver_tour_pack_admin_status').get());
+});
+
+test('feature flags are exact-read, coherent-driver canaries with admin-only boolean writes', async () => {
+  const assigned = testEnv.authenticatedContext(DRIVER_UID).database(databaseURL);
+  const other = testEnv.authenticatedContext('other-driver').database(databaseURL);
+  const passenger = testEnv.authenticatedContext('passenger').database(databaseURL);
+  const forged = testEnv.authenticatedContext('forged-driver').database(databaseURL);
+  const primaryAdmin = testEnv.authenticatedContext('9CWQ4705gVRkfW5Xki5LyvrmVp23').database(databaseURL);
+  const allowlistedAdmin = testEnv.authenticatedContext('allowlisted-admin').database(databaseURL);
+
+  await assertSucceeds(assigned.ref('driver_tour_pack_feature_flags/global').get());
+  await assertSucceeds(passenger.ref('driver_tour_pack_feature_flags/global').get());
+  await assertSucceeds(assigned.ref(`driver_tour_pack_feature_flags/drivers/${DRIVER_ID}`).get());
+  await assertSucceeds(other.ref('driver_tour_pack_feature_flags/drivers/D-OTHER').get());
+  await assertFails(assigned.ref('driver_tour_pack_feature_flags').get());
+  await assertFails(assigned.ref('driver_tour_pack_feature_flags/drivers').get());
+  await assertFails(assigned.ref('driver_tour_pack_feature_flags/drivers/D-OTHER').get());
+  await assertFails(passenger.ref(`driver_tour_pack_feature_flags/drivers/${DRIVER_ID}`).get());
+  await assertFails(forged.ref(`driver_tour_pack_feature_flags/drivers/${DRIVER_ID}`).get());
+  await assertFails(testEnv.unauthenticatedContext().database(databaseURL)
+    .ref('driver_tour_pack_feature_flags/global').get());
+
+  await assertSucceeds(primaryAdmin.ref('driver_tour_pack_feature_flags/global').set(true));
+  await assertSucceeds(allowlistedAdmin.ref(`driver_tour_pack_feature_flags/drivers/${DRIVER_ID}`).set(false));
+  await assertFails(primaryAdmin.ref('driver_tour_pack_feature_flags/global').set({ enabled: true }));
+  await assertFails(assigned.ref('driver_tour_pack_feature_flags/global').set(false));
+  await assertFails(assigned.ref(`driver_tour_pack_feature_flags/drivers/${DRIVER_ID}`).set(true));
 });
 
 test('driver action writes are exact-principal, bounded, closed-schema records', async () => {

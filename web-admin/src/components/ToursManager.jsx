@@ -134,7 +134,12 @@ import {
   formatDateForDisplay,
   formatDateRangeForDisplay,
   getCurrentISODateStamp,
+  formatDateTimeForDisplay,
 } from '../utils/dateUtils';
+import {
+  buildTourPackCoverage,
+  subscribeToDriverTourPackAdminStatuses,
+} from '../services/driverTourPackAdminStatusService';
 
 const getIsoDateFieldError = (value, fieldLabel) => {
   const parsed = parseISODateStrict(value);
@@ -165,7 +170,34 @@ const hasTourFinished = (tour, today = getTodayAtNoon()) => {
 };
 
 // Tour Card Component for grid view
-function TourCard({ tourId, tour, drivers, onEdit, onDelete, onDuplicate, onViewDetails, onAddPassenger }) {
+const PACK_STATUS_COLOR = {
+  ready: 'green', degraded: 'yellow', stale: 'orange', cancelled: 'red', withdrawn: 'red', expired: 'gray', missing: 'gray', ambiguous: 'orange',
+};
+
+function TourPackStatus({ coverage }) {
+  const pack = coverage?.pack || { state: 'missing' };
+  const label = pack.state === 'ready' ? 'Pack ready' : pack.state === 'degraded' ? 'Pack degraded' : pack.state === 'missing' ? 'Pack unavailable' : `Pack ${pack.state}`;
+  const assignment = coverage?.assignmentCoverage === 'covered'
+    ? 'Assigned driver covered'
+    : coverage?.assignmentCoverage === 'uncovered'
+      ? 'Assigned driver has no usable pack'
+      : coverage?.assignmentCoverage === 'inconsistent'
+        ? 'Driver assignment links conflict'
+        : coverage?.assignmentCoverage === 'legacy'
+          ? 'Driver name is not a canonical assignment'
+          : 'No driver assigned';
+  return (
+    <Stack gap={3}>
+      <Tooltip label={pack.reason || `Revision ${pack.revision || '—'} · last publication ${formatDateTimeForDisplay(pack.publishedAtMs, 'unknown')}`}>
+        <Badge variant="light" color={PACK_STATUS_COLOR[pack.state] || 'gray'}>{label}</Badge>
+      </Tooltip>
+      <Text size="xs" c={['uncovered', 'inconsistent', 'legacy'].includes(coverage?.assignmentCoverage) ? 'red' : 'dimmed'}>{assignment}</Text>
+      {pack.revision ? <Text size="xs" c="dimmed">Rev {pack.revision} · {formatDateTimeForDisplay(pack.publishedAtMs, 'unknown')}</Text> : null}
+    </Stack>
+  );
+}
+
+function TourCard({ tourId, tour, drivers, packCoverage, onEdit, onDelete, onDuplicate, onViewDetails, onAddPassenger }) {
   const [assignModalOpened, { open: openAssignModal, close: closeAssignModal }] = useDisclosure(false);
   const [selectedDriver, setSelectedDriver] = useState('');
 
@@ -319,6 +351,7 @@ function TourCard({ tourId, tour, drivers, onEdit, onDelete, onDuplicate, onView
               </Text>
             </Group>
           )}
+          <TourPackStatus coverage={packCoverage} />
         </Stack>
 
         <Group grow>
@@ -1378,6 +1411,7 @@ export default function ToursManager() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [tours, setTours] = useState({});
   const [drivers, setDrivers] = useState({});
+  const [packStatusSnapshot, setPackStatusSnapshot] = useState({ statuses: {}, atLimit: false, limit: 0 });
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState('grid');
   const [currentPage, setCurrentPage] = useState(1);
@@ -1471,6 +1505,9 @@ export default function ToursManager() {
   useEffect(() => {
     const toursRef = ref(db, 'tours');
     const driversRef = ref(db, 'drivers');
+    const unsubPackStatuses = subscribeToDriverTourPackAdminStatuses(db, setPackStatusSnapshot, () => {
+      setSyncStatus('error');
+    });
 
     const unsubTours = onValue(toursRef, (snapshot) => {
       setTours(snapshot.val() || {});
@@ -1495,8 +1532,11 @@ export default function ToursManager() {
     return () => {
       unsubTours();
       unsubDrivers();
+      unsubPackStatuses();
     };
   }, []);
+
+  const packCoverageByTour = useMemo(() => buildTourPackCoverage({ tours, drivers, statuses: packStatusSnapshot.statuses }), [tours, drivers, packStatusSnapshot.statuses]);
 
   // Filter and search tours
   const filteredTours = useMemo(() => {
@@ -1829,6 +1869,11 @@ export default function ToursManager() {
       </Card>
 
       {/* Tours Display */}
+      {packStatusSnapshot.atLimit ? (
+        <Alert color="yellow" icon={<IconAlertCircle size={16} />} mb="md">
+          Driver Pack status view is capped at the most recent {packStatusSnapshot.limit} departures. Older tours may show Pack unavailable; use the management publication history before treating that as a current failure.
+        </Alert>
+      ) : null}
       {filteredTours.length === 0 ? (
         <Card shadow="sm" padding="xl" radius="md" withBorder>
           <Center>
@@ -1857,6 +1902,7 @@ export default function ToursManager() {
               tourId={id}
               tour={tour}
               drivers={drivers}
+              packCoverage={packCoverageByTour[id]}
               onEdit={handleEdit}
               onDelete={handleDelete}
               onDuplicate={handleDuplicate}
@@ -1878,6 +1924,7 @@ export default function ToursManager() {
                   <Table.Th>Driver</Table.Th>
                   <Table.Th>Capacity</Table.Th>
                   <Table.Th>Status</Table.Th>
+                  <Table.Th>Driver pack</Table.Th>
                   <Table.Th>Actions</Table.Th>
                 </Table.Tr>
               </Table.Thead>
@@ -1924,6 +1971,7 @@ export default function ToursManager() {
                           {tour.isActive ? 'Active' : 'Inactive'}
                         </Badge>
                       </Table.Td>
+                      <Table.Td><TourPackStatus coverage={packCoverageByTour[id]} /></Table.Td>
                       <Table.Td onClick={(e) => e.stopPropagation()}>
                         <Group gap="xs">
                           <Tooltip label="View Details">
