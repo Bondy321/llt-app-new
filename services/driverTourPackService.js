@@ -15,8 +15,9 @@ const cacheSegment = (value) => encodeURIComponent(clean(value));
 function isoDate(value) {
   const text = clean(value);
   let result = null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) result = text;
-  const uk = text.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const iso = text.match(/^(\d{4}-\d{2}-\d{2})(?:[ T]00:00:00(?:\.000)?Z?)?$/);
+  if (iso) result = iso[1];
+  const uk = text.match(/^(\d{2})\/(\d{2})\/(\d{4})(?: 00:00:00)?$/);
   if (uk) result = `${uk[3]}-${uk[2]}-${uk[1]}`;
   if (!result) return null;
   const [year, month, day] = result.split('-').map(Number);

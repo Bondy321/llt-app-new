@@ -66,6 +66,7 @@ test('client rehydrates only Firebase-omitted empty collection fields before val
 });
 test('exact departure identity uses explicit canonical keys or strict date plus normalized tour id', () => {
   assert.deepEqual(resolveExactDepartureKey({tourId:'5001d 1',startDate:'10/09/2026'}),{ok:true,departureKey:'2026-09-10::5001D_1',tourId:'5001D_1',dateISO:'2026-09-10',source:'derived'});
+  assert.deepEqual(resolveExactDepartureKey({tourId:'5312L 35',startDate:'21/08/2026 00:00:00'}),{ok:true,departureKey:'2026-08-21::5312L_35',tourId:'5312L_35',dateISO:'2026-08-21',source:'derived'});
   assert.equal(resolveExactDepartureKey({tourId:'5001D 1'}).ok,false);
   assert.equal(resolveExactDepartureKey({departureKey:'2026-09-10::5001D_1',tourId:'wrong'}).ok,false);
   assert.equal(resolveExactDepartureKey({tourId:'5001D 1',startDate:'31/02/2026'}).ok,false);
