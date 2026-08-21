@@ -151,17 +151,22 @@ async function uploadBatch({ database, now, body }) {
   await requireActiveLease(database, request.runId, now());
   let claimConflict = null;
   const claimResult = await database.ref(runPath).transaction((current) => {
-    if (!current || !['BEGUN', 'UPLOADING'].includes(current.status)) {
+    // RTDB transactions may invoke the updater once with an empty local cache before
+    // retrying with the authoritative server value. Seed that speculative pass with
+    // the run we just read; the server-side compare-and-set still resolves every
+    // concurrent batch against its current value before committing.
+    const currentRun = current || run;
+    if (!['BEGUN', 'UPLOADING'].includes(currentRun.status)) {
       claimConflict = 'RUN_NOT_OPEN';
       return undefined;
     }
     const batchKey = String(request.batchIndex);
-    const existingClaim = current.batchClaims?.[batchKey];
+    const existingClaim = currentRun.batchClaims?.[batchKey];
     if (existingClaim && existingClaim !== batchFingerprint) {
       claimConflict = 'BATCH_REPLAY_CONFLICT';
       return undefined;
     }
-    const departureClaims = { ...(current.departureClaims || {}) };
+    const departureClaims = { ...(currentRun.departureClaims || {}) };
     for (const pack of normalizedPacks) {
       const claimedBatch = departureClaims[pack.departureKey];
       if (claimedBatch !== undefined && claimedBatch !== request.batchIndex) {
@@ -171,10 +176,10 @@ async function uploadBatch({ database, now, body }) {
       departureClaims[pack.departureKey] = request.batchIndex;
     }
     return {
-      ...current,
+      ...currentRun,
       status: 'UPLOADING',
       updatedAtMs: now(),
-      batchClaims: { ...(current.batchClaims || {}), [batchKey]: batchFingerprint },
+      batchClaims: { ...(currentRun.batchClaims || {}), [batchKey]: batchFingerprint },
       departureClaims,
     };
   }, undefined, false);

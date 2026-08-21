@@ -145,8 +145,9 @@ function secondValidPack() {
   return pack;
 }
 
-function createMockDatabase(initialState = {}) {
+function createMockDatabase(initialState = {}, { initialNullTransactionPaths = [] } = {}) {
   const state = structuredClone(initialState);
+  const pendingInitialNullPaths = new Set(initialNullTransactionPaths);
   const partsFor = (path) => String(path || '').split('/').filter(Boolean);
   const read = (path) => partsFor(path).reduce((node, part) => node?.[part], state);
   const write = (path, value) => {
@@ -177,6 +178,10 @@ function createMockDatabase(initialState = {}) {
         },
         async transaction(updater) {
           const current = structuredClone(read(path) ?? null);
+          if (pendingInitialNullPaths.delete(path)) {
+            const speculative = updater(null);
+            if (speculative === undefined) return { committed: false, snapshot: snapshot(current) };
+          }
           const next = updater(current);
           if (next === undefined) return { committed: false, snapshot: snapshot(current) };
           write(path, next);
@@ -351,6 +356,24 @@ test('begin, bounded upload and finalize expose no partial pack and atomically m
   assert.equal(database.state.driver_tour_pack_ingestion.latestSuccessfulRun.runId, 'run_001');
   assert.deepEqual(database.state.driver_tour_pack_ingestion.staging, {});
   assert.equal(database.state.driver_tour_pack_ingestion.activeRun, undefined);
+});
+
+test('upload survives RTDB initial-null transaction callbacks without opening partial state', async () => {
+  const runPath = 'driver_tour_pack_ingestion/runs/run_initial_null';
+  const database = createMockDatabase({}, { initialNullTransactionPaths: [runPath] });
+  let nowMs = 1787227200000;
+  const publisher = createDriverTourPackPublisher({ database, now: () => nowMs++ });
+  const result = await beginUploadFinalize({
+    publisher,
+    pack: validPack(),
+    runId: 'run_initial_null',
+    startedAtMs: 1787227000000,
+  });
+
+  assert.equal(result.uploaded.idempotent, false);
+  assert.equal(result.finalized.counts.created, 1);
+  assert.equal(database.state.driver_tour_pack_ingestion.runs.run_initial_null.status, 'FINALIZED');
+  assert.equal(database.state.driver_tour_pack_ingestion.latestSuccessfulRun.runId, 'run_initial_null');
 });
 
 test('identical retries and identical later runs are idempotent without revision churn', async () => {
