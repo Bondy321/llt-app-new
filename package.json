@@ -46,6 +46,7 @@
     "build:preview": "eas build --profile preview --platform all --environment preview",
     "build:production": "eas build --profile production --platform all --environment production",
     "update:dev": "eas update --channel development --environment development",
+    "update:testflight": "cross-env EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT=true eas update --channel testflight --platform ios --environment production",
     "update:prod": "eas update --channel production --environment production"
   },
   "dependencies": {

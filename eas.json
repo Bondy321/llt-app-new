@@ -58,7 +58,7 @@
     "testflight": {
       "extends": "production",
       "environment": "production",
-      "channel": "production",
+      "channel": "testflight",
       "env": {
         "EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT": "true"
       }

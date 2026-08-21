@@ -62,7 +62,7 @@ The following areas still need confirmation before I would call the app fully pr
 - Firebase Functions and rules must be deployed in the correct order before the customer app is released: deploy Functions first, then Realtime Database/Storage rules, then publish the EAS update/build.
 - Storage object rules now require writes to include matching caller auth metadata, but signed-in object reads and signed download URLs still mean effective photo visibility is enforced primarily by Realtime Database metadata.
 
-The GitHub production EAS workflows install Java 21, run the targeted mobile OTA smoke suite, Functions script tests, Firebase emulator rules tests, validate Expo public env, sync EAS production env, and only then build or publish. Run the full mobile test suite before triggering production build, TestFlight, or OTA workflows when you need the broader release gate.
+The GitHub production binary workflows install Java 21, run mobile tests, Functions script tests, Firebase emulator rules tests, validate Expo public env, and sync EAS production env before building. The default `main` push workflow is deliberately limited to an iOS OTA on the isolated `testflight` channel and assumes the affected tests plus one final complete repository verification were green before merge. Production OTA publication remains manual.
 
 ## Native release metadata
 
