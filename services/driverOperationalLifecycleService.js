@@ -1,4 +1,5 @@
 const driverTourPackService = require('./driverTourPackService');
+const driverTourPackActionService = require('./driverTourPackActionService');
 const driverManifestCacheService = require('./driverManifestCacheService');
 const offlineSyncService = require('./offlineSyncService');
 const { normalizeTourId } = require('./tourIdentityService');
@@ -48,6 +49,7 @@ const normalizeDriverOperationalScope = ({
 
 function createDriverOperationalLifecycleService({
   driverPacks = driverTourPackService,
+  driverActions = driverTourPackActionService,
   manifests = driverManifestCacheService,
   offline = offlineSyncService,
 } = {}) {
@@ -65,6 +67,7 @@ function createDriverOperationalLifecycleService({
       manifest: () => manifests.purge({ tourId: scope.tourId, driverId: scope.driverId }),
       legacyTourPack: () => offline.purgeTourPack(scope.tourId, 'driver', { ownerId: scope.driverId }),
       ...(scope.packScope ? { driverTourPack: () => driverPacks.purge(scope.packScope) } : {}),
+      ...(scope.packScope ? { driverTourPackActions: () => driverActions.purge(scope.packScope) } : {}),
       ...(purgeQueuedActions ? { queuedActions: () => offline.purgeActionsForScope({ scope: scope.queueScope }) } : {}),
     };
 

@@ -1,5 +1,5 @@
 const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
-const isProductionBuild = process.env.EAS_BUILD_PROFILE === 'production';
+const isProductionBuild = ['production', 'testflight'].includes(process.env.EAS_BUILD_PROFILE);
 const devClientAutolinkingExclusions = [
   'expo-dev-client',
   'expo-dev-launcher',
@@ -21,7 +21,7 @@ module.exports = {
   expo: {
     name: 'LLT',
     slug: 'loch-lomond-travel',
-    version: '1.0.3',
+    version: '1.0.4',
     orientation: 'portrait',
     icon: './assets/images/outward_app_icon.png',
     userInterfaceStyle: 'light',

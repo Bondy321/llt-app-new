@@ -90,9 +90,9 @@ jobs:
         if: ${{ !inputs.eas_build_id }}
         run: npm --prefix functions ci
 
-      - name: Run mobile smoke tests
+      - name: Run complete mobile tests
         if: ${{ !inputs.eas_build_id }}
-        run: npm run test:mobile:ota
+        run: npm run test:mobile
 
       - name: Run Functions script tests
         if: ${{ !inputs.eas_build_id }}
@@ -167,7 +167,7 @@ jobs:
 
       - name: Verify EAS iOS version state
         if: ${{ !inputs.eas_build_id }}
-        run: eas build:version:get --platform ios --profile production --non-interactive
+        run: eas build:version:get --platform ios --profile testflight --non-interactive
 
       - name: Build production iOS binary
         id: eas-build
@@ -177,7 +177,7 @@ jobs:
           set -euo pipefail
 
           build_args=(
-            --profile production
+            --profile testflight
             --platform ios
             --non-interactive
             --wait

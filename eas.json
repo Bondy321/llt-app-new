@@ -54,6 +54,14 @@
         "buildType": "app-bundle"
       },
       "channel": "production"
+    },
+    "testflight": {
+      "extends": "production",
+      "environment": "production",
+      "channel": "production",
+      "env": {
+        "EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT": "true"
+      }
     }
   },
   "submit": {

@@ -9,6 +9,9 @@ const ACTIONS_ROOT = 'driver_tour_pack_actions';
 const TOMBSTONES_ROOT = 'driver_tour_pack_tombstones';
 const INGESTION_ROOT = 'driver_tour_pack_ingestion';
 const ADMIN_STATUS_ROOT = 'driver_tour_pack_admin_status';
+const CHANGES_ROOT = 'driver_tour_pack_changes';
+const PROGRESS_ROOT = 'driver_tour_pack_progress';
+const ISSUES_ROOT = 'driver_tour_pack_issues';
 
 /**
  * Removes expired operational payloads in small, idempotent batches.  The
@@ -35,10 +38,27 @@ async function cleanupExpiredDriverTourPacks({
   const updates = {};
   let removed = 0;
 
-  Object.entries(candidates).forEach(([departureKey, pack]) => {
-    if (!isExpiredPack(departureKey, pack, nowMs)) return;
+  const expiredEntries = Object.entries(candidates).filter(([departureKey, pack]) => (
+    isExpiredPack(departureKey, pack, nowMs)
+  ));
+  const actionSnapshots = await Promise.all(expiredEntries.map(async ([departureKey]) => {
+    const reference = database.ref(`${ACTIONS_ROOT}/${departureKey}`);
+    const actionSnapshot = typeof reference.get === 'function'
+      ? await reference.get()
+      : await reference.once('value');
+    return actionSnapshot?.val?.() || {};
+  }));
+
+  expiredEntries.forEach(([departureKey, pack], index) => {
     updates[`${PACKS_ROOT}/${departureKey}`] = null;
     updates[`${ACTIONS_ROOT}/${departureKey}`] = null;
+    updates[`${CHANGES_ROOT}/${departureKey}`] = null;
+    updates[`${PROGRESS_ROOT}/${departureKey}`] = null;
+    Object.values(actionSnapshots[index] || {}).forEach((driverActions) => {
+      Object.keys(driverActions?.issues || {}).forEach((issueId) => {
+        updates[`${ISSUES_ROOT}/${issueId}`] = null;
+      });
+    });
     updates[`${INGESTION_ROOT}/packMetadata/${departureKey}`] = null;
     updates[`${ADMIN_STATUS_ROOT}/${departureKey}`] = buildExpiryAdminStatus(pack, nowMs);
     updates[`${TOMBSTONES_ROOT}/${departureKey}`] = buildExpiryTombstone(pack, nowMs);

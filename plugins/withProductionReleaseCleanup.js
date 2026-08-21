@@ -2,6 +2,7 @@ const { withAndroidManifest, withGradleProperties, withInfoPlist } = require('@e
 
 const DEV_CLIENT_GRADLE_PROPERTY = 'EX_DEV_CLIENT_NETWORK_INSPECTOR';
 const SYSTEM_ALERT_WINDOW = 'android.permission.SYSTEM_ALERT_WINDOW';
+const STORE_BUILD_PROFILES = new Set(['production', 'testflight']);
 
 const removeAndroidPermission = (manifest, permissionName) => {
   const permissions = manifest?.manifest?.['uses-permission'];
@@ -15,7 +16,7 @@ const removeAndroidPermission = (manifest, permissionName) => {
 };
 
 const withProductionReleaseCleanup = (config) => {
-  if (process.env.EAS_BUILD_PROFILE !== 'production') {
+  if (!STORE_BUILD_PROFILES.has(process.env.EAS_BUILD_PROFILE)) {
     return config;
   }
 

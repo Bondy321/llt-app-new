@@ -140,6 +140,12 @@ import {
   buildTourPackCoverage,
   subscribeToDriverTourPackAdminStatuses,
 } from '../services/driverTourPackAdminStatusService';
+import {
+  buildDriverTourPackOperationsByTour,
+  departureKeyForTour,
+  subscribeToDriverTourPackOperations,
+  updateDriverTourPackIssueStatus,
+} from '../services/driverTourPackOperationsService';
 
 const getIsoDateFieldError = (value, fieldLabel) => {
   const parsed = parseISODateStrict(value);
@@ -197,7 +203,30 @@ function TourPackStatus({ coverage }) {
   );
 }
 
-function TourCard({ tourId, tour, drivers, packCoverage, onEdit, onDelete, onDuplicate, onViewDetails, onAddPassenger }) {
+function DriverPackOperations({ operations, onIssueStatus, updatingIssueId }) {
+  if (!operations || operations.state === 'missing') return null;
+  if (operations.state === 'ambiguous') return <Text size="xs" c="orange">Progress unavailable: {operations.reason}</Text>;
+  const progress = operations.progress || [];
+  const completedPickups = progress.reduce((total, item) => total + item.pickupCompleted, 0);
+  const pickupTotal = progress.reduce((total, item) => total + item.pickupTotal, 0);
+  const acknowledgementPending = progress.some((item) => !item.acknowledgementCurrent);
+  const openIssueCount = progress.reduce((total, item) => total + item.openIssueCount, 0);
+  return <Stack gap={4} mt={4}>
+    <Text size="xs" c={operations.state === 'stale' ? 'orange' : 'dimmed'}>
+      {operations.state === 'stale' ? 'Driver progress is stale' : `Pickup progress ${completedPickups}/${pickupTotal || 0}`}
+    </Text>
+    {acknowledgementPending ? <Text size="xs" c="orange">Published revision awaiting driver acknowledgement</Text> : null}
+    {openIssueCount ? <Text size="xs" c="red">{openIssueCount} open structured issue{openIssueCount === 1 ? '' : 's'}</Text> : null}
+    {operations.issues.map((issue) => <Group key={issue.issueId} gap="xs" wrap="nowrap">
+      <Badge size="xs" color={issue.severity === 'critical' ? 'red' : issue.severity === 'warning' ? 'orange' : 'yellow'}>{issue.category}</Badge>
+      <Text size="xs" style={{ flex: 1 }}>{issue.status.replace('_', ' ')}</Text>
+      {issue.status === 'open' ? <Button size="compact-xs" variant="light" loading={updatingIssueId === issue.issueId} onClick={() => onIssueStatus(issue, 'acknowledged')}>Acknowledge</Button> : null}
+      {issue.status !== 'resolved' ? <Button size="compact-xs" variant="subtle" loading={updatingIssueId === issue.issueId} onClick={() => onIssueStatus(issue, 'resolved')}>Resolve</Button> : null}
+    </Group>)}
+  </Stack>;
+}
+
+function TourCard({ tourId, tour, drivers, packCoverage, packOperations, onIssueStatus, updatingIssueId, onEdit, onDelete, onDuplicate, onViewDetails, onAddPassenger }) {
   const [assignModalOpened, { open: openAssignModal, close: closeAssignModal }] = useDisclosure(false);
   const [selectedDriver, setSelectedDriver] = useState('');
 
@@ -352,6 +381,7 @@ function TourCard({ tourId, tour, drivers, packCoverage, onEdit, onDelete, onDup
             </Group>
           )}
           <TourPackStatus coverage={packCoverage} />
+          <DriverPackOperations operations={packOperations} onIssueStatus={onIssueStatus} updatingIssueId={updatingIssueId} />
         </Stack>
 
         <Group grow>
@@ -1412,6 +1442,8 @@ export default function ToursManager() {
   const [tours, setTours] = useState({});
   const [drivers, setDrivers] = useState({});
   const [packStatusSnapshot, setPackStatusSnapshot] = useState({ statuses: {}, atLimit: false, limit: 0 });
+  const [packOperationsSnapshot, setPackOperationsSnapshot] = useState({ progress: {}, issues: {}, atLimit: false, limit: 0 });
+  const [updatingIssueId, setUpdatingIssueId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState('grid');
   const [currentPage, setCurrentPage] = useState(1);
@@ -1580,6 +1612,26 @@ export default function ToursManager() {
   const unassignedTours = totalTours - assignedTours;
   const activeTours = Object.values(tours).filter(t => t.isActive).length;
   const totalParticipants = Object.values(tours).reduce((sum, t) => sum + (t.currentParticipants || 0), 0);
+  const visibleDepartureKeys = useMemo(() => paginatedTours.map(([tourId, tour]) => departureKeyForTour(tourId, tour)).filter(Boolean), [paginatedTours]);
+  const visibleDepartureKeySignature = visibleDepartureKeys.join('|');
+  const packOperationsByTour = useMemo(() => buildDriverTourPackOperationsByTour({ tours, progress: packOperationsSnapshot.progress, issues: packOperationsSnapshot.issues }), [tours, packOperationsSnapshot.progress, packOperationsSnapshot.issues]);
+
+  useEffect(() => subscribeToDriverTourPackOperations(db, visibleDepartureKeySignature ? visibleDepartureKeySignature.split('|') : [], setPackOperationsSnapshot, () => {
+    setSyncStatus('error');
+  }), [visibleDepartureKeySignature]);
+
+  const handleIssueStatus = async (issue, status) => {
+    if (!issue || updatingIssueId) return;
+    setUpdatingIssueId(issue.issueId);
+    try {
+      await updateDriverTourPackIssueStatus(db, { departureKey: issue.departureKey, driverId: issue.driverId, issueId: issue.issueId, status });
+      notifications.show({ title: 'Driver issue updated', message: `Issue marked ${status.toLowerCase()}.`, color: 'green' });
+    } catch (error) {
+      notifications.show({ title: 'Issue update failed', message: error?.message || 'Could not update this driver issue.', color: 'red' });
+    } finally {
+      setUpdatingIssueId(null);
+    }
+  };
 
   // Modal handlers
   const handleEdit = (tourId) => {
@@ -1903,6 +1955,9 @@ export default function ToursManager() {
               tour={tour}
               drivers={drivers}
               packCoverage={packCoverageByTour[id]}
+              packOperations={packOperationsByTour[id]}
+              onIssueStatus={handleIssueStatus}
+              updatingIssueId={updatingIssueId}
               onEdit={handleEdit}
               onDelete={handleDelete}
               onDuplicate={handleDuplicate}
@@ -1925,6 +1980,7 @@ export default function ToursManager() {
                   <Table.Th>Capacity</Table.Th>
                   <Table.Th>Status</Table.Th>
                   <Table.Th>Driver pack</Table.Th>
+                  <Table.Th>Live operations</Table.Th>
                   <Table.Th>Actions</Table.Th>
                 </Table.Tr>
               </Table.Thead>
@@ -1972,6 +2028,7 @@ export default function ToursManager() {
                         </Badge>
                       </Table.Td>
                       <Table.Td><TourPackStatus coverage={packCoverageByTour[id]} /></Table.Td>
+                      <Table.Td><DriverPackOperations operations={packOperationsByTour[id]} onIssueStatus={handleIssueStatus} updatingIssueId={updatingIssueId} /></Table.Td>
                       <Table.Td onClick={(e) => e.stopPropagation()}>
                         <Group gap="xs">
                           <Tooltip label="View Details">

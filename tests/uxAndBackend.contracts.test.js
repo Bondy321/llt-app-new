@@ -601,7 +601,7 @@ test('Static contract: customer-facing date labels use strict shared timestamp p
 test('Static contract: native location permissions stay foreground-only', () => {
   const source = readText('app.config.js');
 
-  assert.match(source, /const isProductionBuild = process\.env\.EAS_BUILD_PROFILE === 'production';/);
+  assert.match(source, /const isProductionBuild = \['production', 'testflight'\]\.includes\(process\.env\.EAS_BUILD_PROFILE\);/);
   assert.match(source, /NSAppTransportSecurity: appTransportSecurity/);
   assert.match(source, /NSAllowsArbitraryLoads: false/);
   assert.match(source, /NSLocationWhenInUseUsageDescription/);
@@ -626,7 +626,7 @@ test('Static contract: production native config strips dev-client release metada
   assert.match(appConfigSource, /'expo-dev-menu'/);
   assert.match(appConfigSource, /'\.\/plugins\/withProductionReleaseCleanup'/);
 
-  assert.match(pluginSource, /process\.env\.EAS_BUILD_PROFILE !== 'production'/);
+  assert.match(pluginSource, /STORE_BUILD_PROFILES\.has\(process\.env\.EAS_BUILD_PROFILE\)/);
   assert.match(pluginSource, /delete pluginConfig\.modResults\.NSBonjourServices/);
   assert.match(pluginSource, /delete pluginConfig\.modResults\.NSLocalNetworkUsageDescription/);
   assert.match(pluginSource, /android\.permission\.SYSTEM_ALERT_WINDOW/);
@@ -677,7 +677,7 @@ test('Static contract: production EAS workflows gate release on mobile/backend v
 
   [
     ['.github/workflows/eas-build.yml', 'npm run test:mobile:ota'],
-    ['.github/workflows/eas-testflight.yml', 'npm run test:mobile:ota'],
+    ['.github/workflows/eas-testflight.yml', 'npm run test:mobile'],
     ['.github/workflows/eas-update.yml', 'npm run test:mobile:ota'],
   ].forEach(([relativePath, mobileTestCommand]) => {
     const source = readText(relativePath);

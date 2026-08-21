@@ -71,3 +71,26 @@ test('fails closed for invalid identity and listener errors', () => {
   assert.equal(states.at(-1).reason, 'UNAVAILABLE');
   assert.equal(errors.at(-1).message, 'permission denied');
 });
+
+test('TestFlight eligibility requires its independently revocable server flag', () => {
+  const db = createDatabase();
+  const service = createDriverTourPackFeatureFlagService({ getDatabase: () => db });
+  const states = [];
+  const unsubscribe = service.subscribe('D-BONDY', (state) => states.push(state), () => {}, { testflightEligible: true });
+
+  assert.deepEqual([...db.listeners.keys()].sort(), [
+    'driver_tour_pack_feature_flags/drivers/D-BONDY',
+    'driver_tour_pack_feature_flags/global',
+    'driver_tour_pack_feature_flags/testflight',
+  ]);
+  db.emit('driver_tour_pack_feature_flags/global', false);
+  db.emit('driver_tour_pack_feature_flags/drivers/D-BONDY', false);
+  assert.equal(states.length, 0);
+  db.emit('driver_tour_pack_feature_flags/testflight', true);
+  assert.equal(states.at(-1).enabled, true);
+  assert.equal(states.at(-1).reason, 'TESTFLIGHT_ENABLED');
+  db.emit('driver_tour_pack_feature_flags/testflight', false);
+  assert.equal(states.at(-1).enabled, false);
+  unsubscribe();
+  assert.equal(db.offCalls.length, 3);
+});

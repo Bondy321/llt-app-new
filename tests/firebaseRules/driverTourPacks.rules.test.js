@@ -27,7 +27,22 @@ const validAction = (nowMs = Date.now()) => ({
     stop_1: { state: 'COMPLETED', updatedAtMs: nowMs },
   },
   serviceCompletion: {},
+  hotelCompletion: {},
   issues: {},
+});
+
+const validIssue = (nowMs = Date.now(), issueId = 'issue_001') => ({
+  schemaVersion: 1,
+  issueId,
+  category: 'vehicle',
+  severity: 'warning',
+  status: 'open',
+  summary: 'Warning light is on',
+  revision: 1,
+  createdAtMs: nowMs,
+  updatedAtMs: nowMs,
+  statusUpdatedAtMs: nowMs,
+  statusUpdatedBy: 'driver',
 });
 
 const writeLeafAction = async (db, action) => {
@@ -57,11 +72,13 @@ test.before(async () => {
     await db.ref('/').set({
       driver_tour_packs: {
         [DEPARTURE_KEY]: {
-          schemaVersion: 1, tourId: '5001D_1', status: 'active', expiresAtMs: Date.now() + 60_000,
-          pickups: { stop_1: { pickupId: 'stop_1' } }, services: {},
+          schemaVersion: 1, revision: 1, tourId: '5001D_1', status: 'active', expiresAtMs: Date.now() + 60_000,
+          pickups: { stop_1: { pickupId: 'stop_1' } },
+          services: { service_1: { serviceId: 'service_1' } },
+          hotels: { hotel_1: { hotelId: 'hotel_1' } },
         },
-        [OTHER_DEPARTURE_KEY]: { schemaVersion: 1, tourId: '5002D_1', status: 'active', expiresAtMs: Date.now() + 60_000 },
-        [EXPIRED_DEPARTURE_KEY]: { schemaVersion: 1, tourId: '5001D_1', status: 'active', expiresAtMs: Date.now() - 1 },
+        [OTHER_DEPARTURE_KEY]: { schemaVersion: 1, revision: 1, tourId: '5002D_1', status: 'active', expiresAtMs: Date.now() + 60_000 },
+        [EXPIRED_DEPARTURE_KEY]: { schemaVersion: 1, revision: 1, tourId: '5001D_1', status: 'active', expiresAtMs: Date.now() - 1 },
       },
       driver_tour_pack_tombstones: { [DEPARTURE_KEY]: { status: 'expired' } },
       driver_tour_pack_ingestion: { latestSuccessfulRun: { runId: 'server-owned-run' } },
@@ -74,7 +91,17 @@ test.before(async () => {
       },
       driver_tour_pack_feature_flags: {
         global: false,
+        testflight: false,
         drivers: { [DRIVER_ID]: true, 'D-OTHER': false },
+      },
+      driver_tour_pack_changes: {
+        [DEPARTURE_KEY]: { latest: { schemaVersion: 1, departureKey: DEPARTURE_KEY, tourId: '5001D_1', revision: 1 } },
+      },
+      driver_tour_pack_progress: {
+        [DEPARTURE_KEY]: { [DRIVER_ID]: { schemaVersion: 1, departureKey: DEPARTURE_KEY, driverId: DRIVER_ID, pickupCompleted: 1 } },
+      },
+      driver_tour_pack_issues: {
+        issue_seed: { schemaVersion: 1, issueId: 'issue_seed', departureKey: DEPARTURE_KEY, driverId: DRIVER_ID, category: 'delay', severity: 'warning', status: 'open', updatedAtMs: Date.now() },
       },
       users: {
         [DRIVER_UID]: { driverId: DRIVER_ID },
@@ -154,6 +181,7 @@ test('feature flags are exact-read, coherent-driver canaries with admin-only boo
 
   await assertSucceeds(assigned.ref('driver_tour_pack_feature_flags/global').get());
   await assertSucceeds(passenger.ref('driver_tour_pack_feature_flags/global').get());
+  await assertSucceeds(assigned.ref('driver_tour_pack_feature_flags/testflight').get());
   await assertSucceeds(assigned.ref(`driver_tour_pack_feature_flags/drivers/${DRIVER_ID}`).get());
   await assertSucceeds(other.ref('driver_tour_pack_feature_flags/drivers/D-OTHER').get());
   await assertFails(assigned.ref('driver_tour_pack_feature_flags').get());
@@ -165,10 +193,30 @@ test('feature flags are exact-read, coherent-driver canaries with admin-only boo
     .ref('driver_tour_pack_feature_flags/global').get());
 
   await assertSucceeds(primaryAdmin.ref('driver_tour_pack_feature_flags/global').set(true));
+  await assertSucceeds(primaryAdmin.ref('driver_tour_pack_feature_flags/testflight').set(true));
   await assertSucceeds(allowlistedAdmin.ref(`driver_tour_pack_feature_flags/drivers/${DRIVER_ID}`).set(false));
   await assertFails(primaryAdmin.ref('driver_tour_pack_feature_flags/global').set({ enabled: true }));
   await assertFails(assigned.ref('driver_tour_pack_feature_flags/global').set(false));
+  await assertFails(assigned.ref('driver_tour_pack_feature_flags/testflight').set(false));
   await assertFails(assigned.ref(`driver_tour_pack_feature_flags/drivers/${DRIVER_ID}`).set(true));
+});
+
+test('semantic change metadata is exact-assignment readable and operational projections are admin-only', async () => {
+  const assigned = testEnv.authenticatedContext(DRIVER_UID).database(databaseURL);
+  const passenger = testEnv.authenticatedContext('passenger').database(databaseURL);
+  const admin = testEnv.authenticatedContext('allowlisted-admin').database(databaseURL);
+
+  await assertSucceeds(assigned.ref(`driver_tour_pack_changes/${DEPARTURE_KEY}/latest`).get());
+  await assertFails(assigned.ref('driver_tour_pack_changes').get());
+  await assertFails(passenger.ref(`driver_tour_pack_changes/${DEPARTURE_KEY}/latest`).get());
+  await assertFails(assigned.ref(`driver_tour_pack_changes/${OTHER_DEPARTURE_KEY}`).get());
+  await assertFails(assigned.ref(`driver_tour_pack_changes/${DEPARTURE_KEY}/latest`).set({ forged: true }));
+
+  await assertSucceeds(admin.ref('driver_tour_pack_progress').get());
+  await assertSucceeds(admin.ref('driver_tour_pack_issues').get());
+  await assertFails(assigned.ref('driver_tour_pack_progress').get());
+  await assertFails(assigned.ref('driver_tour_pack_issues').get());
+  await assertFails(admin.ref(`driver_tour_pack_progress/${DEPARTURE_KEY}/${DRIVER_ID}`).set({ forged: true }));
 });
 
 test('driver action writes are exact-principal, bounded, closed-schema records', async () => {
@@ -186,11 +234,54 @@ test('driver action writes are exact-principal, bounded, closed-schema records',
   invalid.pickupStops.stop_1.state = 'WHATEVER';
   await assertFails(assigned.ref(`driver_tour_pack_actions/${DEPARTURE_KEY}/${DRIVER_ID}/pickupStops/stop_1/state`).set(invalid.pickupStops.stop_1.state));
 
-  const oversized = validAction();
-  oversized.issues = Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`issue_${index}`, {
-    type: 'DELAY', status: 'OPEN', createdAtMs: Date.now(), updatedAtMs: Date.now(),
-  }]));
-  await assertFails(assigned.ref(`driver_tour_pack_actions/${DEPARTURE_KEY}/${DRIVER_ID}/issues/issue_21/type`).set('DELAY'));
+  const base = `driver_tour_pack_actions/${DEPARTURE_KEY}/${DRIVER_ID}`;
+  const stamp = Date.now();
+  await assertSucceeds(assigned.ref(base).update({
+    packRevision: 1,
+    updatedAtMs: stamp,
+    'serviceCompletion/service_1/state': 'COMPLETED',
+    'serviceCompletion/service_1/updatedAtMs': stamp,
+    'hotelCompletion/hotel_1/state': 'COMPLETED',
+    'hotelCompletion/hotel_1/updatedAtMs': stamp,
+  }));
+  await assertFails(assigned.ref(`${base}/hotelCompletion/unknown/state`).set('COMPLETED'));
+
+  const issue = validIssue(stamp);
+  await assertSucceeds(assigned.ref(base).update({
+    packRevision: 1,
+    updatedAtMs: stamp,
+    ...Object.fromEntries(Object.entries(issue).map(([field, value]) => [`issues/issue_001/${field}`, value])),
+  }));
+  const emailIssue = {
+    ...validIssue(stamp, 'issue_002'),
+    summary: 'Contact passenger@example.com',
+  };
+  await assertFails(assigned.ref(base).update(Object.fromEntries(
+    Object.entries(emailIssue).map(([field, value]) => [`issues/issue_002/${field}`, value]),
+  )));
+  await assertFails(assigned.ref(`${base}/issues/issue_001/category`).set('other'));
+
+  const admin = testEnv.authenticatedContext('allowlisted-admin').database(databaseURL);
+  await assertSucceeds(admin.ref(base).update({
+    'issues/issue_001/status': 'acknowledged',
+    'issues/issue_001/updatedAtMs': stamp + 1,
+    'issues/issue_001/statusUpdatedAtMs': stamp + 1,
+    'issues/issue_001/statusUpdatedBy': 'operations',
+  }));
+  await assertFails(admin.ref(`${base}/issues/issue_001/summary`).set('Changed by admin'));
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.database(databaseURL);
+    const issues = Object.fromEntries(Array.from({ length: 99 }, (_, index) => {
+      const issueId = `issue_${String(index + 2).padStart(3, '0')}`;
+      return [issueId, validIssue(stamp, issueId)];
+    }));
+    await db.ref(`${base}/issues`).update(issues);
+  });
+  const overflowIssue = validIssue(stamp, 'issue_101');
+  await assertFails(assigned.ref(base).update(Object.fromEntries(
+    Object.entries(overflowIssue).map(([field, value]) => [`issues/issue_101/${field}`, value]),
+  )));
 
   for (const uid of ['passenger', 'forged-driver', 'stale-driver']) {
     await assertFails(testEnv.authenticatedContext(uid).database(databaseURL)

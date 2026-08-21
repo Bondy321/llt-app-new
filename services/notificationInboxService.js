@@ -2,8 +2,10 @@ const { parseTimestampMs } = require('./timeUtils');
 const { normalizeTourId } = require('./tourIdentityService');
 
 const MAX_VISIBLE_NOTICES = 50;
-const ALLOWED_TYPES = new Set(['announcement', 'itinerary']);
-const ALLOWED_SCREENS = new Set(['Chat', 'Itinerary']);
+const ALLOWED_TYPES = new Set(['announcement', 'itinerary', 'driver_tour_pack']);
+const ALLOWED_SCREENS = new Set(['Chat', 'Itinerary', 'DriverTourPack']);
+const DRIVER_SECTIONS = new Set(['status', 'tour', 'pickups', 'passengers', 'seats', 'timeline', 'hotels', 'services', 'coach', 'contacts', 'itineraries', 'coverage', 'quality']);
+const PII = /(?:\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b|\+?\d[\d\s().-]{7,}\d)/i;
 
 const requireSafeKey = (value, label) => {
   const normalized = String(value || '').trim();
@@ -29,7 +31,14 @@ const normalizeTourNotice = (noticeId, raw = {}) => {
   const title = typeof raw.title === 'string' ? raw.title.trim() : '';
   const body = typeof raw.body === 'string' ? raw.body.trim() : '';
 
-  if (!noticeId || !type || !screen || !tourId || !title || !body || !Number.isFinite(createdAtMs)) {
+  const isDriverPack = type === 'driver_tour_pack' || screen === 'DriverTourPack';
+  const departureKey = typeof raw.departureKey === 'string' && /^\d{4}-\d{2}-\d{2}::[A-Z0-9_-]{1,120}$/i.test(raw.departureKey) ? raw.departureKey : null;
+  const revision = Number.isSafeInteger(raw.revision) && raw.revision > 0 ? raw.revision : null;
+  const changedSectionSource = Array.isArray(raw.changedSections)
+    ? raw.changedSections
+    : typeof raw.changedSections === 'string' ? raw.changedSections.split(',') : [];
+  const changedSections = [...new Set(changedSectionSource.map((item) => String(item).trim()).filter((item) => DRIVER_SECTIONS.has(item)))].slice(0, 13);
+  if (!noticeId || !type || !screen || !tourId || !title || !body || !Number.isFinite(createdAtMs) || (isDriverPack && (!departureKey || !revision || PII.test(title) || PII.test(body)))) {
     return null;
   }
 
@@ -51,6 +60,7 @@ const normalizeTourNotice = (noticeId, raw = {}) => {
     priority: raw.priority === 'high' ? 'high' : 'normal',
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date(createdAtMs).toISOString(),
     createdAtMs,
+    ...(isDriverPack ? { departureKey, revision, changedSections, critical: raw.critical === true, requiresAcknowledgement: raw.requiresAcknowledgement === true } : {}),
   };
 };
 

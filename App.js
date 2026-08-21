@@ -17,6 +17,8 @@ import offlineLoginResolver from './services/offlineLoginResolver';
 import driverOperationalLifecycleService from './services/driverOperationalLifecycleService';
 import driverTourPackService from './services/driverTourPackService';
 import useDriverTourPack from './hooks/useDriverTourPack';
+import useDriverTourPackActions from './hooks/useDriverTourPackActions';
+import driverTourPackActionService from './services/driverTourPackActionService';
 import useDriverTourPackFeatureFlag from './hooks/useDriverTourPackFeatureFlag';
 import { getCanonicalIdentity, resolveAuthScopedUserId, toRealtimeKeySegment } from './services/identityService';
 import { normalizeTourId, resolveTourId } from './services/tourIdentityService';
@@ -303,7 +305,7 @@ function AppContent() {
     logger.info('App', 'Refreshing app data');
     if (!isConnected) return;
     await offlineSyncService.replayQueue({
-      services: { bookingService, chatService },
+      services: { bookingService, chatService, driverTourPackActionService },
       scope: offlineSessionScope,
     });
   };
@@ -314,6 +316,7 @@ function AppContent() {
     role: diagnosticsRole,
     offlineCacheOwnerId: bookingData?.id || null,
   });
+  const driverTourPackActions = useDriverTourPackActions({ pack: driverTourPackState.pack, driverId: bookingData?.id, authUid: user?.uid, isConnected });
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
@@ -1599,7 +1602,7 @@ function AppContent() {
   useEffect(() => {
     if (!isConnected || !firebaseConnected || !offlineSessionScope) return;
     offlineSyncService.replayQueue({
-      services: { bookingService, chatService },
+      services: { bookingService, chatService, driverTourPackActionService },
       scope: offlineSessionScope,
     });
   }, [isConnected, firebaseConnected, offlineSessionScopeKey]);
@@ -1662,7 +1665,7 @@ function AppContent() {
             />
           );
         }
-        return <DriverTourPackScreen packState={driverTourPackState} tourData={tourData} driverData={bookingData} onBack={() => navigateTo('DriverHome')} onNavigate={navigateTo} />;
+        return <DriverTourPackScreen packState={driverTourPackState} actionState={driverTourPackActions} isConnected={isConnected} tourData={tourData} driverData={bookingData} onBack={() => navigateTo('DriverHome')} onNavigate={navigateTo} />;
       case 'SafetySupport':
         return (
           <SafetySupportScreen

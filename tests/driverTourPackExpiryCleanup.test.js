@@ -58,7 +58,10 @@ test('expiry cleanup removes only expired operational packs/actions and writes a
       },
       [liveKey]: { schemaVersion: 1, departureKey: liveKey, tourId: 'TOUR_2', dateISO: '2027-01-02', revision: 1, expiresAtMs: nowMs + 1 },
     },
-    driver_tour_pack_actions: { [expiredKey]: { 'D-1': { issues: { secret: true } } } },
+    driver_tour_pack_actions: { [expiredKey]: { 'D-1': { issues: { issue_001: { summary: 'Private issue text' } } } } },
+    driver_tour_pack_changes: { [expiredKey]: { latest: { revision: 4 } } },
+    driver_tour_pack_progress: { [expiredKey]: { 'D-1': { pickupCompleted: 1 } } },
+    driver_tour_pack_issues: { issue_001: { issueId: 'issue_001', departureKey: expiredKey, category: 'vehicle' } },
     driver_tour_pack_ingestion: { packMetadata: { [expiredKey]: { contentFingerprint: 'sha256:deadbeef' } } },
     driver_tour_pack_admin_status: { [expiredKey]: { departureKey: expiredKey, status: 'active' } },
   });
@@ -67,6 +70,9 @@ test('expiry cleanup removes only expired operational packs/actions and writes a
   assert.deepEqual(result, { ok: true, scanned: 1, removed: 1, hasMore: false, cleanedAtMs: nowMs });
   assert.equal(database.state.driver_tour_packs[expiredKey], undefined);
   assert.equal(database.state.driver_tour_pack_actions[expiredKey], undefined);
+  assert.equal(database.state.driver_tour_pack_changes[expiredKey], undefined);
+  assert.equal(database.state.driver_tour_pack_progress[expiredKey], undefined);
+  assert.equal(database.state.driver_tour_pack_issues.issue_001, undefined);
   assert.equal(database.state.driver_tour_pack_ingestion.packMetadata[expiredKey], undefined);
   assert.deepEqual(database.state.driver_tour_pack_admin_status[expiredKey], {
     schemaVersion: 1, departureKey: expiredKey, tourId: 'TOUR_1', tourCode: 'TOUR 1', dateISO: '2027-01-01',

@@ -5,6 +5,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -17,6 +18,16 @@ import { normalizeTourId, resolveTourId } from '../services/tourIdentityService'
 const { commandCentreModel } = require('../services/driverTourPackCommandCentre');
 
 const TABS = Object.freeze(['Overview', 'Run', 'People', 'Tour']);
+const ISSUE_CATEGORIES = Object.freeze([
+  ['delay', 'Delay'], ['vehicle', 'Vehicle'], ['pickup', 'Pickup'], ['passenger', 'Passenger'],
+  ['hotel', 'Hotel'], ['supplier', 'Supplier'], ['accessibility', 'Accessibility'], ['other', 'Other'],
+]);
+const ISSUE_SEVERITIES = Object.freeze([['info', 'Info'], ['warning', 'Warning'], ['critical', 'Critical']]);
+const CHANGE_SECTION_LABELS = Object.freeze({
+  status: 'tour status', tour: 'tour details', pickups: 'pickup run', passengers: 'passenger facts',
+  seats: 'seating', timeline: 'timeline', hotels: 'hotels', services: 'services', coach: 'coach details',
+  contacts: 'contacts', itineraries: 'itineraries', coverage: 'report coverage', quality: 'data quality',
+});
 const SEAT_COLOURS = Object.freeze({
   Empty: '#6B7280',
   Pending: '#B45309',
@@ -77,11 +88,33 @@ function ProgressText({ progress }) {
   );
 }
 
-export default function DriverTourPackScreen({ packState, tourData, driverData, onBack, onNavigate }) {
+function StateControls({ current = 'PENDING', values, onChange, disabled = false, label }) {
+  return (
+    <View style={styles.row} accessibilityLabel={`${label} progress controls`}>
+      {values.map(([value, text, icon]) => (
+        <ActionButton
+          key={value}
+          icon={icon}
+          label={text}
+          selected={current === value}
+          disabled={disabled}
+          onPress={() => onChange(value)}
+        />
+      ))}
+    </View>
+  );
+}
+
+export default function DriverTourPackScreen({ packState, actionState, isConnected, tourData, driverData, onBack, onNavigate }) {
   const [tab, setTab] = useState('Overview');
   const [seatView, setSeatView] = useState('visual');
   const [manifest, setManifest] = useState(null);
   const [manifestSource, setManifestSource] = useState('none');
+  const [issueText, setIssueText] = useState('');
+  const [issueCategory, setIssueCategory] = useState('other');
+  const [issueSeverity, setIssueSeverity] = useState('warning');
+  const [workingKey, setWorkingKey] = useState(null);
+  const [actionFeedback, setActionFeedback] = useState(null);
   const pack = packState?.pack;
   const driverId = driverData?.id;
 
@@ -126,6 +159,24 @@ export default function DriverTourPackScreen({ packState, tourData, driverData, 
   ));
   const identityMatches = Boolean(pack?.tourId && assignedTourId && normalizeTourId(pack.tourId) === assignedTourId);
   const state = packPresentation(packState?.state);
+  const actions = actionState?.actions || {};
+  const change = actionState?.change?.revision === pack?.revision ? actionState.change : null;
+  const changedSectionText = change?.changedSections?.map((section) => CHANGE_SECTION_LABELS[section] || section).join(', ') || '';
+  const submittedIssues = recordValues(actions.issues).sort((left, right) => Number(right.createdAtMs || 0) - Number(left.createdAtMs || 0));
+  const runAction = async (key, operation, successMessage) => {
+    if (workingKey) return;
+    setWorkingKey(key);
+    setActionFeedback(null);
+    try {
+      const result = await operation();
+      setActionFeedback(result?.success
+        ? (result.data?.queued ? `${successMessage} Saved offline and queued.` : successMessage)
+        : (result?.error || 'The action could not be saved.'));
+      return result;
+    } finally {
+      setWorkingKey(null);
+    }
+  };
   const go = (screen, extra = {}) => onNavigate?.(screen, {
     tourId: pack?.tourId,
     from: 'DriverTourPack',
@@ -168,7 +219,27 @@ export default function DriverTourPackScreen({ packState, tourData, driverData, 
         <Text style={styles.heroText}>{pack.dateISO} • {pack.tourCode}</Text>
         <StatePill value={state.label} />
         <Text style={styles.heroText}>{state.detail}</Text>
+        <Text style={styles.heroText} accessibilityLiveRegion="polite">
+          {isConnected ? 'Online' : 'Offline'}
+          {actionState?.pendingCount ? ` • ${actionState.pendingCount} driver action${actionState.pendingCount === 1 ? '' : 's'} waiting to sync` : ' • Driver actions synced'}
+        </Text>
       </View>
+      {change && actionState?.acknowledgementPending ? (
+        <Section title={change.critical ? 'Critical update' : 'Updated operational information'}>
+          <View style={change.critical ? styles.critical : styles.warning} accessibilityRole="alert">
+            <Text style={change.critical ? styles.criticalText : styles.warningText}>
+              Revision {change.revision} changed: {changedSectionText || 'operational information'}.
+              {change.requiresAcknowledgement ? ' You must acknowledge this update before continuing.' : ' Review and acknowledge the updated sections.'}
+            </Text>
+          </View>
+          <ActionButton
+            icon="check-decagram-outline"
+            label={`Acknowledge revision ${change.revision}`}
+            disabled={Boolean(workingKey)}
+            onPress={() => runAction('acknowledge', actionState.acknowledge, 'Revision acknowledged.')}
+          />
+        </Section>
+      ) : null}
       <Section title="Departure check">
         <View style={identityMatches ? styles.ok : styles.critical} accessibilityRole="alert">
           <Text style={identityMatches ? styles.okText : styles.criticalText}>
@@ -205,6 +276,52 @@ export default function DriverTourPackScreen({ packState, tourData, driverData, 
           <View key={issue} style={styles.warning}><Text style={styles.warningText}>{issue}</Text></View>
         )) : <View style={styles.ok}><Text style={styles.okText}>Published pickup, passenger and seat facts are matched.</Text></View>}
       </Section>
+      <Section title="Operational issues">
+        {submittedIssues.length ? submittedIssues.map((issue) => (
+          <View key={issue.issueId} style={issue.severity === 'critical' && issue.status !== 'resolved' ? styles.critical : styles.card}>
+            <Text style={styles.cardTitle}>{String(issue.category || 'other').replace('_', ' ')} • {issue.severity}</Text>
+            <Text style={styles.note}>{issue.summary}</Text>
+            <Text style={styles.muted}>Status: {String(issue.status || 'open').replace('_', ' ')}</Text>
+          </View>
+        )) : <EmptyMessage>No driver issues have been reported for this departure.</EmptyMessage>}
+        <Text style={styles.fieldLabel}>Issue category</Text>
+        <View style={styles.row}>
+          {ISSUE_CATEGORIES.map(([value, label]) => (
+            <ActionButton key={value} icon="tag-outline" label={label} selected={issueCategory === value} onPress={() => setIssueCategory(value)} />
+          ))}
+        </View>
+        <Text style={styles.fieldLabel}>Priority</Text>
+        <View style={styles.row}>
+          {ISSUE_SEVERITIES.map(([value, label]) => (
+            <ActionButton key={value} icon={value === 'critical' ? 'alert-octagon-outline' : 'alert-circle-outline'} label={label} selected={issueSeverity === value} onPress={() => setIssueSeverity(value)} />
+          ))}
+        </View>
+        <TextInput
+          accessibilityLabel="Operational issue summary"
+          multiline
+          maxLength={240}
+          onChangeText={setIssueText}
+          placeholder="Describe the issue without passenger names or personal details"
+          style={styles.issueInput}
+          value={issueText}
+        />
+        <Text style={styles.muted}>{issueText.length}/240 characters</Text>
+        <ActionButton
+          icon="message-alert-outline"
+          label="Report operational issue"
+          disabled={!issueText.trim() || Boolean(workingKey)}
+          onPress={async () => {
+            const result = await runAction('issue', () => actionState.reportIssue({
+              category: issueCategory,
+              severity: issueSeverity,
+              summary: issueText,
+            }), 'Operational issue reported.');
+            if (result?.success) setIssueText('');
+          }}
+        />
+        {actionFeedback ? <Text accessibilityLiveRegion="polite" style={styles.feedback}>{actionFeedback}</Text> : null}
+        {actionState?.error ? <Text accessibilityRole="alert" style={styles.criticalText}>{actionState.error}</Text> : null}
+      </Section>
       <Section title="Driver tools">
         <View style={styles.row}>
           <ActionButton icon="chat-processing-outline" label="Group chat" onPress={() => go('Chat')} />
@@ -223,6 +340,24 @@ export default function DriverTourPackScreen({ packState, tourData, driverData, 
             <Text style={styles.cardTitle}>{index + 1}. {pickup.name}</Text>
             <Text style={styles.muted}>{when(pickup.dateISO, pickup.time)} • {pickup.address || 'Address unavailable'}</Text>
             <ProgressText progress={progress} />
+            {pickup.pickupId !== '__unassigned__' ? (
+              <StateControls
+                label={pickup.name}
+                current={actions.pickupStops?.[pickup.pickupId]?.state || 'PENDING'}
+                disabled={Boolean(workingKey)}
+                values={[
+                  ['PENDING', 'Reset', 'backup-restore'],
+                  ['ARRIVED', 'Arrived', 'map-marker-check-outline'],
+                  ['COMPLETED', 'Complete', 'check-circle-outline'],
+                  ['SKIPPED', 'Skip', 'skip-next-outline'],
+                ]}
+                onChange={(progressState) => runAction(
+                  `pickup:${pickup.pickupId}`,
+                  () => actionState.setPickup(pickup.pickupId, progressState),
+                  `${pickup.name} marked ${progressState.toLowerCase()}.`,
+                )}
+              />
+            ) : null}
             <Text style={styles.muted}>{pickup.bookingCount} booking{pickup.bookingCount === 1 ? '' : 's'} • {pickup.passengerCount} report passenger{pickup.passengerCount === 1 ? '' : 's'}</Text>
           </View>
         )) : <EmptyMessage>No pickup run is published.</EmptyMessage>}
@@ -314,6 +449,21 @@ export default function DriverTourPackScreen({ packState, tourData, driverData, 
               {hotel.phone ? <ActionButton icon="phone-outline" label={`Call ${hotel.name}`} onPress={() => call(hotel.phone)} /> : null}
               {hotel.address ? <ActionButton icon="directions" label={`Directions to ${hotel.name}`} onPress={() => directions(`${hotel.name}, ${hotel.address}`)} /> : null}
             </View>
+            <StateControls
+              label={hotel.name}
+              current={actions.hotelCompletion?.[hotel.hotelId]?.state || 'PENDING'}
+              disabled={Boolean(workingKey)}
+              values={[
+                ['PENDING', 'Reset', 'backup-restore'],
+                ['COMPLETED', 'Complete', 'check-circle-outline'],
+                ['SKIPPED', 'Skip', 'skip-next-outline'],
+              ]}
+              onChange={(completionState) => runAction(
+                `hotel:${hotel.hotelId}`,
+                () => actionState.setHotel(hotel.hotelId, completionState),
+                `${hotel.name} marked ${completionState.toLowerCase()}.`,
+              )}
+            />
           </View>
         )) : <EmptyMessage>No hotel information is published.</EmptyMessage>}
       </Section>
@@ -324,6 +474,21 @@ export default function DriverTourPackScreen({ packState, tourData, driverData, 
             <Text style={styles.muted}>{when(service.dateISO, service.time)} • {service.supplier || service.type}</Text>
             {service.bookingRef ? <Text style={styles.muted}>Ref: {service.bookingRef}</Text> : null}
             {service.notes ? <Text style={styles.note}>{service.notes}</Text> : null}
+            <StateControls
+              label={service.description}
+              current={actions.serviceCompletion?.[service.serviceId]?.state || 'PENDING'}
+              disabled={Boolean(workingKey)}
+              values={[
+                ['PENDING', 'Reset', 'backup-restore'],
+                ['COMPLETED', 'Complete', 'check-circle-outline'],
+                ['SKIPPED', 'Skip', 'skip-next-outline'],
+              ]}
+              onChange={(completionState) => runAction(
+                `service:${service.serviceId}`,
+                () => actionState.setService(service.serviceId, completionState),
+                `${service.description} marked ${completionState.toLowerCase()}.`,
+              )}
+            />
           </View>
         )) : <EmptyMessage>No service information is published.</EmptyMessage>}
       </Section>
@@ -419,6 +584,9 @@ const styles = StyleSheet.create({
   dot: { width: 12, height: 12, borderRadius: 6, backgroundColor: COLORS.primary, marginTop: 4 },
   grow: { flex: 1 },
   note: { color: COLORS.textPrimary, lineHeight: 20 },
+  fieldLabel: { color: COLORS.textPrimary, fontWeight: '800', marginTop: 4 },
+  issueInput: { minHeight: 112, borderWidth: 1, borderColor: COLORS.border, borderRadius: 10, backgroundColor: '#FFFFFF', color: COLORS.textPrimary, padding: 12, textAlignVertical: 'top' },
+  feedback: { color: '#166534', fontWeight: '700', lineHeight: 20 },
   itineraryLabel: { color: COLORS.textSecondary, fontWeight: '800', fontSize: 11 },
   person: { flexDirection: 'row', gap: 8, justifyContent: 'space-between', paddingVertical: 9, borderTopWidth: 1, borderColor: '#EEF0F3' },
   seatGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

@@ -1,5 +1,6 @@
 const DRIVER_ID = /^D-[A-Z0-9_-]{1,77}$/;
 const GLOBAL_PATH = 'driver_tour_pack_feature_flags/global';
+const TESTFLIGHT_PATH = 'driver_tour_pack_feature_flags/testflight';
 const DRIVER_PATH = 'driver_tour_pack_feature_flags/drivers';
 
 const normalizeDriverId = (value) => {
@@ -10,7 +11,7 @@ const enabled = (value) => value === true;
 const defaultDatabase = () => require('../firebase').realtimeDb;
 
 function createDriverTourPackFeatureFlagService({ getDatabase = defaultDatabase } = {}) {
-  const subscribe = (driverIdInput, onChange, onError) => {
+  const subscribe = (driverIdInput, onChange, onError, { testflightEligible = false } = {}) => {
     const driverId = normalizeDriverId(driverIdInput);
     const db = getDatabase?.();
     if (!driverId || !db?.ref) {
@@ -20,25 +21,30 @@ function createDriverTourPackFeatureFlagService({ getDatabase = defaultDatabase 
 
     const globalRef = db.ref(GLOBAL_PATH);
     const driverRef = db.ref(`${DRIVER_PATH}/${driverId}`);
+    const testflightRef = testflightEligible ? db.ref(TESTFLIGHT_PATH) : null;
     let active = true;
     let globalReady = false;
     let driverReady = false;
+    let testflightReady = !testflightEligible;
     let globalEnabled = false;
     let driverEnabled = false;
+    let testflightEnabled = false;
     const emit = () => {
-      if (!active || !globalReady || !driverReady) return;
+      if (!active || !globalReady || !driverReady || !testflightReady) return;
       onChange?.({
-        enabled: globalEnabled || driverEnabled,
+        enabled: globalEnabled || driverEnabled || testflightEnabled,
         loading: false,
-        reason: globalEnabled ? 'GLOBAL_ENABLED' : driverEnabled ? 'DRIVER_ENABLED' : 'DISABLED',
+        reason: globalEnabled ? 'GLOBAL_ENABLED' : driverEnabled ? 'DRIVER_ENABLED' : testflightEnabled ? 'TESTFLIGHT_ENABLED' : 'DISABLED',
       });
     };
     const failClosed = (error) => {
       if (!active) return;
       globalReady = true;
       driverReady = true;
+      testflightReady = true;
       globalEnabled = false;
       driverEnabled = false;
+      testflightEnabled = false;
       onChange?.({ enabled: false, loading: false, reason: 'UNAVAILABLE' });
       onError?.(error);
     };
@@ -52,13 +58,20 @@ function createDriverTourPackFeatureFlagService({ getDatabase = defaultDatabase 
       driverEnabled = enabled(snapshot?.val?.());
       emit();
     };
+    const onTestflight = (snapshot) => {
+      testflightReady = true;
+      testflightEnabled = enabled(snapshot?.val?.());
+      emit();
+    };
 
     globalRef.on('value', onGlobal, failClosed);
     driverRef.on('value', onDriver, failClosed);
+    testflightRef?.on('value', onTestflight, failClosed);
     return () => {
       active = false;
       globalRef.off?.('value', onGlobal);
       driverRef.off?.('value', onDriver);
+      testflightRef?.off?.('value', onTestflight);
     };
   };
 
@@ -68,6 +81,7 @@ function createDriverTourPackFeatureFlagService({ getDatabase = defaultDatabase 
 const service = createDriverTourPackFeatureFlagService();
 module.exports = {
   GLOBAL_PATH,
+  TESTFLIGHT_PATH,
   DRIVER_PATH,
   normalizeDriverId,
   enabled,

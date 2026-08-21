@@ -129,6 +129,25 @@ test('global marketing notification routes without an active tour and keeps its 
   assert.match(route.responseKey, /category-broadcast-1/);
 });
 
+test('driver Tour Pack notifications route only for the active assigned driver and retain safe change metadata', () => {
+  const response = { data: { screen: 'DriverTourPack', tourId: 'TOUR_1', departureKey: '2026-09-10::TOUR_1', revision: 4, changedSections: 'timeline,seats,bad', critical: true, requiresAcknowledgement: true } };
+  const accepted = resolveNotificationRoute(response, { activeTourId: 'TOUR_1', isDriver: true });
+  assert.equal(accepted.accepted, true);
+  assert.deepEqual(accepted.params.changedSections, ['timeline', 'seats']);
+  assert.equal(accepted.params.requiresAcknowledgement, true);
+  assert.equal(resolveNotificationRoute(response, { activeTourId: 'TOUR_1', isDriver: false }).reason, 'DRIVER_ONLY');
+  assert.equal(resolveNotificationRoute({ data: { ...response.data, departureKey: '2026-09-10::OTHER' } }, { activeTourId: 'TOUR_1', isDriver: true }).reason, 'DRIVER_PACK_IDENTITY_MISMATCH');
+  assert.equal(resolveNotificationRoute({ data: { ...response.data, revision: 0 } }, { activeTourId: 'TOUR_1', isDriver: true }).reason, 'INVALID_DRIVER_PACK_NOTIFICATION');
+});
+
+test('driver Tour Pack inbox notices reject malformed identity and PII-bearing notification copy', () => {
+  const safe = normalizeTourNotice('pack-1', createNotice({ type: 'driver_tour_pack', screen: 'DriverTourPack', title: 'Operational information changed', body: 'Open the app to review changes.', departureKey: '2026-09-10::TOUR_1', revision: 2, changedSections: 'timeline', critical: true, requiresAcknowledgement: true }));
+  assert.equal(safe.departureKey, '2026-09-10::TOUR_1');
+  assert.deepEqual(safe.changedSections, ['timeline']);
+  assert.equal(normalizeTourNotice('bad-pack', createNotice({ type: 'driver_tour_pack', screen: 'DriverTourPack', departureKey: 'invalid', revision: 2 })), null);
+  assert.equal(normalizeTourNotice('pii-pack', createNotice({ type: 'driver_tour_pack', screen: 'DriverTourPack', title: 'Call 07123 456789', departureKey: '2026-09-10::TOUR_1', revision: 2 })), null);
+});
+
 test('notification feed subscription combines bounded notices and read state then cleans up both listeners', () => {
   const listeners = new Map();
   const detached = [];

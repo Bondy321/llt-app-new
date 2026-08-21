@@ -10,9 +10,18 @@ The Command Centre is a read-only operational composition. It does not create a 
 | Pending, boarded and no-show state | `tour_manifests/{tourId}` and its complete identity-scoped device cache |
 | Pack lifecycle and quality shown to operations | `driver_tour_pack_admin_status/{departureKey}` |
 | Driver assignment | Canonical driver/tour assignment links; pack access is still enforced by the manifest assignment link |
-| Driver progress and acknowledgements | Reserved for Gate 10 under `driver_tour_pack_actions`; not written by Gates 8–9 |
+| Driver progress and acknowledgements | `driver_tour_pack_actions/{departureKey}/{driverId}`; server projects only safe aggregates |
+| Operations progress visibility | `driver_tour_pack_progress/{departureKey}/{driverId}` and `driver_tour_pack_issues/{issueId}` |
 
 Every join uses `departureKey = YYYY-MM-DD::NORMALIZED_TOUR_ID`. Display names are never identity keys. A pack and the active driver assignment must agree before the Command Centre describes the tour as confirmed.
+
+## Operational defaults
+
+- The sole passenger telephone exposure is the approved booking-lead phone; passenger email is never included.
+- A TourPax-only occupant stays visible as advisory-only with no inferred pickup or contact data.
+- An occupant conflict suppresses the visual seat map only. A safe pickup manifest remains usable where its quality policy permits it.
+- Retention is tour end plus 72 hours. Expiry removes operational PII and driver actions.
+- `departureKey`, not a bare tour ID, is the cross-project and cross-screen identity.
 
 ## Mobile shell
 
@@ -37,11 +46,38 @@ Each tour shows ready/degraded/stale/cancelled/withdrawn/expired/missing state, 
 
 The management dashboard remains the richer dispatch control surface. It shows report delivery freshness, reconciliation totals, projection state, current publication result, actual server-planned revisions, the durable last successful app publication, and a safe per-departure degraded/blocked/withheld queue with explicit reason codes. General dashboard views never receive driver pack payloads.
 
+## Gate 10 progress, issues and notifications
+
+Driver action records remain identity-scoped and offline-capable. The server creates two admin-only, PII-free projections:
+
+- `driver_tour_pack_progress/{departureKey}/{driverId}` contains only identity, revision acknowledgement,
+  pickup/service completion counts and timestamps.
+- `driver_tour_pack_issues/{issueId}` contains only exact departure/driver identity, bounded category,
+  severity, lifecycle status, revision and timestamps. Driver free text and passenger or supplier facts
+  never cross into this root.
+
+The app web-admin subscribes only to exact currently visible departure progress leaves and a bounded,
+`updatedAtMs`-indexed issue query. It shows stale/at-limit state rather than treating missing data as
+completion. Operations may acknowledge or resolve an issue only through leaf updates under
+`driver_tour_pack_actions/{departureKey}/{driverId}/issues/{issueId}`; the server remains responsible
+for projections and notification fanout.
+
+Notifications are semantic: metadata-only republishes are silent; lock-screen copy says only that
+operational information changed and contains no names, hotels, suppliers or issue text. Opening a
+notification identifies the changed safe sections. Critical timing changes may require revision acknowledgement.
+
 ## Rollback
 
-Mobile exposure is controlled by exact boolean leaves under `driver_tour_pack_feature_flags`. Set `global` false/delete it to stop global exposure, or false/delete one coherent driver's leaf to remove a canary. The live listeners fail closed and an open Command Centre returns to Driver Home. This rollback does not delete or mutate manifests, report packs or driver actions.
+Mobile exposure is controlled by exact boolean leaves under `driver_tour_pack_feature_flags`. Set `global` false/delete it to stop global exposure, false/delete `testflight` to revoke the TestFlight-only cohort, or false/delete one coherent driver's leaf to remove a canary. The TestFlight binary is compile-time eligible but still requires the independently revocable server `testflight` flag. The live listeners fail closed and an open Command Centre returns to Driver Home. This rollback does not delete or mutate manifests, report packs or driver actions.
 
 Publisher, Function invoker, rules, web-admin hosting, management-dashboard hosting and OTA mobile rollout remain independently reversible as described in the ingestion and release runbooks.
+
+## TestFlight eligibility
+
+Version 1.0.4 is eligible only for controlled internal TestFlight drivers after a matching-commit
+Functions/rules/web-admin/management deployment. Enable the TestFlight-only server flag (leaving
+the production `global` flag false), then enable one coherent notification canary first, complete
+the real-device field drills, exercise each rollback control, then approve any cohort expansion.
 
 ## Focused release evidence
 

@@ -97,6 +97,17 @@ The feature is hidden unless either `driver_tour_pack_feature_flags/global` is b
 
 Only operations admins may write boolean flag leaves. The per-driver leaf is readable only when `users/{authUid}/driverId` and `drivers/{driverId}/authUid` agree. This is a rollout control, not authorization to a pack; Gate 6 assignment rules still independently protect every pack read.
 
+## Gate 10 actions and notifications
+
+Revision acknowledgement, pickup/service completion and structured issues use identity-scoped offline queues.
+They never mutate source packs or `tour_manifests`. On reconnect, the server validates the assignment and
+projects only safe aggregate progress/issues for operations. A reassignment, expiry, withdrawal, logout or
+identity change purges the old queued action scope before any replay.
+
+Driver Tour Pack notifications are semantic and privacy-safe: no push for metadata-only republication, no
+names/hotel/supplier/issue content on the lock screen, and a deep link only to the exact authorised
+departure. Critical timing changes can require acknowledgement before the driver proceeds.
+
 ## Queue action types
 
 - `MANIFEST_UPDATE`

@@ -982,10 +982,53 @@ test('push navigation payloads preserve durable notice and exact destination con
     notificationType: 'category_broadcast',
     timestamp: 200,
   });
+  assert.deepEqual(__testables.buildPushNavigationData({
+    screen: 'DriverTourPack',
+    tourId: '5001D_1',
+    departureKey: '2026-09-10::5001D_1',
+    revision: 4,
+    changedSections: ['pickups', 'timeline'],
+    critical: true,
+    requiresAcknowledgement: true,
+    notificationType: 'driver_tour_pack',
+    timestamp: 300,
+  }), {
+    screen: 'DriverTourPack',
+    tourId: '5001D_1',
+    departureKey: '2026-09-10::5001D_1',
+    revision: 4,
+    changedSections: 'pickups,timeline',
+    critical: true,
+    requiresAcknowledgement: true,
+    notificationType: 'driver_tour_pack',
+    timestamp: 300,
+  });
   assert.throws(
     () => __testables.buildPushNavigationData({ screen: 'Chat' }),
     /requires a tour id/,
   );
+});
+
+test('driver Tour Pack inbox records contain semantic metadata but no operational payload', () => {
+  const record = __testables.buildTourNotificationRecord({
+    type: 'driver_tour_pack',
+    tourId: '5001D_1',
+    sourceId: '2026-09-10::5001D_1:4',
+    title: 'Operational information changed',
+    body: 'Open the Driver Command Centre to review the updated sections.',
+    screen: 'DriverTourPack',
+    departureKey: '2026-09-10::5001D_1',
+    revision: 4,
+    changedSections: ['hotels', 'services'],
+    createdAtMs: 300,
+  });
+
+  assert.equal(record.departureKey, '2026-09-10::5001D_1');
+  assert.equal(record.changedSections, 'hotels,services');
+  assert.equal(record.revision, 4);
+  assert.equal(record.passengerName, undefined);
+  assert.equal(record.hotelName, undefined);
+  assert.equal(record.critical, undefined);
 });
 
 test('itinerary notifications describe the specific schedule change', () => {

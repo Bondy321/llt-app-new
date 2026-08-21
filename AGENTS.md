@@ -150,6 +150,8 @@ Do not rename these Realtime Database roots without a full migration:
 - `driver_tour_pack_ingestion`
 - `driver_tour_pack_admin_status`
 - `driver_tour_pack_feature_flags`
+- `driver_tour_pack_progress`
+- `driver_tour_pack_issues`
 
 Admin UID hardcoded in rules:
 
@@ -843,7 +845,7 @@ Exported functions:
   - Cloud Run IAM and in-process Google OIDC restrict the exact management sync service account
   - validates bounded versioned packs and semantic fingerprints before staging
   - uses begin/upload/finalize so partial or stale runs cannot become current
-  - writes only `driver_tour_packs`, `driver_tour_pack_tombstones`, and `driver_tour_pack_ingestion`
+  - writes only `driver_tour_packs`, `driver_tour_pack_tombstones`, `driver_tour_pack_ingestion`, and PII-free Tour Pack operations projections
   - records only identities, counts, hashes, and reason codes in logs and audit metadata
 
 Testing hook:
@@ -883,7 +885,10 @@ Important RTDB invariants:
   denied. `driver_tour_pack_tombstones` and `driver_tour_pack_ingestion` stay server-private.
 - `driver_tour_pack_actions/{departureKey}/{driverId}` is separate driver state. A client can
   access only its own leaf under the same coherent assignment and must satisfy the versioned,
-  closed, bounded action schema. Never add actions to the management publisher write roots.
+  closed, bounded action schema. Gate 10 projects only safe progress counts/acknowledgement facts to
+  `driver_tour_pack_progress/{departureKey}/{driverId}` and fixed-schema issues to
+  `driver_tour_pack_issues/{issueId}`; never project passenger, pickup, hotel, supplier, free-text,
+  or raw action payloads. Operations may update only issue status leaves through the approved action path.
 - `cleanupExpiredDriverTourPacks` is a Gen 2 scheduled server cleanup. It deletes expired pack PII,
   driver actions, and metadata in batches of 50, leaving only a PII-free expiry tombstone. Deploy
   Functions first, then RTDB rules, then the mobile reader/cache release.
@@ -928,6 +933,15 @@ If changing any protected data shape, update all of:
 ---
 
 ## 11. Tests
+
+Use incremental verification during implementation:
+
+- After a known-green baseline, run only the test files or named suites affected by each subsequent change.
+- Expand to adjacent contract, security-rule, or integration suites when a shared boundary changes; do not repeatedly rerun unrelated green suites.
+- Before sign-off, deployment, or release, run one complete repository verification pass (including emulators when rules changed).
+- If that final pass exposes a defect, fix it, rerun the affected slice first, then repeat the complete pass once the slice is green.
+
+This keeps feedback fast without weakening the final release gate.
 
 Root orchestration:
 
@@ -1018,7 +1032,7 @@ Many root npm scripts use POSIX-style `NODE_ENV=test`. CI runs on Linux. On nati
 Mobile config:
 
 - Use `app.config.js`; there is no static `app.json`.
-- Version: `1.0.3`
+- Version: `1.0.4`
 - iOS build number: `3` local baseline; production increments are managed remotely by EAS
 - Android version code: `3` local baseline; production increments are managed remotely by EAS
 - Runtime version policy: `appVersion`
@@ -1053,6 +1067,9 @@ Production EAS versioning:
 - Current iOS submit profile stores only non-secret bundle metadata in `eas.json`; GitHub Actions injects App Store Connect IDs/API key material at runtime.
 - Production config runs `plugins/withProductionReleaseCleanup.js` to remove Expo Dev Launcher local-network iOS metadata and Android overlay permission from store/TestFlight native config.
 - The TestFlight workflow validates App Store Connect inputs before building, but only writes the `.p8` API key after the EAS build is complete so the key is never included in the build upload context.
+- Driver Tour Pack v1.0.4 is compile-time TestFlight-eligible but still requires the independently revocable `driver_tour_pack_feature_flags/testflight` server flag; keep the production `global` flag false until the complete field-drill and release matrix has passed.
+  Do not use a general production rollout, App Store submission, or broad OTA cohort as evidence for this
+  operational feature.
 
 OTA updates:
 

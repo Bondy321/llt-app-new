@@ -26,6 +26,8 @@ driver_tour_packs/{departureKey}
 driver_tour_pack_actions/{departureKey}/{driverId}
 driver_tour_pack_tombstones/{departureKey}
 driver_tour_pack_admin_status/{departureKey}
+driver_tour_pack_progress/{departureKey}/{driverId}
+driver_tour_pack_issues/{issueId}
 driver_tour_pack_ingestion/activeRun
 driver_tour_pack_ingestion/runs/{runId}
 driver_tour_pack_ingestion/staging/{runId}
@@ -45,7 +47,13 @@ The collection root remains unreadable, so RTDB queries/listing cannot discover 
 
 Rules also require `expiresAtMs > now` for source-pack reads and action writes. Access therefore revokes immediately at expiry even before the scheduled physical cleanup catches the next bounded batch.
 
-`driver_tour_pack_actions` is deliberately separate from the publisher roots. An assigned driver may read/write only their own exact action leaf under a readable assigned pack. Gate 6 exposes only acknowledgement plus pickup/service progress leaves; pickup and service keys must already exist in the bounded source pack, so they cannot be expanded beyond projection limits. All writes are leaf-only so RTDB can deny every unknown path; callers must not replace an action object. Invalid enum values and timestamps more than five minutes in the future are denied. Structured issue reports remain server-closed until Gate 10 defines their final workflow and notification contract. Actions cannot be written beneath a different driver ID.
+`driver_tour_pack_actions` is deliberately separate from the publisher roots. An assigned driver may read/write only their own exact action leaf under a readable assigned pack. Gate 10 adds revision acknowledgement, pickup/service/hotel completion and structured issues through the same identity-scoped action root; pickup, service and hotel keys must already exist in the bounded source pack. All writes are leaf-only so RTDB can deny every unknown path; callers must not replace an action object. Issue IDs use the fixed `issue_001` through `issue_100` slots, placing a hard per-driver/per-departure bound on this first schema. Invalid enum values and timestamps more than five minutes in the future are denied. Operations acknowledge or resolve only approved issue status leaves, with server-owned projection/audit metadata. Actions cannot be written beneath a different driver ID.
+
+`driver_tour_pack_progress` and `driver_tour_pack_issues` are server-owned, admin-readable projections.
+Progress contains identity, acknowledgement/completion counts and timing only. Issues contain identity,
+bounded category/severity/status, revision and timing only. Neither root may contain passenger, pickup,
+hotel, supplier, itinerary, contact, free-text issue, fingerprint or raw action data. Issue queries must be
+indexed by `updatedAtMs` and bounded; progress reads must be exact departure leaves.
 
 The publisher module asserts that its final multi-location update contains only the Driver Tour Pack, tombstone, ingestion-audit and PII-free admin-status root families above. It has no code path for `tours`, `bookings`, `booking_identities`, `tour_manifests`, driver actions, chat or photos.
 
@@ -104,11 +112,17 @@ The boarding manifest is independent. `getTourManifest` marks a complete v1 snap
 
 ## Deployment and IAM verification
 
-Deploy Functions before any Gate 6 read rules:
+Deploy the ingestion, expiry, Gate 10 projection and semantic-notification Functions before their
+Realtime Database rules, then deploy rules, web-admin hosting, and finally the controlled TestFlight
+build. The management publisher remains disabled until its OIDC invoker policy has been verified.
+Every deployed component must be recorded against the approved matching release commits; an OTA
+rollback, flag disable, publisher stop, invoker revoke and prior Function revision are independent controls.
+
+Start with the core Functions deployment:
 
 ```powershell
 $env:FUNCTIONS_DISCOVERY_TIMEOUT='60'
-npx firebase-tools deploy --only functions:ingestDriverTourPacks,functions:cleanupExpiredDriverTourPacks --project loch-lomond-travel
+npx firebase-tools deploy --only functions:ingestDriverTourPacks,functions:cleanupExpiredDriverTourPacks,functions:sendDriverTourPackChangeNotification,functions:projectDriverTourPackActionState --project loch-lomond-travel
 ```
 
 Then deploy Realtime Database rules, then publish the mobile reader/cache update. Do not release a client that reads packs before the Functions and rules are present.

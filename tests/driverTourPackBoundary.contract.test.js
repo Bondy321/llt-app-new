@@ -62,6 +62,8 @@ test('the rollout flag denies listing and permits only exact coherent-driver can
   assert.match(flags.drivers.$driverId['.write'], /admin_users/);
   assert.match(flags.global['.write'], /admin_users/);
   assert.match(flags.global['.validate'], /isBoolean/);
+  assert.match(flags.testflight['.write'], /admin_users/);
+  assert.match(flags.testflight['.validate'], /isBoolean/);
 });
 
 test('expiry cleanup is bounded and only removes driver pack lifecycle roots', () => {

@@ -16,7 +16,7 @@ const storage = createPersistenceProvider({
 });
 
 const SCHEMA_VERSION = 1;
-const SUPPORTED_QUEUE_TYPES = new Set(['MANIFEST_UPDATE', 'CHAT_MESSAGE', 'INTERNAL_CHAT_MESSAGE', 'PHOTO_UPLOAD']);
+const SUPPORTED_QUEUE_TYPES = new Set(['MANIFEST_UPDATE', 'CHAT_MESSAGE', 'INTERNAL_CHAT_MESSAGE', 'PHOTO_UPLOAD', 'DRIVER_TOUR_PACK_ACTION']);
 const SUPPORTED_QUEUE_STATUSES = new Set(['queued', 'uploading', 'retrying', 'failed', 'completed', 'syncing']);
 const MAX_ATTEMPTS = 5;
 const QUEUE_KEY = 'queue_v1';
@@ -947,6 +947,10 @@ const enqueueAction = async (action) => withQueueMutationLock(async () => {
       });
       queue = filteredQueue;
     }
+    if (scopedAction.type === 'DRIVER_TOUR_PACK_ACTION' && scopedAction.payload?.departureKey) {
+      const actionKey = `${scopedAction.payload.departureKey}:${scopedAction.payload.driverId}:${scopedAction.payload.kind}:${scopedAction.payload.targetId || 'root'}`;
+      queue = queue.filter((entry) => entry.type !== 'DRIVER_TOUR_PACK_ACTION' || entry.status === 'syncing' || !actionMatchesScope(entry, actionScope) || `${entry.payload?.departureKey}:${entry.payload?.driverId}:${entry.payload?.kind}:${entry.payload?.targetId || 'root'}` !== actionKey);
+    }
 
     if (!hasQueueCapacity(queue)) {
       logger.error('OfflineSync', 'Queue enqueue rejected at capacity', {
@@ -1278,7 +1282,7 @@ const subscribeQueuedActions = (listener, { scope } = {}) => {
 };
 
 const applyReplayAction = async (action, services = {}) => {
-  const { bookingService, chatService, photoService, db } = services;
+  const { bookingService, chatService, photoService, driverTourPackActionService, db } = services;
 
   if (action.type === 'MANIFEST_UPDATE' && bookingService?.applyManifestUpdateDirect) {
     return bookingService.applyManifestUpdateDirect(action.payload, db);
@@ -1294,6 +1298,10 @@ const applyReplayAction = async (action, services = {}) => {
 
   if (action.type === 'PHOTO_UPLOAD' && photoService?.uploadPhotoDirect) {
     return photoService.uploadPhotoDirect(action.payload, db);
+  }
+
+  if (action.type === 'DRIVER_TOUR_PACK_ACTION' && driverTourPackActionService?.submitDirect) {
+    return driverTourPackActionService.submitDirect(action.payload, db);
   }
 
   return RESPONSE.fail(`Unsupported replay action type: ${action.type}`);

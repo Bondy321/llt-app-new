@@ -50,6 +50,7 @@ Module._load = function mockLoader(request, parent, isMain) {
       View: createHost('View'),
       TouchableOpacity: createHost('TouchableOpacity'),
       ScrollView: createHost('ScrollView'),
+      TextInput: createHost('TextInput'),
       Linking: { openURL: async () => true },
       Platform: { OS: 'ios' },
     };
@@ -115,5 +116,67 @@ test('renders assignment/offline answers and authoritative progress across tabs'
   const visualSeat = renderer.root.findByProps({ accessibilityLabel: 'Seat 1A: Boarded, Jane Driver' });
   assert.notEqual(visualSeat.props.accessibilityRole, 'button');
 
+  await act(async () => renderer.unmount());
+});
+
+test('surfaces semantic acknowledgement and records offline progress and structured issues', async () => {
+  const Screen = require('../screens/DriverTourPackScreen').default;
+  const calls = [];
+  const operationalPack = {
+    ...pack,
+    hotels: {
+      hotel_1: { hotelId: 'hotel_1', name: 'Operations Hotel', address: 'Hotel Road', phone: '', nights: '1', boardBasis: 'DBB', arrivalDateISO: '2026-09-10', isPlaceholder: false },
+    },
+    services: {
+      service_1: { serviceId: 'service_1', type: 'attraction', description: 'Castle visit', supplier: 'Castle', dateISO: '2026-09-10', time: '14:00', bookingRef: 'SAFE-REF', notes: '', quantity: 1 },
+    },
+  };
+  const actionState = {
+    actions: { revisionAcknowledged: 2, pickupStops: {}, serviceCompletion: {}, hotelCompletion: {}, issues: {} },
+    change: { revision: 3, changedSections: ['pickups', 'timeline'], critical: true, requiresAcknowledgement: true },
+    acknowledgementPending: true,
+    pendingCount: 1,
+    acknowledge: async () => { calls.push(['acknowledge']); return { success: true, data: { queued: true } }; },
+    setPickup: async (...args) => { calls.push(['pickup', ...args]); return { success: true, data: { queued: true } }; },
+    setService: async (...args) => { calls.push(['service', ...args]); return { success: true, data: { queued: true } }; },
+    setHotel: async (...args) => { calls.push(['hotel', ...args]); return { success: true, data: { queued: true } }; },
+    reportIssue: async (value) => { calls.push(['issue', value]); return { success: true, data: { queued: true } }; },
+  };
+  let renderer;
+  await act(async () => {
+    renderer = TestRenderer.create(React.createElement(Screen, {
+      packState: { pack: operationalPack, state: 'ready', source: 'cache' },
+      actionState,
+      isConnected: false,
+      driverData: { id: 'D-ONE', currentTourId: '5001D_1', name: 'Driver One' },
+      tourData: { name: 'Highland Explorer' },
+      onBack: () => {},
+      onNavigate: () => {},
+    }));
+    await Promise.resolve();
+  });
+
+  assert.ok(allText(renderer.root).includes('Critical update'));
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Acknowledge revision 3' }).props.onPress());
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Operational issue summary' }).props.onChangeText('Engine warning light is on'));
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Report operational issue' }).props.onPress());
+
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Run tab' }).props.onPress());
+  const pickupControls = renderer.root.findByProps({ accessibilityLabel: 'Main Street progress controls' });
+  await act(async () => pickupControls.findByProps({ accessibilityLabel: 'Arrived' }).props.onPress());
+
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Tour tab' }).props.onPress());
+  const hotelControls = renderer.root.findByProps({ accessibilityLabel: 'Operations Hotel progress controls' });
+  await act(async () => hotelControls.findByProps({ accessibilityLabel: 'Complete' }).props.onPress());
+  const serviceControls = renderer.root.findByProps({ accessibilityLabel: 'Castle visit progress controls' });
+  await act(async () => serviceControls.findByProps({ accessibilityLabel: 'Complete' }).props.onPress());
+
+  assert.deepEqual(calls, [
+    ['acknowledge'],
+    ['issue', { category: 'other', severity: 'warning', summary: 'Engine warning light is on' }],
+    ['pickup', 'p1', 'ARRIVED'],
+    ['hotel', 'hotel_1', 'COMPLETED'],
+    ['service', 'service_1', 'COMPLETED'],
+  ]);
   await act(async () => renderer.unmount());
 });
