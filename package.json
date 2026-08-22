@@ -39,6 +39,7 @@
     "deploy:web-admin": "npm run build:web-admin && firebase deploy --only hosting:web-admin",
     "validate:expo-env": "node scripts/validateExpoPublicEnv.js",
     "security:audit:production": "npm audit --omit=dev --audit-level=high && npm --prefix functions audit --omit=dev --audit-level=high && npm --prefix web-admin audit --omit=dev --audit-level=high",
+    "security:audit:release": "npm run security:audit:production && npm audit --audit-level=high && npm --prefix functions audit --audit-level=high && npm --prefix web-admin audit --audit-level=high",
     "sync:eas-env:production": "node scripts/syncEasEnvFromProcess.js --environment=production",
     "eas-build-pre-install": "node scripts/validateExpoPublicEnv.js",
     "build:dev:ios": "eas build --profile development --platform ios --environment development",

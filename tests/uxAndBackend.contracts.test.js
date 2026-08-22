@@ -709,7 +709,7 @@ test('Static contract: production binary EAS workflows gate release on mobile/ba
     '.github/workflows/eas-update.yml',
   ].forEach((relativePath) => {
     const source = readText(relativePath);
-    assert.match(source, /run:\s*npm run security:audit:production/);
+    assert.match(source, /run:\s*npm run security:audit:release/);
     assert.match(source, /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK:\s*'true'/);
     assert.match(source, /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK:\s*'true'/);
     assert.doesNotMatch(

@@ -59,7 +59,7 @@ jobs:
         run: npm ci
 
       - name: Audit production dependency graphs
-        run: npm run security:audit:production
+        run: npm run security:audit:release
 
       - name: Validate Expo public environment
         run: npm run validate:expo-env -- --platform=ios
