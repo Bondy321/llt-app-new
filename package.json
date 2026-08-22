@@ -38,6 +38,7 @@
     "build:web-admin": "npm --prefix web-admin run build",
     "deploy:web-admin": "npm run build:web-admin && firebase deploy --only hosting:web-admin",
     "validate:expo-env": "node scripts/validateExpoPublicEnv.js",
+    "security:audit:production": "npm audit --omit=dev --audit-level=high && npm --prefix functions audit --omit=dev --audit-level=high && npm --prefix web-admin audit --omit=dev --audit-level=high",
     "sync:eas-env:production": "node scripts/syncEasEnvFromProcess.js --environment=production",
     "eas-build-pre-install": "node scripts/validateExpoPublicEnv.js",
     "build:dev:ios": "eas build --profile development --platform ios --environment development",
@@ -94,6 +95,9 @@
     "gaxios": {
       "uuid": "^11.1.1"
     },
+    "metro": "0.83.8",
+    "metro-config": "0.83.8",
+    "metro-transform-worker": "0.83.8",
     "xcode": {
       "uuid": "^11.1.1"
     }

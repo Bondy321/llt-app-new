@@ -87,6 +87,10 @@ jobs:
         if: ${{ !inputs.eas_build_id }}
         run: npm ci
 
+      - name: Audit production dependency graphs
+        if: ${{ !inputs.eas_build_id }}
+        run: npm run security:audit:production
+
       - name: Install Functions dependencies
         if: ${{ !inputs.eas_build_id }}
         run: npm --prefix functions ci

@@ -58,6 +58,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit production dependency graphs
+        run: npm run security:audit:production
+
       - name: Validate Expo public environment
         run: npm run validate:expo-env -- --platform=ios
 
