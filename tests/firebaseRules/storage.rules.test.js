@@ -1,4 +1,5 @@
 const test = require('node:test');
+const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
@@ -11,6 +12,7 @@ const {
   uploadBytes,
   deleteObject,
   getBytes,
+  getMetadata,
 } = require('firebase/storage');
 
 const PROJECT_ID = 'demo-llt-storage-rules';
@@ -33,7 +35,7 @@ const imageMetadataFor = (authUid) => ({
 });
 
 let testEnv;
-const storageFor = (uid) => testEnv.authenticatedContext(uid).storage(BUCKET_URL);
+const storageFor = (uid, claims = {}) => testEnv.authenticatedContext(uid, claims).storage(BUCKET_URL);
 
 test.before(async () => {
   const emulator = parseHost();
@@ -60,7 +62,8 @@ test('photo owner can upload and delete group and private objects', async () => 
     'group_tour_photos/TOUR_1/photo.jpg',
     'private_tour_photos/TOUR_1/PASSENGER_1/photo.jpg',
   ]) {
-    const objectRef = ref(storageFor(OWNER_UID), objectPath);
+    const claims = objectPath.startsWith('private_') ? { privatePhotoOwnerKey: 'PASSENGER_1' } : {};
+    const objectRef = ref(storageFor(OWNER_UID, claims), objectPath);
     await assertSucceeds(uploadBytes(objectRef, imageBytes, imageMetadataFor(OWNER_UID)));
     await assertSucceeds(deleteObject(objectRef));
   }
@@ -77,6 +80,27 @@ test('another authenticated user cannot overwrite or delete the uploader object'
   const foreignRef = ref(storageFor(FOREIGN_UID), objectPath);
   await assertFails(uploadBytes(foreignRef, imageBytes, imageMetadataFor(FOREIGN_UID)));
   await assertFails(deleteObject(foreignRef));
+});
+
+test('server-generated group variants are owner-deletable but cannot be client-created or overwritten', async () => {
+  const objectPath = 'group_tour_photos/TOUR_1/viewers/owned_viewer.jpg';
+  const ownerRef = ref(storageFor(OWNER_UID), objectPath);
+  await assertFails(uploadBytes(ownerRef, imageBytes, imageMetadataFor(OWNER_UID)));
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await uploadBytes(ref(context.storage(BUCKET_URL), objectPath), imageBytes, {
+      contentType: 'image/jpeg',
+      customMetadata: {
+        authUid: OWNER_UID,
+        variant: 'viewer',
+        firebaseStorageDownloadTokens: 'server-token',
+      },
+    });
+  });
+
+  await assertFails(uploadBytes(ownerRef, imageBytes, imageMetadataFor(OWNER_UID)));
+  await assertFails(deleteObject(ref(storageFor(FOREIGN_UID), objectPath)));
+  await assertSucceeds(deleteObject(ownerRef));
 });
 
 test('uploads must be authenticated images with matching uploader metadata', async () => {
@@ -97,19 +121,60 @@ test('uploads must be authenticated images with matching uploader metadata', asy
     new Uint8Array([1, 2, 3]),
     { contentType: 'text/plain', customMetadata: { authUid: OWNER_UID } },
   ));
+  await assertFails(uploadBytes(
+    ref(ownerStorage, 'group_tour_photos/TOUR_1/sensitive-metadata.jpg'),
+    imageBytes,
+    { contentType: 'image/jpeg', customMetadata: { authUid: OWNER_UID, bookingRef: 'PRIVATE-REF' } },
+  ));
 });
 
-test('photo reads require authentication', async () => {
+test('private photo reads require the matching stable owner claim', async () => {
   const objectPath = 'private_tour_photos/TOUR_1/PASSENGER_1/read.jpg';
   await assertSucceeds(uploadBytes(
-    ref(storageFor(OWNER_UID), objectPath),
+    ref(storageFor(OWNER_UID, { privatePhotoOwnerKey: 'PASSENGER_1' }), objectPath),
     imageBytes,
     imageMetadataFor(OWNER_UID),
   ));
 
-  await assertSucceeds(getBytes(ref(storageFor(FOREIGN_UID), objectPath)));
+  await assertSucceeds(getBytes(ref(
+    storageFor('restored-owner', { privatePhotoOwnerKey: 'PASSENGER_1' }),
+    objectPath,
+  )));
+  await assertFails(getBytes(ref(storageFor(FOREIGN_UID), objectPath)));
+  await assertFails(getBytes(ref(
+    storageFor(FOREIGN_UID, { privatePhotoOwnerKey: 'PASSENGER_2' }),
+    objectPath,
+  )));
   await assertFails(getBytes(ref(
     testEnv.unauthenticatedContext().storage(BUCKET_URL),
+    objectPath,
+  )));
+});
+
+test('new private uploads retain only the approved client metadata allowlist', async () => {
+  const objectPath = 'private_tour_photos/TOUR_1/PASSENGER_1/metadata.jpg';
+  const objectRef = ref(storageFor(OWNER_UID, { privatePhotoOwnerKey: 'PASSENGER_1' }), objectPath);
+  await assertSucceeds(uploadBytes(objectRef, imageBytes, {
+    contentType: 'image/jpeg',
+    customMetadata: { authUid: OWNER_UID, visibility: 'private', sourceRole: 'source' },
+  }));
+  const metadata = await getMetadata(objectRef);
+  assert.deepEqual(metadata.customMetadata, {
+    authUid: OWNER_UID,
+    visibility: 'private',
+    sourceRole: 'source',
+  });
+});
+
+test('a restored stable owner can delete a private object uploaded by an earlier auth uid', async () => {
+  const objectPath = 'private_tour_photos/TOUR_1/PASSENGER_1/legacy.jpg';
+  await assertSucceeds(uploadBytes(
+    ref(storageFor(OWNER_UID, { privatePhotoOwnerKey: 'PASSENGER_1' }), objectPath),
+    imageBytes,
+    imageMetadataFor(OWNER_UID),
+  ));
+  await assertSucceeds(deleteObject(ref(
+    storageFor('restored-owner', { privatePhotoOwnerKey: 'PASSENGER_1' }),
     objectPath,
   )));
 });

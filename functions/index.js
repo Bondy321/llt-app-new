@@ -25,9 +25,14 @@ const {
 } = require('./lib/managementOidc');
 const { cleanupExpiredDriverTourPacks } = require('./lib/driverTourPackExpiryCleanup');
 const {
+  createDistributedLoginRateLimiter,
+  cleanupExpiredLoginRateLimits,
+} = require('./lib/loginRateLimiter');
+const {
   buildDriverTourPackActionProjectionUpdates,
   summarizeDriverTourPackChange,
 } = require('./lib/driverTourPackOperations');
+const { deriveTourDateIndexUpdate } = require('./lib/tourDateIndex');
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -1093,6 +1098,19 @@ const buildFirebaseStorageDownloadUrl = ({ bucketName, objectPath, token }) => {
   return `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(objectPath)}?alt=media&token=${token}`;
 };
 
+const hardenPrivateSourceObjectMetadata = async (sourceFile, suppliedObjectMetadata = null) => {
+  const objectMetadata = suppliedObjectMetadata || (await sourceFile.getMetadata())[0];
+  const current = objectMetadata?.metadata || {};
+  await sourceFile.setMetadata({
+    metadata: {
+      ...(typeof current.authUid === 'string' && current.authUid ? { authUid: current.authUid } : {}),
+      visibility: 'private',
+      sourceRole: 'source',
+      firebaseStorageDownloadTokens: null,
+    },
+  });
+};
+
 const generatePhotoVariantsForRecord = async ({
   bucketName,
   visibility,
@@ -1137,9 +1155,14 @@ const generatePhotoVariantsForRecord = async ({
   try {
     const sourceFile = resolvedBucket.file(objectPath);
     const [sourceBuffer] = await sourceFile.download();
+    const [sourceObjectMetadata] = await sourceFile.getMetadata();
+    const sourceAuthUid = typeof sourceObjectMetadata?.metadata?.authUid === 'string'
+      ? sourceObjectMetadata.metadata.authUid.trim()
+      : '';
+    if (visibility === 'private') await hardenPrivateSourceObjectMetadata(sourceFile, sourceObjectMetadata);
     const { viewerBuffer, thumbnailBuffer } = await createPhotoVariantBuffers(sourceBuffer);
-    const viewerToken = randomUUID();
-    const thumbnailToken = randomUUID();
+    const viewerToken = visibility === "private" ? null : randomUUID();
+    const thumbnailToken = visibility === "private" ? null : randomUUID();
 
     await Promise.all([
       resolvedBucket.file(viewerPath).save(viewerBuffer, {
@@ -1147,9 +1170,10 @@ const generatePhotoVariantsForRecord = async ({
           contentType: "image/jpeg",
           cacheControl: PHOTO_CACHE_CONTROL_HEADER,
           metadata: {
-            variant: "viewer",
-            idempotencyKey: photoRecord.idempotencyKey || "",
-            firebaseStorageDownloadTokens: viewerToken,
+            ...(visibility === 'private'
+              ? { visibility: 'private', sourceRole: 'viewer' }
+              : { variant: 'viewer', ...(sourceAuthUid ? { authUid: sourceAuthUid } : {}) }),
+            ...(viewerToken ? { firebaseStorageDownloadTokens: viewerToken } : {}),
           },
         },
       }),
@@ -1158,9 +1182,10 @@ const generatePhotoVariantsForRecord = async ({
           contentType: "image/jpeg",
           cacheControl: PHOTO_CACHE_CONTROL_HEADER,
           metadata: {
-            variant: "thumbnail",
-            idempotencyKey: photoRecord.idempotencyKey || "",
-            firebaseStorageDownloadTokens: thumbnailToken,
+            ...(visibility === 'private'
+              ? { visibility: 'private', sourceRole: 'thumbnail' }
+              : { variant: 'thumbnail', ...(sourceAuthUid ? { authUid: sourceAuthUid } : {}) }),
+            ...(thumbnailToken ? { firebaseStorageDownloadTokens: thumbnailToken } : {}),
           },
         },
       }),
@@ -1178,9 +1203,9 @@ const generatePhotoVariantsForRecord = async ({
     });
 
     await resolvedDbRoot.child(photoId).update({
-      viewerUrl,
+      viewerUrl: visibility === "private" ? null : viewerUrl,
       viewerStoragePath: viewerPath,
-      thumbnailUrl,
+      thumbnailUrl: visibility === "private" ? null : thumbnailUrl,
       thumbnailStoragePath: thumbnailPath,
       variantStatus: "ready",
       variantUpdatedAt: Date.now(),
@@ -1933,7 +1958,7 @@ const verifyRequestAuthUid = async (req) => {
       return { success: false, reason: 'AUTH_UID_INVALID' };
     }
 
-    return { success: true, uid };
+    return { success: true, uid, claims: decoded };
   } catch (error) {
     log.warn('Request auth token verification failed', {
       reason: error?.code || 'AUTH_TOKEN_INVALID',
@@ -2334,7 +2359,7 @@ const hashRateLimitDimension = (value) => createHash('sha256')
   .digest('hex')
   .slice(0, 24);
 
-const checkPassengerLoginRateLimits = ({
+const checkPassengerLoginRateLimits = async ({
   authUid,
   clientKey,
   bookingRef,
@@ -2344,39 +2369,145 @@ const checkPassengerLoginRateLimits = ({
   const authDimension = hashRateLimitDimension(authUid);
   const networkDimension = hashRateLimitDimension(clientKey);
   const credentialDimension = hashRateLimitDimension(`${bookingRef}:${email}`);
+  const accountDimension = hashRateLimitDimension(bookingRef);
   const checks = [
     {
       scope: 'credential',
-      key: `verify_passenger_login_credential_${authDimension}_${credentialDimension}`,
+      key: `passenger_credential_${credentialDimension}`,
       maxRequests: 8,
     },
     {
       scope: 'account',
-      key: `verify_passenger_login_account_${authDimension}`,
+      key: `passenger_account_${accountDimension}`,
       maxRequests: 24,
     },
     {
       scope: 'network',
-      key: `verify_passenger_login_network_${networkDimension}`,
+      key: `passenger_network_${networkDimension}`,
       maxRequests: 300,
     },
   ];
 
-  for (const check of checks) {
-    if (!limiter(check.key, check.maxRequests, 60000)) {
-      return {
-        allowed: false,
-        scope: check.scope,
-        authDimension,
-        networkDimension,
-      };
-    }
-  }
+  // Consume every dimension for every attempt. Otherwise an already-denied
+  // narrow bucket could let the same traffic evade the broad network bucket.
+  const results = await Promise.all(checks.map(async (check) => ({
+    ...check,
+    allowed: await limiter(check.key, check.maxRequests, 60000),
+  })));
+  const denied = results.find((check) => !check.allowed);
+  if (denied) return { allowed: false, scope: denied.scope, authDimension, networkDimension };
 
   return { allowed: true, authDimension, networkDimension };
 };
 
-const checkDriverLoginRateLimits = ({
+const getTrustedRequestNetworkKey = (req) => {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  const chain = (Array.isArray(forwardedFor) ? forwardedFor : [forwardedFor])
+    .flatMap((value) => typeof value === 'string' ? value.split(',') : [])
+    .map((value) => value.trim())
+    .filter(Boolean);
+  // Google Front End appends the actual peer and load-balancer addresses. The
+  // penultimate hop therefore ignores any attacker-prepended XFF entries.
+  const platformAddress = chain.length >= 2
+    ? chain[chain.length - 2]
+    : chain[0] || req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || 'unknown';
+  return String(platformAddress).trim().slice(0, 128) || 'unknown';
+};
+
+const PRIVATE_MEDIA_BATCH_LIMIT = 50;
+const PRIVATE_MEDIA_URL_TTL_MS = 5 * 60 * 1000;
+
+const normalizePrivateMediaRequest = (body = {}) => {
+  const tourId = normalizeTourKeyForComparison(body.tourId);
+  const ownerKey = resolveTrimmedString(body.ownerKey);
+  const photoIds = Array.isArray(body.photoIds)
+    ? [...new Set(body.photoIds.map(resolveTrimmedString).filter(Boolean))]
+    : [];
+  if (!tourId || !ownerKey || !isValidFirebaseKey(ownerKey) || photoIds.length < 1
+    || photoIds.length > PRIVATE_MEDIA_BATCH_LIMIT || photoIds.some((id) => !isValidFirebaseKey(id))) {
+    return null;
+  }
+  return { tourId, ownerKey, photoIds };
+};
+
+const isPrivateMediaPathForRecord = ({ path, tourId, ownerKey }) => {
+  const normalized = resolveTrimmedString(path);
+  return Boolean(normalized && normalized.startsWith(`private_tour_photos/${tourId}/${ownerKey}/`)
+    && !normalized.includes('..'));
+};
+
+const PRIVATE_MEDIA_READ_CONCURRENCY = 8;
+const readPrivateMediaRecords = async ({ db, tourId, ownerKey, photoIds, concurrency = PRIVATE_MEDIA_READ_CONCURRENCY }) => {
+  const records = {};
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, photoIds.length) }, async () => {
+    while (nextIndex < photoIds.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const photoId = photoIds[index];
+      const snapshot = await db.ref(`private_tour_photos/${tourId}/${ownerKey}/${photoId}`).once('value');
+      if (snapshot.exists()) records[photoId] = snapshot.val();
+    }
+  });
+  await Promise.all(workers);
+  return records;
+};
+
+const signPrivateMediaRecords = async ({
+  bucket,
+  input,
+  records,
+  expires,
+  concurrency = PRIVATE_MEDIA_READ_CONCURRENCY,
+}) => {
+  const media = {};
+  const tasks = input.photoIds.flatMap((photoId) => {
+    const record = records[photoId];
+    if (!record) return [];
+    const fields = [
+      ['sourceUrl', record.storagePath],
+      ['viewerUrl', record.viewerStoragePath],
+      ['thumbnailUrl', record.thumbnailStoragePath],
+    ];
+    return fields
+      .filter(([, objectPath]) => isPrivateMediaPathForRecord({ path: objectPath, ...input }))
+      .map(([field, objectPath]) => ({ photoId, field, objectPath }));
+  });
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
+    while (nextIndex < tasks.length) {
+      const task = tasks[nextIndex];
+      nextIndex += 1;
+      const [url] = await bucket.file(task.objectPath).getSignedUrl({ action: 'read', expires });
+      if (!media[task.photoId]) media[task.photoId] = {};
+      media[task.photoId][task.field] = url;
+    }
+  });
+  await Promise.all(workers);
+  return media;
+};
+
+exports.resolvePrivatePhotoMedia = onRequest(
+  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 30, cors: true },
+  async (req, res) => {
+    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
+    const requestAuth = await verifyRequestAuthUid(req);
+    if (!requestAuth.success) return res.status(401).json({ success: false, reason: 'NOT_AUTHENTICATED' });
+    const input = normalizePrivateMediaRequest(req.body);
+    if (!input) return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
+    if (requestAuth.claims?.privatePhotoOwnerKey !== input.ownerKey) {
+      return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
+    }
+    const records = await readPrivateMediaRecords({ db: admin.database(), ...input });
+    if (Object.keys(records).length === 0) return res.status(404).json({ success: false, reason: 'NOT_FOUND' });
+    const bucket = admin.storage().bucket();
+    const expires = Date.now() + PRIVATE_MEDIA_URL_TTL_MS;
+    const media = await signPrivateMediaRecords({ bucket, input, records, expires });
+    return res.status(200).json({ success: true, expiresAtMs: expires, media });
+  },
+);
+
+const checkDriverLoginRateLimits = async ({
   authUid,
   clientKey,
   driverId,
@@ -2385,36 +2516,74 @@ const checkDriverLoginRateLimits = ({
   const authDimension = hashRateLimitDimension(authUid);
   const networkDimension = hashRateLimitDimension(clientKey);
   const credentialDimension = hashRateLimitDimension(driverId);
+  const accountDimension = credentialDimension;
   const checks = [
     {
       scope: 'credential',
-      key: `verify_driver_login_credential_${authDimension}_${credentialDimension}`,
+      key: `driver_credential_${authDimension}_${credentialDimension}`,
       maxRequests: 8,
     },
     {
       scope: 'account',
-      key: `verify_driver_login_account_${authDimension}`,
+      key: `driver_account_${accountDimension}`,
       maxRequests: 24,
     },
     {
       scope: 'network',
-      key: `verify_driver_login_network_${networkDimension}`,
+      key: `driver_network_${networkDimension}`,
       maxRequests: 200,
     },
   ];
 
-  for (const check of checks) {
-    if (!limiter(check.key, check.maxRequests, 60000)) {
-      return {
-        allowed: false,
-        scope: check.scope,
-        authDimension,
-        networkDimension,
-      };
-    }
-  }
+  const results = await Promise.all(checks.map(async (check) => ({
+    ...check,
+    allowed: await limiter(check.key, check.maxRequests, 60000),
+  })));
+  const denied = results.find((check) => !check.allowed);
+  if (denied) return { allowed: false, scope: denied.scope, authDimension, networkDimension };
 
   return { allowed: true, authDimension, networkDimension };
+};
+
+const isDeployedFunctionsRuntime = (env = process.env) => Boolean(env.K_SERVICE);
+
+const shouldRequireLoginAppCheck = (env = process.env) => {
+  if (env.REQUIRE_APP_CHECK_FOR_LOGIN === 'true') return true;
+  if (isDeployedFunctionsRuntime(env)) {
+    const error = new Error('Production login App Check enforcement is not configured');
+    error.code = 'LOGIN_APP_CHECK_CONFIGURATION_REQUIRED';
+    throw error;
+  }
+  return false;
+};
+
+const enforceLoginAppCheck = async ({ req, networkDimension, loginType }) => {
+  const requireAppCheck = shouldRequireLoginAppCheck();
+  if (!requireAppCheck) return true;
+  const appCheckToken = req.headers['x-firebase-appcheck'];
+  if (typeof appCheckToken !== 'string' || !appCheckToken.trim()) return false;
+  try {
+    await admin.appCheck().verifyToken(appCheckToken.trim());
+    return true;
+  } catch (error) {
+    log.warn(`${loginType} login rejected: invalid App Check token`, {
+      networkDimension,
+      error: error?.message || String(error),
+    });
+    return false;
+  }
+};
+
+let distributedLoginRateLimiterInstance = null;
+const distributedLoginRateLimiter = async (...args) => {
+  if (!distributedLoginRateLimiterInstance) {
+    // Resolve the Admin database lazily so pure Node tests and deployment
+    // discovery do not require a runtime database URL merely to load exports.
+    distributedLoginRateLimiterInstance = createDistributedLoginRateLimiter({
+      database: admin.database(),
+    });
+  }
+  return distributedLoginRateLimiterInstance(...args);
 };
 
 exports.verifyPassengerLogin = onRequest(
@@ -2436,8 +2605,8 @@ exports.verifyPassengerLogin = onRequest(
 
     try {
       const requestAuth = await verifyRequestAuthUid(req);
-      const clientKey = getRequestClientKey(req);
-      const networkDimension = hashRateLimitDimension(clientKey);
+      const networkKey = getTrustedRequestNetworkKey(req);
+      const networkDimension = hashRateLimitDimension(networkKey);
       if (!requestAuth.success) {
         log.warn('Passenger login rejected: missing or invalid Firebase auth token', {
           bookingRef,
@@ -2447,33 +2616,38 @@ exports.verifyPassengerLogin = onRequest(
         return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
       }
 
-      const requireAppCheck = process.env.REQUIRE_APP_CHECK_FOR_LOGIN === 'true';
-      const appCheckToken = req.headers['x-firebase-appcheck'];
-
-      if (requireAppCheck) {
-        if (typeof appCheckToken !== 'string' || !appCheckToken.trim()) {
-          log.warn('Passenger login rejected: missing App Check token', { networkDimension, bookingRef });
+      try {
+        const appCheckValid = await enforceLoginAppCheck({
+          req,
+          networkDimension,
+          loginType: 'Passenger',
+        });
+        if (!appCheckValid) {
+          log.warn('Passenger login rejected: missing or invalid App Check token', { networkDimension });
           return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
         }
-
-        try {
-          await admin.appCheck().verifyToken(appCheckToken.trim());
-        } catch (appCheckError) {
-          log.warn('Passenger login rejected: invalid App Check token', {
-            networkDimension,
-            bookingRef,
-            error: appCheckError.message,
-          });
-          return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
-        }
+      } catch (configurationError) {
+        log.error('Passenger login disabled by unsafe App Check configuration', configurationError, {
+          networkDimension,
+        });
+        return res.status(503).json({ valid: false, reason: 'SERVICE_UNAVAILABLE' });
       }
 
-      const rateLimit = checkPassengerLoginRateLimits({
-        authUid: requestAuth.uid,
-        clientKey,
-        bookingRef,
-        email,
-      });
+      let rateLimit;
+      try {
+        rateLimit = await checkPassengerLoginRateLimits({
+          authUid: requestAuth.uid,
+          clientKey: networkKey,
+          bookingRef,
+          email,
+          limiter: distributedLoginRateLimiter,
+        });
+      } catch (rateLimitError) {
+        log.error('Passenger login disabled because distributed rate limiting failed', rateLimitError, {
+          networkDimension,
+        });
+        return res.status(503).json({ valid: false, reason: 'SERVICE_UNAVAILABLE' });
+      }
       if (!rateLimit.allowed) {
         log.warn('Passenger login rate limit exceeded', {
           scope: rateLimit.scope,
@@ -2550,6 +2724,20 @@ exports.verifyPassengerLogin = onRequest(
       }
 
       await admin.database().ref().update(grantUpdates);
+
+      const stablePassengerId = `pax_v1:${resolvedBookingRef}:${email}`;
+      const privatePhotoOwnerKey = toRealtimeKeySegment(stablePassengerId);
+      if (!privatePhotoOwnerKey) {
+        return res.status(200).json({ valid: false, reason: 'IDENTITY_INCOMPLETE' });
+      }
+
+      // Preserve unrelated claims while projecting only the RTDB-safe owner key needed
+      // by Storage rules. A restored anonymous session receives the same stable key.
+      const authUser = await admin.auth().getUser(requestAuth.uid);
+      await admin.auth().setCustomUserClaims(requestAuth.uid, {
+        ...(authUser.customClaims || {}),
+        privatePhotoOwnerKey,
+      });
 
       return res.status(200).json({
         valid: true,
@@ -2974,30 +3162,32 @@ exports.verifyDriverLogin = onRequest(
       return res.status(400).json({ valid: false, reason: 'INVALID_INPUT' });
     }
 
-    const requireAppCheck = process.env.REQUIRE_APP_CHECK_FOR_LOGIN === 'true';
-    const appCheckToken = req.headers['x-firebase-appcheck'];
-    if (requireAppCheck) {
-      if (typeof appCheckToken !== 'string' || !appCheckToken.trim()) {
-        return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
-      }
-      try {
-        await admin.appCheck().verifyToken(appCheckToken.trim());
-      } catch (appCheckError) {
-        log.warn('Driver login rejected: invalid App Check token', {
-          driverId,
-          authUid: requestAuth.uid,
-          error: appCheckError?.message || String(appCheckError),
-        });
-        return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
-      }
+    const networkKey = getTrustedRequestNetworkKey(req);
+    const networkDimension = hashRateLimitDimension(networkKey);
+    try {
+      const appCheckValid = await enforceLoginAppCheck({ req, networkDimension, loginType: 'Driver' });
+      if (!appCheckValid) return res.status(401).json({ valid: false, reason: 'INVALID_CREDENTIALS' });
+    } catch (configurationError) {
+      log.error('Driver login disabled by unsafe App Check configuration', configurationError, {
+        networkDimension,
+      });
+      return res.status(503).json({ valid: false, reason: 'SERVICE_UNAVAILABLE' });
     }
 
-    const clientKey = getRequestClientKey(req);
-    const rateLimit = checkDriverLoginRateLimits({
-      authUid: requestAuth.uid,
-      clientKey,
-      driverId,
-    });
+    let rateLimit;
+    try {
+      rateLimit = await checkDriverLoginRateLimits({
+        authUid: requestAuth.uid,
+        clientKey: networkKey,
+        driverId,
+        limiter: distributedLoginRateLimiter,
+      });
+    } catch (rateLimitError) {
+      log.error('Driver login disabled because distributed rate limiting failed', rateLimitError, {
+        networkDimension,
+      });
+      return res.status(503).json({ valid: false, reason: 'SERVICE_UNAVAILABLE' });
+    }
     if (!rateLimit.allowed) {
       log.warn('Driver login rate limit exceeded', {
         scope: rateLimit.scope,
@@ -4261,6 +4451,32 @@ exports.sendSafetyAlertNotification = onValueCreated(
   },
 );
 
+const findPhotoRecordByStoragePath = async ({
+  dbRoot,
+  objectPath,
+  maxAttempts = 5,
+  wait = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+}) => {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const snapshot = await dbRoot
+      .orderByChild('storagePath')
+      .equalTo(objectPath)
+      .once('value');
+    const [photoId, photoRecord] = Object.entries(snapshot.val() || {})[0] || [];
+    if (photoId && photoRecord?.storagePath === objectPath) return { photoId, photoRecord };
+    if (attempt < maxAttempts - 1) await wait(Math.min(250 * (2 ** attempt), 2_000));
+  }
+  return null;
+};
+
+const isPhotoVariantRecordReady = ({ visibility, photoRecord }) => {
+  if (photoRecord?.variantStatus !== "ready") return false;
+  if (visibility === "private") {
+    return Boolean(photoRecord.viewerStoragePath && photoRecord.thumbnailStoragePath);
+  }
+  return Boolean(photoRecord.viewerUrl && photoRecord.thumbnailUrl);
+};
+
 const processPhotoVariantObject = async (event) => {
     const objectData = event.data || {};
     const bucketName = objectData.bucket;
@@ -4281,33 +4497,15 @@ const processPhotoVariantObject = async (event) => {
     }
 
     const { tourId, visibility, ownerKey } = parsed;
-    const idempotencyKey = typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey.trim() : "";
-    if (!tourId || !idempotencyKey) {
+    if (!tourId) {
       return null;
     }
 
     const dbRoot = admin.database().ref(buildPhotoCollectionPath({ visibility, tourId, ownerKey }));
-    const existingSnapshot = await dbRoot
-      .orderByChild("idempotencyKey")
-      .equalTo(idempotencyKey)
-      .once("value");
-
-    if (!existingSnapshot.exists()) {
-      return null;
-    }
-
-    const [photoId, photoRecord] = Object.entries(existingSnapshot.val() || {})[0] || [];
-    if (!photoId || !photoRecord) return null;
-    if (typeof photoRecord.storagePath !== "string" || photoRecord.storagePath !== objectPath) {
-      log.warn("Skipping variant generation due to storagePath mismatch", {
-        tourId,
-        visibility,
-        objectPath,
-        photoId,
-      });
-      return null;
-    }
-    if (photoRecord.variantStatus === "ready" && photoRecord.viewerUrl && photoRecord.thumbnailUrl) {
+    const match = await findPhotoRecordByStoragePath({ dbRoot, objectPath });
+    if (!match) return null;
+    const { photoId, photoRecord } = match;
+    if (isPhotoVariantRecordReady({ visibility, photoRecord })) {
       return null;
     }
 
@@ -4319,7 +4517,6 @@ const processPhotoVariantObject = async (event) => {
       photoId,
       photoRecord: {
         ...photoRecord,
-        idempotencyKey,
         storagePath: objectPath,
       },
     });
@@ -4722,6 +4919,48 @@ exports.sendDriverTourPackChangeNotification = onValueWritten(
   },
 );
 
+const normalizeTourDateIndexesForEvent = async (event) => {
+  const tourId = event.params.tourId;
+  if (!isValidFirebaseKey(tourId)) return null;
+  const tourRef = admin.database().ref(`tours/${tourId}`);
+  const tourSnapshot = await tourRef.once('value');
+  const tour = tourSnapshot.val() || null;
+  if (!tour) return null;
+  const indexUpdate = deriveTourDateIndexUpdate(tour);
+  if (!indexUpdate) return null;
+  await tourRef.update(indexUpdate);
+  log.info('Tour date query indexes normalized', {
+    tourId,
+    indexed: indexUpdate.startDateEpochMs !== null,
+  });
+  return null;
+};
+
+/**
+ * Keeps the bounded admin date query fields coherent for every producer.
+ * Date-leaf triggers avoid charging an invocation for unrelated high-volume
+ * tour children such as live location, participant, and safety updates.
+ */
+exports.normalizeTourDateIndexes = onValueWritten(
+  {
+    ref: '/tours/{tourId}/startDate',
+    region: 'europe-west1',
+    instance: 'loch-lomond-travel-default-rtdb',
+    maxInstances: 10,
+  },
+  normalizeTourDateIndexesForEvent,
+);
+
+exports.normalizeTourEndDateIndex = onValueWritten(
+  {
+    ref: '/tours/{tourId}/endDate',
+    region: 'europe-west1',
+    instance: 'loch-lomond-travel-default-rtdb',
+    maxInstances: 10,
+  },
+  normalizeTourDateIndexesForEvent,
+);
+
 /**
  * Projects driver-owned action state into a compact operations view. The
  * progress projection contains counts only; the admin issue index contains
@@ -4747,6 +4986,23 @@ exports.projectDriverTourPackActionState = onValueWritten(
       afterActions: event.data?.after?.val?.() || null,
       updatedAtMs: Date.now(),
     });
+    // Legacy projections used only issueId as the global key, so different
+    // departures could overwrite one another. Remove a legacy entry only when
+    // it still belongs to this exact source identity; v2 composite entries are
+    // written by the pure projection builder above.
+    const beforeIssues = event.data?.before?.val?.()?.issues || {};
+    const afterIssues = event.data?.after?.val?.()?.issues || {};
+    const legacyIssueIds = new Set([...Object.keys(beforeIssues), ...Object.keys(afterIssues)]
+      .filter((issueId) => JSON.stringify(beforeIssues[issueId] ?? null) !== JSON.stringify(afterIssues[issueId] ?? null)));
+    await Promise.all([...legacyIssueIds].map(async (issueId) => {
+      if (!isValidFirebaseKey(issueId)) return;
+      const legacyPath = `driver_tour_pack_issues/${issueId}`;
+      const legacySnapshot = await db.ref(legacyPath).once('value');
+      const legacy = legacySnapshot.val();
+      if (legacy?.departureKey === departureKey && legacy?.driverId === driverId && legacy?.issueId === issueId) {
+        updates[legacyPath] = null;
+      }
+    }));
     if (Object.keys(updates).length) await db.ref('/').update(updates);
     log.info('Driver Tour Pack action projection updated', {
       departureKey,
@@ -4776,6 +5032,28 @@ exports.cleanupExpiredDriverTourPacks = onSchedule(
   async () => {
     const result = await cleanupExpiredDriverTourPacks({ database: admin.database() });
     log.info('Driver Tour Pack expiry cleanup completed', result);
+    return result;
+  },
+);
+
+/**
+ * Removes only expired, opaque login limiter counters. Active counters remain
+ * authoritative across all Gen2 instances; no login or network identifiers are
+ * stored in this branch.
+ */
+exports.cleanupExpiredLoginRateLimits = onSchedule(
+  {
+    schedule: 'every 1 hours',
+    timeZone: 'Europe/London',
+    region: 'europe-west1',
+    memory: '256MiB',
+    timeoutSeconds: 60,
+    maxInstances: 1,
+  },
+  async () => {
+    const result = await cleanupExpiredLoginRateLimits({ database: admin.database() });
+    if (result.hasMore) log.warn('Expired login rate-limit cleanup reached its bounded ceiling', result);
+    else log.info('Expired login rate-limit cleanup completed', result);
     return result;
   },
 );
@@ -4864,6 +5142,9 @@ exports.__testables = {
   parseSourcePhotoPath,
   buildPhotoCollectionPath,
   processPhotoVariantObject,
+  findPhotoRecordByStoragePath,
+  isPhotoVariantRecordReady,
+  hardenPrivateSourceObjectMetadata,
   createPhotoVariantBuffers,
   buildPhotoVariantPaths,
   buildFirebaseStorageDownloadUrl,
@@ -4892,6 +5173,12 @@ exports.__testables = {
   buildTourDeletionUpdates,
   resolveReportedPhotoStoragePaths,
   checkPassengerLoginRateLimits,
+  shouldRequireLoginAppCheck,
+  isDeployedFunctionsRuntime,
+  enforceLoginAppCheck,
+  getTrustedRequestNetworkKey,
+  createDistributedLoginRateLimiter,
+  cleanupExpiredLoginRateLimits,
   buildTourNotificationId,
   buildTourNotificationRecord,
   buildPushNavigationData,
@@ -4902,4 +5189,8 @@ exports.__testables = {
   createDriverTourPackPublisher,
   validateDriverTourPackHttpRequest,
   verifyManagementOidcRequest,
+  normalizePrivateMediaRequest,
+  isPrivateMediaPathForRecord,
+  readPrivateMediaRecords,
+  signPrivateMediaRecords,
 };

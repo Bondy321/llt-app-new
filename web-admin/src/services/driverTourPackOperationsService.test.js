@@ -25,9 +25,9 @@ describe('Driver Tour Pack operations visibility', () => {
       openIssueCount: 1, criticalIssueCount: 0,
     });
     const issues = sanitizeDriverTourPackIssues({
-      issue_001: { issueId: 'issue_001', departureKey, tourId: '5001D_1', driverId: 'D-100', category: 'delay', severity: 'warning', status: 'open', revision: 2, createdAtMs: 90, updatedAtMs: 100, summary: 'Private passenger detail' },
+      projection_v2: { projectionId: 'projection_v2', issueId: 'issue_001', departureKey, tourId: '5001D_1', driverId: 'D-100', category: 'delay', severity: 'warning', status: 'open', revision: 2, createdAtMs: 90, updatedAtMs: 100, summary: 'Private passenger detail' },
     });
-    expect(issues.issue_001).not.toHaveProperty('summary');
+    expect(issues.projection_v2).not.toHaveProperty('summary');
   });
 
   it('joins only exact dated departures and marks old operations stale', () => {
@@ -52,5 +52,39 @@ describe('Driver Tour Pack operations visibility', () => {
       { path: `driver_tour_pack_actions/${departureKey}/D-100/issues/issue_001` },
       { status: 'acknowledged', updatedAtMs: 123, statusUpdatedAtMs: 123, statusUpdatedBy: 'operations' },
     );
+  });
+
+  it('indexes issues once instead of rescanning the issue set for every visible tour', () => {
+    let departureKeyReads = 0;
+    const tours = Object.fromEntries(Array.from({ length: 500 }, (_, index) => [
+      `TOUR_${index}`,
+      { startDate: '10/09/2026' },
+    ]));
+    const issues = Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => {
+      const tourId = `TOUR_${index % 500}`;
+      const key = `2026-09-10::${tourId}`;
+      const issue = {
+        issueId: `issue_${index}`,
+        tourId,
+        driverId: 'D-100',
+        category: 'delay',
+        severity: 'warning',
+        status: 'open',
+        createdAtMs: 100,
+        updatedAtMs: 100,
+      };
+      Object.defineProperty(issue, 'departureKey', {
+        enumerable: true,
+        get() {
+          departureKeyReads += 1;
+          return key;
+        },
+      });
+      return [`issue_${index}`, issue];
+    }));
+
+    const model = buildDriverTourPackOperationsByTour({ tours, issues, nowMs: 101 });
+    expect(Object.keys(model)).toHaveLength(500);
+    expect(departureKeyReads).toBeLessThan(10_000);
   });
 });

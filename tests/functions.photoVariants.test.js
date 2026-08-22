@@ -42,6 +42,72 @@ test('sanitizeLogText redacts sensitive identifiers from Functions error text', 
   assert.match(sanitized, /\[redacted-jwt\]/);
 });
 
+test('private media request validation is bounded and path authorization is exact', () => {
+  assert.deepEqual(__testables.normalizePrivateMediaRequest({
+    tourId: 'TOUR_1', ownerKey: 'owner-1', photoIds: ['photo-1', 'photo-1'],
+  }), { tourId: 'TOUR_1', ownerKey: 'owner-1', photoIds: ['photo-1'] });
+  assert.equal(__testables.normalizePrivateMediaRequest({
+    tourId: 'TOUR_1', ownerKey: 'owner-1', photoIds: Array.from({ length: 51 }, (_, index) => `p${index}`),
+  }), null);
+  assert.equal(__testables.isPrivateMediaPathForRecord({
+    path: 'private_tour_photos/TOUR_1/owner-1/source.jpg', tourId: 'TOUR_1', ownerKey: 'owner-1',
+  }), true);
+  assert.equal(__testables.isPrivateMediaPathForRecord({
+    path: 'private_tour_photos/TOUR_1/owner-2/source.jpg', tourId: 'TOUR_1', ownerKey: 'owner-1',
+  }), false);
+});
+
+test('private media record reads target only requested exact leaves with bounded concurrency', async () => {
+  const paths = [];
+  let active = 0;
+  let maxActive = 0;
+  const db = { ref: (path) => ({ once: async () => {
+    paths.push(path);
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolve) => setImmediate(resolve));
+    active -= 1;
+    return { exists: () => true, val: () => ({ storagePath: `${path}/source.jpg` }) };
+  } }) };
+  const photoIds = Array.from({ length: 20 }, (_, index) => `photo-${index}`);
+  const records = await __testables.readPrivateMediaRecords({
+    db, tourId: 'TOUR_1', ownerKey: 'owner-1', photoIds, concurrency: 4,
+  });
+  assert.equal(Object.keys(records).length, 20);
+  assert.equal(maxActive, 4);
+  assert.equal(paths.includes('private_tour_photos/TOUR_1/owner-1'), false);
+  assert.deepEqual(paths.sort(), photoIds.map(
+    (photoId) => `private_tour_photos/TOUR_1/owner-1/${photoId}`,
+  ).sort());
+});
+
+test('private media signing is path-scoped and concurrency bounded', async () => {
+  let active = 0;
+  let maxActive = 0;
+  const signedPaths = [];
+  const bucket = { file: (objectPath) => ({ getSignedUrl: async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    signedPaths.push(objectPath);
+    await new Promise((resolve) => setImmediate(resolve));
+    active -= 1;
+    return [`https://signed.invalid/${encodeURIComponent(objectPath)}`];
+  } }) };
+  const input = { tourId: 'TOUR_1', ownerKey: 'owner-1', photoIds: ['p1', 'p2', 'p3'] };
+  const records = Object.fromEntries(input.photoIds.map((photoId) => [photoId, {
+    storagePath: `private_tour_photos/TOUR_1/owner-1/${photoId}.jpg`,
+    viewerStoragePath: `private_tour_photos/TOUR_1/owner-1/viewers/${photoId}.jpg`,
+    thumbnailStoragePath: 'private_tour_photos/TOUR_1/foreign-owner/rejected.jpg',
+  }]));
+  const media = await __testables.signPrivateMediaRecords({
+    bucket, input, records, expires: 12345, concurrency: 2,
+  });
+  assert.equal(maxActive, 2);
+  assert.equal(signedPaths.length, 6);
+  assert.deepEqual(Object.keys(media), input.photoIds);
+  assert.equal(Object.values(media).every((item) => item.sourceUrl && item.viewerUrl && !item.thumbnailUrl), true);
+});
+
 test('admin HTTPS actions allow only the deployed portal, explicit custom origins, or local development', () => {
   assert.equal(__testables.isAllowedAdminOrigin('https://loch-lomond-travel-admin.web.app'), true);
   assert.equal(__testables.isAllowedAdminOrigin('https://loch-lomond-travel-admin.firebaseapp.com'), true);
@@ -70,10 +136,10 @@ const createWindowLimiter = () => {
   };
 };
 
-test('passenger login limits allow launch cohorts behind one shared network', () => {
+test('passenger login limits allow launch cohorts behind one shared network', async () => {
   const limiter = createWindowLimiter();
   for (let index = 0; index < 50; index += 1) {
-    const result = __testables.checkPassengerLoginRateLimits({
+    const result = await __testables.checkPassengerLoginRateLimits({
       authUid: `auth-user-${index}`,
       clientKey: '203.0.113.10:Expo/55 shared-agent',
       bookingRef: `BOOKING-${index}`,
@@ -84,11 +150,11 @@ test('passenger login limits allow launch cohorts behind one shared network', ()
   }
 });
 
-test('passenger login limits still stop repeated credential guessing by one account', () => {
+test('passenger login limits still stop repeated credential guessing by one account', async () => {
   const credentialLimiter = createWindowLimiter();
   let result;
   for (let index = 0; index < 9; index += 1) {
-    result = __testables.checkPassengerLoginRateLimits({
+    result = await __testables.checkPassengerLoginRateLimits({
       authUid: 'one-auth-user',
       clientKey: '203.0.113.20:Expo/55',
       bookingRef: 'SAME-BOOKING',
@@ -101,10 +167,10 @@ test('passenger login limits still stop repeated credential guessing by one acco
 
   const accountLimiter = createWindowLimiter();
   for (let index = 0; index < 25; index += 1) {
-    result = __testables.checkPassengerLoginRateLimits({
-      authUid: 'one-auth-user',
+    result = await __testables.checkPassengerLoginRateLimits({
+      authUid: `rotated-anonymous-auth-${index}`,
       clientKey: '203.0.113.20:Expo/55',
-      bookingRef: `BOOKING-${index}`,
+      bookingRef: 'SAME-TARGET-BOOKING',
       email: `guess-${index}@example.test`,
       limiter: accountLimiter,
     });
@@ -774,6 +840,62 @@ test('buildFirebaseStorageDownloadUrl encodes object paths for token URLs', () =
   );
 });
 
+test('findPhotoRecordByStoragePath tolerates the Storage-finalize versus RTDB-write race', async () => {
+  let reads = 0;
+  const waits = [];
+  const dbRoot = {
+    orderByChild: (field) => {
+      assert.equal(field, 'storagePath');
+      return {
+        equalTo: (path) => ({
+          once: async () => {
+            reads += 1;
+            return { val: () => (reads < 3 ? null : { photo_1: { storagePath: path } }) };
+          },
+        }),
+      };
+    },
+  };
+  const result = await __testables.findPhotoRecordByStoragePath({
+    dbRoot,
+    objectPath: 'group_tour_photos/tour-1/source.jpg',
+    wait: async (delayMs) => waits.push(delayMs),
+  });
+  assert.deepEqual(result, {
+    photoId: 'photo_1',
+    photoRecord: { storagePath: 'group_tour_photos/tour-1/source.jpg' },
+  });
+  assert.deepEqual(waits, [250, 500]);
+});
+
+test('variant readiness uses paths for private media and URLs for group media', () => {
+  assert.equal(__testables.isPhotoVariantRecordReady({
+    visibility: 'private',
+    photoRecord: {
+      variantStatus: 'ready',
+      viewerStoragePath: 'private/viewer.jpg',
+      thumbnailStoragePath: 'private/thumb.jpg',
+      viewerUrl: null,
+      thumbnailUrl: null,
+    },
+  }), true);
+  assert.equal(__testables.isPhotoVariantRecordReady({
+    visibility: 'group',
+    photoRecord: {
+      variantStatus: 'ready',
+      viewerUrl: 'https://example.invalid/viewer',
+      thumbnailUrl: 'https://example.invalid/thumb',
+    },
+  }), true);
+  assert.equal(__testables.isPhotoVariantRecordReady({
+    visibility: 'private',
+    photoRecord: {
+      variantStatus: 'ready',
+      viewerStoragePath: 'private/viewer.jpg',
+    },
+  }), false);
+});
+
 test('generatePhotoVariantsForRecord dry run reports target variant paths without writing', async () => {
   const result = await __testables.generatePhotoVariantsForRecord({
     bucketName: 'demo-bucket.appspot.com',
@@ -798,6 +920,7 @@ test('generatePhotoVariantsForRecord writes ready variant fields', async () => {
   const storageBucket = {
     file: (path) => ({
       download: async () => [Buffer.from('source')],
+      getMetadata: async () => [{ metadata: { authUid: 'auth-1' } }],
       save: async (_buffer, options) => {
         savedPaths.push(path);
         saveMetadataByPath[path] = options?.metadata?.metadata || {};
@@ -842,6 +965,50 @@ test('generatePhotoVariantsForRecord writes ready variant fields', async () => {
   );
   assert.equal(typeof saveMetadataByPath['group_tour_photos/tour-1/viewers/source_viewer.jpg'].firebaseStorageDownloadTokens, 'string');
   assert.equal(typeof saveMetadataByPath['group_tour_photos/tour-1/thumbnails/source_thumb.jpg'].firebaseStorageDownloadTokens, 'string');
+  assert.equal(saveMetadataByPath['group_tour_photos/tour-1/viewers/source_viewer.jpg'].authUid, 'auth-1');
+  assert.equal(saveMetadataByPath['group_tour_photos/tour-1/thumbnails/source_thumb.jpg'].authUid, 'auth-1');
+});
+
+test('private variant generation revokes source tokens and creates path-only tokenless variants', async () => {
+  const sourceMetadataUpdates = [];
+  const savedMetadata = {};
+  const updates = [];
+  const sourcePath = 'private_tour_photos/tour-1/owner-1/source.jpg';
+  const storageBucket = {
+    file: (path) => (path === sourcePath ? {
+      download: async () => [Buffer.from('source')],
+      getMetadata: async () => [{ metadata: {
+        authUid: 'auth-1',
+        bookingRef: 'must-be-removed',
+        firebaseStorageDownloadTokens: 'legacy-token',
+      } }],
+      setMetadata: async (metadata) => sourceMetadataUpdates.push(metadata),
+    } : {
+      save: async (_buffer, options) => { savedMetadata[path] = options.metadata.metadata; },
+    }),
+  };
+  const dbRoot = { child: () => ({ update: async (payload) => updates.push(payload) }) };
+  const result = await __testables.generatePhotoVariantsForRecord({
+    bucketName: 'demo-bucket.appspot.com',
+    visibility: 'private',
+    tourId: 'tour-1',
+    ownerKey: 'owner-1',
+    photoId: 'photo-1',
+    storageBucket,
+    dbRoot,
+    photoRecord: { storagePath: sourcePath },
+  });
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(sourceMetadataUpdates, [{ metadata: {
+    authUid: 'auth-1',
+    visibility: 'private',
+    sourceRole: 'source',
+    firebaseStorageDownloadTokens: null,
+  } }]);
+  assert.deepEqual(savedMetadata[result.viewerPath], { visibility: 'private', sourceRole: 'viewer' });
+  assert.deepEqual(savedMetadata[result.thumbnailPath], { visibility: 'private', sourceRole: 'thumbnail' });
+  assert.equal(updates[0].viewerUrl, null);
+  assert.equal(updates[0].thumbnailUrl, null);
 });
 
 test('generatePhotoVariantsForRecord marks failed when source download fails', async () => {

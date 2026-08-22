@@ -50,6 +50,8 @@ const DOWNLOAD_URL_RETRYABLE_CODES = new Set([
   'storage/unknown',
 ]);
 const IDEMPOTENCY_KEY_MAX_LENGTH = 180;
+const PRIVATE_MEDIA_BATCH_LIMIT = 50;
+const PRIVATE_MEDIA_FUNCTION_NAME = 'resolvePrivatePhotoMedia';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -505,6 +507,7 @@ const fetchPrivatePhotosPage = async (
     limitToLastFn = limitToLast,
     endAtFn = endAt,
     getFn = get,
+    resolvePrivatePhotoMediaFn = resolvePrivatePhotoMedia,
   } = {},
 ) => {
   const validatedTourId = validateTourId(tourId);
@@ -543,6 +546,11 @@ const fetchPrivatePhotosPage = async (
   });
 
   const result = buildPagedPhotoResult(photos, safeLimit);
+  result.items = await resolvePrivatePhotoMediaFn({
+    tourId: validatedTourId,
+    ownerKey: validatedOwnerKey,
+    photos: result.items,
+  });
   logPhotoDbEvent('debug', 'photo_page_fetch_success', {
     visibility: 'private',
     tourId: summarizePrincipalForDbLog(validatedTourId),
@@ -630,6 +638,44 @@ const validateCaption = (caption) => {
   }
 
   return assertTextPassesModeration(trimmed, 'Caption');
+};
+
+const buildPrivateMediaEndpointUrl = (authInstance = auth) => {
+  const explicit = process.env.EXPO_PUBLIC_RESOLVE_PRIVATE_PHOTO_MEDIA_URL?.trim();
+  if (explicit) return explicit;
+  const projectId = authInstance?.app?.options?.projectId;
+  return projectId ? `https://europe-west1-${projectId}.cloudfunctions.net/${PRIVATE_MEDIA_FUNCTION_NAME}` : null;
+};
+
+const resolvePrivatePhotoMedia = async ({ tourId, ownerKey, photos }, {
+  authInstance = auth,
+  fetchFn = fetch,
+  endpoint = buildPrivateMediaEndpointUrl(authInstance),
+} = {}) => {
+  if (!Array.isArray(photos) || photos.length === 0) return [];
+  const safePhotos = photos.map((photo) => {
+    const { sourceUrl: _sourceUrl, viewerUrl: _viewerUrl, thumbnailUrl: _thumbnailUrl, ...safePhoto } = photo;
+    return safePhoto;
+  });
+  const token = await authInstance?.currentUser?.getIdToken?.();
+  if (!endpoint || !token) return safePhotos;
+  const resolvedMedia = {};
+  for (let offset = 0; offset < safePhotos.length; offset += PRIVATE_MEDIA_BATCH_LIMIT) {
+    const batch = safePhotos.slice(offset, offset + PRIVATE_MEDIA_BATCH_LIMIT);
+    const response = await fetchFn(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ tourId, ownerKey, photoIds: batch.map((photo) => photo.id) }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || payload?.success !== true || !payload.media || typeof payload.media !== 'object'
+      || Array.isArray(payload.media)
+      || (payload.expiresAtMs != null && Number(payload.expiresAtMs) <= Date.now())) {
+      throw new Error('Private photo access could not be authorized');
+    }
+    Object.assign(resolvedMedia, payload.media);
+  }
+  return safePhotos.map((photo) => ({ ...photo, ...(resolvedMedia[photo.id] || {}) }));
 };
 
 /**
@@ -773,7 +819,7 @@ const uploadPhoto = async (
         });
         return {
           id: existingId,
-          sourceUrl: existingPhoto.sourceUrl || null,
+          sourceUrl: isPrivate ? null : (existingPhoto.sourceUrl || null),
           userId: existingPhoto.userId || validatedUserId,
           caption: existingPhoto.caption || validatedCaption,
           uploaderName: existingPhoto.uploaderName || uploaderName || 'Tour Member',
@@ -822,13 +868,8 @@ const uploadPhoto = async (
         contentType: blob.type,
         cacheControl: PHOTO_CACHE_CONTROL_HEADER,
         customMetadata: {
-          uploadedBy: validatedUserId,
           authUid,
-          uploadedAt: new Date().toISOString(),
-          idempotencyKey: normalizedIdempotencyKey || '',
-          tourId: validatedTourId,
           visibility: validatedVisibility,
-          ownerKey: validatedUserKey,
           sourceRole: 'source',
         },
       };
@@ -862,7 +903,7 @@ const uploadPhoto = async (
       logPhotoDbEvent('info', 'photo_upload_storage_source_written', uploadDiagnostics);
 
       uploadStage = 'resolving_source_download_url';
-      const downloadURL = await getDownloadUrlWithRetry(getDownloadURLFn, fileRef);
+      const downloadURL = isPrivate ? null : await getDownloadUrlWithRetry(getDownloadURLFn, fileRef);
       logPhotoDbEvent('debug', 'photo_upload_source_url_resolved', {
         ...uploadDiagnostics,
         downloadUrl: summarizeUriForDbLog(downloadURL),
@@ -876,7 +917,6 @@ const uploadPhoto = async (
         : pushFn(photosRef);
 
       const photoData = {
-        sourceUrl: downloadURL,
         userId: validatedUserId,
         caption: validatedCaption,
         timestamp: resolveRealtimeTimestamp(serverTimestampFn, nowFn),
@@ -889,6 +929,7 @@ const uploadPhoto = async (
         variantError: null,
         variantVersion: 2,
       };
+      if (!isPrivate) photoData.sourceUrl = downloadURL;
 
       if (optimizationMetrics && typeof optimizationMetrics === 'object') {
         photoData.optimization = {
@@ -1066,6 +1107,7 @@ const subscribeToPrivatePhotos = (
     orderByChildFn = orderByChild,
     limitToLastFn = limitToLast,
     limit = LIVE_PHOTOS_WINDOW,
+    resolvePrivatePhotoMediaFn = resolvePrivatePhotoMedia,
   } = {},
 ) => {
   try {
@@ -1108,10 +1150,14 @@ const subscribeToPrivatePhotos = (
       liveLimit,
     });
 
-    const unsubscribe = onValueFn(photosQuery, (snapshot) => {
+    let generation = 0;
+    const unsubscribe = onValueFn(photosQuery, async (snapshot) => {
+      const currentGeneration = ++generation;
       try {
-        const photos = mapSnapshotToPhotos(snapshot, { ownerScope });
+        let photos = mapSnapshotToPhotos(snapshot, { ownerScope });
         sortPhotosDescending(photos);
+        photos = await resolvePrivatePhotoMediaFn({ tourId, ownerKey: ownerScopeKey, photos });
+        if (currentGeneration !== generation) return;
         logPhotoDbEvent('debug', 'photo_subscription_snapshot', {
           visibility: 'private',
           tourId: summarizePrincipalForDbLog(tourId),
@@ -1149,6 +1195,7 @@ const subscribeToPrivatePhotos = (
     });
 
     return () => {
+      generation += 1;
       try {
         logPhotoDbEvent('debug', 'photo_subscription_stop', {
           visibility: 'private',
@@ -1564,4 +1611,5 @@ module.exports = {
   deletePrivatePhoto,
   updatePhotoCaption,
   createBlob,
+  resolvePrivatePhotoMedia,
 };

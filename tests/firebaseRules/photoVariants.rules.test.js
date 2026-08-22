@@ -127,7 +127,7 @@ test('allows private photo record with ready variants in valid shape', async () 
   });
 
   await assertSucceeds(dbFor(USER_UID).ref(PRIVATE_PATH).set({
-    sourceUrl: 'https://example.com/source.jpg',
+    storagePath: `private_tour_photos/${TOUR_ID}/${OWNER_KEY}/source.jpg`,
     userId: OWNER_ID,
     timestamp: Date.now(),
     variantStatus: 'ready',
@@ -150,7 +150,7 @@ test('allows private photo access through encoded owner key on user profile', as
   });
 
   await assertSucceeds(dbFor(PROFILE_KEY_UID).ref(PROFILE_KEY_PRIVATE_PATH).set({
-    sourceUrl: 'https://example.com/profile-key-source.jpg',
+    storagePath: `private_tour_photos/${TOUR_ID}/${PROFILE_KEY_OWNER_KEY}/source.jpg`,
     userId: PROFILE_KEY_OWNER_ID,
     timestamp: Date.now(),
     variantStatus: 'ready',

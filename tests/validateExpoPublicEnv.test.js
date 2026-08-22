@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { copyFileSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs');
+const { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { spawnSync } = require('node:child_process');
@@ -49,6 +49,36 @@ test('validateExpoPublicEnv rejects unresolved EAS aliases and placeholders', ()
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_FIREBASE_API_KEY')));
   assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN')));
+});
+
+test('production validation requires both App Check client flags to be exactly true', () => {
+  const rejected = validateExpoPublicEnv(validEnv, {
+    platform: 'ios', requireProductionAppCheck: true,
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.errors.filter((error) => error.includes('must be exactly true')).length, 2);
+
+  const accepted = validateExpoPublicEnv({
+    ...validEnv,
+    EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: 'true',
+    EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: 'true',
+  }, { platform: 'ios', requireProductionAppCheck: true });
+  assert.equal(accepted.ok, true);
+
+  const profileRejected = validateExpoPublicEnv({
+    ...validEnv,
+    EAS_BUILD_PROFILE: 'production',
+  }, { platform: 'ios' });
+  assert.equal(profileRejected.ok, false);
+  assert.equal(profileRejected.errors.filter((error) => error.includes('must be exactly true')).length, 2);
+});
+
+test('production and TestFlight workflows never supply false App Check fallbacks', () => {
+  for (const filename of ['eas-build.yml', 'eas-update.yml', 'eas-testflight.yml']) {
+    const source = readFileSync(resolve(__dirname, `../.github/workflows/${filename}`), 'utf8');
+    assert.doesNotMatch(source, /VERIFY_PASSENGER_LOGIN_(?:USE|REQUIRE)_APPCHECK[^\n]*\|\|\s*'false'/);
+    assert.match(source, /LLT_REQUIRE_PRODUCTION_APPCHECK:\s*'true'/);
+  }
 });
 
 test('validateExpoPublicEnv rejects placeholder optional support phone numbers', () => {

@@ -66,4 +66,26 @@ describe('driver Tour Pack admin status', () => {
     expect(coverage.conflict).toMatchObject({ assignmentState: 'inconsistent', assignmentCoverage: 'inconsistent' });
     expect(coverage.legacy).toMatchObject({ assignmentState: 'legacy', assignmentCoverage: 'legacy' });
   });
+
+  it('indexes driver assignments once instead of rescanning every driver for every tour', () => {
+    let currentTourReads = 0;
+    const tours = Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [
+      `TOUR_${index}`,
+      { startDate: '2026-09-10' },
+    ]));
+    const drivers = Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [
+      `D-${index}`,
+      Object.defineProperty({}, 'currentTourId', {
+        enumerable: true,
+        get() {
+          currentTourReads += 1;
+          return `TOUR_${index}`;
+        },
+      }),
+    ]));
+
+    const coverage = buildTourPackCoverage({ tours, drivers, statuses: {}, nowMs: 1 });
+    expect(Object.keys(coverage)).toHaveLength(1_000);
+    expect(currentTourReads).toBe(1_000);
+  });
 });

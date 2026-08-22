@@ -192,6 +192,24 @@ describe('tour identity invariants', () => {
     );
   });
 
+  it('writes canonical UTC date indexes used by bounded admin queries', async () => {
+    const { buildTourDateIndexFields, createTour } = await import('./tourService.js');
+    expect(buildTourDateIndexFields({ startDate: '22/08/2026', endDate: '24/08/2026' })).toEqual({
+      startDateEpochMs: Date.UTC(2026, 7, 22),
+      endDateEpochMs: Date.UTC(2026, 7, 24),
+    });
+    const result = await createTour({
+      name: 'Indexed Highlands',
+      tourCode: 'INDEX 1',
+      startDate: '22/08/2026',
+      endDate: '24/08/2026',
+    });
+    expect(result.tour).toMatchObject({
+      startDateEpochMs: Date.UTC(2026, 7, 22),
+      endDateEpochMs: Date.UTC(2026, 7, 24),
+    });
+  });
+
   it('rejects create and edit operations whose end date precedes the start date', async () => {
     getMock.mockResolvedValue(buildSnapshot({
       tourCode: 'BAD 1',

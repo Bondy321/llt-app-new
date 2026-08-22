@@ -82,6 +82,7 @@ Driver logout, driver identity change, reassignment, assignment validation failu
 - `missing`, `failed`, `stale`, `incomplete`, `expired`, and `withdrawn` are distinct states.
 - Expired and withdrawn packs delete cached PII immediately and retain only safe state metadata.
 - Listener generations make late responses from an old assignment inert.
+- Cache replacement and purge share a per-scope lock and monotonic generation. A remote fetch captures its generation before the network read, and replacement fails closed if purge revoked that generation while the read was in flight. Purge therefore remains the final durable operation for a revoked scope.
 
 ## Complete manifest cold-start contract
 

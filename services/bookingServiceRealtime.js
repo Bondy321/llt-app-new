@@ -772,6 +772,12 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email, diagnostics } =
         valid: Boolean(payload?.valid),
         reason: payload?.reason || null,
       });
+      // The verifier may have refreshed the stable private-photo owner claim.
+      // Force a token refresh before Storage is used so restored identities receive
+      // their signed owner scope immediately rather than after the normal token TTL.
+      if (payload?.valid === true && auth?.currentUser?.getIdToken) {
+        await auth.currentUser.getIdToken(true);
+      }
       return payload;
     }
 

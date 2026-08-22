@@ -29,7 +29,6 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ref, onValue } from 'firebase/database';
 import { db } from '../firebase';
 import { notifications } from '@mantine/notifications';
 import {
@@ -146,6 +145,11 @@ import {
   subscribeToDriverTourPackOperations,
   updateDriverTourPackIssueStatus,
 } from '../services/driverTourPackOperationsService';
+import {
+  fetchTourByExactId,
+  subscribeToDriverDirectory,
+  subscribeToTourWindow,
+} from '../services/adminDirectoryService';
 
 const getIsoDateFieldError = (value, fieldLabel) => {
   const parsed = parseISODateStrict(value);
@@ -1165,7 +1169,7 @@ function TourDetailsModal({ opened, onClose, tourId, tour }) {
 }
 
 // Import/Export Modal
-function ImportExportModal({ opened, onClose, tours, drivers, onImportSuccess }) {
+function ImportExportModal({ opened, onClose, tours, drivers, onImportSuccess, dateScope }) {
   const [activeTab, setActiveTab] = useState('export');
   const [importing, setImporting] = useState(false);
   const [importMode, setImportMode] = useState('upsert');
@@ -1301,7 +1305,7 @@ function ImportExportModal({ opened, onClose, tours, drivers, onImportSuccess })
         <Tabs.Panel value="export">
           <Stack gap="md">
             <Alert icon={<IconInfoCircle size={16} />} color="blue" variant="light">
-              Export all tours to a CSV file for backup or external editing.
+              Export the tours currently loaded in the {dateScope} date view. This is a bounded operational export, not an automatic full-archive backup.
             </Alert>
 
             <Paper p="md" radius="md" withBorder>
@@ -1439,8 +1443,11 @@ function ImportExportModal({ opened, onClose, tours, drivers, onImportSuccess })
 // Main Tours Manager Component
 export default function ToursManager() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [tours, setTours] = useState({});
+  const [tourWindowTours, setTourWindowTours] = useState({});
+  const [exactTourMatch, setExactTourMatch] = useState(null);
   const [drivers, setDrivers] = useState({});
+  const [tourWindow, setTourWindow] = useState({ atLimit: false, limit: 0 });
+  const [driverDirectoryAtLimit, setDriverDirectoryAtLimit] = useState(false);
   const [packStatusSnapshot, setPackStatusSnapshot] = useState({ statuses: {}, atLimit: false, limit: 0 });
   const [packOperationsSnapshot, setPackOperationsSnapshot] = useState({ progress: {}, issues: {}, atLimit: false, limit: 0 });
   const [updatingIssueId, setUpdatingIssueId] = useState(null);
@@ -1457,6 +1464,12 @@ export default function ToursManager() {
   const filterDateScope = dateScopeParam && allowedDateScopeParams.has(dateScopeParam) ? dateScopeParam : 'current';
   const queryParam = searchParams.get('q') || '';
   const searchTerm = queryParam;
+  const activeExactTourMatch = exactTourMatch?.query === queryParam.trim() ? exactTourMatch.match : null;
+  const tours = useMemo(() => (
+    activeExactTourMatch
+      ? { ...tourWindowTours, [activeExactTourMatch.tourId]: activeExactTourMatch.tour }
+      : tourWindowTours
+  ), [tourWindowTours, activeExactTourMatch]);
 
   // Modal states
   const [createModalOpened, { open: openCreateModal, close: closeCreateModal }] = useDisclosure(false);
@@ -1533,25 +1546,16 @@ export default function ToursManager() {
     setSearchParams(nextParams);
   };
 
-  // Load data from Firebase
+  // Shared, bounded operational metadata subscriptions.
   useEffect(() => {
-    const toursRef = ref(db, 'tours');
-    const driversRef = ref(db, 'drivers');
     const unsubPackStatuses = subscribeToDriverTourPackAdminStatuses(db, setPackStatusSnapshot, () => {
       setSyncStatus('error');
     });
-
-    const unsubTours = onValue(toursRef, (snapshot) => {
-      setTours(snapshot.val() || {});
-      setSyncStatus('connected');
-    }, () => {
-      setSyncStatus('error');
-    });
-
-    const unsubDrivers = onValue(
-      driversRef,
-      (snapshot) => {
-        setDrivers(snapshot.val() || {});
+    const unsubDrivers = subscribeToDriverDirectory(
+      db,
+      ({ drivers: nextDrivers, atLimit }) => {
+        setDrivers(nextDrivers);
+        setDriverDirectoryAtLimit(atLimit);
         setLoading(false);
       },
       (error) => {
@@ -1562,13 +1566,34 @@ export default function ToursManager() {
     );
 
     return () => {
-      unsubTours();
       unsubDrivers();
       unsubPackStatuses();
     };
   }, []);
 
-  const packCoverageByTour = useMemo(() => buildTourPackCoverage({ tours, drivers, statuses: packStatusSnapshot.statuses }), [tours, drivers, packStatusSnapshot.statuses]);
+  useEffect(() => subscribeToTourWindow(db, { dateScope: filterDateScope }, ({ tours: nextTours, atLimit, limit }) => {
+    setTourWindowTours(nextTours);
+    setTourWindow({ atLimit, limit });
+    setSyncStatus('connected');
+  }, () => {
+    setSyncStatus('error');
+  }), [filterDateScope]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!queryParam.trim()) {
+      return () => { cancelled = true; };
+    }
+    const requestedQuery = queryParam.trim();
+    fetchTourByExactId(db, queryParam)
+      .then((match) => {
+        if (!cancelled) setExactTourMatch({ query: requestedQuery, match });
+      })
+      .catch(() => {
+        if (!cancelled) setExactTourMatch({ query: requestedQuery, match: null });
+      });
+    return () => { cancelled = true; };
+  }, [queryParam]);
 
   // Filter and search tours
   const filteredTours = useMemo(() => {
@@ -1590,14 +1615,15 @@ export default function ToursManager() {
         (filterStatus === 'inactive' && !tour.isActive);
 
       const isPastTour = hasTourFinished(tour, today);
-      const matchesDateScope =
+      const isExactDeepLink = activeExactTourMatch?.tourId === id && queryParam.trim().length > 0;
+      const matchesDateScope = isExactDeepLink ||
         filterDateScope === 'all' ||
         (filterDateScope === 'past' && isPastTour) ||
         (filterDateScope === 'current' && !isPastTour);
 
       return matchesSearch && matchesStatus && matchesDateScope;
     });
-  }, [tours, searchTerm, filterStatus, filterDateScope]);
+  }, [tours, searchTerm, filterStatus, filterDateScope, activeExactTourMatch, queryParam]);
 
   // Pagination
   const totalPages = Math.ceil(filteredTours.length / itemsPerPage);
@@ -1613,10 +1639,12 @@ export default function ToursManager() {
   const activeTours = Object.values(tours).filter(t => t.isActive).length;
   const totalParticipants = Object.values(tours).reduce((sum, t) => sum + (t.currentParticipants || 0), 0);
   const visibleDepartureKeys = useMemo(() => paginatedTours.map(([tourId, tour]) => departureKeyForTour(tourId, tour)).filter(Boolean), [paginatedTours]);
-  const visibleDepartureKeySignature = visibleDepartureKeys.join('|');
-  const packOperationsByTour = useMemo(() => buildDriverTourPackOperationsByTour({ tours, progress: packOperationsSnapshot.progress, issues: packOperationsSnapshot.issues }), [tours, packOperationsSnapshot.progress, packOperationsSnapshot.issues]);
+  const visibleDepartureKeySignature = JSON.stringify(visibleDepartureKeys);
+  const visibleTours = useMemo(() => Object.fromEntries(paginatedTours), [paginatedTours]);
+  const packCoverageByTour = useMemo(() => buildTourPackCoverage({ tours: visibleTours, drivers, statuses: packStatusSnapshot.statuses }), [visibleTours, drivers, packStatusSnapshot.statuses]);
+  const packOperationsByTour = useMemo(() => buildDriverTourPackOperationsByTour({ tours: visibleTours, progress: packOperationsSnapshot.progress, issues: packOperationsSnapshot.issues }), [visibleTours, packOperationsSnapshot.progress, packOperationsSnapshot.issues]);
 
-  useEffect(() => subscribeToDriverTourPackOperations(db, visibleDepartureKeySignature ? visibleDepartureKeySignature.split('|') : [], setPackOperationsSnapshot, () => {
+  useEffect(() => subscribeToDriverTourPackOperations(db, JSON.parse(visibleDepartureKeySignature), setPackOperationsSnapshot, () => {
     setSyncStatus('error');
   }), [visibleDepartureKeySignature]);
 
@@ -1713,7 +1741,7 @@ export default function ToursManager() {
         </div>
         <Group gap="sm">
           <Button variant="light" leftSection={<IconDatabaseExport size={16} />} onClick={openImportExportModal}>
-            Import/Export
+            Import/Export current date view
           </Button>
           <Button variant="light" leftSection={<IconUserPlus size={16} />} onClick={() => handleAddPassenger(null)}>
             Add Passenger
@@ -1810,7 +1838,7 @@ export default function ToursManager() {
         <Paper p="md" radius="md" withBorder className="stat-card">
           <Group justify="space-between">
             <div>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Total Tours</Text>
+              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Tours in {filterDateScope} view</Text>
               <Text size="xl" fw={700}>{totalTours}</Text>
             </div>
             <ThemeIcon color="brand" variant="light" size="xl" radius="md">
@@ -1921,9 +1949,24 @@ export default function ToursManager() {
       </Card>
 
       {/* Tours Display */}
+      {tourWindow.atLimit ? (
+        <Alert color="yellow" icon={<IconAlertCircle size={16} />} mb="md">
+          This date view is capped at {tourWindow.limit} indexed tours. Refine the date/status filters before exporting or treating these totals as the complete archive.
+        </Alert>
+      ) : null}
+      {driverDirectoryAtLimit ? (
+        <Alert color="yellow" icon={<IconAlertCircle size={16} />} mb="md">
+          This screen keeps the first {500} drivers live for assignment coverage. Use the paged Drivers directory or an exact Driver ID search to manage drivers outside this live window.
+        </Alert>
+      ) : null}
       {packStatusSnapshot.atLimit ? (
         <Alert color="yellow" icon={<IconAlertCircle size={16} />} mb="md">
           Driver Pack status view is capped at the most recent {packStatusSnapshot.limit} departures. Older tours may show Pack unavailable; use the management publication history before treating that as a current failure.
+        </Alert>
+      ) : null}
+      {packOperationsSnapshot.atLimit ? (
+        <Alert color="yellow" icon={<IconAlertCircle size={16} />} mb="md">
+          One or more visible departures reached the bounded operations-issue limit. The list is prioritised by unresolved severity and newest update; use the Driver Command Centre audit source before treating it as exhaustive.
         </Alert>
       ) : null}
       {filteredTours.length === 0 ? (
@@ -2122,6 +2165,7 @@ export default function ToursManager() {
         onClose={closeImportExportModal}
         tours={tours}
         drivers={drivers}
+        dateScope={filterDateScope}
         onImportSuccess={() => {}}
       />
     </Box>

@@ -66,6 +66,10 @@ export function resolveTourPackAdminStatus({ tourId, tour, statuses, nowMs = Dat
   const dateISO = dateISOForTour(tour);
   const candidates = Object.values(sanitizeDriverTourPackAdminStatuses(statuses))
     .filter((status) => status.tourId === tourId);
+  return resolveTourPackAdminStatusFromCandidates({ tourId, tour, dateISO, candidates, nowMs });
+}
+
+function resolveTourPackAdminStatusFromCandidates({ tourId, tour, dateISO = dateISOForTour(tour), candidates = [], nowMs }) {
   if (!dateISO) {
     return candidates.length ? { state: 'ambiguous', reason: 'Tour start date is missing or invalid.' } : { state: 'missing' };
   }
@@ -79,11 +83,25 @@ export function resolveTourPackAdminStatus({ tourId, tour, statuses, nowMs = Dat
 }
 
 export function buildTourPackCoverage({ tours = {}, drivers = {}, statuses = {}, nowMs = Date.now() } = {}) {
+  const driversByTour = new Map();
+  Object.entries(asRecord(drivers)).forEach(([driverId, driver]) => {
+    const currentTourId = driver?.currentTourId;
+    const tourId = typeof currentTourId === 'string' ? currentTourId.trim() : '';
+    if (!tourId) return;
+    const assigned = driversByTour.get(tourId);
+    if (assigned) assigned.push(driverId);
+    else driversByTour.set(tourId, [driverId]);
+  });
+  const statusesByTour = new Map();
+  Object.values(sanitizeDriverTourPackAdminStatuses(statuses)).forEach((status) => {
+    const candidates = statusesByTour.get(status.tourId);
+    if (candidates) candidates.push(status);
+    else statusesByTour.set(status.tourId, [status]);
+  });
+
   return Object.fromEntries(Object.entries(asRecord(tours)).map(([tourId, tour]) => {
     const tourDriverId = typeof tour?.driverId === 'string' ? tour.driverId.trim() : '';
-    const currentDriverIds = Object.entries(asRecord(drivers))
-      .filter(([, driver]) => driver?.currentTourId === tourId)
-      .map(([driverId]) => driverId);
+    const currentDriverIds = driversByTour.get(tourId) || [];
     const assignedDriverIds = [...new Set([tourDriverId, ...currentDriverIds].filter(Boolean))];
     const hasLegacyNameOnly = assignedDriverIds.length === 0
       && typeof tour?.driverName === 'string'
@@ -94,7 +112,12 @@ export function buildTourPackCoverage({ tours = {}, drivers = {}, statuses = {},
       : assignedDriverIds.length === 1
         ? 'assigned'
         : hasLegacyNameOnly ? 'legacy' : 'unassigned';
-    const pack = resolveTourPackAdminStatus({ tourId, tour, statuses, nowMs });
+    const pack = resolveTourPackAdminStatusFromCandidates({
+      tourId,
+      tour,
+      candidates: statusesByTour.get(tourId) || [],
+      nowMs,
+    });
     return [tourId, {
       pack,
       assignedDriverCount: assignedDriverIds.length,

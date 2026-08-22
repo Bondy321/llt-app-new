@@ -473,7 +473,7 @@ test('Static contract: user content reports stay scoped to tour users and admin 
   assert.match(rules.rules.group_tour_photos.$tourId.$photoId['.write'], /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
 });
 
-test('Static contract: Storage photo writes require caller auth metadata', () => {
+test('Static contract: Storage photos use uploader proof and stable private owner claims', () => {
   const storageRules = readText('storage_rules.json');
   const photoSource = readText('services/photoService.js');
 
@@ -483,7 +483,11 @@ test('Static contract: Storage photo writes require caller auth metadata', () =>
   assert.doesNotMatch(storageRules, /resource\.exists\(\)/);
   assert.match(photoSource, /authInstance = auth/);
   assert.match(photoSource, /throw new Error\('Authenticated user required for photo upload'\)/);
-  assert.match(photoSource, /customMetadata: \{\s+uploadedBy: validatedUserId,\s+authUid,/);
+  assert.match(storageRules, /request\.auth\.token\.privatePhotoOwnerKey == ownerId/);
+  assert.match(photoSource, /customMetadata: \{\s+authUid,\s+visibility: validatedVisibility,\s+sourceRole: 'source'/);
+  assert.doesNotMatch(photoSource, /customMetadata: \{[^}]*uploadedBy:/s);
+  assert.doesNotMatch(photoSource, /customMetadata: \{[^}]*idempotencyKey:/s);
+  assert.doesNotMatch(photoSource, /customMetadata: \{[^}]*ownerKey:/s);
 });
 
 test('Static contract: email-style stable identities are encoded before identity binding path writes', () => {

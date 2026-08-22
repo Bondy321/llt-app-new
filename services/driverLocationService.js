@@ -16,6 +16,7 @@ export const publishDriverLocation = async ({
   updatedBy,
   dbInstance,
   now = Date.now,
+  isScopeCurrent = () => true,
 }) => {
   const payload = buildDriverLocationPayload({
     ...location,
@@ -23,8 +24,16 @@ export const publishDriverLocation = async ({
     address,
     updatedBy,
   });
+  if (!isScopeCurrent()) {
+    return {
+      success: false,
+      skipped: true,
+      reason: 'DRIVER_LOCATION_SCOPE_REVOKED',
+    };
+  }
   await resolveLocationRef(tourId, dbInstance).set(payload);
   return {
+    success: true,
     ...payload,
     timestamp: now(),
   };

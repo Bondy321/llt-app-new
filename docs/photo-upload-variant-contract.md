@@ -16,7 +16,7 @@ Mobile upload preparation should only optimize the source upload file for v2 pay
 New uploads should enter `group_tour_photos/*` or `private_tour_photos/*` with:
 
 - `variantStatus: "processing"`
-- `sourceUrl`
+- `sourceUrl` for group photos only; private photos persist `storagePath` and resolve URLs in memory
 - `variantUpdatedAt`
 - `variantError` (nullable)
 - `variantVersion` (currently `2`)
@@ -32,10 +32,71 @@ the encoded owner fields used by rules:
 - `users/{uid}/stablePassengerKey = toRealtimeKeySegment(stablePassengerId)`
 - `users/{uid}/privatePhotoOwnerKey = toRealtimeKeySegment(privatePhotoOwnerId)`
 
-Cloud Function variant generation updates records to:
+After successful passenger verification, the backend also projects `privatePhotoOwnerKey` into a
+signed Firebase Auth custom claim. Private Storage reads and writes require that claim to equal the
+owner bucket. The client force-refreshes its ID token after verification, so a restored passenger
+identity can immediately access the same private bucket while other authenticated users are denied.
+
+Storage custom metadata is deliberately minimal. Client source objects retain only `authUid` (needed
+for uploader-owned overwrite/delete enforcement), `visibility`, and `sourceRole`; stable passenger
+IDs, booking-derived owner keys, tour IDs, idempotency keys, and upload timestamps must not be copied
+into object metadata.
+
+Private photo records are path-authoritative. Durable Firebase download-token URLs must not be
+stored for private source, viewer, or thumbnail objects. `resolvePrivatePhotoMedia` accepts at most
+50 exact photo IDs, verifies the Firebase bearer token and signed `privatePhotoOwnerKey`, validates
+every path against the requested tour/owner prefix, and returns five-minute Cloud Storage signed
+URLs. Backend RTDB reads and signing calls both use bounded concurrency; reads target only those exact
+photo leaves and never download the owner album branch. The mobile service merges returned URLs into
+in-memory photo objects only.
+
+Before deploying the restrictive Storage rules, inventory legacy records and tokens:
+
+```bash
+npm --prefix functions run harden:private-photos -- --dry-run --tourId=5112D_8 --ownerKey=OWNER_KEY --limit=50
+npm --prefix functions run harden:private-photos -- --apply --tourId=5112D_8 --ownerKey=OWNER_KEY --limit=50
+# Continue only when nextCursor is returned:
+npm --prefix functions run harden:private-photos -- --apply --tourId=5112D_8 --ownerKey=OWNER_KEY --limit=50 --after=NEXT_CURSOR
+```
+
+Every run requires an exact tour and owner bucket and pages photo keys at that RTDB query boundary;
+there is no whole-tree scan mode. Apply mode removes private RTDB URL fields and revokes
+`firebaseStorageDownloadTokens` on source and variant objects. Missing objects are idempotent success;
+other Storage failures stop before their record is sanitized. Always review dry-run counts first.
+When the command returns `nextCursor`, continue with `--after=<nextCursor>` until it returns `null`;
+bounded batches must not restart from the first record.
+
+`resolvePrivatePhotoMedia` uses Cloud Storage V4 signing. The deployed Function service account must
+be able to read the bucket, the Service Account Credentials API must be enabled, and the signer must
+have `iam.serviceAccounts.signBlob` (normally through Service Account Token Creator on itself).
+
+Release order is deliberate: deploy `verifyPassengerLogin` and `resolvePrivatePhotoMedia`, release
+the client token-refresh/path-only reader, run and review the legacy hardening migration, then deploy
+the restrictive Storage rules. Reversing that order can temporarily strand existing private albums.
+
+Cloud Function variant generation updates group records to:
 
 - `variantStatus: "ready"` with `viewerUrl` and `thumbnailUrl`; or
 - `variantStatus: "failed"` with `variantError`.
+
+Generated group variants retain only the source object's uploader `authUid` plus server variant/token
+metadata. Clients cannot create or overwrite derivative paths; the uploader can still delete the
+viewer and thumbnail when deleting their group photo.
+
+Before deploying the derivative-path rule, refresh existing ready group variants one tour at a time
+so legacy viewer/thumbnail objects also inherit their source uploader identity:
+
+```bash
+npm --prefix functions run backfill:photo-variants -- --dry-run --visibility=group --tourId=5112D_8 --refresh-group-ownership=true
+npm --prefix functions run backfill:photo-variants -- --apply --visibility=group --tourId=5112D_8 --refresh-group-ownership=true
+# Continue only when nextCursor is returned:
+npm --prefix functions run backfill:photo-variants -- --apply --visibility=group --tourId=5112D_8 --refresh-group-ownership=true --after=NEXT_CURSOR
+```
+
+Private records use the same lifecycle status but retain only `viewerStoragePath` and
+`thumbnailStoragePath`; display URLs are resolved in memory. The Storage-finalize handler joins the
+record through the indexed `storagePath` and retries the short Storage/RTDB ordering race, so variant
+generation no longer depends on sensitive correlation metadata.
 
 Admin moderation of a reported group photo must call `removeReportedPhoto`. The Function reads the trusted report and photo record, deletes the source, viewer, and thumbnail Storage objects, then atomically removes RTDB metadata and marks the report `actioned`. Browser code must not treat metadata-only deletion as complete photo removal.
 

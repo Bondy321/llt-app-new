@@ -268,6 +268,23 @@ const parseTourServiceDate = (value) => {
   return iso.success ? iso.date : null;
 };
 
+const toUtcDateOnlyMs = (date) => Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+
+export const buildTourDateIndexFields = (tourData = {}) => {
+  const hasStartDate = typeof tourData.startDate === 'string' && tourData.startDate.trim();
+  const hasEndDate = typeof tourData.endDate === 'string' && tourData.endDate.trim();
+  if (!hasStartDate && !hasEndDate) return {};
+  const startDate = parseTourServiceDate(tourData.startDate);
+  const endDate = parseTourServiceDate(tourData.endDate || tourData.startDate);
+  if (!startDate || !endDate) {
+    throw new Error('Tour start and end dates must be valid before their admin query indexes can be written.');
+  }
+  return {
+    startDateEpochMs: toUtcDateOnlyMs(startDate),
+    endDateEpochMs: toUtcDateOnlyMs(endDate),
+  };
+};
+
 const assertChronologicalTourDates = (tourData = {}) => {
   const hasStartDate = hasOwn(tourData, 'startDate') && String(tourData.startDate || '').trim();
   const hasEndDate = hasOwn(tourData, 'endDate') && String(tourData.endDate || '').trim();
@@ -395,6 +412,7 @@ export const createTour = async (tourData, _createdBy = 'admin') => {
     ...DEFAULT_TOUR,
     ...tourData,
     tourCode,
+    ...buildTourDateIndexFields(tourData),
     // Ensure itinerary structure is correct
     itinerary: tourData.itinerary || {
       title: tourData.name || '',
@@ -474,9 +492,14 @@ export const updateTour = async (tourId, updates) => {
   assertTourCapacityUpdate(existingTour, updates);
   assertTourCodeUnchanged(tourId, updates, existingTour);
 
-  await update(tourRef, updates);
+  const indexedUpdates = {
+    ...updates,
+    ...buildTourDateIndexFields({ ...existingTour, ...updates }),
+  };
 
-  return { id: tourId, updates };
+  await update(tourRef, indexedUpdates);
+
+  return { id: tourId, updates: indexedUpdates };
 };
 
 /**

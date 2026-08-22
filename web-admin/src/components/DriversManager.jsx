@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo } from 'react';
-import { ref, onValue, update } from 'firebase/database';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { ref, update } from 'firebase/database';
 import { db } from '../firebase';
 import { applyDriverAssignmentMutation } from '../services/tourService';
 import { createDriver } from '../services/driverService';
+import { fetchDriverByExactId, fetchDriverDirectoryPage, subscribeToDriverDirectory } from '../services/adminDirectoryService';
 import { notifications } from '@mantine/notifications';
 import { formatDateTimeForDisplay } from '../utils/dateUtils';
 import {
@@ -501,16 +502,24 @@ export function DriversManager() {
   const [drivers, setDrivers] = useState({});
   const [selectedDriverId, setSelectedDriverId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [directoryPage, setDirectoryPage] = useState({ index: 0, cursor: null, hasMore: false, limit: 500 });
+  const [pageHistory, setPageHistory] = useState([]);
+  const firstPageRef = useRef({ drivers: {}, cursor: null, hasMore: false, limit: 500 });
+  const pageIndexRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [createModalOpened, { open: openCreateModal, close: closeCreateModal }] = useDisclosure(false);
 
   // Fetch drivers
   useEffect(() => {
-    const driversRef = ref(db, 'drivers');
-    const unsubscribe = onValue(
-      driversRef,
-      (snapshot) => {
-        setDrivers(snapshot.val() || {});
+    const unsubscribe = subscribeToDriverDirectory(
+      db,
+      ({ drivers: nextDrivers, atLimit, limit }) => {
+        const cursor = Object.keys(nextDrivers).sort().at(-1) || null;
+        firstPageRef.current = { drivers: nextDrivers, cursor, hasMore: atLimit, limit };
+        if (pageIndexRef.current === 0) {
+          setDrivers(nextDrivers);
+          setDirectoryPage({ index: 0, cursor, hasMore: atLimit, limit });
+        }
         setLoading(false);
       },
       (error) => {
@@ -524,6 +533,40 @@ export function DriversManager() {
     );
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const candidate = searchTerm.trim().toUpperCase();
+    if (!/^D-[A-Z0-9_-]{1,77}$/.test(candidate) || drivers[candidate]) return undefined;
+    fetchDriverByExactId(db, candidate).then((match) => {
+      if (!cancelled && match) setDrivers((current) => ({ ...current, [match.driverId]: match.driver }));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [searchTerm, drivers]);
+
+  const handleNextDriverPage = async () => {
+    if (!directoryPage.cursor || !directoryPage.hasMore) return;
+    try {
+      const next = await fetchDriverDirectoryPage(db, { afterKey: directoryPage.cursor });
+      setPageHistory((history) => [...history, { drivers, directoryPage }]);
+      pageIndexRef.current = directoryPage.index + 1;
+      setDrivers(next.drivers);
+      setDirectoryPage({ index: pageIndexRef.current, cursor: next.nextCursor, hasMore: next.hasMore, limit: next.limit });
+      setSelectedDriverId(null);
+    } catch (error) {
+      notifications.show({ title: 'Driver page unavailable', message: error?.message || 'Could not load the next driver page.', color: 'red' });
+    }
+  };
+
+  const handlePreviousDriverPage = () => {
+    const previous = pageHistory.at(-1);
+    if (!previous) return;
+    setPageHistory((history) => history.slice(0, -1));
+    pageIndexRef.current = previous.directoryPage.index;
+    setDrivers(previous.drivers);
+    setDirectoryPage(previous.directoryPage);
+    setSelectedDriverId(null);
+  };
 
   const resolveCurrentTourId = (driver) => resolveAssignmentTourIdInput(driver?.currentTourId);
 
@@ -540,6 +583,9 @@ export function DriversManager() {
   const activeDrivers = Object.values(drivers).filter((d) => !!resolveCurrentTourId(d)).length;
 
   const handleDriverCreated = (newId) => {
+    // A newly created key can sort beyond the bounded live window. Drive it
+    // through the exact-ID lookup path so the details panel remains reachable.
+    setSearchTerm(newId);
     setSelectedDriverId(newId);
   };
 
@@ -572,7 +618,7 @@ export function DriversManager() {
         <Paper p="md" radius="md" withBorder>
           <Group justify="space-between">
             <div>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Total Drivers</Text>
+              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Drivers on page {directoryPage.index + 1}</Text>
               <Text size="xl" fw={700}>{totalDrivers}</Text>
             </div>
             <ThemeIcon color="brand" variant="light" size="xl" radius="md">
@@ -652,6 +698,11 @@ export function DriversManager() {
                 )}
               </Stack>
             </ScrollArea>
+            <Group justify="space-between" mt="sm">
+              <Button size="xs" variant="light" disabled={pageHistory.length === 0} onClick={handlePreviousDriverPage}>Previous</Button>
+              <Text size="xs" c="dimmed">Bounded directory page {directoryPage.index + 1}</Text>
+              <Button size="xs" variant="light" disabled={!directoryPage.hasMore} onClick={handleNextDriverPage}>Next</Button>
+            </Group>
           </Card>
         </Grid.Col>
 

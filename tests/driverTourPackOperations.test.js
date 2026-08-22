@@ -4,6 +4,7 @@ const test = require('node:test');
 const {
   buildDriverTourPackActionProjectionUpdates,
   buildDriverTourPackProgress,
+  buildDriverTourPackIssueProjectionId,
   changedSectionNames,
   summarizeDriverTourPackChange,
 } = require('../functions/lib/driverTourPackOperations');
@@ -86,9 +87,11 @@ test('progress projection contains aggregates only and indexes structured issues
     afterActions: actions,
     updatedAtMs: 600,
   });
-  assert.equal(updates[`driver_tour_pack_issues/issue_safe`].summary, undefined);
-  assert.equal(updates[`driver_tour_pack_issues/issue_safe`].departureKey, pack.departureKey);
-  assert.equal(JSON.stringify(updates[`driver_tour_pack_issues/issue_safe`]).includes('Warning light'), false);
+  const projectionId = buildDriverTourPackIssueProjectionId({ departureKey: pack.departureKey, driverId: 'D-ONE', issueId: 'issue_safe' });
+  assert.equal(updates[`driver_tour_pack_issues/${projectionId}`].summary, undefined);
+  assert.equal(updates[`driver_tour_pack_issues/${projectionId}`].departureKey, pack.departureKey);
+  assert.match(updates[`driver_tour_pack_issues/${projectionId}`].departurePriorityKey, /^2026-09-10::5001D_1\|0\|/);
+  assert.equal(JSON.stringify(updates[`driver_tour_pack_issues/${projectionId}`]).includes('Warning light'), false);
 });
 
 test('action projection removes progress and issue indexes with action deletion', () => {
@@ -101,5 +104,14 @@ test('action projection removes progress and issue indexes with action deletion'
     afterActions: null,
   });
   assert.equal(updates[`driver_tour_pack_progress/${pack.departureKey}/D-ONE`], null);
-  assert.equal(updates['driver_tour_pack_issues/old_issue'], null);
+  const projectionId = buildDriverTourPackIssueProjectionId({ departureKey: pack.departureKey, driverId: 'D-ONE', issueId: 'old_issue' });
+  assert.equal(updates[`driver_tour_pack_issues/${projectionId}`], null);
+});
+
+test('issue projection keys are collision-free across departures and drivers', () => {
+  const first = buildDriverTourPackIssueProjectionId({ departureKey: '2026-09-10::TOUR_A', driverId: 'D-ONE', issueId: 'issue_001' });
+  const second = buildDriverTourPackIssueProjectionId({ departureKey: '2026-09-11::TOUR_B', driverId: 'D-ONE', issueId: 'issue_001' });
+  const third = buildDriverTourPackIssueProjectionId({ departureKey: '2026-09-10::TOUR_A', driverId: 'D-TWO', issueId: 'issue_001' });
+  assert.equal(new Set([first, second, third]).size, 3);
+  assert.ok([first, second, third].every((key) => /^v2_[A-Za-z0-9_-]+$/.test(key)));
 });

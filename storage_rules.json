@@ -17,29 +17,65 @@ service firebase.storage {
         && (resource == null || resource.metadata.authUid == request.auth.uid);
     }
 
+    function hasApprovedPhotoMetadata() {
+      return request.resource != null
+        && request.resource.metadata.keys().hasOnly(['authUid', 'visibility', 'sourceRole'])
+        && (!request.resource.metadata.keys().hasAny(['visibility'])
+          || request.resource.metadata.visibility == 'group'
+          || request.resource.metadata.visibility == 'private')
+        && (!request.resource.metadata.keys().hasAny(['sourceRole'])
+          || request.resource.metadata.sourceRole == 'source'
+          || request.resource.metadata.sourceRole == 'viewer'
+          || request.resource.metadata.sourceRole == 'thumbnail');
+    }
+
     function isUploaderDelete() {
       return request.resource == null
         && resource != null
         && resource.metadata.authUid == request.auth.uid;
     }
 
-    // NOTE:
-    // Private photo ownership is enforced in Realtime Database using stable identity bindings
-    // (booking refs / stable passenger IDs), which Storage rules cannot query directly.
-    // For parity with that model and to prevent false denials, private objects are gated to
-    // authenticated users + image constraints. Metadata/listing access remains constrained by
-    // Realtime Database rules.
-    match /private_tour_photos/{tourId}/{ownerId}/{allPaths=**} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn()
-        && ((isImageUpload() && hasMatchingUploaderAuth()) || isUploaderDelete());
+    function ownsPrivatePhotoBucket(ownerId) {
+      return isSignedIn()
+        && request.auth.token.keys().hasAll(['privatePhotoOwnerKey'])
+        && request.auth.token.privatePhotoOwnerKey is string
+        && request.auth.token.privatePhotoOwnerKey == ownerId;
     }
 
-    // Group tour photos (including nested thumbnails folders).
-    match /group_tour_photos/{tourId}/{allPaths=**} {
+    // NOTE:
+    // The login verifier projects the caller's RTDB-safe stable owner key into a signed
+    // custom claim. This keeps restored passenger identities working without exposing
+    // private bytes to every authenticated Firebase user.
+    match /private_tour_photos/{tourId}/{ownerId}/{allPaths=**} {
+      allow read: if ownsPrivatePhotoBucket(ownerId);
+      allow create: if ownsPrivatePhotoBucket(ownerId)
+        && isImageUpload()
+        && hasApprovedPhotoMetadata()
+        && request.resource.metadata.authUid == request.auth.uid;
+      allow update: if ownsPrivatePhotoBucket(ownerId)
+        && isImageUpload()
+        && hasApprovedPhotoMetadata()
+        && hasMatchingUploaderAuth();
+      allow delete: if ownsPrivatePhotoBucket(ownerId) && resource != null;
+    }
+
+    // Group source photos are client-owned. Generated variants preserve the
+    // source authUid so the uploader can delete them, but clients cannot forge
+    // or overwrite server-generated derivative objects.
+    match /group_tour_photos/{tourId}/{fileName} {
       allow read: if isSignedIn();
       allow write: if isSignedIn()
-        && ((isImageUpload() && hasMatchingUploaderAuth()) || isUploaderDelete());
+        && ((isImageUpload() && hasApprovedPhotoMetadata() && hasMatchingUploaderAuth()) || isUploaderDelete());
+    }
+
+    match /group_tour_photos/{tourId}/viewers/{fileName} {
+      allow read: if isSignedIn();
+      allow delete: if isSignedIn() && isUploaderDelete();
+    }
+
+    match /group_tour_photos/{tourId}/thumbnails/{fileName} {
+      allow read: if isSignedIn();
+      allow delete: if isSignedIn() && isUploaderDelete();
     }
   }
 }

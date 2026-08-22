@@ -31,7 +31,9 @@ const parseArgs = (argv = []) => {
     visibility: 'all',
     tourId: null,
     ownerKey: null,
+    afterCursor: null,
     retryFailed: true,
+    refreshGroupOwnership: false,
     allowFullScan: false,
   };
 
@@ -57,10 +59,13 @@ const parseArgs = (argv = []) => {
       options.tourId = trimString(arg.slice('--tourId='.length));
     } else if (arg.startsWith('--ownerKey=')) {
       options.ownerKey = trimString(arg.slice('--ownerKey='.length));
+    } else if (arg.startsWith('--after=')) {
+      options.afterCursor = trimString(arg.slice('--after='.length));
     }
   });
 
   options.retryFailed = parseBooleanFlag(argv, 'retry-failed', options.retryFailed);
+  options.refreshGroupOwnership = parseBooleanFlag(argv, 'refresh-group-ownership', options.refreshGroupOwnership);
   options.allowFullScan = parseBooleanFlag(argv, 'allow-full-scan', options.allowFullScan);
 
   return options;
@@ -78,27 +83,54 @@ const getConfiguredBucketName = (admin) => {
   return bucket?.name || null;
 };
 
-const shouldBackfill = (photo, { retryFailed }) => {
+const shouldBackfill = (photo, { retryFailed, force = false }) => {
   if (!isPlainObject(photo)) return false;
   if (!trimString(photo.storagePath)) return false;
+  if (force) return true;
   if (!trimString(photo.viewerUrl) || !trimString(photo.thumbnailUrl)) return true;
   return retryFailed && photo.variantStatus === 'failed';
 };
 
-const collectGroupCandidates = async ({ db, tourId, remaining, retryFailed }) => {
+const compareKeys = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
+
+const collectGroupCandidates = async ({ db, tourId, remaining, retryFailed, refreshGroupOwnership, afterCursor }) => {
   if (remaining <= 0) return { candidates: [], scannedPhotos: 0 };
 
   const rootPath = tourId ? `group_tour_photos/${tourId}` : 'group_tour_photos';
-  const snapshot = await db.ref(rootPath).once('value');
+  let rootRef = db.ref(rootPath);
+  if (refreshGroupOwnership) {
+    rootRef = rootRef.orderByKey();
+    if (afterCursor) rootRef = rootRef.startAt(afterCursor);
+    rootRef = rootRef.limitToFirst(remaining + (afterCursor ? 2 : 1));
+  }
+  const snapshot = await rootRef.once('value');
   const value = snapshot.val() || {};
   const candidates = [];
   let scannedPhotos = 0;
+
+  if (refreshGroupOwnership) {
+    const unseen = Object.entries(value)
+      .sort(([left], [right]) => compareKeys(left, right))
+      .filter(([photoId]) => !afterCursor || compareKeys(photoId, afterCursor) > 0);
+    const page = unseen.slice(0, remaining);
+    page.forEach(([photoId, photoRecord]) => {
+      scannedPhotos += 1;
+      if (shouldBackfill(photoRecord, { retryFailed, force: true })) {
+        candidates.push({ visibility: 'group', tourId, ownerKey: null, photoId, photoRecord });
+      }
+    });
+    return {
+      candidates,
+      scannedPhotos,
+      nextCursor: unseen.length > remaining && page.length ? page.at(-1)[0] : null,
+    };
+  }
 
   const tours = tourId ? { [tourId]: value } : value;
   Object.entries(tours).some(([currentTourId, photosById]) => {
     Object.entries(photosById || {}).some(([photoId, photoRecord]) => {
       scannedPhotos += 1;
-      if (shouldBackfill(photoRecord, { retryFailed })) {
+      if (shouldBackfill(photoRecord, { retryFailed, force: refreshGroupOwnership })) {
         candidates.push({
           visibility: 'group',
           tourId: currentTourId,
@@ -112,7 +144,7 @@ const collectGroupCandidates = async ({ db, tourId, remaining, retryFailed }) =>
     return candidates.length >= remaining;
   });
 
-  return { candidates, scannedPhotos };
+  return { candidates, scannedPhotos, nextCursor: null };
 };
 
 const collectPrivateCandidates = async ({ db, tourId, ownerKey, remaining, retryFailed }) => {
@@ -154,6 +186,7 @@ const collectCandidates = async (options, deps = {}) => {
   const db = deps.db;
   const candidates = [];
   const scan = { groupPhotos: 0, privatePhotos: 0 };
+  let nextCursor = null;
 
   if (options.visibility === 'all' || options.visibility === 'group') {
     const groupResult = await collectGroupCandidates({
@@ -161,9 +194,12 @@ const collectCandidates = async (options, deps = {}) => {
       tourId: options.tourId,
       remaining: options.limit - candidates.length,
       retryFailed: options.retryFailed,
+      refreshGroupOwnership: options.refreshGroupOwnership,
+      afterCursor: options.afterCursor,
     });
     candidates.push(...groupResult.candidates);
     scan.groupPhotos += groupResult.scannedPhotos;
+    nextCursor = groupResult.nextCursor || null;
   }
 
   if (candidates.length < options.limit && (options.visibility === 'all' || options.visibility === 'private')) {
@@ -181,6 +217,7 @@ const collectCandidates = async (options, deps = {}) => {
   return {
     candidates: candidates.slice(0, options.limit),
     scan,
+    nextCursor,
   };
 };
 
@@ -191,6 +228,14 @@ const validateOptions = (options = {}) => {
 
   if (options.ownerKey && options.visibility === 'group') {
     throw new Error('--ownerKey can only be used with --visibility=private or --visibility=all');
+  }
+
+  if (options.refreshGroupOwnership && (!options.tourId || options.visibility !== 'group')) {
+    throw new Error('--refresh-group-ownership requires --visibility=group and an exact --tourId');
+  }
+
+  if (options.afterCursor && !options.refreshGroupOwnership) {
+    throw new Error('--after is supported only with --refresh-group-ownership');
   }
 
   if (options.dryRun === false && !options.allowFullScan && !options.tourId) {
@@ -215,7 +260,7 @@ const run = async (options = {}, deps = {}) => {
     throw new Error('Could not resolve Firebase Storage bucket name');
   }
 
-  const { candidates, scan } = await collectCandidates(resolvedOptions, { db });
+  const { candidates, scan, nextCursor } = await collectCandidates(resolvedOptions, { db });
   const results = [];
 
   for (const candidate of candidates) {
@@ -249,6 +294,8 @@ const run = async (options = {}, deps = {}) => {
     tourId: resolvedOptions.tourId,
     ownerKey: resolvedOptions.ownerKey,
     retryFailed: resolvedOptions.retryFailed,
+    refreshGroupOwnership: resolvedOptions.refreshGroupOwnership,
+    nextCursor,
     scan,
     summary,
     results,
@@ -268,6 +315,8 @@ const main = async (argv = process.argv.slice(2), deps = {}) => {
     tourId: result.tourId,
     ownerKey: result.ownerKey,
     retryFailed: result.retryFailed,
+    refreshGroupOwnership: result.refreshGroupOwnership,
+    nextCursor: result.nextCursor,
     scan: result.scan,
   }));
   result.results.forEach((item) => {

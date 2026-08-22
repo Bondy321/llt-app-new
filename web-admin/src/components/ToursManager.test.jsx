@@ -14,8 +14,18 @@ vi.mock('../firebase', () => ({
 
 vi.mock('firebase/database', () => ({
   ref: (...args) => mockRef(...args),
+  get: async (dbRef) => {
+    const tourId = dbRef.path?.startsWith('tours/') ? dbRef.path.slice('tours/'.length) : '';
+    const value = currentToursFixture?.[tourId];
+    return { exists: () => value !== undefined, val: () => value };
+  },
   onValue: (...args) => mockOnValue(...args),
   orderByChild: (path) => ({ type: 'orderByChild', path }),
+  orderByKey: () => ({ type: 'orderByKey' }),
+  startAt: (value) => ({ type: 'startAt', value }),
+  endAt: (value) => ({ type: 'endAt', value }),
+  equalTo: (value) => ({ type: 'equalTo', value }),
+  limitToFirst: (limit) => ({ type: 'limitToFirst', limit }),
   limitToLast: (limit) => ({ type: 'limitToLast', limit }),
   query: (dbRef, ...constraints) => ({ ...dbRef, constraints }),
 }));

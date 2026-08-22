@@ -11,7 +11,7 @@ The Command Centre is a read-only operational composition. It does not create a 
 | Pack lifecycle and quality shown to operations | `driver_tour_pack_admin_status/{departureKey}` |
 | Driver assignment | Canonical driver/tour assignment links; pack access is still enforced by the manifest assignment link |
 | Driver progress and acknowledgements | `driver_tour_pack_actions/{departureKey}/{driverId}`; server projects only safe aggregates |
-| Operations progress visibility | `driver_tour_pack_progress/{departureKey}/{driverId}` and `driver_tour_pack_issues/{issueId}` |
+| Operations progress visibility | `driver_tour_pack_progress/{departureKey}/{driverId}` and `driver_tour_pack_issues/{projectionId}` |
 
 Every join uses `departureKey = YYYY-MM-DD::NORMALIZED_TOUR_ID`. Display names are never identity keys. A pack and the active driver assignment must agree before the Command Centre describes the tour as confirmed.
 
@@ -52,15 +52,22 @@ Driver action records remain identity-scoped and offline-capable. The server cre
 
 - `driver_tour_pack_progress/{departureKey}/{driverId}` contains only identity, revision acknowledgement,
   pickup/service completion counts and timestamps.
-- `driver_tour_pack_issues/{issueId}` contains only exact departure/driver identity, bounded category,
+- `driver_tour_pack_issues/{projectionId}` uses a stable base64url composite of departure, driver and
+  source issue ID, and contains only exact identity, bounded category,
   severity, lifecycle status, revision and timestamps. Driver free text and passenger or supplier facts
   never cross into this root.
 
 The app web-admin subscribes only to exact currently visible departure progress leaves and a bounded,
-`updatedAtMs`-indexed issue query. It shows stale/at-limit state rather than treating missing data as
+`departurePriorityKey`-indexed issue query. Unresolved critical issues sort first and newer updates sort
+first within each priority. It shows stale/at-limit state rather than treating missing data as
 completion. Operations may acknowledge or resolve an issue only through leaf updates under
 `driver_tour_pack_actions/{departureKey}/{driverId}/issues/{issueId}`; the server remains responsible
 for projections and notification fanout.
+
+Migration is dry-run first: deploy the composite projection Function, run
+`backfill:driver-tour-pack-issues`, deploy the RTDB index, then release web admin. The migration removes
+an issueId-only legacy row only when its embedded departure/driver/issue identity matches, so a historical
+collision cannot delete another departure's v2 projection.
 
 Notifications are semantic: metadata-only republishes are silent; lock-screen copy says only that
 operational information changed and contains no names, hotels, suppliers or issue text. Opening a

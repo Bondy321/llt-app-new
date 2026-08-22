@@ -51,6 +51,7 @@ Passenger location is optional. Opening Find My Bus checks existing foreground p
 - Disabling auto-share transactionally removes only a live record, preserving a manual pickup point if one exists.
 - A failed withdrawal leaves auto-share enabled and exposes a retry action; the UI must not claim sharing stopped before the remote record is removed.
 - Auto-share is foreground-only. When the screen is inactive, the last live record naturally becomes stale and expires in passenger presentation.
+- Every auto-share run captures the effect's tour/auth lifecycle scope. Reassignment, logout, disable, or unmount revokes that scope; cancellation is checked after native location capture and again at the service write boundary, so a late capture cannot republish coordinates to the former tour.
 
 ## Verification
 

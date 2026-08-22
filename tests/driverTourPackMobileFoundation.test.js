@@ -91,6 +91,60 @@ test('malformed cached entries are deleted fail-closed', async () => {
   await store.setItemAsync(service.cacheKey(scope),JSON.stringify({pack:{unsafe:true}}));
   const result=await service.load(scope); assert.equal(result.success,false); assert.equal(store.data.size,0);
 });
+test('a stale cache read cannot delete a newer serialized replacement', async () => {
+  const data = new Map();
+  let releaseRead;
+  let readStarted;
+  const readStartedPromise = new Promise((resolve) => { readStarted = resolve; });
+  const storage = {
+    data,
+    getItemAsync: async (key) => {
+      const captured = data.get(key) || null;
+      readStarted();
+      await new Promise((resolve) => { releaseRead = resolve; });
+      return captured;
+    },
+    setItemAsync: async (key, value) => data.set(key, value),
+    deleteItemAsync: async (key) => data.delete(key),
+  };
+  const service = createDriverTourPackService({ storage, now: () => 1787227200000 });
+  const key = service.cacheKey(scope);
+  data.set(key, JSON.stringify({ pack: { malformed: true } }));
+
+  const pendingLoad = service.load(scope);
+  await readStartedPromise;
+  const pendingReplace = service.replace(scope, pack());
+  releaseRead();
+
+  assert.equal((await pendingLoad).success, false);
+  assert.equal((await pendingReplace).success, true);
+  const stored = JSON.parse(data.get(key));
+  assert.equal(stored.pack.departureKey, scope.departureKey);
+  assert.equal(stored.pack.passengers.passenger_1.name, 'Jane');
+});
+test('purge revokes an in-flight fetch before it can resurrect cached passenger data', async () => {
+  let resolveRead;
+  const delayedDb = {
+    ref() {
+      return {
+        once: async () => new Promise((resolve) => { resolveRead = resolve; }),
+      };
+    },
+  };
+  const store = memory();
+  const service = createDriverTourPackService({ storage: store, db: delayedDb, now: () => 1787227200000 });
+  const pendingFetch = service.fetchRemote(scope);
+
+  const purged = await service.purge(scope);
+  assert.equal(purged.success, true);
+  resolveRead({ val: () => pack() });
+  const fetched = await pendingFetch;
+
+  assert.equal(fetched.success, false);
+  assert.equal(fetched.code, 'DRIVER_TOUR_PACK_SCOPE_REVOKED');
+  assert.equal((await service.load(scope)).data, null);
+  assert.equal(store.data.has(service.cacheKey(scope)), false);
+});
 test('revision subscription is bounded to exact pack and assignment validation is fail-closed', async () => {
   const db=fakeDb(pack()); const service=createDriverTourPackService({storage:memory(),db}); let revision=null; const stop=service.subscribeRevision(scope,(event)=>{revision=event.revision;}); db.emit(2); stop(); db.emit(3); assert.equal(revision,2);
   assert.equal(validateDriverTourPackAssignment({authUid:'uid',driverId:'D-1',driverAuthUid:'uid',assignedDepartureKey:scope.departureKey,manifestAssigned:true,pack:pack()}).valid,true);

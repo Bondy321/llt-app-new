@@ -405,7 +405,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const uploadLocationUpdate = async (
     { latitude, longitude, accuracy, timestamp, address },
     source = 'manual',
-    { shouldUpdateLocalState = () => true } = {}
+    { shouldUpdateLocalState = () => true, isScopeCurrent = () => true } = {}
   ) => {
     logger.info('DriverHomeScreen', 'Driver location upload started', {
       activeTourId,
@@ -422,7 +422,15 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       address: address || 'Address unavailable',
       source,
       dbInstance: realtimeDb,
+      isScopeCurrent,
     });
+    if (persistedLocation.skipped) {
+      logger.info('DriverHomeScreen', 'Driver location upload skipped for revoked scope', {
+        activeTourId,
+        source,
+      });
+      return persistedLocation;
+    }
     logger.info('DriverHomeScreen', 'Driver location upload completed', {
       activeTourId,
       source,
@@ -676,6 +684,8 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
           ? { success: true, location: primedLocation }
           : await captureCurrentLocationWithPermission(Location.Accuracy.Balanced);
 
+        if (cancelled) return;
+
         if (!captureResult.success) {
           setAutoShareStatus('Paused: location permission required');
           logger.warn('DriverHomeScreen', 'Auto-share paused by permission', {
@@ -689,13 +699,18 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         const timestamp = new Date().toISOString();
         const { latitude, longitude, accuracy } = location.coords;
 
-        await uploadLocationUpdate({
+        const uploadResult = await uploadLocationUpdate({
           latitude,
           longitude,
           accuracy,
           timestamp,
           address: lastLocationAddressRef.current,
-        }, 'auto', { shouldUpdateLocalState: () => !cancelled });
+        }, 'auto', {
+          shouldUpdateLocalState: () => !cancelled,
+          isScopeCurrent: () => !cancelled,
+        });
+
+        if (uploadResult?.skipped) return;
 
         if (!cancelled) {
           setAutoShareLastRunAt(timestamp);

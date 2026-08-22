@@ -151,9 +151,9 @@ test('verified driver identity persistence is complete for assigned and unassign
   assert.equal(unassigned['users/driver-auth-1/driverAssignedTourId'], null);
 });
 
-test('driver login limiter enforces credential, account, and network dimensions independently', () => {
+test('driver login limiter enforces credential, account, and network dimensions independently', async () => {
   const calls = [];
-  const allowed = __testables.checkDriverLoginRateLimits({
+  const allowed = await __testables.checkDriverLoginRateLimits({
     authUid: 'auth-1',
     clientKey: 'network-1',
     driverId: 'D-BONDY',
@@ -167,7 +167,7 @@ test('driver login limiter enforces credential, account, and network dimensions 
   assert.deepEqual(calls.map(({ maxRequests }) => maxRequests), [8, 24, 200]);
   assert.ok(calls.every(({ windowMs }) => windowMs === 60000));
 
-  const denied = __testables.checkDriverLoginRateLimits({
+  const denied = await __testables.checkDriverLoginRateLimits({
     authUid: 'auth-1',
     clientKey: 'network-1',
     driverId: 'D-BONDY',

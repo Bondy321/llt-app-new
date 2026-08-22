@@ -5,21 +5,20 @@ const IS_DEV_RUNTIME =
   typeof __DEV__ !== 'undefined'
     ? __DEV__
     : typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production';
-let realtimeDb;
 const { loadOptionalService } = require('./optionalServiceLoader');
+const { createLazyRealtimeDbResolver } = require('./lazyRealtimeDb');
 const { toRealtimeKeySegment } = require('./identityService');
 const { parseTimestampMs: parseStrictTimestampMs } = require('./timeUtils');
 const { assertTextPassesModeration } = require('./contentModerationService');
 
-if (!isTestEnv) {
-  try {
-    ({ realtimeDb } = require('../firebase'));
-  } catch (error) {
+const resolveRealtimeDb = createLazyRealtimeDbResolver({
+  loadFirebaseModule: () => (isTestEnv ? null : require('../firebase')),
+  onLoadError: (error) => {
     if (IS_DEV_RUNTIME) {
-      console.warn('Realtime database module not initialized during load:', error.message);
+      console.warn('Realtime database module is not available yet:', error?.message || String(error));
     }
-  }
-}
+  },
+});
 
 const offlineSyncService = loadOptionalService({
   modulePath: './offlineSyncService',
@@ -632,9 +631,9 @@ const readMessagesFromSnapshot = (snapshot) => buildMessagesFromSnapshot(snapsho
 
 // ==================== SEND MESSAGES ====================
 
-const sendMessageDirect = async (payload, dbInstance = realtimeDb) => {
+const sendMessageDirect = async (payload, dbInstance) => {
   try {
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     if (!db) return { success: false, error: 'Realtime database unavailable' };
 
     const validatedTourId = validateTourId(payload.tourId);
@@ -679,9 +678,9 @@ const sendMessageDirect = async (payload, dbInstance = realtimeDb) => {
   }
 };
 
-const sendInternalMessageDirect = async (payload, dbInstance = realtimeDb) => {
+const sendInternalMessageDirect = async (payload, dbInstance) => {
   try {
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     if (!db) return { success: false, error: 'Realtime database unavailable' };
 
     const validatedTourId = validateTourId(payload.tourId);
@@ -727,12 +726,12 @@ const sendInternalMessageDirect = async (payload, dbInstance = realtimeDb) => {
 };
 
 // Send a text message to the tour chat with optimistic response
-const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb, options = {}) => {
+const sendMessage = async (tourId, message, senderInfo, dbInstance, options = {}) => {
   try {
     const validatedTourId = validateTourId(tourId);
     const validatedMessage = validateMessageText(message);
     const validatedSender = validateSenderInfo(senderInfo);
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     logChatEvent('info', 'chat_message_send_started', {
       tourId: validatedTourId,
       messageLength: validatedMessage.length,
@@ -838,7 +837,7 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb,
 };
 
 // Send an image message to the tour chat
-const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstance = realtimeDb, options = {}) => {
+const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstance, options = {}) => {
   try {
     // Validate inputs
     const validatedTourId = validateTourId(tourId);
@@ -868,7 +867,7 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
       return { success: false, error: `Caption exceeds maximum length of ${MAX_CAPTION_LENGTH} characters` };
     }
 
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
 
     if (!db) {
       logChatImageDbEvent('error', 'chat_image_message_database_unavailable', {
@@ -946,7 +945,7 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
 };
 
 // Send a message to the internal driver chat for a tour
-const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance = realtimeDb, options = {}) => {
+const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance, options = {}) => {
   try {
     const validatedTourId = validateTourId(tourId);
     const validatedMessage = validateMessageText(message);
@@ -959,7 +958,7 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
       hasReplyTo: Boolean(options.replyTo),
     });
 
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
 
     const localMessageId = validateMessageId(options.messageId || createLocalMessageId('int'));
     const idempotencyKey = options.idempotencyKey || localMessageId;
@@ -1062,7 +1061,7 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
 // Writes must only target chats/{tourId}/messages/{messageId}/reactions/{emoji}/{userId} leaf nodes.
 
 // Add a reaction to a message
-const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb) => {
+const addReaction = async (tourId, messageId, emoji, userId, dbInstance) => {
   try {
     const validatedTourId = validateTourId(tourId);
     const validatedMessageId = validateMessageId(messageId);
@@ -1082,7 +1081,7 @@ const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realti
       return { success: false, error: 'Invalid emoji character for database key' };
     }
 
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     if (!db) {
       return { success: false, error: 'Database unavailable' };
     }
@@ -1127,7 +1126,7 @@ const addReaction = async (tourId, messageId, emoji, userId, dbInstance = realti
 };
 
 // Remove a reaction from a message
-const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb) => {
+const removeReaction = async (tourId, messageId, emoji, userId, dbInstance) => {
   try {
     const validatedTourId = validateTourId(tourId);
     const validatedMessageId = validateMessageId(messageId);
@@ -1147,7 +1146,7 @@ const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       return { success: false, error: 'Invalid emoji character for database key' };
     }
 
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     if (!db) {
       return { success: false, error: 'Database unavailable' };
     }
@@ -1193,7 +1192,7 @@ const removeReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
 
 // Toggle a reaction (add if not present, remove if present)
 // IMPORTANT: toggles never overwrite reactions/{emoji}; only leaf set/remove writes are allowed.
-const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = realtimeDb, options = {}) => {
+const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance, options = {}) => {
   const normalizedEmoji = typeof emoji === 'string' ? emoji.trim() : '';
   const maskedUserId = maskUserId(userId);
   logReactionEvent('info', 'reaction_toggle_attempt', {
@@ -1223,7 +1222,7 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
       return { success: false, error: 'Invalid emoji character for database key' };
     }
 
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     if (!db) {
       return { success: false, error: 'Database unavailable' };
     }
@@ -1361,7 +1360,7 @@ const toggleReaction = async (tourId, messageId, emoji, userId, dbInstance = rea
 // ==================== TYPING INDICATORS ====================
 
 // Update typing status for a user
-const setTypingStatus = async (tourId, userId, userName, isTyping, isDriver = false, dbInstance = realtimeDb, options = {}) => {
+const setTypingStatus = async (tourId, userId, userName, isTyping, isDriver = false, dbInstance, options = {}) => {
   try {
     const validatedTourId = validateTourId(tourId);
     const { actorKey } = getRealtimeActorContext(userId);
@@ -1369,7 +1368,7 @@ const setTypingStatus = async (tourId, userId, userName, isTyping, isDriver = fa
     if (scope === 'internal' && !isDriver) {
       return { success: false };
     }
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     if (!db) return { success: false };
 
     const typingRef = db.ref(`${getChatActorStatusPath(validatedTourId, 'typing', scope)}/${actorKey}`);
@@ -1410,8 +1409,8 @@ const setTypingStatus = async (tourId, userId, userName, isTyping, isDriver = fa
 };
 
 // Subscribe to typing indicators
-const subscribeToTypingIndicators = (tourId, currentUserId, onTypingUpdate, dbInstance = realtimeDb, options = {}) => {
-  const db = dbInstance || realtimeDb;
+const subscribeToTypingIndicators = (tourId, currentUserId, onTypingUpdate, dbInstance, options = {}) => {
+  const db = dbInstance || resolveRealtimeDb();
 
   if (!db || !tourId || typeof onTypingUpdate !== 'function') {
     return () => {};
@@ -1468,7 +1467,7 @@ const subscribeToTypingIndicators = (tourId, currentUserId, onTypingUpdate, dbIn
 // ==================== ONLINE PRESENCE ====================
 
 // Update user's online presence
-const setOnlinePresence = async (tourId, userId, userName, isOnline, isDriver = false, dbInstance = realtimeDb, options = {}) => {
+const setOnlinePresence = async (tourId, userId, userName, isOnline, isDriver = false, dbInstance, options = {}) => {
   try {
     const validatedTourId = validateTourId(tourId);
     const { actorKey } = getRealtimeActorContext(userId);
@@ -1476,7 +1475,7 @@ const setOnlinePresence = async (tourId, userId, userName, isOnline, isDriver = 
     if (scope === 'internal' && !isDriver) {
       return { success: false };
     }
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     if (!db) return { success: false };
 
     const presenceRef = db.ref(`${getChatActorStatusPath(validatedTourId, 'presence', scope)}/${actorKey}`);
@@ -1515,8 +1514,8 @@ const setOnlinePresence = async (tourId, userId, userName, isOnline, isDriver = 
 };
 
 // Subscribe to online presence
-const subscribeToPresence = (tourId, onPresenceUpdate, dbInstance = realtimeDb, options = {}) => {
-  const db = dbInstance || realtimeDb;
+const subscribeToPresence = (tourId, onPresenceUpdate, dbInstance, options = {}) => {
+  const db = dbInstance || resolveRealtimeDb();
 
   if (!db || !tourId || typeof onPresenceUpdate !== 'function') {
     return () => {};
@@ -1575,13 +1574,13 @@ const subscribeToPresence = (tourId, onPresenceUpdate, dbInstance = realtimeDb, 
 // ==================== MESSAGE SUBSCRIPTIONS ====================
 
 // Subscribe to chat messages for a tour
-const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtimeDb, options = {}) => {
+const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance, options = {}) => {
   try {
     // Validate inputs
     const validatedTourId = validateTourId(tourId);
     validateCallback(onMessagesUpdate);
 
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
 
     if (!db) {
       logChatEvent('warn', 'chat_subscription_skipped_database_unavailable', { tourId: validatedTourId });
@@ -1646,8 +1645,8 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance = realtime
 };
 
 // Subscribe to internal driver chat messages for a tour
-const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance = realtimeDb, options = {}) => {
-  const db = dbInstance || realtimeDb;
+const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance, options = {}) => {
+  const db = dbInstance || resolveRealtimeDb();
 
   if (!db || !tourId || typeof onMessagesUpdate !== 'function') {
     logChatEvent('warn', 'internal_chat_subscription_skipped_missing_params', {
@@ -1723,11 +1722,11 @@ const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance = re
 // ==================== READ RECEIPTS ====================
 
 // Mark tour chat as read
-const markChatAsRead = async (tourId, userId, dbInstance = realtimeDb) => {
+const markChatAsRead = async (tourId, userId, dbInstance) => {
   try {
     const validatedTourId = validateTourId(tourId);
     const { actorKey } = getRealtimeActorContext(userId);
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     if (!db) return { success: false };
 
     const lastReadRef = db.ref(`chats/${validatedTourId}/lastRead/${actorKey}`);
@@ -1744,11 +1743,11 @@ const markChatAsRead = async (tourId, userId, dbInstance = realtimeDb) => {
 };
 
 // Mark internal driver chat as read
-const markInternalChatAsRead = async (tourId, userId, dbInstance = realtimeDb) => {
+const markInternalChatAsRead = async (tourId, userId, dbInstance) => {
   try {
     const validatedTourId = validateTourId(tourId);
     const { actorKey } = getRealtimeActorContext(userId);
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     if (!db) return { success: false };
 
     const lastReadRef = db.ref(`internal_chats/${validatedTourId}/lastRead/${actorKey}`);
@@ -1765,8 +1764,8 @@ const markInternalChatAsRead = async (tourId, userId, dbInstance = realtimeDb) =
 };
 
 // Subscribe to read receipts
-const subscribeToReadReceipts = (tourId, onReadUpdate, dbInstance = realtimeDb) => {
-  const db = dbInstance || realtimeDb;
+const subscribeToReadReceipts = (tourId, onReadUpdate, dbInstance) => {
+  const db = dbInstance || resolveRealtimeDb();
 
   if (!db || !tourId || typeof onReadUpdate !== 'function') {
     return () => {};
@@ -1801,9 +1800,9 @@ const subscribeToReadReceipts = (tourId, onReadUpdate, dbInstance = realtimeDb) 
 // ==================== UTILITY FUNCTIONS ====================
 
 // Get initial messages (alternative to subscription for one-time fetch)
-const getChatMessages = async (tourId, limit = 50, dbInstance = realtimeDb) => {
+const getChatMessages = async (tourId, limit = 50, dbInstance) => {
   try {
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     if (!db) return [];
 
     const messagesRef = db.ref(`chats/${tourId}/messages`);
@@ -1844,10 +1843,10 @@ const getChatMessageById = async ({
   tourId,
   messageId,
   scope = 'group',
-  dbInstance = realtimeDb,
+  dbInstance,
 } = {}) => {
   try {
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     if (!db) return { success: false, error: 'Realtime database unavailable', message: null };
 
     const safeMessageId = validateMessageId(messageId);
@@ -1883,10 +1882,10 @@ const getChatMessagesPage = async ({
   beforeTimestamp = null,
   beforeMessageId = null,
   limit = DEFAULT_PAGE_MESSAGE_LIMIT,
-  dbInstance = realtimeDb,
+  dbInstance,
 } = {}) => {
   try {
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     if (!db) return { success: false, error: 'Realtime database unavailable', messages: [] };
 
     const safeLimit = normalizeMessageLimit(limit, DEFAULT_PAGE_MESSAGE_LIMIT);
@@ -1954,7 +1953,7 @@ const getMessageTextForCopy = (message) => {
 };
 
 // Soft-delete a group message owned by the active principal.
-const deleteMessage = async (tourId, messageId, requestingUserId, _isDriver = false, dbInstance = realtimeDb) => {
+const deleteMessage = async (tourId, messageId, requestingUserId, _isDriver = false, dbInstance) => {
   try {
     // Validate inputs
     const validatedTourId = validateTourId(tourId);
@@ -1964,7 +1963,7 @@ const deleteMessage = async (tourId, messageId, requestingUserId, _isDriver = fa
       return { success: false, error: 'User ID is required to delete a message' };
     }
 
-    const db = dbInstance || realtimeDb;
+    const db = dbInstance || resolveRealtimeDb();
     if (!db) return { success: false, error: 'Database unavailable' };
 
     const messageRef = db.ref(`chats/${validatedTourId}/messages/${validatedMessageId}`);

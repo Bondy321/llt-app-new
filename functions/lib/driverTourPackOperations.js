@@ -33,6 +33,21 @@ const DRIVER_TOUR_PACK_ISSUE_STATUSES = Object.freeze(['open', 'acknowledged', '
 
 const isObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const values = (value) => Object.values(isObject(value) ? value : {});
+const MAX_PRIORITY_TIME_MS = 9_999_999_999_999;
+
+function buildDriverTourPackIssueProjectionId({ departureKey, driverId, issueId } = {}) {
+  if (![departureKey, driverId, issueId].every((value) => typeof value === 'string' && value)) return null;
+  return `v2_${Buffer.from(JSON.stringify([departureKey, driverId, issueId]), 'utf8').toString('base64url')}`;
+}
+
+function buildDriverTourPackIssuePriorityKey({ departureKey, severity, status, updatedAtMs } = {}) {
+  if (!departureKey) return null;
+  const statusRank = status === 'resolved' ? 9 : status === 'acknowledged' ? 1 : 0;
+  const severityRank = severity === 'critical' ? 0 : severity === 'warning' ? 2 : 4;
+  const rank = Math.min(9, statusRank + severityRank);
+  const inverseTime = String(Math.max(0, MAX_PRIORITY_TIME_MS - safeInteger(updatedAtMs))).padStart(13, '0');
+  return `${departureKey}|${rank}|${inverseTime}`;
+}
 const safeInteger = (value, fallback = 0) => Number.isSafeInteger(value) && value >= 0 ? value : fallback;
 
 function changedSectionNames(beforePack, afterPack) {
@@ -94,8 +109,11 @@ function normalizeIssue(issueId, raw, { departureKey, tourId, driverId } = {}) {
   const status = DRIVER_TOUR_PACK_ISSUE_STATUSES.includes(raw.status) ? raw.status : null;
   const summary = typeof raw.summary === 'string' ? raw.summary.trim().slice(0, 240) : '';
   if (!issueId || !category || !severity || !status || !summary || !departureKey || !tourId || !driverId) return null;
+  const updatedAtMs = safeInteger(raw.statusUpdatedAtMs ?? raw.updatedAtMs ?? raw.createdAtMs);
+  const projectionId = buildDriverTourPackIssueProjectionId({ departureKey, driverId, issueId });
   return {
     schemaVersion: 1,
+    projectionId,
     issueId,
     departureKey,
     tourId,
@@ -105,7 +123,8 @@ function normalizeIssue(issueId, raw, { departureKey, tourId, driverId } = {}) {
     status,
     revision: safeInteger(raw.revision, 1),
     createdAtMs: safeInteger(raw.createdAtMs),
-    updatedAtMs: safeInteger(raw.statusUpdatedAtMs ?? raw.updatedAtMs ?? raw.createdAtMs),
+    updatedAtMs,
+    departurePriorityKey: buildDriverTourPackIssuePriorityKey({ departureKey, severity, status, updatedAtMs }),
     ...(raw.statusUpdatedBy === 'operations' ? { statusUpdatedBy: 'operations' } : {}),
   };
 }
@@ -172,9 +191,11 @@ function buildDriverTourPackActionProjectionUpdates({
   }
   const beforeIssues = isObject(beforeActions?.issues) ? beforeActions.issues : {};
   const afterIssues = isObject(afterActions?.issues) ? afterActions.issues : {};
-  const issueIds = new Set([...Object.keys(beforeIssues), ...Object.keys(afterIssues)]);
+  const issueIds = new Set([...Object.keys(beforeIssues), ...Object.keys(afterIssues)]
+    .filter((issueId) => JSON.stringify(beforeIssues[issueId] ?? null) !== JSON.stringify(afterIssues[issueId] ?? null)));
   issueIds.forEach((issueId) => {
-    updates[`driver_tour_pack_issues/${issueId}`] = normalizeIssue(issueId, afterIssues[issueId], {
+    const projectionId = buildDriverTourPackIssueProjectionId({ departureKey, driverId, issueId });
+    updates[`driver_tour_pack_issues/${projectionId}`] = normalizeIssue(issueId, afterIssues[issueId], {
       departureKey,
       tourId: pack?.tourId,
       driverId,
@@ -188,6 +209,8 @@ module.exports = {
   DRIVER_TOUR_PACK_ISSUE_CATEGORIES,
   DRIVER_TOUR_PACK_ISSUE_SEVERITIES,
   DRIVER_TOUR_PACK_ISSUE_STATUSES,
+  buildDriverTourPackIssuePriorityKey,
+  buildDriverTourPackIssueProjectionId,
   buildDriverTourPackActionProjectionUpdates,
   buildDriverTourPackProgress,
   changedSectionNames,

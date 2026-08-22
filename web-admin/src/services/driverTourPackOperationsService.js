@@ -1,7 +1,8 @@
-import { limitToLast, onValue, orderByChild, query, ref, update } from 'firebase/database';
+import { endAt, limitToFirst, onValue, orderByChild, query, ref, startAt, update } from 'firebase/database';
 import { formatDateToISO, parseISODateStrict, parseUKDateStrict } from '../utils/dateUtils';
 
 export const DRIVER_TOUR_PACK_OPERATIONS_LIMIT = 2_000;
+export const DRIVER_TOUR_PACK_ISSUES_PER_DEPARTURE_LIMIT = 100;
 export const DRIVER_TOUR_PACK_PROGRESS_ROOT = 'driver_tour_pack_progress';
 export const DRIVER_TOUR_PACK_ISSUES_ROOT = 'driver_tour_pack_issues';
 
@@ -55,22 +56,30 @@ export function sanitizeDriverTourPackProgress(value, departureKey) {
 }
 
 export function sanitizeDriverTourPackIssues(value) {
-  return Object.fromEntries(Object.entries(asRecord(value)).flatMap(([issueId, issue]) => {
-    if (!issue || issue.issueId !== issueId || !exactIdentity(issue) || !DRIVER_ID.test(issue.driverId || '') || !ISSUE_TYPES.has(issue.category) || !ISSUE_SEVERITIES.has(issue.severity) || !ISSUE_STATUSES.has(issue.status) || !safeInteger(issue.createdAtMs) || !safeInteger(issue.updatedAtMs)) return [];
-    return [[issueId, { issueId, departureKey: issue.departureKey, tourId: issue.tourId, driverId: issue.driverId, category: issue.category, severity: issue.severity, status: issue.status, revision: Number.isSafeInteger(issue.revision) ? issue.revision : null, createdAtMs: issue.createdAtMs, updatedAtMs: issue.updatedAtMs }]];
+  return Object.fromEntries(Object.entries(asRecord(value)).flatMap(([recordKey, issue]) => {
+    const projectionId = typeof issue?.projectionId === 'string' ? issue.projectionId : null;
+    const isLegacy = issue?.issueId === recordKey && !projectionId;
+    if (!issue || (!isLegacy && projectionId !== recordKey) || typeof issue.issueId !== 'string' || !exactIdentity(issue) || !DRIVER_ID.test(issue.driverId || '') || !ISSUE_TYPES.has(issue.category) || !ISSUE_SEVERITIES.has(issue.severity) || !ISSUE_STATUSES.has(issue.status) || !safeInteger(issue.createdAtMs) || !safeInteger(issue.updatedAtMs)) return [];
+    return [[recordKey, { projectionId, issueId: issue.issueId, departureKey: issue.departureKey, tourId: issue.tourId, driverId: issue.driverId, category: issue.category, severity: issue.severity, status: issue.status, revision: Number.isSafeInteger(issue.revision) ? issue.revision : null, createdAtMs: issue.createdAtMs, updatedAtMs: issue.updatedAtMs }]];
   }));
 }
 
 export function buildDriverTourPackOperationsByTour({ tours = {}, progress = {}, issues = {}, nowMs = Date.now() } = {}) {
   const safeProgress = asRecord(progress);
   const safeIssues = sanitizeDriverTourPackIssues(issues);
+  const issuesByDeparture = new Map();
+  Object.values(safeIssues).forEach((issue) => {
+    const entries = issuesByDeparture.get(issue.departureKey);
+    if (entries) entries.push(issue);
+    else issuesByDeparture.set(issue.departureKey, [issue]);
+  });
   return Object.fromEntries(Object.entries(asRecord(tours)).map(([tourId, tour]) => {
     const dateISO = tourDateISO(tour);
     const departureKey = dateISO ? `${dateISO}::${tourId}` : null;
     const progressEntries = departureKey
       ? Object.values(sanitizeDriverTourPackProgress(safeProgress[departureKey], departureKey))
       : [];
-    const openIssues = Object.values(safeIssues).filter((issue) => issue.departureKey === departureKey && issue.status !== 'resolved');
+    const openIssues = (issuesByDeparture.get(departureKey) || []).filter((issue) => issue.status !== 'resolved');
     const newest = Math.max(0, ...progressEntries.map((entry) => entry.updatedAtMs || 0), ...openIssues.map((entry) => entry.updatedAtMs || 0));
     return [tourId, {
       state: !dateISO ? 'ambiguous' : (progressEntries.length || openIssues.length) ? (nowMs - newest > 24 * 60 * 60 * 1_000 ? 'stale' : 'ready') : 'missing',
@@ -84,17 +93,49 @@ export function subscribeToDriverTourPackOperations(database, departureKeys, onD
   const boundedLimit = Number.isSafeInteger(limit) && limit > 0 && limit <= DRIVER_TOUR_PACK_OPERATIONS_LIMIT ? limit : DRIVER_TOUR_PACK_OPERATIONS_LIMIT;
   const keys = [...new Set((Array.isArray(departureKeys) ? departureKeys : []).filter((key) => typeof key === 'string' && key.length <= 180))].slice(0, boundedLimit);
   const state = { progress: {}, issues: {}, progressAtLimit: keys.length >= boundedLimit, issuesAtLimit: false, limit: boundedLimit };
-  const emit = () => onData({ ...state, atLimit: state.progressAtLimit || state.issuesAtLimit });
-  const unsubscribeIssues = onValue(query(ref(database, DRIVER_TOUR_PACK_ISSUES_ROOT), orderByChild('updatedAtMs'), limitToLast(boundedLimit)), (snapshot) => {
-    state.issues = sanitizeDriverTourPackIssues(snapshot.val());
-    state.issuesAtLimit = Object.keys(state.issues).length >= boundedLimit;
-    emit();
-  }, onError);
-  const progressUnsubscribers = keys.map((departureKey) => onValue(ref(database, `${DRIVER_TOUR_PACK_PROGRESS_ROOT}/${departureKey}`), (snapshot) => {
-    state.progress[departureKey] = sanitizeDriverTourPackProgress(snapshot.val(), departureKey);
-    emit();
-  }, onError));
-  return () => { unsubscribeIssues(); progressUnsubscribers.forEach((unsubscribe) => unsubscribe()); };
+  const issuesByDeparture = {};
+  const issueLimitByDeparture = {};
+  let emitQueued = false;
+  let cancelled = false;
+  const emit = () => {
+    if (emitQueued || cancelled) return;
+    emitQueued = true;
+    queueMicrotask(() => {
+      emitQueued = false;
+      if (!cancelled) onData({ ...state, atLimit: state.progressAtLimit || state.issuesAtLimit });
+    });
+  };
+  const unsubscribers = [];
+
+  keys.forEach((departureKey) => {
+    unsubscribers.push(onValue(ref(database, `${DRIVER_TOUR_PACK_PROGRESS_ROOT}/${departureKey}`), (snapshot) => {
+      state.progress[departureKey] = sanitizeDriverTourPackProgress(snapshot.val(), departureKey);
+      emit();
+    }, onError));
+
+    const issueQuery = query(
+      ref(database, DRIVER_TOUR_PACK_ISSUES_ROOT),
+      orderByChild('departurePriorityKey'),
+      startAt(`${departureKey}|`),
+      endAt(`${departureKey}|\uf8ff`),
+      limitToFirst(DRIVER_TOUR_PACK_ISSUES_PER_DEPARTURE_LIMIT),
+    );
+    unsubscribers.push(onValue(issueQuery, (snapshot) => {
+      const departureIssues = sanitizeDriverTourPackIssues(snapshot.val());
+      issuesByDeparture[departureKey] = departureIssues;
+      state.issues = Object.assign({}, ...Object.values(issuesByDeparture));
+      const count = Number.isSafeInteger(snapshot.size) ? snapshot.size : Object.keys(departureIssues).length;
+      issueLimitByDeparture[departureKey] = count >= DRIVER_TOUR_PACK_ISSUES_PER_DEPARTURE_LIMIT;
+      state.issuesAtLimit = Object.values(issueLimitByDeparture).some(Boolean);
+      emit();
+    }, onError));
+  });
+
+  if (keys.length === 0) emit();
+  return () => {
+    cancelled = true;
+    unsubscribers.forEach((unsubscribe) => unsubscribe());
+  };
 }
 
 export async function updateDriverTourPackIssueStatus(database, { departureKey, driverId, issueId, status, nowMs = Date.now() } = {}, { updateFn = update, refFn = ref } = {}) {

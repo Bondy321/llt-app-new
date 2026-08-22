@@ -152,6 +152,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `driver_tour_pack_feature_flags`
 - `driver_tour_pack_progress`
 - `driver_tour_pack_issues`
+- `login_rate_limits` (server-private opaque abuse-prevention counters)
 
 Admin UID hardcoded in rules:
 
@@ -193,7 +194,17 @@ Passenger login:
   - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK`
   - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK`
 - Backend App Check enforcement is controlled by `REQUIRE_APP_CHECK_FOR_LOGIN`.
-- App Check is intentionally off by default in `.env.example`.
+- Deployed login Functions fail closed unless `REQUIRE_APP_CHECK_FOR_LOGIN=true`; tests and
+  emulators may explicitly keep it off. Production mobile builds must enable both login App Check
+  client flags.
+- Login abuse quotas are authoritative RTDB transactions under opaque hashed
+  `login_rate_limits/v1/*` buckets, shared by every Gen2 instance. The module-local limiter is not
+  an acceptable authority for either login endpoint.
+- Production/TestFlight workflows require both client App Check flags to be exactly true. A
+  deployed `K_SERVICE` runtime always requires backend enforcement regardless of test/emulator
+  markers. Broad network quotas use only the trusted platform forwarding hop, never client IDs or
+  User-Agent values. Expiry cleanup compare-and-deletes and drains bounded batches without deleting
+  a concurrently reset bucket.
 
 Driver login:
 
@@ -397,7 +408,7 @@ Current upload contract:
 DB lifecycle fields for new uploads:
 
 - `variantStatus: "processing"`
-- `sourceUrl`
+- `sourceUrl` for group photos only; private records use `storagePath`
 - `variantUpdatedAt`
 - `variantError`
 - `variantVersion: 2`
@@ -407,13 +418,22 @@ Server variant generator:
 - Function: `generatePhotoVariants`
 - Region: `us-east1`
 - Uses `sharp` to create viewer and thumbnail JPEGs.
-- Updates photo records to `variantStatus: "ready"` with `viewerUrl` and `thumbnailUrl`, or `variantStatus: "failed"` with `variantError`.
+- Group records become `variantStatus: "ready"` with durable `viewerUrl` and `thumbnailUrl`.
+  Private records become ready with path fields only and resolve five-minute signed URLs in memory;
+  their source/variant objects must not retain Firebase download tokens. Failed generation stores
+  `variantStatus: "failed"` with `variantError`.
 
 Storage rules:
 
 - Authenticated image uploads only.
 - Max image size is 10 MB.
-- Private photo ownership is enforced in Realtime Database, not Storage rules.
+- Private object access requires the signed `privatePhotoOwnerKey` Auth claim created by the
+  passenger login verifier; the client force-refreshes its ID token after verification.
+- Private RTDB records are path-authoritative and never persist durable download-token URLs. Mobile
+  resolves batches of at most 50 private records through `resolvePrivatePhotoMedia`; returned
+  five-minute signed URLs are memory-only.
+- Object custom metadata must not contain stable passenger IDs, booking-derived owner keys, tour
+  IDs, idempotency keys, or upload timestamps.
 
 Expo FileSystem contract:
 
@@ -482,7 +502,9 @@ authoritative and queued updates patch the device snapshot only after durable en
 Logout, driver identity change, reassignment, assignment validation failure, cancellation/withdrawal,
 and expiry must call the exact-scope lifecycle purge. It stops old replay, removes both Tour Pack
 caches, the complete manifest and that scope's actions, and uses generation guards so late old-tour
-responses cannot repopulate storage.
+responses cannot repopulate storage. Driver Tour Pack remote reads capture the cache generation before
+network I/O; purge increments that generation under the same per-scope lock before deleting, and a late
+replacement must fail closed when its captured generation no longer matches.
 
 Canonical sync states:
 
@@ -658,6 +680,7 @@ Driver location:
 - Map and Tour Home derive presentation through `utils/driverLocation.js`. Live points become non-actionable when stale and disappear after 30 minutes; manual pickup points remain destinations without a live label.
 - Find My Bus does not require passenger location permission to show the driver point. Permission is requested only when the passenger chooses to show/refresh their own position.
 - Driver reassignment/unassignment clears the former tour's location atomically so passengers never inherit another driver's coordinates.
+- Auto-share checks lifecycle cancellation after native location capture and again immediately before the service writes Firebase. Logout, reassignment, disable, or unmount must make the old scope fail closed so late coordinates never return to the former tour.
 
 Safety UX:
 
@@ -755,6 +778,24 @@ Operational expectations:
 - Tour identity guards reject create/update flows that would overwrite or mutate a generated tour key.
 - Tour updates perform one authoritative read, reject a missing target, and
   validate partial date/capacity patches against the stored tour before writing.
+- Dated tours persist canonical UTC-midnight `startDateEpochMs` and `endDateEpochMs` query fields;
+  date-leaf Functions normalize them for every producer without firing on unrelated tour children.
+  `ToursManager` subscribes through the indexed `endDateEpochMs` window with a 500-record cap,
+  discloses capped totals/exports, and fetches exact dashboard deep-link IDs on demand. Run the
+  dry-run-first `backfill:tour-date-indexes` maintenance command before releasing this query path
+  over legacy records.
+- `normalizeTourDateIndexes` and `normalizeTourEndDateIndex` repair those fields after writes to the
+  `startDate` and `endDate` leaves, including external management/Apps Script and Admin SDK producers,
+  without firing for unrelated tour updates. Release order is Functions, verified backfill, RTDB
+  index/validation rules, then the bounded web-admin query. The Functions remain authoritative because
+  parent admin writes and Admin SDK producers cannot be made field-required at child rules.
+- Tours and Drivers share the bounded driver-directory subscription. Driver Tour Pack coverage and
+  operations are derived only for visible tours using prebuilt assignment/issue indexes; issue
+  queries are exact-departure scoped and capped rather than downloading the global issue history.
+- Driver issue operations projections use a base64url composite departure/driver/issue key so reused
+  `issue_001` identifiers never collide. `departurePriorityKey` orders unresolved critical issues first
+  and newest within priority. Run `backfill:driver-tour-pack-issues` before releasing the matching web query;
+  delete legacy issueId-only projections only when their embedded source identity matches.
 - Driver assignment writes must align with the mobile canonical `currentTourId` contract and clean stale assignment links.
 - Driver creation must use a transaction and fail on an existing driver code; never replace a driver record during create.
 - CSV updates are field-preserving patches. Missing columns must not clear itinerary, pickup, assignment, or other state; driver assignment requires a canonical existing Driver ID.
@@ -778,13 +819,17 @@ Exported functions:
   - HTTPS `POST`
   - region `europe-west1`
   - reads `booking_identities/{bookingRef}`
-  - optional backend App Check enforcement
-  - rate limited in separate credential-, account-, and broad network-level buckets after auth/App Check validation
+  - mandatory App Check enforcement in deployed production; fail-closed configuration guard
+  - distributed atomic rate limits in separate opaque credential-, account-, and broad network-level buckets after auth/App Check validation
 - `verifyDriverLogin`
   - HTTPS `POST`, authenticated, region `europe-west1`
-  - validates driver credentials and optionally App Check, then transactionally binds an
+  - validates driver credentials and mandatory production App Check, then transactionally binds an
     unclaimed driver record to the caller and persists server-owned identity helpers
   - rate limited in separate credential-, account-, and broad network-level buckets
+- `cleanupExpiredLoginRateLimits`
+  - scheduled hourly in `europe-west1`
+  - deletes expired opaque limiter records in bounded batches; no raw account, credential, UID,
+    email, driver code, client ID, user agent, or IP values are stored
 - `assignDriverToTour`
   - HTTPS `POST`, authenticated driver-only, region `europe-west1`
   - serializes competing driver/tour mutations, rejects occupied or inactive tours, and
@@ -832,6 +877,12 @@ Exported functions:
   - RTDB update trigger on `/tours/{tourId}/itinerary`
   - region `europe-west1`
   - sends to tour participants plus assigned driver auth users
+- `normalizeTourDateIndexes`
+  - RTDB write trigger on `/tours/{tourId}/startDate`, region `europe-west1`
+  - repairs or removes derived UTC date-query fields after start-date writes from every producer
+- `normalizeTourEndDateIndex`
+  - RTDB write trigger on `/tours/{tourId}/endDate`, region `europe-west1`
+  - repairs or removes derived UTC date-query fields after end-date writes from every producer
 - `submitSafetyReport`
   - authenticated HTTPS `POST`, region `europe-west1`
   - validates caller tour/role access and bounded report/location input
@@ -865,6 +916,29 @@ npm --prefix functions run backfill:photo-variants -- --apply --tourId=5112D_8 -
 
 Use `--visibility=group|private`, `--tourId=...`, and `--ownerKey=...` to narrow photo variant backfills.
 Broad apply runs without `--tourId` require `--allow-full-scan`.
+Before deploying derivative-path Storage rules, refresh each tour's ready group variants with
+`--visibility=group --tourId=... --refresh-group-ownership=true`; continue bounded pages with the
+returned `--after=NEXT_CURSOR`. This preserves the uploader `authUid` on server variants so owner
+deletion remains functional while client variant creation/overwrite is denied.
+
+Admin scaling migrations:
+
+```bash
+npm --prefix functions run backfill:tour-date-indexes
+npm --prefix functions run backfill:tour-date-indexes -- --apply --allow-full-scan
+npm --prefix functions run backfill:driver-tour-pack-issues
+npm --prefix functions run backfill:driver-tour-pack-issues -- --apply --allow-full-scan
+```
+
+Legacy private URL/token hardening is dry-run first:
+
+```bash
+npm --prefix functions run harden:private-photos -- --dry-run --tourId=5112D_8 --ownerKey=OWNER_KEY --limit=50
+npm --prefix functions run harden:private-photos -- --apply --tourId=5112D_8 --ownerKey=OWNER_KEY --limit=50
+```
+
+This migration has no broad-scan mode. Continue owner-scoped pages with `--after=NEXT_CURSOR` when
+the prior result returns a cursor; missing Storage objects are retry-safe, while other errors fail closed.
 
 ---
 
@@ -920,7 +994,8 @@ Important Storage invariants:
 
 - `group_tour_photos/{tourId}/...` read/write requires authenticated user and image constraints for writes.
 - `private_tour_photos/{tourId}/{ownerKey}/...` read/write requires the caller's encoded stable/private owner key or identity binding.
-- Ownership is intentionally enforced in RTDB metadata, because Storage rules cannot look up stable identity bindings.
+- Private Storage ownership uses the verifier-issued `privatePhotoOwnerKey` custom claim because
+  Storage rules cannot look up RTDB identity bindings directly.
 
 If changing any protected data shape, update all of:
 

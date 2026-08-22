@@ -130,3 +130,37 @@ test('stopping live sharing preserves a fixed manual pickup point', async () => 
   assert.equal(result.removed, false);
   assert.equal(transactionResult, undefined);
 });
+
+test('a location captured for a revoked tour scope cannot reach Firebase', async () => {
+  let resolveCapture;
+  let scopeCurrent = true;
+  const writes = [];
+  const capture = new Promise((resolve) => { resolveCapture = resolve; });
+  const dbInstance = {
+    ref(path) {
+      return { async set(value) { writes.push({ path, value }); } };
+    },
+  };
+
+  const autoShareRun = (async () => {
+    const location = await capture;
+    return publishDriverLocation({
+      tourId: 'FORMER_TOUR',
+      location,
+      source: 'auto',
+      dbInstance,
+      isScopeCurrent: () => scopeCurrent,
+    });
+  })();
+
+  scopeCurrent = false;
+  resolveCapture({ latitude: 56, longitude: -4, accuracy: 8 });
+  const result = await autoShareRun;
+
+  assert.deepEqual(result, {
+    success: false,
+    skipped: true,
+    reason: 'DRIVER_LOCATION_SCOPE_REVOKED',
+  });
+  assert.deepEqual(writes, []);
+});

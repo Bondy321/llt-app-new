@@ -24,6 +24,7 @@ const {
   deletePrivatePhoto,
   updatePhotoCaption,
   uploadPhotoDirect,
+  resolvePrivatePhotoMedia,
 } = require('../services/photoService');
 
 const mockDbRef = (_db, path) => ({ path });
@@ -98,8 +99,12 @@ test('uploadPhoto stores group photo using group_tour_photos paths and rich meta
   assert.strictEqual(uploadCall.uploadedBlob, blob);
   assert.strictEqual(uploadCall.metadata.contentType, 'image/jpeg');
   assert.strictEqual(uploadCall.metadata.cacheControl, 'public,max-age=31536000,immutable');
-  assert.strictEqual(uploadCall.metadata.customMetadata.uploadedBy, 'user-9');
   assert.strictEqual(uploadCall.metadata.customMetadata.authUid, 'auth-upload-1');
+  assert.deepStrictEqual(uploadCall.metadata.customMetadata, {
+    authUid: 'auth-upload-1',
+    visibility: 'group',
+    sourceRole: 'source',
+  });
 
   assert.deepStrictEqual(setPayload, {
     sourceUrl: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
@@ -173,7 +178,7 @@ test('uploadPhoto stores private photos in private_tour_photos namespaces', asyn
 
   assert.strictEqual(writePath, 'private_tour_photos/tour-55/user-private');
   assert.strictEqual(dbPayload.storagePath, 'private_tour_photos/tour-55/user-private/1700000000000_user-private.webp');
-  assert.strictEqual(dbPayload.sourceUrl, 'https://example.com/private_tour_photos/tour-55/user-private/1700000000000_user-private.webp');
+  assert.strictEqual(dbPayload.sourceUrl, undefined);
   assert.strictEqual(dbPayload.fileType, 'image/webp');
   assert.ok(!('uploaderName' in dbPayload));
   assert.strictEqual(blob.closed, true);
@@ -335,6 +340,40 @@ test('uploadPhoto writes processing variant state for server-owned variants', as
   });
 });
 
+test('resolvePrivatePhotoMedia hydrates short-lived URLs in memory with an authenticated bounded request', async () => {
+  const requests = [];
+  const photos = [{ id: 'photo-1', storagePath: 'private_tour_photos/tour-1/owner-1/a.jpg' }];
+  const result = await resolvePrivatePhotoMedia({ tourId: 'tour-1', ownerKey: 'owner-1', photos }, {
+    authInstance: { currentUser: { getIdToken: async () => 'token-1' } },
+    endpoint: 'https://example.test/resolve',
+    fetchFn: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, json: async () => ({ success: true, expiresAtMs: Date.now() + 60_000, media: { 'photo-1': { sourceUrl: 'https://signed.test/a' } } }) };
+    },
+  });
+  assert.strictEqual(result[0].sourceUrl, 'https://signed.test/a');
+  assert.strictEqual(requests[0].options.headers.Authorization, 'Bearer token-1');
+  assert.deepStrictEqual(JSON.parse(requests[0].options.body), {
+    tourId: 'tour-1', ownerKey: 'owner-1', photoIds: ['photo-1'],
+  });
+  assert.strictEqual(photos[0].sourceUrl, undefined);
+});
+
+test('resolvePrivatePhotoMedia rejects expired or malformed authorization responses', async () => {
+  const deps = {
+    authInstance: { currentUser: { getIdToken: async () => 'token-1' } },
+    endpoint: 'https://example.test/resolve',
+  };
+  await assert.rejects(resolvePrivatePhotoMedia({ tourId: 't', ownerKey: 'o', photos: [{ id: 'p' }] }, {
+    ...deps,
+    fetchFn: async () => ({ ok: true, json: async () => ({ success: true, expiresAtMs: Date.now() - 1, media: {} }) }),
+  }), /could not be authorized/);
+  await assert.rejects(resolvePrivatePhotoMedia({ tourId: 't', ownerKey: 'o', photos: [{ id: 'p' }] }, {
+    ...deps,
+    fetchFn: async () => ({ ok: true, json: async () => ({ success: true, media: [] }) }),
+  }), /could not be authorized/);
+});
+
 test('uploadPhoto retries getDownloadURL for transient storage errors before succeeding', async (t) => {
   const originalNow = Date.now;
   Date.now = () => 1700000000000;
@@ -448,6 +487,7 @@ test('subscribeToPrivatePhotos scopes path to user and sorts newest first', asyn
     },
   });
 
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepStrictEqual(seenPaths, ['private_tour_photos/tour-A/user-5']);
   assert.deepStrictEqual(received.map((p) => p.id), ['two', 'one']);
   assert.deepStrictEqual(received.map((p) => p.ownerScope), ['user-5', 'user-5']);
@@ -535,7 +575,7 @@ test('fetchPrivatePhotosPage applies endBefore cursor and normalizes timestamps 
   assert.strictEqual(result.hasMore, false);
 });
 
-test('fetchPrivatePhotosPage normalizes malformed photo fields', async () => {
+test('fetchPrivatePhotosPage strips legacy durable URLs while normalizing malformed fields', async () => {
   const result = await fetchPrivatePhotosPage({
     tourId: 'tour-current',
     ownerId: 'pax_v1:ABC:current@example.com',
@@ -562,7 +602,7 @@ test('fetchPrivatePhotosPage normalizes malformed photo fields', async () => {
 
   const [photo] = result.items;
   assert.equal(photo.id, 'malformed');
-  assert.equal(photo.viewerUrl, 'https://cdn/good-viewer.jpg');
+  assert.equal('viewerUrl' in photo, false);
   assert.equal('thumbnailUrl' in photo, false);
   assert.equal('sourceUrl' in photo, false);
   assert.equal('caption' in photo, false);

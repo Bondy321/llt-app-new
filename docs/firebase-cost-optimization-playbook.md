@@ -50,6 +50,14 @@ Track minimum 7 days before major tuning:
 
 **Success metric:** measurable reduction in chat/manifest read volume per active user.
 
+Web-admin implementation:
+
+- `ToursManager` queries `tours` through indexed numeric `endDateEpochMs` windows and caps current, past, and all-dates views at 500 records. The UI discloses when a result is capped; capped totals and exports are not complete-archive totals.
+- Dated tour creates and edits write UTC-midnight `startDateEpochMs` and `endDateEpochMs` alongside the display date fields. Before releasing this query path over legacy data, dry-run `npm --prefix functions run backfill:tour-date-indexes`, correct invalid records, then apply with `--apply --allow-full-scan`.
+- `normalizeTourDateIndexes` and `normalizeTourEndDateIndex` are the server-owned repair boundary for every producer (web admin, management/Apps Script sync, and Admin SDK maintenance). They listen only to the two date leaves, avoiding invocations for unrelated high-volume location/participant/safety updates. Deploy the Functions first, run and verify the backfill, deploy the RTDB index/validation rules, and only then release the bounded web query. RTDB rules validate numeric ordering when fields are present; the server triggers are authoritative because parent-level admin writes and Admin SDK producers cannot be made field-required by child validation. Monitor for invalid dated tours whose stale indexes the Functions remove.
+- Driver issue projections use a collision-free composite projection ID and `departurePriorityKey`, ordered unresolved critical first and newest within priority. Before releasing the new admin query, deploy Functions, dry-run then apply `npm --prefix functions run backfill:driver-tour-pack-issues -- --apply --allow-full-scan`, deploy the `departurePriorityKey` RTDB index, and then deploy web admin. Legacy issue-ID-only records are deleted only when their embedded departure/driver identity matches the source being migrated.
+- Driver directory consumers share one bounded listener. Driver Tour Pack issues are queried only for visible departure keys, capped per departure, and coverage/operations calculations build lookup indexes once per snapshot.
+
 ### 2) Push token + preference hygiene
 
 - Continue token refresh on launch.

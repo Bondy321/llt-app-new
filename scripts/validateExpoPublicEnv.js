@@ -195,6 +195,22 @@ const validateExpoPublicEnv = (env = process.env, options = {}) => {
     }
   });
 
+  const easBuildProfile = String(env.EAS_BUILD_PROFILE || '').trim().toLowerCase();
+  const requireProductionAppCheck = options.requireProductionAppCheck === true
+    || env.LLT_REQUIRE_PRODUCTION_APPCHECK === 'true'
+    || easBuildProfile === 'production'
+    || easBuildProfile === 'testflight';
+  if (requireProductionAppCheck) {
+    [
+      'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK',
+      'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK',
+    ].forEach((name) => {
+      if (env[name] !== 'true') {
+        errors.push(`${name} must be exactly true for production/TestFlight releases`);
+      }
+    });
+  }
+
   return { ok: errors.length === 0, errors, platform };
 };
 

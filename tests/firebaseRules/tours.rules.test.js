@@ -315,6 +315,17 @@ test('allows admin tour metadata management', async () => {
   await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}`).update({ isActive: false }));
   await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/driverId`).set(DRIVER_ID));
   await assertFails(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/driverId`).set('D-MISSING'));
+  const startDateEpochMs = Date.UTC(2026, 7, 22);
+  const endDateEpochMs = Date.UTC(2026, 7, 24);
+  await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}`).update({ startDateEpochMs, endDateEpochMs }));
+  await assertFails(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/endDateEpochMs`).set(startDateEpochMs - 1));
+  await assertSucceeds(
+    dbFor(ADMIN_UID).ref('tours')
+      .orderByChild('endDateEpochMs')
+      .startAt(startDateEpochMs)
+      .limitToFirst(500)
+      .get(),
+  );
 });
 
 test('allows hardcoded admin web console collection reads and root multi-path updates', async () => {
