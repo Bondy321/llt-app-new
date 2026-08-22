@@ -703,6 +703,21 @@ test('Static contract: production binary EAS workflows gate release on mobile/ba
     assert.ok(envIndex >= 0 && publishIndex > envIndex, 'env validation must run before EAS publish/build');
   });
 
+  [
+    '.github/workflows/eas-build.yml',
+    '.github/workflows/eas-testflight.yml',
+    '.github/workflows/eas-update.yml',
+  ].forEach((relativePath) => {
+    const source = readText(relativePath);
+    assert.match(source, /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK:\s*'true'/);
+    assert.match(source, /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK:\s*'true'/);
+    assert.doesNotMatch(
+      source,
+      /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_(?:USE|REQUIRE)_APPCHECK:\s*\$\{\{\s*secrets\./,
+      `${relativePath} must not let stale secrets disable production App Check`,
+    );
+  });
+
   assert.equal(
     packageJson.scripts['test:mobile:ota'],
     'npm run test:mobile:auth && npm run test:mobile:services:booking',
