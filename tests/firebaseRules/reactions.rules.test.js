@@ -435,11 +435,19 @@ test('denies passenger principals from creating internal driver chat messages', 
   }));
 });
 
-test('allows internal driver lastRead writes through canonical driver identity', async () => {
+test('allows group lastRead server timestamps through the authenticated passenger identity', async () => {
+  await assertSucceeds(
+    dbFor(PASSENGER_AUTH_UID)
+      .ref(`chats/${TOUR_ID}/lastRead/${PASSENGER_AUTH_UID}`)
+      .set({ '.sv': 'timestamp' })
+  );
+});
+
+test('allows internal driver lastRead server timestamps through canonical driver identity', async () => {
   await assertSucceeds(
     dbFor(DRIVER_AUTH_UID)
       .ref(`internal_chats/${INTERNAL_TOUR_ID}/lastRead/${DRIVER_PRINCIPAL_ID}`)
-      .set(Date.now())
+      .set({ '.sv': 'timestamp' })
   );
   await assertFails(
     dbFor(PASSENGER_AUTH_UID)

@@ -30,7 +30,6 @@ import * as Haptics from '../services/hapticsService';
 import {
   sendInternalDriverMessage,
   sendMessage,
-  sendImageMessage,
   subscribeToChatMessages,
   subscribeToInternalDriverChat,
   subscribeToTypingIndicators,
@@ -47,9 +46,9 @@ import {
 } from '../services/chatService';
 import { createPersistenceProvider } from '../services/persistenceProvider';
 import offlineSyncService from '../services/offlineSyncService';
-import * as bookingService from '../services/bookingServiceRealtime';
 import * as chatService from '../services/chatService';
 import * as photoService from '../services/photoService';
+import { optimizeSourcePhotoForUpload } from '../services/imageOptimizationService';
 import {
   REPORT_REASON_OPTIONS,
   checkTextForObjectionableContent,
@@ -1150,6 +1149,7 @@ const ChatHeader = React.memo(({
   onSync,
   onlineCount,
   queueStats,
+  isConnected,
 }) => (
   <LinearGradient
     colors={internalDriverChat ? [COLORS.primaryDark, COLORS.primaryBlue] : [COLORS.primaryBlue, COLORS.primaryLight]}
@@ -1166,8 +1166,8 @@ const ChatHeader = React.memo(({
         {internalDriverChat ? 'Driver Chat' : 'Group Chat'}
       </Text>
       <View style={styles.onlineIndicator}>
-        <View style={[styles.onlineDot, { backgroundColor: COLORS.onlineIndicator }]} />
-        <Text style={styles.onlineCount}>{onlineCount} online</Text>
+        <View style={[styles.onlineDot, { backgroundColor: isConnected ? COLORS.onlineIndicator : COLORS.tertiaryText }]} />
+        <Text style={styles.onlineCount}>{isConnected ? `${onlineCount} online` : 'Offline'}</Text>
       </View>
     </View>
 
@@ -1829,6 +1829,8 @@ export default function ChatScreen({
   initialMessageId = null,
   identityBinding: identityBindingProp = null,
   canonicalIdentity: canonicalIdentityProp = null,
+  isConnected = true,
+  offlineSessionScope = null,
 }) {
   // Core state
   const [messages, setMessages] = useState([]);
@@ -1859,6 +1861,8 @@ export default function ChatScreen({
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [imageSendState, setImageSendState] = useState({ status: 'idle', message: '', retryUri: null });
   const [lastSeenTimestamp, setLastSeenTimestamp] = useState(null);
+  const [sessionUnreadBoundaryTimestamp, setSessionUnreadBoundaryTimestamp] = useState(null);
+  const [readStateRestored, setReadStateRestored] = useState(false);
   const [unreadAnchorY, setUnreadAnchorY] = useState(null);
   const [showJumpToUnread, setShowJumpToUnread] = useState(false);
   const [replyingToMessage, setReplyingToMessage] = useState(null);
@@ -1933,10 +1937,17 @@ export default function ChatScreen({
   const principalId = canonicalIdentity?.principalId || 'anonymous';
   const passengerStableId = canonicalIdentity?.stablePassengerId || null;
   const authUid = canonicalIdentity?.authUid || currentUser?.uid || null;
-  const realtimeActorId = useMemo(
-    () => resolveRealtimeActorId({ authUid, principalId }) || principalId,
-    [authUid, principalId]
-  );
+  const realtimeActorId = useMemo(() => {
+    // Internal driver-chat rules deliberately key read state, typing and
+    // presence by the stable driver principal. Group chat continues to prefer
+    // the auth UID so passenger sessions keep their existing identity shape.
+    if (internalDriverChat && isDriver && principalId.startsWith('driver:')) {
+      return isRealtimeKeySegment(principalId)
+        ? principalId
+        : toRealtimeKeySegment(principalId);
+    }
+    return resolveRealtimeActorId({ authUid, principalId }) || principalId;
+  }, [authUid, internalDriverChat, isDriver, principalId]);
   const currentReactionUserIds = useMemo(() => {
     const candidates = [
       realtimeActorId,
@@ -1950,6 +1961,38 @@ export default function ChatScreen({
     return Array.from(new Set(candidates.filter(Boolean)));
   }, [authUid, passengerStableId, principalId, realtimeActorId]);
   const userName = bookingData?.passengerNames?.[0] || 'Tour Participant';
+  const chatQueueScope = useMemo(() => (
+    offlineSyncService.normalizeSessionScope(offlineSessionScope)
+    || offlineSyncService.normalizeSessionScope({
+      tourId,
+      principalId,
+      role: canonicalIdentity?.principalType === 'driver' ? 'driver' : 'passenger',
+      authUid,
+      cacheOwnerId: bookingData?.id || principalId,
+    })
+  ), [
+    authUid,
+    bookingData?.id,
+    canonicalIdentity?.principalType,
+    offlineSessionScope,
+    principalId,
+    tourId,
+  ]);
+  const chatQueueActionTypes = useMemo(() => new Set(
+    internalDriverChat
+      ? ['INTERNAL_CHAT_MESSAGE']
+      : ['CHAT_MESSAGE', 'PHOTO_UPLOAD'],
+  ), [internalDriverChat]);
+  const summarizeChatQueueActions = useCallback((actions = []) => (
+    (Array.isArray(actions) ? actions : []).reduce((summary, action) => {
+      if (!chatQueueActionTypes.has(action?.type) || action?.status === 'completed') return summary;
+      if (action.status === 'uploading' || action.status === 'syncing') summary.syncing += 1;
+      else if (action.status === 'failed') summary.failed += 1;
+      else summary.pending += 1;
+      summary.total += 1;
+      return summary;
+    }, { pending: 0, syncing: 0, failed: 0, total: 0 })
+  ), [chatQueueActionTypes]);
   useEffect(() => {
     logChatReactionDebug('chat_reaction_actor_context', {
       tourId,
@@ -2231,18 +2274,22 @@ export default function ChatScreen({
   ), [canonicalIdentity, hiddenMessageIds, messages, mutedSenderIds]);
 
   const markActiveChatRead = useCallback(async ({ force = false } = {}) => {
-    if (!tourId || !realtimeActorId) return;
+    if (!tourId || !realtimeActorId || !readStateRestored) return;
+    if (!force && !isAtBottomRef.current) return;
+
+    const latestMessage = messages[messages.length - 1];
+    const latestTimestamp = getMessageTimestamp(latestMessage);
+    if (!Number.isFinite(latestTimestamp)) return;
+    if (Number.isFinite(lastSeenTimestamp) && latestTimestamp <= lastSeenTimestamp) return;
 
     const now = Date.now();
     if (!force && now - lastReadMarkAtRef.current < 3000) return;
     lastReadMarkAtRef.current = now;
 
     const markReadFn = internalDriverChat ? markInternalChatAsRead : markChatAsRead;
-    const latestMessage = messages[messages.length - 1];
-    const latestTimestamp = getMessageTimestamp(latestMessage);
     const result = await markReadFn(tourId, realtimeActorId);
 
-    if (result?.success && latestTimestamp && readStateStorageKey) {
+    if (result?.success && readStateStorageKey) {
       setLastSeenTimestamp(latestTimestamp);
       setUnreadAnchorY(null);
       await readStateStorage.setItemAsync(readStateStorageKey, String(latestTimestamp));
@@ -2251,7 +2298,9 @@ export default function ChatScreen({
     tourId,
     realtimeActorId,
     internalDriverChat,
+    lastSeenTimestamp,
     messages,
+    readStateRestored,
     getMessageTimestamp,
     readStateStorage,
     readStateStorageKey,
@@ -2298,9 +2347,12 @@ export default function ChatScreen({
 
   useEffect(() => {
     let active = true;
+    setReadStateRestored(false);
+    setLastSeenTimestamp(null);
+    setSessionUnreadBoundaryTimestamp(null);
 
     if (!readStateStorageKey) {
-      setLastSeenTimestamp(null);
+      setReadStateRestored(true);
       return;
     }
 
@@ -2309,9 +2361,16 @@ export default function ChatScreen({
         const storedTimestamp = await readStateStorage.getItemAsync(readStateStorageKey);
         if (!active) return;
         const parsed = Number(storedTimestamp);
-        setLastSeenTimestamp(Number.isFinite(parsed) && parsed > 0 ? parsed : null);
+        const restoredTimestamp = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        setLastSeenTimestamp(restoredTimestamp);
+        setSessionUnreadBoundaryTimestamp(restoredTimestamp);
+        setReadStateRestored(true);
       } catch (error) {
-        if (active) setLastSeenTimestamp(null);
+        if (active) {
+          setLastSeenTimestamp(null);
+          setSessionUnreadBoundaryTimestamp(null);
+          setReadStateRestored(true);
+        }
       }
     };
 
@@ -2493,12 +2552,18 @@ export default function ChatScreen({
     return () => unsubscribe();
   }, [chatScope, tourId]);
 
-  const refreshQueueStats = useCallback(async () => {
-    const statsResult = await offlineSyncService.getQueueStats();
-    if (statsResult?.success && statsResult?.data) {
-      setQueueStats(statsResult.data);
+  const getChatQueueStats = useCallback(async () => {
+    const actionsResult = await offlineSyncService.getQueuedActions({ scope: chatQueueScope || undefined });
+    if (actionsResult?.success && Array.isArray(actionsResult.data)) {
+      return summarizeChatQueueActions(actionsResult.data);
     }
-  }, []);
+    return { pending: 0, syncing: 0, failed: 0, total: 0 };
+  }, [chatQueueScope, summarizeChatQueueActions]);
+  const refreshQueueStats = useCallback(async () => {
+    const stats = await getChatQueueStats();
+    setQueueStats(stats);
+    return stats;
+  }, [getChatQueueStats]);
 
   const clearSyncBannerTimeout = useCallback(() => {
     if (syncBannerTimeoutRef.current) {
@@ -2662,12 +2727,12 @@ export default function ChatScreen({
       return;
     }
 
-    const unsubscribe = offlineSyncService.subscribeQueueState((stats) => {
-      setQueueStats(stats || { pending: 0, syncing: 0, failed: 0, total: 0 });
-    });
+    const unsubscribe = offlineSyncService.subscribeQueuedActions((actions) => {
+      setQueueStats(summarizeChatQueueActions(actions));
+    }, chatQueueScope ? { scope: chatQueueScope } : undefined);
 
     return () => unsubscribe();
-  }, [tourId]);
+  }, [chatQueueScope, summarizeChatQueueActions, tourId]);
 
   // Set online presence on mount/unmount
   useEffect(() => {
@@ -2825,6 +2890,7 @@ export default function ChatScreen({
         messageId: optimisticId,
         idempotencyKey: optimisticId,
         replyTo: pendingReply || undefined,
+        online: isConnected,
       });
 
       if (!result?.success || !result?.message) {
@@ -2925,6 +2991,7 @@ export default function ChatScreen({
     realtimeActorId,
     userName,
     isDriver,
+    isConnected,
     passengerStableId,
     internalDriverChat,
     replyingToMessage,
@@ -2993,6 +3060,7 @@ export default function ChatScreen({
         messageId: message.id,
         idempotencyKey: message.idempotencyKey || message.id,
         replyTo: message.replyTo || undefined,
+        online: isConnected,
       });
 
       if (!result?.success || !result?.message) {
@@ -3086,6 +3154,7 @@ export default function ChatScreen({
     principalId,
     requiresPassengerStableIdForWrites,
     internalDriverChat,
+    isConnected,
     isDriver,
     passengerStableId,
     retryingMessageIds,
@@ -3097,26 +3166,35 @@ export default function ChatScreen({
   ]);
 
   const handleManualSync = useCallback(async ({ retryFailedOnly = false } = {}) => {
+    if (!isConnected) {
+      showSyncBanner({
+        contract: offlineSyncService.UNIFIED_SYNC_STATES.OFFLINE_NO_NETWORK,
+        outcomeText: queueStats.total > 0
+          ? `${queueStats.total} chat item${queueStats.total === 1 ? '' : 's'} safely queued`
+          : 'No chat items waiting to sync',
+        autoDismissMs: 5500,
+      });
+      return;
+    }
+
     try {
-      const beforeStatsResult = await offlineSyncService.getQueueStats();
-      const beforeStats = beforeStatsResult?.success
-        ? beforeStatsResult.data
-        : { pending: 0, failed: 0, syncing: 0, total: 0 };
+      const beforeStats = await getChatQueueStats();
 
       if (retryFailedOnly) {
         await offlineSyncService.retryFailedActions({
           types: internalDriverChat
-            ? ['CHAT_MESSAGE', 'INTERNAL_CHAT_MESSAGE', 'PHOTO_UPLOAD']
+            ? ['INTERNAL_CHAT_MESSAGE']
             : ['CHAT_MESSAGE', 'PHOTO_UPLOAD'],
+          tourId,
+          scope: chatQueueScope || undefined,
         });
       }
 
-      const replayResult = await offlineSyncService.replayQueue({ services: { bookingService, chatService, photoService } });
-      await refreshQueueStats();
-      const afterStatsResult = await offlineSyncService.getQueueStats();
-      const afterStats = afterStatsResult?.success
-        ? afterStatsResult.data
-        : { pending: 0, failed: 0, syncing: 0, total: 0 };
+      const replayResult = await offlineSyncService.replayQueue({
+        services: internalDriverChat ? { chatService } : { chatService, photoService },
+        scope: chatQueueScope || undefined,
+      });
+      const afterStats = await refreshQueueStats();
 
       showQueueSyncOutcome({ replayResult, beforeStats, afterStats });
     } catch (error) {
@@ -3125,159 +3203,212 @@ export default function ChatScreen({
         fallbackErrorMessage: 'Unable to flush queued chat actions.',
       });
     }
-  }, [internalDriverChat, refreshQueueStats, showQueueSyncOutcome]);
+  }, [
+    chatQueueScope,
+    getChatQueueStats,
+    internalDriverChat,
+    isConnected,
+    queueStats.total,
+    refreshQueueStats,
+    showQueueSyncOutcome,
+    showSyncBanner,
+    tourId,
+  ]);
 
-  const handleSendImage = useCallback(
-    async (imageUri) => {
-      if (!imageUri || isImageUploading) return;
-      if (internalDriverChat) {
-        setShowAttachmentMenu(false);
-        showTransientFeedback({
-          type: 'info',
-          icon: 'image-outline',
-          message: 'Photos can be shared in the group chat.',
+  const handleSendImage = useCallback(async (imageUri) => {
+    if (!imageUri || isImageUploading) return;
+    if (internalDriverChat) {
+      setShowAttachmentMenu(false);
+      showTransientFeedback({
+        type: 'info',
+        icon: 'image-outline',
+        message: 'Photos can be shared in the group chat.',
+      });
+      return;
+    }
+
+    const previousAttempt = imageSendAttemptRef.current;
+    const imageMessageId = previousAttempt?.imageUri === imageUri
+      ? previousAttempt.messageId
+      : `img_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const photoJobId = `chat_photo_upload_${imageMessageId}`;
+    const createdAt = new Date().toISOString();
+    let imageSendStage = 'preparing';
+    let queuedActionCreated = false;
+    imageSendAttemptRef.current = { imageUri, messageId: imageMessageId };
+
+    clearImageSendResetTimeout();
+    setImageSendState({ status: 'uploading', message: 'Preparing photo...', retryUri: imageUri });
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    traceChatImageSend('send_requested', {
+      imageUri: summarizeUri(imageUri),
+      messageIdMasked: maskIdentifier(imageMessageId),
+      online: isConnected,
+    });
+
+    try {
+      if (requiresPassengerStableIdForWrites && !passengerStableId) {
+        throw new Error('CHAT_IDENTITY_NOT_READY');
+      }
+
+      const senderInfo = buildChatSenderInfo();
+      logSenderIdentityPath();
+      const optimized = await optimizeSourcePhotoForUpload({ uri: imageUri });
+      const optimisticMessage = {
+        id: imageMessageId,
+        idempotencyKey: imageMessageId,
+        text: '',
+        senderName: userName,
+        senderId: senderInfo.principalId || senderInfo.userId,
+        ...(senderInfo.stablePassengerId ? { senderStableId: senderInfo.stablePassengerId } : {}),
+        timestamp: createdAt,
+        isDriver,
+        status: 'queued',
+        type: 'image',
+        imageUrl: optimized.uploadUri || imageUri,
+        thumbnailUrl: imageUri,
+      };
+      setMessages((current) => mergeMessagesById(current, [optimisticMessage]));
+      scrollToBottom(true);
+
+      imageSendStage = 'queueing';
+      const enqueueResult = await offlineSyncService.enqueueAction({
+        id: photoJobId,
+        type: 'PHOTO_UPLOAD',
+        tourId,
+        scope: chatQueueScope || {
+          tourId,
+          principalId,
+          role: canonicalIdentity?.principalType === 'driver' ? 'driver' : 'passenger',
+          authUid,
+        },
+        createdAt,
+        payload: {
+          payloadVersion: 2,
+          jobId: photoJobId,
+          idempotencyKey: `chat_photo_${imageMessageId}`,
+          createdAt,
+          tourId,
+          visibility: 'group',
+          ownerId: principalId,
+          userId: principalId,
+          uploaderName: userName,
+          localAssets: {
+            sourceUri: optimized.uploadUri || imageUri,
+            previewUri: imageUri,
+            optimizationMetrics: optimized.metrics || null,
+          },
+          metadata: { caption: '' },
+          chatMessage: {
+            tourId,
+            messageId: imageMessageId,
+            idempotencyKey: imageMessageId,
+            caption: '',
+            senderInfo,
+            createdAt,
+          },
+          attemptCount: 0,
+          lastError: null,
+        },
+      });
+      if (!enqueueResult?.success) {
+        throw new Error('CHAT_PHOTO_QUEUE_FAILED');
+      }
+      queuedActionCreated = true;
+      await refreshQueueStats();
+
+      if (!isConnected) {
+        setImageSendState({
+          status: 'queued',
+          message: 'Photo saved on this device and will send when you are online.',
+          retryUri: null,
         });
+        traceChatImageSend('queued_offline', { messageIdMasked: maskIdentifier(imageMessageId) });
         return;
       }
 
-      let imageSendStage = 'start';
-      const previousAttempt = imageSendAttemptRef.current;
-      const imageMessageId = previousAttempt?.imageUri === imageUri
-        ? previousAttempt.messageId
-        : `img_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-      imageSendAttemptRef.current = { imageUri, messageId: imageMessageId };
-      traceChatImageSend('send_requested', {
-        imageUri: summarizeUri(imageUri),
-        isUploadAlreadyInFlight: isImageUploading,
+      imageSendStage = 'replaying';
+      setImageSendState({ status: 'uploading', message: 'Sending photo...', retryUri: imageUri });
+      const replayResult = await offlineSyncService.replayQueue({
+        services: { chatService, photoService },
+        scope: chatQueueScope || undefined,
       });
+      const outcome = replayResult?.data?.outcomes?.find((entry) => entry.actionId === photoJobId);
+      await refreshQueueStats();
 
-      clearImageSendResetTimeout();
-      setImageSendState({
-        status: 'uploading',
-        message: 'Preparing photo...',
-        retryUri: imageUri,
-      });
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-
-      try {
-        const userId = principalId;
-
-        if (requiresPassengerStableIdForWrites && !passengerStableId) {
-          imageSendStage = 'identity';
-          traceChatImageSend('blocked_missing_sender_stable_id', {
-            imageUri: summarizeUri(imageUri),
-          });
-          setImageSendState({
-            status: 'failed',
-            message: 'Your chat identity is still syncing. Try again in a moment.',
-            retryUri: imageUri,
-          });
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-          return;
-        }
-
-        // Upload to Firebase Storage using correct signature:
-        // uploadPhoto(uri, tourId, userId, caption, options)
-        imageSendStage = 'photo_upload';
-        traceChatImageSend('photo_upload_start', {
-          imageUri: summarizeUri(imageUri),
-          uploaderNamePresent: Boolean(userName),
-        });
-        const uploadResult = await photoService.uploadPhoto(
-          imageUri,
-          tourId,
-          userId,
-          '', // caption
-          {
-            visibility: 'group',
-            uploaderName: userName,
-            idempotencyKey: `chat_photo_${imageMessageId}`,
-          }
-        );
-
-        const uploadedSourceUrl = uploadResult?.sourceUrl;
-
-        if (uploadedSourceUrl) {
-          traceChatImageSend('photo_upload_success', {
-            photoIdMasked: maskIdentifier(uploadResult.id),
-            hasPhotoUrl: Boolean(uploadedSourceUrl),
-            photoUrl: summarizeUri(uploadedSourceUrl),
-          });
-          const senderInfo = buildChatSenderInfo();
-          logSenderIdentityPath();
-
-          imageSendStage = 'chat_message_write';
-          traceChatImageSend('chat_message_write_start', {
-            senderPrincipalType: senderInfo.principalType,
-            senderIdMasked: maskIdentifier(senderInfo.principalId || senderInfo.userId),
-            senderStableIdMasked: maskIdentifier(senderInfo.stablePassengerId || senderInfo.senderStableId),
-            hasImageUrl: true,
-          });
-          const result = await sendImageMessage(tourId, uploadedSourceUrl, '', senderInfo, undefined, {
-            messageId: imageMessageId,
-            idempotencyKey: imageMessageId,
-          });
-          if (!result?.success) {
-            throw new Error(result?.error || 'Image message could not be sent');
-          }
-          if (result.serverPromise && typeof result.serverPromise.then === 'function') {
-            await result.serverPromise;
-          }
-          traceChatImageSend('chat_message_write_success', {
-            messageIdMasked: maskIdentifier(result?.message?.id),
-          });
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          setImageSendState({
-            status: 'success',
-            message: 'Photo sent',
-            retryUri: null,
-          });
-          imageSendAttemptRef.current = null;
-          imageSendResetTimeoutRef.current = setTimeout(() => {
-            setImageSendState((prev) => (prev.status === 'success' ? { status: 'idle', message: '', retryUri: null } : prev));
-            imageSendResetTimeoutRef.current = null;
-          }, 2400);
-        } else {
-          imageSendStage = 'photo_upload';
-          traceChatImageSend('photo_upload_missing_url', {
-            uploadResultKeys: uploadResult && typeof uploadResult === 'object' ? Object.keys(uploadResult).slice(0, 12) : [],
-          });
-          setImageSendState({
-            status: 'failed',
-            message: 'Photo could not be uploaded. Try again.',
-            retryUri: imageUri,
-          });
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        }
-      } catch (error) {
-        traceChatImageSend('send_failed', {
-          stage: imageSendStage,
-          error: summarizeErrorForDiagnostics(error),
-          imageUri: summarizeUri(imageUri),
-        });
-        setImageSendState({
-          status: 'failed',
-          message: 'Photo could not be sent. Try again.',
-          retryUri: imageUri,
-        });
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      if (replayResult?.success && outcome?.success) {
+        setMessages((current) => current.map((message) => (
+          message.id === imageMessageId ? { ...message, status: 'delivered' } : message
+        )));
+        setImageSendState({ status: 'success', message: 'Photo sent', retryUri: null });
+        imageSendAttemptRef.current = null;
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        imageSendResetTimeoutRef.current = setTimeout(() => {
+          setImageSendState((previous) => (
+            previous.status === 'success' ? { status: 'idle', message: '', retryUri: null } : previous
+          ));
+          imageSendResetTimeoutRef.current = null;
+        }, 2400);
+        traceChatImageSend('send_completed', { messageIdMasked: maskIdentifier(imageMessageId) });
+        return;
       }
-    },
-    [
-      buildChatSenderInfo,
-      clearImageSendResetTimeout,
-      isImageUploading,
-      internalDriverChat,
-      logSenderIdentityPath,
-      passengerStableId,
-      principalId,
-      requiresPassengerStableIdForWrites,
-      showTransientFeedback,
-      traceChatImageSend,
-      tourId,
-      userName,
-    ]
-  );
+
+      setImageSendState({
+        status: 'queued',
+        message: 'Photo is safely queued and will retry automatically.',
+        retryUri: null,
+      });
+      traceChatImageSend('replay_deferred', {
+        messageIdMasked: maskIdentifier(imageMessageId),
+        replaySuccess: Boolean(replayResult?.success),
+        outcomeSkipped: Boolean(outcome?.skipped),
+      });
+    } catch (error) {
+      traceChatImageSend('send_failed', {
+        stage: imageSendStage,
+        queuedActionCreated,
+        error: summarizeErrorForDiagnostics(error),
+        imageUri: summarizeUri(imageUri),
+      });
+      if (!queuedActionCreated) {
+        setMessages((current) => current.filter((message) => message.id !== imageMessageId));
+      }
+      setImageSendState(queuedActionCreated
+        ? {
+            status: 'queued',
+            message: 'Photo is safely queued and will retry automatically.',
+            retryUri: null,
+          }
+        : {
+            status: 'failed',
+            message: error?.message === 'CHAT_IDENTITY_NOT_READY'
+              ? 'Your chat identity is still syncing. Try again in a moment.'
+              : 'Photo could not be prepared. Try again.',
+            retryUri: imageUri,
+          });
+      if (!queuedActionCreated) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }, [
+    authUid,
+    buildChatSenderInfo,
+    canonicalIdentity?.principalType,
+    chatQueueScope,
+    clearImageSendResetTimeout,
+    internalDriverChat,
+    isConnected,
+    isDriver,
+    isImageUploading,
+    logSenderIdentityPath,
+    passengerStableId,
+    principalId,
+    refreshQueueStats,
+    requiresPassengerStableIdForWrites,
+    scrollToBottom,
+    showTransientFeedback,
+    tourId,
+    traceChatImageSend,
+    userName,
+  ]);
 
   // Image picker handler
   const handlePickImage = useCallback(async () => {
@@ -3759,18 +3890,23 @@ export default function ChatScreen({
     setRefreshing(true);
 
     try {
-      const beforeStatsResult = await offlineSyncService.getQueueStats();
-      const beforeStats = beforeStatsResult?.success
-        ? beforeStatsResult.data
-        : { pending: 0, failed: 0, syncing: 0, total: 0 };
+      const beforeStats = await getChatQueueStats();
+      if (!isConnected) {
+        showSyncBanner({
+          contract: offlineSyncService.UNIFIED_SYNC_STATES.OFFLINE_NO_NETWORK,
+          outcomeText: beforeStats.total > 0
+            ? `${beforeStats.total} chat item${beforeStats.total === 1 ? '' : 's'} safely queued`
+            : 'Showing the latest messages saved on this device',
+          autoDismissMs: 5500,
+        });
+        return;
+      }
 
-      const replayResult = await offlineSyncService.replayQueue({ services: { bookingService, chatService, photoService } });
-      await refreshQueueStats();
-
-      const afterStatsResult = await offlineSyncService.getQueueStats();
-      const afterStats = afterStatsResult?.success
-        ? afterStatsResult.data
-        : { pending: 0, failed: 0, syncing: 0, total: 0 };
+      const replayResult = await offlineSyncService.replayQueue({
+        services: internalDriverChat ? { chatService } : { chatService, photoService },
+        scope: chatQueueScope || undefined,
+      });
+      const afterStats = await refreshQueueStats();
 
       showQueueSyncOutcome({ replayResult, beforeStats, afterStats });
     } catch (error) {
@@ -3781,7 +3917,15 @@ export default function ChatScreen({
     } finally {
       setRefreshing(false);
     }
-  }, [refreshQueueStats, showQueueSyncOutcome]);
+  }, [
+    chatQueueScope,
+    getChatQueueStats,
+    internalDriverChat,
+    isConnected,
+    refreshQueueStats,
+    showQueueSyncOutcome,
+    showSyncBanner,
+  ]);
 
   const handleLoadOlderMessages = useCallback(async () => {
     if (!tourId || loadingOlderMessages || messages.length === 0) return;
@@ -3869,18 +4013,20 @@ export default function ChatScreen({
 
     const unreadMessage = visibleMessages.find((message) => {
       const timestamp = getMessageTimestamp(message);
-      return timestamp && timestamp > lastSeenTimestamp;
+      return timestamp
+        && timestamp > lastSeenTimestamp
+        && !isMessageOwnedByCurrentSession(message, canonicalIdentity);
     });
 
     return unreadMessage?.id || null;
-  }, [visibleMessages, lastSeenTimestamp, getMessageTimestamp]);
+  }, [visibleMessages, lastSeenTimestamp, getMessageTimestamp, canonicalIdentity]);
 
   const groupedMessages = useMemo(() => {
     return buildChatTimelineItems(visibleMessages, {
-      lastSeenTimestamp,
+      lastSeenTimestamp: sessionUnreadBoundaryTimestamp,
       isMessageOwned: (message) => isMessageOwnedByCurrentSession(message, canonicalIdentity),
     });
-  }, [visibleMessages, lastSeenTimestamp, canonicalIdentity]);
+  }, [visibleMessages, sessionUnreadBoundaryTimestamp, canonicalIdentity]);
 
   const unreadAnchorIndex = useMemo(() => {
     if (!unreadAnchorMessageId) return -1;
@@ -4483,7 +4629,24 @@ export default function ChatScreen({
         onSync={handleManualSync}
         onlineCount={presenceInfo.onlineCount}
         queueStats={queueStats}
+        isConnected={isConnected}
       />
+
+      {chatLoadError && messages.length > 0 ? (
+        <View style={styles.liveErrorBanner} accessibilityRole="alert">
+          <MaterialCommunityIcons name="cloud-alert-outline" size={17} color={THEME.error} />
+          <Text style={styles.liveErrorBannerText} numberOfLines={2}>
+            Live updates paused. Your existing messages are still available.
+          </Text>
+          <TouchableOpacity
+            onPress={() => setSubscriptionRevision((current) => current + 1)}
+            accessibilityRole="button"
+            accessibilityLabel="Retry live chat updates"
+          >
+            <Text style={styles.liveErrorBannerAction}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       {isSearchOpen && (
         <View style={styles.searchPanel}>
@@ -4845,6 +5008,30 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontSize: 11,
     fontWeight: '700',
+  },
+  liveErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    marginHorizontal: SPACING.md,
+    marginTop: SPACING.xs,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderWidth: 1,
+    borderColor: THEME.sync.critical.border,
+    backgroundColor: THEME.sync.critical.background,
+    borderRadius: RADIUS.md,
+  },
+  liveErrorBannerText: {
+    flex: 1,
+    color: THEME.sync.critical.foreground,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  liveErrorBannerAction: {
+    color: COLORS.primaryBlue,
+    fontSize: 12,
+    fontWeight: '800',
   },
   feedbackHost: {
     paddingHorizontal: SPACING.md,

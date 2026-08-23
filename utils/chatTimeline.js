@@ -140,6 +140,7 @@ const buildChatTimelineItems = (messages = [], options = {}) => {
 
   sortedMessages.forEach((message, index) => {
     const messageMs = getMessageTimestampMs(message);
+    const isOwnMessage = resolveOwnership(message, isMessageOwned);
     const messageDate = Number.isFinite(messageMs)
       ? new Date(messageMs).toDateString()
       : 'Unknown date';
@@ -153,14 +154,19 @@ const buildChatTimelineItems = (messages = [], options = {}) => {
       currentDate = messageDate;
     }
 
-    if (!unreadInjected && Number.isFinite(lastSeenMs) && Number.isFinite(messageMs) && messageMs > lastSeenMs) {
+    if (
+      !unreadInjected
+      && !isOwnMessage
+      && Number.isFinite(lastSeenMs)
+      && Number.isFinite(messageMs)
+      && messageMs > lastSeenMs
+    ) {
       items.push({ type: 'unread-separator', id: `unread-${message?.id || index}` });
       unreadInjected = true;
     }
 
     const previousMessage = sortedMessages[index - 1] || null;
     const nextMessage = sortedMessages[index + 1] || null;
-    const isOwnMessage = resolveOwnership(message, isMessageOwned);
     const previousIsOwnMessage = resolveOwnership(previousMessage, isMessageOwned);
     const nextIsOwnMessage = resolveOwnership(nextMessage, isMessageOwned);
 

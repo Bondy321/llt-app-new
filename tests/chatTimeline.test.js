@@ -27,6 +27,24 @@ test('buildChatTimelineItems groups by date and injects unread separator once', 
   );
 });
 
+test('buildChatTimelineItems places unread separator before the first incoming message, not an outgoing message', () => {
+  const timeline = buildChatTimelineItems([
+    { id: 'before', senderId: 'other', timestamp: '2026-03-18T09:00:00.000Z', text: 'before' },
+    { id: 'mine', senderId: 'me', timestamp: '2026-03-18T09:03:00.000Z', text: 'sent by me' },
+    { id: 'incoming', senderId: 'other', timestamp: '2026-03-18T09:04:00.000Z', text: 'new for me' },
+  ], {
+    lastSeenTimestamp: '2026-03-18T09:01:00.000Z',
+    isMessageOwned: (message) => message.senderId === 'me',
+  });
+
+  const separatorIndex = timeline.findIndex((item) => item.type === 'unread-separator');
+  const incomingIndex = timeline.findIndex((item) => item.type === 'message' && item.data.id === 'incoming');
+  const mineIndex = timeline.findIndex((item) => item.type === 'message' && item.data.id === 'mine');
+
+  assert.equal(separatorIndex, incomingIndex - 1);
+  assert.equal(separatorIndex > mineIndex, true);
+});
+
 test('shouldShowSenderForMessage only shows first incoming message in a short sender cluster', () => {
   const first = { id: 'first', senderId: 'guide-1', senderName: 'Guide', timestamp: '2026-03-18T09:00:00.000Z' };
   const second = { id: 'second', senderId: 'guide-1', senderName: 'Guide', timestamp: '2026-03-18T09:04:00.000Z' };

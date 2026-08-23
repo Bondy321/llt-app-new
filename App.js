@@ -13,6 +13,7 @@ import useDiagnostics from './hooks/useDiagnostics';
 import offlineSyncService from './services/offlineSyncService';
 import * as bookingService from './services/bookingServiceRealtime';
 import * as chatService from './services/chatService';
+import * as photoService from './services/photoService';
 import offlineLoginResolver from './services/offlineLoginResolver';
 import driverOperationalLifecycleService from './services/driverOperationalLifecycleService';
 import driverTourPackService from './services/driverTourPackService';
@@ -309,7 +310,7 @@ function AppContent() {
     logger.info('App', 'Refreshing app data');
     if (!isConnected) return;
     await offlineSyncService.replayQueue({
-      services: { bookingService, chatService, driverTourPackActionService },
+      services: { bookingService, chatService, photoService, driverTourPackActionService },
       scope: offlineSessionScope,
     });
   };
@@ -1624,7 +1625,7 @@ function AppContent() {
   useEffect(() => {
     if (!isConnected || !firebaseConnected || !offlineSessionScope) return;
     offlineSyncService.replayQueue({
-      services: { bookingService, chatService, driverTourPackActionService },
+      services: { bookingService, chatService, photoService, driverTourPackActionService },
       scope: offlineSessionScope,
     });
   }, [isConnected, firebaseConnected, offlineSessionScopeKey]);
@@ -1817,6 +1818,7 @@ case 'Itinerary':
             initialMessageId={screenParams.messageId || null}
             identityBinding={identityBinding}
             canonicalIdentity={canonicalIdentity}
+            offlineSessionScope={offlineSessionScope}
           />
         );
       case 'Map':

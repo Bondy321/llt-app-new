@@ -24,7 +24,15 @@ The legacy unversioned validation branch remains temporarily available so instal
 3. A transaction creates the record only when absent.
 4. An existing record is accepted only when its idempotency key and sender identities match.
 5. Manual retry preserves the failed message ID and reply context.
-6. Photo retries preserve both the photo-upload idempotency key and chat message ID.
+6. When connectivity is explicitly offline, text sends queue without resolving or touching Firebase first.
+7. Chat photo sends always enter the identity-scoped `PHOTO_UPLOAD` queue. The action contains a bounded dependent chat-message record, so upload and message creation replay as one idempotent delivery using the same photo-upload key and chat message ID.
+8. Screen-specific replay contexts skip queue types for which they did not inject a handler. Skipped actions remain unchanged; they do not consume attempts, enter backoff, or become failed.
+
+## Read and recovery behaviour
+
+Read receipts use Firebase server timestamps. The device keeps a separate session-start unread boundary so the divider remains stable while live read progress advances only when the reader is at the latest message. Outgoing messages never create an unread divider or unread jump target.
+
+A transient live-listener failure must not replace a successful conversation snapshot with an empty array. The screen retains the last known messages, displays a live-update warning, and offers an explicit retry.
 
 ## Notifications
 

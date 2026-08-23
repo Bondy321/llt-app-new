@@ -1297,7 +1297,46 @@ const applyReplayAction = async (action, services = {}) => {
   }
 
   if (action.type === 'PHOTO_UPLOAD' && photoService?.uploadPhotoDirect) {
-    return photoService.uploadPhotoDirect(action.payload, db);
+    const uploadResult = await photoService.uploadPhotoDirect(action.payload, db);
+    const chatMessage = action.payload?.chatMessage;
+    if (!uploadResult?.success || !chatMessage) {
+      return uploadResult;
+    }
+
+    const imageUrl = uploadResult.data?.sourceUrl;
+    if (!imageUrl) {
+      return RESPONSE.fail('Queued chat photo upload completed without a shareable image URL');
+    }
+
+    const messageResult = await chatService.sendImageMessage(
+      chatMessage.tourId || action.tourId,
+      imageUrl,
+      chatMessage.caption || '',
+      chatMessage.senderInfo,
+      db,
+      {
+        messageId: chatMessage.messageId,
+        idempotencyKey: chatMessage.idempotencyKey || chatMessage.messageId,
+      },
+    );
+    if (!messageResult?.success) {
+      return RESPONSE.fail(messageResult?.error || 'Queued chat photo message could not be created');
+    }
+    if (messageResult.serverPromise && typeof messageResult.serverPromise.then === 'function') {
+      try {
+        await messageResult.serverPromise;
+      } catch (error) {
+        return RESPONSE.fail(error);
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        ...uploadResult.data,
+        chatMessageId: messageResult.message?.id || chatMessage.messageId,
+      },
+    };
   }
 
   if (action.type === 'DRIVER_TOUR_PACK_ACTION' && driverTourPackActionService?.submitDirect) {
@@ -1305,6 +1344,29 @@ const applyReplayAction = async (action, services = {}) => {
   }
 
   return RESPONSE.fail(`Unsupported replay action type: ${action.type}`);
+};
+
+const hasReplayHandler = (action, services = {}) => {
+  if (!action || !SUPPORTED_QUEUE_TYPES.has(action.type)) return false;
+  if (action.type === 'MANIFEST_UPDATE') {
+    return typeof services.bookingService?.applyManifestUpdateDirect === 'function';
+  }
+  if (action.type === 'CHAT_MESSAGE') {
+    return typeof services.chatService?.sendMessageDirect === 'function';
+  }
+  if (action.type === 'INTERNAL_CHAT_MESSAGE') {
+    return typeof services.chatService?.sendInternalMessageDirect === 'function';
+  }
+  if (action.type === 'PHOTO_UPLOAD') {
+    const canUpload = typeof services.photoService?.uploadPhotoDirect === 'function';
+    const needsChatMessage = Boolean(action.payload?.chatMessage);
+    const canCreateChatMessage = typeof services.chatService?.sendImageMessage === 'function';
+    return canUpload && (!needsChatMessage || canCreateChatMessage);
+  }
+  if (action.type === 'DRIVER_TOUR_PACK_ACTION') {
+    return typeof services.driverTourPackActionService?.submitDirect === 'function';
+  }
+  return false;
 };
 
 const replayQueue = async ({ db, services = {}, scope = activeSessionScope } = {}) => {
@@ -1408,6 +1470,27 @@ const replayQueue = async ({ db, services = {}, scope = activeSessionScope } = {
         continue;
       }
 
+      // Screen-specific sync controls intentionally inject only the handlers
+      // they own. Leave other feature actions untouched for their own replay
+      // path instead of consuming retries and eventually marking them failed.
+      if (!hasReplayHandler(action, services)) {
+        skipped += 1;
+        outcomes.push({
+          actionId: action.id,
+          type: action.type,
+          tourId: action.tourId,
+          bookingRef: action.payload?.bookingRef || null,
+          success: false,
+          skipped: true,
+          reason: 'Replay handler unavailable in this sync context',
+        });
+        logger.debug('OfflineSync', 'Queue replay preserved action without an injected handler', {
+          action: summarizeQueueActionForLog(action),
+          serviceKeys: Object.keys(services || {}),
+        });
+        continue;
+      }
+
       const inProgressStatus = action.type === 'PHOTO_UPLOAD' ? 'uploading' : 'syncing';
       await updateAction(action.id, { status: inProgressStatus, lastError: null }, { silent: true, scope: replayScope });
       logger.info('OfflineSync', 'Queue replay action started', {
@@ -1490,7 +1573,7 @@ const replayQueue = async ({ db, services = {}, scope = activeSessionScope } = {
       queueCount: sortedQueue.length,
       heldForOtherSessions,
     });
-    return RESPONSE.ok({ processed, failed, outcomes, heldForOtherSessions });
+    return RESPONSE.ok({ processed, failed, skipped, outcomes, heldForOtherSessions });
   } catch (error) {
     logger.error('OfflineSync', 'Queue replay failed', {
       error: error?.message,

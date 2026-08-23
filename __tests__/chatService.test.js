@@ -67,6 +67,7 @@ const createMockRealtimeDb = (initialData = {}) => {
   const refCalls = [];
   const data = JSON.parse(JSON.stringify(initialData));
   const listeners = new Map();
+  const errorListeners = new Map();
 
   const normalizePath = (path = '') => path.split('/').filter(Boolean);
   const getValue = (path) => normalizePath(path).reduce((acc, part) => (acc == null ? undefined : acc[part]), data);
@@ -163,6 +164,9 @@ const createMockRealtimeDb = (initialData = {}) => {
   return {
     refCalls,
     data,
+    emitListenerError(path, error) {
+      (errorListeners.get(path) || []).forEach((callback) => callback(error));
+    },
     ref(path) {
       const context = { path, setCalls: [], removeCalls: 0, updateCalls: [], transactionCalls: [], pushCalls: [] };
 
@@ -203,11 +207,16 @@ const createMockRealtimeDb = (initialData = {}) => {
 
       context.queryState = {};
 
-      context.on = (eventType, callback) => {
+      context.on = (eventType, callback, cancelCallback) => {
         assert.equal(eventType, 'value');
         const callbacks = listeners.get(path) || [];
         callbacks.push(callback);
         listeners.set(path, callbacks);
+        if (typeof cancelCallback === 'function') {
+          const errorCallbacks = errorListeners.get(path) || [];
+          errorCallbacks.push(cancelCallback);
+          errorListeners.set(path, errorCallbacks);
+        }
         callback(buildSnapshot(path, context.queryState));
         return callback;
       };
@@ -434,7 +443,7 @@ test('markChatAsRead writes timestamp to chat lastRead path', async () => {
   assert.equal(result.success, true);
   const refCall = mockDb.refCalls[0];
   assert.equal(refCall.path, 'chats/tour-77/lastRead/user-22');
-  assert.ok(new Date(refCall.setCalls[0]).getTime());
+  assert.deepEqual(refCall.setCalls[0], { '.sv': 'timestamp' });
 });
 
 test('markInternalChatAsRead writes timestamp to internal chat lastRead path', async () => {
@@ -445,7 +454,7 @@ test('markInternalChatAsRead writes timestamp to internal chat lastRead path', a
   assert.equal(result.success, true);
   const refCall = mockDb.refCalls[0];
   assert.equal(refCall.path, 'internal_chats/tour-88/lastRead/driver:D-3');
-  assert.ok(new Date(refCall.setCalls[0]).getTime());
+  assert.deepEqual(refCall.setCalls[0], { '.sv': 'timestamp' });
 });
 
 test('chat replay uses one deterministic Firebase key and never duplicates an acknowledged message', async () => {
@@ -959,6 +968,70 @@ test('subscribeToChatMessages normalizes reaction maps for the UI', async () => 
     '❤️': ['user-1', 'user-2'],
   });
 
+  unsubscribe();
+});
+
+test('chat listener errors preserve the last successful conversation snapshot', () => {
+  const mockDb = createMockRealtimeDb({
+    chats: {
+      'tour-resilient': {
+        messages: {
+          'msg-1': {
+            text: 'Still visible',
+            timestamp: '2026-03-18T09:00:00.000Z',
+          },
+        },
+      },
+    },
+  });
+  const updates = [];
+  const errors = [];
+
+  const unsubscribe = subscribeToChatMessages(
+    'tour-resilient',
+    (messages) => updates.push(messages),
+    mockDb,
+    { onError: (error) => errors.push(error) },
+  );
+
+  mockDb.emitListenerError('chats/tour-resilient/messages', new Error('temporary disconnect'));
+
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0].map((message) => message.id), ['msg-1']);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /temporary disconnect/);
+  unsubscribe();
+});
+
+test('internal chat listener errors preserve the last successful conversation snapshot', () => {
+  const mockDb = createMockRealtimeDb({
+    internal_chats: {
+      'tour-internal-resilient': {
+        messages: {
+          'int-1': {
+            text: 'Operational update',
+            timestamp: '2026-03-18T09:00:00.000Z',
+          },
+        },
+      },
+    },
+  });
+  const updates = [];
+  const errors = [];
+
+  const unsubscribe = subscribeToInternalDriverChat(
+    'tour-internal-resilient',
+    (messages) => updates.push(messages),
+    mockDb,
+    { onError: (error) => errors.push(error) },
+  );
+
+  mockDb.emitListenerError('internal_chats/tour-internal-resilient/messages', new Error('permission refresh'));
+
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0].map((message) => message.id), ['int-1']);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /permission refresh/);
   unsubscribe();
 });
 

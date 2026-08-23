@@ -576,6 +576,54 @@ test('Static contract: failed chat sends preserve reply composer context', () =>
   assert.match(source, /clearImageSendResetTimeout/);
 });
 
+test('Static contract: chat connectivity and queue ownership stay wired from app shell to every send and replay', () => {
+  const appSource = readText('App.js');
+  const chatSource = readText('screens/ChatScreen.js');
+  const offlineSource = readText('services/offlineSyncService.js');
+
+  assert.match(appSource, /offlineSessionScope=\{offlineSessionScope\}/);
+  assert.match(appSource, /services: \{ bookingService, chatService, photoService, driverTourPackActionService \}/);
+  assert.match(chatSource, /isConnected = true/);
+  assert.match(chatSource, /offlineSessionScope = null/);
+  assert.match(chatSource, /online: isConnected/);
+  assert.match(chatSource, /scope: chatQueueScope \|\| undefined/);
+  assert.match(chatSource, /subscribeQueuedActions/);
+  assert.match(chatSource, /chatMessage: \{/);
+  assert.match(offlineSource, /hasReplayHandler/);
+  assert.match(offlineSource, /Queue replay preserved action without an injected handler/);
+});
+
+test('Static contract: chat listener failures keep visible messages and expose retry recovery', () => {
+  const serviceSource = readText('services/chatService.js');
+  const screenSource = readText('screens/ChatScreen.js');
+
+  assert.doesNotMatch(serviceSource, /onMessagesUpdate\(\[\]\)/);
+  assert.match(screenSource, /Live updates paused\. Your existing messages are still available\./);
+  assert.match(screenSource, /Retry live chat updates/);
+});
+
+test('Static contract: chat read state advances only after restore and while the reader is at the latest message', () => {
+  const source = readText('screens/ChatScreen.js');
+
+  assert.match(source, /sessionUnreadBoundaryTimestamp/);
+  assert.match(source, /readStateRestored/);
+  assert.match(source, /if \(!force && !isAtBottomRef\.current\) return;/);
+  assert.match(source, /!isMessageOwnedByCurrentSession\(message, canonicalIdentity\)/);
+});
+
+test('Static contract: internal driver chat uses the rules-compatible stable actor for live state', () => {
+  const source = readText('screens/ChatScreen.js');
+
+  assert.match(
+    source,
+    /internalDriverChat\s*&&\s*isDriver\s*&&\s*principalId\.startsWith\('driver:'\)/,
+  );
+  assert.match(
+    source,
+    /return isRealtimeKeySegment\(principalId\)[\s\S]*?toRealtimeKeySegment\(principalId\)/,
+  );
+});
+
 test('Static contract: chat timestamp helpers use strict shared parser', () => {
   [
     'utils/chatTimeline.js',

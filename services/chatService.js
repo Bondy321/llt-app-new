@@ -731,7 +731,6 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance, options = {}
     const validatedTourId = validateTourId(tourId);
     const validatedMessage = validateMessageText(message);
     const validatedSender = validateSenderInfo(senderInfo);
-    const db = dbInstance || resolveRealtimeDb();
     logChatEvent('info', 'chat_message_send_started', {
       tourId: validatedTourId,
       messageLength: validatedMessage.length,
@@ -752,7 +751,9 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance, options = {}
       replyTo: sanitizeReplyContext(options.replyTo),
     };
 
-    const directResult = await sendMessageDirect(payload, db);
+    const directResult = options.online === false
+      ? { success: false, error: 'Device is offline' }
+      : await sendMessageDirect(payload, dbInstance || resolveRealtimeDb());
     if (directResult.success) {
       const optimisticMessage = { ...directResult.message, status: 'sent' };
       logChatEvent('info', 'chat_message_send_completed', {
@@ -764,7 +765,7 @@ const sendMessage = async (tourId, message, senderInfo, dbInstance, options = {}
       return { success: true, message: optimisticMessage, queued: false, serverPromise: Promise.resolve(directResult) };
     }
 
-    const shouldQueue = !options.online || /timeout|network|unavailable/i.test(directResult.error || '');
+    const shouldQueue = options.online === false || /timeout|network|offline|unavailable/i.test(directResult.error || '');
     if (!shouldQueue || !offlineSyncService?.enqueueAction) {
       logChatEvent('warn', 'chat_message_send_failed_without_queue', {
         tourId: validatedTourId,
@@ -958,8 +959,6 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
       hasReplyTo: Boolean(options.replyTo),
     });
 
-    const db = dbInstance || resolveRealtimeDb();
-
     const localMessageId = validateMessageId(options.messageId || createLocalMessageId('int'));
     const idempotencyKey = options.idempotencyKey || localMessageId;
     const payload = {
@@ -972,7 +971,9 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
       replyTo: sanitizeReplyContext(options.replyTo),
     };
 
-    const directResult = await sendInternalMessageDirect(payload, db);
+    const directResult = options.online === false
+      ? { success: false, error: 'Device is offline' }
+      : await sendInternalMessageDirect(payload, dbInstance || resolveRealtimeDb());
     if (directResult.success) {
       logChatEvent('info', 'internal_chat_message_send_completed', {
         tourId: validatedTourId,
@@ -983,7 +984,7 @@ const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance
       return { success: true, message: { ...directResult.message, status: 'sent' }, queued: false, serverPromise: Promise.resolve(directResult) };
     }
 
-    const shouldQueue = !options.online || /timeout|network|unavailable/i.test(directResult.error || '');
+    const shouldQueue = options.online === false || /timeout|network|offline|unavailable/i.test(directResult.error || '');
     if (!shouldQueue || !offlineSyncService?.enqueueAction) {
       logChatEvent('warn', 'internal_chat_message_send_failed_without_queue', {
         tourId: validatedTourId,
@@ -1597,28 +1598,29 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance, options =
     });
 
     const listener = messagesQuery.on('value', (snapshot) => {
+      let messages;
       try {
-        const messages = readMessagesFromSnapshot(snapshot);
+        messages = readMessagesFromSnapshot(snapshot);
         const reactionSummary = summarizeMessagesForReactionDebug(messages);
         logReactionEvent('info', 'reaction_subscription_snapshot', {
           tourId: validatedTourId,
           chatType: 'group',
           ...reactionSummary,
         });
-        onMessagesUpdate(messages);
       } catch (error) {
         logChatEvent('error', 'chat_subscription_snapshot_processing_failed', {
           tourId: validatedTourId,
           error: summarizeErrorForDbLog(error),
         });
-        onMessagesUpdate([]); // Provide empty array as fallback
+        options.onError?.(error);
+        return;
       }
+      onMessagesUpdate(messages);
     }, (error) => {
       logChatEvent('error', 'chat_subscription_failed', {
         tourId: validatedTourId,
         error: summarizeErrorForDbLog(error),
       });
-      onMessagesUpdate([]); // Provide empty array on error
       options.onError?.(error);
     });
 
@@ -1693,7 +1695,6 @@ const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance, opt
         tourId: validatedTourId,
         error: summarizeErrorForDbLog(error),
       });
-      onMessagesUpdate([]);
       options.onError?.(error);
     }
   }, (error) => {
@@ -1701,7 +1702,6 @@ const subscribeToInternalDriverChat = (tourId, onMessagesUpdate, dbInstance, opt
       tourId: validatedTourId,
       error: summarizeErrorForDbLog(error),
     });
-    onMessagesUpdate([]);
     options.onError?.(error);
   });
 
@@ -1730,7 +1730,7 @@ const markChatAsRead = async (tourId, userId, dbInstance) => {
     if (!db) return { success: false };
 
     const lastReadRef = db.ref(`chats/${validatedTourId}/lastRead/${actorKey}`);
-    await lastReadRef.set(new Date().toISOString());
+    await lastReadRef.set({ '.sv': 'timestamp' });
     return { success: true };
   } catch (error) {
     logChatEvent('warn', 'chat_mark_read_failed', {
@@ -1751,7 +1751,7 @@ const markInternalChatAsRead = async (tourId, userId, dbInstance) => {
     if (!db) return { success: false };
 
     const lastReadRef = db.ref(`internal_chats/${validatedTourId}/lastRead/${actorKey}`);
-    await lastReadRef.set(new Date().toISOString());
+    await lastReadRef.set({ '.sv': 'timestamp' });
     return { success: true };
   } catch (error) {
     logChatEvent('warn', 'internal_chat_mark_read_failed', {

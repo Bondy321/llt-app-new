@@ -351,6 +351,111 @@ test('replayQueue can process PHOTO_UPLOAD when photoService direct handler is p
   assert.equal(remaining.data[0].status, 'completed');
 });
 
+test('screen-specific replay preserves queued actions whose handlers were not injected', async () => {
+  await clearQueue();
+
+  await offlineSyncService.enqueueAction({
+    id: 'chat-context-message',
+    type: 'CHAT_MESSAGE',
+    tourId: 'tour-mixed-context',
+    payload: { text: 'send me now' },
+  });
+  await offlineSyncService.enqueueAction({
+    id: 'chat-context-photo',
+    type: 'PHOTO_UPLOAD',
+    tourId: 'tour-mixed-context',
+    payload: {
+      tourId: 'tour-mixed-context',
+      userId: 'passenger-1',
+      uri: 'file:///tmp/preserve.jpg',
+      idempotencyKey: 'photo-preserve-1',
+    },
+  });
+
+  const replay = await offlineSyncService.replayQueue({
+    services: {
+      chatService: {
+        sendMessageDirect: async () => ({ success: true }),
+      },
+    },
+  });
+
+  assert.equal(replay.success, true);
+  assert.equal(replay.data.processed, 1);
+  assert.equal(replay.data.failed, 0);
+  assert.equal(replay.data.skipped, 1);
+  assert.equal(replay.data.outcomes.find((outcome) => outcome.actionId === 'chat-context-photo')?.skipped, true);
+
+  const remaining = await offlineSyncService.getQueuedActions();
+  const preservedPhoto = remaining.data.find((action) => action.id === 'chat-context-photo');
+  assert.ok(preservedPhoto);
+  assert.equal(preservedPhoto.status, 'queued');
+  assert.equal(preservedPhoto.attempts, 0);
+  assert.equal(preservedPhoto.lastError, null);
+});
+
+test('queued chat photo uploads create one deterministic chat image after upload', async () => {
+  await clearQueue();
+
+  await offlineSyncService.enqueueAction({
+    id: 'queued-chat-photo-1',
+    type: 'PHOTO_UPLOAD',
+    tourId: 'tour-chat-photo',
+    payload: {
+      tourId: 'tour-chat-photo',
+      userId: 'passenger-1',
+      uri: 'file:///tmp/chat-photo.jpg',
+      idempotencyKey: 'chat-photo-upload-1',
+      chatMessage: {
+        tourId: 'tour-chat-photo',
+        messageId: 'img-chat-photo-1',
+        idempotencyKey: 'img-chat-photo-1',
+        caption: '',
+        senderInfo: {
+          name: 'Alex',
+          principalId: 'passenger-1',
+          principalType: 'passenger',
+          stablePassengerId: 'passenger-1',
+        },
+      },
+    },
+  });
+
+  const calls = [];
+  const replay = await offlineSyncService.replayQueue({
+    services: {
+      photoService: {
+        uploadPhotoDirect: async () => ({
+          success: true,
+          data: { sourceUrl: 'https://example.com/chat-photo.jpg', id: 'photo-1' },
+        }),
+      },
+      chatService: {
+        sendImageMessage: async (tourId, imageUrl, caption, senderInfo, db, options) => {
+          calls.push({ tourId, imageUrl, caption, senderInfo, db, options });
+          return {
+            success: true,
+            message: { id: options.messageId },
+            serverPromise: Promise.resolve(),
+          };
+        },
+      },
+    },
+  });
+
+  assert.equal(replay.success, true);
+  assert.equal(replay.data.processed, 1);
+  assert.equal(replay.data.failed, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].tourId, 'tour-chat-photo');
+  assert.equal(calls[0].imageUrl, 'https://example.com/chat-photo.jpg');
+  assert.equal(calls[0].options.messageId, 'img-chat-photo-1');
+
+  const remaining = await offlineSyncService.getQueuedActions();
+  assert.equal(remaining.data[0].status, 'completed');
+  assert.equal(remaining.data[0].result.chatMessageId, 'img-chat-photo-1');
+});
+
 test('replayQueue skips max-attempt failed action and replays once when re-queued', async () => {
   await clearQueue();
   const MAX_ATTEMPTS = 5;
