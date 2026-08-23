@@ -190,6 +190,9 @@ test('deleteCurrentAccount clears app account records, active-tour content, loca
   assert.equal(updatePayload['logs/stable-pax-1'], undefined);
   assert.equal(updatePayload['identity_bindings/stable-pax-1/auth-1'], null);
   assert.equal(updatePayload['tours/TOUR_1/liveTracking/auth-1'], null);
+  assert.equal(updatePayload['notification_read_state/TOUR_1/auth-1'], null);
+  assert.equal(updatePayload['notification_read_state/TOUR_1/stable-pax-1'], null);
+  assert.equal(updatePayload['notification_read_migration_requests/TOUR_1/auth-1'], null);
   assert.equal(updatePayload['tours/TOUR_1/liveTracking/stable-pax-1'], undefined);
   assert.equal(updatePayload['chats/TOUR_1/messages/mine/deleted'], true);
   assert.equal(updatePayload['chats/TOUR_1/messages/mine/text'], '');

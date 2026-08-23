@@ -141,6 +141,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `category_broadcasts`
 - `tour_notifications`
 - `notification_read_state`
+- `notification_read_cleanup_jobs` (server-private bounded continuation jobs)
 - `web_admin_settings`
 - `booking_identities`
 - `manual_booking_creation_locks`
@@ -571,16 +572,21 @@ Durable tour update roots:
 
 ```text
 tour_notifications/{tourId}/{noticeId}
-notification_read_state/{tourId}/{authUid}/{noticeId}
+notification_read_state/{tourId}/{canonicalPrincipalKey}/{noticeId}
 ```
 
 - Functions own notice creation; mobile clients cannot forge notices.
 - Tour members and verified assigned drivers can read only their attached tour feed.
-- Users can write read timestamps only below their own auth UID.
+- Passengers write read timestamps only below the stable principal key bound to their authenticated profile; verified drivers use `driver:{driverId}`. A UID branch is reserved for legacy participants without a stable binding.
+- Read-state writes also require current tour membership/verified assignment and an existing notice. Notice eviction enqueues an exact server-private cleanup job; `cleanupNotificationReadState` drains at most 10 jobs in 50-user continuation pages every 15 minutes.
+- A canonical-principal client submits an exact, identity-authorized `notification_read_migration_requests/{tourId}/{authUid}` record. Because UID-only history is ambiguous on shared devices, `processNotificationReadMigrationRequest` deletes (never copies) the legacy UID branch, removes the request, and writes a per-tour completion marker inside the authenticated user profile to suppress repeat work.
+- The scheduled cleanup also seeds a server-private legacy-tour queue from a single shallow key discovery, then processes one queued tour in bounded 50-principal pages. It preserves canonical keys and live UID-only accounts, removes only obsolete bound-identity or deleted-auth UID branches, and removes the queue item when the tour is deleted or exhausted.
 - Tour-scoped notification taps are accepted only for the active canonical tour. Global marketing taps may open `NotificationPreferences` after an app session is restored, even when no tour is active.
 - Push payloads and durable notices preserve `noticeId` plus destination context such as `messageId`, `categoryKey`, and `broadcastId`. Chat opens the exact message, including an on-demand lookup when it is outside the live 80-message window.
 - Cold/foreground responses are deduplicated only after navigation succeeds; concurrent delivery is suppressed while a response is in flight and a failed navigation remains retryable.
 - The tour feed is capped server-side at the newest 100 notices and queried client-side at the newest 50.
+- Read-state listeners are capped at the newest 100 numeric timestamps. The mobile feed keeps a minimal versioned 30-day auth-UID/canonical-principal/tour cache, preserves it on listener failure with explicit retry/stale UI, and revokes then purges every indexed cache for that UID on logout/account deletion. A persisted generation marker prevents a late listener write or orphaned cache/index entry from becoming readable after revocation.
+- Category-broadcast routes require a supported canonical category plus broadcast ID. Preference load work runs in parallel, and one resolved permission decision is reused through token registration/save.
 
 User profile fields:
 
@@ -873,6 +879,13 @@ Exported functions:
   - RTDB create trigger on `/internal_chats/{tourId}/messages/{messageId}`
   - notifies the other coherently assigned drivers
   - routes to the exact internal-driver chat message
+- `cleanupNotificationReadState`
+  - scheduled every 15 minutes in `europe-west1`
+  - drains durable read-state cleanup jobs in bounded 10-job / 50-user continuation pages
+  - performs one shallow legacy-tour key discovery, then drains the private tour queue with bounded 50-principal RTDB queries and Firebase Auth existence checks
+- `processNotificationReadMigrationRequest`
+  - retry-enabled RTDB create trigger on `/notification_read_migration_requests/{tourId}/{authUid}` in `europe-west1`
+  - validates the requested key against the server-side passenger/driver profile, deletes ambiguous legacy UID read markers without attribution, and records completion on the user profile
 - `generatePhotoVariants`
   - Storage finalize trigger
   - region `us-east1`
@@ -990,6 +1003,7 @@ Important RTDB invariants:
 - `broadcasts` writes are admin-only and require numeric `createdAtMs`.
 - `category_broadcasts` writes are admin-only, require numeric `createdAtMs`, and target canonical future-tour preference keys under `users/{uid}/preferences/marketing`.
 - `users` validates push token metadata, identity metadata, driver helper fields, and notification preferences.
+- Push tokens must use the bounded Expo token format; provider and app/device/permission metadata are value- and length-bounded.
 - `admin_users` is the web-admin privilege allowlist; entries must be boolean `true`, and only the primary operations-admin UID may grant or revoke entries.
 - `ops_alerts` reads are admin-only through the hardcoded admin UID or `admin_users`; mobile writes must be bounded, sanitised, fingerprinted, and schema-valid.
 - `tours/{tourId}/safetyAlerts` and `globalSafetyAlerts` mobile writes are denied; authenticated

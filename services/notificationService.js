@@ -253,7 +253,11 @@ const persistPermissionState = async ({ userId, permissionState, canAskAgain }) 
   }
 };
 
-export const primeNotificationPermissions = async ({ userId = null, requestIfNeeded = true } = {}) => {
+export const primeNotificationPermissions = async ({
+  userId = null,
+  requestIfNeeded = true,
+  persistState = true,
+} = {}) => {
   try {
     logger.info('NotificationService', 'Permission probe started', {
       userId: maskIdentifier(userId),
@@ -268,7 +272,9 @@ export const primeNotificationPermissions = async ({ userId = null, requestIfNee
         status: 'unavailable',
         description: permissionStateDescriptions.unavailable,
       };
-      await persistPermissionState({ userId, permissionState: unavailable.state, canAskAgain: unavailable.canAskAgain });
+      if (persistState) {
+        await persistPermissionState({ userId, permissionState: unavailable.state, canAskAgain: unavailable.canAskAgain });
+      }
       logger.info('NotificationService', 'Permission probe completed for unavailable device', {
         userId: maskIdentifier(userId),
       });
@@ -290,7 +296,9 @@ export const primeNotificationPermissions = async ({ userId = null, requestIfNee
       description: permissionStateDescriptions[state] || permissionStateDescriptions.denied,
     };
 
-    await persistPermissionState({ userId, permissionState: result.state, canAskAgain: result.canAskAgain });
+    if (persistState) {
+      await persistPermissionState({ userId, permissionState: result.state, canAskAgain: result.canAskAgain });
+    }
     logger.info('NotificationService', 'Permission probe completed', {
       userId: maskIdentifier(userId),
       state: result.state,
@@ -356,7 +364,10 @@ const normalizeNotificationPreferences = (preferences = {}) => {
  * Registers the device for push notifications and returns the Expo Push Token.
  * Enhanced with better error handling and retry logic
  */
-export const registerForPushNotificationsAsync = async (retries = 3) => {
+export const registerForPushNotificationsAsync = async (
+  retries = 3,
+  { permissionGranted = false, requestIfNeeded = true } = {},
+) => {
   try {
     logger.info('NotificationService', 'Push registration started', {
       retries,
@@ -388,28 +399,33 @@ export const registerForPushNotificationsAsync = async (retries = 3) => {
       }
     }
 
-    // Get or request permissions
-    let finalPermissions;
-    try {
-      const existingPermissions = await Notifications.getPermissionsAsync();
-      finalPermissions = existingPermissions;
+    // Reuse a permission decision already made by the caller to avoid prompting
+    // or probing twice during one save/restore action.
+    if (!permissionGranted) {
+      let finalPermissions;
+      try {
+        const existingPermissions = await Notifications.getPermissionsAsync();
+        finalPermissions = existingPermissions;
 
-      if (!isGrantedNotificationPermission(existingPermissions)) {
-        finalPermissions = await Notifications.requestPermissionsAsync();
+        if (requestIfNeeded
+          && !isGrantedNotificationPermission(existingPermissions)
+          && existingPermissions?.canAskAgain !== false) {
+          finalPermissions = await Notifications.requestPermissionsAsync();
+        }
+      } catch (permError) {
+        logger.error('NotificationService', 'Push registration permission check failed', {
+          error: permError?.message || String(permError),
+        });
+        return null;
       }
-    } catch (permError) {
-      logger.error('NotificationService', 'Push registration permission check failed', {
-        error: permError?.message || String(permError),
-      });
-      return null;
-    }
 
-    if (!isGrantedNotificationPermission(finalPermissions)) {
-      logger.warn('NotificationService', 'Push registration blocked by permission state', {
-        status: finalPermissions?.status || 'unknown',
-        canAskAgain: finalPermissions?.canAskAgain,
-      });
-      return null;
+      if (!isGrantedNotificationPermission(finalPermissions)) {
+        logger.warn('NotificationService', 'Push registration blocked by permission state', {
+          status: finalPermissions?.status || 'unknown',
+          canAskAgain: finalPermissions?.canAskAgain,
+        });
+        return null;
+      }
     }
 
     // Get the Expo push token with retry logic
@@ -469,7 +485,7 @@ const buildUnavailableTokenPatch = ({
 }) => ({
   pushToken: null,
   pushTokenStatus: 'UNAVAILABLE',
-  pushTokenProvider: existingUserData.pushTokenProvider || 'expo',
+  pushTokenProvider: 'expo',
   pushTokenInvalidReason: null,
   pushTokenUpdatedAt: nowIso,
   pushPermissionState: permissionState.state,
@@ -486,7 +502,7 @@ const buildUnavailableTokenPatch = ({
  * @param {string} userId - The current user's ID
  * @param {object} preferences - The object containing toggle states
  */
-export const saveUserPreferences = async (userId, preferences) => {
+export const saveUserPreferences = async (userId, preferences, options = {}) => {
   try {
     // Validate inputs
     const validatedUserId = resolveNotificationUserId(userId);
@@ -503,10 +519,20 @@ export const saveUserPreferences = async (userId, preferences) => {
 
     const userRef = realtimeDb.ref(`users/${validatedUserId}`);
 
+    // Verify the remote destination before triggering an OS permission prompt.
+    // Permission decisions can take human time, so keep a bounded one-minute gate.
     const userSnapshot = await withTimeout(
       userRef.once('value'),
-      'Existing preferences fetch timeout'
+      'Existing preferences fetch timeout',
     );
+    const suppliedPermissionState = options?.permissionState;
+    const permissionProbe = suppliedPermissionState?.state
+      ? { success: true, data: suppliedPermissionState }
+      : await withTimeout(primeNotificationPermissions({
+        userId: validatedUserId,
+        requestIfNeeded: true,
+        persistState: false,
+      }), 'Permission check timeout', 60_000);
 
     const existingUserData = userSnapshot.val() || {};
     logger.debug('NotificationService', 'Existing notification preference record loaded', {
@@ -550,8 +576,6 @@ export const saveUserPreferences = async (userId, preferences) => {
       marketing: mergedMarketing,
     };
 
-    // 1. Get a normalized permission state and request prompt if needed
-    const permissionProbe = await primeNotificationPermissions({ userId: validatedUserId, requestIfNeeded: true });
     const permissionState = permissionProbe?.success
       ? permissionProbe.data
       : {
@@ -588,7 +612,7 @@ export const saveUserPreferences = async (userId, preferences) => {
     }
 
     // 2. Get the token (permission already granted above)
-    const token = await registerForPushNotificationsAsync();
+    const token = await registerForPushNotificationsAsync(3, { permissionGranted: true });
 
     if (!token) {
       await withTimeout(
@@ -719,12 +743,13 @@ export const restorePushTokenForSession = async (userId) => {
     const permissionProbe = await primeNotificationPermissions({
       userId: validatedUserId,
       requestIfNeeded: false,
+      persistState: false,
     });
     if (!permissionProbe?.success || !permissionProbe.data?.granted) {
       return { success: true, restored: false, reason: 'permission_not_granted' };
     }
 
-    const token = await registerForPushNotificationsAsync();
+    const token = await registerForPushNotificationsAsync(3, { permissionGranted: true });
     if (!token) {
       return { success: false, restored: false, error: 'Push token is unavailable' };
     }
@@ -737,6 +762,9 @@ export const restorePushTokenForSession = async (userId) => {
         pushTokenProvider: 'expo',
         pushTokenInvalidReason: null,
         pushTokenUpdatedAt: nowIso,
+        pushPermissionState: permissionProbe.data.state,
+        pushPermissionCanAskAgain: permissionProbe.data.canAskAgain,
+        pushPermissionUpdatedAt: nowIso,
         lastUpdated: nowIso,
       }),
       'Push token restore timeout'

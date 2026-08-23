@@ -422,6 +422,13 @@ test('Static contract: category broadcasts target canonical tour-interest prefer
   assert.match(source, /exports\.processCategoryBroadcastWrite = onValueCreated/);
   assert.match(source, /ref: '\/category_broadcasts\/\{categoryKey\}\/\{broadcastId\}'/);
   assert.match(source, /orderByChild\(`preferences\/marketing\/\$\{preferenceKey\}`\)/);
+  const categoryHandlerSource = source.slice(
+    source.indexOf('exports.processCategoryBroadcastWrite = onValueCreated'),
+    source.indexOf('exports.sendChatNotification = onValueCreated'),
+  );
+  assert.match(categoryHandlerSource, /buildCategoryBroadcastPushMessages\(\{/);
+  assert.doesNotMatch(categoryHandlerSource, /buildChatNotificationContent/);
+  assert.doesNotMatch(categoryHandlerSource, /chunkArrayDeterministically\(\s*validRecipients/);
   assert.match(adminSource, /category_broadcasts\/\$\{targetId\}/);
 
   categoryKeys.forEach((categoryKey) => {
@@ -446,6 +453,29 @@ test('Static contract: notification taps preserve exact destination context end 
   assert.match(routingSource, /GLOBAL_NOTIFICATION_SCREENS/);
   assert.match(routingSource, /messageId/);
   assert.match(routingSource, /categoryKey/);
+});
+
+test('Static contract: notification read state stays canonical and migrates legacy UID branches', () => {
+  const rules = readJson('database.rules.json');
+  const serviceSource = readText('services/notificationInboxService.js');
+  const screenSource = readText('screens/NotificationPreferencesScreen.js');
+  const functionsSource = readText('functions/index.js');
+  const principalRules = rules.rules.notification_read_state.$tourId.$principalId;
+  const migrationRules = rules.rules.notification_read_migration_requests.$tourId.$authUid;
+
+  assert.match(principalRules['.read'], /stablePassengerKey/);
+  assert.match(principalRules['.read'], /'driver:' \+ root\.child/);
+  assert.match(principalRules.$noticeId['.write'], /tour_notifications/);
+  assert.match(migrationRules['.write'], /auth\.uid === \$authUid/);
+  assert.match(migrationRules['.write'], /stablePassengerKey/);
+  assert.equal(migrationRules.$other['.validate'], false);
+  assert.match(serviceSource, /requestNotificationReadStateMigration/);
+  assert.match(serviceSource, /notification_read_state\/\$\{safeTourId\}\/\$\{safeReadStateOwnerId\}/);
+  assert.match(screenSource, /readStateOwnerId: cacheOwnerId/);
+  assert.match(functionsSource, /exports\.processNotificationReadMigrationRequest = onValueCreated/);
+  assert.match(functionsSource, /retry: true/);
+  assert.match(functionsSource, /notificationReadStateUpgradedTours/);
+  assert.doesNotMatch(functionsSource, /notification_read_migration_receipts/);
 });
 
 test('Static contract: photo variant lifecycle fields stay allowed by database rules', () => {

@@ -17,10 +17,12 @@ const buildNotificationService = ({
   authUid = null,
   lastNotificationResponse = null,
   existingUserData = null,
+  profileFetchError = null,
 } = {}) => {
   const updates = [];
   const refPaths = [];
   let permissionStatus = permission;
+  let permissionChecks = 0;
   let responseHandler = null;
   let responseListenerRemoved = false;
 
@@ -38,8 +40,8 @@ const buildNotificationService = ({
         },
         setNotificationHandler: () => {},
         setNotificationChannelAsync: async () => {},
-        getPermissionsAsync: async () => ({ status: permissionStatus }),
-        requestPermissionsAsync: async () => ({ status: permissionStatus }),
+        getPermissionsAsync: async () => { permissionChecks += 1; return { status: permissionStatus }; },
+        requestPermissionsAsync: async () => { permissionChecks += 1; return { status: permissionStatus }; },
         getLastNotificationResponseAsync: async () => lastNotificationResponse,
         addNotificationResponseReceivedListener: (handler) => {
           responseHandler = handler;
@@ -76,7 +78,9 @@ const buildNotificationService = ({
           ref: (path = '') => {
             refPaths.push(path);
             return {
-              once: async () => ({
+              once: async () => {
+                if (profileFetchError) throw profileFetchError;
+                return ({
                 val: () => existingUserData || ({
                   preferences: {
                     ops: { group_photos: true },
@@ -84,7 +88,8 @@ const buildNotificationService = ({
                   },
                   pushTokenProvider: 'expo',
                 }),
-              }),
+              });
+              },
               update: async (payload) => {
                 updates.push(payload);
               },
@@ -106,6 +111,7 @@ const buildNotificationService = ({
     setPermission: (next) => { permissionStatus = next; },
     emitNotificationResponse: (response) => responseHandler?.(response),
     wasResponseListenerRemoved: () => responseListenerRemoved,
+    getPermissionCheckCount: () => permissionChecks,
   };
 };
 
@@ -128,15 +134,14 @@ test('saveUserPreferences persists canonical preference schema and token metadat
   });
 
   assert.equal(result.success, true);
-  assert.equal(updates.length, 3);
-  assert.equal(updates[0].pushPermissionState, 'granted');
-  assert.deepEqual(updates[1].__tokenRequestOptions, { projectId: 'test-project-id' });
-  assert.equal(updates[2].pushToken, 'ExponentPushToken[test-token]');
-  assert.equal(updates[2].pushTokenStatus, 'ACTIVE');
-  assert.equal(updates[2].pushTokenProvider, 'expo');
-  assert.equal(updates[2].pushTokenInvalidReason, null);
-  assert.equal(updates[2].pushPermissionState, 'granted');
-  assert.deepEqual(updates[2].preferences, {
+  assert.equal(updates.length, 2);
+  assert.deepEqual(updates[0].__tokenRequestOptions, { projectId: 'test-project-id' });
+  assert.equal(updates[1].pushToken, 'ExponentPushToken[test-token]');
+  assert.equal(updates[1].pushTokenStatus, 'ACTIVE');
+  assert.equal(updates[1].pushTokenProvider, 'expo');
+  assert.equal(updates[1].pushTokenInvalidReason, null);
+  assert.equal(updates[1].pushPermissionState, 'granted');
+  assert.deepEqual(updates[1].preferences, {
     ops: {
       driver_updates: true,
       itinerary_changes: false,
@@ -171,16 +176,48 @@ test('saveUserPreferences handles denied permission path without throwing and ma
 
   assert.equal(result.success, true);
   assert.ok(result.warning.includes('notifications are disabled'));
-  assert.equal(updates.length, 2);
-  assert.equal(updates[0].pushPermissionState, 'denied');
-  assert.equal(updates[1].pushToken, null);
-  assert.equal(updates[1].pushTokenStatus, 'UNAVAILABLE');
-  assert.equal(updates[1].pushTokenInvalidReason, null);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].pushToken, null);
+  assert.equal(updates[0].pushTokenStatus, 'UNAVAILABLE');
+  assert.equal(updates[0].pushTokenInvalidReason, null);
   assert.equal(updates.some((entry) => entry.__tokenRequestOptions), false);
-  assert.equal(updates[1].pushPermissionState, 'denied');
-  assert.equal(updates[1].preferences.ops.group_chat, true);
-  assert.equal(updates[1].preferences.ops.itinerary_changes, true);
-  assert.equal(updates[1].preferences.marketing.mystery_breaks, true);
+  assert.equal(updates[0].pushPermissionState, 'denied');
+  assert.equal(updates[0].preferences.ops.group_chat, true);
+  assert.equal(updates[0].preferences.ops.itinerary_changes, true);
+  assert.equal(updates[0].preferences.marketing.mystery_breaks, true);
+});
+
+test('saveUserPreferences reuses a resolved onboarding permission without probing twice', async () => {
+  const { service, getPermissionCheckCount, updates } = buildNotificationService({ permission: 'granted' });
+
+  const result = await service.saveUserPreferences('user-onboarding', {
+    ops: { group_chat: true },
+  }, {
+    permissionState: {
+      state: 'granted',
+      granted: true,
+      canAskAgain: true,
+      status: 'granted',
+      description: 'Notifications are enabled.',
+    },
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(getPermissionCheckCount(), 0);
+  assert.equal(updates.filter((entry) => entry.__tokenRequestOptions).length, 1);
+  assert.equal(updates.at(-1).pushPermissionState, 'granted');
+});
+
+test('saveUserPreferences does not prompt when the remote profile cannot be loaded', async () => {
+  const { service, getPermissionCheckCount } = buildNotificationService({
+    permission: 'undetermined',
+    profileFetchError: new Error('offline'),
+  });
+
+  const result = await service.saveUserPreferences('user-offline', { ops: { group_chat: true } });
+
+  assert.equal(result.success, false);
+  assert.equal(getPermissionCheckCount(), 0);
 });
 
 test('primeNotificationPermissions reports denied state when permission can still be requested later', async () => {
@@ -389,6 +426,9 @@ test('restorePushTokenForSession silently reactivates a token after the next suc
   assert.equal(restoredPatch.pushToken, 'ExponentPushToken[test-token]');
   assert.equal(restoredPatch.pushTokenStatus, 'ACTIVE');
   assert.equal(restoredPatch.pushTokenInvalidReason, null);
+  assert.equal(restoredPatch.pushPermissionState, 'granted');
+  assert.equal(restoredPatch.pushPermissionCanAskAgain, true);
+  assert.match(restoredPatch.pushPermissionUpdatedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
 test('notification response subscription routes active-tour taps once and removes its listener', async () => {

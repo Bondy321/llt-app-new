@@ -47,6 +47,13 @@ const USER_PROFILE_FETCH_CHUNK_SIZE = 100;
 const USER_PROFILE_CACHE_TTL_MS = 2 * 60 * 1000;
 const USER_PROFILE_CACHE_MAX_ENTRIES = 5000;
 const TOUR_NOTIFICATION_MAX_RECORDS = 100;
+const NOTIFICATION_READ_CLEANUP_JOB_BATCH_SIZE = 10;
+const NOTIFICATION_READ_CLEANUP_USER_BATCH_SIZE = 50;
+const LEGACY_NOTIFICATION_READ_CLEANUP_BATCH_SIZE = 50;
+const LEGACY_NOTIFICATION_READ_CLEANUP_CONCURRENCY = 5;
+const LEGACY_NOTIFICATION_READ_CLEANUP_STATE_PATH = 'notification_read_legacy_cleanup_state/v1';
+const LEGACY_NOTIFICATION_READ_CLEANUP_QUEUE_PATH = 'notification_read_legacy_cleanup_queue';
+const LEGACY_NOTIFICATION_READ_CLEANUP_SEED_BATCH_SIZE = 200;
 const userProfileCache = new Map();
 const PHOTO_CACHE_CONTROL_HEADER = "public,max-age=31536000,immutable";
 const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
@@ -898,7 +905,9 @@ const persistTourNotification = async ({ db = admin.database(), record }) => {
   }
 
   const noticesRef = db.ref(`tour_notifications/${record.tourId}`);
+  let evictedNoticeIds = [];
   await noticesRef.transaction((currentValue) => {
+    evictedNoticeIds = [];
     const nextValue = currentValue && typeof currentValue === 'object' ? { ...currentValue } : {};
     nextValue[record.noticeId] = record;
 
@@ -908,12 +917,385 @@ const persistTourNotification = async ({ db = admin.database(), record }) => {
     });
     while (sorted.length > TOUR_NOTIFICATION_MAX_RECORDS) {
       const [oldestId] = sorted.shift();
+      evictedNoticeIds.push(oldestId);
       delete nextValue[oldestId];
     }
     return nextValue;
   });
 
+  if (evictedNoticeIds.length > 0) {
+    await enqueueNotificationReadCleanupJobs({
+      db,
+      tourId: record.tourId,
+      noticeIds: evictedNoticeIds,
+    });
+  }
+
   return record;
+};
+
+const buildNotificationReadCleanupJobId = ({ tourId, noticeId }) => `nrc_${createHash('sha256')
+  .update(`${tourId}:${noticeId}`)
+  .digest('hex')
+  .slice(0, 32)}`;
+
+const enqueueNotificationReadCleanupJobs = async ({
+  db = admin.database(),
+  tourId,
+  noticeIds = [],
+  now = Date.now(),
+}) => {
+  if (!isValidFirebaseKey(tourId)) {
+    throw new Error('Invalid notification cleanup tour id');
+  }
+
+  const safeNoticeIds = [...new Set(noticeIds.filter(isValidFirebaseKey))];
+  await Promise.all(safeNoticeIds.map(async (noticeId) => {
+    const jobId = buildNotificationReadCleanupJobId({ tourId, noticeId });
+    await db.ref(`notification_read_cleanup_jobs/${jobId}`).transaction((currentValue) => (
+      currentValue || {
+        version: 1,
+        jobId,
+        tourId,
+        noticeId,
+        createdAtMs: now,
+        updatedAtMs: now,
+        afterUserId: null,
+        processedUserCount: 0,
+      }
+    ));
+  }));
+  return safeNoticeIds.length;
+};
+
+const processNotificationReadMigrationRequest = async ({
+  db = admin.database(),
+  tourId,
+  authUid,
+  request,
+  now = Date.now(),
+}) => {
+  const requestPath = `notification_read_migration_requests/${tourId}/${authUid}`;
+  const principalId = resolveTrimmedString(request?.principalId);
+  if (!isValidFirebaseKey(tourId)
+    || !isValidFirebaseKey(authUid)
+    || request?.version !== 1
+    || !isValidFirebaseKey(principalId)
+    || principalId === authUid) {
+    await db.ref(requestPath).remove();
+    return { legacyRemoved: false, invalid: true };
+  }
+
+  const profileSnapshot = await db.ref(`users/${authUid}`).once('value');
+  const profile = profileSnapshot.val() || {};
+  const stablePassengerKey = resolveTrimmedString(profile.stablePassengerKey);
+  const driverId = resolveTrimmedString(profile.driverId);
+  const expectedPrincipalId = isValidFirebaseKey(stablePassengerKey)
+    && resolveTrimmedString(profile.stablePassengerId)
+    ? stablePassengerKey
+    : isValidFirebaseKey(driverId)
+      ? `driver:${driverId}`
+      : null;
+
+  if (principalId !== expectedPrincipalId
+    || profile.notificationReadStateUpgradedTours?.[tourId] === true) {
+    await db.ref(requestPath).remove();
+    return { legacyRemoved: false, invalid: true };
+  }
+
+  await db.ref().update({
+    [`notification_read_state/${tourId}/${authUid}`]: null,
+    [requestPath]: null,
+    [`users/${authUid}/notificationReadStateUpgradedTours/${tourId}`]: true,
+  });
+  return {
+    legacyRemoved: true,
+    invalid: false,
+    principalId,
+    completedAtMs: now,
+  };
+};
+
+const fetchRealtimeDatabaseShallowKeys = async ({
+  db = admin.database(),
+  path,
+  fetchImpl = fetch,
+}) => {
+  const databaseURL = resolveTrimmedString(db.app?.options?.databaseURL)
+    || resolveTrimmedString(admin.app().options?.databaseURL);
+  const credential = db.app?.options?.credential || admin.app().options?.credential;
+  if (!databaseURL || !credential?.getAccessToken || typeof fetchImpl !== 'function') {
+    throw new Error('Realtime Database shallow-key access is unavailable');
+  }
+  const accessToken = await credential.getAccessToken();
+  const token = resolveTrimmedString(accessToken?.access_token);
+  if (!token) throw new Error('Realtime Database cleanup access token is unavailable');
+  const encodedPath = String(path || '')
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/');
+  const response = await fetchImpl(
+    `${databaseURL.replace(/\/$/, '')}/${encodedPath}.json?shallow=true`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!response.ok) throw new Error(`Realtime Database shallow-key read failed (${response.status})`);
+  const value = await response.json();
+  return Object.keys(value && typeof value === 'object' ? value : {})
+    .filter(isValidFirebaseKey)
+    .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+};
+
+const shouldDeleteLegacyNotificationReadPrincipal = ({ principalId, profile, authUserExists = false }) => {
+  if (!isValidFirebaseKey(principalId)
+    || principalId.startsWith('pax_v1:')
+    || principalId.startsWith('driver:')) return false;
+  if (!profile || typeof profile !== 'object') return !authUserExists;
+  return isValidFirebaseKey(resolveTrimmedString(profile.stablePassengerKey))
+    || isValidFirebaseKey(resolveTrimmedString(profile.driverId));
+};
+
+const processLegacyNotificationReadStateCleanup = async ({
+  db = admin.database(),
+  listTourIds = () => fetchRealtimeDatabaseShallowKeys({ db, path: 'notification_read_state' }),
+  resolveExistingAuthUids = async (uids) => {
+    if (uids.length === 0) return new Set();
+    const result = await admin.auth().getUsers(uids.map((uid) => ({ uid })));
+    return new Set((result.users || []).map((user) => user.uid));
+  },
+  now = Date.now(),
+} = {}) => {
+  const stateRef = db.ref(LEGACY_NOTIFICATION_READ_CLEANUP_STATE_PATH);
+  const stateSnapshot = await stateRef.once('value');
+  const state = stateSnapshot.val() || {};
+  if (state.completed === true) return { completed: true, processedCount: 0, deletedCount: 0 };
+
+  if (state.seeded !== true) {
+    const tourIds = await listTourIds();
+    for (let offset = 0; offset < tourIds.length; offset += LEGACY_NOTIFICATION_READ_CLEANUP_SEED_BATCH_SIZE) {
+      const queueUpdates = Object.fromEntries(
+        tourIds.slice(offset, offset + LEGACY_NOTIFICATION_READ_CLEANUP_SEED_BATCH_SIZE)
+          .map((tourId) => [tourId, { version: 1, afterPrincipalId: null }]),
+      );
+      await db.ref(LEGACY_NOTIFICATION_READ_CLEANUP_QUEUE_PATH).update(queueUpdates);
+    }
+    await stateRef.set({
+      version: 1,
+      seeded: true,
+      completed: tourIds.length === 0,
+      ...(tourIds.length === 0 ? { completedAtMs: now } : {}),
+      updatedAtMs: now,
+    });
+    return {
+      seeded: true,
+      completed: tourIds.length === 0,
+      discoveredTourCount: tourIds.length,
+      processedCount: 0,
+      deletedCount: 0,
+    };
+  }
+
+  const queueSnapshot = await db.ref(LEGACY_NOTIFICATION_READ_CLEANUP_QUEUE_PATH)
+    .orderByKey()
+    .limitToFirst(2)
+    .once('value');
+  const queueEntries = Object.entries(queueSnapshot.val() || {})
+    .filter(([tourId]) => isValidFirebaseKey(tourId))
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  const [tourId, queueItem = {}] = queueEntries[0] || [];
+  if (!tourId) {
+    await stateRef.set({
+      version: 1,
+      seeded: true,
+      completed: true,
+      completedAtMs: now,
+      updatedAtMs: now,
+    });
+    return { completed: true, processedCount: 0, deletedCount: 0 };
+  }
+
+  const afterPrincipalId = isValidFirebaseKey(queueItem?.afterPrincipalId)
+    ? queueItem.afterPrincipalId
+    : null;
+  let principalsQuery = db.ref(`notification_read_state/${tourId}`).orderByKey();
+  if (afterPrincipalId) principalsQuery = principalsQuery.startAt(afterPrincipalId);
+  const principalsSnapshot = await principalsQuery
+    .limitToFirst(LEGACY_NOTIFICATION_READ_CLEANUP_BATCH_SIZE + (afterPrincipalId ? 2 : 1))
+    .once('value');
+  const principalEntries = Object.entries(principalsSnapshot.val() || {})
+    .filter(([principalId]) => isValidFirebaseKey(principalId)
+      && (!afterPrincipalId || principalId > afterPrincipalId))
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  const pageEntries = principalEntries.slice(0, LEGACY_NOTIFICATION_READ_CLEANUP_BATCH_SIZE);
+  const page = pageEntries.map(([principalId]) => principalId);
+  const profiles = new Map();
+  let cursor = 0;
+  const workers = Array.from({
+    length: Math.min(LEGACY_NOTIFICATION_READ_CLEANUP_CONCURRENCY, page.length),
+  }, async () => {
+    while (cursor < page.length) {
+      const index = cursor;
+      cursor += 1;
+      const principalId = page[index];
+      if (principalId.startsWith('pax_v1:') || principalId.startsWith('driver:')) continue;
+      const snapshot = await db.ref(`users/${principalId}`).once('value');
+      profiles.set(principalId, snapshot.val());
+    }
+  });
+  await Promise.all(workers);
+
+  const missingProfileUids = page.filter((principalId) => (
+    !principalId.startsWith('pax_v1:')
+    && !principalId.startsWith('driver:')
+    && !profiles.get(principalId)
+    && principalId.length <= 128
+  ));
+  const existingAuthUids = await resolveExistingAuthUids(missingProfileUids);
+
+  const updates = {};
+  page.forEach((principalId) => {
+    if (shouldDeleteLegacyNotificationReadPrincipal({
+      principalId,
+      profile: profiles.get(principalId),
+      authUserExists: existingAuthUids.has(principalId),
+    })) {
+      updates[`notification_read_state/${tourId}/${principalId}`] = null;
+    }
+  });
+  const hasMoreInTour = principalEntries.length > pageEntries.length;
+  const hasMoreTours = queueEntries.length > 1;
+  updates[`${LEGACY_NOTIFICATION_READ_CLEANUP_QUEUE_PATH}/${tourId}`] = hasMoreInTour
+    ? { version: 1, afterPrincipalId: page.at(-1), updatedAtMs: now }
+    : null;
+  updates[LEGACY_NOTIFICATION_READ_CLEANUP_STATE_PATH] = {
+    version: 1,
+    seeded: true,
+    completed: !hasMoreInTour && !hasMoreTours,
+    ...(!hasMoreInTour && !hasMoreTours ? { completedAtMs: now } : {}),
+    updatedAtMs: now,
+  };
+  await db.ref().update(updates);
+  return {
+    completed: !hasMoreInTour && !hasMoreTours,
+    tourId,
+    processedCount: page.length,
+    deletedCount: Object.keys(updates).filter((path) => path.startsWith('notification_read_state/')).length,
+  };
+};
+
+const processNotificationReadCleanupJob = async ({ db = admin.database(), jobId, job, now = Date.now() }) => {
+  if (!isValidFirebaseKey(jobId)
+    || !job
+    || job.version !== 1
+    || job.jobId !== jobId
+    || !isValidFirebaseKey(job.tourId)
+    || !isValidFirebaseKey(job.noticeId)) {
+    await db.ref(`notification_read_cleanup_jobs/${jobId}`).remove();
+    return { completed: true, removedReadCount: 0, processedUserCount: 0, invalid: true };
+  }
+
+  const afterUserId = isValidFirebaseKey(job.afterUserId) ? job.afterUserId : null;
+  let usersQuery = db.ref(`notification_read_state/${job.tourId}`).orderByKey();
+  if (afterUserId) usersQuery = usersQuery.startAt(afterUserId);
+  const snapshot = await usersQuery
+    .limitToFirst(NOTIFICATION_READ_CLEANUP_USER_BATCH_SIZE + (afterUserId ? 2 : 1))
+    .once('value');
+  const userEntries = Object.entries(snapshot.val() || {})
+    .filter(([userId]) => isValidFirebaseKey(userId) && (!afterUserId || userId > afterUserId))
+    .sort(([left], [right]) => left.localeCompare(right));
+  const pageEntries = userEntries.slice(0, NOTIFICATION_READ_CLEANUP_USER_BATCH_SIZE);
+  const hasMore = userEntries.length > pageEntries.length;
+  const updates = {};
+
+  pageEntries.forEach(([userId, userState]) => {
+    if (userState && typeof userState === 'object' && Object.prototype.hasOwnProperty.call(userState, job.noticeId)) {
+      updates[`notification_read_state/${job.tourId}/${userId}/${job.noticeId}`] = null;
+    }
+  });
+  if (Object.keys(updates).length > 0) await db.ref().update(updates);
+
+  if (!hasMore) {
+    await db.ref(`notification_read_cleanup_jobs/${jobId}`).remove();
+    return {
+      completed: true,
+      removedReadCount: Object.keys(updates).length,
+      processedUserCount: pageEntries.length,
+    };
+  }
+
+  const nextCursor = pageEntries.at(-1)?.[0];
+  await db.ref(`notification_read_cleanup_jobs/${jobId}`).update({
+    afterUserId: nextCursor,
+    processedUserCount: Number(job.processedUserCount || 0) + pageEntries.length,
+    updatedAtMs: now,
+  });
+  return {
+    completed: false,
+    removedReadCount: Object.keys(updates).length,
+    processedUserCount: pageEntries.length,
+    afterUserId: nextCursor,
+  };
+};
+
+const processNotificationReadCleanupJobs = async ({ db = admin.database(), now = Date.now() } = {}) => {
+  const snapshot = await db.ref('notification_read_cleanup_jobs')
+    .orderByChild('createdAtMs')
+    .limitToFirst(NOTIFICATION_READ_CLEANUP_JOB_BATCH_SIZE)
+    .once('value');
+  const jobs = Object.entries(snapshot.val() || {});
+  const results = [];
+  for (const [jobId, job] of jobs) {
+    try {
+      results.push(await processNotificationReadCleanupJob({ db, jobId, job, now }));
+    } catch (error) {
+      log.warn('Notification read-state cleanup job deferred', {
+        jobId,
+        tourId: job?.tourId,
+        error: error?.message || String(error),
+      });
+      results.push({ completed: false, error: true });
+    }
+  }
+  return results;
+};
+
+const buildCategoryBroadcastPushMessages = ({
+  validRecipients = [],
+  categoryKey,
+  categoryLabel,
+  broadcastId,
+  message,
+  timestamp = Date.now(),
+}) => {
+  const messageText = resolveTrimmedString(message);
+  if (!isSupportedTourNotificationCategory(categoryKey)
+    || !isValidFirebaseKey(broadcastId)
+    || !messageText) {
+    throw new Error('Invalid category broadcast push payload');
+  }
+
+  const notificationBody = messageText.length > 200
+    ? `${messageText.substring(0, 197)}...`
+    : messageText;
+
+  return [...validRecipients]
+    .sort((left, right) => String(left?.userId || '').localeCompare(String(right?.userId || '')))
+    .map((recipient) => ({
+      to: recipient?.userData?.pushToken,
+      sound: 'default',
+      title: `New ${categoryLabel || resolveTourNotificationCategoryLabel(categoryKey)} tour alert`,
+      body: notificationBody,
+      data: buildPushNavigationData({
+        screen: 'NotificationPreferences',
+        notificationType: 'category_broadcast',
+        categoryKey,
+        broadcastId,
+        timestamp,
+      }),
+      priority: 'default',
+      channelId: 'default',
+    }))
+    .filter((payload) => typeof payload.to === 'string' && payload.to.trim().length > 0);
 };
 
 const loadDriverProfile = async (driverId) => {
@@ -1825,6 +2207,8 @@ const buildTourDeletionUpdates = ({
     [`broadcasts/${tourId}`]: null,
     [`tour_notifications/${tourId}`]: null,
     [`notification_read_state/${tourId}`]: null,
+    [`notification_read_migration_requests/${tourId}`]: null,
+    [`notification_read_legacy_cleanup_queue/${tourId}`]: null,
     [`tour_access_grants/${tourId}`]: null,
     [`manual_booking_creation_locks/tours/${tourId}`]: null,
     [`driver_assignment_locks/tours/${tourId}`]: null,
@@ -4002,43 +4386,21 @@ exports.processCategoryBroadcastWrite = onValueCreated(
         context: { categoryKey, broadcastId, notificationType: 'category_broadcast' },
       });
 
-      const messageText = broadcastData.message.trim();
-      const notificationBody = messageText.length > 200
-        ? `${messageText.substring(0, 197)}...`
-        : messageText;
-      const recipientChunks = chunkArrayDeterministically(
-        validRecipients.map((recipient) => recipient.userId),
-        RECIPIENT_CHUNK_SIZE,
-      );
-      const pushMessages = [];
-      const notificationContent = buildChatNotificationContent({ messageData, tourName, isAdmin });
+      const pushMessages = buildCategoryBroadcastPushMessages({
+        validRecipients,
+        categoryKey,
+        categoryLabel,
+        broadcastId,
+        message: broadcastData.message,
+        timestamp: broadcastData.createdAtMs,
+      });
 
       log.info('Using deterministic recipient chunking for category broadcast notifications', {
         categoryKey,
         broadcastId,
-        chunks: recipientChunks.length,
+        chunks: Math.ceil(pushMessages.length / RECIPIENT_CHUNK_SIZE),
         chunkSize: RECIPIENT_CHUNK_SIZE,
       });
-
-      for (const recipientChunk of recipientChunks) {
-        for (const userId of recipientChunk) {
-          const userData = usersMap[userId];
-          pushMessages.push({
-            to: userData.pushToken,
-            sound: 'default',
-            title: `New ${categoryLabel} tour alert`,
-            body: notificationBody,
-            data: buildPushNavigationData({
-              screen: 'NotificationPreferences',
-              notificationType: 'category_broadcast',
-              categoryKey,
-              broadcastId,
-            }),
-            priority: 'default',
-            channelId: 'default',
-          });
-        }
-      }
       const payloadAssemblyDurationMs = Date.now() - assemblyStart;
 
       if (invalidTokens.length > 0) {
@@ -5275,6 +5637,78 @@ exports.cleanupExpiredLoginRateLimits = onSchedule(
 );
 
 /**
+ * Deletes ambiguous legacy auth-UID read markers once a canonical passenger
+ * or driver principal is active. UID-only history cannot be safely attributed
+ * on shared devices, so it is never copied into the canonical branch.
+ */
+exports.processNotificationReadMigrationRequest = onValueCreated(
+  {
+    ref: '/notification_read_migration_requests/{tourId}/{authUid}',
+    region: 'europe-west1',
+    instance: 'loch-lomond-travel-default-rtdb',
+    maxInstances: 10,
+    retry: true,
+  },
+  async (event) => {
+    const { tourId, authUid } = event.params;
+    try {
+      const result = await processNotificationReadMigrationRequest({
+        db: admin.database(),
+        tourId,
+        authUid,
+        request: event.data?.val(),
+      });
+      log.info('Notification read-state migration request completed', {
+        tourId,
+        legacyRemoved: result.legacyRemoved,
+        invalid: result.invalid,
+      });
+      return result;
+    } catch (error) {
+      log.error('Notification read-state migration request failed', error, { tourId, authUid });
+      throw error;
+    }
+  },
+);
+
+/**
+ * Continues exact notice read-state cleanup in bounded user pages. Eviction
+ * only enqueues a small durable job; notification delivery never downloads a
+ * tour-wide read-state fanout.
+ */
+exports.cleanupNotificationReadState = onSchedule(
+  {
+    schedule: 'every 15 minutes',
+    timeZone: 'Europe/London',
+    region: 'europe-west1',
+    memory: '256MiB',
+    timeoutSeconds: 120,
+    maxInstances: 1,
+  },
+  async () => {
+    const database = admin.database();
+    const results = await processNotificationReadCleanupJobs({ db: database });
+    let legacyResult = null;
+    try {
+      legacyResult = await processLegacyNotificationReadStateCleanup({ db: database });
+    } catch (error) {
+      log.warn('Legacy notification read-state cleanup deferred', {
+        error: error?.message || String(error),
+      });
+    }
+    log.info('Notification read-state cleanup pass completed', {
+      jobCount: results.length,
+      completedCount: results.filter((result) => result.completed).length,
+      deferredCount: results.filter((result) => result.error).length,
+      legacyProcessedCount: legacyResult?.processedCount || 0,
+      legacyDeletedCount: legacyResult?.deletedCount || 0,
+      legacyCompleted: legacyResult?.completed === true,
+    });
+    return { jobs: results, legacy: legacyResult };
+  },
+);
+
+/**
  * Private cross-project boundary for management-generated Driver Tour Packs.
  * Cloud Run IAM and a second in-process Google OIDC check both restrict the
  * caller to the management sync service account.
@@ -5403,10 +5837,19 @@ exports.__testables = {
   buildTourNotificationId,
   buildTourNotificationRecord,
   buildPushNavigationData,
+  buildCategoryBroadcastPushMessages,
   summarizeItineraryChange,
   summarizeDriverTourPackChange,
   buildDriverTourPackActionProjectionUpdates,
   persistTourNotification,
+  buildNotificationReadCleanupJobId,
+  enqueueNotificationReadCleanupJobs,
+  processNotificationReadMigrationRequest,
+  fetchRealtimeDatabaseShallowKeys,
+  shouldDeleteLegacyNotificationReadPrincipal,
+  processLegacyNotificationReadStateCleanup,
+  processNotificationReadCleanupJob,
+  processNotificationReadCleanupJobs,
   createDriverTourPackPublisher,
   validateDriverTourPackHttpRequest,
   verifyManagementOidcRequest,

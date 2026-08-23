@@ -57,12 +57,15 @@ Web-admin implementation:
 - `normalizeTourDateIndexes` and `normalizeTourEndDateIndex` are the server-owned repair boundary for every producer (web admin, management/Apps Script sync, and Admin SDK maintenance). They listen only to the two date leaves, avoiding invocations for unrelated high-volume location/participant/safety updates. Deploy the Functions first, run and verify the backfill, deploy the RTDB index/validation rules, and only then release the bounded web query. RTDB rules validate numeric ordering when fields are present; the server triggers are authoritative because parent-level admin writes and Admin SDK producers cannot be made field-required by child validation. Monitor for invalid dated tours whose stale indexes the Functions remove.
 - Driver issue projections use a collision-free composite projection ID and `departurePriorityKey`, ordered unresolved critical first and newest within priority. Before releasing the new admin query, deploy Functions, dry-run then apply `npm --prefix functions run backfill:driver-tour-pack-issues -- --apply --allow-full-scan`, deploy the `departurePriorityKey` RTDB index, and then deploy web admin. Legacy issue-ID-only records are deleted only when their embedded departure/driver identity matches the source being migrated.
 - Driver directory consumers share one bounded listener. Driver Tour Pack issues are queried only for visible departure keys, capped per departure, and coverage/operations calculations build lookup indexes once per snapshot.
+- Notification legacy read-state retirement performs one keys-only shallow discovery to seed a private tour queue, then uses key-ordered 50-principal pages; it does not repeat full-tour principal enumeration every 15 minutes. Durable notice-eviction jobs use the same 50-principal continuation bound.
 
 ### 2) Push token + preference hygiene
 
 - Continue token refresh on launch.
 - Prune invalid Expo tokens quickly after failed deliveries.
 - Skip fanout early when user preferences disable a notification class.
+- Keep the tour feed at 100 notices, prune orphaned read-state when notices roll off, and query only the newest 50 notices / 100 read markers on mobile.
+- Treat Expo ticket acceptance separately from future receipt-confirmed delivery metrics.
 
 **Success metric:** lower wasted push attempts + higher valid delivery ratio.
 

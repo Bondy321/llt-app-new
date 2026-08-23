@@ -2,6 +2,18 @@ const { normalizeTourId } = require('../services/tourIdentityService');
 
 const TOUR_SCOPED_NOTIFICATION_SCREENS = new Set(['Chat', 'Itinerary', 'GroupPhotobook', 'SafetySupport', 'DriverTourPack']);
 const GLOBAL_NOTIFICATION_SCREENS = new Set(['NotificationPreferences']);
+const SUPPORTED_MARKETING_CATEGORY_KEYS = new Set([
+  'day_trips',
+  'mystery_breaks',
+  'scotland_highlands_islands',
+  'isle_of_ireland',
+  'european_breaks',
+  'steam_train_tours',
+  'cruises_ferries',
+  'theatre_concerts',
+  'sporting_breaks',
+  'history_military_breaks',
+]);
 const SUPPORTED_NOTIFICATION_SCREENS = new Set([
   ...TOUR_SCOPED_NOTIFICATION_SCREENS,
   ...GLOBAL_NOTIFICATION_SCREENS,
@@ -70,6 +82,17 @@ const resolveNotificationRoute = (value, context = {}) => {
     }
   }
   if (screen === 'DriverTourPack' && context.isDriver !== true) return { accepted: false, reason: 'DRIVER_ONLY' };
+  const marketingCategoryKey = screen === 'NotificationPreferences'
+    ? readOptionalString(data.categoryKey)
+    : null;
+  if (marketingCategoryKey && !SUPPORTED_MARKETING_CATEGORY_KEYS.has(marketingCategoryKey)) {
+    return { accepted: false, reason: 'UNSUPPORTED_MARKETING_CATEGORY' };
+  }
+  if (screen === 'NotificationPreferences'
+    && data.notificationType === 'category_broadcast'
+    && (!marketingCategoryKey || !readOptionalString(data.broadcastId))) {
+    return { accepted: false, reason: 'INVALID_MARKETING_NOTIFICATION' };
+  }
   const driverPackDepartureKey = screen === 'DriverTourPack' ? readSafeDepartureKey(data.departureKey) : null;
   const driverPackRevision = screen === 'DriverTourPack' ? readRevision(data.revision) : null;
   if (screen === 'DriverTourPack' && (!driverPackDepartureKey || !driverPackRevision)) {
@@ -106,7 +129,7 @@ const resolveNotificationRoute = (value, context = {}) => {
   }
   if (screen === 'NotificationPreferences') {
     params.returnTo = context.isDriver ? 'DriverHome' : 'TourHome';
-    params.categoryKey = readOptionalString(data.categoryKey);
+    params.categoryKey = marketingCategoryKey;
     params.broadcastId = readOptionalString(data.broadcastId);
   }
 

@@ -31,9 +31,11 @@ const NotificationFeedCard = ({
   unreadCount = 0,
   loading = false,
   error = '',
+  stale = false,
   busy = false,
   onOpen,
   onMarkAll,
+  onRetry,
 }) => (
   <View style={styles.card}>
     <View style={styles.headerRow}>
@@ -61,17 +63,34 @@ const NotificationFeedCard = ({
       ) : null}
     </View>
 
-    {loading ? (
+    {loading && items.length === 0 ? (
       <View style={styles.stateRow}>
         <ActivityIndicator size="small" color={COLORS.primary} />
         <Text style={styles.stateText}>Loading updates...</Text>
       </View>
-    ) : error ? (
+    ) : null}
+
+    {error ? (
       <View style={[styles.stateRow, styles.errorState]}>
         <MaterialCommunityIcons name="cloud-alert-outline" size={20} color={COLORS.error} />
         <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity
+          onPress={onRetry}
+          accessibilityRole="button"
+          accessibilityLabel="Retry loading tour updates"
+          style={styles.retryButton}
+        >
+          <Text style={styles.retryText}>Retry</Text>
+        </TouchableOpacity>
       </View>
-    ) : items.length === 0 ? (
+    ) : stale && items.length > 0 ? (
+      <View style={[styles.stateRow, styles.staleState]}>
+        <MaterialCommunityIcons name="cloud-off-outline" size={18} color={COLORS.warning} />
+        <Text style={styles.staleText}>Showing saved updates while the live feed reconnects.</Text>
+      </View>
+    ) : null}
+
+    {!loading && !error && items.length === 0 ? (
       <View style={styles.emptyState}>
         <View style={styles.emptyIcon}>
           <MaterialCommunityIcons name="bell-check-outline" size={24} color={COLORS.primary} />
@@ -81,7 +100,9 @@ const NotificationFeedCard = ({
           <Text style={styles.stateText}>New operational updates will appear here.</Text>
         </View>
       </View>
-    ) : (
+    ) : null}
+
+    {items.length > 0 ? (
       <View style={styles.list}>
         {items.slice(0, 8).map((item, index) => (
           <TouchableOpacity
@@ -113,7 +134,7 @@ const NotificationFeedCard = ({
           </TouchableOpacity>
         ))}
       </View>
-    )}
+    ) : null}
   </View>
 );
 
@@ -156,6 +177,10 @@ const styles = StyleSheet.create({
   stateText: { color: COLORS.textSecondary, fontSize: 13, lineHeight: 18 },
   errorState: { backgroundColor: COLORS.errorLight || '#FEF2F2' },
   errorText: { flex: 1, color: COLORS.error, fontSize: 13, lineHeight: 18 },
+  retryButton: { minHeight: 36, justifyContent: 'center', paddingHorizontal: 8 },
+  retryText: { color: COLORS.error, fontSize: 12, fontWeight: '800' },
+  staleState: { backgroundColor: COLORS.warningLight || '#FFFBEB' },
+  staleText: { flex: 1, color: COLORS.textSecondary, fontSize: 12, lineHeight: 17 },
   emptyState: { minHeight: 92, borderTopWidth: 1, borderTopColor: COLORS.border, flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16 },
   emptyIcon: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primaryMuted || '#EFF6FF' },
   emptyCopy: { flex: 1 },

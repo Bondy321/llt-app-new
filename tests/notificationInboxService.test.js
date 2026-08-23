@@ -3,9 +3,14 @@ const assert = require('node:assert/strict');
 
 const {
   buildNotificationFeed,
+  clearNotificationFeedCache,
+  feedCacheKey,
+  loadNotificationFeedCache,
   markAllNotificationsRead,
   markNotificationRead,
   normalizeTourNotice,
+  persistNotificationFeedCache,
+  requestNotificationReadStateMigration,
   subscribeToNotificationFeed,
 } = require('../services/notificationInboxService');
 const {
@@ -127,6 +132,21 @@ test('global marketing notification routes without an active tour and keeps its 
     broadcastId: 'category-broadcast-1',
   });
   assert.match(route.responseKey, /category-broadcast-1/);
+  assert.equal(resolveNotificationRoute({
+    data: {
+      screen: 'NotificationPreferences',
+      notificationType: 'category_broadcast',
+      categoryKey: 'unknown_category',
+      broadcastId: 'category-broadcast-2',
+    },
+  }, {}).reason, 'UNSUPPORTED_MARKETING_CATEGORY');
+  assert.equal(resolveNotificationRoute({
+    data: {
+      screen: 'NotificationPreferences',
+      notificationType: 'category_broadcast',
+      categoryKey: 'day_trips',
+    },
+  }, {}).reason, 'INVALID_MARKETING_NOTIFICATION');
 });
 
 test('driver Tour Pack notifications route only for the active assigned driver and retain safe change metadata', () => {
@@ -154,6 +174,7 @@ test('notification feed subscription combines bounded notices and read state the
   const makeRef = (path) => ({
     path,
     orderByChild: () => makeRef(path),
+    orderByValue: () => makeRef(path),
     limitToLast: () => makeRef(path),
     on: (event, handler) => listeners.set(`${path}:${event}`, handler),
     off: (event, handler) => detached.push({ path, event, handler }),
@@ -164,14 +185,20 @@ test('notification feed subscription combines bounded notices and read state the
   const unsubscribe = subscribeToNotificationFeed({
     tourId: 'TOUR_1',
     userId: 'user-1',
+    cacheOwnerId: 'principal-1',
+    readStateOwnerId: 'principal-1',
     db,
     auth: null,
+    cacheStorage: {
+      getItemAsync: async () => null,
+      multiSetAsync: async () => true,
+    },
     onUpdate: (next) => updates.push(next),
   });
 
   listeners.get('tour_notifications/TOUR_1:value')({ val: () => ({ notice_1: createNotice() }) });
   assert.equal(updates.length, 0);
-  listeners.get('notification_read_state/TOUR_1/user-1:value')({ val: () => ({}) });
+  listeners.get('notification_read_state/TOUR_1/principal-1:value')({ val: () => ({}) });
   assert.equal(updates.length, 1);
   assert.equal(updates[0].unreadCount, 1);
 
@@ -179,7 +206,171 @@ test('notification feed subscription combines bounded notices and read state the
   assert.equal(detached.length, 2);
 });
 
-test('notification read mutations are scoped to the active tour and authenticated user path', async () => {
+test('notification feed cache is versioned, identity scoped, bounded, and clearable', async () => {
+  const values = new Map();
+  const storage = {
+    getItemAsync: async (key) => values.get(key) || null,
+    setItemAsync: async (key, value) => { values.set(key, value); },
+    deleteItemAsync: async (key) => { values.delete(key); },
+    multiSetAsync: async (entries) => { entries.forEach(([key, value]) => values.set(key, value)); return true; },
+    multiDeleteAsync: async (keys) => { keys.forEach((key) => values.delete(key)); return true; },
+  };
+  const items = buildNotificationFeed({ notice_1: createNotice() }, { notice_1: 1786525300000 });
+
+  await persistNotificationFeedCache({
+    tourId: 'TOUR_1',
+    userId: 'user-1',
+    cacheOwnerId: 'principal-1',
+    items,
+    storage,
+    now: 1786525400000,
+  });
+  const cached = await loadNotificationFeedCache({
+    tourId: 'TOUR_1',
+    userId: 'user-1',
+    cacheOwnerId: 'principal-1',
+    storage,
+    now: 1786525401000,
+  });
+
+  assert.equal(cached.items.length, 1);
+  assert.equal(cached.items[0].isRead, true);
+  assert.equal(values.has(feedCacheKey('TOUR_1', 'user-1', 'principal-1')), true);
+  assert.equal(await clearNotificationFeedCache({ userId: 'user-1', storage }), 1);
+  assert.equal(values.has(feedCacheKey('TOUR_1', 'user-1', 'principal-1')), false);
+});
+
+test('notification cache cannot cross application identities that reuse one anonymous auth uid', async () => {
+  const values = new Map();
+  const storage = {
+    getItemAsync: async (key) => values.get(key) || null,
+    setItemAsync: async (key, value) => { values.set(key, value); },
+    deleteItemAsync: async (key) => { values.delete(key); },
+    multiSetAsync: async (entries) => { entries.forEach(([key, value]) => values.set(key, value)); return true; },
+    multiDeleteAsync: async (keys) => { keys.forEach((key) => values.delete(key)); return true; },
+  };
+  const items = buildNotificationFeed({ notice_1: createNotice() }, {});
+  await persistNotificationFeedCache({
+    tourId: 'TOUR_1', userId: 'shared-auth', cacheOwnerId: 'passenger-a', items, storage, now: 1000,
+  });
+
+  assert.equal(await loadNotificationFeedCache({
+    tourId: 'TOUR_1', userId: 'shared-auth', cacheOwnerId: 'passenger-b', storage, now: 1100,
+  }), null);
+  assert.equal((await loadNotificationFeedCache({
+    tourId: 'TOUR_1', userId: 'shared-auth', cacheOwnerId: 'passenger-a', storage, now: 1100,
+  })).items.length, 1);
+});
+
+test('notification cache revocation blocks a late listener write and invalidates orphaned cache data', async () => {
+  const values = new Map();
+  const storage = {
+    getItemAsync: async (key) => values.get(key) || null,
+    setItemAsync: async (key, value) => { values.set(key, value); },
+    deleteItemAsync: async (key) => { values.delete(key); },
+    multiSetAsync: async (entries) => { entries.forEach(([key, value]) => values.set(key, value)); return true; },
+    multiDeleteAsync: async (keys) => { keys.forEach((key) => values.delete(key)); return true; },
+  };
+  const items = buildNotificationFeed({ notice_1: createNotice() }, {});
+  await persistNotificationFeedCache({
+    tourId: 'TOUR_1', userId: 'revoked-auth', cacheOwnerId: 'passenger-a', items, storage, now: 1000,
+    expectedGeneration: 0,
+  });
+  values.set('index_v1_revoked-auth', '{corrupt');
+  await clearNotificationFeedCache({ userId: 'revoked-auth', storage });
+
+  const lateSaved = await persistNotificationFeedCache({
+    tourId: 'TOUR_1', userId: 'revoked-auth', cacheOwnerId: 'passenger-a', items, storage, now: 1200,
+    expectedGeneration: 0,
+  });
+  assert.equal(lateSaved, false);
+  assert.equal(await loadNotificationFeedCache({
+    tourId: 'TOUR_1', userId: 'revoked-auth', cacheOwnerId: 'passenger-a', storage, now: 1300,
+  }), null);
+});
+
+test('notification cache privacy cleanup retries transient durable storage failures', async () => {
+  const values = new Map();
+  let generationWriteAttempts = 0;
+  let deleteAttempts = 0;
+  const storage = {
+    getItemAsync: async (key) => values.get(key) || null,
+    setItemAsync: async (key, value) => {
+      generationWriteAttempts += 1;
+      if (generationWriteAttempts < 3) throw new Error('transient generation write failure');
+      values.set(key, value);
+    },
+    multiSetAsync: async (entries) => { entries.forEach(([key, value]) => values.set(key, value)); return true; },
+    multiDeleteAsync: async (keys) => {
+      deleteAttempts += 1;
+      if (deleteAttempts < 2) throw new Error('transient delete failure');
+      keys.forEach((key) => values.delete(key));
+      return true;
+    },
+  };
+  const items = buildNotificationFeed({ notice_1: createNotice() }, {});
+  await persistNotificationFeedCache({
+    tourId: 'TOUR_1', userId: 'privacy-retry-auth', cacheOwnerId: 'passenger-a', items, storage, now: 1000,
+  });
+
+  await clearNotificationFeedCache({ userId: 'privacy-retry-auth', storage });
+
+  assert.equal(generationWriteAttempts, 3);
+  assert.equal(deleteAttempts, 2);
+  assert.equal(values.has(feedCacheKey('TOUR_1', 'privacy-retry-auth', 'passenger-a')), false);
+});
+
+test('notification feed presents cached updates and preserves them when one live listener fails', async () => {
+  const listeners = new Map();
+  const errors = new Map();
+  const makeRef = (path) => ({
+    orderByChild: () => makeRef(path),
+    orderByValue: () => makeRef(path),
+    limitToLast: () => makeRef(path),
+    on: (event, handler, errorHandler) => {
+      listeners.set(`${path}:${event}`, handler);
+      errors.set(`${path}:${event}`, errorHandler);
+    },
+    off: () => {},
+  });
+  const cachedItems = buildNotificationFeed({ notice_1: createNotice() }, {});
+  const cacheStorage = {
+    getItemAsync: async (key) => key.startsWith('feed_v1_') ? JSON.stringify({
+      version: 1,
+      tourId: 'TOUR_1',
+      userId: 'user-recovery',
+      cacheOwnerId: 'passenger-recovery',
+      generation: 0,
+      cachedAtMs: 1786525400000,
+      items: cachedItems,
+    }) : null,
+    multiSetAsync: async () => true,
+  };
+  const updates = [];
+  const failures = [];
+
+  const unsubscribe = subscribeToNotificationFeed({
+    tourId: 'TOUR_1',
+    userId: 'user-recovery',
+    cacheOwnerId: 'passenger-recovery',
+    db: { ref: (path = '') => makeRef(path) },
+    auth: null,
+    cacheStorage,
+    now: 1786525401000,
+    onUpdate: (value) => updates.push(value),
+    onError: (error, recovery) => failures.push({ error, recovery }),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  errors.get('notification_read_state/TOUR_1/passenger-recovery:value')(new Error('offline'));
+
+  assert.equal(updates[0].source, 'cache');
+  assert.equal(updates[0].stale, true);
+  assert.equal(updates[0].items.length, 1);
+  assert.equal(failures[0].recovery.hasPersistedCache, true);
+  unsubscribe();
+});
+
+test('notification read mutations are scoped to the active tour and canonical principal path', async () => {
   const writes = [];
   const db = {
     ref: (path = '') => ({
@@ -188,10 +379,19 @@ test('notification read mutations are scoped to the active tour and authenticate
     }),
   };
 
-  await markNotificationRead({ tourId: 'TOUR_1', userId: 'user-1', noticeId: 'notice-1', db, auth: null, now: 1000 });
+  await markNotificationRead({
+    tourId: 'TOUR_1',
+    userId: 'shared-auth',
+    readStateOwnerId: 'passenger-a',
+    noticeId: 'notice-1',
+    db,
+    auth: null,
+    now: 1000,
+  });
   const count = await markAllNotificationsRead({
     tourId: 'TOUR_1',
-    userId: 'user-1',
+    userId: 'shared-auth',
+    readStateOwnerId: 'passenger-a',
     noticeIds: ['notice-1', 'notice-2', 'notice-2'],
     db,
     auth: null,
@@ -201,11 +401,83 @@ test('notification read mutations are scoped to the active tour and authenticate
   assert.equal(count, 2);
   assert.deepEqual(writes[0], {
     type: 'set',
-    path: 'notification_read_state/TOUR_1/user-1/notice-1',
+    path: 'notification_read_state/TOUR_1/passenger-a/notice-1',
     value: 1000,
   });
   assert.deepEqual(writes[1].value, {
-    'notification_read_state/TOUR_1/user-1/notice-1': 2000,
-    'notification_read_state/TOUR_1/user-1/notice-2': 2000,
+    'notification_read_state/TOUR_1/passenger-a/notice-1': 2000,
+    'notification_read_state/TOUR_1/passenger-a/notice-2': 2000,
   });
+});
+
+test('notification read-state migration requests are exact and skipped for legacy UID principals', async () => {
+  const writes = [];
+  const db = { ref: (path) => ({ set: async (value) => writes.push({ path, value }) }) };
+  assert.equal(await requestNotificationReadStateMigration({
+    tourId: 'TOUR_1',
+    userId: 'shared-auth',
+    readStateOwnerId: 'passenger-a',
+    db,
+    auth: null,
+    now: 1234,
+  }), true);
+  assert.deepEqual(writes, [{
+    path: 'notification_read_migration_requests/TOUR_1/shared-auth',
+    value: { version: 1, principalId: 'passenger-a', requestedAtMs: 1234 },
+  }]);
+  assert.equal(await requestNotificationReadStateMigration({
+    tourId: 'TOUR_1',
+    userId: 'shared-auth',
+    readStateOwnerId: 'shared-auth',
+    db,
+    auth: null,
+    now: 1235,
+  }), false);
+  assert.equal(writes.length, 1);
+});
+
+test('cache clearing revokes live listeners before they can recreate passenger data', async () => {
+  const values = new Map();
+  const listeners = new Map();
+  const detached = [];
+  const storage = {
+    getItemAsync: async (key) => values.get(key) || null,
+    setItemAsync: async (key, value) => { values.set(key, value); },
+    multiSetAsync: async (entries) => { entries.forEach(([key, value]) => values.set(key, value)); return true; },
+    multiDeleteAsync: async (keys) => { keys.forEach((key) => values.delete(key)); return true; },
+  };
+  const makeRef = (path) => ({
+    orderByChild: () => makeRef(path),
+    orderByValue: () => makeRef(path),
+    limitToLast: () => makeRef(path),
+    on: (event, handler) => listeners.set(`${path}:${event}`, handler),
+    off: (event, handler) => detached.push({ path, event, handler }),
+  });
+  const updates = [];
+
+  subscribeToNotificationFeed({
+    tourId: 'TOUR_1',
+    userId: 'logout-race-auth',
+    cacheOwnerId: 'passenger-a',
+    readStateOwnerId: 'passenger-a',
+    db: { ref: (path = '') => makeRef(path) },
+    auth: null,
+    cacheStorage: storage,
+    onUpdate: (value) => updates.push(value),
+  });
+  const noticeHandler = listeners.get('tour_notifications/TOUR_1:value');
+  const readHandler = listeners.get('notification_read_state/TOUR_1/passenger-a:value');
+  noticeHandler({ val: () => ({ notice_1: createNotice() }) });
+  readHandler({ val: () => ({}) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(updates.length, 1);
+
+  await clearNotificationFeedCache({ userId: 'logout-race-auth', storage });
+  noticeHandler({ val: () => ({ notice_2: createNotice({ sourceId: 'broadcast_2' }) }) });
+  readHandler({ val: () => ({ notice_2: 2000 }) });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(updates.length, 1);
+  assert.equal(detached.length, 2);
+  assert.equal(values.has(feedCacheKey('TOUR_1', 'logout-race-auth', 'passenger-a')), false);
 });

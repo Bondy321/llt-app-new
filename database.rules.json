@@ -482,14 +482,14 @@
         ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
         ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || (auth.uid === $userId && !newData.exists()))",
         ".validate": "!newData.exists() || ((!newData.child('pushToken').exists() || newData.child('pushToken').val() === null || (newData.child('pushTokenStatus').val() === 'ACTIVE' && newData.child('pushPermissionState').val() === 'granted')) && (!newData.child('stablePassengerId').exists() || ((data.child('stablePassengerId').exists() && newData.child('stablePassengerId').val() === data.child('stablePassengerId').val() && newData.child('stablePassengerKey').val() === data.child('stablePassengerKey').val() && newData.child('privatePhotoOwnerId').val() === data.child('privatePhotoOwnerId').val() && newData.child('privatePhotoOwnerKey').val() === data.child('privatePhotoOwnerKey').val() && newData.child('bookingRef').val() === data.child('bookingRef').val() && newData.child('normalizedPassengerEmail').val() === data.child('normalizedPassengerEmail').val()) || (newData.child('bookingRef').isString() && newData.child('normalizedPassengerEmail').isString() && newData.child('identityVersion').val() === 'pax_v1' && newData.child('stablePassengerId').val() === 'pax_v1:' + newData.child('bookingRef').val() + ':' + newData.child('normalizedPassengerEmail').val() && newData.child('stablePassengerKey').isString() && newData.child('privatePhotoOwnerId').val() === newData.child('stablePassengerId').val() && newData.child('privatePhotoOwnerKey').val() === newData.child('stablePassengerKey').val() && root.child('booking_access_grants/' + newData.child('bookingRef').val() + '/' + $userId + '/expiresAtMs').isNumber() && root.child('booking_access_grants/' + newData.child('bookingRef').val() + '/' + $userId + '/expiresAtMs').val() > now && root.child('booking_access_grants/' + newData.child('bookingRef').val() + '/' + $userId + '/normalizedPassengerEmail').val() === newData.child('normalizedPassengerEmail').val()))) && (!newData.child('driverId').exists() || ((data.child('driverId').exists() && newData.child('driverId').val() === data.child('driverId').val() && newData.child('driverPrincipalId').val() === data.child('driverPrincipalId').val()) || (newData.child('driverPrincipalId').val() === 'driver:' + newData.child('driverId').val() && root.child('drivers/' + newData.child('driverId').val() + '/authUid').val() === $userId))))",
-        "pushToken": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString() || newData.val() === null" },
+        "pushToken": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.val() === null || (newData.isString() && newData.val().length <= 240 && newData.val().matches(/^Expo(nent)?PushToken\\[[A-Za-z0-9_-]{1,200}\\]$/))" },
         "pushTokenStatus": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.val() === 'ACTIVE' || newData.val() === 'INVALID' || newData.val() === 'UNAVAILABLE'" },
-        "pushTokenProvider": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString()" },
-        "pushTokenUpdatedAt": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString()" },
-        "pushTokenInvalidReason": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString() || newData.val() === null" },
+        "pushTokenProvider": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.val() === 'expo'" },
+        "pushTokenUpdatedAt": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 40)" },
+        "pushTokenInvalidReason": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.val() === null || (newData.isString() && newData.val().length <= 80)" },
         "pushPermissionState": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.val() === 'granted' || newData.val() === 'denied' || newData.val() === 'blocked' || newData.val() === 'unavailable'" },
         "pushPermissionCanAskAgain": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isBoolean() || newData.val() === null" },
-        "pushPermissionUpdatedAt": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString()" },
+        "pushPermissionUpdatedAt": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 40)" },
         "privatePhotoOwnerId": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString()" },
         "privatePhotoOwnerKey": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString()" },
         "privatePhotoOwnerType": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.val() === 'stable_passenger'" },
@@ -502,12 +502,18 @@
         "identityVersion": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.val() === 'pax_v1'" },
         "bookingRef": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString()" },
         "normalizedPassengerEmail": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString()" },
+        "notificationReadStateUpgradedTours": {
+          "$tourId": {
+            ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
+            ".validate": "!newData.exists() || newData.val() === true"
+          }
+        },
         "lastUpdated": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)", ".validate": "!newData.exists() || newData.isString() || newData.isNumber()" },
-        "deviceOS": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString()" },
-        "deviceModel": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString()" },
-        "appVersion": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString()" },
-        "appBuild": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString()" },
-        "osVersion": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.isString()" },
+        "deviceOS": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || (newData.isString() && newData.val().length > 0 && newData.val().length <= 20)" },
+        "deviceModel": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || (newData.isString() && newData.val().length > 0 && newData.val().length <= 120)" },
+        "appVersion": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || (newData.isString() && newData.val().length > 0 && newData.val().length <= 40)" },
+        "appBuild": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || (newData.isString() && newData.val().length > 0 && newData.val().length <= 40)" },
+        "osVersion": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || (newData.isString() && newData.val().length > 0 && newData.val().length <= 80)" },
         "preferences": {
           ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
           "ops": {
@@ -750,12 +756,44 @@
       ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$tourId": {
-        "$userId": {
-          ".read": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+        "$principalId": {
+          ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() && (($principalId === root.child('users/' + auth.uid + '/stablePassengerKey').val() && root.child('users/' + auth.uid + '/stablePassengerId').isString()) || ($principalId === auth.uid && !root.child('users/' + auth.uid + '/stablePassengerKey').exists()))) || (root.child('users/' + auth.uid + '/driverId').isString() && $principalId === 'driver:' + root.child('users/' + auth.uid + '/driverId').val() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
+          ".indexOn": [".value"],
           "$noticeId": {
-            ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+            ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (((root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() && (($principalId === root.child('users/' + auth.uid + '/stablePassengerKey').val() && root.child('users/' + auth.uid + '/stablePassengerId').isString()) || ($principalId === auth.uid && !root.child('users/' + auth.uid + '/stablePassengerKey').exists()))) || (root.child('users/' + auth.uid + '/driverId').isString() && $principalId === 'driver:' + root.child('users/' + auth.uid + '/driverId').val() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true)) && (!newData.exists() || root.child('tour_notifications/' + $tourId + '/' + $noticeId).exists())))",
             ".validate": "!newData.exists() || (newData.isNumber() && newData.val() > 0 && newData.val() <= now)"
           }
+        }
+      }
+    },
+
+    "notification_read_cleanup_jobs": {
+      ".read": false,
+      ".write": false,
+      ".indexOn": ["createdAtMs"]
+    },
+
+    "notification_read_legacy_cleanup_state": {
+      ".read": false,
+      ".write": false
+    },
+
+    "notification_read_legacy_cleanup_queue": {
+      ".read": false,
+      ".write": false
+    },
+
+    "notification_read_migration_requests": {
+      ".read": false,
+      ".write": false,
+      "$tourId": {
+        "$authUid": {
+          ".write": "auth != null && auth.uid === $authUid && (!newData.exists() || (!root.child('users/' + auth.uid + '/notificationReadStateUpgradedTours/' + $tourId).exists() && ((root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() && newData.child('principalId').val() === root.child('users/' + auth.uid + '/stablePassengerKey').val() && root.child('users/' + auth.uid + '/stablePassengerId').isString()) || (root.child('users/' + auth.uid + '/driverId').isString() && newData.child('principalId').val() === 'driver:' + root.child('users/' + auth.uid + '/driverId').val() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))))",
+          ".validate": "!newData.exists() || (newData.hasChildren(['version', 'principalId', 'requestedAtMs']) && newData.child('version').val() === 1 && newData.child('principalId').isString() && newData.child('principalId').val().length > 0 && newData.child('principalId').val().length <= 240 && newData.child('requestedAtMs').isNumber() && newData.child('requestedAtMs').val() > 0 && newData.child('requestedAtMs').val() <= now + 60000)",
+          "version": { ".validate": "newData.val() === 1" },
+          "principalId": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 240" },
+          "requestedAtMs": { ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= now + 60000" },
+          "$other": { ".validate": false }
         }
       }
     },

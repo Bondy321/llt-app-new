@@ -39,6 +39,7 @@ import {
 } from './services/notificationService';
 import { COLORS as THEME } from './theme';
 import AppErrorBoundary from './components/AppErrorBoundary';
+const { clearNotificationFeedCache } = require('./services/notificationInboxService');
 
 // Import Screens
 import LoginScreen from './screens/LoginScreen';
@@ -1565,12 +1566,13 @@ function AppContent() {
 
   const handleLogout = async () => {
     const authUid = user?.uid || auth?.currentUser?.uid || null;
-    const [scopeResult, tokenResult, operationalPurgeResult] = await Promise.allSettled([
+    const [scopeResult, tokenResult, operationalPurgeResult, notificationCacheResult] = await Promise.allSettled([
       offlineSyncService.setActiveSessionScope(null),
       authUid ? deactivatePushToken(authUid) : Promise.resolve({ success: true }),
       currentDriverLifecycleScope
         ? driverOperationalLifecycleService.purge(currentDriverLifecycleScope)
         : Promise.resolve({ success: true }),
+      authUid ? clearNotificationFeedCache({ userId: authUid }) : Promise.resolve(0),
     ]);
 
     if (scopeResult.status === 'rejected') {
@@ -1596,6 +1598,11 @@ function AppContent() {
           : operationalPurgeResult.value?.error,
       });
     }
+    if (notificationCacheResult.status === 'rejected') {
+      logger.warn('Auth', 'Saved notification updates could not be cleared during logout', {
+        error: notificationCacheResult.reason?.message || String(notificationCacheResult.reason),
+      });
+    }
 
     previousDriverOperationalScopeRef.current = null;
     driverLifecyclePurgeRef.current = null;
@@ -1613,11 +1620,21 @@ function AppContent() {
       const operationalPurge = currentDriverLifecycleScope
         ? driverOperationalLifecycleService.purge(currentDriverLifecycleScope)
         : offlineSyncService.setActiveSessionScope(null);
-      await operationalPurge.catch((error) => {
+      const deletedAuthUid = summary.deletedAuthUid || null;
+      const [operationalResult, notificationCacheResult] = await Promise.allSettled([
+        operationalPurge,
+        deletedAuthUid ? clearNotificationFeedCache({ userId: deletedAuthUid }) : Promise.resolve(0),
+      ]);
+      if (operationalResult.status === 'rejected') {
         logger.warn('Auth', 'Offline operational data could not be cleared after account deletion', {
-          error: error?.message || String(error),
+          error: operationalResult.reason?.message || String(operationalResult.reason),
         });
-      });
+      }
+      if (notificationCacheResult.status === 'rejected') {
+        logger.warn('Auth', 'Saved notification updates could not be cleared after account deletion', {
+          error: notificationCacheResult.reason?.message || String(notificationCacheResult.reason),
+        });
+      }
       previousDriverOperationalScopeRef.current = null;
       driverLifecyclePurgeRef.current = null;
       setDriverSessionGeneration((value) => value + 1);
@@ -1850,6 +1867,7 @@ case 'Itinerary':
             returnTo={notificationReturnTarget}
             onComplete={handleNotificationOnboardingComplete}
             tourId={tourData?.id}
+            cacheOwnerId={toRealtimeKeySegment(canonicalIdentity?.principalId) || notificationPreferencesUserId}
             initialMarketingCategoryKey={screenParams?.categoryKey || null}
             onNavigate={navigateTo}
           />

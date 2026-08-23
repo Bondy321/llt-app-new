@@ -1162,6 +1162,8 @@ test('tour deletion plan removes all tour-scoped app data and canonical assignme
     'broadcasts/TOUR_1',
     'tour_notifications/TOUR_1',
     'notification_read_state/TOUR_1',
+    'notification_read_migration_requests/TOUR_1',
+    'notification_read_legacy_cleanup_queue/TOUR_1',
     'tour_access_grants/TOUR_1',
     'bookings/BOOK_1',
     'booking_identities/BOOK_1',
@@ -1267,6 +1269,46 @@ test('push navigation payloads preserve durable notice and exact destination con
   );
 });
 
+test('category broadcast fanout builds valid marketing payloads without chat-only variables', () => {
+  const messages = __testables.buildCategoryBroadcastPushMessages({
+    validRecipients: [
+      { userId: 'user-2', userData: { pushToken: 'ExponentPushToken[recipient-device-2]' } },
+      { userId: 'user-1', userData: { pushToken: 'ExponentPushToken[recipient-device-1]' } },
+    ],
+    categoryKey: 'day_trips',
+    categoryLabel: 'Day Trips',
+    broadcastId: 'broadcast-1',
+    message: 'A new day trip is available.',
+    timestamp: 1234,
+  });
+
+  assert.deepEqual(messages.map((payload) => payload.to), [
+    'ExponentPushToken[recipient-device-1]',
+    'ExponentPushToken[recipient-device-2]',
+  ]);
+  assert.deepEqual(messages[0], {
+      to: 'ExponentPushToken[recipient-device-1]',
+      sound: 'default',
+      title: 'New Day Trips tour alert',
+      body: 'A new day trip is available.',
+      data: {
+        screen: 'NotificationPreferences',
+        notificationType: 'category_broadcast',
+        categoryKey: 'day_trips',
+        broadcastId: 'broadcast-1',
+        timestamp: 1234,
+      },
+      priority: 'default',
+      channelId: 'default',
+    });
+  assert.throws(() => __testables.buildCategoryBroadcastPushMessages({
+    validRecipients: [],
+    categoryKey: 'unsupported',
+    broadcastId: 'broadcast-1',
+    message: 'Invalid',
+  }), /Invalid category broadcast/);
+});
+
 test('driver Tour Pack inbox records contain semantic metadata but no operational payload', () => {
   const record = __testables.buildTourNotificationRecord({
     type: 'driver_tour_pack',
@@ -1333,13 +1375,29 @@ test('tour notification persistence is idempotent and retains only the newest 10
       createdAtMs: index + 1,
     },
   ]));
+  const cleanupJobs = {};
+  let cleanupJobTransactions = 0;
   const db = {
-    ref: (path) => ({
-      transaction: async (mutator) => {
-        assert.equal(path, 'tour_notifications/TOUR_1');
-        storedValue = mutator(storedValue);
-      },
-    }),
+    ref: (path = '') => {
+      if (path === 'tour_notifications/TOUR_1') {
+        return {
+          transaction: async (mutator) => {
+            storedValue = mutator(storedValue);
+            return { snapshot: { val: () => storedValue } };
+          },
+        };
+      }
+      if (path.startsWith('notification_read_cleanup_jobs/')) {
+        const jobId = path.split('/').at(-1);
+        return {
+          transaction: async (mutator) => {
+            cleanupJobTransactions += 1;
+            cleanupJobs[jobId] = mutator(cleanupJobs[jobId] || null);
+          },
+        };
+      }
+      return { update: async () => {} };
+    },
   };
   const record = __testables.buildTourNotificationRecord({
     type: 'itinerary',
@@ -1359,6 +1417,307 @@ test('tour notification persistence is idempotent and retains only the newest 10
   assert.equal(storedValue.old_0, undefined);
   assert.deepEqual(storedValue[record.noticeId], record);
   assert.equal(record.messageId, 'message_101');
+  assert.equal(Object.keys(cleanupJobs).length, 1);
+  assert.equal(cleanupJobTransactions, 1);
+  assert.equal(Object.values(cleanupJobs)[0].noticeId, 'old_0');
+});
+
+test('notification read-state cleanup jobs page users and resume from a durable cursor', async () => {
+  const noticeId = 'evicted_notice';
+  const stateByUser = Object.fromEntries(Array.from({ length: 52 }, (_, index) => [
+    `user_${String(index).padStart(3, '0')}`,
+    { [noticeId]: index + 1, retained_notice: index + 2 },
+  ]));
+  const rootUpdates = [];
+  const jobUpdates = [];
+  let removed = false;
+  let startAfter = null;
+  let queryLimit = null;
+  const db = {
+    ref: (path = '') => {
+      if (path === 'notification_read_state/TOUR_1') {
+        const query = {
+          orderByKey: () => query,
+          startAt: (value) => { startAfter = value; return query; },
+          limitToFirst: (value) => { queryLimit = value; return query; },
+          once: async () => {
+            const entries = Object.entries(stateByUser)
+              .filter(([userId]) => !startAfter || userId >= startAfter)
+              .slice(0, queryLimit);
+            return { val: () => Object.fromEntries(entries) };
+          },
+        };
+        return query;
+      }
+      if (path === 'notification_read_cleanup_jobs/job_1') {
+        return {
+          update: async (value) => jobUpdates.push(value),
+          remove: async () => { removed = true; },
+        };
+      }
+      return { update: async (value) => rootUpdates.push(value) };
+    },
+  };
+  const job = {
+    version: 1,
+    jobId: 'job_1',
+    tourId: 'TOUR_1',
+    noticeId,
+    processedUserCount: 0,
+  };
+
+  const firstPage = await __testables.processNotificationReadCleanupJob({
+    db, jobId: 'job_1', job, now: 1000,
+  });
+  assert.equal(firstPage.completed, false);
+  assert.equal(firstPage.processedUserCount, 50);
+  assert.equal(Object.keys(rootUpdates[0]).length, 50);
+  assert.equal(jobUpdates[0].afterUserId, 'user_049');
+  assert.equal(removed, false);
+
+  startAfter = null;
+  const secondPage = await __testables.processNotificationReadCleanupJob({
+    db,
+    jobId: 'job_1',
+    job: { ...job, ...jobUpdates[0] },
+    now: 2000,
+  });
+  assert.equal(secondPage.completed, true);
+  assert.equal(secondPage.processedUserCount, 2);
+  assert.equal(Object.keys(rootUpdates[1]).length, 2);
+  assert.equal(removed, true);
+});
+
+test('notification read-state upgrade deletes ambiguous legacy UID markers without copying them', async () => {
+  const rootUpdates = [];
+  const db = {
+    ref: (path = '') => {
+      if (path === 'users/shared-auth') {
+        return { once: async () => ({ val: () => ({
+          stablePassengerId: 'pax_v1:BOOKING1:passenger@example.com',
+          stablePassengerKey: 'pax_v1:BOOKING1:passenger_40_example_2E_com',
+        }) }) };
+      }
+      if (path === '') return { update: async (updates) => rootUpdates.push(updates) };
+      return { remove: async () => {} };
+    },
+  };
+
+  const result = await __testables.processNotificationReadMigrationRequest({
+    db,
+    tourId: 'TOUR_1',
+    authUid: 'shared-auth',
+    request: {
+      version: 1,
+      principalId: 'pax_v1:BOOKING1:passenger_40_example_2E_com',
+      requestedAtMs: 1000,
+    },
+    now: 2000,
+  });
+
+  assert.equal(result.legacyRemoved, true);
+  assert.deepEqual(rootUpdates, [{
+    'notification_read_state/TOUR_1/shared-auth': null,
+    'notification_read_migration_requests/TOUR_1/shared-auth': null,
+    'users/shared-auth/notificationReadStateUpgradedTours/TOUR_1': true,
+  }]);
+});
+
+test('legacy notification cleanup seeds a durable tour queue once', async () => {
+  const queueUpdates = [];
+  const stateWrites = [];
+  const db = {
+    ref: (path = '') => {
+      if (path === 'notification_read_legacy_cleanup_state/v1') {
+        return {
+          once: async () => ({ val: () => null }),
+          set: async (value) => stateWrites.push(value),
+        };
+      }
+      if (path === 'notification_read_legacy_cleanup_queue') {
+        return { update: async (updates) => queueUpdates.push(updates) };
+      }
+      throw new Error(`Unexpected path ${path}`);
+    },
+  };
+
+  const result = await __testables.processLegacyNotificationReadStateCleanup({
+    db,
+    listTourIds: async () => ['TOUR_2', 'TOUR_1'],
+    now: 2000,
+  });
+
+  assert.equal(result.seeded, true);
+  assert.equal(result.discoveredTourCount, 2);
+  assert.deepEqual(queueUpdates, [{
+    TOUR_2: { version: 1, afterPrincipalId: null },
+    TOUR_1: { version: 1, afterPrincipalId: null },
+  }]);
+  assert.deepEqual(stateWrites, [{
+    version: 1, seeded: true, completed: false, updatedAtMs: 2000,
+  }]);
+});
+
+test('legacy notification cleanup seeds large tour sets in bounded durable writes', async () => {
+  const batchSizes = [];
+  let stateWrite = null;
+  const db = {
+    ref: (path = '') => {
+      if (path === 'notification_read_legacy_cleanup_state/v1') {
+        return {
+          once: async () => ({ val: () => null }),
+          set: async (value) => { stateWrite = value; },
+        };
+      }
+      if (path === 'notification_read_legacy_cleanup_queue') {
+        return { update: async (updates) => batchSizes.push(Object.keys(updates).length) };
+      }
+      throw new Error(`Unexpected path ${path}`);
+    },
+  };
+
+  await __testables.processLegacyNotificationReadStateCleanup({
+    db,
+    listTourIds: async () => Array.from({ length: 451 }, (_, index) => `TOUR_${String(index).padStart(3, '0')}`),
+    now: 2500,
+  });
+
+  assert.deepEqual(batchSizes, [200, 200, 51]);
+  assert.equal(stateWrite.seeded, true);
+  assert.equal(stateWrite.completed, false);
+});
+
+test('legacy notification cleanup shallow discovery authenticates and returns deterministic keys', async () => {
+  let request = null;
+  const db = {
+    app: {
+      options: {
+        databaseURL: 'https://example-default-rtdb.europe-west1.firebasedatabase.app/',
+        credential: { getAccessToken: async () => ({ access_token: 'access-token' }) },
+      },
+    },
+  };
+
+  const keys = await __testables.fetchRealtimeDatabaseShallowKeys({
+    db,
+    path: 'notification_read_state',
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ TOUR_2: true, 'invalid.key': true, TOUR_1: true }),
+      };
+    },
+  });
+
+  assert.deepEqual(keys, ['TOUR_1', 'TOUR_2']);
+  assert.equal(request.url, 'https://example-default-rtdb.europe-west1.firebasedatabase.app/notification_read_state.json?shallow=true');
+  assert.deepEqual(request.options, { headers: { Authorization: 'Bearer access-token' } });
+});
+
+test('legacy notification cleanup deletes only obsolete and deleted-auth UID branches', async () => {
+  const rootUpdates = [];
+  const profileReads = [];
+  const profiles = {
+    'legacy-bound': { stablePassengerId: 'pax_v1:B1:a@example.com', stablePassengerKey: 'pax_v1:B1:a_40_example_2E_com' },
+    'legacy-current': { preferences: { ops: {} } },
+    'orphan-active': null,
+    'orphan-deleted': null,
+  };
+  const query = (value) => ({
+    orderByKey() { return this; },
+    startAt() { return this; },
+    limitToFirst() { return this; },
+    once: async () => ({ val: () => value }),
+  });
+  const db = {
+    ref: (path = '') => {
+      if (path === 'notification_read_legacy_cleanup_state/v1') {
+        return { once: async () => ({ val: () => ({ seeded: true }) }), set: async () => {} };
+      }
+      if (path === 'notification_read_legacy_cleanup_queue') {
+        return query({ TOUR_1: { version: 1, afterPrincipalId: null } });
+      }
+      if (path === 'notification_read_state/TOUR_1') {
+        return query({
+          'driver:D-1': { notice: 1 },
+          'legacy-bound': { notice: 1 },
+          'legacy-current': { notice: 1 },
+          'orphan-active': { notice: 1 },
+          'orphan-deleted': { notice: 1 },
+          'pax_v1:B1:a_40_example_2E_com': { notice: 1 },
+        });
+      }
+      if (path.startsWith('users/')) {
+        const userId = path.split('/').at(-1);
+        return { once: async () => {
+          profileReads.push(userId);
+          return { val: () => profiles[userId] ?? null };
+        } };
+      }
+      if (path === '') return { update: async (updates) => rootUpdates.push(updates) };
+      throw new Error(`Unexpected path ${path}`);
+    },
+  };
+
+  const result = await __testables.processLegacyNotificationReadStateCleanup({
+    db,
+    resolveExistingAuthUids: async () => new Set(['orphan-active']),
+    now: 3000,
+  });
+
+  assert.equal(result.completed, true);
+  assert.equal(result.processedCount, 6);
+  assert.equal(result.deletedCount, 2);
+  assert.deepEqual(profileReads.sort(), [
+    'legacy-bound', 'legacy-current', 'orphan-active', 'orphan-deleted',
+  ]);
+  assert.equal(rootUpdates[0]['notification_read_state/TOUR_1/legacy-bound'], null);
+  assert.equal(rootUpdates[0]['notification_read_state/TOUR_1/orphan-deleted'], null);
+  assert.equal(rootUpdates[0]['notification_read_state/TOUR_1/orphan-active'], undefined);
+  assert.equal(rootUpdates[0]['notification_read_state/TOUR_1/legacy-current'], undefined);
+  assert.equal(rootUpdates[0]['notification_read_state/TOUR_1/driver:D-1'], undefined);
+  assert.equal(rootUpdates[0]['notification_read_legacy_cleanup_queue/TOUR_1'], null);
+  assert.equal(rootUpdates[0]['notification_read_legacy_cleanup_state/v1'].completed, true);
+});
+
+test('legacy notification cleanup resumes with the next queued tour after a tour is deleted', async () => {
+  const rootUpdates = [];
+  let principalLimit = null;
+  const db = {
+    ref: (path = '') => {
+      if (path === 'notification_read_legacy_cleanup_state/v1') {
+        return { once: async () => ({ val: () => ({ seeded: true }) }) };
+      }
+      if (path === 'notification_read_legacy_cleanup_queue') {
+        return {
+          orderByKey() { return this; },
+          limitToFirst: () => ({ once: async () => ({ val: () => ({ TOUR_2: { version: 1 } }) }) }),
+        };
+      }
+      if (path === 'notification_read_state/TOUR_2') {
+        return {
+          orderByKey() { return this; },
+          limitToFirst(limit) {
+            principalLimit = limit;
+            return { once: async () => ({ val: () => ({}) }) };
+          },
+        };
+      }
+      if (path === '') return { update: async (updates) => rootUpdates.push(updates) };
+      throw new Error(`Unexpected path ${path}`);
+    },
+  };
+
+  const result = await __testables.processLegacyNotificationReadStateCleanup({
+    db, resolveExistingAuthUids: async () => new Set(), now: 4000,
+  });
+
+  assert.equal(result.tourId, 'TOUR_2');
+  assert.equal(result.completed, true);
+  assert.equal(principalLimit, 51);
+  assert.equal(rootUpdates[0]['notification_read_legacy_cleanup_queue/TOUR_2'], null);
 });
 
 test('reported photo cleanup resolves source and generated variant storage objects', () => {

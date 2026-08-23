@@ -160,6 +160,7 @@ const ToggleRow = ({
 export default function NotificationPreferencesScreen({
   onBack,
   userId,
+  cacheOwnerId = userId,
   isOnboarding = false,
   audience = 'passenger',
   onComplete,
@@ -245,6 +246,8 @@ export default function NotificationPreferencesScreen({
   const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
   const [notificationFeedLoading, setNotificationFeedLoading] = useState(false);
   const [notificationFeedError, setNotificationFeedError] = useState('');
+  const [notificationFeedStale, setNotificationFeedStale] = useState(false);
+  const [notificationFeedRetryKey, setNotificationFeedRetryKey] = useState(0);
   const [notificationFeedBusy, setNotificationFeedBusy] = useState(false);
 
   // 1. Operational Alerts (During the tour)
@@ -303,6 +306,7 @@ export default function NotificationPreferencesScreen({
       setNotificationUnreadCount(0);
       setNotificationFeedLoading(false);
       setNotificationFeedError('');
+      setNotificationFeedStale(false);
       return undefined;
     }
 
@@ -312,20 +316,28 @@ export default function NotificationPreferencesScreen({
       return subscribeToNotificationFeed({
         tourId,
         userId,
-        onUpdate: ({ items, unreadCount }) => {
+        cacheOwnerId,
+        readStateOwnerId: cacheOwnerId,
+        onUpdate: ({ items, unreadCount, stale = false }) => {
           if (!mountedRef.current) return;
           setNotificationFeed(items);
           setNotificationUnreadCount(unreadCount);
           setNotificationFeedLoading(false);
           setNotificationFeedError('');
+          setNotificationFeedStale(stale);
         },
-        onError: (error) => {
+        onError: (error, recovery = {}) => {
           if (!mountedRef.current) return;
           logger.warn('NotificationPreferences', 'Tour update feed failed', {
             error: error?.message || String(error),
           });
           setNotificationFeedLoading(false);
-          setNotificationFeedError('Tour updates could not be refreshed. Your alert preferences are still available below.');
+          setNotificationFeedStale(recovery.stale === true && recovery.hasItems === true);
+          setNotificationFeedError(recovery.hasPersistedCache
+            ? 'Live updates could not be refreshed. Saved updates are still shown below.'
+            : recovery.hasItems
+              ? 'Live updates could not be refreshed. Your current updates remain shown below.'
+            : 'Tour updates could not be refreshed. Your alert preferences are still available below.');
         },
       });
     } catch (error) {
@@ -336,13 +348,43 @@ export default function NotificationPreferencesScreen({
       setNotificationFeedError('Tour updates are temporarily unavailable.');
       return undefined;
     }
-  }, [isOnboarding, tourId, userId]);
+  }, [cacheOwnerId, isOnboarding, notificationFeedRetryKey, tourId, userId]);
+
+  const handleRetryNotificationFeed = () => {
+    setNotificationFeedLoading(true);
+    setNotificationFeedError('');
+    setNotificationFeedRetryKey((value) => value + 1);
+  };
 
   const handleOpenNotification = async (item) => {
     if (!item) return;
     if (!item.isRead) {
+      setNotificationFeed((current) => current.map((notice) => (
+        notice.noticeId === item.noticeId
+          ? { ...notice, isRead: true, readAtMs: Date.now() }
+          : notice
+      )));
+      setNotificationUnreadCount((current) => Math.max(0, current - 1));
+    }
+    onNavigate?.(item.screen, {
+      tourId: item.tourId,
+      noticeId: item.noticeId,
+      messageId: item.messageId,
+      departureKey: item.departureKey,
+      revision: item.revision,
+      changedSections: item.changedSections,
+      critical: item.critical === true,
+      requiresAcknowledgement: item.requiresAcknowledgement === true,
+      fromNotification: true,
+    });
+    if (!item.isRead) {
       try {
-        await markNotificationRead({ tourId, userId, noticeId: item.noticeId });
+        await markNotificationRead({
+          tourId,
+          userId,
+          readStateOwnerId: cacheOwnerId,
+          noticeId: item.noticeId,
+        });
       } catch (error) {
         logger.warn('NotificationPreferences', 'Tour update read state could not be saved', {
           noticeType: item.type,
@@ -350,12 +392,6 @@ export default function NotificationPreferencesScreen({
         });
       }
     }
-    onNavigate?.(item.screen, {
-      tourId: item.tourId,
-      noticeId: item.noticeId,
-      messageId: item.messageId,
-      fromNotification: true,
-    });
   };
 
   const handleMarkAllNotificationsRead = async () => {
@@ -365,6 +401,7 @@ export default function NotificationPreferencesScreen({
       await markAllNotificationsRead({
         tourId,
         userId,
+        readStateOwnerId: cacheOwnerId,
         noticeIds: notificationFeed.filter((item) => !item.isRead).map((item) => item.noticeId),
       });
     } catch (error) {
@@ -418,10 +455,14 @@ export default function NotificationPreferencesScreen({
     }
 
     try {
-      const permissionProbe = await primeNotificationPermissions({
-        userId,
-        requestIfNeeded: false,
-      });
+      const [permissionProbe, saved] = await Promise.all([
+        primeNotificationPermissions({
+          userId,
+          requestIfNeeded: false,
+          persistState: false,
+        }),
+        getUserPreferences(userId, { throwOnError: true }),
+      ]);
       if (!canApplyRequest()) return;
       if (permissionProbe?.success) {
         setPermissionStatus(permissionProbe.data);
@@ -438,8 +479,6 @@ export default function NotificationPreferencesScreen({
         });
       }
 
-      const saved = await getUserPreferences(userId, { throwOnError: true });
-      if (!canApplyRequest()) return;
       const nextOpsPrefs = saved?.ops
         ? { ...defaultOpsPrefs, ...saved.ops }
         : { ...defaultOpsPrefs };
@@ -571,6 +610,7 @@ export default function NotificationPreferencesScreen({
     const permissionProbe = await primeNotificationPermissions({
       userId,
       requestIfNeeded: true,
+      persistState: false,
     });
     if (!mountedRef.current) return;
 
@@ -599,7 +639,9 @@ export default function NotificationPreferencesScreen({
       updatedAt: new Date().toISOString(),
     };
 
-    const saveResult = await saveUserPreferences(userId, fullPreferences);
+    const saveResult = await saveUserPreferences(userId, fullPreferences, {
+      permissionState: permissionProbe.data,
+    });
     if (!mountedRef.current) return;
 
     if (!saveResult.success) {
@@ -921,9 +963,11 @@ export default function NotificationPreferencesScreen({
             unreadCount={notificationUnreadCount}
             loading={notificationFeedLoading}
             error={notificationFeedError}
+            stale={notificationFeedStale}
             busy={notificationFeedBusy}
             onOpen={handleOpenNotification}
             onMarkAll={handleMarkAllNotificationsRead}
+            onRetry={handleRetryNotificationFeed}
           />
         ) : null}
 

@@ -311,13 +311,21 @@ const buildAccountRecordUpdates = ({ authUid, identities, identityBinding, tourI
   const updates = {};
   updates[`users/${authUid}`] = null;
   updates[`logs/${authUid}`] = null;
-  if (tourId) updates[`tours/${tourId}/liveTracking/${authUid}`] = null;
+  if (tourId) {
+    updates[`tours/${tourId}/liveTracking/${authUid}`] = null;
+    updates[`notification_read_state/${tourId}/${authUid}`] = null;
+    updates[`notification_read_migration_requests/${tourId}/${authUid}`] = null;
+  }
 
   const stableKeys = new Set();
   addIdentity(stableKeys, identityBinding?.stablePassengerKey);
   addIdentity(stableKeys, identityBinding?.stablePassengerId);
   identities.forEach((identity) => {
     if (!identity.startsWith('driver:') && identity !== authUid) addIdentity(stableKeys, identity);
+    if (tourId) {
+      const principalKey = toRealtimeKeySegment(identity);
+      if (principalKey) updates[`notification_read_state/${tourId}/${principalKey}`] = null;
+    }
   });
 
   stableKeys.forEach((stableKey) => {
