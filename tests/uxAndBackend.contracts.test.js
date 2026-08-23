@@ -871,6 +871,19 @@ test('Static contract: preference and manifest screens guard stale async state',
   assert.match(imageViewerSource, /if \(!visibleRef\.current\) return/);
 });
 
+test('Static contract: boarding phone actions use the active scoped Tour Pack contact', () => {
+  const appSource = readText('App.js');
+  const manifestSource = readText('screens/PassengerManifestScreen.js');
+  const phoneSource = readText('utils/bookingLeadPhone.js');
+
+  assert.match(appSource, /driverTourPack=\{driverTourPackState\?\.pack \|\| null\}/);
+  assert.match(manifestSource, /buildBookingLeadPhoneIndex\(driverTourPack, tourId\)/);
+  assert.match(manifestSource, /Phone booking/);
+  assert.match(manifestSource, /Linking\.openURL\(telephoneUrl\)/);
+  assert.match(phoneSource, /packTourId !== requestedTourId/);
+  assert.doesNotMatch(manifestSource, /logger\.(?:info|warn)[^;]*selectedBookingPhone/s);
+});
+
 test('Static contract: safety support cleans up emergency timers and validates phone handoffs', () => {
   const source = readText('screens/SafetySupportScreen.js');
 

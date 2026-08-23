@@ -1682,6 +1682,7 @@ function AppContent() {
       case 'PassengerManifest':
         return (
           <PassengerManifestScreen
+            driverTourPack={driverTourPackState?.pack || null}
             // 1. Pass the global 'screenParams' as 'route.params' so the screen can read 'tourId'
             route={{
               params: {

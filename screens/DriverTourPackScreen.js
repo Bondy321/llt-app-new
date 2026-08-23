@@ -16,6 +16,7 @@ import driverManifestCacheService from '../services/driverManifestCacheService';
 import { getTourManifest } from '../services/bookingServiceRealtime';
 import { normalizeTourId, resolveTourId } from '../services/tourIdentityService';
 const { commandCentreModel } = require('../services/driverTourPackCommandCentre');
+const { toTelephoneUrl } = require('../utils/bookingLeadPhone');
 
 const TABS = Object.freeze(['Overview', 'Run', 'People', 'Tour']);
 const ISSUE_CATEGORIES = Object.freeze([
@@ -226,8 +227,8 @@ export default function DriverTourPackScreen({ packState, actionState, isConnect
   });
 
   const call = (phone) => {
-    const safePhone = String(phone || '').trim().replace(/[^0-9+*#,;]/g, '');
-    if (safePhone) Linking.openURL(`tel:${safePhone}`).catch(() => undefined);
+    const telephoneUrl = toTelephoneUrl(phone);
+    if (telephoneUrl) Linking.openURL(telephoneUrl).catch(() => undefined);
   };
   const directions = (address) => {
     const query = String(address || '').trim();

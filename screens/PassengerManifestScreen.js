@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet, Text, View, SectionList, FlatList, TextInput,
-  TouchableOpacity, ActivityIndicator, Modal, Alert
+  TouchableOpacity, ActivityIndicator, Modal, Alert, Linking
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
@@ -17,6 +17,11 @@ import logger, { maskIdentifier } from '../services/loggerService';
 const { getBookingSyncState, normalizeSyncState } = require('../utils/manifestSyncState');
 const { pickupTimeToMinutes } = require('../services/pickupTimeParser');
 const { normalizeTourId } = require('../services/tourIdentityService');
+const {
+  buildBookingLeadPhoneIndex,
+  normalizeBookingReference,
+  toTelephoneUrl,
+} = require('../utils/bookingLeadPhone');
 
 const COLORS = {
   primary: THEME.primary,
@@ -56,7 +61,7 @@ const HEADER_WIDGETS_VISIBLE = {
   nextPassenger: true,
 };
 
-export default function PassengerManifestScreen({ route, navigation }) {
+export default function PassengerManifestScreen({ route, navigation, driverTourPack = null }) {
   const { tourId, actorPrincipalId, authUid, offlineCacheOwnerId, sessionGeneration = 0 } = route.params;
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -326,6 +331,13 @@ export default function PassengerManifestScreen({ route, navigation }) {
     () => sortedFilteredBookings.find((booking) => priorityRank(booking.status) === 0) || null,
     [sortedFilteredBookings]
   );
+  const bookingLeadPhones = useMemo(
+    () => buildBookingLeadPhoneIndex(driverTourPack, tourId),
+    [driverTourPack, tourId]
+  );
+  const selectedBookingPhone = selectedBooking
+    ? bookingLeadPhones.get(normalizeBookingReference(selectedBooking.id))
+    : null;
 
   const sectionListData = sectionedPriorityBookings;
   const resultsDescriptor = `${sortedFilteredBookings.length} of ${manifestData.bookings.length} bookings`;
@@ -356,6 +368,24 @@ export default function PassengerManifestScreen({ route, navigation }) {
     setPartialStatuses(normalized);
     setPartialMode(false);
     setModalVisible(true);
+  };
+
+  const handlePhoneBooking = () => {
+    const telephoneUrl = toTelephoneUrl(selectedBookingPhone);
+    if (!telephoneUrl || !selectedBooking) return;
+
+    logger.info('PassengerManifest', 'Booking lead phone handoff started', {
+      tourId,
+      bookingRef: maskIdentifier(selectedBooking.id),
+    });
+    Linking.openURL(telephoneUrl).catch((error) => {
+      logger.warn('PassengerManifest', 'Booking lead phone handoff failed', {
+        tourId,
+        bookingRef: maskIdentifier(selectedBooking.id),
+        error: error?.message || String(error),
+      });
+      Alert.alert('Phone unavailable', 'The phone app could not be opened. Please try again.');
+    });
   };
 
   const submitUpdate = async (passengerStatuses) => {
@@ -877,8 +907,25 @@ export default function PassengerManifestScreen({ route, navigation }) {
             {selectedBooking && (
               <>
                 <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>{selectedBooking.passengerNames[0]}</Text>
-                  <Text style={styles.modalSubtitle}>Ref: {selectedBooking.id} - {selectedBooking.passengerNames.length} Pax</Text>
+                  <View style={styles.modalHeaderRow}>
+                    <View style={styles.modalHeaderText}>
+                      <Text style={styles.modalTitle}>{selectedBooking.passengerNames[0]}</Text>
+                      <Text style={styles.modalSubtitle}>Ref: {selectedBooking.id} - {selectedBooking.passengerNames.length} Pax</Text>
+                    </View>
+                    {selectedBookingPhone ? (
+                      <TouchableOpacity
+                        accessibilityRole="button"
+                        accessibilityLabel={`Phone booking ${selectedBooking.id}`}
+                        accessibilityHint="Opens the phone app with the booking lead number ready to call."
+                        activeOpacity={0.8}
+                        onPress={handlePhoneBooking}
+                        style={styles.phoneBookingBtn}
+                      >
+                        <MaterialCommunityIcons name="phone-outline" size={20} color={COLORS.textLight} />
+                        <Text style={styles.phoneBookingBtnText}>Phone booking</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
                 </View>
 
                 {partialMode ? (
@@ -1388,8 +1435,26 @@ const styles = StyleSheet.create({
     minHeight: 350,
   },
   modalHeader: { marginBottom: 20, borderBottomWidth: 1, borderBottomColor: '#eee', paddingBottom: 15 },
+  modalHeaderRow: { alignItems: 'center', flexDirection: 'row', gap: SPACING.md },
+  modalHeaderText: { flex: 1 },
   modalTitle: { fontSize: 22, fontWeight: 'bold', color: COLORS.primary },
   modalSubtitle: { fontSize: 16, color: COLORS.muted, marginTop: 5 },
+  phoneBookingBtn: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: COLORS.primary,
+    borderRadius: RADIUS.md,
+    flexDirection: 'row',
+    gap: SPACING.xs,
+    minHeight: 44,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+  },
+  phoneBookingBtnText: {
+    color: COLORS.textLight,
+    fontSize: 15,
+    fontWeight: FONT_WEIGHT.bold,
+  },
   
   modalSectionLabel: { fontSize: 14, fontWeight: 'bold', color: COLORS.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.4 },
   actionRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 15, marginBottom: 15 },

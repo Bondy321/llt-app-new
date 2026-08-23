@@ -57,6 +57,7 @@ let getTourManifestCalls = 0;
 let manifestLoader = async () => mockManifest;
 let cachedManifest = null;
 let cachedReplacements = [];
+let openedUrls = [];
 
 const originalLoad = Module._load;
 Module._load = function mockLoader(request, parent, isMain) {
@@ -96,6 +97,7 @@ Module._load = function mockLoader(request, parent, isMain) {
       ActivityIndicator: createHost('ActivityIndicator'),
       Modal: createHost('Modal'),
       Alert: { alert: () => {} },
+      Linking: { openURL: async (url) => { openedUrls.push(url); return true; } },
     };
   }
 
@@ -244,4 +246,48 @@ test('PassengerManifestScreen renders an identity-scoped cached manifest before 
   await waitForEffects();
   assert.equal(cachedReplacements.length, 1);
   assert.equal(cachedReplacements[0].driverId, 'D-CACHE');
+});
+
+test('PassengerManifestScreen offers the active Tour Pack booking phone in boarding controls', async () => {
+  getTourManifestCalls = 0;
+  cachedManifest = null;
+  cachedReplacements = [];
+  openedUrls = [];
+  manifestLoader = async () => mockManifest;
+  const PassengerManifestScreen = require('../screens/PassengerManifestScreen').default;
+  const driverTourPack = {
+    tourId: 'TOUR-1',
+    contacts: {
+      bookingLeads: {
+        lead_queued: {
+          contactId: 'lead_queued',
+          bookingRef: bookingRefs.queued,
+          phone: '+44 (0) 7700 900-123',
+        },
+      },
+    },
+  };
+
+  let renderer;
+  await act(async () => {
+    renderer = TestRenderer.create(React.createElement(PassengerManifestScreen, {
+      route: { params: { tourId: 'TOUR-1' } },
+      navigation: { goBack: () => {} },
+      driverTourPack,
+    }));
+  });
+  await waitForEffects();
+
+  const bookingCard = renderer.root.findByProps({
+    accessibilityLabel: `Booking ${bookingRefs.queued}. PENDING. 1 passengers.`,
+  });
+  await act(async () => bookingCard.props.onPress());
+
+  const phoneButton = renderer.root.findByProps({
+    accessibilityLabel: `Phone booking ${bookingRefs.queued}`,
+  });
+  await act(async () => phoneButton.props.onPress());
+
+  assert.deepEqual(openedUrls, ['tel:+4407700900123']);
+  await act(async () => renderer.unmount());
 });
