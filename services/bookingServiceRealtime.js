@@ -400,7 +400,7 @@ const fetchTourManifestFromFunction = async (tourCodeOriginal) => {
     logBookingEvent('warn', 'Tour manifest function unavailable: no endpoint candidates', {
       tourCode: maskIdentifier(tourCodeOriginal),
     });
-    return null;
+    throw new Error('Manifest service is not configured in this app version. Please update the app and try again.');
   }
 
   const firebaseAuthResult = await getFirebaseAuthHeaderValue();
@@ -1043,10 +1043,11 @@ const ensureBookingSchemaConsistency = async (bookingRef, bookingData) => {
       passengers: passengerNames,
       ...(Array.isArray(bookingData.passengerDetails) ? { passengerDetails } : {}),
       seatNumbers,
-      ...(Array.isArray(bookingData.seatLabels) ? { seatLabels } : {}),
+      seatLabels,
       pickupPoints,
-      pickupTime: firstPickup.time || 'TBA',
-      pickupLocation: firstPickup.location || 'To be confirmed',
+      pickupDate: firstPickup.date || bookingData.pickupDate || 'TBA',
+      pickupTime: firstPickup.time || bookingData.pickupTime || 'TBA',
+      pickupLocation: firstPickup.location || bookingData.pickupLocation || bookingData.pickupAddress || 'To be confirmed',
     },
     passengerSourceIndexes: rows.map((row) => row.sourceIndexes),
     duplicatePassengerCount: duplicateCount,
@@ -1064,109 +1065,12 @@ const getTourManifest = async (tourCodeOriginal) => {
     });
 
     const functionManifest = await fetchTourManifestFromFunction(validatedTourCode);
-    if (functionManifest) {
-      logBookingEvent('info', 'Manifest fetch completed via function', {
-        tourId: functionManifest.tourId,
-        bookingCount: functionManifest.bookings.length,
-        totalPax: functionManifest.stats?.totalPax || 0,
-      });
-      return functionManifest;
-    }
-
-    if (!realtimeDb) {
-      throw new Error('Realtime database not initialized');
-    }
-
-    const tourId = sanitizeTourId(validatedTourCode);
-
-    const bookingsQuery = realtimeDb.ref('bookings')
-      .orderByChild('tourId')
-      .equalTo(tourId);
-
-    const manifestRef = realtimeDb.ref(`tour_manifests/${tourId}`);
-
-    const [bookingsSnapshot, manifestSnapshot] = await Promise.all([
-      bookingsQuery.once('value'),
-      manifestRef.once('value')
-    ]);
-    logBookingEvent('info', 'Manifest snapshots loaded', {
-      tourId,
-      bookingsSnapshotExists: bookingsSnapshot.exists(),
-      manifestSnapshotExists: manifestSnapshot.exists(),
+    logBookingEvent('info', 'Manifest fetch completed via function', {
+      tourId: functionManifest.tourId,
+      bookingCount: functionManifest.bookings.length,
+      totalPax: functionManifest.stats?.totalPax || 0,
     });
-
-    const bookings = [];
-    const manifestData = manifestSnapshot.val() || {};
-    const bookingStatuses = manifestData.bookings || {};
-
-    if (bookingsSnapshot.exists()) {
-      const rawBookings = bookingsSnapshot.val();
-
-      for (const [bookingRef, data] of Object.entries(rawBookings)) {
-        const { normalizedBooking, passengerSourceIndexes } = await ensureBookingSchemaConsistency(bookingRef, data);
-        const liveStatus = bookingStatuses[bookingRef] || {};
-        const totalPax = normalizedBooking.passengerNames.length;
-        const hasPassengerStatuses = Array.isArray(liveStatus.passengerStatus);
-        const passengerStatus = normalizePassengerStatuses(
-          hasPassengerStatuses
-            ? passengerSourceIndexes.map((indexes) => {
-              const statuses = indexes
-                .map((index) => liveStatus.passengerStatus[index])
-                .filter((status) => Object.values(MANIFEST_STATUS).includes(status));
-              return statuses.find((status) => status !== MANIFEST_STATUS.PENDING)
-                || statuses[0]
-                || MANIFEST_STATUS.PENDING;
-            })
-            : liveStatus.passengerStatus,
-          totalPax
-        );
-        const derivedStatus = hasPassengerStatuses ? deriveParentStatusFromPassengers(passengerStatus) : null;
-        const currentStatus = derivedStatus || liveStatus.status || MANIFEST_STATUS.PENDING;
-
-        bookings.push({
-          ...normalizedBooking,
-          status: currentStatus,
-          hasPassengerStatuses,
-          passengerStatus,
-          notes: liveStatus.notes || ''
-        });
-      }
-    }
-
-    const stats = bookings.reduce((acc, b) => {
-      const paxCount = b.passengerNames.length;
-      acc.totalPax += paxCount;
-
-      if (b.hasPassengerStatuses && Array.isArray(b.passengerStatus) && b.passengerStatus.length > 0) {
-        b.passengerStatus.forEach((status) => {
-          if (status === MANIFEST_STATUS.BOARDED) acc.checkedIn += 1;
-          if (status === MANIFEST_STATUS.NO_SHOW) acc.noShows += 1;
-        });
-      } else {
-        if (b.status === MANIFEST_STATUS.BOARDED) {
-          acc.checkedIn += paxCount;
-        } else if (b.status === MANIFEST_STATUS.NO_SHOW) {
-          acc.noShows += paxCount;
-        }
-      }
-      return acc;
-    }, { totalBookings: bookings.length, totalPax: 0, checkedIn: 0, noShows: 0 });
-
-    logBookingEvent('info', 'Manifest fetch completed', {
-      tourId,
-      bookingCount: bookings.length,
-      totalPax: stats.totalPax,
-      checkedIn: stats.checkedIn,
-      noShows: stats.noShows,
-    });
-
-    return {
-      schemaVersion: 1,
-      complete: true,
-      tourId,
-      bookings,
-      stats
-    };
+    return functionManifest;
 
   } catch (error) {
     logger?.error?.('Manifest', 'Error fetching tour manifest', { tourCode: maskIdentifier(tourCodeOriginal), error: error?.message || String(error) });
@@ -1209,73 +1113,11 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
 
     const tourId = sanitizeTourId(validatedTourCode);
     const currentAuthUid = auth?.currentUser?.uid || null;
-    if (currentAuthUid) {
-      try {
-        const [userProfileSnapshot, participantSnapshot] = await Promise.all([
-          db.ref(`users/${currentAuthUid}`).once('value'),
-          db.ref(`tours/${tourId}/participants/${currentAuthUid}`).once('value'),
-        ]);
-        const userProfile = userProfileSnapshot.exists() ? (userProfileSnapshot.val() || {}) : {};
-        const driverId = typeof userProfile.driverId === 'string' ? userProfile.driverId.trim() : '';
-        const [driverSnapshot, assignedDriverSnapshot, bookingSnapshot] = driverId
-          ? await Promise.all([
-              db.ref(`drivers/${driverId}`).once('value'),
-              db.ref(`tour_manifests/${tourId}/assigned_drivers/${driverId}`).once('value'),
-              db.ref(`bookings/${validatedBookingRef}`).once('value'),
-            ])
-          : [null, null, null];
-        const driverProfile = driverSnapshot?.exists?.() ? (driverSnapshot.val() || {}) : {};
-        const bookingRecord = bookingSnapshot?.exists?.() ? (bookingSnapshot.val() || {}) : {};
-        const bookingTourId = bookingRecord?.tourId || null;
-        const passengerOwnsBooking = !driverId
-          && participantSnapshot.exists()
-          && userProfile.bookingRef === validatedBookingRef;
-        const bookingTourMatches = driverId ? bookingTourId === tourId : passengerOwnsBooking;
-
-        logBookingEvent('info', 'Manifest write authorization context', {
-          tourId,
-          bookingRef: maskIdentifier(validatedBookingRef),
-          authUid: maskIdentifier(currentAuthUid),
-          hasUserProfile: userProfileSnapshot.exists(),
-          driverId: driverId ? maskIdentifier(driverId) : null,
-          hasDriverId: Boolean(driverId),
-          driverAuthMatches: Boolean(driverId && driverProfile.authUid === currentAuthUid),
-          assignedDriverFlag: assignedDriverSnapshot?.val?.() === true,
-          participantExists: participantSnapshot.exists(),
-          bookingTourMatches,
-          bookingTourId: bookingTourId || null,
-        });
-        recordBookingDiagnostic('manifest_write_authorization_context', {
-          tourId,
-          bookingRef: maskIdentifier(validatedBookingRef),
-          hasAuthUid: Boolean(currentAuthUid),
-          hasUserProfile: userProfileSnapshot.exists(),
-          driverId: driverId ? maskIdentifier(driverId) : null,
-          hasDriverId: Boolean(driverId),
-          driverAuthMatches: Boolean(driverId && driverProfile.authUid === currentAuthUid),
-          assignedDriverFlag: assignedDriverSnapshot?.val?.() === true,
-          participantExists: participantSnapshot.exists(),
-          bookingTourMatches,
-          bookingTourId: bookingTourId || null,
-        });
-      } catch (diagnosticError) {
-        logBookingEvent('warn', 'Manifest write authorization context unavailable', {
-          tourId,
-          bookingRef: maskIdentifier(validatedBookingRef),
-          error: diagnosticError?.message || String(diagnosticError),
-        });
-        recordBookingDiagnostic('manifest_write_authorization_context_unavailable', {
-          tourId,
-          bookingRef: maskIdentifier(validatedBookingRef),
-          error: diagnosticError?.message || String(diagnosticError),
-        });
-      }
-    } else {
-      recordBookingDiagnostic('manifest_write_without_auth_user', {
-        tourId,
-        bookingRef: maskIdentifier(validatedBookingRef),
-      });
-    }
+    recordBookingDiagnostic('manifest_write_identity_state', {
+      tourId,
+      bookingRef: maskIdentifier(validatedBookingRef),
+      hasAuthUid: Boolean(currentAuthUid),
+    });
 
     const parsedLocalUpdatedAt = parseTimestampMs(payload.lastUpdated);
     const localUpdatedAt = Number.isFinite(parsedLocalUpdatedAt) ? parsedLocalUpdatedAt : Date.now();
@@ -1289,23 +1131,31 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
     const bookingManifestRef = db.ref(`tour_manifests/${tourId}/bookings/${validatedBookingRef}`);
     let observedServerValue = {};
     let duplicateDelivery = false;
-    const transactionResult = await Promise.race([
-      bookingManifestRef.transaction((currentValue) => {
-        const current = currentValue || {};
-        observedServerValue = current;
-        duplicateDelivery = Boolean(
-          payload.idempotencyKey
-          && current.idempotencyKey === payload.idempotencyKey
-        );
-        if (duplicateDelivery) return current;
+    let transactionTimeoutId;
+    let transactionResult;
+    try {
+      transactionResult = await Promise.race([
+        bookingManifestRef.transaction((currentValue) => {
+          const current = currentValue || {};
+          observedServerValue = current;
+          duplicateDelivery = Boolean(
+            payload.idempotencyKey
+            && current.idempotencyKey === payload.idempotencyKey
+          );
+          if (duplicateDelivery) return current;
 
-        const parsedServerUpdatedAt = parseTimestampMs(current.lastUpdated);
-        const serverUpdatedAt = Number.isFinite(parsedServerUpdatedAt) ? parsedServerUpdatedAt : 0;
-        if (serverUpdatedAt > localUpdatedAt) return undefined;
-        return manifestUpdate;
-      }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Manifest update timeout')), 15000))
-    ]);
+          const parsedServerUpdatedAt = parseTimestampMs(current.lastUpdated);
+          const serverUpdatedAt = Number.isFinite(parsedServerUpdatedAt) ? parsedServerUpdatedAt : 0;
+          if (serverUpdatedAt > localUpdatedAt) return undefined;
+          return manifestUpdate;
+        }),
+        new Promise((_, reject) => {
+          transactionTimeoutId = setTimeout(() => reject(new Error('Manifest update timeout')), 15000);
+        }),
+      ]);
+    } finally {
+      if (transactionTimeoutId) clearTimeout(transactionTimeoutId);
+    }
     const serverValue = transactionResult?.snapshot?.val?.() || observedServerValue || {};
 
     if (!transactionResult?.committed) {
@@ -1401,7 +1251,16 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
       idempotencyKey,
     };
 
-    const onlineResult = await applyManifestUpdateDirect(directPayload, options.db || realtimeDb);
+    const explicitlyOffline = options.online === false;
+    const onlineResult = explicitlyOffline
+      ? { success: false, error: 'Device reported offline' }
+      : await applyManifestUpdateDirect(directPayload, options.db || realtimeDb);
+    if (explicitlyOffline) {
+      logBookingEvent('info', 'Direct manifest update skipped while offline', {
+        tourCode: maskIdentifier(validatedTourCode),
+        bookingRef: maskIdentifier(validatedBookingRef),
+      });
+    }
     if (onlineResult.success) {
       logBookingEvent('info', 'Manifest update completed online', {
         tourCode: maskIdentifier(validatedTourCode),
@@ -1424,7 +1283,7 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
       };
     }
 
-    const shouldQueue = !options.online || /timeout|network|unavailable/i.test(onlineResult.error || '');
+    const shouldQueue = explicitlyOffline || /timeout|network|unavailable/i.test(onlineResult.error || '');
     if (!shouldQueue || !offlineSyncService?.enqueueAction) {
       logBookingEvent('warn', 'Manifest update failed without queue fallback', {
         tourCode: maskIdentifier(validatedTourCode),

@@ -102,7 +102,7 @@ function normalizeSnapshot(snapshot, { tourId, driverId, now = Date.now() } = {}
   if (!canonicalTourId || !canonicalDriverId || !snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
   if (normalizeTourId(snapshot.tourId) !== canonicalTourId || normalizeDriverId(snapshot.driverId) !== canonicalDriverId) return null;
   if (snapshot.schemaVersion !== SCHEMA_VERSION || snapshot.complete !== true) return null;
-  if (!Array.isArray(snapshot.bookings) || snapshot.bookings.length === 0 || snapshot.bookings.length > MAX_BOOKINGS) return null;
+  if (!Array.isArray(snapshot.bookings) || snapshot.bookings.length > MAX_BOOKINGS) return null;
   const bookings = snapshot.bookings.map(normalizeBooking);
   if (bookings.some((booking) => !booking)) return null;
   const ids = new Set(bookings.map((booking) => booking.id));

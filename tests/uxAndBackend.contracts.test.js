@@ -228,9 +228,11 @@ test('Static contract: passenger manifests are assembled through verified backen
   assert.match(bookingSource, /fetchTourManifestFromFunction/);
   assert.match(bookingSource, /headers,\s*\n\s*body: JSON\.stringify\(\{ tourId: tourCodeOriginal \}\)/);
   assert.match(bookingSource, /Manifest fetch completed via function/);
-  assert.match(bookingSource, /Array\.isArray\(liveStatus\.passengerStatus\)/);
+  assert.doesNotMatch(bookingSource, /const bookingsQuery = realtimeDb\.ref\('bookings'\)/);
   assert.match(functionsSource, /exports\.getTourManifest = onRequest/);
   assert.match(functionsSource, /verifyTourManifestAccess/);
+  assert.match(functionsSource, /Array\.isArray\(liveStatus\.passengerStatus\)/);
+  assert.match(functionsSource, /buildDriverManifestBooking/);
   assert.match(functionsSource, /orderByChild\('tourId'\)\.equalTo\(canonicalTourId\)/);
   assert.match(packageJson, /tests\/getTourManifest\.test\.js/);
 });

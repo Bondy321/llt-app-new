@@ -53,8 +53,13 @@ const mockQueueActions = [
 ];
 
 let replayQueueCalls = 0;
+let replayQueueScopes = [];
+let subscribedQueueScopes = [];
+let queuedActionReadScopes = [];
 let getTourManifestCalls = 0;
 let manifestLoader = async () => mockManifest;
+let manifestUpdater = async () => ({ success: true, queued: false });
+let manifestUpdateCalls = [];
 let cachedManifest = null;
 let cachedReplacements = [];
 let openedUrls = [];
@@ -118,7 +123,10 @@ Module._load = function mockLoader(request, parent, isMain) {
         getTourManifestCalls += 1;
         return manifestLoader();
       },
-      updateManifestBooking: async () => ({ success: true }),
+      updateManifestBooking: async (...args) => {
+        manifestUpdateCalls.push(args);
+        return manifestUpdater(...args);
+      },
       MANIFEST_STATUS: {
         PENDING: 'PENDING',
         BOARDED: 'BOARDED',
@@ -132,25 +140,35 @@ Module._load = function mockLoader(request, parent, isMain) {
       __esModule: true,
       default: {
         subscribeQueueState: () => () => {},
-        subscribeQueuedActions: (callback) => {
+        subscribeQueuedActions: (callback, options) => {
+          subscribedQueueScopes.push(options?.scope || null);
           callback(mockQueueActions);
           return () => {};
         },
-        getQueuedActions: async () => ({ success: true, data: mockQueueActions }),
-        replayQueue: async () => {
+        getQueuedActions: async (options) => {
+          queuedActionReadScopes.push(options?.scope || null);
+          return { success: true, data: mockQueueActions };
+        },
+        replayQueue: async (options) => {
           replayQueueCalls += 1;
+          replayQueueScopes.push(options?.scope || null);
           return { success: true };
         },
         updateAction: async () => ({ success: true }),
       },
       subscribeQueueState: () => () => {},
-      subscribeQueuedActions: (callback) => {
+      subscribeQueuedActions: (callback, options) => {
+        subscribedQueueScopes.push(options?.scope || null);
         callback(mockQueueActions);
         return () => {};
       },
-      getQueuedActions: async () => ({ success: true, data: mockQueueActions }),
-      replayQueue: async () => {
+      getQueuedActions: async (options) => {
+        queuedActionReadScopes.push(options?.scope || null);
+        return { success: true, data: mockQueueActions };
+      },
+      replayQueue: async (options) => {
         replayQueueCalls += 1;
+        replayQueueScopes.push(options?.scope || null);
         return { success: true };
       },
       updateAction: async () => ({ success: true }),
@@ -178,9 +196,14 @@ Module._load = function mockLoader(request, parent, isMain) {
 
 test('PassengerManifestScreen only surfaces booking sync labels that need attention', async () => {
   replayQueueCalls = 0;
+  replayQueueScopes = [];
+  subscribedQueueScopes = [];
+  queuedActionReadScopes = [];
   getTourManifestCalls = 0;
   cachedManifest = null;
   cachedReplacements = [];
+  manifestUpdater = async () => ({ success: true, queued: false });
+  manifestUpdateCalls = [];
   manifestLoader = async () => mockManifest;
   const PassengerManifestScreen = require('../screens/PassengerManifestScreen').default;
 
@@ -188,7 +211,12 @@ test('PassengerManifestScreen only surfaces booking sync labels that need attent
   await act(async () => {
     renderer = TestRenderer.create(
       React.createElement(PassengerManifestScreen, {
-        route: { params: { tourId: 'TOUR-1' } },
+        route: { params: {
+          tourId: 'TOUR-1',
+          actorPrincipalId: 'driver:D-TEST',
+          authUid: 'driver-auth-test',
+          offlineCacheOwnerId: 'D-TEST',
+        } },
         navigation: { goBack: () => {} },
       })
     );
@@ -219,6 +247,9 @@ test('PassengerManifestScreen only surfaces booking sync labels that need attent
   });
 
   assert.equal(replayQueueCalls, 1);
+  assert.equal(subscribedQueueScopes.at(-1).principalId, 'driver:D-TEST');
+  assert.equal(replayQueueScopes[0].principalId, 'driver:D-TEST');
+  assert.equal(queuedActionReadScopes.at(-1).principalId, 'driver:D-TEST');
   assert.ok(getTourManifestCalls > baselineManifestCalls);
 });
 
@@ -293,5 +324,73 @@ test('PassengerManifestScreen offers the active Tour Pack booking phone in board
   await act(async () => phoneButton.props.onPress());
 
   assert.deepEqual(openedUrls, ['tel:+4407700900123']);
+  await act(async () => renderer.unmount());
+});
+
+test('PassengerManifestScreen queues a boarding update immediately when connectivity is offline', async () => {
+  cachedManifest = null;
+  cachedReplacements = [];
+  manifestUpdateCalls = [];
+  manifestLoader = async () => mockManifest;
+  manifestUpdater = async () => ({
+    success: true,
+    queued: true,
+    localStatus: 'BOARDED',
+    passengerStatus: ['BOARDED'],
+  });
+  const PassengerManifestScreen = require('../screens/PassengerManifestScreen').default;
+
+  let renderer;
+  await act(async () => {
+    renderer = TestRenderer.create(React.createElement(PassengerManifestScreen, {
+      route: { params: {
+        tourId: 'TOUR-1',
+        actorPrincipalId: 'driver:D-OFFLINE',
+        authUid: 'driver-auth-offline',
+        offlineCacheOwnerId: 'D-OFFLINE',
+      } },
+      navigation: { goBack: () => {} },
+      isConnected: false,
+    }));
+  });
+  await waitForEffects();
+
+  const bookingCard = renderer.root.findByProps({
+    accessibilityLabel: `Booking ${bookingRefs.queued}. PENDING. 1 passengers.`,
+  });
+  await act(async () => bookingCard.props.onPress());
+  const allHereButton = renderer.root.findByProps({
+    accessibilityLabel: `Mark all passengers here for booking ${bookingRefs.queued}`,
+  });
+  await act(async () => allHereButton.props.onPress());
+  await waitForEffects();
+
+  assert.equal(manifestUpdateCalls.length, 1);
+  assert.equal(manifestUpdateCalls[0][3].online, false);
+  assert.equal(manifestUpdateCalls[0][3].actorPrincipalId, 'driver:D-OFFLINE');
+  await act(async () => renderer.unmount());
+});
+
+test('PassengerManifestScreen distinguishes an authoritative empty manifest from filtered results', async () => {
+  cachedManifest = null;
+  cachedReplacements = [];
+  manifestLoader = async () => ({
+    ...mockManifest,
+    bookings: [],
+    stats: { totalBookings: 0, totalPax: 0, checkedIn: 0, noShows: 0 },
+  });
+  const PassengerManifestScreen = require('../screens/PassengerManifestScreen').default;
+  let renderer;
+  await act(async () => {
+    renderer = TestRenderer.create(React.createElement(PassengerManifestScreen, {
+      route: { params: { tourId: 'TOUR-1' } },
+      navigation: { goBack: () => {} },
+    }));
+  });
+  await waitForEffects();
+  const textContent = renderer.root.findAll((node) => node.type === 'Text')
+    .map((node) => String(node.props.children || '')).join(' ');
+  assert.match(textContent, /No passengers on this manifest/);
+  assert.match(textContent, /no passenger bookings to board/);
   await act(async () => renderer.unmount());
 });

@@ -56,18 +56,22 @@ test('never accepts a wrong-tour, malformed, duplicated, or partial snapshot', a
   assert.equal(storage.values.size, 0);
 });
 
-test('does not replace a valid non-empty cached manifest with an empty or unmarked payload', async () => {
+test('accepts an authoritative empty manifest but still rejects an unmarked partial payload', async () => {
   const storage = createStorage();
   const cache = createDriverManifestCacheService({ storage, now: () => 1_000 });
-  const saved = await cache.replace({ tourId: 'TOUR_1', driverId: 'D-DRIVER', manifest: manifest(), fetchedAtMs: 900 });
-  assert.equal(saved.success, true);
   assert.equal((await cache.replace({
+    tourId: 'TOUR_1', driverId: 'D-DRIVER', manifest: manifest(), fetchedAtMs: 900,
+  })).success, true);
+  const emptied = await cache.replace({
     tourId: 'TOUR_1', driverId: 'D-DRIVER', manifest: manifest({ bookings: [] }), fetchedAtMs: 950,
-  })).success, false);
+  });
+  assert.equal(emptied.success, true);
+  assert.deepEqual(emptied.data.bookings, []);
+  assert.deepEqual(emptied.data.stats, { totalBookings: 0, totalPax: 0, checkedIn: 0, noShows: 0 });
   assert.equal((await cache.replace({
     tourId: 'TOUR_1', driverId: 'D-DRIVER', manifest: manifest({ complete: false }), fetchedAtMs: 950,
   })).success, false);
-  assert.deepEqual((await cache.get({ tourId: 'TOUR_1', driverId: 'D-DRIVER' })).data, saved.data);
+  assert.deepEqual((await cache.get({ tourId: 'TOUR_1', driverId: 'D-DRIVER' })).data, emptied.data);
 });
 
 test('identity-scopes snapshots and performs exact idempotent purge', async () => {

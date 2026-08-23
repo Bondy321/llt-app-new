@@ -302,6 +302,10 @@ test('buildTourManifestPayload assembles normalized bookings and live passenger 
         tourId: '5112D_8',
         passengerNames: ['Alex', 'Sam'],
         pickupPoints: [{ location: 'Balloch', time: '08:00' }],
+        email: 'must-not-cross@example.com',
+        phone: '+441234567890',
+        service: 'Internal service name',
+        contract: 'Internal contract name',
       },
       BY_TOUR_ID: {
         tourId: '5112D_8',
@@ -328,9 +332,25 @@ test('buildTourManifestPayload assembles normalized bookings and live passenger 
   assert.equal(manifest.bookings.length, 2);
   const booking = manifest.bookings.find((item) => item.id === 'ABC123');
   assert.deepEqual(booking.passengerNames, ['Alex', 'Sam']);
-  assert.deepEqual(booking.pickupPoints, [{ location: 'Balloch', time: '08:00' }]);
+  assert.equal(booking.pickupLocation, 'Balloch');
+  assert.equal(booking.pickupTime, '08:00');
   assert.equal(booking.status, 'PARTIAL');
   assert.deepEqual(booking.passengerStatus, ['BOARDED', 'NO_SHOW']);
+  assert.deepEqual(Object.keys(booking).sort(), [
+    'hasPassengerStatuses',
+    'id',
+    'passengerNames',
+    'passengerStatus',
+    'pickupDate',
+    'pickupLocation',
+    'pickupTime',
+    'seatLabels',
+    'seatNumbers',
+    'status',
+  ]);
+  const legacyBooking = manifest.bookings.find((item) => item.id === 'BY_TOUR_ID');
+  assert.equal(legacyBooking.status, 'BOARDED');
+  assert.deepEqual(legacyBooking.passengerStatus, ['BOARDED']);
   assert.equal(manifest.stats.totalPax, 3);
   assert.equal(manifest.stats.checkedIn, 2);
   assert.equal(manifest.stats.noShows, 1);
@@ -370,7 +390,7 @@ test('buildTourManifestPayload removes sync duplicates by passenger and seat ide
 
   assert.deepEqual(booking.passengerNames, ['Ms Patricia Saunders', 'Mrs Emily Mckay']);
   assert.deepEqual(booking.seatNumbers, [13, 14]);
-  assert.equal(booking.passengerDetails.length, 2);
+  assert.deepEqual(booking.seatLabels, ['S13', 'S14']);
   assert.deepEqual(booking.passengerStatus, ['BOARDED', 'NO_SHOW']);
   assert.equal(booking.status, 'PARTIAL');
   assert.equal(manifest.stats.totalPax, 2);
@@ -891,6 +911,24 @@ test('buildFirebaseStorageDownloadUrl encodes object paths for token URLs', () =
     }),
     'https://firebasestorage.googleapis.com/v0/b/demo-bucket.appspot.com/o/private_tour_photos%2Ftour-1%2Fpax_v1%3AT123%3Aemail_2E_example%2Fviewers%2Fsource_viewer.jpg?alt=media&token=token-1',
   );
+});
+
+test('buildTourManifestPayload uses canonical pickup fields when no pickup point array exists', async () => {
+  const db = createMockRealtimeDb({
+    tours: { TOUR_1: { name: 'Day tour', tourCode: 'TOUR 1' } },
+    bookings: {
+      PICKUP1: {
+        tourId: 'TOUR_1',
+        passengerNames: ['A Passenger'],
+        pickupLocation: 'Glasgow Central',
+        pickupTime: '09:15',
+      },
+    },
+  });
+
+  const manifest = await __testables.buildTourManifestPayload({ tourId: 'TOUR_1', db });
+  assert.equal(manifest.bookings[0].pickupLocation, 'Glasgow Central');
+  assert.equal(manifest.bookings[0].pickupTime, '09:15');
 });
 
 test('findPhotoRecordByStoragePath tolerates the Storage-finalize versus RTDB-write race', async () => {

@@ -61,7 +61,7 @@ const HEADER_WIDGETS_VISIBLE = {
   nextPassenger: true,
 };
 
-export default function PassengerManifestScreen({ route, navigation, driverTourPack = null }) {
+export default function PassengerManifestScreen({ route, navigation, driverTourPack = null, isConnected = true }) {
   const { tourId, actorPrincipalId, authUid, offlineCacheOwnerId, sessionGeneration = 0 } = route.params;
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -88,6 +88,18 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
   const activeScopeKeyRef = useRef(scopeKey);
   const manifestSourceRef = useRef('none');
   const cacheScopeEnabled = /^D-[A-Z0-9_-]+$/.test(String(offlineCacheOwnerId || '').trim().toUpperCase());
+  const manifestQueueScope = useMemo(() => {
+    const normalizedTourId = normalizeTourId(tourId);
+    const principalId = String(actorPrincipalId || '').trim();
+    if (!normalizedTourId || !principalId) return null;
+    return {
+      tourId: normalizedTourId,
+      principalId,
+      role: 'driver',
+      authUid: authUid || null,
+      cacheOwnerId: offlineCacheOwnerId || principalId,
+    };
+  }, [actorPrincipalId, authUid, offlineCacheOwnerId, tourId]);
 
   useEffect(() => {
     manifestSourceRef.current = manifestSource;
@@ -230,9 +242,9 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
         failed: stats.failed,
         bookingCount: Object.keys(syncMap).length,
       });
-    });
+    }, manifestQueueScope ? { scope: manifestQueueScope } : undefined);
     return () => unsubscribe?.();
-  }, [tourId]);
+  }, [manifestQueueScope, scopeKey, tourId]);
 
   useEffect(() => () => {
     mountedRef.current = false;
@@ -416,7 +428,7 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
         : selectedBooking.passengerNames.map(() => MANIFEST_STATUS.PENDING);
 
       const result = await updateManifestBooking(tourId, selectedBooking.id, statusesToPersist, {
-        online: true,
+        online: isConnected,
         actorPrincipalId,
         authUid,
       });
@@ -443,39 +455,49 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
         setBookingSyncState((prev) => ({ ...prev, [selectedBooking.id]: normalizeSyncState('synced') }));
       }
 
+      const appliedPassengerStatuses = Array.isArray(result?.passengerStatus)
+        && result.passengerStatus.length === selectedBooking.passengerNames.length
+        ? result.passengerStatus
+        : selectedBooking.passengerNames.map((_, index) => (
+          result?.status || statusesToPersist[index] || MANIFEST_STATUS.PENDING
+        ));
+      const appliedStatus = result?.status || result?.localStatus || MANIFEST_STATUS.PENDING;
+      setManifestData((current) => ({
+        ...current,
+        bookings: current.bookings.map((booking) => (
+          booking.id === selectedBooking.id
+            ? {
+                ...booking,
+                status: appliedStatus,
+                passengerStatus: appliedPassengerStatuses,
+                hasPassengerStatuses: true,
+                pendingServerConfirmation: Boolean(result?.queued),
+              }
+            : booking
+        )),
+      }));
+      const cachePatch = cacheScopeEnabled
+        ? await driverManifestCache.applyOptimisticUpdate({
+          tourId,
+          driverId: offlineCacheOwnerId,
+          bookingRef: selectedBooking.id,
+          passengerStatuses: appliedPassengerStatuses,
+        })
+        : null;
+      if (cacheScopeEnabled && !cachePatch.success) {
+        logger.warn('PassengerManifest', 'Manifest update could not be mirrored to the local snapshot', {
+          tourId,
+          bookingRef: maskIdentifier(selectedBooking.id),
+          error: cachePatch.error,
+        });
+      }
+
       const syncStateLabel = result?.queued ? 'queued for sync' : 'synced';
       setModalVisible(false);
       setSelectedBooking(null);
       setPartialMode(false);
 
       if (result?.queued) {
-        const optimisticStatus = result.localStatus || MANIFEST_STATUS.PENDING;
-        setManifestData((current) => ({
-          ...current,
-          bookings: current.bookings.map((booking) => (
-            booking.id === selectedBooking.id
-              ? {
-                  ...booking,
-                  status: optimisticStatus,
-                  passengerStatus: statusesToPersist,
-                  hasPassengerStatuses: true,
-                  pendingServerConfirmation: true,
-                }
-              : booking
-          )),
-        }));
-        const cachePatch = cacheScopeEnabled
-          ? await driverManifestCache.applyOptimisticUpdate({
-            tourId, driverId: offlineCacheOwnerId, bookingRef: selectedBooking.id, passengerStatuses: statusesToPersist,
-          })
-          : null;
-        if (cacheScopeEnabled && !cachePatch.success) {
-          logger.warn('PassengerManifest', 'Queued manifest update could not be mirrored to the local snapshot', {
-            tourId,
-            bookingRef: maskIdentifier(selectedBooking.id),
-            error: cachePatch.error,
-          });
-        }
         showStatusFeedback({
           variant: 'warning',
           message: `${selectedBooking.id} is saved on this device and queued for the server. A newer change for this booking will replace this queued one.`,
@@ -512,6 +534,12 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
           unresolvedDelta,
           syncStateLabel,
           autoDismissMs: 4000,
+        });
+      } else {
+        showStatusFeedback({
+          variant: result?.conflict ? 'warning' : 'success',
+          message: result?.conflictMessage || 'Status saved. The manifest could not refresh, so the confirmed update is shown from this device.',
+          autoDismissMs: 5000,
         });
       }
     } catch (error) {
@@ -555,12 +583,25 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
       setRefreshing(true);
     }
 
+    if (!isConnected) {
+      showStatusFeedback({
+        variant: 'warning',
+        message: 'You are offline. Boarding changes stay safely queued on this device and will sync after reconnection.',
+        autoDismissMs: 5000,
+      });
+      if (mountedRef.current) setRefreshing(false);
+      return;
+    }
+
     try {
       logger.info('PassengerManifest', 'Manifest sync started', {
         tourId,
         isManualRefresh,
       });
-      const replay = await offlineSyncService.replayQueue({ services: { bookingService, chatService } });
+      const replay = await offlineSyncService.replayQueue({
+        services: { bookingService, chatService },
+        scope: manifestQueueScope || undefined,
+      });
       if (!mountedRef.current) return;
       logger.info('PassengerManifest', 'Manifest sync replay completed', {
         tourId,
@@ -599,7 +640,7 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
         });
       }
 
-      const queued = await offlineSyncService.getQueuedActions();
+      const queued = await offlineSyncService.getQueuedActions({ scope: manifestQueueScope || undefined });
       if (!mountedRef.current) return;
       if (queued.success) {
         const scopedManifestActions = queued.data.filter((action) => (
@@ -661,7 +702,11 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
 
   const handleRetryFailed = async () => {
     logger.info('PassengerManifest', 'Retry failed manifest actions started', { tourId });
-    await offlineSyncService.retryFailedActions({ types: ['MANIFEST_UPDATE'], tourId });
+    await offlineSyncService.retryFailedActions({
+      types: ['MANIFEST_UPDATE'],
+      tourId,
+      scope: manifestQueueScope || undefined,
+    });
     if (!mountedRef.current) return;
     await handleSyncNow();
   };
@@ -876,9 +921,11 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
         sortedFilteredBookings.length === 0 ? (
           <View style={styles.emptyStateCard}>
             <MaterialCommunityIcons name="clipboard-search-outline" size={34} color={COLORS.primary} />
-            <Text style={styles.emptyStateTitle}>No matching bookings</Text>
+            <Text style={styles.emptyStateTitle}>{isNarrowedView ? 'No matching bookings' : 'No passengers on this manifest'}</Text>
             <Text style={styles.emptyStateBody}>
-              Adjust search or filters to find passengers, then update statuses.
+              {isNarrowedView
+                ? 'Adjust search or filters to find passengers, then update statuses.'
+                : 'This tour currently has no passenger bookings to board.'}
             </Text>
           </View>
         ) : (
@@ -1004,6 +1051,7 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
                         style={[styles.actionBtn, { backgroundColor: COLORS.success }]}
                         onPress={() => handleSetAll(MANIFEST_STATUS.BOARDED)}
                         disabled={actionLoading}
+                        accessibilityLabel={`Mark all passengers here for booking ${selectedBooking.id}`}
                       >
                         <MaterialCommunityIcons name="check-all" size={28} color="white" />
                         <Text style={styles.actionBtnText}>All Here</Text>
@@ -1013,6 +1061,7 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
                         style={[styles.actionBtn, { backgroundColor: COLORS.danger }]}
                         onPress={() => handleSetAll(MANIFEST_STATUS.NO_SHOW)}
                         disabled={actionLoading}
+                        accessibilityLabel={`Mark all passengers no-show for booking ${selectedBooking.id}`}
                       >
                         <MaterialCommunityIcons name="close-circle-outline" size={28} color="white" />
                         <Text style={styles.actionBtnText}>No Show</Text>

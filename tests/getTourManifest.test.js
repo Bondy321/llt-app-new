@@ -100,3 +100,23 @@ test('getTourManifest surfaces authorization failures with customer-safe copy', 
     delete process.env.EXPO_PUBLIC_GET_TOUR_MANIFEST_URL;
   }
 });
+
+test('getTourManifest fails closed when the verified endpoint is not configured', async () => {
+  const explicitEndpoint = process.env.EXPO_PUBLIC_GET_TOUR_MANIFEST_URL;
+  const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
+  delete process.env.EXPO_PUBLIC_GET_TOUR_MANIFEST_URL;
+  delete process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
+
+  try {
+    const service = loadService();
+    await assert.rejects(
+      service.getTourManifest('5112D_8'),
+      /Manifest service is not configured/,
+    );
+  } finally {
+    if (explicitEndpoint === undefined) delete process.env.EXPO_PUBLIC_GET_TOUR_MANIFEST_URL;
+    else process.env.EXPO_PUBLIC_GET_TOUR_MANIFEST_URL = explicitEndpoint;
+    if (projectId === undefined) delete process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
+    else process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = projectId;
+  }
+});

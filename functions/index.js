@@ -2208,10 +2208,11 @@ const normalizeManifestBooking = (bookingRef, bookingData = {}) => {
     passengers: passengerNames,
     ...(Array.isArray(bookingData.passengerDetails) ? { passengerDetails } : {}),
     seatNumbers,
-    ...(Array.isArray(bookingData.seatLabels) ? { seatLabels } : {}),
+    seatLabels,
     pickupPoints,
-    pickupTime: firstPickup.time || 'TBA',
-    pickupLocation: firstPickup.location || 'To be confirmed',
+    pickupDate: firstPickup.date || bookingData.pickupDate || 'TBA',
+    pickupTime: firstPickup.time || bookingData.pickupTime || 'TBA',
+    pickupLocation: firstPickup.location || bookingData.pickupLocation || bookingData.pickupAddress || 'To be confirmed',
   };
   Object.defineProperty(normalizedBooking, '_manifestPassengerSourceIndexes', {
     value: rows.map((row) => row.sourceIndexes),
@@ -2223,6 +2224,32 @@ const normalizeManifestBooking = (bookingRef, bookingData = {}) => {
   });
   return normalizedBooking;
 };
+
+// The full booking record is needed while the Function reconciles duplicated
+// passenger rows, but the driver manifest only renders this bounded operational
+// subset. Keeping the projection here prevents contact, payment, service and
+// contract fields from crossing the backend boundary or entering offline cache.
+const buildDriverManifestBooking = ({ bookingRef, normalizedBooking, passengerStatus, status }) => ({
+  id: cleanPassengerString(bookingRef, 120),
+  passengerNames: normalizedBooking.passengerNames.map((name) => (
+    cleanPassengerString(name, 180) || 'Unknown Passenger'
+  )),
+  seatNumbers: normalizedBooking.passengerNames.map((_, index) => {
+    const seat = normalizedBooking.seatNumbers?.[index];
+    return typeof seat === 'number' && Number.isFinite(seat)
+      ? seat
+      : (cleanPassengerString(String(seat ?? ''), 40) || 'TBA');
+  }),
+  seatLabels: normalizedBooking.passengerNames.map((_, index) => (
+    cleanPassengerString(normalizedBooking.seatLabels?.[index], 80) || 'TBA'
+  )),
+  passengerStatus,
+  hasPassengerStatuses: true,
+  status,
+  pickupDate: cleanPassengerString(normalizedBooking.pickupDate, 40) || 'TBA',
+  pickupLocation: cleanPassengerString(normalizedBooking.pickupLocation, 250) || 'To be confirmed',
+  pickupTime: cleanPassengerString(normalizedBooking.pickupTime, 40) || 'TBA',
+});
 
 const verifyTourManifestAccess = async ({ authUid, tourId, db = admin.database() }) => {
   if (!isValidFirebaseKey(authUid) || !isValidFirebaseKey(tourId)) {
@@ -2266,7 +2293,11 @@ const buildTourManifestPayload = async ({ tourId, requestedTourCode = null, db =
     throw new Error('Invalid tour id');
   }
 
-  const tourSnapshot = await db.ref(`tours/${canonicalTourId}`).once('value');
+  const [tourSnapshot, bookingsByTourIdSnapshot, manifestSnapshot] = await Promise.all([
+    db.ref(`tours/${canonicalTourId}`).once('value'),
+    db.ref('bookings').orderByChild('tourId').equalTo(canonicalTourId).once('value'),
+    db.ref(`tour_manifests/${canonicalTourId}`).once('value'),
+  ]);
   if (!tourSnapshot.exists()) {
     const error = new Error('Tour not found');
     error.code = 'TOUR_NOT_FOUND';
@@ -2278,11 +2309,6 @@ const buildTourManifestPayload = async ({ tourId, requestedTourCode = null, db =
     || resolveTrimmedString(requestedTourCode)
     || canonicalTourId.replace(/_/g, ' ');
 
-  const [bookingsByTourIdSnapshot, manifestSnapshot] = await Promise.all([
-    db.ref('bookings').orderByChild('tourId').equalTo(canonicalTourId).once('value'),
-    db.ref(`tour_manifests/${canonicalTourId}`).once('value'),
-  ]);
-
   const rawBookings = bookingsByTourIdSnapshot.val() || {};
   const manifestData = manifestSnapshot.val() || {};
   const bookingStatuses = manifestData.bookings || {};
@@ -2291,6 +2317,9 @@ const buildTourManifestPayload = async ({ tourId, requestedTourCode = null, db =
     const liveStatus = bookingStatuses[bookingRef] || {};
     const totalPax = normalizedBooking.passengerNames.length;
     const hasPassengerStatuses = Array.isArray(liveStatus.passengerStatus);
+    const legacyParentStatus = Object.values(MANIFEST_STATUS).includes(liveStatus.status)
+      ? liveStatus.status
+      : MANIFEST_STATUS.PENDING;
     const rawPassengerStatuses = hasPassengerStatuses
       ? normalizedBooking._manifestPassengerSourceIndexes.map((indexes) => {
         const statuses = indexes
@@ -2299,17 +2328,16 @@ const buildTourManifestPayload = async ({ tourId, requestedTourCode = null, db =
         const resolved = statuses.find((status) => status !== MANIFEST_STATUS.PENDING);
         return resolved || statuses[0] || MANIFEST_STATUS.PENDING;
       })
-      : liveStatus.passengerStatus;
+      : Array(totalPax).fill(legacyParentStatus);
     const passengerStatus = normalizePassengerStatuses(rawPassengerStatuses, totalPax);
-    const derivedStatus = hasPassengerStatuses ? deriveParentStatusFromPassengers(passengerStatus) : null;
+    const status = deriveParentStatusFromPassengers(passengerStatus);
 
-    return {
-      ...normalizedBooking,
-      status: derivedStatus || liveStatus.status || MANIFEST_STATUS.PENDING,
-      hasPassengerStatuses,
+    return buildDriverManifestBooking({
+      bookingRef,
+      normalizedBooking,
       passengerStatus,
-      notes: liveStatus.notes || '',
-    };
+      status,
+    });
   });
 
   const stats = bookings.reduce((acc, booking) => {
@@ -5294,6 +5322,7 @@ exports.__testables = {
   verifyTourManifestAccess,
   normalizeManifestPassengerRows,
   normalizeManifestBooking,
+  buildDriverManifestBooking,
   resolveDriverAssignment,
   claimDriverAuthUid,
   buildDriverIdentityProfileUpdates,
