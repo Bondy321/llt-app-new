@@ -692,7 +692,7 @@ const saveTourPack = async (tourId, role, payload, options = {}) => {
       const fetchedAt = payload.fetchedAt || new Date().toISOString();
       const sourceVersion = payload.sourceVersion || SCHEMA_VERSION;
       const mergedPayload = {
-        ...(existingPack && typeof existingPack === 'object' ? existingPack : {}),
+        ...(!options.replaceExisting && existingPack && typeof existingPack === 'object' ? existingPack : {}),
         ...payload,
         fetchedAt,
         sourceVersion,

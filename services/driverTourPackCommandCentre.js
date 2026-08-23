@@ -126,6 +126,9 @@ function seatState(seat, passenger, manifestStatus) {
 function qualityIssues(pack) {
   const quality = pack?.quality || {};
   const issues = [];
+  if (quality.pickupManifestPublishable !== true) {
+    issues.push('Report pickup and passenger details are withheld by the reconciliation safety gate. Use the authoritative boarding manifest.');
+  }
   if (quality.state !== 'complete') {
     issues.push('Pack is incomplete; check dispatch information before departure.');
   }
@@ -173,8 +176,9 @@ function progressForPassengers(passengers) {
 }
 
 function commandCentreModel(pack, manifest, { nowMs = Date.now() } = {}) {
+  const pickupManifestAvailable = pack?.quality?.pickupManifestPublishable === true;
   const index = manifestStatusIndex(manifest);
-  const passengers = selectOrderedPassengers(pack).map((passenger) => {
+  const passengers = (pickupManifestAvailable ? selectOrderedPassengers(pack) : []).map((passenger) => {
     const manifestStatus = passengerManifestStatus(passenger, index);
     return {
       ...passenger,
@@ -183,7 +187,7 @@ function commandCentreModel(pack, manifest, { nowMs = Date.now() } = {}) {
     };
   });
   const passengerByKey = new Map(passengers.map((passenger) => [passenger.passengerKey, passenger]));
-  const seats = selectOrderedSeats(pack).map((seat) => {
+  const seats = (pickupManifestAvailable ? selectOrderedSeats(pack) : []).map((seat) => {
     const passenger = passengerByKey.get(seat.passengerKey);
     return {
       ...seat,
@@ -199,7 +203,7 @@ function commandCentreModel(pack, manifest, { nowMs = Date.now() } = {}) {
       .filter((seat) => [DISPLAY_STATES.UNMATCHED, DISPLAY_STATES.CONFLICT].includes(seat.displayState) && seat.passenger)
       .map((seat) => seat.passenger.passengerKey),
   ]).size;
-  const pickups = selectOrderedPickups(pack).map((pickup) => {
+  const pickups = (pickupManifestAvailable ? selectOrderedPickups(pack) : []).map((pickup) => {
     const pickupPassengers = passengers.filter((passenger) => passenger.pickupId === pickup.pickupId);
     return { pickup, passengers: pickupPassengers, progress: progressForPassengers(pickupPassengers) };
   });
@@ -222,6 +226,7 @@ function commandCentreModel(pack, manifest, { nowMs = Date.now() } = {}) {
   }
   const timeline = selectOrderedTimeline(pack);
   return {
+    pickupManifestAvailable,
     pickups,
     passengers,
     seats,

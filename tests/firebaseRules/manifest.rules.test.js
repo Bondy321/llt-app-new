@@ -113,7 +113,7 @@ test('allows exact tour manifest reads but denies listing all manifests', async 
 
 test('allows exact booking reads for tour members but denies listing all bookings', async () => {
   await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`bookings/${BOOKING_REF}`).get());
-  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`bookings/${BOOKING_REF}`).get());
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`bookings/${BOOKING_REF}`).get());
   await assertFails(dbFor(DRIVER_AUTH_UID).ref('bookings').get());
 });
 

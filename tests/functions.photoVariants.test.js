@@ -198,6 +198,59 @@ test('buildVerifiedLoginGrantUpdates scopes passenger grants to booking, tour, a
   assert.equal('tourCode' in updates['booking_access_grants/ABC123/auth-uid-1'], false);
 });
 
+test('passenger login projections allowlist customer data and drop operational fields', () => {
+  const booking = __testables.buildPassengerSafeBooking('ABC123', {
+    tourId: '5112D_8',
+    tourCode: '5112D 8',
+    passengerNames: ['Alex Example'],
+    seatNumbers: ['S12'],
+    pickupDate: '24/08/2026',
+    pickupPoints: [{
+      date: '24/08/2026',
+      time: '08:00',
+      location: 'Balloch Tourist Information Centre',
+      address: 'Old Luss Road, Balloch',
+      supplierPhone: '01234 567890',
+    }],
+    email: 'traveller@example.com',
+    phone: '07123 456789',
+    serviceContracts: [{ reference: 'SECRET' }],
+    internalNotes: 'Do not expose',
+  }, '5112D_8');
+  const tour = __testables.buildPassengerSafeTour('5112D_8', {
+    name: 'Highlands Escape',
+    tourCode: '5112D 8',
+    startDate: '24/08/2026',
+    isActive: true,
+    currentParticipants: 21,
+    driverName: 'Jamie',
+    driverPhone: '07111 222333',
+    itinerary: {
+      title: 'Your itinerary',
+      days: [{ day: 1, content: 'Welcome', supplierReference: 'SECRET' }],
+      serviceContracts: [{ price: 100 }],
+    },
+    driver_itinerary: 'Depot and supplier instructions',
+    services: [{ reference: 'SECRET' }],
+    contracts: [{ price: 100 }],
+    participants: { passengerUid: { email: 'hidden@example.com' } },
+  });
+
+  assert.deepEqual(Object.keys(booking).sort(), [
+    'id', 'passengerNames', 'pickupDate', 'pickupLocation', 'pickupPoints', 'pickupTime',
+    'seatNumbers', 'totalPax', 'tourCode', 'tourId',
+  ]);
+  assert.deepEqual(Object.keys(booking.pickupPoints[0]).sort(), ['address', 'date', 'location', 'time']);
+  assert.equal(JSON.stringify(booking).includes('example.com'), false);
+  assert.deepEqual(Object.keys(tour).sort(), [
+    'currentParticipants', 'driverName', 'driverPhone', 'id', 'isActive', 'itinerary',
+    'name', 'startDate', 'tourCode',
+  ]);
+  assert.deepEqual(tour.itinerary.days[0], { day: 1, content: 'Welcome' });
+  assert.equal(JSON.stringify(tour).includes('SECRET'), false);
+  assert.equal(JSON.stringify(tour).includes('driver_itinerary'), false);
+});
+
 const createMockRealtimeDb = (state) => {
   const getValue = (dbPath = '') => dbPath
     .split('/')

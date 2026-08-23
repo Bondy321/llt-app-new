@@ -62,6 +62,9 @@ test.before(async () => {
       isActive: true,
       maxParticipants: 50,
       currentParticipants: 1,
+      itinerary: { title: 'Passenger itinerary', days: [{ day: 1, content: 'Welcome' }] },
+      driver_itinerary: 'Depot and supplier instructions',
+      services: { service1: { contractRef: 'SECRET' } },
       participants: {
         [PASSENGER_AUTH_UID]: {
           userId: PASSENGER_AUTH_UID,
@@ -122,11 +125,18 @@ test('requires a verified login grant before a new passenger can join a tour', a
   }));
 });
 
-test('limits tour reads to participants, assigned drivers, admins, or verified login grants', async () => {
-  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}`).get());
+test('passengers can read only explicit safe tour leaves while assigned drivers retain the operational tour', async () => {
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}`).get());
   await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}`).get());
-  await assertSucceeds(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}`).get());
+  await assertFails(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}`).get());
   await assertFails(dbFor(UNATTACHED_AUTH_UID).ref(`tours/${TOUR_ID}`).get());
+
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/itinerary`).get());
+  await assertSucceeds(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/itinerary`).get());
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/driver_itinerary`).get());
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/services`).get());
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/participants/${PASSENGER_AUTH_UID}`).get());
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/participants`).get());
 });
 
 test('denies passengers from writing driver-only tour location fields', async () => {

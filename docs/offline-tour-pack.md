@@ -50,6 +50,14 @@ write must provide an owner identity, either explicitly or through the active
 session scope. This is required because a Tour Pack contains booking/driver
 identity data, not just shared itinerary content.
 
+Passenger Tour Packs are also a privacy boundary. Online login saves only the
+server-safe passenger booking/tour projections. Session and Tour Pack restore
+recursively allowlist those objects and atomically replace a valid legacy
+passenger cache, removing unknown top-level and nested operational fields.
+A legacy payload that cannot be safely projected requires an online refresh.
+Driver Tour Packs remain separate and are never passed through the passenger
+projection.
+
 ## Shared-device ownership
 
 Every queue action stores a versioned `scope` containing canonical `tourId`,

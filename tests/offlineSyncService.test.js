@@ -438,6 +438,26 @@ test('saveTourPack merges partial payloads without losing existing keys', async 
   assert.equal(typeof cached.data.sourceVersion, 'number');
 });
 
+test('saveTourPack can atomically replace a legacy passenger payload', async () => {
+  const tourId = 'tour-replace-legacy';
+  const role = 'passenger';
+  const packOptions = { ownerId: 'BOOKING-REPLACE-1' };
+
+  await offlineSyncService.saveTourPack(tourId, role, {
+    tour: { id: tourId, services: [{ supplier: 'Hidden' }] },
+    contracts: [{ ref: 'Hidden' }],
+  }, packOptions);
+  await offlineSyncService.saveTourPack(tourId, role, {
+    tour: { id: tourId, name: 'Safe tour' },
+    booking: { id: 'BOOKING-REPLACE-1' },
+  }, { ...packOptions, replaceExisting: true });
+
+  const cached = await offlineSyncService.getTourPack(tourId, role, packOptions);
+  assert.equal(cached.success, true);
+  assert.deepEqual(cached.data.tour, { id: tourId, name: 'Safe tour' });
+  assert.equal('contracts' in cached.data, false);
+});
+
 test('queue mutations serialize concurrent enqueues without dropping actions', async () => {
   await clearQueue();
   const scope = testScope('tour-concurrent', 'passenger-concurrent');

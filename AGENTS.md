@@ -248,6 +248,7 @@ Offline login:
 - `services/offlineLoginResolver.js` permits re-entry only for cached sessions or cached Tour Packs.
 - Unknown first-time users are blocked offline with explicit reason codes.
 - Passenger offline login requires normalized email match.
+- Passenger session/Tour Pack restores recursively apply the server-safe passenger allowlist and atomically replace valid legacy caches; an unprojectable cache requires an online refresh.
 - Offline cache TTL is 30 days.
 
 ---
@@ -967,7 +968,7 @@ Important RTDB invariants:
   driver actions, and metadata in batches of 50, leaving only a PII-free expiry tombstone. Deploy
   Functions first, then RTDB rules, then the mobile reader/cache release.
 - `drivers`, `bookings`, `tours`, and `tour_manifests` must not expose collection-level authenticated reads.
-- Passenger login uses `verifyPassengerLogin` to validate booking identity and create short-lived `tour_access_grants` / `booking_access_grants` before first tour access.
+- Passenger login uses `verifyPassengerLogin` to validate booking identity, return recursively allowlisted booking/tour projections, and create short-lived `tour_access_grants` / `booking_access_grants` before first purpose-specific child access. Passengers must never read whole `bookings/{bookingRef}` or `tours/{tourId}` records.
 - Online passenger login must persist `users/{authUid}/bookingRef` before entering the app; that caller-owned profile link keeps exact manifest-row access working after short-lived grants expire.
 - Driver-code login uses `verifyDriverLogin`; assignments resolve from `drivers/{driverId}/currentTourId`.
 - Driver identity and assignment authority are server-owned. Claimed clients can update only
@@ -1320,6 +1321,7 @@ High-signal docs:
 - `docs/data-contracts/driver-location.md`
 - `docs/data-contracts/safety-delivery.md`
 - `docs/data-contracts/manual-passenger-creation.md`
+- `docs/data-contracts/passenger-data-boundary.md`
 - `docs/data-contracts/ops-alerts.md`
 - `docs/data-contracts/tour-identity.md`
 - `docs/data-contracts/driver-tour-pack-ingestion.md`

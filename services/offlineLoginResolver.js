@@ -9,6 +9,11 @@ const OFFLINE_LOGIN_REASONS = {
 const OFFLINE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const { resolveTourId } = require('./tourIdentityService');
 const { parseTimestampMs } = require('./timeUtils');
+const {
+  normalizePassengerIdentityProjection,
+  normalizePassengerTourPack,
+  normalizePassengerTourProjection,
+} = require('./passengerDataBoundary');
 
 const normalizePassengerEmail = (email) => (typeof email === 'string' ? email.trim().toLowerCase() : '');
 
@@ -21,6 +26,9 @@ const resolveCachedPassengerEmail = (identity) => {
 const preserveStableIdentityFields = (identity) => {
   if (!identity || typeof identity !== 'object') return identity;
 
+  const passengerIdentity = normalizePassengerIdentityProjection(identity, identity.id || identity.bookingRef);
+  if (!passengerIdentity) return null;
+
   const stablePassengerId = typeof identity.stablePassengerId === 'string'
     ? identity.stablePassengerId.trim()
     : '';
@@ -29,7 +37,7 @@ const preserveStableIdentityFields = (identity) => {
     : '';
 
   return {
-    ...identity,
+    ...passengerIdentity,
     ...(stablePassengerId ? { stablePassengerId } : {}),
     ...(identityVersion ? { identityVersion } : {}),
   };
@@ -88,12 +96,38 @@ const resolveOfflineLoginFromCache = async ({
         };
       }
 
+      const boundedTour = expectedRole === 'passenger'
+        ? normalizePassengerTourProjection(cachedTourData, cachedTourId)
+        : cachedTourData;
+      if (!boundedTour) {
+        return {
+          success: false,
+          reason: OFFLINE_LOGIN_REASONS.NO_CACHED_SESSION,
+          error: 'Cached trip data needs a secure online refresh.',
+        };
+      }
+      const boundedIdentity = expectedRole === 'passenger'
+        ? preserveStableIdentityFields(cachedBookingData)
+        : cachedBookingData;
+      if (!boundedIdentity) {
+        return {
+          success: false,
+          reason: OFFLINE_LOGIN_REASONS.NO_CACHED_SESSION,
+          error: 'Cached trip data needs a secure online refresh.',
+        };
+      }
+      if (expectedRole === 'passenger') {
+        await sessionStorage.multiSet([
+          [sessionKeys.TOUR_DATA, JSON.stringify(boundedTour)],
+          [sessionKeys.BOOKING_DATA, JSON.stringify(boundedIdentity)],
+        ]);
+      }
       return {
         success: true,
         source: 'session',
         type: expectedRole,
-        tour: cachedTourData,
-        identity: preserveStableIdentityFields(cachedBookingData),
+        tour: boundedTour,
+        identity: boundedIdentity,
       };
     }
 
@@ -135,12 +169,62 @@ const resolveOfflineLoginFromCache = async ({
           };
         }
 
+        const boundedTour = expectedRole === 'passenger'
+          ? normalizePassengerTourProjection(cachedPackResult.data.tour || cachedTourData, cachedTourId)
+          : (cachedPackResult.data.tour || cachedTourData);
+        if (!boundedTour) {
+          return {
+            success: false,
+            reason: OFFLINE_LOGIN_REASONS.NO_CACHED_SESSION,
+            error: 'Cached trip data needs a secure online refresh.',
+          };
+        }
+        const boundedIdentity = expectedRole === 'passenger'
+          ? preserveStableIdentityFields(packIdentity)
+          : packIdentity;
+        if (!boundedIdentity) {
+          return {
+            success: false,
+            reason: OFFLINE_LOGIN_REASONS.NO_CACHED_SESSION,
+            error: 'Cached trip data needs a secure online refresh.',
+          };
+        }
+        if (expectedRole === 'passenger') {
+          const boundedPack = normalizePassengerTourPack({
+            ...cachedPackResult.data,
+            tour: boundedTour,
+            booking: boundedIdentity,
+          }, {
+            expectedTourId: cachedTourId,
+            expectedBookingRef: normalizedReference,
+          });
+          if (!boundedPack) {
+            return {
+              success: false,
+              reason: OFFLINE_LOGIN_REASONS.NO_CACHED_SESSION,
+              error: 'Cached trip data needs a secure online refresh.',
+            };
+          }
+          const rewriteResult = await offlineSyncService.saveTourPack(
+            cachedTourId,
+            expectedRole,
+            boundedPack,
+            { ...packOwnerOptions, replaceExisting: true },
+          );
+          if (!rewriteResult?.success) {
+            return {
+              success: false,
+              reason: OFFLINE_LOGIN_REASONS.NO_CACHED_SESSION,
+              error: 'Cached trip data needs a secure online refresh.',
+            };
+          }
+        }
         return {
           success: true,
           source: 'tour-pack',
           type: expectedRole,
-          tour: cachedPackResult.data.tour || cachedTourData,
-          identity: preserveStableIdentityFields(packIdentity),
+          tour: boundedTour,
+          identity: boundedIdentity,
         };
       }
     }

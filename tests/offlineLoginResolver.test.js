@@ -9,13 +9,17 @@ const {
 } = require('../services/offlineLoginResolver');
 const { OFFLINE_LOGIN_REASON_COPY } = require('../screens/loginFlow');
 
-const createSessionStorage = (tourData, bookingData) => ({
-  multiGet: async (keys) => keys.map((key) => {
-    if (key === '@LLT:tourData') return [key, tourData ? JSON.stringify(tourData) : null];
-    if (key === '@LLT:bookingData') return [key, bookingData ? JSON.stringify(bookingData) : null];
-    return [key, null];
-  }),
-});
+const createSessionStorage = (tourData, bookingData) => {
+  const values = new Map([
+    ['@LLT:tourData', tourData ? JSON.stringify(tourData) : null],
+    ['@LLT:bookingData', bookingData ? JSON.stringify(bookingData) : null],
+  ]);
+  return {
+    values,
+    multiGet: async (keys) => keys.map((key) => [key, values.get(key) || null]),
+    multiSet: async (entries) => entries.forEach(([key, value]) => values.set(key, value)),
+  };
+};
 
 const sessionKeys = {
   TOUR_DATA: '@LLT:tourData',
@@ -29,13 +33,14 @@ test('reason codes map to plain-language offline headlines', () => {
 });
 
 test('offline passenger login succeeds when booking ref and normalized email match cached session', async () => {
+  const sessionStorage = createSessionStorage(
+    { id: 'T_1', tourCode: 'T1', services: [{ supplier: 'Hidden' }] },
+    { id: 'ABC123', normalizedPassengerEmail: 'passenger@example.com', contract: 'Hidden' }
+  );
   const result = await resolveOfflineLoginFromCache({
     reference: 'abc123',
     normalizedEmail: normalizePassengerEmail('Passenger@Example.com'),
-    sessionStorage: createSessionStorage(
-      { id: 'T_1', tourCode: 'T1' },
-      { id: 'ABC123', normalizedPassengerEmail: 'passenger@example.com' }
-    ),
+    sessionStorage,
     sessionKeys,
     offlineSyncService: {
       getTourPackMeta: async () => ({ success: true, data: { lastSyncedAt: new Date().toISOString() } }),
@@ -46,6 +51,8 @@ test('offline passenger login succeeds when booking ref and normalized email mat
   assert.equal(result.success, true);
   assert.equal(result.type, 'passenger');
   assert.equal(result.source, 'session');
+  assert.equal('services' in JSON.parse(sessionStorage.values.get(sessionKeys.TOUR_DATA)), false);
+  assert.equal('contract' in JSON.parse(sessionStorage.values.get(sessionKeys.BOOKING_DATA)), false);
 });
 
 test('offline unknown first-time code is blocked with NO_CACHED_SESSION', async () => {
@@ -109,6 +116,7 @@ test('resolveCachedPassengerEmail reads the canonical normalized email field', (
 
 test('offline tour-pack lookup normalizes cached tour id before reading cache keys', async () => {
   const seenTourIds = [];
+  let replacement = null;
 
   const result = await resolveOfflineLoginFromCache({
     reference: 'ABC123',
@@ -128,10 +136,15 @@ test('offline tour-pack lookup normalizes cached tour id before reading cache ke
         return {
           success: true,
           data: {
-            tour: { id: tourId },
-            booking: { id: 'ABC123', normalizedPassengerEmail: 'passenger@example.com' },
+            tour: { id: tourId, driver_itinerary: 'Hidden' },
+            booking: { id: 'ABC123', normalizedPassengerEmail: 'passenger@example.com', services: ['Hidden'] },
+            contracts: [{ supplier: 'Hidden' }],
           },
         };
+      },
+      saveTourPack: async (tourId, role, payload, options) => {
+        replacement = { tourId, role, payload, options };
+        return { success: true, data: payload };
       },
     },
   });
@@ -139,4 +152,8 @@ test('offline tour-pack lookup normalizes cached tour id before reading cache ke
   assert.equal(result.success, true);
   assert.equal(result.source, 'tour-pack');
   assert.deepEqual(seenTourIds, ['5112D_8', '5112D_8']);
+  assert.equal(replacement.options.replaceExisting, true);
+  assert.equal('driver_itinerary' in replacement.payload.tour, false);
+  assert.equal('services' in replacement.payload.booking, false);
+  assert.equal('contracts' in replacement.payload, false);
 });

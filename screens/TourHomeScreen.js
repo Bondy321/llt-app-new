@@ -39,6 +39,7 @@ import {
   responsiveLineHeight,
 } from '../utils/responsiveLayout';
 const { buildTourHomeActionPlan } = require('../utils/tourHomeActionPlanner');
+const { formatPickupDate } = require('../utils/pickupPresentation');
 
 // Brand Colors
 const COLORS = {
@@ -1341,13 +1342,20 @@ export default function TourHomeScreen({
                         </View>
                         <View style={styles.pickupLocationInfo}>
                           <MaterialCommunityIcons name="map-marker" size={16} color={COLORS.coralAccent} />
-                          <Text
-                            style={[styles.pickupLocationText, responsiveStyles.pickupLocationText]}
-                            numberOfLines={2}
-                            maxFontSizeMultiplier={FONT_SCALE_LIMITS.body}
-                          >
-                            {pickup.location}
-                          </Text>
+                          <View style={styles.pickupLocationCopy}>
+                            <Text
+                              style={[styles.pickupLocationText, responsiveStyles.pickupLocationText]}
+                              numberOfLines={2}
+                              maxFontSizeMultiplier={FONT_SCALE_LIMITS.body}
+                            >
+                              {pickup.location}
+                            </Text>
+                            {formatPickupDate(pickup.date || bookingData.pickupDate) ? (
+                              <Text style={styles.pickupDateText}>
+                                {formatPickupDate(pickup.date || bookingData.pickupDate)}
+                              </Text>
+                            ) : null}
+                          </View>
                         </View>
                       </View>
                     ))}
@@ -1361,13 +1369,18 @@ export default function TourHomeScreen({
                       </View>
                       <View style={styles.pickupLocationInfo}>
                         <MaterialCommunityIcons name="map-marker" size={16} color={COLORS.coralAccent} />
-                        <Text
-                          style={[styles.pickupLocationText, responsiveStyles.pickupLocationText]}
-                          numberOfLines={2}
-                          maxFontSizeMultiplier={FONT_SCALE_LIMITS.body}
-                        >
-                          {bookingData.pickupLocation}
-                        </Text>
+                        <View style={styles.pickupLocationCopy}>
+                          <Text
+                            style={[styles.pickupLocationText, responsiveStyles.pickupLocationText]}
+                            numberOfLines={2}
+                            maxFontSizeMultiplier={FONT_SCALE_LIMITS.body}
+                          >
+                            {bookingData.pickupLocation}
+                          </Text>
+                          {formatPickupDate(bookingData.pickupDate) ? (
+                            <Text style={styles.pickupDateText}>{formatPickupDate(bookingData.pickupDate)}</Text>
+                          ) : null}
+                        </View>
                       </View>
                     </View>
                   </View>
@@ -2090,12 +2103,22 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 6,
   },
+  pickupLocationCopy: {
+    flex: 1,
+  },
   pickupLocationText: {
     fontSize: 14,
     color: COLORS.darkText,
     fontWeight: '500',
     flex: 1,
     lineHeight: 20,
+  },
+  pickupDateText: {
+    marginTop: 3,
+    fontSize: 12,
+    lineHeight: 17,
+    color: COLORS.subtleText,
+    fontWeight: '600',
   },
 
   // Seat section styles

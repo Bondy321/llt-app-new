@@ -121,7 +121,7 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   assert.equal(rules.rules.bookings['.read'], adminOnlyRootAccess);
   assert.notEqual(rules.rules.bookings['.read'], 'auth != null');
   assert.notEqual(rules.rules.bookings.$bookingRef['.read'], 'auth != null');
-  assert.match(rules.rules.bookings.$bookingRef['.read'], /booking_access_grants/);
+  assert.doesNotMatch(rules.rules.bookings.$bookingRef['.read'], /booking_access_grants|participants/);
   assert.match(rules.rules.bookings.$bookingRef['.read'], /data\.child\('tourId'\)\.isString\(\)/);
   assert.deepEqual(rules.rules.bookings['.indexOn'], ['tourId']);
   assert.equal(
@@ -167,7 +167,12 @@ test('Static contract: tour metadata writes stay least-privilege', () => {
 
   assert.match(rules.rules.tours['.read'], /admin_users/);
   assert.notEqual(rules.rules.tours['.read'], 'auth != null');
-  assert.match(tourRules['.read'], /tour_access_grants\/' \+ \$tourId \+ '\/' \+ auth\.uid \+ '\/expiresAtMs/);
+  assert.doesNotMatch(tourRules['.read'], /participants|tour_access_grants/);
+  assert.match(tourRules.itinerary['.read'], /tour_access_grants\/' \+ \$tourId \+ '\/' \+ auth\.uid \+ '\/expiresAtMs/);
+  assert.match(tourRules.driverLocation['.read'], /participants\/' \+ auth\.uid/);
+  assert.equal(tourRules.driver_itinerary['.read'], undefined);
+  assert.match(rules.rules.bookings.$bookingRef['.read'], /assigned_drivers/);
+  assert.doesNotMatch(rules.rules.bookings.$bookingRef['.read'], /booking_access_grants|participants/);
   assert.notEqual(tourRules['.write'], 'auth != null');
   assert.match(tourRules['.write'], /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
   assert.match(tourRules.participants.$userId['.write'], /tour_access_grants\/' \+ \$tourId \+ '\/' \+ auth\.uid \+ '\/expiresAtMs/);
@@ -184,7 +189,7 @@ test('Static contract: tour metadata writes stay least-privilege', () => {
   assert.match(readText('package.json'), /tests\/firebaseRules\/tours\.rules\.test\.js/);
 
   const bookingSource = readText('services/bookingServiceRealtime.js');
-  assert.match(bookingSource, /Client joins must never create or rewrite tour metadata/);
+  assert.match(bookingSource, /Capacity\/passenger totals[\s\S]*not by app-session joins/);
   assert.match(bookingSource, /participantRef\.transaction/);
   assert.doesNotMatch(bookingSource, /tourRef\.transaction\(\(tourState\)/);
   assert.doesNotMatch(bookingSource, /update\(\{ isActive: true, participants: \{\}, currentParticipants: 0 \}\)/);
@@ -208,6 +213,10 @@ test('Static contract: verified login grants are scoped and short-lived', () => 
   assert.match(functionsSource, /booking_access_grants\/\$\{bookingRef\}\/\$\{authUid\}/);
   assert.match(functionsSource, /verifyIdToken\(token\)/);
   assert.match(bookingServiceSource, /headers\.Authorization = `Bearer \$\{firebaseAuthResult\.token\}`/);
+  assert.match(functionsSource, /booking: buildPassengerSafeBooking/);
+  assert.match(functionsSource, /tour: buildPassengerSafeTour/);
+  assert.match(bookingServiceSource, /normalizePassengerBookingProjection/);
+  assert.doesNotMatch(bookingServiceSource, /passenger_tour_after_verifier/);
 });
 
 test('Static contract: passenger manifests are assembled through verified backend endpoint', () => {
@@ -882,6 +891,23 @@ test('Static contract: boarding phone actions use the active scoped Tour Pack co
   assert.match(manifestSource, /Linking\.openURL\(telephoneUrl\)/);
   assert.match(phoneSource, /packTourId !== requestedTourId/);
   assert.doesNotMatch(manifestSource, /logger\.(?:info|warn)[^;]*selectedBookingPhone/s);
+});
+
+test('Static contract: customer pickup readiness uses only the booking-safe projection', () => {
+  const appSource = readText('App.js');
+  const homeSource = readText('screens/TourHomeScreen.js');
+  const mapSource = readText('screens/MapScreen.js');
+  const mapWebSource = readText('screens/MapScreen.web.js');
+  const boundarySource = readText('services/passengerDataBoundary.js');
+
+  assert.match(appSource, /bookingData=\{bookingData\}/);
+  assert.match(homeSource, /formatPickupDate\(pickup\.date \|\| bookingData\.pickupDate\)/);
+  assert.match(mapSource, /resolvePrimaryPickup\(bookingData\)/);
+  assert.match(mapSource, /Directions to your pickup/);
+  assert.match(mapWebSource, /Directions to your pickup/);
+  assert.doesNotMatch(boundarySource, /serviceContracts|driver_itinerary|internalNotes/);
+  assert.doesNotMatch(mapSource, /bookingData\?\.services|bookingData\.services|tourData\?\.services|tourData\.services/);
+  assert.doesNotMatch(homeSource, /bookingData\?\.services|bookingData\.services|tourData\?\.services|tourData\.services/);
 });
 
 test('Static contract: safety support cleans up emergency timers and validates phone handoffs', () => {

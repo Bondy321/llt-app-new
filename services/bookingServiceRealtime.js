@@ -15,6 +15,10 @@ let loginDiagnosticsService = null;
 const { loadOptionalService } = require('./optionalServiceLoader');
 const { normalizeTourId, resolveTourId } = require('./tourIdentityService');
 const { normalizeItineraryDocument } = require('./itineraryService');
+const {
+  normalizePassengerBookingProjection,
+  normalizePassengerTourProjection,
+} = require('./passengerDataBoundary');
 
 try {
   loginDiagnosticsService = require('./loginDiagnosticsService');
@@ -1207,23 +1211,26 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
     const currentAuthUid = auth?.currentUser?.uid || null;
     if (currentAuthUid) {
       try {
-        const [userProfileSnapshot, participantSnapshot, bookingSnapshot] = await Promise.all([
+        const [userProfileSnapshot, participantSnapshot] = await Promise.all([
           db.ref(`users/${currentAuthUid}`).once('value'),
           db.ref(`tours/${tourId}/participants/${currentAuthUid}`).once('value'),
-          db.ref(`bookings/${validatedBookingRef}`).once('value'),
         ]);
         const userProfile = userProfileSnapshot.exists() ? (userProfileSnapshot.val() || {}) : {};
         const driverId = typeof userProfile.driverId === 'string' ? userProfile.driverId.trim() : '';
-        const [driverSnapshot, assignedDriverSnapshot] = driverId
+        const [driverSnapshot, assignedDriverSnapshot, bookingSnapshot] = driverId
           ? await Promise.all([
               db.ref(`drivers/${driverId}`).once('value'),
               db.ref(`tour_manifests/${tourId}/assigned_drivers/${driverId}`).once('value'),
+              db.ref(`bookings/${validatedBookingRef}`).once('value'),
             ])
-          : [null, null];
+          : [null, null, null];
         const driverProfile = driverSnapshot?.exists?.() ? (driverSnapshot.val() || {}) : {};
-        const bookingRecord = bookingSnapshot.exists() ? (bookingSnapshot.val() || {}) : {};
+        const bookingRecord = bookingSnapshot?.exists?.() ? (bookingSnapshot.val() || {}) : {};
         const bookingTourId = bookingRecord?.tourId || null;
-        const bookingTourMatches = bookingTourId === tourId;
+        const passengerOwnsBooking = !driverId
+          && participantSnapshot.exists()
+          && userProfile.bookingRef === validatedBookingRef;
+        const bookingTourMatches = driverId ? bookingTourId === tourId : passengerOwnsBooking;
 
         logBookingEvent('info', 'Manifest write authorization context', {
           tourId,
@@ -1760,34 +1767,6 @@ const validateBookingReference = async (reference, email, options = {}) => {
 
     const resolvedBookingRef = validateBookingRef(passengerVerification.bookingRef || upperRef);
 
-    validationPhase = 'passenger_booking_read';
-    const bookingSnapshot = await readRealtimeSnapshotWithLoginRetry(
-      realtimeDb.ref(`bookings/${resolvedBookingRef}`),
-      { label: 'passenger_booking_after_verifier', diagnostics: loginDiagnosticsContext }
-    );
-
-    if (!bookingSnapshot.exists()) {
-      logBookingEvent('warn', 'Passenger login booking missing after verifier success', {
-        bookingRef: maskIdentifier(resolvedBookingRef),
-      });
-      recordLoginDiagnostic('booking_validation_booking_missing_after_verifier', {
-        bookingRef: resolvedBookingRef,
-      }, loginDiagnosticsContext);
-      return { valid: false, error: 'Booking reference not found' };
-    }
-
-    const bookingData = bookingSnapshot.val();
-    const { normalizedBooking } = await ensureBookingSchemaConsistency(resolvedBookingRef, bookingData);
-    recordLoginDiagnostic('booking_validation_booking_loaded_after_verifier', {
-      bookingRef: resolvedBookingRef,
-      bookingFieldNames: Object.keys(bookingData || {}),
-      normalizedFieldNames: Object.keys(normalizedBooking || {}),
-      bookingTourId: bookingData?.tourId || null,
-      passengerNamesCount: Array.isArray(normalizedBooking?.passengerNames) ? normalizedBooking.passengerNames.length : null,
-      pickupPointsCount: Array.isArray(normalizedBooking?.pickupPoints) ? normalizedBooking.pickupPoints.length : null,
-      seatNumbersCount: Array.isArray(normalizedBooking?.seatNumbers) ? normalizedBooking.seatNumbers.length : null,
-    }, loginDiagnosticsContext);
-
     const tourId = resolveVerifierTourId(passengerVerification);
     if (!tourId) {
       logBookingEvent('warn', 'Passenger login tour id unavailable after verifier success', {
@@ -1800,61 +1779,23 @@ const validateBookingReference = async (reference, email, options = {}) => {
       return { valid: false, error: 'Tour information not available' };
     }
 
-    validationPhase = 'passenger_tour_read';
-    const tourSnapshot = await readRealtimeSnapshotWithLoginRetry(
-      realtimeDb.ref(`tours/${tourId}`),
-      { label: 'passenger_tour_after_verifier', diagnostics: loginDiagnosticsContext }
+    validationPhase = 'passenger_safe_projection';
+    const normalizedBooking = normalizePassengerBookingProjection(
+      passengerVerification.booking,
+      resolvedBookingRef,
     );
-
-    if (!tourSnapshot.exists()) {
-      logBookingEvent('warn', 'Passenger login tour missing after verifier success', {
+    const tourData = normalizePassengerTourProjection(passengerVerification.tour, tourId);
+    if (!normalizedBooking || !tourData) {
+      logBookingEvent('warn', 'Passenger login verifier omitted the safe trip projection', {
         bookingRef: maskIdentifier(resolvedBookingRef),
         tourId,
+        hasSafeBooking: Boolean(normalizedBooking),
+        hasSafeTour: Boolean(tourData),
       });
-      recordLoginDiagnostic('booking_validation_tour_missing_after_verifier', {
-        bookingRef: resolvedBookingRef,
-        tourId,
-      }, loginDiagnosticsContext);
-      return { valid: false, error: 'Tour information not available' };
-    }
-
-    const tourData = tourSnapshot.val();
-    recordLoginDiagnostic('booking_validation_tour_loaded_after_verifier', {
-      bookingRef: resolvedBookingRef,
-      tourId,
-      tourFieldNames: Object.keys(tourData || {}),
-      isActive: tourData?.isActive,
-      currentParticipants: tourData?.currentParticipants,
-      maxParticipants: tourData?.maxParticipants,
-      hasParticipantsBranch: Boolean(tourData?.participants),
-      participantsFieldType: typeof tourData?.participants,
-      hasItinerary: Boolean(tourData?.itinerary),
-      hasDriverItinerary: Boolean(tourData?.driver_itinerary),
-    }, loginDiagnosticsContext);
-    // We still use the public participant count for the passenger view, without mutating tour data before joinTour.
-    validationPhase = 'passenger_participant_count_read';
-    let reconciledParticipantCount = typeof tourData.currentParticipants === 'number'
-      ? tourData.currentParticipants
-      : 0;
-
-    try {
-      reconciledParticipantCount = await getTourParticipantCount(tourId, realtimeDb, {
-        loginDiagnostics: loginDiagnosticsContext,
-      });
-    } catch (countError) {
-      logBookingEvent('warn', 'Passenger login continuing without reconciled participant count', {
-        tourId,
-        fallbackCount: reconciledParticipantCount,
-        code: countError?.code || null,
-        error: countError?.message || String(countError),
-      });
-      recordLoginDiagnostic('booking_validation_participant_count_unavailable', {
-        tourId,
-        fallbackCount: reconciledParticipantCount,
-        error: loginDiagnosticsService?.summarizeError
-          ? loginDiagnosticsService.summarizeError(countError)
-          : { code: countError?.code || null, message: countError?.message || String(countError) },
-      }, loginDiagnosticsContext);
+      return {
+        valid: false,
+        error: 'Secure trip information is temporarily unavailable. Please update the app and try again.',
+      };
     }
 
     if (!tourData.isActive) {
@@ -1879,7 +1820,7 @@ const validateBookingReference = async (reference, email, options = {}) => {
       bookingRef: maskIdentifier(resolvedBookingRef),
       tourId,
       hasStablePassengerId: Boolean(stablePassengerId),
-      participantCount: reconciledParticipantCount,
+      participantCount: tourData.currentParticipants,
     });
     recordLoginDiagnostic('booking_validation_succeeded', {
       bookingRef: resolvedBookingRef,
@@ -1887,7 +1828,7 @@ const validateBookingReference = async (reference, email, options = {}) => {
       tourId,
       hasStablePassengerId: Boolean(stablePassengerId),
       identityVersion,
-      participantCount: reconciledParticipantCount,
+      participantCount: tourData.currentParticipants,
     }, loginDiagnosticsContext);
 
     return {
@@ -1900,9 +1841,7 @@ const validateBookingReference = async (reference, email, options = {}) => {
         identityVersion,
       },
       tour: {
-        id: tourId,
         ...tourData,
-        currentParticipants: reconciledParticipantCount
       }
     };
   } catch (error) {
@@ -2019,18 +1958,24 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb, options = {}) =
       throw new Error('Realtime database not initialized');
     }
 
-    // Verify tour exists and is active. Client joins must never create or rewrite tour metadata.
-    const tourSnapshot = await readRealtimeSnapshotWithLoginRetry(
-      db.ref(`tours/${validatedTourId}`),
-      { label: 'join_tour_read', diagnostics: loginDiagnosticsContext }
-    );
-    const tourData = tourSnapshot.exists() ? (tourSnapshot.val() || {}) : {};
-    if (!tourSnapshot.exists()) {
-      recordLoginDiagnostic('join_tour_missing_tour', {
-        tourId: validatedTourId,
-        userId: validatedUserId,
-      }, loginDiagnosticsContext);
-      throw new Error('Tour not found');
+    // Online passenger login supplies a server-built, allowlisted tour projection.
+    // Legacy/internal callers may still verify the parent directly, but production
+    // passenger flow never needs permission to read the complete tour document.
+    const projectedTour = normalizePassengerTourProjection(options.tourProjection, validatedTourId);
+    let tourData = projectedTour;
+    if (!tourData) {
+      const tourSnapshot = await readRealtimeSnapshotWithLoginRetry(
+        db.ref(`tours/${validatedTourId}`),
+        { label: 'join_tour_read', diagnostics: loginDiagnosticsContext }
+      );
+      tourData = tourSnapshot.exists() ? (tourSnapshot.val() || {}) : {};
+      if (!tourSnapshot.exists()) {
+        recordLoginDiagnostic('join_tour_missing_tour', {
+          tourId: validatedTourId,
+          userId: validatedUserId,
+        }, loginDiagnosticsContext);
+        throw new Error('Tour not found');
+      }
     }
 
     if (tourData.isActive === false) {
@@ -2054,9 +1999,11 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb, options = {}) =
 
     // User already joined - return current count
     if (participantSnapshot.exists()) {
-      const reconciledCount = await ensureTourParticipantCount(validatedTourId, db, {
-        loginDiagnostics: loginDiagnosticsContext,
-      });
+      const reconciledCount = projectedTour
+        ? projectedTour.currentParticipants
+        : await ensureTourParticipantCount(validatedTourId, db, {
+          loginDiagnostics: loginDiagnosticsContext,
+        });
       logBookingEvent('info', 'Join tour skipped because user already joined', {
         tourId: validatedTourId,
         userId: maskIdentifier(validatedUserId),
@@ -2090,9 +2037,11 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb, options = {}) =
 
     if (!transactionResult?.committed) {
       // Transaction aborted - likely user already joined
-      const reconciledCount = await ensureTourParticipantCount(validatedTourId, db, {
-        loginDiagnostics: loginDiagnosticsContext,
-      });
+      const reconciledCount = projectedTour
+        ? projectedTour.currentParticipants
+        : await ensureTourParticipantCount(validatedTourId, db, {
+          loginDiagnostics: loginDiagnosticsContext,
+        });
       logBookingEvent('warn', 'Join tour transaction aborted', {
         tourId: validatedTourId,
         userId: maskIdentifier(validatedUserId),
@@ -2101,9 +2050,11 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb, options = {}) =
       return { success: true, currentParticipants: reconciledCount, alreadyJoined: true };
     }
 
-    const currentParticipants = await ensureTourParticipantCount(validatedTourId, db, {
-      loginDiagnostics: loginDiagnosticsContext,
-    });
+    const currentParticipants = projectedTour
+      ? projectedTour.currentParticipants
+      : await ensureTourParticipantCount(validatedTourId, db, {
+        loginDiagnostics: loginDiagnosticsContext,
+      });
     logBookingEvent('info', 'Join tour completed', {
       tourId: validatedTourId,
       userId: maskIdentifier(validatedUserId),

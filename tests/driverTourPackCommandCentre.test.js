@@ -38,7 +38,7 @@ test('maps authoritative per-seat manifest status without using names', () => {
 });
 
 test('unresolved occupants are counted once even when their seat is also unresolved', () => {
-  const pack = { pickups:{p:{pickupId:'p',sequence:0,time:'08:00'}}, passengers:{x:{passengerKey:'x',pickupId:'p',seatLabel:'1A',sourceState:'PAX_ONLY'}}, seats:{s:{seatId:'s',label:'1A',state:'unmatched',passengerKey:'x'}}, timeline:{}, quality:{} };
+  const pack = { pickups:{p:{pickupId:'p',sequence:0,time:'08:00'}}, passengers:{x:{passengerKey:'x',pickupId:'p',seatLabel:'1A',sourceState:'PAX_ONLY'}}, seats:{s:{seatId:'s',label:'1A',state:'unmatched',passengerKey:'x'}}, timeline:{}, quality:{ pickupManifestPublishable: true } };
   assert.equal(commandCentreModel(pack, null).unresolved, 1);
 });
 
@@ -63,7 +63,7 @@ test('derives stop progress from manifest authority and retains passengers witho
     },
     seats: {},
     timeline: {},
-    quality: {},
+    quality: { pickupManifestPublishable: true },
   };
   const manifest = { bookings: [{ id: 'b1', seatLabels: ['1a', '1b'], passengerStatus: ['BOARDED', 'NO_SHOW'] }] };
   const model = commandCentreModel(pack, manifest);
@@ -71,4 +71,23 @@ test('derives stop progress from manifest authority and retains passengers witho
   assert.equal(model.pickups[1].pickup.name, 'Pickup details unavailable');
   assert.equal(model.pickups[1].progress.unresolved, 1);
   assert.deepEqual(model.progress, { total: 3, boarded: 1, pending: 0, noShow: 1, unresolved: 1 });
+});
+
+test('fails closed when reconciliation withholds the report pickup manifest', () => {
+  const pack = {
+    dateISO: '2026-08-21',
+    pickups: { p1: { pickupId: 'p1', sequence: 0, name: 'Balloch', time: '08:00' } },
+    passengers: { one: { passengerKey: 'one', bookingRef: 'B1', pickupId: 'p1', name: 'Alex', note: 'Driver-only note' } },
+    seats: { s1: { seatId: 's1', label: 'S1', state: 'occupied', passengerKey: 'one' } },
+    timeline: {},
+    quality: { pickupManifestPublishable: false },
+  };
+
+  const model = commandCentreModel(pack, { bookings: [{ id: 'B1', seatLabels: ['S1'] }] });
+  assert.equal(model.pickupManifestAvailable, false);
+  assert.deepEqual(model.pickups, []);
+  assert.deepEqual(model.passengers, []);
+  assert.deepEqual(model.seats, []);
+  assert.equal(model.unresolved, 0);
+  assert.match(model.qualityIssues[0], /withheld.*authoritative boarding manifest/i);
 });

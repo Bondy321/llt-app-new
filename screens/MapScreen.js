@@ -21,6 +21,8 @@ import { realtimeDb } from '../firebase';
 import { COLORS as THEME } from '../theme';
 import { getMinutesAgo, parseTimestampMs } from '../services/timeUtils';
 import logger from '../services/loggerService';
+const { buildDirectionsUrls } = require('../utils/directions');
+const { resolvePrimaryPickup } = require('../utils/pickupPresentation');
 import { getDriverLocationPresentation } from '../utils/driverLocation';
 
 // Brand Colors
@@ -91,7 +93,7 @@ const normalizeMapCoords = (coords) => {
   };
 };
 
-export default function MapScreen({ onBack, tourId, tourData }) {
+export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
   const MIN_REFRESH_SPINNER_MS = 120;
   const [driverLocation, setDriverLocation] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
@@ -100,6 +102,7 @@ export default function MapScreen({ onBack, tourId, tourData }) {
   const [userLocationNotice, setUserLocationNotice] = useState('');
   const [freshnessNow, setFreshnessNow] = useState(() => Date.now());
   const [mapType, setMapType] = useState('standard');
+  const primaryPickup = useMemo(() => resolvePrimaryPickup(bookingData), [bookingData]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showDetailCard, setShowDetailCard] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
@@ -490,6 +493,37 @@ export default function MapScreen({ onBack, tourId, tourData }) {
     });
   }, [tourId]);
 
+  const openDirections = useCallback(async (destination, source) => {
+    const urls = buildDirectionsUrls(destination, Platform.OS);
+    if (!urls) return false;
+    let targetUrl = urls.webUrl;
+    try {
+      const supported = urls.nativeUrl ? await Linking.canOpenURL(urls.nativeUrl) : false;
+      targetUrl = supported ? urls.nativeUrl : urls.webUrl;
+    } catch (error) {
+      logger.warn('MapScreen', 'Directions URL support check failed; falling back to web', {
+        tourId,
+        source,
+        platform: Platform.OS,
+        error: error?.message || String(error),
+      });
+    }
+    try {
+      await Linking.openURL(targetUrl);
+      return true;
+    } catch (error) {
+      logger.warn('MapScreen', 'Directions launch failed', {
+        tourId,
+        source,
+        platform: Platform.OS,
+        usedWebFallback: targetUrl === urls.webUrl,
+        error: error?.message || String(error),
+      });
+      Alert.alert('Directions unavailable', 'Could not open maps on this device. Please try again in a moment.');
+      return false;
+    }
+  }, [tourId]);
+
   const handleGetDirections = useCallback(async () => {
     logger.info('MapScreen', 'Directions requested', {
       tourId,
@@ -506,44 +540,21 @@ export default function MapScreen({ onBack, tourId, tourData }) {
     }
 
     const { latitude, longitude } = driverLocationPoint;
-    const label = 'Bus Pickup Point';
-    const url = Platform.select({
-      ios: `maps://app?daddr=${latitude},${longitude}&dirflg=d`,
-      android: `google.navigation:q=${latitude},${longitude}`,
+    await openDirections(`${latitude},${longitude}`, 'driver_location');
+  }, [driverLocationPoint, driverLocationPresentation.actionable, locationFreshness, openDirections, tourId]);
+
+  const handlePickupDirections = useCallback(async () => {
+    if (!primaryPickup.destination) return;
+    if (Platform.OS === 'ios') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+    logger.info('MapScreen', 'Booked pickup directions requested', {
+      tourId,
+      hasPickupAddress: Boolean(primaryPickup.address),
+      hasPickupLocation: Boolean(primaryPickup.location),
     });
-
-    const webUrl = `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`;
-
-    let targetUrl = webUrl;
-
-    try {
-      const supported = await Linking.canOpenURL(url);
-      logger.debug('MapScreen', 'Directions URL support checked', {
-        tourId,
-        supported,
-        platform: Platform.OS,
-      });
-      targetUrl = supported ? url : webUrl;
-    } catch (error) {
-      logger.warn('MapScreen', 'Directions URL support check failed; falling back to web', {
-        tourId,
-        platform: Platform.OS,
-        error: error?.message || String(error),
-      });
-    }
-
-    try {
-      await Linking.openURL(targetUrl);
-    } catch (error) {
-      logger.warn('MapScreen', 'Directions launch failed', {
-        tourId,
-        platform: Platform.OS,
-        usedWebFallback: targetUrl === webUrl,
-        error: error?.message || String(error),
-      });
-      Alert.alert('Directions unavailable', 'Could not open maps on this device. Please try again in a moment.');
-    }
-  }, [driverLocationPoint, driverLocationPresentation.actionable, locationFreshness, tourId]);
+    await openDirections(primaryPickup.destination, 'booked_pickup');
+  }, [openDirections, primaryPickup, tourId]);
 
   const handleCallDriver = useCallback(async () => {
     if (Platform.OS === 'ios') {
@@ -905,6 +916,19 @@ export default function MapScreen({ onBack, tourId, tourData }) {
                         <Text style={styles.primaryButtonText}>Get Directions</Text>
                       </TouchableOpacity>
 
+                      {primaryPickup.destination ? (
+                        <TouchableOpacity
+                          style={styles.secondaryButton}
+                          onPress={handlePickupDirections}
+                          activeOpacity={0.85}
+                          accessibilityLabel="Directions to your booked pickup"
+                          accessibilityHint={`${primaryPickup.location || primaryPickup.address}${primaryPickup.formattedDate ? ` on ${primaryPickup.formattedDate}` : ''}`}
+                          accessibilityRole="button"
+                        >
+                          <MaterialCommunityIcons name="map-marker-path" size={20} color={COLORS.primaryBlue} />
+                        </TouchableOpacity>
+                      ) : null}
+
                       <TouchableOpacity
                         style={styles.secondaryButton}
                         onPress={handleCallDriver}
@@ -933,6 +957,19 @@ export default function MapScreen({ onBack, tourId, tourData }) {
                           : 'No pickup point is live yet. As soon as the driver shares one, this map will update automatically.'}
                       </Text>
                     </View>
+                    {primaryPickup.destination ? (
+                      <TouchableOpacity
+                        style={styles.pickupDirectionsButton}
+                        onPress={handlePickupDirections}
+                        activeOpacity={0.85}
+                        accessibilityLabel="Directions to your booked pickup"
+                        accessibilityHint={`${primaryPickup.location || primaryPickup.address}${primaryPickup.formattedDate ? ` on ${primaryPickup.formattedDate}` : ''}`}
+                        accessibilityRole="button"
+                      >
+                        <MaterialCommunityIcons name="map-marker-path" size={18} color={COLORS.white} />
+                        <Text style={styles.pickupDirectionsButtonText}>Directions to your pickup</Text>
+                      </TouchableOpacity>
+                    ) : null}
                     <TouchableOpacity
                       style={styles.contactButton}
                       onPress={handleCallDriver}
@@ -1336,6 +1373,23 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
     paddingHorizontal: 10,
+  },
+  pickupDirectionsButton: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    marginBottom: 10,
+    backgroundColor: COLORS.primaryBlue,
+    borderRadius: 12,
+    gap: 8,
+  },
+  pickupDirectionsButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: COLORS.white,
   },
   contactButton: {
     flexDirection: 'row',

@@ -3,8 +3,10 @@ import { Alert, StyleSheet, Text, TouchableOpacity, View, Linking } from 'react-
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { COLORS, SPACING, RADIUS } from '../theme';
 import { getDriverLocationPresentation } from '../utils/driverLocation';
+const { buildDirectionsUrls } = require('../utils/directions');
+const { resolvePrimaryPickup } = require('../utils/pickupPresentation');
 
-export default function MapScreen({ onBack, tourData }) {
+export default function MapScreen({ onBack, tourData, bookingData }) {
   const driverLocation = tourData?.driverLocation;
   const presentation = getDriverLocationPresentation(driverLocation);
   const latitude = presentation.coordinates?.latitude;
@@ -12,6 +14,8 @@ export default function MapScreen({ onBack, tourData }) {
   const mapsUrl = presentation.actionable
     ? `https://www.google.com/maps?q=${latitude},${longitude}`
     : null;
+  const primaryPickup = resolvePrimaryPickup(bookingData);
+  const pickupMapsUrl = buildDirectionsUrls(primaryPickup.destination, 'web')?.webUrl || null;
 
   const handleOpenInMaps = async () => {
     if (!mapsUrl) return;
@@ -19,6 +23,15 @@ export default function MapScreen({ onBack, tourData }) {
       await Linking.openURL(mapsUrl);
     } catch {
       Alert.alert('Maps unavailable', 'Could not open Google Maps from this browser.');
+    }
+  };
+
+  const handleOpenPickupInMaps = async () => {
+    if (!pickupMapsUrl) return;
+    try {
+      await Linking.openURL(pickupMapsUrl);
+    } catch {
+      Alert.alert('Maps unavailable', 'Could not open your pickup in Google Maps from this browser.');
     }
   };
 
@@ -50,6 +63,17 @@ export default function MapScreen({ onBack, tourData }) {
               : 'No driver pickup point or live location has been published yet.'}
           </Text>
         )}
+
+        {pickupMapsUrl ? (
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={handleOpenPickupInMaps}
+            accessibilityRole="button"
+            accessibilityLabel="Directions to your booked pickup"
+          >
+            <Text style={styles.primaryButtonText}>Directions to your pickup</Text>
+          </TouchableOpacity>
+        ) : null}
 
         <TouchableOpacity style={styles.secondaryButton} onPress={onBack}>
           <Text style={styles.secondaryButtonText}>Back</Text>

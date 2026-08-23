@@ -5,6 +5,28 @@ const path = require('node:path');
 const SERVICE_PATH = path.resolve(__dirname, '../services/bookingServiceRealtime.js');
 const FIREBASE_PATH = path.resolve(__dirname, '../firebase.js');
 
+const verifiedPassengerPayload = (overrides = {}) => ({
+  valid: true,
+  bookingRef: 'ABC123',
+  tourId: '5112D_8',
+  booking: {
+    id: 'ABC123',
+    tourId: '5112D_8',
+    tourCode: '5112D 8',
+    passengerNames: ['Alex'],
+    seatNumbers: ['12'],
+    pickupPoints: [{ date: '24/08/2026', location: 'Balloch', time: '08:00' }],
+  },
+  tour: {
+    id: '5112D_8',
+    name: 'Highlands',
+    tourCode: '5112D 8',
+    isActive: true,
+    currentParticipants: 7,
+  },
+  ...overrides,
+});
+
 const createMockRealtimeDb = (state, options = {}) => {
   const buildRef = (dbPath = '') => {
     const segments = dbPath.split('/').filter(Boolean);
@@ -145,9 +167,7 @@ test('validateBookingReference normalizes verifier tourId before tour lookup', a
   try {
     global.fetch = async () => ({
       ok: true,
-      json: async () => ({
-        valid: true,
-        bookingRef: 'ABC123',
+      json: async () => verifiedPassengerPayload({
         tourId: ' 5112d 8 ',
         tourCode: 'SHOULD_NOT_BE_USED',
       }),
@@ -230,11 +250,7 @@ test('validateBookingReference sends x-firebase-appcheck header when token is av
       capturedHeaders = options.headers;
       return {
         ok: true,
-        json: async () => ({
-          valid: true,
-          bookingRef: 'ABC123',
-          tourId: '5112D_8',
-        }),
+        json: async () => verifiedPassengerPayload(),
       };
     };
 
@@ -277,11 +293,7 @@ test('validateBookingReference does not send x-firebase-appcheck header when App
       capturedHeaders = options.headers;
       return {
         ok: true,
-        json: async () => ({
-          valid: true,
-          bookingRef: 'ABC123',
-          tourId: '5112D_8',
-        }),
+        json: async () => verifiedPassengerPayload(),
       };
     };
 
@@ -433,11 +445,7 @@ test('validateBookingReference retries with derived verifier URL when explicit U
       return {
         ok: true,
         status: 200,
-        json: async () => ({
-          valid: true,
-          bookingRef: 'ABC123',
-          tourId: '5112D_8',
-        }),
+        json: async () => verifiedPassengerPayload(),
       };
     };
 
@@ -503,11 +511,7 @@ test('validateBookingReference sends Firebase bearer token to passenger verifier
       capturedHeaders = options.headers;
       return {
         ok: true,
-        json: async () => ({
-          valid: true,
-          bookingRef: 'ABC123',
-          tourId: '5112D_8',
-        }),
+        json: async () => verifiedPassengerPayload(),
       };
     };
 
@@ -537,7 +541,7 @@ test('validateBookingReference sends Firebase bearer token to passenger verifier
   }
 });
 
-test('validateBookingReference retries transient post-verifier booking reads', async () => {
+test('validateBookingReference uses the server-safe projection without raw booking or tour reads', async () => {
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verifyPassengerLogin';
   process.env.EXPO_PUBLIC_LOGIN_REALTIME_READ_RETRY_BASE_MS = '0';
 
@@ -546,12 +550,16 @@ test('validateBookingReference retries transient post-verifier booking reads', a
     global.fetch = async () => ({
       ok: true,
       status: 200,
-      json: async () => ({ valid: true, bookingRef: 'ABC123', tourId: '5112D_8' }),
+      json: async () => verifiedPassengerPayload(),
     });
 
-    let bookingReadAttempts = 0;
-    const transientPermissionDenied = new Error('Permission denied');
-    transientPermissionDenied.code = 'PERMISSION_DENIED';
+    let rawReadAttempts = 0;
+    const blockedRawRead = () => {
+      rawReadAttempts += 1;
+      const error = new Error('Permission denied');
+      error.code = 'PERMISSION_DENIED';
+      return error;
+    };
 
     const service = loadServiceWithDb({
       drivers: {},
@@ -569,17 +577,18 @@ test('validateBookingReference retries transient post-verifier booking reads', a
       },
     }, {
       readErrors: {
-        'bookings/ABC123': () => {
-          bookingReadAttempts += 1;
-          return bookingReadAttempts === 1 ? transientPermissionDenied : null;
-        },
+        'bookings/ABC123': blockedRawRead,
+        'tours/5112D_8': blockedRawRead,
       },
     });
 
     const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
 
     assert.equal(result.valid, true);
-    assert.equal(bookingReadAttempts, 2);
+    assert.equal(rawReadAttempts, 0);
+    assert.deepEqual(Object.keys(result.tour).sort(), [
+      'currentParticipants', 'id', 'isActive', 'name', 'tourCode',
+    ]);
   } finally {
     global.fetch = originalFetch;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
@@ -587,7 +596,7 @@ test('validateBookingReference retries transient post-verifier booking reads', a
   }
 });
 
-test('validateBookingReference continues when participant count reconciliation is unavailable', async () => {
+test('validateBookingReference uses the bounded server participant count without reading participant identities', async () => {
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verifyPassengerLogin';
   process.env.EXPO_PUBLIC_LOGIN_REALTIME_READ_RETRY_BASE_MS = '0';
 
@@ -596,7 +605,7 @@ test('validateBookingReference continues when participant count reconciliation i
     global.fetch = async () => ({
       ok: true,
       status: 200,
-      json: async () => ({ valid: true, bookingRef: 'ABC123', tourId: '5112D_8' }),
+      json: async () => verifiedPassengerPayload(),
     });
 
     const permissionDenied = new Error('Permission denied');
@@ -708,7 +717,7 @@ test('validateBookingReference keeps passenger flow for non D- codes', async () 
   try {
     global.fetch = async () => ({
       ok: true,
-      json: async () => ({ valid: true, bookingRef: 'ABC123', tourId: '5112D_8' }),
+      json: async () => verifiedPassengerPayload(),
     });
 
     const service = loadServiceWithDb({
@@ -745,7 +754,7 @@ test('validateBookingReference sends passenger refs to verifier without probing 
       return {
         ok: true,
         status: 200,
-        json: async () => ({ valid: true, bookingRef: 'ABC123', tourId: '5112D_8' }),
+        json: async () => verifiedPassengerPayload(),
       };
     };
 

@@ -20,6 +20,7 @@ Every join uses `departureKey = YYYY-MM-DD::NORMALIZED_TOUR_ID`. Display names a
 - The sole passenger telephone exposure is the approved booking-lead phone; passenger email is never included.
 - A TourPax-only occupant stays visible as advisory-only with no inferred pickup or contact data.
 - An occupant conflict suppresses the visual seat map only. A safe pickup manifest remains usable where its quality policy permits it.
+- `quality.pickupManifestPublishable` is enforced by the mobile composition layer. When it is not exactly `true`, report pickup/passenger/seat facts are withheld from Run and People; the authoritative Passenger Manifest remains available for boarding.
 - Retention is tour end plus 72 hours. Expiry removes operational PII and driver actions.
 - `departureKey`, not a bare tour ID, is the cross-project and cross-screen identity.
 
@@ -28,9 +29,9 @@ Every join uses `departureKey = YYYY-MM-DD::NORMALIZED_TOUR_ID`. Display names a
 The shell has four stable sections:
 
 - **Overview**: exact departure confirmation, offline readiness, manifest source, next future event, unresolved fact count, boarding total and quality warnings.
-- **Run**: ordered pickup stops with manifest-derived boarded/pending/no-show/unresolved totals, followed by the unified report timeline.
-- **People**: report passengers grouped by pickup, manifest-derived state, approved booking-lead call actions, actual-label coach layout and an accessible list alternative.
-- **Tour**: hotels with available call/directions actions, services and references, coach/operational contacts, client itinerary and clearly marked confidential driver itinerary.
+- **Run**: ordered pickup stops with manifest-derived boarded/pending/no-show/unresolved totals, address-based directions where available, followed by the unified report timeline.
+- **People**: report passengers grouped by pickup, manifest-derived state, approved booking-lead call actions, bounded driver notes, actual-label coach layout and an accessible list alternative.
+- **Tour**: hotels with postcode-aware call/directions actions, services with positive quantities and references, coach/operational contacts, client itinerary and clearly marked confidential driver itinerary.
 
 Seat state is always written as text as well as colour: `Empty`, `Pending`, `Boarded`, `No-show`, `Unmatched` or `Conflict`. Conflict policy suppresses the visual layout while preserving the accessible list. Interactive controls have a minimum 48-point height and explicit accessibility roles, labels and selected/disabled state.
 

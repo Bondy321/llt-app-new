@@ -56,6 +56,10 @@ import DriverTourPackScreen from './screens/DriverTourPackScreen';
 const { getLoginTransitionDurationMs } = require('./screens/loginFlow');
 const { isEligibleEdgeSwipe, shouldCommitEdgeSwipeHome } = require('./services/swipeHomeNavigation');
 const { markNotificationRead } = require('./services/notificationInboxService');
+const {
+  normalizePassengerIdentityProjection,
+  normalizePassengerTourProjection,
+} = require('./services/passengerDataBoundary');
 
 const IDENTITY_VERSION = 'pax_v1';
 const IDENTITY_SESSION_KEYS = {
@@ -767,8 +771,25 @@ function AppContent() {
       }
 
       if (savedBookingData[1]) {
-        const bookingData = JSON.parse(savedBookingData[1]);
-        const tourData = savedTourData[1] ? JSON.parse(savedTourData[1]) : null;
+        const storedBookingData = JSON.parse(savedBookingData[1]);
+        const storedTourData = savedTourData[1] ? JSON.parse(savedTourData[1]) : null;
+        const isDriverBooking = Boolean(storedBookingData?.isDriver || storedBookingData?.id?.startsWith('D-'));
+        const bookingData = isDriverBooking
+          ? storedBookingData
+          : normalizePassengerIdentityProjection(storedBookingData, storedBookingData?.id);
+        const tourData = isDriverBooking
+          ? storedTourData
+          : normalizePassengerTourProjection(storedTourData, storedTourData?.id);
+        if (!bookingData || !tourData) {
+          logger.warn('Session', 'Passenger session requires a secure online refresh');
+          return;
+        }
+        if (!isDriverBooking) {
+          await SessionStorage.multiSet([
+            [SESSION_KEYS.TOUR_DATA, JSON.stringify(tourData)],
+            [SESSION_KEYS.BOOKING_DATA, JSON.stringify(bookingData)],
+          ]);
+        }
         const screen = lastScreen[1] || 'Login';
         
         setBookingData(bookingData);
@@ -1244,6 +1265,7 @@ function AppContent() {
         }, loginDiagnosticsContext);
         const joinResult = await joinTour(tourDetails.id, authUid, undefined, {
           loginDiagnostics: loginDiagnosticsContext,
+          tourProjection: tourDetails,
         });
         await loginDiagnostics.recordLoginDiagnostic('passenger_join_tour_succeeded', {
           tourId: tourDetails.id,
@@ -1800,7 +1822,7 @@ case 'Itinerary':
         // Use active tour ID if passed, else fall back to session data
         const mapTourId = resolveTourId(screenParams.tourId, tourData?.id, tourData?.tourCode);
         const mapReturnTarget = screenParams?.from || (isDriverSession ? 'DriverHome' : 'TourHome');
-        return <MapScreen {...screenProps} onBack={() => navigateTo(mapReturnTarget)} tourId={mapTourId} tourData={tourData} />;
+        return <MapScreen {...screenProps} onBack={() => navigateTo(mapReturnTarget)} tourId={mapTourId} tourData={tourData} bookingData={bookingData} />;
       case 'NotificationPreferences':
         const notificationReturnTarget = screenParams?.returnTo || (isDriverSession ? 'DriverHome' : 'TourHome');
         const notificationPreferencesUserId = resolveAuthScopedUserId({

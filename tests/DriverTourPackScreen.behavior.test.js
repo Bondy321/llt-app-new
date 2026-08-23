@@ -79,9 +79,9 @@ const pack = {
   tourCode: '5001D 1',
   dateISO: '2026-09-10',
   tour: { name: 'Highland Explorer' },
-  quality: { state: 'complete', conflicts: 0, tourPaxOnly: 0, paxOnly: 0, unseated: 0, missingReports: 0, suppressSeatMap: false },
+  quality: { state: 'complete', conflicts: 0, tourPaxOnly: 0, paxOnly: 0, unseated: 0, missingReports: 0, suppressSeatMap: false, pickupManifestPublishable: true },
   pickups: { p1: { pickupId: 'p1', sequence: 0, name: 'Main Street', dateISO: '2026-09-10', time: '08:00', address: '1 Main Street', passengerCount: 1, bookingCount: 1 } },
-  passengers: { pax1: { passengerKey: 'pax1', bookingRef: 'B1', name: 'Jane Driver', pickupId: 'p1', seatLabel: '1A', sourceState: 'MATCHED', bookingLeadContactId: '' } },
+  passengers: { pax1: { passengerKey: 'pax1', bookingRef: 'B1', name: 'Jane Driver', pickupId: 'p1', seatLabel: '1A', sourceState: 'MATCHED', bookingLeadContactId: '', note: 'Front step assistance required' } },
   seats: { seat1: { seatId: 'seat1', label: '1A', state: 'occupied', passengerKey: 'pax1' } },
   timeline: { event1: { eventId: 'event1', dateISO: '2026-09-10', time: '08:00', title: 'Main Street pickup', subtitle: 'Main Street', type: 'pickup', sequence: 0 } },
   hotels: {}, services: {},
@@ -109,10 +109,12 @@ test('renders assignment/offline answers and authoritative progress across tabs'
   assert.ok(allText(renderer.root).includes('Ready offline'));
 
   await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Run tab' }).props.onPress());
+  assert.ok(renderer.root.findAllByProps({ accessibilityLabel: 'Directions to Main Street' }).length > 0);
   assert.ok(allText(renderer.root).some((value) => value.includes('1 boarded • 0 pending • 0 no-show')));
 
   await act(async () => renderer.root.findByProps({ accessibilityLabel: 'People tab' }).props.onPress());
   assert.ok(renderer.root.findAllByProps({ accessibilityLabel: 'Jane Driver, seat 1A, Boarded' }).length > 0);
+  assert.ok(allText(renderer.root).includes('Driver note: Front step assistance required'));
   const visualSeat = renderer.root.findByProps({ accessibilityLabel: 'Seat 1A: Boarded, Jane Driver' });
   assert.notEqual(visualSeat.props.accessibilityRole, 'button');
 
@@ -125,7 +127,7 @@ test('surfaces semantic acknowledgement and records offline progress and structu
   const operationalPack = {
     ...pack,
     hotels: {
-      hotel_1: { hotelId: 'hotel_1', name: 'Operations Hotel', address: 'Hotel Road', phone: '', nights: '1', boardBasis: 'DBB', arrivalDateISO: '2026-09-10', isPlaceholder: false },
+      hotel_1: { hotelId: 'hotel_1', name: 'Operations Hotel', address: '', postcode: 'G1 1AA', phone: '', nights: '1', boardBasis: 'DBB', arrivalDateISO: '2026-09-10', isPlaceholder: false },
     },
     services: {
       service_1: { serviceId: 'service_1', type: 'attraction', description: 'Castle visit', supplier: 'Castle', dateISO: '2026-09-10', time: '14:00', bookingRef: 'SAFE-REF', notes: '', quantity: 1 },
@@ -173,6 +175,8 @@ test('surfaces semantic acknowledgement and records offline progress and structu
   const serviceControls = renderer.root.findByProps({ accessibilityLabel: 'Castle visit progress controls' });
   await act(async () => serviceControls.findByProps({ accessibilityLabel: 'Complete' }).props.onPress());
   assert.ok(allText(renderer.root).includes('Castle visit marked completed. Saved offline and queued.'));
+  assert.ok(allText(renderer.root).includes('Quantity: 1'));
+  assert.ok(renderer.root.findAllByProps({ accessibilityLabel: 'Directions to Operations Hotel' }).length > 0);
 
   assert.deepEqual(calls, [
     ['acknowledge'],
@@ -181,5 +185,32 @@ test('surfaces semantic acknowledgement and records offline progress and structu
     ['hotel', 'hotel_1', 'COMPLETED'],
     ['service', 'service_1', 'COMPLETED'],
   ]);
+  await act(async () => renderer.unmount());
+});
+
+test('withholds report-derived passenger and pickup content when the quality gate is closed', async () => {
+  const Screen = require('../screens/DriverTourPackScreen').default;
+  let renderer;
+  await act(async () => {
+    renderer = TestRenderer.create(React.createElement(Screen, {
+      packState: {
+        pack: { ...pack, quality: { ...pack.quality, pickupManifestPublishable: false } },
+        state: 'ready',
+        source: 'cache',
+      },
+      driverData: { id: 'D-ONE', currentTourId: '5001D_1', name: 'Driver One' },
+      onBack: () => {},
+      onNavigate: () => {},
+    }));
+    await Promise.resolve();
+  });
+
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Run tab' }).props.onPress());
+  assert.ok(allText(renderer.root).some((value) => value.includes('withheld because reconciliation did not pass')));
+  assert.equal(renderer.root.findAllByProps({ accessibilityLabel: 'Directions to Main Street' }).length, 0);
+
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'People tab' }).props.onPress());
+  assert.equal(renderer.root.findAllByProps({ accessibilityLabel: 'Jane Driver, seat 1A, Boarded' }).length, 0);
+  assert.ok(renderer.root.findAllByProps({ accessibilityLabel: 'Open authoritative boarding manifest' }).length > 0);
   await act(async () => renderer.unmount());
 });

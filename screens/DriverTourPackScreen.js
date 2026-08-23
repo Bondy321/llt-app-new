@@ -17,6 +17,13 @@ import { getTourManifest } from '../services/bookingServiceRealtime';
 import { normalizeTourId, resolveTourId } from '../services/tourIdentityService';
 const { commandCentreModel } = require('../services/driverTourPackCommandCentre');
 const { toTelephoneUrl } = require('../utils/bookingLeadPhone');
+const { buildDestinationQuery, buildDirectionsUrls } = require('../utils/directions');
+
+const formatPositiveQuantity = (value) => {
+  const quantity = Number(value);
+  if (!Number.isFinite(quantity) || quantity <= 0) return '';
+  return Number.isInteger(quantity) ? String(quantity) : String(Number(quantity.toFixed(2)));
+};
 
 const TABS = Object.freeze(['Overview', 'Run', 'People', 'Tour']);
 const ISSUE_CATEGORIES = Object.freeze([
@@ -230,12 +237,19 @@ export default function DriverTourPackScreen({ packState, actionState, isConnect
     const telephoneUrl = toTelephoneUrl(phone);
     if (telephoneUrl) Linking.openURL(telephoneUrl).catch(() => undefined);
   };
-  const directions = (address) => {
-    const query = String(address || '').trim();
-    if (!query) return;
-    const encoded = encodeURIComponent(query);
-    const url = Platform.OS === 'ios' ? `maps://?q=${encoded}` : `geo:0,0?q=${encoded}`;
-    Linking.openURL(url).catch(() => Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encoded}`).catch(() => undefined));
+  const directions = async (...destinationParts) => {
+    const destination = buildDestinationQuery(destinationParts);
+    const urls = buildDirectionsUrls(destination, Platform.OS);
+    if (!urls) return;
+    let targetUrl = urls.webUrl;
+    try {
+      targetUrl = urls.nativeUrl && await Linking.canOpenURL(urls.nativeUrl)
+        ? urls.nativeUrl
+        : urls.webUrl;
+    } catch (_) {
+      targetUrl = urls.webUrl;
+    }
+    await Linking.openURL(targetUrl).catch(() => undefined);
   };
 
   if (!pack) {
@@ -374,28 +388,41 @@ export default function DriverTourPackScreen({ packState, actionState, isConnect
   const run = (
     <>
       <Section title="Ordered pickup run">
-        {model.pickups.length ? model.pickups.map(({ pickup, progress }, index) => (
+        {!model.pickupManifestAvailable ? (
+          <View style={styles.warning} accessibilityRole="alert">
+            <Text style={styles.warningText}>Report pickup details are withheld because reconciliation did not pass the publication safety gate. Use the authoritative boarding manifest.</Text>
+          </View>
+        ) : model.pickups.length ? model.pickups.map(({ pickup, progress }, index) => (
           <View key={pickup.pickupId} style={styles.card}>
             <Text style={styles.cardTitle}>{index + 1}. {pickup.name}</Text>
             <Text style={styles.muted}>{when(pickup.dateISO, pickup.time)} • {pickup.address || 'Address unavailable'}</Text>
             <ProgressText progress={progress} />
             {pickup.pickupId !== '__unassigned__' ? (
-              <StateControls
-                label={pickup.name}
-                current={actions.pickupStops?.[pickup.pickupId]?.state || 'PENDING'}
-                disabled={Boolean(workingKey)}
-                values={[
-                  ['PENDING', 'Reset', 'backup-restore'],
-                  ['ARRIVED', 'Arrived', 'map-marker-check-outline'],
-                  ['COMPLETED', 'Complete', 'check-circle-outline'],
-                  ['SKIPPED', 'Skip', 'skip-next-outline'],
-                ]}
-                onChange={(progressState) => runAction(
-                  `pickup:${pickup.pickupId}`,
-                  () => actionState.setPickup(pickup.pickupId, progressState),
-                  `${pickup.name} marked ${progressState.toLowerCase()}.`,
-                )}
-              />
+              <>
+                {String(pickup.address || '').trim() ? (
+                  <ActionButton
+                    icon="directions"
+                    label={`Directions to ${pickup.name}`}
+                    onPress={() => directions(pickup.name, pickup.address)}
+                  />
+                ) : null}
+                <StateControls
+                  label={pickup.name}
+                  current={actions.pickupStops?.[pickup.pickupId]?.state || 'PENDING'}
+                  disabled={Boolean(workingKey)}
+                  values={[
+                    ['PENDING', 'Reset', 'backup-restore'],
+                    ['ARRIVED', 'Arrived', 'map-marker-check-outline'],
+                    ['COMPLETED', 'Complete', 'check-circle-outline'],
+                    ['SKIPPED', 'Skip', 'skip-next-outline'],
+                  ]}
+                  onChange={(progressState) => runAction(
+                    `pickup:${pickup.pickupId}`,
+                    () => actionState.setPickup(pickup.pickupId, progressState),
+                    `${pickup.name} marked ${progressState.toLowerCase()}.`,
+                  )}
+                />
+              </>
             ) : null}
             <Text style={styles.muted}>{pickup.bookingCount} booking{pickup.bookingCount === 1 ? '' : 's'} • {pickup.passengerCount} report passenger{pickup.passengerCount === 1 ? '' : 's'}</Text>
           </View>
@@ -421,7 +448,11 @@ export default function DriverTourPackScreen({ packState, actionState, isConnect
   const people = (
     <>
       <Section title="Passenger manifest by pickup">
-        {model.pickups.length ? model.pickups.map(({ pickup, passengers }) => (
+        {!model.pickupManifestAvailable ? (
+          <View style={styles.warning} accessibilityRole="alert">
+            <Text style={styles.warningText}>Report passenger groups are withheld because reconciliation did not pass the publication safety gate. Continue in the authoritative boarding manifest.</Text>
+          </View>
+        ) : model.pickups.length ? model.pickups.map(({ pickup, passengers }) => (
           <View key={pickup.pickupId} style={styles.card}>
             <Text style={styles.cardTitle}>{pickup.name} • {pickup.time || 'TBC'}</Text>
             {passengers.length ? passengers.map((passenger) => {
@@ -431,6 +462,7 @@ export default function DriverTourPackScreen({ packState, actionState, isConnect
                   <View style={styles.grow}>
                     <Text style={styles.cardTitle}>{passenger.name}</Text>
                     <Text style={styles.muted}>Seat {passenger.seatLabel || 'unverified'} • {passenger.sourceState === 'MATCHED' ? 'Pickup confirmed' : 'Needs attention'}</Text>
+                    {String(passenger.note || '').trim() ? <Text style={styles.note}>Driver note: {passenger.note}</Text> : null}
                     {lead?.phone ? <ActionButton icon="phone-outline" label={`Call booking lead for ${passenger.bookingRef}`} onPress={() => call(lead.phone)} /> : null}
                   </View>
                   <StatePill value={passenger.displayState} />
@@ -441,7 +473,7 @@ export default function DriverTourPackScreen({ packState, actionState, isConnect
         )) : <EmptyMessage>No passenger groups are published.</EmptyMessage>}
       </Section>
       <ActionButton icon="account-group-outline" label="Open authoritative boarding manifest" onPress={() => go('PassengerManifest')} />
-      <Section title="Coach seating">
+      {model.pickupManifestAvailable ? <Section title="Coach seating">
         <View style={styles.row}>
           <ActionButton icon="view-grid-outline" label="Visual seats" selected={seatView === 'visual'} onPress={() => setSeatView('visual')} />
           <ActionButton icon="format-list-bulleted" label="Accessible seat list" selected={seatView === 'list'} onPress={() => setSeatView('list')} />
@@ -460,7 +492,7 @@ export default function DriverTourPackScreen({ packState, actionState, isConnect
             </View>
           ))}</View>
         ) : null}
-      </Section>
+      </Section> : null}
     </>
   );
 
@@ -473,10 +505,10 @@ export default function DriverTourPackScreen({ packState, actionState, isConnect
         {hotels.length ? hotels.map((hotel) => (
           <View key={hotel.hotelId} style={styles.card}>
             <Text style={styles.cardTitle}>{hotel.name}</Text>
-            <Text style={styles.muted}>{[hotel.address, `${hotel.nights} night(s)`, hotel.boardBasis].filter(Boolean).join(' • ')}</Text>
+            <Text style={styles.muted}>{[hotel.address, hotel.postcode, `${hotel.nights} night(s)`, hotel.boardBasis].filter(Boolean).join(' • ')}</Text>
             <View style={styles.row}>
               {hotel.phone ? <ActionButton icon="phone-outline" label={`Call ${hotel.name}`} onPress={() => call(hotel.phone)} /> : null}
-              {hotel.address ? <ActionButton icon="directions" label={`Directions to ${hotel.name}`} onPress={() => directions(`${hotel.name}, ${hotel.address}`)} /> : null}
+              {(hotel.address || hotel.postcode) ? <ActionButton icon="directions" label={`Directions to ${hotel.name}`} onPress={() => directions(hotel.name, hotel.address, hotel.postcode)} /> : null}
             </View>
             <StateControls
               label={hotel.name}
@@ -501,6 +533,7 @@ export default function DriverTourPackScreen({ packState, actionState, isConnect
           <View key={service.serviceId} style={styles.card}>
             <Text style={styles.cardTitle}>{service.description}</Text>
             <Text style={styles.muted}>{when(service.dateISO, service.time)} • {service.supplier || service.type}</Text>
+            {formatPositiveQuantity(service.quantity) ? <Text style={styles.muted}>Quantity: {formatPositiveQuantity(service.quantity)}</Text> : null}
             {service.bookingRef ? <Text style={styles.muted}>Ref: {service.bookingRef}</Text> : null}
             {service.notes ? <Text style={styles.note}>{service.notes}</Text> : null}
             <StateControls
