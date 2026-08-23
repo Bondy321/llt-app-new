@@ -38,19 +38,24 @@ export default function MapScreen({ onBack, tourData, bookingData }) {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.card}>
-        <Text style={styles.title}>Live map is available in the mobile app</Text>
+        <Text style={styles.title}>Find my bus</Text>
         <Text style={styles.description}>
-          Web preview currently shows a lightweight fallback. Use iOS/Android builds for full live map tracking.
+          For the clearest live view, use the iOS app. From this page you can still open the latest safe bus location or your booked pickup.
         </Text>
 
         {presentation.available ? (
           <>
-            <Text style={styles.coords}>
-              {presentation.mode === 'pickup' ? 'Driver pickup point' : 'Driver live location'}: {latitude.toFixed(5)}, {longitude.toFixed(5)}
+            <Text style={styles.locationStatus}>
+              {presentation.mode === 'pickup' ? 'The driver has shared a pickup point.' : 'A current bus location is available.'}
             </Text>
             {presentation.actionable ? (
-              <TouchableOpacity style={styles.primaryButton} onPress={handleOpenInMaps}>
-                <Text style={styles.primaryButtonText}>Open in Google Maps</Text>
+              <TouchableOpacity
+                style={styles.primaryButton}
+                onPress={handleOpenInMaps}
+                accessibilityRole="button"
+                accessibilityLabel="Open the latest bus location in Google Maps"
+              >
+                <Text style={styles.primaryButtonText}>Open bus location in Google Maps</Text>
               </TouchableOpacity>
             ) : (
               <Text style={styles.description}>
@@ -79,7 +84,12 @@ export default function MapScreen({ onBack, tourData, bookingData }) {
           </TouchableOpacity>
         ) : null}
 
-        <TouchableOpacity style={styles.secondaryButton} onPress={onBack}>
+        <TouchableOpacity
+          style={styles.secondaryButton}
+          onPress={onBack}
+          accessibilityRole="button"
+          accessibilityLabel="Back to the tour screen"
+        >
           <Text style={styles.secondaryButtonText}>Back</Text>
         </TouchableOpacity>
       </View>
@@ -112,7 +122,7 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: COLORS.textSecondary,
   },
-  coords: {
+  locationStatus: {
     fontSize: 14,
     fontWeight: '600',
     color: COLORS.textPrimary,

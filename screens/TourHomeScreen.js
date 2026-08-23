@@ -632,6 +632,7 @@ export default function TourHomeScreen({
   const [driverReady, setDriverReady] = useState(false);
   const [driverLocationRecord, setDriverLocationRecord] = useState(null);
   const [driverLocationNow, setDriverLocationNow] = useState(() => Date.now());
+  const [noShowAcknowledged, setNoShowAcknowledged] = useState(false);
   const scrollViewRef = useRef(null);
   const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
 
@@ -891,6 +892,10 @@ export default function TourHomeScreen({
   }, [manifestStatus]);
 
   const isNoShow = manifestStatus === MANIFEST_STATUS.NO_SHOW;
+
+  useEffect(() => {
+    if (!isNoShow) setNoShowAcknowledged(false);
+  }, [isNoShow]);
 
   const pickupCountdownState = useMemo(() => {
     if (!primaryPickupTime) return null;
@@ -1538,12 +1543,29 @@ export default function TourHomeScreen({
         </LinearGradient>
 
         {/* Enhanced No-Show Modal */}
-        <Modal visible={isNoShow} transparent animationType="fade" presentationStyle="overFullScreen">
+        <Modal
+          visible={isNoShow && !noShowAcknowledged}
+          transparent
+          animationType="fade"
+          presentationStyle="overFullScreen"
+          onRequestClose={() => setNoShowAcknowledged(true)}
+        >
           <View style={styles.modalOverlay}>
-            <Animated.View style={styles.modalCard}>
+            <Animated.View
+              style={styles.modalCard}
+              accessibilityViewIsModal
+              accessibilityRole="alert"
+              accessibilityLabel="You have been marked as missing from pickup"
+            >
               <LinearGradient
                 colors={[COLORS.errorLight, COLORS.white]}
                 style={styles.modalGradient}
+              >
+              <ScrollView
+                style={styles.modalScrollView}
+                contentContainerStyle={styles.modalScrollContent}
+                showsVerticalScrollIndicator
+                bounces={false}
               >
               <View style={styles.modalIconContainer}>
                 <View style={styles.modalIconPulse} />
@@ -1566,6 +1588,8 @@ export default function TourHomeScreen({
                 style={styles.modalPrimaryButton}
                 onPress={handleCallDriver}
                 activeOpacity={0.9}
+                accessibilityRole="button"
+                accessibilityLabel="Call your driver now"
               >
                 <LinearGradient
                   colors={[COLORS.coralAccent, '#E55B3C']}
@@ -1580,6 +1604,8 @@ export default function TourHomeScreen({
                 style={styles.modalSecondaryButton}
                 onPress={handleMessageDriver}
                 activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Send your driver a text message"
               >
                 <MaterialCommunityIcons name="message-text" size={20} color={COLORS.primaryBlue} />
                 <Text style={styles.modalSecondaryButtonText}>Send Text Message</Text>
@@ -1589,9 +1615,21 @@ export default function TourHomeScreen({
                 style={styles.modalEmergencyButton}
                 onPress={() => navigateWithLog('SafetySupport', { from: 'TourHome', mode: 'passenger' }, 'no_show_modal')}
                 activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Open emergency assistance"
               >
                 <MaterialCommunityIcons name="shield-alert" size={18} color={COLORS.error} />
                 <Text style={styles.modalEmergencyButtonText}>Emergency Assistance</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.modalContinueButton}
+                onPress={() => setNoShowAcknowledged(true)}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Acknowledge this alert and continue to the tour screen"
+              >
+                <Text style={styles.modalContinueButtonText}>I understand — continue to tour</Text>
               </TouchableOpacity>
 
               <View style={styles.modalLogoutDivider} />
@@ -1606,10 +1644,13 @@ export default function TourHomeScreen({
                   onLogout();
                 }}
                 activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Log out"
               >
                 <MaterialCommunityIcons name="logout-variant" size={18} color={COLORS.subtleText} />
                 <Text style={styles.modalLogoutButtonText}>Log Out</Text>
               </TouchableOpacity>
+              </ScrollView>
               </LinearGradient>
             </Animated.View>
           </View>
@@ -2393,13 +2434,33 @@ const styles = StyleSheet.create({
   modalCard: {
     width: '100%',
     maxWidth: 400,
+    maxHeight: '92%',
     borderRadius: 24,
     overflow: 'hidden',
     ...SHADOWS.xl,
   },
   modalGradient: {
+    maxHeight: '100%',
+  },
+  modalScrollView: {
+    width: '100%',
+  },
+  modalScrollContent: {
     padding: 28,
     alignItems: 'center',
+  },
+  modalContinueButton: {
+    minHeight: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.md,
+    marginTop: SPACING.sm,
+  },
+  modalContinueButtonText: {
+    color: COLORS.primaryBlue,
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   modalIconContainer: {
     position: 'relative',

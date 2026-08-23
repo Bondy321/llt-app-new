@@ -1157,7 +1157,14 @@ const ChatHeader = React.memo(({
     end={{ x: 1, y: 1 }}
     style={styles.header}
   >
-    <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7} hitSlop={8}>
+    <TouchableOpacity
+      onPress={onBack}
+      style={styles.headerButton}
+      activeOpacity={0.7}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel="Go back"
+    >
       <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
     </TouchableOpacity>
 
@@ -4601,7 +4608,13 @@ export default function ChatScreen({
     return (
       <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
         <View style={[styles.header, { backgroundColor: COLORS.chatHeaderColor }]}>
-          <TouchableOpacity onPress={onBack} style={styles.headerButton} activeOpacity={0.7}>
+          <TouchableOpacity
+            onPress={onBack}
+            style={styles.headerButton}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
             <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Group Chat</Text>
@@ -4660,9 +4673,15 @@ export default function ChatScreen({
               onChangeText={setSearchQuery}
               autoCorrect={false}
               autoCapitalize="none"
+              accessibilityLabel="Search chat messages"
             />
             {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')} activeOpacity={0.7}>
+              <TouchableOpacity
+                onPress={() => setSearchQuery('')}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Clear chat search"
+              >
                 <MaterialCommunityIcons name="close-circle" size={18} color={COLORS.tertiaryText} />
               </TouchableOpacity>
             )}
@@ -4678,6 +4697,9 @@ export default function ChatScreen({
                 style={[styles.searchNavBtn, filteredSearchResults.length === 0 && styles.searchNavBtnDisabled]}
                 onPress={() => cycleSearchResult(-1)}
                 disabled={filteredSearchResults.length === 0}
+                accessibilityRole="button"
+                accessibilityLabel="Previous search result"
+                accessibilityState={{ disabled: filteredSearchResults.length === 0 }}
               >
                 <MaterialCommunityIcons name="chevron-up" size={18} color={COLORS.primaryBlue} />
               </TouchableOpacity>
@@ -4685,6 +4707,9 @@ export default function ChatScreen({
                 style={[styles.searchNavBtn, filteredSearchResults.length === 0 && styles.searchNavBtnDisabled]}
                 onPress={() => cycleSearchResult(1)}
                 disabled={filteredSearchResults.length === 0}
+                accessibilityRole="button"
+                accessibilityLabel="Next search result"
+                accessibilityState={{ disabled: filteredSearchResults.length === 0 }}
               >
                 <MaterialCommunityIcons name="chevron-down" size={18} color={COLORS.primaryBlue} />
               </TouchableOpacity>
@@ -4700,6 +4725,9 @@ export default function ChatScreen({
                   style={[styles.searchFilterChip, active && styles.searchFilterChipActive]}
                   onPress={() => setSearchFilter(filter.key)}
                   activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Filter chat by ${filter.label}`}
+                  accessibilityState={{ selected: active }}
                 >
                   <MaterialCommunityIcons
                     name={filter.icon}
@@ -4722,6 +4750,8 @@ export default function ChatScreen({
                   style={[styles.searchPreviewCard, item.isActive && styles.searchPreviewCardActive]}
                   onPress={() => jumpToMessageById(item.id)}
                   activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open message from ${item.senderName}: ${item.previewText}`}
                 >
                   <View style={styles.searchPreviewHeader}>
                     <View style={styles.searchPreviewSenderRow}>
@@ -4978,8 +5008,8 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   syncNowBtn: {
-    width: 34,
-    height: 34,
+    width: 44,
+    height: 44,
     borderRadius: RADIUS.full,
     alignItems: 'center',
     justifyContent: 'center',
@@ -5127,8 +5157,8 @@ const styles = StyleSheet.create({
     gap: SPACING.xs,
   },
   searchNavBtn: {
-    width: 30,
-    height: 30,
+    width: 44,
+    height: 44,
     borderRadius: RADIUS.full,
     alignItems: 'center',
     justifyContent: 'center',

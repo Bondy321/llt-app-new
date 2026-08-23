@@ -544,21 +544,33 @@ export default function PhotobookScreen({
   ]);
 
   const requestCameraPermission = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Needed', 'Camera permission is required to take photos.');
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Camera access needed', 'Allow camera access in your device settings to take a photo.');
+        return false;
+      }
+      return true;
+    } catch (error) {
+      logger.warn('Photobook', 'Camera permission request failed', { error: error?.message || String(error) });
+      Alert.alert('Camera unavailable', 'We could not open the camera permission prompt. Try again or check your device settings.');
       return false;
     }
-    return true;
   };
 
   const requestGalleryPermission = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Needed', 'Gallery access is required to select photos.');
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Photo access needed', 'Allow photo access in your device settings to choose a photo.');
+        return false;
+      }
+      return true;
+    } catch (error) {
+      logger.warn('Photobook', 'Photo permission request failed', { error: error?.message || String(error) });
+      Alert.alert('Photos unavailable', 'We could not open the photo permission prompt. Try again or check your device settings.');
       return false;
     }
-    return true;
   };
 
   const handleTakePhoto = async () => {
@@ -566,11 +578,18 @@ export default function PhotobookScreen({
     const hasPermission = await requestCameraPermission();
     if (!hasPermission) return;
 
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ['images'],
-      allowsEditing: false,
-      quality: 0.8,
-    });
+    let result;
+    try {
+      result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        quality: 0.8,
+      });
+    } catch (error) {
+      logger.warn('Photobook', 'Camera launch failed', { error: error?.message || String(error) });
+      Alert.alert('Camera unavailable', 'We could not open the camera. Please try again.');
+      return;
+    }
 
     if (!result.canceled && result.assets?.[0]) {
       tracePrivatePhotos('take_photo_selected', {
@@ -592,11 +611,18 @@ export default function PhotobookScreen({
     const hasPermission = await requestGalleryPermission();
     if (!hasPermission) return;
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: false,
-      quality: 0.8,
-    });
+    let result;
+    try {
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        quality: 0.8,
+      });
+    } catch (error) {
+      logger.warn('Photobook', 'Photo library launch failed', { error: error?.message || String(error) });
+      Alert.alert('Photos unavailable', 'We could not open your photo library. Please try again.');
+      return;
+    }
 
     if (!result.canceled && result.assets?.[0]) {
       tracePrivatePhotos('gallery_photo_selected', {
@@ -1118,6 +1144,8 @@ export default function PhotobookScreen({
                       photo={photo}
                       style={thumbnailTileStyle}
                       onPress={() => openViewer(photo.id)}
+                      accessibilityLabel={`Open photo${photo.caption ? `: ${photo.caption}` : ''}`}
+                      accessibilityHint="Opens this photo full screen"
                       useExpoImage={false}
                       onImageLoadStart={(itemPhoto) => recordTileImageEvent('load_start', itemPhoto)}
                       onImageLoad={(itemPhoto) => recordTileImageEvent('load', itemPhoto)}

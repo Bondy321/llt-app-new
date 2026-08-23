@@ -34,7 +34,7 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
     app_foreground: 0,
     network_recovered: 0,
   });
-  const refreshSyncMetaInFlightRef = useRef(false);
+  const refreshSyncMetaInFlightRef = useRef(null);
   const lastSyncMetaRefreshAtRef = useRef(0);
   const statusRef = useRef({
     isConnected: true,
@@ -43,14 +43,15 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
   });
   const lastProbeOutcomeRef = useRef({ connected: null, error: null });
   const onForegroundRef = useRef(onForeground);
+  const effectGenerationRef = useRef(0);
 
   useEffect(() => {
     onForegroundRef.current = onForeground;
   }, [onForeground]);
 
-  const refreshSyncMeta = async () => {
+  const refreshSyncMeta = async (generation = effectGenerationRef.current) => {
     const now = Date.now();
-    if (refreshSyncMetaInFlightRef.current) {
+    if (refreshSyncMetaInFlightRef.current === generation) {
       return;
     }
 
@@ -58,7 +59,7 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
       return;
     }
 
-    refreshSyncMetaInFlightRef.current = true;
+    refreshSyncMetaInFlightRef.current = generation;
     lastSyncMetaRefreshAtRef.current = now;
 
     try {
@@ -68,6 +69,7 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
           role,
           { ownerId: offlineCacheOwnerId },
         );
+        if (generation !== effectGenerationRef.current) return;
         if (metaResult.success && metaResult.data?.lastSyncedAt) {
           setLastSyncAt(metaResult.data.lastSyncedAt);
           return;
@@ -75,6 +77,7 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
       }
 
       const fallbackResult = await getLastSuccessAt();
+      if (generation !== effectGenerationRef.current) return;
       if (fallbackResult.success) {
         setLastSyncAt(fallbackResult.data || null);
       }
@@ -83,11 +86,13 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
         error: error?.message || String(error),
       });
     } finally {
-      refreshSyncMetaInFlightRef.current = false;
+      if (refreshSyncMetaInFlightRef.current === generation) {
+        refreshSyncMetaInFlightRef.current = null;
+      }
     }
   };
 
-  const scheduleProbe = (reason) => {
+  const scheduleProbe = (reason, generation = effectGenerationRef.current) => {
     const reasonWindow = reason === 'app_foreground'
       ? PROBE_WINDOWS_MS.appForeground
       : reason === 'network_recovered'
@@ -95,7 +100,7 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
         : 0;
 
     if (!reasonWindow) {
-      probeFirebase(reason);
+      probeFirebase(reason, generation);
       return;
     }
 
@@ -104,7 +109,7 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
     const elapsed = now - lastRun;
 
     if (elapsed >= reasonWindow) {
-      probeFirebase(reason);
+      probeFirebase(reason, generation);
       return;
     }
 
@@ -115,16 +120,17 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
     const waitMs = reasonWindow - elapsed;
     probeTimersRef.current[reason] = setTimeout(() => {
       probeTimersRef.current[reason] = null;
-      probeFirebase(reason);
+      probeFirebase(reason, generation);
     }, waitMs);
   };
 
-  const probeFirebase = async (reason = 'manual') => {
+  const probeFirebase = async (reason = 'manual', generation = effectGenerationRef.current) => {
     if (reason in lastProbeAtRef.current) {
       lastProbeAtRef.current[reason] = Date.now();
     }
 
     if (!realtimeDb?.ref) {
+      if (generation !== effectGenerationRef.current) return;
       setFirebaseConnected(false);
       setLastFirebaseError('Realtime database unavailable');
       logger.warn('Diagnostics', 'Realtime database not available during probe', { reason });
@@ -135,6 +141,7 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
 
     try {
       await realtimeDb.ref(FIREBASE_PROBE_PATH).once('value');
+      if (generation !== effectGenerationRef.current) return;
       const duration = Date.now() - start;
       setLastProbeDurationMs(duration);
       setLastFirebaseError(null);
@@ -148,6 +155,7 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
 
       lastProbeOutcomeRef.current = { connected: true, error: null };
     } catch (error) {
+      if (generation !== effectGenerationRef.current) return;
       const duration = Date.now() - start;
       setLastProbeDurationMs(duration);
       setFirebaseConnected(false);
@@ -164,15 +172,19 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
   };
 
   useEffect(() => {
+    const generation = effectGenerationRef.current + 1;
+    effectGenerationRef.current = generation;
     // Identity changes must not retain or throttle against the previous
     // traveller's last-sync label.
     lastSyncMetaRefreshAtRef.current = 0;
     setLastSyncAt(null);
     const unsubscribeQueue = offlineSyncService.subscribeQueueState((stats) => {
+      if (generation !== effectGenerationRef.current) return;
       setQueueStats(stats);
     });
 
     const unsubscribeNetInfo = NetInfo.addEventListener((state) => {
+      if (generation !== effectGenerationRef.current) return;
       const online = Boolean(state.isConnected);
 
       if (statusRef.current.isConnected === online) {
@@ -192,11 +204,12 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
       }
 
       if (online) {
-        scheduleProbe('network_recovered');
+        scheduleProbe('network_recovered', generation);
       }
     });
 
     const appStateSubscription = AppState.addEventListener('change', (nextAppState) => {
+      if (generation !== effectGenerationRef.current) return;
       const prevState = appState.current;
       appState.current = nextAppState;
 
@@ -205,8 +218,8 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
       }
 
       if (prevState.match(/inactive|background/) && nextAppState === 'active') {
-        scheduleProbe('app_foreground');
-        refreshSyncMeta();
+        scheduleProbe('app_foreground', generation);
+        refreshSyncMeta(generation);
         const foregroundCallback = onForegroundRef.current;
         if (typeof foregroundCallback === 'function') {
           foregroundCallback();
@@ -215,8 +228,9 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
     });
 
     if (realtimeDb?.ref) {
-      firebaseListenerRef.current = realtimeDb.ref('.info/connected');
-      firebaseListenerRef.current.on('value', (snapshot) => {
+      const connectionRef = realtimeDb.ref('.info/connected');
+      const onConnectionValue = (snapshot) => {
+        if (generation !== effectGenerationRef.current) return;
         const connected = Boolean(snapshot.val());
 
         if (statusRef.current.firebaseConnected === connected) {
@@ -232,15 +246,17 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
           logger.warn('Diagnostics', 'Realtime database connection lost');
         }
         if (connected) setLastFirebaseError(null);
-      });
+      };
+      connectionRef.on('value', onConnectionValue);
+      firebaseListenerRef.current = { ref: connectionRef, callback: onConnectionValue };
     } else {
       setFirebaseConnected(false);
       setLastFirebaseError('Realtime database unavailable');
       logger.warn('Diagnostics', 'Realtime database not available; connection watcher skipped');
     }
 
-    probeFirebase('startup');
-    refreshSyncMeta();
+    probeFirebase('startup', generation);
+    refreshSyncMeta(generation);
 
     return () => {
       unsubscribeQueue?.();
@@ -252,8 +268,12 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
           probeTimersRef.current[reason] = null;
         }
       });
-      if (firebaseListenerRef.current) {
-        firebaseListenerRef.current.off();
+      if (effectGenerationRef.current === generation) {
+        effectGenerationRef.current += 1;
+      }
+      if (firebaseListenerRef.current?.ref && firebaseListenerRef.current?.callback) {
+        firebaseListenerRef.current.ref.off('value', firebaseListenerRef.current.callback);
+        firebaseListenerRef.current = null;
       }
     };
   }, [activeTourId, offlineCacheOwnerId, role]);

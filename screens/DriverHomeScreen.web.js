@@ -96,7 +96,15 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
           {hasTour ? (
             <View style={styles.actionsColumn}>
               {quickActions.map((action) => (
-                <TouchableOpacity key={action.key} style={styles.actionCard} onPress={action.action} activeOpacity={0.85}>
+                <TouchableOpacity
+                  key={action.key}
+                  style={styles.actionCard}
+                  onPress={action.action}
+                  activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityLabel={action.cta}
+                  accessibilityHint={action.subtitle}
+                >
                   <View style={[styles.actionIconCircle, { backgroundColor: `${action.color}18` }]}>
                     <MaterialCommunityIcons name={action.icon} size={20} color={action.color} />
                   </View>
@@ -121,7 +129,12 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate }) {
         </View>
 
         <View style={styles.footerActions}>
-          <TouchableOpacity style={styles.secondaryButton} onPress={onLogout}>
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            onPress={onLogout}
+            accessibilityRole="button"
+            accessibilityLabel="Log out securely"
+          >
             <MaterialCommunityIcons name="logout" size={18} color={COLORS.textPrimary} />
             <Text style={styles.secondaryButtonText}>Log out securely</Text>
           </TouchableOpacity>

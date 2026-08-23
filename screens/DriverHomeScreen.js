@@ -14,6 +14,7 @@ import {
   Platform,
   Animated,
   AppState,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
@@ -543,7 +544,22 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
           activeTourId: targetTourId,
           reason: captureResult.error,
         });
-        Alert.alert('Permission Denied', 'Allow location access to share your pickup point.');
+        Alert.alert(
+          'Location access needed',
+          'Allow location access in your device settings to share the pickup point.',
+          [
+            { text: 'Not now', style: 'cancel' },
+            {
+              text: 'Open settings',
+              onPress: () => Linking.openSettings().catch((error) => {
+                logger.warn('DriverHomeScreen', 'Device settings could not be opened', {
+                  error: error?.message || String(error),
+                });
+                Alert.alert('Settings unavailable', 'Open your device settings and allow location access for this app.');
+              }),
+            },
+          ],
+        );
         setUpdatingLocation(false);
         return;
       }

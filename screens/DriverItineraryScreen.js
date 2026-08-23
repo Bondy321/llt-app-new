@@ -296,7 +296,7 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName, offlin
         error: error?.message || String(error),
       });
 
-      if (retry < 3) {
+      if (retry < 2) {
         const delay = Math.pow(2, retry) * 1000;
         logger.warn('DriverItineraryScreen', 'Driver itinerary load scheduling retry', {
           tourId,
@@ -314,7 +314,7 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName, offlin
         }, delay);
 
         runIfRequestActive(requestId, () => {
-          setErrorMessage(`Connection issue. Retrying (${retry + 1}/3)...`);
+          setErrorMessage(`Connection issue. Retrying (${retry + 1}/2)...`);
         });
       } else {
         const cached = await loadCachedDriverItinerary();
@@ -378,7 +378,12 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName, offlin
       <SafeAreaView style={styles.safeArea}>
         <LinearGradient colors={[COLORS.amber, '#B45309']} style={styles.headerGradient}>
           <View style={styles.headerContent}>
-            <TouchableOpacity onPress={onBack} style={styles.headerButton}>
+            <TouchableOpacity
+              onPress={onBack}
+              style={styles.headerButton}
+              accessibilityRole="button"
+              accessibilityLabel="Back to the previous driver screen"
+            >
               <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
             </TouchableOpacity>
             <View style={styles.headerTitleContainer}>
@@ -397,7 +402,12 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName, offlin
       {/* HEADER */}
       <LinearGradient colors={[COLORS.amber, '#B45309']} style={styles.headerGradient}>
         <View style={styles.headerContent}>
-          <TouchableOpacity onPress={onBack} style={styles.headerButton}>
+          <TouchableOpacity
+            onPress={onBack}
+            style={styles.headerButton}
+            accessibilityRole="button"
+            accessibilityLabel="Back to the previous driver screen"
+          >
             <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
           </TouchableOpacity>
           <View style={styles.headerTitleContainer}>
@@ -429,9 +439,22 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName, offlin
         }
       >
         {errorMessage ? (
-          <View style={styles.errorBanner}>
-            <MaterialCommunityIcons name="alert-circle" size={20} color={COLORS.white} />
-            <Text style={styles.errorText}>{errorMessage}</Text>
+          <View style={styles.errorBanner} accessibilityRole="alert">
+            <View style={styles.errorMessageRow}>
+              <MaterialCommunityIcons name="alert-circle" size={20} color={COLORS.white} />
+              <Text style={styles.errorText}>{errorMessage}</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={() => loadDriverItinerary({ showSkeleton: false })}
+              disabled={refreshing}
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading the driver itinerary"
+              accessibilityState={{ disabled: refreshing, busy: refreshing }}
+            >
+              <MaterialCommunityIcons name="refresh" size={18} color={COLORS.amber} />
+              <Text style={styles.retryButtonText}>{refreshing ? 'Retrying…' : 'Retry now'}</Text>
+            </TouchableOpacity>
           </View>
         ) : null}
 
@@ -491,7 +514,7 @@ const styles = StyleSheet.create({
   headerTitleContainer: { flex: 1, marginHorizontal: 10 },
   headerLabel: { color: COLORS.amberLight, fontSize: 12, letterSpacing: 1.2, textTransform: 'uppercase', fontWeight: '700' },
   headerTitle: { fontSize: 24, fontWeight: '800', color: COLORS.white, marginTop: 2 },
-  headerButton: { padding: 8, minWidth: 40, alignItems: 'center' },
+  headerButton: { minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center' },
   headerIconContainer: { padding: 8, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 12 },
   offlineBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.2)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, marginTop: 4 },
   offlineText: { color: COLORS.white, fontSize: 10, fontWeight: '600', marginLeft: 4 },
@@ -499,8 +522,11 @@ const styles = StyleSheet.create({
   scrollContainer: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 40 },
 
   // Error Banner
-  errorBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.danger, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 12, marginBottom: 16 },
+  errorBanner: { backgroundColor: COLORS.danger, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 12, marginBottom: 16, gap: 10 },
+  errorMessageRow: { flexDirection: 'row', alignItems: 'center' },
   errorText: { color: COLORS.white, fontSize: 13, fontWeight: '600', marginLeft: 8, flex: 1 },
+  retryButton: { alignItems: 'center', alignSelf: 'flex-end', backgroundColor: COLORS.white, borderRadius: 10, flexDirection: 'row', gap: 6, minHeight: 44, paddingHorizontal: 14 },
+  retryButtonText: { color: COLORS.amber, fontSize: 13, fontWeight: '800' },
 
   // Sync Text
   syncText: { fontSize: 11, color: COLORS.secondaryText, textAlign: 'center', marginBottom: 12, fontStyle: 'italic' },

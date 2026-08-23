@@ -64,6 +64,8 @@ const mapStyle = [
   { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#9e9e9e' }] },
 ];
 
+const DRIVER_LOCATION_INITIAL_TIMEOUT_MS = 10000;
+
 const summarizeCoords = (coords) => {
   if (!coords) return { present: false };
   const latitude = Number(coords.latitude ?? coords.lat);
@@ -269,9 +271,17 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
     hasDriverSnapshotRef.current = false;
     lastDriverSnapshotKeyRef.current = '';
     const locationRef = realtimeDb.ref(`tours/${tourId}/driverLocation`);
+    const initialSnapshotTimeout = setTimeout(() => {
+      if (!isMountedRef.current || hasDriverSnapshotRef.current) return;
+      setConnectionStatus('error');
+      setErrorMsg('The bus location is taking longer than expected. Retry now or use your booked pickup directions.');
+      setLoading(false);
+      logger.warn('MapScreen', 'Driver location initial snapshot timed out', { tourId });
+    }, DRIVER_LOCATION_INITIAL_TIMEOUT_MS);
     logger.info('MapScreen', 'Driver location subscription started', { tourId });
 
     const unsubscribe = locationRef.on('value', (snapshot) => {
+      clearTimeout(initialSnapshotTimeout);
       if (snapshot.exists()) {
         const data = snapshot.val();
         const snapshotKey = getDriverLocationSnapshotKey(data);
@@ -304,6 +314,7 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
       }
       setLoading(false);
     }, (error) => {
+      clearTimeout(initialSnapshotTimeout);
       logger.error('MapScreen', 'Driver location subscription failed', {
         tourId,
         error: error?.message || String(error),
@@ -315,6 +326,7 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
     });
 
     return () => {
+      clearTimeout(initialSnapshotTimeout);
       logger.debug('MapScreen', 'Driver location subscription stopped', { tourId });
       locationRef.off('value', unsubscribe);
     };

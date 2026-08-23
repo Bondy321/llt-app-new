@@ -59,6 +59,7 @@ import DriverTourPackScreen from './screens/DriverTourPackScreen';
 const { getLoginTransitionDurationMs } = require('./screens/loginFlow');
 const { isEligibleEdgeSwipe, shouldCommitEdgeSwipeHome } = require('./services/swipeHomeNavigation');
 const { markNotificationRead } = require('./services/notificationInboxService');
+const { createAppRouteHistory } = require('./utils/appRouteHistory');
 const {
   normalizePassengerIdentityProjection,
   normalizePassengerTourProjection,
@@ -181,6 +182,7 @@ function AppContent() {
   const driverLifecyclePurgeRef = useRef(null);
   const driverAssignmentChangeRef = useRef(null);
   const assignmentValidationSeqRef = useRef(0);
+  const routeHistoryRef = useRef(createAppRouteHistory());
 
   const isDriverSession = bookingData?.id && bookingData.id.startsWith('D-');
   const canonicalIdentity = useMemo(
@@ -276,6 +278,7 @@ function AppContent() {
   const driverTourPackFeature = useDriverTourPackFeatureFlag(isDriverSession ? bookingData?.id : null);
   useEffect(() => {
     if (currentScreen !== 'DriverTourPack' || driverTourPackFeature.loading || driverTourPackFeature.enabled) return;
+    routeHistoryRef.current.reset();
     setCurrentScreen('DriverHome');
     setScreenParams({});
     SessionStorage.setItem(SESSION_KEYS.LAST_SCREEN, 'DriverHome').catch(() => undefined);
@@ -806,6 +809,7 @@ function AppContent() {
         
         const fallbackScreen = bookingData.id && bookingData.id.startsWith('D-') ? 'DriverHome' : 'TourHome';
         const restoredScreen = screen === 'Login' || screen === 'NotificationPreferences' ? fallbackScreen : screen;
+        routeHistoryRef.current.reset();
         setCurrentScreen(restoredScreen);
       }
     } catch (error) {
@@ -1003,6 +1007,7 @@ function AppContent() {
         setTourData(null);
         setTourCode('');
         setScreenParams({});
+        routeHistoryRef.current.reset();
         setCurrentScreen('DriverHome');
         setDriverSessionGeneration((value) => value + 1);
         await SessionStorage.multiSet([
@@ -1170,6 +1175,7 @@ function AppContent() {
       setTourData(tourDetails || null);
       setBookingData(driverSessionData);
       driverLifecyclePurgeRef.current = null;
+      routeHistoryRef.current.reset();
       setCurrentScreen(postLoginScreen);
       recordCrashBreadcrumb('Auth', 'driver_login_session_established', {
         postLoginScreen,
@@ -1388,6 +1394,7 @@ function AppContent() {
       }
     }
 
+    routeHistoryRef.current.reset();
     setCurrentScreen(postLoginScreen);
     if (tourDetails?.id) {
       await loginDiagnostics.recordLoginDiagnostic('passenger_offline_pack_save_started', {
@@ -1460,13 +1467,26 @@ function AppContent() {
     navigateTo(returnTo || homeScreen, { from: 'NotificationPreferences', onboardingCompleted: normalizedStatus === 'completed' });
   };
 
-  // Updated navigation to accept params
-  const navigateTo = (screen, params = {}) => {
+  const navigateTo = useCallback((screen, params = {}, options = {}) => {
     logger.trackScreen(screen, { from: currentScreen, ...params });
-    setScreenParams(params); // Store params for the next screen to use
+    if (options.reset === true) {
+      routeHistoryRef.current.reset();
+    } else if (options.replace !== true && screen !== currentScreen) {
+      routeHistoryRef.current.push({ screen: currentScreen, params: screenParams });
+    }
+    setScreenParams(params);
     setCurrentScreen(screen);
     saveSession({ currentScreen: screen });
-  };
+  }, [currentScreen, screenParams]);
+
+  const navigateBack = useCallback((fallbackScreen, fallbackParams = {}) => {
+    const target = routeHistoryRef.current.pop({ fallbackScreen, fallbackParams });
+    if (!target) return;
+    logger.trackScreen(target.screen, { from: currentScreen, via: 'back' });
+    setScreenParams(target.params);
+    setCurrentScreen(target.screen);
+    saveSession({ currentScreen: target.screen });
+  }, [currentScreen]);
   notificationNavigateRef.current = navigateTo;
 
   useEffect(() => {
@@ -1516,7 +1536,7 @@ function AppContent() {
     });
   }, [tourData?.id, user?.uid]);
 
-  const edgeSwipeResponder = PanResponder.create({
+  const edgeSwipeResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => false,
     onMoveShouldSetPanResponder: (_, gestureState) => {
         if (!canSwipeToHome) return false;
@@ -1532,10 +1552,10 @@ function AppContent() {
           dx: gestureState?.dx,
           vx: gestureState?.vx,
         });
-        navigateTo(homeScreen, { viaGesture: 'edge-swipe-home' });
+        navigateTo(homeScreen, { viaGesture: 'edge-swipe-home' }, { reset: true });
       },
     onPanResponderTerminationRequest: () => true,
-    });
+    }), [canSwipeToHome, currentScreen, homeScreen, navigateTo]);
 
   const clearSessionState = async ({ includeNotificationOnboarding = false } = {}) => {
     const keysToRemove = [
@@ -1560,6 +1580,7 @@ function AppContent() {
       setBookingData(null);
       setIdentityBinding(null);
       setScreenParams({});
+      routeHistoryRef.current.reset();
       setCurrentScreen('Login');
     }
   };
@@ -1714,11 +1735,11 @@ function AppContent() {
             />
           );
         }
-        return <DriverTourPackScreen packState={driverTourPackState} actionState={driverTourPackActions} isConnected={isConnected} tourData={tourData} driverData={bookingData} onBack={() => navigateTo('DriverHome')} onNavigate={navigateTo} />;
+        return <DriverTourPackScreen packState={driverTourPackState} actionState={driverTourPackActions} isConnected={isConnected} tourData={tourData} driverData={bookingData} onBack={() => navigateBack('DriverHome')} onNavigate={navigateTo} />;
       case 'SafetySupport':
         return (
           <SafetySupportScreen
-            onBack={() => navigateTo(screenParams?.from || 'TourHome')}
+            onBack={() => navigateBack(screenParams?.from || 'TourHome')}
             tourData={tourData}
             bookingData={bookingData}
             userId={user?.uid}
@@ -1747,7 +1768,7 @@ function AppContent() {
             // 2. Mock the 'navigation' object so the screen's logic works without changing it
             navigation={{
               navigate: navigateTo,
-              goBack: () => navigateTo(screenParams?.from || 'DriverHome')
+              goBack: () => navigateBack(screenParams?.from || 'DriverHome')
             }}
           />
         );
@@ -1766,7 +1787,7 @@ function AppContent() {
         return (
           <PhotobookScreen
             {...screenProps}
-            onBack={() => navigateTo('TourHome')}
+            onBack={() => navigateBack('TourHome')}
             onViewerVisibilityChange={handleViewerVisibilityChange}
             tourId={tourData?.id}
             privatePhotoOwnerId={canonicalIdentity?.principalId}
@@ -1778,7 +1799,7 @@ function AppContent() {
         return (
           <GroupPhotobookScreen
             {...screenProps}
-            onBack={() => navigateTo('TourHome')}
+            onBack={() => navigateBack('TourHome')}
             onViewerVisibilityChange={handleViewerVisibilityChange}
             userId={canonicalIdentity?.principalId}
             tourId={tourData?.id}
@@ -1797,7 +1818,7 @@ case 'Itinerary':
         return (
           <ItineraryScreen
             {...screenProps}
-            onBack={() => navigateTo(backDest)}
+            onBack={() => navigateBack(backDest)}
             tourId={itinTourId}
             tourName={tourData?.name}
             startDate={tourData?.startDate}
@@ -1809,7 +1830,7 @@ case 'Itinerary':
         return (
           <DriverItineraryScreen
             {...screenProps}
-            onBack={() => navigateTo('DriverHome')}
+            onBack={() => navigateBack('DriverHome')}
             tourId={screenParams.tourId || tourData?.id}
             tourName={tourData?.name}
             offlineCacheOwnerId={bookingData?.id}
@@ -1836,7 +1857,7 @@ case 'Itinerary':
         return (
           <ChatScreen
             {...screenProps}
-            onBack={() => navigateTo(backScreen)}
+            onBack={() => navigateBack(backScreen)}
             tourId={chatTourId}
             bookingData={effectiveBookingData}
             tourData={tourData || { name: 'Tour Chat' }}
@@ -1851,7 +1872,7 @@ case 'Itinerary':
         // Use active tour ID if passed, else fall back to session data
         const mapTourId = resolveTourId(screenParams.tourId, tourData?.id, tourData?.tourCode);
         const mapReturnTarget = screenParams?.from || (isDriverSession ? 'DriverHome' : 'TourHome');
-        return <MapScreen {...screenProps} onBack={() => navigateTo(mapReturnTarget)} tourId={mapTourId} tourData={tourData} bookingData={bookingData} />;
+        return <MapScreen {...screenProps} onBack={() => navigateBack(mapReturnTarget)} tourId={mapTourId} tourData={tourData} bookingData={bookingData} />;
       case 'NotificationPreferences':
         const notificationReturnTarget = screenParams?.returnTo || (isDriverSession ? 'DriverHome' : 'TourHome');
         const notificationPreferencesUserId = resolveAuthScopedUserId({
@@ -1860,7 +1881,7 @@ case 'Itinerary':
         });
         return (
           <NotificationPreferencesScreen
-            onBack={() => navigateTo(notificationReturnTarget, { from: 'NotificationPreferences' })}
+            onBack={() => navigateBack(notificationReturnTarget, { from: 'NotificationPreferences' })}
             userId={notificationPreferencesUserId}
             isOnboarding={screenParams?.isOnboarding === true}
             audience={screenParams?.audience || (isDriverSession ? 'driver' : 'passenger')}
@@ -1875,7 +1896,7 @@ case 'Itinerary':
       case 'AccountPrivacy':
         return (
           <AccountPrivacyScreen
-            onBack={() => navigateTo(screenParams?.from || homeScreen)}
+            onBack={() => navigateBack(screenParams?.from || homeScreen)}
             onLogout={handleLogout}
             onAccountDeleted={handleAccountDeleted}
             tourData={tourData}

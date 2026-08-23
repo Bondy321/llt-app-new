@@ -1157,7 +1157,12 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
       <SafeAreaView style={styles.safeArea}>
         <LinearGradient colors={[COLORS.primaryBlue, COLORS.complementaryBlue]} style={styles.headerGradient}>
           <View style={styles.headerContent}>
-            <TouchableOpacity onPress={onBack} style={styles.headerButton}>
+            <TouchableOpacity
+              onPress={onBack}
+              style={styles.headerButton}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
+            >
               <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.white} />
             </TouchableOpacity>
             <View style={styles.headerTitleContainer}>
@@ -1210,7 +1215,12 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
 
           {isDriver && !isEditing && !showSearch && (
             <View style={styles.headerActions}>
-              <TouchableOpacity onPress={toggleSearch} style={[styles.headerIconButton, { marginRight: 8 }]}>
+              <TouchableOpacity
+                onPress={toggleSearch}
+                style={[styles.headerIconButton, { marginRight: 8 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Search itinerary"
+              >
                 <MaterialCommunityIcons name="magnify" size={22} color={COLORS.white} />
               </TouchableOpacity>
               <TouchableOpacity
@@ -1225,13 +1235,23 @@ export default function ItineraryScreen({ onBack, tourId, tourName, startDate, i
           )}
 
           {!isDriver && !isEditing && !showSearch && (
-            <TouchableOpacity onPress={toggleSearch} style={styles.headerIconButton}>
+            <TouchableOpacity
+              onPress={toggleSearch}
+              style={styles.headerIconButton}
+              accessibilityRole="button"
+              accessibilityLabel="Search itinerary"
+            >
               <MaterialCommunityIcons name="magnify" size={22} color={COLORS.white} />
             </TouchableOpacity>
           )}
 
           {showSearch && !isEditing && (
-            <TouchableOpacity onPress={toggleSearch} style={styles.headerIconButton}>
+            <TouchableOpacity
+              onPress={toggleSearch}
+              style={styles.headerIconButton}
+              accessibilityRole="button"
+              accessibilityLabel="Close itinerary search"
+            >
               <MaterialCommunityIcons name="close" size={22} color={COLORS.white} />
             </TouchableOpacity>
           )}
@@ -1647,7 +1667,7 @@ const styles = StyleSheet.create({
   headerTitle: { flexShrink: 1, fontSize: 20, lineHeight: 25, fontWeight: '800', color: COLORS.white, marginTop: 2 },
   headerButton: { padding: 8, minWidth: 40, alignItems: 'center' },
   headerButtonDisabled: { opacity: 0.4 },
-  headerIconButton: { padding: 8 },
+  headerIconButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   headerActions: { flexDirection: 'row', alignItems: 'center' },
   editButton: { backgroundColor: COLORS.white, borderRadius: 12 },
   readSummaryPanel: {

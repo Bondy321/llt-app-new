@@ -147,6 +147,10 @@ const ToggleRow = ({
       </View>
     </View>
     <Switch
+      accessibilityRole="switch"
+      accessibilityLabel={label}
+      accessibilityHint={description || undefined}
+      accessibilityState={{ checked: value, disabled }}
       trackColor={{ false: COLORS.border, true: color }}
       thumbColor={Platform.OS === 'ios' ? COLORS.white : value ? color : COLORS.white}
       ios_backgroundColor={COLORS.border}
@@ -839,7 +843,7 @@ export default function NotificationPreferencesScreen({
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={onBack} style={styles.headerButton}>
+          <TouchableOpacity onPress={onBack} style={styles.headerButton} accessibilityRole="button" accessibilityLabel="Back">
             <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.darkText} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Notifications</Text>
@@ -856,11 +860,11 @@ export default function NotificationPreferencesScreen({
             <Text style={styles.emptyPanelTitle}>{loadError ? 'Something went wrong' : 'Not signed in'}</Text>
             <Text style={styles.emptyPanelMessage}>{loadError || emptyStateMessage}</Text>
             {loadError ? (
-              <TouchableOpacity style={styles.retryButton} onPress={loadPreferences}>
+              <TouchableOpacity style={styles.retryButton} onPress={loadPreferences} accessibilityRole="button" accessibilityLabel="Retry loading notification preferences">
                 <Text style={styles.retryButtonText}>Retry</Text>
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity style={styles.retryButton} onPress={onBack}>
+              <TouchableOpacity style={styles.retryButton} onPress={onBack} accessibilityRole="button" accessibilityLabel="Back">
                 <Text style={styles.retryButtonText}>Back</Text>
               </TouchableOpacity>
             )}
@@ -874,7 +878,7 @@ export default function NotificationPreferencesScreen({
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
         {isOnboarding ? <View style={styles.headerButton} /> : (
-          <TouchableOpacity onPress={onBack} style={styles.headerButton}>
+          <TouchableOpacity onPress={onBack} style={styles.headerButton} accessibilityRole="button" accessibilityLabel="Back">
             <MaterialCommunityIcons name="arrow-left" size={26} color={COLORS.darkText} />
           </TouchableOpacity>
         )}
@@ -982,18 +986,27 @@ export default function NotificationPreferencesScreen({
             <TouchableOpacity
               style={[styles.presetChip, activeOpsPreset === 'essential' && styles.presetChipActive]}
               onPress={() => applyOpsPreset('essential')}
+              accessibilityRole="button"
+              accessibilityLabel="Use essential tour notification settings"
+              accessibilityState={{ selected: activeOpsPreset === 'essential' }}
             >
               <Text style={[styles.presetChipText, activeOpsPreset === 'essential' && styles.presetChipTextActive]}>Essential</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.presetChip, activeOpsPreset === 'all' && styles.presetChipActive]}
               onPress={() => applyOpsPreset('all')}
+              accessibilityRole="button"
+              accessibilityLabel="Turn all tour notifications on"
+              accessibilityState={{ selected: activeOpsPreset === 'all' }}
             >
               <Text style={[styles.presetChipText, activeOpsPreset === 'all' && styles.presetChipTextActive]}>All on</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.presetChip, activeOpsPreset === 'none' && styles.presetChipActive]}
               onPress={() => applyOpsPreset('none')}
+              accessibilityRole="button"
+              accessibilityLabel="Turn all tour notifications off"
+              accessibilityState={{ selected: activeOpsPreset === 'none' }}
             >
               <Text style={[styles.presetChipText, activeOpsPreset === 'none' && styles.presetChipTextActive]}>All off</Text>
             </TouchableOpacity>
@@ -1063,6 +1076,9 @@ export default function NotificationPreferencesScreen({
                 <TouchableOpacity
                   style={[styles.presetChip, activeMarketingPreset === 'recommended' && styles.presetChipActive]}
                   onPress={() => applyMarketingPreset('recommended')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Use recommended interest notification settings"
+                  accessibilityState={{ selected: activeMarketingPreset === 'recommended' }}
                 >
                   <Text
                     style={[
@@ -1076,12 +1092,18 @@ export default function NotificationPreferencesScreen({
                 <TouchableOpacity
                   style={[styles.presetChip, activeMarketingPreset === 'all' && styles.presetChipActive]}
                   onPress={() => applyMarketingPreset('all')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Turn all interest notifications on"
+                  accessibilityState={{ selected: activeMarketingPreset === 'all' }}
                 >
                   <Text style={[styles.presetChipText, activeMarketingPreset === 'all' && styles.presetChipTextActive]}>All on</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.presetChip, activeMarketingPreset === 'none' && styles.presetChipActive]}
                   onPress={() => applyMarketingPreset('none')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Turn all interest notifications off"
+                  accessibilityState={{ selected: activeMarketingPreset === 'none' }}
                 >
                   <Text style={[styles.presetChipText, activeMarketingPreset === 'none' && styles.presetChipTextActive]}>All off</Text>
                 </TouchableOpacity>
@@ -1124,6 +1146,9 @@ export default function NotificationPreferencesScreen({
               style={[styles.saveButton, styles.saveButtonOnGradient, saving && styles.disabledButton]}
               onPress={handleSave}
               disabled={saving}
+              accessibilityRole="button"
+              accessibilityLabel="Save notification preferences"
+              accessibilityState={{ disabled: saving, busy: saving }}
             >
               {saving ? (
                 <ActivityIndicator color={COLORS.primaryBlue} />
@@ -1145,6 +1170,9 @@ export default function NotificationPreferencesScreen({
               style={[styles.saveButton, (onboardingActionBusy || saving) && styles.disabledButton]}
               onPress={handleEnableNow}
               disabled={onboardingActionBusy || saving}
+              accessibilityRole="button"
+              accessibilityLabel={activeOnboardingCopy.primaryCta}
+              accessibilityState={{ disabled: onboardingActionBusy || saving, busy: onboardingActionBusy || saving }}
             >
               {(onboardingActionBusy || saving) ? (
                 <ActivityIndicator color={COLORS.white} />
@@ -1157,6 +1185,9 @@ export default function NotificationPreferencesScreen({
               style={styles.secondaryOnboardingButton}
               onPress={handleMaybeLater}
               disabled={onboardingActionBusy || saving}
+              accessibilityRole="button"
+              accessibilityLabel={activeOnboardingCopy.secondaryCta}
+              accessibilityState={{ disabled: onboardingActionBusy || saving }}
             >
               <Text style={styles.secondaryOnboardingButtonText}>{activeOnboardingCopy.secondaryCta}</Text>
             </TouchableOpacity>
@@ -1168,9 +1199,12 @@ export default function NotificationPreferencesScreen({
             style={styles.testButton}
             onPress={handleTestNotification}
             disabled={saving}
+            accessibilityRole="button"
+            accessibilityLabel="Send a test notification"
+            accessibilityState={{ disabled: saving }}
           >
             <MaterialCommunityIcons name="bell-check-outline" size={20} color={COLORS.secondaryText} />
-            <Text style={styles.testButtonText}>Test Notification System</Text>
+            <Text style={styles.testButtonText}>Send a test notification</Text>
           </TouchableOpacity>
         ) : null}
 

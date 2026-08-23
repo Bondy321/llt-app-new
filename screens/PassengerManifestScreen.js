@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet, Text, View, SectionList, FlatList, TextInput,
-  TouchableOpacity, ActivityIndicator, Modal, Alert, Linking
+  TouchableOpacity, ActivityIndicator, Modal, Alert, Linking, ScrollView,
+  KeyboardAvoidingView, Keyboard, Platform
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
@@ -67,6 +68,7 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
   const [refreshing, setRefreshing] = useState(false);
   const [manifestData, setManifestData] = useState({ bookings: [], stats: {} });
   const [manifestSource, setManifestSource] = useState('none');
+  const [manifestLoadError, setManifestLoadError] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -154,6 +156,7 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
       }
       if (!canApplyRequest()) return null;
       setManifestData(cacheResult?.data || data);
+      setManifestLoadError('');
       manifestSourceRef.current = 'live';
       setManifestSource('live');
       logger.info('PassengerManifest', 'Manifest load completed', {
@@ -168,7 +171,7 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
         error: error?.message || String(error),
       });
       if (canApplyRequest() && manifestSourceRef.current !== 'cache') {
-        Alert.alert('Manifest unavailable', 'Could not load the passenger manifest. Please check your connection and try again.');
+        setManifestLoadError('Could not load the passenger manifest. Check your connection and retry.');
       }
       return null;
     } finally {
@@ -384,6 +387,7 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
       passengerCount: booking?.passengerNames?.length || 0,
       hasPassengerStatuses: Boolean(booking?.hasPassengerStatuses),
     });
+    Keyboard.dismiss();
     setSelectedBooking(booking);
     const existingStatuses = Array.isArray(booking.passengerStatus) ? booking.passengerStatus : [];
     const normalized = booking.passengerNames.map((_, idx) => existingStatuses[idx] || MANIFEST_STATUS.PENDING);
@@ -700,6 +704,19 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
     }
   };
 
+  const confirmAllNoShow = () => {
+    if (!selectedBooking || actionLoading) return;
+    const passengerCount = selectedBooking.passengerNames?.length || 0;
+    Alert.alert(
+      'Mark this booking as no-show?',
+      `This will mark all ${passengerCount} passenger${passengerCount === 1 ? '' : 's'} on ${selectedBooking.id} as not present.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Mark no-show', style: 'destructive', onPress: () => handleSetAll(MANIFEST_STATUS.NO_SHOW) },
+      ],
+    );
+  };
+
   const handleRetryFailed = async () => {
     logger.info('PassengerManifest', 'Retry failed manifest actions started', { tourId });
     await offlineSyncService.retryFailedActions({
@@ -718,6 +735,8 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
         <TouchableOpacity
           onPress={() => navigation.goBack()}
           style={styles.backButton}
+          accessibilityRole="button"
+          accessibilityLabel="Back to driver console"
         >
           <MaterialCommunityIcons name="arrow-left" size={20} color={COLORS.textLight} />
           <Text style={styles.backText}>Console</Text>
@@ -727,7 +746,14 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
           <Text style={styles.headerSubtitle} numberOfLines={1}>Tour {tourId}</Text>
           {manifestSource === 'cache' && <Text style={styles.headerSubtitle}>Saved offline copy - refreshing when available</Text>}
         </View>
-        <TouchableOpacity onPress={() => handleSyncNow()} style={styles.syncBtn} disabled={refreshing}>
+        <TouchableOpacity
+          onPress={() => handleSyncNow()}
+          style={styles.syncBtn}
+          disabled={refreshing}
+          accessibilityRole="button"
+          accessibilityLabel={refreshing ? 'Syncing passenger manifest' : 'Sync passenger manifest'}
+          accessibilityState={{ disabled: refreshing, busy: refreshing }}
+        >
           <Text style={styles.syncBtnText}>{refreshing ? 'Syncing...' : 'Sync'}</Text>
         </TouchableOpacity>
       </View>
@@ -806,6 +832,8 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
             style={styles.nextActionCard}
             onPress={() => handleOpenBooking(nextPriorityBooking)}
             activeOpacity={0.9}
+            accessibilityRole="button"
+            accessibilityLabel={`Open next unresolved booking ${nextPriorityBooking.id}`}
           >
             <View style={styles.nextActionMeta}>
               <Text style={styles.nextActionEyebrow}>NEXT</Text>
@@ -823,9 +851,14 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
             value={searchQuery}
             onChangeText={setSearchQuery}
             autoCapitalize="characters"
+            accessibilityLabel="Search passengers or bookings"
           />
           {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
+            <TouchableOpacity
+              onPress={() => setSearchQuery('')}
+              accessibilityRole="button"
+              accessibilityLabel="Clear manifest search"
+            >
               <MaterialCommunityIcons name="close-circle" size={18} color={COLORS.muted} />
             </TouchableOpacity>
           )}
@@ -833,7 +866,9 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
         <TouchableOpacity
           onPress={() => setFiltersOpen((open) => !open)}
           style={[styles.filterToggle, (filtersOpen || statusFilter !== 'ALL') && styles.filterToggleActive]}
+          accessibilityRole="button"
           accessibilityLabel="Toggle manifest filters"
+          accessibilityState={{ expanded: filtersOpen, selected: statusFilter !== 'ALL' }}
         >
           <MaterialCommunityIcons
             name="filter-variant"
@@ -859,6 +894,9 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
                   setStatusFilter(item.key);
                   if (item.key === 'ALL') setFiltersOpen(false);
                 }}
+                accessibilityRole="button"
+                accessibilityLabel={`Show ${item.label.toLowerCase()} bookings`}
+                accessibilityState={{ selected: isActive }}
               >
                 <Text style={[styles.filterChipText, isActive && styles.filterChipTextActive]}>{item.label}</Text>
               </TouchableOpacity>
@@ -889,6 +927,8 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
                 handleOpenBooking(statusFeedback.nextBooking);
                 showStatusFeedback(null);
               }}
+              accessibilityRole="button"
+              accessibilityLabel="Open next unresolved booking"
             >
               <Text style={styles.statusBannerBtnText}>Open next</Text>
             </TouchableOpacity>
@@ -897,12 +937,19 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
             <TouchableOpacity
               style={[styles.statusBannerBtn, styles[`statusBannerBtn_${statusFeedback.variant || 'success'}`]]}
               onPress={statusFeedback.onCtaPress}
+              accessibilityRole="button"
+              accessibilityLabel={statusFeedback.ctaLabel}
             >
               <Text style={styles.statusBannerBtnText}>{statusFeedback.ctaLabel}</Text>
             </TouchableOpacity>
           )}
           {!statusFeedback.autoDismissMs && (
-            <TouchableOpacity onPress={() => showStatusFeedback(null)} style={styles.statusBannerDismiss}>
+            <TouchableOpacity
+              onPress={() => showStatusFeedback(null)}
+              style={styles.statusBannerDismiss}
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss manifest status"
+            >
               <MaterialCommunityIcons name="close" size={16} color={COLORS.info} />
             </TouchableOpacity>
           )}
@@ -918,7 +965,22 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
       {loading && !refreshing ? (
         <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 20 }} />
       ) : (
-        sortedFilteredBookings.length === 0 ? (
+        manifestLoadError && manifestData.bookings.length === 0 ? (
+          <View style={styles.emptyStateCard} accessibilityRole="alert">
+            <MaterialCommunityIcons name="cloud-alert-outline" size={34} color={COLORS.danger} />
+            <Text style={styles.emptyStateTitle}>Manifest unavailable</Text>
+            <Text style={styles.emptyStateBody}>{manifestLoadError}</Text>
+            <TouchableOpacity
+              style={styles.emptyStateRetryButton}
+              onPress={() => loadManifest()}
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading the passenger manifest"
+            >
+              <MaterialCommunityIcons name="refresh" size={18} color={COLORS.textLight} />
+              <Text style={styles.emptyStateRetryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : sortedFilteredBookings.length === 0 ? (
           <View style={styles.emptyStateCard}>
             <MaterialCommunityIcons name="clipboard-search-outline" size={34} color={COLORS.primary} />
             <Text style={styles.emptyStateTitle}>{isNarrowedView ? 'No matching bookings' : 'No passengers on this manifest'}</Text>
@@ -959,8 +1021,12 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
         animationType="slide"
         onRequestClose={() => setModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+        <KeyboardAvoidingView
+          style={styles.modalKeyboardAvoider}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent} accessibilityViewIsModal>
             {selectedBooking && (
               <>
                 <View style={styles.modalHeader}>
@@ -985,6 +1051,12 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
                   </View>
                 </View>
 
+                <ScrollView
+                  style={styles.modalBody}
+                  contentContainerStyle={styles.modalBodyContent}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator
+                >
                 {partialMode ? (
                   <>
                     <Text style={styles.modalSectionLabel}>Select Passengers</Text>
@@ -1002,6 +1074,9 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
                                 style={[styles.statusPill, status === MANIFEST_STATUS.BOARDED && styles.statusPillActiveSuccess]}
                                 onPress={() => updatePassengerStatus(idx, MANIFEST_STATUS.BOARDED)}
                                 disabled={actionLoading}
+                                accessibilityRole="button"
+                                accessibilityLabel={`Mark ${name} as boarded`}
+                                accessibilityState={{ selected: status === MANIFEST_STATUS.BOARDED, disabled: actionLoading }}
                               >
                                 <Text style={[styles.statusPillText, status === MANIFEST_STATUS.BOARDED && styles.statusPillTextActive]}>Boarded</Text>
                               </TouchableOpacity>
@@ -1009,6 +1084,9 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
                                 style={[styles.statusPill, status === MANIFEST_STATUS.NO_SHOW && styles.statusPillActiveDanger]}
                                 onPress={() => updatePassengerStatus(idx, MANIFEST_STATUS.NO_SHOW)}
                                 disabled={actionLoading}
+                                accessibilityRole="button"
+                                accessibilityLabel={`Mark ${name} as no-show`}
+                                accessibilityState={{ selected: status === MANIFEST_STATUS.NO_SHOW, disabled: actionLoading }}
                               >
                                 <Text style={[styles.statusPillText, status === MANIFEST_STATUS.NO_SHOW && styles.statusPillTextActive]}>No Show</Text>
                               </TouchableOpacity>
@@ -1016,6 +1094,9 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
                                 style={[styles.statusPill, status === MANIFEST_STATUS.PENDING && styles.statusPillActivePending]}
                                 onPress={() => updatePassengerStatus(idx, MANIFEST_STATUS.PENDING)}
                                 disabled={actionLoading}
+                                accessibilityRole="button"
+                                accessibilityLabel={`Mark ${name} as pending`}
+                                accessibilityState={{ selected: status === MANIFEST_STATUS.PENDING, disabled: actionLoading }}
                               >
                                 <Text style={[styles.statusPillText, status === MANIFEST_STATUS.PENDING && styles.statusPillTextActive]}>Pending</Text>
                               </TouchableOpacity>
@@ -1037,6 +1118,9 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
                         style={[styles.partialFooterBtn, styles.partialFooterConfirm]}
                         onPress={handleConfirmPartial}
                         disabled={actionLoading}
+                        accessibilityRole="button"
+                        accessibilityLabel="Confirm individual passenger statuses"
+                        accessibilityState={{ disabled: actionLoading, busy: actionLoading }}
                       >
                         <Text style={[styles.partialFooterText, { color: 'white' }]}>Confirm</Text>
                       </TouchableOpacity>
@@ -1052,6 +1136,8 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
                         onPress={() => handleSetAll(MANIFEST_STATUS.BOARDED)}
                         disabled={actionLoading}
                         accessibilityLabel={`Mark all passengers here for booking ${selectedBooking.id}`}
+                        accessibilityRole="button"
+                        accessibilityState={{ disabled: actionLoading, busy: actionLoading }}
                       >
                         <MaterialCommunityIcons name="check-all" size={28} color="white" />
                         <Text style={styles.actionBtnText}>All Here</Text>
@@ -1059,9 +1145,12 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
 
                       <TouchableOpacity
                         style={[styles.actionBtn, { backgroundColor: COLORS.danger }]}
-                        onPress={() => handleSetAll(MANIFEST_STATUS.NO_SHOW)}
+                        onPress={confirmAllNoShow}
                         disabled={actionLoading}
                         accessibilityLabel={`Mark all passengers no-show for booking ${selectedBooking.id}`}
+                        accessibilityRole="button"
+                        accessibilityHint="Asks for confirmation before saving"
+                        accessibilityState={{ disabled: actionLoading, busy: actionLoading }}
                       >
                         <MaterialCommunityIcons name="close-circle-outline" size={28} color="white" />
                         <Text style={styles.actionBtnText}>No Show</Text>
@@ -1091,10 +1180,12 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
                     </TouchableOpacity>
                   </>
                 )}
+                </ScrollView>
               </>
             )}
+            </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
     </SafeAreaView>
@@ -1122,6 +1213,7 @@ const styles = StyleSheet.create({
   backButton: {
     flexDirection: 'row',
     alignItems: 'center',
+    minHeight: 44,
     paddingVertical: SPACING.xs,
   },
   backText: { color: COLORS.textLight, fontSize: 14, fontWeight: FONT_WEIGHT.bold, marginLeft: 5 },
@@ -1266,8 +1358,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   filterToggle: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     borderRadius: RADIUS.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1294,6 +1386,8 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderWidth: 1,
     borderColor: COLORS.border,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   filterChipActive: {
     backgroundColor: COLORS.chipActiveBg,
@@ -1365,7 +1459,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   statusBannerDismiss: {
-    padding: 2,
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   syncStatusPill: {
@@ -1396,6 +1493,8 @@ const styles = StyleSheet.create({
     fontWeight: FONT_WEIGHT.medium,
   },
   syncBtn: {
+    minHeight: 44,
+    justifyContent: 'center',
     paddingHorizontal: SPACING.sm,
     paddingVertical: SPACING.xs + 1,
     borderRadius: RADIUS.md,
@@ -1486,13 +1585,17 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
+  modalKeyboardAvoider: { flex: 1 },
   modalContent: {
     backgroundColor: 'white',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 20,
     minHeight: 350,
+    maxHeight: '92%',
   },
+  modalBody: { flexShrink: 1 },
+  modalBodyContent: { paddingBottom: SPACING.md },
   modalHeader: { marginBottom: 20, borderBottomWidth: 1, borderBottomColor: '#eee', paddingBottom: 15 },
   modalHeaderRow: { alignItems: 'center', flexDirection: 'row', gap: SPACING.md },
   modalHeaderText: { flex: 1 },
@@ -1514,6 +1617,18 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: FONT_WEIGHT.bold,
   },
+  emptyStateRetryButton: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: COLORS.primary,
+    borderRadius: RADIUS.md,
+    flexDirection: 'row',
+    gap: SPACING.xs,
+    minHeight: 44,
+    marginTop: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+  },
+  emptyStateRetryText: { color: COLORS.textLight, fontWeight: FONT_WEIGHT.bold },
   
   modalSectionLabel: { fontSize: 14, fontWeight: 'bold', color: COLORS.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.4 },
   actionRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 15, marginBottom: 15 },

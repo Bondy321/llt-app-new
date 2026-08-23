@@ -751,13 +751,19 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
               ) : null}
 
               {errorState ? (
-                <View style={styles.errorContainer}>
+                <View style={styles.errorContainer} accessibilityRole="alert" accessibilityLiveRegion="assertive">
                   <MaterialCommunityIcons name="alert-circle" size={16} color={COLORS.errorRed} />
                   <View style={styles.errorBody}>
                     <Text style={styles.errorTitle}>{errorState.title}</Text>
                     <Text style={styles.errorText}>{errorState.message}</Text>
                     {errorState.recoverySteps?.length ? (
-                      <TouchableOpacity style={styles.disclosureButtonCompact} onPress={() => setShowRecoverySteps((current) => !current)}>
+                      <TouchableOpacity
+                        style={styles.disclosureButtonCompact}
+                        onPress={() => setShowRecoverySteps((current) => !current)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Show recovery steps"
+                        accessibilityState={{ expanded: showRecoverySteps }}
+                      >
                         <Text style={styles.disclosureErrorText}>How to recover</Text>
                         <MaterialCommunityIcons name={showRecoverySteps ? 'chevron-up' : 'chevron-down'} size={16} color={COLORS.errorRed} />
                       </TouchableOpacity>
@@ -771,10 +777,10 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                       : null}
                     {errorState.showOfflineActions ? (
                       <View style={styles.errorActionsContainer}>
-                        <TouchableOpacity style={styles.errorActionButton} onPress={() => handleOfflineCtaPress('retry_now')} disabled={loading}>
+                        <TouchableOpacity style={styles.errorActionButton} onPress={() => handleOfflineCtaPress('retry_now')} disabled={loading} accessibilityRole="button" accessibilityLabel="Retry sign in now" accessibilityState={{ disabled: loading }}>
                           <Text style={styles.errorActionText}>Retry now</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.errorActionButton} onPress={() => handleOfflineCtaPress('verify_online')} disabled={loading}>
+                        <TouchableOpacity style={styles.errorActionButton} onPress={() => handleOfflineCtaPress('verify_online')} disabled={loading} accessibilityRole="button" accessibilityLabel="Verify this code online" accessibilityState={{ disabled: loading }}>
                           <Text style={styles.errorActionText}>I’m connected, verify this code</Text>
                         </TouchableOpacity>
                       </View>
@@ -789,6 +795,9 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                   onPress={handleLogin}
                   activeOpacity={0.9}
                   disabled={isSubmitDisabled}
+                  accessibilityRole="button"
+                  accessibilityLabel={loading ? 'Verifying your tour access' : 'Access my tour'}
+                  accessibilityState={{ disabled: isSubmitDisabled, busy: loading }}
                 >
                   <LinearGradient colors={[COLORS.primaryBlue, COLORS.secondaryBlue]} style={styles.buttonGradient}>
                     {loading ? (
@@ -820,7 +829,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                 </TouchableOpacity>
               </Animated.View>
 
-              <TouchableOpacity style={styles.disclosureButton} onPress={() => setShowPrimaryHelp((current) => !current)}>
+              <TouchableOpacity style={styles.disclosureButton} onPress={() => setShowPrimaryHelp((current) => !current)} accessibilityRole="button" accessibilityLabel="Sign-in help" accessibilityState={{ expanded: showPrimaryHelp }}>
                 <Text style={styles.disclosureText}>Sign-in help</Text>
                 <MaterialCommunityIcons name={showPrimaryHelp ? 'chevron-up' : 'chevron-down'} size={16} color={COLORS.primaryBlue} />
               </TouchableOpacity>
@@ -832,7 +841,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
                 </View>
               ) : null}
 
-              <TouchableOpacity style={styles.disclosureButton} onPress={() => setShowOfflineHelp((current) => !current)}>
+              <TouchableOpacity style={styles.disclosureButton} onPress={() => setShowOfflineHelp((current) => !current)} accessibilityRole="button" accessibilityLabel="Why offline sign-in may be unavailable" accessibilityState={{ expanded: showOfflineHelp }}>
                 <Text style={styles.disclosureText}>Why can’t I log in offline?</Text>
                 <MaterialCommunityIcons name={showOfflineHelp ? 'chevron-up' : 'chevron-down'} size={16} color={COLORS.primaryBlue} />
               </TouchableOpacity>

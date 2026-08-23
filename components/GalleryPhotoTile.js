@@ -19,6 +19,8 @@ const GalleryPhotoTile = React.memo(function GalleryPhotoTile({
   onImageLoadStart = null,
   onImageLoad = null,
   onImageError = null,
+  accessibilityLabel = 'Open photo',
+  accessibilityHint = null,
 }) {
   const uri = resolveThumbnailDisplayUri(photo);
   const cacheKey = buildPhotoCacheKey(photo, 'thumbnail');
@@ -31,6 +33,10 @@ const GalleryPhotoTile = React.memo(function GalleryPhotoTile({
       onPress={onPress}
       activeOpacity={0.85}
       disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={{ disabled }}
     >
       {source && useExpoImage ? (
         <ExpoImage

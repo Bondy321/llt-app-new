@@ -311,26 +311,38 @@ export default function GroupPhotobookScreen({
 
   const requestCameraPermission = async () => {
     logger.info('GroupPhotobook', 'Camera permission requested', { tourId });
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      logger.warn('GroupPhotobook', 'Camera permission denied', { tourId, status });
-      Alert.alert('Permission Needed', 'Camera permission is required to take photos.');
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        logger.warn('GroupPhotobook', 'Camera permission denied', { tourId, status });
+        Alert.alert('Camera access needed', 'Allow camera access in your device settings to take a photo.');
+        return false;
+      }
+      logger.info('GroupPhotobook', 'Camera permission granted', { tourId });
+      return true;
+    } catch (error) {
+      logger.warn('GroupPhotobook', 'Camera permission request failed', { tourId, error: error?.message || String(error) });
+      Alert.alert('Camera unavailable', 'We could not open the camera permission prompt. Try again or check your device settings.');
       return false;
     }
-    logger.info('GroupPhotobook', 'Camera permission granted', { tourId });
-    return true;
   };
 
   const requestGalleryPermission = async () => {
     logger.info('GroupPhotobook', 'Gallery permission requested', { tourId });
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      logger.warn('GroupPhotobook', 'Gallery permission denied', { tourId, status });
-      Alert.alert('Permission Needed', 'Gallery access is required to select photos.');
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        logger.warn('GroupPhotobook', 'Gallery permission denied', { tourId, status });
+        Alert.alert('Photo access needed', 'Allow photo access in your device settings to choose a photo.');
+        return false;
+      }
+      logger.info('GroupPhotobook', 'Gallery permission granted', { tourId });
+      return true;
+    } catch (error) {
+      logger.warn('GroupPhotobook', 'Gallery permission request failed', { tourId, error: error?.message || String(error) });
+      Alert.alert('Photos unavailable', 'We could not open the photo permission prompt. Try again or check your device settings.');
       return false;
     }
-    logger.info('GroupPhotobook', 'Gallery permission granted', { tourId });
-    return true;
   };
 
   const handleTakePhoto = async () => {
@@ -338,11 +350,18 @@ export default function GroupPhotobookScreen({
     const hasPermission = await requestCameraPermission();
     if (!hasPermission) return;
 
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ['images'],
-      allowsEditing: false,
-      quality: 0.8,
-    });
+    let result;
+    try {
+      result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        quality: 0.8,
+      });
+    } catch (error) {
+      logger.warn('GroupPhotobook', 'Camera launch failed', { tourId, error: error?.message || String(error) });
+      Alert.alert('Camera unavailable', 'We could not open the camera. Please try again.');
+      return;
+    }
 
     if (!result.canceled && result.assets?.[0]) {
       setPendingImage(result.assets[0]);
@@ -364,11 +383,18 @@ export default function GroupPhotobookScreen({
     const hasPermission = await requestGalleryPermission();
     if (!hasPermission) return;
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: false,
-      quality: 0.8,
-    });
+    let result;
+    try {
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        quality: 0.8,
+      });
+    } catch (error) {
+      logger.warn('GroupPhotobook', 'Photo library launch failed', { tourId, error: error?.message || String(error) });
+      Alert.alert('Photos unavailable', 'We could not open your photo library. Please try again.');
+      return;
+    }
 
     if (!result.canceled && result.assets?.[0]) {
       setPendingImage(result.assets[0]);
@@ -889,6 +915,8 @@ export default function GroupPhotobookScreen({
                   photo={photo}
                   style={thumbnailTileStyle}
                   onPress={() => openViewer(section.sectionIndex, photoIndexInSection)}
+                  accessibilityLabel={`Open group photo${photo.caption ? `: ${photo.caption}` : ''}`}
+                  accessibilityHint="Opens this photo full screen"
                 >
                   {photo.userId === principalId && (
                     <View style={styles.myPhotoBadge}>
@@ -923,6 +951,9 @@ export default function GroupPhotobookScreen({
           onPress={showUploadOptions}
           activeOpacity={0.9}
           disabled={false}
+          accessibilityRole="button"
+          accessibilityLabel="Add a group photo"
+          accessibilityHint="Choose a photo or take a new one"
         >
           <LinearGradient
             colors={[COLORS.success, '#22C55E']}
