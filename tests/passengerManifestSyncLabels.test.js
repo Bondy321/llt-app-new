@@ -36,10 +36,10 @@ const bookingRefs = {
 
 const mockManifest = {
   bookings: [
-    { id: bookingRefs.queued, pickupLocation: 'A', passengerNames: ['Q One'], status: 'PENDING' },
-    { id: bookingRefs.syncing, pickupLocation: 'A', passengerNames: ['S One'], status: 'PENDING' },
-    { id: bookingRefs.failed, pickupLocation: 'B', passengerNames: ['F One'], status: 'PENDING' },
-    { id: bookingRefs.malformed, pickupLocation: 'B', passengerNames: ['M One'], status: 'PENDING' },
+    { id: bookingRefs.queued, pickupLocation: 'Glasgow Buchanan Bus Station', pickupTime: '10:30', passengerNames: ['Q One'], status: 'PENDING' },
+    { id: bookingRefs.syncing, pickupLocation: 'Glasgow Buchanan Bus Station', pickupTime: '10:30', passengerNames: ['S One'], status: 'BOARDED' },
+    { id: bookingRefs.failed, pickupLocation: 'Balloch Tourist Information Centre', pickupTime: '11:15', passengerNames: ['F One'], status: 'PENDING' },
+    { id: bookingRefs.malformed, pickupLocation: 'Balloch Tourist Information Centre', pickupTime: '11:15', passengerNames: ['M One'], status: 'BOARDED' },
   ],
   stats: { totalPax: 4, checkedIn: 0, noShows: 0 },
 };
@@ -207,6 +207,10 @@ test('PassengerManifestScreen only surfaces booking sync labels that need attent
   assert.ok(allText.includes('SYNCING'));
   assert.ok(allText.includes('FAILED'));
   assert.ok(!allText.includes('SYNCED'));
+  assert.ok(allText.includes('GLASGOW BUCHANAN BUS STATION - 10:30'));
+  assert.ok(allText.includes('BALLOCH TOURIST INFORMATION CENTRE - 11:15'));
+  assert.ok(!allText.includes('UNRESOLVED - 10:30'));
+  assert.ok(!allText.includes('RESOLVED - 10:30'));
 
   const sectionList = renderer.root.findByType('SectionList');
   const baselineManifestCalls = getTourManifestCalls;

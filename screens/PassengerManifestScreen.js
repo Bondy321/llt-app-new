@@ -299,21 +299,31 @@ export default function PassengerManifestScreen({ route, navigation, driverTourP
   }), [filteredBookings]);
 
   const sectionedPriorityBookings = useMemo(() => {
-    const groups = {};
+    const groups = new Map();
     sortedFilteredBookings.forEach((booking) => {
       const unresolved = priorityRank(booking.status) === 0;
-      const bucket = unresolved ? 'Unresolved' : 'Resolved';
       const pickupLabel = booking.pickupTime || 'TBA';
-      const key = `${bucket}__${pickupLabel}`;
-      if (!groups[key]) {
-        groups[key] = { title: `${bucket} - ${pickupLabel}`, data: [], unresolved, pickupLabel };
+      const pickupLocation = String(booking.pickupLocation || '').trim() || 'Pickup point unavailable';
+      const key = `${pickupLocation.toUpperCase()}__${pickupLabel.toUpperCase()}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          title: `${pickupLocation} - ${pickupLabel}`,
+          data: [],
+          unresolved,
+          pickupLabel,
+          pickupLocation,
+        });
       }
-      groups[key].data.push(booking);
+      const group = groups.get(key);
+      group.unresolved = group.unresolved || unresolved;
+      group.data.push(booking);
     });
 
-    return Object.values(groups).sort((a, b) => {
+    return [...groups.values()].sort((a, b) => {
       if (a.unresolved !== b.unresolved) return a.unresolved ? -1 : 1;
-      return toPickupTimeSortValue(a.pickupLabel) - toPickupTimeSortValue(b.pickupLabel);
+      const pickupDelta = toPickupTimeSortValue(a.pickupLabel) - toPickupTimeSortValue(b.pickupLabel);
+      if (pickupDelta !== 0) return pickupDelta;
+      return a.pickupLocation.localeCompare(b.pickupLocation);
     });
   }, [sortedFilteredBookings]);
 
