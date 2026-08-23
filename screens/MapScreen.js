@@ -23,7 +23,7 @@ import { getMinutesAgo, parseTimestampMs } from '../services/timeUtils';
 import logger from '../services/loggerService';
 const { buildDirectionsUrls } = require('../utils/directions');
 const { resolvePrimaryPickup } = require('../utils/pickupPresentation');
-import { getDriverLocationPresentation } from '../utils/driverLocation';
+import { getDriverLocationPresentation, getDriverLocationSnapshotKey } from '../utils/driverLocation';
 
 // Brand Colors
 const COLORS = {
@@ -106,6 +106,7 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showDetailCard, setShowDetailCard] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
+  const [subscriptionRetryKey, setSubscriptionRetryKey] = useState(0);
 
   const mapRef = useRef(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -113,6 +114,10 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
   const slideAnim = useRef(new Animated.Value(100)).current;
   const markerScaleAnim = useRef(new Animated.Value(0)).current;
   const refreshRotation = useRef(new Animated.Value(0)).current;
+  const isMountedRef = useRef(true);
+  const realtimeConnectedRef = useRef(false);
+  const hasDriverSnapshotRef = useRef(false);
+  const lastDriverSnapshotKeyRef = useRef('');
   const driverLocationPresentation = useMemo(
     () => getDriverLocationPresentation(driverLocation, freshnessNow),
     [driverLocation, freshnessNow]
@@ -128,24 +133,37 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
     return () => clearInterval(freshnessTimer);
   }, []);
 
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   const loadUserLocation = useCallback(async ({ requestPermission = false } = {}) => {
     const permission = requestPermission
       ? await Location.requestForegroundPermissionsAsync()
       : await Location.getForegroundPermissionsAsync();
 
     if (permission?.status !== 'granted') {
-      setUserLocation(null);
-      setUserLocationNotice('Your location is off. The driver\'s shared point is still available.');
+      if (isMountedRef.current) {
+        setUserLocation(null);
+        setUserLocationNotice('Your location is off. The driver\'s shared point is still available.');
+      }
       return { success: false, reason: 'permission-denied' };
     }
 
     try {
       const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      setUserLocation(location.coords);
-      setUserLocationNotice('');
+      if (isMountedRef.current) {
+        setUserLocation(location.coords);
+        setUserLocationNotice('');
+      }
       return { success: true, location };
     } catch (error) {
-      setUserLocationNotice('Your position could not be refreshed. The driver\'s shared point is still available.');
+      if (isMountedRef.current) {
+        setUserLocationNotice('Your position could not be refreshed. The driver\'s shared point is still available.');
+      }
       logger.warn('MapScreen', 'Optional user location lookup failed', {
         tourId,
         error: error?.message || String(error),
@@ -246,16 +264,23 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
       return;
     }
 
-    setConnectionStatus('connecting');
+    setConnectionStatus(realtimeConnectedRef.current ? 'connecting' : 'offline');
+    setErrorMsg(null);
+    hasDriverSnapshotRef.current = false;
+    lastDriverSnapshotKeyRef.current = '';
     const locationRef = realtimeDb.ref(`tours/${tourId}/driverLocation`);
     logger.info('MapScreen', 'Driver location subscription started', { tourId });
 
     const unsubscribe = locationRef.on('value', (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
+        const snapshotKey = getDriverLocationSnapshotKey(data);
+        const isMeaningfulUpdate = hasDriverSnapshotRef.current
+          && snapshotKey
+          && snapshotKey !== lastDriverSnapshotKeyRef.current;
         setDriverLocation(data);
         setErrorMsg(null);
-        setConnectionStatus('connected');
+        setConnectionStatus(realtimeConnectedRef.current ? 'connected' : 'offline');
         logger.info('MapScreen', 'Driver location snapshot received', {
           tourId,
           coords: summarizeCoords(data),
@@ -265,12 +290,16 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
         });
 
         // Haptic feedback on location update
-        if (Platform.OS === 'ios') {
+        if (isMeaningfulUpdate && Platform.OS === 'ios') {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         }
+        hasDriverSnapshotRef.current = true;
+        lastDriverSnapshotKeyRef.current = snapshotKey;
       } else {
         setDriverLocation(null);
-        setConnectionStatus('waiting');
+        setConnectionStatus(realtimeConnectedRef.current ? 'waiting' : 'offline');
+        hasDriverSnapshotRef.current = true;
+        lastDriverSnapshotKeyRef.current = '';
         logger.info('MapScreen', 'Driver location snapshot empty', { tourId });
       }
       setLoading(false);
@@ -289,7 +318,7 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
       logger.debug('MapScreen', 'Driver location subscription stopped', { tourId });
       locationRef.off('value', unsubscribe);
     };
-  }, [tourId]);
+  }, [subscriptionRetryKey, tourId]);
 
   const calculateDistanceKm = (pointA, pointB) => {
     const toRad = (value) => (value * Math.PI) / 180;
@@ -346,6 +375,7 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
   const relativeUpdateTime = driverLocationTimestamp ? formatRelativeTime(driverLocationTimestamp) : '';
   const locationFreshness = driverLocationPresentation.freshness;
   const isStale = locationFreshness === 'stale';
+  const hasLowAccuracy = locationFreshness === 'low_accuracy';
   const hasExpiredLiveLocation = locationFreshness === 'expired';
   const distanceKm = driverLocationPresentation.actionable && driverLocationPoint && userLocationPoint
     ? calculateDistanceKm(driverLocationPoint, userLocationPoint)
@@ -524,6 +554,21 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
     }
   }, [tourId]);
 
+  useEffect(() => {
+    const connectedRef = realtimeDb.ref('.info/connected');
+    const onConnection = (snapshot) => {
+      const connected = snapshot.val() === true;
+      realtimeConnectedRef.current = connected;
+      if (!connected) {
+        setConnectionStatus('offline');
+      } else if (!errorMsg) {
+        setConnectionStatus(driverLocation ? 'connected' : 'waiting');
+      }
+    };
+    connectedRef.on('value', onConnection);
+    return () => connectedRef.off('value', onConnection);
+  }, [Boolean(driverLocation), Boolean(errorMsg)]);
+
   const handleGetDirections = useCallback(async () => {
     logger.info('MapScreen', 'Directions requested', {
       tourId,
@@ -597,6 +642,8 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
         return { color: COLORS.warning, label: 'STALE', icon: 'clock-alert-outline' };
       case 'pickup':
         return { color: COLORS.primaryBlue, label: 'PICKUP POINT', icon: 'map-marker-check-outline' };
+      case 'low_accuracy':
+        return { color: COLORS.warning, label: 'LOW ACCURACY', icon: 'crosshairs-question' };
       default:
         return { color: COLORS.secondaryText, label: 'UNKNOWN', icon: 'help-circle-outline' };
     }
@@ -645,6 +692,9 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
       case 'error':
         config = { color: COLORS.errorRed, icon: 'wifi-alert', label: 'Connection error' };
         break;
+      case 'offline':
+        config = { color: COLORS.warning, icon: 'wifi-off', label: 'Reconnecting...' };
+        break;
       default:
         config = { color: COLORS.secondaryText, icon: 'wifi-sync', label: 'Connecting...' };
     }
@@ -679,7 +729,7 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
             latitude: driverLocationPoint.latitude,
             longitude: driverLocationPoint.longitude,
           }}
-          title="Bus Pickup Point"
+          title={driverLocationPresentation.mode === 'live' ? 'Live Bus Location' : 'Bus Pickup Point'}
           description={`Updated ${relativeUpdateTime}`}
           anchor={{ x: 0.5, y: 0.5 }}
         >
@@ -814,6 +864,15 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
                     <View style={styles.errorTextContainer}>
                       <Text style={styles.errorTitle}>Location Error</Text>
                       <Text style={styles.errorMessage}>{errorMsg}</Text>
+                      <TouchableOpacity
+                        style={styles.contactButton}
+                        onPress={() => setSubscriptionRetryKey((value) => value + 1)}
+                        accessibilityLabel="Retry driver location connection"
+                        accessibilityRole="button"
+                      >
+                        <MaterialCommunityIcons name="refresh" size={18} color={COLORS.primaryBlue} />
+                        <Text style={styles.contactButtonText}>Retry</Text>
+                      </TouchableOpacity>
                     </View>
                   </View>
                 ) : driverHasLocation ? (
@@ -841,7 +900,9 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
                         <MaterialCommunityIcons name="bus" size={28} color={COLORS.white} />
                       </View>
                       <View style={styles.driverDetails}>
-                        <Text style={styles.driverTitle}>Bus Pickup Point</Text>
+                        <Text style={styles.driverTitle}>
+                          {driverLocationPresentation.mode === 'live' ? 'Live Bus Location' : 'Bus Pickup Point'}
+                        </Text>
                         <Text style={styles.driverSubtitle}>
                           {driverLocationPresentation.mode === 'pickup'
                             ? 'Fixed pickup point shared by the driver'
@@ -891,6 +952,15 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
                         <MaterialCommunityIcons name="alert" size={20} color={COLORS.warning} />
                         <Text style={styles.staleText}>
                           This location is getting stale. The driver may still be moving — refresh shortly or contact them for a live update.
+                        </Text>
+                      </View>
+                    )}
+
+                    {hasLowAccuracy && (
+                      <View style={styles.staleWarning}>
+                        <MaterialCommunityIcons name="crosshairs-question" size={20} color={COLORS.warning} />
+                        <Text style={styles.staleText}>
+                          The driver's GPS accuracy is too low for safe directions. Wait for a clearer update or contact the driver.
                         </Text>
                       </View>
                     )}
@@ -974,6 +1044,8 @@ export default function MapScreen({ onBack, tourId, tourData, bookingData }) {
                       style={styles.contactButton}
                       onPress={handleCallDriver}
                       activeOpacity={0.85}
+                      accessibilityLabel="Contact driver by phone"
+                      accessibilityRole="button"
                     >
                       <MaterialCommunityIcons name="phone" size={18} color={COLORS.primaryBlue} />
                       <Text style={styles.contactButtonText}>Contact Driver</Text>

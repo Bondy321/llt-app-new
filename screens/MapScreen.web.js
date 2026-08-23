@@ -53,7 +53,11 @@ export default function MapScreen({ onBack, tourData, bookingData }) {
                 <Text style={styles.primaryButtonText}>Open in Google Maps</Text>
               </TouchableOpacity>
             ) : (
-              <Text style={styles.description}>This live update is too old to navigate to safely. Wait for the driver to share again.</Text>
+              <Text style={styles.description}>
+                {presentation.freshness === 'low_accuracy'
+                  ? 'The driver GPS accuracy is too low for safe directions. Wait for a clearer update.'
+                  : 'This live update is too old to navigate to safely. Wait for the driver to share again.'}
+              </Text>
             )}
           </>
         ) : (

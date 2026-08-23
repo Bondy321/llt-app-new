@@ -24,6 +24,7 @@ const {
   verifyManagementOidcRequest,
 } = require('./lib/managementOidc');
 const { cleanupExpiredDriverTourPacks } = require('./lib/driverTourPackExpiryCleanup');
+const { cleanupExpiredDriverLocations } = require('./lib/driverLocationExpiryCleanup');
 const {
   createDistributedLoginRateLimiter,
   cleanupExpiredLoginRateLimits,
@@ -5219,6 +5220,28 @@ exports.cleanupExpiredDriverTourPacks = onSchedule(
   async () => {
     const result = await cleanupExpiredDriverTourPacks({ database: admin.database() });
     log.info('Driver Tour Pack expiry cleanup completed', result);
+    return result;
+  },
+);
+
+/**
+ * Removes expired live driver-coordinate leases in a bounded batch. Each
+ * candidate is transactionally compared with the queried session so a fresh
+ * publication can never be deleted by an older cleanup run.
+ */
+exports.cleanupExpiredDriverLocations = onSchedule(
+  {
+    schedule: 'every 15 minutes',
+    timeZone: 'Europe/London',
+    region: 'europe-west1',
+    memory: '256MiB',
+    timeoutSeconds: 60,
+    maxInstances: 1,
+  },
+  async () => {
+    const result = await cleanupExpiredDriverLocations({ database: admin.database() });
+    if (result.hasMore) log.warn('Expired driver-location cleanup reached its bounded ceiling', result);
+    else log.info('Expired driver-location cleanup completed', result);
     return result;
   },
 );

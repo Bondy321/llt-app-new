@@ -173,6 +173,7 @@ test('allows assigned drivers, but not unassigned drivers, to write driver tour 
 
 test('validates versioned driver location records and accepts server timestamps', async () => {
   const locationRef = dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/driverLocation`);
+  const cleanupAtMs = Date.now() + (30 * 60 * 1000);
   await assertSucceeds(locationRef.set({
     schemaVersion: 1,
     isSharing: true,
@@ -183,6 +184,64 @@ test('validates versioned driver location records and accepts server timestamps'
     timestamp: { '.sv': 'timestamp' },
     accuracy: 12,
     updatedBy: 'Driver Palmer',
+    sessionId: 'session_rules_123',
+    cleanupAtMs,
+    fallbackPickup: {
+      schemaVersion: 1,
+      isSharing: true,
+      mode: 'pickup',
+      source: 'manual',
+      latitude: 56.1,
+      longitude: -4.7,
+      timestamp: Date.now() - 60_000,
+      address: 'Pier Road',
+    },
+  }));
+
+  await assertFails(locationRef.set({
+    schemaVersion: 1,
+    isSharing: true,
+    mode: 'live',
+    source: 'auto',
+    latitude: 56.0,
+    longitude: -4.6,
+    timestamp: { '.sv': 'timestamp' },
+    sessionId: 'bad',
+    cleanupAtMs,
+  }));
+
+  await assertFails(locationRef.set({
+    schemaVersion: 1,
+    isSharing: true,
+    mode: 'live',
+    source: 'auto',
+    latitude: 56.0,
+    longitude: -4.6,
+    timestamp: { '.sv': 'timestamp' },
+    sessionId: 'session_rules_123',
+    cleanupAtMs: Date.now() + (5 * 60 * 1000),
+  }));
+
+  await assertFails(locationRef.set({
+    schemaVersion: 1,
+    isSharing: true,
+    mode: 'live',
+    source: 'auto',
+    latitude: 56.0,
+    longitude: -4.6,
+    timestamp: { '.sv': 'timestamp' },
+    sessionId: 'session_rules_123',
+    cleanupAtMs,
+    fallbackPickup: {
+      schemaVersion: 1,
+      isSharing: true,
+      mode: 'pickup',
+      source: 'manual',
+      latitude: 56.1,
+      longitude: -4.7,
+      timestamp: Date.now() - 60_000,
+      unexpectedPrivateField: 'must-not-leak',
+    },
   }));
 
   await assertFails(locationRef.set({

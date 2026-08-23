@@ -213,7 +213,7 @@
     "tours": {
       ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
       ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
-      ".indexOn": ["startDateEpochMs", "endDateEpochMs", "isActive", "driverId"],
+      ".indexOn": ["startDateEpochMs", "endDateEpochMs", "isActive", "driverId", "driverLocation/cleanupAtMs"],
       "$tourId": {
         ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))",
         ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
@@ -264,6 +264,22 @@
           "accuracy": { ".validate": "true" },
           "address": { ".validate": "true" },
           "updatedBy": { ".validate": "true" },
+          "sessionId": { ".validate": "newData.parent().child('source').val() === 'auto' && newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{8,80}$/)" },
+          "cleanupAtMs": { ".validate": "newData.parent().child('source').val() === 'auto' && newData.isNumber() && newData.val() >= now + 1500000 && newData.val() <= now + 2100000" },
+          "fallbackPickup": {
+            ".validate": "newData.parent().child('source').val() === 'auto' && newData.child('schemaVersion').val() === 1 && newData.child('isSharing').val() === true && newData.child('mode').val() === 'pickup' && newData.child('source').val() === 'manual' && newData.child('latitude').isNumber() && newData.child('latitude').val() >= -90 && newData.child('latitude').val() <= 90 && newData.child('longitude').isNumber() && newData.child('longitude').val() >= -180 && newData.child('longitude').val() <= 180 && newData.child('timestamp').isNumber() && (!newData.child('accuracy').exists() || (newData.child('accuracy').isNumber() && newData.child('accuracy').val() >= 0 && newData.child('accuracy').val() <= 10000)) && (!newData.child('address').exists() || (newData.child('address').isString() && newData.child('address').val().length > 0 && newData.child('address').val().length <= 500)) && (!newData.child('updatedBy').exists() || (newData.child('updatedBy').isString() && newData.child('updatedBy').val().length > 0 && newData.child('updatedBy').val().length <= 100))",
+            "schemaVersion": { ".validate": "true" },
+            "isSharing": { ".validate": "true" },
+            "mode": { ".validate": "true" },
+            "source": { ".validate": "true" },
+            "latitude": { ".validate": "true" },
+            "longitude": { ".validate": "true" },
+            "timestamp": { ".validate": "true" },
+            "accuracy": { ".validate": "true" },
+            "address": { ".validate": "true" },
+            "updatedBy": { ".validate": "true" },
+            "$other": { ".validate": "false" }
+          },
           "$other": { ".validate": "false" }
         },
         "participants": {

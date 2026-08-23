@@ -13,6 +13,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Animated,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
@@ -27,8 +28,16 @@ import { createPersistenceProvider } from '../services/persistenceProvider';
 import logger, { maskIdentifier } from '../services/loggerService';
 import { getMinutesAgo } from '../services/timeUtils';
 import { normalizeTourId, resolveTourId } from '../services/tourIdentityService';
-import { publishDriverLocation, withdrawLiveDriverLocation } from '../services/driverLocationService';
-import { getDriverLocationPresentation } from '../utils/driverLocation';
+import {
+  createDriverLocationSessionId,
+  publishDriverLocation,
+  withdrawLiveDriverLocation,
+} from '../services/driverLocationService';
+import {
+  DRIVER_LOCATION_MAX_ACTIONABLE_ACCURACY_METERS,
+  getDriverLocationPresentation,
+  getDriverLocationStatusMeta,
+} from '../utils/driverLocation';
 import { COLORS as THEME } from '../theme';
 
 const COLORS = {
@@ -80,6 +89,7 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const [bannerRetryHandler, setBannerRetryHandler] = useState(null);
   const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(null);
   const [locationFreshnessNow, setLocationFreshnessNow] = useState(() => Date.now());
+  const [isAppActive, setIsAppActive] = useState(AppState.currentState === 'active');
 
   // Modal State for Joining Tour
   const [joinModalVisible, setJoinModalVisible] = useState(false);
@@ -92,9 +102,16 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const persistenceRef = useRef(createPersistenceProvider({ namespace: 'LLT_DRIVER_HOME' }));
   const bannerTimerRef = useRef(null);
-  const autoShareInFlightRef = useRef(false);
+  const autoShareInFlightRef = useRef(null);
   const autoShareToggleInFlightRef = useRef(false);
   const autoShareInitialLocationRef = useRef(null);
+  const autoShareGenerationRef = useRef(0);
+  const autoShareSessionRef = useRef(null);
+  const autoShareEnabledRef = useRef(false);
+  const isAppActiveRef = useRef(AppState.currentState === 'active');
+  const activeTourIdRef = useRef('');
+  const driverIdRef = useRef('');
+  const previewRequestIdRef = useRef(0);
   const locationBusyRef = useRef(false);
   const lastLocationAddressRef = useRef('');
 
@@ -106,6 +123,11 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     driverData?.assignedTourCode,
     driverData?.currentTourCode
   ) || '';
+
+  activeTourIdRef.current = activeTourId;
+  driverIdRef.current = driverData?.id || '';
+  autoShareEnabledRef.current = autoShareEnabled;
+  isAppActiveRef.current = isAppActive;
 
   const sanitizeTourId = useCallback((tourCode) => normalizeTourId(tourCode), []);
   const autoSharePreferenceKey = `AUTO_SHARE_${driverData?.id || 'unknown'}`;
@@ -120,8 +142,17 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   }, [activeTourId, autoShareEnabled, driverData?.id]);
 
   const lastLocationPresentation = getDriverLocationPresentation(lastLocationUpdate, locationFreshnessNow);
-  const isLocationStale = lastLocationPresentation.freshness === 'stale'
-    || lastLocationPresentation.freshness === 'expired';
+  const lastLocationStatus = getDriverLocationStatusMeta(lastLocationPresentation);
+  const isLocationStale = lastLocationStatus.needsRefresh;
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      const nextIsActive = nextState === 'active';
+      isAppActiveRef.current = nextIsActive;
+      setIsAppActive(nextIsActive);
+    });
+    return () => subscription.remove();
+  }, []);
 
   useEffect(() => {
     const freshnessTimer = setInterval(() => setLocationFreshnessNow(Date.now()), 30 * 1000);
@@ -135,6 +166,19 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   useEffect(() => {
     lastLocationAddressRef.current = lastLocationUpdate?.address || '';
   }, [lastLocationUpdate?.address]);
+
+  useEffect(() => {
+    if (
+      previewLocation
+      && (previewLocation.tourId !== activeTourId || previewLocation.driverId !== (driverData?.id || ''))
+    ) {
+      previewRequestIdRef.current += 1;
+      setPreviewModalVisible(false);
+      setPreviewLocation(null);
+      setAddressLoading(false);
+      setUpdatingLocation(false);
+    }
+  }, [activeTourId, driverData?.id, previewLocation]);
 
   const showBanner = useCallback(({
     contract,
@@ -300,18 +344,21 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     }).start();
   }, []);
 
-  // Fetch existing location data on mount
+  // Keep the driver's status reconciled with the authoritative server timestamp.
   useEffect(() => {
-    if (!activeTourId) return;
+    setLastLocationUpdate(null);
+    setLocationAccuracy(null);
+    lastLocationAddressRef.current = '';
+    if (!activeTourId) return undefined;
 
-    let cancelled = false;
     const locationRef = realtimeDb.ref(`tours/${activeTourId}/driverLocation`);
-    logger.debug('DriverHomeScreen', 'Existing driver location lookup started', { activeTourId });
-    locationRef.once('value').then((snapshot) => {
-      if (cancelled) return;
+    logger.debug('DriverHomeScreen', 'Driver location subscription started', { activeTourId });
+    const onLocation = (snapshot) => {
+      if (activeTourIdRef.current !== activeTourId) return;
       if (snapshot.exists()) {
         const data = snapshot.val();
         setLastLocationUpdate(data);
+        setLocationAccuracy(Number.isFinite(Number(data?.accuracy)) ? Number(data.accuracy) : null);
         logger.info('DriverHomeScreen', 'Existing driver location loaded', {
           activeTourId,
           hasTimestamp: Boolean(data?.timestamp || data?.lastUpdated),
@@ -319,27 +366,31 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
           accuracy: Number.isFinite(Number(data?.accuracy)) ? Math.round(Number(data.accuracy)) : null,
         });
       } else {
+        setLastLocationUpdate(null);
+        setLocationAccuracy(null);
         logger.info('DriverHomeScreen', 'Existing driver location empty', { activeTourId });
       }
-    }).catch((error) => {
-      if (cancelled) return;
+    };
+    const onLocationError = (error) => {
+      if (activeTourIdRef.current !== activeTourId) return;
       logger.warn('DriverHomeScreen', 'Existing driver location lookup failed', {
         activeTourId,
         error: error?.message || String(error),
       });
-    });
+    };
+    locationRef.on('value', onLocation, onLocationError);
 
     return () => {
-      cancelled = true;
+      locationRef.off('value', onLocation);
+      logger.debug('DriverHomeScreen', 'Driver location subscription stopped', { activeTourId });
     };
   }, [activeTourId, driverData?.id]);
 
   // Reverse geocode to get address
-  const getAddressFromCoords = async (latitude, longitude) => {
+  const getAddressFromCoords = async (latitude, longitude, targetTourId) => {
     try {
-      setAddressLoading(true);
       logger.debug('DriverHomeScreen', 'Reverse geocode started', {
-        activeTourId,
+        activeTourId: targetTourId,
         latitudeApprox: Number.isFinite(Number(latitude)) ? Number(Number(latitude).toFixed(3)) : null,
         longitudeApprox: Number.isFinite(Number(longitude)) ? Number(Number(longitude).toFixed(3)) : null,
       });
@@ -356,24 +407,23 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         if (addr.city) parts.push(addr.city);
         if (addr.region) parts.push(addr.region);
 
-        setAddressText(parts.join(', ') || 'Address unavailable');
+        const address = parts.join(', ') || 'Address unavailable';
         logger.info('DriverHomeScreen', 'Reverse geocode completed', {
-          activeTourId,
+          activeTourId: targetTourId,
           resultCount: result.length,
           hasAddress: parts.length > 0,
         });
+        return address;
       } else {
-        setAddressText('Address unavailable');
-        logger.warn('DriverHomeScreen', 'Reverse geocode returned no results', { activeTourId });
+        logger.warn('DriverHomeScreen', 'Reverse geocode returned no results', { activeTourId: targetTourId });
+        return 'Address unavailable';
       }
     } catch (error) {
       logger.warn('DriverHomeScreen', 'Reverse geocode failed', {
-        activeTourId,
+        activeTourId: targetTourId,
         error: error?.message || String(error),
       });
-      setAddressText('Could not determine address');
-    } finally {
-      setAddressLoading(false);
+      return 'Could not determine address';
     }
   };
 
@@ -405,10 +455,17 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const uploadLocationUpdate = async (
     { latitude, longitude, accuracy, timestamp, address },
     source = 'manual',
-    { shouldUpdateLocalState = () => true, isScopeCurrent = () => true } = {}
+    {
+      targetTourId = activeTourId,
+      targetDriverId = driverData?.id || '',
+      shouldUpdateLocalState = () => true,
+      isScopeCurrent = () => true,
+      sessionId,
+    } = {}
   ) => {
     logger.info('DriverHomeScreen', 'Driver location upload started', {
-      activeTourId,
+      activeTourId: targetTourId,
+      driverId: maskIdentifier(targetDriverId),
       source,
       hasAddress: Boolean(address),
       accuracy: Number.isFinite(Number(accuracy)) ? Math.round(Number(accuracy)) : null,
@@ -416,46 +473,46 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       longitudeApprox: Number.isFinite(Number(longitude)) ? Number(Number(longitude).toFixed(3)) : null,
     });
     const persistedLocation = await publishDriverLocation({
-      tourId: activeTourId,
+      tourId: targetTourId,
       location: { latitude, longitude, accuracy, timestamp },
       updatedBy: driverData.name,
       address: address || 'Address unavailable',
       source,
       dbInstance: realtimeDb,
       isScopeCurrent,
+      sessionId,
     });
     if (persistedLocation.skipped) {
       logger.info('DriverHomeScreen', 'Driver location upload skipped for revoked scope', {
-        activeTourId,
+        activeTourId: targetTourId,
         source,
       });
       return persistedLocation;
     }
     logger.info('DriverHomeScreen', 'Driver location upload completed', {
-      activeTourId,
+      activeTourId: targetTourId,
       source,
       timestamp,
     });
 
     if (shouldUpdateLocalState()) {
-      setLastLocationUpdate({
+      setLastLocationUpdate(persistedLocation.storedLocation || {
+        ...persistedLocation,
         latitude,
         longitude,
-        timestamp: persistedLocation.timestamp,
         updatedBy: driverData.name,
         address: address || 'Address unavailable',
         accuracy,
-        source,
-        mode: persistedLocation.mode,
-        isSharing: true,
-        schemaVersion: persistedLocation.schemaVersion,
       });
     }
+    return persistedLocation;
   };
 
   // Function to capture location and show preview
   const handleCaptureLocation = async () => {
-    if (!activeTourId) {
+    const targetTourId = activeTourId;
+    const targetDriverId = driverData?.id || '';
+    if (!targetTourId) {
       logger.warn('DriverHomeScreen', 'Manual location capture blocked without tour', {
         driverId: maskIdentifier(driverData?.id),
       });
@@ -473,14 +530,17 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     }
 
     setUpdatingLocation(true);
-    logger.info('DriverHomeScreen', 'Manual location capture started', { activeTourId });
+    const requestId = previewRequestIdRef.current + 1;
+    previewRequestIdRef.current = requestId;
+    setAddressLoading(true);
+    logger.info('DriverHomeScreen', 'Manual location capture started', { activeTourId: targetTourId });
 
     try {
       // 1. Request Permission
       const captureResult = await captureCurrentLocationWithPermission(Location.Accuracy.High);
       if (!captureResult.success) {
         logger.warn('DriverHomeScreen', 'Manual location capture blocked by permission', {
-          activeTourId,
+          activeTourId: targetTourId,
           reason: captureResult.error,
         });
         Alert.alert('Permission Denied', 'Allow location access to share your pickup point.');
@@ -492,22 +552,39 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       const location = captureResult.location;
 
       const { latitude, longitude, accuracy } = location.coords;
+      if (
+        previewRequestIdRef.current !== requestId
+        || activeTourIdRef.current !== targetTourId
+        || driverIdRef.current !== targetDriverId
+      ) return;
 
-      setPreviewLocation({
+      const nextPreview = {
         latitude,
         longitude,
         accuracy,
         timestamp: new Date().toISOString(),
-      });
-      setLocationAccuracy(accuracy);
+        tourId: targetTourId,
+        driverId: targetDriverId,
+        requestId,
+      };
 
       // 3. Get address
-      await getAddressFromCoords(latitude, longitude);
+      const address = await getAddressFromCoords(latitude, longitude, targetTourId);
+      if (
+        previewRequestIdRef.current !== requestId
+        || activeTourIdRef.current !== targetTourId
+        || driverIdRef.current !== targetDriverId
+      ) return;
+
+      setPreviewLocation(nextPreview);
+      setLocationAccuracy(accuracy);
+      setAddressText(address);
+      setAddressLoading(false);
 
       // 4. Show preview modal
       setPreviewModalVisible(true);
       logger.info('DriverHomeScreen', 'Manual location preview ready', {
-        activeTourId,
+        activeTourId: targetTourId,
         accuracy: Number.isFinite(Number(accuracy)) ? Math.round(Number(accuracy)) : null,
       });
 
@@ -523,7 +600,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         actionHandler: handleCaptureLocation,
       });
     } finally {
-      setUpdatingLocation(false);
+      if (previewRequestIdRef.current === requestId) {
+        setAddressLoading(false);
+        setUpdatingLocation(false);
+      }
     }
   };
 
@@ -531,17 +611,43 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   const handleConfirmLocation = async () => {
     if (!previewLocation) return;
 
+    const { tourId: targetTourId, driverId: targetDriverId } = previewLocation;
+    if (activeTourIdRef.current !== targetTourId || driverIdRef.current !== targetDriverId) {
+      setPreviewModalVisible(false);
+      setPreviewLocation(null);
+      showBanner({ type: 'warning', message: 'Your tour assignment changed. Capture the pickup point again.' });
+      return;
+    }
+    if (Number(locationAccuracy) > DRIVER_LOCATION_MAX_ACTIONABLE_ACCURACY_METERS) {
+      showBanner({ type: 'warning', message: 'Location accuracy is too low. Refresh the pin before sharing.' });
+      return;
+    }
+
     if (Platform.OS === 'ios') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     }
 
     setConfirmingLocation(true);
-    logger.info('DriverHomeScreen', 'Manual location confirm started', { activeTourId });
+    logger.info('DriverHomeScreen', 'Manual location confirm started', { activeTourId: targetTourId });
 
     try {
       const { latitude, longitude, timestamp } = previewLocation;
 
-      await uploadLocationUpdate({ latitude, longitude, timestamp, address: addressText, accuracy: locationAccuracy }, 'manual');
+      const isScopeCurrent = () => (
+        activeTourIdRef.current === targetTourId
+        && driverIdRef.current === targetDriverId
+      );
+      const result = await uploadLocationUpdate(
+        { latitude, longitude, timestamp, address: addressText, accuracy: locationAccuracy },
+        'manual',
+        { targetTourId, targetDriverId, isScopeCurrent }
+      );
+      if (result?.skipped) {
+        setPreviewModalVisible(false);
+        setPreviewLocation(null);
+        showBanner({ type: 'warning', message: 'Your tour assignment changed. No location was shared.' });
+        return;
+      }
 
       // Success animation
       Animated.sequence([
@@ -623,7 +729,15 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         }
         autoShareInitialLocationRef.current = permission.location;
       } else if (activeTourId) {
-        const withdrawal = await withdrawLiveDriverLocation({ tourId: activeTourId, dbInstance: realtimeDb });
+        const activeSession = autoShareSessionRef.current;
+        autoShareGenerationRef.current += 1;
+        autoShareSessionRef.current = null;
+        autoShareEnabledRef.current = false;
+        const withdrawal = await withdrawLiveDriverLocation({
+          tourId: activeSession?.tourId || activeTourId,
+          dbInstance: realtimeDb,
+          expectedSessionId: activeSession?.sessionId,
+        });
         if (withdrawal.removed) setLastLocationUpdate(null);
         setAutoShareLastRunAt(null);
       }
@@ -664,32 +778,56 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
       setAutoShareStatus('Paused: join a tour to resume auto-share');
       return undefined;
     }
+    if (!isAppActive) {
+      setAutoShareStatus('Paused while the app is in the background');
+      return undefined;
+    }
 
     let cancelled = false;
     let intervalId;
+    const generation = autoShareGenerationRef.current + 1;
+    const sessionId = createDriverLocationSessionId();
+    const targetTourId = activeTourId;
+    const targetDriverId = driverData?.id || '';
+    const session = { generation, sessionId, tourId: targetTourId, driverId: targetDriverId };
+    autoShareGenerationRef.current = generation;
+    autoShareSessionRef.current = session;
+    const isScopeCurrent = () => (
+      !cancelled
+      && autoShareGenerationRef.current === generation
+      && autoShareSessionRef.current?.sessionId === sessionId
+      && autoShareEnabledRef.current
+      && isAppActiveRef.current
+      && activeTourIdRef.current === targetTourId
+      && driverIdRef.current === targetDriverId
+    );
 
     const runAutoShare = async () => {
-      if (cancelled || locationBusyRef.current || autoShareInFlightRef.current) return;
+      if (!isScopeCurrent() || locationBusyRef.current || autoShareInFlightRef.current === generation) return;
 
-      autoShareInFlightRef.current = true;
+      autoShareInFlightRef.current = generation;
       try {
         setAutoShareStatus('Auto-share running (battery-aware mode)');
         logger.debug('DriverHomeScreen', 'Auto-share location capture started', {
-          activeTourId,
+          activeTourId: targetTourId,
           locationBusy: locationBusyRef.current,
         });
         const primedLocation = autoShareInitialLocationRef.current;
         autoShareInitialLocationRef.current = null;
-        const captureResult = primedLocation
+        const primedAtMs = Number(primedLocation?.timestamp);
+        const canUsePrimedLocation = primedLocation
+          && Number.isFinite(primedAtMs)
+          && Date.now() - primedAtMs < 30_000;
+        const captureResult = canUsePrimedLocation
           ? { success: true, location: primedLocation }
           : await captureCurrentLocationWithPermission(Location.Accuracy.Balanced);
 
-        if (cancelled) return;
+        if (!isScopeCurrent()) return;
 
         if (!captureResult.success) {
           setAutoShareStatus('Paused: location permission required');
           logger.warn('DriverHomeScreen', 'Auto-share paused by permission', {
-            activeTourId,
+            activeTourId: targetTourId,
             reason: captureResult.error,
           });
           return;
@@ -706,32 +844,37 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
           timestamp,
           address: lastLocationAddressRef.current,
         }, 'auto', {
-          shouldUpdateLocalState: () => !cancelled,
-          isScopeCurrent: () => !cancelled,
+          targetTourId,
+          targetDriverId,
+          sessionId,
+          shouldUpdateLocalState: isScopeCurrent,
+          isScopeCurrent,
         });
 
         if (uploadResult?.skipped) return;
 
-        if (!cancelled) {
-          setAutoShareLastRunAt(timestamp);
+        if (isScopeCurrent()) {
+          setAutoShareLastRunAt(uploadResult.timestamp);
           setLocationAccuracy(accuracy);
-          setAutoShareStatus('Live: periodic updates every 3 minutes');
+          setAutoShareStatus(Number(accuracy) > DRIVER_LOCATION_MAX_ACTIONABLE_ACCURACY_METERS
+            ? 'Low GPS accuracy: visible for context; retrying in 3 minutes'
+            : 'Live: periodic updates every 3 minutes');
           logger.info('DriverHomeScreen', 'Auto-share location upload completed', {
-            activeTourId,
-            timestamp,
+            activeTourId: targetTourId,
+            timestamp: uploadResult.timestamp,
             accuracy: Number.isFinite(Number(accuracy)) ? Math.round(Number(accuracy)) : null,
           });
         }
       } catch (error) {
-        if (!cancelled) {
+        if (isScopeCurrent()) {
           setAutoShareStatus('Paused: network issue, will retry automatically');
           logger.warn('DriverHomeScreen', 'Auto-share run failed', {
-            activeTourId,
+            activeTourId: targetTourId,
             error: error?.message || String(error),
           });
         }
       } finally {
-        autoShareInFlightRef.current = false;
+        if (autoShareInFlightRef.current === generation) autoShareInFlightRef.current = null;
       }
     };
 
@@ -741,14 +884,43 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     return () => {
       cancelled = true;
       if (intervalId) clearInterval(intervalId);
+      if (autoShareSessionRef.current?.sessionId === sessionId) {
+        autoShareSessionRef.current = null;
+        autoShareGenerationRef.current += 1;
+      }
+      withdrawLiveDriverLocation({
+        tourId: targetTourId,
+        dbInstance: realtimeDb,
+        expectedSessionId: sessionId,
+      }).catch((error) => {
+        logger.warn('DriverHomeScreen', 'Live location withdrawal on lifecycle change failed', {
+          activeTourId: targetTourId,
+          error: error?.message || String(error),
+        });
+      });
     };
   }, [
     autoShareEnabled,
     activeTourId,
+    driverData?.id,
+    isAppActive,
   ]);
 
   // Refetch location in preview modal
   const handleRefetchLocation = async () => {
+    const currentPreview = previewLocation;
+    if (!currentPreview) return;
+    if (
+      activeTourIdRef.current !== currentPreview.tourId
+      || driverIdRef.current !== currentPreview.driverId
+    ) {
+      setPreviewModalVisible(false);
+      setPreviewLocation(null);
+      showBanner({ type: 'warning', message: 'Your tour assignment changed. Capture the pickup point again.' });
+      return;
+    }
+    const requestId = previewRequestIdRef.current + 1;
+    previewRequestIdRef.current = requestId;
     if (Platform.OS === 'ios') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
@@ -757,21 +929,36 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
     logger.info('DriverHomeScreen', 'Location preview refresh started', { activeTourId });
 
     try {
-      let location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
+      const captureResult = await captureCurrentLocationWithPermission(Location.Accuracy.High);
+      if (!captureResult.success) {
+        showBanner({ type: 'warning', message: 'Allow location access before refreshing the pickup point.' });
+        return;
+      }
+      const location = captureResult.location;
 
       const { latitude, longitude, accuracy } = location.coords;
 
-      setPreviewLocation({
+      const nextPreview = {
         latitude,
         longitude,
         accuracy,
         timestamp: new Date().toISOString(),
-      });
-      setLocationAccuracy(accuracy);
+        tourId: currentPreview.tourId,
+        driverId: currentPreview.driverId,
+        requestId,
+      };
 
-      await getAddressFromCoords(latitude, longitude);
+      setAddressLoading(true);
+      const address = await getAddressFromCoords(latitude, longitude, currentPreview.tourId);
+      if (
+        previewRequestIdRef.current !== requestId
+        || activeTourIdRef.current !== currentPreview.tourId
+        || driverIdRef.current !== currentPreview.driverId
+      ) return;
+      setPreviewLocation(nextPreview);
+      setLocationAccuracy(accuracy);
+      setAddressText(address);
+      setAddressLoading(false);
       logger.info('DriverHomeScreen', 'Location preview refresh completed', {
         activeTourId,
         accuracy: Number.isFinite(Number(accuracy)) ? Math.round(Number(accuracy)) : null,
@@ -789,7 +976,10 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         actionHandler: handleRefetchLocation,
       });
     } finally {
-      setUpdatingLocation(false);
+      if (previewRequestIdRef.current === requestId) {
+        setAddressLoading(false);
+        setUpdatingLocation(false);
+      }
     }
   };
 
@@ -956,6 +1146,13 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
   };
 
   const accuracyConfig = getAccuracyConfig(locationAccuracy);
+  const lastLocationStatusColor = lastLocationStatus.tone === 'success'
+    ? COLORS.success
+    : lastLocationStatus.tone === 'warning'
+      ? COLORS.warning
+      : lastLocationStatus.tone === 'muted'
+        ? COLORS.muted
+        : COLORS.primary;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -1043,15 +1240,22 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
               <View style={styles.lastUpdateCard}>
                 <View style={styles.lastUpdateHeader}>
                   <View style={styles.lastUpdateIcon}>
-                    <MaterialCommunityIcons name="map-marker-check" size={20} color={COLORS.success} />
+                    <MaterialCommunityIcons
+                      name={lastLocationStatus.needsRefresh ? 'map-marker-alert' : 'map-marker-check'}
+                      size={20}
+                      color={lastLocationStatusColor}
+                    />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.lastUpdateTitle}>Last Shared Location</Text>
                     <Text style={styles.lastUpdateTime}>{formatTimeAgo(lastLocationUpdate.timestamp)}</Text>
                   </View>
-                  <Animated.View style={[styles.liveBadge, { transform: [{ scale: pulseAnim }] }]}>
-                    <View style={styles.liveIndicator} />
-                    <Text style={styles.liveText}>Active</Text>
+                  <Animated.View style={[
+                    styles.liveBadge,
+                    { transform: [{ scale: lastLocationStatus.pulse ? pulseAnim : 1 }] },
+                  ]}>
+                    {lastLocationStatus.pulse && <View style={styles.liveIndicator} />}
+                    <Text style={styles.liveText}>{lastLocationStatus.label}</Text>
                   </Animated.View>
                 </View>
                 {lastLocationUpdate.address && (
@@ -1068,8 +1272,14 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                   <MaterialCommunityIcons name="alert-circle" size={20} color={COLORS.warning} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.staleNudgeTitle}>Passengers are seeing an old location — update now.</Text>
-                  <Text style={styles.staleNudgeSubtitle}>Last shared {formatTimeAgo(lastLocationUpdate?.timestamp)}. Tap “Set pickup” to refresh immediately.</Text>
+                  <Text style={styles.staleNudgeTitle}>
+                    {lastLocationPresentation.freshness === 'low_accuracy'
+                      ? 'GPS accuracy is too low for safe directions.'
+                      : 'Passengers are seeing an old location — update now.'}
+                  </Text>
+                  <Text style={styles.staleNudgeSubtitle}>
+                    Last shared {formatTimeAgo(lastLocationUpdate?.timestamp)}. Tap "Set pickup" to refresh immediately.
+                  </Text>
                 </View>
               </View>
             )}
@@ -1114,8 +1324,12 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                 <Text style={styles.bigButtonSubtitle}>Drop a pin for passengers</Text>
                 {lastLocationUpdate && (
                   <View style={styles.tileBadge}>
-                    <MaterialCommunityIcons name="check-circle" size={14} color={COLORS.success} />
-                    <Text style={styles.tileBadgeText}>Location active</Text>
+                    <MaterialCommunityIcons
+                      name={lastLocationStatus.needsRefresh ? 'alert-circle' : 'check-circle'}
+                      size={14}
+                      color={lastLocationStatusColor}
+                    />
+                    <Text style={styles.tileBadgeText}>{lastLocationStatus.label}</Text>
                   </View>
                 )}
               </TouchableOpacity>
@@ -1297,7 +1511,13 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
         visible={previewModalVisible}
         transparent={false}
         animationType="slide"
-        onRequestClose={() => setPreviewModalVisible(false)}
+        onRequestClose={() => {
+          if (confirmingLocation) return;
+          previewRequestIdRef.current += 1;
+          setAddressLoading(false);
+          setUpdatingLocation(false);
+          setPreviewModalVisible(false);
+        }}
       >
         <SafeAreaView style={styles.previewModalContainer}>
           <View style={styles.previewHeader}>
@@ -1306,9 +1526,13 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
                 if (Platform.OS === 'ios') {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 }
+                previewRequestIdRef.current += 1;
+                setAddressLoading(false);
+                setUpdatingLocation(false);
                 setPreviewModalVisible(false);
               }}
               style={styles.previewCloseButton}
+              disabled={confirmingLocation}
               accessibilityLabel="Close preview"
               accessibilityRole="button"
             >
@@ -1419,10 +1643,14 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
           <View style={styles.previewActions}>
             <TouchableOpacity
               style={styles.cancelPreviewButton}
+              disabled={confirmingLocation}
               onPress={() => {
                 if (Platform.OS === 'ios') {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 }
+                previewRequestIdRef.current += 1;
+                setAddressLoading(false);
+                setUpdatingLocation(false);
                 setPreviewModalVisible(false);
               }}
               accessibilityLabel="Cancel"
@@ -1432,11 +1660,21 @@ export default function DriverHomeScreen({ driverData, onLogout, onNavigate, onD
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.confirmPreviewButton}
+              style={[
+                styles.confirmPreviewButton,
+                (Number(locationAccuracy) > DRIVER_LOCATION_MAX_ACTIONABLE_ACCURACY_METERS) && { opacity: 0.5 },
+              ]}
               onPress={handleConfirmLocation}
-              disabled={confirmingLocation || addressLoading}
+              disabled={
+                confirmingLocation
+                || addressLoading
+                || Number(locationAccuracy) > DRIVER_LOCATION_MAX_ACTIONABLE_ACCURACY_METERS
+              }
               accessibilityLabel="Share location with passengers"
               accessibilityRole="button"
+              accessibilityHint={Number(locationAccuracy) > DRIVER_LOCATION_MAX_ACTIONABLE_ACCURACY_METERS
+                ? 'Refresh the location first because the current accuracy is too low'
+                : undefined}
             >
               {confirmingLocation ? (
                 <ActivityIndicator color={COLORS.white} />

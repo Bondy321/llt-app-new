@@ -678,11 +678,13 @@ Driver location:
 - Canonical passenger/driver live bus path: `tours/{tourId}/driverLocation`.
 - Source contract: `docs/data-contracts/driver-location.md`.
 - Versioned records use a server timestamp and distinguish fixed `pickup` points from foreground `live` sharing.
-- Driver Home writes manual and auto-share location updates through `services/driverLocationService.js`; turning auto-share off transactionally withdraws only live state.
-- Map and Tour Home derive presentation through `utils/driverLocation.js`. Live points become non-actionable when stale and disappear after 30 minutes; manual pickup points remain destinations without a live label.
+- Driver Home writes manual and auto-share location updates through `services/driverLocationService.js`; each foreground auto-share lifecycle owns an opaque session, preserves any validated fixed pickup fallback, arms Firebase disconnect removal/restoration, and transactionally withdraws only its exact live state on disable/background/reassignment/unmount.
+- Auto locations carry a server-validated `cleanupAtMs` lease. `cleanupExpiredDriverLocations` runs every 15 minutes, queries the indexed lease in bounded batches, and compare-deletes only the exact expired session.
+- Map and Tour Home derive presentation through `utils/driverLocation.js`. Live points cover the three-minute cadence, become non-actionable when stale or worse than 500m accuracy, and disappear after 30 minutes; manual pickup points remain destinations without a live label.
+- Find My Bus derives connection truth from Firebase `.info/connected`, retries subscription failures explicitly, and haptics only on a changed publication after the initial snapshot.
 - Find My Bus does not require passenger location permission to show the driver point. Permission is requested only when the passenger chooses to show/refresh their own position.
 - Driver reassignment/unassignment clears the former tour's location atomically so passengers never inherit another driver's coordinates.
-- Auto-share checks lifecycle cancellation after native location capture and again immediately before the service writes Firebase. Logout, reassignment, disable, or unmount must make the old scope fail closed so late coordinates never return to the former tour.
+- Auto-share checks lifecycle cancellation after native location capture and after the service write. Logout, backgrounding, reassignment, disable, or unmount must revoke the exact session so late coordinates never return to the former tour.
 
 Safety UX:
 
