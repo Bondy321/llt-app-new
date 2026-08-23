@@ -36,7 +36,7 @@ import {
   generateEmergencySMS,
   getSafetyHistory,
   processOfflineQueue,
-  getOfflineQueueCount,
+  getOfflineQueueSummary,
   getOfflineQueuedSafetyEvents,
 } from '../services/safetyService';
 import logger, { maskIdentifier } from '../services/loggerService';
@@ -46,6 +46,21 @@ import { COLORS as THEME, SPACING, RADIUS, SHADOWS } from '../theme';
 
 const SOS_COUNTDOWN_SECONDS = 5;
 const MIN_DIALABLE_DIGITS = 7;
+const EMPTY_QUEUE_SUMMARY = Object.freeze({
+  total: 0,
+  readyToRetry: 0,
+  waiting: 0,
+  requiresAttention: 0,
+  nextRetryAtMs: null,
+});
+
+const SAFETY_STATUS_META = {
+  pending: { label: 'Submitted', color: '#2563EB' },
+  acknowledged: { label: 'Acknowledged', color: '#0F766E' },
+  in_progress: { label: 'In progress', color: '#7C3AED' },
+  escalated: { label: 'Escalated', color: '#DC2626' },
+  resolved: { label: 'Resolved', color: '#16A34A' },
+};
 
 const hasDialableDigits = (phone) => (
   (String(phone || '').match(/\d/g) || []).length >= MIN_DIALABLE_DIGITS
@@ -77,7 +92,7 @@ const COLORS = {
 };
 
 // ==================== SOS BUTTON COMPONENT ====================
-const SOSButton = ({ onActivate, isActive, countdown, onCancel }) => {
+const SOSButton = ({ onActivate, onAccessibleActivate, isActive, countdown, onCancel }) => {
   const { width: windowWidth } = useWindowDimensions();
   const buttonSize = Math.min(188, Math.max(148, (windowWidth || 360) * 0.45));
   const glowSize = buttonSize + 28;
@@ -162,11 +177,13 @@ const SOSButton = ({ onActivate, isActive, countdown, onCancel }) => {
               isActive && styles.sosButtonActive,
             ]}
             onLongPress={onActivate}
-            onPress={isActive ? onCancel : undefined}
+            onPress={isActive ? onCancel : onAccessibleActivate}
             delayLongPress={500}
             activeOpacity={0.9}
             accessibilityLabel={isActive ? 'Cancel SOS countdown' : 'Hold for SOS emergency options'}
-            accessibilityHint="The app opens emergency options and does not call 999 automatically."
+            accessibilityHint={isActive
+              ? 'Cancels the emergency-options countdown.'
+              : 'Double tap to confirm, or hold, to start the emergency-options countdown. The app does not call 999 automatically.'}
             accessibilityRole="button"
           >
             <LinearGradient
@@ -443,6 +460,11 @@ const HistoryItem = ({ event }) => {
   const meta = CATEGORY_META[event.category] || {};
   const severityMeta = SEVERITY_META[event.severity] || {};
   const isQueued = Boolean(event.isQueued);
+  const statusMeta = isQueued
+    ? event.retryDisposition === 'requires_attention'
+      ? { label: 'Needs retry', color: COLORS.error }
+      : { label: 'Saved', color: COLORS.warning }
+    : SAFETY_STATUS_META[event.status] || SAFETY_STATUS_META.pending;
 
   const formatDate = (timestamp) => {
     const parsedMs = parseTimestampMs(timestamp);
@@ -467,21 +489,23 @@ const HistoryItem = ({ event }) => {
       </View>
       <View style={styles.historyContent}>
         <Text style={styles.historyTitle}>{meta.title || 'Report'}</Text>
-        <Text style={styles.historyDate}>{formatDate(event.timestamp || event.queuedAt)}</Text>
+        <Text style={styles.historyDate}>
+          {severityMeta.label ? `${severityMeta.label} urgency · ` : ''}{formatDate(event.timestamp || event.queuedAt)}
+        </Text>
       </View>
       <View
         style={[
           styles.historyBadge,
-          { backgroundColor: isQueued ? `${COLORS.warning}20` : `${severityMeta.color || COLORS.textMuted}20` },
+          { backgroundColor: `${statusMeta.color}20` },
         ]}
       >
         <Text
           style={[
             styles.historyBadgeText,
-            { color: isQueued ? COLORS.warning : severityMeta.color || COLORS.textMuted },
+            { color: statusMeta.color },
           ]}
         >
-          {isQueued ? 'Queued' : severityMeta.label || 'Unknown'}
+          {statusMeta.label}
         </Text>
       </View>
     </View>
@@ -511,6 +535,7 @@ export default function SafetySupportScreen({
   const sosTimerRef = useRef(null);
   const sosCountdownRef = useRef(SOS_COUNTDOWN_SECONDS);
   const sosCoordsRef = useRef(null);
+  const [sosDeliveryState, setSosDeliveryState] = useState({ status: 'idle', message: '' });
   const mountedRef = useRef(true);
   const historyRequestSeqRef = useRef(0);
 
@@ -522,6 +547,7 @@ export default function SafetySupportScreen({
   const [liveLocationLastUpdate, setLiveLocationLastUpdate] = useState(null);
   const locationWatchRef = useRef(null);
   const liveLocationSharingRef = useRef(false);
+  const activeLiveLocationScopeRef = useRef(null);
 
   useEffect(() => () => {
     mountedRef.current = false;
@@ -534,9 +560,11 @@ export default function SafetySupportScreen({
       locationWatchRef.current.remove();
       locationWatchRef.current = null;
     }
-    if (liveLocationSharingRef.current && tourId && userId) {
-      updateLiveLocationSharing(tourId, userId, false).catch(() => {});
+    const activeScope = activeLiveLocationScopeRef.current;
+    if (liveLocationSharingRef.current && activeScope?.tourId && activeScope?.userId) {
+      updateLiveLocationSharing(activeScope.tourId, activeScope.userId, false).catch(() => {});
       liveLocationSharingRef.current = false;
+      activeLiveLocationScopeRef.current = null;
     }
   }, []);
 
@@ -574,6 +602,8 @@ export default function SafetySupportScreen({
 
   // Offline queue state
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
+  const [offlineQueueSummary, setOfflineQueueSummary] = useState(EMPTY_QUEUE_SUMMARY);
+  const [syncingOfflineQueue, setSyncingOfflineQueue] = useState(false);
 
   // Animation
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -629,17 +659,19 @@ export default function SafetySupportScreen({
 
   // Process offline queue when connected
   useEffect(() => {
-    if (isConnected && offlineQueueCount > 0) {
+    if (isConnected && offlineQueueSummary.readyToRetry > 0 && !syncingOfflineQueue) {
+      setSyncingOfflineQueue(true);
       logger.info('SafetySupportScreen', 'Processing offline safety queue after reconnect', {
         userId: maskIdentifier(userId),
-        offlineQueueCount,
+        offlineQueueCount: offlineQueueSummary.total,
       });
-      processOfflineQueue(safetyQueueScope).then(async ({ processed, failed }) => {
+      processOfflineQueue(safetyQueueScope).then(async ({ processed, failed, requiresAttention }) => {
         if (!mountedRef.current) return;
         logger.info('SafetySupportScreen', 'Offline safety queue processed', {
           userId: maskIdentifier(userId),
           processed,
           failed,
+          requiresAttention,
         });
         if (processed > 0) {
           Alert.alert(
@@ -653,9 +685,20 @@ export default function SafetySupportScreen({
           userId: maskIdentifier(userId),
           error: error?.message || String(error),
         });
+      }).finally(() => {
+        if (mountedRef.current) setSyncingOfflineQueue(false);
       });
     }
-  }, [isConnected, offlineQueueCount, safetyQueueScope, userId]);
+  }, [isConnected, offlineQueueSummary.readyToRetry, offlineQueueSummary.total, safetyQueueScope, syncingOfflineQueue, userId]);
+
+  useEffect(() => {
+    if (!isConnected || !offlineQueueSummary.nextRetryAtMs) return undefined;
+    const delay = Math.max(0, offlineQueueSummary.nextRetryAtMs - Date.now());
+    const timer = setTimeout(() => {
+      checkOfflineQueue();
+    }, Math.min(delay + 50, 15 * 60 * 1000));
+    return () => clearTimeout(timer);
+  }, [isConnected, offlineQueueSummary.nextRetryAtMs, safetyQueueScope]);
 
   const loadTrustedContacts = async () => {
     logger.debug('SafetySupportScreen', 'Trusted contacts load started');
@@ -666,10 +709,35 @@ export default function SafetySupportScreen({
   };
 
   const checkOfflineQueue = async () => {
-    const count = await getOfflineQueueCount(safetyQueueScope);
+    const summary = await getOfflineQueueSummary(safetyQueueScope);
     if (!mountedRef.current) return;
-    setOfflineQueueCount(count);
-    logger.info('SafetySupportScreen', 'Offline safety queue count loaded', { count });
+    setOfflineQueueCount(summary.total);
+    setOfflineQueueSummary(summary);
+    logger.info('SafetySupportScreen', 'Offline safety queue summary loaded', {
+      count: summary.total,
+      readyToRetry: summary.readyToRetry,
+      requiresAttention: summary.requiresAttention,
+    });
+  };
+
+  const handleRetrySafetyQueue = async () => {
+    if (!isConnected || syncingOfflineQueue) return;
+    setSyncingOfflineQueue(true);
+    try {
+      const result = await processOfflineQueue(safetyQueueScope, { manual: true });
+      await checkOfflineQueue();
+      if (!mountedRef.current) return;
+      if (result.processed > 0) {
+        Alert.alert('Saved reports sent', `${result.processed} safety report(s) were submitted.`);
+      } else if (result.requiresAttention > 0 || result.failed > 0) {
+        Alert.alert(
+          'Report still needs attention',
+          'The saved report could not be accepted. Check that this tour session is current, or call operations if the issue is urgent.',
+        );
+      }
+    } finally {
+      if (mountedRef.current) setSyncingOfflineQueue(false);
+    }
   };
 
   const openDialer = async (phone) => {
@@ -866,6 +934,21 @@ export default function SafetySupportScreen({
     }
   };
 
+  const confirmAccessibleSOS = () => {
+    if (sosActive) {
+      cancelSOS();
+      return;
+    }
+    Alert.alert(
+      'Start SOS countdown?',
+      `Emergency options will open after ${SOS_COUNTDOWN_SECONDS} seconds. The app will not call ${emergencyNumber} automatically.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Start countdown', style: 'destructive', onPress: startSOS },
+      ],
+    );
+  };
+
   const cancelSOS = () => {
     logger.info('SafetySupportScreen', 'SOS countdown cancelled', {
       tourId,
@@ -899,7 +982,8 @@ export default function SafetySupportScreen({
     }
     Vibration.vibrate([0, 500, 200, 500]);
 
-    const canNotifyPrimaryContact = trustedContacts.length > 0 && capturedCoords;
+    const canNotifyPrimaryContact = trustedContacts.length > 0
+      && hasDialableDigits(trustedContacts[0]?.phone);
     const primaryContact = canNotifyPrimaryContact ? trustedContacts[0] : null;
     const smsMessage = primaryContact
       ? generateEmergencySMS(capturedCoords, tourData, userName)
@@ -932,6 +1016,10 @@ export default function SafetySupportScreen({
 
     // Recording and alert fanout run after options are shown. A slow or failed
     // network must never delay access to the phone dialler.
+    setSosDeliveryState({
+      status: 'sending',
+      message: 'Sending an operations safety alert…',
+    });
     logSafetyEvent({
         userId,
         principalId: principalId || userId,
@@ -951,24 +1039,45 @@ export default function SafetySupportScreen({
         hasLocation: Boolean(capturedCoords),
         queued: Boolean(sosSubmission.queued),
       });
+      if (mountedRef.current) {
+        setSosDeliveryState(sosSubmission.queued
+          ? {
+              status: 'queued',
+              message: 'Operations alert saved on this device. It will send automatically when a connection is available.',
+            }
+          : {
+              status: 'submitted',
+              message: 'Operations safety alert sent.',
+            });
+        checkOfflineQueue();
+      }
     }).catch((error) => {
       logger.error('SafetySupportScreen', 'SOS safety event log failed', {
         tourId,
         userId: maskIdentifier(userId),
         error: error?.message || String(error),
       });
+      if (mountedRef.current) {
+        setSosDeliveryState({
+          status: 'failed',
+          message: 'The operations alert was not saved. Use the call options now if you still need help.',
+        });
+      }
     });
   };
 
   // ==================== LIVE LOCATION HANDLERS ====================
   const toggleLiveLocation = async (enabled) => {
     if (liveLocationUpdating) return;
+    const targetScope = enabled
+      ? { tourId, userId }
+      : (activeLiveLocationScopeRef.current || { tourId, userId });
     logger.info('SafetySupportScreen', 'Live location toggle requested', {
       tourId,
       userId: maskIdentifier(userId),
       enabled,
     });
-    if (!tourId || !userId) {
+    if (!targetScope.tourId || !targetScope.userId) {
       logger.warn('SafetySupportScreen', 'Live location toggle blocked without identity context', {
         hasTourId: Boolean(tourId),
         hasUserId: Boolean(userId),
@@ -1056,6 +1165,7 @@ export default function SafetySupportScreen({
 
         setLiveLocationSharing(true);
         liveLocationSharingRef.current = true;
+        activeLiveLocationScopeRef.current = { tourId, userId };
         setLiveLocationLastUpdate(Date.now());
         logger.info('SafetySupportScreen', 'Live location sharing started', {
           tourId,
@@ -1088,40 +1198,42 @@ export default function SafetySupportScreen({
         }
 
         const shareStopped = await updateLiveLocationSharing(
-          tourId,
-          userId,
+          targetScope.tourId,
+          targetScope.userId,
           false
         );
         if (!mountedRef.current) return;
 
-        setLiveLocationSharing(false);
-        liveLocationSharingRef.current = false;
-        setLiveLocationLastUpdate(null);
         if (shareStopped) {
+          setLiveLocationSharing(false);
+          liveLocationSharingRef.current = false;
+          activeLiveLocationScopeRef.current = null;
+          setLiveLocationLastUpdate(null);
           logger.info('SafetySupportScreen', 'Live location sharing stopped', {
-            tourId,
-            userId: maskIdentifier(userId),
+            tourId: targetScope.tourId,
+            userId: maskIdentifier(targetScope.userId),
           });
         } else {
           logger.warn('SafetySupportScreen', 'Live location stop was not accepted by server', {
-            tourId,
-            userId: maskIdentifier(userId),
+            tourId: targetScope.tourId,
+            userId: maskIdentifier(targetScope.userId),
           });
-          Alert.alert('Location sharing stopped', 'Sharing was stopped on this device, but we could not update the server right now.');
+          Alert.alert(
+            'Could not confirm sharing stopped',
+            'Automatic disconnect cleanup is still armed. Please try the switch again when connected.',
+          );
         }
       } catch (error) {
-        if (mountedRef.current) {
-          setLiveLocationSharing(false);
-          liveLocationSharingRef.current = false;
-          setLiveLocationLastUpdate(null);
-        }
         logger.warn('SafetySupportScreen', 'Live location sharing stop write failed', {
-          tourId,
-          userId: maskIdentifier(userId),
+          tourId: targetScope.tourId,
+          userId: maskIdentifier(targetScope.userId),
           error: error?.message || String(error),
         });
         if (mountedRef.current) {
-          Alert.alert('Location sharing stopped', 'Sharing was stopped on this device, but we could not update the server right now.');
+          Alert.alert(
+            'Could not confirm sharing stopped',
+            'Automatic disconnect cleanup is still armed. Please try the switch again when connected.',
+          );
         }
       }
     }
@@ -1130,6 +1242,27 @@ export default function SafetySupportScreen({
       setLiveLocationUpdating(false);
     }
   };
+
+  useEffect(() => {
+    const activeScope = activeLiveLocationScopeRef.current;
+    if (
+      !activeScope
+      || (activeScope.tourId === tourId && activeScope.userId === userId)
+    ) return undefined;
+
+    if (locationWatchRef.current) {
+      locationWatchRef.current.remove();
+      locationWatchRef.current = null;
+    }
+    updateLiveLocationSharing(activeScope.tourId, activeScope.userId, false).then((stopped) => {
+      if (!mountedRef.current || !stopped) return;
+      activeLiveLocationScopeRef.current = null;
+      liveLocationSharingRef.current = false;
+      setLiveLocationSharing(false);
+      setLiveLocationLastUpdate(null);
+    }).catch(() => {});
+    return undefined;
+  }, [tourId, userId]);
 
   // Cleanup location watch on unmount
   useEffect(() => {
@@ -1431,28 +1564,86 @@ export default function SafetySupportScreen({
             <View style={styles.offlineBanner}>
               <MaterialCommunityIcons name="wifi-off" size={18} color={COLORS.white} />
               <Text style={styles.offlineBannerText}>
-                You're offline. Reports can be saved on this device for retry.
+                {offlineQueueCount > 0
+                  ? `You're offline. ${offlineQueueCount} safety report(s) are saved on this device.`
+                  : "You're offline. Reports can be saved on this device for retry."}
               </Text>
             </View>
           )}
 
           {/* Pending Queue Banner */}
           {offlineQueueCount > 0 && isConnected && (
-            <View style={styles.queueBanner}>
-              <MaterialCommunityIcons name="cloud-upload" size={18} color={COLORS.white} />
+            <View style={[
+              styles.queueBanner,
+              offlineQueueSummary.requiresAttention > 0 && styles.queueAttentionBanner,
+            ]}>
+              <MaterialCommunityIcons
+                name={offlineQueueSummary.requiresAttention > 0 ? 'alert-circle' : 'cloud-upload'}
+                size={18}
+                color={COLORS.white}
+              />
               <Text style={styles.queueBannerText}>
-                {offlineQueueCount} pending report(s) syncing...
+                {offlineQueueSummary.requiresAttention > 0
+                  ? `${offlineQueueSummary.requiresAttention} saved report(s) need another attempt.`
+                  : syncingOfflineQueue
+                    ? `Sending ${offlineQueueCount} saved report(s)…`
+                    : `${offlineQueueCount} report(s) safely saved for automatic retry.`}
               </Text>
+              {offlineQueueSummary.requiresAttention > 0 && (
+                <TouchableOpacity
+                  style={styles.queueRetryButton}
+                  onPress={handleRetrySafetyQueue}
+                  disabled={syncingOfflineQueue}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry saved safety reports"
+                >
+                  {syncingOfflineQueue
+                    ? <ActivityIndicator size="small" color={COLORS.error} />
+                    : <Text style={styles.queueRetryButtonText}>Retry now</Text>}
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
           {/* SOS Emergency Button */}
           <SOSButton
             onActivate={startSOS}
+            onAccessibleActivate={confirmAccessibleSOS}
             isActive={sosActive}
             countdown={sosCountdown}
             onCancel={cancelSOS}
           />
+
+          {sosDeliveryState.status !== 'idle' && (
+            <View
+              style={[
+                styles.sosDeliveryBanner,
+                sosDeliveryState.status === 'failed' && styles.sosDeliveryBannerFailed,
+                sosDeliveryState.status === 'submitted' && styles.sosDeliveryBannerSubmitted,
+              ]}
+              accessibilityLiveRegion="polite"
+              accessibilityRole="alert"
+            >
+              {sosDeliveryState.status === 'sending'
+                ? <ActivityIndicator size="small" color={COLORS.primary} />
+                : (
+                  <MaterialCommunityIcons
+                    name={sosDeliveryState.status === 'failed'
+                      ? 'alert-circle'
+                      : sosDeliveryState.status === 'submitted'
+                        ? 'check-circle'
+                        : 'cloud-clock'}
+                    size={20}
+                    color={sosDeliveryState.status === 'failed'
+                      ? COLORS.error
+                      : sosDeliveryState.status === 'submitted'
+                        ? COLORS.success
+                        : COLORS.warning}
+                  />
+                )}
+              <Text style={styles.sosDeliveryText}>{sosDeliveryState.message}</Text>
+            </View>
+          )}
 
           {/* Instant Contacts Card */}
           <View style={styles.card}>
@@ -1944,9 +2135,55 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   queueBannerText: {
+    flex: 1,
     color: COLORS.white,
     fontSize: 14,
     fontWeight: '600',
+  },
+  queueAttentionBanner: {
+    backgroundColor: COLORS.error,
+  },
+  queueRetryButton: {
+    minHeight: 32,
+    minWidth: 78,
+    borderRadius: 16,
+    backgroundColor: COLORS.white,
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  queueRetryButtonText: {
+    color: COLORS.error,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  sosDeliveryBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginTop: -6,
+    marginBottom: 16,
+    borderRadius: 12,
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  sosDeliveryBannerFailed: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
+  sosDeliveryBannerSubmitted: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#BBF7D0',
+  },
+  sosDeliveryText: {
+    flex: 1,
+    color: COLORS.text,
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 20,
   },
 
   // SOS Button

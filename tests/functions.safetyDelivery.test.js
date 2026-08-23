@@ -123,3 +123,22 @@ test('safety reporter access distinguishes attached passengers and coherent assi
   });
   assert.equal(outsider.allowed, false);
 });
+
+test('safety submission quota uses one opaque authenticated-user bucket', async () => {
+  const calls = [];
+  const allowed = await __testables.checkSafetySubmissionRateLimit({
+    authUid: 'private-auth-user',
+    limiter: async (...args) => {
+      calls.push(args);
+      return true;
+    },
+  });
+
+  assert.equal(allowed, true);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0][0], /^safety_uid_[a-f0-9]{24}$/);
+  assert.doesNotMatch(calls[0][0], /private-auth-user/);
+  assert.equal(calls[0][1], 20);
+  assert.equal(calls[0][2], 60000);
+  assert.equal(await __testables.checkSafetySubmissionRateLimit({ authUid: '', limiter: async () => true }), false);
+});

@@ -54,6 +54,9 @@ const MANUAL_BOOKING_LOCK_TTL_MS = 30 * 1000;
 const DRIVER_ASSIGNMENT_LOCK_TTL_MS = 30 * 1000;
 const TOUR_DELETION_LOCK_TTL_MS = 10 * 60 * 1000;
 const SAFETY_SUBMISSION_LOCK_TTL_MS = 30 * 1000;
+const SAFETY_RATE_LIMIT_ROOT = 'safety_rate_limits/v1';
+const SAFETY_RATE_LIMIT_MAX_REQUESTS = 20;
+const SAFETY_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const OPERATIONS_ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const MANIFEST_STATUS = {
   PENDING: 'PENDING',
@@ -2742,6 +2745,27 @@ const distributedLoginRateLimiter = async (...args) => {
   return distributedLoginRateLimiterInstance(...args);
 };
 
+let distributedSafetyRateLimiterInstance = null;
+const distributedSafetyRateLimiter = async (...args) => {
+  if (!distributedSafetyRateLimiterInstance) {
+    distributedSafetyRateLimiterInstance = createDistributedLoginRateLimiter({
+      database: admin.database(),
+      rootPath: SAFETY_RATE_LIMIT_ROOT,
+    });
+  }
+  return distributedSafetyRateLimiterInstance(...args);
+};
+
+const checkSafetySubmissionRateLimit = async ({ authUid, limiter = distributedSafetyRateLimiter } = {}) => {
+  const normalizedAuthUid = resolveTrimmedString(authUid);
+  if (!normalizedAuthUid) return false;
+  return limiter(
+    `safety_uid_${hashRateLimitDimension(normalizedAuthUid)}`,
+    SAFETY_RATE_LIMIT_MAX_REQUESTS,
+    SAFETY_RATE_LIMIT_WINDOW_MS,
+  );
+};
+
 exports.verifyPassengerLogin = onRequest(
   {
     region: 'europe-west1',
@@ -3590,9 +3614,14 @@ exports.submitSafetyReport = onRequest(
     if (!requestAuth.success) {
       return res.status(401).json({ success: false, reason: 'INVALID_CREDENTIALS' });
     }
-    const clientKey = getRequestClientKey(req);
-    if (!checkRateLimit(`submit_safety_${requestAuth.uid}_${hashRateLimitDimension(clientKey)}`, 20, 60000)) {
-      return res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' });
+    try {
+      const allowed = await checkSafetySubmissionRateLimit({ authUid: requestAuth.uid });
+      if (!allowed) {
+        return res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' });
+      }
+    } catch (error) {
+      log.error('Safety rate-limit check failed closed', error, { authUid: requestAuth.uid });
+      return res.status(503).json({ success: false, reason: 'TRY_AGAIN_LATER' });
     }
 
     let input;
@@ -5209,10 +5238,16 @@ exports.cleanupExpiredLoginRateLimits = onSchedule(
     maxInstances: 1,
   },
   async () => {
-    const result = await cleanupExpiredLoginRateLimits({ database: admin.database() });
-    if (result.hasMore) log.warn('Expired login rate-limit cleanup reached its bounded ceiling', result);
-    else log.info('Expired login rate-limit cleanup completed', result);
-    return result;
+    const database = admin.database();
+    const [loginResult, safetyResult] = await Promise.all([
+      cleanupExpiredLoginRateLimits({ database }),
+      cleanupExpiredLoginRateLimits({ database, rootPath: SAFETY_RATE_LIMIT_ROOT }),
+    ]);
+    if (loginResult.hasMore) log.warn('Expired login rate-limit cleanup reached its bounded ceiling', loginResult);
+    else log.info('Expired login rate-limit cleanup completed', loginResult);
+    if (safetyResult.hasMore) log.warn('Expired safety rate-limit cleanup reached its bounded ceiling', safetyResult);
+    else log.info('Expired safety rate-limit cleanup completed', safetyResult);
+    return { login: loginResult, safety: safetyResult };
   },
 );
 
@@ -5288,6 +5323,7 @@ exports.__testables = {
   buildCanonicalSafetyRecord,
   buildSafetySubmissionUpdates,
   resolveSafetyReporterAccess,
+  checkSafetySubmissionRateLimit,
   resolveChatSenderParticipantIds,
   resolveChatSenderDeliveryIds,
   collectAssignedDriverIds,

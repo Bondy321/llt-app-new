@@ -135,6 +135,12 @@ const OFFLINE_QUEUE_CORRUPT_BACKUP_KEY = '@LLT:safetyOfflineQueue:corruptBackup'
 const MAX_OFFLINE_SAFETY_EVENTS = 250;
 const SAFETY_QUEUE_SCOPE_VERSION = 1;
 const SAFETY_SUBMISSION_TIMEOUT_MS = 12000;
+const SAFETY_RETRY_BASE_DELAY_MS = 15000;
+const SAFETY_RETRY_MAX_DELAY_MS = 15 * 60 * 1000;
+const SAFETY_RETRY_DISPOSITION = {
+  RETRYABLE: 'retryable',
+  REQUIRES_ATTENTION: 'requires_attention',
+};
 let safetyQueueMutationTail = Promise.resolve();
 let trustedContactsMutationTail = Promise.resolve();
 const activeSafetyQueueReplays = new Set();
@@ -249,8 +255,21 @@ const normalizeOfflineSafetyEvent = (event) => {
     retryCount: Number.isFinite(Number(event.retryCount))
       ? Math.max(0, Math.trunc(Number(event.retryCount)))
       : 0,
+    retryDisposition: event.retryDisposition === SAFETY_RETRY_DISPOSITION.REQUIRES_ATTENTION
+      ? SAFETY_RETRY_DISPOSITION.REQUIRES_ATTENTION
+      : SAFETY_RETRY_DISPOSITION.RETRYABLE,
+    nextRetryAtMs: event.nextRetryAtMs !== null
+      && event.nextRetryAtMs !== undefined
+      && Number.isFinite(Number(event.nextRetryAtMs))
+      ? Math.max(0, Math.trunc(Number(event.nextRetryAtMs)))
+      : null,
   };
 };
+
+const getSafetyRetryDelayMs = (retryCount) => Math.min(
+  SAFETY_RETRY_MAX_DELAY_MS,
+  SAFETY_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, Math.min(10, retryCount - 1))),
+);
 
 const boundOfflineSafetyQueue = (events) => {
   const normalized = Array.isArray(events)
@@ -387,7 +406,10 @@ const writeSafetyEventAtomically = async (payload, options = {}) => {
     const reason = result?.reason || `HTTP_${response.status}`;
     const error = new Error('Safety report was not accepted by the submission service');
     error.code = reason;
-    error.retryable = response.status === 409 || response.status === 429 || response.status >= 500;
+    error.retryable = reason === 'SUBMISSION_IN_PROGRESS'
+      || reason === 'TRY_AGAIN_LATER'
+      || response.status === 401
+      || response.status >= 500;
     throw error;
   }
   return {
@@ -537,6 +559,8 @@ export async function queueOfflineSafetyEvent(payload) {
       queueId: `safety_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
       queuedAt: new Date().toISOString(),
       retryCount: 0,
+      retryDisposition: SAFETY_RETRY_DISPOSITION.RETRYABLE,
+      nextRetryAtMs: null,
     }]);
       const ownedQueueLength = filterSafetyQueueForScope(nextQueue, sessionScope).length;
       await logger.info('Safety', 'Event queued for offline retry', {
@@ -552,9 +576,11 @@ export async function queueOfflineSafetyEvent(payload) {
 }
 
 // Process offline queue when back online
-export async function processOfflineQueue(scope) {
+export async function processOfflineQueue(scope, options = {}) {
   const normalizedScope = normalizeSafetyQueueScope(scope);
   const replayScopeKey = getSafetyQueueScopeKey(normalizedScope);
+  const manual = options?.manual === true;
+  const nowMs = Number.isFinite(Number(options?.nowMs)) ? Number(options.nowMs) : Date.now();
   if (!normalizedScope || !replayScopeKey) {
     return { processed: 0, failed: 0, deferred: true, reason: 'scope_required' };
   }
@@ -576,21 +602,42 @@ export async function processOfflineQueue(scope) {
 
     let processed = 0;
     let failed = 0;
+    let deferred = 0;
+    let requiresAttention = 0;
     const processedEventIds = new Set();
     const failedEventsById = new Map();
 
     for (const event of ownedQueue) {
+      const retryDisposition = event.retryDisposition || SAFETY_RETRY_DISPOSITION.RETRYABLE;
+      const nextRetryAtMs = Number(event.nextRetryAtMs);
+      if (!manual && retryDisposition === SAFETY_RETRY_DISPOSITION.REQUIRES_ATTENTION) {
+        requiresAttention += 1;
+        deferred += 1;
+        continue;
+      }
+      if (!manual && Number.isFinite(nextRetryAtMs) && nextRetryAtMs > nowMs) {
+        deferred += 1;
+        continue;
+      }
       try {
         await writeSafetyEventAtomically(event, { processedFromQueue: true });
         processed++;
         processedEventIds.add(getSafetyQueueEventId(event));
       } catch (error) {
         failed++;
+        const retryCount = (event.retryCount || 0) + 1;
+        const retryable = error?.retryable !== false;
+        const retryDisposition = retryable
+          ? SAFETY_RETRY_DISPOSITION.RETRYABLE
+          : SAFETY_RETRY_DISPOSITION.REQUIRES_ATTENTION;
+        if (!retryable) requiresAttention += 1;
         failedEventsById.set(getSafetyQueueEventId(event), {
           ...event,
-          retryCount: (event.retryCount || 0) + 1,
-          lastRetryAt: new Date().toISOString(),
+          retryCount,
+          retryDisposition,
+          lastRetryAt: new Date(nowMs).toISOString(),
           lastErrorCode: error?.code || 'REMOTE_WRITE_FAILED',
+          nextRetryAtMs: retryable ? nowMs + getSafetyRetryDelayMs(retryCount) : null,
         });
       }
     }
@@ -613,9 +660,11 @@ export async function processOfflineQueue(scope) {
     await logger.info('Safety', 'Offline queue processed', {
       processed,
       failed,
+      deferred,
+      requiresAttention,
       retainedForOtherSessions: retainedQueue.length,
     });
-    return { processed, failed, retainedForOtherSessions: retainedQueue.length };
+    return { processed, failed, deferred, requiresAttention, retainedForOtherSessions: retainedQueue.length };
   } catch (error) {
     await logger.error('Safety', 'Failed to process offline queue', { error: error.message });
     return { processed: 0, failed: 0, error: error.message };
@@ -666,8 +715,11 @@ export async function updateLiveLocationSharing(tourId, userId, isSharing, coord
         throw error;
       }
     } else {
-      await disconnectHandler?.cancel?.();
+      // Keep the disconnect cleanup armed until the server confirms deletion.
+      // If remove fails during a network transition, the scheduled cleanup is
+      // still able to remove the precise location when the connection closes.
       await ref.remove();
+      await disconnectHandler?.cancel?.();
     }
 
     return true;
@@ -901,14 +953,49 @@ export async function getOfflineQueuedSafetyEvents(scope, limit = 20) {
   }
 }
 
+export async function getOfflineQueueSummary(scope, nowMs = Date.now()) {
+  try {
+    const queue = filterSafetyQueueForScope(await readOfflineSafetyQueue(), scope);
+    return queue.reduce((summary, event) => {
+      summary.total += 1;
+      if (event.retryDisposition === SAFETY_RETRY_DISPOSITION.REQUIRES_ATTENTION) {
+        summary.requiresAttention += 1;
+        return summary;
+      }
+      const nextRetryAtMs = Number(event.nextRetryAtMs);
+      if (Number.isFinite(nextRetryAtMs) && nextRetryAtMs > nowMs) {
+        summary.waiting += 1;
+        summary.nextRetryAtMs = summary.nextRetryAtMs === null
+          ? nextRetryAtMs
+          : Math.min(summary.nextRetryAtMs, nextRetryAtMs);
+      } else {
+        summary.readyToRetry += 1;
+      }
+      return summary;
+    }, {
+      total: 0,
+      readyToRetry: 0,
+      waiting: 0,
+      requiresAttention: 0,
+      nextRetryAtMs: null,
+    });
+  } catch (error) {
+    return { total: 0, readyToRetry: 0, waiting: 0, requiresAttention: 0, nextRetryAtMs: null };
+  }
+}
+
 export const __testables = {
   MAX_OFFLINE_SAFETY_EVENTS,
+  SAFETY_RETRY_BASE_DELAY_MS,
+  SAFETY_RETRY_MAX_DELAY_MS,
+  SAFETY_RETRY_DISPOSITION,
   boundOfflineSafetyQueue,
   normalizeOfflineSafetyEvent,
   normalizeSafetyQueueScope,
   deriveSafetyQueueScope,
   safetyEventMatchesScope,
   getSafetyQueueEventId,
+  getSafetyRetryDelayMs,
   writeSafetyEventAtomically,
   toRemoteSafetyPayload,
   getTrustedContactsStorageKey,

@@ -278,7 +278,7 @@ test('limits live tracking and tour safety alerts to tour-attached users', async
     coords: { latitude: 56.0, longitude: -4.6 },
   }));
 
-  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/safetyAlerts/event-1`).set({
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/safetyAlerts/event-1`).set({
     userId: PASSENGER_AUTH_UID,
     status: 'pending',
     timestamp: '2026-05-23T19:43:00.000Z',

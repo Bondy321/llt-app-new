@@ -14,6 +14,7 @@ import offlineSyncService from './services/offlineSyncService';
 import * as bookingService from './services/bookingServiceRealtime';
 import * as chatService from './services/chatService';
 import * as photoService from './services/photoService';
+import { processOfflineQueue as processOfflineSafetyQueue } from './services/safetyService';
 import offlineLoginResolver from './services/offlineLoginResolver';
 import driverOperationalLifecycleService from './services/driverOperationalLifecycleService';
 import driverTourPackService from './services/driverTourPackService';
@@ -309,10 +310,15 @@ function AppContent() {
   const refreshAppData = async () => {
     logger.info('App', 'Refreshing app data');
     if (!isConnected) return;
-    await offlineSyncService.replayQueue({
-      services: { bookingService, chatService, photoService, driverTourPackActionService },
-      scope: offlineSessionScope,
-    });
+    await Promise.allSettled([
+      offlineSyncService.replayQueue({
+        services: { bookingService, chatService, photoService, driverTourPackActionService },
+        scope: offlineSessionScope,
+      }),
+      offlineSessionScope
+        ? processOfflineSafetyQueue(offlineSessionScope)
+        : Promise.resolve({ deferred: true, reason: 'scope_required' }),
+    ]);
   };
 
   const { isConnected, firebaseConnected } = useDiagnostics({
@@ -1624,10 +1630,13 @@ function AppContent() {
 
   useEffect(() => {
     if (!isConnected || !firebaseConnected || !offlineSessionScope) return;
-    offlineSyncService.replayQueue({
-      services: { bookingService, chatService, photoService, driverTourPackActionService },
-      scope: offlineSessionScope,
-    });
+    Promise.allSettled([
+      offlineSyncService.replayQueue({
+        services: { bookingService, chatService, photoService, driverTourPackActionService },
+        scope: offlineSessionScope,
+      }),
+      processOfflineSafetyQueue(offlineSessionScope),
+    ]);
   }, [isConnected, firebaseConnected, offlineSessionScopeKey]);
 
   if (initializing) {

@@ -182,9 +182,8 @@ test('Static contract: tour metadata writes stay least-privilege', () => {
   assert.match(tourRules.driverLocation['.write'], /tour_manifests\/' \+ \$tourId \+ '\/assigned_drivers\//);
   assert.match(tourRules.itinerary['.write'], /assigned_drivers/);
   assert.match(tourRules.driver_itinerary['.write'], /assigned_drivers/);
-  assert.match(tourRules.safetyAlerts.$eventId['.write'], /participants\/' \+ auth\.uid/);
-  assert.match(tourRules.safetyAlerts.$eventId['.write'], /!data\.exists\(\)/);
-  assert.match(tourRules.safetyAlerts.$eventId['.write'], /newData\.child\('status'\)\.val\(\) === 'pending'/);
+  assert.match(tourRules.safetyAlerts.$eventId['.write'], /admin_users/);
+  assert.doesNotMatch(tourRules.safetyAlerts.$eventId['.write'], /participants|assigned_drivers|!data\.exists\(\)/);
   assert.match(tourRules.liveTracking.$userId['.write'], /auth\.uid === \$userId/);
   assert.match(readText('package.json'), /tests\/firebaseRules\/tours\.rules\.test\.js/);
 
@@ -978,6 +977,13 @@ test('Static contract: safety support cleans up emergency timers and validates p
   assert.match(source, /const shareStarted = await updateLiveLocationSharing/);
   assert.match(source, /if \(!shareStarted\) \{/);
   assert.match(source, /const shareStopped = await updateLiveLocationSharing/);
+  assert.match(source, /onAccessibleActivate={confirmAccessibleSOS}/);
+  assert.match(source, /Start SOS countdown\?/);
+  assert.match(source, /hasDialableDigits\(trustedContacts\[0\]\?\.phone\)/);
+  assert.match(source, /activeLiveLocationScopeRef/);
+  assert.match(source, /Operations safety alert sent\./);
+  assert.match(source, /The operations alert was not saved\./);
+  assert.match(source, /SAFETY_STATUS_META/);
 });
 
 test('Static contract: passenger login establishes participant access before entering the app', () => {
@@ -1088,6 +1094,12 @@ test('Static contract: safety delivery is operations-visible and Firebase mainte
   assert.match(functionsSource, /exports\.submitSafetyReport = onRequest/);
   assert.match(functionsSource, /buildSafetySubmissionUpdates/);
   assert.match(functionsSource, /exports\.sendSafetyAlertNotification = onValueCreated/);
+  assert.match(functionsSource, /checkSafetySubmissionRateLimit/);
+  assert.match(functionsSource, /SAFETY_RATE_LIMIT_ROOT/);
+  assert.match(safetySource, /SAFETY_RETRY_DISPOSITION/);
+  assert.match(safetySource, /getOfflineQueueSummary/);
+  assert.match(safetySource, /Keep the disconnect cleanup armed until the server confirms deletion/);
+  assert.match(readText('App.js'), /processOfflineSafetyQueue\(offlineSessionScope\)/);
   assert.doesNotMatch(safetySource, /Promise\.allSettled\(auxiliaryWrites\)/);
   assert.match(functionsSource, /runLazyRateLimitMaintenance\(now\)/);
   assert.doesNotMatch(functionsSource, /const maintenanceInterval = setInterval/);

@@ -153,6 +153,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `driver_tour_pack_progress`
 - `driver_tour_pack_issues`
 - `login_rate_limits` (server-private opaque abuse-prevention counters)
+- `safety_rate_limits` (server-private opaque safety-submission counters)
 
 Admin UID hardcoded in rules:
 
@@ -989,7 +990,9 @@ Important RTDB invariants:
 - `users` validates push token metadata, identity metadata, driver helper fields, and notification preferences.
 - `admin_users` is the web-admin privilege allowlist; entries must be boolean `true`, and only the primary operations-admin UID may grant or revoke entries.
 - `ops_alerts` reads are admin-only through the hardcoded admin UID or `admin_users`; mobile writes must be bounded, sanitised, fingerprinted, and schema-valid.
-- `globalSafetyAlerts` writes require admin or caller-owned pending event creation.
+- `tours/{tourId}/safetyAlerts` and `globalSafetyAlerts` mobile writes are denied; authenticated
+  clients submit through `submitSafetyReport`, while primary/delegated operations admins may
+  update existing alert status and delivery fields.
 
 Important Storage invariants:
 

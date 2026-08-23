@@ -41,7 +41,11 @@ test.before(async () => {
         [TOUR_ID]: {
           tourCode: 'TOUR 1',
           participants: { [PASSENGER_UID]: { joinedAt: '2026-08-12T10:00:00.000Z' } },
+          safetyAlerts: { 'event-1': pendingAlert() },
         },
+      },
+      globalSafetyAlerts: {
+        'event-1': pendingAlert(),
       },
       logs: {
         [PASSENGER_UID]: {
@@ -91,9 +95,9 @@ const versionedAlert = () => ({
   processedFromQueue: false,
 });
 
-test('a participant can create their own pending tour and global safety records', async () => {
-  await assertSucceeds(dbFor(PASSENGER_UID).ref(`tours/${TOUR_ID}/safetyAlerts/event-1`).set(pendingAlert()));
-  await assertSucceeds(dbFor(PASSENGER_UID).ref('globalSafetyAlerts/event-1').set(pendingAlert()));
+test('participants cannot bypass the authenticated safety Function with direct legacy writes', async () => {
+  await assertFails(dbFor(PASSENGER_UID).ref(`tours/${TOUR_ID}/safetyAlerts/event-1`).set(pendingAlert()));
+  await assertFails(dbFor(PASSENGER_UID).ref('globalSafetyAlerts/event-1').set(pendingAlert()));
 });
 
 test('participants cannot acknowledge, resolve, or rewrite safety ownership', async () => {
@@ -146,4 +150,15 @@ test('outsiders cannot create or update safety records', async () => {
   }));
   await assertFails(dbFor(OUTSIDER_UID).ref('globalSafetyAlerts/event-1/status').set('resolved'));
   await assertFails(dbFor(OUTSIDER_UID).ref(`logs/${PASSENGER_UID}/safety/event-1/status`).set('resolved'));
+});
+
+test('distributed safety quota buckets stay server-private', async () => {
+  const passengerDb = dbFor(PASSENGER_UID);
+  await assertFails(passengerDb.ref('safety_rate_limits/v1/safety_uid_probe').get());
+  await assertFails(passengerDb.ref('safety_rate_limits/v1/safety_uid_probe').set({
+    version: 1,
+    count: 1,
+    resetAtMs: Date.now() + 60000,
+    expiresAtMs: Date.now() + 3600000,
+  }));
 });

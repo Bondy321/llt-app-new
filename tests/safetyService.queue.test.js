@@ -17,6 +17,7 @@ const firebaseWrites = [];
 const authMock = { currentUser: null };
 let pushedId = 0;
 let setWriteHook = null;
+let removeWriteHook = null;
 const fetchCalls = [];
 let fetchHandler = null;
 global.fetch = async (url, options) => {
@@ -48,7 +49,10 @@ const realtimeDbMock = {
       };
     },
     set: async (value) => firebaseWrites.push({ path, value }),
-    remove: async () => firebaseWrites.push({ path, value: null }),
+    remove: async () => {
+      if (removeWriteHook) await removeWriteHook(path);
+      firebaseWrites.push({ path, value: null });
+    },
     onDisconnect: () => ({
       remove: async () => firebaseWrites.push({ path: `${path}:onDisconnect`, value: null }),
       cancel: async () => firebaseWrites.push({ path: `${path}:onDisconnectCancel`, value: null }),
@@ -90,8 +94,10 @@ Module._load = function load(request, parent, isMain) {
 const {
   __testables,
   getOfflineQueueCount,
+  getOfflineQueueSummary,
   getOfflineQueuedSafetyEvents,
   getTrustedContacts,
+  generateEmergencySMS,
   addTrustedContact,
   removeTrustedContact,
   processOfflineQueue,
@@ -108,6 +114,7 @@ test.beforeEach(() => {
   authMock.currentUser = null;
   pushedId = 0;
   setWriteHook = null;
+  removeWriteHook = null;
   fetchCalls.length = 0;
   fetchHandler = null;
 });
@@ -290,6 +297,69 @@ test('atomic remote failure keeps the report queued with the same idempotency ke
   assert.equal(queued[0].clientEventId, result.payload.clientEventId);
 });
 
+test('terminal safety rejection stays durable but is not retried automatically forever', async () => {
+  authenticate();
+  await queueOfflineSafetyEvent({
+    id: 'terminal-report',
+    category: 'incident',
+    severity: 'high',
+    message: 'Need help',
+    ...scope('passenger-a'),
+  });
+  fetchHandler = async () => ({
+    ok: false,
+    status: 403,
+    json: async () => ({ success: false, reason: 'NOT_AUTHORIZED' }),
+  });
+
+  const first = await processOfflineQueue(scope('passenger-a'), { nowMs: 1000 });
+  assert.equal(first.failed, 1);
+  assert.equal(first.requiresAttention, 1);
+  assert.equal(fetchCalls.length, 1);
+  assert.deepEqual(await getOfflineQueueSummary(scope('passenger-a'), 1000), {
+    total: 1,
+    readyToRetry: 0,
+    waiting: 0,
+    requiresAttention: 1,
+    nextRetryAtMs: null,
+  });
+
+  const second = await processOfflineQueue(scope('passenger-a'), { nowMs: 2000 });
+  assert.equal(second.processed, 0);
+  assert.equal(second.deferred, 1);
+  assert.equal(fetchCalls.length, 1);
+});
+
+test('retryable safety failure backs off and succeeds with the same queued event', async () => {
+  authenticate();
+  await queueOfflineSafetyEvent({
+    id: 'retryable-report',
+    category: 'medical',
+    severity: 'critical',
+    message: 'Need help',
+    ...scope('passenger-a'),
+  });
+  fetchHandler = async () => ({
+    ok: false,
+    status: 500,
+    json: async () => ({ success: false, reason: 'INTERNAL_ERROR' }),
+  });
+
+  const first = await processOfflineQueue(scope('passenger-a'), { nowMs: 1000 });
+  assert.equal(first.failed, 1);
+  const summary = await getOfflineQueueSummary(scope('passenger-a'), 1000);
+  assert.equal(summary.waiting, 1);
+  assert.equal(summary.nextRetryAtMs, 1000 + __testables.SAFETY_RETRY_BASE_DELAY_MS);
+
+  await processOfflineQueue(scope('passenger-a'), { nowMs: summary.nextRetryAtMs - 1 });
+  assert.equal(fetchCalls.length, 1);
+  fetchHandler = null;
+  const final = await processOfflineQueue(scope('passenger-a'), { nowMs: summary.nextRetryAtMs });
+  assert.equal(final.processed, 1);
+  assert.equal(await getOfflineQueueCount(scope('passenger-a')), 0);
+  assert.equal(fetchCalls.length, 2);
+});
+
 test('explicitly offline safety submission is saved immediately without waiting on fetch', async () => {
   authenticate();
   const result = await logSafetyEvent({
@@ -323,8 +393,24 @@ test('live location sharing is auth-owned, versioned, bounded, and disconnect-sa
     accuracy: 10,
   }), false);
   assert.equal(await updateLiveLocationSharing('TOUR-1', 'auth-user', false), true);
-  assert.equal(firebaseWrites.some(({ path }) => path.endsWith(':onDisconnectCancel')), true);
-  assert.equal(firebaseWrites.at(-1).value, null);
+  const removeIndex = firebaseWrites.findIndex(({ path, value }) => path === 'tours/TOUR-1/liveTracking/auth-user' && value === null);
+  const cancelIndex = firebaseWrites.findIndex(({ path }) => path.endsWith(':onDisconnectCancel'));
+  assert.equal(removeIndex >= 0, true);
+  assert.equal(cancelIndex > removeIndex, true);
+});
+
+test('failed live-location deletion leaves disconnect cleanup armed', async () => {
+  authenticate();
+  assert.equal(await updateLiveLocationSharing('TOUR-1', 'auth-user', true, {
+    latitude: 56.0,
+    longitude: -4.6,
+    accuracy: 10,
+  }), true);
+  firebaseWrites.length = 0;
+  removeWriteHook = async () => { throw new Error('network unavailable'); };
+
+  assert.equal(await updateLiveLocationSharing('TOUR-1', 'auth-user', false), false);
+  assert.equal(firebaseWrites.some(({ path }) => path.endsWith(':onDisconnectCancel')), false);
 });
 
 test('trusted contacts are private to the active principal', async () => {
@@ -338,6 +424,13 @@ test('trusted contacts are private to the active principal', async () => {
   await removeTrustedContact('passenger-a', first.id);
   assert.deepEqual(await getTrustedContacts('passenger-a'), []);
   assert.equal((await getTrustedContacts('passenger-b')).length, 1);
+});
+
+test('emergency trusted-contact message remains useful when GPS is unavailable', () => {
+  const message = generateEmergencySMS(null, { name: 'Island Tour', tourCode: '5001D' }, 'Alex');
+  assert.match(message, /Location unavailable/);
+  assert.doesNotMatch(message, /maps\.google\.com/);
+  assert.match(message, /Island Tour/);
 });
 
 test('trusted contact mutations are serialized and surface durable-storage failure', async () => {
