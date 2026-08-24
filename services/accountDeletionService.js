@@ -4,6 +4,7 @@ import { auth, authHelpers, realtimeDb } from '../firebase';
 import { createPersistenceProvider } from './persistenceProvider';
 import loggerService, { maskIdentifier } from './loggerService';
 import * as photoService from './photoService';
+import appSessionService from './appSessionService';
 
 const { normalizeTourId } = require('./tourIdentityService');
 
@@ -325,6 +326,8 @@ const buildAccountRecordUpdates = ({
   updates[`users/${authUid}`] = null;
   updates[`logs/${authUid}`] = null;
   if (tourId) {
+    updates[`tours/${tourId}/participants/${authUid}`] = null;
+    updates[`tour_access_grants/${tourId}/${authUid}`] = null;
     updates[`tours/${tourId}/liveTracking/${authUid}`] = null;
     updates[`notification_read_state/${tourId}/${authUid}`] = null;
     updates[`notification_read_migration_requests/${tourId}/${authUid}`] = null;
@@ -349,6 +352,7 @@ const buildAccountRecordUpdates = ({
   }
 
   if (passengerBookingRef) {
+    updates[`booking_access_grants/${passengerBookingRef}/${authUid}`] = null;
     updates[`passenger_identity_security/${passengerBookingRef}/authorizedAuthUid`] = null;
   }
 
@@ -462,6 +466,7 @@ export const deleteCurrentAccount = async ({
   localStorage = AsyncStorage,
   providerFactory = createPersistenceProvider,
   photoApi = photoService,
+  appSessionApi = appSessionService,
   logger = loggerService,
 } = {}) => {
   const summary = makeSummary();
@@ -491,6 +496,10 @@ export const deleteCurrentAccount = async ({
   const encodedIdentitySet = new Set(identities.map(toRealtimeKeySegment).filter(Boolean));
 
   try {
+    const activeAppSession = await appSessionApi.readSession();
+    if (!activeAppSession) {
+      throw new Error('A current secure app session is required for account deletion.');
+    }
     logger.info('AccountDeletion', 'Account deletion started', {
       authUid: maskIdentifier(authUid),
       tourId,
@@ -545,6 +554,12 @@ export const deleteCurrentAccount = async ({
       await db.ref().update(updates);
       summary.remoteRecordsCleared = Object.keys(updates).length;
     }
+
+    const sessionEnd = await appSessionApi.endSession({ authUid, session: activeAppSession });
+    if (!sessionEnd?.success) {
+      throw new Error('Account deletion could not revoke the active app session.');
+    }
+    await appSessionApi.completeEnd();
 
     if (typeof authHelpersOverride?.clearAuthData === 'function') {
       await authHelpersOverride.clearAuthData();

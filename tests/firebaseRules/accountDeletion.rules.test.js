@@ -6,6 +6,7 @@ const {
   assertSucceeds,
 } = require('@firebase/rules-unit-testing');
 const { toRealtimeKeySegment } = require('../../services/identityService');
+const { passengerAuthorityUpdates, driverAuthorityUpdates } = require('./sessionFixtures');
 
 const PROJECT_ID = 'demo-llt-account-deletion-rules';
 const TOUR_ID = 'TOUR_DELETE_001';
@@ -125,6 +126,12 @@ test.before(async () => {
       timestamp: 1710000000004,
       isDriver: true,
       status: 'sent',
+    });
+    await db.ref().update({
+      ...passengerAuthorityUpdates({
+        uid: PASSENGER_AUTH_UID, tourId: TOUR_ID, principalId: PASSENGER_STABLE_ID, bookingRef: 'T123456',
+      }),
+      ...driverAuthorityUpdates({ uid: DRIVER_AUTH_UID, driverId: DRIVER_ID, tourId: TOUR_ID }),
     });
   });
 });

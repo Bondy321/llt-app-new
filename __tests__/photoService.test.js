@@ -87,113 +87,73 @@ test('uploadPhoto requires an auth uid for storage metadata', async () => {
   );
 });
 
-test('uploadPhoto stores private photos in private_tour_photos namespaces', async (t) => {
-  const originalNow = Date.now;
-  Date.now = () => 1700000000000;
-  t.after(() => {
-    Date.now = originalNow;
-  });
-
+test('uploadPhoto sends private media only through the authenticated server endpoint', async () => {
   const blob = createMockBlob({ type: 'image/webp' });
-  const mockFetch = async () => ({ ok: true, blob: async () => blob });
-
-  let writePath;
-  const mockPush = (ref) => {
-    writePath = ref.path;
-    return { key: 'private-photo-1' };
-  };
-
-  let dbPayload;
-  await uploadPhoto('file://private.webp', 'tour-55', 'user-private', 'Hidden gem', {
+  const requests = [];
+  const result = await uploadPhoto('file://private.webp', 'tour-55', 'user-private', 'Hidden gem', {
     visibility: 'private',
-    storageInstance: {},
-    realtimeDbInstance: {},
-    storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async () => {},
-    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
-    dbRefFn: mockDbRef,
-    pushFn: mockPush,
-    setFn: async (_ref, payload) => {
-      dbPayload = payload;
+    idempotencyKey: 'private-photo-1',
+    authInstance: { currentUser: { uid: 'auth-1', getIdToken: async () => 'id-token' } },
+    appCheckTokenFn: async () => 'app-check-token',
+    privateUploadEndpoint: 'https://functions.test/uploadPrivatePhoto',
+    fetchFn: async (url, options) => {
+      requests.push({ url, options });
+      if (url === 'file://private.webp') return { ok: true, blob: async () => blob };
+      return { ok: true, json: async () => ({ success: true, photo: {
+        id: 'private-photo-1', userId: 'pax_v2_0123456789abcdef0123456789abcdef',
+        storagePath: 'private_tour_photos/tour-55/opaque/private-photo-1.webp',
+      } }) };
     },
-    serverTimestampFn: () => 9999,
-    fetchFn: mockFetch,
   });
-
-  assert.strictEqual(writePath, 'private_tour_photos/tour-55/user-private');
-  assert.strictEqual(dbPayload.storagePath, 'private_tour_photos/tour-55/user-private/1700000000000_user-private.webp');
-  assert.strictEqual(dbPayload.sourceUrl, undefined);
-  assert.strictEqual(dbPayload.fileType, 'image/webp');
-  assert.ok(!('uploaderName' in dbPayload));
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].url, 'https://functions.test/uploadPrivatePhoto');
+  assert.equal(requests[1].options.headers.Authorization, 'Bearer id-token');
+  assert.equal(requests[1].options.headers['x-firebase-appcheck'], 'app-check-token');
+  assert.deepStrictEqual(JSON.parse(decodeURIComponent(requests[1].options.headers['x-private-photo-metadata'])), {
+    tourId: 'tour-55', idempotencyKey: 'private-photo-1', caption: 'Hidden gem',
+  });
+  assert.equal(result.sourceUrl, undefined);
   assert.strictEqual(blob.closed, true);
 });
 
-test('uploadPhoto sanitizes private owner key segments for Realtime Database paths', async (t) => {
-  const originalNow = Date.now;
-  Date.now = () => 1700000000000;
-  t.after(() => {
-    Date.now = originalNow;
-  });
-
+test('uploadPhoto never transmits a credential-derived private owner identity', async () => {
   const ownerId = 'pax_v1:T123659:msandreayoung@yahoo.co.uk';
-  const expectedOwnerKey = 'pax_v1:T123659:msandreayoung@yahoo_2E_co_2E_uk';
-  let writePath;
-  let storedPayload;
-
+  let privateMetadata;
   await uploadPhoto('file://private.jpg', 'tour-55', ownerId, 'Owner with email', {
     visibility: 'private',
-    storageInstance: {},
-    realtimeDbInstance: {},
-    fetchFn: async () => ({ ok: true, blob: async () => createMockBlob() }),
-    storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async () => {},
-    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
-    dbRefFn: (_db, path) => ({ path }),
-    pushFn: (ref) => {
-      writePath = ref.path;
-      return { key: 'private-photo-sanitized' };
+    idempotencyKey: 'private-photo-safe-owner',
+    authInstance: { currentUser: { uid: 'auth-1', getIdToken: async () => 'id-token' } },
+    appCheckTokenFn: async () => 'app-check-token',
+    privateUploadEndpoint: 'https://functions.test/uploadPrivatePhoto',
+    fetchFn: async (url, options) => {
+      if (url.startsWith('file:')) return { ok: true, blob: async () => createMockBlob() };
+      privateMetadata = decodeURIComponent(options.headers['x-private-photo-metadata']);
+      return { ok: true, json: async () => ({ success: true, photo: {
+        id: 'private-photo-safe-owner', userId: 'pax_v2_0123456789abcdef0123456789abcdef',
+        storagePath: 'private_tour_photos/tour-55/opaque/photo.jpg',
+      } }) };
     },
-    setFn: async (_ref, payload) => {
-      storedPayload = payload;
-    },
-    serverTimestampFn: () => 1,
   });
-
-  assert.strictEqual(writePath, `private_tour_photos/tour-55/${expectedOwnerKey}`);
-  assert.strictEqual(
-    storedPayload.storagePath,
-    `private_tour_photos/tour-55/${expectedOwnerKey}/1700000000000_pax_v1_T123659_msandreayoung_yahoo.co.uk.jpg`,
-  );
+  assert.equal(privateMetadata.includes(ownerId), false);
+  assert.equal(privateMetadata.includes('msandreayoung'), false);
 });
 
-
-test('uploadPhoto falls back to a numeric client timestamp when server timestamp is a placeholder object', async (t) => {
-  const originalNow = Date.now;
-  Date.now = () => 1700000000123;
-  t.after(() => {
-    Date.now = originalNow;
-  });
-
-  const blob = createMockBlob();
-  let dbPayload;
-
-  await uploadPhoto('file://private.jpg', 'tour-rt', 'owner-1', 'Fallback timestamp', {
+test('uploadPhoto trusts only the server-generated private timestamp and record', async () => {
+  const result = await uploadPhoto('file://private.jpg', 'tour-rt', 'owner-1', 'Server timestamp', {
     visibility: 'private',
-    storageInstance: {},
-    realtimeDbInstance: {},
-    fetchFn: async () => ({ ok: true, blob: async () => blob }),
-    storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async () => {},
-    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
-    dbRefFn: mockDbRef,
-    pushFn: () => ({ key: 'private-photo-ts' }),
-    setFn: async (_ref, payload) => {
-      dbPayload = payload;
+    idempotencyKey: 'private-photo-ts',
+    authInstance: { currentUser: { uid: 'auth-1', getIdToken: async () => 'id-token' } },
+    appCheckTokenFn: async () => 'app-check-token',
+    privateUploadEndpoint: 'https://functions.test/uploadPrivatePhoto',
+    fetchFn: async (url) => {
+      if (url.startsWith('file:')) return { ok: true, blob: async () => createMockBlob() };
+      return { ok: true, json: async () => ({ success: true, photo: {
+        id: 'private-photo-ts', timestamp: 1700000000123,
+        storagePath: 'private_tour_photos/tour-rt/opaque/photo.jpg',
+      } }) };
     },
-    serverTimestampFn: () => ({ '.sv': 'timestamp' }),
   });
-
-  assert.strictEqual(dbPayload.timestamp, 1700000000123);
+  assert.strictEqual(result.timestamp, 1700000000123);
 });
 
 test('uploadPhoto rejects unsupported image types', async () => {
@@ -275,6 +235,7 @@ test('resolvePrivatePhotoMedia hydrates short-lived URLs in memory with an authe
   const photos = [{ id: 'photo-1', storagePath: 'private_tour_photos/tour-1/owner-1/a.jpg' }];
   const result = await resolvePrivatePhotoMedia({ tourId: 'tour-1', ownerKey: 'owner-1', photos }, {
     authInstance: { currentUser: { getIdToken: async () => 'token-1' } },
+    appCheckTokenFn: async () => 'app-check-token',
     endpoint: 'https://example.test/resolve',
     fetchFn: async (url, options) => {
       requests.push({ url, options });
@@ -292,6 +253,7 @@ test('resolvePrivatePhotoMedia hydrates short-lived URLs in memory with an authe
 test('resolvePrivatePhotoMedia rejects expired or malformed authorization responses', async () => {
   const deps = {
     authInstance: { currentUser: { getIdToken: async () => 'token-1' } },
+    appCheckTokenFn: async () => 'app-check-token',
     endpoint: 'https://example.test/resolve',
   };
   await assert.rejects(resolvePrivatePhotoMedia({ tourId: 't', ownerKey: 'o', photos: [{ id: 'p' }] }, {
@@ -519,51 +481,33 @@ test('deleteGroupPhoto rejects delete when requesting user does not own photo', 
   );
 });
 
-test('deletePrivatePhoto keeps its database record when storage deletion fails so the user can retry', async () => {
-  const deletedDbPaths = [];
-
+test('deletePrivatePhoto leaves all mutation to the server and surfaces a failed delete', async () => {
+  let request;
   await assert.rejects(
     deletePrivatePhoto('tour-2', 'user-2', 'photo-99', {
-      storageInstance: {},
-      realtimeDbInstance: {},
-      dbRefFn: (_db, path) => ({ path }),
-      getFn: async () => mockSnapshot({
-        storagePath: 'private_tour_photos/tour-2/user-2/file.jpg',
-        viewerStoragePath: 'private_tour_photos/tour-2/user-2/viewers/file_viewer.jpg',
-        thumbnailStoragePath: 'private_tour_photos/tour-2/user-2/thumbnails/file_thumb.jpg',
-      }),
-      storageRefFn: (_storage, path) => ({ path }),
-      deleteObjectFn: async () => {
-        throw new Error('storage down');
-      },
-      removeFn: async (ref) => {
-        deletedDbPaths.push(ref.path);
+      authInstance: { currentUser: { getIdToken: async () => 'id-token' } },
+      appCheckTokenFn: async () => 'app-check-token',
+      endpoint: 'https://functions.test/deletePrivatePhoto',
+      fetchFn: async (url, options) => {
+        request = { url, options };
+        return { ok: false, json: async () => ({ reason: 'DELETE_FAILED' }) };
       },
     }),
-    /storage down/,
+    /could not be deleted/,
   );
-
-  assert.deepStrictEqual(deletedDbPaths, []);
+  assert.equal(request.url, 'https://functions.test/deletePrivatePhoto');
+  assert.deepStrictEqual(JSON.parse(request.options.body), { tourId: 'tour-2', photoId: 'photo-99' });
 });
 
-test('deletePrivatePhoto treats an already-missing Storage object as retry-safe', async () => {
-  const deletedDbPaths = [];
+test('deletePrivatePhoto treats a server-confirmed idempotent delete as success', async () => {
   const result = await deletePrivatePhoto('tour-2', 'user-2', 'photo-99', {
-    storageInstance: {},
-    realtimeDbInstance: {},
-    dbRefFn: (_db, path) => ({ path }),
-    getFn: async () => mockSnapshot({ storagePath: 'private_tour_photos/tour-2/user-2/file.jpg' }),
-    storageRefFn: (_storage, path) => ({ path }),
-    deleteObjectFn: async () => {
-      const error = new Error('missing');
-      error.code = 'storage/object-not-found';
-      throw error;
-    },
-    removeFn: async (ref) => deletedDbPaths.push(ref.path),
+    authInstance: { currentUser: { getIdToken: async () => 'id-token' } },
+    appCheckTokenFn: async () => 'app-check-token',
+    endpoint: 'https://functions.test/deletePrivatePhoto',
+    fetchFn: async () => ({ ok: true, json: async () => ({ success: true, alreadyDeleted: true }) }),
   });
 
   assert.deepStrictEqual(result, { success: true });
-  assert.deepStrictEqual(deletedDbPaths, ['private_tour_photos/tour-2/user-2/photo-99']);
 });
 
 

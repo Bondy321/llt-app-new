@@ -6,6 +6,7 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
+const { driverAuthorityUpdates } = require('./sessionFixtures');
 
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const PROJECT_ID = 'demo-llt-driver-rules';
@@ -62,6 +63,11 @@ test.before(async () => {
     });
     await db.ref('tour_manifests/TOUR_1').set({ assigned_drivers: {} });
     await db.ref(`users/${DRIVER_AUTH_UID}`).set({ driverId: CLAIMED_DRIVER_ID });
+    await db.ref().update(driverAuthorityUpdates({
+      uid: DRIVER_AUTH_UID,
+      driverId: CLAIMED_DRIVER_ID,
+      tourId: '5203L_22',
+    }));
   });
 });
 

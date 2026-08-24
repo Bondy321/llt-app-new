@@ -6,6 +6,7 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
+const { passengerAuthorityUpdates, driverAuthorityUpdates } = require('./sessionFixtures');
 
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const PROJECT_ID = 'demo-llt-tour-rules';
@@ -96,6 +97,11 @@ test.before(async () => {
       principalType: 'driver',
     });
     await db.ref(`tour_access_grants/${TOUR_ID}/${OTHER_PASSENGER_AUTH_UID}`).set(grantPayload(OTHER_PASSENGER_AUTH_UID));
+    await db.ref().update({
+      ...passengerAuthorityUpdates({ uid: PASSENGER_AUTH_UID, tourId: TOUR_ID }),
+      ...passengerAuthorityUpdates({ uid: OTHER_PASSENGER_AUTH_UID, tourId: TOUR_ID }),
+      ...driverAuthorityUpdates({ uid: DRIVER_AUTH_UID, driverId: DRIVER_ID, tourId: TOUR_ID }),
+    });
   });
 });
 
@@ -105,8 +111,8 @@ test.after(async () => {
   }
 });
 
-test('allows passengers to write only their own participant row and participant count', async () => {
-  await assertSucceeds(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/participants/${OTHER_PASSENGER_AUTH_UID}`).set({
+test('keeps participant authority server-owned and denies passenger tour mutation', async () => {
+  await assertFails(dbFor(OTHER_PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}/participants/${OTHER_PASSENGER_AUTH_UID}`).set({
     userId: OTHER_PASSENGER_AUTH_UID,
     joinedAt: '2026-05-23T19:41:00.000Z',
     lastUpdated: '2026-05-23T19:41:00.000Z',

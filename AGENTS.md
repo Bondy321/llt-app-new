@@ -219,6 +219,17 @@ Driver login:
   write driver, user-authority, tour-driver, or manifest-assignment nodes directly.
 - Canonical driver principal for identity-sensitive paths is `driver:{DRIVER_ID}`.
 
+Application session authority:
+
+- Source contract: `docs/data-contracts/app-session.md`; rollout and operational response are in `docs/app-session-rollout.md` and `docs/app-session-operations-runbook.md`.
+- `app_sessions/{authUid}` is the only authority that turns persistent mobile Firebase Auth into current app access. Clients read only their own record and cannot write any session field.
+- Login Functions issue an opaque `sess_v1_{32 lowercase hex}` ID under a per-UID transactional `app_session_locks` lock. Passenger membership is server-owned schema v2 and must match the session ID, principal, tour and expiry.
+- Driver access requires an active matching session in addition to every driver mapping and assignment. Operational assignment survives logout but is never sufficient for app access.
+- Normal logout calls `endAppSession` with Auth, App Check and the exact expected session ID. Missing state is idempotent success; mismatched state returns `SESSION_CHANGED` and cannot end a newer login.
+- Offline logout is a durable blocking pending state, not a completed logout. Startup retries it, and no tour UI may be restored while it is pending.
+- Admin revocation uses `revokeAppSession`; session expiry cleanup runs every 15 minutes. Both share the same compare-safe cleanup and distributed lock boundary.
+- Normal logout preserves Firebase Auth, `passenger_identity_security`, `authorizedAuthUid`, opaque passenger identity, historical content and operational driver assignment. Explicit account deletion remains a separate workflow.
+
 Stable passenger identity:
 
 - Canonical ID: opaque server-issued `pax_v2_{32 lowercase hex characters}`.
@@ -590,6 +601,7 @@ notification_read_state/{tourId}/{canonicalPrincipalKey}/{noticeId}
 
 - Functions own notice creation; mobile clients cannot forge notices.
 - Tour members and verified assigned drivers can read only their attached tour feed.
+- Tour feed/read-state access and operational fanout require a current non-expired app session; stale membership, stale assignment, or an active token alone is insufficient.
 - Passengers write read timestamps only below the stable principal key bound to their authenticated profile; verified drivers use `driver:{driverId}`. A UID branch is reserved for legacy participants without a stable binding.
 - Read-state writes also require current tour membership/verified assignment and an existing notice. Notice eviction enqueues an exact server-private cleanup job; `cleanupNotificationReadState` drains at most 10 jobs in 50-user continuation pages every 15 minutes.
 - A canonical-principal client submits an exact, identity-authorized `notification_read_migration_requests/{tourId}/{authUid}` record. Because UID-only history is ambiguous on shared devices, `processNotificationReadMigrationRequest` deletes (never copies) the legacy UID branch, removes the request, and writes a per-tour completion marker inside the authenticated user profile to suppress repeat work.
@@ -626,6 +638,7 @@ users/{uid}/preferences/marketing/*
 Function fanout safeguards:
 
 - deterministic chunking
+- active app-session and matching participant/driver-assignment eligibility
 - recipient cap: 1000
 - user fetch chunk size: 100
 - recipient chunk size: 200
@@ -917,6 +930,15 @@ Exported functions:
   - authenticated HTTPS `POST`, region `europe-west1`
   - validates caller tour/role access and bounded report/location input
   - atomically writes private, tour, critical-global, and idempotency-lock paths
+- `endAppSession`
+  - authenticated and App-Check-protected HTTPS `POST`, region `europe-west1`, CORS disabled
+  - compare-ends only the exact expected session and removes session-derived authority and ephemeral state
+- `revokeAppSession`
+  - operations-admin HTTPS `POST`, region `europe-west1`, allowlisted reasons and optional expected-session compare
+  - uses the same lock and cleanup path as normal logout without unassigning drivers or rotating passenger identity
+- `cleanupExpiredAppSessions`
+  - scheduled every 15 minutes in `europe-west1`
+  - cleans at most 50 expired sessions and 100 expired bounded audit events per run
 - `sendSafetyAlertNotification`
   - RTDB create trigger on `/tours/{tourId}/safetyAlerts/{eventId}`
   - alerts coherently assigned drivers and eligible operations-admin mobile profiles
@@ -936,6 +958,7 @@ Testing hook:
 Maintenance scripts:
 
 - `npm --prefix functions run backfill:photo-variants -- --dry-run --limit=50`
+- `npm --prefix functions run migrate:app-sessions -- --project=loch-lomond-travel --limit=25`
 
 Photo variant backfill example:
 
@@ -1093,13 +1116,13 @@ Firebase emulator rules:
 npm run test:emulators
 ```
 
-Current `test:emulators` runs the complete Realtime Database and Storage rules matrix: reactions, manifests, photo variants, tours, drivers, account deletion, content reports, broadcasts, logs, notifications, safety alerts, and authenticated photo object ownership/deletion. To isolate photo variant/photo ownership rules while diagnosing a failure, run:
+Current `test:emulators` runs the complete Realtime Database and Storage rules matrix: app sessions, stale-session denial, reactions, manifests, photo variants, tours, drivers, account deletion, content reports, broadcasts, logs, notifications, safety alerts, and direct media denial. To isolate photo/session rules while diagnosing a failure, run:
 
 ```bash
 firebase emulators:exec --project demo-llt-rules --only database "node --test tests/firebaseRules/photoVariants.rules.test.js"
 ```
 
-Client photo deletion is Storage-first and retry-safe: Storage rules allow only the object's `metadata.authUid` owner to delete it, `storage/object-not-found` is an idempotent success, and the RTDB photo record must remain when any other Storage failure occurs.
+All client Storage reads and writes under `group_tour_photos/**` and `private_tour_photos/**` are denied. Authenticated, App-Check-protected Functions verify the current app session for upload, short-lived URL resolution and deletion; RTDB metadata stores paths rather than durable download URLs.
 
 High-value contract tests to know:
 
@@ -1349,6 +1372,7 @@ High-signal docs:
 - `docs/date-contract.md`
 - `docs/date-contract-web-admin.md`
 - `docs/data-contracts/driver-assignment.md`
+- `docs/data-contracts/app-session.md`
 - `docs/data-contracts/chat-delivery.md`
 - `docs/data-contracts/driver-location.md`
 - `docs/data-contracts/safety-delivery.md`
@@ -1358,6 +1382,8 @@ High-signal docs:
 - `docs/data-contracts/tour-identity.md`
 - `docs/data-contracts/driver-tour-pack-ingestion.md`
 - `docs/offline-tour-pack.md`
+- `docs/app-session-rollout.md`
+- `docs/app-session-operations-runbook.md`
 - `docs/driver-command-centre-operations.md`
 - `docs/photo-upload-variant-contract.md`
 - `docs/reactions-write-contract.md`

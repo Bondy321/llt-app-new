@@ -13,7 +13,8 @@
     "backfill:tour-date-indexes": "node scripts/backfillTourDateIndexes.js",
     "backfill:driver-tour-pack-issues": "node scripts/backfillDriverTourPackIssueProjections.js",
     "repair:manifest-duplicates": "node scripts/repairDuplicateManifestPassengers.js",
-    "migrate:opaque-passenger-identities": "node scripts/migrateOpaquePassengerIdentities.js"
+    "migrate:opaque-passenger-identities": "node scripts/migrateOpaquePassengerIdentities.js",
+    "migrate:app-sessions": "node scripts/migrateAppSessions.js"
   },
   "engines": {
     "node": "22"

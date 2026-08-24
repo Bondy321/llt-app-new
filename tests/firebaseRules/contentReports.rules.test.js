@@ -6,6 +6,7 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
+const { passengerAuthorityUpdates, driverAuthorityUpdates } = require('./sessionFixtures');
 
 const PROJECT_ID = 'demo-llt-content-report-rules';
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
@@ -99,6 +100,10 @@ test.before(async () => {
       userId: 'passenger-other',
       caption: 'Reported photo',
       timestamp: 1781090000002,
+    });
+    await db.ref().update({
+      ...passengerAuthorityUpdates({ uid: PASSENGER_UID, tourId: TOUR_ID }),
+      ...driverAuthorityUpdates({ uid: DRIVER_AUTH_UID, driverId: DRIVER_ID, tourId: TOUR_ID }),
     });
   });
 });

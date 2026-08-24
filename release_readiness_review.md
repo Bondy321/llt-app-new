@@ -1,5 +1,13 @@
 # LLT App Release Readiness Review
 
+## 2026-08-24 security implementation addendum
+
+The prior photo-access finding and the visible-logout/server-authority gap have been remediated in the repository. Mobile access now requires a server-owned, non-expired `app_sessions/{authUid}` record in addition to matching passenger membership or coherent driver assignment. Normal logout, admin revocation, and scheduled expiry cleanup remove that authority, disable push eligibility, and clear session-owned ephemeral state without rotating the opaque passenger identity or unassigning a driver.
+
+Direct Firebase Storage access to both group and private photo roots is denied. Authenticated, App-Check-protected Functions perform upload, delete, and short-lived media URL resolution after current session/tour verification. The compatible mobile client persists compare-safe logout requests and blocks in a truthful logout-pending state when offline.
+
+The strict production cutover still requires the staged order and maintenance-window checks in `docs/app-session-rollout.md`: compatible Functions, TestFlight OTA, bounded dry-run/apply migration, strict RTDB/Storage rules, admin hosting, then production smoke verification. This addendum does not supersede unrelated App Store, production environment, dependency, or physical-device gates below.
+
 Review date: 2026-06-11
 
 Scope: `llt-app-new`, excluding `web-admin`.
@@ -269,31 +277,32 @@ Verification:
 
 ## Not Blockers, But Fix Within The First Month
 
-### M1. Storage object reads for private and group photos are too broad
+### M1. Resolved in repository: Storage object reads for private and group photos were too broad
 
 Evidence:
 
-- `storage_rules.json:20-35`
-- Stricter metadata rules exist in `database.rules.json:215-249`.
+- `storage_rules.json` denies all direct group/private photo object operations.
+- `functions/index.js` exposes authenticated, App-Check-protected group/private upload, resolution, and deletion endpoints.
+- `tests/firebaseRules/storage.rules.test.js`, `tests/functions.groupPhotoSecurity.test.js`, and `__tests__/photoService.test.js` cover direct denial and server mediation.
 
 Current behavior:
 
-Realtime Database metadata access is scoped to participants, assigned drivers, admins, or private owner identity bindings. Storage object reads, however, allow any signed-in user to read `private_tour_photos/**` and `group_tour_photos/**` if they know or obtain the object path/download URL.
+Realtime Database photo metadata and every media Function require a current matching app session. Storage rules deny direct access even to signed-in users and stable private-owner claims. The client stores paths and requests short-lived media URLs after current-tour authorization.
 
 Why it matters:
 
-This is better than public storage, but it is still broader than the metadata privacy model. Private photo objects are especially sensitive.
+An old Firebase Auth token, stale participant/assignment, guessed path, or copied custom claim cannot directly read or write photo objects.
 
-Fix direction:
+Completed implementation:
 
-- Move private photo delivery behind signed, short-lived server URLs or a function that verifies the RTDB metadata permissions first.
-- Alternatively redesign storage paths and auth claims so Storage rules can enforce owner/tour membership directly.
-- Review Firebase Storage download-token behavior and ensure tokens are rotated or avoided where privacy requires it.
+- Group and private upload/delete/resolve operations use Auth, App Check, current app-session verification, current tour membership/assignment, deterministic ownership, and bounded inputs.
+- Metadata no longer requires durable Firebase download URLs.
+- Account deletion removes owned media through backend authority before ending its app session.
 
 Verification:
 
-- Add Storage rules or service tests proving a signed-in outsider cannot fetch another passenger's private object.
-- Confirm group photo access still works for tour participants and assigned drivers.
+- The complete Storage/RTDB emulator matrix and mobile/Functions media suites must remain green before release.
+- Production smoke checks must confirm allowed current-tour resolution and cross-tour, stale-session, signed-out, unassigned-driver, and invented-tour denial.
 
 ### M2. `currentParticipants` is participant-writable
 

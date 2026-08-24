@@ -23,6 +23,7 @@ const {
   normalizePassengerBookingProjection,
   normalizePassengerTourProjection,
 } = require('./passengerDataBoundary');
+const { validateAppSession } = require('./appSessionService');
 
 try {
   loginDiagnosticsService = require('./loginDiagnosticsService');
@@ -1357,6 +1358,9 @@ const mapDriverAssignmentReason = (reason) => {
     INVALID_INPUT: 'Enter a valid tour code.',
     METHOD_NOT_ALLOWED: 'The assignment service is unavailable in this app version. Please update the app.',
     NOT_AUTHORIZED: 'This device is not linked to that driver profile. Please sign in again or contact dispatch.',
+    SESSION_CHANGED: 'Your secure driver session changed. Sign in again before assigning a tour.',
+    SESSION_INACTIVE: 'Your secure driver session has ended. Sign in again before assigning a tour.',
+    SESSION_IN_PROGRESS: 'Another secure session action is still finishing. Please wait a moment and try again.',
     TOUR_ALREADY_ASSIGNED: 'That tour already has another driver assigned. Contact dispatch before changing it.',
     TOUR_INACTIVE: 'That tour is no longer active. Contact dispatch if this is unexpected.',
     TOUR_NOT_FOUND: 'Tour not found. Check the code on your paperwork and try again.',
@@ -1367,7 +1371,7 @@ const mapDriverAssignmentReason = (reason) => {
 
 // Driver assignment is server-authorized so every related tour, driver, profile,
 // and manifest path changes atomically under one trusted operation.
-const assignDriverToTour = async (driverId, tourCode) => {
+const assignDriverToTour = async (driverId, tourCode, options = {}) => {
   try {
     const validatedDriverId = validateDriverId(driverId);
     const validatedTourCode = validateTourCode(tourCode);
@@ -1397,6 +1401,13 @@ const assignDriverToTour = async (driverId, tourCode) => {
       throw new Error(mapDriverAssignmentReason('INVALID_CREDENTIALS'));
     }
 
+    const appSessionService = options.appSessionService || require('./appSessionService');
+    const currentAppSession = options.appSession || await appSessionService.readSession();
+    if (!currentAppSession || currentAppSession.principalType !== 'driver'
+      || currentAppSession.driverId !== validatedDriverId) {
+      throw new Error('Your secure driver session has ended. Sign in again before assigning a tour.');
+    }
+
     let response;
     try {
       response = await fetchWithTimeout(endpoint, {
@@ -1408,6 +1419,7 @@ const assignDriverToTour = async (driverId, tourCode) => {
         body: JSON.stringify({
           driverId: validatedDriverId,
           tourCode: validatedTourCode,
+          expectedSessionId: currentAppSession.sessionId,
         }),
       });
     } catch (error) {
@@ -1430,12 +1442,20 @@ const assignDriverToTour = async (driverId, tourCode) => {
       tourId: payload.tourId,
       previousTourId: payload.previousTourId || null,
     });
+    const updatedSession = validateAppSession(payload.session);
+    if (!updatedSession || updatedSession.sessionId !== currentAppSession.sessionId
+      || updatedSession.sessionRevision <= currentAppSession.sessionRevision
+      || updatedSession.tourId !== payload.tourId) {
+      throw new Error('The assignment completed but its secure session response was invalid. Sign in again.');
+    }
+    await appSessionService.persistSession(updatedSession);
 
     return {
       success: true,
       tourId: payload.tourId,
       tourCode: payload.tourCode || validatedTourCode,
       previousTourId: payload.previousTourId || null,
+      session: updatedSession,
     };
 
   } catch (error) {
@@ -1547,11 +1567,21 @@ const validateBookingReference = async (reference, email, options = {}) => {
           assignmentStatus: driverVerification.assignmentStatus || null,
           hasResolvedTour: Boolean(driverVerification.tour),
         });
+        const driverAppSession = validateAppSession(driverVerification.session);
+        if (!driverAppSession || driverAppSession.principalType !== 'driver'
+          || driverAppSession.driverId !== upperRef
+          || driverAppSession.tourId !== (driverVerification.driver?.assignedTourId || null)) {
+          return {
+            valid: false,
+            error: 'Secure driver session could not be established. Please reconnect and try again.',
+          };
+        }
         return {
           valid: true,
           type: 'driver',
           driver: driverVerification.driver,
           tour: driverVerification.tour || null,
+          session: driverAppSession,
           assignmentStatus: driverVerification.assignmentStatus || (
             driverVerification.driver?.assignedTourId
               ? (driverVerification.tour ? 'ASSIGNED' : 'ASSIGNED_TOUR_NOT_FOUND')
@@ -1560,12 +1590,7 @@ const validateBookingReference = async (reference, email, options = {}) => {
         };
       }
 
-      const directDriverResult = await resolveDriverLoginFromDatabase(upperRef);
-      if (directDriverResult) {
-        return directDriverResult;
-      }
-
-      logBookingEvent('warn', 'Driver login reference was not validated by verifier or fallback', {
+      logBookingEvent('warn', 'Driver login reference was not validated by the secure verifier', {
         driverId: maskIdentifier(upperRef),
       });
       return { valid: false, error: 'Driver verification is temporarily unavailable. Please try again shortly.' };
@@ -1688,6 +1713,14 @@ const validateBookingReference = async (reference, email, options = {}) => {
         error: 'Secure passenger identity could not be established. Please update the app and try again.',
       };
     }
+    const appSession = validateAppSession(passengerVerification.session);
+    if (!appSession || appSession.principalType !== 'passenger'
+      || appSession.principalId !== stablePassengerId || appSession.tourId !== tourId) {
+      return {
+        valid: false,
+        error: 'Secure app session could not be established. Please reconnect and try again.',
+      };
+    }
 
     logBookingEvent('info', 'Passenger login reference validated', {
       bookingRef: maskIdentifier(resolvedBookingRef),
@@ -1707,6 +1740,7 @@ const validateBookingReference = async (reference, email, options = {}) => {
     return {
       valid: true,
       type: 'passenger',
+      session: appSession,
       booking: {
         ...normalizedBooking,
         normalizedPassengerEmail: normalizedEmail,
@@ -1870,8 +1904,18 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb, options = {}) =
       { label: 'join_tour_participant_read', diagnostics: loginDiagnosticsContext }
     );
 
-    // User already joined - return current count
+    // Membership is created atomically by verifyPassengerLogin. This wrapper is
+    // retained only for compatibility and never writes participant authority.
     if (participantSnapshot.exists()) {
+      const participant = participantSnapshot.val() || {};
+      const appSessionService = options.appSessionService || require('./appSessionService');
+      const activeSession = options.appSession || await appSessionService.readSession();
+      if (!activeSession || participant.schemaVersion !== 2
+        || participant.sessionId !== activeSession.sessionId
+        || participant.principalId !== activeSession.principalId
+        || participant.sessionExpiresAtMs <= Date.now()) {
+        throw new Error('Secure tour membership does not match the active app session');
+      }
       const reconciledCount = projectedTour
         ? projectedTour.currentParticipants
         : await ensureTourParticipantCount(validatedTourId, db, {
@@ -1889,61 +1933,7 @@ const joinTour = async (tourId, userId, dbInstance = realtimeDb, options = {}) =
       }, loginDiagnosticsContext);
       return { success: true, currentParticipants: reconciledCount, alreadyJoined: true };
     }
-
-    // Join tour using a participant-row transaction. Capacity/passenger totals
-    // are maintained by trusted booking producers, not by app-session joins.
-    const nowIso = new Date().toISOString();
-    const transactionResult = await participantRef.transaction((participantState) => {
-      if (participantState) return undefined;
-      return {
-        joinedAt: nowIso,
-        lastUpdated: nowIso,
-        userId: validatedUserId
-      };
-    });
-    recordLoginDiagnostic('join_tour_participant_transaction_completed', {
-      tourId: validatedTourId,
-      userId: validatedUserId,
-      committed: Boolean(transactionResult?.committed),
-      snapshotExists: Boolean(transactionResult?.snapshot?.val?.()),
-    }, loginDiagnosticsContext);
-
-    if (!transactionResult?.committed) {
-      // Transaction aborted - likely user already joined
-      const reconciledCount = projectedTour
-        ? projectedTour.currentParticipants
-        : await ensureTourParticipantCount(validatedTourId, db, {
-          loginDiagnostics: loginDiagnosticsContext,
-        });
-      logBookingEvent('warn', 'Join tour transaction aborted', {
-        tourId: validatedTourId,
-        userId: maskIdentifier(validatedUserId),
-        currentParticipants: reconciledCount,
-      });
-      return { success: true, currentParticipants: reconciledCount, alreadyJoined: true };
-    }
-
-    const currentParticipants = projectedTour
-      ? projectedTour.currentParticipants
-      : await ensureTourParticipantCount(validatedTourId, db, {
-        loginDiagnostics: loginDiagnosticsContext,
-      });
-    logBookingEvent('info', 'Join tour completed', {
-      tourId: validatedTourId,
-      userId: maskIdentifier(validatedUserId),
-      currentParticipants,
-    });
-    recordLoginDiagnostic('join_tour_completed', {
-      tourId: validatedTourId,
-      userId: validatedUserId,
-      currentParticipants,
-      alreadyJoined: false,
-    }, loginDiagnosticsContext);
-    return {
-      success: true,
-      currentParticipants,
-      alreadyJoined: false
-    };
+    throw new Error('The server did not create secure tour membership for this session');
   } catch (error) {
     logger?.error?.('Tour', 'Error joining tour', { tourId, userId: maskIdentifier(userId), error: error?.message || String(error) });
     recordLoginDiagnostic('join_tour_threw', {

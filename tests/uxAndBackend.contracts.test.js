@@ -106,11 +106,14 @@ test('Static contract: identity bindings are server-owned except exact owner cle
     "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
   );
   assert.match(bindingWriteRule, /auth\.uid === \$uid && data\.val\(\) === true && !newData\.exists\(\)/);
+  assert.match(bindingWriteRule, /app_sessions/);
+  assert.match(bindingWriteRule, /status'\)\.val\(\) === 'active'/);
+  assert.match(bindingWriteRule, /expiresAtMs'\)\.val\(\) > now/);
   assert.doesNotMatch(bindingWriteRule, /newData\.val\(\) === true/);
-  assert.equal(
-    rules.rules.passenger_identity_security.$bookingRef.authorizedAuthUid['.write'],
-    'auth != null && data.val() === auth.uid && !newData.exists()',
-  );
+  const securityCleanupRule = rules.rules.passenger_identity_security.$bookingRef.authorizedAuthUid['.write'];
+  assert.match(securityCleanupRule, /data\.val\(\) === auth\.uid && !newData\.exists\(\)/);
+  assert.match(securityCleanupRule, /app_sessions/);
+  assert.match(securityCleanupRule, /expiresAtMs/);
   assert.match(rules.rules.identity_bindings_meta.$stablePassengerId['.validate'], /pax_v2_/);
 });
 
@@ -119,8 +122,7 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   const adminUid = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
   const adminOnlyRootAccess = `auth != null && auth.uid === '${adminUid}'`;
   const portalAdminRootAccess = `auth != null && (auth.uid === '${adminUid}' || root.child('admin_users/' + auth.uid).val() === true)`;
-  const privateOwnerAccess = "auth != null && $ownerId.matches(/^pax_v2_[a-f0-9]{32}$/) && ($ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)";
-  const manifestBookingAccess = `auth != null && (auth.uid === '${adminUid}' || (root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() && (root.child('users/' + auth.uid + '/bookingRef').val() === $bookingRef || (root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').val() > now))) || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true)) && root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId`;
+  const manifestBookingAccess = rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.write'];
 
   assert.equal(
     rules.rules.bookings.$bookingRef['.write'],
@@ -132,19 +134,25 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   assert.doesNotMatch(rules.rules.bookings.$bookingRef['.read'], /booking_access_grants|participants/);
   assert.match(rules.rules.bookings.$bookingRef['.read'], /data\.child\('tourId'\)\.isString\(\)/);
   assert.deepEqual(rules.rules.bookings['.indexOn'], ['tourId']);
-  assert.equal(
-    rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.write'],
-    manifestBookingAccess,
-  );
+  assert.match(manifestBookingAccess, /app_sessions/);
+  assert.match(manifestBookingAccess, /tourId'\)\.val\(\) === \$tourId/);
+  assert.match(manifestBookingAccess, /users\/' \+ auth\.uid \+ '\/bookingRef/);
+  assert.match(manifestBookingAccess, /participants\/' \+ auth\.uid \+ '\/sessionId/);
+  assert.match(manifestBookingAccess, /assigned_drivers/);
+  assert.match(manifestBookingAccess, /bookings\/' \+ \$bookingRef \+ '\/tourId/);
   assert.equal(rules.rules.tour_manifests['.read'], portalAdminRootAccess);
   assert.notEqual(rules.rules.tour_manifests['.read'], 'auth != null');
   assert.notEqual(rules.rules.tour_manifests.$tourId['.read'], 'auth != null');
   assert.doesNotMatch(rules.rules.tour_manifests.$tourId['.read'], /participants\/' \+ auth\.uid/);
   assert.match(rules.rules.tour_manifests.$tourId['.read'], /assigned_drivers/);
   assert.match(rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.read'], /users\/' \+ auth\.uid \+ '\/bookingRef/);
-  assert.match(rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.read'], /booking_access_grants/);
-  assert.equal(rules.rules.private_tour_photos.$tourId.$ownerId['.read'], privateOwnerAccess);
-  assert.equal(rules.rules.private_tour_photos.$tourId.$ownerId['.write'], privateOwnerAccess);
+  assert.match(rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.read'], /app_sessions/);
+  assert.doesNotMatch(rules.rules.tour_manifests.$tourId.bookings.$bookingRef['.read'], /booking_access_grants/);
+  const privateOwnerAccess = rules.rules.private_tour_photos.$tourId.$ownerId['.read'];
+  assert.equal(rules.rules.private_tour_photos.$tourId.$ownerId['.write'], false);
+  assert.match(privateOwnerAccess, /app_sessions/);
+  assert.match(privateOwnerAccess, /principalId'\)\.val\(\) === \$ownerId/);
+  assert.match(privateOwnerAccess, /participants\/' \+ auth\.uid \+ '\/sessionId/);
   assert.notEqual(rules.rules.group_tour_photos.$tourId['.read'], 'auth != null');
   assert.equal(rules.rules.group_tour_photos.$tourId['.read'], rules.rules.group_tour_photos.$tourId['.validate']);
   assert.match(rules.rules.group_tour_photos.$tourId['.read'], /tours\/' \+ \$tourId \+ '\/participants\/' \+ auth\.uid/);
@@ -177,14 +185,18 @@ test('Static contract: tour metadata writes stay least-privilege', () => {
   assert.match(rules.rules.tours['.read'], /admin_users/);
   assert.notEqual(rules.rules.tours['.read'], 'auth != null');
   assert.doesNotMatch(tourRules['.read'], /participants|tour_access_grants/);
-  assert.match(tourRules.itinerary['.read'], /tour_access_grants\/' \+ \$tourId \+ '\/' \+ auth\.uid \+ '\/expiresAtMs/);
+  assert.match(tourRules['.read'], /app_sessions/);
+  assert.match(tourRules['.read'], /assigned_drivers/);
+  assert.match(tourRules.itinerary['.read'], /app_sessions/);
+  assert.match(tourRules.itinerary['.read'], /participants\/' \+ auth\.uid \+ '\/sessionId/);
   assert.match(tourRules.driverLocation['.read'], /participants\/' \+ auth\.uid/);
   assert.equal(tourRules.driver_itinerary['.read'], undefined);
   assert.match(rules.rules.bookings.$bookingRef['.read'], /assigned_drivers/);
   assert.doesNotMatch(rules.rules.bookings.$bookingRef['.read'], /booking_access_grants|participants/);
   assert.notEqual(tourRules['.write'], 'auth != null');
   assert.match(tourRules['.write'], /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
-  assert.match(tourRules.participants.$userId['.write'], /tour_access_grants\/' \+ \$tourId \+ '\/' \+ auth\.uid \+ '\/expiresAtMs/);
+  assert.match(tourRules.participants.$userId['.write'], /admin_users/);
+  assert.doesNotMatch(tourRules.participants.$userId['.write'], /tour_access_grants|auth\.uid === \$userId/);
   assert.notEqual(tourRules.participants.$userId['.write'], "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')");
   assert.doesNotMatch(tourRules.currentParticipants['.write'], /participants/);
   assert.match(tourRules.currentParticipants['.write'], /admin_users/);
@@ -197,8 +209,10 @@ test('Static contract: tour metadata writes stay least-privilege', () => {
   assert.match(readText('package.json'), /tests\/firebaseRules\/tours\.rules\.test\.js/);
 
   const bookingSource = readText('services/bookingServiceRealtime.js');
-  assert.match(bookingSource, /Capacity\/passenger totals[\s\S]*not by app-session joins/);
-  assert.match(bookingSource, /participantRef\.transaction/);
+  assert.match(bookingSource, /currentParticipants is the booked passenger total[\s\S]*must never replace that commercial passenger count/);
+  assert.match(bookingSource, /Membership is created atomically by verifyPassengerLogin/);
+  assert.match(bookingSource, /participant\.sessionId !== activeSession\.sessionId/);
+  assert.doesNotMatch(bookingSource, /participantRef\.transaction/);
   assert.doesNotMatch(bookingSource, /tourRef\.transaction\(\(tourState\)/);
   assert.doesNotMatch(bookingSource, /update\(\{ isActive: true, participants: \{\}, currentParticipants: 0 \}\)/);
 });
@@ -348,10 +362,10 @@ test('Static contract: curated ops alerts stay separate from raw logs and schema
   const opsAlerts = rules.rules.ops_alerts;
   const adminUsers = rules.rules.admin_users;
 
-  assert.equal(
-    rules.rules.logs.$userId['.read'],
-    "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')",
-  );
+  assert.match(rules.rules.logs.$userId['.read'], /auth\.uid === \$userId/);
+  assert.match(rules.rules.logs.$userId['.read'], /app_sessions/);
+  assert.match(rules.rules.logs.$userId['.read'], /status'\)\.val\(\) === 'active'/);
+  assert.match(rules.rules.logs.$userId['.read'], /expiresAtMs'\)\.val\(\) > now/);
   assert.equal(
     adminUsers['.read'],
     "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
@@ -472,11 +486,14 @@ test('Static contract: notification read state stays canonical and migrates lega
   const principalRules = rules.rules.notification_read_state.$tourId.$principalId;
   const migrationRules = rules.rules.notification_read_migration_requests.$tourId.$authUid;
 
-  assert.match(principalRules['.read'], /stablePassengerKey/);
-  assert.match(principalRules['.read'], /'driver:' \+ root\.child/);
+  assert.match(principalRules['.read'], /app_sessions/);
+  assert.match(principalRules['.read'], /principalId'\)\.val\(\) === \$principalId/);
+  assert.match(principalRules['.read'], /participants\/' \+ auth\.uid \+ '\/sessionId/);
+  assert.match(principalRules['.read'], /assigned_drivers/);
   assert.match(principalRules.$noticeId['.write'], /tour_notifications/);
   assert.match(migrationRules['.write'], /auth\.uid === \$authUid/);
-  assert.match(migrationRules['.write'], /stablePassengerKey/);
+  assert.match(migrationRules['.write'], /app_sessions/);
+  assert.match(migrationRules['.write'], /principalId'\)\.val\(\)/);
   assert.equal(migrationRules.$other['.validate'], false);
   assert.match(serviceSource, /requestNotificationReadStateMigration/);
   assert.match(serviceSource, /notification_read_state\/\$\{safeTourId\}\/\$\{safeReadStateOwnerId\}/);
@@ -522,27 +539,23 @@ test('Static contract: user content reports stay scoped to tour users and admin 
   assert.match(rules.rules.group_tour_photos.$tourId.$photoId['.write'], /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
 });
 
-test('Static contract: Storage photos use uploader proof and stable private owner claims', () => {
+test('Static contract: photo objects are inaccessible directly and all media operations are server-authorized', () => {
   const storageRules = readText('storage_rules.json');
   const photoSource = readText('services/photoService.js');
   const functionsSource = readText('functions/index.js');
 
-  assert.match(storageRules, /function hasMatchingUploaderAuth\(\)/);
-  assert.match(storageRules, /request\.resource\.metadata\.authUid == request\.auth\.uid/);
-  assert.match(storageRules, /resource == null \|\| resource\.metadata\.authUid == request\.auth\.uid/);
-  assert.doesNotMatch(storageRules, /resource\.exists\(\)/);
-  assert.match(photoSource, /authInstance = auth/);
-  assert.match(photoSource, /throw new Error\('Authenticated user required for photo upload'\)/);
-  assert.match(storageRules, /request\.auth\.token\.privatePhotoOwnerKey == ownerId/);
-  assert.match(photoSource, /customMetadata: \{\s+authUid,\s+visibility: validatedVisibility,\s+sourceRole: 'source'/);
-  assert.doesNotMatch(photoSource, /customMetadata: \{[^}]*uploadedBy:/s);
-  assert.doesNotMatch(photoSource, /customMetadata: \{[^}]*idempotencyKey:/s);
-  assert.doesNotMatch(photoSource, /customMetadata: \{[^}]*ownerKey:/s);
+  assert.match(storageRules, /match \/private_tour_photos\/\{tourId\}\/\{ownerId\}\/\{allPaths=\*\*\}[\s\S]*allow read, write: if false/);
   assert.match(storageRules, /match \/group_tour_photos\/\{tourId\}\/\{fileName\}[\s\S]*allow read, write: if false/);
+  assert.doesNotMatch(photoSource, /getDownloadURL\(/);
+  assert.match(photoSource, /throw new Error\('Authenticated user required for photo upload'\)/);
+  assert.match(photoSource, /'x-firebase-appcheck': appCheckToken/);
   assert.match(photoSource, /resolveGroupPhotoMedia/);
   assert.match(photoSource, /uploadGroupPhoto/);
   assert.match(photoSource, /deleteGroupPhoto/);
+  assert.match(photoSource, /uploadPrivatePhoto/);
+  assert.match(photoSource, /deletePrivatePhoto/);
   assert.match(functionsSource, /verifyCurrentTourPhotoAccess/);
+  assert.match(functionsSource, /verifyActiveAppSession/);
   assert.match(functionsSource, /enforceGroupMediaAppCheck/);
   assert.match(functionsSource, /GROUP_MEDIA_URL_TTL_MS = 5 \* 60 \* 1000/);
   assert.doesNotMatch(functionsSource, /viewerToken = visibility === "private"/);

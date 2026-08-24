@@ -7,6 +7,7 @@ const {
   assertFails,
 } = require('@firebase/rules-unit-testing');
 const { toRealtimeKeySegment } = require('../../services/identityService');
+const { passengerAuthorityUpdates } = require('./sessionFixtures');
 
 const PROJECT_ID = 'demo-llt-photo-rules';
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
@@ -53,10 +54,7 @@ test.before(async () => {
   });
 
   await testEnv.withSecurityRulesDisabled(async (context) => {
-    await context.database(dbUrl).ref(`tours/${TOUR_ID}/participants/${USER_UID}`).set({
-      userId: USER_UID,
-      joinedAt: 1710000000000,
-    });
+    await context.database(dbUrl).ref().update(passengerAuthorityUpdates({ uid: USER_UID, tourId: TOUR_ID }));
   });
 });
 
@@ -144,68 +142,58 @@ test('denies invalid variantStatus values', async () => {
   }));
 });
 
-test('allows private photo record with ready variants in valid shape', async () => {
+test('private photo records are server-created path-only metadata', async () => {
   await testEnv.withSecurityRulesDisabled(async (context) => {
-    await context.database(dbUrl).ref(`users/${USER_UID}`).set({
-      stablePassengerId: OWNER_ID,
-      stablePassengerKey: OWNER_KEY,
-      privatePhotoOwnerId: OWNER_ID,
-      privatePhotoOwnerKey: OWNER_KEY,
+    await context.database(dbUrl).ref().update({
+      ...passengerAuthorityUpdates({ uid: USER_UID, tourId: TOUR_ID, principalId: OWNER_ID }),
+      [PRIVATE_PATH]: {
+        storagePath: `private_tour_photos/${TOUR_ID}/${OWNER_KEY}/source.jpg`,
+        userId: OWNER_ID,
+        timestamp: Date.now(),
+        variantStatus: 'ready',
+        viewerStoragePath: `private_tour_photos/${TOUR_ID}/${OWNER_KEY}/viewers/source_viewer.jpg`,
+        thumbnailStoragePath: `private_tour_photos/${TOUR_ID}/${OWNER_KEY}/thumbnails/source_thumb.jpg`,
+        variantUpdatedAt: Date.now(),
+        variantVersion: 2,
+      },
     });
     await context.database(dbUrl).ref(`identity_bindings/${OWNER_KEY}/${USER_UID}`).set(true);
   });
-
-  await assertSucceeds(dbFor(USER_UID).ref(PRIVATE_PATH).set({
-    storagePath: `private_tour_photos/${TOUR_ID}/${OWNER_KEY}/source.jpg`,
-    userId: OWNER_ID,
-    timestamp: Date.now(),
-    variantStatus: 'ready',
-    viewerUrl: 'https://example.com/viewer.jpg',
-    thumbnailUrl: 'https://example.com/thumb.jpg',
-    variantUpdatedAt: Date.now(),
-    variantVersion: 2,
-  }));
+  await assertSucceeds(dbFor(USER_UID).ref(PRIVATE_PATH).get());
+  await assertFails(dbFor(USER_UID).ref(PRIVATE_PATH).set({ storagePath: 'private_tour_photos/forged.jpg' }));
 });
 
 test('allows private photo access through encoded owner key on user profile', async () => {
   await testEnv.withSecurityRulesDisabled(async (context) => {
-    await context.database(dbUrl).ref(`users/${PROFILE_KEY_UID}`).set({
-      stablePassengerId: PROFILE_KEY_OWNER_ID,
-      stablePassengerKey: PROFILE_KEY_OWNER_KEY,
-      privatePhotoOwnerId: PROFILE_KEY_OWNER_ID,
-      privatePhotoOwnerKey: PROFILE_KEY_OWNER_KEY,
+    await context.database(dbUrl).ref().update({
+      ...passengerAuthorityUpdates({ uid: PROFILE_KEY_UID, tourId: TOUR_ID, principalId: PROFILE_KEY_OWNER_ID }),
+      [PROFILE_KEY_PRIVATE_PATH]: {
+        storagePath: `private_tour_photos/${TOUR_ID}/${PROFILE_KEY_OWNER_KEY}/source.jpg`,
+        userId: PROFILE_KEY_OWNER_ID,
+        timestamp: Date.now(),
+        variantStatus: 'ready',
+        viewerStoragePath: `private_tour_photos/${TOUR_ID}/${PROFILE_KEY_OWNER_KEY}/viewers/source_viewer.jpg`,
+        thumbnailStoragePath: `private_tour_photos/${TOUR_ID}/${PROFILE_KEY_OWNER_KEY}/thumbnails/source_thumb.jpg`,
+        variantUpdatedAt: Date.now(),
+        variantVersion: 2,
+      },
     });
     await context.database(dbUrl).ref(`identity_bindings/${PROFILE_KEY_OWNER_KEY}/${PROFILE_KEY_UID}`).remove();
   });
-
-  await assertSucceeds(dbFor(PROFILE_KEY_UID).ref(PROFILE_KEY_PRIVATE_PATH).set({
-    storagePath: `private_tour_photos/${TOUR_ID}/${PROFILE_KEY_OWNER_KEY}/source.jpg`,
-    userId: PROFILE_KEY_OWNER_ID,
-    timestamp: Date.now(),
-    variantStatus: 'ready',
-    viewerUrl: 'https://example.com/profile-key-viewer.jpg',
-    thumbnailUrl: 'https://example.com/profile-key-thumb.jpg',
-    variantUpdatedAt: Date.now(),
-    variantVersion: 2,
-  }));
+  await assertSucceeds(dbFor(PROFILE_KEY_UID).ref(PROFILE_KEY_PRIVATE_PATH).get());
 });
 
 test('denies private photo access for a foreign authenticated user', async () => {
   await testEnv.withSecurityRulesDisabled(async (context) => {
-    await context.database(dbUrl).ref(`users/${USER_UID}`).set({
-      stablePassengerId: OWNER_ID,
-      stablePassengerKey: OWNER_KEY,
-      privatePhotoOwnerId: OWNER_ID,
-      privatePhotoOwnerKey: OWNER_KEY,
-    });
+    await context.database(dbUrl).ref().update(passengerAuthorityUpdates({ uid: USER_UID, tourId: TOUR_ID, principalId: OWNER_ID }));
     await context.database(dbUrl).ref(`identity_bindings/${OWNER_KEY}/${USER_UID}`).set(true);
     await context.database(dbUrl).ref(PRIVATE_PATH).set({
-      sourceUrl: 'https://example.com/private.jpg',
+      storagePath: `private_tour_photos/${TOUR_ID}/${OWNER_KEY}/source.jpg`,
       userId: OWNER_ID,
       timestamp: Date.now(),
       variantStatus: 'ready',
-      viewerUrl: 'https://example.com/private-viewer.jpg',
-      thumbnailUrl: 'https://example.com/private-thumb.jpg',
+      viewerStoragePath: `private_tour_photos/${TOUR_ID}/${OWNER_KEY}/viewers/source_viewer.jpg`,
+      thumbnailStoragePath: `private_tour_photos/${TOUR_ID}/${OWNER_KEY}/thumbnails/source_thumb.jpg`,
       variantUpdatedAt: Date.now(),
       variantVersion: 2,
     });

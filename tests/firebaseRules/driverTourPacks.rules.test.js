@@ -9,6 +9,7 @@ const {
   assertSucceeds,
 } = require('@firebase/rules-unit-testing');
 const { createDriverTourPackActionService } = require('../../services/driverTourPackActionService');
+const { driverAuthorityUpdates } = require('./sessionFixtures');
 
 const PROJECT_ID = 'demo-llt-driver-tour-pack-rules';
 const rules = fs.readFileSync(path.resolve(__dirname, '../../database.rules.json'), 'utf8');
@@ -123,6 +124,7 @@ test.before(async () => {
         '5002D_1': { assigned_drivers: {} },
       },
     });
+    await db.ref().update(driverAuthorityUpdates({ uid: DRIVER_UID, driverId: DRIVER_ID, tourId: '5001D_1' }));
   });
 });
 
@@ -183,10 +185,10 @@ test('feature flags are exact-read, coherent-driver canaries with admin-only boo
   const allowlistedAdmin = testEnv.authenticatedContext('allowlisted-admin').database(databaseURL);
 
   await assertSucceeds(assigned.ref('driver_tour_pack_feature_flags/global').get());
-  await assertSucceeds(passenger.ref('driver_tour_pack_feature_flags/global').get());
+  await assertFails(passenger.ref('driver_tour_pack_feature_flags/global').get());
   await assertSucceeds(assigned.ref('driver_tour_pack_feature_flags/testflight').get());
   await assertSucceeds(assigned.ref(`driver_tour_pack_feature_flags/drivers/${DRIVER_ID}`).get());
-  await assertSucceeds(other.ref('driver_tour_pack_feature_flags/drivers/D-OTHER').get());
+  await assertFails(other.ref('driver_tour_pack_feature_flags/drivers/D-OTHER').get());
   await assertFails(assigned.ref('driver_tour_pack_feature_flags').get());
   await assertFails(assigned.ref('driver_tour_pack_feature_flags/drivers').get());
   await assertFails(assigned.ref('driver_tour_pack_feature_flags/drivers/D-OTHER').get());

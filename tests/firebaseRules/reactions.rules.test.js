@@ -7,6 +7,7 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
+const { passengerAuthorityUpdates, driverAuthorityUpdates } = require('./sessionFixtures');
 const { sendInternalDriverMessage } = require('../../services/chatService');
 const { toRealtimeKeySegment } = require('../../services/identityService');
 
@@ -29,7 +30,7 @@ const PASSENGER_AUTH_UID = 'passenger-auth-1';
 const PASSENGER_PRINCIPAL_ID = 'pax_v2_11111111111111111111111111111111';
 const PASSENGER_PRINCIPAL_KEY = toRealtimeKeySegment(PASSENGER_PRINCIPAL_ID);
 const UNATTACHED_AUTH_UID = 'unattached-auth-1';
-const INTERNAL_TOUR_ID = 'TOUR_INTERNAL_001';
+const INTERNAL_TOUR_ID = TOUR_ID;
 
 const parseHost = () => {
   const value = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
@@ -91,6 +92,12 @@ const seedMessage = async () => {
     await context.database(dbUrl).ref(`users/${PASSENGER_AUTH_UID}`).set({
       stablePassengerId: PASSENGER_PRINCIPAL_ID,
       privatePhotoOwnerId: PASSENGER_PRINCIPAL_ID,
+    });
+    await context.database(dbUrl).ref().update({
+      ...passengerAuthorityUpdates({ uid: 'userA', tourId: TOUR_ID }),
+      ...passengerAuthorityUpdates({ uid: PASSENGER_AUTH_UID, tourId: TOUR_ID, principalId: PASSENGER_PRINCIPAL_ID }),
+      ...passengerAuthorityUpdates({ uid: INCOMPLETE_SENDER_UID, tourId: TOUR_ID }),
+      ...driverAuthorityUpdates({ uid: DRIVER_AUTH_UID, driverId: DRIVER_ID, tourId: TOUR_ID }),
     });
   });
 };

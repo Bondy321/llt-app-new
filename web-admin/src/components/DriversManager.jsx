@@ -4,6 +4,12 @@ import { db } from '../firebase';
 import { applyDriverAssignmentMutation } from '../services/tourService';
 import { createDriver } from '../services/driverService';
 import { fetchDriverByExactId, fetchDriverDirectoryPage, subscribeToDriverDirectory } from '../services/adminDirectoryService';
+import {
+  APP_SESSION_REVOCATION_REASONS,
+  maskAppSessionId,
+  revokeAppSession,
+  subscribeToAppSession,
+} from '../services/appSessionAdminService';
 import { notifications } from '@mantine/notifications';
 import { formatDateTimeForDisplay } from '../utils/dateUtils';
 import {
@@ -31,6 +37,7 @@ import {
   Tabs,
   Alert,
   Pill,
+  Select,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
@@ -45,6 +52,7 @@ import {
   IconUserPlus,
   IconInfoCircle,
   IconCalendar,
+  IconShieldLock,
 } from '@tabler/icons-react';
 
 const normalizeAssignmentTourIdInput = (value) => {
@@ -212,9 +220,59 @@ function DriverDetailsPanel({ driverId, driver }) {
   const [newTourId, setNewTourId] = useState('');
   const [saving, setSaving] = useState(false);
   const [assigningTour, setAssigningTour] = useState(false);
+  const [appSession, setAppSession] = useState(null);
+  const [sessionLoading, setSessionLoading] = useState(Boolean(driver?.authUid));
+  const [sessionError, setSessionError] = useState('');
+  const [revokeOpened, setRevokeOpened] = useState(false);
+  const [revocationReason, setRevocationReason] = useState('');
+  const [revokingSession, setRevokingSession] = useState(false);
 
   const resolvedAssignedTourId = resolveAssignmentTourIdInput(driver?.currentTourId);
   const assignments = resolvedAssignedTourId ? [resolvedAssignedTourId] : [];
+
+  useEffect(() => {
+    setAppSession(null);
+    setSessionError('');
+    if (!driver?.authUid) {
+      setSessionLoading(false);
+      return undefined;
+    }
+    setSessionLoading(true);
+    return subscribeToAppSession({
+      authUid: driver.authUid,
+      onChange: (session) => {
+        setAppSession(session);
+        setSessionLoading(false);
+      },
+      onError: (error) => {
+        setSessionError(error?.message || 'Session status could not be loaded.');
+        setSessionLoading(false);
+      },
+    });
+  }, [driver?.authUid]);
+
+  const handleRevokeSession = async () => {
+    if (!appSession || !revocationReason) return;
+    setRevokingSession(true);
+    try {
+      await revokeAppSession({
+        authUid: driver.authUid,
+        sessionId: appSession.sessionId,
+        reason: revocationReason,
+      });
+      setRevokeOpened(false);
+      setRevocationReason('');
+      notifications.show({
+        title: 'App session ended',
+        message: `${driver.name || driverId} will be returned to secure login.`,
+        color: 'green',
+      });
+    } catch (error) {
+      notifications.show({ title: 'Session not ended', message: error.message, color: 'red' });
+    } finally {
+      setRevokingSession(false);
+    }
+  };
 
   const handleSaveDetails = async () => {
     setSaving(true);
@@ -422,6 +480,42 @@ function DriverDetailsPanel({ driverId, driver }) {
                 </Group>
               </Paper>
 
+              <Paper p="md" radius="md" withBorder>
+                <Stack gap="xs">
+                  <Group justify="space-between" align="flex-start">
+                    <Group gap="xs">
+                      <ThemeIcon variant="light" color="blue" size="md">
+                        <IconShieldLock size={16} />
+                      </ThemeIcon>
+                      <Box>
+                        <Text fw={600} size="sm">Mobile app session</Text>
+                        <Text size="xs" c="dimmed">Server-authorised access for this driver device</Text>
+                      </Box>
+                    </Group>
+                    <Badge color={appSession && !appSession.isExpired ? 'green' : 'gray'} variant="light">
+                      {sessionLoading ? 'Checking' : appSession && !appSession.isExpired ? 'Active' : 'No active session'}
+                    </Badge>
+                  </Group>
+                  {sessionError && <Alert color="red">{sessionError}</Alert>}
+                  {appSession && (
+                    <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
+                      <Text size="xs"><strong>Role:</strong> {appSession.principalType}</Text>
+                      <Text size="xs"><strong>Session:</strong> {maskAppSessionId(appSession.sessionId)}</Text>
+                      <Text size="xs"><strong>Tour:</strong> {appSession.tourId || 'Unassigned'}</Text>
+                      <Text size="xs"><strong>Expires:</strong> {formatDateTimeForDisplay(appSession.expiresAtMs, 'Unknown')}</Text>
+                    </SimpleGrid>
+                  )}
+                  {!driver?.authUid && (
+                    <Text size="xs" c="dimmed">This driver has not linked a mobile Firebase account yet.</Text>
+                  )}
+                  {appSession && !appSession.isExpired && (
+                    <Button color="red" variant="light" size="xs" onClick={() => setRevokeOpened(true)}>
+                      End app session
+                    </Button>
+                  )}
+                </Stack>
+              </Paper>
+
               <Button
                 onClick={handleSaveDetails}
                 loading={saving}
@@ -493,6 +587,33 @@ function DriverDetailsPanel({ driverId, driver }) {
           </Card>
         </Tabs.Panel>
       </Tabs>
+
+      <Modal
+        opened={revokeOpened}
+        onClose={() => !revokingSession && setRevokeOpened(false)}
+        title="End mobile app session?"
+        centered
+      >
+        <Stack>
+          <Alert color="orange" icon={<IconShieldLock size={18} />}>
+            This immediately removes tour, chat, photo and notification access from the current app session. It does not delete the driver account.
+          </Alert>
+          <Select
+            label="Reason"
+            placeholder="Select a reason"
+            data={APP_SESSION_REVOCATION_REASONS}
+            value={revocationReason}
+            onChange={(value) => setRevocationReason(value || '')}
+            required
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setRevokeOpened(false)} disabled={revokingSession}>Cancel</Button>
+            <Button color="red" onClick={handleRevokeSession} loading={revokingSession} disabled={!revocationReason}>
+              Confirm and end session
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Box>
   );
 }

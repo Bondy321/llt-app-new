@@ -4,6 +4,22 @@ const path = require('node:path');
 
 const SERVICE_PATH = path.resolve(__dirname, '../services/bookingServiceRealtime.js');
 const FIREBASE_PATH = path.resolve(__dirname, '../firebase.js');
+const CURRENT_SESSION = {
+  schemaVersion: 1,
+  sessionId: 'sess_v1_0123456789abcdef0123456789abcdef',
+  principalType: 'driver',
+  principalId: 'driver:D-BONDY',
+  driverId: 'D-BONDY',
+  tourId: '5112D_8',
+  issuedAtMs: Date.now() - 1_000,
+  expiresAtMs: Date.now() + 60_000,
+  sessionRevision: 1,
+};
+const UPDATED_SESSION = { ...CURRENT_SESSION, tourId: '6000A_1', sessionRevision: 2 };
+const createSessionApi = () => ({
+  readSession: async () => CURRENT_SESSION,
+  persistSession: async (session) => session,
+});
 
 const loadService = ({ currentUser = { uid: 'driver-auth-1', getIdToken: async () => 'driver-id-token' } } = {}) => {
   const previousNodeEnv = process.env.NODE_ENV;
@@ -55,24 +71,29 @@ test('assignDriverToTour uses the authenticated server endpoint and returns cano
             tourId: '6000A_1',
             tourCode: '6000A 1',
             previousTourId: '5112D_8',
+            session: UPDATED_SESSION,
           }),
         };
       };
 
       const service = loadService();
-      const result = await service.assignDriverToTour('d-bondy', '6000a 1');
+      const result = await service.assignDriverToTour('d-bondy', '6000a 1', {
+        appSessionService: createSessionApi(),
+      });
 
       assert.equal(capturedRequest.url, 'https://europe-west1-demo-project.cloudfunctions.net/assignDriverToTour');
       assert.equal(capturedRequest.options.headers.Authorization, 'Bearer driver-id-token');
       assert.deepEqual(JSON.parse(capturedRequest.options.body), {
         driverId: 'D-BONDY',
         tourCode: '6000a 1',
+        expectedSessionId: CURRENT_SESSION.sessionId,
       });
       assert.deepEqual(result, {
         success: true,
         tourId: '6000A_1',
         tourCode: '6000A 1',
         previousTourId: '5112D_8',
+        session: UPDATED_SESSION,
       });
     } finally {
       global.fetch = originalFetch;
@@ -92,7 +113,7 @@ test('assignDriverToTour maps an occupied tour to dispatch-safe user copy', asyn
       const service = loadService();
 
       await assert.rejects(
-        service.assignDriverToTour('D-BONDY', '6000A 1'),
+        service.assignDriverToTour('D-BONDY', '6000A 1', { appSessionService: createSessionApi() }),
         /already has another driver assigned/i,
       );
     } finally {
@@ -113,7 +134,7 @@ test('assignDriverToTour refuses to call the backend without an authenticated to
       const service = loadService({ currentUser: { uid: 'driver-auth-1' } });
 
       await assert.rejects(
-        service.assignDriverToTour('D-BONDY', '6000A 1'),
+        service.assignDriverToTour('D-BONDY', '6000A 1', { appSessionService: createSessionApi() }),
         /secure driver access is still starting/i,
       );
       assert.equal(fetchCalled, false);
@@ -135,7 +156,7 @@ test('assignDriverToTour rejects malformed backend responses without changing lo
       const service = loadService();
 
       await assert.rejects(
-        service.assignDriverToTour('D-BONDY', '6000A 1'),
+        service.assignDriverToTour('D-BONDY', '6000A 1', { appSessionService: createSessionApi() }),
         /unexpected response/i,
       );
     } finally {

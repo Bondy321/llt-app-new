@@ -6,6 +6,7 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
+const { passengerAuthorityUpdates, driverAuthorityUpdates } = require('./sessionFixtures');
 
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const PROJECT_ID = 'demo-llt-manifest-rules';
@@ -91,6 +92,10 @@ test.before(async () => {
       driverPrincipalId: `driver:${OTHER_DRIVER_ID}`,
       driverAssignedTourId: 'OTHER_TOUR',
       principalType: 'driver',
+    });
+    await db.ref().update({
+      ...passengerAuthorityUpdates({ uid: PASSENGER_AUTH_UID, tourId: TOUR_ID, bookingRef: BOOKING_REF }),
+      ...driverAuthorityUpdates({ uid: DRIVER_AUTH_UID, driverId: DRIVER_ID, tourId: TOUR_ID }),
     });
   });
 });

@@ -6,6 +6,7 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
+const { passengerAuthorityUpdates } = require('./sessionFixtures');
 
 const PROJECT_ID = 'demo-llt-safety-alert-rules';
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
@@ -53,6 +54,7 @@ test.before(async () => {
         },
       },
     });
+    await context.database(dbUrl).ref().update(passengerAuthorityUpdates({ uid: PASSENGER_UID, tourId: TOUR_ID }));
   });
 });
 

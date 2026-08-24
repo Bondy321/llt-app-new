@@ -464,6 +464,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         }, { remote: true, reason: 'Login:offline_login_resolved' });
         await onLoginSuccess(normalizedReference, offlineCheck.tour, offlineCheck.identity, offlineCheck.type, {
           offlineMode: true,
+          appSession: offlineCheck.appSession || null,
           loginDiagnostics: loginDiagnosticContext,
           loginDiagnosticId: loginDiagnosticContext.attemptId,
         });
@@ -525,6 +526,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         await onLoginSuccess(normalizedReference, result.tour, loginData, result.type, {
           loginDiagnostics: loginDiagnosticContext,
           loginDiagnosticId: loginDiagnosticContext.attemptId,
+          appSession: result.session || null,
         });
         await loginDiagnostics.recordLoginDiagnostic('login_success_handoff_completed', {
           loginMode: result.type || loginMode,

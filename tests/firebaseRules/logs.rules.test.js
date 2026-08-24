@@ -6,6 +6,7 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
+const { passengerAuthorityUpdates } = require('./sessionFixtures');
 
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const USER_UID = 'mobile-log-user-1';
@@ -30,6 +31,9 @@ test.before(async () => {
   testEnv = await initializeTestEnvironment({
     projectId: PROJECT_ID,
     database: { host: emulator.host, port: emulator.port, rules },
+  });
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref().update(passengerAuthorityUpdates({ uid: USER_UID, tourId: 'LOG_TOUR' }));
   });
 });
 

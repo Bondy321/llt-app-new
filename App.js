@@ -17,6 +17,8 @@ import * as photoService from './services/photoService';
 import { processOfflineQueue as processOfflineSafetyQueue } from './services/safetyService';
 import offlineLoginResolver from './services/offlineLoginResolver';
 import driverOperationalLifecycleService from './services/driverOperationalLifecycleService';
+import appSessionService from './services/appSessionService';
+import localSessionCleanupService from './services/localSessionCleanupService';
 import driverTourPackService from './services/driverTourPackService';
 import useDriverTourPack from './hooks/useDriverTourPack';
 import useDriverTourPackActions from './hooks/useDriverTourPackActions';
@@ -62,6 +64,7 @@ import PassengerManifestScreen from './screens/PassengerManifestScreen';
 import SafetySupportScreen from './screens/SafetySupportScreen';
 import DriverItineraryScreen from './screens/DriverItineraryScreen';
 import DriverTourPackScreen from './screens/DriverTourPackScreen';
+import LogoutPendingScreen from './screens/LogoutPendingScreen';
 const { getLoginTransitionDurationMs } = require('./screens/loginFlow');
 const { isEligibleEdgeSwipe, shouldCommitEdgeSwipeHome } = require('./services/swipeHomeNavigation');
 const { markNotificationRead } = require('./services/notificationInboxService');
@@ -172,6 +175,8 @@ function AppContent() {
   const [tourData, setTourData] = useState(null);
   const [bookingData, setBookingData] = useState(null);
   const [identityBinding, setIdentityBinding] = useState(null);
+  const [appSession, setAppSession] = useState(null);
+  const [logoutStatus, setLogoutStatus] = useState({ state: 'idle', error: null, diagnostic: null });
   
   // State for passing params between screens manually (since we aren't using React Navigation stack)
   const [screenParams, setScreenParams] = useState({});
@@ -188,6 +193,9 @@ function AppContent() {
   const driverLifecyclePurgeRef = useRef(null);
   const driverAssignmentChangeRef = useRef(null);
   const assignmentValidationSeqRef = useRef(0);
+  const appSessionListenerRef = useRef(null);
+  const sessionGenerationRef = useRef(0);
+  const logoutContextRef = useRef(null);
   const routeHistoryRef = useRef(createAppRouteHistory());
 
   const isDriverSession = bookingData?.id && bookingData.id.startsWith('D-');
@@ -248,15 +256,17 @@ function AppContent() {
   const diagnosticsRole = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
   const offlineSessionScope = useMemo(() => {
     const principalId = canonicalIdentity?.principalId;
-    if (!diagnosticsTourId || !principalId || principalId === 'anonymous') return null;
+    if (!appSession || !diagnosticsTourId || !principalId || principalId === 'anonymous'
+      || appSession.tourId !== diagnosticsTourId || appSession.principalId !== principalId) return null;
     return {
       tourId: diagnosticsTourId,
       principalId,
       role: diagnosticsRole,
       authUid: canonicalIdentity?.authUid || null,
       cacheOwnerId: bookingData?.id || principalId,
+      sessionId: appSession.sessionId,
     };
-  }, [bookingData?.id, canonicalIdentity?.authUid, canonicalIdentity?.principalId, diagnosticsRole, diagnosticsTourId]);
+  }, [appSession, bookingData?.id, canonicalIdentity?.authUid, canonicalIdentity?.principalId, diagnosticsRole, diagnosticsTourId]);
   const offlineSessionScopeKey = offlineSessionScope
     ? `${offlineSessionScope.tourId}|${offlineSessionScope.role}|${offlineSessionScope.principalId}|${offlineSessionScope.cacheOwnerId}`
     : 'none';
@@ -667,11 +677,6 @@ function AppContent() {
     let unsubscribe = null;
     try {
       setAuthError(null);
-      await restoreSession();
-      if (typeof authUnsubscribeRef.current === 'function') authUnsubscribeRef.current();
-      unsubscribe = authHelpers.onAuthStateChanged(handleAuthStateChange);
-      authUnsubscribeRef.current = unsubscribe;
-
       const currentUser = await authHelpers.ensureAuthenticated();
       if (currentUser) {
         setUser(currentUser);
@@ -683,8 +688,65 @@ function AppContent() {
           authUidMasked: maskIdentifier(currentUser.uid),
         }, { remote: true, reason: 'Auth:ensure_authenticated' });
         logger.info('Auth', 'User authenticated', { uid: maskIdentifier(currentUser.uid) });
-        await hydrateIdentityBindingForCurrentUser(currentUser.uid);
       }
+
+      const pendingEnd = await appSessionService.readPendingEnd();
+      if (pendingEnd) {
+        const [savedTourEntry, savedBookingEntry] = await SessionStorage.multiGet([
+          SESSION_KEYS.TOUR_DATA,
+          SESSION_KEYS.BOOKING_DATA,
+        ]);
+        const cachedForCleanup = await appSessionService.readSession({ allowExpired: true });
+        const parseSaved = (entry) => {
+          try { return entry?.[1] ? JSON.parse(entry[1]) : null; } catch { return null; }
+        };
+        await localSessionCleanupService.cleanup({
+          authUid: currentUser?.uid || pendingEnd.authUid,
+          appSession: cachedForCleanup,
+          bookingData: parseSaved(savedBookingEntry),
+          tourData: parseSaved(savedTourEntry),
+        });
+        await restoreSession(null);
+        setAppSession(null);
+        setLogoutStatus({
+          state: 'pending_network',
+          error: 'We still need to confirm logout with the server.',
+          diagnostic: pendingEnd.sessionId.slice(-6),
+        });
+      } else {
+        const cachedSession = await appSessionService.readSession();
+        let activeSession = cachedSession;
+        if (cachedSession && currentUser?.uid) {
+          try {
+            const verification = await appSessionService.verifyCurrent({
+              authUid: currentUser.uid,
+              expectedSession: cachedSession,
+            });
+            activeSession = verification.valid ? verification.session : null;
+            if (activeSession) await appSessionService.persistSession(activeSession);
+          } catch (error) {
+            // A still-unexpired cached session is the only bounded offline restore.
+            // Reconnect validation and the remote listener remain mandatory.
+            activeSession = cachedSession;
+            logger.warn('Session', 'Secure session verification deferred while offline', {
+              error: error?.message || String(error),
+            });
+          }
+        }
+        if (!activeSession) {
+          await appSessionService.clearSession();
+          await restoreSession(null);
+          setAppSession(null);
+        } else {
+          setAppSession(activeSession);
+          await restoreSession(activeSession);
+          await hydrateIdentityBindingForCurrentUser(currentUser.uid);
+        }
+      }
+
+      if (typeof authUnsubscribeRef.current === 'function') authUnsubscribeRef.current();
+      unsubscribe = authHelpers.onAuthStateChanged(handleAuthStateChange);
+      authUnsubscribeRef.current = unsubscribe;
 
       setInitializing(false);
       return unsubscribe;
@@ -725,8 +787,17 @@ function AppContent() {
     if (initializing) setInitializing(false);
   };
 
-  const restoreSession = async () => {
+  const restoreSession = async (validAppSession) => {
     try {
+      if (!validAppSession) {
+        await SessionStorage.multiRemove([
+          SESSION_KEYS.TOUR_DATA,
+          SESSION_KEYS.BOOKING_DATA,
+          SESSION_KEYS.LAST_SCREEN,
+          SESSION_KEYS.IDENTITY_BINDING,
+        ]);
+        return false;
+      }
       const [savedTourData, savedBookingData, lastScreen, savedIdentityBinding] = await SessionStorage.multiGet([
         SESSION_KEYS.TOUR_DATA,
         SESSION_KEYS.BOOKING_DATA,
@@ -768,9 +839,21 @@ function AppContent() {
         const tourData = isDriverBooking
           ? storedTourData
           : normalizePassengerTourProjection(storedTourData, storedTourData?.id);
-        if (!bookingData || !tourData) {
-          logger.warn('Session', 'Passenger session requires a secure online refresh');
-          return;
+        const matchesRole = isDriverBooking
+          ? validAppSession.principalType === 'driver'
+            && validAppSession.driverId === bookingData?.id
+          : validAppSession.principalType === 'passenger'
+            && validAppSession.principalId === bookingData?.stablePassengerId;
+        const matchesTour = validAppSession.tourId === (tourData?.id || bookingData?.assignedTourId || null);
+        if (!bookingData || !matchesRole || !matchesTour || (validAppSession.tourId && !tourData)) {
+          await SessionStorage.multiRemove([
+            SESSION_KEYS.TOUR_DATA,
+            SESSION_KEYS.BOOKING_DATA,
+            SESSION_KEYS.LAST_SCREEN,
+            SESSION_KEYS.IDENTITY_BINDING,
+          ]);
+          logger.warn('Session', 'Saved app data does not match the active secure session');
+          return false;
         }
         if (!isDriverBooking) {
           await SessionStorage.multiSet([
@@ -788,9 +871,12 @@ function AppContent() {
         const restoredScreen = screen === 'Login' || screen === 'NotificationPreferences' ? fallbackScreen : screen;
         routeHistoryRef.current.reset();
         setCurrentScreen(restoredScreen);
+        return true;
       }
+      return false;
     } catch (error) {
       logger.warn('Session', 'Failed to restore session', { error: error.message });
+      return false;
     }
   };
 
@@ -1018,15 +1104,33 @@ function AppContent() {
     };
   }, [currentDriverLifecycleScopeKey, user?.uid]);
 
-  const resolveOfflineLogin = async (reference, normalizedEmail) => resolveOfflineLoginFromCache({
-    reference,
-    normalizedEmail,
-    sessionStorage: SessionStorage,
-    sessionKeys: SESSION_KEYS,
-    offlineSyncService,
-    maskIdentifier,
-    logger,
-  });
+  const resolveOfflineLogin = async (reference, normalizedEmail) => {
+    if (await appSessionService.readPendingEnd()) {
+      return { success: false, reason: 'LOGOUT_PENDING', error: 'Logout must finish online before this device can reopen a tour.' };
+    }
+    const cachedAppSession = await appSessionService.readSession();
+    if (!cachedAppSession) {
+      return { success: false, reason: 'ONLINE_VERIFICATION_REQUIRED', error: 'Connect to the internet to start a secure tour session.' };
+    }
+    const result = await resolveOfflineLoginFromCache({
+      reference,
+      normalizedEmail,
+      sessionStorage: SessionStorage,
+      sessionKeys: SESSION_KEYS,
+      offlineSyncService,
+      maskIdentifier,
+      logger,
+    });
+    if (!result?.success) return result;
+    const identityId = result.type === 'driver' ? result.identity?.id : result.identity?.stablePassengerId;
+    const expectedTourId = result.tour?.id || result.identity?.assignedTourId || null;
+    if (cachedAppSession.principalType !== result.type
+      || cachedAppSession.principalId !== (result.type === 'driver' ? `driver:${identityId}` : identityId)
+      || cachedAppSession.tourId !== expectedTourId) {
+      return { success: false, reason: 'SESSION_SCOPE_MISMATCH', error: 'Saved tour data no longer matches this secure session. Reconnect to sign in.' };
+    }
+    return { ...result, appSession: cachedAppSession };
+  };
 
   const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger', options = {}) => {
     const targetScreen = userType === 'driver' ? 'DriverHome' : 'TourHome';
@@ -1059,6 +1163,24 @@ function AppContent() {
       alreadyHydrated: Boolean(options?.alreadyHydrated),
       offlineMode: Boolean(options?.offlineMode),
     }, { remote: true, reason: 'Auth:login_success_handler_started' });
+    const verifiedAppSession = options?.appSession || await appSessionService.readSession();
+    const expectedPrincipalId = userType === 'driver'
+      ? `driver:${bookingOrDriverData?.id}`
+      : bookingOrDriverData?.stablePassengerId;
+    const expectedTourId = tourDetails?.id || bookingOrDriverData?.assignedTourId || null;
+    if (!verifiedAppSession
+      || verifiedAppSession.principalType !== userType
+      || verifiedAppSession.principalId !== expectedPrincipalId
+      || verifiedAppSession.tourId !== expectedTourId) {
+      const sessionError = new Error('Secure app session unavailable');
+      sessionError.userMessage = 'We could not establish a secure app session. Please reconnect and sign in again.';
+      throw sessionError;
+    }
+    await appSessionService.persistSession(verifiedAppSession);
+    await appSessionService.clearPendingEnd();
+    sessionGenerationRef.current += 1;
+    setAppSession(verifiedAppSession);
+    setLogoutStatus({ state: 'idle', error: null, diagnostic: null });
     const durationMs = getLoginTransitionDurationMs({ alreadyHydrated: options?.alreadyHydrated });
     const showInterstitial = !options?.alreadyHydrated;
     if (showInterstitial) {
@@ -1562,51 +1684,147 @@ function AppContent() {
     }
   };
 
-  const handleLogout = async () => {
-    const authUid = user?.uid || auth?.currentUser?.uid || null;
-    const [scopeResult, tokenResult, operationalPurgeResult, notificationCacheResult] = await Promise.allSettled([
-      offlineSyncService.setActiveSessionScope(null),
-      authUid ? deactivatePushToken(authUid) : Promise.resolve({ success: true }),
-      currentDriverLifecycleScope
-        ? driverOperationalLifecycleService.purge(currentDriverLifecycleScope)
-        : Promise.resolve({ success: true }),
-      authUid ? clearNotificationFeedCache({ userId: authUid }) : Promise.resolve(0),
-    ]);
-
-    if (scopeResult.status === 'rejected') {
-      logger.warn('Auth', 'Offline session scope could not be cleared during logout', {
-        error: scopeResult.reason?.message || String(scopeResult.reason),
-      });
-    }
-    if (tokenResult.status === 'rejected' || tokenResult.value?.success === false) {
-      logger.warn('Auth', 'Push token could not be deactivated during logout', {
-        error: tokenResult.status === 'rejected'
-          ? (tokenResult.reason?.message || String(tokenResult.reason))
-          : tokenResult.value?.error,
-      });
-    }
-    if (operationalPurgeResult.status === 'rejected' || operationalPurgeResult.value?.success === false) {
-      const failures = operationalPurgeResult.status === 'fulfilled'
-        ? operationalPurgeResult.value?.failures?.map((failure) => failure.name) || []
-        : [];
-      logger.warn('Auth', 'Driver operational data could not be completely purged during logout', {
-        failedOperations: failures,
-        error: operationalPurgeResult.status === 'rejected'
-          ? (operationalPurgeResult.reason?.message || String(operationalPurgeResult.reason))
-          : operationalPurgeResult.value?.error,
-      });
-    }
-    if (notificationCacheResult.status === 'rejected') {
-      logger.warn('Auth', 'Saved notification updates could not be cleared during logout', {
-        error: notificationCacheResult.reason?.message || String(notificationCacheResult.reason),
-      });
-    }
-
+  const purgeLocalSession = async ({ capturedSession = appSession } = {}) => {
+    const result = await localSessionCleanupService.cleanup({
+      authUid: user?.uid || auth?.currentUser?.uid || null,
+      appSession: capturedSession,
+      bookingData,
+      tourData,
+      driverOperationalScope: currentDriverLifecycleScope,
+    });
     previousDriverOperationalScopeRef.current = null;
     driverLifecyclePurgeRef.current = null;
     setDriverSessionGeneration((value) => value + 1);
+    setAppSession(null);
     await clearSessionState();
+    return result;
   };
+
+  const handleLogout = async () => {
+    const authUid = user?.uid || auth?.currentUser?.uid || null;
+    const capturedSession = appSession;
+    logoutContextRef.current = {
+      authUid,
+      appSession: capturedSession,
+      bookingData,
+      tourData,
+      driverOperationalScope: currentDriverLifecycleScope,
+    };
+    if (!authUid || !capturedSession) {
+      const cleanup = await purgeLocalSession({ capturedSession });
+      if (cleanup.success) await appSessionService.completeEnd();
+      return;
+    }
+    setLogoutStatus({ state: 'requesting', error: null, diagnostic: capturedSession.sessionId.slice(-6) });
+    const serverResult = await appSessionService.endSession({ authUid, session: capturedSession });
+    if (serverResult.reason === 'SESSION_CHANGED') {
+      try {
+        const current = await appSessionService.verifyCurrent({ authUid, expectedSession: capturedSession });
+        if (current.reason === 'SESSION_CHANGED' && current.session) {
+          await appSessionService.persistSession(current.session);
+          await appSessionService.clearPendingEnd();
+          setAppSession(current.session);
+          setLogoutStatus({ state: 'idle', error: null, diagnostic: null });
+          return;
+        }
+      } catch (error) {
+        logger.warn('Auth', 'Could not resolve changed session after logout response', { error: error?.message || String(error) });
+      }
+    }
+
+    const cleanup = await purgeLocalSession({ capturedSession });
+    if (!cleanup.success) {
+      setLogoutStatus({
+        state: 'failed',
+        error: 'Some private data could not be removed from this device. Try again before continuing.',
+        diagnostic: capturedSession.sessionId.slice(-6),
+      });
+      return;
+    }
+    if (serverResult.success) {
+      await appSessionService.completeEnd();
+      logoutContextRef.current = null;
+      setLogoutStatus({ state: 'complete', error: null, diagnostic: null });
+      return;
+    }
+    setLogoutStatus({
+      state: 'pending_network',
+      error: serverResult.reason === 'NETWORK_ERROR'
+        ? 'We could not reach the server. Logout will finish automatically when you reconnect.'
+        : 'The server could not confirm logout yet. Try again when connected.',
+      diagnostic: capturedSession.sessionId.slice(-6),
+    });
+  };
+
+  const retryPendingLogout = useCallback(async () => {
+    if (logoutStatus.state === 'requesting') return;
+    setLogoutStatus((current) => ({ ...current, state: 'requesting', error: null }));
+    if (logoutStatus.state === 'failed') {
+      const cleanup = await localSessionCleanupService.cleanup(logoutContextRef.current || {});
+      if (!cleanup.success) {
+        setLogoutStatus((current) => ({
+          ...current,
+          state: 'failed',
+          error: 'Some private data still could not be removed from this device. Please try again.',
+        }));
+        return;
+      }
+    }
+    const result = await appSessionService.retryPendingEnd();
+    if (result.success) {
+      await appSessionService.completeEnd();
+      logoutContextRef.current = null;
+      setLogoutStatus({ state: 'complete', error: null, diagnostic: null });
+      setCurrentScreen('Login');
+      return;
+    }
+    setLogoutStatus((current) => ({
+      ...current,
+      state: 'pending_network',
+      error: result.reason === 'NETWORK_ERROR'
+        ? 'We still cannot reach the server. We will keep trying when the connection returns.'
+        : 'Logout is still awaiting server confirmation. Please try again.',
+    }));
+  }, [logoutStatus.state]);
+
+  useEffect(() => {
+    if (!isConnected || logoutStatus.state !== 'pending_network') return;
+    retryPendingLogout();
+  }, [isConnected, logoutStatus.state, retryPendingLogout]);
+
+  useEffect(() => {
+    if (typeof appSessionListenerRef.current === 'function') appSessionListenerRef.current();
+    appSessionListenerRef.current = null;
+    if (!appSession || !user?.uid || logoutStatus.state !== 'idle') return undefined;
+    const generation = ++sessionGenerationRef.current;
+    const unsubscribe = appSessionService.subscribe({
+      authUid: user.uid,
+      expectedSession: appSession,
+      onRevoked: async ({ reason }) => {
+        if (generation !== sessionGenerationRef.current) return;
+        setLogoutStatus({ state: 'requesting', error: null, diagnostic: appSession.sessionId.slice(-6) });
+        const cleanup = await purgeLocalSession({ capturedSession: appSession });
+        if (cleanup.success) {
+          await appSessionService.completeEnd();
+          setLogoutStatus({ state: 'complete', error: null, diagnostic: null });
+        } else {
+          setLogoutStatus({
+            state: 'failed',
+            error: 'Your session ended remotely, but some local data still needs to be removed. Try again.',
+            diagnostic: appSession.sessionId.slice(-6),
+          });
+        }
+        logger.info('Auth', 'Remote app session revocation handled', { reason });
+      },
+      onError: (error) => logger.warn('Session', 'Remote session listener paused', { error: error?.message || String(error) }),
+    });
+    appSessionListenerRef.current = unsubscribe;
+    return () => {
+      sessionGenerationRef.current += 1;
+      unsubscribe();
+      if (appSessionListenerRef.current === unsubscribe) appSessionListenerRef.current = null;
+    };
+  }, [appSession?.sessionId, logoutStatus.state, user?.uid]);
 
   const handleAccountDeleted = async (summary = {}) => {
     try {
@@ -1636,6 +1854,7 @@ function AppContent() {
       previousDriverOperationalScopeRef.current = null;
       driverLifecyclePurgeRef.current = null;
       setDriverSessionGeneration((value) => value + 1);
+      setAppSession(null);
       await clearSessionState({ includeNotificationOnboarding: true });
       setUser(auth?.currentUser || null);
     } catch (error) {
@@ -1660,6 +1879,20 @@ function AppContent() {
         <ActivityIndicator size="large" color={COLORS.primaryBlue} />
         <Text style={styles.loadingText}>Connecting to Tour Services...</Text>
       </SafeAreaView>
+    );
+  }
+
+  if (logoutStatus.state === 'requesting'
+    || logoutStatus.state === 'pending_network'
+    || logoutStatus.state === 'failed') {
+    return (
+      <LogoutPendingScreen
+        isConnected={isConnected}
+        isRetrying={logoutStatus.state === 'requesting'}
+        error={logoutStatus.error}
+        diagnostic={logoutStatus.diagnostic}
+        onRetry={retryPendingLogout}
+      />
     );
   }
 

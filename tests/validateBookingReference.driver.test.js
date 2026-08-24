@@ -5,6 +5,32 @@ const path = require('node:path');
 const SERVICE_PATH = path.resolve(__dirname, '../services/bookingServiceRealtime.js');
 const FIREBASE_PATH = path.resolve(__dirname, '../firebase.js');
 
+const verifiedDriverPayload = (overrides = {}) => ({
+  valid: true,
+  type: 'driver',
+  driver: {
+    id: 'D-BONDY',
+    name: 'Bondy',
+    assignedTourId: '5112D_8',
+    assignedTourCode: '5112D 8',
+    hasAssignedTour: true,
+  },
+  tour: { id: '5112D_8', name: 'Highlands', tourCode: '5112D 8', isActive: true },
+  assignmentStatus: 'ASSIGNED',
+  session: {
+    schemaVersion: 1,
+    sessionId: 'sess_v1_0123456789abcdef0123456789abcdef',
+    principalType: 'driver',
+    principalId: 'driver:D-BONDY',
+    driverId: 'D-BONDY',
+    tourId: '5112D_8',
+    issuedAtMs: Date.now() - 1_000,
+    expiresAtMs: Date.now() + 60_000,
+    sessionRevision: 1,
+  },
+  ...overrides,
+});
+
 const withEnv = async (patch, callback) => {
   const previous = {};
   Object.keys(patch).forEach((key) => {
@@ -75,7 +101,7 @@ const loadServiceWithDb = (state, options = {}) => {
   return service;
 };
 
-test('validateBookingReference returns driver tour payload when current tour exists', async () => {
+test('validateBookingReference refuses the removed direct-database driver fallback', async () => {
   await withoutDriverVerifierConfig(async () => {
     const service = loadServiceWithDb({
       drivers: {
@@ -88,18 +114,12 @@ test('validateBookingReference returns driver tour payload when current tour exi
 
     const result = await service.validateBookingReference('d-bondy');
 
-    assert.equal(result.valid, true);
-    assert.equal(result.type, 'driver');
-    assert.equal(result.driver.id, 'D-BONDY');
-    assert.equal(result.driver.assignedTourId, '5112D_8');
-    assert.equal(result.driver.hasAssignedTour, true);
-    assert.equal(result.assignmentStatus, 'ASSIGNED');
-    assert.equal(result.tour.id, '5112D_8');
-    assert.equal(result.tour.name, 'Highlands');
+    assert.equal(result.valid, false);
+    assert.match(result.error, /temporarily unavailable/i);
   });
 });
 
-test('validateBookingReference returns null tour and UNASSIGNED for drivers without assignment', async () => {
+test('validateBookingReference does not use unassigned durable driver data as authority', async () => {
   await withoutDriverVerifierConfig(async () => {
     const service = loadServiceWithDb({
       drivers: {
@@ -110,16 +130,12 @@ test('validateBookingReference returns null tour and UNASSIGNED for drivers with
 
     const result = await service.validateBookingReference('D-SMITH');
 
-    assert.equal(result.valid, true);
-    assert.equal(result.type, 'driver');
-    assert.equal(result.driver.assignedTourId, null);
-    assert.equal(result.driver.hasAssignedTour, false);
-    assert.equal(result.tour, null);
-    assert.equal(result.assignmentStatus, 'UNASSIGNED');
+    assert.equal(result.valid, false);
+    assert.match(result.error, /temporarily unavailable/i);
   });
 });
 
-test('validateBookingReference keeps driver auto-detect based on D- prefix', async () => {
+test('validateBookingReference keeps D-prefix routing without direct verification fallback', async () => {
   await withoutDriverVerifierConfig(async () => {
     const service = loadServiceWithDb({
       drivers: {
@@ -130,9 +146,8 @@ test('validateBookingReference keeps driver auto-detect based on D- prefix', asy
 
     const result = await service.validateBookingReference('d-macleod');
 
-    assert.equal(result.valid, true);
-    assert.equal(result.type, 'driver');
-    assert.equal(result.driver.id, 'D-MACLEOD');
+    assert.equal(result.valid, false);
+    assert.match(result.error, /temporarily unavailable/i);
   });
 });
 
@@ -147,19 +162,7 @@ test('validateBookingReference uses verified driver endpoint when configured', a
       return {
         ok: true,
         status: 200,
-        json: async () => ({
-          valid: true,
-          type: 'driver',
-          driver: {
-            id: 'D-BONDY',
-            name: 'Bondy',
-            assignedTourId: '5112D_8',
-            assignedTourCode: '5112D 8',
-            hasAssignedTour: true,
-          },
-          tour: { id: '5112D_8', name: 'Highlands', tourCode: '5112D 8', isActive: true },
-          assignmentStatus: 'ASSIGNED',
-        }),
+        json: async () => verifiedDriverPayload(),
       };
     };
 
@@ -196,19 +199,7 @@ test('validateBookingReference ignores driver verifier URL that points at passen
       return {
         ok: true,
         status: 200,
-        json: async () => ({
-          valid: true,
-          type: 'driver',
-          driver: {
-            id: 'D-BONDY',
-            name: 'Bondy',
-            assignedTourId: '5112D_8',
-            assignedTourCode: '5112D 8',
-            hasAssignedTour: true,
-          },
-          tour: { id: '5112D_8', name: 'Highlands', tourCode: '5112D 8', isActive: true },
-          assignmentStatus: 'ASSIGNED',
-        }),
+        json: async () => verifiedDriverPayload(),
       };
     };
 

@@ -41,6 +41,27 @@ const {
   ensureOpaquePassengerIdentity,
   isOpaquePassengerId,
 } = require('./lib/passengerIdentity');
+const {
+  buildDriverSessionRecord,
+  buildPassengerParticipantRecord,
+  buildPassengerSessionRecord,
+  calculateSessionExpiry,
+  createAppSessionId,
+  isActiveSessionRecord,
+  isValidAppSessionId,
+  toClientSession,
+} = require('./lib/appSession');
+const {
+  acquireAppSessionLock,
+  releaseAppSessionLock,
+} = require('./lib/appSessionLock');
+const { verifyActiveAppSession } = require('./lib/appSessionAccess');
+const {
+  buildAppSessionCleanupUpdates,
+  buildAppSessionEvent,
+  cleanupAppSession,
+  cleanupDriverLocationForSession,
+} = require('./lib/appSessionCleanup');
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -62,7 +83,8 @@ const LEGACY_NOTIFICATION_READ_CLEANUP_STATE_PATH = 'notification_read_legacy_cl
 const LEGACY_NOTIFICATION_READ_CLEANUP_QUEUE_PATH = 'notification_read_legacy_cleanup_queue';
 const LEGACY_NOTIFICATION_READ_CLEANUP_SEED_BATCH_SIZE = 200;
 const userProfileCache = new Map();
-const PHOTO_CACHE_CONTROL_HEADER = "public,max-age=31536000,immutable";
+const PHOTO_CACHE_CONTROL_HEADER = "private,max-age=300,no-transform";
+const PRIVATE_PHOTO_CACHE_CONTROL_HEADER = "private,no-store";
 const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
 const VERIFIED_LOGIN_GRANT_TTL_MS = 30 * 60 * 1000;
 const MANUAL_BOOKING_LOCK_TTL_MS = 30 * 1000;
@@ -536,6 +558,39 @@ const fetchUsersSnapshot = async (participantIds = [], context = {}) => {
   });
 
   return usersMap;
+};
+
+const filterOperationalRecipientsByActiveSession = async ({
+  recipientIds = [],
+  tourId,
+  participants = {},
+  allowOperationsAdmins = false,
+  db = admin.database(),
+} = {}) => {
+  const uniqueIds = [...new Set(recipientIds.filter((uid) => isValidFirebaseKey(uid)))];
+  const allowed = [];
+  for (const chunk of chunkArrayDeterministically(uniqueIds, USER_PROFILE_FETCH_CHUNK_SIZE)) {
+    const snapshots = await Promise.all(chunk.map((uid) => db.ref(`app_sessions/${uid}`).once('value')));
+    snapshots.forEach((snapshot, index) => {
+      const uid = chunk[index];
+      if (allowOperationsAdmins && uid === OPERATIONS_ADMIN_UID) {
+        allowed.push(uid);
+        return;
+      }
+      const session = snapshot.val();
+      if (!isActiveSessionRecord(session) || session.authUid !== uid || session.tourId !== tourId) return;
+      if (session.principalType === 'passenger') {
+        const participant = participants?.[uid];
+        if (!participant
+          || participant.schemaVersion !== 2
+          || participant.sessionId !== session.sessionId
+          || participant.principalId !== session.principalId
+          || Number(participant.sessionExpiresAtMs) <= Date.now()) return;
+      }
+      allowed.push(uid);
+    });
+  }
+  return allowed;
 };
 
 const selectNotificationRecipients = ({
@@ -2118,6 +2173,7 @@ const buildManualPassengerBookingUpdates = ({
       [`tours/${normalized.tourId}/manifestPassengerCount`]: totalPassengerCount,
     },
   };
+
 };
 
 const verifyOperationsAdminAccess = async ({ authUid, db = admin.database() }) => {
@@ -2406,6 +2462,106 @@ const buildVerifiedLoginGrantUpdates = ({
     [`tour_access_grants/${tourId}/${authUid}`]: grantPayload,
     [`booking_access_grants/${bookingRef}/${authUid}`]: grantPayload,
   };
+};
+
+const buildSafeAppSessionEvent = ({ session, eventType, reason, actorType, nowMs = Date.now() }) => ({
+  ...buildAppSessionEvent({ session, eventType, reason, actorType, nowMs }),
+  authUidHash: createHash('sha256').update(session.authUid).digest('hex').slice(0, 24),
+});
+
+const issuePassengerAppSession = async ({
+  db,
+  authUid,
+  principalId,
+  tourId,
+  bookingRef,
+  identityUpdates,
+  grantUpdates,
+  nowMs = Date.now(),
+}) => {
+  const lock = await acquireAppSessionLock({ db, authUid, operation: 'issue', nowMs });
+  if (!lock.acquired) {
+    const error = new Error('App session operation is already in progress');
+    error.code = 'SESSION_IN_PROGRESS';
+    throw error;
+  }
+  try {
+    const [existingSnapshot, userSnapshot] = await Promise.all([
+      db.ref(`app_sessions/${authUid}`).once('value'),
+      db.ref(`users/${authUid}`).once('value'),
+    ]);
+    const existingSession = existingSnapshot.val();
+    const session = buildPassengerSessionRecord({ authUid, principalId, tourId, nowMs });
+    const participant = buildPassengerParticipantRecord({ session });
+    const updates = existingSession?.sessionId
+      ? buildAppSessionCleanupUpdates({ session: existingSession, userProfile: userSnapshot.val() || {}, nowMs })
+      : {};
+    const eventId = db.ref('app_session_events').push().key;
+    Object.assign(updates, grantUpdates, identityUpdates, {
+      [`users/${authUid}/principalType`]: 'passenger',
+      [`app_sessions/${authUid}`]: session,
+      [`tours/${tourId}/participants/${authUid}`]: participant,
+      [`app_session_events/${eventId}`]: buildSafeAppSessionEvent({
+        session,
+        eventType: existingSession ? 'refreshed' : 'issued',
+        reason: existingSession ? 'credential_reverification' : 'credential_verification',
+        actorType: 'passenger',
+        nowMs,
+      }),
+    });
+    await db.ref().update(updates);
+    if (existingSession?.principalType === 'driver') {
+      await cleanupDriverLocationForSession({ db, session: existingSession });
+    }
+    return session;
+  } finally {
+    await releaseAppSessionLock({ db, authUid, owner: lock.owner });
+  }
+};
+
+const issueDriverAppSession = async ({
+  db,
+  authUid,
+  driverId,
+  tourId,
+  profileUpdates,
+  nowMs = Date.now(),
+}) => {
+  const lock = await acquireAppSessionLock({ db, authUid, operation: 'issue', nowMs });
+  if (!lock.acquired) {
+    const error = new Error('App session operation is already in progress');
+    error.code = 'SESSION_IN_PROGRESS';
+    throw error;
+  }
+  try {
+    const [existingSnapshot, userSnapshot] = await Promise.all([
+      db.ref(`app_sessions/${authUid}`).once('value'),
+      db.ref(`users/${authUid}`).once('value'),
+    ]);
+    const existingSession = existingSnapshot.val();
+    const session = buildDriverSessionRecord({ authUid, driverId, tourId, nowMs });
+    const updates = existingSession?.sessionId
+      ? buildAppSessionCleanupUpdates({ session: existingSession, userProfile: userSnapshot.val() || {}, nowMs })
+      : {};
+    const eventId = db.ref('app_session_events').push().key;
+    Object.assign(updates, profileUpdates, {
+      [`app_sessions/${authUid}`]: session,
+      [`app_session_events/${eventId}`]: buildSafeAppSessionEvent({
+        session,
+        eventType: existingSession ? 'refreshed' : 'issued',
+        reason: existingSession ? 'driver_reverification' : 'driver_verification',
+        actorType: 'driver',
+        nowMs,
+      }),
+    });
+    await db.ref().update(updates);
+    if (existingSession?.principalType === 'driver') {
+      await cleanupDriverLocationForSession({ db, session: existingSession });
+    }
+    return session;
+  } finally {
+    await releaseAppSessionLock({ db, authUid, owner: lock.owner });
+  }
 };
 
 const compactDefined = (value = {}) => Object.fromEntries(
@@ -2851,7 +3007,9 @@ const buildDriverSelfAssignmentUpdates = ({
     },
   };
 
-  if (normalizeDriverId(tourData.driverId) !== driverId) {
+  if (previousTourId !== tourId) {
+    // Never carry coordinates from an earlier assignment (or a previous driver
+    // on the target tour) into the newly authorized driver session.
     updates[`tours/${tourId}/driverLocation`] = null;
   }
 
@@ -3029,40 +3187,23 @@ const verifyCurrentTourPhotoAccess = async ({ db, authUid, tourId }) => {
   if (!isValidFirebaseKey(authUid) || !isValidFirebaseKey(tourId)) {
     return { allowed: false, reason: 'INVALID_INPUT' };
   }
-  const [tourSnapshot, adminSnapshot, userSnapshot] = await Promise.all([
+  const [tourSnapshot, adminSnapshot] = await Promise.all([
     db.ref(`tours/${tourId}`).once('value'),
     db.ref(`admin_users/${authUid}`).once('value'),
-    db.ref(`users/${authUid}`).once('value'),
   ]);
   if (!tourSnapshot.exists()) return { allowed: false, reason: 'NOT_FOUND' };
   if (authUid === OPERATIONS_ADMIN_UID || adminSnapshot.val() === true) {
     return { allowed: true, role: 'admin', principalId: authUid };
   }
-  if (tourSnapshot.child(`participants/${authUid}`).exists()) {
-    const user = userSnapshot.val() || {};
-    const principalId = resolveTrimmedString(user.stablePassengerId)
-      || resolveTrimmedString(user.privatePhotoOwnerId);
-    if (principalId && isOpaquePassengerId(principalId)) {
-      return { allowed: true, role: 'passenger', principalId };
-    }
-    return { allowed: false, reason: 'IDENTITY_NOT_READY' };
-  }
-  const user = userSnapshot.val() || {};
-  const driverId = resolveTrimmedString(user.driverId);
-  if (!driverId || !isValidFirebaseKey(driverId)) {
-    return { allowed: false, reason: 'NOT_TOUR_MEMBER' };
-  }
-  const [driverSnapshot, assignmentSnapshot] = await Promise.all([
-    db.ref(`drivers/${driverId}`).once('value'),
-    db.ref(`tour_manifests/${tourId}/assigned_drivers/${driverId}`).once('value'),
-  ]);
-  const driver = driverSnapshot.val() || {};
-  if (resolveTrimmedString(driver.authUid) === authUid
-    && assignmentSnapshot.val() === true
-    && isDriverProfileAssignedToTour(driver, tourId)) {
-    return { allowed: true, role: 'assigned_driver', principalId: `driver:${driverId}`, driverId };
-  }
-  return { allowed: false, reason: 'NOT_TOUR_MEMBER' };
+  const access = await verifyActiveAppSession({ db, authUid, expectedTourId: tourId });
+  if (!access.allowed) return { allowed: false, reason: access.reason };
+  return {
+    allowed: true,
+    role: access.role === 'driver' ? 'assigned_driver' : 'passenger',
+    principalId: access.principalId,
+    driverId: access.driverId,
+    session: access.session,
+  };
 };
 
 const enforceGroupMediaAppCheck = async (req, env = process.env, appCheck = admin.appCheck()) => {
@@ -3146,12 +3287,19 @@ const signGroupMediaRecords = async ({ bucket, input, records, expires, concurre
 exports.resolvePrivatePhotoMedia = onRequest(
   { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 30, cors: true },
   async (req, res) => {
+    res.set('Cache-Control', 'private,no-store');
     if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
-    const requestAuth = await verifyRequestAuthUid(req);
-    if (!requestAuth.success) return res.status(401).json({ success: false, reason: 'NOT_AUTHENTICATED' });
+    const requestAuth = await authorizeAppSessionMobileRequest({ req, res });
+    if (!requestAuth) return null;
     const input = normalizePrivateMediaRequest(req.body);
     if (!input) return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
-    if (requestAuth.claims?.privatePhotoOwnerKey !== input.ownerKey) {
+    const access = await verifyActiveAppSession({
+      db: admin.database(),
+      authUid: requestAuth.uid,
+      expectedTourId: input.tourId,
+      expectedRole: 'passenger',
+    });
+    if (!access.allowed || access.principalId !== input.ownerKey) {
       return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
     }
     const records = await readPrivateMediaRecords({ db: admin.database(), ...input });
@@ -3160,6 +3308,134 @@ exports.resolvePrivatePhotoMedia = onRequest(
     const expires = Date.now() + PRIVATE_MEDIA_URL_TTL_MS;
     const media = await signPrivateMediaRecords({ bucket, input, records, expires });
     return res.status(200).json({ success: true, expiresAtMs: expires, media });
+  },
+);
+
+const normalizePrivatePhotoUploadMetadata = (rawHeader) => {
+  const input = normalizeGroupPhotoUploadMetadata(rawHeader);
+  return input ? { ...input, uploaderName: undefined } : null;
+};
+
+const reservePrivatePhotoRecord = async ({ db, input, principalId, contentType, fileSize, nowMs = Date.now() }) => {
+  const photoId = toRealtimeKeySegment(input.idempotencyKey);
+  const extension = extensionForGroupPhotoContentType(contentType);
+  const storagePath = `private_tour_photos/${input.tourId}/${principalId}/${photoId}.${extension}`;
+  const recordRef = db.ref(`private_tour_photos/${input.tourId}/${principalId}/${photoId}`);
+  let conflict = false;
+  let deduped = false;
+  const result = await recordRef.transaction((current) => {
+    if (current) {
+      if (current.idempotencyKey === input.idempotencyKey && current.userId === principalId
+        && current.storagePath === storagePath) {
+        deduped = true;
+        return current;
+      }
+      conflict = true;
+      return undefined;
+    }
+    return {
+      userId: principalId,
+      caption: input.caption,
+      timestamp: nowMs,
+      storagePath,
+      fileSize,
+      fileType: contentType,
+      idempotencyKey: input.idempotencyKey,
+      variantStatus: 'processing',
+      variantUpdatedAt: nowMs,
+      variantError: null,
+      variantVersion: 2,
+    };
+  });
+  if (conflict || !result.committed) return { success: false, reason: 'IDEMPOTENCY_CONFLICT' };
+  return { success: true, photoId, storagePath, deduped, recordRef };
+};
+
+exports.uploadPrivatePhoto = onRequest(
+  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 60, memory: '512MiB', cors: true },
+  async (req, res) => {
+    res.set('Cache-Control', 'private,no-store');
+    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
+    const input = normalizePrivatePhotoUploadMetadata(req.headers['x-private-photo-metadata']);
+    if (!input) return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
+    const requestAuth = await authorizeAppSessionMobileRequest({ req, res });
+    if (!requestAuth) return null;
+    const access = await verifyActiveAppSession({
+      db: admin.database(),
+      authUid: requestAuth.uid,
+      expectedTourId: input.tourId,
+      expectedRole: 'passenger',
+    });
+    if (!access.allowed) return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
+    const contentType = resolveTrimmedString(req.headers['content-type'])?.toLowerCase();
+    const body = Buffer.isBuffer(req.rawBody) ? req.rawBody : null;
+    if (!body || body.length < 1 || body.length > GROUP_MEDIA_MAX_UPLOAD_BYTES
+      || !GROUP_MEDIA_ALLOWED_TYPES.has(contentType)) {
+      return res.status(400).json({ success: false, reason: 'INVALID_IMAGE' });
+    }
+    const reservation = await reservePrivatePhotoRecord({
+      db: admin.database(),
+      input,
+      principalId: access.principalId,
+      contentType,
+      fileSize: body.length,
+    });
+    if (!reservation.success) return res.status(409).json({ success: false, reason: reservation.reason });
+    const file = admin.storage().bucket().file(reservation.storagePath);
+    if (!reservation.deduped || !(await file.exists())[0]) {
+      await file.save(body, {
+        resumable: false,
+        metadata: {
+          contentType,
+          cacheControl: PRIVATE_PHOTO_CACHE_CONTROL_HEADER,
+          metadata: { visibility: 'private', sourceRole: 'source' },
+        },
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      photo: {
+        id: reservation.photoId,
+        userId: access.principalId,
+        caption: input.caption,
+        storagePath: reservation.storagePath,
+        deduped: reservation.deduped,
+      },
+    });
+  },
+);
+
+exports.deletePrivatePhoto = onRequest(
+  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 30, cors: true },
+  async (req, res) => {
+    res.set('Cache-Control', 'private,no-store');
+    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
+    const tourId = normalizeTourKeyForComparison(req.body?.tourId);
+    const photoId = resolveTrimmedString(req.body?.photoId);
+    if (!tourId || !isValidFirebaseKey(tourId) || !photoId || !isValidFirebaseKey(photoId)) {
+      return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
+    }
+    const requestAuth = await authorizeAppSessionMobileRequest({ req, res });
+    if (!requestAuth) return null;
+    const access = await verifyActiveAppSession({
+      db: admin.database(),
+      authUid: requestAuth.uid,
+      expectedTourId: tourId,
+      expectedRole: 'passenger',
+    });
+    if (!access.allowed) return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
+    const recordRef = admin.database().ref(`private_tour_photos/${tourId}/${access.principalId}/${photoId}`);
+    const snapshot = await recordRef.once('value');
+    if (!snapshot.exists()) return res.status(200).json({ success: true, alreadyDeleted: true });
+    const record = snapshot.val() || {};
+    if (record.userId !== access.principalId) {
+      return res.status(403).json({ success: false, reason: 'NOT_OWNER' });
+    }
+    const paths = [record.storagePath, record.viewerStoragePath, record.thumbnailStoragePath]
+      .filter((path) => isPrivateMediaPathForRecord({ path, tourId, ownerKey: access.principalId }));
+    await Promise.all(paths.map((path) => admin.storage().bucket().file(path).delete({ ignoreNotFound: true })));
+    await recordRef.remove();
+    return res.status(200).json({ success: true, alreadyDeleted: false });
   },
 );
 
@@ -3657,10 +3933,12 @@ exports.verifyPassengerLogin = onRequest(
         return res.status(reason === 'REAUTHORIZE_REQUIRED' ? 403 : 200).json({ valid: false, reason });
       }
 
+      const sessionIssuedAtMs = Date.now();
       const grantUpdates = buildVerifiedLoginGrantUpdates({
         authUid: requestAuth.uid,
         bookingRef: resolvedBookingRef,
         tourId: canonicalTourId,
+        nowMs: sessionIssuedAtMs,
       });
 
       if (!grantUpdates) {
@@ -3680,20 +3958,30 @@ exports.verifyPassengerLogin = onRequest(
         tourId: canonicalTourId,
         passengerPrincipalId: stablePassengerId,
         previousProfile: userSnapshot.val() || {},
+        nowMs: sessionIssuedAtMs,
       });
       if (!identityUpdates) {
         return res.status(200).json({ valid: false, reason: 'IDENTITY_INCOMPLETE' });
       }
 
-      await database.ref().update({ ...grantUpdates, ...identityUpdates });
-
       // Preserve unrelated claims while projecting only the RTDB-safe owner key needed
-      // by Storage rules. A restored anonymous session receives the same stable key.
+      // by transitional account-deletion code. Storage no longer trusts this claim.
       const authUser = await admin.auth().getUser(requestAuth.uid);
       await admin.auth().setCustomUserClaims(requestAuth.uid, {
         ...(authUser.customClaims || {}),
         privatePhotoOwnerKey: stablePassengerId,
         passengerIdentityVersion: PASSENGER_IDENTITY_VERSION,
+      });
+
+      const appSession = await issuePassengerAppSession({
+        db: database,
+        authUid: requestAuth.uid,
+        principalId: stablePassengerId,
+        tourId: canonicalTourId,
+        bookingRef: resolvedBookingRef,
+        identityUpdates,
+        grantUpdates,
+        nowMs: sessionIssuedAtMs,
       });
 
       return res.status(200).json({
@@ -3704,6 +3992,7 @@ exports.verifyPassengerLogin = onRequest(
         tourCode: canonicalTourCode,
         stablePassengerId,
         identityVersion: PASSENGER_IDENTITY_VERSION,
+        session: toClientSession(appSession),
         booking: buildPassengerSafeBooking(resolvedBookingRef, bookingSnapshot.val() || {}, canonicalTourId),
         tour: buildPassengerSafeTour(canonicalTourId, tourData),
         grantExpiresAtMs: grantUpdates[`tour_access_grants/${canonicalTourId}/${requestAuth.uid}`].expiresAtMs,
@@ -4069,7 +4358,11 @@ exports.getTourManifest = onRequest(
     }
 
     try {
-      const access = await verifyTourManifestAccess({ authUid: requestAuth.uid, tourId });
+      const access = await verifyActiveAppSession({
+        db: admin.database(),
+        authUid: requestAuth.uid,
+        expectedTourId: tourId,
+      });
       if (!access.allowed) {
         log.warn('Tour manifest request denied', {
           authUid: requestAuth.uid,
@@ -4206,12 +4499,20 @@ exports.verifyDriverLogin = onRequest(
       }
 
       const nowMs = Date.now();
-      await db.ref().update(buildDriverIdentityProfileUpdates({
+      const driverProfileUpdates = buildDriverIdentityProfileUpdates({
         driverId,
         authUid: requestAuth.uid,
         assignedTourId: assignment.assignedTourId,
         nowMs,
-      }));
+      });
+      const appSession = await issueDriverAppSession({
+        db,
+        authUid: requestAuth.uid,
+        driverId,
+        tourId: assignment.assignedTourId,
+        profileUpdates: driverProfileUpdates,
+        nowMs,
+      });
 
       log.info('Driver login reference validated', {
         driverId,
@@ -4236,6 +4537,7 @@ exports.verifyDriverLogin = onRequest(
           ? (resolvedTour ? 'ASSIGNED' : 'ASSIGNED_TOUR_NOT_FOUND')
           : 'UNASSIGNED',
         identityClaimed: true,
+        session: toClientSession(appSession),
       });
     } catch (error) {
       log.error('Driver login verification failed', error, {
@@ -4265,7 +4567,9 @@ exports.assignDriverToTour = onRequest(
     const driverId = normalizeDriverId(req.body?.driverId);
     const requestedTour = resolveTrimmedString(req.body?.tourCode || req.body?.tourId);
     const tourId = normalizeTourKeyForComparison(requestedTour);
-    if (!driverId || !isValidFirebaseKey(driverId) || !tourId || !isValidFirebaseKey(tourId)) {
+    const expectedSessionId = resolveTrimmedString(req.body?.expectedSessionId);
+    if (!driverId || !isValidFirebaseKey(driverId) || !tourId || !isValidFirebaseKey(tourId)
+      || !isValidAppSessionId(expectedSessionId)) {
       return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
     }
 
@@ -4276,6 +4580,7 @@ exports.assignDriverToTour = onRequest(
 
     const db = admin.database();
     const lockOwner = randomUUID();
+    let appSessionLock = null;
     const lockPaths = [
       `driver_assignment_locks/drivers/${driverId}`,
       `driver_assignment_locks/tours/${tourId}`,
@@ -4283,6 +4588,26 @@ exports.assignDriverToTour = onRequest(
     const acquiredLocks = [];
 
     try {
+      appSessionLock = await acquireAppSessionLock({
+        db,
+        authUid: requestAuth.uid,
+        operation: 'assign',
+      });
+      if (!appSessionLock.acquired) {
+        return res.status(409).json({ success: false, reason: 'SESSION_IN_PROGRESS' });
+      }
+      const activeAccess = await verifyActiveAppSession({
+        db,
+        authUid: requestAuth.uid,
+        expectedRole: 'driver',
+        expectedSessionId,
+        allowUnassignedDriver: true,
+      });
+      if (!activeAccess.allowed || activeAccess.session.driverId !== driverId) {
+        const status = activeAccess.reason === 'SESSION_CHANGED' ? 409 : 403;
+        return res.status(status).json({ success: false, reason: activeAccess.reason || 'NOT_AUTHORIZED' });
+      }
+
       for (const lockPath of lockPaths) {
         const acquired = await acquireManualBookingLock({
           db,
@@ -4346,8 +4671,29 @@ exports.assignDriverToTour = onRequest(
         tourData,
         previousTourData: previousTourSnapshot?.val?.() || {},
       });
-
+      const nowMs = Date.now();
+      const updatedSession = {
+        ...activeAccess.session,
+        tourId,
+        lastAuthenticatedAtMs: nowMs,
+        expiresAtMs: calculateSessionExpiry({ principalType: 'driver', tourId, nowMs }),
+        sessionRevision: activeAccess.session.sessionRevision + 1,
+      };
+      assignment.updates[`app_sessions/${requestAuth.uid}`] = updatedSession;
+      assignment.updates[`app_session_events/${db.ref('app_session_events').push().key}`] = buildSafeAppSessionEvent({
+        session: updatedSession,
+        eventType: 'assignment_changed',
+        reason: 'driver_self_assignment',
+        actorType: 'driver',
+        nowMs,
+      });
       await db.ref().update(assignment.updates);
+      if (assignment.previousTourId && assignment.previousTourId !== tourId) {
+        await cleanupDriverLocationForSession({
+          db,
+          session: { ...activeAccess.session, tourId: assignment.previousTourId },
+        });
+      }
       log.info('Driver self-assignment completed', {
         driverId,
         authUid: requestAuth.uid,
@@ -4360,6 +4706,7 @@ exports.assignDriverToTour = onRequest(
         tourId,
         tourCode: assignment.canonicalTourCode,
         previousTourId: assignment.previousTourId,
+        session: toClientSession(updatedSession),
       });
     } catch (error) {
       log.error('Driver self-assignment failed', error, {
@@ -4374,8 +4721,171 @@ exports.assignDriverToTour = onRequest(
         path,
         owner: lockOwner,
       })));
+      if (appSessionLock?.acquired) {
+        await releaseAppSessionLock({ db, authUid: requestAuth.uid, owner: appSessionLock.owner });
+      }
     }
   }
+);
+
+const authorizeAppSessionMobileRequest = async ({ req, res }) => {
+  const requestAuth = await verifyRequestAuthUid(req);
+  if (!requestAuth.success) {
+    res.status(401).json({ success: false, reason: 'NOT_AUTHENTICATED' });
+    return null;
+  }
+  let appCheckValid = false;
+  try {
+    appCheckValid = await enforceGroupMediaAppCheck(req);
+  } catch (error) {
+    log.error('App session App Check configuration failure', error);
+    res.status(503).json({ success: false, reason: 'SERVICE_UNAVAILABLE' });
+    return null;
+  }
+  if (!appCheckValid) {
+    res.status(401).json({ success: false, reason: 'APP_CHECK_REQUIRED' });
+    return null;
+  }
+  return requestAuth;
+};
+
+exports.endAppSession = onRequest(
+  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 30, cors: false },
+  async (req, res) => {
+    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
+    const requestAuth = await authorizeAppSessionMobileRequest({ req, res });
+    if (!requestAuth) return null;
+    const expectedSessionId = resolveTrimmedString(req.body?.expectedSessionId);
+    if (!isValidAppSessionId(expectedSessionId) || req.body?.reason !== 'user_logout') {
+      return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
+    }
+    try {
+      const allowed = await distributedLoginRateLimiter(
+        `session_end_${hashRateLimitDimension(requestAuth.uid)}`,
+        20,
+        60 * 1000,
+      );
+      if (!allowed) return res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' });
+    } catch (error) {
+      log.error('App session end rate limit failed closed', error);
+      return res.status(503).json({ success: false, reason: 'SERVICE_UNAVAILABLE' });
+    }
+
+    const db = admin.database();
+    const lock = await acquireAppSessionLock({ db, authUid: requestAuth.uid, operation: 'end' });
+    if (!lock.acquired) return res.status(409).json({ success: false, reason: 'SESSION_IN_PROGRESS' });
+    try {
+      const snapshot = await db.ref(`app_sessions/${requestAuth.uid}`).once('value');
+      if (!snapshot.exists()) {
+        return res.status(200).json({
+          success: true,
+          reason: 'ENDED',
+          endedSessionId: expectedSessionId,
+          alreadyEnded: true,
+          endedAtMs: Date.now(),
+        });
+      }
+      const session = snapshot.val();
+      if (session.sessionId !== expectedSessionId) {
+        return res.status(409).json({ success: false, reason: 'SESSION_CHANGED' });
+      }
+      const endedAtMs = Date.now();
+      await cleanupAppSession({
+        db,
+        session,
+        expectedSessionId,
+        eventType: 'ended_by_user',
+        reason: 'user_logout',
+        actorType: session.principalType,
+        nowMs: endedAtMs,
+        createEventId: () => db.ref('app_session_events').push().key,
+      });
+      log.info('App session ended by user', {
+        authUid: requestAuth.uid,
+        principalType: session.principalType,
+        tourId: session.tourId,
+      });
+      return res.status(200).json({
+        success: true,
+        reason: 'ENDED',
+        endedSessionId: expectedSessionId,
+        alreadyEnded: false,
+        endedAtMs,
+      });
+    } catch (error) {
+      log.error('App session end failed', error, { authUid: requestAuth.uid });
+      return res.status(error?.code === 'SESSION_CHANGED' ? 409 : 500).json({
+        success: false,
+        reason: error?.code === 'SESSION_CHANGED' ? 'SESSION_CHANGED' : 'INTERNAL_ERROR',
+      });
+    } finally {
+      await releaseAppSessionLock({ db, authUid: requestAuth.uid, owner: lock.owner });
+    }
+  },
+);
+
+const APP_SESSION_REVOCATION_REASONS = new Set([
+  'lost_device',
+  'security_review',
+  'staff_request',
+  'account_support',
+]);
+
+exports.revokeAppSession = onRequest(
+  { region: 'europe-west1', maxInstances: 10, timeoutSeconds: 30, cors: false },
+  async (req, res) => {
+    if (!applyAuthenticatedCors(req, res)) return res.status(403).json({ success: false, reason: 'ORIGIN_NOT_ALLOWED' });
+    if (req.method === 'OPTIONS') return res.status(204).send('');
+    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
+    const requestAuth = await verifyRequestAuthUid(req);
+    if (!requestAuth.success) return res.status(401).json({ success: false, reason: 'NOT_AUTHENTICATED' });
+    const db = admin.database();
+    if (!(await verifyOperationsAdminAccess({ authUid: requestAuth.uid, db }))) {
+      return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
+    }
+    const targetAuthUid = resolveTrimmedString(req.body?.authUid);
+    const expectedSessionId = resolveTrimmedString(req.body?.expectedSessionId);
+    const reason = resolveTrimmedString(req.body?.reason);
+    if (!isValidFirebaseKey(targetAuthUid) || !APP_SESSION_REVOCATION_REASONS.has(reason)
+      || (expectedSessionId && !isValidAppSessionId(expectedSessionId))) {
+      return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
+    }
+    const lock = await acquireAppSessionLock({ db, authUid: targetAuthUid, operation: 'revoke' });
+    if (!lock.acquired) return res.status(409).json({ success: false, reason: 'SESSION_IN_PROGRESS' });
+    try {
+      const snapshot = await db.ref(`app_sessions/${targetAuthUid}`).once('value');
+      if (!snapshot.exists()) {
+        return res.status(200).json({ success: true, reason: 'ENDED', alreadyEnded: true });
+      }
+      const session = snapshot.val();
+      if (expectedSessionId && session.sessionId !== expectedSessionId) {
+        return res.status(409).json({ success: false, reason: 'SESSION_CHANGED' });
+      }
+      const endedAtMs = Date.now();
+      await cleanupAppSession({
+        db,
+        session,
+        expectedSessionId: session.sessionId,
+        eventType: 'ended_by_admin',
+        reason,
+        actorType: 'operations_admin',
+        nowMs: endedAtMs,
+        createEventId: () => db.ref('app_session_events').push().key,
+      });
+      log.info('App session revoked by operations', {
+        authUid: targetAuthUid,
+        adminUid: requestAuth.uid,
+        principalType: session.principalType,
+        reason,
+      });
+      return res.status(200).json({ success: true, reason: 'ENDED', alreadyEnded: false, endedAtMs });
+    } catch (error) {
+      log.error('Admin app session revocation failed', error, { authUid: targetAuthUid, reason });
+      return res.status(500).json({ success: false, reason: 'INTERNAL_ERROR' });
+    } finally {
+      await releaseAppSessionLock({ db, authUid: targetAuthUid, owner: lock.owner });
+    }
+  },
 );
 
 exports.submitSafetyReport = onRequest(
@@ -4415,6 +4925,16 @@ exports.submitSafetyReport = onRequest(
     const lockOwner = randomUUID();
     let lockAcquired = false;
     try {
+      const access = await verifyActiveAppSession({
+        db,
+        authUid: requestAuth.uid,
+        expectedTourId: input.tourId,
+        expectedRole: input.role,
+      });
+      if (!access.allowed) {
+        return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
+      }
+
       const existingSnapshot = await db.ref(`tours/${input.tourId}/safetyAlerts/${input.clientEventId}`).once('value');
       if (existingSnapshot.exists()) {
         const existing = existingSnapshot.val() || {};
@@ -4427,16 +4947,6 @@ exports.submitSafetyReport = onRequest(
           alreadySubmitted: true,
           receivedAtMs: Number(existing.receivedAtMs || existing.timestampMs) || null,
         });
-      }
-
-      const access = await resolveSafetyReporterAccess({
-        db,
-        authUid: requestAuth.uid,
-        tourId: input.tourId,
-        requestedRole: input.role,
-      });
-      if (!access.allowed) {
-        return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
       }
 
       lockAcquired = await acquireManualBookingLock({
@@ -4984,6 +5494,13 @@ exports.sendChatNotification = onValueCreated(
         });
       }
 
+      if (!isAdmin) {
+        senderDeliveryIds = await filterOperationalRecipientsByActiveSession({
+          recipientIds: senderDeliveryIds,
+          tourId,
+          participants,
+        });
+      }
       if (!isAdmin && senderDeliveryIds.length === 0) {
         log.error("Sender is not an active participant or assigned driver of the tour", null, {
           tourId,
@@ -4994,7 +5511,12 @@ exports.sendChatNotification = onValueCreated(
       }
 
       const audienceIds = [...new Set([...participantIds, ...assignedDriverRecipientIds])];
-      const cappedParticipantIds = applyRecipientCap(audienceIds, NOTIFICATION_RECIPIENT_CAP, {
+      const activeAudienceIds = await filterOperationalRecipientsByActiveSession({
+        recipientIds: audienceIds,
+        tourId,
+        participants,
+      });
+      const cappedParticipantIds = applyRecipientCap(activeAudienceIds, NOTIFICATION_RECIPIENT_CAP, {
         tourId,
         notificationType: 'chat',
       });
@@ -5185,8 +5707,20 @@ exports.sendInternalChatNotification = onValueCreated(
         return null;
       }
 
+      const activeDriverRecipientIds = await filterOperationalRecipientsByActiveSession({
+        recipientIds: assignedDriverRecipientIds,
+        tourId,
+      });
+      const activeSenderDeliveryIds = await filterOperationalRecipientsByActiveSession({
+        recipientIds: senderDeliveryIds,
+        tourId,
+      });
+      if (activeSenderDeliveryIds.length === 0) {
+        log.warn('Internal chat sender has no active app session', { tourId, messageId });
+        return null;
+      }
       const cappedRecipientIds = applyRecipientCap(
-        assignedDriverRecipientIds,
+        activeDriverRecipientIds,
         NOTIFICATION_RECIPIENT_CAP,
         { tourId, notificationType: 'internal_chat' },
       );
@@ -5196,7 +5730,7 @@ exports.sendInternalChatNotification = onValueCreated(
         usersMap,
         preferencePath: ['preferences', 'ops', 'group_chat'],
         senderId: messageData.senderId,
-        senderParticipantIds: senderDeliveryIds,
+        senderParticipantIds: activeSenderDeliveryIds,
         excludeSender: true,
         context: { tourId, notificationType: 'internal_chat' },
       });
@@ -5293,8 +5827,12 @@ exports.sendSafetyAlertNotification = onValueCreated(
       const delegatedAdminIds = Object.entries(adminUsersSnapshot.val() || {})
         .filter(([, enabled]) => enabled === true)
         .map(([uid]) => uid);
+      const activeDriverRecipientIds = await filterOperationalRecipientsByActiveSession({
+        recipientIds: assignedDriverRecipientIds,
+        tourId,
+      });
       const audienceIds = applyRecipientCap(
-        [...new Set([OPERATIONS_ADMIN_UID, ...delegatedAdminIds, ...assignedDriverRecipientIds])],
+        [...new Set([OPERATIONS_ADMIN_UID, ...delegatedAdminIds, ...activeDriverRecipientIds])],
         NOTIFICATION_RECIPIENT_CAP,
         { tourId, notificationType: 'safety_alert' },
       );
@@ -5547,7 +6085,11 @@ exports.sendItineraryNotification = onValueWritten(
         manifestData: manifestSnapshot.val() || {},
         context: { tourId, notificationType: 'itinerary' },
       });
-      const recipientIds = [...new Set([...participantIds, ...assignedDriverRecipientIds])];
+      const recipientIds = await filterOperationalRecipientsByActiveSession({
+        recipientIds: [...new Set([...participantIds, ...assignedDriverRecipientIds])],
+        tourId,
+        participants,
+      });
 
       if (recipientIds.length === 0) {
         log.info("No participants or assigned drivers for itinerary update", { tourId });
@@ -5743,7 +6285,11 @@ exports.sendDriverTourPackChangeNotification = onValueWritten(
         manifestData: notificationManifest,
         context: { departureKey, notificationType: 'driver_tour_pack' },
       });
-      const cappedRecipientIds = applyRecipientCap(recipientIds, NOTIFICATION_RECIPIENT_CAP, {
+      const activeRecipientIds = await filterOperationalRecipientsByActiveSession({
+        recipientIds,
+        tourId: afterPack.tourId,
+      });
+      const cappedRecipientIds = applyRecipientCap(activeRecipientIds, NOTIFICATION_RECIPIENT_CAP, {
         departureKey,
         notificationType: 'driver_tour_pack',
       });
@@ -6027,6 +6573,75 @@ exports.cleanupExpiredLoginRateLimits = onSchedule(
   },
 );
 
+exports.cleanupExpiredAppSessions = onSchedule(
+  {
+    schedule: 'every 15 minutes',
+    timeZone: 'Europe/London',
+    region: 'europe-west1',
+    memory: '256MiB',
+    timeoutSeconds: 120,
+    maxInstances: 1,
+  },
+  async () => {
+    const db = admin.database();
+    const nowMs = Date.now();
+    const snapshot = await db.ref('app_sessions')
+      .orderByChild('expiresAtMs')
+      .endAt(nowMs)
+      .limitToFirst(50)
+      .once('value');
+    const candidates = snapshot.val() || {};
+    const summary = { scanned: 0, expired: 0, alreadyEnded: 0, locked: 0, failed: 0, eventsRemoved: 0 };
+    for (const [authUid, candidate] of Object.entries(candidates)) {
+      summary.scanned += 1;
+      const lock = await acquireAppSessionLock({ db, authUid, operation: 'cleanup', nowMs });
+      if (!lock.acquired) {
+        summary.locked += 1;
+        continue;
+      }
+      try {
+        const currentSnapshot = await db.ref(`app_sessions/${authUid}`).once('value');
+        const current = currentSnapshot.val();
+        if (!current || current.sessionId !== candidate.sessionId) {
+          summary.alreadyEnded += 1;
+          continue;
+        }
+        if (Number(current.expiresAtMs) > nowMs) continue;
+        await cleanupAppSession({
+          db,
+          session: current,
+          expectedSessionId: current.sessionId,
+          eventType: 'expired',
+          reason: 'session_expired',
+          actorType: 'system',
+          nowMs,
+          createEventId: () => db.ref('app_session_events').push().key,
+        });
+        summary.expired += 1;
+      } catch (error) {
+        summary.failed += 1;
+        log.error('Expired app session cleanup failed', error, { authUid });
+      } finally {
+        await releaseAppSessionLock({ db, authUid, owner: lock.owner });
+      }
+    }
+
+    const eventsSnapshot = await db.ref('app_session_events')
+      .orderByChild('expiresAtMs')
+      .endAt(nowMs)
+      .limitToFirst(100)
+      .once('value');
+    const eventUpdates = {};
+    eventsSnapshot.forEach((child) => { eventUpdates[child.key] = null; });
+    if (Object.keys(eventUpdates).length) {
+      await db.ref('app_session_events').update(eventUpdates);
+      summary.eventsRemoved = Object.keys(eventUpdates).length;
+    }
+    log.info('Expired app session cleanup completed', summary);
+    return summary;
+  },
+);
+
 /**
  * Deletes ambiguous legacy auth-UID read markers once a canonical passenger
  * or driver principal is active. UID-only history cannot be safely attributed
@@ -6261,4 +6876,21 @@ exports.__testables = {
   isPrivateMediaPathForRecord,
   readPrivateMediaRecords,
   signPrivateMediaRecords,
+  buildDriverSessionRecord,
+  buildPassengerParticipantRecord,
+  buildPassengerSessionRecord,
+  calculateSessionExpiry,
+  createAppSessionId,
+  isActiveSessionRecord,
+  isValidAppSessionId,
+  toClientSession,
+  acquireAppSessionLock,
+  releaseAppSessionLock,
+  verifyActiveAppSession,
+  buildAppSessionCleanupUpdates,
+  buildAppSessionEvent,
+  cleanupAppSession,
+  cleanupDriverLocationForSession,
+  normalizePrivatePhotoUploadMetadata,
+  reservePrivatePhotoRecord,
 };

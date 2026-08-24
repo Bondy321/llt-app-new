@@ -2,6 +2,30 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { joinTour, ensureBookingSchemaConsistency, ensureTourParticipantCount } = require('../services/bookingServiceRealtime');
 
+const secureSessionFor = (tourId, userId) => ({
+  schemaVersion: 1,
+  sessionId: `sess_v1_${String(userId).replace(/[^a-f0-9]/gi, '').padEnd(32, '0').slice(0, 32).toLowerCase()}`,
+  principalType: 'passenger',
+  principalId: `pax_v2_${String(userId).replace(/[^a-f0-9]/gi, '').padEnd(32, 'a').slice(0, 32).toLowerCase()}`,
+  driverId: null,
+  tourId,
+  issuedAtMs: Date.now() - 1_000,
+  expiresAtMs: Date.now() + 60_000,
+  sessionRevision: 1,
+});
+
+const seedSecureMembership = (mockDb, tourId, userId) => {
+  const session = secureSessionFor(tourId, userId);
+  mockDb.state.tours[tourId].participants[userId] = {
+    schemaVersion: 2,
+    principalId: session.principalId,
+    sessionId: session.sessionId,
+    sessionExpiresAtMs: session.expiresAtMs,
+    joinedAtMs: Date.now(),
+  };
+  return { appSession: session };
+};
+
 const createMockRealtimeDb = () => {
   const state = { tours: {} };
 
@@ -80,11 +104,12 @@ const seedActiveTour = (mockDb, tourId, overrides = {}) => {
   };
 };
 
-test('registers app membership without changing the trusted booked-passenger total', async () => {
+test('accepts server-owned membership without changing the trusted booked-passenger total', async () => {
   const mockDb = createMockRealtimeDb();
   seedActiveTour(mockDb, 'tour-1');
 
-  const result = await joinTour('tour-1', 'user-1', mockDb);
+  const options = seedSecureMembership(mockDb, 'tour-1', 'user-1');
+  const result = await joinTour('tour-1', 'user-1', mockDb, options);
 
   assert.equal(result.success, true);
   assert.equal(result.currentParticipants, 0);
@@ -92,13 +117,13 @@ test('registers app membership without changing the trusted booked-passenger tot
   assert.equal(mockDb.state.tours['tour-1'].currentParticipants, 0);
 });
 
-test('handles concurrent joins with reliable increments', async () => {
+test('handles concurrent reads of independently server-issued memberships', async () => {
   const mockDb = createMockRealtimeDb();
   seedActiveTour(mockDb, 'tour-abc');
 
   await Promise.all([
-    joinTour('tour-abc', 'user-1', mockDb),
-    joinTour('tour-abc', 'user-2', mockDb)
+    joinTour('tour-abc', 'user-1', mockDb, seedSecureMembership(mockDb, 'tour-abc', 'user-1')),
+    joinTour('tour-abc', 'user-2', mockDb, seedSecureMembership(mockDb, 'tour-abc', 'user-2'))
   ]);
 
   assert.equal(mockDb.state.tours['tour-abc'].currentParticipants, 0);
@@ -112,8 +137,9 @@ test('returns existing count when user rejoins the same tour', async () => {
   const mockDb = createMockRealtimeDb();
   seedActiveTour(mockDb, 'tour-rejoin');
 
-  await joinTour('tour-rejoin', 'user-1', mockDb);
-  const repeatJoin = await joinTour('tour-rejoin', 'user-1', mockDb);
+  const options = seedSecureMembership(mockDb, 'tour-rejoin', 'user-1');
+  await joinTour('tour-rejoin', 'user-1', mockDb, options);
+  const repeatJoin = await joinTour('tour-rejoin', 'user-1', mockDb, options);
 
   assert.equal(repeatJoin.success, true);
   assert.equal(repeatJoin.currentParticipants, 0);
@@ -125,22 +151,24 @@ test('keeps participant counts stable across repeated joins for the same user', 
   const mockDb = createMockRealtimeDb();
   seedActiveTour(mockDb, 'tour-repeat');
 
+  const options = seedSecureMembership(mockDb, 'tour-repeat', 'user-99');
   await Promise.all([
-    joinTour('tour-repeat', 'user-99', mockDb),
-    joinTour('tour-repeat', 'user-99', mockDb),
-    joinTour('tour-repeat', 'user-99', mockDb)
+    joinTour('tour-repeat', 'user-99', mockDb, options),
+    joinTour('tour-repeat', 'user-99', mockDb, options),
+    joinTour('tour-repeat', 'user-99', mockDb, options)
   ]);
 
   assert.equal(mockDb.state.tours['tour-repeat'].currentParticipants, 0);
   assert.deepEqual(Object.keys(mockDb.state.tours['tour-repeat'].participants), ['user-99']);
 });
 
-test('surfaces transaction errors', async () => {
+test('refuses to recreate missing server membership even when legacy transaction support exists', async () => {
   const mockDb = createMockRealtimeDb();
   seedActiveTour(mockDb, 'tour-2');
   mockDb.transactionError = new Error('transaction failed');
 
-  await assert.rejects(joinTour('tour-2', 'user-3', mockDb), /transaction failed/);
+  await assert.rejects(joinTour('tour-2', 'user-3', mockDb), /server did not create secure tour membership/i);
+  assert.equal(mockDb.state.tours['tour-2'].participants['user-3'], undefined);
 });
 
 test('does not create missing tours from the customer app', async () => {
@@ -196,7 +224,8 @@ test('preserves trusted booked-passenger totals when app membership differs', as
     participants: { 'user-existing': { joinedAt: 'ts' } },
   });
 
-  const result = await joinTour('tour-booked-total', 'user-new', mockDb);
+  const options = seedSecureMembership(mockDb, 'tour-booked-total', 'user-new');
+  const result = await joinTour('tour-booked-total', 'user-new', mockDb, options);
 
   assert.equal(result.currentParticipants, 42);
   assert.equal(mockDb.state.tours['tour-booked-total'].currentParticipants, 42);

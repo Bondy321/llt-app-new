@@ -132,6 +132,18 @@ export const prefetchPhotoUris = async (uris = []) => {
   await Promise.allSettled(uniqueUris.map((uri) => getCachedPhotoUri(uri)));
 };
 
+export const clearPhotoViewerCache = async () => {
+  inFlightDownloads.clear();
+  try {
+    await FileSystem.deleteAsync(CACHE_DIR, { idempotent: true });
+    cacheDirReady = false;
+    return { success: true };
+  } catch (error) {
+    cacheDirReady = false;
+    return { success: false, error: error?.message || String(error) };
+  }
+};
+
 export const __internal = {
   hashString,
   extractExtension,

@@ -6,6 +6,7 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
+const { passengerAuthorityUpdates, driverAuthorityUpdates } = require('./sessionFixtures');
 
 const PROJECT_ID = 'demo-llt-notification-rules';
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
@@ -79,6 +80,10 @@ test.before(async () => {
     await db.ref(`users/${DRIVER_UID}`).set({ driverId: DRIVER_ID });
     await db.ref(`tour_manifests/${TOUR_ID}/assigned_drivers/${DRIVER_ID}`).set(true);
     await db.ref(`tour_notifications/${TOUR_ID}/${NOTICE_ID}`).set(notice());
+    await db.ref().update({
+      ...passengerAuthorityUpdates({ uid: PASSENGER_UID, tourId: TOUR_ID, principalId: PASSENGER_PRINCIPAL_KEY, bookingRef: 'NOTIFY_BOOKING_1' }),
+      ...driverAuthorityUpdates({ uid: DRIVER_UID, driverId: DRIVER_ID, tourId: TOUR_ID }),
+    });
   });
 });
 
@@ -174,7 +179,7 @@ test('passenger read state becomes inaccessible after tour membership is removed
     await testEnv.withSecurityRulesDisabled(async (context) => {
       await context.database(databaseURL)
         .ref(`tours/${TOUR_ID}/participants/${PASSENGER_UID}`)
-        .set({ userId: PASSENGER_UID });
+        .set(passengerAuthorityUpdates({ uid: PASSENGER_UID, tourId: TOUR_ID, principalId: PASSENGER_PRINCIPAL_KEY })[`tours/${TOUR_ID}/participants/${PASSENGER_UID}`]);
     });
   }
 });

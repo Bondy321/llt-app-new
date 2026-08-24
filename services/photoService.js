@@ -1,17 +1,9 @@
 // services/photoService.js
-// Production-ready photo service using Firebase Storage and Realtime Database
+// Production-ready photo service using server-mediated Storage and Realtime Database metadata
 // Enhanced with comprehensive validation, file type checking, and size limits
 
 const {
-  ref: storageRef,
-  uploadBytes,
-  uploadBytesResumable,
-  deleteObject,
-} = require('firebase/storage');
-const {
   ref: databaseRef,
-  push,
-  set,
   remove,
   serverTimestamp,
   onValue,
@@ -19,12 +11,10 @@ const {
   update,
   query,
   orderByChild,
-  equalTo,
-  limitToFirst,
   limitToLast,
   endAt,
 } = require('firebase/database');
-const { storage, realtimeDbModular, auth, getCurrentAppCheckToken } = require('../firebase');
+const { realtimeDbModular, auth, getCurrentAppCheckToken } = require('../firebase');
 const { normalizePhotoUri } = require('./photoVariantService');
 const { loadOptionalService } = require('./optionalServiceLoader');
 const { assertTextPassesModeration } = require('./contentModerationService');
@@ -42,10 +32,12 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic'];
 const MAX_CAPTION_LENGTH = 500;
 const LIVE_PHOTOS_WINDOW = 100;
-const PHOTO_CACHE_CONTROL_HEADER = 'public,max-age=31536000,immutable';
+const PHOTO_CACHE_CONTROL_HEADER = 'private,max-age=300,no-transform';
 const IDEMPOTENCY_KEY_MAX_LENGTH = 180;
 const PRIVATE_MEDIA_BATCH_LIMIT = 50;
 const PRIVATE_MEDIA_FUNCTION_NAME = 'resolvePrivatePhotoMedia';
+const PRIVATE_UPLOAD_FUNCTION_NAME = 'uploadPrivatePhoto';
+const PRIVATE_DELETE_FUNCTION_NAME = 'deletePrivatePhoto';
 const GROUP_MEDIA_FUNCTION_NAME = 'resolveGroupPhotoMedia';
 const GROUP_UPLOAD_FUNCTION_NAME = 'uploadGroupPhoto';
 const GROUP_DELETE_FUNCTION_NAME = 'deleteGroupPhoto';
@@ -139,54 +131,6 @@ const resolveRealtimeTimestamp = (serverTimestampFn, nowFn = Date.now) => {
 
   const fallback = nowFn();
   return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : Date.now();
-};
-
-const deleteStoredPhotoObject = async ({
-  storageInstance,
-  storageRefFn,
-  deleteObjectFn,
-  path,
-  label,
-  timeoutMs = 10000,
-}) => {
-  const storagePath = typeof path === 'string' ? path.trim() : '';
-  if (!storagePath) return;
-
-  let timeoutId = null;
-  try {
-    logPhotoDbEvent('debug', 'photo_storage_delete_start', {
-      label,
-      path: summarizePathForDbLog(storagePath),
-      timeoutMs,
-    });
-    const fileRef = storageRefFn(storageInstance, storagePath);
-    await Promise.race([
-      deleteObjectFn(fileRef),
-      new Promise((_, reject) =>
-        { timeoutId = setTimeout(() => reject(new Error(`${label} deletion timeout`)), timeoutMs); }
-      ),
-    ]);
-    logPhotoDbEvent('debug', 'photo_storage_delete_success', {
-      label,
-      path: summarizePathForDbLog(storagePath),
-    });
-  } catch (error) {
-    if (error?.code === 'storage/object-not-found') {
-      logPhotoDbEvent('debug', 'photo_storage_delete_already_absent', {
-        label,
-        path: summarizePathForDbLog(storagePath),
-      });
-      return;
-    }
-    logPhotoDbEvent('warn', 'photo_storage_delete_failed', {
-      label,
-      path: summarizePathForDbLog(storagePath),
-      error: summarizeErrorForDbLog(error),
-    });
-    throw error;
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
 };
 
 // ==================== PAGINATION HELPERS ====================
@@ -618,6 +562,17 @@ const buildPrivateMediaEndpointUrl = (authInstance = auth) => {
   return projectId ? `https://europe-west1-${projectId}.cloudfunctions.net/${PRIVATE_MEDIA_FUNCTION_NAME}` : null;
 };
 
+const buildPrivatePhotoEndpointUrl = (functionName, authInstance = auth) => {
+  const envNames = {
+    [PRIVATE_UPLOAD_FUNCTION_NAME]: 'EXPO_PUBLIC_UPLOAD_PRIVATE_PHOTO_URL',
+    [PRIVATE_DELETE_FUNCTION_NAME]: 'EXPO_PUBLIC_DELETE_PRIVATE_PHOTO_URL',
+  };
+  const explicit = process.env[envNames[functionName]]?.trim();
+  if (explicit) return explicit;
+  const projectId = authInstance?.app?.options?.projectId;
+  return projectId ? `https://europe-west1-${projectId}.cloudfunctions.net/${functionName}` : null;
+};
+
 const buildGroupPhotoEndpointUrl = (functionName, authInstance = auth) => {
   const envNames = {
     [GROUP_MEDIA_FUNCTION_NAME]: 'EXPO_PUBLIC_RESOLVE_GROUP_PHOTO_MEDIA_URL',
@@ -673,20 +628,21 @@ const resolvePrivatePhotoMedia = async ({ tourId, ownerKey, photos }, {
   authInstance = auth,
   fetchFn = fetch,
   endpoint = buildPrivateMediaEndpointUrl(authInstance),
+  appCheckTokenFn = getCurrentAppCheckToken,
 } = {}) => {
   if (!Array.isArray(photos) || photos.length === 0) return [];
   const safePhotos = photos.map((photo) => {
     const { sourceUrl: _sourceUrl, viewerUrl: _viewerUrl, thumbnailUrl: _thumbnailUrl, ...safePhoto } = photo;
     return safePhoto;
   });
-  const token = await authInstance?.currentUser?.getIdToken?.();
-  if (!endpoint || !token) return safePhotos;
+  if (!endpoint) return safePhotos;
+  const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn);
   const resolvedMedia = {};
   for (let offset = 0; offset < safePhotos.length; offset += PRIVATE_MEDIA_BATCH_LIMIT) {
     const batch = safePhotos.slice(offset, offset + PRIVATE_MEDIA_BATCH_LIMIT);
     const response = await fetchFn(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({ tourId, ownerKey, photoIds: batch.map((photo) => photo.id) }),
     });
     const payload = await response.json().catch(() => null);
@@ -742,27 +698,14 @@ const uploadPhoto = async (
   {
     visibility = 'group',
     uploaderName = 'Tour Member',
-    storageInstance = storage,
     authInstance = auth,
-    realtimeDbInstance = realtimeDbModular,
-    storageRefFn = storageRef,
-    uploadBytesFn = uploadBytes,
-    uploadBytesResumableFn = uploadBytesResumable,
-    dbRefFn = databaseRef,
-    pushFn = push,
-    setFn = set,
-    getFn = get,
-    queryFn = query,
-    orderByChildFn = orderByChild,
-    equalToFn = equalTo,
-    limitToFirstFn = limitToFirst,
-    serverTimestampFn = serverTimestamp,
     fetchFn = fetch,
     onProgress = null,
     optimizationMetrics = null,
     idempotencyKey = null,
     nowFn = Date.now,
     groupUploadEndpoint = buildGroupPhotoEndpointUrl(GROUP_UPLOAD_FUNCTION_NAME, authInstance),
+    privateUploadEndpoint = buildPrivatePhotoEndpointUrl(PRIVATE_UPLOAD_FUNCTION_NAME, authInstance),
     appCheckTokenFn = getCurrentAppCheckToken,
   } = {}
 ) => {
@@ -781,14 +724,6 @@ const uploadPhoto = async (
     const normalizedIdempotencyKey = typeof idempotencyKey === 'string' && idempotencyKey.trim()
       ? idempotencyKey.trim().slice(0, IDEMPOTENCY_KEY_MAX_LENGTH)
       : null;
-
-    if (!storageInstance) {
-      throw new Error('Storage instance not initialized');
-    }
-
-    if (!realtimeDbInstance) {
-      throw new Error('Database instance not initialized');
-    }
 
     const authUid = typeof authInstance?.currentUser?.uid === 'string' && authInstance.currentUser.uid.trim()
       ? authInstance.currentUser.uid.trim()
@@ -809,47 +744,6 @@ const uploadPhoto = async (
       uri: summarizeUriForDbLog(validatedUri),
     };
     logPhotoDbEvent('info', 'photo_upload_start', uploadDiagnostics);
-
-    const databasePath = isPrivate
-      ? `private_tour_photos/${validatedTourId}/${validatedUserKey}`
-      : `group_tour_photos/${validatedTourId}`;
-    uploadDiagnostics = {
-      ...uploadDiagnostics,
-      databasePath: summarizePathForDbLog(databasePath),
-    };
-    const photosRef = isPrivate ? dbRefFn(realtimeDbInstance, databasePath) : null;
-
-    // Look up only the matching idempotency record. The previous implementation
-    // downloaded the complete album on every queued-photo retry, which became
-    // progressively slower and more expensive as a tour's album grew.
-    if (normalizedIdempotencyKey && isPrivate) {
-      uploadStage = 'checking_existing_photo_idempotency';
-      logPhotoDbEvent('debug', 'photo_upload_db_lookup_start', uploadDiagnostics);
-      const existingQuery = queryFn(
-        photosRef,
-        orderByChildFn('idempotencyKey'),
-        equalToFn(normalizedIdempotencyKey),
-        limitToFirstFn(1),
-      );
-      const existingSnapshot = await getFn(existingQuery);
-      const existingData = existingSnapshot.val() || {};
-      const existingEntry = Object.entries(existingData)[0];
-      if (existingEntry) {
-        const [existingId, existingPhoto] = existingEntry;
-        logPhotoDbEvent('info', 'photo_upload_deduped_existing_record', {
-          ...uploadDiagnostics,
-          photoId: summarizePrincipalForDbLog(existingId),
-        });
-        return {
-          id: existingId,
-          sourceUrl: isPrivate ? null : (existingPhoto.sourceUrl || null),
-          userId: existingPhoto.userId || validatedUserId,
-          caption: existingPhoto.caption || validatedCaption,
-          uploaderName: existingPhoto.uploaderName || uploaderName || 'Tour Member',
-          deduped: true,
-        };
-      }
-    }
 
     // Create blob and validate
     uploadStage = 'fetching_source_blob';
@@ -899,141 +793,38 @@ const uploadPhoto = async (
       }
     }
 
-    // Determine file extension from blob type
-    const extensionMap = {
-      'image/jpeg': 'jpg',
-      'image/jpg': 'jpg',
-      'image/png': 'png',
-      'image/webp': 'webp',
-      'image/heic': 'heic',
-    };
-    const extension = extensionMap[blob.type] || 'jpg';
-
-    const uploadTimestamp = Date.now();
-    const deterministicSegment = normalizedIdempotencyKey
-      ? sanitizeStorageSegment(normalizedIdempotencyKey, `${uploadTimestamp}_${validatedUserId}`)
-      : sanitizeStorageSegment(`${uploadTimestamp}_${validatedUserId}`, `${uploadTimestamp}_photo`);
-    const filename = `${deterministicSegment}.${extension}`;
-    const storagePath = isPrivate
-      ? `private_tour_photos/${validatedTourId}/${validatedUserKey}/${filename}`
-      : `group_tour_photos/${validatedTourId}/${filename}`;
-    uploadDiagnostics = {
-      ...uploadDiagnostics,
-      storagePath: summarizePathForDbLog(storagePath),
-    };
-    const fileRef = storageRefFn(storageInstance, storagePath);
-
+    uploadStage = 'uploading_private_photo_via_server';
     try {
-      const metadata = {
-        contentType: blob.type,
-        cacheControl: PHOTO_CACHE_CONTROL_HEADER,
-        customMetadata: {
-          authUid,
-          visibility: validatedVisibility,
-          sourceRole: 'source',
-        },
-      };
-
-      const uploadWithProgress = () => new Promise((resolve, reject) => {
-        try {
-          if (typeof uploadBytesResumableFn !== 'function' || typeof onProgress !== 'function') {
-            resolve(uploadBytesFn(fileRef, blob, metadata));
-            return;
-          }
-
-          const uploadTask = uploadBytesResumableFn(fileRef, blob, metadata);
-          uploadTask.on('state_changed', (snapshot) => {
-            if (snapshot.totalBytes > 0) {
-              onProgress(snapshot.bytesTransferred / snapshot.totalBytes);
-            }
-          }, reject, () => resolve(uploadTask.snapshot));
-        } catch (error) {
-          reject(error);
-        }
-      });
-
-      uploadStage = 'uploading_source_to_storage';
-      logPhotoDbEvent('debug', 'photo_upload_storage_source_start', uploadDiagnostics);
-      await Promise.race([
-        uploadWithProgress(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Photo upload timeout')), 60000)
-        ),
-      ]);
-      logPhotoDbEvent('info', 'photo_upload_storage_source_written', uploadDiagnostics);
-
-      uploadStage = 'resolving_source_download_url';
-      const downloadURL = null;
-      logPhotoDbEvent('debug', 'photo_upload_source_url_resolved', {
-        ...uploadDiagnostics,
-        downloadUrl: summarizeUriForDbLog(downloadURL),
-      });
-
-      // New idempotent uploads use a deterministic record key as a second line
-      // of defence against concurrent queue replays. Legacy push-key records are
-      // still discovered by the indexed query above.
-      const newPhotoRef = normalizedIdempotencyKey
-        ? dbRefFn(realtimeDbInstance, `${databasePath}/${sanitizeRealtimeKeySegment(normalizedIdempotencyKey)}`)
-        : pushFn(photosRef);
-
-      const photoData = {
-        userId: validatedUserId,
-        caption: validatedCaption,
-        timestamp: resolveRealtimeTimestamp(serverTimestampFn, nowFn),
-        storagePath,
-        fileSize: blob.size,
-        fileType: blob.type,
+      if (!normalizedIdempotencyKey) throw new Error('idempotencyKey is required for private photo uploads');
+      if (!privateUploadEndpoint) throw new Error('Private photo upload endpoint is unavailable');
+      const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn);
+      if (typeof onProgress === 'function') onProgress(0.05);
+      const encodedMetadata = encodeURIComponent(JSON.stringify({
+        tourId: validatedTourId,
         idempotencyKey: normalizedIdempotencyKey,
-        variantStatus: 'processing',
-        variantUpdatedAt: nowFn(),
-        variantError: null,
-        variantVersion: 2,
-      };
-      if (optimizationMetrics && typeof optimizationMetrics === 'object') {
-        photoData.optimization = {
-          originalSizeBytes: optimizationMetrics.originalSizeBytes || null,
-          optimizedSizeBytes: optimizationMetrics.optimizedSizeBytes || blob.size,
-          viewerSizeBytes: optimizationMetrics.viewerSizeBytes || null,
-          thumbnailSizeBytes: optimizationMetrics.thumbnailSizeBytes || null,
-          optimizationRatio: optimizationMetrics.optimizationRatio ?? null,
-          viewerOptimizationRatio: optimizationMetrics.viewerOptimizationRatio ?? null,
-        };
-      }
-
-      uploadStage = 'writing_photo_record_to_database';
-      logPhotoDbEvent('debug', 'photo_upload_db_write_start', {
-        ...uploadDiagnostics,
-        photoId: summarizePrincipalForDbLog(newPhotoRef?.key),
-        photoDataKeys: Object.keys(photoData),
-      });
-      await setFn(newPhotoRef, photoData);
-      uploadStage = 'completed';
-      logPhotoDbEvent('info', 'photo_upload_db_write_success', {
-        ...uploadDiagnostics,
-        photoId: summarizePrincipalForDbLog(newPhotoRef?.key),
-        variantStatus: photoData.variantStatus,
-      });
-
-      return {
-        id: newPhotoRef.key,
-        sourceUrl: downloadURL,
-        userId: validatedUserId,
         caption: validatedCaption,
-        uploaderName: uploaderName || 'Tour Member',
-      };
-    } finally {
-      // Clean up blob
-      if (blob && typeof blob.close === 'function') {
-        try {
-          blob.close();
-        } catch (error) {
-          logPhotoDbEvent('warn', 'photo_upload_blob_close_failed', {
-            stage: uploadStage,
-            error: summarizeErrorForDbLog(error),
-          });
-        }
+      }));
+      const response = await fetchFn(privateUploadEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': blob.type,
+          'x-private-photo-metadata': encodedMetadata,
+          ...authHeaders,
+        },
+        body: blob,
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || payload?.success !== true || !payload.photo?.id) {
+        throw new Error(payload?.reason === 'NOT_AUTHORIZED'
+          ? 'You no longer have access to this tour'
+          : 'Private photo upload could not be authorized');
       }
-
+      if (typeof onProgress === 'function') onProgress(1);
+      return payload.photo;
+    } finally {
+      if (blob && typeof blob.close === 'function') {
+        try { blob.close(); } catch (error) { /* best-effort release */ }
+      }
     }
   } catch (error) {
     logPhotoDbEvent('error', 'photo_upload_failed', {
@@ -1356,13 +1147,10 @@ const deletePrivatePhoto = async (
   ownerId,
   photoId,
   {
-    storageInstance = storage,
-    realtimeDbInstance = realtimeDbModular,
-    storageRefFn = storageRef,
-    deleteObjectFn = deleteObject,
-    dbRefFn = databaseRef,
-    removeFn = remove,
-    getFn = get,
+    authInstance = auth,
+    fetchFn = fetch,
+    endpoint = buildPrivatePhotoEndpointUrl(PRIVATE_DELETE_FUNCTION_NAME, authInstance),
+    appCheckTokenFn = getCurrentAppCheckToken,
   } = {}
 ) => {
   if (!tourId || !ownerId || !photoId) {
@@ -1379,56 +1167,19 @@ const deletePrivatePhoto = async (
       photoId: summarizePrincipalForDbLog(photoId),
     });
 
-    // First, get the photo data to find the storage path
-    const photoRef = dbRefFn(realtimeDbInstance, `private_tour_photos/${tourId}/${ownerScopeKey}/${photoId}`);
-    const snapshot = await getFn(photoRef);
-    const photoData = snapshot.val();
-
-    if (!photoData) {
-      logPhotoDbEvent('warn', 'photo_delete_missing_record', {
-        visibility: 'private',
-        tourId: summarizePrincipalForDbLog(tourId),
-        ownerId: summarizePrincipalForDbLog(ownerId),
-        photoId: summarizePrincipalForDbLog(photoId),
-      });
-      throw new Error('Photo not found');
+    if (!endpoint) throw new Error('Private photo delete endpoint is unavailable');
+    const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn);
+    const response = await fetchFn(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ tourId, photoId }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || payload?.success !== true) {
+      throw new Error(payload?.reason === 'NOT_AUTHORIZED'
+        ? 'You no longer have access to this tour'
+        : 'Private photo could not be deleted');
     }
-
-    logPhotoDbEvent('debug', 'photo_delete_record_loaded', {
-      visibility: 'private',
-      tourId: summarizePrincipalForDbLog(tourId),
-      ownerId: summarizePrincipalForDbLog(ownerId),
-      ownerKey: summarizePrincipalForDbLog(ownerScopeKey),
-      photoId: summarizePrincipalForDbLog(photoId),
-      hasSourcePath: Boolean(photoData.storagePath),
-      hasViewerPath: Boolean(photoData.viewerStoragePath),
-      hasThumbnailPath: Boolean(photoData.thumbnailStoragePath),
-    });
-
-    await deleteStoredPhotoObject({
-      storageInstance,
-      storageRefFn,
-      deleteObjectFn,
-      path: photoData.storagePath,
-      label: 'private photo',
-    });
-    await deleteStoredPhotoObject({
-      storageInstance,
-      storageRefFn,
-      deleteObjectFn,
-      path: photoData.viewerStoragePath,
-      label: 'private viewer photo',
-    });
-    await deleteStoredPhotoObject({
-      storageInstance,
-      storageRefFn,
-      deleteObjectFn,
-      path: photoData.thumbnailStoragePath,
-      label: 'private thumbnail',
-    });
-
-    // Delete from database
-    await removeFn(photoRef);
 
     logPhotoDbEvent('info', 'photo_delete_success', {
       visibility: 'private',
@@ -1512,6 +1263,8 @@ const updatePhotoCaption = async (
 
 
 const uploadPhotoDirect = async (payload = {}) => {
+  // Historical offline-queue API name: this delegates to uploadPhoto, which
+  // always uses the authenticated, App-Check-protected media Functions.
   let directDiagnostics = {};
 
   try {
@@ -1604,5 +1357,6 @@ module.exports = {
   createBlob,
   resolvePrivatePhotoMedia,
   buildGroupPhotoEndpointUrl,
+  buildPrivatePhotoEndpointUrl,
   buildGroupPhotoAuthHeaders,
 };

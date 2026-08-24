@@ -12,7 +12,8 @@ test('Gate 6 opens only exact coherent-driver pack reads and keeps server roots 
   assert.equal(packs['.write'], false);
   assert.ok(packs['.indexOn'].includes('expiresAtMs'));
   assert.match(packs.$departureKey['.read'], /users\/' \+ auth\.uid \+ '\/driverId/);
-  assert.match(packs.$departureKey['.read'], /drivers\/' \+ root\.child\('users\/' \+ auth\.uid \+ '\/driverId'\)\.val\(\) \+ '\/authUid/);
+  assert.match(packs.$departureKey['.read'], /app_sessions\/' \+ auth\.uid \+ '\/driverId/);
+  assert.match(packs.$departureKey['.read'], /drivers\/' \+ root\.child\('app_sessions\/' \+ auth\.uid \+ '\/driverId'\)\.val\(\) \+ '\/authUid/);
   assert.match(packs.$departureKey['.read'], /tour_manifests\/' \+ data\.child\('tourId'\)\.val\(\) \+ '\/assigned_drivers/);
   assert.equal(packs.$departureKey['.write'], false);
   ['driver_tour_pack_tombstones', 'driver_tour_pack_ingestion'].forEach((root) => {

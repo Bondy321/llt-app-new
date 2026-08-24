@@ -7,6 +7,7 @@ const {
   assertFails,
 } = require('@firebase/rules-unit-testing');
 const { toRealtimeKeySegment } = require('../../services/identityService');
+const { passengerAuthorityUpdates } = require('./sessionFixtures');
 
 const PROJECT_ID = 'demo-llt-identity-rules';
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
@@ -57,6 +58,9 @@ test.before(async () => {
       principalType: 'passenger',
     });
     await context.database(dbUrl).ref(`identity_bindings/${STABLE_KEY}/${USER_UID}`).set(true);
+    await context.database(dbUrl).ref().update(passengerAuthorityUpdates({
+      uid: USER_UID, tourId: 'TOUR_1', principalId: STABLE_ID, bookingRef: BOOKING_REF,
+    }));
   });
 });
 

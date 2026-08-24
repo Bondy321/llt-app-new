@@ -90,6 +90,16 @@ const loadService = () => {
   return require('../services/accountDeletionService');
 };
 
+const createAppSessionApi = () => ({
+  readSession: async () => ({
+    sessionId: 'sess_v1_0123456789abcdef0123456789abcdef',
+    principalType: 'passenger',
+    tourId: 'TOUR_1',
+  }),
+  endSession: async () => ({ success: true }),
+  completeEnd: async () => {},
+});
+
 test.afterEach(() => {
   Module._load = originalLoad;
 });
@@ -173,6 +183,7 @@ test('deleteCurrentAccount clears app account records, active-tour content, loca
       },
     },
     deleteUserFn: async (user) => deletedUsers.push(user.uid),
+    appSessionApi: createAppSessionApi(),
   });
 
   assert.equal(result.success, true);
@@ -252,6 +263,7 @@ test('deleteCurrentAccount removes driver-owned internal chat and driver locatio
       ensureAuthenticated: async () => ({ uid: 'fresh-driver-auth' }),
     },
     deleteUserFn: async () => {},
+    appSessionApi: createAppSessionApi(),
   });
 
   assert.equal(result.success, true);
@@ -296,6 +308,7 @@ test('deleteCurrentAccount does not expose raw backend errors to the account scr
     localStorage: { multiRemove: async () => {} },
     providerFactory: () => ({ multiDeleteAsync: async () => true }),
     photoApi: {},
+    appSessionApi: createAppSessionApi(),
   });
 
   assert.equal(result.success, false);
@@ -317,6 +330,7 @@ test('account deletion records local provider false results as cleanup warnings'
       ensureAuthenticated: async () => ({ uid: 'fresh-auth' }),
     },
     deleteUserFn: async () => {},
+    appSessionApi: createAppSessionApi(),
   });
 
   assert.equal(result.success, true);

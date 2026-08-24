@@ -11,6 +11,17 @@ const verifiedPassengerPayload = (overrides = {}) => ({
   tourId: '5112D_8',
   stablePassengerId: 'pax_v2_0123456789abcdef0123456789abcdef',
   identityVersion: 'pax_v2',
+  session: {
+    schemaVersion: 1,
+    sessionId: 'sess_v1_0123456789abcdef0123456789abcdef',
+    principalType: 'passenger',
+    principalId: 'pax_v2_0123456789abcdef0123456789abcdef',
+    driverId: null,
+    tourId: '5112D_8',
+    issuedAtMs: Date.now() - 1_000,
+    expiresAtMs: Date.now() + 60_000,
+    sessionRevision: 1,
+  },
   booking: {
     id: 'ABC123',
     tourId: '5112D_8',

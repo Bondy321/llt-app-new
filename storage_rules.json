@@ -1,57 +1,10 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    function isImageUpload() {
-      return request.resource != null
-        && request.resource.contentType.matches('image/.*')
-        && request.resource.size < 10 * 1024 * 1024;
-    }
-
-    function hasMatchingUploaderAuth() {
-      return request.resource != null
-        && request.resource.metadata.authUid == request.auth.uid
-        && (resource == null || resource.metadata.authUid == request.auth.uid);
-    }
-
-    function hasApprovedPhotoMetadata() {
-      return request.resource != null
-        && request.resource.metadata.keys().hasOnly(['authUid', 'visibility', 'sourceRole'])
-        && (!request.resource.metadata.keys().hasAny(['visibility'])
-          || request.resource.metadata.visibility == 'group'
-          || request.resource.metadata.visibility == 'private')
-        && (!request.resource.metadata.keys().hasAny(['sourceRole'])
-          || request.resource.metadata.sourceRole == 'source'
-          || request.resource.metadata.sourceRole == 'viewer'
-          || request.resource.metadata.sourceRole == 'thumbnail');
-    }
-
-    function ownsPrivatePhotoBucket(ownerId) {
-      return isSignedIn()
-        && request.auth.token.keys().hasAll(['privatePhotoOwnerKey'])
-        && request.auth.token.privatePhotoOwnerKey is string
-        && request.auth.token.privatePhotoOwnerKey.matches('^pax_v2_[a-f0-9]{32}$')
-        && request.auth.token.privatePhotoOwnerKey == ownerId;
-    }
-
-    // NOTE:
-    // The login verifier projects the caller's RTDB-safe stable owner key into a signed
-    // custom claim. This keeps restored passenger identities working without exposing
-    // private bytes to every authenticated Firebase user.
+    // Private media is session-authorised by Cloud Functions. Stable identity
+    // claims are never sufficient to address Storage objects directly.
     match /private_tour_photos/{tourId}/{ownerId}/{allPaths=**} {
-      allow read: if ownsPrivatePhotoBucket(ownerId);
-      allow create: if ownsPrivatePhotoBucket(ownerId)
-        && isImageUpload()
-        && hasApprovedPhotoMetadata()
-        && request.resource.metadata.authUid == request.auth.uid;
-      allow update: if ownsPrivatePhotoBucket(ownerId)
-        && isImageUpload()
-        && hasApprovedPhotoMetadata()
-        && hasMatchingUploaderAuth();
-      allow delete: if ownsPrivatePhotoBucket(ownerId) && resource != null;
+      allow read, write: if false;
     }
 
     // Group media is server-mediated. Storage rules cannot query Realtime
