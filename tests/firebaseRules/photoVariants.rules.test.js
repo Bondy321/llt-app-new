@@ -13,6 +13,8 @@ const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const TOUR_ID = 'TOUR_001';
 const USER_UID = 'user-photo-1';
 const FOREIGN_UID = 'user-photo-foreign';
+const DRIVER_UID = 'user-photo-driver';
+const DRIVER_ID = 'D-PHOTO';
 const PROFILE_KEY_UID = 'user-photo-profile-key';
 const OWNER_ID = 'pax_v2_22222222222222222222222222222222';
 const OWNER_KEY = toRealtimeKeySegment(OWNER_ID);
@@ -62,9 +64,9 @@ test.after(async () => {
   if (testEnv) await testEnv.cleanup();
 });
 
-test('allows valid group photo variant processing fields', async () => {
-  await assertSucceeds(dbFor(USER_UID).ref(GROUP_PATH).set({
-    sourceUrl: 'https://example.com/source.jpg',
+test('group photo records are server-created path-only metadata', async () => {
+  const record = {
+    storagePath: `group_tour_photos/${TOUR_ID}/source.jpg`,
     userId: USER_UID,
     timestamp: Date.now(),
     idempotencyKey: 'idem-1',
@@ -72,6 +74,17 @@ test('allows valid group photo variant processing fields', async () => {
     variantUpdatedAt: Date.now(),
     variantError: null,
     variantVersion: 2,
+  };
+  await assertFails(dbFor(USER_UID).ref(GROUP_PATH).set(record));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref(GROUP_PATH).set(record);
+  });
+  await assertSucceeds(dbFor(USER_UID).ref(GROUP_PATH).get());
+  await assertSucceeds(dbFor(USER_UID).ref(GROUP_PATH).update({
+    caption: 'Updated caption', captionUpdatedAt: Date.now(), captionEditedBy: USER_UID,
+  }));
+  await assertFails(dbFor(USER_UID).ref(GROUP_PATH).update({
+    storagePath: `group_tour_photos/OTHER_TOUR/source.jpg`,
   }));
 });
 
@@ -104,6 +117,22 @@ test('denies group photo metadata access for users outside the tour', async () =
     timestamp: Date.now(),
     variantStatus: 'ready',
   }));
+});
+
+test('stale driver assignment flags do not retain group photo metadata access', async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.database(dbUrl);
+    await db.ref(`users/${DRIVER_UID}/driverId`).set(DRIVER_ID);
+    await db.ref(`drivers/${DRIVER_ID}`).set({
+      authUid: DRIVER_UID,
+      name: 'Photo Driver',
+      currentTourId: 'OTHER_TOUR',
+    });
+    await db.ref(`tour_manifests/${TOUR_ID}/assigned_drivers/${DRIVER_ID}`).set(true);
+  });
+
+  await assertFails(dbFor(DRIVER_UID).ref(GROUP_PATH).get());
+  await assertFails(dbFor(DRIVER_UID).ref(`${GROUP_PATH}/caption`).set('Stale edit'));
 });
 
 test('denies invalid variantStatus values', async () => {

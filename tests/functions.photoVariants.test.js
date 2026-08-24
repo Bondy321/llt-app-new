@@ -902,17 +902,6 @@ test('buildPhotoVariantPaths maps private variants to supplied owner key', () =>
   });
 });
 
-test('buildFirebaseStorageDownloadUrl encodes object paths for token URLs', () => {
-  assert.equal(
-    __testables.buildFirebaseStorageDownloadUrl({
-      bucketName: 'demo-bucket.appspot.com',
-      objectPath: 'private_tour_photos/tour-1/pax_v1:T123:email_2E_example/viewers/source_viewer.jpg',
-      token: 'token-1',
-    }),
-    'https://firebasestorage.googleapis.com/v0/b/demo-bucket.appspot.com/o/private_tour_photos%2Ftour-1%2Fpax_v1%3AT123%3Aemail_2E_example%2Fviewers%2Fsource_viewer.jpg?alt=media&token=token-1',
-  );
-});
-
 test('buildTourManifestPayload uses canonical pickup fields when no pickup point array exists', async () => {
   const db = createMockRealtimeDb({
     tours: { TOUR_1: { name: 'Day tour', tourCode: 'TOUR 1' } },
@@ -959,7 +948,7 @@ test('findPhotoRecordByStoragePath tolerates the Storage-finalize versus RTDB-wr
   assert.deepEqual(waits, [250, 500]);
 });
 
-test('variant readiness uses paths for private media and URLs for group media', () => {
+test('variant readiness uses tokenless Storage paths for private and group media', () => {
   assert.equal(__testables.isPhotoVariantRecordReady({
     visibility: 'private',
     photoRecord: {
@@ -974,8 +963,8 @@ test('variant readiness uses paths for private media and URLs for group media', 
     visibility: 'group',
     photoRecord: {
       variantStatus: 'ready',
-      viewerUrl: 'https://example.invalid/viewer',
-      thumbnailUrl: 'https://example.invalid/thumb',
+      viewerStoragePath: 'group/viewer.jpg',
+      thumbnailStoragePath: 'group/thumb.jpg',
     },
   }), true);
   assert.equal(__testables.isPhotoVariantRecordReady({
@@ -1007,11 +996,13 @@ test('generatePhotoVariantsForRecord dry run reports target variant paths withou
 test('generatePhotoVariantsForRecord writes ready variant fields', async () => {
   const savedPaths = [];
   const saveMetadataByPath = {};
+  const sourceMetadataUpdates = [];
   const updates = [];
   const storageBucket = {
     file: (path) => ({
       download: async () => [Buffer.from('source')],
       getMetadata: async () => [{ metadata: { authUid: 'auth-1' } }],
+      setMetadata: async (metadata) => sourceMetadataUpdates.push(metadata),
       save: async (_buffer, options) => {
         savedPaths.push(path);
         saveMetadataByPath[path] = options?.metadata?.metadata || {};
@@ -1046,18 +1037,17 @@ test('generatePhotoVariantsForRecord writes ready variant fields', async () => {
   ]);
   assert.equal(updates[0].photoId, 'photo-1');
   assert.equal(updates[0].payload.variantStatus, 'ready');
-  assert.match(
-    updates[0].payload.viewerUrl,
-    /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/demo-bucket\.appspot\.com\/o\/group_tour_photos%2Ftour-1%2Fviewers%2Fsource_viewer\.jpg\?alt=media&token=/,
-  );
-  assert.match(
-    updates[0].payload.thumbnailUrl,
-    /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/demo-bucket\.appspot\.com\/o\/group_tour_photos%2Ftour-1%2Fthumbnails%2Fsource_thumb\.jpg\?alt=media&token=/,
-  );
-  assert.equal(typeof saveMetadataByPath['group_tour_photos/tour-1/viewers/source_viewer.jpg'].firebaseStorageDownloadTokens, 'string');
-  assert.equal(typeof saveMetadataByPath['group_tour_photos/tour-1/thumbnails/source_thumb.jpg'].firebaseStorageDownloadTokens, 'string');
-  assert.equal(saveMetadataByPath['group_tour_photos/tour-1/viewers/source_viewer.jpg'].authUid, 'auth-1');
-  assert.equal(saveMetadataByPath['group_tour_photos/tour-1/thumbnails/source_thumb.jpg'].authUid, 'auth-1');
+  assert.equal(updates[0].payload.viewerUrl, null);
+  assert.equal(updates[0].payload.thumbnailUrl, null);
+  assert.deepEqual(saveMetadataByPath['group_tour_photos/tour-1/viewers/source_viewer.jpg'], {
+    visibility: 'group', sourceRole: 'viewer',
+  });
+  assert.deepEqual(saveMetadataByPath['group_tour_photos/tour-1/thumbnails/source_thumb.jpg'], {
+    visibility: 'group', sourceRole: 'thumbnail',
+  });
+  assert.deepEqual(sourceMetadataUpdates, [{ metadata: {
+    visibility: 'group', sourceRole: 'source', firebaseStorageDownloadTokens: null,
+  } }]);
 });
 
 test('private variant generation revokes source tokens and creates path-only tokenless variants', async () => {

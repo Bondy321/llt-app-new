@@ -24,6 +24,7 @@ const {
   deletePrivatePhoto,
   updatePhotoCaption,
   uploadPhotoDirect,
+  resolveGroupPhotoMedia,
   resolvePrivatePhotoMedia,
 } = require('../services/photoService');
 
@@ -40,95 +41,38 @@ const createMockBlob = (overrides = {}) => ({
   ...overrides,
 });
 
-test('uploadPhoto stores group photo using group_tour_photos paths and rich metadata', async (t) => {
-  const originalNow = Date.now;
-  Date.now = () => 1700000000000;
-  t.after(() => {
-    Date.now = originalNow;
-  });
-
+test('uploadPhoto sends group media only through the authenticated server endpoint', async () => {
   const blob = createMockBlob();
   const fetchCalls = [];
-  const mockFetch = async (uri) => {
-    fetchCalls.push(uri);
-    return {
-      ok: true,
-      blob: async () => blob,
-    };
-  };
-
-  let uploadCall;
-  const mockUploadBytes = async (ref, uploadedBlob, metadata) => {
-    uploadCall = { ref, uploadedBlob, metadata };
-  };
-
-  const storagePaths = [];
-  const mockStorageRef = (_storage, path) => {
-    storagePaths.push(path);
-    return { path };
-  };
-
-  let setPayload;
-  let setPath;
-  const mockPush = (ref) => {
-    setPath = ref.path;
-    return { key: 'group-photo-1' };
-  };
-  const mockSet = async (_ref, payload) => {
-    setPayload = payload;
+  const mockFetch = async (uri, options) => {
+    fetchCalls.push({ uri, options });
+    if (uri === 'file://group.jpg') return { ok: true, blob: async () => blob };
+    return { ok: true, json: async () => ({ success: true, photo: {
+      id: 'idem-group-1', userId: 'user-9', caption: 'Lovely day!', uploaderName: 'Driver Bond',
+      storagePath: 'group_tour_photos/tour-77/idem-group-1.jpg',
+    } }) };
   };
 
   const result = await uploadPhoto('file://group.jpg', 'tour-77', 'user-9', 'Lovely day!', {
+    idempotencyKey: 'idem-group-1',
     uploaderName: 'Driver Bond',
-    storageInstance: {},
-    realtimeDbInstance: {},
-    storageRefFn: mockStorageRef,
-    uploadBytesFn: mockUploadBytes,
-    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
-    dbRefFn: mockDbRef,
-    pushFn: mockPush,
-    setFn: mockSet,
-    serverTimestampFn: () => 1234567890,
+    authInstance: { currentUser: { uid: 'auth-1', getIdToken: async () => 'id-token' } },
+    appCheckTokenFn: async () => 'app-check-token',
+    groupUploadEndpoint: 'https://functions.test/uploadGroupPhoto',
     fetchFn: mockFetch,
   });
 
-  assert.deepStrictEqual(fetchCalls, ['file://group.jpg']);
-  assert.strictEqual(storagePaths[0], 'group_tour_photos/tour-77/1700000000000_user-9.jpg');
-  assert.strictEqual(setPath, 'group_tour_photos/tour-77');
-  assert.strictEqual(uploadCall.ref.path, storagePaths[0]);
-  assert.strictEqual(uploadCall.uploadedBlob, blob);
-  assert.strictEqual(uploadCall.metadata.contentType, 'image/jpeg');
-  assert.strictEqual(uploadCall.metadata.cacheControl, 'public,max-age=31536000,immutable');
-  assert.strictEqual(uploadCall.metadata.customMetadata.authUid, 'auth-upload-1');
-  assert.deepStrictEqual(uploadCall.metadata.customMetadata, {
-    authUid: 'auth-upload-1',
-    visibility: 'group',
-    sourceRole: 'source',
+  assert.equal(fetchCalls.length, 2);
+  assert.equal(fetchCalls[1].uri, 'https://functions.test/uploadGroupPhoto');
+  assert.equal(fetchCalls[1].options.headers.Authorization, 'Bearer id-token');
+  assert.equal(fetchCalls[1].options.headers['x-firebase-appcheck'], 'app-check-token');
+  assert.equal(fetchCalls[1].options.body, blob);
+  const metadata = JSON.parse(decodeURIComponent(fetchCalls[1].options.headers['x-group-photo-metadata']));
+  assert.deepStrictEqual(metadata, {
+    tourId: 'tour-77', idempotencyKey: 'idem-group-1', caption: 'Lovely day!', uploaderName: 'Driver Bond',
   });
-
-  assert.deepStrictEqual(setPayload, {
-    sourceUrl: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
-    userId: 'user-9',
-    caption: 'Lovely day!',
-    timestamp: 1234567890,
-    storagePath: 'group_tour_photos/tour-77/1700000000000_user-9.jpg',
-    fileSize: 1024,
-    fileType: 'image/jpeg',
-    idempotencyKey: null,
-    variantStatus: 'processing',
-    variantUpdatedAt: 1700000000000,
-    variantError: null,
-    variantVersion: 2,
-    uploaderName: 'Driver Bond',
-  });
-
-  assert.deepStrictEqual(result, {
-    id: 'group-photo-1',
-    sourceUrl: 'https://example.com/group_tour_photos/tour-77/1700000000000_user-9.jpg',
-    userId: 'user-9',
-    caption: 'Lovely day!',
-    uploaderName: 'Driver Bond',
-  });
+  assert.equal(result.id, 'idem-group-1');
+  assert.equal(result.sourceUrl, undefined);
   assert.strictEqual(blob.closed, true);
 });
 
@@ -291,53 +235,39 @@ test('uploadPhoto surfaces fetch failures when response is not ok', async () => 
 });
 
 
-test('uploadPhoto writes processing variant state for server-owned variants', async (t) => {
-  const originalNow = Date.now;
-  Date.now = () => 1700000000000;
-  t.after(() => {
-    Date.now = originalNow;
+test('resolveGroupPhotoMedia strips durable URLs and hydrates only short-lived authorized media', async () => {
+  const source = [{ id: 'photo-1', storagePath: 'group_tour_photos/tour-1/a.jpg', sourceUrl: 'https://legacy-token' }];
+  const result = await resolveGroupPhotoMedia({ tourId: 'tour-1', photos: source }, {
+    authInstance: { currentUser: { getIdToken: async () => 'id-token' } },
+    appCheckTokenFn: async () => 'app-check-token',
+    endpoint: 'https://functions.test/resolveGroupPhotoMedia',
+    fetchFn: async (_url, options) => {
+      assert.equal(options.headers.Authorization, 'Bearer id-token');
+      assert.equal(options.headers['x-firebase-appcheck'], 'app-check-token');
+      return { ok: true, json: async () => ({
+        success: true,
+        expiresAtMs: Date.now() + 60_000,
+        media: { 'photo-1': { sourceUrl: 'https://signed.test/source' } },
+      }) };
+    },
+  });
+  assert.equal(result[0].sourceUrl, 'https://signed.test/source');
+  assert.equal(source[0].sourceUrl, 'https://legacy-token');
+});
+
+test('resolveGroupPhotoMedia keeps deleted photo references harmless when no media remains', async () => {
+  const source = [{ id: 'deleted-photo', storagePath: 'group_tour_photos/tour-1/deleted.jpg' }];
+  const result = await resolveGroupPhotoMedia({ tourId: 'tour-1', photos: source }, {
+    authInstance: { currentUser: { getIdToken: async () => 'id-token' } },
+    appCheckTokenFn: async () => 'app-check-token',
+    endpoint: 'https://functions.test/resolveGroupPhotoMedia',
+    fetchFn: async () => ({
+      ok: true,
+      json: async () => ({ success: true, expiresAtMs: Date.now() + 60_000, media: {} }),
+    }),
   });
 
-  const mainBlob = createMockBlob({ size: 2048, type: 'image/jpeg' });
-  const uploaded = [];
-  let payload;
-
-  await uploadPhoto('file://main.jpg', 'tour-source-only', 'user-source', 'Source-only', {
-    optimizationMetrics: {
-      originalSizeBytes: 4096,
-      optimizedSizeBytes: 2048,
-      optimizationRatio: 0.5,
-    },
-    storageInstance: {},
-    realtimeDbInstance: {},
-    storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async (ref, _blob, metadata) => {
-      uploaded.push({ path: ref.path, metadata });
-    },
-    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
-    dbRefFn: mockDbRef,
-    pushFn: () => ({ key: 'source-photo' }),
-    setFn: async (_ref, value) => {
-      payload = value;
-    },
-    serverTimestampFn: () => 42,
-    fetchFn: async () => ({ ok: true, blob: async () => mainBlob }),
-  });
-
-  assert.deepStrictEqual(uploaded.map((entry) => entry.path), [
-    'group_tour_photos/tour-source-only/1700000000000_user-source.jpg',
-  ]);
-  assert.strictEqual(payload.variantStatus, 'processing');
-  assert.strictEqual(payload.sourceUrl, 'https://example.com/group_tour_photos/tour-source-only/1700000000000_user-source.jpg');
-  assert.strictEqual(payload.variantVersion, 2);
-  assert.deepStrictEqual(payload.optimization, {
-    originalSizeBytes: 4096,
-    optimizedSizeBytes: 2048,
-    viewerSizeBytes: null,
-    thumbnailSizeBytes: null,
-    optimizationRatio: 0.5,
-    viewerOptimizationRatio: null,
-  });
+  assert.deepEqual(result, source);
 });
 
 test('resolvePrivatePhotoMedia hydrates short-lived URLs in memory with an authenticated bounded request', async () => {
@@ -374,70 +304,20 @@ test('resolvePrivatePhotoMedia rejects expired or malformed authorization respon
   }), /could not be authorized/);
 });
 
-test('uploadPhoto retries getDownloadURL for transient storage errors before succeeding', async (t) => {
-  const originalNow = Date.now;
-  Date.now = () => 1700000000000;
-  t.after(() => {
-    Date.now = originalNow;
-  });
-
+test('uploadPhoto fails closed when group upload authorization is denied', async () => {
   const blob = createMockBlob();
-  let attempts = 0;
-
-  let payload;
-  await uploadPhoto('file://group.jpg', 'tour-retry', 'user-retry', '', {
-    storageInstance: {},
-    realtimeDbInstance: {},
-    storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async () => {},
-    getDownloadURLFn: async (ref) => {
-      attempts += 1;
-      if (attempts < 3) {
-        const error = new Error('object-not-found while edge cache catches up');
-        error.code = 'storage/object-not-found';
-        throw error;
-      }
-      return `https://example.com/${ref.path}`;
-    },
-    dbRefFn: mockDbRef,
-    pushFn: () => ({ key: 'photo-retry' }),
-    setFn: async (_ref, value) => {
-      payload = value;
-    },
-    serverTimestampFn: () => 123,
-    fetchFn: async () => ({ ok: true, blob: async () => blob }),
-  });
-
-  assert.strictEqual(attempts, 3);
-  assert.strictEqual(payload.sourceUrl, 'https://example.com/group_tour_photos/tour-retry/1700000000000_user-retry.jpg');
-});
-
-test('uploadPhoto fails fast on non-retryable getDownloadURL errors', async () => {
-  const blob = createMockBlob();
-  let attempts = 0;
-
   await assert.rejects(
     uploadPhoto('file://group.jpg', 'tour-fail', 'user-fail', '', {
-      storageInstance: {},
-      realtimeDbInstance: {},
-      storageRefFn: (_storage, path) => ({ path }),
-      uploadBytesFn: async () => {},
-      getDownloadURLFn: async () => {
-        attempts += 1;
-        const error = new Error('permission denied');
-        error.code = 'storage/unauthorized';
-        throw error;
-      },
-      dbRefFn: mockDbRef,
-      pushFn: () => ({ key: 'photo-fail' }),
-      setFn: async () => {},
-      serverTimestampFn: () => 123,
-      fetchFn: async () => ({ ok: true, blob: async () => blob }),
+      idempotencyKey: 'failed-upload',
+      authInstance: { currentUser: { uid: 'auth-1', getIdToken: async () => 'id-token' } },
+      appCheckTokenFn: async () => 'app-check-token',
+      groupUploadEndpoint: 'https://functions.test/uploadGroupPhoto',
+      fetchFn: async (url) => url.startsWith('file:')
+        ? ({ ok: true, blob: async () => blob })
+        : ({ ok: false, json: async () => ({ reason: 'NOT_AUTHORIZED' }) }),
     }),
-    /permission denied/
+    /no longer have access/
   );
-
-  assert.strictEqual(attempts, 1);
 });
 
 test('subscribeToTourPhotos sorts by descending timestamp and returns a safe fallback when mapping fails', async () => {
@@ -612,46 +492,28 @@ test('fetchPrivatePhotosPage strips legacy durable URLs while normalizing malfor
 });
 
 test('deleteGroupPhoto deletes owned photo from storage and database', async () => {
-  const operations = [];
-
+  const requests = [];
   const result = await deleteGroupPhoto('tour-1', 'photo-1', 'owner-1', {
-    storageInstance: {},
-    realtimeDbInstance: {},
-    dbRefFn: (_db, path) => ({ path }),
-    getFn: async () => mockSnapshot({
-      userId: 'owner-1',
-      storagePath: 'group_tour_photos/tour-1/file.jpg',
-      viewerStoragePath: 'group_tour_photos/tour-1/viewers/file_viewer.jpg',
-      thumbnailStoragePath: 'group_tour_photos/tour-1/thumbnails/file_thumb.jpg',
-    }),
-    storageRefFn: (_storage, path) => ({ path }),
-    deleteObjectFn: async (ref) => {
-      operations.push(`delete-storage:${ref.path}`);
-    },
-    removeFn: async (ref) => {
-      operations.push(`delete-db:${ref.path}`);
+    authInstance: { currentUser: { getIdToken: async () => 'id-token' } },
+    appCheckTokenFn: async () => 'app-check-token',
+    endpoint: 'https://functions.test/deleteGroupPhoto',
+    fetchFn: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, json: async () => ({ success: true }) };
     },
   });
-
-  assert.deepStrictEqual(operations, [
-    'delete-storage:group_tour_photos/tour-1/file.jpg',
-    'delete-storage:group_tour_photos/tour-1/viewers/file_viewer.jpg',
-    'delete-storage:group_tour_photos/tour-1/thumbnails/file_thumb.jpg',
-    'delete-db:group_tour_photos/tour-1/photo-1',
-  ]);
+  assert.equal(requests[0].options.headers.Authorization, 'Bearer id-token');
+  assert.deepStrictEqual(JSON.parse(requests[0].options.body), { tourId: 'tour-1', photoId: 'photo-1' });
   assert.deepStrictEqual(result, { success: true });
 });
 
 test('deleteGroupPhoto rejects delete when requesting user does not own photo', async () => {
   await assert.rejects(
     deleteGroupPhoto('tour-1', 'photo-1', 'intruder', {
-      storageInstance: {},
-      realtimeDbInstance: {},
-      dbRefFn: (_db, path) => ({ path }),
-      getFn: async () => mockSnapshot({ userId: 'owner-1' }),
-      removeFn: async () => {},
-      deleteObjectFn: async () => {},
-      storageRefFn: (_storage, path) => ({ path }),
+      authInstance: { currentUser: { getIdToken: async () => 'id-token' } },
+      appCheckTokenFn: async () => 'app-check-token',
+      endpoint: 'https://functions.test/deleteGroupPhoto',
+      fetchFn: async () => ({ ok: false, json: async () => ({ reason: 'NOT_OWNER' }) }),
     }),
     /You can only delete your own photos/
   );
@@ -710,28 +572,17 @@ test('uploadPhoto reports progress updates when resumable upload is available', 
   const progress = [];
 
   await uploadPhoto('file://progress.jpg', 'tour-p', 'user-p', 'Progress', {
-    storageInstance: {},
-    realtimeDbInstance: {},
-    fetchFn: async () => ({ ok: true, blob: async () => blob }),
-    storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async () => {},
-    uploadBytesResumableFn: () => ({
-      snapshot: { bytesTransferred: 100, totalBytes: 100 },
-      on: (_event, onNext, _onError, onComplete) => {
-        onNext({ bytesTransferred: 25, totalBytes: 100 });
-        onNext({ bytesTransferred: 100, totalBytes: 100 });
-        onComplete();
-      },
-    }),
-    getDownloadURLFn: async () => 'https://example.com/progress.jpg',
-    dbRefFn: mockDbRef,
-    pushFn: () => ({ key: 'progress-photo' }),
-    setFn: async () => {},
-    serverTimestampFn: () => 1,
+    idempotencyKey: 'progress-photo',
+    authInstance: { currentUser: { uid: 'auth-1', getIdToken: async () => 'id-token' } },
+    appCheckTokenFn: async () => 'app-check-token',
+    groupUploadEndpoint: 'https://functions.test/uploadGroupPhoto',
+    fetchFn: async (url) => url.startsWith('file:')
+      ? ({ ok: true, blob: async () => blob })
+      : ({ ok: true, json: async () => ({ success: true, photo: { id: 'progress-photo' } }) }),
     onProgress: (ratio) => progress.push(ratio),
   });
 
-  assert.deepStrictEqual(progress, [0.25, 1]);
+  assert.deepStrictEqual(progress, [0.05, 1]);
 });
 
 
@@ -795,93 +646,38 @@ test('updatePhotoCaption writes caption edit metadata for group photo', async ()
 
 test('uploadPhoto reuses existing record when idempotency key already exists', async () => {
   const blob = createMockBlob();
-  let pushCalls = 0;
-  let setCalls = 0;
   let fetchCalls = 0;
-  let queryConstraints;
 
   const result = await uploadPhoto('file://group.jpg', 'tour-77', 'user-9', 'Lovely day!', {
     idempotencyKey: 'idem-123',
     uploaderName: 'Driver Bond',
-    storageInstance: {},
-    realtimeDbInstance: {},
-    storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async () => {},
-    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
-    dbRefFn: (_db, path) => ({ path, key: path.split('/').pop() }),
-    queryFn: (ref, ...constraints) => {
-      queryConstraints = constraints;
-      return { ...ref, queried: true };
-    },
-    orderByChildFn: (field) => ({ orderByChild: field }),
-    equalToFn: (value) => ({ equalTo: value }),
-    limitToFirstFn: (value) => ({ limitToFirst: value }),
-    getFn: async () => mockSnapshot({
-      existing_photo: {
-        idempotencyKey: 'idem-123',
-        sourceUrl: 'https://example.com/group_tour_photos/tour-77/existing.jpg',
-        userId: 'user-9',
-        caption: 'Already done',
-        uploaderName: 'Driver Bond',
-      },
-    }),
-    pushFn: () => {
-      pushCalls += 1;
-      return { key: 'new-photo' };
-    },
-    setFn: async () => {
-      setCalls += 1;
-    },
-    serverTimestampFn: () => 123,
-    fetchFn: async () => {
+    authInstance: { currentUser: { uid: 'auth-1', getIdToken: async () => 'id-token' } },
+    appCheckTokenFn: async () => 'app-check-token',
+    groupUploadEndpoint: 'https://functions.test/uploadGroupPhoto',
+    fetchFn: async (url) => {
       fetchCalls += 1;
-      return { ok: true, blob: async () => blob };
+      return url.startsWith('file:')
+        ? { ok: true, blob: async () => blob }
+        : { ok: true, json: async () => ({ success: true, photo: { id: 'existing_photo', deduped: true } }) };
     },
   });
-
-  assert.deepStrictEqual(queryConstraints, [
-    { orderByChild: 'idempotencyKey' },
-    { equalTo: 'idem-123' },
-    { limitToFirst: 1 },
-  ]);
-  assert.equal(fetchCalls, 0);
-  assert.equal(pushCalls, 0);
-  assert.equal(setCalls, 0);
+  assert.equal(fetchCalls, 2);
   assert.equal(result.id, 'existing_photo');
   assert.equal(result.deduped, true);
 });
 
 test('uploadPhoto uses a deterministic database key for a new idempotent upload', async () => {
   const blob = createMockBlob();
-  let writtenRef;
-  let pushCalls = 0;
 
   const result = await uploadPhoto('file://group.jpg', 'tour-77', 'user-9', 'New photo', {
     idempotencyKey: 'queue.item#1',
-    storageInstance: {},
-    realtimeDbInstance: {},
-    storageRefFn: (_storage, path) => ({ path }),
-    uploadBytesFn: async () => {},
-    getDownloadURLFn: async (ref) => `https://example.com/${ref.path}`,
-    dbRefFn: (_db, path) => ({ path, key: path.split('/').pop() }),
-    queryFn: (ref) => ref,
-    orderByChildFn: () => ({}),
-    equalToFn: () => ({}),
-    limitToFirstFn: () => ({}),
-    getFn: async () => mockSnapshot(null),
-    pushFn: () => {
-      pushCalls += 1;
-      return { key: 'unexpected-push' };
-    },
-    setFn: async (ref) => {
-      writtenRef = ref;
-    },
-    serverTimestampFn: () => 123,
-    fetchFn: async () => ({ ok: true, blob: async () => blob }),
+    authInstance: { currentUser: { uid: 'auth-1', getIdToken: async () => 'id-token' } },
+    appCheckTokenFn: async () => 'app-check-token',
+    groupUploadEndpoint: 'https://functions.test/uploadGroupPhoto',
+    fetchFn: async (url) => url.startsWith('file:')
+      ? ({ ok: true, blob: async () => blob })
+      : ({ ok: true, json: async () => ({ success: true, photo: { id: 'queue_2E_item_23_1' } }) }),
   });
-
-  assert.equal(pushCalls, 0);
-  assert.equal(writtenRef.path, 'group_tour_photos/tour-77/queue_2E_item_23_1');
   assert.equal(result.id, 'queue_2E_item_23_1');
 });
 

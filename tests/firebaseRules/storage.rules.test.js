@@ -59,75 +59,43 @@ test.after(async () => {
   if (testEnv) await testEnv.cleanup();
 });
 
-test('photo owner can upload and delete group and private objects', async () => {
-  for (const objectPath of [
-    'group_tour_photos/TOUR_1/photo.jpg',
-    `private_tour_photos/TOUR_1/${OWNER_KEY}/photo.jpg`,
-  ]) {
-    const claims = objectPath.startsWith('private_') ? { privatePhotoOwnerKey: OWNER_KEY } : {};
-    const objectRef = ref(storageFor(OWNER_UID, claims), objectPath);
-    await assertSucceeds(uploadBytes(objectRef, imageBytes, imageMetadataFor(OWNER_UID)));
-    await assertSucceeds(deleteObject(objectRef));
+test('all direct client access to server-mediated group media is denied', async () => {
+  const paths = [
+    'group_tour_photos/TOUR_B/source.jpg',
+    'group_tour_photos/TOUR_B/viewers/source_viewer.jpg',
+    'group_tour_photos/TOUR_B/thumbnails/source_thumb.jpg',
+  ];
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    for (const objectPath of paths) {
+      await uploadBytes(ref(context.storage(BUCKET_URL), objectPath), imageBytes, { contentType: 'image/jpeg' });
+    }
+  });
+  for (const objectPath of paths) {
+    for (const context of [
+      storageFor(OWNER_UID, { tourId: 'TOUR_B' }),
+      storageFor(FOREIGN_UID, { tourId: 'TOUR_A' }),
+      storageFor('unassigned-driver', { driverId: 'D-404' }),
+      testEnv.unauthenticatedContext().storage(BUCKET_URL),
+    ]) {
+      const objectRef = ref(context, objectPath);
+      await assertFails(getBytes(objectRef));
+      await assertFails(deleteObject(objectRef));
+    }
   }
 });
 
-test('another authenticated user cannot overwrite or delete the uploader object', async () => {
-  const objectPath = 'group_tour_photos/TOUR_1/owned.jpg';
-  await assertSucceeds(uploadBytes(
-    ref(storageFor(OWNER_UID), objectPath),
-    imageBytes,
-    imageMetadataFor(OWNER_UID),
-  ));
-
-  const foreignRef = ref(storageFor(FOREIGN_UID), objectPath);
-  await assertFails(uploadBytes(foreignRef, imageBytes, imageMetadataFor(FOREIGN_UID)));
-  await assertFails(deleteObject(foreignRef));
-});
-
-test('server-generated group variants are owner-deletable but cannot be client-created or overwritten', async () => {
-  const objectPath = 'group_tour_photos/TOUR_1/viewers/owned_viewer.jpg';
-  const ownerRef = ref(storageFor(OWNER_UID), objectPath);
-  await assertFails(uploadBytes(ownerRef, imageBytes, imageMetadataFor(OWNER_UID)));
-
-  await testEnv.withSecurityRulesDisabled(async (context) => {
-    await uploadBytes(ref(context.storage(BUCKET_URL), objectPath), imageBytes, {
-      contentType: 'image/jpeg',
-      customMetadata: {
-        authUid: OWNER_UID,
-        variant: 'viewer',
-        firebaseStorageDownloadTokens: 'server-token',
-      },
-    });
-  });
-
-  await assertFails(uploadBytes(ownerRef, imageBytes, imageMetadataFor(OWNER_UID)));
-  await assertFails(deleteObject(ref(storageFor(FOREIGN_UID), objectPath)));
-  await assertSucceeds(deleteObject(ownerRef));
-});
-
-test('uploads must be authenticated images with matching uploader metadata', async () => {
-  const unauthenticatedRef = ref(
-    testEnv.unauthenticatedContext().storage(BUCKET_URL),
-    'group_tour_photos/TOUR_1/unauthenticated.jpg',
-  );
-  await assertFails(uploadBytes(unauthenticatedRef, imageBytes, imageMetadataFor(OWNER_UID)));
-
-  const ownerStorage = storageFor(OWNER_UID);
-  await assertFails(uploadBytes(
-    ref(ownerStorage, 'group_tour_photos/TOUR_1/forged.jpg'),
-    imageBytes,
-    imageMetadataFor(FOREIGN_UID),
-  ));
-  await assertFails(uploadBytes(
-    ref(ownerStorage, 'group_tour_photos/TOUR_1/not-image.txt'),
-    new Uint8Array([1, 2, 3]),
-    { contentType: 'text/plain', customMetadata: { authUid: OWNER_UID } },
-  ));
-  await assertFails(uploadBytes(
-    ref(ownerStorage, 'group_tour_photos/TOUR_1/sensitive-metadata.jpg'),
-    imageBytes,
-    { contentType: 'image/jpeg', customMetadata: { authUid: OWNER_UID, bookingRef: 'PRIVATE-REF' } },
-  ));
+test('members cannot upload to their own, another, or an invented group tour path', async () => {
+  for (const objectPath of [
+    'group_tour_photos/TOUR_A/own.jpg',
+    'group_tour_photos/TOUR_B/cross-tour.jpg',
+    'group_tour_photos/INVENTED_TOUR/invented.jpg',
+  ]) {
+    await assertFails(uploadBytes(
+      ref(storageFor(OWNER_UID, { tourId: 'TOUR_A' }), objectPath),
+      imageBytes,
+      imageMetadataFor(OWNER_UID),
+    ));
+  }
 });
 
 test('private photo reads require the matching stable owner claim', async () => {

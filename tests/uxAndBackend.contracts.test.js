@@ -525,6 +525,7 @@ test('Static contract: user content reports stay scoped to tour users and admin 
 test('Static contract: Storage photos use uploader proof and stable private owner claims', () => {
   const storageRules = readText('storage_rules.json');
   const photoSource = readText('services/photoService.js');
+  const functionsSource = readText('functions/index.js');
 
   assert.match(storageRules, /function hasMatchingUploaderAuth\(\)/);
   assert.match(storageRules, /request\.resource\.metadata\.authUid == request\.auth\.uid/);
@@ -537,6 +538,14 @@ test('Static contract: Storage photos use uploader proof and stable private owne
   assert.doesNotMatch(photoSource, /customMetadata: \{[^}]*uploadedBy:/s);
   assert.doesNotMatch(photoSource, /customMetadata: \{[^}]*idempotencyKey:/s);
   assert.doesNotMatch(photoSource, /customMetadata: \{[^}]*ownerKey:/s);
+  assert.match(storageRules, /match \/group_tour_photos\/\{tourId\}\/\{fileName\}[\s\S]*allow read, write: if false/);
+  assert.match(photoSource, /resolveGroupPhotoMedia/);
+  assert.match(photoSource, /uploadGroupPhoto/);
+  assert.match(photoSource, /deleteGroupPhoto/);
+  assert.match(functionsSource, /verifyCurrentTourPhotoAccess/);
+  assert.match(functionsSource, /enforceGroupMediaAppCheck/);
+  assert.match(functionsSource, /GROUP_MEDIA_URL_TTL_MS = 5 \* 60 \* 1000/);
+  assert.doesNotMatch(functionsSource, /viewerToken = visibility === "private"/);
 });
 
 test('Static contract: passenger identities are server-issued opaque values and client writes are removed', () => {
@@ -567,13 +576,12 @@ test('Static contract: legacy Expo FileSystem methods use the explicit legacy en
   });
 });
 
-test('Static contract: chat message validation keeps image payload branch and thumbnail requirement', () => {
-  // Intentional static check: validation expression is a rules DSL string; regex guards critical media constraints.
+test('Static contract: chat media rejects durable URLs and permits server-created photo references', () => {
   const rules = readJson('database.rules.json');
-  const messageValidate = rules.rules.chats.$tourId.messages.$messageId['.validate'];
-
-  assert.match(messageValidate, /newData\.child\('type'\)\.val\(\) === 'image'/);
-  assert.match(messageValidate, /newData\.child\('thumbnailUrl'\)/);
+  const messageRules = rules.rules.chats.$tourId.messages.$messageId;
+  assert.equal(messageRules.imageUrl['.validate'], '!newData.exists()');
+  assert.equal(messageRules.thumbnailUrl['.validate'], '!newData.exists()');
+  assert.match(messageRules.photoId['.validate'], /newData\.isString/);
 });
 
 test('Static contract: photo upload modals guard duplicate enqueue taps', () => {

@@ -47,6 +47,16 @@ const MAX_PRESENCE_AGE_MS = 300000; // 5 minutes
 const CLEANUP_TYPING_DELAY_MS = 10000;
 const DEFAULT_LIVE_MESSAGE_LIMIT = 80;
 const DEFAULT_PAGE_MESSAGE_LIMIT = 40;
+const GROUP_PHOTO_CHAT_FUNCTION_NAME = 'createGroupPhotoChatMessage';
+
+const buildGroupPhotoChatEndpoint = (authInstance) => {
+  const explicit = process.env.EXPO_PUBLIC_CREATE_GROUP_PHOTO_CHAT_MESSAGE_URL?.trim();
+  if (explicit) return explicit;
+  const projectId = authInstance?.app?.options?.projectId;
+  return projectId
+    ? `https://europe-west1-${projectId}.cloudfunctions.net/${GROUP_PHOTO_CHAT_FUNCTION_NAME}`
+    : null;
+};
 
 const normalizeMessageLimit = (limit, fallback) => {
   const numericLimit = Number(limit);
@@ -531,12 +541,16 @@ const buildMessagePayload = (messageText, senderInfo, messageId, messageType = '
   };
 };
 
-const buildImageMessagePayload = (imageUrl, caption, senderInfo, messageId) => {
+const buildImageMessagePayload = (media, caption, senderInfo, messageId) => {
   const base = buildMessagePayload(caption, senderInfo, messageId, 'image');
+  const photoId = typeof media === 'object' ? media?.photoId : null;
+  const previewUrl = typeof media === 'object' ? media?.previewUrl : media;
   return {
     ...base,
-    imageUrl,
-    thumbnailUrl: imageUrl, // Could be a smaller version
+    ...(photoId ? { photoId } : {}),
+    ...(typeof previewUrl === 'string' && previewUrl.trim()
+      ? { imageUrl: previewUrl.trim(), thumbnailUrl: previewUrl.trim() }
+      : {}),
   };
 };
 
@@ -628,6 +642,30 @@ const buildTimestampQuery = (messagesRef, {
 };
 
 const readMessagesFromSnapshot = (snapshot) => buildMessagesFromSnapshot(snapshot);
+
+const hydrateGroupPhotoMessages = async (tourId, messages, resolveMediaFn = null) => {
+  const safeMessages = Array.isArray(messages) ? messages : [];
+  const photoMessages = safeMessages.filter((message) => (
+    message?.type === 'image' && typeof message.photoId === 'string' && message.photoId.trim()
+  ));
+  if (photoMessages.length === 0) return safeMessages;
+  const resolver = resolveMediaFn || require('./photoService').resolveGroupPhotoMedia;
+  const uniquePhotos = [...new Set(photoMessages.map((message) => message.photoId.trim()))]
+    .map((id) => ({ id }));
+  const hydrated = await resolver({ tourId, photos: uniquePhotos });
+  const mediaById = new Map(hydrated.map((photo) => [photo.id, photo]));
+  return safeMessages.map((message) => {
+    const media = mediaById.get(message.photoId);
+    if (!media) return message;
+    const imageUrl = media.viewerUrl || media.sourceUrl || media.thumbnailUrl || null;
+    const thumbnailUrl = media.thumbnailUrl || media.viewerUrl || media.sourceUrl || null;
+    return {
+      ...message,
+      ...(imageUrl ? { imageUrl } : {}),
+      ...(thumbnailUrl ? { thumbnailUrl } : {}),
+    };
+  });
+};
 
 // ==================== SEND MESSAGES ====================
 
@@ -844,15 +882,14 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
     const validatedTourId = validateTourId(tourId);
     const validatedSender = validateSenderInfo(senderInfo);
 
-    if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.trim()) {
+    const photoId = validateMessageId(options.photoId || (typeof imageUrl === 'object' ? imageUrl?.photoId : ''));
+    const previewUrl = typeof imageUrl === 'object' ? imageUrl?.previewUrl : imageUrl;
+    if (!photoId) {
       logChatImageDbEvent('warn', 'chat_image_message_missing_url', {
         tourId: validatedTourId,
         sender: summarizeSenderForDbLog(validatedSender),
       });
-      return { success: false, error: 'Image URL is required' };
-    }
-    if (imageUrl.trim().length > 2048) {
-      return { success: false, error: 'Image URL exceeds the maximum length' };
+      return { success: false, error: 'Photo reference is required' };
     }
 
     // Validate caption length if provided
@@ -868,43 +905,49 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
       return { success: false, error: `Caption exceeds maximum length of ${MAX_CAPTION_LENGTH} characters` };
     }
 
-    const db = dbInstance || resolveRealtimeDb();
-
-    if (!db) {
-      logChatImageDbEvent('error', 'chat_image_message_database_unavailable', {
-        tourId: validatedTourId,
-        sender: summarizeSenderForDbLog(validatedSender),
-      });
-      return { success: false, error: 'Realtime database unavailable' };
-    }
-
     const { messageId, idempotencyKey } = resolveMessageWriteIdentity({
       messageId: options.messageId,
       idempotencyKey: options.idempotencyKey,
     }, 'img');
     const clientCreatedAt = Date.now();
-    const newMessageRef = db.ref(`chats/${validatedTourId}/messages/${messageId}`);
-    const optimisticMessage = buildImageMessagePayload(imageUrl.trim(), sanitizedCaption, validatedSender, messageId);
-    const payloadForDb = {
-      schemaVersion: CHAT_MESSAGE_SCHEMA_VERSION,
-      text: sanitizedCaption,
-      senderName: validatedSender.name,
-      senderId: validatedSender.principalId,
-      senderType: validatedSender.principalType,
-      ...(validatedSender.stablePassengerId ? { senderStableId: validatedSender.stablePassengerId } : {}),
-      timestamp: { '.sv': 'timestamp' },
-      clientCreatedAt,
-      isDriver: validatedSender.isDriver,
-      status: 'sent',
-      type: 'image',
-      idempotencyKey,
-      imageUrl: imageUrl.trim(),
-      thumbnailUrl: imageUrl.trim(),
-    };
-
-    // Send to database with timeout protection
+    const optimisticMessage = buildImageMessagePayload({ photoId, previewUrl }, sanitizedCaption, validatedSender, messageId);
+    const firebaseModule = options.firebaseModule || (isTestEnv ? null : require('../firebase'));
+    const authInstance = options.authInstance || firebaseModule?.auth;
+    const endpoint = options.endpoint || buildGroupPhotoChatEndpoint(authInstance);
+    const fetchFn = options.fetchFn || fetch;
+    const appCheckTokenFn = options.appCheckTokenFn || firebaseModule?.getCurrentAppCheckToken;
+    if (!endpoint || !authInstance?.currentUser?.getIdToken || typeof appCheckTokenFn !== 'function') {
+      return { success: false, error: 'Secure group photo messaging is unavailable' };
+    }
     const serverPromise = withTimeout(
-      writeMessageOnce(newMessageRef, payloadForDb),
+      (async () => {
+        const [token, appCheckToken] = await Promise.all([
+          authInstance.currentUser.getIdToken(),
+          appCheckTokenFn(),
+        ]);
+        if (!token || !appCheckToken) throw new Error('App verification required for group photos');
+        const response = await fetchFn(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            'x-firebase-appcheck': appCheckToken,
+          },
+          body: JSON.stringify({
+            tourId: validatedTourId,
+            photoId,
+            messageId,
+            caption: sanitizedCaption,
+            senderName: validatedSender.name,
+            clientCreatedAt,
+          }),
+        });
+        const responsePayload = await response.json().catch(() => null);
+        if (!response.ok || responsePayload?.success !== true) {
+          throw new Error('Photo message could not be authorized');
+        }
+        return responsePayload.message;
+      })(),
       30000,
       'Image message send timeout',
     );
@@ -915,7 +958,7 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
         messageId,
         sender: summarizeSenderForDbLog(validatedSender),
         captionLength: sanitizedCaption.length,
-        imageUrlLength: imageUrl.trim().length,
+        hasPhotoId: Boolean(photoId),
         error: summarizeErrorForDbLog(error),
       });
       if (optimisticMessage) {
@@ -937,7 +980,7 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
     logChatImageDbEvent('error', 'chat_image_message_build_failed', {
       tourId: typeof tourId === 'string' ? tourId.trim() : null,
       sender: summarizeSenderForDbLog(senderInfo),
-      hasImageUrl: Boolean(imageUrl),
+      hasPhotoId: Boolean(options?.photoId || (typeof imageUrl === 'object' && imageUrl?.photoId)),
       captionLength: typeof caption === 'string' ? caption.length : 0,
       error: summarizeErrorForDbLog(error),
     });
@@ -1597,7 +1640,9 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance, options =
       limit: normalizeMessageLimit(options.limit, DEFAULT_LIVE_MESSAGE_LIMIT),
     });
 
+    let generation = 0;
     const listener = messagesQuery.on('value', (snapshot) => {
+      const currentGeneration = ++generation;
       let messages;
       try {
         messages = readMessagesFromSnapshot(snapshot);
@@ -1615,7 +1660,16 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance, options =
         options.onError?.(error);
         return;
       }
-      onMessagesUpdate(messages);
+      const hasPhotoReferences = messages.some((message) => message?.type === 'image' && message?.photoId);
+      if (!hasPhotoReferences) {
+        onMessagesUpdate(messages);
+        return;
+      }
+      hydrateGroupPhotoMessages(validatedTourId, messages, options.resolveGroupPhotoMediaFn)
+        .then((hydrated) => {
+          if (currentGeneration === generation) onMessagesUpdate(hydrated);
+        })
+        .catch((error) => options.onError?.(error));
     }, (error) => {
       logChatEvent('error', 'chat_subscription_failed', {
         tourId: validatedTourId,
@@ -1626,6 +1680,7 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance, options =
 
     // Return unsubscribe function
     return () => {
+      generation += 1;
       try {
         const refForOff = typeof messagesQuery?.off === 'function' ? messagesQuery : messagesRef;
         refForOff.off('value', listener);
@@ -1913,9 +1968,12 @@ const getChatMessagesPage = async ({
       })
       : allMessages;
 
-    const pageMessages = olderMessages.length > safeLimit
+    let pageMessages = olderMessages.length > safeLimit
       ? olderMessages.slice(olderMessages.length - safeLimit)
       : olderMessages;
+    if (normalizeChatScope(scope) === 'group') {
+      pageMessages = await hydrateGroupPhotoMessages(tourId, pageMessages);
+    }
     const nextCursor = pageMessages.length > 0
       ? {
         beforeTimestamp: pageMessages[0].timestampRaw ?? pageMessages[0].timestamp,
@@ -2009,6 +2067,7 @@ module.exports = {
   sendInternalDriverMessage,
   sendMessageDirect,
   sendInternalMessageDirect,
+  hydrateGroupPhotoMessages,
 
   // Subscriptions
   subscribeToChatMessages,

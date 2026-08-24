@@ -16,7 +16,7 @@ Mobile upload preparation should only optimize the source upload file for v2 pay
 New uploads should enter `group_tour_photos/*` or `private_tour_photos/*` with:
 
 - `variantStatus: "processing"`
-- `sourceUrl` for group photos only; private photos persist `storagePath` and resolve URLs in memory
+- `storagePath` for both group and private photos; durable media URLs are forbidden
 - `variantUpdatedAt`
 - `variantError` (nullable)
 - `variantVersion` (currently `2`)
@@ -42,13 +42,36 @@ for uploader-owned overwrite/delete enforcement), `visibility`, and `sourceRole`
 IDs, booking-derived owner keys, tour IDs, idempotency keys, and upload timestamps must not be copied
 into object metadata.
 
-Private photo records are path-authoritative. Durable Firebase download-token URLs must not be
-stored for private source, viewer, or thumbnail objects. `resolvePrivatePhotoMedia` accepts at most
+All photo records are path-authoritative. Durable Firebase download-token URLs must not be stored
+for source, viewer, or thumbnail objects. `resolvePrivatePhotoMedia` accepts at most
 50 exact photo IDs, verifies the Firebase bearer token and signed `privatePhotoOwnerKey`, validates
 every path against the requested tour/owner prefix, and returns five-minute Cloud Storage signed
 URLs. Backend RTDB reads and signing calls both use bounded concurrency; reads target only those exact
 photo leaves and never download the owner album branch. The mobile service merges returned URLs into
 in-memory photo objects only.
+
+Group Storage is entirely server-mediated because Storage rules cannot query Realtime Database tour
+membership. Direct client reads, uploads, overwrites, and deletes under `group_tour_photos/**` are
+denied. `resolveGroupPhotoMedia`, `uploadGroupPhoto`, `deleteGroupPhoto`, and
+`createGroupPhotoChatMessage` require Firebase Auth and App Check, confirm that the tour exists, then
+authorize only an operations admin, a current `tours/{tourId}/participants/{authUid}` passenger with
+an opaque identity, or a driver whose profile/Auth UID/current assignment all agree. Reads are
+limited to 50 exact photo IDs and return five-minute signed URLs in memory. Uploads are capped at
+10 MB, accept supported image types only, and use a deterministic idempotency key and server-owned
+path. Group chat image messages persist `photoId`, never a media URL.
+
+Before release, back up and dry-run the bounded hardening migration for every tour appearing in
+either group-photo metadata or group chat. Deploy the server Functions and deny-all group Storage
+rules before apply mode so a client cannot mint a replacement token during cleanup. The migration
+derives missing Storage paths from all historical URL aliases, revokes tokens on every source and
+variant object (including unreferenced objects), removes photo URL fields, and converts matching chat
+image URLs to `photoId`. An existing chat-only object is recovered into deterministic path-only photo
+metadata; a missing object has its dead URL removed without inventing media:
+
+```bash
+npm --prefix functions run harden:group-photos -- --tourId=5112D_8 --limit=100
+npm --prefix functions run harden:group-photos -- --apply --tourId=5112D_8 --limit=100
+```
 
 Before deploying the restrictive Storage rules, inventory legacy records and tokens:
 
@@ -76,12 +99,11 @@ the restrictive Storage rules. Reversing that order can temporarily strand exist
 
 Cloud Function variant generation updates group records to:
 
-- `variantStatus: "ready"` with `viewerUrl` and `thumbnailUrl`; or
+- `variantStatus: "ready"` with `viewerStoragePath` and `thumbnailStoragePath`; or
 - `variantStatus: "failed"` with `variantError`.
 
-Generated group variants retain only the source object's uploader `authUid` plus server variant/token
-metadata. Clients cannot create or overwrite derivative paths; the uploader can still delete the
-viewer and thumbnail when deleting their group photo.
+Generated group variants retain only non-sensitive role metadata and no download token. Clients
+cannot address derivative paths; authorized deletion is performed by `deleteGroupPhoto`.
 
 Before deploying the derivative-path rule, refresh existing ready group variants one tour at a time
 so legacy viewer/thumbnail objects also inherit their source uploader identity:

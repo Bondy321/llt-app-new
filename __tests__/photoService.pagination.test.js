@@ -139,8 +139,10 @@ test('subscribeToTourPhotos stays bounded via limitToLast window', async () => {
       }));
       return () => {};
     },
+    resolveGroupPhotoMediaFn: async ({ photos }) => photos,
   });
 
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(seenLimit, 100);
   assert.deepEqual(callbackRows.map((row) => row.id), ['newest', 'old']);
   assert.equal(typeof unsubscribe, 'function');

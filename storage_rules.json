@@ -29,12 +29,6 @@ service firebase.storage {
           || request.resource.metadata.sourceRole == 'thumbnail');
     }
 
-    function isUploaderDelete() {
-      return request.resource == null
-        && resource != null
-        && resource.metadata.authUid == request.auth.uid;
-    }
-
     function ownsPrivatePhotoBucket(ownerId) {
       return isSignedIn()
         && request.auth.token.keys().hasAll(['privatePhotoOwnerKey'])
@@ -60,23 +54,21 @@ service firebase.storage {
       allow delete: if ownsPrivatePhotoBucket(ownerId) && resource != null;
     }
 
-    // Group source photos are client-owned. Generated variants preserve the
-    // source authUid so the uploader can delete them, but clients cannot forge
-    // or overwrite server-generated derivative objects.
+    // Group media is server-mediated. Storage rules cannot query Realtime
+    // Database tour membership, so clients must never address these objects
+    // directly. Cloud Functions verify current membership/assignment for every
+    // upload, read-URL resolution, and delete request; Admin SDK and signed URL
+    // operations bypass these client rules.
     match /group_tour_photos/{tourId}/{fileName} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn()
-        && ((isImageUpload() && hasApprovedPhotoMetadata() && hasMatchingUploaderAuth()) || isUploaderDelete());
+      allow read, write: if false;
     }
 
     match /group_tour_photos/{tourId}/viewers/{fileName} {
-      allow read: if isSignedIn();
-      allow delete: if isSignedIn() && isUploaderDelete();
+      allow read, write: if false;
     }
 
     match /group_tour_photos/{tourId}/thumbnails/{fileName} {
-      allow read: if isSignedIn();
-      allow delete: if isSignedIn() && isUploaderDelete();
+      allow read, write: if false;
     }
   }
 }

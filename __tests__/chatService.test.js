@@ -18,24 +18,37 @@ const {
   setOnlinePresence,
   getChatMessageById,
   getChatMessagesPage,
+  hydrateGroupPhotoMessages,
   deleteMessage,
 } = require('../services/chatService');
+
+test('path-only chat photo references are hydrated in memory without mutating stored messages', async () => {
+  const stored = [{ id: 'm1', type: 'image', photoId: 'p1' }, { id: 'm2', type: 'text', text: 'Hello' }];
+  const hydrated = await hydrateGroupPhotoMessages('TOUR_1', stored, async ({ tourId, photos }) => {
+    assert.equal(tourId, 'TOUR_1');
+    assert.deepEqual(photos, [{ id: 'p1' }]);
+    return [{ id: 'p1', viewerUrl: 'https://signed.test/viewer', thumbnailUrl: 'https://signed.test/thumb' }];
+  });
+  assert.equal(hydrated[0].imageUrl, 'https://signed.test/viewer');
+  assert.equal(hydrated[0].thumbnailUrl, 'https://signed.test/thumb');
+  assert.equal(stored[0].imageUrl, undefined);
+});
 
 test('sendImageMessage applies the same moderation gate as text chat', async () => {
   const result = await sendImageMessage(
     'tour-123',
-    'https://example.com/photo.jpg',
+    { photoId: 'photo-1' },
     'kys',
     { name: 'Alex', userId: 'driver:alex', principalType: 'driver', isDriver: true },
     createMockRealtimeDb(),
+    { photoId: 'photo-1' },
   );
 
   assert.equal(result.success, false);
   assert.match(result.error, /Caption contains wording/);
 });
 
-test('sendImageMessage writes a captionless photo once at its deterministic versioned path', async () => {
-  const mockDb = createMockRealtimeDb();
+test('sendImageMessage creates a captionless path-only photo message through the secure Function', async () => {
   const sender = {
     name: 'Alex',
     principalId: 'driver:alex',
@@ -44,23 +57,33 @@ test('sendImageMessage writes a captionless photo once at its deterministic vers
   };
   const result = await sendImageMessage(
     'tour-photo',
-    'https://example.com/photo.jpg',
+    { photoId: 'photo-1' },
     '',
     sender,
-    mockDb,
-    { messageId: 'img-stable-1', idempotencyKey: 'img-stable-1' },
+    null,
+    {
+      messageId: 'img-stable-1',
+      idempotencyKey: 'img-stable-1',
+      photoId: 'photo-1',
+      endpoint: 'https://functions.test/createGroupPhotoChatMessage',
+      authInstance: { currentUser: { getIdToken: async () => 'id-token' } },
+      appCheckTokenFn: async () => 'app-check-token',
+      fetchFn: async (_url, options) => {
+        const payload = JSON.parse(options.body);
+        assert.equal(payload.photoId, 'photo-1');
+        assert.equal(options.headers.Authorization, 'Bearer id-token');
+        return { ok: true, json: async () => ({ success: true, message: {
+          id: 'img-stable-1', schemaVersion: 2, type: 'image', text: '',
+          idempotencyKey: 'img-stable-1', photoId: 'photo-1', timestamp: 123,
+        } }) };
+      },
+    },
   );
   await result.serverPromise;
 
   assert.equal(result.success, true);
-  const writeRef = mockDb.refCalls.find((call) => call.path === 'chats/tour-photo/messages/img-stable-1');
-  assert.ok(writeRef);
-  const payload = writeRef.transactionCalls[0].next;
-  assert.equal(payload.schemaVersion, 2);
-  assert.equal(payload.type, 'image');
-  assert.equal(payload.text, '');
-  assert.equal(payload.idempotencyKey, 'img-stable-1');
-  assert.deepEqual(payload.timestamp, { '.sv': 'timestamp' });
+  assert.equal(result.message.photoId, 'photo-1');
+  assert.equal(result.message.imageUrl, undefined);
 });
 
 const createMockRealtimeDb = (initialData = {}) => {

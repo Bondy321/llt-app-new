@@ -9,6 +9,7 @@
     "logs": "firebase functions:log",
     "backfill:photo-variants": "node scripts/backfillPhotoVariants.js",
     "harden:private-photos": "node scripts/hardenPrivatePhotoMedia.js",
+    "harden:group-photos": "node scripts/hardenGroupPhotoMedia.js",
     "backfill:tour-date-indexes": "node scripts/backfillTourDateIndexes.js",
     "backfill:driver-tour-pack-issues": "node scripts/backfillDriverTourPackIssueProjections.js",
     "repair:manifest-duplicates": "node scripts/repairDuplicateManifestPassengers.js",

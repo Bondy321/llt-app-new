@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const photoBackfill = require('../functions/scripts/backfillPhotoVariants');
 const privatePhotoHardening = require('../functions/scripts/hardenPrivatePhotoMedia');
+const groupPhotoHardening = require('../functions/scripts/hardenGroupPhotoMedia');
 
 test('photo variant backfill selects missing or failed server variants', () => {
   assert.equal(photoBackfill.shouldBackfill({
@@ -151,6 +152,108 @@ test('private photo hardening treats missing objects as success but fails other 
   const options = { dryRun: false, tourId: 'T', ownerKey: 'O', limit: 10, afterCursor: null };
   await assert.doesNotReject(privatePhotoHardening.run({ admin: makeAdmin({ code: 404 }), options }));
   await assert.rejects(privatePhotoHardening.run({ admin: makeAdmin({ code: 500 }), options }));
+});
+
+test('group photo hardening derives exact paths, strips URLs, and migrates chat references', () => {
+  assert.equal(groupPhotoHardening.parseArgs([]).dryRun, true);
+  assert.equal(groupPhotoHardening.parseArgs(['--apply']).dryRun, false);
+  const candidate = groupPhotoHardening.buildCandidate({
+    tourId: 'TOUR_1', photoId: 'photo-1', record: {
+      sourceUrl: 'https://firebasestorage.googleapis.com/v0/b/demo/o/group_tour_photos%2FTOUR_1%2Fsource.jpg?alt=media&token=secret',
+      viewerUrl: 'https://token.test/viewer',
+      viewerStoragePath: 'group_tour_photos/TOUR_1/viewers/source_viewer.jpg',
+      thumbnailStoragePath: 'group_tour_photos/TOUR_2/thumbnails/foreign.jpg',
+    },
+  });
+  assert.equal(candidate.storagePath, 'group_tour_photos/TOUR_1/source.jpg');
+  assert.deepEqual(candidate.urlFields, ['sourceUrl', 'viewerUrl']);
+  assert.deepEqual(candidate.objectPaths, [
+    'group_tour_photos/TOUR_1/source.jpg',
+    'group_tour_photos/TOUR_1/viewers/source_viewer.jpg',
+  ]);
+  assert.deepEqual(groupPhotoHardening.findChatReferenceUpdates({
+    candidates: [candidate],
+    messages: { m1: { type: 'image', imageUrl: candidate.legacyUrls[0], thumbnailUrl: candidate.legacyUrls[0] } },
+  }), {
+    'chats/TOUR_1/messages/m1/photoId': 'photo-1',
+    'chats/TOUR_1/messages/m1/imageUrl': null,
+    'chats/TOUR_1/messages/m1/thumbnailUrl': null,
+  });
+});
+
+test('group photo hardening migrates the oldest url-only record shape', () => {
+  const candidate = groupPhotoHardening.buildCandidate({
+    tourId: 'TOUR_1',
+    photoId: 'legacy-photo',
+    record: {
+      url: 'https://firebasestorage.googleapis.com/v0/b/demo/o/group_tour_photos%2FTOUR_1%2Flegacy.jpg?alt=media&token=secret',
+    },
+  });
+  assert.equal(candidate.storagePath, 'group_tour_photos/TOUR_1/legacy.jpg');
+  assert.deepEqual(candidate.urlFields, ['url']);
+  assert.deepEqual(candidate.legacyUrls, [
+    'https://firebasestorage.googleapis.com/v0/b/demo/o/group_tour_photos%2FTOUR_1%2Flegacy.jpg?alt=media&token=secret',
+  ]);
+});
+
+test('group photo token audit uses bounded file metadata and returns deterministic paths', async () => {
+  let fallbackReads = 0;
+  const files = [
+    { name: 'group_tour_photos/TOUR_1/z.jpg', metadata: { metadata: { firebaseStorageDownloadTokens: 'token-z' } } },
+    { name: 'group_tour_photos/TOUR_1/clean.jpg', metadata: { metadata: {} } },
+    {
+      name: 'group_tour_photos/TOUR_1/a.jpg',
+      getMetadata: async () => {
+        fallbackReads += 1;
+        return [{ metadata: { firebaseStorageDownloadTokens: 'token-a' } }];
+      },
+    },
+  ];
+  const result = await groupPhotoHardening.listTokenizedObjects({
+    bucket: { getFiles: async () => [files] },
+    tourId: 'TOUR_1',
+    concurrency: 2,
+  });
+  assert.deepEqual(result, [
+    'group_tour_photos/TOUR_1/a.jpg',
+    'group_tour_photos/TOUR_1/z.jpg',
+  ]);
+  assert.equal(fallbackReads, 1);
+});
+
+test('group photo hardening recovers existing orphan chat media and clears missing links', async () => {
+  const existingUrl = 'https://firebasestorage.googleapis.com/v0/b/demo/o/group_tour_photos%2FTOUR_1%2Forphan.jpg?alt=media&token=one';
+  const missingUrl = 'https://firebasestorage.googleapis.com/v0/b/demo/o/group_tour_photos%2FTOUR_1%2Fmissing.jpg?alt=media&token=two';
+  const plan = await groupPhotoHardening.buildOrphanChatMediaPlan({
+    bucket: {
+      file: (objectPath) => ({ exists: async () => [objectPath.endsWith('/orphan.jpg')] }),
+    },
+    tourId: 'TOUR_1',
+    tourExists: true,
+    knownUrls: new Set(),
+    nowMs: 1234,
+    messages: {
+      existing: {
+        type: 'image', imageUrl: existingUrl, thumbnailUrl: existingUrl,
+        senderStableId: 'pax_v2_11111111111111111111111111111111', senderName: 'Guest', timestamp: 100,
+      },
+      missing: {
+        type: 'image', imageUrl: missingUrl, thumbnailUrl: missingUrl,
+        senderId: 'legacy-auth-uid', text: 'Missing', timestamp: 200,
+      },
+    },
+  });
+  assert.equal(plan.referenceCount, 2);
+  assert.equal(Object.keys(plan.photoRecords).length, 1);
+  const [photoId, record] = Object.entries(plan.photoRecords)[0];
+  assert.match(photoId, /^legacy_chat_[a-f0-9]{32}$/);
+  assert.equal(record.storagePath, 'group_tour_photos/TOUR_1/orphan.jpg');
+  assert.equal(record.userId, 'pax_v2_11111111111111111111111111111111');
+  assert.equal(record.caption, '');
+  assert.equal(plan.updates['chats/TOUR_1/messages/existing/photoId'], photoId);
+  assert.equal(plan.updates['chats/TOUR_1/messages/existing/imageUrl'], null);
+  assert.equal(plan.updates['chats/TOUR_1/messages/missing/imageUrl'], null);
+  assert.equal(plan.updates['chats/TOUR_1/messages/missing/photoId'], undefined);
 });
 
 test('photo variant backfill apply runs require explicit broad-scan approval', () => {

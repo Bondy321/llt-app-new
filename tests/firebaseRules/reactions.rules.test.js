@@ -173,9 +173,9 @@ test('allows the versioned chat contract with a server timestamp and determinist
   }));
 });
 
-test('allows captionless versioned image chat messages with bounded URLs', async () => {
+test('rejects client-written durable image URLs and reads server-created photo references', async () => {
   const messageId = 'MSG_V2_IMAGE_001';
-  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/messages/${messageId}`).set({
+  const legacyPayload = {
     schemaVersion: 2,
     senderId: PASSENGER_PRINCIPAL_ID,
     senderStableId: PASSENGER_PRINCIPAL_ID,
@@ -190,7 +190,15 @@ test('allows captionless versioned image chat messages with bounded URLs', async
     type: 'image',
     imageUrl: 'https://example.com/photo.jpg',
     thumbnailUrl: 'https://example.com/photo-thumb.jpg',
-  }));
+  };
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/messages/${messageId}`).set(legacyPayload));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const { imageUrl, thumbnailUrl, ...pathOnlyPayload } = legacyPayload;
+    await context.database(dbUrl).ref(`chats/${TOUR_ID}/messages/${messageId}`).set({
+      ...pathOnlyPayload, timestamp: Date.now(), photoId: 'photo-1',
+    });
+  });
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/messages/${messageId}`).get());
 });
 
 test('allows the owner to tombstone a versioned image without retaining download URLs', async () => {

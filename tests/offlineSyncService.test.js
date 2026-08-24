@@ -448,8 +448,9 @@ test('queued chat photo uploads create one deterministic chat image after upload
   assert.equal(replay.data.failed, 0);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].tourId, 'tour-chat-photo');
-  assert.equal(calls[0].imageUrl, 'https://example.com/chat-photo.jpg');
+  assert.deepEqual(calls[0].imageUrl, { photoId: 'photo-1' });
   assert.equal(calls[0].options.messageId, 'img-chat-photo-1');
+  assert.equal(calls[0].options.photoId, 'photo-1');
 
   const remaining = await offlineSyncService.getQueuedActions();
   assert.equal(remaining.data[0].status, 'completed');

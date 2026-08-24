@@ -1303,20 +1303,21 @@ const applyReplayAction = async (action, services = {}) => {
       return uploadResult;
     }
 
-    const imageUrl = uploadResult.data?.sourceUrl;
-    if (!imageUrl) {
-      return RESPONSE.fail('Queued chat photo upload completed without a shareable image URL');
+    const photoId = uploadResult.data?.id;
+    if (!photoId) {
+      return RESPONSE.fail('Queued chat photo upload completed without a media reference');
     }
 
     const messageResult = await chatService.sendImageMessage(
       chatMessage.tourId || action.tourId,
-      imageUrl,
+      { photoId },
       chatMessage.caption || '',
       chatMessage.senderInfo,
       db,
       {
         messageId: chatMessage.messageId,
         idempotencyKey: chatMessage.idempotencyKey || chatMessage.messageId,
+        photoId,
       },
     );
     if (!messageResult?.success) {

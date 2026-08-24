@@ -415,7 +415,7 @@ Current upload contract:
 DB lifecycle fields for new uploads:
 
 - `variantStatus: "processing"`
-- `sourceUrl` for group photos only; private records use `storagePath`
+- `storagePath` for both group and private photos; neither scope persists durable media URLs
 - `variantUpdatedAt`
 - `variantError`
 - `variantVersion: 2`
@@ -425,14 +425,23 @@ Server variant generator:
 - Function: `generatePhotoVariants`
 - Region: `us-east1`
 - Uses `sharp` to create viewer and thumbnail JPEGs.
-- Group records become `variantStatus: "ready"` with durable `viewerUrl` and `thumbnailUrl`.
-  Private records become ready with path fields only and resolve five-minute signed URLs in memory;
+- Group and private records become ready with path fields only and resolve five-minute signed URLs in memory;
   their source/variant objects must not retain Firebase download tokens. Failed generation stores
   `variantStatus: "failed"` with `variantError`.
 
 Storage rules:
 
-- Authenticated image uploads only.
+- Direct client Storage access to `group_tour_photos/**` is denied. `resolveGroupPhotoMedia`,
+  `uploadGroupPhoto`, `deleteGroupPhoto`, and `createGroupPhotoChatMessage` require Auth plus App
+  Check and re-check current participant or coherent assigned-driver access on every request.
+- Group chat image records store `photoId`, never durable `imageUrl` or `thumbnailUrl` fields.
+- Group uploads are server-owned, deterministic/idempotent, supported-image-only, and capped at 10 MB.
+- Group URL/token cleanup is exact-tour and dry-run first. Back up both `group_tour_photos` and
+  `chats`, inventory every tour present in either branch, deploy the server Functions and deny-direct
+  Storage rules, then run `npm --prefix functions run harden:group-photos -- --apply --tourId=TOUR_ID`.
+  The migration revokes unreferenced object tokens, handles `sourceUrl`/`url`/`fullUrl` history,
+  converts chat URLs to `photoId`, recovers existing chat-only objects, and clears links to missing
+  objects. Continue with `--after=NEXT_CURSOR` when returned.
 - Max image size is 10 MB.
 - Private object access requires the signed `privatePhotoOwnerKey` Auth claim created by the
   passenger login verifier; the client force-refreshes its ID token after verification.

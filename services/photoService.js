@@ -6,7 +6,6 @@ const {
   ref: storageRef,
   uploadBytes,
   uploadBytesResumable,
-  getDownloadURL,
   deleteObject,
 } = require('firebase/storage');
 const {
@@ -25,7 +24,7 @@ const {
   limitToLast,
   endAt,
 } = require('firebase/database');
-const { storage, realtimeDbModular, auth } = require('../firebase');
+const { storage, realtimeDbModular, auth, getCurrentAppCheckToken } = require('../firebase');
 const { normalizePhotoUri } = require('./photoVariantService');
 const { loadOptionalService } = require('./optionalServiceLoader');
 const { assertTextPassesModeration } = require('./contentModerationService');
@@ -44,16 +43,12 @@ const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp
 const MAX_CAPTION_LENGTH = 500;
 const LIVE_PHOTOS_WINDOW = 100;
 const PHOTO_CACHE_CONTROL_HEADER = 'public,max-age=31536000,immutable';
-const DOWNLOAD_URL_RETRYABLE_CODES = new Set([
-  'storage/object-not-found',
-  'storage/retry-limit-exceeded',
-  'storage/unknown',
-]);
 const IDEMPOTENCY_KEY_MAX_LENGTH = 180;
 const PRIVATE_MEDIA_BATCH_LIMIT = 50;
 const PRIVATE_MEDIA_FUNCTION_NAME = 'resolvePrivatePhotoMedia';
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const GROUP_MEDIA_FUNCTION_NAME = 'resolveGroupPhotoMedia';
+const GROUP_UPLOAD_FUNCTION_NAME = 'uploadGroupPhoto';
+const GROUP_DELETE_FUNCTION_NAME = 'deleteGroupPhoto';
 
 const summarizeUriForDbLog = (uri) => {
   if (typeof uri !== 'string' || !uri.trim()) {
@@ -144,32 +139,6 @@ const resolveRealtimeTimestamp = (serverTimestampFn, nowFn = Date.now) => {
 
   const fallback = nowFn();
   return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : Date.now();
-};
-
-const getDownloadUrlWithRetry = async (getDownloadURLFn, fileRef, { maxAttempts = 5, initialDelayMs = 200 } = {}) => {
-  let attempt = 0;
-  let lastError = null;
-
-  while (attempt < maxAttempts) {
-    try {
-      return await getDownloadURLFn(fileRef);
-    } catch (error) {
-      lastError = error;
-      const code = typeof error?.code === 'string' ? error.code : null;
-      const retryableByCode = code && DOWNLOAD_URL_RETRYABLE_CODES.has(code);
-      const retryableByMessage = typeof error?.message === 'string' && /network|timeout|timed out|object-not-found/i.test(error.message);
-
-      attempt += 1;
-      if (attempt >= maxAttempts || (!retryableByCode && !retryableByMessage)) {
-        break;
-      }
-
-      const delay = initialDelayMs * (2 ** (attempt - 1));
-      await sleep(Math.min(delay, 2000));
-    }
-  }
-
-  throw lastError || new Error('Failed to resolve photo URL');
 };
 
 const deleteStoredPhotoObject = async ({
@@ -430,6 +399,7 @@ const fetchTourPhotosPage = async (
     limitToLastFn = limitToLast,
     endAtFn = endAt,
     getFn = get,
+    resolveGroupPhotoMediaFn = resolveGroupPhotoMedia,
   } = {},
 ) => {
   const validatedTourId = validateTourId(tourId);
@@ -464,6 +434,7 @@ const fetchTourPhotosPage = async (
   });
 
   const result = buildPagedPhotoResult(photos, safeLimit);
+  result.items = await resolveGroupPhotoMediaFn({ tourId: validatedTourId, photos: result.items });
   logPhotoDbEvent('debug', 'photo_page_fetch_success', {
     visibility: 'group',
     tourId: summarizePrincipalForDbLog(validatedTourId),
@@ -647,6 +618,57 @@ const buildPrivateMediaEndpointUrl = (authInstance = auth) => {
   return projectId ? `https://europe-west1-${projectId}.cloudfunctions.net/${PRIVATE_MEDIA_FUNCTION_NAME}` : null;
 };
 
+const buildGroupPhotoEndpointUrl = (functionName, authInstance = auth) => {
+  const envNames = {
+    [GROUP_MEDIA_FUNCTION_NAME]: 'EXPO_PUBLIC_RESOLVE_GROUP_PHOTO_MEDIA_URL',
+    [GROUP_UPLOAD_FUNCTION_NAME]: 'EXPO_PUBLIC_UPLOAD_GROUP_PHOTO_URL',
+    [GROUP_DELETE_FUNCTION_NAME]: 'EXPO_PUBLIC_DELETE_GROUP_PHOTO_URL',
+  };
+  const explicit = process.env[envNames[functionName]]?.trim();
+  if (explicit) return explicit;
+  const projectId = authInstance?.app?.options?.projectId;
+  return projectId ? `https://europe-west1-${projectId}.cloudfunctions.net/${functionName}` : null;
+};
+
+const buildGroupPhotoAuthHeaders = async (authInstance = auth, appCheckTokenFn = getCurrentAppCheckToken) => {
+  const token = await authInstance?.currentUser?.getIdToken?.();
+  if (!token) throw new Error('Authenticated user required for group photos');
+  const appCheckToken = await appCheckTokenFn?.();
+  if (!appCheckToken) throw new Error('App verification required for group photos');
+  return { Authorization: `Bearer ${token}`, 'x-firebase-appcheck': appCheckToken };
+};
+
+const resolveGroupPhotoMedia = async ({ tourId, photos }, {
+  authInstance = auth,
+  fetchFn = fetch,
+  endpoint = buildGroupPhotoEndpointUrl(GROUP_MEDIA_FUNCTION_NAME, authInstance),
+  appCheckTokenFn = getCurrentAppCheckToken,
+} = {}) => {
+  if (!Array.isArray(photos) || photos.length === 0) return [];
+  const safePhotos = photos.map((photo) => {
+    const { sourceUrl: _sourceUrl, viewerUrl: _viewerUrl, thumbnailUrl: _thumbnailUrl, ...safePhoto } = photo;
+    return safePhoto;
+  });
+  if (!endpoint) return safePhotos;
+  const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn);
+  const resolvedMedia = {};
+  for (let offset = 0; offset < safePhotos.length; offset += PRIVATE_MEDIA_BATCH_LIMIT) {
+    const batch = safePhotos.slice(offset, offset + PRIVATE_MEDIA_BATCH_LIMIT);
+    const response = await fetchFn(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ tourId, photoIds: batch.map((photo) => photo.id) }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || payload?.success !== true || !payload.media || typeof payload.media !== 'object'
+      || Array.isArray(payload.media) || Number(payload.expiresAtMs) <= Date.now()) {
+      throw new Error('Group photo access could not be authorized');
+    }
+    Object.assign(resolvedMedia, payload.media);
+  }
+  return safePhotos.map((photo) => ({ ...photo, ...(resolvedMedia[photo.id] || {}) }));
+};
+
 const resolvePrivatePhotoMedia = async ({ tourId, ownerKey, photos }, {
   authInstance = auth,
   fetchFn = fetch,
@@ -726,7 +748,6 @@ const uploadPhoto = async (
     storageRefFn = storageRef,
     uploadBytesFn = uploadBytes,
     uploadBytesResumableFn = uploadBytesResumable,
-    getDownloadURLFn = getDownloadURL,
     dbRefFn = databaseRef,
     pushFn = push,
     setFn = set,
@@ -741,6 +762,8 @@ const uploadPhoto = async (
     optimizationMetrics = null,
     idempotencyKey = null,
     nowFn = Date.now,
+    groupUploadEndpoint = buildGroupPhotoEndpointUrl(GROUP_UPLOAD_FUNCTION_NAME, authInstance),
+    appCheckTokenFn = getCurrentAppCheckToken,
   } = {}
 ) => {
   let uploadStage = 'initializing';
@@ -794,12 +817,12 @@ const uploadPhoto = async (
       ...uploadDiagnostics,
       databasePath: summarizePathForDbLog(databasePath),
     };
-    const photosRef = dbRefFn(realtimeDbInstance, databasePath);
+    const photosRef = isPrivate ? dbRefFn(realtimeDbInstance, databasePath) : null;
 
     // Look up only the matching idempotency record. The previous implementation
     // downloaded the complete album on every queued-photo retry, which became
     // progressively slower and more expensive as a tour's album grew.
-    if (normalizedIdempotencyKey) {
+    if (normalizedIdempotencyKey && isPrivate) {
       uploadStage = 'checking_existing_photo_idempotency';
       logPhotoDbEvent('debug', 'photo_upload_db_lookup_start', uploadDiagnostics);
       const existingQuery = queryFn(
@@ -838,6 +861,43 @@ const uploadPhoto = async (
       fileType: blob.type || null,
       fileSize: typeof blob.size === 'number' ? blob.size : null,
     };
+
+    if (!isPrivate) {
+      uploadStage = 'uploading_group_photo_via_server';
+      try {
+        if (!normalizedIdempotencyKey) throw new Error('idempotencyKey is required for group photo uploads');
+        if (!groupUploadEndpoint) throw new Error('Group photo upload endpoint is unavailable');
+        const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn);
+        if (typeof onProgress === 'function') onProgress(0.05);
+        const encodedMetadata = encodeURIComponent(JSON.stringify({
+          tourId: validatedTourId,
+          idempotencyKey: normalizedIdempotencyKey,
+          caption: validatedCaption,
+          uploaderName: uploaderName || 'Tour Member',
+        }));
+        const response = await fetchFn(groupUploadEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': blob.type,
+            'x-group-photo-metadata': encodedMetadata,
+            ...authHeaders,
+          },
+          body: blob,
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || payload?.success !== true || !payload.photo?.id) {
+          throw new Error(payload?.reason === 'NOT_AUTHORIZED'
+            ? 'You no longer have access to this tour'
+            : 'Group photo upload could not be authorized');
+        }
+        if (typeof onProgress === 'function') onProgress(1);
+        return payload.photo;
+      } finally {
+        if (blob && typeof blob.close === 'function') {
+          try { blob.close(); } catch (error) { /* best-effort release */ }
+        }
+      }
+    }
 
     // Determine file extension from blob type
     const extensionMap = {
@@ -903,7 +963,7 @@ const uploadPhoto = async (
       logPhotoDbEvent('info', 'photo_upload_storage_source_written', uploadDiagnostics);
 
       uploadStage = 'resolving_source_download_url';
-      const downloadURL = isPrivate ? null : await getDownloadUrlWithRetry(getDownloadURLFn, fileRef);
+      const downloadURL = null;
       logPhotoDbEvent('debug', 'photo_upload_source_url_resolved', {
         ...uploadDiagnostics,
         downloadUrl: summarizeUriForDbLog(downloadURL),
@@ -929,8 +989,6 @@ const uploadPhoto = async (
         variantError: null,
         variantVersion: 2,
       };
-      if (!isPrivate) photoData.sourceUrl = downloadURL;
-
       if (optimizationMetrics && typeof optimizationMetrics === 'object') {
         photoData.optimization = {
           originalSizeBytes: optimizationMetrics.originalSizeBytes || null,
@@ -940,11 +998,6 @@ const uploadPhoto = async (
           optimizationRatio: optimizationMetrics.optimizationRatio ?? null,
           viewerOptimizationRatio: optimizationMetrics.viewerOptimizationRatio ?? null,
         };
-      }
-
-      // Add uploader name for group photos
-      if (!isPrivate && uploaderName) {
-        photoData.uploaderName = uploaderName.trim();
       }
 
       uploadStage = 'writing_photo_record_to_database';
@@ -1008,6 +1061,7 @@ const subscribeToTourPhotos = (
     orderByChildFn = orderByChild,
     limitToLastFn = limitToLast,
     limit = LIVE_PHOTOS_WINDOW,
+    resolveGroupPhotoMediaFn = resolveGroupPhotoMedia,
   } = {}
 ) => {
   try {
@@ -1035,10 +1089,16 @@ const subscribeToTourPhotos = (
       tourId: summarizePrincipalForDbLog(validatedTourId),
       liveLimit,
     });
+    let generation = 0;
     const unsubscribe = onValueFn(photosQuery, (snapshot) => {
+      const currentGeneration = ++generation;
       try {
-        const photos = mapSnapshotToPhotos(snapshot);
+        let photos = mapSnapshotToPhotos(snapshot);
         sortPhotosDescending(photos);
+        const safePhotos = photos.map((photo) => {
+          const { sourceUrl: _sourceUrl, viewerUrl: _viewerUrl, thumbnailUrl: _thumbnailUrl, ...safePhoto } = photo;
+          return safePhoto;
+        });
         logPhotoDbEvent('debug', 'photo_subscription_snapshot', {
           visibility: 'group',
           tourId: summarizePrincipalForDbLog(validatedTourId),
@@ -1052,7 +1112,20 @@ const subscribeToTourPhotos = (
             hasViewer: Boolean(photo.viewerUrl),
           })),
         });
-        callback(photos);
+        callback(safePhotos);
+        Promise.resolve(resolveGroupPhotoMediaFn({ tourId: validatedTourId, photos: safePhotos }))
+          .then((hydrated) => {
+            if (currentGeneration === generation) callback(hydrated);
+          })
+          .catch((error) => {
+            if (currentGeneration === generation) {
+              logPhotoDbEvent('warn', 'photo_subscription_media_resolution_failed', {
+                visibility: 'group',
+                tourId: summarizePrincipalForDbLog(validatedTourId),
+                error: summarizeErrorForDbLog(error),
+              });
+            }
+          });
       } catch (error) {
         logPhotoDbEvent('error', 'photo_subscription_snapshot_processing_failed', {
           visibility: 'group',
@@ -1062,6 +1135,7 @@ const subscribeToTourPhotos = (
         callback([]); // Provide empty array as fallback
       }
     }, (error) => {
+      generation += 1;
       logPhotoDbEvent('error', 'photo_subscription_failed', {
         visibility: 'group',
         tourId: summarizePrincipalForDbLog(validatedTourId),
@@ -1071,6 +1145,7 @@ const subscribeToTourPhotos = (
     });
 
     return () => {
+      generation += 1;
       try {
         logPhotoDbEvent('debug', 'photo_subscription_stop', {
           visibility: 'group',
@@ -1236,115 +1311,30 @@ const deleteGroupPhoto = async (
   photoId,
   requestingUserId,
   {
-    storageInstance = storage,
-    realtimeDbInstance = realtimeDbModular,
-    storageRefFn = storageRef,
-    deleteObjectFn = deleteObject,
-    dbRefFn = databaseRef,
-    removeFn = remove,
-    getFn = get,
+    authInstance = auth,
+    fetchFn = fetch,
+    endpoint = buildGroupPhotoEndpointUrl(GROUP_DELETE_FUNCTION_NAME, authInstance),
+    appCheckTokenFn = getCurrentAppCheckToken,
   } = {}
 ) => {
   try {
-    // Validate inputs
     const validatedTourId = validateTourId(tourId);
     const validatedPhotoId = validatePhotoId(photoId);
-
     if (!requestingUserId || typeof requestingUserId !== 'string') {
       throw new Error('User ID is required to delete a photo');
     }
-
-    if (!storageInstance) {
-      throw new Error('Storage instance not initialized');
+    if (!endpoint) throw new Error('Group photo delete endpoint is unavailable');
+    const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn);
+    const response = await fetchFn(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ tourId: validatedTourId, photoId: validatedPhotoId }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || payload?.success !== true) {
+      if (payload?.reason === 'NOT_OWNER') throw new Error('You can only delete your own photos');
+      throw new Error('Photo could not be deleted');
     }
-
-    if (!realtimeDbInstance) {
-      throw new Error('Database instance not initialized');
-    }
-
-    logPhotoDbEvent('info', 'photo_delete_start', {
-      visibility: 'group',
-      tourId: summarizePrincipalForDbLog(validatedTourId),
-      photoId: summarizePrincipalForDbLog(validatedPhotoId),
-      requestingUserId: summarizePrincipalForDbLog(requestingUserId),
-    });
-
-    // First, get the photo data to find the storage path
-    const photoRef = dbRefFn(realtimeDbInstance, `group_tour_photos/${validatedTourId}/${validatedPhotoId}`);
-    const snapshot = await getFn(photoRef);
-    const photoData = snapshot.val();
-
-    if (!photoData) {
-      logPhotoDbEvent('warn', 'photo_delete_missing_record', {
-        visibility: 'group',
-        tourId: summarizePrincipalForDbLog(validatedTourId),
-        photoId: summarizePrincipalForDbLog(validatedPhotoId),
-      });
-      throw new Error('Photo not found');
-    }
-
-    logPhotoDbEvent('debug', 'photo_delete_record_loaded', {
-      visibility: 'group',
-      tourId: summarizePrincipalForDbLog(validatedTourId),
-      photoId: summarizePrincipalForDbLog(validatedPhotoId),
-      ownerId: summarizePrincipalForDbLog(photoData.userId),
-      hasSourcePath: Boolean(photoData.storagePath),
-      hasViewerPath: Boolean(photoData.viewerStoragePath),
-      hasThumbnailPath: Boolean(photoData.thumbnailStoragePath),
-    });
-
-    // Verify ownership: only the photo uploader can delete it
-    if (photoData.userId && photoData.userId !== requestingUserId) {
-      logPhotoDbEvent('warn', 'photo_delete_blocked_owner_mismatch', {
-        visibility: 'group',
-        tourId: summarizePrincipalForDbLog(validatedTourId),
-        photoId: summarizePrincipalForDbLog(validatedPhotoId),
-        ownerId: summarizePrincipalForDbLog(photoData.userId),
-        requestingUserId: summarizePrincipalForDbLog(requestingUserId),
-      });
-      throw new Error('You can only delete your own photos');
-    }
-
-    await deleteStoredPhotoObject({
-      storageInstance,
-      storageRefFn,
-      deleteObjectFn,
-      path: photoData.storagePath,
-      label: 'photo',
-    });
-    await deleteStoredPhotoObject({
-      storageInstance,
-      storageRefFn,
-      deleteObjectFn,
-      path: photoData.viewerStoragePath,
-      label: 'viewer photo',
-    });
-    await deleteStoredPhotoObject({
-      storageInstance,
-      storageRefFn,
-      deleteObjectFn,
-      path: photoData.thumbnailStoragePath,
-      label: 'thumbnail',
-    });
-
-    // Delete from the database only after every known Storage object is gone.
-    let databaseTimeoutId = null;
-    try {
-      await Promise.race([
-        removeFn(photoRef),
-        new Promise((_, reject) => {
-          databaseTimeoutId = setTimeout(() => reject(new Error('Database deletion timeout')), 10000);
-        }),
-      ]);
-    } finally {
-      if (databaseTimeoutId) clearTimeout(databaseTimeoutId);
-    }
-
-    logPhotoDbEvent('info', 'photo_delete_success', {
-      visibility: 'group',
-      tourId: summarizePrincipalForDbLog(validatedTourId),
-      photoId: summarizePrincipalForDbLog(validatedPhotoId),
-    });
     return { success: true };
   } catch (error) {
     logPhotoDbEvent('error', 'photo_delete_failed', {
@@ -1605,6 +1595,7 @@ module.exports = {
   uploadPhotoDirect,
   fetchTourPhotosPage,
   fetchPrivatePhotosPage,
+  resolveGroupPhotoMedia,
   subscribeToTourPhotos,
   subscribeToPrivatePhotos,
   deleteGroupPhoto,
@@ -1612,4 +1603,6 @@ module.exports = {
   updatePhotoCaption,
   createBlob,
   resolvePrivatePhotoMedia,
+  buildGroupPhotoEndpointUrl,
+  buildGroupPhotoAuthHeaders,
 };
