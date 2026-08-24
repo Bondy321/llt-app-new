@@ -209,9 +209,15 @@ const run = async ({ admin, options }) => {
   };
 };
 
-if (require.main === module) {
-  const admin = require('firebase-admin');
-  const options = parseArgs(process.argv.slice(2));
+const closeAdminApps = async (admin) => {
+  const apps = Array.isArray(admin?.apps) ? admin.apps.filter(Boolean) : [];
+  await Promise.all(apps.map((app) => (
+    typeof app.delete === 'function' ? app.delete() : Promise.resolve()
+  )));
+};
+
+const main = async ({ admin, argv = process.argv.slice(2) }) => {
+  const options = parseArgs(argv);
   const projectId = options.projectId || process.env.GCLOUD_PROJECT || 'loch-lomond-travel';
   if (!admin.apps.length) admin.initializeApp({
     projectId,
@@ -219,9 +225,18 @@ if (require.main === module) {
       || process.env.FIREBASE_DATABASE_URL
       || `https://${projectId}-default-rtdb.europe-west1.firebasedatabase.app`,
   });
-  run({ admin, options }).then((result) => {
+  try {
+    const result = await run({ admin, options });
     console.log(JSON.stringify(result, null, 2));
-  }).catch((error) => {
+    return result;
+  } finally {
+    await closeAdminApps(admin);
+  }
+};
+
+if (require.main === module) {
+  const admin = require('firebase-admin');
+  main({ admin }).catch((error) => {
     console.error(error.message);
     process.exitCode = 1;
   });
@@ -229,7 +244,9 @@ if (require.main === module) {
 
 module.exports = {
   buildCutoverUpdates,
+  closeAdminApps,
   inventoryLegacySessionState,
+  main,
   parseArgs,
   readKeyPage,
   run,

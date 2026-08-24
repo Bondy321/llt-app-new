@@ -15,6 +15,7 @@ const { verifyActiveAppSession } = require('../functions/lib/appSessionAccess');
 const { buildAppSessionCleanupUpdates, cleanupAppSession } = require('../functions/lib/appSessionCleanup');
 const {
   buildCutoverUpdates,
+  closeAdminApps,
   parseArgs: parseMigrationArgs,
 } = require('../functions/scripts/migrateAppSessions');
 
@@ -177,4 +178,16 @@ test('cutover migration is dry-run-first, bounded and never synthesises trusted 
   assert.equal(updates['tours/TOUR_A/participants/uid-p'], null);
   assert.equal(updates['users/uid-p/pushTokenStatus'], 'UNAVAILABLE');
   assert.equal(Object.keys(updates).some((key) => key.startsWith('app_sessions/')), false);
+});
+
+test('cutover migration closes every Firebase Admin app so CLI runs terminate', async () => {
+  const closed = [];
+  await closeAdminApps({
+    apps: [
+      { delete: async () => { closed.push('first'); } },
+      null,
+      { delete: async () => { closed.push('second'); } },
+    ],
+  });
+  assert.deepEqual(closed.sort(), ['first', 'second']);
 });
