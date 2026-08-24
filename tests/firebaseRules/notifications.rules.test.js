@@ -11,8 +11,8 @@ const PROJECT_ID = 'demo-llt-notification-rules';
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const TOUR_ID = 'NOTIFY_TOUR_1';
 const PASSENGER_UID = 'notify-passenger';
-const PASSENGER_PRINCIPAL_KEY = 'pax_v1:BOOKING1:passenger_40_example_2E_com';
-const OTHER_PASSENGER_PRINCIPAL_KEY = 'pax_v1:BOOKING2:other_40_example_2E_com';
+const PASSENGER_PRINCIPAL_KEY = 'pax_v2_44444444444444444444444444444444';
+const OTHER_PASSENGER_PRINCIPAL_KEY = 'pax_v2_55555555555555555555555555555555';
 const DRIVER_UID = 'notify-driver-auth';
 const DRIVER_ID = 'D-NOTIFY';
 const DRIVER_PRINCIPAL_KEY = `driver:${DRIVER_ID}`;
@@ -68,8 +68,13 @@ test.before(async () => {
       currentTourId: TOUR_ID,
     });
     await db.ref(`users/${PASSENGER_UID}`).set({
-      stablePassengerId: 'pax_v1:BOOKING1:passenger@example.com',
+      stablePassengerId: PASSENGER_PRINCIPAL_KEY,
       stablePassengerKey: PASSENGER_PRINCIPAL_KEY,
+      privatePhotoOwnerId: PASSENGER_PRINCIPAL_KEY,
+      privatePhotoOwnerKey: PASSENGER_PRINCIPAL_KEY,
+      identityVersion: 'pax_v2',
+      bookingRef: 'NOTIFY_BOOKING_1',
+      principalType: 'passenger',
     });
     await db.ref(`users/${DRIVER_UID}`).set({ driverId: DRIVER_ID });
     await db.ref(`tour_manifests/${TOUR_ID}/assigned_drivers/${DRIVER_ID}`).set(true);

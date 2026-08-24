@@ -35,7 +35,13 @@ test('reason codes map to plain-language offline headlines', () => {
 test('offline passenger login succeeds when booking ref and normalized email match cached session', async () => {
   const sessionStorage = createSessionStorage(
     { id: 'T_1', tourCode: 'T1', services: [{ supplier: 'Hidden' }] },
-    { id: 'ABC123', normalizedPassengerEmail: 'passenger@example.com', contract: 'Hidden' }
+    {
+      id: 'ABC123',
+      normalizedPassengerEmail: 'passenger@example.com',
+      stablePassengerId: 'pax_v2_99999999999999999999999999999999',
+      identityVersion: 'pax_v2',
+      contract: 'Hidden',
+    }
   );
   const result = await resolveOfflineLoginFromCache({
     reference: 'abc123',
@@ -137,7 +143,13 @@ test('offline tour-pack lookup normalizes cached tour id before reading cache ke
           success: true,
           data: {
             tour: { id: tourId, driver_itinerary: 'Hidden' },
-            booking: { id: 'ABC123', normalizedPassengerEmail: 'passenger@example.com', services: ['Hidden'] },
+            booking: {
+              id: 'ABC123',
+              normalizedPassengerEmail: 'passenger@example.com',
+              stablePassengerId: 'pax_v2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+              identityVersion: 'pax_v2',
+              services: ['Hidden'],
+            },
             contracts: [{ supplier: 'Hidden' }],
           },
         };

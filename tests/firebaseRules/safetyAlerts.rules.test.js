@@ -79,7 +79,7 @@ const versionedAlert = () => ({
   tourId: TOUR_ID,
   reporterAuthUid: PASSENGER_UID,
   userId: PASSENGER_UID,
-  principalId: 'pax_v1:BOOKING:passenger@example.com',
+  principalId: 'pax_v2_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
   role: 'passenger',
   category: 'medical',
   severity: 'critical',

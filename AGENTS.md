@@ -144,6 +144,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `notification_read_cleanup_jobs` (server-private bounded continuation jobs)
 - `web_admin_settings`
 - `booking_identities`
+- `passenger_identity_security` (server-only opaque identity and installation binding; never sync-owned)
 - `manual_booking_creation_locks`
 - `driver_tour_packs`
 - `driver_tour_pack_actions`
@@ -220,8 +221,11 @@ Driver login:
 
 Stable passenger identity:
 
-- Canonical raw ID: `pax_v1:{BOOKING_REF}:{normalized_email}`.
-- Raw stable IDs contain characters that are invalid in RTDB keys.
+- Canonical ID: opaque server-issued `pax_v2_{32 lowercase hex characters}`.
+- Passenger principals must never contain booking reference, email, phone, name, or other customer data.
+- `verifyPassengerLogin` transactionally creates/reuses the opaque ID and persists the user profile and bindings with Admin SDK authority. Clients never derive or bind passenger identities.
+- A booking is bound to its first verified Firebase Auth UID through `passenger_identity_security/{bookingRef}/authorizedAuthUid`; a different UID receives `REAUTHORIZE_REQUIRED`. This server-only root is separate from sync-owned `booking_identities`, so imports cannot erase security state. Migration locks ambiguous multi-UID legacy bookings for operations review.
+- The only client mutation allowed in `passenger_identity_security` is deletion of `authorizedAuthUid` by that exact currently bound UID during explicit account deletion; clients cannot read, create, replace, or reassign a security record.
 - Use `toRealtimeKeySegment(stablePassengerId)` before using stable identities as path segments.
 - Encoded keys are required for:
   - `identity_bindings/{stablePassengerKey}/{authUid}`
@@ -233,8 +237,8 @@ Stable passenger identity:
   - `stablePassengerKey`
   - `privatePhotoOwnerId`
   - `privatePhotoOwnerKey`
-  - `identityVersion: "pax_v1"`
-  - `normalizedPassengerEmail`
+  - `identityVersion: "pax_v2"`
+- Passenger-readable records and user profiles must not retain `normalizedPassengerEmail` as identity metadata. The verifier-only `booking_identities` root remains the private credential source; it must never own opaque identity or login-binding state.
 
 Important helper:
 
@@ -828,7 +832,7 @@ Exported functions:
 - `verifyPassengerLogin`
   - HTTPS `POST`
   - region `europe-west1`
-  - reads `booking_identities/{bookingRef}`
+  - validates credentials from `booking_identities/{bookingRef}`, then creates/reuses and device-binds the principal in server-only `passenger_identity_security/{bookingRef}`
   - mandatory App Check enforcement in deployed production; fail-closed configuration guard
   - distributed atomic rate limits in separate opaque credential-, account-, and broad network-level buckets after auth/App Check validation
 - `verifyDriverLogin`
@@ -999,7 +1003,7 @@ Important RTDB invariants:
 - Chat reaction, typing, presence, and read-state actor leaves are identity-scoped.
 - Private photos allow access by auth UID, raw stable identity, encoded stable key, raw private owner, encoded private owner key, or identity binding.
 - Passenger profile creation and new `identity_bindings` writes must match the caller's canonical short-lived `booking_access_grants` identity; an authenticated client cannot self-assert an arbitrary passenger identity.
-- `identity_bindings_meta` writes are admin or caller-owned binding only.
+- `identity_bindings` and `identity_bindings_meta` are server/admin-owned; passenger clients cannot create, rotate, or delete bindings.
 - `broadcasts` writes are admin-only and require numeric `createdAtMs`.
 - `category_broadcasts` writes are admin-only, require numeric `createdAtMs`, and target canonical future-tour preference keys under `users/{uid}/preferences/marketing`.
 - `users` validates push token metadata, identity metadata, driver helper fields, and notification preferences.
@@ -1293,7 +1297,7 @@ Date parsing drift:
 
 Identity edge cases:
 
-- Stable passenger IDs must stay raw in profile fields but encoded in path keys.
+- Only `pax_v2_` opaque passenger IDs are valid. Treat any `pax_v1:` value as exposed credential material and fail closed.
 
 Driver assignment coherence:
 

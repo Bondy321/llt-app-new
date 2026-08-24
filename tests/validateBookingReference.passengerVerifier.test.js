@@ -9,6 +9,8 @@ const verifiedPassengerPayload = (overrides = {}) => ({
   valid: true,
   bookingRef: 'ABC123',
   tourId: '5112D_8',
+  stablePassengerId: 'pax_v2_0123456789abcdef0123456789abcdef',
+  identityVersion: 'pax_v2',
   booking: {
     id: 'ABC123',
     tourId: '5112D_8',
@@ -495,6 +497,26 @@ test('validateBookingReference maps verifier endpoint-not-found to actionable co
 
     assert.equal(result.valid, false);
     assert.equal(result.error, 'Passenger verification is temporarily unavailable. Please try again shortly.');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference explains device-bound reauthorization without exposing identity details', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verify';
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: false,
+      status: 403,
+      json: async () => ({ valid: false, reason: 'REAUTHORIZE_REQUIRED' }),
+    });
+    const service = loadServiceWithDb({ drivers: {}, bookings: {}, tours: {} });
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+    assert.equal(result.valid, false);
+    assert.match(result.error, /secured to another device|security review/i);
+    assert.doesNotMatch(result.error, /ABC123|traveller@example/i);
   } finally {
     global.fetch = originalFetch;
     delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;

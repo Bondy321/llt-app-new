@@ -1669,11 +1669,13 @@ test('legacy notification cleanup deletes only obsolete and deleted-auth UID bra
 
   assert.equal(result.completed, true);
   assert.equal(result.processedCount, 6);
-  assert.equal(result.deletedCount, 2);
+  assert.equal(result.deletedCount, 3);
   assert.deepEqual(profileReads.sort(), [
     'legacy-bound', 'legacy-current', 'orphan-active', 'orphan-deleted',
+    'pax_v1:B1:a_40_example_2E_com',
   ]);
   assert.equal(rootUpdates[0]['notification_read_state/TOUR_1/legacy-bound'], null);
+  assert.equal(rootUpdates[0]['notification_read_state/TOUR_1/pax_v1:B1:a_40_example_2E_com'], null);
   assert.equal(rootUpdates[0]['notification_read_state/TOUR_1/orphan-deleted'], null);
   assert.equal(rootUpdates[0]['notification_read_state/TOUR_1/orphan-active'], undefined);
   assert.equal(rootUpdates[0]['notification_read_state/TOUR_1/legacy-current'], undefined);

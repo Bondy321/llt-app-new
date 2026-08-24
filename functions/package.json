@@ -11,7 +11,8 @@
     "harden:private-photos": "node scripts/hardenPrivatePhotoMedia.js",
     "backfill:tour-date-indexes": "node scripts/backfillTourDateIndexes.js",
     "backfill:driver-tour-pack-issues": "node scripts/backfillDriverTourPackIssueProjections.js",
-    "repair:manifest-duplicates": "node scripts/repairDuplicateManifestPassengers.js"
+    "repair:manifest-duplicates": "node scripts/repairDuplicateManifestPassengers.js",
+    "migrate:opaque-passenger-identities": "node scripts/migrateOpaquePassengerIdentities.js"
   },
   "engines": {
     "node": "22"

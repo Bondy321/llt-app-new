@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   getCanonicalIdentity,
+  isOpaquePassengerId,
   isRealtimeKeySegment,
   resolveAuthScopedUserId,
   resolveRealtimeActorId,
@@ -14,11 +15,11 @@ test('resolveAuthScopedUserId prefers canonical auth UID over principal identity
     authUser: { uid: 'auth-uid-1' },
     bookingData: {
       id: 'BKG-123',
-      stablePassengerId: 'stable-passenger-1',
+      stablePassengerId: 'pax_v2_0123456789abcdef0123456789abcdef',
     },
   });
 
-  assert.equal(canonicalIdentity.principalId, 'stable-passenger-1');
+  assert.equal(canonicalIdentity.principalId, 'pax_v2_0123456789abcdef0123456789abcdef');
   assert.equal(resolveAuthScopedUserId({ canonicalIdentity, authUser: { uid: 'fallback-uid' } }), 'auth-uid-1');
 });
 
@@ -68,4 +69,18 @@ test('resolveRealtimeActorId prefers auth UID and falls back to encoded principa
     }),
     'pax_v1:T123659:msandreayoung@yahoo_2E_co_2E_uk'
   );
+});
+
+test('canonical passenger identity accepts only opaque server-issued v2 principals', () => {
+  const opaqueId = 'pax_v2_fedcba9876543210fedcba9876543210';
+  assert.equal(isOpaquePassengerId(opaqueId), true);
+  assert.equal(isOpaquePassengerId('pax_v1:BOOKING:person@example.com'), false);
+  assert.equal(getCanonicalIdentity({
+    authUser: { uid: 'auth-uid' },
+    bookingData: { stablePassengerId: opaqueId },
+  }).principalId, opaqueId);
+  assert.equal(getCanonicalIdentity({
+    authUser: { uid: 'auth-uid' },
+    bookingData: { stablePassengerId: 'pax_v1:BOOKING:person@example.com' },
+  }).principalId, 'auth-uid');
 });

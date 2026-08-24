@@ -19,6 +19,8 @@ const PROJECT_ID = 'demo-llt-storage-rules';
 const BUCKET_URL = `gs://${PROJECT_ID}.appspot.com`;
 const OWNER_UID = 'photo-owner';
 const FOREIGN_UID = 'photo-foreign';
+const OWNER_KEY = 'pax_v2_77777777777777777777777777777777';
+const FOREIGN_OWNER_KEY = 'pax_v2_88888888888888888888888888888888';
 
 const parseHost = () => {
   const value = process.env.FIREBASE_STORAGE_EMULATOR_HOST;
@@ -60,9 +62,9 @@ test.after(async () => {
 test('photo owner can upload and delete group and private objects', async () => {
   for (const objectPath of [
     'group_tour_photos/TOUR_1/photo.jpg',
-    'private_tour_photos/TOUR_1/PASSENGER_1/photo.jpg',
+    `private_tour_photos/TOUR_1/${OWNER_KEY}/photo.jpg`,
   ]) {
-    const claims = objectPath.startsWith('private_') ? { privatePhotoOwnerKey: 'PASSENGER_1' } : {};
+    const claims = objectPath.startsWith('private_') ? { privatePhotoOwnerKey: OWNER_KEY } : {};
     const objectRef = ref(storageFor(OWNER_UID, claims), objectPath);
     await assertSucceeds(uploadBytes(objectRef, imageBytes, imageMetadataFor(OWNER_UID)));
     await assertSucceeds(deleteObject(objectRef));
@@ -129,20 +131,20 @@ test('uploads must be authenticated images with matching uploader metadata', asy
 });
 
 test('private photo reads require the matching stable owner claim', async () => {
-  const objectPath = 'private_tour_photos/TOUR_1/PASSENGER_1/read.jpg';
+  const objectPath = `private_tour_photos/TOUR_1/${OWNER_KEY}/read.jpg`;
   await assertSucceeds(uploadBytes(
-    ref(storageFor(OWNER_UID, { privatePhotoOwnerKey: 'PASSENGER_1' }), objectPath),
+    ref(storageFor(OWNER_UID, { privatePhotoOwnerKey: OWNER_KEY }), objectPath),
     imageBytes,
     imageMetadataFor(OWNER_UID),
   ));
 
   await assertSucceeds(getBytes(ref(
-    storageFor('restored-owner', { privatePhotoOwnerKey: 'PASSENGER_1' }),
+    storageFor('restored-owner', { privatePhotoOwnerKey: OWNER_KEY }),
     objectPath,
   )));
   await assertFails(getBytes(ref(storageFor(FOREIGN_UID), objectPath)));
   await assertFails(getBytes(ref(
-    storageFor(FOREIGN_UID, { privatePhotoOwnerKey: 'PASSENGER_2' }),
+    storageFor(FOREIGN_UID, { privatePhotoOwnerKey: FOREIGN_OWNER_KEY }),
     objectPath,
   )));
   await assertFails(getBytes(ref(
@@ -152,8 +154,8 @@ test('private photo reads require the matching stable owner claim', async () => 
 });
 
 test('new private uploads retain only the approved client metadata allowlist', async () => {
-  const objectPath = 'private_tour_photos/TOUR_1/PASSENGER_1/metadata.jpg';
-  const objectRef = ref(storageFor(OWNER_UID, { privatePhotoOwnerKey: 'PASSENGER_1' }), objectPath);
+  const objectPath = `private_tour_photos/TOUR_1/${OWNER_KEY}/metadata.jpg`;
+  const objectRef = ref(storageFor(OWNER_UID, { privatePhotoOwnerKey: OWNER_KEY }), objectPath);
   await assertSucceeds(uploadBytes(objectRef, imageBytes, {
     contentType: 'image/jpeg',
     customMetadata: { authUid: OWNER_UID, visibility: 'private', sourceRole: 'source' },
@@ -167,14 +169,14 @@ test('new private uploads retain only the approved client metadata allowlist', a
 });
 
 test('a restored stable owner can delete a private object uploaded by an earlier auth uid', async () => {
-  const objectPath = 'private_tour_photos/TOUR_1/PASSENGER_1/legacy.jpg';
+  const objectPath = `private_tour_photos/TOUR_1/${OWNER_KEY}/legacy.jpg`;
   await assertSucceeds(uploadBytes(
-    ref(storageFor(OWNER_UID, { privatePhotoOwnerKey: 'PASSENGER_1' }), objectPath),
+    ref(storageFor(OWNER_UID, { privatePhotoOwnerKey: OWNER_KEY }), objectPath),
     imageBytes,
     imageMetadataFor(OWNER_UID),
   ));
   await assertSucceeds(deleteObject(ref(
-    storageFor('restored-owner', { privatePhotoOwnerKey: 'PASSENGER_1' }),
+    storageFor('restored-owner', { privatePhotoOwnerKey: OWNER_KEY }),
     objectPath,
   )));
 });

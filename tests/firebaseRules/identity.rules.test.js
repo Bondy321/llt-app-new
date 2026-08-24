@@ -9,10 +9,11 @@ const {
 const { toRealtimeKeySegment } = require('../../services/identityService');
 
 const PROJECT_ID = 'demo-llt-identity-rules';
+const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const USER_UID = 'passenger-auth-identity-1';
 const BOOKING_REF = 'T123456';
 const EMAIL = 'traveller@example.com';
-const STABLE_ID = `pax_v1:${BOOKING_REF}:${EMAIL}`;
+const STABLE_ID = 'pax_v2_0123456789abcdef0123456789abcdef';
 const STABLE_KEY = toRealtimeKeySegment(STABLE_ID);
 
 const parseHost = () => {
@@ -40,12 +41,22 @@ test.before(async () => {
     await context.database(dbUrl).ref(`booking_access_grants/${BOOKING_REF}/${USER_UID}`).set({
       bookingRef: BOOKING_REF,
       tourId: 'TOUR_1',
-      normalizedPassengerEmail: EMAIL,
       expiresAtMs: Date.now() + 60_000,
     });
     await context.database(dbUrl).ref('drivers/D-CLAIMED').set({
       authUid: 'another-driver-auth',
     });
+    await context.database(dbUrl).ref(`users/${USER_UID}`).set({
+      stablePassengerId: STABLE_ID,
+      stablePassengerKey: STABLE_KEY,
+      privatePhotoOwnerId: STABLE_ID,
+      privatePhotoOwnerKey: STABLE_KEY,
+      privatePhotoOwnerType: 'opaque_passenger',
+      identityVersion: 'pax_v2',
+      bookingRef: BOOKING_REF,
+      principalType: 'passenger',
+    });
+    await context.database(dbUrl).ref(`identity_bindings/${STABLE_KEY}/${USER_UID}`).set(true);
   });
 });
 
@@ -53,20 +64,42 @@ test.after(async () => {
   if (testEnv) await testEnv.cleanup();
 });
 
-test('verified passenger can persist only the canonical granted identity and binding', async () => {
+test('passenger identity profile is server-owned and an existing binding is owner-removable only', async () => {
   const db = dbFor(USER_UID);
-  await assertSucceeds(db.ref().update({
-    [`users/${USER_UID}/stablePassengerId`]: STABLE_ID,
-    [`users/${USER_UID}/stablePassengerKey`]: STABLE_KEY,
-    [`users/${USER_UID}/privatePhotoOwnerId`]: STABLE_ID,
-    [`users/${USER_UID}/privatePhotoOwnerKey`]: STABLE_KEY,
-    [`users/${USER_UID}/privatePhotoOwnerType`]: 'stable_passenger',
-    [`users/${USER_UID}/identityVersion`]: 'pax_v1',
-    [`users/${USER_UID}/bookingRef`]: BOOKING_REF,
-    [`users/${USER_UID}/normalizedPassengerEmail`]: EMAIL,
-    [`users/${USER_UID}/principalType`]: 'passenger',
+  await assertSucceeds(db.ref(`users/${USER_UID}`).get());
+  await assertFails(db.ref(`users/${USER_UID}/stablePassengerId`).set('pax_v2_fedcba9876543210fedcba9876543210'));
+  await assertSucceeds(db.ref(`identity_bindings/${STABLE_KEY}/${USER_UID}`).set(null));
+  await assertFails(db.ref(`identity_bindings/${STABLE_KEY}/${USER_UID}`).set(true));
+});
+
+test('passenger login security records cannot be read, created, or reassigned by clients', async () => {
+  const passenger = dbFor(USER_UID);
+  const attacker = dbFor('attacker-auth');
+  await assertFails(passenger.ref(`passenger_identity_security/${BOOKING_REF}`).get());
+  await assertFails(passenger.ref(`passenger_identity_security/${BOOKING_REF}/authorizedAuthUid`).set(USER_UID));
+  await assertFails(attacker.ref(`passenger_identity_security/${BOOKING_REF}`).get());
+});
+
+test('verified access grants reject passenger email credential copies', async () => {
+  const now = Date.now();
+  const grant = {
+    source: 'verifyPassengerLogin',
+    bookingRef: BOOKING_REF,
+    tourId: 'TOUR_1',
+    grantedAt: new Date(now).toISOString(),
+    grantedAtMs: now,
+    expiresAtMs: now + 60_000,
+  };
+  const adminDb = dbFor(ADMIN_UID);
+  await assertSucceeds(adminDb.ref(`booking_access_grants/${BOOKING_REF}/safe-auth`).set(grant));
+  await assertFails(adminDb.ref(`booking_access_grants/${BOOKING_REF}/leaky-auth`).set({
+    ...grant,
+    normalizedPassengerEmail: EMAIL,
   }));
-  await assertSucceeds(db.ref(`identity_bindings/${STABLE_KEY}/${USER_UID}`).set(true));
+  await assertFails(adminDb.ref('tour_access_grants/TOUR_1/leaky-auth').set({
+    ...grant,
+    normalizedPassengerEmail: EMAIL,
+  }));
 });
 
 test('authenticated client cannot forge a passenger or driver identity', async () => {
@@ -78,7 +111,7 @@ test('authenticated client cannot forge a passenger or driver identity', async (
     stablePassengerKey: forgedKey,
     privatePhotoOwnerId: forgedId,
     privatePhotoOwnerKey: forgedKey,
-    identityVersion: 'pax_v1',
+    identityVersion: 'pax_v2',
     bookingRef: BOOKING_REF,
     normalizedPassengerEmail: EMAIL,
   }));
@@ -91,5 +124,5 @@ test('authenticated client cannot forge a passenger or driver identity', async (
 });
 
 test('verified passenger cannot bind an arbitrary identity path', async () => {
-  await assertFails(dbFor(USER_UID).ref(`identity_bindings/${toRealtimeKeySegment('pax_v1:OTHER:other@example.com')}/${USER_UID}`).set(true));
+  await assertFails(dbFor(USER_UID).ref('identity_bindings/pax_v2_fedcba9876543210fedcba9876543210/passenger-auth-identity-1').set(true));
 });

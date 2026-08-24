@@ -8,9 +8,9 @@ All reaction writes must target the user-leaf path:
 
 `chats/{tourId}/messages/{messageId}/reactions/{emoji}/{userId} = true`
 
-`userId` is the RTDB path key for the actor. If the actor is a stable passenger identity such as
-`pax_v1:{BOOKING_REF}:{normalized_email}`, encode it with `toRealtimeKeySegment()` before writing
-the leaf. Driver actors may use either the current auth UID or the canonical driver principal
+`userId` is the RTDB path key for the actor. Passenger actors use the opaque server-issued
+`pax_v2_{32 hex characters}` principal and pass it through `toRealtimeKeySegment()` before writing
+the leaf. The principal contains no booking credentials or personal data. Driver actors may use either the current auth UID or the canonical driver principal
 `driver:{DRIVER_ID}`; rules only trust that driver principal when `users/{auth.uid}/driverId`
 matches and `drivers/{driverId}/authUid` is the caller. Driver-authored group chat messages use
 the same proof, so reactions to newly sent driver messages target a server-backed message.

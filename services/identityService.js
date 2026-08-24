@@ -6,6 +6,13 @@ const resolveTrimmedString = (value) => {
 
 const REALTIME_KEY_INVALID_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/;
 const REALTIME_KEY_INVALID_GLOBAL_PATTERN = /[.#$\/\[\]\x00-\x1F\x7F]/g;
+const PASSENGER_IDENTITY_VERSION = 'pax_v2';
+const OPAQUE_PASSENGER_ID_PATTERN = /^pax_v2_[a-f0-9]{32}$/;
+
+const isOpaquePassengerId = (value) => {
+  const trimmed = resolveTrimmedString(value);
+  return Boolean(trimmed && OPAQUE_PASSENGER_ID_PATTERN.test(trimmed));
+};
 
 const isRealtimeKeySegment = (value) => {
   const trimmed = resolveTrimmedString(value);
@@ -45,8 +52,10 @@ const resolveDriverId = ({ bookingData = {}, identityBinding = {} } = {}) => (
 );
 
 const resolveStablePassengerId = ({ bookingData = {}, identityBinding = {} } = {}) => (
-  resolveTrimmedString(identityBinding?.stablePassengerId)
-  || resolveTrimmedString(bookingData?.stablePassengerId)
+  [identityBinding?.stablePassengerId, bookingData?.stablePassengerId]
+    .map(resolveTrimmedString)
+    .find(isOpaquePassengerId)
+  || null
 );
 
 const isDriverIdentity = ({ bookingData = {}, identityBinding = {} } = {}) => {
@@ -97,7 +106,10 @@ const resolveAuthScopedUserId = ({ canonicalIdentity = null, authUser = null } =
 };
 
 module.exports = {
+  OPAQUE_PASSENGER_ID_PATTERN,
+  PASSENGER_IDENTITY_VERSION,
   getCanonicalIdentity,
+  isOpaquePassengerId,
   resolveAuthScopedUserId,
   resolveRealtimeActorId,
   isRealtimeKeySegment,

@@ -9,6 +9,7 @@ const OFFLINE_LOGIN_REASONS = {
 const OFFLINE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const { resolveTourId } = require('./tourIdentityService');
 const { parseTimestampMs } = require('./timeUtils');
+const { PASSENGER_IDENTITY_VERSION, isOpaquePassengerId } = require('./identityService');
 const {
   normalizePassengerIdentityProjection,
   normalizePassengerTourPack,
@@ -36,10 +37,14 @@ const preserveStableIdentityFields = (identity) => {
     ? identity.identityVersion.trim()
     : '';
 
+  if (!isOpaquePassengerId(stablePassengerId) || identityVersion !== PASSENGER_IDENTITY_VERSION) {
+    return null;
+  }
+
   return {
     ...passengerIdentity,
-    ...(stablePassengerId ? { stablePassengerId } : {}),
-    ...(identityVersion ? { identityVersion } : {}),
+    stablePassengerId,
+    identityVersion,
   };
 };
 

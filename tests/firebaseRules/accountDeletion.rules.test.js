@@ -10,7 +10,7 @@ const { toRealtimeKeySegment } = require('../../services/identityService');
 const PROJECT_ID = 'demo-llt-account-deletion-rules';
 const TOUR_ID = 'TOUR_DELETE_001';
 const PASSENGER_AUTH_UID = 'passenger-delete-auth-1';
-const PASSENGER_STABLE_ID = 'pax_v1:BOOKING123:reviewer@example.com';
+const PASSENGER_STABLE_ID = 'pax_v2_66666666666666666666666666666666';
 const PASSENGER_STABLE_KEY = toRealtimeKeySegment(PASSENGER_STABLE_ID);
 const DRIVER_AUTH_UID = 'driver-delete-auth-1';
 const DRIVER_ID = 'D-REVIEW';
@@ -55,6 +55,11 @@ test.before(async () => {
       principalType: 'passenger',
     });
     await db.ref(`identity_bindings/${PASSENGER_STABLE_KEY}/${PASSENGER_AUTH_UID}`).set(true);
+    await db.ref(`passenger_identity_security/T123456`).set({
+      passengerPrincipalId: PASSENGER_STABLE_ID,
+      passengerIdentityVersion: 'pax_v2',
+      authorizedAuthUid: PASSENGER_AUTH_UID,
+    });
     await db.ref(`tours/${TOUR_ID}/participants/${PASSENGER_AUTH_UID}`).set({
       userId: PASSENGER_AUTH_UID,
       joinedAt: 1710000000000,
@@ -135,6 +140,7 @@ test('allows passenger account deletion cleanup update shape', async () => {
     [`users/${PASSENGER_AUTH_UID}`]: null,
     [`logs/${PASSENGER_AUTH_UID}`]: null,
     [`identity_bindings/${PASSENGER_STABLE_KEY}/${PASSENGER_AUTH_UID}`]: null,
+    'passenger_identity_security/T123456/authorizedAuthUid': null,
     [`tours/${TOUR_ID}/liveTracking/${PASSENGER_AUTH_UID}`]: null,
     [`chats/${TOUR_ID}/messages/passenger-owned/deleted`]: true,
     [`chats/${TOUR_ID}/messages/passenger-owned/text`]: '',
@@ -151,7 +157,6 @@ test('allows driver account deletion cleanup update shape', async () => {
     [`drivers/${DRIVER_ID}/authUid`]: null,
     [`tours/${TOUR_ID}/liveTracking/${DRIVER_AUTH_UID}`]: null,
     [`tours/${TOUR_ID}/driverLocation`]: null,
-    [`identity_bindings/${DRIVER_ID}/${DRIVER_AUTH_UID}`]: null,
     [`internal_chats/${TOUR_ID}/messages/driver-owned`]: null,
   }));
 });

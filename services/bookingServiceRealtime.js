@@ -14,6 +14,10 @@ let maskIdentifier = (value) => value;
 let loginDiagnosticsService = null;
 const { loadOptionalService } = require('./optionalServiceLoader');
 const { normalizeTourId, resolveTourId } = require('./tourIdentityService');
+const {
+  PASSENGER_IDENTITY_VERSION,
+  isOpaquePassengerId,
+} = require('./identityService');
 const { normalizeItineraryDocument } = require('./itineraryService');
 const {
   normalizePassengerBookingProjection,
@@ -850,17 +854,15 @@ const validateBookingRef = (bookingRef) => {
   return bookingRef.trim().toUpperCase();
 };
 
-const buildPassengerStableIdentity = ({ bookingRef, normalizedEmail } = {}) => {
-  const normalizedBookingRef = typeof bookingRef === 'string' ? bookingRef.trim().toUpperCase() : '';
-  const normalizedPassengerEmail = typeof normalizedEmail === 'string' ? normalizedEmail.trim().toLowerCase() : '';
-
-  if (!normalizedBookingRef || !normalizedPassengerEmail) {
+const resolveVerifiedPassengerIdentity = ({ stablePassengerId, identityVersion } = {}) => {
+  const normalizedIdentity = typeof stablePassengerId === 'string' ? stablePassengerId.trim() : '';
+  if (!isOpaquePassengerId(normalizedIdentity) || identityVersion !== PASSENGER_IDENTITY_VERSION) {
     return { stablePassengerId: null, identityVersion: null };
   }
 
   return {
-    stablePassengerId: `pax_v1:${normalizedBookingRef}:${normalizedPassengerEmail}`,
-    identityVersion: 'pax_v1',
+    stablePassengerId: normalizedIdentity,
+    identityVersion: PASSENGER_IDENTITY_VERSION,
   };
 };
 
@@ -1604,6 +1606,7 @@ const validateBookingReference = async (reference, email, options = {}) => {
         BOOKING_NOT_FOUND: 'Booking reference not found',
         EMAIL_MISMATCH: 'Email does not match this booking reference',
         INVALID_CREDENTIALS: 'Login details could not be verified. Please check your details and try again.',
+        REAUTHORIZE_REQUIRED: 'This booking is secured to another device or needs a security review. Please contact Loch Lomond Travel to restore access.',
         IDENTITY_INCOMPLETE: 'We found this booking but could not complete login. Please contact support if this keeps happening.',
         INVALID_INPUT: 'Invalid login details provided',
         TRY_AGAIN_LATER: 'Too many verification attempts. Please wait a moment and try again.',
@@ -1670,10 +1673,21 @@ const validateBookingReference = async (reference, email, options = {}) => {
       return { valid: false, error: 'This tour is no longer active' };
     }
 
-    const { stablePassengerId, identityVersion } = buildPassengerStableIdentity({
-      bookingRef: resolvedBookingRef,
-      normalizedEmail,
+    const { stablePassengerId, identityVersion } = resolveVerifiedPassengerIdentity({
+      stablePassengerId: passengerVerification.stablePassengerId,
+      identityVersion: passengerVerification.identityVersion,
     });
+
+    if (!stablePassengerId) {
+      logBookingEvent('error', 'Passenger verifier omitted a valid opaque identity', {
+        bookingRef: maskIdentifier(resolvedBookingRef),
+        tourId,
+      });
+      return {
+        valid: false,
+        error: 'Secure passenger identity could not be established. Please update the app and try again.',
+      };
+    }
 
     logBookingEvent('info', 'Passenger login reference validated', {
       bookingRef: maskIdentifier(resolvedBookingRef),
@@ -2018,7 +2032,7 @@ module.exports = {
   normalizeManifestPassengerRows,
   ensureBookingSchemaConsistency,
   ensureTourParticipantCount,
-  buildPassengerStableIdentity,
+  resolveVerifiedPassengerIdentity,
   validateBookingReference,
   joinTour,
   getTourItinerary,

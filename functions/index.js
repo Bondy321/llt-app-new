@@ -34,6 +34,13 @@ const {
   summarizeDriverTourPackChange,
 } = require('./lib/driverTourPackOperations');
 const { deriveTourDateIndexUpdate } = require('./lib/tourDateIndex');
+const {
+  PASSENGER_IDENTITY_VERSION,
+  authorizePassengerLoginDevice,
+  buildPassengerIdentitySecurityUpdates,
+  ensureOpaquePassengerIdentity,
+  isOpaquePassengerId,
+} = require('./lib/passengerIdentity');
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -1048,7 +1055,7 @@ const fetchRealtimeDatabaseShallowKeys = async ({
 
 const shouldDeleteLegacyNotificationReadPrincipal = ({ principalId, profile, authUserExists = false }) => {
   if (!isValidFirebaseKey(principalId)
-    || principalId.startsWith('pax_v1:')
+    || isOpaquePassengerId(principalId)
     || principalId.startsWith('driver:')) return false;
   if (!profile || typeof profile !== 'object') return !authUserExists;
   return isValidFirebaseKey(resolveTrimmedString(profile.stablePassengerKey))
@@ -1137,7 +1144,7 @@ const processLegacyNotificationReadStateCleanup = async ({
       const index = cursor;
       cursor += 1;
       const principalId = page[index];
-      if (principalId.startsWith('pax_v1:') || principalId.startsWith('driver:')) continue;
+      if (isOpaquePassengerId(principalId) || principalId.startsWith('driver:')) continue;
       const snapshot = await db.ref(`users/${principalId}`).once('value');
       profiles.set(principalId, snapshot.val());
     }
@@ -1145,7 +1152,7 @@ const processLegacyNotificationReadStateCleanup = async ({
   await Promise.all(workers);
 
   const missingProfileUids = page.filter((principalId) => (
-    !principalId.startsWith('pax_v1:')
+    !isOpaquePassengerId(principalId)
     && !principalId.startsWith('driver:')
     && !profiles.get(principalId)
     && principalId.length <= 128
@@ -2218,6 +2225,7 @@ const buildTourDeletionUpdates = ({
   Object.keys(bookings).forEach((bookingRef) => {
     updates[`bookings/${bookingRef}`] = null;
     updates[`booking_identities/${bookingRef}`] = null;
+    updates[`passenger_identity_security/${bookingRef}`] = null;
     updates[`booking_access_grants/${bookingRef}`] = null;
     updates[`manual_booking_creation_locks/bookings/${bookingRef}`] = null;
   });
@@ -2389,7 +2397,6 @@ const resolveSafetyReporterAccess = async ({ db, authUid, tourId, requestedRole 
 const buildVerifiedLoginGrantUpdates = ({
   authUid,
   bookingRef,
-  normalizedPassengerEmail,
   tourId,
   nowMs = Date.now(),
 }) => {
@@ -2407,10 +2414,6 @@ const buildVerifiedLoginGrantUpdates = ({
     grantedAtMs: nowMs,
     expiresAtMs,
   };
-
-  if (normalizedPassengerEmail) {
-    grantPayload.normalizedPassengerEmail = normalizedPassengerEmail;
-  }
 
   return {
     [`tour_access_grants/${tourId}/${authUid}`]: grantPayload,
@@ -3222,7 +3225,9 @@ exports.verifyPassengerLogin = onRequest(
         return res.status(429).json({ valid: false, reason: 'TRY_AGAIN_LATER' });
       }
 
-      const identitySnapshot = await admin.database().ref(`booking_identities/${bookingRef}`).once('value');
+      const database = admin.database();
+      const identityRef = database.ref(`booking_identities/${bookingRef}`);
+      const identitySnapshot = await identityRef.once('value');
 
       if (!identitySnapshot.exists()) {
         log.warn('Passenger login verification failed', { bookingRef, networkDimension, cause: 'BOOKING_NOT_FOUND' });
@@ -3272,10 +3277,52 @@ exports.verifyPassengerLogin = onRequest(
       }
 
       const canonicalTourCode = resolveTrimmedString(tourData.tourCode) || null;
+      const securityRef = database.ref(`passenger_identity_security/${resolvedBookingRef}`);
+      const securedIdentity = await ensureOpaquePassengerIdentity({
+        securityRef,
+        // Transitional seed preserves the live binding while the security-root
+        // migration is rolling out. Booking sync is never authoritative after this.
+        seed: {
+          ...(isOpaquePassengerId(identity.passengerPrincipalId)
+            ? {
+              passengerPrincipalId: identity.passengerPrincipalId,
+              passengerIdentityVersion: PASSENGER_IDENTITY_VERSION,
+              passengerIdentityIssuedAtMs: identity.passengerIdentityIssuedAtMs || Date.now(),
+            }
+            : {}),
+          ...(typeof identity.authorizedAuthUid === 'string' && identity.authorizedAuthUid.trim()
+            ? { authorizedAuthUid: identity.authorizedAuthUid.trim() }
+            : {}),
+          ...(identity.loginLocked === true
+            ? { loginLocked: true, loginLockReason: identity.loginLockReason || 'migration_review_required' }
+            : {}),
+        },
+      });
+      const stablePassengerId = securedIdentity.passengerPrincipalId;
+      if (!isOpaquePassengerId(stablePassengerId)) {
+        return res.status(200).json({ valid: false, reason: 'IDENTITY_INCOMPLETE' });
+      }
+
+      try {
+        await authorizePassengerLoginDevice({
+          securityRef,
+          authUid: requestAuth.uid,
+        });
+      } catch (authorizationError) {
+        const reason = authorizationError?.code === 'REAUTHORIZE_REQUIRED'
+          ? 'REAUTHORIZE_REQUIRED'
+          : 'IDENTITY_INCOMPLETE';
+        log.warn('Passenger login rejected by device-bound credential', {
+          bookingRef,
+          networkDimension,
+          reason,
+        });
+        return res.status(reason === 'REAUTHORIZE_REQUIRED' ? 403 : 200).json({ valid: false, reason });
+      }
+
       const grantUpdates = buildVerifiedLoginGrantUpdates({
         authUid: requestAuth.uid,
         bookingRef: resolvedBookingRef,
-        normalizedPassengerEmail: email,
         tourId: canonicalTourId,
       });
 
@@ -3288,20 +3335,28 @@ exports.verifyPassengerLogin = onRequest(
         return res.status(200).json({ valid: false, reason: 'IDENTITY_INCOMPLETE' });
       }
 
-      await admin.database().ref().update(grantUpdates);
-
-      const stablePassengerId = `pax_v1:${resolvedBookingRef}:${email}`;
-      const privatePhotoOwnerKey = toRealtimeKeySegment(stablePassengerId);
-      if (!privatePhotoOwnerKey) {
+      const userRef = database.ref(`users/${requestAuth.uid}`);
+      const userSnapshot = await userRef.once('value');
+      const identityUpdates = buildPassengerIdentitySecurityUpdates({
+        authUid: requestAuth.uid,
+        bookingRef: resolvedBookingRef,
+        tourId: canonicalTourId,
+        passengerPrincipalId: stablePassengerId,
+        previousProfile: userSnapshot.val() || {},
+      });
+      if (!identityUpdates) {
         return res.status(200).json({ valid: false, reason: 'IDENTITY_INCOMPLETE' });
       }
+
+      await database.ref().update({ ...grantUpdates, ...identityUpdates });
 
       // Preserve unrelated claims while projecting only the RTDB-safe owner key needed
       // by Storage rules. A restored anonymous session receives the same stable key.
       const authUser = await admin.auth().getUser(requestAuth.uid);
       await admin.auth().setCustomUserClaims(requestAuth.uid, {
         ...(authUser.customClaims || {}),
-        privatePhotoOwnerKey,
+        privatePhotoOwnerKey: stablePassengerId,
+        passengerIdentityVersion: PASSENGER_IDENTITY_VERSION,
       });
 
       return res.status(200).json({
@@ -3310,6 +3365,8 @@ exports.verifyPassengerLogin = onRequest(
         bookingRef: resolvedBookingRef,
         tourId: canonicalTourId,
         tourCode: canonicalTourCode,
+        stablePassengerId,
+        identityVersion: PASSENGER_IDENTITY_VERSION,
         booking: buildPassengerSafeBooking(resolvedBookingRef, bookingSnapshot.val() || {}, canonicalTourId),
         tour: buildPassengerSafeTour(canonicalTourId, tourData),
         grantExpiresAtMs: grantUpdates[`tour_access_grants/${canonicalTourId}/${requestAuth.uid}`].expiresAtMs,
@@ -5802,6 +5859,10 @@ exports.__testables = {
   generatePhotoVariantsForRecord,
   sanitizeLogText,
   buildVerifiedLoginGrantUpdates,
+  buildPassengerIdentitySecurityUpdates,
+  authorizePassengerLoginDevice,
+  ensureOpaquePassengerIdentity,
+  isOpaquePassengerId,
   buildPassengerSafeItinerary,
   buildPassengerSafeBooking,
   buildPassengerSafeTour,

@@ -22,7 +22,13 @@ import useDriverTourPack from './hooks/useDriverTourPack';
 import useDriverTourPackActions from './hooks/useDriverTourPackActions';
 import driverTourPackActionService from './services/driverTourPackActionService';
 import useDriverTourPackFeatureFlag from './hooks/useDriverTourPackFeatureFlag';
-import { getCanonicalIdentity, resolveAuthScopedUserId, toRealtimeKeySegment } from './services/identityService';
+import {
+  PASSENGER_IDENTITY_VERSION,
+  getCanonicalIdentity,
+  isOpaquePassengerId,
+  resolveAuthScopedUserId,
+  toRealtimeKeySegment,
+} from './services/identityService';
 import { normalizeTourId, resolveTourId } from './services/tourIdentityService';
 import { parseTimestampMs } from './services/timeUtils';
 import {
@@ -65,7 +71,7 @@ const {
   normalizePassengerTourProjection,
 } = require('./services/passengerDataBoundary');
 
-const IDENTITY_VERSION = 'pax_v1';
+const IDENTITY_VERSION = PASSENGER_IDENTITY_VERSION;
 const IDENTITY_SESSION_KEYS = {
   IDENTITY_BINDING: '@LLT:identityBinding',
 };
@@ -452,79 +458,36 @@ function AppContent() {
     bookingRef,
     normalizedPassengerEmail,
   }) => {
-    if (!authUid || !realtimeDb || !bookingRef || !stablePassengerId) {
+    if (!authUid || !realtimeDb || !bookingRef || !isOpaquePassengerId(stablePassengerId)
+      || identityVersion !== IDENTITY_VERSION) {
       return { profilePersisted: false, bindingPersisted: false };
     }
 
-    const now = Date.now();
     const stablePassengerKey = toRealtimeKeySegment(stablePassengerId);
-    const privatePhotoOwnerKey = stablePassengerKey;
-    const profileUpdates = {
-      [`users/${authUid}/privatePhotoOwnerId`]: stablePassengerId,
-      [`users/${authUid}/privatePhotoOwnerKey`]: privatePhotoOwnerKey,
-      [`users/${authUid}/privatePhotoOwnerType`]: 'stable_passenger',
-      [`users/${authUid}/lastUpdated`]: now,
-    };
-    const bindingLinkUpdates = {};
-    const bindingMetaUpdates = {};
-
-    if (normalizedPassengerEmail) {
-      profileUpdates[`users/${authUid}/stablePassengerId`] = stablePassengerId;
-      profileUpdates[`users/${authUid}/stablePassengerKey`] = stablePassengerKey;
-      profileUpdates[`users/${authUid}/identityVersion`] = identityVersion || IDENTITY_VERSION;
-      profileUpdates[`users/${authUid}/bookingRef`] = bookingRef;
-      profileUpdates[`users/${authUid}/normalizedPassengerEmail`] = normalizedPassengerEmail;
-      bindingLinkUpdates[`identity_bindings/${stablePassengerKey}/${authUid}`] = true;
-      bindingMetaUpdates[`identity_bindings_meta/${stablePassengerKey}/bookingRef`] = bookingRef;
-      bindingMetaUpdates[`identity_bindings_meta/${stablePassengerKey}/normalizedPassengerEmail`] = normalizedPassengerEmail;
-      bindingMetaUpdates[`identity_bindings_meta/${stablePassengerKey}/identityVersion`] = identityVersion || IDENTITY_VERSION;
-      bindingMetaUpdates[`identity_bindings_meta/${stablePassengerKey}/lastSeenAt`] = now;
-    }
-
     try {
-      await realtimeDb.ref().update(profileUpdates);
+      const snapshot = await realtimeDb.ref(`users/${authUid}`).once('value');
+      const profile = snapshot.val() || {};
+      const serverIdentityMatches = profile.stablePassengerId === stablePassengerId
+        && profile.stablePassengerKey === stablePassengerKey
+        && profile.privatePhotoOwnerId === stablePassengerId
+        && profile.privatePhotoOwnerKey === stablePassengerKey
+        && profile.identityVersion === IDENTITY_VERSION
+        && profile.bookingRef === bookingRef;
+      if (!serverIdentityMatches) {
+        throw new Error('Server-issued passenger identity does not match the authenticated profile');
+      }
     } catch (error) {
-      const profileError = new Error('Passenger identity profile persistence failed');
+      const profileError = new Error('Passenger identity profile verification failed');
       profileError.userMessage = 'We could not finish securing your tour session. Please check your connection and try again.';
       profileError.criticalIdentityPersistence = true;
       profileError.cause = error;
       throw profileError;
     }
 
-    let bindingPersisted = false;
-    let bindingMetaPersisted = false;
-
-    if (Object.keys(bindingLinkUpdates).length > 0) {
-      try {
-        await realtimeDb.ref().update(bindingLinkUpdates);
-        bindingPersisted = true;
-      } catch (error) {
-        logger.warn('Identity', 'identity_binding_link_persist_failure', {
-          authUid: maskIdentifier(authUid),
-          stablePassengerKey: stablePassengerKey ? maskIdentifier(stablePassengerKey) : null,
-          error: error?.message || String(error),
-          code: error?.code || null,
-        });
-      }
-    }
-    if (Object.keys(bindingMetaUpdates).length > 0) {
-      try {
-        await realtimeDb.ref().update(bindingMetaUpdates);
-        bindingMetaPersisted = true;
-      } catch (error) {
-        logger.warn('Identity', 'identity_binding_meta_persist_failure', {
-          authUid: maskIdentifier(authUid),
-          stablePassengerKey: stablePassengerKey ? maskIdentifier(stablePassengerKey) : null,
-          error: error?.message || String(error),
-          code: error?.code || null,
-        });
-      }
-    }
-
     return {
       profilePersisted: true,
-      bindingPersisted,
-      bindingMetaPersisted,
+      bindingPersisted: true,
+      bindingMetaPersisted: true,
       stablePassengerKey,
     };
   };
@@ -624,7 +587,8 @@ function AppContent() {
     const normalizedPassengerEmail = restoredBinding?.normalizedPassengerEmail || normalizePassengerEmail(restoredBooking?.normalizedPassengerEmail);
     const bookingRef = restoredBinding?.bookingRef || restoredBooking?.id || null;
 
-    if (!stablePassengerId || !normalizedPassengerEmail || !bookingRef) {
+    if (!isOpaquePassengerId(stablePassengerId) || !normalizedPassengerEmail || !bookingRef
+      || (restoredBinding?.identityVersion || restoredBooking?.identityVersion) !== IDENTITY_VERSION) {
       return null;
     }
 
@@ -660,7 +624,7 @@ function AppContent() {
       const userProfile = snapshot.val() || {};
       const stablePassengerId = userProfile?.stablePassengerId;
 
-      if (!stablePassengerId) {
+      if (!isOpaquePassengerId(stablePassengerId) || userProfile?.identityVersion !== IDENTITY_VERSION) {
         const repairedBinding = await repairIdentityBindingFromSession(authUid);
         if (repairedBinding?.stablePassengerId) {
           logger.info('Identity', 'identity_binding_repaired_from_session', {
@@ -773,7 +737,9 @@ function AppContent() {
       if (savedIdentityBinding?.[1]) {
         try {
           const restoredBinding = JSON.parse(savedIdentityBinding[1]);
-          if (restoredBinding && typeof restoredBinding === 'object') {
+          if (restoredBinding && typeof restoredBinding === 'object'
+            && isOpaquePassengerId(restoredBinding.stablePassengerId)
+            && restoredBinding.identityVersion === IDENTITY_VERSION) {
             setIdentityBinding(restoredBinding);
           }
         } catch (parseError) {
@@ -785,6 +751,17 @@ function AppContent() {
         const storedBookingData = JSON.parse(savedBookingData[1]);
         const storedTourData = savedTourData[1] ? JSON.parse(savedTourData[1]) : null;
         const isDriverBooking = Boolean(storedBookingData?.isDriver || storedBookingData?.id?.startsWith('D-'));
+        if (!isDriverBooking && (!isOpaquePassengerId(storedBookingData?.stablePassengerId)
+          || storedBookingData?.identityVersion !== IDENTITY_VERSION)) {
+          await SessionStorage.multiRemove([
+            SESSION_KEYS.TOUR_DATA,
+            SESSION_KEYS.BOOKING_DATA,
+            SESSION_KEYS.LAST_SCREEN,
+            SESSION_KEYS.IDENTITY_BINDING,
+          ]);
+          logger.warn('Session', 'Legacy passenger session invalidated; online verification required');
+          return;
+        }
         const bookingData = isDriverBooking
           ? storedBookingData
           : normalizePassengerIdentityProjection(storedBookingData, storedBookingData?.id);
@@ -1241,9 +1218,9 @@ function AppContent() {
       ...bookingOrDriverData,
       normalizedPassengerEmail: normalizePassengerEmail(bookingOrDriverData?.normalizedPassengerEmail),
     };
-    const { stablePassengerId, identityVersion } = bookingService.buildPassengerStableIdentity({
-      bookingRef: normalizedBookingData?.id,
-      normalizedEmail: normalizedBookingData?.normalizedPassengerEmail,
+    const { stablePassengerId, identityVersion } = bookingService.resolveVerifiedPassengerIdentity({
+      stablePassengerId: normalizedBookingData?.stablePassengerId,
+      identityVersion: normalizedBookingData?.identityVersion,
     });
     const nextIdentityBinding = stablePassengerId
       ? {

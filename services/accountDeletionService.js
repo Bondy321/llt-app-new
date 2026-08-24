@@ -84,6 +84,11 @@ const getDriverId = (bookingData) => {
   return value.startsWith('D-') ? value : null;
 };
 
+const getPassengerBookingRef = (bookingData) => {
+  const value = typeof bookingData?.id === 'string' ? bookingData.id.trim().toUpperCase() : '';
+  return value && !value.startsWith('D-') ? safeRealtimeKey(value, '') : null;
+};
+
 const getTourId = (tourData, bookingData) => normalizeTourId(
   tourData?.id,
   bookingData?.assignedTourId,
@@ -307,7 +312,15 @@ const scrubChatContent = async ({ db, tourId, identitySet, encodedIdentitySet, d
   return updates;
 };
 
-const buildAccountRecordUpdates = ({ authUid, identities, identityBinding, tourId, driverId, includeDriverLocation }) => {
+const buildAccountRecordUpdates = ({
+  authUid,
+  identities,
+  identityBinding,
+  tourId,
+  driverId,
+  passengerBookingRef,
+  includeDriverLocation,
+}) => {
   const updates = {};
   updates[`users/${authUid}`] = null;
   updates[`logs/${authUid}`] = null;
@@ -328,10 +341,16 @@ const buildAccountRecordUpdates = ({ authUid, identities, identityBinding, tourI
     }
   });
 
-  stableKeys.forEach((stableKey) => {
-    const key = toRealtimeKeySegment(stableKey);
-    if (key) updates[`identity_bindings/${key}/${authUid}`] = null;
-  });
+  if (!driverId) {
+    stableKeys.forEach((stableKey) => {
+      const key = toRealtimeKeySegment(stableKey);
+      if (key) updates[`identity_bindings/${key}/${authUid}`] = null;
+    });
+  }
+
+  if (passengerBookingRef) {
+    updates[`passenger_identity_security/${passengerBookingRef}/authorizedAuthUid`] = null;
+  }
 
   if (driverId) {
     const driverKey = toRealtimeKeySegment(driverId);
@@ -464,6 +483,7 @@ export const deleteCurrentAccount = async ({
 
   const tourId = getTourId(tourData, bookingData);
   const driverId = getDriverId(bookingData);
+  const passengerBookingRef = getPassengerBookingRef(bookingData);
   const role = isDriverSession || driverId ? 'driver' : 'passenger';
   const identities = collectIdentityValues({ authUid, canonicalIdentity, bookingData, identityBinding });
   const privatePhotoOwnerIds = collectPrivatePhotoOwnerIds({ canonicalIdentity, bookingData, identityBinding });
@@ -501,6 +521,7 @@ export const deleteCurrentAccount = async ({
       identityBinding,
       tourId,
       driverId,
+      passengerBookingRef,
       includeDriverLocation: role === 'driver',
     });
 

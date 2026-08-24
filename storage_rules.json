@@ -39,6 +39,7 @@ service firebase.storage {
       return isSignedIn()
         && request.auth.token.keys().hasAll(['privatePhotoOwnerKey'])
         && request.auth.token.privatePhotoOwnerKey is string
+        && request.auth.token.privatePhotoOwnerKey.matches('^pax_v2_[a-f0-9]{32}$')
         && request.auth.token.privatePhotoOwnerKey == ownerId;
     }
 

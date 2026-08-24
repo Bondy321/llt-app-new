@@ -95,15 +95,23 @@ test('Static contract: principal-owned chat reaction/typing/presence writes stay
   assert.equal(internalChatRules.presence.$id['.write'], expectedInternalDriverWrite);
 });
 
-test('Static contract: identity_bindings_meta writes are limited to admin or caller-owned binding', () => {
+test('Static contract: identity bindings are server-owned except exact owner cleanup', () => {
   // Intentional static check: this is a least-privilege invariant in database.rules.json.
   const rules = readJson('database.rules.json');
-  const writeRule = rules.rules.identity_bindings_meta.$stablePassengerId['.write'];
+  const metadataWriteRule = rules.rules.identity_bindings_meta.$stablePassengerId['.write'];
+  const bindingWriteRule = rules.rules.identity_bindings.$stablePassengerId.$uid['.write'];
 
   assert.equal(
-    writeRule,
-    "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('identity_bindings/' + $stablePassengerId + '/' + auth.uid).val() === true)",
+    metadataWriteRule,
+    "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
   );
+  assert.match(bindingWriteRule, /auth\.uid === \$uid && data\.val\(\) === true && !newData\.exists\(\)/);
+  assert.doesNotMatch(bindingWriteRule, /newData\.val\(\) === true/);
+  assert.equal(
+    rules.rules.passenger_identity_security.$bookingRef.authorizedAuthUid['.write'],
+    'auth != null && data.val() === auth.uid && !newData.exists()',
+  );
+  assert.match(rules.rules.identity_bindings_meta.$stablePassengerId['.validate'], /pax_v2_/);
 });
 
 test('Static contract: sensitive database writes remain ownership or admin gated', () => {
@@ -111,7 +119,7 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   const adminUid = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
   const adminOnlyRootAccess = `auth != null && auth.uid === '${adminUid}'`;
   const portalAdminRootAccess = `auth != null && (auth.uid === '${adminUid}' || root.child('admin_users/' + auth.uid).val() === true)`;
-  const privateOwnerAccess = "auth != null && ($ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)";
+  const privateOwnerAccess = "auth != null && $ownerId.matches(/^pax_v2_[a-f0-9]{32}$/) && ($ownerId === root.child('users/' + auth.uid + '/stablePassengerKey').val() || $ownerId === root.child('users/' + auth.uid + '/privatePhotoOwnerKey').val() || root.child('identity_bindings/' + $ownerId + '/' + auth.uid).val() === true)";
   const manifestBookingAccess = `auth != null && (auth.uid === '${adminUid}' || (root.child('tours/' + $tourId + '/participants/' + auth.uid).exists() && (root.child('users/' + auth.uid + '/bookingRef').val() === $bookingRef || (root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').isNumber() && root.child('booking_access_grants/' + $bookingRef + '/' + auth.uid + '/expiresAtMs').val() > now))) || (root.child('users/' + auth.uid + '/driverId').isString() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true)) && root.child('bookings/' + $bookingRef + '/tourId').val() === $tourId`;
 
   assert.equal(
@@ -142,8 +150,9 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   assert.match(rules.rules.group_tour_photos.$tourId['.read'], /tours\/' \+ \$tourId \+ '\/participants\/' \+ auth\.uid/);
   assert.match(rules.rules.group_tour_photos.$tourId['.read'], /assigned_drivers/);
   ['privatePhotoOwnerKey', 'stablePassengerKey'].forEach((field) => {
-    assert.equal(rules.rules.users.$userId[field]['.validate'], '!newData.exists() || newData.isString()');
-    assert.match(rules.rules.users.$userId[field]['.write'], /auth\.uid === \$userId/);
+    assert.match(rules.rules.users.$userId[field]['.validate'], /pax_v2_/);
+    assert.doesNotMatch(rules.rules.users.$userId[field]['.write'], /auth\.uid === \$userId/);
+    assert.match(rules.rules.users.$userId[field]['.write'], /admin_users/);
   });
   assert.equal(rules.rules.users.$userId.driverId['.validate'], '!newData.exists() || newData.isString()');
   assert.equal(rules.rules.users.$userId.driverPrincipalId['.validate'], '!newData.exists() || newData.isString()');
@@ -530,17 +539,14 @@ test('Static contract: Storage photos use uploader proof and stable private owne
   assert.doesNotMatch(photoSource, /customMetadata: \{[^}]*ownerKey:/s);
 });
 
-test('Static contract: email-style stable identities are encoded before identity binding path writes', () => {
+test('Static contract: passenger identities are server-issued opaque values and client writes are removed', () => {
   const appSource = fs.readFileSync(path.join(__dirname, '..', 'App.js'), 'utf8');
   const chatSource = fs.readFileSync(path.join(__dirname, '..', 'services', 'chatService.js'), 'utf8');
 
-  assert.match(appSource, /!authUid \|\| !realtimeDb \|\| !bookingRef \|\| !stablePassengerId/);
+  assert.match(appSource, /isOpaquePassengerId\(stablePassengerId\)/);
   assert.match(appSource, /stablePassengerKey = toRealtimeKeySegment\(stablePassengerId\)/);
-  assert.match(appSource, /privatePhotoOwnerKey = stablePassengerKey/);
-  assert.match(appSource, /users\/\$\{authUid\}\/privatePhotoOwnerKey/);
-  assert.match(appSource, /users\/\$\{authUid\}\/stablePassengerKey/);
-  assert.match(appSource, /identity_bindings\/\$\{stablePassengerKey\}\/\$\{authUid\}/);
-  assert.doesNotMatch(appSource, /identity_bindings\/\$\{stablePassengerId\}/);
+  assert.doesNotMatch(appSource, /identity_bindings\/\$\{/);
+  assert.doesNotMatch(appSource, /pax_v1:/);
   assert.match(chatSource, /getRealtimeActorContext\(userId\)/);
   assert.match(chatSource, /getChatActorStatusPath\(validatedTourId, 'typing', scope\)/);
   assert.match(chatSource, /getChatActorStatusPath\(validatedTourId, 'presence', scope\)/);
