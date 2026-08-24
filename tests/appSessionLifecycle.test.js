@@ -16,6 +16,7 @@ const { buildAppSessionCleanupUpdates, cleanupAppSession } = require('../functio
 const {
   buildCutoverUpdates,
   closeAdminApps,
+  isParticipantBackedByActiveSession,
   parseArgs: parseMigrationArgs,
 } = require('../functions/scripts/migrateAppSessions');
 
@@ -170,14 +171,41 @@ test('cutover migration is dry-run-first, bounded and never synthesises trusted 
   assert.equal(options.apply, false);
   assert.equal(options.limit, 25);
   const updates = buildCutoverUpdates({
-    participantRows: [{ tourId: 'TOUR_A', authUid: 'uid-p' }],
+    staleParticipantRows: [{ tourId: 'TOUR_A', authUid: 'uid-p' }],
     tourGrantRows: [{ tourId: 'TOUR_A', authUid: 'uid-p' }],
     bookingGrantRows: [{ bookingRef: 'BOOK-1', authUid: 'uid-p' }],
-    pushTokenUids: ['uid-p'],
+    pushTokenUidsToDeactivate: ['uid-p'],
   });
   assert.equal(updates['tours/TOUR_A/participants/uid-p'], null);
   assert.equal(updates['users/uid-p/pushTokenStatus'], 'UNAVAILABLE');
   assert.equal(Object.keys(updates).some((key) => key.startsWith('app_sessions/')), false);
+});
+
+test('cutover preserves a participant and push token backed by a current exact session', () => {
+  const nowMs = 10_000;
+  const session = buildPassengerSessionRecord({
+    authUid: 'uid-current',
+    principalId: PASSENGER_ID,
+    tourId: 'TOUR_CURRENT',
+    sessionId: SESSION_ID,
+    nowMs: 1_000,
+    expiresAtMs: 20_000,
+  });
+  const participant = buildPassengerParticipantRecord({ session });
+  assert.equal(isParticipantBackedByActiveSession({
+    tourId: 'TOUR_CURRENT', authUid: 'uid-current', record: participant,
+  }, { 'uid-current': session }, nowMs), true);
+  assert.equal(isParticipantBackedByActiveSession({
+    tourId: 'OTHER_TOUR', authUid: 'uid-current', record: participant,
+  }, { 'uid-current': session }, nowMs), false);
+
+  const updates = buildCutoverUpdates({
+    staleParticipantRows: [],
+    tourGrantRows: [],
+    bookingGrantRows: [],
+    pushTokenUidsToDeactivate: [],
+  });
+  assert.deepEqual(updates, {});
 });
 
 test('cutover migration closes every Firebase Admin app so CLI runs terminate', async () => {

@@ -63,7 +63,7 @@ npm --prefix functions run migrate:app-sessions -- --project=loch-lomond-travel 
 
 Apply requires all three safeguards: `--apply`, exact `--confirm-project`, and `--cutover=FORCE_SECURE_RELOGIN`, plus a unique protected `--backup` path. Continue with returned `afterTour`, `afterUid`, and `afterBooking` cursors until each is null. Stop on `truncatedParents`, a failed post-run audit, unexpected project identity, or any backup creation failure.
 
-The script never creates a session from legacy state. Every affected user must complete verified online login after cutover.
+The script never creates a session from legacy state. It preserves only exact current session-bound participant/token state; every affected legacy user must complete verified online login after cutover.
 
 ## Release smoke matrix
 

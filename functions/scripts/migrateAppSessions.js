@@ -48,6 +48,23 @@ const readKeyPage = async ({ ref, after, limit }) => {
 
 const boundedChildren = (value) => Object.entries(value || {}).slice(0, MAX_CHILDREN_PER_PARENT);
 
+const isParticipantBackedByActiveSession = ({ tourId, authUid, record }, activeSessions, nowMs) => {
+  const session = activeSessions?.[authUid];
+  return Boolean(session
+    && session.schemaVersion === 1
+    && session.status === 'active'
+    && session.authUid === authUid
+    && session.principalType === 'passenger'
+    && session.tourId === tourId
+    && typeof session.sessionId === 'string'
+    && Number(session.expiresAtMs) > nowMs
+    && record?.schemaVersion === 2
+    && record.userId === authUid
+    && record.sessionId === session.sessionId
+    && record.principalId === session.principalId
+    && Number(record.sessionExpiresAtMs) > nowMs);
+};
+
 const inventoryLegacySessionState = async ({ db, options }) => {
   const [tourPage, userPage, bookingPage] = await Promise.all([
     readKeyPage({ ref: db.ref('tours'), after: options.afterTour, limit: options.limit }),
@@ -91,11 +108,18 @@ const inventoryLegacySessionState = async ({ db, options }) => {
     || record.userId !== authUid
     || typeof record.sessionId !== 'string'
     || !/^sess_v1_[a-f0-9]{32}$/.test(record.sessionId));
+  const nowMs = Date.now();
   const activeSessionSnapshot = await db.ref('app_sessions')
-    .orderByChild('expiresAtMs').startAt(Date.now() + 1).limitToFirst(MAX_CHILDREN_PER_PARENT).once('value');
-  const activeSessions = activeSessionSnapshot.val() || {};
+    .orderByChild('expiresAtMs').startAt(nowMs + 1).limitToFirst(MAX_CHILDREN_PER_PARENT + 1).once('value');
+  const activeSessionEntries = Object.entries(activeSessionSnapshot.val() || {});
+  if (activeSessionEntries.length > MAX_CHILDREN_PER_PARENT) truncatedParents.push('app_sessions');
+  const activeSessions = Object.fromEntries(activeSessionEntries.slice(0, MAX_CHILDREN_PER_PARENT));
+  const staleParticipantRows = participantRows.filter((row) => (
+    !isParticipantBackedByActiveSession(row, activeSessions, nowMs)
+  ));
   const participantUids = new Set(participantRows.map((row) => row.authUid));
   const inferredOnlyUids = [...participantUids].filter((uid) => !activeSessions[uid]);
+  const pushTokenUids = users.filter(({ profile }) => typeof profile.pushToken === 'string').map(({ authUid }) => authUid);
 
   return {
     pages: { tours: tourPage, users: userPage, bookings: bookingPage },
@@ -105,6 +129,7 @@ const inventoryLegacySessionState = async ({ db, options }) => {
     users,
     activeSessions,
     invalidParticipants,
+    staleParticipantRows,
     inferredOnlyUids,
     multiTourUids: [...uidTours.entries()]
       .filter(([, tours]) => tours.size > 1)
@@ -114,14 +139,15 @@ const inventoryLegacySessionState = async ({ db, options }) => {
       driverId: profile.driverId,
       assignedTourId: profile.driverAssignedTourId || null,
     })),
-    pushTokenUids: users.filter(({ profile }) => typeof profile.pushToken === 'string').map(({ authUid }) => authUid),
+    pushTokenUids,
+    pushTokenUidsToDeactivate: pushTokenUids.filter((authUid) => !activeSessions[authUid]),
     truncatedParents,
   };
 };
 
 const buildCutoverUpdates = (inventory) => {
   const updates = {};
-  inventory.participantRows.forEach(({ tourId, authUid }) => {
+  inventory.staleParticipantRows.forEach(({ tourId, authUid }) => {
     updates[`tours/${tourId}/participants/${authUid}`] = null;
   });
   inventory.tourGrantRows.forEach(({ tourId, authUid }) => {
@@ -130,7 +156,7 @@ const buildCutoverUpdates = (inventory) => {
   inventory.bookingGrantRows.forEach(({ bookingRef, authUid }) => {
     updates[`booking_access_grants/${bookingRef}/${authUid}`] = null;
   });
-  inventory.pushTokenUids.forEach((authUid) => {
+  inventory.pushTokenUidsToDeactivate.forEach((authUid) => {
     updates[`users/${authUid}/pushToken`] = null;
     updates[`users/${authUid}/pushTokenStatus`] = 'UNAVAILABLE';
     updates[`users/${authUid}/pushTokenInvalidReason`] = 'SECURE_RELOGIN_REQUIRED';
@@ -157,10 +183,13 @@ const summarize = (inventory, options) => ({
   apply: options.apply,
   participantRows: inventory.participantRows.length,
   invalidParticipantRows: inventory.invalidParticipants.length,
+  staleParticipantRows: inventory.staleParticipantRows.length,
+  activeSessionBackedParticipantsPreserved: inventory.participantRows.length - inventory.staleParticipantRows.length,
   tourAccessGrants: inventory.tourGrantRows.length,
   bookingAccessGrants: inventory.bookingGrantRows.length,
   activeDriverAuthMappings: inventory.driverAuthMappings.length,
   pushTokens: inventory.pushTokenUids.length,
+  pushTokensToDeactivate: inventory.pushTokenUidsToDeactivate.length,
   multiTourUids: inventory.multiTourUids.length,
   sessionsNotSafelyInferable: inventory.inferredOnlyUids.length,
   trustedSessionsCreated: 0,
@@ -246,6 +275,7 @@ module.exports = {
   buildCutoverUpdates,
   closeAdminApps,
   inventoryLegacySessionState,
+  isParticipantBackedByActiveSession,
   main,
   parseArgs,
   readKeyPage,

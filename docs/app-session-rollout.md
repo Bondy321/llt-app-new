@@ -61,7 +61,7 @@ During the maintenance window, apply one bounded page at a time with the page's 
 npm --prefix functions run migrate:app-sessions -- --project=loch-lomond-travel --apply --confirm-project=loch-lomond-travel --cutover=FORCE_SECURE_RELOGIN --backup=C:\secure-backups\app-session-page-001.json --limit=25
 ```
 
-The script writes only leaf-level/multipath removals, deactivates existing push tokens, does not create sessions, and verifies every changed path. Require `postRunAudit.passed=true` for each page. Never commit the backup.
+The script writes only leaf-level/multipath removals, deactivates legacy push tokens not backed by a current session, preserves exact session-bound participants and tokens, does not create sessions, and verifies every changed path. Require `postRunAudit.passed=true` for each page. Never commit the backup.
 
 ### 4. Deploy strict data and media rules
 
