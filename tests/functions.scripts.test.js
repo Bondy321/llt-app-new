@@ -86,6 +86,24 @@ test('private photo hardening is dry-run first and selects only exact private pa
   assert.deepStrictEqual(candidate.objectPaths, ['private_tour_photos/TOUR_1/owner-1/source.jpg']);
 });
 
+test('private photo hardening recovers exact paths from URL-only legacy records', () => {
+  const candidate = privatePhotoHardening.buildCandidate({
+    tourId: 'TOUR_1', ownerKey: 'owner-1', photoId: 'photo-1',
+    record: {
+      sourceUrl: 'https://firebasestorage.googleapis.com/v0/b/demo/o/private_tour_photos%2FTOUR_1%2Fowner-1%2Fsource.jpg?alt=media&token=secret',
+      viewerUrl: 'https://firebasestorage.googleapis.com/v0/b/demo/o/private_tour_photos%2FTOUR_1%2Fother-owner%2Fviewer.jpg?alt=media&token=secret',
+      thumbnailUrl: 'https://example.test/not-a-firebase-object',
+      url: 'https://firebasestorage.googleapis.com/v0/b/demo/o/private_tour_photos%2FTOUR_1%2Fowner-1%2Fold-source.jpg?alt=media&token=secret',
+      fullUrl: 'https://example.test/old-external-link',
+    },
+  });
+  assert.deepStrictEqual(candidate.objectPaths, ['private_tour_photos/TOUR_1/owner-1/source.jpg']);
+  assert.deepStrictEqual(candidate.pathUpdates, {
+    storagePath: 'private_tour_photos/TOUR_1/owner-1/source.jpg',
+  });
+  assert.deepStrictEqual(candidate.urlFields, ['sourceUrl', 'viewerUrl', 'thumbnailUrl', 'url', 'fullUrl']);
+});
+
 test('private photo hardening apply revokes tokens and removes durable URL fields', async () => {
   const metadataWrites = [];
   const dbUpdates = [];
@@ -103,9 +121,21 @@ test('private photo hardening apply revokes tokens and removes durable URL field
   };
   const admin = {
     database: () => ({ ref: () => ownerRef }),
-    storage: () => ({ bucket: () => ({ file: (path) => ({
-      setMetadata: async (metadata) => metadataWrites.push({ path, metadata }),
-    }) }) }),
+    storage: () => ({ bucket: () => ({
+      getFiles: async () => [[
+        {
+          name: 'private_tour_photos/TOUR_1/owner/source.jpg',
+          getMetadata: async () => [{ metadata: { firebaseStorageDownloadTokens: 'a' } }],
+        },
+        {
+          name: 'private_tour_photos/TOUR_1/owner/viewer.jpg',
+          getMetadata: async () => [{ metadata: { firebaseStorageDownloadTokens: 'b' } }],
+        },
+      ]],
+      file: (path) => ({
+        setMetadata: async (metadata) => metadataWrites.push({ path, metadata }),
+      }),
+    }) }),
   };
   await privatePhotoHardening.run({ admin, options: {
     dryRun: false, tourId: 'TOUR_1', ownerKey: 'owner', limit: 50, afterCursor: null,
@@ -146,7 +176,13 @@ test('private photo hardening treats missing objects as success but fails other 
     };
     return {
       database: () => ({ ref: () => ownerRef }),
-      storage: () => ({ bucket: () => ({ file: () => ({ setMetadata: async () => { throw error; } }) }) }),
+      storage: () => ({ bucket: () => ({
+        getFiles: async () => [[{
+          name: 'private_tour_photos/T/O/source.jpg',
+          getMetadata: async () => [{ metadata: { firebaseStorageDownloadTokens: 'token' } }],
+        }]],
+        file: () => ({ setMetadata: async () => { throw error; } }),
+      }) }),
     };
   };
   const options = { dryRun: false, tourId: 'T', ownerKey: 'O', limit: 10, afterCursor: null };
@@ -197,14 +233,27 @@ test('group photo hardening migrates the oldest url-only record shape', () => {
 });
 
 test('group photo token audit uses bounded file metadata and returns deterministic paths', async () => {
-  let fallbackReads = 0;
+  let metadataReads = 0;
   const files = [
-    { name: 'group_tour_photos/TOUR_1/z.jpg', metadata: { metadata: { firebaseStorageDownloadTokens: 'token-z' } } },
-    { name: 'group_tour_photos/TOUR_1/clean.jpg', metadata: { metadata: {} } },
+    {
+      name: 'group_tour_photos/TOUR_1/z.jpg',
+      metadata: { metadata: {} },
+      getMetadata: async () => {
+        metadataReads += 1;
+        return [{ metadata: { firebaseStorageDownloadTokens: 'token-z' } }];
+      },
+    },
+    {
+      name: 'group_tour_photos/TOUR_1/clean.jpg',
+      getMetadata: async () => {
+        metadataReads += 1;
+        return [{ metadata: {} }];
+      },
+    },
     {
       name: 'group_tour_photos/TOUR_1/a.jpg',
       getMetadata: async () => {
-        fallbackReads += 1;
+        metadataReads += 1;
         return [{ metadata: { firebaseStorageDownloadTokens: 'token-a' } }];
       },
     },
@@ -218,7 +267,7 @@ test('group photo token audit uses bounded file metadata and returns determinist
     'group_tour_photos/TOUR_1/a.jpg',
     'group_tour_photos/TOUR_1/z.jpg',
   ]);
-  assert.equal(fallbackReads, 1);
+  assert.equal(metadataReads, 3);
 });
 
 test('group photo hardening recovers existing orphan chat media and clears missing links', async () => {

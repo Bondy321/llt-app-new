@@ -155,10 +155,10 @@ const listTokenizedObjects = async ({ bucket, tourId, concurrency = 12 }) => {
     while (nextIndex < files.length) {
       const file = files[nextIndex];
       nextIndex += 1;
-      const listedMetadata = file?.metadata;
-      const metadata = listedMetadata?.metadata
-        ? listedMetadata
-        : (await file.getMetadata())[0];
+      // The list response can omit firebaseStorageDownloadTokens while still
+      // returning other custom metadata. Read the object itself so a partial
+      // listing cannot produce a false-negative security audit.
+      const metadata = (await file.getMetadata())[0];
       if (metadata?.metadata?.firebaseStorageDownloadTokens) tokenized.push(file.name);
     }
   });
