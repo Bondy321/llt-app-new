@@ -1,15 +1,12 @@
 {
   "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "checkJs": false
+  },
   "include": [
-    "src/**/*.js",
-    "src/**/*.jsx",
-    "functions/src/**/*.js",
-    "web-admin/src/app/**/*.js",
-    "web-admin/src/app/**/*.jsx",
-    "web-admin/src/features/**/*.js",
-    "web-admin/src/features/**/*.jsx",
-    "web-admin/src/shared/**/*.js",
-    "web-admin/src/shared/**/*.jsx",
+    "src/shared/config/runtimeEnvironment.js",
+    "functions/src/config/runtimeConfig.js",
+    "functions/src/infrastructure/database/firebaseKey.js",
     "contracts/types/**/*.d.ts"
   ],
   "exclude": ["**/generated/**"]

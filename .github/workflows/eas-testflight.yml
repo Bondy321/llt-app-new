@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     permissions:
+      actions: read
       contents: read
     outputs:
       build_id: ${{ steps.select-build.outputs.build_id }}
@@ -65,6 +66,11 @@ jobs:
         run: |
           git fetch origin main --depth=1
           git merge-base --is-ancestor ${{ github.sha }} origin/main
+
+      - name: Require successful CI for exact release SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/verifyCiRunForSha.js --sha=${{ github.sha }}
 
       - name: Setup Node.js 24
         if: ${{ !inputs.eas_build_id }}
@@ -324,6 +330,23 @@ jobs:
           echo "EAS build id: $EAS_BUILD_ID"
           eas whoami
           eas project:info --non-interactive
+
+      - name: Verify selected EAS build belongs to release SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          eas build:view "$EAS_BUILD_ID" --json > eas-selected-build.json
+          node <<'NODE'
+          const fs = require('fs');
+          const build = JSON.parse(fs.readFileSync('eas-selected-build.json', 'utf8'));
+          const builtSha = build.gitCommitHash || build.gitCommit?.hash || build.metadata?.gitCommitHash;
+          const releaseSha = process.env.GITHUB_SHA;
+
+          if (!builtSha || builtSha !== releaseSha) {
+            throw new Error(`Selected EAS build belongs to ${builtSha || 'an unknown commit'}, not release SHA ${releaseSha}.`);
+          }
+          console.log(`Selected EAS build matches exact release SHA ${releaseSha}.`);
+          NODE
 
       - name: Configure iOS submit profile
         shell: bash

@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     permissions:
+      actions: read
       contents: read
     env:
       CI: true
@@ -47,6 +48,11 @@ jobs:
         run: |
           git fetch origin main --depth=1
           git merge-base --is-ancestor ${{ github.sha }} origin/main
+
+      - name: Require successful CI for exact release SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/verifyCiRunForSha.js --sha=${{ github.sha }}
 
       - name: Setup Node.js 24
         uses: actions/setup-node@v4
