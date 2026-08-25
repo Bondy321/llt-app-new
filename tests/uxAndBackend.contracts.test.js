@@ -611,7 +611,7 @@ test('Static contract: photo upload modals guard duplicate enqueue taps', () => 
     'screens/PhotobookScreen.js',
     'screens/GroupPhotobookScreen.js',
   ].forEach((relativePath) => {
-    const source = readText(relativePath);
+    const source = readMobileModuleSource(relativePath);
 
     assert.match(source, /const \[uploading, setUploading\] = useState\(false\);/);
     assert.match(source, /if \(uploading(?: \|\| !pendingImage\?\.uri)?\) return;/);
@@ -715,14 +715,14 @@ test('Static contract: customer-facing date labels use strict shared timestamp p
     'screens/NotificationPreferencesScreen.js',
     'screens/ItineraryScreen.js',
   ].forEach((relativePath) => {
-    const source = readText(relativePath);
+    const source = readMobileModuleSource(relativePath);
 
     assert.match(source, /parseTimestampMs|parseSharedTimestampMs/);
     assert.doesNotMatch(source, /Date\.parse\(/);
   });
 
   ['screens/PhotobookScreen.js', 'screens/GroupPhotobookScreen.js'].forEach((relativePath) => {
-    const source = readText(relativePath);
+    const source = readMobileModuleSource(relativePath);
     assert.match(source, /getPhotoTimestampMs/);
     assert.doesNotMatch(source, /const aTs = a\.timestamp \|\| 0;/);
   });
