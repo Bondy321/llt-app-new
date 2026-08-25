@@ -526,7 +526,7 @@ export default function NotificationPreferencesView({
             </TouchableOpacity>
           </View>
         ) : null}
-        
+
         {!isOnboarding ? (
           <TouchableOpacity
             style={styles.testButton}

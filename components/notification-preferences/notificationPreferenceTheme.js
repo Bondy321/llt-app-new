@@ -18,4 +18,3 @@ export const COLORS = {
   border: THEME.border,
   headerBg: THEME.white,
 };
-

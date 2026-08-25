@@ -61,7 +61,6 @@ export const AnimatedCard = ({ children, style, delay = 0, onPress, accessibilit
 
   return <Animated.View style={[style, animatedStyle]}>{children}</Animated.View>;
 };
-
 // Skeleton loading component
 export const SkeletonLoader = ({ width, height, borderRadius = 8, style }) => {
   const pulseAnim = useRef(new Animated.Value(0.3)).current;

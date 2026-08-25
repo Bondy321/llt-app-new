@@ -205,4 +205,3 @@ export interface ContractValidationResult {
   valid: boolean;
   errors: string[];
 }
-

@@ -67,7 +67,7 @@ export default function AppShell() {
   const [identityBinding, setIdentityBinding] = useState(null);
   const [appSession, setAppSession] = useState(null);
   const [logoutStatus, setLogoutStatus] = useState({ state: 'idle', error: null, diagnostic: null });
-  
+
   const [driverSessionGeneration, setDriverSessionGeneration] = useState(0);
   const driverIdentityPersistKeyRef = useRef(null);
   const authUnsubscribeRef = useRef(null);

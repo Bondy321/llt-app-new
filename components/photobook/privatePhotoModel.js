@@ -8,7 +8,6 @@ export const formatPhotoDate = (timestamp, options) => {
     ? new Date(parsedMs).toLocaleDateString(undefined, options)
     : null;
 };
-
 export const getPhotoTimestampMs = (photo) => {
   const parsedMs = parseTimestampMs(photo?.timestamp);
   return Number.isFinite(parsedMs) ? parsedMs : 0;
@@ -75,4 +74,3 @@ export const summarizeRealtimeKey = (value) => {
     containsEncodedDot: normalized.includes('_2E_'),
   };
 };
-

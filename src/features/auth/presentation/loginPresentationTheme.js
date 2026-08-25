@@ -23,7 +23,6 @@ export const COLORS = {
   warning: THEME_COLORS.warning,
   warningSoft: THEME_COLORS.warningLight,
 };
-
 export const SPACING = THEME_SPACING || {
   xs: 4,
   sm: 8,
@@ -52,4 +51,3 @@ export const FONT_WEIGHT = THEME_FONT_WEIGHT || {
   bold: '700',
   extrabold: '800',
 };
-

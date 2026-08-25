@@ -29,7 +29,6 @@ export function ItineraryLoadingView({ onBack, renderLoadingSkeleton, tourName }
     </SafeAreaView>
   );
 }
-
 export default function ItineraryView(props) {
   const {
     beginEditing, collapsedDays, dataSource, dataToRender, displayTitle, editConflict, errorMessage,

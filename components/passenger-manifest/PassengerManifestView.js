@@ -283,10 +283,10 @@ const renderHeader = () => (
             sections={sectionListData}
             keyExtractor={item => item.id}
             renderItem={({ item }) => (
-              <ManifestBookingCard 
-                booking={item} 
-                onPress={() => handleOpenBooking(item)} 
-                isSearchResult={false} 
+              <ManifestBookingCard
+                booking={item}
+                onPress={() => handleOpenBooking(item)}
+                isSearchResult={false}
                 syncState={getBookingSyncState(bookingSyncState, item.id) || 'synced'}
               />
             )}
@@ -479,4 +479,3 @@ const renderHeader = () => (
     </SafeAreaView>
   );
 }
-

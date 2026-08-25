@@ -449,10 +449,10 @@ export default function NotificationPreferencesScreen({
         permissionState: permissionStatus?.state || 'unknown',
       });
       setTestStatus({ type: 'progress', message: 'Checking notification permissions...' });
-      
+
       const token = await registerForPushNotificationsAsync();
       if (!mountedRef.current) return;
-      
+
       if (!token) {
         logger.warn('NotificationPreferences', 'Test notification blocked without token', {
           permissionState: permissionStatus?.state || 'unknown',

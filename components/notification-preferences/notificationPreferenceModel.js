@@ -61,5 +61,3 @@ export const MARKETING_PREFERENCE_META = TOUR_NOTIFICATION_CATEGORIES.reduce((me
     };
     return meta;
   }, {});
-
-

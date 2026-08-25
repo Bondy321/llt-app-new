@@ -525,4 +525,3 @@ export default function DriverHomeController({ driverData, onLogout, onNavigate,
 
   return <DriverHomeView {...{ accuracyConfig, activeTourId, addressLoading, addressText, autoShareEnabled, autoShareLastRunAt, autoShareSaving, autoShareStatus, cacheStatusLabel, confirmingLocation, driverData, driverTourPackFeature, driverTourPackState, fadeAnim, formatTimeAgo, handleCaptureLocation, handleConfirmLocation, handleJoinTour, handleOpenChat, handleOpenDriverChat, handleRefetchLocation, handleToggleAutoShare, inputTourCode, isLocationStale, joinModalVisible, joining, lastLocationPresentation, lastLocationStatus, lastLocationStatusColor, lastLocationUpdate, locationAccuracy, onLogout, onNavigate, previewLocation, previewModalVisible, previewRequestIdRef, pulseAnim, setAddressLoading, setInputTourCode, setJoinModalVisible, setPreviewModalVisible, setUpdatingLocation, showBanner, successAnim, updatingLocation }} />;
 }
-

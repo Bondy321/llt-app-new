@@ -436,7 +436,7 @@ export default function createPassengerManifestScreenStyles({ StyleSheet, COLORS
     paddingHorizontal: SPACING.lg,
   },
   emptyStateRetryText: { color: COLORS.textLight, fontWeight: FONT_WEIGHT.bold },
-  
+
   modalSectionLabel: { fontSize: 14, fontWeight: 'bold', color: COLORS.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.4 },
   actionRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 15, marginBottom: 15 },
   actionBtn: {
@@ -447,7 +447,7 @@ export default function createPassengerManifestScreenStyles({ StyleSheet, COLORS
     justifyContent: 'center',
   },
   actionBtnText: { color: 'white', fontSize: 16, fontWeight: 'bold', marginTop: 5 },
-  
+
   secondaryActionBtn: {
     padding: 15,
     borderRadius: 12,

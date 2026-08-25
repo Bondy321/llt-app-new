@@ -115,7 +115,7 @@ const generateTypes = () => {
     }
     lines.push('}', '');
   }
-  lines.push('export interface ContractValidationResult {', '  valid: boolean;', '  errors: string[];', '}', '');
+  lines.push('export interface ContractValidationResult {', '  valid: boolean;', '  errors: string[];', '}');
   return `${lines.join('\n')}\n`;
 };
 
