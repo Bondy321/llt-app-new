@@ -8,6 +8,7 @@ import { COLORS } from './tourHomePresentation';
 import { RADIUS, SHADOWS, SPACING } from '../../theme';
 
 const styles = createTourHomeScreenStyles({ StyleSheet, COLORS, RADIUS, SHADOWS, SPACING });
+const PICKUP_COUNTDOWN_REFRESH_MS = 30 * 1000;
 
 export const AnimatedCard = ({ children, style, delay = 0, onPress, accessibilityLabel, accessibilityHint }) => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
