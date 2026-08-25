@@ -1,0 +1,162 @@
+'use strict';
+
+const { loadLegacyLibrary } = require('./bootstrap/legacyLibrary');
+const { createPhotoVariantBuffers } = require('./infrastructure/storage/mediaProcessor');
+const { sanitizeLogText } = require('./infrastructure/logging/safeLogger');
+const { verifyRequestAuthUid } = require('./infrastructure/auth/requestAuth');
+const { enforceLoginAppCheck, shouldRequireLoginAppCheck } = require('./infrastructure/auth/loginAppCheckGate');
+const { isAllowedAdminOrigin } = require('./infrastructure/http/adminCors');
+const { isDeployedFunctionsRuntime } = require('./config/runtimeConfig');
+const { enforceGroupMediaAppCheck } = require('./infrastructure/auth/appCheckGate');
+const notificationPolicy = require('./domains/notifications/notificationPolicy');
+const notificationRecipients = require('./domains/notifications/notificationRecipients');
+const notificationDelivery = require('./domains/notifications/notificationDelivery');
+const notificationState = require('./domains/notifications/notificationState');
+const { cleanupInvalidTokens } = require('./domains/notifications/invalidTokenCleanup');
+const broadcastFunctions = require('./domains/notifications/broadcastFunctions');
+const photoVariants = require('./domains/media/photoVariants');
+const photoVariantFunction = require('./domains/media/photoVariantFunction');
+const mediaAccess = require('./domains/media/mediaAccess');
+const groupMediaFunctions = require('./domains/media/groupMediaFunctions');
+const privateMediaFunctions = require('./domains/media/privateMediaFunctions');
+const safetySubmission = require('./domains/safety/safetySubmission');
+const { resolveSafetyReporterAccess } = require('./domains/safety/safetyAccess');
+const { checkSafetySubmissionRateLimit } = require('./domains/safety/safetyRateLimit');
+const sessionIssuance = require('./domains/app-sessions/sessionIssuance');
+const passengerProjection = require('./domains/passenger-auth/passengerProjection');
+const passengerLoginSecurity = require('./domains/passenger-auth/passengerLoginSecurity');
+const driverLoginSecurity = require('./domains/driver-auth/driverLoginSecurity');
+const manualPassengerBooking = require('./domains/administration/manualPassengerBooking');
+const { verifyOperationsAdminAccess } = require('./domains/administration/adminAuthorization');
+const tourDeletion = require('./domains/administration/tourDeletion');
+const manifestDomain = require('./domains/manifests/manifestDomain');
+const driverAssignment = require('./domains/driver-assignment/driverAssignment');
+
+const passengerIdentity = loadLegacyLibrary('passengerIdentity');
+const loginRateLimiter = loadLegacyLibrary('loginRateLimiter');
+const driverTourPackOperations = loadLegacyLibrary('driverTourPackOperations');
+const driverTourPackPublisher = loadLegacyLibrary('driverTourPackPublisher');
+const managementOidc = loadLegacyLibrary('managementOidc');
+const manifestPassengers = loadLegacyLibrary('manifestPassengers');
+const appSession = loadLegacyLibrary('appSession');
+const appSessionLock = loadLegacyLibrary('appSessionLock');
+const appSessionAccess = loadLegacyLibrary('appSessionAccess');
+const appSessionCleanup = loadLegacyLibrary('appSessionCleanup');
+
+module.exports = {
+  toRealtimeKeySegment: notificationPolicy.toRealtimeKeySegment,
+  validateMessageData: notificationPolicy.validateMessageData,
+  buildChatNotificationContent: notificationPolicy.buildChatNotificationContent,
+  buildSafetyNotificationContent: notificationPolicy.buildSafetyNotificationContent,
+  normalizeSafetySubmissionInput: safetySubmission.normalizeSafetySubmissionInput,
+  buildCanonicalSafetyRecord: safetySubmission.buildCanonicalSafetyRecord,
+  buildSafetySubmissionUpdates: safetySubmission.buildSafetySubmissionUpdates,
+  resolveSafetyReporterAccess,
+  checkSafetySubmissionRateLimit,
+  resolveChatSenderParticipantIds: notificationRecipients.resolveChatSenderParticipantIds,
+  resolveChatSenderDeliveryIds: notificationDelivery.resolveChatSenderDeliveryIds,
+  collectAssignedDriverIds: notificationRecipients.collectAssignedDriverIds,
+  isDriverProfileAssignedToTour: notificationRecipients.isDriverProfileAssignedToTour,
+  resolveAssignedDriverRecipientIds: notificationDelivery.resolveAssignedDriverRecipientIds,
+  getPushTokenIneligibilityReason: notificationPolicy.getPushTokenIneligibilityReason,
+  shouldRemoveInvalidToken: notificationPolicy.shouldRemoveInvalidToken,
+  cleanupInvalidTokens,
+  selectNotificationRecipients: notificationRecipients.selectNotificationRecipients,
+  parseSourcePhotoPath: photoVariants.parseSourcePhotoPath,
+  buildPhotoCollectionPath: photoVariants.buildPhotoCollectionPath,
+  processPhotoVariantObject: photoVariantFunction.processPhotoVariantObject,
+  findPhotoRecordByStoragePath: photoVariantFunction.findPhotoRecordByStoragePath,
+  isPhotoVariantRecordReady: photoVariantFunction.isPhotoVariantRecordReady,
+  hardenPrivateSourceObjectMetadata: photoVariants.hardenPrivateSourceObjectMetadata,
+  hardenGroupSourceObjectMetadata: photoVariants.hardenGroupSourceObjectMetadata,
+  createPhotoVariantBuffers,
+  buildPhotoVariantPaths: photoVariants.buildPhotoVariantPaths,
+  generatePhotoVariantsForRecord: photoVariants.generatePhotoVariantsForRecord,
+  sanitizeLogText,
+  buildVerifiedLoginGrantUpdates: sessionIssuance.buildVerifiedLoginGrantUpdates,
+  buildPassengerIdentitySecurityUpdates: passengerIdentity.buildPassengerIdentitySecurityUpdates,
+  authorizePassengerLoginDevice: passengerIdentity.authorizePassengerLoginDevice,
+  ensureOpaquePassengerIdentity: passengerIdentity.ensureOpaquePassengerIdentity,
+  isOpaquePassengerId: passengerIdentity.isOpaquePassengerId,
+  buildPassengerSafeItinerary: passengerProjection.buildPassengerSafeItinerary,
+  buildPassengerSafeBooking: passengerProjection.buildPassengerSafeBooking,
+  buildPassengerSafeTour: passengerProjection.buildPassengerSafeTour,
+  verifyRequestAuthUid,
+  verifyCurrentTourPhotoAccess: mediaAccess.verifyCurrentTourPhotoAccess,
+  enforceGroupMediaAppCheck,
+  normalizeGroupMediaRequest: mediaAccess.normalizeGroupMediaRequest,
+  isGroupMediaPathForRecord: mediaAccess.isGroupMediaPathForRecord,
+  readGroupMediaRecords: mediaAccess.readGroupMediaRecords,
+  signGroupMediaRecords: mediaAccess.signGroupMediaRecords,
+  normalizeGroupPhotoUploadMetadata: groupMediaFunctions.normalizeGroupPhotoUploadMetadata,
+  extensionForGroupPhotoContentType: groupMediaFunctions.extensionForGroupPhotoContentType,
+  reserveGroupPhotoRecord: groupMediaFunctions.reserveGroupPhotoRecord,
+  normalizeManualPassengerPayload: manualPassengerBooking.normalizeManualPassengerPayload,
+  findManualPassengerSeatConflicts: manualPassengerBooking.findManualPassengerSeatConflicts,
+  buildManualPassengerBookingUpdates: manualPassengerBooking.buildManualPassengerBookingUpdates,
+  verifyOperationsAdminAccess,
+  isAllowedAdminOrigin,
+  buildTourManifestPayload: manifestDomain.buildTourManifestPayload,
+  verifyTourManifestAccess: manifestDomain.verifyTourManifestAccess,
+  normalizeManifestPassengerRows: manifestPassengers.normalizeManifestPassengerRows,
+  normalizeManifestBooking: manifestDomain.normalizeManifestBooking,
+  buildDriverManifestBooking: manifestDomain.buildDriverManifestBooking,
+  resolveDriverAssignment: driverAssignment.resolveDriverAssignment,
+  claimDriverAuthUid: driverAssignment.claimDriverAuthUid,
+  buildDriverIdentityProfileUpdates: driverAssignment.buildDriverIdentityProfileUpdates,
+  collectDriverAssignmentConflicts: driverAssignment.collectDriverAssignmentConflicts,
+  buildDriverSelfAssignmentUpdates: driverAssignment.buildDriverSelfAssignmentUpdates,
+  checkDriverLoginRateLimits: driverLoginSecurity.checkDriverLoginRateLimits,
+  validateCategoryBroadcastData: broadcastFunctions.validateCategoryBroadcastData,
+  userWantsTourCategoryBroadcast: notificationPolicy.userWantsTourCategoryBroadcast,
+  resolveBroadcastDeliveryStatus: broadcastFunctions.resolveBroadcastDeliveryStatus,
+  buildTourDeletionUpdates: tourDeletion.buildTourDeletionUpdates,
+  resolveReportedPhotoStoragePaths: tourDeletion.resolveReportedPhotoStoragePaths,
+  checkPassengerLoginRateLimits: passengerLoginSecurity.checkPassengerLoginRateLimits,
+  shouldRequireLoginAppCheck,
+  isDeployedFunctionsRuntime,
+  enforceLoginAppCheck,
+  getTrustedRequestNetworkKey: passengerLoginSecurity.getTrustedRequestNetworkKey,
+  createDistributedLoginRateLimiter: loginRateLimiter.createDistributedLoginRateLimiter,
+  cleanupExpiredLoginRateLimits: loginRateLimiter.cleanupExpiredLoginRateLimits,
+  buildTourNotificationId: notificationState.buildTourNotificationId,
+  buildTourNotificationRecord: notificationState.buildTourNotificationRecord,
+  buildPushNavigationData: notificationState.buildPushNavigationData,
+  buildCategoryBroadcastPushMessages: notificationDelivery.buildCategoryBroadcastPushMessages,
+  summarizeItineraryChange: notificationState.summarizeItineraryChange,
+  summarizeDriverTourPackChange: driverTourPackOperations.summarizeDriverTourPackChange,
+  buildDriverTourPackActionProjectionUpdates: driverTourPackOperations.buildDriverTourPackActionProjectionUpdates,
+  persistTourNotification: notificationState.persistTourNotification,
+  buildNotificationReadCleanupJobId: notificationState.buildNotificationReadCleanupJobId,
+  enqueueNotificationReadCleanupJobs: notificationState.enqueueNotificationReadCleanupJobs,
+  processNotificationReadMigrationRequest: notificationState.processNotificationReadMigrationRequest,
+  fetchRealtimeDatabaseShallowKeys: notificationState.fetchRealtimeDatabaseShallowKeys,
+  shouldDeleteLegacyNotificationReadPrincipal: notificationState.shouldDeleteLegacyNotificationReadPrincipal,
+  processLegacyNotificationReadStateCleanup: notificationState.processLegacyNotificationReadStateCleanup,
+  processNotificationReadCleanupJob: notificationState.processNotificationReadCleanupJob,
+  processNotificationReadCleanupJobs: notificationState.processNotificationReadCleanupJobs,
+  createDriverTourPackPublisher: driverTourPackPublisher.createDriverTourPackPublisher,
+  validateDriverTourPackHttpRequest: managementOidc.validateDriverTourPackHttpRequest,
+  verifyManagementOidcRequest: managementOidc.verifyManagementOidcRequest,
+  normalizePrivateMediaRequest: mediaAccess.normalizePrivateMediaRequest,
+  isPrivateMediaPathForRecord: mediaAccess.isPrivateMediaPathForRecord,
+  readPrivateMediaRecords: mediaAccess.readPrivateMediaRecords,
+  signPrivateMediaRecords: mediaAccess.signPrivateMediaRecords,
+  buildDriverSessionRecord: appSession.buildDriverSessionRecord,
+  buildPassengerParticipantRecord: appSession.buildPassengerParticipantRecord,
+  buildPassengerSessionRecord: appSession.buildPassengerSessionRecord,
+  calculateSessionExpiry: appSession.calculateSessionExpiry,
+  createAppSessionId: appSession.createAppSessionId,
+  isActiveSessionRecord: appSession.isActiveSessionRecord,
+  isValidAppSessionId: appSession.isValidAppSessionId,
+  toClientSession: appSession.toClientSession,
+  acquireAppSessionLock: appSessionLock.acquireAppSessionLock,
+  releaseAppSessionLock: appSessionLock.releaseAppSessionLock,
+  verifyActiveAppSession: appSessionAccess.verifyActiveAppSession,
+  buildAppSessionCleanupUpdates: appSessionCleanup.buildAppSessionCleanupUpdates,
+  buildAppSessionEvent: appSessionCleanup.buildAppSessionEvent,
+  cleanupAppSession: appSessionCleanup.cleanupAppSession,
+  cleanupDriverLocationForSession: appSessionCleanup.cleanupDriverLocationForSession,
+  normalizePrivatePhotoUploadMetadata: privateMediaFunctions.normalizePrivatePhotoUploadMetadata,
+  reservePrivatePhotoRecord: privateMediaFunctions.reservePrivatePhotoRecord,
+};

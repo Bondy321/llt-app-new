@@ -389,4 +389,5 @@ module.exports = {
   loadIdentityBindingsForPrincipal,
   resolveChatSenderParticipantIds,
   selectNotificationRecipients,
+  setCachedUserProfile,
 };
