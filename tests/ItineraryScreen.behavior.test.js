@@ -93,7 +93,7 @@ Module._load = function mockLoader(request, parent, isMain) {
       },
     };
   }
-  if (request.endsWith('/services/itineraryService') || request === '../services/itineraryService') {
+  if (request.endsWith('/itineraryService') || request === '../services/itineraryService') {
     return {
       ...actualItineraryService,
       saveItineraryWithConflictGuard: async () => saveResult,
