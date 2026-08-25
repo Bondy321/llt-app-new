@@ -2,6 +2,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const {
+  readAppArchitectureSource,
+  readFunctionsArchitectureSource,
+  readMobileModuleSource,
+} = require('./helpers/readAppArchitectureSource');
 
 const offlineSyncService = require('../services/offlineSyncService');
 
@@ -221,7 +226,7 @@ test('Static contract: verified login grants are scoped and short-lived', () => 
   const rules = readJson('database.rules.json');
   const tourGrant = rules.rules.tour_access_grants.$tourId.$userId;
   const bookingGrant = rules.rules.booking_access_grants.$bookingRef.$userId;
-  const functionsSource = readText('functions/index.js');
+  const functionsSource = readFunctionsArchitectureSource();
   const bookingServiceSource = readText('services/bookingServiceRealtime.js');
 
   assert.match(tourGrant['.read'], /auth\.uid === \$userId/);
@@ -243,7 +248,7 @@ test('Static contract: verified login grants are scoped and short-lived', () => 
 
 test('Static contract: passenger manifests are assembled through verified backend endpoint', () => {
   const bookingSource = readText('services/bookingServiceRealtime.js');
-  const functionsSource = readText('functions/index.js');
+  const functionsSource = readFunctionsArchitectureSource();
   const packageJson = readText('package.json');
 
   assert.match(bookingSource, /buildTourManifestEndpointUrl/);
@@ -251,7 +256,8 @@ test('Static contract: passenger manifests are assembled through verified backen
   assert.match(bookingSource, /headers,\s*\n\s*body: JSON\.stringify\(\{ tourId: tourCodeOriginal \}\)/);
   assert.match(bookingSource, /Manifest fetch completed via function/);
   assert.doesNotMatch(bookingSource, /const bookingsQuery = realtimeDb\.ref\('bookings'\)/);
-  assert.match(functionsSource, /exports\.getTourManifest = onRequest/);
+  assert.match(functionsSource, /const getTourManifest = onRequestWithResult/);
+  assert.match(functionsSource, /getTourManifest: manifests\.getTourManifest/);
   assert.match(functionsSource, /verifyTourManifestAccess/);
   assert.match(functionsSource, /Array\.isArray\(liveStatus\.passengerStatus\)/);
   assert.match(functionsSource, /buildDriverManifestBooking/);
@@ -261,13 +267,14 @@ test('Static contract: passenger manifests are assembled through verified backen
 
 test('Static contract: driver login uses verifier without client manifest scans', () => {
   const bookingSource = readText('services/bookingServiceRealtime.js');
-  const functionsSource = readText('functions/index.js');
+  const functionsSource = readFunctionsArchitectureSource();
   const driverTestSource = readText('tests/validateBookingReference.driver.test.js');
 
   assert.match(bookingSource, /buildDriverLoginVerifierUrl/);
   assert.match(bookingSource, /verifyDriverLoginIdentity/);
   assert.match(bookingSource, /Driver verifier accepted code/);
-  assert.match(functionsSource, /exports\.verifyDriverLogin = onRequest/);
+  assert.match(functionsSource, /const verifyDriverLogin = onRequestWithResult/);
+  assert.match(functionsSource, /verifyDriverLogin: driverAuth\.verifyDriverLogin/);
   assert.match(functionsSource, /resolveDriverAssignment/);
   assert.doesNotMatch(functionsSource, /db\.ref\('tour_manifests'\)\.once\('value'\)/);
   assert.match(driverTestSource, /uses verified driver endpoint when configured/);
@@ -275,7 +282,7 @@ test('Static contract: driver login uses verifier without client manifest scans'
 
 test('Static contract: driver identity and assignment authority are server-owned', () => {
   const rules = readJson('database.rules.json');
-  const functionsSource = readText('functions/index.js');
+  const functionsSource = readFunctionsArchitectureSource();
   const driverRootRules = rules.rules.drivers;
   const driverWriteRule = rules.rules.drivers.$driverId['.write'];
   const authUidWriteRule = rules.rules.drivers.$driverId.authUid['.write'];
@@ -294,7 +301,8 @@ test('Static contract: driver identity and assignment authority are server-owned
   assert.match(lastActiveWriteRule, /root\.child\('drivers\/' \+ \$driverId \+ '\/authUid'\)\.val\(\) === auth\.uid/);
   assert.doesNotMatch(assignedDriverWriteRule, /drivers\//);
   assert.doesNotMatch(assignedDriverCodeWriteRule, /drivers\//);
-  assert.match(functionsSource, /exports\.assignDriverToTour = onRequest/);
+  assert.match(functionsSource, /const assignDriverToTour = onRequestWithResult/);
+  assert.match(functionsSource, /assignDriverToTour: assignment\.assignDriverToTour/);
   assert.match(functionsSource, /claimDriverAuthUid/);
   assert.match(readText('package.json'), /tests\/firebaseRules\/drivers\.rules\.test\.js/);
 });
@@ -350,7 +358,7 @@ test('Static contract: user-facing runtime text has no mojibake artifacts', () =
 });
 
 test('Static contract: startup initialization errors use curated customer copy', () => {
-  const source = readText('App.js');
+  const source = readAppArchitectureSource();
 
   assert.match(source, /const STARTUP_CONNECTION_ERROR_MESSAGE =/);
   assert.match(source, /setAuthError\(STARTUP_CONNECTION_ERROR_MESSAGE\);/);
@@ -393,11 +401,11 @@ test('Static contract: curated ops alerts stay separate from raw logs and schema
 });
 
 test('Static contract: Functions error logger redacts exception text', () => {
-  const source = readText('functions/index.js');
+  const source = readFunctionsArchitectureSource();
 
   assert.match(source, /const sanitizeLogText = \(value\) =>/);
-  assert.match(source, /error: sanitizeLogText\(error\?\.message \|\| error \|\| null\)/);
-  assert.match(source, /stack: error\?\.stack \? sanitizeLogText\(error\.stack\) : null/);
+  assert.match(source, /error: sanitizeLogText\(\(error && typeof error === 'object' && 'message' in error\)/);
+  assert.match(source, /\? sanitizeLogText\(error\.stack\)\s+: null/);
   assert.match(source, /sanitizeLogText,/);
 });
 
@@ -420,8 +428,9 @@ test('Static contract: dashboard broadcast root reads and writes stay Firebase-b
 
 test('Static contract: category broadcasts target canonical tour-interest preferences', () => {
   const rules = readJson('database.rules.json');
-  const source = readText('functions/index.js');
-  const screenSource = readText('screens/NotificationPreferencesScreen.js');
+  const source = readFunctionsArchitectureSource();
+  const categoryHandlerSource = readText('functions/src/domains/notifications/broadcastFunctions.js');
+  const screenSource = readMobileModuleSource('screens/NotificationPreferencesScreen.js');
   const adminSource = readText('web-admin/src/components/BroadcastPanel.jsx');
   const categoryBroadcasts = rules.rules.category_broadcasts;
   const categoryKeys = [
@@ -442,13 +451,10 @@ test('Static contract: category broadcasts target canonical tour-interest prefer
   assert.deepEqual(categoryBroadcasts.$categoryKey['.indexOn'], ['createdAtMs']);
   assert.equal(categoryBroadcasts.$categoryKey.$broadcastId['.write'], adminAccess);
   assert.match(categoryBroadcasts.$categoryKey.$broadcastId['.validate'], /newData\.child\('categoryKey'\)\.val\(\) === \$categoryKey/);
-  assert.match(source, /exports\.processCategoryBroadcastWrite = onValueCreated/);
+  assert.match(source, /const processCategoryBroadcastWrite = onValueCreated/);
+  assert.match(source, /processCategoryBroadcastWrite: broadcasts\.processCategoryBroadcastWrite/);
   assert.match(source, /ref: '\/category_broadcasts\/\{categoryKey\}\/\{broadcastId\}'/);
   assert.match(source, /orderByChild\(`preferences\/marketing\/\$\{preferenceKey\}`\)/);
-  const categoryHandlerSource = source.slice(
-    source.indexOf('exports.processCategoryBroadcastWrite = onValueCreated'),
-    source.indexOf('exports.sendChatNotification = onValueCreated'),
-  );
   assert.match(categoryHandlerSource, /buildCategoryBroadcastPushMessages\(\{/);
   assert.doesNotMatch(categoryHandlerSource, /buildChatNotificationContent/);
   assert.doesNotMatch(categoryHandlerSource, /chunkArrayDeterministically\(\s*validRecipients/);
@@ -462,14 +468,14 @@ test('Static contract: category broadcasts target canonical tour-interest prefer
 });
 
 test('Static contract: notification taps preserve exact destination context end to end', () => {
-  const appSource = readText('App.js');
-  const chatSource = readText('screens/ChatScreen.js');
-  const preferencesSource = readText('screens/NotificationPreferencesScreen.js');
+  const appSource = readAppArchitectureSource();
+  const chatSource = readMobileModuleSource('screens/ChatScreen.js');
+  const preferencesSource = readMobileModuleSource('screens/NotificationPreferencesScreen.js');
   const routingSource = readText('utils/notificationRouting.js');
 
   assert.match(appSource, /const hasAppSession = Boolean\(bookingData\?\.id\)/);
-  assert.match(appSource, /initialMessageId=\{screenParams\.messageId \|\| null\}/);
-  assert.match(appSource, /initialMarketingCategoryKey=\{screenParams\?\.categoryKey \|\| null\}/);
+  assert.match(appSource, /initialMessageId=\{context\.screenParams\.messageId \|\| null\}/);
+  assert.match(appSource, /initialMarketingCategoryKey=\{context\.screenParams\?\.categoryKey \|\| null\}/);
   assert.match(chatSource, /getChatMessageById/);
   assert.match(chatSource, /initialMessageId/);
   assert.match(preferencesSource, /initialMarketingCategoryKey/);
@@ -481,8 +487,8 @@ test('Static contract: notification taps preserve exact destination context end 
 test('Static contract: notification read state stays canonical and migrates legacy UID branches', () => {
   const rules = readJson('database.rules.json');
   const serviceSource = readText('services/notificationInboxService.js');
-  const screenSource = readText('screens/NotificationPreferencesScreen.js');
-  const functionsSource = readText('functions/index.js');
+  const screenSource = readMobileModuleSource('screens/NotificationPreferencesScreen.js');
+  const functionsSource = readFunctionsArchitectureSource();
   const principalRules = rules.rules.notification_read_state.$tourId.$principalId;
   const migrationRules = rules.rules.notification_read_migration_requests.$tourId.$authUid;
 
@@ -498,7 +504,8 @@ test('Static contract: notification read state stays canonical and migrates lega
   assert.match(serviceSource, /requestNotificationReadStateMigration/);
   assert.match(serviceSource, /notification_read_state\/\$\{safeTourId\}\/\$\{safeReadStateOwnerId\}/);
   assert.match(screenSource, /readStateOwnerId: cacheOwnerId/);
-  assert.match(functionsSource, /exports\.processNotificationReadMigrationRequest = onValueCreated/);
+  assert.match(functionsSource, /const processNotificationReadMigrationRequest = onValueCreated/);
+  assert.match(functionsSource, /processNotificationReadMigrationRequest: notificationReads\.processNotificationReadMigrationRequest/);
   assert.match(functionsSource, /retry: true/);
   assert.match(functionsSource, /notificationReadStateUpgradedTours/);
   assert.doesNotMatch(functionsSource, /notification_read_migration_receipts/);
@@ -542,7 +549,7 @@ test('Static contract: user content reports stay scoped to tour users and admin 
 test('Static contract: photo objects are inaccessible directly and all media operations are server-authorized', () => {
   const storageRules = readText('storage_rules.json');
   const photoSource = readText('services/photoService.js');
-  const functionsSource = readText('functions/index.js');
+  const functionsSource = readFunctionsArchitectureSource();
 
   assert.match(storageRules, /match \/private_tour_photos\/\{tourId\}\/\{ownerId\}\/\{allPaths=\*\*\}[\s\S]*allow read, write: if false/);
   assert.match(storageRules, /match \/group_tour_photos\/\{tourId\}\/\{fileName\}[\s\S]*allow read, write: if false/);
@@ -562,7 +569,7 @@ test('Static contract: photo objects are inaccessible directly and all media ope
 });
 
 test('Static contract: passenger identities are server-issued opaque values and client writes are removed', () => {
-  const appSource = fs.readFileSync(path.join(__dirname, '..', 'App.js'), 'utf8');
+  const appSource = readAppArchitectureSource();
   const chatSource = fs.readFileSync(path.join(__dirname, '..', 'services', 'chatService.js'), 'utf8');
 
   assert.match(appSource, /isOpaquePassengerId\(stablePassengerId\)/);
@@ -614,7 +621,7 @@ test('Static contract: photo upload modals guard duplicate enqueue taps', () => 
 });
 
 test('Static contract: passenger driver calls use tour contact data', () => {
-  const source = readText('screens/TourHomeScreen.js');
+  const source = readMobileModuleSource('screens/TourHomeScreen.js');
 
   assert.match(source, /resolveDriverPhoneNumber/);
   assert.match(source, /tourData\?\.driverPhone/);
@@ -623,7 +630,7 @@ test('Static contract: passenger driver calls use tour contact data', () => {
 });
 
 test('Static contract: failed chat sends preserve reply composer context', () => {
-  const source = readText('screens/ChatScreen.js');
+  const source = readMobileModuleSource('screens/ChatScreen.js');
 
   assert.match(source, /const pendingReply = replyingToMessage;/);
   assert.match(source, /setReplyingToMessage\(pendingReply\);/);
@@ -633,8 +640,8 @@ test('Static contract: failed chat sends preserve reply composer context', () =>
 });
 
 test('Static contract: chat connectivity and queue ownership stay wired from app shell to every send and replay', () => {
-  const appSource = readText('App.js');
-  const chatSource = readText('screens/ChatScreen.js');
+  const appSource = readAppArchitectureSource();
+  const chatSource = readMobileModuleSource('screens/ChatScreen.js');
   const offlineSource = readText('services/offlineSyncService.js');
 
   assert.match(appSource, /offlineSessionScope=\{offlineSessionScope\}/);
@@ -651,7 +658,7 @@ test('Static contract: chat connectivity and queue ownership stay wired from app
 
 test('Static contract: chat listener failures keep visible messages and expose retry recovery', () => {
   const serviceSource = readText('services/chatService.js');
-  const screenSource = readText('screens/ChatScreen.js');
+  const screenSource = readMobileModuleSource('screens/ChatScreen.js');
 
   assert.doesNotMatch(serviceSource, /onMessagesUpdate\(\[\]\)/);
   assert.match(screenSource, /Live updates paused\. Your existing messages are still available\./);
@@ -659,7 +666,7 @@ test('Static contract: chat listener failures keep visible messages and expose r
 });
 
 test('Static contract: chat read state advances only after restore and while the reader is at the latest message', () => {
-  const source = readText('screens/ChatScreen.js');
+  const source = readMobileModuleSource('screens/ChatScreen.js');
 
   assert.match(source, /sessionUnreadBoundaryTimestamp/);
   assert.match(source, /readStateRestored/);
@@ -668,7 +675,7 @@ test('Static contract: chat read state advances only after restore and while the
 });
 
 test('Static contract: internal driver chat uses the rules-compatible stable actor for live state', () => {
-  const source = readText('screens/ChatScreen.js');
+  const source = readMobileModuleSource('screens/ChatScreen.js');
 
   assert.match(
     source,
@@ -753,7 +760,7 @@ test('Static contract: production native config strips dev-client release metada
 });
 
 test('Static contract: live map and safety sharing guard stale or malformed location state', () => {
-  const mapSource = readText('screens/MapScreen.js');
+  const mapSource = readMobileModuleSource('screens/MapScreen.js');
   const locationSource = readText('utils/driverLocation.js');
   assert.match(mapSource, /normalizeMapCoords/);
   assert.match(mapSource, /getDriverLocationPresentation/);
@@ -768,7 +775,7 @@ test('Static contract: live map and safety sharing guard stale or malformed loca
   assert.match(locationSource, /freshness: 'invalid'/);
   assert.match(locationSource, /timestamp: \{ '\.sv': 'timestamp' \}/);
 
-  const safetySource = readText('screens/SafetySupportScreen.js');
+  const safetySource = readMobileModuleSource('screens/SafetySupportScreen.js');
   assert.match(safetySource, /locationWatchRef\.current\.remove\(\);/);
   assert.match(safetySource, /Live location watch update failed/);
   assert.match(safetySource, /Live location sharing stop write failed/);
@@ -927,11 +934,11 @@ test('Static contract: customer-facing screens avoid startup-only window measure
     assert.doesNotMatch(source, /\bDimensions\b/, `${relativePath} must not use static window dimensions`);
   });
 
-  assert.match(readText('screens/LoginScreen.js'), /useWindowDimensions/);
-  assert.match(readText('screens/PhotobookScreen.js'), /thumbnailTileStyle/);
-  assert.match(readText('screens/GroupPhotobookScreen.js'), /thumbnailTileStyle/);
-  assert.match(readText('screens/SafetySupportScreen.js'), /useWindowDimensions/);
-  assert.match(readText('screens/TourHomeScreen.js'), /quickActionWrapper/);
+  assert.match(readMobileModuleSource('screens/LoginScreen.js'), /useWindowDimensions/);
+  assert.match(readMobileModuleSource('screens/PhotobookScreen.js'), /thumbnailTileStyle/);
+  assert.match(readMobileModuleSource('screens/GroupPhotobookScreen.js'), /thumbnailTileStyle/);
+  assert.match(readMobileModuleSource('screens/SafetySupportScreen.js'), /useWindowDimensions/);
+  assert.match(readMobileModuleSource('screens/TourHomeScreen.js'), /quickActionWrapper/);
 });
 
 test('Static contract: shared gallery data hook guards stale async updates', () => {
@@ -945,9 +952,9 @@ test('Static contract: shared gallery data hook guards stale async updates', () 
 });
 
 test('Static contract: itinerary cache metadata cannot update stale screens', () => {
-  const source = readText('screens/ItineraryScreen.js');
+  const source = readMobileModuleSource('screens/ItineraryScreen.js');
   const bookingSource = readText('services/bookingServiceRealtime.js');
-  const functionsSource = readText('functions/index.js');
+  const functionsSource = readFunctionsArchitectureSource();
 
   assert.match(source, /mountedRef/);
   assert.match(source, /activeTourIdRef/);
@@ -959,14 +966,14 @@ test('Static contract: itinerary cache metadata cannot update stale screens', ()
   assert.match(source, /A newer itinerary is already live/);
   assert.match(bookingSource, /tours\/\$\{normalizedTourId\}\/itinerary/);
   assert.match(bookingSource, /throw error;/);
-  assert.match(functionsSource, /sendItineraryNotification = onValueWritten/);
+  assert.match(functionsSource, /const sendItineraryNotification = onValueWritten/);
   assert.match(functionsSource, /Skipping metadata-only itinerary notification/);
 });
 
 test('Static contract: preference and manifest screens guard stale async state', () => {
-  const notificationSource = readText('screens/NotificationPreferencesScreen.js');
-  const manifestSource = readText('screens/PassengerManifestScreen.js');
-  const imageViewerSource = readText('components/ImageViewer.js');
+  const notificationSource = readMobileModuleSource('screens/NotificationPreferencesScreen.js');
+  const manifestSource = readMobileModuleSource('screens/PassengerManifestScreen.js');
+  const imageViewerSource = readMobileModuleSource('components/ImageViewer.js');
 
   assert.match(notificationSource, /mountedRef/);
   assert.match(notificationSource, /preferenceLoadSeqRef/);
@@ -988,11 +995,11 @@ test('Static contract: preference and manifest screens guard stale async state',
 });
 
 test('Static contract: boarding phone actions use the active scoped Tour Pack contact', () => {
-  const appSource = readText('App.js');
-  const manifestSource = readText('screens/PassengerManifestScreen.js');
+  const appSource = readAppArchitectureSource();
+  const manifestSource = readMobileModuleSource('screens/PassengerManifestScreen.js');
   const phoneSource = readText('utils/bookingLeadPhone.js');
 
-  assert.match(appSource, /driverTourPack=\{driverTourPackState\?\.pack \|\| null\}/);
+  assert.match(appSource, /driverTourPack=\{context\.driverTourPackState\?\.pack \|\| null\}/);
   assert.match(manifestSource, /buildBookingLeadPhoneIndex\(driverTourPack, tourId\)/);
   assert.match(manifestSource, /Phone booking/);
   assert.match(manifestSource, /Linking\.openURL\(telephoneUrl\)/);
@@ -1001,10 +1008,10 @@ test('Static contract: boarding phone actions use the active scoped Tour Pack co
 });
 
 test('Static contract: customer pickup readiness uses only the booking-safe projection', () => {
-  const appSource = readText('App.js');
-  const homeSource = readText('screens/TourHomeScreen.js');
-  const mapSource = readText('screens/MapScreen.js');
-  const mapWebSource = readText('screens/MapScreen.web.js');
+  const appSource = readAppArchitectureSource();
+  const homeSource = readMobileModuleSource('screens/TourHomeScreen.js');
+  const mapSource = readMobileModuleSource('screens/MapScreen.js');
+  const mapWebSource = readMobileModuleSource('screens/MapScreen.web.js');
   const boundarySource = readText('services/passengerDataBoundary.js');
 
   assert.match(appSource, /bookingData=\{bookingData\}/);
@@ -1018,7 +1025,7 @@ test('Static contract: customer pickup readiness uses only the booking-safe proj
 });
 
 test('Static contract: safety support cleans up emergency timers and validates phone handoffs', () => {
-  const source = readText('screens/SafetySupportScreen.js');
+  const source = readMobileModuleSource('screens/SafetySupportScreen.js');
 
   assert.match(source, /const MIN_DIALABLE_DIGITS = 7/);
   assert.match(source, /const hasDialableDigits = \(phone\) =>/);
@@ -1045,8 +1052,8 @@ test('Static contract: safety support cleans up emergency timers and validates p
 });
 
 test('Static contract: passenger login establishes participant access before entering the app', () => {
-  const appSource = readText('App.js');
-  const loginSource = readText('screens/LoginScreen.js');
+  const appSource = readAppArchitectureSource();
+  const loginSource = readMobileModuleSource('screens/LoginScreen.js');
 
   assert.match(appSource, /const authUser = user \|\| auth\?\.currentUser \|\| null/);
   assert.match(appSource, /const authUid = authUser\?\.uid \|\| null/);
@@ -1084,10 +1091,10 @@ test('Static contract: customer-facing error copy avoids raw backend messages', 
 });
 
 test('Static contract: offline data stays scoped to the signed-in tour identity', () => {
-  const appSource = readText('App.js');
+  const appSource = readAppArchitectureSource();
   const offlineSource = readText('services/offlineSyncService.js');
   const safetySource = readText('services/safetyService.js');
-  const driverItinerarySource = readText('screens/DriverItineraryScreen.js');
+  const driverItinerarySource = readMobileModuleSource('screens/DriverItineraryScreen.js');
 
   assert.match(appSource, /cacheOwnerId: bookingData\?\.id \|\| principalId/);
   assert.match(appSource, /setActiveSessionScope\(offlineSessionScope\)/);
@@ -1122,7 +1129,7 @@ test('Static contract: mobile icon imports do not bundle unused font families', 
 });
 
 test('Static contract: driver auto-share is in-app, non-overlapping, and durably enabled', () => {
-  const source = readText('screens/DriverHomeScreen.js');
+  const source = readMobileModuleSource('screens/DriverHomeScreen.js');
   assert.match(source, /autoShareInFlightRef\.current/);
   assert.match(source, /locationBusyRef\.current/);
   assert.match(source, /withdrawLiveDriverLocation/);
@@ -1134,7 +1141,7 @@ test('Static contract: driver auto-share is in-app, non-overlapping, and durably
 
 test('Static contract: optional haptics cannot reject app actions and pickup countdown avoids second-by-second churn', () => {
   const hapticsSource = readText('services/hapticsService.js');
-  const tourHomeSource = readText('screens/TourHomeScreen.js');
+  const tourHomeSource = readMobileModuleSource('screens/TourHomeScreen.js');
   assert.match(hapticsSource, /Haptics are optional feedback and must never reject a user action/);
   assert.match(hapticsSource, /return await fallback\(\)/);
   assert.match(tourHomeSource, /PICKUP_COUNTDOWN_REFRESH_MS = 30 \* 1000/);
@@ -1143,21 +1150,23 @@ test('Static contract: optional haptics cannot reject app actions and pickup cou
 
 test('Static contract: safety delivery is operations-visible and Firebase maintenance is request-driven', () => {
   const safetySource = readText('services/safetyService.js');
-  const functionsSource = readText('functions/index.js');
+  const functionsSource = readFunctionsArchitectureSource();
   const webDebugSource = readText('web-admin/src/services/firebaseDebug.js');
 
   assert.match(safetySource, /writeSafetyEventAtomically/);
   assert.match(safetySource, /cloudfunctions\.net\/submitSafetyReport/);
   assert.match(safetySource, /Authorization: `Bearer \$\{token\}`/);
-  assert.match(functionsSource, /exports\.submitSafetyReport = onRequest/);
+  assert.match(functionsSource, /const submitSafetyReport = onRequestWithResult/);
+  assert.match(functionsSource, /submitSafetyReport: safety\.submitSafetyReport/);
   assert.match(functionsSource, /buildSafetySubmissionUpdates/);
-  assert.match(functionsSource, /exports\.sendSafetyAlertNotification = onValueCreated/);
+  assert.match(functionsSource, /const sendSafetyAlertNotification = onValueCreated/);
+  assert.match(functionsSource, /sendSafetyAlertNotification: safetyNotifications\.sendSafetyAlertNotification/);
   assert.match(functionsSource, /checkSafetySubmissionRateLimit/);
   assert.match(functionsSource, /SAFETY_RATE_LIMIT_ROOT/);
   assert.match(safetySource, /SAFETY_RETRY_DISPOSITION/);
   assert.match(safetySource, /getOfflineQueueSummary/);
   assert.match(safetySource, /Keep the disconnect cleanup armed until the server confirms deletion/);
-  assert.match(readText('App.js'), /processOfflineSafetyQueue\(offlineSessionScope\)/);
+  assert.match(readAppArchitectureSource(), /processOfflineSafetyQueue\(offlineSessionScope\)/);
   assert.doesNotMatch(safetySource, /Promise\.allSettled\(auxiliaryWrites\)/);
   assert.match(functionsSource, /runLazyRateLimitMaintenance\(now\)/);
   assert.doesNotMatch(functionsSource, /const maintenanceInterval = setInterval/);

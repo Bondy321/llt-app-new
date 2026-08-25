@@ -1,5 +1,5 @@
 const test = require('node:test');
-const { readAppArchitectureSource } = require('./helpers/readAppArchitectureSource');
+const { readAppArchitectureSource, readMobileModuleSource } = require('./helpers/readAppArchitectureSource');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -45,7 +45,7 @@ test('live bus map has a bounded initial wait and a recoverable timeout state', 
 });
 
 test('manifest bulk no-show is confirmed and the booking modal can scroll above the keyboard', () => {
-  const source = readSource('screens/PassengerManifestScreen.js');
+  const source = readMobileModuleSource('screens/PassengerManifestScreen.js');
 
   assert.match(source, /Mark this booking as no-show\?/);
   assert.match(source, /style: 'destructive'/);
@@ -57,7 +57,7 @@ test('manifest bulk no-show is confirmed and the booking modal can scroll above 
 });
 
 test('a no-show passenger can dismiss the interruption without hiding their status', () => {
-  const source = readSource('screens/TourHomeScreen.js');
+  const source = readMobileModuleSource('screens/TourHomeScreen.js');
 
   assert.match(source, /noShowAcknowledged/);
   assert.match(source, /I understand — continue to tour/);
@@ -82,8 +82,8 @@ test('photo selection failures and driver location denial have explicit recovery
 });
 
 test('high-frequency icon controls and gallery tiles expose accessible names and touch targets', () => {
-  const chat = readSource('screens/ChatScreen.js');
-  const itinerary = readSource('screens/ItineraryScreen.js');
+  const chat = readMobileModuleSource('screens/ChatScreen.js');
+  const itinerary = readMobileModuleSource('screens/ItineraryScreen.js');
   const galleryTile = readSource('components/GalleryPhotoTile.js');
 
   assert.match(chat, /accessibilityLabel="Previous search result"/);
