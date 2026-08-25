@@ -6,6 +6,7 @@ import { recordBreadcrumb, summarizeUri } from '../../services/crashDiagnosticsS
 import { isRealtimeKeySegment } from '../../services/identityService';
 import { COLORS as THEME } from '../../theme';
 import { parseTimestampMs as parseSharedTimestampMs } from '../../services/timeUtils';
+import styles from './chatStyles';
 export const {
   buildChatSearchResults,
   normalizeSearchQuery

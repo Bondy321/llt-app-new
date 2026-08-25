@@ -4,7 +4,19 @@ import { ActivityIndicator, Animated, Image, Modal, PanResponder, Pressable, Tex
 import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import * as Haptics from '../../services/hapticsService';
 import { COLORS as THEME, SPACING } from '../../theme';
-import { getReactionUserIds, QUICK_REACTIONS, buildReplyPreviewText, normalizeTimestamp, URL_REGEX, COLORS, DEFAULT_CHAT_WINDOW_WIDTH, openChatExternalLink } from "./chatShared";
+import {
+  buildReplyPreviewText,
+  COLORS,
+  DEFAULT_CHAT_WINDOW_WIDTH,
+  getReactionUserIds,
+  getSwipeReplyDragState,
+  normalizeTimestamp,
+  openChatExternalLink,
+  QUICK_REACTIONS,
+  shouldStartSwipeReplyGesture,
+  shouldTriggerSwipeReplyOnRelease,
+  URL_REGEX,
+} from './chatShared';
 import styles from "./chatStyles";
 export const MessageReactions = ({
   reactions,
