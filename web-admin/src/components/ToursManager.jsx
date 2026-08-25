@@ -28,151 +28,29 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
+import ToursManagerView from '../features/tours/presentation/ToursManagerView';
 import { useSearchParams } from 'react-router-dom';
 import { db } from '../firebase';
 import { notifications } from '@mantine/notifications';
-import {
-  Card,
-  Text,
-  Title,
-  Group,
-  Button,
-  TextInput,
-  Select,
-  Stack,
-  Box,
-  Badge,
-  Table,
-  ScrollArea,
-  ActionIcon,
-  Tooltip,
-  Modal,
-  Loader,
-  Center,
-  Paper,
-  ThemeIcon,
-  Menu,
-  Divider,
-  Avatar,
-  SimpleGrid,
-  Pagination,
-  SegmentedControl,
-  Textarea,
-  NumberInput,
-  Grid,
-  Tabs,
-  Alert,
-  FileButton,
-  Progress,
-  Timeline,
-  Collapse,
-  CopyButton,
-  Code,
-  Indicator,
-  Switch,
-  Accordion,
-} from '@mantine/core';
+import { Text, Stack, Loader, Center } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import {
-  IconSearch,
-  IconFilter,
-  IconRefresh,
-  IconMap,
-  IconUser,
-  IconPhone,
-  IconEdit,
-  IconDotsVertical,
-  IconCheck,
-  IconX,
-  IconCalendar,
-  IconBus,
-  IconUsers,
-  IconMapPin,
-  IconPlus,
-  IconTrash,
-  IconCopy,
-  IconDownload,
-  IconUpload,
-  IconTemplate,
-  IconClock,
-  IconRoute,
-  IconEye,
-  IconAlertCircle,
-  IconCircleCheck,
-  IconPlayerPlay,
-  IconInfoCircle,
-  IconNotes,
-  IconDatabaseExport,
-  IconChevronDown,
-  IconChevronRight,
-  IconCalendarEvent,
-  IconListDetails,
-  IconUserPlus,
-} from '@tabler/icons-react';
-import AddPassengerModal from './AddPassengerModal';
-import { parseTourPickupPointsText } from '../services/tourFormService';
-import {
-  DEFAULT_TOUR,
-  TOUR_TEMPLATES,
-  createTour,
-  createTourFromTemplate,
-  updateTour,
-  deleteTour,
-  assignDriver,
-  unassignDriver,
-  duplicateTour,
-  exportToursToCSV,
-  previewTourCSVImport,
-  executeTourCSVImport,
-  ddmmyyyyToInputFormat,
-  inputFormatToDDMMYYYY,
-} from '../services/tourService';
-import {
-  parseUKDateStrict,
-  parseISODateStrict,
-  formatDateForDisplay,
-  formatDateRangeForDisplay,
-  getCurrentISODateStamp,
-  formatDateTimeForDisplay,
-} from '../utils/dateUtils';
-import {
-  buildTourPackCoverage,
-  subscribeToDriverTourPackAdminStatuses,
-} from '../services/driverTourPackAdminStatusService';
-import {
-  buildDriverTourPackOperationsByTour,
-  departureKeyForTour,
-  subscribeToDriverTourPackOperations,
-  updateDriverTourPackIssueStatus,
-} from '../services/driverTourPackOperationsService';
-import {
-  fetchTourByExactId,
-  subscribeToDriverDirectory,
-  subscribeToTourWindow,
-} from '../services/adminDirectoryService';
-
-const getIsoDateFieldError = (value, fieldLabel) => {
-  const parsed = parseISODateStrict(value);
-  if (parsed.success) return null;
-  return `${fieldLabel} must be a valid date (yyyy-MM-dd).`;
-};
-
+import { duplicateTour } from '../services/tourService';
+import { parseUKDateStrict, parseISODateStrict } from '../utils/dateUtils';
+import { buildTourPackCoverage, subscribeToDriverTourPackAdminStatuses } from '../services/driverTourPackAdminStatusService';
+import { buildDriverTourPackOperationsByTour, departureKeyForTour, subscribeToDriverTourPackOperations, updateDriverTourPackIssueStatus } from '../services/driverTourPackOperationsService';
+import { fetchTourByExactId, subscribeToDriverDirectory, subscribeToTourWindow } from '../services/adminDirectoryService';
 const getTodayAtNoon = () => {
   const today = new Date();
   today.setHours(12, 0, 0, 0);
   return today;
 };
-
-const parseTourDate = (value) => {
+const parseTourDate = value => {
   const ukParsed = parseUKDateStrict(value);
   if (ukParsed.success) return ukParsed.date;
-
   const isoParsed = parseISODateStrict(value);
   if (isoParsed.success) return isoParsed.date;
-
   return null;
 };
-
 const hasTourFinished = (tour, today = getTodayAtNoon()) => {
   const finishDate = parseTourDate(tour?.endDate || tour?.startDate);
   if (!finishDate) return false;
@@ -180,1276 +58,27 @@ const hasTourFinished = (tour, today = getTodayAtNoon()) => {
 };
 
 // Tour Card Component for grid view
-const PACK_STATUS_COLOR = {
-  ready: 'green', degraded: 'yellow', stale: 'orange', cancelled: 'red', withdrawn: 'red', expired: 'gray', missing: 'gray', ambiguous: 'orange',
-};
-
-function TourPackStatus({ coverage }) {
-  const pack = coverage?.pack || { state: 'missing' };
-  const label = pack.state === 'ready' ? 'Pack ready' : pack.state === 'degraded' ? 'Pack degraded' : pack.state === 'missing' ? 'Pack unavailable' : `Pack ${pack.state}`;
-  const assignment = coverage?.assignmentCoverage === 'covered'
-    ? 'Assigned driver covered'
-    : coverage?.assignmentCoverage === 'uncovered'
-      ? 'Assigned driver has no usable pack'
-      : coverage?.assignmentCoverage === 'inconsistent'
-        ? 'Driver assignment links conflict'
-        : coverage?.assignmentCoverage === 'legacy'
-          ? 'Driver name is not a canonical assignment'
-          : 'No driver assigned';
-  return (
-    <Stack gap={3}>
-      <Tooltip label={pack.reason || `Revision ${pack.revision || '—'} · last publication ${formatDateTimeForDisplay(pack.publishedAtMs, 'unknown')}`}>
-        <Badge variant="light" color={PACK_STATUS_COLOR[pack.state] || 'gray'}>{label}</Badge>
-      </Tooltip>
-      <Text size="xs" c={['uncovered', 'inconsistent', 'legacy'].includes(coverage?.assignmentCoverage) ? 'red' : 'dimmed'}>{assignment}</Text>
-      {pack.revision ? <Text size="xs" c="dimmed">Rev {pack.revision} · {formatDateTimeForDisplay(pack.publishedAtMs, 'unknown')}</Text> : null}
-    </Stack>
-  );
-}
-
-function DriverPackOperations({ operations, onIssueStatus, updatingIssueId }) {
-  if (!operations || operations.state === 'missing') return null;
-  if (operations.state === 'ambiguous') return <Text size="xs" c="orange">Progress unavailable: {operations.reason}</Text>;
-  const progress = operations.progress || [];
-  const completedPickups = progress.reduce((total, item) => total + item.pickupCompleted, 0);
-  const pickupTotal = progress.reduce((total, item) => total + item.pickupTotal, 0);
-  const acknowledgementPending = progress.some((item) => !item.acknowledgementCurrent);
-  const openIssueCount = progress.reduce((total, item) => total + item.openIssueCount, 0);
-  return <Stack gap={4} mt={4}>
-    <Text size="xs" c={operations.state === 'stale' ? 'orange' : 'dimmed'}>
-      {operations.state === 'stale' ? 'Driver progress is stale' : `Pickup progress ${completedPickups}/${pickupTotal || 0}`}
-    </Text>
-    {acknowledgementPending ? <Text size="xs" c="orange">Published revision awaiting driver acknowledgement</Text> : null}
-    {openIssueCount ? <Text size="xs" c="red">{openIssueCount} open structured issue{openIssueCount === 1 ? '' : 's'}</Text> : null}
-    {operations.issues.map((issue) => <Group key={issue.issueId} gap="xs" wrap="nowrap">
-      <Badge size="xs" color={issue.severity === 'critical' ? 'red' : issue.severity === 'warning' ? 'orange' : 'yellow'}>{issue.category}</Badge>
-      <Text size="xs" style={{ flex: 1 }}>{issue.status.replace('_', ' ')}</Text>
-      {issue.status === 'open' ? <Button size="compact-xs" variant="light" loading={updatingIssueId === issue.issueId} onClick={() => onIssueStatus(issue, 'acknowledged')}>Acknowledge</Button> : null}
-      {issue.status !== 'resolved' ? <Button size="compact-xs" variant="subtle" loading={updatingIssueId === issue.issueId} onClick={() => onIssueStatus(issue, 'resolved')}>Resolve</Button> : null}
-    </Group>)}
-  </Stack>;
-}
-
-function TourCard({ tourId, tour, drivers, packCoverage, packOperations, onIssueStatus, updatingIssueId, onEdit, onDelete, onDuplicate, onViewDetails, onAddPassenger }) {
-  const [assignModalOpened, { open: openAssignModal, close: closeAssignModal }] = useDisclosure(false);
-  const [selectedDriver, setSelectedDriver] = useState('');
-
-  const driverOptions = Object.entries(drivers).map(([id, driver]) => ({
-    value: id,
-    label: `${driver.name} (${id})`,
-  }));
-
-  const handleAssign = async () => {
-    if (!selectedDriver) return;
-
-    const driver = drivers[selectedDriver];
-    try {
-      await assignDriver(tourId, selectedDriver, {
-        name: driver.name,
-        phone: driver.phone || '',
-        authUid: driver.authUid || '',
-      });
-      notifications.show({
-        title: 'Driver Assigned',
-        message: `${driver.name} assigned to tour ${tourId}`,
-        color: 'green',
-      });
-      closeAssignModal();
-      setSelectedDriver('');
-    } catch (error) {
-      notifications.show({
-        title: 'Assignment Failed',
-        message: error.message,
-        color: 'red',
-      });
-    }
-  };
-
-  const handleUnassign = async () => {
-    try {
-      await unassignDriver(tourId);
-      notifications.show({
-        title: 'Driver Unassigned',
-        message: `Tour ${tourId} is now unassigned`,
-        color: 'blue',
-      });
-    } catch (error) {
-      notifications.show({
-        title: 'Error',
-        message: error.message,
-        color: 'red',
-      });
-    }
-  };
-
-  const isAssigned = tour.driverName && tour.driverName !== 'TBA';
-  const capacityPercent = ((tour.currentParticipants || 0) / (tour.maxParticipants || 53)) * 100;
-
-  return (
-    <>
-      <Card shadow="sm" padding="lg" radius="md" withBorder className="interactive-card">
-        <Group justify="space-between" mb="xs">
-          <Group gap="xs">
-            <Badge variant="light" color={tour.isActive ? 'green' : 'gray'}>
-              {tour.isActive ? 'Active' : 'Inactive'}
-            </Badge>
-            <Badge variant="light" color="blue">
-              {tour.days || 1} Day{(tour.days || 1) > 1 ? 's' : ''}
-            </Badge>
-          </Group>
-          <Menu shadow="md" width={200}>
-            <Menu.Target>
-              <ActionIcon variant="subtle" color="gray">
-                <IconDotsVertical size={16} />
-              </ActionIcon>
-            </Menu.Target>
-            <Menu.Dropdown>
-              <Menu.Label>Tour Actions</Menu.Label>
-              <Menu.Item leftSection={<IconEye size={14} />} onClick={() => onViewDetails(tourId)}>
-                View Details
-              </Menu.Item>
-              <Menu.Item leftSection={<IconEdit size={14} />} onClick={() => onEdit(tourId)}>
-                Edit Tour
-              </Menu.Item>
-              <Menu.Item leftSection={<IconUserPlus size={14} />} onClick={() => onAddPassenger(tourId)}>
-                Add Passenger
-              </Menu.Item>
-              <Menu.Item leftSection={<IconCopy size={14} />} onClick={() => onDuplicate(tourId)}>
-                Duplicate
-              </Menu.Item>
-              <Menu.Divider />
-              <Menu.Label>Driver</Menu.Label>
-              <Menu.Item leftSection={<IconUser size={14} />} onClick={openAssignModal}>
-                {isAssigned ? 'Reassign Driver' : 'Assign Driver'}
-              </Menu.Item>
-              {isAssigned && (
-                <Menu.Item
-                  leftSection={<IconX size={14} />}
-                  color="orange"
-                  onClick={handleUnassign}
-                >
-                  Unassign Driver
-                </Menu.Item>
-              )}
-              <Menu.Divider />
-              <Menu.Item
-                leftSection={<IconTrash size={14} />}
-                color="red"
-                onClick={() => onDelete(tourId)}
-              >
-                Delete Tour
-              </Menu.Item>
-            </Menu.Dropdown>
-          </Menu>
-        </Group>
-
-        <Group gap="xs" mb="sm">
-          <ThemeIcon color="brand" variant="light" size="md">
-            <IconMap size={16} />
-          </ThemeIcon>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <Text fw={600} size="lg" truncate="end">
-              {tour.name || tourId}
-            </Text>
-            <Text size="xs" c="dimmed" truncate="end">{tour.tourCode || tourId}</Text>
-          </div>
-        </Group>
-
-        <Stack gap="xs" mb="md">
-          <Group gap="xs">
-            <IconCalendar size={14} color="gray" />
-            <Text size="sm" c="dimmed">
-              {formatDateRangeForDisplay(tour.startDate, tour.endDate)}
-            </Text>
-          </Group>
-          <Group gap="xs">
-            <IconUser size={14} color="gray" />
-            <Text size="sm" c={isAssigned ? 'dark' : 'dimmed'}>
-              {tour.driverName || 'TBA'}
-            </Text>
-            {isAssigned && <Badge size="xs" color="green">Assigned</Badge>}
-          </Group>
-          <Group gap="xs">
-            <IconUsers size={14} color="gray" />
-            <Text size="sm" c="dimmed">
-              {tour.currentParticipants || 0} / {tour.maxParticipants || 53} participants
-            </Text>
-          </Group>
-          <Progress value={capacityPercent} color={capacityPercent > 90 ? 'red' : capacityPercent > 70 ? 'orange' : 'blue'} size="sm" />
-          {tour.pickupPoints && tour.pickupPoints.length > 0 && (
-            <Group gap="xs">
-              <IconMapPin size={14} color="gray" />
-              <Text size="sm" c="dimmed" truncate="end">
-                {tour.pickupPoints.length} pickup point{tour.pickupPoints.length > 1 ? 's' : ''}
-              </Text>
-            </Group>
-          )}
-          <TourPackStatus coverage={packCoverage} />
-          <DriverPackOperations operations={packOperations} onIssueStatus={onIssueStatus} updatingIssueId={updatingIssueId} />
-        </Stack>
-
-        <Group grow>
-          <Button variant="light" size="sm" onClick={() => onViewDetails(tourId)}>
-            View Details
-          </Button>
-          <Button
-            variant={isAssigned ? 'light' : 'filled'}
-            size="sm"
-            onClick={openAssignModal}
-          >
-            {isAssigned ? 'Reassign' : 'Assign'}
-          </Button>
-        </Group>
-      </Card>
-
-      {/* Assignment Modal */}
-      <Modal opened={assignModalOpened} onClose={closeAssignModal} title="Assign Driver to Tour" centered>
-        <Stack gap="md">
-          <Paper p="md" radius="md" bg="gray.0">
-            <Group gap="xs">
-              <ThemeIcon color="brand" variant="light" size="lg">
-                <IconMap size={18} />
-              </ThemeIcon>
-              <div>
-                <Text fw={600}>{tour.name || tourId}</Text>
-                <Text size="xs" c="dimmed">
-                  Current: {tour.driverName || 'TBA'}
-                </Text>
-              </div>
-            </Group>
-          </Paper>
-
-          <Select
-            label="Select Driver"
-            placeholder="Choose a driver"
-            data={driverOptions}
-            value={selectedDriver}
-            onChange={setSelectedDriver}
-            searchable
-            clearable
-            leftSection={<IconUsers size={16} />}
-          />
-
-          <Group justify="flex-end" mt="md">
-            <Button variant="light" onClick={closeAssignModal}>Cancel</Button>
-            <Button onClick={handleAssign} disabled={!selectedDriver}>
-              Assign Driver
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-    </>
-  );
-}
-
-// Create Tour Modal Component
-function CreateTourModal({ opened, onClose, onSuccess, userEmail }) {
-  const [activeTab, setActiveTab] = useState('manual');
-  const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({ ...DEFAULT_TOUR });
-  const [pickupPointsText, setPickupPointsText] = useState('');
-
-  const resetForm = () => {
-    setFormData({ ...DEFAULT_TOUR });
-    setPickupPointsText('');
-    setActiveTab('manual');
-  };
-
-  const handleClose = () => {
-    resetForm();
-    onClose();
-  };
-
-  const handleInputChange = (field, value) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-  };
-
-  const handleCreateManual = async (e) => {
-    e.preventDefault();
-    if (!formData.name.trim()) {
-      notifications.show({
-        title: 'Missing Information',
-        message: 'Please enter a tour name',
-        color: 'red',
-      });
-      return;
-    }
-
-    if (!formData.tourCode.trim()) {
-      notifications.show({
-        title: 'Missing Information',
-        message: 'Please enter a tour code',
-        color: 'red',
-      });
-      return;
-    }
-
-    const startDateError = getIsoDateFieldError(formData.startDate, 'Start date');
-    const endDateError = getIsoDateFieldError(formData.endDate, 'End date');
-    if (startDateError || endDateError) {
-      notifications.show({
-        title: 'Invalid Date',
-        message: startDateError || endDateError,
-        color: 'red',
-      });
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // Parse pickup points from text
-      const pickupPoints = parseTourPickupPointsText(pickupPointsText);
-
-      const tourData = {
-        ...formData,
-        startDate: inputFormatToDDMMYYYY(formData.startDate),
-        endDate: inputFormatToDDMMYYYY(formData.endDate),
-        pickupPoints,
-        itinerary: {
-          title: formData.name,
-          days: []
-        }
-      };
-
-      const result = await createTour(tourData, userEmail);
-      notifications.show({
-        title: 'Tour Created',
-        message: `"${formData.name}" has been created successfully`,
-        color: 'green',
-      });
-      onSuccess(result.id);
-      handleClose();
-    } catch (error) {
-      notifications.show({
-        title: 'Error',
-        message: error.message,
-        color: 'red',
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleCreateFromTemplate = async (templateKey) => {
-    setLoading(true);
-    try {
-      const result = await createTourFromTemplate(templateKey, {}, userEmail);
-      notifications.show({
-        title: 'Tour Created',
-        message: `Tour created from "${TOUR_TEMPLATES[templateKey].name}" template`,
-        color: 'green',
-      });
-      onSuccess(result.id);
-      handleClose();
-    } catch (error) {
-      notifications.show({
-        title: 'Error',
-        message: error.message,
-        color: 'red',
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Modal
-      opened={opened}
-      onClose={handleClose}
-      title={
-        <Group gap="xs">
-          <ThemeIcon color="brand" variant="light" size="md">
-            <IconPlus size={16} />
-          </ThemeIcon>
-          <Text fw={600}>Create New Tour</Text>
-        </Group>
-      }
-      size="lg"
-      centered
-    >
-      <Tabs value={activeTab} onChange={setActiveTab}>
-        <Tabs.List mb="md">
-          <Tabs.Tab value="manual" leftSection={<IconEdit size={14} />}>
-            Manual Entry
-          </Tabs.Tab>
-          <Tabs.Tab value="templates" leftSection={<IconTemplate size={14} />}>
-            From Template
-          </Tabs.Tab>
-        </Tabs.List>
-
-        <Tabs.Panel value="manual">
-          <form onSubmit={handleCreateManual}>
-            <Stack gap="md">
-              <Grid>
-                <Grid.Col span={8}>
-                  <TextInput
-                    label="Tour Name"
-                    placeholder="e.g., Coronation Street Experience"
-                    value={formData.name}
-                    onChange={(e) => handleInputChange('name', e.target.value)}
-                    leftSection={<IconMap size={16} />}
-                    required
-                  />
-                </Grid.Col>
-                <Grid.Col span={4}>
-                  <TextInput
-                    label="Tour Code"
-                    placeholder="e.g., 5209L 16"
-                    value={formData.tourCode}
-                    onChange={(e) => handleInputChange('tourCode', e.target.value)}
-                    required
-                  />
-                </Grid.Col>
-              </Grid>
-
-              <Grid>
-                <Grid.Col span={4}>
-                  <NumberInput
-                    label="Days"
-                    value={formData.days}
-                    onChange={(val) => handleInputChange('days', val)}
-                    min={1}
-                    max={30}
-                  />
-                </Grid.Col>
-                <Grid.Col span={4}>
-                  <TextInput
-                    label="Start Date"
-                    type="date"
-                    value={ddmmyyyyToInputFormat(formData.startDate)}
-                    onChange={(e) => handleInputChange('startDate', e.target.value)}
-                    leftSection={<IconCalendar size={16} />}
-                    error={getIsoDateFieldError(ddmmyyyyToInputFormat(formData.startDate), 'Start date')}
-                    required
-                  />
-                </Grid.Col>
-                <Grid.Col span={4}>
-                  <TextInput
-                    label="End Date"
-                    type="date"
-                    value={ddmmyyyyToInputFormat(formData.endDate)}
-                    onChange={(e) => handleInputChange('endDate', e.target.value)}
-                    leftSection={<IconCalendar size={16} />}
-                    error={getIsoDateFieldError(ddmmyyyyToInputFormat(formData.endDate), 'End date')}
-                    required
-                  />
-                </Grid.Col>
-              </Grid>
-
-              <Grid>
-                <Grid.Col span={12}>
-                  <NumberInput
-                    label="Max Participants"
-                    value={formData.maxParticipants}
-                    onChange={(val) => handleInputChange('maxParticipants', val)}
-                    min={1}
-                    max={100}
-                    leftSection={<IconUsers size={16} />}
-                  />
-                </Grid.Col>
-              </Grid>
-
-              <Alert icon={<IconUsers size={16} />} color="gray" variant="light">
-                Booked participants starts at 0 and is maintained automatically when bookings are added.
-              </Alert>
-
-              <Switch
-                label="Tour is Active"
-                checked={formData.isActive}
-                onChange={(e) => handleInputChange('isActive', e.currentTarget.checked)}
-              />
-
-              <Textarea
-                label="Pickup Points"
-                placeholder="Enter one per line in format: HH:MM - Location&#10;e.g., 06:30 - Dundee - Seagate Bus Station"
-                value={pickupPointsText}
-                onChange={(e) => setPickupPointsText(e.target.value)}
-                minRows={4}
-                description="Format: TIME - LOCATION (one per line)"
-              />
-
-              <Alert icon={<IconInfoCircle size={16} />} color="blue" variant="light">
-                The tour will be created with driver set to "TBA". You can assign a driver after creation.
-                The itinerary starts empty and remains unchanged by this form.
-              </Alert>
-
-              <Group justify="flex-end" mt="md">
-                <Button variant="light" onClick={handleClose}>Cancel</Button>
-                <Button type="submit" loading={loading} leftSection={<IconPlus size={16} />}>
-                  Create Tour
-                </Button>
-              </Group>
-            </Stack>
-          </form>
-        </Tabs.Panel>
-
-        <Tabs.Panel value="templates">
-          <Stack gap="md">
-            <Text size="sm" c="dimmed">
-              Select a pre-configured tour template to quickly create a new tour.
-              You can edit the details after creation.
-            </Text>
-
-            <SimpleGrid cols={1} spacing="md">
-              {Object.entries(TOUR_TEMPLATES).map(([key, template]) => (
-                <Paper
-                  key={key}
-                  p="md"
-                  radius="md"
-                  withBorder
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => handleCreateFromTemplate(key)}
-                >
-                  <Group justify="space-between">
-                    <Group gap="md">
-                      <ThemeIcon color="brand" variant="light" size="xl" radius="md">
-                        <IconMap size={24} />
-                      </ThemeIcon>
-                      <div>
-                        <Text fw={600}>{template.name}</Text>
-                        <Group gap="xs" mt={4}>
-                          <Badge size="xs" variant="light">
-                            {template.days} Day{template.days > 1 ? 's' : ''}
-                          </Badge>
-                          <Badge size="xs" variant="light" color="blue">
-                            {template.maxParticipants} max
-                          </Badge>
-                          <Badge size="xs" variant="light" color="green">
-                            {template.pickupPoints?.length || 0} pickups
-                          </Badge>
-                        </Group>
-                      </div>
-                    </Group>
-                    <ActionIcon variant="light" size="lg" color="brand">
-                      <IconChevronRight size={18} />
-                    </ActionIcon>
-                  </Group>
-                </Paper>
-              ))}
-            </SimpleGrid>
-
-            {loading && (
-              <Center py="md">
-                <Loader size="sm" />
-              </Center>
-            )}
-          </Stack>
-        </Tabs.Panel>
-      </Tabs>
-    </Modal>
-  );
-}
-
-// Edit Tour Modal Component
-function EditTourModal({ opened, onClose, tourId, tour, onSuccess }) {
-  const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState(() => ({
-    ...DEFAULT_TOUR,
-    ...tour,
-    tourCode: tour?.tourCode || tourId || '',
-  }));
-  const [pickupPointsText, setPickupPointsText] = useState(() => (
-    (tour?.pickupPoints || [])
-      .map(pp => `${pp.time} - ${pp.location}`)
-      .join('\n')
-  ));
-
-  const handleInputChange = (field, value) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-  };
-
-  const handleSave = async (e) => {
-    e.preventDefault();
-    if (!formData.name.trim()) {
-      notifications.show({
-        title: 'Missing Information',
-        message: 'Please enter a tour name',
-        color: 'red',
-      });
-      return;
-    }
-
-    const startDateIso = formData.startDate?.includes('-') ? formData.startDate : ddmmyyyyToInputFormat(formData.startDate);
-    const endDateIso = formData.endDate?.includes('-') ? formData.endDate : ddmmyyyyToInputFormat(formData.endDate);
-
-    const startDateError = getIsoDateFieldError(startDateIso, 'Start date');
-    const endDateError = getIsoDateFieldError(endDateIso, 'End date');
-    if (startDateError || endDateError) {
-      notifications.show({
-        title: 'Invalid Date',
-        message: startDateError || endDateError,
-        color: 'red',
-      });
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // Parse pickup points from text
-      const pickupPoints = parseTourPickupPointsText(pickupPointsText);
-
-      const updateData = {
-        name: formData.name,
-        days: formData.days,
-        startDate: inputFormatToDDMMYYYY(startDateIso),
-        endDate: inputFormatToDDMMYYYY(endDateIso),
-        isActive: formData.isActive,
-        maxParticipants: formData.maxParticipants,
-        pickupPoints,
-      };
-
-      await updateTour(tourId, updateData);
-      notifications.show({
-        title: 'Tour Updated',
-        message: `"${formData.name}" has been updated`,
-        color: 'green',
-      });
-      onSuccess();
-      onClose();
-    } catch (error) {
-      notifications.show({
-        title: 'Error',
-        message: error.message,
-        color: 'red',
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Modal
-      opened={opened}
-      onClose={onClose}
-      title={
-        <Group gap="xs">
-          <ThemeIcon color="blue" variant="light" size="md">
-            <IconEdit size={16} />
-          </ThemeIcon>
-          <Text fw={600}>Edit Tour</Text>
-        </Group>
-      }
-      size="lg"
-      centered
-    >
-      <form onSubmit={handleSave}>
-        <Stack gap="md">
-          <Paper p="sm" radius="md" bg="gray.0">
-            <Group gap="xs">
-              <Text size="xs" c="dimmed">Tour ID:</Text>
-              <Code>{tourId}</Code>
-              <CopyButton value={tourId}>
-                {({ copied, copy }) => (
-                  <Tooltip label={copied ? 'Copied!' : 'Copy ID'}>
-                    <ActionIcon variant="subtle" size="xs" onClick={copy}>
-                      <IconCopy size={12} />
-                    </ActionIcon>
-                  </Tooltip>
-                )}
-              </CopyButton>
-            </Group>
-          </Paper>
-
-          <Grid>
-            <Grid.Col span={8}>
-              <TextInput
-                label="Tour Name"
-                placeholder="e.g., Coronation Street Experience"
-                value={formData.name}
-                onChange={(e) => handleInputChange('name', e.target.value)}
-                leftSection={<IconMap size={16} />}
-                required
-              />
-            </Grid.Col>
-            <Grid.Col span={4}>
-              <TextInput
-                label="Tour Code"
-                placeholder="e.g., 5209L 16"
-                value={formData.tourCode || tourId || ''}
-                readOnly
-              />
-            </Grid.Col>
-          </Grid>
-
-          <Grid>
-            <Grid.Col span={4}>
-              <NumberInput
-                label="Days"
-                value={formData.days}
-                onChange={(val) => handleInputChange('days', val)}
-                min={1}
-                max={30}
-              />
-            </Grid.Col>
-            <Grid.Col span={4}>
-              <TextInput
-                label="Start Date"
-                type="date"
-                value={ddmmyyyyToInputFormat(formData.startDate)}
-                onChange={(e) => handleInputChange('startDate', e.target.value)}
-                leftSection={<IconCalendar size={16} />}
-                error={getIsoDateFieldError(ddmmyyyyToInputFormat(formData.startDate), 'Start date')}
-                required
-              />
-            </Grid.Col>
-            <Grid.Col span={4}>
-              <TextInput
-                label="End Date"
-                type="date"
-                value={ddmmyyyyToInputFormat(formData.endDate)}
-                onChange={(e) => handleInputChange('endDate', e.target.value)}
-                leftSection={<IconCalendar size={16} />}
-                error={getIsoDateFieldError(ddmmyyyyToInputFormat(formData.endDate), 'End date')}
-                required
-              />
-            </Grid.Col>
-          </Grid>
-
-          <Grid>
-            <Grid.Col span={6}>
-              <NumberInput
-                label="Max Participants"
-                value={formData.maxParticipants}
-                onChange={(val) => handleInputChange('maxParticipants', val)}
-                min={Math.max(1, Number(formData.currentParticipants) || 0)}
-                max={100}
-                leftSection={<IconUsers size={16} />}
-                description="Cannot be lower than booked participants"
-              />
-            </Grid.Col>
-            <Grid.Col span={6}>
-              <NumberInput
-                label="Booked Participants"
-                value={formData.currentParticipants}
-                readOnly
-                description="Managed automatically from booking operations"
-              />
-            </Grid.Col>
-          </Grid>
-
-          <Switch
-            label="Tour is Active"
-            checked={formData.isActive}
-            onChange={(e) => handleInputChange('isActive', e.currentTarget.checked)}
-          />
-
-          <Textarea
-            label="Pickup Points"
-            placeholder="Enter one per line in format: HH:MM - Location"
-            value={pickupPointsText}
-            onChange={(e) => setPickupPointsText(e.target.value)}
-            minRows={4}
-            description="Format: TIME - LOCATION (one per line)"
-          />
-
-          <Group justify="flex-end" mt="md">
-            <Button variant="light" onClick={onClose}>Cancel</Button>
-            <Button type="submit" loading={loading} leftSection={<IconCheck size={16} />}>
-              Save Changes
-            </Button>
-          </Group>
-        </Stack>
-      </form>
-    </Modal>
-  );
-}
-
-// Delete Confirmation Modal
-function DeleteTourModal({ opened, onClose, tourId, tourName, onConfirm }) {
-  const [loading, setLoading] = useState(false);
-
-  const handleDelete = async () => {
-    setLoading(true);
-    try {
-      await deleteTour(tourId);
-      notifications.show({
-        title: 'Tour Deleted',
-        message: `"${tourName || tourId}" has been deleted`,
-        color: 'green',
-      });
-      onConfirm();
-      onClose();
-    } catch (error) {
-      notifications.show({
-        title: 'Error',
-        message: error.message,
-        color: 'red',
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Modal opened={opened} onClose={onClose} title="Delete Tour" centered size="sm">
-      <Stack gap="md">
-        <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light">
-          This action cannot be undone. The tour and all its data will be permanently deleted.
-        </Alert>
-
-        <Paper p="md" radius="md" bg="red.0">
-          <Group gap="xs">
-            <ThemeIcon color="red" variant="light" size="lg">
-              <IconTrash size={18} />
-            </ThemeIcon>
-            <div>
-              <Text fw={600}>{tourName || tourId}</Text>
-              <Text size="xs" c="dimmed">ID: {tourId}</Text>
-            </div>
-          </Group>
-        </Paper>
-
-        <Group justify="flex-end" mt="md">
-          <Button variant="light" onClick={onClose}>Cancel</Button>
-          <Button color="red" loading={loading} onClick={handleDelete} leftSection={<IconTrash size={16} />}>
-            Delete Tour
-          </Button>
-        </Group>
-      </Stack>
-    </Modal>
-  );
-}
-
-// Tour Details Modal
-function TourDetailsModal({ opened, onClose, tourId, tour }) {
-  if (!tour) return null;
-
-  const isAssigned = tour.driverName && tour.driverName !== 'TBA';
-  const pickupPoints = tour.pickupPoints || [];
-  const itinerary = tour.itinerary || { title: '', days: [] };
-  const capacityPercent = ((tour.currentParticipants || 0) / (tour.maxParticipants || 53)) * 100;
-
-  return (
-    <Modal
-      opened={opened}
-      onClose={onClose}
-      title={
-        <Group gap="xs">
-          <ThemeIcon color="brand" variant="light" size="md">
-            <IconMap size={16} />
-          </ThemeIcon>
-          <Text fw={600}>Tour Details</Text>
-        </Group>
-      }
-      size="lg"
-      centered
-    >
-      <Stack gap="md">
-        {/* Header Info */}
-        <Paper p="md" radius="md" withBorder>
-          <Group justify="space-between" mb="sm">
-            <div>
-              <Title order={3}>{tour.name || tourId}</Title>
-              <Group gap="xs" mt={4}>
-                <Code>{tour.tourCode || tourId}</Code>
-                <CopyButton value={tourId}>
-                  {({ copied, copy }) => (
-                    <Tooltip label={copied ? 'Copied!' : 'Copy ID'}>
-                      <ActionIcon variant="subtle" size="xs" onClick={copy}>
-                        <IconCopy size={12} />
-                      </ActionIcon>
-                    </Tooltip>
-                  )}
-                </CopyButton>
-              </Group>
-            </div>
-            <Stack gap="xs" align="flex-end">
-              <Badge variant="filled" color={tour.isActive ? 'green' : 'gray'}>
-                {tour.isActive ? 'Active' : 'Inactive'}
-              </Badge>
-              <Badge variant="light" color="blue">
-                {tour.days || 1} Day{(tour.days || 1) > 1 ? 's' : ''}
-              </Badge>
-            </Stack>
-          </Group>
-        </Paper>
-
-        {/* Dates & Capacity */}
-        <SimpleGrid cols={2} spacing="md">
-          <Paper p="md" radius="md" withBorder>
-            <Group gap="xs" mb="xs">
-              <IconCalendarEvent size={16} color="gray" />
-              <Text fw={500}>Dates</Text>
-            </Group>
-            <Text size="sm">Start: {formatDateForDisplay(tour.startDate)}</Text>
-            <Text size="sm">End: {formatDateForDisplay(tour.endDate)}</Text>
-          </Paper>
-          <Paper p="md" radius="md" withBorder>
-            <Group gap="xs" mb="xs">
-              <IconUsers size={16} color="gray" />
-              <Text fw={500}>Capacity</Text>
-            </Group>
-            <Text size="xl" fw={700}>{tour.currentParticipants || 0} / {tour.maxParticipants || 53}</Text>
-            <Progress value={capacityPercent} color={capacityPercent > 90 ? 'red' : capacityPercent > 70 ? 'orange' : 'blue'} size="sm" mt="xs" />
-          </Paper>
-        </SimpleGrid>
-
-        {/* Driver Info */}
-        <Paper p="md" radius="md" withBorder>
-          <Text fw={500} mb="sm">Assigned Driver</Text>
-          <Group gap="md">
-            <Avatar size="lg" radius="xl" color={isAssigned ? 'brand' : 'gray'}>
-              {tour.driverName?.charAt(0) || '?'}
-            </Avatar>
-            <div style={{ flex: 1 }}>
-              <Text fw={500}>{tour.driverName || 'TBA'}</Text>
-              {tour.driverPhone && (
-                <Group gap="xs">
-                  <IconPhone size={14} color="gray" />
-                  <Text size="sm" c="dimmed">{tour.driverPhone}</Text>
-                </Group>
-              )}
-            </div>
-            <Badge variant="dot" color={isAssigned ? 'green' : 'orange'}>
-              {isAssigned ? 'Assigned' : 'Unassigned'}
-            </Badge>
-          </Group>
-        </Paper>
-
-        {/* Pickup Points */}
-        {pickupPoints.length > 0 && (
-          <Paper p="md" radius="md" withBorder>
-            <Text fw={500} mb="sm">Pickup Points ({pickupPoints.length})</Text>
-            <Timeline active={-1} bulletSize={20}>
-              {pickupPoints.map((pp, index) => (
-                <Timeline.Item
-                  key={index}
-                  bullet={<IconMapPin size={12} />}
-                  title={
-                    <Group gap="xs">
-                      {pp.time && <Badge size="xs" variant="light">{pp.time}</Badge>}
-                      <Text size="sm">{pp.location}</Text>
-                    </Group>
-                  }
-                />
-              ))}
-            </Timeline>
-          </Paper>
-        )}
-
-        {/* Itinerary */}
-        {itinerary.days && itinerary.days.length > 0 && (
-          <Paper p="md" radius="md" withBorder>
-            <Text fw={500} mb="sm">Itinerary: {itinerary.title || tour.name}</Text>
-            <Accordion variant="separated">
-              {itinerary.days.map((day, dayIndex) => (
-                <Accordion.Item key={dayIndex} value={`day-${day.day || dayIndex + 1}`}>
-                  <Accordion.Control>
-                    <Group gap="xs">
-                      <Badge size="sm" variant="light">Day {day.day || dayIndex + 1}</Badge>
-                      <Text size="sm">{day.title || `Day ${day.day || dayIndex + 1} Activities`}</Text>
-                    </Group>
-                  </Accordion.Control>
-                  <Accordion.Panel>
-                    <Stack gap="xs">
-                      {(day.activities || []).map((activity, actIndex) => (
-                        <Group key={actIndex} gap="xs" align="flex-start">
-                          {activity.time && (
-                            <Badge size="xs" variant="light" style={{ minWidth: 50 }}>
-                              {activity.time}
-                            </Badge>
-                          )}
-                          <Text size="sm" style={{ flex: 1 }}>{activity.description}</Text>
-                        </Group>
-                      ))}
-                    </Stack>
-                  </Accordion.Panel>
-                </Accordion.Item>
-              ))}
-            </Accordion>
-          </Paper>
-        )}
-
-        <Button variant="light" onClick={onClose} fullWidth>
-          Close
-        </Button>
-      </Stack>
-    </Modal>
-  );
-}
-
-// Import/Export Modal
-function ImportExportModal({ opened, onClose, tours, drivers, onImportSuccess, dateScope }) {
-  const [activeTab, setActiveTab] = useState('export');
-  const [importing, setImporting] = useState(false);
-  const [importMode, setImportMode] = useState('upsert');
-  const [importValidOnly, setImportValidOnly] = useState(true);
-  const [importPreview, setImportPreview] = useState({ rows: [], parseErrors: [], summary: { total: 0, valid: 0, invalid: 0 } });
-  const [rawCsvContent, setRawCsvContent] = useState('');
-
-  const handleExport = () => {
-    const csv = exportToursToCSV(tours, { drivers });
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `tours_export_${getCurrentISODateStamp()}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    notifications.show({
-      title: 'Export Complete',
-      message: `${Object.keys(tours).length} tours exported to CSV`,
-      color: 'green',
-    });
-  };
-
-  const handleFileSelect = (file) => {
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const content = String(e.target?.result || '');
-        setRawCsvContent(content);
-        const preview = await previewTourCSVImport(content, { mode: importMode });
-        setImportPreview(preview);
-      } catch (error) {
-        notifications.show({
-          title: 'Parse Error',
-          message: error.message || 'Could not parse the CSV file. Please check the format.',
-          color: 'red',
-        });
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleImport = async () => {
-    if (importPreview.summary.total === 0) {
-      notifications.show({
-        title: 'No Data',
-        message: 'Please select a CSV file with tour data',
-        color: 'red',
-      });
-      return;
-    }
-
-    if (importValidOnly && importPreview.summary.valid === 0) {
-      notifications.show({
-        title: 'No Valid Rows',
-        message: 'No valid rows available to import.',
-        color: 'red',
-      });
-      return;
-    }
-
-    setImporting(true);
-    try {
-      const result = await executeTourCSVImport(importPreview.rows, {
-        mode: importMode,
-        importValidOnly,
-        createdBy: 'import',
-      });
-
-      notifications.show({
-        title: 'Import Complete',
-        message: result.errors.length > 0
-          ? `Created ${result.created.length}, updated ${result.updated.length}, failed ${result.errors.length}. First issue: ${result.errors[0].error}`
-          : `Created ${result.created.length}, updated ${result.updated.length}, failed 0`,
-        color: result.errors.length > 0 ? 'orange' : 'green',
-      });
-
-      onImportSuccess();
-      setImportPreview({ rows: [], parseErrors: [], summary: { total: 0, valid: 0, invalid: 0 } });
-      setRawCsvContent('');
-      onClose();
-    } catch (error) {
-      notifications.show({
-        title: 'Import Error',
-        message: error.message,
-        color: 'red',
-      });
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const handleModeChange = async (mode) => {
-    setImportMode(mode);
-    if (!rawCsvContent) return;
-    const preview = await previewTourCSVImport(rawCsvContent, { mode });
-    setImportPreview(preview);
-  };
-
-  const rowsToShow = importPreview.rows.slice(0, 25);
-
-  return (
-    <Modal
-      opened={opened}
-      onClose={onClose}
-      title={
-        <Group gap="xs">
-          <ThemeIcon color="brand" variant="light" size="md">
-            <IconDatabaseExport size={16} />
-          </ThemeIcon>
-          <Text fw={600}>Import / Export Tours</Text>
-        </Group>
-      }
-      size="xl"
-      centered
-    >
-      <Tabs value={activeTab} onChange={setActiveTab}>
-        <Tabs.List mb="md">
-          <Tabs.Tab value="export" leftSection={<IconDownload size={14} />}>
-            Export
-          </Tabs.Tab>
-          <Tabs.Tab value="import" leftSection={<IconUpload size={14} />}>
-            Import
-          </Tabs.Tab>
-        </Tabs.List>
-
-        <Tabs.Panel value="export">
-          <Stack gap="md">
-            <Alert icon={<IconInfoCircle size={16} />} color="blue" variant="light">
-              Export the tours currently loaded in the {dateScope} date view. This is a bounded operational export, not an automatic full-archive backup.
-            </Alert>
-
-            <Paper p="md" radius="md" withBorder>
-              <Group justify="space-between">
-                <div>
-                  <Text fw={500}>Ready to Export</Text>
-                  <Text size="sm" c="dimmed">{Object.keys(tours).length} tours will be exported</Text>
-                </div>
-                <ThemeIcon color="green" variant="light" size="xl" radius="md">
-                  <IconCircleCheck size={24} />
-                </ThemeIcon>
-              </Group>
-            </Paper>
-
-            <Button leftSection={<IconDownload size={16} />} onClick={handleExport} fullWidth>
-              Download CSV File
-            </Button>
-          </Stack>
-        </Tabs.Panel>
-
-        <Tabs.Panel value="import">
-          <Stack gap="md">
-            <Alert icon={<IconInfoCircle size={16} />} color="orange" variant="light">
-              Import tours from CSV with validation preview. Required columns: Tour Code and Name.
-            </Alert>
-
-            <Select
-              label="Import mode"
-              value={importMode}
-              onChange={(value) => value && handleModeChange(value)}
-              data={[
-                { value: 'create-only', label: 'Create only (reject existing tour codes)' },
-                { value: 'update-existing', label: 'Update existing only (reject new tour codes)' },
-                { value: 'upsert', label: 'Upsert (create new and update existing)' },
-              ]}
-            />
-
-            <FileButton onChange={handleFileSelect} accept=".csv">
-              {(props) => (
-                <Paper
-                  {...props}
-                  p="xl"
-                  radius="md"
-                  withBorder
-                  style={{ cursor: 'pointer', textAlign: 'center' }}
-                >
-                  <ThemeIcon color="brand" variant="light" size="xl" radius="xl" mx="auto" mb="sm">
-                    <IconUpload size={24} />
-                  </ThemeIcon>
-                  <Text fw={500}>Click to select CSV file</Text>
-                  <Text size="xs" c="dimmed">Supports quoted multiline and escaped quote fields</Text>
-                </Paper>
-              )}
-            </FileButton>
-
-            {(importPreview.parseErrors.length > 0 || importPreview.summary.total > 0) && (
-              <Paper p="md" radius="md" withBorder>
-                <Group justify="space-between" mb="sm">
-                  <Text fw={500}>Dry-run Preview</Text>
-                  <Group gap="xs">
-                    <Badge color="blue">{importPreview.summary.total} rows</Badge>
-                    <Badge color="green">{importPreview.summary.valid} valid</Badge>
-                    <Badge color="red">{importPreview.summary.invalid} invalid</Badge>
-                    {importPreview.summary.warnings > 0 ? <Badge color="yellow">{importPreview.summary.warnings} warnings</Badge> : null}
-                  </Group>
-                </Group>
-
-                {importPreview.parseErrors.map((error, index) => (
-                  <Alert key={index} color="red" variant="light" mb="xs" icon={<IconAlertCircle size={16} />}>
-                    {error}
-                  </Alert>
-                ))}
-
-                <ScrollArea h={260}>
-                  <Table striped highlightOnHover size="sm">
-                    <Table.Thead>
-                      <Table.Tr>
-                        <Table.Th>Row</Table.Th>
-                        <Table.Th>Mode</Table.Th>
-                        <Table.Th>Tour Code</Table.Th>
-                        <Table.Th>Name</Table.Th>
-                        <Table.Th>Status</Table.Th>
-                        <Table.Th>Checks</Table.Th>
-                      </Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                      {rowsToShow.map((row) => (
-                        <Table.Tr key={row.rowNumber}>
-                          <Table.Td>{row.rowNumber}</Table.Td>
-                          <Table.Td><Badge size="xs" variant="light">{row.action}</Badge></Table.Td>
-                          <Table.Td><Code>{row.tour.tourCode || '-'}</Code></Table.Td>
-                          <Table.Td>{row.tour.name || '-'}</Table.Td>
-                          <Table.Td>
-                            <Badge color={row.isValid ? 'green' : 'red'} size="xs">{row.isValid ? 'Valid' : 'Invalid'}</Badge>
-                          </Table.Td>
-                          <Table.Td>
-                            {[...row.errors, ...(row.warnings || [])].length === 0
-                              ? '-'
-                              : [...row.errors, ...(row.warnings || [])].join(' ')}
-                          </Table.Td>
-                        </Table.Tr>
-                      ))}
-                    </Table.Tbody>
-                  </Table>
-                </ScrollArea>
-                {importPreview.rows.length > rowsToShow.length && (
-                  <Text size="xs" c="dimmed" mt="xs">Showing first {rowsToShow.length} of {importPreview.rows.length} rows.</Text>
-                )}
-              </Paper>
-            )}
-
-            <Switch
-              checked={importValidOnly}
-              onChange={(event) => setImportValidOnly(event.currentTarget.checked)}
-              label="Import valid rows only"
-              description="When enabled, invalid rows are skipped."
-            />
-
-            <Button
-              leftSection={<IconUpload size={16} />}
-              onClick={handleImport}
-              loading={importing}
-              fullWidth
-              disabled={importPreview.summary.total === 0}
-            >
-              Run Import
-            </Button>
-          </Stack>
-        </Tabs.Panel>
-      </Tabs>
-    </Modal>
-  );
-}
-
-// Main Tours Manager Component
 export default function ToursManager() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [tourWindowTours, setTourWindowTours] = useState({});
   const [exactTourMatch, setExactTourMatch] = useState(null);
   const [drivers, setDrivers] = useState({});
-  const [tourWindow, setTourWindow] = useState({ atLimit: false, limit: 0 });
+  const [tourWindow, setTourWindow] = useState({
+    atLimit: false,
+    limit: 0
+  });
   const [driverDirectoryAtLimit, setDriverDirectoryAtLimit] = useState(false);
-  const [packStatusSnapshot, setPackStatusSnapshot] = useState({ statuses: {}, atLimit: false, limit: 0 });
-  const [packOperationsSnapshot, setPackOperationsSnapshot] = useState({ progress: {}, issues: {}, atLimit: false, limit: 0 });
+  const [packStatusSnapshot, setPackStatusSnapshot] = useState({
+    statuses: {},
+    atLimit: false,
+    limit: 0
+  });
+  const [packOperationsSnapshot, setPackOperationsSnapshot] = useState({
+    progress: {},
+    issues: {},
+    atLimit: false,
+    limit: 0
+  });
   const [updatingIssueId, setUpdatingIssueId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState('grid');
@@ -1465,84 +94,84 @@ export default function ToursManager() {
   const queryParam = searchParams.get('q') || '';
   const searchTerm = queryParam;
   const activeExactTourMatch = exactTourMatch?.query === queryParam.trim() ? exactTourMatch.match : null;
-  const tours = useMemo(() => (
-    activeExactTourMatch
-      ? { ...tourWindowTours, [activeExactTourMatch.tourId]: activeExactTourMatch.tour }
-      : tourWindowTours
-  ), [tourWindowTours, activeExactTourMatch]);
+  const tours = useMemo(() => activeExactTourMatch ? {
+    ...tourWindowTours,
+    [activeExactTourMatch.tourId]: activeExactTourMatch.tour
+  } : tourWindowTours, [tourWindowTours, activeExactTourMatch]);
 
   // Modal states
-  const [createModalOpened, { open: openCreateModal, close: closeCreateModal }] = useDisclosure(false);
-  const [editModalOpened, { open: openEditModal, close: closeEditModal }] = useDisclosure(false);
-  const [deleteModalOpened, { open: openDeleteModal, close: closeDeleteModal }] = useDisclosure(false);
-  const [detailsModalOpened, { open: openDetailsModal, close: closeDetailsModal }] = useDisclosure(false);
-  const [importExportModalOpened, { open: openImportExportModal, close: closeImportExportModal }] = useDisclosure(false);
-  const [addPassengerModalOpened, { open: openAddPassengerModal, close: closeAddPassengerModal }] = useDisclosure(false);
+  const [createModalOpened, {
+    open: openCreateModal,
+    close: closeCreateModal
+  }] = useDisclosure(false);
+  const [editModalOpened, {
+    open: openEditModal,
+    close: closeEditModal
+  }] = useDisclosure(false);
+  const [deleteModalOpened, {
+    open: openDeleteModal,
+    close: closeDeleteModal
+  }] = useDisclosure(false);
+  const [detailsModalOpened, {
+    open: openDetailsModal,
+    close: closeDetailsModal
+  }] = useDisclosure(false);
+  const [importExportModalOpened, {
+    open: openImportExportModal,
+    close: closeImportExportModal
+  }] = useDisclosure(false);
+  const [addPassengerModalOpened, {
+    open: openAddPassengerModal,
+    close: closeAddPassengerModal
+  }] = useDisclosure(false);
   const [helpExpanded, setHelpExpanded] = useState(false);
 
   // Selected tour for modals
   const [selectedTourId, setSelectedTourId] = useState(null);
-
-  const handleFilterStatusChange = (value) => {
+  const handleFilterStatusChange = value => {
     // UI writes status changes back to URL, while preserving unrelated query params.
     const nextStatus = value || 'all';
     const currentStatusParam = searchParams.get('status') || 'all';
-
     setCurrentPage(1);
-
     if (currentStatusParam === nextStatus) {
       return;
     }
-
     const nextParams = new URLSearchParams(searchParams);
-
     if (nextStatus === 'all') {
       nextParams.delete('status');
     } else {
       nextParams.set('status', nextStatus);
     }
-
     setSearchParams(nextParams);
   };
-
-  const handleDateScopeChange = (value) => {
+  const handleDateScopeChange = value => {
     const nextDateScope = value || 'current';
     const currentDateScopeParam = searchParams.get('dateScope') || 'current';
-
     setCurrentPage(1);
-
     if (currentDateScopeParam === nextDateScope) {
       return;
     }
-
     const nextParams = new URLSearchParams(searchParams);
-
     if (nextDateScope === 'current') {
       nextParams.delete('dateScope');
     } else {
       nextParams.set('dateScope', nextDateScope);
     }
-
     setSearchParams(nextParams);
   };
-
-  const handleSearchTermChange = (value) => {
+  const handleSearchTermChange = value => {
     const nextSearchTerm = value || '';
     const currentQueryParam = searchParams.get('q') || '';
-
     setCurrentPage(1);
-
     if (currentQueryParam === nextSearchTerm.trim()) {
       return;
     }
-
     const nextParams = new URLSearchParams(searchParams);
     if (nextSearchTerm.trim()) {
       nextParams.set('q', nextSearchTerm.trim());
     } else {
       nextParams.delete('q');
     }
-
     setSearchParams(nextParams);
   };
 
@@ -1551,86 +180,84 @@ export default function ToursManager() {
     const unsubPackStatuses = subscribeToDriverTourPackAdminStatuses(db, setPackStatusSnapshot, () => {
       setSyncStatus('error');
     });
-    const unsubDrivers = subscribeToDriverDirectory(
-      db,
-      ({ drivers: nextDrivers, atLimit }) => {
-        setDrivers(nextDrivers);
-        setDriverDirectoryAtLimit(atLimit);
-        setLoading(false);
-      },
-      (error) => {
-        setLoading(false);
-        setSyncStatus('error');
-        notifications.show({ title: 'Drivers unavailable', message: error?.message || 'Could not load driver assignments.', color: 'red' });
-      },
-    );
-
+    const unsubDrivers = subscribeToDriverDirectory(db, ({
+      drivers: nextDrivers,
+      atLimit
+    }) => {
+      setDrivers(nextDrivers);
+      setDriverDirectoryAtLimit(atLimit);
+      setLoading(false);
+    }, error => {
+      setLoading(false);
+      setSyncStatus('error');
+      notifications.show({
+        title: 'Drivers unavailable',
+        message: error?.message || 'Could not load driver assignments.',
+        color: 'red'
+      });
+    });
     return () => {
       unsubDrivers();
       unsubPackStatuses();
     };
   }, []);
-
-  useEffect(() => subscribeToTourWindow(db, { dateScope: filterDateScope }, ({ tours: nextTours, atLimit, limit }) => {
+  useEffect(() => subscribeToTourWindow(db, {
+    dateScope: filterDateScope
+  }, ({
+    tours: nextTours,
+    atLimit,
+    limit
+  }) => {
     setTourWindowTours(nextTours);
-    setTourWindow({ atLimit, limit });
+    setTourWindow({
+      atLimit,
+      limit
+    });
     setSyncStatus('connected');
   }, () => {
     setSyncStatus('error');
   }), [filterDateScope]);
-
   useEffect(() => {
     let cancelled = false;
     if (!queryParam.trim()) {
-      return () => { cancelled = true; };
+      return () => {
+        cancelled = true;
+      };
     }
     const requestedQuery = queryParam.trim();
-    fetchTourByExactId(db, queryParam)
-      .then((match) => {
-        if (!cancelled) setExactTourMatch({ query: requestedQuery, match });
-      })
-      .catch(() => {
-        if (!cancelled) setExactTourMatch({ query: requestedQuery, match: null });
+    fetchTourByExactId(db, queryParam).then(match => {
+      if (!cancelled) setExactTourMatch({
+        query: requestedQuery,
+        match
       });
-    return () => { cancelled = true; };
+    }).catch(() => {
+      if (!cancelled) setExactTourMatch({
+        query: requestedQuery,
+        match: null
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [queryParam]);
 
   // Filter and search tours
   const filteredTours = useMemo(() => {
     const today = getTodayAtNoon();
-
     return Object.entries(tours).filter(([id, tour]) => {
-      const matchesSearch =
-        id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (tour.name && tour.name.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (tour.tourCode && tour.tourCode.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (tour.driverName && tour.driverName.toLowerCase().includes(searchTerm.toLowerCase()));
-
+      const matchesSearch = id.toLowerCase().includes(searchTerm.toLowerCase()) || tour.name && tour.name.toLowerCase().includes(searchTerm.toLowerCase()) || tour.tourCode && tour.tourCode.toLowerCase().includes(searchTerm.toLowerCase()) || tour.driverName && tour.driverName.toLowerCase().includes(searchTerm.toLowerCase());
       const isAssigned = tour.driverName && tour.driverName !== 'TBA';
-      const matchesStatus =
-        filterStatus === 'all' ||
-        (filterStatus === 'assigned' && isAssigned) ||
-        (filterStatus === 'unassigned' && !isAssigned) ||
-        (filterStatus === 'active' && tour.isActive) ||
-        (filterStatus === 'inactive' && !tour.isActive);
-
+      const matchesStatus = filterStatus === 'all' || filterStatus === 'assigned' && isAssigned || filterStatus === 'unassigned' && !isAssigned || filterStatus === 'active' && tour.isActive || filterStatus === 'inactive' && !tour.isActive;
       const isPastTour = hasTourFinished(tour, today);
       const isExactDeepLink = activeExactTourMatch?.tourId === id && queryParam.trim().length > 0;
-      const matchesDateScope = isExactDeepLink ||
-        filterDateScope === 'all' ||
-        (filterDateScope === 'past' && isPastTour) ||
-        (filterDateScope === 'current' && !isPastTour);
-
+      const matchesDateScope = isExactDeepLink || filterDateScope === 'all' || filterDateScope === 'past' && isPastTour || filterDateScope === 'current' && !isPastTour;
       return matchesSearch && matchesStatus && matchesDateScope;
     });
   }, [tours, searchTerm, filterStatus, filterDateScope, activeExactTourMatch, queryParam]);
 
   // Pagination
   const totalPages = Math.ceil(filteredTours.length / itemsPerPage);
-  const paginatedTours = filteredTours.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  );
+  const paginatedTours = filteredTours.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   // Stats
   const totalTours = Object.keys(tours).length;
@@ -1641,533 +268,152 @@ export default function ToursManager() {
   const visibleDepartureKeys = useMemo(() => paginatedTours.map(([tourId, tour]) => departureKeyForTour(tourId, tour)).filter(Boolean), [paginatedTours]);
   const visibleDepartureKeySignature = JSON.stringify(visibleDepartureKeys);
   const visibleTours = useMemo(() => Object.fromEntries(paginatedTours), [paginatedTours]);
-  const packCoverageByTour = useMemo(() => buildTourPackCoverage({ tours: visibleTours, drivers, statuses: packStatusSnapshot.statuses }), [visibleTours, drivers, packStatusSnapshot.statuses]);
-  const packOperationsByTour = useMemo(() => buildDriverTourPackOperationsByTour({ tours: visibleTours, progress: packOperationsSnapshot.progress, issues: packOperationsSnapshot.issues }), [visibleTours, packOperationsSnapshot.progress, packOperationsSnapshot.issues]);
-
+  const packCoverageByTour = useMemo(() => buildTourPackCoverage({
+    tours: visibleTours,
+    drivers,
+    statuses: packStatusSnapshot.statuses
+  }), [visibleTours, drivers, packStatusSnapshot.statuses]);
+  const packOperationsByTour = useMemo(() => buildDriverTourPackOperationsByTour({
+    tours: visibleTours,
+    progress: packOperationsSnapshot.progress,
+    issues: packOperationsSnapshot.issues
+  }), [visibleTours, packOperationsSnapshot.progress, packOperationsSnapshot.issues]);
   useEffect(() => subscribeToDriverTourPackOperations(db, JSON.parse(visibleDepartureKeySignature), setPackOperationsSnapshot, () => {
     setSyncStatus('error');
   }), [visibleDepartureKeySignature]);
-
   const handleIssueStatus = async (issue, status) => {
     if (!issue || updatingIssueId) return;
     setUpdatingIssueId(issue.issueId);
     try {
-      await updateDriverTourPackIssueStatus(db, { departureKey: issue.departureKey, driverId: issue.driverId, issueId: issue.issueId, status });
-      notifications.show({ title: 'Driver issue updated', message: `Issue marked ${status.toLowerCase()}.`, color: 'green' });
+      await updateDriverTourPackIssueStatus(db, {
+        departureKey: issue.departureKey,
+        driverId: issue.driverId,
+        issueId: issue.issueId,
+        status
+      });
+      notifications.show({
+        title: 'Driver issue updated',
+        message: `Issue marked ${status.toLowerCase()}.`,
+        color: 'green'
+      });
     } catch (error) {
-      notifications.show({ title: 'Issue update failed', message: error?.message || 'Could not update this driver issue.', color: 'red' });
+      notifications.show({
+        title: 'Issue update failed',
+        message: error?.message || 'Could not update this driver issue.',
+        color: 'red'
+      });
     } finally {
       setUpdatingIssueId(null);
     }
   };
 
   // Modal handlers
-  const handleEdit = (tourId) => {
+  const handleEdit = tourId => {
     setSelectedTourId(tourId);
     openEditModal();
   };
-
-  const handleDelete = (tourId) => {
+  const handleDelete = tourId => {
     setSelectedTourId(tourId);
     openDeleteModal();
   };
-
-  const handleViewDetails = (tourId) => {
+  const handleViewDetails = tourId => {
     setSelectedTourId(tourId);
     openDetailsModal();
   };
-
   const handleAddPassenger = (tourId = null) => {
     setSelectedTourId(tourId);
     openAddPassengerModal();
   };
-
-  const handleDuplicate = async (tourId) => {
+  const handleDuplicate = async tourId => {
     try {
       const result = await duplicateTour(tourId, 'admin');
       notifications.show({
         title: 'Tour Duplicated',
         message: `Created copy: ${result.id}`,
-        color: 'green',
+        color: 'green'
       });
     } catch (error) {
       notifications.show({
         title: 'Error',
         message: error.message,
-        color: 'red',
+        color: 'red'
       });
     }
   };
-
-  const handleTourCreated = (_tourId) => {
+  const handleTourCreated = _tourId => {
     setCurrentPage(1);
   };
-
-  const handlePassengerCreated = (result) => {
+  const handlePassengerCreated = result => {
     if (result?.tourId) {
       setSelectedTourId(result.tourId);
     }
   };
-
   const selectedTour = selectedTourId ? tours[selectedTourId] : null;
-
   if (loading) {
-    return (
-      <Center style={{ minHeight: 400 }}>
+    return <Center style={{
+      minHeight: 400
+    }}>
         <Stack align="center" gap="md">
           <Loader size="lg" color="brand" />
           <Text c="dimmed">Loading tours...</Text>
         </Stack>
-      </Center>
-    );
+      </Center>;
   }
-
-  return (
-    <Box>
-      {/* Header */}
-      <Group justify="space-between" mb="xl">
-        <div>
-          <Group gap="sm">
-            <Title order={2}>Tours Management</Title>
-            <Indicator color={syncStatus === 'connected' ? 'green' : syncStatus === 'syncing' ? 'orange' : 'red'} processing={syncStatus === 'syncing'}>
-              <Tooltip label={`Firebase: ${syncStatus}`}>
-                <ThemeIcon variant="light" color={syncStatus === 'connected' ? 'green' : 'orange'} size="sm">
-                  <IconRefresh size={14} />
-                </ThemeIcon>
-              </Tooltip>
-            </Indicator>
-          </Group>
-          <Text c="dimmed" size="sm">Create, edit, and manage tours with real-time Firebase sync</Text>
-        </div>
-        <Group gap="sm">
-          <Button variant="light" leftSection={<IconDatabaseExport size={16} />} onClick={openImportExportModal}>
-            Import/Export current date view
-          </Button>
-          <Button variant="light" leftSection={<IconUserPlus size={16} />} onClick={() => handleAddPassenger(null)}>
-            Add Passenger
-          </Button>
-          <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
-            Add Tour
-          </Button>
-        </Group>
-      </Group>
-
-      {/* How to Add Tours Help Section */}
-      <Card shadow="sm" padding="md" radius="md" withBorder mb="lg">
-        <Group justify="space-between" onClick={() => setHelpExpanded(!helpExpanded)} style={{ cursor: 'pointer' }}>
-          <Group gap="sm">
-            <ThemeIcon color="blue" variant="light" size="md">
-              <IconInfoCircle size={16} />
-            </ThemeIcon>
-            <div>
-              <Text fw={500}>How to Add Tours to Firebase</Text>
-              <Text size="xs" c="dimmed">Click to expand for instructions</Text>
-            </div>
-          </Group>
-          <ActionIcon variant="subtle">
-            {helpExpanded ? <IconChevronDown size={16} /> : <IconChevronRight size={16} />}
-          </ActionIcon>
-        </Group>
-
-        <Collapse in={helpExpanded}>
-          <Divider my="md" />
-          <SimpleGrid cols={{ base: 1, md: 3 }} spacing="md">
-            <Paper p="md" radius="md" bg="green.0">
-              <Group gap="xs" mb="sm">
-                <ThemeIcon color="green" variant="light" size="md">
-                  <IconPlus size={16} />
-                </ThemeIcon>
-                <Text fw={600}>Method 1: Manual Entry</Text>
-              </Group>
-              <Text size="sm" c="dimmed" mb="sm">
-                Click "Add Tour" and fill in tour details. Tour Code becomes the Firebase ID.
-              </Text>
-              <Code block>
-{`// Firebase path: /tours/{tourCode}
-{
-  "name": "Tour Name",
-  "tourCode": "5209L 16",
-  "days": 2,
-  "startDate": "09/10/2025",
-  "endDate": "10/10/2025",
-  "isActive": true,
-  "driverName": "TBA",
-  "maxParticipants": 53,
-  "currentParticipants": 0,
-  "pickupPoints": [...],
-  "itinerary": {...}
-}`}
-              </Code>
-            </Paper>
-
-            <Paper p="md" radius="md" bg="blue.0">
-              <Group gap="xs" mb="sm">
-                <ThemeIcon color="blue" variant="light" size="md">
-                  <IconTemplate size={16} />
-                </ThemeIcon>
-                <Text fw={600}>Method 2: Templates</Text>
-              </Group>
-              <Text size="sm" c="dimmed" mb="sm">
-                Use pre-configured templates with pickup points and itineraries already set up.
-              </Text>
-              <Text size="xs" c="dimmed">
-                Available: Loch Lomond, Highlands, Edinburgh
-              </Text>
-            </Paper>
-
-            <Paper p="md" radius="md" bg="orange.0">
-              <Group gap="xs" mb="sm">
-                <ThemeIcon color="orange" variant="light" size="md">
-                  <IconUpload size={16} />
-                </ThemeIcon>
-                <Text fw={600}>Method 3: CSV Import</Text>
-              </Group>
-              <Text size="sm" c="dimmed" mb="sm">
-                Import multiple tours from CSV. Columns: Tour Code, Name, Days, Start Date, End Date, etc.
-              </Text>
-              <Text size="xs" c="dimmed">
-                Use Export to get a template CSV
-              </Text>
-            </Paper>
-          </SimpleGrid>
-        </Collapse>
-      </Card>
-
-      {/* Stats Cards */}
-      <SimpleGrid cols={{ base: 2, sm: 3, md: 5 }} spacing="lg" mb="xl">
-        <Paper p="md" radius="md" withBorder className="stat-card">
-          <Group justify="space-between">
-            <div>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Tours in {filterDateScope} view</Text>
-              <Text size="xl" fw={700}>{totalTours}</Text>
-            </div>
-            <ThemeIcon color="brand" variant="light" size="xl" radius="md">
-              <IconMap size={24} />
-            </ThemeIcon>
-          </Group>
-        </Paper>
-        <Paper p="md" radius="md" withBorder className="stat-card">
-          <Group justify="space-between">
-            <div>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Assigned</Text>
-              <Text size="xl" fw={700} c="green">{assignedTours}</Text>
-            </div>
-            <ThemeIcon color="green" variant="light" size="xl" radius="md">
-              <IconCheck size={24} />
-            </ThemeIcon>
-          </Group>
-        </Paper>
-        <Paper p="md" radius="md" withBorder className="stat-card">
-          <Group justify="space-between">
-            <div>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Unassigned</Text>
-              <Text size="xl" fw={700} c="orange">{unassignedTours}</Text>
-            </div>
-            <ThemeIcon color="orange" variant="light" size="xl" radius="md">
-              <IconX size={24} />
-            </ThemeIcon>
-          </Group>
-        </Paper>
-        <Paper p="md" radius="md" withBorder className="stat-card">
-          <Group justify="space-between">
-            <div>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Active</Text>
-              <Text size="xl" fw={700} c="blue">{activeTours}</Text>
-            </div>
-            <ThemeIcon color="blue" variant="light" size="xl" radius="md">
-              <IconPlayerPlay size={24} />
-            </ThemeIcon>
-          </Group>
-        </Paper>
-        <Paper p="md" radius="md" withBorder className="stat-card">
-          <Group justify="space-between">
-            <div>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Participants</Text>
-              <Text size="xl" fw={700} c="grape">{totalParticipants}</Text>
-            </div>
-            <ThemeIcon color="grape" variant="light" size="xl" radius="md">
-              <IconUsers size={24} />
-            </ThemeIcon>
-          </Group>
-        </Paper>
-      </SimpleGrid>
-
-      {/* Filters */}
-      <Card shadow="sm" padding="md" radius="md" withBorder mb="lg">
-        <Group justify="space-between" wrap="wrap" gap="md">
-          <Group gap="md" wrap="wrap">
-            <TextInput
-              placeholder="Search tours, codes, drivers..."
-              leftSection={<IconSearch size={16} />}
-              value={searchTerm}
-              onChange={(e) => handleSearchTermChange(e.target.value)}
-              style={{ width: 280 }}
-            />
-            <Select
-              placeholder="Filter by status"
-              leftSection={<IconFilter size={16} />}
-              data={[
-                { value: 'all', label: 'All Tours' },
-                { value: 'assigned', label: 'Assigned' },
-                { value: 'unassigned', label: 'Unassigned (TBA)' },
-                { value: 'active', label: 'Active' },
-                { value: 'inactive', label: 'Inactive' },
-              ]}
-              value={filterStatus}
-              onChange={handleFilterStatusChange}
-              style={{ width: 180 }}
-              clearable={false}
-            />
-            <Select
-              placeholder="Filter by date"
-              leftSection={<IconCalendar size={16} />}
-              data={[
-                { value: 'current', label: 'Current & upcoming' },
-                { value: 'past', label: 'Past only' },
-                { value: 'all', label: 'All dates' },
-              ]}
-              value={filterDateScope}
-              onChange={handleDateScopeChange}
-              style={{ width: 210 }}
-              clearable={false}
-            />
-          </Group>
-          <Group gap="md">
-            <SegmentedControl
-              value={viewMode}
-              onChange={setViewMode}
-              data={[
-                { label: 'Grid', value: 'grid' },
-                { label: 'Table', value: 'table' },
-              ]}
-            />
-            <Text size="sm" c="dimmed">
-              Showing {paginatedTours.length} of {filteredTours.length} tours
-            </Text>
-          </Group>
-        </Group>
-      </Card>
-
-      {/* Tours Display */}
-      {tourWindow.atLimit ? (
-        <Alert color="yellow" icon={<IconAlertCircle size={16} />} mb="md">
-          This date view is capped at {tourWindow.limit} indexed tours. Refine the date/status filters before exporting or treating these totals as the complete archive.
-        </Alert>
-      ) : null}
-      {driverDirectoryAtLimit ? (
-        <Alert color="yellow" icon={<IconAlertCircle size={16} />} mb="md">
-          This screen keeps the first {500} drivers live for assignment coverage. Use the paged Drivers directory or an exact Driver ID search to manage drivers outside this live window.
-        </Alert>
-      ) : null}
-      {packStatusSnapshot.atLimit ? (
-        <Alert color="yellow" icon={<IconAlertCircle size={16} />} mb="md">
-          Driver Pack status view is capped at the most recent {packStatusSnapshot.limit} departures. Older tours may show Pack unavailable; use the management publication history before treating that as a current failure.
-        </Alert>
-      ) : null}
-      {packOperationsSnapshot.atLimit ? (
-        <Alert color="yellow" icon={<IconAlertCircle size={16} />} mb="md">
-          One or more visible departures reached the bounded operations-issue limit. The list is prioritised by unresolved severity and newest update; use the Driver Command Centre audit source before treating it as exhaustive.
-        </Alert>
-      ) : null}
-      {filteredTours.length === 0 ? (
-        <Card shadow="sm" padding="xl" radius="md" withBorder>
-          <Center>
-            <Stack align="center" gap="md">
-              <ThemeIcon color="gray" variant="light" size={60} radius="xl">
-                <IconMap size={30} />
-              </ThemeIcon>
-              <Text c="dimmed" ta="center">
-                {totalTours === 0
-                  ? 'No tours yet. Click "Add Tour" to create your first tour.'
-                  : 'No tours found matching your criteria'}
-              </Text>
-              {totalTours === 0 && (
-                <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
-                  Create First Tour
-                </Button>
-              )}
-            </Stack>
-          </Center>
-        </Card>
-      ) : viewMode === 'grid' ? (
-        <SimpleGrid cols={{ base: 1, sm: 2, md: 3, lg: 4 }} spacing="lg">
-          {paginatedTours.map(([id, tour]) => (
-            <TourCard
-              key={id}
-              tourId={id}
-              tour={tour}
-              drivers={drivers}
-              packCoverage={packCoverageByTour[id]}
-              packOperations={packOperationsByTour[id]}
-              onIssueStatus={handleIssueStatus}
-              updatingIssueId={updatingIssueId}
-              onEdit={handleEdit}
-              onDelete={handleDelete}
-              onDuplicate={handleDuplicate}
-              onViewDetails={handleViewDetails}
-              onAddPassenger={handleAddPassenger}
-            />
-          ))}
-        </SimpleGrid>
-      ) : (
-        <Card shadow="sm" padding="md" radius="md" withBorder>
-          <ScrollArea>
-            <Table striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Tour</Table.Th>
-                  <Table.Th>Code</Table.Th>
-                  <Table.Th>Days</Table.Th>
-                  <Table.Th>Dates</Table.Th>
-                  <Table.Th>Driver</Table.Th>
-                  <Table.Th>Capacity</Table.Th>
-                  <Table.Th>Status</Table.Th>
-                  <Table.Th>Driver pack</Table.Th>
-                  <Table.Th>Live operations</Table.Th>
-                  <Table.Th>Actions</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {paginatedTours.map(([id, tour]) => {
-                  const isAssigned = tour.driverName && tour.driverName !== 'TBA';
-
-                  return (
-                    <Table.Tr key={id} className="table-row-clickable" onClick={() => handleViewDetails(id)}>
-                      <Table.Td>
-                        <Group gap="xs">
-                          <ThemeIcon color="brand" variant="light" size="sm">
-                            <IconMap size={12} />
-                          </ThemeIcon>
-                          <Text fw={500} size="sm" truncate="end" style={{ maxWidth: 200 }}>
-                            {tour.name || id}
-                          </Text>
-                        </Group>
-                      </Table.Td>
-                      <Table.Td>
-                        <Code>{tour.tourCode || id}</Code>
-                      </Table.Td>
-                      <Table.Td>
-                        <Badge variant="light" size="sm">
-                          {tour.days || 1} day{(tour.days || 1) > 1 ? 's' : ''}
-                        </Badge>
-                      </Table.Td>
-                      <Table.Td>
-                        <Text size="sm" c="dimmed">{formatDateForDisplay(tour.startDate)}</Text>
-                      </Table.Td>
-                      <Table.Td>
-                        <Group gap="xs">
-                          <Avatar size="xs" radius="xl" color={isAssigned ? 'brand' : 'gray'}>
-                            {tour.driverName?.charAt(0) || '?'}
-                          </Avatar>
-                          <Text size="sm">{tour.driverName || 'TBA'}</Text>
-                        </Group>
-                      </Table.Td>
-                      <Table.Td>
-                        <Text size="sm">{tour.currentParticipants || 0}/{tour.maxParticipants || 53}</Text>
-                      </Table.Td>
-                      <Table.Td>
-                        <Badge variant="light" color={tour.isActive ? 'green' : 'gray'} size="sm">
-                          {tour.isActive ? 'Active' : 'Inactive'}
-                        </Badge>
-                      </Table.Td>
-                      <Table.Td><TourPackStatus coverage={packCoverageByTour[id]} /></Table.Td>
-                      <Table.Td><DriverPackOperations operations={packOperationsByTour[id]} onIssueStatus={handleIssueStatus} updatingIssueId={updatingIssueId} /></Table.Td>
-                      <Table.Td onClick={(e) => e.stopPropagation()}>
-                        <Group gap="xs">
-                          <Tooltip label="View Details">
-                            <ActionIcon variant="light" color="brand" onClick={() => handleViewDetails(id)}>
-                              <IconEye size={14} />
-                            </ActionIcon>
-                          </Tooltip>
-                          <Tooltip label="Edit">
-                            <ActionIcon variant="light" color="blue" onClick={() => handleEdit(id)}>
-                              <IconEdit size={14} />
-                            </ActionIcon>
-                          </Tooltip>
-                          <Tooltip label="Add Passenger">
-                            <ActionIcon variant="light" color="green" onClick={() => handleAddPassenger(id)}>
-                              <IconUserPlus size={14} />
-                            </ActionIcon>
-                          </Tooltip>
-                          <Tooltip label="Delete">
-                            <ActionIcon variant="light" color="red" onClick={() => handleDelete(id)}>
-                              <IconTrash size={14} />
-                            </ActionIcon>
-                          </Tooltip>
-                        </Group>
-                      </Table.Td>
-                    </Table.Tr>
-                  );
-                })}
-              </Table.Tbody>
-            </Table>
-          </ScrollArea>
-        </Card>
-      )}
-
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <Center mt="xl">
-          <Pagination
-            total={totalPages}
-            value={currentPage}
-            onChange={setCurrentPage}
-            size="md"
-            radius="md"
-          />
-        </Center>
-      )}
-
-      {/* Modals */}
-      <CreateTourModal
-        opened={createModalOpened}
-        onClose={closeCreateModal}
-        onSuccess={handleTourCreated}
-        userEmail="admin"
-      />
-
-      {editModalOpened && (
-        <EditTourModal
-          key={selectedTourId || 'new-selection'}
-          opened={editModalOpened}
-          onClose={closeEditModal}
-          tourId={selectedTourId}
-          tour={selectedTour}
-          onSuccess={() => {}}
-        />
-      )}
-
-      <DeleteTourModal
-        opened={deleteModalOpened}
-        onClose={closeDeleteModal}
-        tourId={selectedTourId}
-        tourName={selectedTour?.name}
-        onConfirm={() => setSelectedTourId(null)}
-      />
-
-      <TourDetailsModal
-        opened={detailsModalOpened}
-        onClose={closeDetailsModal}
-        tourId={selectedTourId}
-        tour={selectedTour}
-      />
-
-      <AddPassengerModal
-        opened={addPassengerModalOpened}
-        onClose={closeAddPassengerModal}
-        tours={tours}
-        initialTourId={selectedTourId || ''}
-        onSuccess={handlePassengerCreated}
-      />
-
-      <ImportExportModal
-        opened={importExportModalOpened}
-        onClose={closeImportExportModal}
-        tours={tours}
-        drivers={drivers}
-        dateScope={filterDateScope}
-        onImportSuccess={() => {}}
-      />
-    </Box>
-  );
+  return <ToursManagerView {...{
+    activeTours,
+    addPassengerModalOpened,
+    assignedTours,
+    closeAddPassengerModal,
+    closeCreateModal,
+    closeDeleteModal,
+    closeDetailsModal,
+    closeEditModal,
+    closeImportExportModal,
+    createModalOpened,
+    currentPage,
+    deleteModalOpened,
+    detailsModalOpened,
+    driverDirectoryAtLimit,
+    drivers,
+    editModalOpened,
+    filterDateScope,
+    filterStatus,
+    filteredTours,
+    handleAddPassenger,
+    handleDateScopeChange,
+    handleDelete,
+    handleDuplicate,
+    handleEdit,
+    handleFilterStatusChange,
+    handleIssueStatus,
+    handlePassengerCreated,
+    handleSearchTermChange,
+    handleTourCreated,
+    handleViewDetails,
+    helpExpanded,
+    importExportModalOpened,
+    openCreateModal,
+    openImportExportModal,
+    packCoverageByTour,
+    packOperationsByTour,
+    packOperationsSnapshot,
+    packStatusSnapshot,
+    paginatedTours,
+    searchTerm,
+    selectedTour,
+    selectedTourId,
+    setCurrentPage,
+    setHelpExpanded,
+    setSelectedTourId,
+    setViewMode,
+    syncStatus,
+    totalPages,
+    totalParticipants,
+    totalTours,
+    tourWindow,
+    tours,
+    unassignedTours,
+    updatingIssueId,
+    viewMode
+  }} />;
 }
