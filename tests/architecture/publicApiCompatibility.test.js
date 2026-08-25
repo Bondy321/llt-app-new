@@ -14,6 +14,13 @@ const { isOpaquePassengerId } = require('../../functions/lib/passengerIdentity')
 const { createAppSessionId, isValidAppSessionId } = require('../../functions/lib/appSession');
 
 const repositoryRoot = path.resolve(__dirname, '../..');
+const readJavaScriptTree = (directory) => fs.readdirSync(directory, { withFileTypes: true })
+  .flatMap((entry) => {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) return readJavaScriptTree(entryPath);
+    return entry.isFile() && entry.name.endsWith('.js') ? [fs.readFileSync(entryPath, 'utf8')] : [];
+  })
+  .join('\n');
 const EXPECTED_FUNCTION_EXPORTS = [
   '__testables',
   'assignDriverToTour',
@@ -208,7 +215,10 @@ test('opaque passenger, app-session, and media identity formats reject credentia
 });
 
 test('high-value HTTP reason codes remain represented at the backend boundary', () => {
-  const source = fs.readFileSync(path.join(repositoryRoot, 'functions/index.js'), 'utf8');
+  const source = [
+    fs.readFileSync(path.join(repositoryRoot, 'functions/index.js'), 'utf8'),
+    readJavaScriptTree(path.join(repositoryRoot, 'functions/src')),
+  ].join('\n');
   const expectedReasonCodes = [
     'APP_CHECK_REQUIRED', 'ASSIGNMENT_IN_PROGRESS', 'DELETE_IN_PROGRESS', 'DRIVER_ALREADY_LINKED',
     'DRIVER_NOT_FOUND', 'ENDED', 'EVENT_ID_CONFLICT', 'IDENTITY_INCOMPLETE', 'IDEMPOTENCY_CONFLICT',

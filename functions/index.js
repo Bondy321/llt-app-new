@@ -22,6 +22,62 @@ const {
   isExpoPushToken,
 } = require('./src/infrastructure/notifications/expoPushClient');
 const { createPhotoVariantBuffers } = require('./src/infrastructure/storage/mediaProcessor');
+const { isValidFirebaseKey } = require('./src/infrastructure/database/firebaseKey');
+const { getBearerToken, verifyRequestAuthUid } = require('./src/infrastructure/auth/requestAuth');
+const { authorizeAppSessionMobileRequest } = require('./src/infrastructure/auth/appSessionRequestAuth');
+const { applyAuthenticatedCors, isAllowedAdminOrigin } = require('./src/infrastructure/http/adminCors');
+const { verifyOperationsAdminAccess } = require('./src/domains/administration/adminAuthorization');
+const {
+  buildCanonicalSafetyRecord,
+  buildSafetySubmissionUpdates,
+  createSafetySubmissionError,
+  normalizeSafetyCoordinate,
+  normalizeSafetySubmissionInput,
+} = require('./src/domains/safety/safetySubmission');
+const {
+  buildPhotoCollectionPath,
+  buildPhotoVariantPaths,
+  generatePhotoVariantsForRecord,
+  hardenGroupSourceObjectMetadata,
+  hardenPrivateSourceObjectMetadata,
+  parseSourcePhotoPath,
+} = require('./src/domains/media/photoVariants');
+const {
+  enforceGroupMediaAppCheck,
+  GROUP_MEDIA_ALLOWED_TYPES,
+  GROUP_MEDIA_MAX_UPLOAD_BYTES,
+  GROUP_MEDIA_URL_TTL_MS,
+  isGroupMediaPathForRecord,
+  isPrivateMediaPathForRecord,
+  normalizeGroupMediaRequest,
+  normalizePrivateMediaRequest,
+  PRIVATE_MEDIA_URL_TTL_MS,
+  readGroupMediaRecords,
+  readPrivateMediaRecords,
+  signGroupMediaRecords,
+  signPrivateMediaRecords,
+  verifyCurrentTourPhotoAccess,
+} = require('./src/domains/media/mediaAccess');
+const privateMediaFunctions = require('./src/domains/media/privateMediaFunctions');
+const groupMediaFunctions = require('./src/domains/media/groupMediaFunctions');
+const {
+  extensionForGroupPhotoContentType,
+  normalizeGroupPhotoUploadMetadata,
+  reserveGroupPhotoRecord,
+} = groupMediaFunctions;
+const {
+  createGroupPhotoChatMessage,
+  deleteGroupPhoto,
+  resolveGroupPhotoMedia,
+  uploadGroupPhoto,
+} = groupMediaFunctions;
+const {
+  deletePrivatePhoto,
+  normalizePrivatePhotoUploadMetadata,
+  reservePrivatePhotoRecord,
+  resolvePrivatePhotoMedia,
+  uploadPrivatePhoto,
+} = privateMediaFunctions;
 const {
   applyRecipientCap,
   buildChatNotificationContent,
@@ -203,175 +259,6 @@ const compactNotificationText = (value, maxLength = 220) => {
   return `${compact.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 };
 
-const parseSourcePhotoPath = (objectPath = "") => {
-  const groupMatch = objectPath.match(/^group_tour_photos\/([^/]+)\/([^/]+)$/);
-  if (groupMatch) {
-    return {
-      visibility: "group",
-      tourId: groupMatch[1],
-      ownerKey: null,
-      filename: groupMatch[2],
-    };
-  }
-
-  const privateMatch = objectPath.match(/^private_tour_photos\/([^/]+)\/([^/]+)\/([^/]+)$/);
-  if (privateMatch) {
-    return {
-      visibility: "private",
-      tourId: privateMatch[1],
-      ownerKey: privateMatch[2],
-      filename: privateMatch[3],
-    };
-  }
-
-  return null;
-};
-
-const buildPhotoCollectionPath = ({ visibility, tourId, ownerKey }) => {
-  if (visibility === "private") {
-    return `private_tour_photos/${tourId}/${ownerKey}`;
-  }
-  return `group_tour_photos/${tourId}`;
-};
-
-const buildPhotoVariantPaths = ({ visibility, tourId, ownerKey, filename }) => {
-  const extensionlessName = filename.replace(/\.[^/.]+$/, "");
-  const viewerPath = visibility === "private"
-    ? `private_tour_photos/${tourId}/${ownerKey}/viewers/${extensionlessName}_viewer.jpg`
-    : `group_tour_photos/${tourId}/viewers/${extensionlessName}_viewer.jpg`;
-  const thumbnailPath = visibility === "private"
-    ? `private_tour_photos/${tourId}/${ownerKey}/thumbnails/${extensionlessName}_thumb.jpg`
-    : `group_tour_photos/${tourId}/thumbnails/${extensionlessName}_thumb.jpg`;
-
-  return { viewerPath, thumbnailPath };
-};
-
-const hardenPrivateSourceObjectMetadata = async (sourceFile, suppliedObjectMetadata = null) => {
-  const objectMetadata = suppliedObjectMetadata || (await sourceFile.getMetadata())[0];
-  const current = objectMetadata?.metadata || {};
-  await sourceFile.setMetadata({
-    metadata: {
-      ...(typeof current.authUid === 'string' && current.authUid ? { authUid: current.authUid } : {}),
-      visibility: 'private',
-      sourceRole: 'source',
-      firebaseStorageDownloadTokens: null,
-    },
-  });
-};
-
-const hardenGroupSourceObjectMetadata = async (sourceFile) => {
-  await sourceFile.setMetadata({
-    metadata: {
-      visibility: 'group',
-      sourceRole: 'source',
-      firebaseStorageDownloadTokens: null,
-    },
-  });
-};
-
-const generatePhotoVariantsForRecord = async ({
-  bucketName,
-  visibility,
-  tourId,
-  ownerKey = null,
-  photoId,
-  photoRecord,
-  dryRun = false,
-  storageBucket = null,
-  dbRoot = null,
-}) => {
-  const objectPath = typeof photoRecord?.storagePath === "string" ? photoRecord.storagePath : "";
-  if (!bucketName || !objectPath || !photoId || !tourId) {
-    return { status: "skipped", reason: "missing-required-fields" };
-  }
-
-  const filename = objectPath.split("/").pop();
-  if (!filename) {
-    return { status: "skipped", reason: "missing-filename" };
-  }
-
-  const { viewerPath, thumbnailPath } = buildPhotoVariantPaths({
-    visibility,
-    tourId,
-    ownerKey,
-    filename,
-  });
-
-  if (dryRun) {
-    return {
-      status: "dry-run",
-      photoId,
-      objectPath,
-      viewerPath,
-      thumbnailPath,
-    };
-  }
-
-  const resolvedDbRoot = dbRoot || admin.database().ref(buildPhotoCollectionPath({ visibility, tourId, ownerKey }));
-  const resolvedBucket = storageBucket || admin.storage().bucket(bucketName);
-
-  try {
-    const sourceFile = resolvedBucket.file(objectPath);
-    const [sourceBuffer] = await sourceFile.download();
-    const [sourceObjectMetadata] = await sourceFile.getMetadata();
-    if (visibility === 'private') await hardenPrivateSourceObjectMetadata(sourceFile, sourceObjectMetadata);
-    else await hardenGroupSourceObjectMetadata(sourceFile);
-    const { viewerBuffer, thumbnailBuffer } = await createPhotoVariantBuffers(sourceBuffer);
-    await Promise.all([
-      resolvedBucket.file(viewerPath).save(viewerBuffer, {
-        metadata: {
-          contentType: "image/jpeg",
-          cacheControl: PHOTO_CACHE_CONTROL_HEADER,
-          metadata: {
-            ...(visibility === 'private'
-              ? { visibility: 'private', sourceRole: 'viewer' }
-              : { visibility: 'group', sourceRole: 'viewer' }),
-          },
-        },
-      }),
-      resolvedBucket.file(thumbnailPath).save(thumbnailBuffer, {
-        metadata: {
-          contentType: "image/jpeg",
-          cacheControl: PHOTO_CACHE_CONTROL_HEADER,
-          metadata: {
-            ...(visibility === 'private'
-              ? { visibility: 'private', sourceRole: 'thumbnail' }
-              : { visibility: 'group', sourceRole: 'thumbnail' }),
-          },
-        },
-      }),
-    ]);
-
-    await resolvedDbRoot.child(photoId).update({
-      viewerUrl: null,
-      viewerStoragePath: viewerPath,
-      thumbnailUrl: null,
-      thumbnailStoragePath: thumbnailPath,
-      variantStatus: "ready",
-      variantUpdatedAt: Date.now(),
-      variantError: null,
-    });
-
-    return { status: "ready", photoId, viewerPath, thumbnailPath };
-  } catch (error) {
-    await resolvedDbRoot.child(photoId).update({
-      variantStatus: "failed",
-      variantUpdatedAt: Date.now(),
-      variantError: error?.message || "Variant generation failed",
-    });
-
-    return {
-      status: "failed",
-      photoId,
-      error: error?.message || "Variant generation failed",
-    };
-  }
-};
-
-/**
- * Verifies that an admin broadcast is legitimate by checking the senderUid.
- * Rejects messages that claim admin status without a verified non-anonymous auth UID.
- */
 const verifyAdminBroadcast = async (messageData) => {
   const { senderUid } = messageData;
 
@@ -403,142 +290,6 @@ const verifyAdminBroadcast = async (messageData) => {
 /**
  * Validates a Firebase path segment to prevent path traversal attacks.
  * Firebase keys cannot contain '.', '$', '#', '[', ']', or '/'.
- */
-const isValidFirebaseKey = (key) => {
-  if (!key || typeof key !== 'string' || key.trim().length === 0) {
-    return false;
-  }
-  // Firebase keys cannot contain these characters
-  return !/[./$#\[\]]/.test(key);
-};
-
-const createSafetySubmissionError = (code, message = code) => {
-  const error = new Error(message);
-  error.code = code;
-  return error;
-};
-
-const normalizeSafetyCoordinate = (value, minimum, maximum) => {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) && numeric >= minimum && numeric <= maximum
-    ? numeric
-    : null;
-};
-
-const normalizeSafetySubmissionInput = (input = {}, nowMs = Date.now()) => {
-  const clientEventId = resolveTrimmedString(input.clientEventId);
-  const tourId = normalizeTourKeyForComparison(input.tourId);
-  const role = resolveTrimmedString(input.role)?.toLowerCase();
-  const category = resolveTrimmedString(input.category)?.toLowerCase();
-  const requestedSeverity = resolveTrimmedString(input.severity)?.toLowerCase() || 'medium';
-  const message = resolveTrimmedString(input.message);
-  const customMessage = resolveTrimmedString(input.customMessage);
-  const clientCreatedAtMs = Number(input.clientCreatedAtMs);
-
-  if (!clientEventId || clientEventId.length > 160 || !isValidFirebaseKey(clientEventId)) {
-    throw createSafetySubmissionError('INVALID_EVENT_ID');
-  }
-  if (!tourId || tourId.length > 160 || !isValidFirebaseKey(tourId)) {
-    throw createSafetySubmissionError('INVALID_TOUR');
-  }
-  if (role !== 'passenger' && role !== 'driver') {
-    throw createSafetySubmissionError('INVALID_ROLE');
-  }
-  if (!SAFETY_CATEGORIES.has(category)) {
-    throw createSafetySubmissionError('INVALID_CATEGORY');
-  }
-  if (!SAFETY_SEVERITIES.has(requestedSeverity)) {
-    throw createSafetySubmissionError('INVALID_SEVERITY');
-  }
-  if (!message || message.length > 240) {
-    throw createSafetySubmissionError('INVALID_MESSAGE');
-  }
-  if (customMessage && customMessage.length > 1000) {
-    throw createSafetySubmissionError('INVALID_DETAILS');
-  }
-  if (
-    !Number.isFinite(clientCreatedAtMs)
-    || clientCreatedAtMs < Date.UTC(2020, 0, 1)
-    || clientCreatedAtMs > nowMs + 5 * 60 * 1000
-  ) {
-    throw createSafetySubmissionError('INVALID_CLIENT_TIME');
-  }
-
-  let coords = null;
-  if (input.coords !== null && input.coords !== undefined) {
-    const latitude = normalizeSafetyCoordinate(input.coords?.latitude, -90, 90);
-    const longitude = normalizeSafetyCoordinate(input.coords?.longitude, -180, 180);
-    const accuracy = Number(input.coords?.accuracy);
-    if (latitude === null || longitude === null || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > 100000) {
-      throw createSafetySubmissionError('INVALID_LOCATION');
-    }
-    coords = { latitude, longitude, accuracy };
-  }
-
-  const isSOS = category === 'sos';
-  const severity = isSOS ? 'critical' : requestedSeverity;
-  if (input.isSOS === true && !isSOS) {
-    throw createSafetySubmissionError('INVALID_SOS_STATE');
-  }
-
-  return {
-    clientEventId,
-    tourId,
-    role,
-    category,
-    severity,
-    message,
-    customMessage,
-    coords,
-    isSOS,
-    clientCreatedAtMs,
-    processedFromQueue: input.processedFromQueue === true,
-  };
-};
-
-const buildCanonicalSafetyRecord = ({ input, authUid, principalId, nowMs = Date.now() }) => ({
-  schemaVersion: 2,
-  eventId: input.clientEventId,
-  clientEventId: input.clientEventId,
-  tourId: input.tourId,
-  reporterAuthUid: authUid,
-  userId: authUid,
-  principalId,
-  role: input.role,
-  category: input.category,
-  severity: input.severity,
-  message: input.message,
-  customMessage: input.customMessage,
-  coords: input.coords,
-  isSOS: input.isSOS,
-  status: 'pending',
-  timestamp: new Date(nowMs).toISOString(),
-  timestampMs: nowMs,
-  clientCreatedAt: new Date(input.clientCreatedAtMs).toISOString(),
-  clientCreatedAtMs: input.clientCreatedAtMs,
-  receivedAt: new Date(nowMs).toISOString(),
-  receivedAtMs: nowMs,
-  processedFromQueue: input.processedFromQueue,
-});
-
-const buildSafetySubmissionUpdates = ({ record, lockPath }) => {
-  const eventId = record.eventId;
-  const updates = {
-    [`logs/${record.reporterAuthUid}/safety/${eventId}`]: record,
-    [`tours/${record.tourId}/safetyAlerts/${eventId}`]: record,
-    [lockPath]: null,
-  };
-  if (record.isSOS || record.severity === 'critical') {
-    updates[`globalSafetyAlerts/${eventId}`] = {
-      ...record,
-      tourAlertId: `tours/${record.tourId}/safetyAlerts/${eventId}`,
-    };
-  }
-  return updates;
-};
-
-/**
- * Rate limiting check (simple implementation)
  */
 const rateLimitCache = new Map();
 const RATE_LIMIT_MAINTENANCE_INTERVAL_MS = 300000;
@@ -881,50 +632,6 @@ const buildManualPassengerBookingUpdates = ({
 
 };
 
-const verifyOperationsAdminAccess = async ({ authUid, db = admin.database() }) => {
-  if (!isValidFirebaseKey(authUid)) return false;
-  if (authUid === OPERATIONS_ADMIN_UID) return true;
-  const snapshot = await db.ref(`admin_users/${authUid}`).once('value');
-  return snapshot.val() === true;
-};
-
-const DEFAULT_ADMIN_PORTAL_ORIGINS = new Set([
-  'https://loch-lomond-travel-admin.web.app',
-  'https://loch-lomond-travel-admin.firebaseapp.com',
-]);
-
-const isAllowedAdminOrigin = (origin, configuredOrigins = process.env.ADMIN_PORTAL_ALLOWED_ORIGINS) => {
-  if (!origin) return true;
-  let parsedOrigin;
-  try {
-    parsedOrigin = new URL(origin);
-  } catch {
-    return false;
-  }
-  if (parsedOrigin.origin !== origin || !['http:', 'https:'].includes(parsedOrigin.protocol)) return false;
-  if (
-    parsedOrigin.protocol === 'http:'
-    && ['localhost', '127.0.0.1'].includes(parsedOrigin.hostname)
-  ) return true;
-
-  const extraOrigins = String(configuredOrigins || '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-  return DEFAULT_ADMIN_PORTAL_ORIGINS.has(parsedOrigin.origin) || extraOrigins.includes(parsedOrigin.origin);
-};
-
-const applyAuthenticatedCors = (req, res) => {
-  const requestOrigin = typeof req.headers?.origin === 'string' ? req.headers.origin.trim() : '';
-  const allowed = isAllowedAdminOrigin(requestOrigin);
-  if (requestOrigin && allowed) res.set('Access-Control-Allow-Origin', requestOrigin);
-  res.set('Vary', 'Origin');
-  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-  res.set('Access-Control-Max-Age', '3600');
-  return allowed;
-};
-
 const deleteStoragePrefixes = async ({ bucket = admin.storage().bucket(), prefixes = [] }) => {
   let deleted = 0;
   for (const prefix of [...new Set(prefixes.filter(Boolean))]) {
@@ -1079,37 +786,6 @@ const cleanupInvalidTokens = async (invalidTokens = [], remover = removeInvalidT
     });
   }
   return { attempted: results.length, failed: failed.length };
-};
-
-const getBearerToken = (req) => {
-  const headerValue = req.headers?.authorization || req.headers?.Authorization;
-  if (typeof headerValue !== 'string') return null;
-
-  const match = headerValue.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : null;
-};
-
-const verifyRequestAuthUid = async (req) => {
-  const token = getBearerToken(req);
-  if (!token) {
-    return { success: false, reason: 'AUTH_TOKEN_MISSING' };
-  }
-
-  try {
-    const decoded = await admin.auth().verifyIdToken(token);
-    const uid = typeof decoded?.uid === 'string' ? decoded.uid.trim() : '';
-    if (!uid || !isValidFirebaseKey(uid)) {
-      return { success: false, reason: 'AUTH_UID_INVALID' };
-    }
-
-    return { success: true, uid, claims: decoded };
-  } catch (error) {
-    log.warn('Request auth token verification failed', {
-      reason: error?.code || 'AUTH_TOKEN_INVALID',
-      error: error?.message || String(error),
-    });
-    return { success: false, reason: 'AUTH_TOKEN_INVALID' };
-  }
 };
 
 const resolveSafetyReporterAccess = async ({ db, authUid, tourId, requestedRole }) => {
@@ -1810,568 +1486,6 @@ const getTrustedRequestNetworkKey = (req) => {
     : chain[0] || req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || 'unknown';
   return String(platformAddress).trim().slice(0, 128) || 'unknown';
 };
-
-const PRIVATE_MEDIA_BATCH_LIMIT = 50;
-const PRIVATE_MEDIA_URL_TTL_MS = 5 * 60 * 1000;
-const GROUP_MEDIA_BATCH_LIMIT = 50;
-const GROUP_MEDIA_URL_TTL_MS = 5 * 60 * 1000;
-const GROUP_MEDIA_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
-const GROUP_MEDIA_ALLOWED_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic']);
-
-const normalizePrivateMediaRequest = (body = {}) => {
-  const tourId = normalizeTourKeyForComparison(body.tourId);
-  const ownerKey = resolveTrimmedString(body.ownerKey);
-  const photoIds = Array.isArray(body.photoIds)
-    ? [...new Set(body.photoIds.map(resolveTrimmedString).filter(Boolean))]
-    : [];
-  if (!tourId || !ownerKey || !isValidFirebaseKey(ownerKey) || photoIds.length < 1
-    || photoIds.length > PRIVATE_MEDIA_BATCH_LIMIT || photoIds.some((id) => !isValidFirebaseKey(id))) {
-    return null;
-  }
-  return { tourId, ownerKey, photoIds };
-};
-
-const isPrivateMediaPathForRecord = ({ path, tourId, ownerKey }) => {
-  const normalized = resolveTrimmedString(path);
-  return Boolean(normalized && normalized.startsWith(`private_tour_photos/${tourId}/${ownerKey}/`)
-    && !normalized.includes('..'));
-};
-
-const PRIVATE_MEDIA_READ_CONCURRENCY = 8;
-const readPrivateMediaRecords = async ({ db, tourId, ownerKey, photoIds, concurrency = PRIVATE_MEDIA_READ_CONCURRENCY }) => {
-  const records = {};
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, photoIds.length) }, async () => {
-    while (nextIndex < photoIds.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const photoId = photoIds[index];
-      const snapshot = await db.ref(`private_tour_photos/${tourId}/${ownerKey}/${photoId}`).once('value');
-      if (snapshot.exists()) records[photoId] = snapshot.val();
-    }
-  });
-  await Promise.all(workers);
-  return records;
-};
-
-const signPrivateMediaRecords = async ({
-  bucket,
-  input,
-  records,
-  expires,
-  concurrency = PRIVATE_MEDIA_READ_CONCURRENCY,
-}) => {
-  const media = {};
-  const tasks = input.photoIds.flatMap((photoId) => {
-    const record = records[photoId];
-    if (!record) return [];
-    const fields = [
-      ['sourceUrl', record.storagePath],
-      ['viewerUrl', record.viewerStoragePath],
-      ['thumbnailUrl', record.thumbnailStoragePath],
-    ];
-    return fields
-      .filter(([, objectPath]) => isPrivateMediaPathForRecord({ path: objectPath, ...input }))
-      .map(([field, objectPath]) => ({ photoId, field, objectPath }));
-  });
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
-    while (nextIndex < tasks.length) {
-      const task = tasks[nextIndex];
-      nextIndex += 1;
-      const [url] = await bucket.file(task.objectPath).getSignedUrl({ action: 'read', expires });
-      if (!media[task.photoId]) media[task.photoId] = {};
-      media[task.photoId][task.field] = url;
-    }
-  });
-  await Promise.all(workers);
-  return media;
-};
-
-const verifyCurrentTourPhotoAccess = async ({ db, authUid, tourId }) => {
-  if (!isValidFirebaseKey(authUid) || !isValidFirebaseKey(tourId)) {
-    return { allowed: false, reason: 'INVALID_INPUT' };
-  }
-  const [tourSnapshot, adminSnapshot] = await Promise.all([
-    db.ref(`tours/${tourId}`).once('value'),
-    db.ref(`admin_users/${authUid}`).once('value'),
-  ]);
-  if (!tourSnapshot.exists()) return { allowed: false, reason: 'NOT_FOUND' };
-  if (authUid === OPERATIONS_ADMIN_UID || adminSnapshot.val() === true) {
-    return { allowed: true, role: 'admin', principalId: authUid };
-  }
-  const access = await verifyActiveAppSession({ db, authUid, expectedTourId: tourId });
-  if (!access.allowed) return { allowed: false, reason: access.reason };
-  return {
-    allowed: true,
-    role: access.role === 'driver' ? 'assigned_driver' : 'passenger',
-    principalId: access.principalId,
-    driverId: access.driverId,
-    session: access.session,
-  };
-};
-
-const enforceGroupMediaAppCheck = async (req, env = process.env, appCheck = admin.appCheck()) => {
-  if (env.REQUIRE_APP_CHECK_FOR_GROUP_MEDIA === 'false') return true;
-  const required = env.REQUIRE_APP_CHECK_FOR_GROUP_MEDIA === 'true'
-    || env.REQUIRE_APP_CHECK_FOR_LOGIN === 'true';
-  if (!required && !isDeployedFunctionsRuntime(env)) return true;
-  if (!required && isDeployedFunctionsRuntime(env)) {
-    const error = new Error('Production group media App Check enforcement is not configured');
-    error.code = 'GROUP_MEDIA_APP_CHECK_CONFIGURATION_REQUIRED';
-    throw error;
-  }
-  const token = req.headers['x-firebase-appcheck'];
-  if (typeof token !== 'string' || !token.trim()) return false;
-  try {
-    await appCheck.verifyToken(token.trim());
-    return true;
-  } catch (error) {
-    return false;
-  }
-};
-
-const normalizeGroupMediaRequest = (body = {}) => {
-  const tourId = normalizeTourKeyForComparison(body.tourId);
-  const photoIds = Array.isArray(body.photoIds)
-    ? [...new Set(body.photoIds.map(resolveTrimmedString).filter(Boolean))]
-    : [];
-  if (!tourId || !isValidFirebaseKey(tourId) || photoIds.length < 1
-    || photoIds.length > GROUP_MEDIA_BATCH_LIMIT || photoIds.some((id) => !isValidFirebaseKey(id))) {
-    return null;
-  }
-  return { tourId, photoIds };
-};
-
-const isGroupMediaPathForRecord = ({ path, tourId }) => {
-  const normalized = resolveTrimmedString(path);
-  return Boolean(normalized && normalized.startsWith(`group_tour_photos/${tourId}/`)
-    && !normalized.includes('..'));
-};
-
-const readGroupMediaRecords = async ({ db, tourId, photoIds, concurrency = PRIVATE_MEDIA_READ_CONCURRENCY }) => {
-  const records = {};
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, photoIds.length) }, async () => {
-    while (nextIndex < photoIds.length) {
-      const photoId = photoIds[nextIndex];
-      nextIndex += 1;
-      const snapshot = await db.ref(`group_tour_photos/${tourId}/${photoId}`).once('value');
-      if (snapshot.exists()) records[photoId] = snapshot.val();
-    }
-  });
-  await Promise.all(workers);
-  return records;
-};
-
-const signGroupMediaRecords = async ({ bucket, input, records, expires, concurrency = PRIVATE_MEDIA_READ_CONCURRENCY }) => {
-  const media = {};
-  const tasks = input.photoIds.flatMap((photoId) => {
-    const record = records[photoId];
-    if (!record) return [];
-    return [
-      ['sourceUrl', record.storagePath],
-      ['viewerUrl', record.viewerStoragePath],
-      ['thumbnailUrl', record.thumbnailStoragePath],
-    ].filter(([, objectPath]) => isGroupMediaPathForRecord({ path: objectPath, tourId: input.tourId }))
-      .map(([field, objectPath]) => ({ photoId, field, objectPath }));
-  });
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
-    while (nextIndex < tasks.length) {
-      const task = tasks[nextIndex];
-      nextIndex += 1;
-      const [url] = await bucket.file(task.objectPath).getSignedUrl({ action: 'read', expires });
-      if (!media[task.photoId]) media[task.photoId] = {};
-      media[task.photoId][task.field] = url;
-    }
-  });
-  await Promise.all(workers);
-  return media;
-};
-
-exports.resolvePrivatePhotoMedia = onRequest(
-  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 30, cors: true },
-  async (req, res) => {
-    res.set('Cache-Control', 'private,no-store');
-    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
-    const requestAuth = await authorizeAppSessionMobileRequest({ req, res });
-    if (!requestAuth) return null;
-    const input = normalizePrivateMediaRequest(req.body);
-    if (!input) return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
-    const access = await verifyActiveAppSession({
-      db: admin.database(),
-      authUid: requestAuth.uid,
-      expectedTourId: input.tourId,
-      expectedRole: 'passenger',
-    });
-    if (!access.allowed || access.principalId !== input.ownerKey) {
-      return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
-    }
-    const records = await readPrivateMediaRecords({ db: admin.database(), ...input });
-    if (Object.keys(records).length === 0) return res.status(404).json({ success: false, reason: 'NOT_FOUND' });
-    const bucket = admin.storage().bucket();
-    const expires = Date.now() + PRIVATE_MEDIA_URL_TTL_MS;
-    const media = await signPrivateMediaRecords({ bucket, input, records, expires });
-    return res.status(200).json({ success: true, expiresAtMs: expires, media });
-  },
-);
-
-const normalizePrivatePhotoUploadMetadata = (rawHeader) => {
-  const input = normalizeGroupPhotoUploadMetadata(rawHeader);
-  return input ? { ...input, uploaderName: undefined } : null;
-};
-
-const reservePrivatePhotoRecord = async ({ db, input, principalId, contentType, fileSize, nowMs = Date.now() }) => {
-  const photoId = toRealtimeKeySegment(input.idempotencyKey);
-  const extension = extensionForGroupPhotoContentType(contentType);
-  const storagePath = `private_tour_photos/${input.tourId}/${principalId}/${photoId}.${extension}`;
-  const recordRef = db.ref(`private_tour_photos/${input.tourId}/${principalId}/${photoId}`);
-  let conflict = false;
-  let deduped = false;
-  const result = await recordRef.transaction((current) => {
-    if (current) {
-      if (current.idempotencyKey === input.idempotencyKey && current.userId === principalId
-        && current.storagePath === storagePath) {
-        deduped = true;
-        return current;
-      }
-      conflict = true;
-      return undefined;
-    }
-    return {
-      userId: principalId,
-      caption: input.caption,
-      timestamp: nowMs,
-      storagePath,
-      fileSize,
-      fileType: contentType,
-      idempotencyKey: input.idempotencyKey,
-      variantStatus: 'processing',
-      variantUpdatedAt: nowMs,
-      variantError: null,
-      variantVersion: 2,
-    };
-  });
-  if (conflict || !result.committed) return { success: false, reason: 'IDEMPOTENCY_CONFLICT' };
-  return { success: true, photoId, storagePath, deduped, recordRef };
-};
-
-exports.uploadPrivatePhoto = onRequest(
-  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 60, memory: '512MiB', cors: true },
-  async (req, res) => {
-    res.set('Cache-Control', 'private,no-store');
-    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
-    const input = normalizePrivatePhotoUploadMetadata(req.headers['x-private-photo-metadata']);
-    if (!input) return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
-    const requestAuth = await authorizeAppSessionMobileRequest({ req, res });
-    if (!requestAuth) return null;
-    const access = await verifyActiveAppSession({
-      db: admin.database(),
-      authUid: requestAuth.uid,
-      expectedTourId: input.tourId,
-      expectedRole: 'passenger',
-    });
-    if (!access.allowed) return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
-    const contentType = resolveTrimmedString(req.headers['content-type'])?.toLowerCase();
-    const body = Buffer.isBuffer(req.rawBody) ? req.rawBody : null;
-    if (!body || body.length < 1 || body.length > GROUP_MEDIA_MAX_UPLOAD_BYTES
-      || !GROUP_MEDIA_ALLOWED_TYPES.has(contentType)) {
-      return res.status(400).json({ success: false, reason: 'INVALID_IMAGE' });
-    }
-    const reservation = await reservePrivatePhotoRecord({
-      db: admin.database(),
-      input,
-      principalId: access.principalId,
-      contentType,
-      fileSize: body.length,
-    });
-    if (!reservation.success) return res.status(409).json({ success: false, reason: reservation.reason });
-    const file = admin.storage().bucket().file(reservation.storagePath);
-    if (!reservation.deduped || !(await file.exists())[0]) {
-      await file.save(body, {
-        resumable: false,
-        metadata: {
-          contentType,
-          cacheControl: PRIVATE_PHOTO_CACHE_CONTROL_HEADER,
-          metadata: { visibility: 'private', sourceRole: 'source' },
-        },
-      });
-    }
-    return res.status(200).json({
-      success: true,
-      photo: {
-        id: reservation.photoId,
-        userId: access.principalId,
-        caption: input.caption,
-        storagePath: reservation.storagePath,
-        deduped: reservation.deduped,
-      },
-    });
-  },
-);
-
-exports.deletePrivatePhoto = onRequest(
-  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 30, cors: true },
-  async (req, res) => {
-    res.set('Cache-Control', 'private,no-store');
-    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
-    const tourId = normalizeTourKeyForComparison(req.body?.tourId);
-    const photoId = resolveTrimmedString(req.body?.photoId);
-    if (!tourId || !isValidFirebaseKey(tourId) || !photoId || !isValidFirebaseKey(photoId)) {
-      return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
-    }
-    const requestAuth = await authorizeAppSessionMobileRequest({ req, res });
-    if (!requestAuth) return null;
-    const access = await verifyActiveAppSession({
-      db: admin.database(),
-      authUid: requestAuth.uid,
-      expectedTourId: tourId,
-      expectedRole: 'passenger',
-    });
-    if (!access.allowed) return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
-    const recordRef = admin.database().ref(`private_tour_photos/${tourId}/${access.principalId}/${photoId}`);
-    const snapshot = await recordRef.once('value');
-    if (!snapshot.exists()) return res.status(200).json({ success: true, alreadyDeleted: true });
-    const record = snapshot.val() || {};
-    if (record.userId !== access.principalId) {
-      return res.status(403).json({ success: false, reason: 'NOT_OWNER' });
-    }
-    const paths = [record.storagePath, record.viewerStoragePath, record.thumbnailStoragePath]
-      .filter((path) => isPrivateMediaPathForRecord({ path, tourId, ownerKey: access.principalId }));
-    await Promise.all(paths.map((path) => admin.storage().bucket().file(path).delete({ ignoreNotFound: true })));
-    await recordRef.remove();
-    return res.status(200).json({ success: true, alreadyDeleted: false });
-  },
-);
-
-const authorizeGroupMediaRequest = async ({ req, res, tourId, db = admin.database() }) => {
-  const requestAuth = await verifyRequestAuthUid(req);
-  if (!requestAuth.success) {
-    res.status(401).json({ success: false, reason: 'NOT_AUTHENTICATED' });
-    return null;
-  }
-  let appCheckValid = false;
-  try {
-    appCheckValid = await enforceGroupMediaAppCheck(req);
-  } catch (error) {
-    log.error('Group media App Check configuration failure', error);
-    res.status(503).json({ success: false, reason: 'SERVICE_UNAVAILABLE' });
-    return null;
-  }
-  if (!appCheckValid) {
-    res.status(401).json({ success: false, reason: 'APP_CHECK_REQUIRED' });
-    return null;
-  }
-  const access = await verifyCurrentTourPhotoAccess({ db, authUid: requestAuth.uid, tourId });
-  if (!access.allowed) {
-    res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
-    return null;
-  }
-  return { requestAuth, access };
-};
-
-exports.resolveGroupPhotoMedia = onRequest(
-  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 30, cors: true },
-  async (req, res) => {
-    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
-    const input = normalizeGroupMediaRequest(req.body);
-    if (!input) return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
-    const authorization = await authorizeGroupMediaRequest({ req, res, tourId: input.tourId });
-    if (!authorization) return null;
-    const records = await readGroupMediaRecords({ db: admin.database(), ...input });
-    const expires = Date.now() + GROUP_MEDIA_URL_TTL_MS;
-    const media = await signGroupMediaRecords({ bucket: admin.storage().bucket(), input, records, expires });
-    return res.status(200).json({ success: true, expiresAtMs: expires, media });
-  },
-);
-
-const normalizeGroupPhotoUploadMetadata = (rawHeader) => {
-  if (typeof rawHeader !== 'string' || rawHeader.length > 4096) return null;
-  try {
-    const input = JSON.parse(decodeURIComponent(rawHeader));
-    const tourId = normalizeTourKeyForComparison(input.tourId);
-    const idempotencyKey = resolveTrimmedString(input.idempotencyKey);
-    const caption = resolveTrimmedString(input.caption) || '';
-    const uploaderName = resolveTrimmedString(input.uploaderName) || 'Tour Member';
-    if (!tourId || !isValidFirebaseKey(tourId) || !idempotencyKey || idempotencyKey.length > 180
-      || !isValidFirebaseKey(toRealtimeKeySegment(idempotencyKey)) || caption.length > 500
-      || uploaderName.length > 100) return null;
-    return { tourId, idempotencyKey, caption, uploaderName };
-  } catch (error) {
-    return null;
-  }
-};
-
-const extensionForGroupPhotoContentType = (contentType) => ({
-  'image/jpeg': 'jpg',
-  'image/jpg': 'jpg',
-  'image/png': 'png',
-  'image/webp': 'webp',
-  'image/heic': 'heic',
-}[contentType] || null);
-
-const reserveGroupPhotoRecord = async ({ db, input, access, contentType, fileSize, nowMs = Date.now() }) => {
-  const photoId = toRealtimeKeySegment(input.idempotencyKey);
-  const extension = extensionForGroupPhotoContentType(contentType);
-  const storagePath = `group_tour_photos/${input.tourId}/${photoId}.${extension}`;
-  const recordRef = db.ref(`group_tour_photos/${input.tourId}/${photoId}`);
-  let conflict = false;
-  let deduped = false;
-  const result = await recordRef.transaction((current) => {
-    if (current) {
-      if (current.idempotencyKey === input.idempotencyKey && current.userId === access.principalId
-        && current.storagePath === storagePath) {
-        deduped = true;
-        return current;
-      }
-      conflict = true;
-      return;
-    }
-    return {
-      userId: access.principalId,
-      caption: input.caption,
-      uploaderName: input.uploaderName,
-      timestamp: nowMs,
-      storagePath,
-      fileSize,
-      fileType: contentType,
-      idempotencyKey: input.idempotencyKey,
-      variantStatus: 'processing',
-      variantUpdatedAt: nowMs,
-      variantError: null,
-      variantVersion: 2,
-    };
-  });
-  if (conflict || !result.committed) return { success: false, reason: 'IDEMPOTENCY_CONFLICT' };
-  return { success: true, photoId, storagePath, deduped, recordRef };
-};
-
-exports.uploadGroupPhoto = onRequest(
-  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 60, memory: '512MiB', cors: true },
-  async (req, res) => {
-    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
-    const input = normalizeGroupPhotoUploadMetadata(req.headers['x-group-photo-metadata']);
-    if (!input) return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
-    const authorization = await authorizeGroupMediaRequest({ req, res, tourId: input.tourId });
-    if (!authorization) return null;
-    const contentType = resolveTrimmedString(req.headers['content-type'])?.toLowerCase();
-    const body = Buffer.isBuffer(req.rawBody) ? req.rawBody : null;
-    if (!body || body.length < 1 || body.length > GROUP_MEDIA_MAX_UPLOAD_BYTES
-      || !GROUP_MEDIA_ALLOWED_TYPES.has(contentType)) {
-      return res.status(400).json({ success: false, reason: 'INVALID_IMAGE' });
-    }
-    const reservation = await reserveGroupPhotoRecord({
-      db: admin.database(),
-      input,
-      access: authorization.access,
-      contentType,
-      fileSize: body.length,
-    });
-    if (!reservation.success) return res.status(409).json({ success: false, reason: reservation.reason });
-    const file = admin.storage().bucket().file(reservation.storagePath);
-    if (!reservation.deduped || !(await file.exists())[0]) {
-      await file.save(body, {
-        resumable: false,
-        metadata: {
-          contentType,
-          cacheControl: PHOTO_CACHE_CONTROL_HEADER,
-          metadata: { visibility: 'group', sourceRole: 'source' },
-        },
-      });
-    }
-    return res.status(200).json({
-      success: true,
-      photo: {
-        id: reservation.photoId,
-        userId: authorization.access.principalId,
-        caption: input.caption,
-        uploaderName: input.uploaderName,
-        storagePath: reservation.storagePath,
-        deduped: reservation.deduped,
-      },
-    });
-  },
-);
-
-exports.deleteGroupPhoto = onRequest(
-  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 30, cors: true },
-  async (req, res) => {
-    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
-    const tourId = normalizeTourKeyForComparison(req.body?.tourId);
-    const photoId = resolveTrimmedString(req.body?.photoId);
-    if (!tourId || !isValidFirebaseKey(tourId) || !photoId || !isValidFirebaseKey(photoId)) {
-      return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
-    }
-    const authorization = await authorizeGroupMediaRequest({ req, res, tourId });
-    if (!authorization) return null;
-    const recordRef = admin.database().ref(`group_tour_photos/${tourId}/${photoId}`);
-    const snapshot = await recordRef.once('value');
-    if (!snapshot.exists()) return res.status(404).json({ success: false, reason: 'NOT_FOUND' });
-    const record = snapshot.val() || {};
-    if (authorization.access.role !== 'admin' && record.userId !== authorization.access.principalId) {
-      return res.status(403).json({ success: false, reason: 'NOT_OWNER' });
-    }
-    const paths = [record.storagePath, record.viewerStoragePath, record.thumbnailStoragePath]
-      .filter((path) => isGroupMediaPathForRecord({ path, tourId }));
-    await Promise.all(paths.map(async (path) => {
-      try { await admin.storage().bucket().file(path).delete(); } catch (error) { if (error?.code !== 404) throw error; }
-    }));
-    await recordRef.remove();
-    return res.status(200).json({ success: true });
-  },
-);
-
-exports.createGroupPhotoChatMessage = onRequest(
-  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 30, cors: true },
-  async (req, res) => {
-    if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
-    const tourId = normalizeTourKeyForComparison(req.body?.tourId);
-    const photoId = resolveTrimmedString(req.body?.photoId);
-    const messageId = resolveTrimmedString(req.body?.messageId);
-    const caption = resolveTrimmedString(req.body?.caption) || '';
-    const senderName = resolveTrimmedString(req.body?.senderName) || 'Tour Member';
-    const clientCreatedAt = Number(req.body?.clientCreatedAt);
-    if (!tourId || !isValidFirebaseKey(tourId) || !photoId || !isValidFirebaseKey(photoId)
-      || !messageId || !isValidFirebaseKey(messageId) || messageId.length > 160
-      || caption.length > 500 || senderName.length > 100 || !Number.isFinite(clientCreatedAt) || clientCreatedAt <= 0) {
-      return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
-    }
-    const authorization = await authorizeGroupMediaRequest({ req, res, tourId });
-    if (!authorization) return null;
-    const photoSnapshot = await admin.database().ref(`group_tour_photos/${tourId}/${photoId}`).once('value');
-    if (!photoSnapshot.exists()) return res.status(404).json({ success: false, reason: 'PHOTO_NOT_FOUND' });
-    const isDriver = authorization.access.role === 'assigned_driver';
-    const message = {
-      schemaVersion: 2,
-      text: caption,
-      senderName,
-      senderId: authorization.access.principalId,
-      senderStableId: authorization.access.principalId,
-      senderType: isDriver ? 'driver' : 'passenger',
-      timestamp: admin.database.ServerValue.TIMESTAMP,
-      clientCreatedAt,
-      isDriver,
-      status: 'sent',
-      type: 'image',
-      idempotencyKey: messageId,
-      photoId,
-    };
-    const messageRef = admin.database().ref(`chats/${tourId}/messages/${messageId}`);
-    let conflict = false;
-    const transaction = await messageRef.transaction((current) => {
-      if (!current) return message;
-      if (current.idempotencyKey === messageId && current.photoId === photoId
-        && current.senderId === authorization.access.principalId) return current;
-      conflict = true;
-      return;
-    });
-    if (conflict || !transaction.committed) {
-      return res.status(409).json({ success: false, reason: 'IDEMPOTENCY_CONFLICT' });
-    }
-    return res.status(200).json({ success: true, message: { ...transaction.snapshot.val(), id: messageId } });
-  },
-);
 
 const checkDriverLoginRateLimits = async ({
   authUid,
@@ -3434,27 +2548,6 @@ exports.assignDriverToTour = onRequest(
     }
   }
 );
-
-const authorizeAppSessionMobileRequest = async ({ req, res }) => {
-  const requestAuth = await verifyRequestAuthUid(req);
-  if (!requestAuth.success) {
-    res.status(401).json({ success: false, reason: 'NOT_AUTHENTICATED' });
-    return null;
-  }
-  let appCheckValid = false;
-  try {
-    appCheckValid = await enforceGroupMediaAppCheck(req);
-  } catch (error) {
-    log.error('App session App Check configuration failure', error);
-    res.status(503).json({ success: false, reason: 'SERVICE_UNAVAILABLE' });
-    return null;
-  }
-  if (!appCheckValid) {
-    res.status(401).json({ success: false, reason: 'APP_CHECK_REQUIRED' });
-    return null;
-  }
-  return requestAuth;
-};
 
 exports.endAppSession = onRequest(
   { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 30, cors: false },
@@ -5191,7 +4284,16 @@ exports.cleanupNotificationReadState = onSchedule(
  * Cloud Run IAM and a second in-process Google OIDC check both restrict the
  * caller to the management sync service account.
  */
-Object.assign(exports, tourIndexFunctions, scheduledCleanupFunctions, { ingestDriverTourPacks });
+Object.assign(exports, tourIndexFunctions, scheduledCleanupFunctions, {
+  createGroupPhotoChatMessage,
+  deleteGroupPhoto,
+  resolveGroupPhotoMedia,
+  uploadGroupPhoto,
+  deletePrivatePhoto,
+  ingestDriverTourPacks,
+  resolvePrivatePhotoMedia,
+  uploadPrivatePhoto,
+});
 
 exports.__testables = {
   toRealtimeKeySegment,
