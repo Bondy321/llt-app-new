@@ -4,6 +4,8 @@ Welcome, Agent. This file is the operational source of truth for contributors wo
 
 Last updated: August 21, 2026
 
+Architecture source of truth: start with `docs/architecture/overview.md`, then follow `module-boundaries.md` and the runtime-specific document. Keep `App.js` and `functions/index.js` as composition roots; preserve compatibility facades; place Firebase, HTTP, and persistence access behind adapters; update canonical contracts and generated copies together; run `npm run verify:refactor` for structural changes. The detailed rationale lives in `docs/architecture/decisions/` and should not be duplicated here.
+
 ---
 
 ## 1. What This Repo Is

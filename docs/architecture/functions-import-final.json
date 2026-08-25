@@ -1,0 +1,69 @@
+{
+  "generatedAt": "2026-08-25T17:39:29.962Z",
+  "limitations": "Local clean-process require timing is a regression signal only; it is not a Cloud Functions cold-start benchmark.",
+  "index": {
+    "bytes": 66,
+    "lines": 4,
+    "directImports": [
+      "./src/compositionRoot"
+    ]
+  },
+  "cleanProcessImport": {
+    "elapsedMs": 406.054,
+    "sharpLoaded": false,
+    "expoServerSdkLoaded": false,
+    "loadedModuleCount": 421
+  },
+  "largestDomains": [
+    {
+      "path": "functions/src/domains/notifications/notificationState.js",
+      "bytes": 23251,
+      "lines": 600
+    },
+    {
+      "path": "functions/src/domains/notifications/chatNotificationFunctions.js",
+      "bytes": 17219,
+      "lines": 408
+    },
+    {
+      "path": "functions/src/domains/notifications/broadcastFunctions.js",
+      "bytes": 16769,
+      "lines": 434
+    },
+    {
+      "path": "functions/src/domains/administration/administrationFunctions.js",
+      "bytes": 14020,
+      "lines": 329
+    },
+    {
+      "path": "functions/src/domains/administration/manualPassengerBooking.js",
+      "bytes": 12980,
+      "lines": 331
+    },
+    {
+      "path": "functions/src/domains/notifications/notificationRecipients.js",
+      "bytes": 12894,
+      "lines": 394
+    },
+    {
+      "path": "functions/src/domains/media/groupMediaFunctions.js",
+      "bytes": 11643,
+      "lines": 273
+    },
+    {
+      "path": "functions/src/domains/notifications/notificationPolicy.js",
+      "bytes": 11414,
+      "lines": 325
+    },
+    {
+      "path": "functions/src/domains/manifests/manifestDomain.js",
+      "bytes": 10479,
+      "lines": 245
+    },
+    {
+      "path": "functions/src/domains/passenger-auth/passengerLoginWorkflow.js",
+      "bytes": 10245,
+      "lines": 252
+    }
+  ]
+}
