@@ -5,22 +5,11 @@
 const { randomUUID } = require('node:crypto');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../notifications/notificationPolicy');
+const { normalizeBookingRef, normalizeEmail } = require('../passenger-auth/passengerSanitizer');
 
 const MANIFEST_STATUS = Object.freeze({
   PENDING: 'PENDING', BOARDED: 'BOARDED', NO_SHOW: 'NO_SHOW', PARTIAL: 'PARTIAL',
 });
-
-/** @type {(...args: any[]) => any} */
-const normalizeBookingRef = (bookingRef) => {
-  if (typeof bookingRef !== 'string') return '';
-  return bookingRef.trim().toUpperCase();
-};
-
-/** @type {(...args: any[]) => any} */
-const normalizeEmail = (email) => {
-  if (typeof email !== 'string') return '';
-  return email.trim().toLowerCase();
-};
 
 /** @type {(...args: any[]) => any} */
 const createManualPassengerError = (code, message) => {
