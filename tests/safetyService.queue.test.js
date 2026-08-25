@@ -79,13 +79,13 @@ Module._load = function load(request, parent, isMain) {
   if (request === '@react-native-async-storage/async-storage') {
     return { __esModule: true, default: asyncStorage };
   }
-  if (request === '../firebase') {
+  if (request === '../firebase' || request === '../../firebase') {
     return {
       auth: authMock,
       realtimeDb: realtimeDbMock,
     };
   }
-  if (request === './loggerService') {
+  if (request === './loggerService' || request === '../loggerService') {
     return { __esModule: true, default: logger };
   }
   return originalLoad.call(this, request, parent, isMain);

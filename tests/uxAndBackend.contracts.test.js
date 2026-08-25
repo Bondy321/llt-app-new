@@ -6,6 +6,7 @@ const {
   readAppArchitectureSource,
   readFunctionsArchitectureSource,
   readMobileModuleSource,
+  readServiceModuleSource,
 } = require('./helpers/readAppArchitectureSource');
 
 const offlineSyncService = require('../services/offlineSyncService');
@@ -213,7 +214,7 @@ test('Static contract: tour metadata writes stay least-privilege', () => {
   assert.match(tourRules.liveTracking.$userId['.write'], /auth\.uid === \$userId/);
   assert.match(readText('package.json'), /tests\/firebaseRules\/tours\.rules\.test\.js/);
 
-  const bookingSource = readText('services/bookingServiceRealtime.js');
+  const bookingSource = readServiceModuleSource('services/bookingServiceRealtime.js');
   assert.match(bookingSource, /currentParticipants is the booked passenger total[\s\S]*must never replace that commercial passenger count/);
   assert.match(bookingSource, /Membership is created atomically by verifyPassengerLogin/);
   assert.match(bookingSource, /participant\.sessionId !== activeSession\.sessionId/);
@@ -227,7 +228,7 @@ test('Static contract: verified login grants are scoped and short-lived', () => 
   const tourGrant = rules.rules.tour_access_grants.$tourId.$userId;
   const bookingGrant = rules.rules.booking_access_grants.$bookingRef.$userId;
   const functionsSource = readFunctionsArchitectureSource();
-  const bookingServiceSource = readText('services/bookingServiceRealtime.js');
+  const bookingServiceSource = readServiceModuleSource('services/bookingServiceRealtime.js');
 
   assert.match(tourGrant['.read'], /auth\.uid === \$userId/);
   assert.match(tourGrant['.write'], /admin_users/);
@@ -247,7 +248,7 @@ test('Static contract: verified login grants are scoped and short-lived', () => 
 });
 
 test('Static contract: passenger manifests are assembled through verified backend endpoint', () => {
-  const bookingSource = readText('services/bookingServiceRealtime.js');
+  const bookingSource = readServiceModuleSource('services/bookingServiceRealtime.js');
   const functionsSource = readFunctionsArchitectureSource();
   const packageJson = readText('package.json');
 
@@ -266,7 +267,7 @@ test('Static contract: passenger manifests are assembled through verified backen
 });
 
 test('Static contract: driver login uses verifier without client manifest scans', () => {
-  const bookingSource = readText('services/bookingServiceRealtime.js');
+  const bookingSource = readServiceModuleSource('services/bookingServiceRealtime.js');
   const functionsSource = readFunctionsArchitectureSource();
   const driverTestSource = readText('tests/validateBookingReference.driver.test.js');
 
@@ -321,8 +322,8 @@ test('Static contract: remote logger uploads stay warning-plus by default outsid
 test('Static contract: early runtime console logging stays development-gated', () => {
   const firebaseSource = readText('firebase.js');
   const persistenceSource = readText('services/persistenceProvider.js');
-  const bookingSource = readText('services/bookingServiceRealtime.js');
-  const chatSource = readText('services/chatService.js');
+  const bookingSource = readServiceModuleSource('services/bookingServiceRealtime.js');
+  const chatSource = readServiceModuleSource('services/chatService.js');
   const optionalLoaderSource = readText('services/optionalServiceLoader.js');
   const firebaseConsoleCalls = firebaseSource.match(/console\.(log|warn|error)\(/g) || [];
 
@@ -549,7 +550,7 @@ test('Static contract: user content reports stay scoped to tour users and admin 
 
 test('Static contract: photo objects are inaccessible directly and all media operations are server-authorized', () => {
   const storageRules = readText('storage_rules.json');
-  const photoSource = readText('services/photoService.js');
+  const photoSource = readServiceModuleSource('services/photoService.js');
   const functionsSource = readFunctionsArchitectureSource();
 
   assert.match(storageRules, /match \/private_tour_photos\/\{tourId\}\/\{ownerId\}\/\{allPaths=\*\*\}[\s\S]*allow read, write: if false/);
@@ -571,7 +572,7 @@ test('Static contract: photo objects are inaccessible directly and all media ope
 
 test('Static contract: passenger identities are server-issued opaque values and client writes are removed', () => {
   const appSource = readAppArchitectureSource();
-  const chatSource = fs.readFileSync(path.join(__dirname, '..', 'services', 'chatService.js'), 'utf8');
+  const chatSource = readServiceModuleSource('services/chatService.js');
 
   assert.match(appSource, /isOpaquePassengerId\(stablePassengerId\)/);
   assert.match(appSource, /stablePassengerKey = toRealtimeKeySegment\(stablePassengerId\)/);
@@ -658,7 +659,7 @@ test('Static contract: chat connectivity and queue ownership stay wired from app
 });
 
 test('Static contract: chat listener failures keep visible messages and expose retry recovery', () => {
-  const serviceSource = readText('services/chatService.js');
+  const serviceSource = readServiceModuleSource('services/chatService.js');
   const screenSource = readMobileModuleSource('screens/ChatScreen.js');
 
   assert.doesNotMatch(serviceSource, /onMessagesUpdate\(\[\]\)/);
@@ -694,7 +695,9 @@ test('Static contract: chat timestamp helpers use strict shared parser', () => {
     'utils/chatUnreadSummary.js',
     'services/chatService.js',
   ].forEach((relativePath) => {
-    const source = readText(relativePath);
+    const source = relativePath.startsWith('services/')
+      ? readServiceModuleSource(relativePath)
+      : readText(relativePath);
 
     assert.match(source, /parseStrictTimestampMs|parseTimestampMs: parseStrictTimestampMs/);
     assert.doesNotMatch(source, /Date\.parse\(timestamp\)/);
@@ -954,7 +957,7 @@ test('Static contract: shared gallery data hook guards stale async updates', () 
 
 test('Static contract: itinerary cache metadata cannot update stale screens', () => {
   const source = readMobileModuleSource('screens/ItineraryScreen.js');
-  const bookingSource = readText('services/bookingServiceRealtime.js');
+  const bookingSource = readServiceModuleSource('services/bookingServiceRealtime.js');
   const functionsSource = readFunctionsArchitectureSource();
 
   assert.match(source, /mountedRef/);
@@ -1094,7 +1097,7 @@ test('Static contract: customer-facing error copy avoids raw backend messages', 
 test('Static contract: offline data stays scoped to the signed-in tour identity', () => {
   const appSource = readAppArchitectureSource();
   const offlineSource = readText('services/offlineSyncService.js');
-  const safetySource = readText('services/safetyService.js');
+  const safetySource = readServiceModuleSource('services/safetyService.js');
   const driverItinerarySource = readMobileModuleSource('screens/DriverItineraryScreen.js');
 
   assert.match(appSource, /cacheOwnerId: bookingData\?\.id \|\| principalId/);
@@ -1150,7 +1153,7 @@ test('Static contract: optional haptics cannot reject app actions and pickup cou
 });
 
 test('Static contract: safety delivery is operations-visible and Firebase maintenance is request-driven', () => {
-  const safetySource = readText('services/safetyService.js');
+  const safetySource = readServiceModuleSource('services/safetyService.js');
   const functionsSource = readFunctionsArchitectureSource();
   const webDebugSource = readText('web-admin/src/services/firebaseDebug.js');
 

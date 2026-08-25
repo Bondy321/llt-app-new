@@ -35,8 +35,28 @@ const readMobileModuleSource = (relativePath) => {
   ].join('\n');
 };
 
+const serviceDomainDirectories = {
+  'services/bookingServiceRealtime.js': 'booking',
+  'services/chatService.js': 'chat',
+  'services/notificationService.js': 'notifications',
+  'services/photoService.js': 'photo',
+  'services/safetyService.js': 'safety',
+};
+
+const readServiceModuleSource = (relativePath) => {
+  const facadePath = path.join(repositoryRoot, relativePath);
+  const domainDirectory = serviceDomainDirectories[relativePath];
+  return [
+    fs.readFileSync(facadePath, 'utf8'),
+    ...(domainDirectory
+      ? readTree(path.join(repositoryRoot, 'services', domainDirectory))
+      : []),
+  ].join('\n');
+};
+
 module.exports = {
   readAppArchitectureSource,
   readFunctionsArchitectureSource,
   readMobileModuleSource,
+  readServiceModuleSource,
 };
