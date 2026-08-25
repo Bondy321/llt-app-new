@@ -26,7 +26,7 @@ import {
   IconRefresh,
   IconTrash,
 } from '@tabler/icons-react';
-import { db } from '../firebase';
+import { getAdminDatabase } from '../shared/runtime/adminRuntime';
 import {
   CONTENT_REPORT_STATUS,
   CONTENT_REPORT_STATUS_OPTIONS,
@@ -43,6 +43,7 @@ import {
   summarizeDatabaseInstance,
 } from '../services/firebaseDebug';
 import { formatDateTimeForDisplay } from '../utils/dateUtils';
+const db = getAdminDatabase();
 
 const REPORT_STATUS_COLOR = {
   [CONTENT_REPORT_STATUS.OPEN]: 'red',

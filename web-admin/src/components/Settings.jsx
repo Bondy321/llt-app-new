@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
 import { notifications } from '@mantine/notifications';
 import {
   Alert,
@@ -31,7 +30,7 @@ import {
   IconShield,
   IconUser,
 } from '@tabler/icons-react';
-import { auth } from '../firebase';
+import { changeCurrentAccountPassword, getCurrentAccountUser } from '../services/accountSecurityService';
 
 /* global __APP_VERSION__ */
 
@@ -56,7 +55,7 @@ function SettingsSection({ title, description, icon, color, children }) {
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'development';
 
 export default function Settings() {
-  const user = auth.currentUser;
+  const user = getCurrentAccountUser();
   const [passwordModalOpened, { open: openPasswordModal, close: closePasswordModal }] = useDisclosure(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -91,9 +90,7 @@ export default function Settings() {
 
     setChangingPassword(true);
     try {
-      const credential = EmailAuthProvider.credential(user.email, currentPassword);
-      await reauthenticateWithCredential(user, credential);
-      await updatePassword(user, newPassword);
+      await changeCurrentAccountPassword({ currentPassword, newPassword });
       notifications.show({ title: 'Password updated', message: 'Your password has been changed successfully.', color: 'green' });
       closePassword();
     } catch (error) {

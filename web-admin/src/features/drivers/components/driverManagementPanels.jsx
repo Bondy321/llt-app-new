@@ -1,12 +1,10 @@
 import { useEffect, useState } from 'react';
-import { ref, update } from 'firebase/database';
-import { db } from '../../../firebase';
 import { applyDriverAssignmentMutation } from '../../../services/tourService';
-import { createDriver } from '../../../services/driverService';
+import { createDriver, updateDriverContactProjection } from '../../../services/driverService';
 import { APP_SESSION_REVOCATION_REASONS, maskAppSessionId, revokeAppSession, subscribeToAppSession } from '../../../services/appSessionAdminService';
 import { notifications } from '@mantine/notifications';
 import { formatDateTimeForDisplay } from '../../../utils/dateUtils';
-import { ActionIcon, Alert, Avatar, Badge, Box, Button, Card, Divider, Grid, Group, Loader, Modal, Paper, Pill, Select, SimpleGrid, Stack, Tabs, Text, TextInput, ThemeIcon, Title, Tooltip } from '@mantine/core';
+import { Alert, Avatar, Badge, Box, Button, Card, Divider, Group, Modal, Paper, Pill, Select, SimpleGrid, Stack, Tabs, Text, TextInput, ThemeIcon, Title } from '@mantine/core';
 import { IconBus, IconCalendar, IconCheck, IconId, IconInfoCircle, IconMap, IconPhone, IconPlus, IconShieldLock, IconUser } from '@tabler/icons-react';
 import { normalizeAssignmentTourIdInput, resolveAssignmentTourIdInput } from '../domain/driverAssignmentIdentity';
 
@@ -263,7 +261,7 @@ function DriverDetailsPanel({ driverId, driver }) {
           updates[`tours/${tourId}/driverPhone`] = nextPhone;
         });
 
-        await update(ref(db), updates);
+        await updateDriverContactProjection(updates);
       }
 
       notifications.show({

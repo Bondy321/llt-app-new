@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { notifications } from '@mantine/notifications';
 import { Center, Loader, Stack, Text } from '@mantine/core';
 import { IconActivity, IconClock, IconRefresh } from '@tabler/icons-react';
-import { auth, db } from '../firebase';
+import { getAdminDatabase, getCurrentAdminUser } from '../shared/runtime/adminRuntime';
 import { HEALTH_STATE, buildHealthSnapshot } from '../services/healthService';
 import { SAFETY_STATUS, buildOperationsDashboardModel, filterSafetyAlerts, revalidateDashboardBranches, subscribeToDashboardBranches, updateSafetyAlertStatus } from '../services/dashboardService';
 import { acknowledgeOpsAlert, buildOpsAlertStats, fetchOpsAlerts, filterOpsAlerts, resolveOpsAlert, subscribeToOpsAlerts } from '../services/opsAlertService';
@@ -14,6 +14,7 @@ const OPS_ALERT_QUERY = {
   orderBy: 'lastSeenAtMs',
   limit: 80
 };
+const db = getAdminDatabase();
 const BRANCH_LABELS = {
   drivers: {
     label: 'Drivers',
@@ -283,9 +284,9 @@ export default function Dashboard() {
     });
     try {
       if (action === 'resolve') {
-        await resolveOpsAlert(db, alertId, auth.currentUser?.uid);
+        await resolveOpsAlert(db, alertId, getCurrentAdminUser()?.uid);
       } else {
-        await acknowledgeOpsAlert(db, alertId, auth.currentUser?.uid);
+        await acknowledgeOpsAlert(db, alertId, getCurrentAdminUser()?.uid);
       }
       actionTimer.success();
       notifications.show({
@@ -313,7 +314,7 @@ export default function Dashboard() {
       database: summarizeDatabaseInstance(db)
     });
     try {
-      await updateSafetyAlertStatus(db, alert, status, auth.currentUser?.uid);
+      await updateSafetyAlertStatus(db, alert, status, getCurrentAdminUser()?.uid);
       actionTimer.success();
       notifications.show({
         title: status === SAFETY_STATUS.RESOLVED ? 'Safety alert resolved' : 'Safety alert acknowledged',

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { db } from '../firebase';
+import { getAdminDatabase } from '../shared/runtime/adminRuntime';
 import { fetchDriverByExactId, fetchDriverDirectoryPage, subscribeToDriverDirectory } from '../services/adminDirectoryService';
 import { notifications } from '@mantine/notifications';
 import {
@@ -11,7 +11,6 @@ import {
   TextInput,
   Stack,
   Box,
-  Modal,
   Loader,
   Center,
   Paper,
@@ -19,7 +18,6 @@ import {
   SimpleGrid,
   ScrollArea,
   Grid,
-  Select,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
@@ -32,6 +30,7 @@ import {
 
 import { CreateDriverModal, DriverCard, DriverDetailsPanel } from '../features/drivers/components/driverManagementPanels';
 import { resolveAssignmentTourIdInput } from '../features/drivers/domain/driverAssignmentIdentity';
+const db = getAdminDatabase();
 export function DriversManager() {
   const [drivers, setDrivers] = useState({});
   const [selectedDriverId, setSelectedDriverId] = useState(null);

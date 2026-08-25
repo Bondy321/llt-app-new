@@ -1,4 +1,4 @@
-import { ref, runTransaction } from 'firebase/database';
+import { ref, runTransaction, update } from 'firebase/database';
 import { db } from '../firebase';
 import { nowAsISOString } from '../utils/dateUtils';
 
@@ -40,3 +40,5 @@ export async function createDriver({ name, code, phone = '' }) {
 
   return { id: driverId, driver };
 }
+
+export const updateDriverContactProjection = (updates) => update(ref(db), updates);

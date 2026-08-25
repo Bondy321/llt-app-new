@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
-import { ref, push, set, onValue, query, orderByChild, limitToLast } from 'firebase/database';
-import { db, auth } from '../firebase';
+import { getCurrentAdminUser } from '../shared/runtime/adminRuntime';
+import { queueBroadcast, subscribeToBroadcastHistory, subscribeToBroadcastTours } from '../services/broadcastRepository';
 import { notifications } from '@mantine/notifications';
 import {
   Card,
@@ -75,18 +75,16 @@ export function BroadcastPanel() {
   const sendInFlightRef = useRef(false);
 
   useEffect(() => {
-    const toursRef = ref(db, 'tours');
-    const unsubscribe = onValue(
-      toursRef,
-      (snapshot) => {
-        setTours(snapshot.val() || {});
+    const unsubscribe = subscribeToBroadcastTours({
+      onData: (nextTours) => {
+        setTours(nextTours);
         setLoadingTours(false);
       },
-      (error) => {
+      onError: (error) => {
         setLoadingTours(false);
         notifications.show({ title: 'Tours unavailable', message: error?.message || 'Could not load broadcast targets.', color: 'red' });
       },
-    );
+    });
     return () => unsubscribe();
   }, []);
 
@@ -103,24 +101,17 @@ export function BroadcastPanel() {
   useEffect(() => {
     if (!historyRootPath) return undefined;
 
-    const historyQuery = query(
-      ref(db, historyRootPath),
-      orderByChild('createdAtMs'),
-      limitToLast(25)
-    );
-
-    const unsubscribe = onValue(
-      historyQuery,
-      (snapshot) => {
-        const broadcasts = snapshot.val() || {};
+    const unsubscribe = subscribeToBroadcastHistory({
+      rootPath: historyRootPath,
+      onData: (broadcasts) => {
         const history = Object.entries(broadcasts)
           .map(([broadcastId, payload]) => normalizeBroadcastMessage(historyTargetId, broadcastId, payload, targetMode))
           .sort((a, b) => (b.timestampMs ?? 0) - (a.timestampMs ?? 0));
 
         setBroadcastHistoryState({ rootPath: historyRootPath, items: history });
       },
-      (error) => notifications.show({ title: 'History unavailable', message: error?.message || 'Could not load broadcast history.', color: 'red' }),
-    );
+      onError: (error) => notifications.show({ title: 'History unavailable', message: error?.message || 'Could not load broadcast history.', color: 'red' }),
+    });
 
     return () => unsubscribe();
   }, [historyRootPath, historyTargetId, targetMode]);
@@ -209,7 +200,7 @@ export function BroadcastPanel() {
       return;
     }
 
-    if (!auth.currentUser?.uid) {
+    if (!getCurrentAdminUser()?.uid) {
       notifications.show({ title: 'Sign-in Required', message: 'Please sign in again before sending broadcasts.', color: 'red' });
       return;
     }
@@ -237,12 +228,9 @@ export function BroadcastPanel() {
       const rootPath = isCategoryMode
         ? `category_broadcasts/${targetId}`
         : `broadcasts/${targetId}`;
-      const broadcastsRef = ref(db, rootPath);
-      const newBroadcastRef = push(broadcastsRef);
       const broadcastPayload = {
         message: message.trim(),
         createdAtMs: Date.now(),
-        createdByUid: auth.currentUser?.uid || null,
         source: 'web_admin',
         deliveryStatus: 'queued',
         deliveryUpdatedAtMs: Date.now(),
@@ -253,7 +241,7 @@ export function BroadcastPanel() {
         broadcastPayload.categoryLabel = targetLabel;
       }
 
-      await set(newBroadcastRef, broadcastPayload);
+      await queueBroadcast({ rootPath, payload: broadcastPayload });
 
       notifications.show({
         title: 'Broadcast Queued',
@@ -459,7 +447,7 @@ export function BroadcastPanel() {
                 size="lg"
                 color={isCategoryMode ? 'blue' : 'orange'}
                 leftSection={<IconSend size={18} />}
-                disabled={!hasTarget || !message.trim() || loading || !auth.currentUser?.uid}
+                disabled={!hasTarget || !message.trim() || loading || !getCurrentAdminUser()?.uid}
               >
                 {isCategoryMode ? 'Send Tour Type Broadcast' : 'Send Broadcast'}
               </Button>

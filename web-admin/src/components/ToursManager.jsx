@@ -30,7 +30,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import ToursManagerView from '../features/tours/presentation/ToursManagerView';
 import { useSearchParams } from 'react-router-dom';
-import { db } from '../firebase';
+import { getAdminDatabase } from '../shared/runtime/adminRuntime';
 import { notifications } from '@mantine/notifications';
 import { Text, Stack, Loader, Center } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
@@ -39,6 +39,7 @@ import { parseUKDateStrict, parseISODateStrict } from '../utils/dateUtils';
 import { buildTourPackCoverage, subscribeToDriverTourPackAdminStatuses } from '../services/driverTourPackAdminStatusService';
 import { buildDriverTourPackOperationsByTour, departureKeyForTour, subscribeToDriverTourPackOperations, updateDriverTourPackIssueStatus } from '../services/driverTourPackOperationsService';
 import { fetchTourByExactId, subscribeToDriverDirectory, subscribeToTourWindow } from '../services/adminDirectoryService';
+const db = getAdminDatabase();
 const getTodayAtNoon = () => {
   const today = new Date();
   today.setHours(12, 0, 0, 0);

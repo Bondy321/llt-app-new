@@ -22,7 +22,6 @@ import {
   SAFETY_ATTENTION_STATUSES,
   SAFETY_SEVERITY_WEIGHT,
   SAFETY_STATUS,
-  SAFETY_STATUS_OPTIONS,
   asRecord,
   cleanString,
   countCollection,
