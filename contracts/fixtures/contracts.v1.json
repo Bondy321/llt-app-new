@@ -1,0 +1,222 @@
+{
+  "valid": [
+    { "name": "opaque passenger principal", "contract": "PassengerPrincipalId", "value": "pax_v2_0123456789abcdef0123456789abcdef" },
+    { "name": "driver principal", "contract": "DriverPrincipalId", "value": "driver:D-100" },
+    { "name": "app session identifier", "contract": "AppSessionId", "value": "sess_v1_0123456789abcdef0123456789abcdef" },
+    {
+      "name": "active passenger app session",
+      "contract": "AppSession",
+      "clientProjection": false,
+      "value": {
+        "schemaVersion": 1,
+        "sessionId": "sess_v1_0123456789abcdef0123456789abcdef",
+        "authUid": "auth-user-1",
+        "principalId": "pax_v2_0123456789abcdef0123456789abcdef",
+        "principalType": "passenger",
+        "tourId": "5112D_8",
+        "driverId": null,
+        "status": "active",
+        "issuedAtMs": 1000,
+        "lastAuthenticatedAtMs": 1000,
+        "expiresAtMs": 2000,
+        "sessionRevision": 1
+      }
+    },
+    {
+      "name": "passenger participant",
+      "contract": "PassengerParticipantRecord",
+      "clientProjection": false,
+      "value": {
+        "schemaVersion": 2,
+        "userId": "auth-user-1",
+        "principalId": "pax_v2_0123456789abcdef0123456789abcdef",
+        "sessionId": "sess_v1_0123456789abcdef0123456789abcdef",
+        "sessionExpiresAtMs": 2000,
+        "joinedAtMs": 1000,
+        "lastAuthenticatedAtMs": 1000
+      }
+    },
+    { "name": "passenger login failure", "contract": "PassengerLoginResponse", "value": { "valid": false, "reason": "INVALID_CREDENTIALS" } },
+    { "name": "driver login failure", "contract": "DriverLoginResponse", "value": { "valid": false, "reason": "DRIVER_NOT_FOUND" } },
+    { "name": "driver assignment failure", "contract": "DriverAssignmentResponse", "value": { "success": false, "reason": "TOUR_INACTIVE" } },
+    {
+      "name": "versioned text chat message",
+      "contract": "ChatMessage",
+      "value": {
+        "schemaVersion": 2,
+        "id": "msg_001",
+        "senderId": "pax_v2_0123456789abcdef0123456789abcdef",
+        "senderStableId": "pax_v2_0123456789abcdef0123456789abcdef",
+        "senderName": "Passenger",
+        "senderType": "passenger",
+        "text": "Hello",
+        "timestamp": 1000,
+        "clientCreatedAt": 1000,
+        "status": "sent",
+        "type": "text",
+        "idempotencyKey": "msg_001"
+      }
+    },
+    { "name": "reaction leaf", "contract": "ChatReaction", "value": { "emoji": "👍", "actorKey": "pax_v2_0123456789abcdef0123456789abcdef", "active": true } },
+    { "name": "presence record", "contract": "ChatPresenceRecord", "value": { "online": true, "lastSeen": 1000, "name": "Passenger", "isDriver": false } },
+    {
+      "name": "path-only group photo",
+      "contract": "GroupPhotoRecord",
+      "value": {
+        "userId": "pax_v2_0123456789abcdef0123456789abcdef",
+        "storagePath": "group_tour_photos/5112D_8/photo_1.jpg",
+        "timestamp": 1000,
+        "variantStatus": "processing",
+        "variantVersion": 2
+      }
+    },
+    {
+      "name": "path-only private photo",
+      "contract": "PrivatePhotoRecord",
+      "value": {
+        "userId": "pax_v2_0123456789abcdef0123456789abcdef",
+        "storagePath": "private_tour_photos/5112D_8/pax_v2_0123456789abcdef0123456789abcdef/photo_1.jpg",
+        "timestamp": 1000,
+        "variantStatus": "ready",
+        "variantVersion": 2
+      }
+    },
+    { "name": "short-lived resolved media", "contract": "ResolvedMediaResponse", "value": { "success": true, "expiresAtMs": 2000, "media": { "photo_1": { "viewerUrl": "https://signed.example/view" } } } },
+    { "name": "chat notification target", "contract": "NotificationPayload", "value": { "screen": "Chat", "tourId": "5112D_8", "messageId": "msg_001" } },
+    {
+      "name": "bounded safety submission",
+      "contract": "SafetySubmission",
+      "value": {
+        "schemaVersion": 2,
+        "eventId": "evt_001",
+        "tourId": "5112D_8",
+        "principalId": "pax_v2_0123456789abcdef0123456789abcdef",
+        "role": "passenger",
+        "category": "incident",
+        "severity": "high",
+        "message": "Assistance required",
+        "isSOS": false,
+        "clientCreatedAtMs": 1000
+      }
+    },
+    { "name": "manual driver location", "contract": "DriverLocationRecord", "value": { "schemaVersion": 1, "source": "manual", "latitude": 56.2, "longitude": -4.7, "accuracy": 10, "timestamp": 1000 } },
+    { "name": "queued tour-pack action", "contract": "DriverTourPackActionResult", "value": { "success": true, "queued": true } },
+    { "name": "safe HTTP error", "contract": "StandardHttpErrorResponse", "value": { "success": false, "reason": "INVALID_INPUT", "status": 400, "retryable": false } }
+  ],
+  "invalid": [
+    { "name": "booking reference in public identity", "contract": "PassengerPrincipalId", "value": "pax_v1:T123456:person@example.com" },
+    { "name": "email-derived opaque identity", "contract": "PassengerPrincipalId", "value": "pax_v2_person@example.com" },
+    { "name": "malformed session ID", "contract": "AppSessionId", "value": "sess_v1_booking@example.com" },
+    {
+      "name": "unknown app-session field",
+      "contract": "AppSession",
+      "value": {
+        "schemaVersion": 1,
+        "sessionId": "sess_v1_0123456789abcdef0123456789abcdef",
+        "authUid": "auth-user-1",
+        "principalId": "pax_v2_0123456789abcdef0123456789abcdef",
+        "principalType": "passenger",
+        "tourId": "5112D_8",
+        "driverId": null,
+        "status": "active",
+        "issuedAtMs": 1000,
+        "lastAuthenticatedAtMs": 1000,
+        "expiresAtMs": 2000,
+        "sessionRevision": 1,
+        "email": "person@example.com"
+      }
+    },
+    {
+      "name": "mismatched driver principal",
+      "contract": "AppSession",
+      "value": {
+        "schemaVersion": 1,
+        "sessionId": "sess_v1_0123456789abcdef0123456789abcdef",
+        "authUid": "auth-driver-1",
+        "principalId": "driver:D-OTHER",
+        "principalType": "driver",
+        "tourId": "5112D_8",
+        "driverId": "D-100",
+        "status": "active",
+        "issuedAtMs": 1000,
+        "lastAuthenticatedAtMs": 1000,
+        "expiresAtMs": 2000,
+        "sessionRevision": 1
+      }
+    },
+    {
+      "name": "credential field in chat message",
+      "contract": "ChatMessage",
+      "value": {
+        "schemaVersion": 2,
+        "senderId": "pax_v2_0123456789abcdef0123456789abcdef",
+        "senderName": "Passenger",
+        "senderType": "passenger",
+        "text": "Hello",
+        "timestamp": 1000,
+        "clientCreatedAt": 1000,
+        "status": "sent",
+        "type": "text",
+        "idempotencyKey": "msg_001",
+        "email": "person@example.com"
+      }
+    },
+    {
+      "name": "durable group photo URL",
+      "contract": "GroupPhotoRecord",
+      "value": {
+        "userId": "pax_v2_0123456789abcdef0123456789abcdef",
+        "storagePath": "group_tour_photos/5112D_8/photo_1.jpg",
+        "timestamp": 1000,
+        "variantStatus": "ready",
+        "variantVersion": 2,
+        "sourceUrl": "https://firebasestorage.googleapis.com/download?token=durable"
+      }
+    },
+    {
+      "name": "durable private photo URL",
+      "contract": "PrivatePhotoRecord",
+      "value": {
+        "userId": "pax_v2_0123456789abcdef0123456789abcdef",
+        "storagePath": "private_tour_photos/5112D_8/owner/photo_1.jpg",
+        "timestamp": 1000,
+        "variantStatus": "ready",
+        "variantVersion": 2,
+        "viewerUrl": "https://firebasestorage.googleapis.com/download?token=durable"
+      }
+    },
+    { "name": "malformed notification tour", "contract": "NotificationPayload", "value": { "screen": "Chat", "tourId": "tour/other" } },
+    { "name": "unexpected notification route", "contract": "NotificationPayload", "value": { "screen": "AdminSecrets", "tourId": "5112D_8" } },
+    {
+      "name": "unbounded safety text",
+      "contract": "SafetySubmission",
+      "value": {
+        "schemaVersion": 2,
+        "eventId": "evt_001",
+        "tourId": "5112D_8",
+        "principalId": "pax_v2_0123456789abcdef0123456789abcdef",
+        "role": "passenger",
+        "category": "incident",
+        "severity": "high",
+        "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "isSOS": false,
+        "clientCreatedAtMs": 1000
+      }
+    },
+    {
+      "name": "invalid chat schema version",
+      "contract": "ChatMessage",
+      "value": {
+        "schemaVersion": 99,
+        "senderId": "pax_v2_0123456789abcdef0123456789abcdef",
+        "senderName": "Passenger",
+        "senderType": "passenger",
+        "timestamp": 1000,
+        "clientCreatedAt": 1000,
+        "status": "sent",
+        "type": "text",
+        "idempotencyKey": "msg_001"
+      }
+    }
+  ]
+}

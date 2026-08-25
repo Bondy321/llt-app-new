@@ -1,0 +1,2620 @@
+{
+  "generatedAt": "2026-08-25T12:17:56.604Z",
+  "sourceFileCount": 147,
+  "byBytes": [
+    {
+      "path": "functions/index.js",
+      "bytes": 259848,
+      "lines": 6899
+    },
+    {
+      "path": "screens/ChatScreen.js",
+      "bytes": 213264,
+      "lines": 6330
+    },
+    {
+      "path": "App.js",
+      "bytes": 92430,
+      "lines": 2218
+    },
+    {
+      "path": "screens/SafetySupportScreen.js",
+      "bytes": 91050,
+      "lines": 2808
+    },
+    {
+      "path": "screens/DriverHomeScreen.js",
+      "bytes": 83218,
+      "lines": 2300
+    },
+    {
+      "path": "web-admin/src/components/ToursManager.jsx",
+      "bytes": 81299,
+      "lines": 2174
+    },
+    {
+      "path": "screens/TourHomeScreen.js",
+      "bytes": 80353,
+      "lines": 2578
+    },
+    {
+      "path": "screens/ItineraryScreen.js",
+      "bytes": 78732,
+      "lines": 2203
+    },
+    {
+      "path": "services/bookingServiceRealtime.js",
+      "bytes": 78378,
+      "lines": 2036
+    },
+    {
+      "path": "services/chatService.js",
+      "bytes": 73972,
+      "lines": 2100
+    },
+    {
+      "path": "screens/PassengerManifestScreen.js",
+      "bytes": 65048,
+      "lines": 1716
+    },
+    {
+      "path": "services/offlineSyncService.js",
+      "bytes": 63894,
+      "lines": 1652
+    },
+    {
+      "path": "screens/PhotobookScreen.js",
+      "bytes": 63752,
+      "lines": 1846
+    },
+    {
+      "path": "screens/NotificationPreferencesScreen.js",
+      "bytes": 59615,
+      "lines": 1806
+    },
+    {
+      "path": "screens/MapScreen.js",
+      "bytes": 52392,
+      "lines": 1495
+    },
+    {
+      "path": "web-admin/src/components/Dashboard.jsx",
+      "bytes": 51695,
+      "lines": 1290
+    },
+    {
+      "path": "screens/GroupPhotobookScreen.js",
+      "bytes": 48522,
+      "lines": 1458
+    },
+    {
+      "path": "services/photoService.js",
+      "bytes": 48512,
+      "lines": 1364
+    },
+    {
+      "path": "components/ImageViewer.js",
+      "bytes": 40385,
+      "lines": 1279
+    },
+    {
+      "path": "screens/LoginScreen.js",
+      "bytes": 40352,
+      "lines": 1074
+    },
+    {
+      "path": "web-admin/src/services/tourService.js",
+      "bytes": 37269,
+      "lines": 1106
+    },
+    {
+      "path": "screens/DriverTourPackScreen.js",
+      "bytes": 35903,
+      "lines": 681
+    },
+    {
+      "path": "services/safetyService.js",
+      "bytes": 33298,
+      "lines": 1004
+    },
+    {
+      "path": "web-admin/src/components/DriversManager.jsx",
+      "bytes": 30564,
+      "lines": 874
+    },
+    {
+      "path": "functions/lib/driverTourPackPublisher.js",
+      "bytes": 28354,
+      "lines": 673
+    },
+    {
+      "path": "services/notificationService.js",
+      "bytes": 27795,
+      "lines": 832
+    },
+    {
+      "path": "web-admin/src/components/BroadcastPanel.jsx",
+      "bytes": 27042,
+      "lines": 702
+    },
+    {
+      "path": "functions/lib/driverTourPackSchema.js",
+      "bytes": 25080,
+      "lines": 541
+    },
+    {
+      "path": "web-admin/src/services/dashboardService.js",
+      "bytes": 23389,
+      "lines": 649
+    },
+    {
+      "path": "screens/DriverItineraryScreen.js",
+      "bytes": 22262,
+      "lines": 603
+    },
+    {
+      "path": "services/accountDeletionService.js",
+      "bytes": 20484,
+      "lines": 624
+    },
+    {
+      "path": "services/notificationInboxService.js",
+      "bytes": 19688,
+      "lines": 536
+    },
+    {
+      "path": "services/opsAlertService.js",
+      "bytes": 16016,
+      "lines": 439
+    },
+    {
+      "path": "web-admin/src/App.jsx",
+      "bytes": 15987,
+      "lines": 500
+    },
+    {
+      "path": "services/crashDiagnosticsService.js",
+      "bytes": 15811,
+      "lines": 462
+    },
+    {
+      "path": "services/driverTourPackActionService.js",
+      "bytes": 15690,
+      "lines": 294
+    },
+    {
+      "path": "services/loggerService.js",
+      "bytes": 15521,
+      "lines": 500
+    },
+    {
+      "path": "firebase.js",
+      "bytes": 14440,
+      "lines": 473
+    },
+    {
+      "path": "services/driverTourPackSchema.js",
+      "bytes": 13883,
+      "lines": 81
+    },
+    {
+      "path": "web-admin/src/components/AddPassengerModal.jsx",
+      "bytes": 13807,
+      "lines": 404
+    },
+    {
+      "path": "web-admin/src/services/opsAlertService.js",
+      "bytes": 13791,
+      "lines": 366
+    },
+    {
+      "path": "web-admin/src/components/ContentModerationPanel.jsx",
+      "bytes": 13545,
+      "lines": 394
+    },
+    {
+      "path": "web-admin/src/services/tourCsvService.js",
+      "bytes": 12730,
+      "lines": 364
+    },
+    {
+      "path": "services/loginDiagnosticsService.js",
+      "bytes": 12699,
+      "lines": 408
+    },
+    {
+      "path": "functions/lib/passengerIdentityMigration.js",
+      "bytes": 12569,
+      "lines": 307
+    },
+    {
+      "path": "components/TodaysAgendaCard.js",
+      "bytes": 11704,
+      "lines": 395
+    },
+    {
+      "path": "services/persistenceProvider.js",
+      "bytes": 11153,
+      "lines": 336
+    },
+    {
+      "path": "web-admin/src/services/firebaseDebug.js",
+      "bytes": 10851,
+      "lines": 352
+    },
+    {
+      "path": "services/driverManifestCacheService.js",
+      "bytes": 10764,
+      "lines": 205
+    },
+    {
+      "path": "hooks/useDiagnostics.js",
+      "bytes": 10660,
+      "lines": 310
+    },
+    {
+      "path": "screens/AccountPrivacyScreen.js",
+      "bytes": 10542,
+      "lines": 377
+    },
+    {
+      "path": "services/appSessionService.js",
+      "bytes": 10211,
+      "lines": 252
+    },
+    {
+      "path": "services/driverTourPackCommandCentre.js",
+      "bytes": 9965,
+      "lines": 254
+    },
+    {
+      "path": "screens/DriverHomeScreen.web.js",
+      "bytes": 9845,
+      "lines": 316
+    },
+    {
+      "path": "services/driverTourPackService.js",
+      "bytes": 9759,
+      "lines": 127
+    },
+    {
+      "path": "services/offlineLoginResolver.js",
+      "bytes": 9252,
+      "lines": 262
+    },
+    {
+      "path": "functions/lib/driverTourPackOperations.js",
+      "bytes": 9102,
+      "lines": 221
+    },
+    {
+      "path": "web-admin/src/services/driverTourPackOperationsService.js",
+      "bytes": 9000,
+      "lines": 148
+    },
+    {
+      "path": "web-admin/src/components/Settings.jsx",
+      "bytes": 8605,
+      "lines": 204
+    },
+    {
+      "path": "components/NotificationFeedCard.js",
+      "bytes": 8423,
+      "lines": 189
+    },
+    {
+      "path": "web-admin/src/services/contentModerationService.js",
+      "bytes": 8397,
+      "lines": 230
+    },
+    {
+      "path": "web-admin/src/services/passengerService.js",
+      "bytes": 8377,
+      "lines": 222
+    },
+    {
+      "path": "components/ManifestBookingCard.js",
+      "bytes": 8043,
+      "lines": 273
+    },
+    {
+      "path": "hooks/usePhotoGalleryData.js",
+      "bytes": 7962,
+      "lines": 255
+    },
+    {
+      "path": "components/SyncStatusBanner.js",
+      "bytes": 7835,
+      "lines": 265
+    },
+    {
+      "path": "services/passengerDataBoundary.js",
+      "bytes": 7683,
+      "lines": 187
+    },
+    {
+      "path": "utils/driverLocation.js",
+      "bytes": 7340,
+      "lines": 215
+    },
+    {
+      "path": "utils/chatTimeline.js",
+      "bytes": 7045,
+      "lines": 208
+    },
+    {
+      "path": "web-admin/src/services/driverTourPackAdminStatusService.js",
+      "bytes": 6925,
+      "lines": 141
+    },
+    {
+      "path": "web-admin/src/utils/dateUtils.js",
+      "bytes": 6920,
+      "lines": 246
+    },
+    {
+      "path": "services/contentModerationService.js",
+      "bytes": 6706,
+      "lines": 197
+    },
+    {
+      "path": "functions/lib/appSession.js",
+      "bytes": 6649,
+      "lines": 187
+    },
+    {
+      "path": "web-admin/src/services/adminDirectoryService.js",
+      "bytes": 6340,
+      "lines": 154
+    },
+    {
+      "path": "utils/notificationRouting.js",
+      "bytes": 5879,
+      "lines": 155
+    },
+    {
+      "path": "functions/lib/loginRateLimiter.js",
+      "bytes": 5685,
+      "lines": 159
+    },
+    {
+      "path": "services/imageOptimizationService.js",
+      "bytes": 5662,
+      "lines": 171
+    },
+    {
+      "path": "services/itineraryService.js",
+      "bytes": 5565,
+      "lines": 164
+    },
+    {
+      "path": "hooks/useDriverTourPack.js",
+      "bytes": 5243,
+      "lines": 79
+    },
+    {
+      "path": "screens/MapScreen.web.js",
+      "bytes": 5232,
+      "lines": 156
+    },
+    {
+      "path": "services/pickupTimeParser.js",
+      "bytes": 5220,
+      "lines": 179
+    },
+    {
+      "path": "screens/loginFlow.js",
+      "bytes": 5128,
+      "lines": 149
+    },
+    {
+      "path": "functions/lib/passengerIdentity.js",
+      "bytes": 5084,
+      "lines": 150
+    },
+    {
+      "path": "services/photoViewerCacheService.js",
+      "bytes": 4966,
+      "lines": 153
+    },
+    {
+      "path": "functions/lib/driverTourPackExpiryCleanup.js",
+      "bytes": 4842,
+      "lines": 130
+    },
+    {
+      "path": "services/photoVariantService.js",
+      "bytes": 4797,
+      "lines": 163
+    },
+    {
+      "path": "utils/itineraryPresentation.js",
+      "bytes": 4704,
+      "lines": 130
+    },
+    {
+      "path": "hooks/useDriverTourPackActions.js",
+      "bytes": 4480,
+      "lines": 112
+    },
+    {
+      "path": "services/driverLocationService.js",
+      "bytes": 4357,
+      "lines": 132
+    },
+    {
+      "path": "functions/lib/driverLocationExpiryCleanup.js",
+      "bytes": 4349,
+      "lines": 131
+    },
+    {
+      "path": "utils/notificationCategories.js",
+      "bytes": 4284,
+      "lines": 136
+    },
+    {
+      "path": "functions/lib/appSessionCleanup.js",
+      "bytes": 4207,
+      "lines": 109
+    },
+    {
+      "path": "services/driverOperationalLifecycleService.js",
+      "bytes": 4097,
+      "lines": 110
+    },
+    {
+      "path": "services/identityService.js",
+      "bytes": 3863,
+      "lines": 118
+    },
+    {
+      "path": "services/localSessionCleanupService.js",
+      "bytes": 3695,
+      "lines": 104
+    },
+    {
+      "path": "functions/lib/appSessionAccess.js",
+      "bytes": 3691,
+      "lines": 96
+    },
+    {
+      "path": "web-admin/src/firebase.js",
+      "bytes": 3682,
+      "lines": 117
+    },
+    {
+      "path": "services/timeUtils.js",
+      "bytes": 3253,
+      "lines": 122
+    },
+    {
+      "path": "components/AppErrorBoundary.js",
+      "bytes": 3251,
+      "lines": 125
+    },
+    {
+      "path": "services/chatSwipeReplyGesture.js",
+      "bytes": 3156,
+      "lines": 103
+    },
+    {
+      "path": "functions/lib/managementOidc.js",
+      "bytes": 3150,
+      "lines": 78
+    },
+    {
+      "path": "services/driverTourPackFeatureFlag.js",
+      "bytes": 3138,
+      "lines": 91
+    },
+    {
+      "path": "screens/LogoutPendingScreen.js",
+      "bytes": 3108,
+      "lines": 57
+    },
+    {
+      "path": "components/ManifestConflictCard.js",
+      "bytes": 3098,
+      "lines": 63
+    },
+    {
+      "path": "services/itineraryDateParser.js",
+      "bytes": 2924,
+      "lines": 120
+    },
+    {
+      "path": "components/GalleryPhotoTile.js",
+      "bytes": 2792,
+      "lines": 91
+    },
+    {
+      "path": "web-admin/src/services/appSessionAdminService.js",
+      "bytes": 2709,
+      "lines": 65
+    },
+    {
+      "path": "web-admin/src/services/healthService.js",
+      "bytes": 2558,
+      "lines": 96
+    },
+    {
+      "path": "functions/lib/manifestPassengers.js",
+      "bytes": 2471,
+      "lines": 58
+    },
+    {
+      "path": "services/hapticsService.js",
+      "bytes": 2320,
+      "lines": 75
+    },
+    {
+      "path": "services/swipeHomeNavigation.js",
+      "bytes": 2196,
+      "lines": 80
+    },
+    {
+      "path": "utils/itinerarySyncPresentation.js",
+      "bytes": 2169,
+      "lines": 82
+    },
+    {
+      "path": "utils/chatReplyNavigation.js",
+      "bytes": 2061,
+      "lines": 78
+    },
+    {
+      "path": "services/photoGalleryMergeService.js",
+      "bytes": 2057,
+      "lines": 64
+    },
+    {
+      "path": "utils/chatUnreadSummary.js",
+      "bytes": 2053,
+      "lines": 63
+    },
+    {
+      "path": "web-admin/src/main.jsx",
+      "bytes": 2052,
+      "lines": 90
+    },
+    {
+      "path": "utils/responsiveLayout.js",
+      "bytes": 1963,
+      "lines": 75
+    },
+    {
+      "path": "web-admin/src/utils/triageUtils.js",
+      "bytes": 1886,
+      "lines": 71
+    },
+    {
+      "path": "functions/lib/appSessionLock.js",
+      "bytes": 1729,
+      "lines": 59
+    },
+    {
+      "path": "utils/tourHomeActionPlanner.js",
+      "bytes": 1556,
+      "lines": 46
+    },
+    {
+      "path": "web-admin/src/services/adminActionService.js",
+      "bytes": 1476,
+      "lines": 41
+    },
+    {
+      "path": "web-admin/src/services/unifiedSyncContract.js",
+      "bytes": 1435,
+      "lines": 50
+    },
+    {
+      "path": "services/driverTourPackSelectors.js",
+      "bytes": 1377,
+      "lines": 11
+    },
+    {
+      "path": "web-admin/src/services/driverService.js",
+      "bytes": 1352,
+      "lines": 43
+    },
+    {
+      "path": "utils/appRouteHistory.js",
+      "bytes": 1343,
+      "lines": 46
+    },
+    {
+      "path": "utils/unifiedSyncContract.js",
+      "bytes": 1338,
+      "lines": 47
+    },
+    {
+      "path": "functions/lib/tourDateIndex.js",
+      "bytes": 1293,
+      "lines": 31
+    },
+    {
+      "path": "utils/chatSearch.js",
+      "bytes": 1270,
+      "lines": 40
+    },
+    {
+      "path": "utils/bookingLeadPhone.js",
+      "bytes": 1195,
+      "lines": 38
+    },
+    {
+      "path": "utils/pickupPresentation.js",
+      "bytes": 1181,
+      "lines": 37
+    },
+    {
+      "path": "services/imageOptimizationService.web.js",
+      "bytes": 1089,
+      "lines": 39
+    },
+    {
+      "path": "hooks/useDriverTourPackFeatureFlag.js",
+      "bytes": 1033,
+      "lines": 28
+    },
+    {
+      "path": "services/driverTourPackFreshness.js",
+      "bytes": 1029,
+      "lines": 21
+    },
+    {
+      "path": "services/optionalServiceLoader.js",
+      "bytes": 1028,
+      "lines": 38
+    },
+    {
+      "path": "hooks/usePhotoThumbnailPrefetch.js",
+      "bytes": 1003,
+      "lines": 36
+    },
+    {
+      "path": "web-admin/src/test/setupTests.js",
+      "bytes": 982,
+      "lines": 40
+    },
+    {
+      "path": "web-admin/src/utils/notificationCategories.js",
+      "bytes": 975,
+      "lines": 22
+    },
+    {
+      "path": "services/appMetadata.js",
+      "bytes": 934,
+      "lines": 33
+    },
+    {
+      "path": "utils/directions.js",
+      "bytes": 897,
+      "lines": 33
+    },
+    {
+      "path": "services/photoThumbnailPrefetchPlanner.js",
+      "bytes": 771,
+      "lines": 36
+    },
+    {
+      "path": "services/lazyRealtimeDb.js",
+      "bytes": 764,
+      "lines": 32
+    },
+    {
+      "path": "services/imageViewerPagerState.js",
+      "bytes": 726,
+      "lines": 25
+    },
+    {
+      "path": "web-admin/src/services/tourFormService.js",
+      "bytes": 575,
+      "lines": 20
+    },
+    {
+      "path": "utils/manifestSyncState.js",
+      "bytes": 557,
+      "lines": 19
+    },
+    {
+      "path": "services/tourIdentityService.js",
+      "bytes": 545,
+      "lines": 27
+    },
+    {
+      "path": "utils/chatRetry.js",
+      "bytes": 507,
+      "lines": 14
+    },
+    {
+      "path": "web-admin/src/services/adminAuthService.js",
+      "bytes": 474,
+      "lines": 17
+    },
+    {
+      "path": "utils/installTextScalingDefaults.js",
+      "bytes": 456,
+      "lines": 20
+    }
+  ],
+  "byLines": [
+    {
+      "path": "functions/index.js",
+      "bytes": 259848,
+      "lines": 6899
+    },
+    {
+      "path": "screens/ChatScreen.js",
+      "bytes": 213264,
+      "lines": 6330
+    },
+    {
+      "path": "screens/SafetySupportScreen.js",
+      "bytes": 91050,
+      "lines": 2808
+    },
+    {
+      "path": "screens/TourHomeScreen.js",
+      "bytes": 80353,
+      "lines": 2578
+    },
+    {
+      "path": "screens/DriverHomeScreen.js",
+      "bytes": 83218,
+      "lines": 2300
+    },
+    {
+      "path": "App.js",
+      "bytes": 92430,
+      "lines": 2218
+    },
+    {
+      "path": "screens/ItineraryScreen.js",
+      "bytes": 78732,
+      "lines": 2203
+    },
+    {
+      "path": "web-admin/src/components/ToursManager.jsx",
+      "bytes": 81299,
+      "lines": 2174
+    },
+    {
+      "path": "services/chatService.js",
+      "bytes": 73972,
+      "lines": 2100
+    },
+    {
+      "path": "services/bookingServiceRealtime.js",
+      "bytes": 78378,
+      "lines": 2036
+    },
+    {
+      "path": "screens/PhotobookScreen.js",
+      "bytes": 63752,
+      "lines": 1846
+    },
+    {
+      "path": "screens/NotificationPreferencesScreen.js",
+      "bytes": 59615,
+      "lines": 1806
+    },
+    {
+      "path": "screens/PassengerManifestScreen.js",
+      "bytes": 65048,
+      "lines": 1716
+    },
+    {
+      "path": "services/offlineSyncService.js",
+      "bytes": 63894,
+      "lines": 1652
+    },
+    {
+      "path": "screens/MapScreen.js",
+      "bytes": 52392,
+      "lines": 1495
+    },
+    {
+      "path": "screens/GroupPhotobookScreen.js",
+      "bytes": 48522,
+      "lines": 1458
+    },
+    {
+      "path": "services/photoService.js",
+      "bytes": 48512,
+      "lines": 1364
+    },
+    {
+      "path": "web-admin/src/components/Dashboard.jsx",
+      "bytes": 51695,
+      "lines": 1290
+    },
+    {
+      "path": "components/ImageViewer.js",
+      "bytes": 40385,
+      "lines": 1279
+    },
+    {
+      "path": "web-admin/src/services/tourService.js",
+      "bytes": 37269,
+      "lines": 1106
+    },
+    {
+      "path": "screens/LoginScreen.js",
+      "bytes": 40352,
+      "lines": 1074
+    },
+    {
+      "path": "services/safetyService.js",
+      "bytes": 33298,
+      "lines": 1004
+    },
+    {
+      "path": "web-admin/src/components/DriversManager.jsx",
+      "bytes": 30564,
+      "lines": 874
+    },
+    {
+      "path": "services/notificationService.js",
+      "bytes": 27795,
+      "lines": 832
+    },
+    {
+      "path": "web-admin/src/components/BroadcastPanel.jsx",
+      "bytes": 27042,
+      "lines": 702
+    },
+    {
+      "path": "screens/DriverTourPackScreen.js",
+      "bytes": 35903,
+      "lines": 681
+    },
+    {
+      "path": "functions/lib/driverTourPackPublisher.js",
+      "bytes": 28354,
+      "lines": 673
+    },
+    {
+      "path": "web-admin/src/services/dashboardService.js",
+      "bytes": 23389,
+      "lines": 649
+    },
+    {
+      "path": "services/accountDeletionService.js",
+      "bytes": 20484,
+      "lines": 624
+    },
+    {
+      "path": "screens/DriverItineraryScreen.js",
+      "bytes": 22262,
+      "lines": 603
+    },
+    {
+      "path": "functions/lib/driverTourPackSchema.js",
+      "bytes": 25080,
+      "lines": 541
+    },
+    {
+      "path": "services/notificationInboxService.js",
+      "bytes": 19688,
+      "lines": 536
+    },
+    {
+      "path": "services/loggerService.js",
+      "bytes": 15521,
+      "lines": 500
+    },
+    {
+      "path": "web-admin/src/App.jsx",
+      "bytes": 15987,
+      "lines": 500
+    },
+    {
+      "path": "firebase.js",
+      "bytes": 14440,
+      "lines": 473
+    },
+    {
+      "path": "services/crashDiagnosticsService.js",
+      "bytes": 15811,
+      "lines": 462
+    },
+    {
+      "path": "services/opsAlertService.js",
+      "bytes": 16016,
+      "lines": 439
+    },
+    {
+      "path": "services/loginDiagnosticsService.js",
+      "bytes": 12699,
+      "lines": 408
+    },
+    {
+      "path": "web-admin/src/components/AddPassengerModal.jsx",
+      "bytes": 13807,
+      "lines": 404
+    },
+    {
+      "path": "components/TodaysAgendaCard.js",
+      "bytes": 11704,
+      "lines": 395
+    },
+    {
+      "path": "web-admin/src/components/ContentModerationPanel.jsx",
+      "bytes": 13545,
+      "lines": 394
+    },
+    {
+      "path": "screens/AccountPrivacyScreen.js",
+      "bytes": 10542,
+      "lines": 377
+    },
+    {
+      "path": "web-admin/src/services/opsAlertService.js",
+      "bytes": 13791,
+      "lines": 366
+    },
+    {
+      "path": "web-admin/src/services/tourCsvService.js",
+      "bytes": 12730,
+      "lines": 364
+    },
+    {
+      "path": "web-admin/src/services/firebaseDebug.js",
+      "bytes": 10851,
+      "lines": 352
+    },
+    {
+      "path": "services/persistenceProvider.js",
+      "bytes": 11153,
+      "lines": 336
+    },
+    {
+      "path": "screens/DriverHomeScreen.web.js",
+      "bytes": 9845,
+      "lines": 316
+    },
+    {
+      "path": "hooks/useDiagnostics.js",
+      "bytes": 10660,
+      "lines": 310
+    },
+    {
+      "path": "functions/lib/passengerIdentityMigration.js",
+      "bytes": 12569,
+      "lines": 307
+    },
+    {
+      "path": "services/driverTourPackActionService.js",
+      "bytes": 15690,
+      "lines": 294
+    },
+    {
+      "path": "components/ManifestBookingCard.js",
+      "bytes": 8043,
+      "lines": 273
+    },
+    {
+      "path": "components/SyncStatusBanner.js",
+      "bytes": 7835,
+      "lines": 265
+    },
+    {
+      "path": "services/offlineLoginResolver.js",
+      "bytes": 9252,
+      "lines": 262
+    },
+    {
+      "path": "hooks/usePhotoGalleryData.js",
+      "bytes": 7962,
+      "lines": 255
+    },
+    {
+      "path": "services/driverTourPackCommandCentre.js",
+      "bytes": 9965,
+      "lines": 254
+    },
+    {
+      "path": "services/appSessionService.js",
+      "bytes": 10211,
+      "lines": 252
+    },
+    {
+      "path": "web-admin/src/utils/dateUtils.js",
+      "bytes": 6920,
+      "lines": 246
+    },
+    {
+      "path": "web-admin/src/services/contentModerationService.js",
+      "bytes": 8397,
+      "lines": 230
+    },
+    {
+      "path": "web-admin/src/services/passengerService.js",
+      "bytes": 8377,
+      "lines": 222
+    },
+    {
+      "path": "functions/lib/driverTourPackOperations.js",
+      "bytes": 9102,
+      "lines": 221
+    },
+    {
+      "path": "utils/driverLocation.js",
+      "bytes": 7340,
+      "lines": 215
+    },
+    {
+      "path": "utils/chatTimeline.js",
+      "bytes": 7045,
+      "lines": 208
+    },
+    {
+      "path": "services/driverManifestCacheService.js",
+      "bytes": 10764,
+      "lines": 205
+    },
+    {
+      "path": "web-admin/src/components/Settings.jsx",
+      "bytes": 8605,
+      "lines": 204
+    },
+    {
+      "path": "services/contentModerationService.js",
+      "bytes": 6706,
+      "lines": 197
+    },
+    {
+      "path": "components/NotificationFeedCard.js",
+      "bytes": 8423,
+      "lines": 189
+    },
+    {
+      "path": "functions/lib/appSession.js",
+      "bytes": 6649,
+      "lines": 187
+    },
+    {
+      "path": "services/passengerDataBoundary.js",
+      "bytes": 7683,
+      "lines": 187
+    },
+    {
+      "path": "services/pickupTimeParser.js",
+      "bytes": 5220,
+      "lines": 179
+    },
+    {
+      "path": "services/imageOptimizationService.js",
+      "bytes": 5662,
+      "lines": 171
+    },
+    {
+      "path": "services/itineraryService.js",
+      "bytes": 5565,
+      "lines": 164
+    },
+    {
+      "path": "services/photoVariantService.js",
+      "bytes": 4797,
+      "lines": 163
+    },
+    {
+      "path": "functions/lib/loginRateLimiter.js",
+      "bytes": 5685,
+      "lines": 159
+    },
+    {
+      "path": "screens/MapScreen.web.js",
+      "bytes": 5232,
+      "lines": 156
+    },
+    {
+      "path": "utils/notificationRouting.js",
+      "bytes": 5879,
+      "lines": 155
+    },
+    {
+      "path": "web-admin/src/services/adminDirectoryService.js",
+      "bytes": 6340,
+      "lines": 154
+    },
+    {
+      "path": "services/photoViewerCacheService.js",
+      "bytes": 4966,
+      "lines": 153
+    },
+    {
+      "path": "functions/lib/passengerIdentity.js",
+      "bytes": 5084,
+      "lines": 150
+    },
+    {
+      "path": "screens/loginFlow.js",
+      "bytes": 5128,
+      "lines": 149
+    },
+    {
+      "path": "web-admin/src/services/driverTourPackOperationsService.js",
+      "bytes": 9000,
+      "lines": 148
+    },
+    {
+      "path": "web-admin/src/services/driverTourPackAdminStatusService.js",
+      "bytes": 6925,
+      "lines": 141
+    },
+    {
+      "path": "utils/notificationCategories.js",
+      "bytes": 4284,
+      "lines": 136
+    },
+    {
+      "path": "services/driverLocationService.js",
+      "bytes": 4357,
+      "lines": 132
+    },
+    {
+      "path": "functions/lib/driverLocationExpiryCleanup.js",
+      "bytes": 4349,
+      "lines": 131
+    },
+    {
+      "path": "functions/lib/driverTourPackExpiryCleanup.js",
+      "bytes": 4842,
+      "lines": 130
+    },
+    {
+      "path": "utils/itineraryPresentation.js",
+      "bytes": 4704,
+      "lines": 130
+    },
+    {
+      "path": "services/driverTourPackService.js",
+      "bytes": 9759,
+      "lines": 127
+    },
+    {
+      "path": "components/AppErrorBoundary.js",
+      "bytes": 3251,
+      "lines": 125
+    },
+    {
+      "path": "services/timeUtils.js",
+      "bytes": 3253,
+      "lines": 122
+    },
+    {
+      "path": "services/itineraryDateParser.js",
+      "bytes": 2924,
+      "lines": 120
+    },
+    {
+      "path": "services/identityService.js",
+      "bytes": 3863,
+      "lines": 118
+    },
+    {
+      "path": "web-admin/src/firebase.js",
+      "bytes": 3682,
+      "lines": 117
+    },
+    {
+      "path": "hooks/useDriverTourPackActions.js",
+      "bytes": 4480,
+      "lines": 112
+    },
+    {
+      "path": "services/driverOperationalLifecycleService.js",
+      "bytes": 4097,
+      "lines": 110
+    },
+    {
+      "path": "functions/lib/appSessionCleanup.js",
+      "bytes": 4207,
+      "lines": 109
+    },
+    {
+      "path": "services/localSessionCleanupService.js",
+      "bytes": 3695,
+      "lines": 104
+    },
+    {
+      "path": "services/chatSwipeReplyGesture.js",
+      "bytes": 3156,
+      "lines": 103
+    },
+    {
+      "path": "functions/lib/appSessionAccess.js",
+      "bytes": 3691,
+      "lines": 96
+    },
+    {
+      "path": "web-admin/src/services/healthService.js",
+      "bytes": 2558,
+      "lines": 96
+    },
+    {
+      "path": "components/GalleryPhotoTile.js",
+      "bytes": 2792,
+      "lines": 91
+    },
+    {
+      "path": "services/driverTourPackFeatureFlag.js",
+      "bytes": 3138,
+      "lines": 91
+    },
+    {
+      "path": "web-admin/src/main.jsx",
+      "bytes": 2052,
+      "lines": 90
+    },
+    {
+      "path": "utils/itinerarySyncPresentation.js",
+      "bytes": 2169,
+      "lines": 82
+    },
+    {
+      "path": "services/driverTourPackSchema.js",
+      "bytes": 13883,
+      "lines": 81
+    },
+    {
+      "path": "services/swipeHomeNavigation.js",
+      "bytes": 2196,
+      "lines": 80
+    },
+    {
+      "path": "hooks/useDriverTourPack.js",
+      "bytes": 5243,
+      "lines": 79
+    },
+    {
+      "path": "functions/lib/managementOidc.js",
+      "bytes": 3150,
+      "lines": 78
+    },
+    {
+      "path": "utils/chatReplyNavigation.js",
+      "bytes": 2061,
+      "lines": 78
+    },
+    {
+      "path": "services/hapticsService.js",
+      "bytes": 2320,
+      "lines": 75
+    },
+    {
+      "path": "utils/responsiveLayout.js",
+      "bytes": 1963,
+      "lines": 75
+    },
+    {
+      "path": "web-admin/src/utils/triageUtils.js",
+      "bytes": 1886,
+      "lines": 71
+    },
+    {
+      "path": "web-admin/src/services/appSessionAdminService.js",
+      "bytes": 2709,
+      "lines": 65
+    },
+    {
+      "path": "services/photoGalleryMergeService.js",
+      "bytes": 2057,
+      "lines": 64
+    },
+    {
+      "path": "components/ManifestConflictCard.js",
+      "bytes": 3098,
+      "lines": 63
+    },
+    {
+      "path": "utils/chatUnreadSummary.js",
+      "bytes": 2053,
+      "lines": 63
+    },
+    {
+      "path": "functions/lib/appSessionLock.js",
+      "bytes": 1729,
+      "lines": 59
+    },
+    {
+      "path": "functions/lib/manifestPassengers.js",
+      "bytes": 2471,
+      "lines": 58
+    },
+    {
+      "path": "screens/LogoutPendingScreen.js",
+      "bytes": 3108,
+      "lines": 57
+    },
+    {
+      "path": "web-admin/src/services/unifiedSyncContract.js",
+      "bytes": 1435,
+      "lines": 50
+    },
+    {
+      "path": "utils/unifiedSyncContract.js",
+      "bytes": 1338,
+      "lines": 47
+    },
+    {
+      "path": "utils/appRouteHistory.js",
+      "bytes": 1343,
+      "lines": 46
+    },
+    {
+      "path": "utils/tourHomeActionPlanner.js",
+      "bytes": 1556,
+      "lines": 46
+    },
+    {
+      "path": "web-admin/src/services/driverService.js",
+      "bytes": 1352,
+      "lines": 43
+    },
+    {
+      "path": "web-admin/src/services/adminActionService.js",
+      "bytes": 1476,
+      "lines": 41
+    },
+    {
+      "path": "utils/chatSearch.js",
+      "bytes": 1270,
+      "lines": 40
+    },
+    {
+      "path": "web-admin/src/test/setupTests.js",
+      "bytes": 982,
+      "lines": 40
+    },
+    {
+      "path": "services/imageOptimizationService.web.js",
+      "bytes": 1089,
+      "lines": 39
+    },
+    {
+      "path": "services/optionalServiceLoader.js",
+      "bytes": 1028,
+      "lines": 38
+    },
+    {
+      "path": "utils/bookingLeadPhone.js",
+      "bytes": 1195,
+      "lines": 38
+    },
+    {
+      "path": "utils/pickupPresentation.js",
+      "bytes": 1181,
+      "lines": 37
+    },
+    {
+      "path": "hooks/usePhotoThumbnailPrefetch.js",
+      "bytes": 1003,
+      "lines": 36
+    },
+    {
+      "path": "services/photoThumbnailPrefetchPlanner.js",
+      "bytes": 771,
+      "lines": 36
+    },
+    {
+      "path": "services/appMetadata.js",
+      "bytes": 934,
+      "lines": 33
+    },
+    {
+      "path": "utils/directions.js",
+      "bytes": 897,
+      "lines": 33
+    },
+    {
+      "path": "services/lazyRealtimeDb.js",
+      "bytes": 764,
+      "lines": 32
+    },
+    {
+      "path": "functions/lib/tourDateIndex.js",
+      "bytes": 1293,
+      "lines": 31
+    },
+    {
+      "path": "hooks/useDriverTourPackFeatureFlag.js",
+      "bytes": 1033,
+      "lines": 28
+    },
+    {
+      "path": "services/tourIdentityService.js",
+      "bytes": 545,
+      "lines": 27
+    },
+    {
+      "path": "services/imageViewerPagerState.js",
+      "bytes": 726,
+      "lines": 25
+    },
+    {
+      "path": "web-admin/src/utils/notificationCategories.js",
+      "bytes": 975,
+      "lines": 22
+    },
+    {
+      "path": "services/driverTourPackFreshness.js",
+      "bytes": 1029,
+      "lines": 21
+    },
+    {
+      "path": "utils/installTextScalingDefaults.js",
+      "bytes": 456,
+      "lines": 20
+    },
+    {
+      "path": "web-admin/src/services/tourFormService.js",
+      "bytes": 575,
+      "lines": 20
+    },
+    {
+      "path": "utils/manifestSyncState.js",
+      "bytes": 557,
+      "lines": 19
+    },
+    {
+      "path": "web-admin/src/services/adminAuthService.js",
+      "bytes": 474,
+      "lines": 17
+    },
+    {
+      "path": "utils/chatRetry.js",
+      "bytes": 507,
+      "lines": 14
+    },
+    {
+      "path": "services/driverTourPackSelectors.js",
+      "bytes": 1377,
+      "lines": 11
+    }
+  ],
+  "functionExports": [
+    "__testables",
+    "assignDriverToTour",
+    "cleanupExpiredAppSessions",
+    "cleanupExpiredDriverLocations",
+    "cleanupExpiredDriverTourPacks",
+    "cleanupExpiredLoginRateLimits",
+    "cleanupNotificationReadState",
+    "createGroupPhotoChatMessage",
+    "createManualPassengerBooking",
+    "deleteGroupPhoto",
+    "deletePrivatePhoto",
+    "deleteTourData",
+    "endAppSession",
+    "generatePhotoVariants",
+    "getTourManifest",
+    "ingestDriverTourPacks",
+    "normalizeTourDateIndexes",
+    "normalizeTourEndDateIndex",
+    "processBroadcastWrite",
+    "processCategoryBroadcastWrite",
+    "processNotificationReadMigrationRequest",
+    "projectDriverTourPackActionState",
+    "removeReportedPhoto",
+    "resolveGroupPhotoMedia",
+    "resolvePrivatePhotoMedia",
+    "revokeAppSession",
+    "sendChatNotification",
+    "sendDriverTourPackChangeNotification",
+    "sendInternalChatNotification",
+    "sendItineraryNotification",
+    "sendSafetyAlertNotification",
+    "submitSafetyReport",
+    "uploadGroupPhoto",
+    "uploadPrivatePhoto",
+    "verifyDriverLogin",
+    "verifyPassengerLogin"
+  ],
+  "serviceExports": {
+    "services/chatService.js": [
+      "addReaction",
+      "deleteMessage",
+      "getChatMessageById",
+      "getChatMessages",
+      "getChatMessagesPage",
+      "getMessageTextForCopy",
+      "hydrateGroupPhotoMessages",
+      "markChatAsRead",
+      "markInternalChatAsRead",
+      "removeReaction",
+      "sendImageMessage",
+      "sendInternalDriverMessage",
+      "sendInternalMessageDirect",
+      "sendMessage",
+      "sendMessageDirect",
+      "setOnlinePresence",
+      "setTypingStatus",
+      "subscribeToChatMessages",
+      "subscribeToInternalDriverChat",
+      "subscribeToPresence",
+      "subscribeToReadReceipts",
+      "subscribeToTypingIndicators",
+      "toggleReaction"
+    ],
+    "services/bookingServiceRealtime.js": [
+      "MANIFEST_STATUS",
+      "applyManifestUpdateDirect",
+      "assignDriverToTour",
+      "buildAssignedDriverCodePayload",
+      "ensureBookingSchemaConsistency",
+      "ensureTourParticipantCount",
+      "getDriverItinerary",
+      "getTourItinerary",
+      "getTourManifest",
+      "joinTour",
+      "normalizeManifestPassengerRows",
+      "resolveVerifiedPassengerIdentity",
+      "updateManifestBooking",
+      "validateBookingReference"
+    ],
+    "services/photoService.js": [
+      "buildGroupPhotoAuthHeaders",
+      "buildGroupPhotoEndpointUrl",
+      "buildPrivatePhotoEndpointUrl",
+      "createBlob",
+      "deleteGroupPhoto",
+      "deletePrivatePhoto",
+      "fetchPrivatePhotosPage",
+      "fetchTourPhotosPage",
+      "resolveGroupPhotoMedia",
+      "resolvePrivatePhotoMedia",
+      "subscribeToPrivatePhotos",
+      "subscribeToTourPhotos",
+      "updatePhotoCaption",
+      "uploadPhoto",
+      "uploadPhotoDirect"
+    ]
+  },
+  "mobileRoutes": [
+    "AccountPrivacy",
+    "Chat",
+    "DriverHome",
+    "DriverItinerary",
+    "DriverTourPack",
+    "GroupPhotobook",
+    "Itinerary",
+    "Login",
+    "Map",
+    "NotificationPreferences",
+    "PassengerManifest",
+    "Photobook",
+    "SafetySupport",
+    "TourHome"
+  ],
+  "directFirebaseImports": [
+    {
+      "file": "firebase.js",
+      "line": 2,
+      "text": "import firebase from 'firebase/compat/app';"
+    },
+    {
+      "file": "firebase.js",
+      "line": 7,
+      "text": "import { getStorage } from 'firebase/storage';"
+    },
+    {
+      "file": "firebase.js",
+      "line": 8,
+      "text": "import { getDatabase } from 'firebase/database';"
+    },
+    {
+      "file": "firebase.js",
+      "line": 15,
+      "text": "} from 'firebase/auth';"
+    },
+    {
+      "file": "services/accountDeletionService.js",
+      "line": 2,
+      "text": "import { deleteUser } from 'firebase/auth';"
+    },
+    {
+      "file": "services/photoService.js",
+      "line": 16,
+      "text": "} = require('firebase/database');"
+    },
+    {
+      "file": "web-admin/src/App.jsx",
+      "line": 4,
+      "text": "import { signInWithEmailAndPassword, onAuthStateChanged, signOut, sendPasswordResetEmail } from 'firebase/auth';"
+    },
+    {
+      "file": "web-admin/src/components/BroadcastPanel.jsx",
+      "line": 2,
+      "text": "import { ref, push, set, onValue, query, orderByChild, limitToLast } from 'firebase/database';"
+    },
+    {
+      "file": "web-admin/src/components/DriversManager.jsx",
+      "line": 2,
+      "text": "import { ref, update } from 'firebase/database';"
+    },
+    {
+      "file": "web-admin/src/components/Settings.jsx",
+      "line": 2,
+      "text": "import { updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';"
+    },
+    {
+      "file": "web-admin/src/firebase.js",
+      "line": 1,
+      "text": "import { initializeApp } from \"firebase/app\";"
+    },
+    {
+      "file": "web-admin/src/firebase.js",
+      "line": 2,
+      "text": "import { getAuth } from \"firebase/auth\";"
+    },
+    {
+      "file": "web-admin/src/firebase.js",
+      "line": 3,
+      "text": "import { getDatabase, onValue, ref } from \"firebase/database\";"
+    },
+    {
+      "file": "web-admin/src/services/adminAuthService.js",
+      "line": 1,
+      "text": "import { get, ref } from 'firebase/database';"
+    },
+    {
+      "file": "web-admin/src/services/adminDirectoryService.js",
+      "line": 12,
+      "text": "} from 'firebase/database';"
+    },
+    {
+      "file": "web-admin/src/services/appSessionAdminService.js",
+      "line": 1,
+      "text": "import { onValue, ref } from 'firebase/database';"
+    },
+    {
+      "file": "web-admin/src/services/contentModerationService.js",
+      "line": 1,
+      "text": "import { get, limitToLast, onValue, orderByChild, query, ref, update } from 'firebase/database';"
+    },
+    {
+      "file": "web-admin/src/services/dashboardService.js",
+      "line": 1,
+      "text": "import { get, onValue, ref, update } from 'firebase/database';"
+    },
+    {
+      "file": "web-admin/src/services/driverService.js",
+      "line": 1,
+      "text": "import { ref, runTransaction } from 'firebase/database';"
+    },
+    {
+      "file": "web-admin/src/services/driverTourPackAdminStatusService.js",
+      "line": 1,
+      "text": "import { limitToLast, onValue, orderByChild, query, ref } from 'firebase/database';"
+    },
+    {
+      "file": "web-admin/src/services/driverTourPackOperationsService.js",
+      "line": 1,
+      "text": "import { endAt, limitToFirst, onValue, orderByChild, query, ref, startAt, update } from 'firebase/database';"
+    },
+    {
+      "file": "web-admin/src/services/healthService.js",
+      "line": 1,
+      "text": "import { get, ref } from 'firebase/database';"
+    },
+    {
+      "file": "web-admin/src/services/opsAlertService.js",
+      "line": 1,
+      "text": "import { get, limitToLast, onValue, orderByChild, query, ref, update } from 'firebase/database';"
+    },
+    {
+      "file": "web-admin/src/services/tourService.js",
+      "line": 45,
+      "text": "import { ref, update, get, onValue, runTransaction } from 'firebase/database';"
+    }
+  ],
+  "directPersistenceImports": [
+    {
+      "file": "App.js",
+      "line": 6,
+      "text": "import AsyncStorage from '@react-native-async-storage/async-storage';"
+    },
+    {
+      "file": "firebase.js",
+      "line": 6,
+      "text": "import AsyncStorage from '@react-native-async-storage/async-storage';"
+    },
+    {
+      "file": "screens/DriverItineraryScreen.js",
+      "line": 18,
+      "text": "import AsyncStorage from '@react-native-async-storage/async-storage';"
+    },
+    {
+      "file": "services/accountDeletionService.js",
+      "line": 1,
+      "text": "import AsyncStorage from '@react-native-async-storage/async-storage';"
+    },
+    {
+      "file": "services/appSessionService.js",
+      "line": 1,
+      "text": "const NativeAsyncStorage = require('@react-native-async-storage/async-storage').default;"
+    },
+    {
+      "file": "services/localSessionCleanupService.js",
+      "line": 1,
+      "text": "const AsyncStorage = require('@react-native-async-storage/async-storage').default;"
+    },
+    {
+      "file": "services/persistenceProvider.js",
+      "line": 7,
+      "text": "SecureStore = require('expo-secure-store');"
+    },
+    {
+      "file": "services/persistenceProvider.js",
+      "line": 13,
+      "text": "AsyncStorage = require('@react-native-async-storage/async-storage').default;"
+    },
+    {
+      "file": "services/safetyService.js",
+      "line": 4,
+      "text": "import AsyncStorage from '@react-native-async-storage/async-storage';"
+    }
+  ],
+  "directFetchCalls": [
+    {
+      "file": "components/ImageViewer.js",
+      "line": 390,
+      "text": "NetInfo.fetch().then((state) => {"
+    },
+    {
+      "file": "screens/LoginScreen.js",
+      "line": 407,
+      "text": "netInfoState = await NetInfo.fetch();"
+    },
+    {
+      "file": "services/appSessionService.js",
+      "line": 85,
+      "text": "fetchFn = (...args) => fetch(...args),"
+    },
+    {
+      "file": "services/bookingServiceRealtime.js",
+      "line": 215,
+      "text": "return await fetch(endpoint, { ...options, signal: controller.signal });"
+    },
+    {
+      "file": "services/bookingServiceRealtime.js",
+      "line": 701,
+      "text": "const response = await fetch(endpoint, {"
+    },
+    {
+      "file": "services/safetyService.js",
+      "line": 338,
+      "text": "return await fetch(endpoint, { ...options, signal: controller.signal });"
+    },
+    {
+      "file": "web-admin/src/services/adminActionService.js",
+      "line": 23,
+      "text": "const response = await fetch(endpoint, {"
+    },
+    {
+      "file": "web-admin/src/services/passengerService.js",
+      "line": 204,
+      "text": "const response = await fetch(endpoint, {"
+    }
+  ],
+  "circularDependencies": [],
+  "functionsIndexImports": [
+    "firebase-functions/v2/database",
+    "firebase-functions/v2/https",
+    "firebase-functions/v2/scheduler",
+    "firebase-functions/v2/storage",
+    "firebase-admin",
+    "expo-server-sdk",
+    "sharp",
+    "crypto",
+    "./lib/manifestPassengers",
+    "./lib/driverTourPackPublisher",
+    "./lib/managementOidc",
+    "./lib/driverTourPackExpiryCleanup",
+    "./lib/driverLocationExpiryCleanup",
+    "./lib/loginRateLimiter",
+    "./lib/driverTourPackOperations",
+    "./lib/tourDateIndex",
+    "./lib/passengerIdentity",
+    "./lib/appSession",
+    "./lib/appSessionLock",
+    "./lib/appSessionAccess",
+    "./lib/appSessionCleanup"
+  ],
+  "sharpImporters": [
+    "functions/index.js"
+  ],
+  "expoServerSdkImporters": [
+    "functions/index.js"
+  ],
+  "topLevelMutableCollections": [
+    {
+      "file": "App.js",
+      "line": 78,
+      "text": "const IDENTITY_SESSION_KEYS = {"
+    },
+    {
+      "file": "App.js",
+      "line": 82,
+      "text": "const COLORS = {"
+    },
+    {
+      "file": "App.js",
+      "line": 92,
+      "text": "const SESSION_KEYS = {"
+    },
+    {
+      "file": "components/ManifestBookingCard.js",
+      "line": 13,
+      "text": "const STATUS_COLORS = {"
+    },
+    {
+      "file": "components/ManifestBookingCard.js",
+      "line": 20,
+      "text": "const STATUS_LIGHT_COLORS = {"
+    },
+    {
+      "file": "components/ManifestBookingCard.js",
+      "line": 27,
+      "text": "const STATUS_ICONS = {"
+    },
+    {
+      "file": "components/ManifestBookingCard.js",
+      "line": 34,
+      "text": "const SYNC_META = {"
+    },
+    {
+      "file": "components/NotificationFeedCard.js",
+      "line": 12,
+      "text": "const iconByType = {"
+    },
+    {
+      "file": "components/SyncStatusBanner.js",
+      "line": 14,
+      "text": "const SEVERITY_STYLES = {"
+    },
+    {
+      "file": "components/SyncStatusBanner.js",
+      "line": 57,
+      "text": "const SEVERITY_PROGRESS = {"
+    },
+    {
+      "file": "components/TodaysAgendaCard.js",
+      "line": 14,
+      "text": "const COLORS = {"
+    },
+    {
+      "file": "firebase.js",
+      "line": 41,
+      "text": "const firebaseConfig = {"
+    },
+    {
+      "file": "firebase.js",
+      "line": 52,
+      "text": "const REQUIRED_FIREBASE_CONFIG_FIELDS = ["
+    },
+    {
+      "file": "firebase.js",
+      "line": 62,
+      "text": "const FIREBASE_CONFIG_FIELD_ENV_MAP = {"
+    },
+    {
+      "file": "firebase.js",
+      "line": 72,
+      "text": "const FIREBASE_PLACEHOLDER_VALUE_PATTERNS = ["
+    },
+    {
+      "file": "firebase.js",
+      "line": 202,
+      "text": "const firebaseInitHealth = {"
+    },
+    {
+      "file": "firebase.js",
+      "line": 301,
+      "text": "let authStateListeners = [];"
+    },
+    {
+      "file": "firebase.js",
+      "line": 341,
+      "text": "const authHelpers = {"
+    },
+    {
+      "file": "functions/index.js",
+      "line": 85,
+      "text": "const userProfileCache = new Map();"
+    },
+    {
+      "file": "functions/index.js",
+      "line": 98,
+      "text": "const MANIFEST_STATUS = {"
+    },
+    {
+      "file": "functions/index.js",
+      "line": 104,
+      "text": "const TOUR_NOTIFICATION_CATEGORY_LABELS = {"
+    },
+    {
+      "file": "functions/index.js",
+      "line": 117,
+      "text": "const PUSH_NOTIFICATION_SCREENS = new Set(['Chat', 'Itinerary', 'GroupPhotobook', 'NotificationPreferences', 'SafetySupport', 'DriverTourPack']);"
+    },
+    {
+      "file": "functions/index.js",
+      "line": 118,
+      "text": "const SAFETY_CATEGORIES = new Set(["
+    },
+    {
+      "file": "functions/index.js",
+      "line": 129,
+      "text": "const SAFETY_SEVERITIES = new Set(['low', 'medium', 'high', 'critical']);"
+    },
+    {
+      "file": "functions/index.js",
+      "line": 130,
+      "text": "const LEGACY_TOUR_NOTIFICATION_CATEGORY_PREF_KEYS = {"
+    },
+    {
+      "file": "functions/index.js",
+      "line": 193,
+      "text": "const log = {"
+    },
+    {
+      "file": "functions/index.js",
+      "line": 1838,
+      "text": "const rateLimitCache = new Map();"
+    },
+    {
+      "file": "functions/index.js",
+      "line": 2186,
+      "text": "const DEFAULT_ADMIN_PORTAL_ORIGINS = new Set(["
+    },
+    {
+      "file": "functions/index.js",
+      "line": 3114,
+      "text": "const GROUP_MEDIA_ALLOWED_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic']);"
+    },
+    {
+      "file": "functions/index.js",
+      "line": 4829,
+      "text": "const APP_SESSION_REVOCATION_REASONS = new Set(["
+    },
+    {
+      "file": "functions/index.js",
+      "line": 5069,
+      "text": "const BROADCAST_TERMINAL_STATUSES = new Set(['delivered', 'partial', 'failed', 'no_recipients']);"
+    },
+    {
+      "file": "functions/lib/appSessionLock.js",
+      "line": 6,
+      "text": "const APP_SESSION_LOCK_OPERATIONS = new Set(['issue', 'end', 'assign', 'revoke', 'cleanup']);"
+    },
+    {
+      "file": "functions/lib/driverTourPackPublisher.js",
+      "line": 17,
+      "text": "const ALLOWED_WRITE_ROOTS = new Set(Object.values(DRIVER_TOUR_PACK_ROOTS));"
+    },
+    {
+      "file": "hooks/useDiagnostics.js",
+      "line": 11,
+      "text": "const PROBE_WINDOWS_MS = {"
+    },
+    {
+      "file": "hooks/useDriverTourPack.js",
+      "line": 5,
+      "text": "const initial = { state: 'missing', pack: null, error: null, source: null, revision: null, loading: true };"
+    },
+    {
+      "file": "screens/ChatScreen.js",
+      "line": 94,
+      "text": "const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🎉'];"
+    },
+    {
+      "file": "screens/ChatScreen.js",
+      "line": 133,
+      "text": "const SEARCH_FILTERS = ["
+    },
+    {
+      "file": "screens/ChatScreen.js",
+      "line": 145,
+      "text": "const COLORS = {"
+    },
+    {
+      "file": "screens/ChatScreen.js",
+      "line": 463,
+      "text": "const REMOTE_REACTION_DEBUG_EVENTS = new Set(["
+    },
+    {
+      "file": "screens/DriverHomeScreen.js",
+      "line": 44,
+      "text": "const COLORS = {"
+    },
+    {
+      "file": "screens/DriverHomeScreen.js",
+      "line": 62,
+      "text": "const minimalMapStyle = ["
+    },
+    {
+      "file": "screens/DriverItineraryScreen.js",
+      "line": 22,
+      "text": "const COLORS = {"
+    },
+    {
+      "file": "screens/ItineraryScreen.js",
+      "line": 42,
+      "text": "const COLORS = {"
+    },
+    {
+      "file": "screens/LoginScreen.js",
+      "line": 51,
+      "text": "const COLORS = {"
+    },
+    {
+      "file": "screens/MapScreen.js",
+      "line": 29,
+      "text": "const COLORS = {"
+    },
+    {
+      "file": "screens/MapScreen.js",
+      "line": 46,
+      "text": "const mapStyle = ["
+    },
+    {
+      "file": "screens/NotificationPreferencesScreen.js",
+      "line": 39,
+      "text": "const COLORS = {"
+    },
+    {
+      "file": "screens/PassengerManifestScreen.js",
+      "line": 27,
+      "text": "const COLORS = {"
+    },
+    {
+      "file": "screens/PassengerManifestScreen.js",
+      "line": 51,
+      "text": "const STATUS_FILTERS = ["
+    },
+    {
+      "file": "screens/PassengerManifestScreen.js",
+      "line": 59,
+      "text": "const HEADER_WIDGETS_VISIBLE = {"
+    },
+    {
+      "file": "screens/SafetySupportScreen.js",
+      "line": 57,
+      "text": "const SAFETY_STATUS_META = {"
+    },
+    {
+      "file": "screens/SafetySupportScreen.js",
+      "line": 75,
+      "text": "const COLORS = {"
+    },
+    {
+      "file": "screens/TourHomeScreen.js",
+      "line": 45,
+      "text": "const COLORS = {"
+    },
+    {
+      "file": "screens/loginFlow.js",
+      "line": 1,
+      "text": "const OFFLINE_LOGIN_REASON_COPY = {"
+    },
+    {
+      "file": "screens/loginFlow.js",
+      "line": 39,
+      "text": "const OFFLINE_RETRYABLE_REASONS = ['NO_CACHED_SESSION', 'CODE_MISMATCH', 'CACHE_EXPIRED', 'EMAIL_MISMATCH', 'EMAIL_NOT_CACHED'];"
+    },
+    {
+      "file": "screens/loginFlow.js",
+      "line": 43,
+      "text": "const LOGIN_PRIMARY_LAYOUT_KEYS = ['code_input', 'primary_cta', 'mode_hints'];"
+    },
+    {
+      "file": "screens/loginFlow.js",
+      "line": 49,
+      "text": "const LOGIN_MODE_HINTS = {"
+    },
+    {
+      "file": "services/accountDeletionService.js",
+      "line": 19,
+      "text": "const APP_SESSION_KEYS = ["
+    },
+    {
+      "file": "services/accountDeletionService.js",
+      "line": 27,
+      "text": "const SAFETY_LOCAL_KEYS = ["
+    },
+    {
+      "file": "services/appSessionService.js",
+      "line": 3,
+      "text": "const testStorageValues = new Map();"
+    },
+    {
+      "file": "services/appSessionService.js",
+      "line": 4,
+      "text": "const testStorage = {"
+    },
+    {
+      "file": "services/appSessionService.js",
+      "line": 17,
+      "text": "const SAFE_SESSION_KEYS = new Set(["
+    },
+    {
+      "file": "services/bookingServiceRealtime.js",
+      "line": 35,
+      "text": "const MANIFEST_STATUS = {"
+    },
+    {
+      "file": "services/contentModerationService.js",
+      "line": 32,
+      "text": "const REPORT_REASON_OPTIONS = ["
+    },
+    {
+      "file": "services/contentModerationService.js",
+      "line": 41,
+      "text": "const REPORT_REASON_KEYS = new Set(REPORT_REASON_OPTIONS.map((option) => option.key));"
+    },
+    {
+      "file": "services/contentModerationService.js",
+      "line": 42,
+      "text": "const CONTENT_TYPES = new Set(['chat_message', 'group_photo']);"
+    },
+    {
+      "file": "services/contentModerationService.js",
+      "line": 43,
+      "text": "const CHAT_SCOPES = new Set(['group', 'internal']);"
+    },
+    {
+      "file": "services/contentModerationService.js",
+      "line": 45,
+      "text": "const OBJECTIONABLE_PATTERNS = ["
+    },
+    {
+      "file": "services/crashDiagnosticsService.js",
+      "line": 27,
+      "text": "let breadcrumbs = [];"
+    },
+    {
+      "file": "services/crashDiagnosticsService.js",
+      "line": 28,
+      "text": "let context = {};"
+    },
+    {
+      "file": "services/driverManifestCacheService.js",
+      "line": 10,
+      "text": "const MANIFEST_STATUSES = new Set(['PENDING', 'BOARDED', 'NO_SHOW', 'PARTIAL']);"
+    },
+    {
+      "file": "services/driverManifestCacheService.js",
+      "line": 19,
+      "text": "const response = {"
+    },
+    {
+      "file": "services/driverTourPackSchema.js",
+      "line": 12,
+      "text": "const TOP = ['schemaVersion','departureKey','tourId','tourCode','dateISO','status','sourceSnapshotDate','generatedAtMs','publishedAtMs','revision','contentFingerprint','expiresAtMs"
+    },
+    {
+      "file": "services/driverTourPackSchema.js",
+      "line": 13,
+      "text": "const COVERAGE = ['tourSummary','paxByDepPoint','tourPax','tourContract','hotelInfo','tourItinerary'];"
+    },
+    {
+      "file": "services/driverTourPackSchema.js",
+      "line": 14,
+      "text": "const QUALITY = ['state','matched','tourPaxOnly','paxOnly','conflicts','duplicateTourPaxSeats','duplicatePaxSeats','unseated','layoutAnomalies','missingReports','suppressSeatMap','"
+    },
+    {
+      "file": "services/hapticsService.js",
+      "line": 3,
+      "text": "let ExpoHaptics = {};"
+    },
+    {
+      "file": "services/hapticsService.js",
+      "line": 41,
+      "text": "const androidImpactTypeByStyle = {"
+    },
+    {
+      "file": "services/hapticsService.js",
+      "line": 49,
+      "text": "const androidNotificationTypeByType = {"
+    },
+    {
+      "file": "services/imageOptimizationService.js",
+      "line": 4,
+      "text": "const OPTIMIZATION_PROFILES = {"
+    },
+    {
+      "file": "services/itineraryService.js",
+      "line": 6,
+      "text": "const METADATA_KEYS = new Set(['revision', 'updatedAt', 'updatedBy']);"
+    },
+    {
+      "file": "services/localSessionCleanupService.js",
+      "line": 6,
+      "text": "const APP_LOCAL_KEYS = ["
+    },
+    {
+      "file": "services/loggerService.js",
+      "line": 21,
+      "text": "const LOG_LEVELS = {"
+    },
+    {
+      "file": "services/loggerService.js",
+      "line": 39,
+      "text": "const LOG_COLORS = {"
+    },
+    {
+      "file": "services/loggerService.js",
+      "line": 48,
+      "text": "const SENSITIVE_KEYS = new Set(["
+    },
+    {
+      "file": "services/loginDiagnosticsService.js",
+      "line": 1,
+      "text": "let Platform = { OS: 'unknown', Version: 'unknown', constants: {} };"
+    },
+    {
+      "file": "services/loginDiagnosticsService.js",
+      "line": 2,
+      "text": "let Constants = {};"
+    },
+    {
+      "file": "services/loginDiagnosticsService.js",
+      "line": 27,
+      "text": "const SENSITIVE_KEY_FRAGMENTS = ["
+    },
+    {
+      "file": "services/notificationInboxService.js",
+      "line": 10,
+      "text": "const ALLOWED_TYPES = new Set(['announcement', 'itinerary', 'driver_tour_pack']);"
+    },
+    {
+      "file": "services/notificationInboxService.js",
+      "line": 11,
+      "text": "const ALLOWED_SCREENS = new Set(['Chat', 'Itinerary', 'DriverTourPack']);"
+    },
+    {
+      "file": "services/notificationInboxService.js",
+      "line": 12,
+      "text": "const DRIVER_SECTIONS = new Set(['status', 'tour', 'pickups', 'passengers', 'seats', 'timeline', 'hotels', 'services', 'coach', 'contacts', 'itineraries', 'coverage', 'quality']);"
+    },
+    {
+      "file": "services/notificationInboxService.js",
+      "line": 19,
+      "text": "const notificationCacheGenerations = new Map();"
+    },
+    {
+      "file": "services/notificationInboxService.js",
+      "line": 20,
+      "text": "const notificationCacheWriteChains = new Map();"
+    },
+    {
+      "file": "services/notificationInboxService.js",
+      "line": 21,
+      "text": "const notificationFeedSubscriptions = new Map();"
+    },
+    {
+      "file": "services/notificationService.js",
+      "line": 22,
+      "text": "const handledNotificationResponseKeys = new Set();"
+    },
+    {
+      "file": "services/notificationService.js",
+      "line": 23,
+      "text": "const inFlightNotificationResponseKeys = new Set();"
+    },
+    {
+      "file": "services/notificationService.js",
+      "line": 164,
+      "text": "const DEFAULT_NOTIFICATION_PREFERENCES = {"
+    },
+    {
+      "file": "services/notificationService.js",
+      "line": 222,
+      "text": "const permissionStateDescriptions = {"
+    },
+    {
+      "file": "services/offlineLoginResolver.js",
+      "line": 1,
+      "text": "const OFFLINE_LOGIN_REASONS = {"
+    },
+    {
+      "file": "services/offlineSyncService.js",
+      "line": 19,
+      "text": "const SUPPORTED_QUEUE_TYPES = new Set(['MANIFEST_UPDATE', 'CHAT_MESSAGE', 'INTERNAL_CHAT_MESSAGE', 'PHOTO_UPLOAD', 'DRIVER_TOUR_PACK_ACTION']);"
+    },
+    {
+      "file": "services/offlineSyncService.js",
+      "line": 20,
+      "text": "const SUPPORTED_QUEUE_STATUSES = new Set(['queued', 'uploading', 'retrying', 'failed', 'completed', 'syncing']);"
+    },
+    {
+      "file": "services/offlineSyncService.js",
+      "line": 31,
+      "text": "const SUPPORTED_SCOPE_ROLES = new Set(['passenger', 'driver']);"
+    },
+    {
+      "file": "services/offlineSyncService.js",
+      "line": 37,
+      "text": "const listeners = new Set();"
+    },
+    {
+      "file": "services/offlineSyncService.js",
+      "line": 38,
+      "text": "const queueListeners = new Set();"
+    },
+    {
+      "file": "services/offlineSyncService.js",
+      "line": 39,
+      "text": "const tourPackWriteLocks = new Map();"
+    },
+    {
+      "file": "services/offlineSyncService.js",
+      "line": 45,
+      "text": "const RESPONSE = {"
+    },
+    {
+      "file": "services/offlineSyncService.js",
+      "line": 357,
+      "text": "const SYNC_SUMMARY_SOURCES = new Set(['unknown', 'manual-refresh', 'auto-replay', 'startup']);"
+    },
+    {
+      "file": "services/opsAlertService.js",
+      "line": 4,
+      "text": "const OPS_ALERT_LEVELS = {"
+    },
+    {
+      "file": "services/opsAlertService.js",
+      "line": 9,
+      "text": "const OPS_ALERT_SEVERITIES = {"
+    },
+    {
+      "file": "services/opsAlertService.js",
+      "line": 16,
+      "text": "const OPS_ALERT_STATUSES = {"
+    },
+    {
+      "file": "services/opsAlertService.js",
+      "line": 22,
+      "text": "const OPS_ALERT_SOURCES = {"
+    },
+    {
+      "file": "services/persistenceProvider.js",
+      "line": 29,
+      "text": "const defaultLogger = {"
+    },
+    {
+      "file": "services/photoService.js",
+      "line": 32,
+      "text": "const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic'];"
+    },
+    {
+      "file": "services/photoVariantService.js",
+      "line": 1,
+      "text": "const EMPTY_URI_STRINGS = new Set(['null', 'undefined', '[object object]']);"
+    },
+    {
+      "file": "services/photoViewerCacheService.js",
+      "line": 7,
+      "text": "const inFlightDownloads = new Map();"
+    },
+    {
+      "file": "services/safetyService.js",
+      "line": 140,
+      "text": "const SAFETY_RETRY_DISPOSITION = {"
+    },
+    {
+      "file": "services/safetyService.js",
+      "line": 146,
+      "text": "const activeSafetyQueueReplays = new Set();"
+    },
+    {
+      "file": "utils/itineraryPresentation.js",
+      "line": 7,
+      "text": "const KEYWORD_ICONS = ["
+    },
+    {
+      "file": "utils/manifestSyncState.js",
+      "line": 1,
+      "text": "const VALID_SYNC_STATES = new Set(['queued', 'syncing', 'failed', 'synced']);"
+    },
+    {
+      "file": "utils/notificationRouting.js",
+      "line": 3,
+      "text": "const TOUR_SCOPED_NOTIFICATION_SCREENS = new Set(['Chat', 'Itinerary', 'GroupPhotobook', 'SafetySupport', 'DriverTourPack']);"
+    },
+    {
+      "file": "utils/notificationRouting.js",
+      "line": 4,
+      "text": "const GLOBAL_NOTIFICATION_SCREENS = new Set(['NotificationPreferences']);"
+    },
+    {
+      "file": "utils/notificationRouting.js",
+      "line": 5,
+      "text": "const SUPPORTED_MARKETING_CATEGORY_KEYS = new Set(["
+    },
+    {
+      "file": "utils/notificationRouting.js",
+      "line": 17,
+      "text": "const SUPPORTED_NOTIFICATION_SCREENS = new Set(["
+    },
+    {
+      "file": "utils/tourHomeActionPlanner.js",
+      "line": 3,
+      "text": "const ACTION_IDS = {"
+    },
+    {
+      "file": "utils/unifiedSyncContract.js",
+      "line": 1,
+      "text": "const HEALTH_STATE = {"
+    },
+    {
+      "file": "utils/unifiedSyncContract.js",
+      "line": 8,
+      "text": "const UNIFIED_SYNC_STATES = {"
+    },
+    {
+      "file": "web-admin/src/App.jsx",
+      "line": 59,
+      "text": "const navItems = ["
+    },
+    {
+      "file": "web-admin/src/components/BroadcastPanel.jsx",
+      "line": 56,
+      "text": "const DELIVERY_STATUS_META = {"
+    },
+    {
+      "file": "web-admin/src/components/BroadcastPanel.jsx",
+      "line": 66,
+      "text": "const messageTemplates = ["
+    },
+    {
+      "file": "web-admin/src/components/ContentModerationPanel.jsx",
+      "line": 47,
+      "text": "const REPORT_STATUS_COLOR = {"
+    },
+    {
+      "file": "web-admin/src/components/ContentModerationPanel.jsx",
+      "line": 54,
+      "text": "const CONTENT_TYPE_LABEL = {"
+    },
+    {
+      "file": "web-admin/src/components/Dashboard.jsx",
+      "line": 89,
+      "text": "const OPS_ALERT_QUERY = { orderBy: 'lastSeenAtMs', limit: 80 };"
+    },
+    {
+      "file": "web-admin/src/components/Dashboard.jsx",
+      "line": 91,
+      "text": "const OPS_SEVERITY_COLOR = {"
+    },
+    {
+      "file": "web-admin/src/components/Dashboard.jsx",
+      "line": 98,
+      "text": "const OPS_STATUS_COLOR = {"
+    },
+    {
+      "file": "web-admin/src/components/Dashboard.jsx",
+      "line": 104,
+      "text": "const SAFETY_SEVERITY_COLOR = {"
+    },
+    {
+      "file": "web-admin/src/components/Dashboard.jsx",
+      "line": 111,
+      "text": "const SAFETY_STATUS_COLOR = {"
+    },
+    {
+      "file": "web-admin/src/components/Dashboard.jsx",
+      "line": 119,
+      "text": "const BRANCH_LABELS = {"
+    },
+    {
+      "file": "web-admin/src/components/ToursManager.jsx",
+      "line": 183,
+      "text": "const PACK_STATUS_COLOR = {"
+    },
+    {
+      "file": "web-admin/src/firebase.js",
+      "line": 16,
+      "text": "const firebaseConfig = {"
+    },
+    {
+      "file": "web-admin/src/services/appSessionAdminService.js",
+      "line": 6,
+      "text": "const REVOCATION_REASONS = new Set(['lost_device', 'security_review', 'staff_request', 'account_support']);"
+    },
+    {
+      "file": "web-admin/src/services/contentModerationService.js",
+      "line": 29,
+      "text": "const VALID_STATUSES = new Set(Object.values(CONTENT_REPORT_STATUS));"
+    },
+    {
+      "file": "web-admin/src/services/dashboardService.js",
+      "line": 44,
+      "text": "const SAFETY_ATTENTION_STATUSES = new Set(["
+    },
+    {
+      "file": "web-admin/src/services/dashboardService.js",
+      "line": 51,
+      "text": "const SAFETY_SEVERITY_WEIGHT = {"
+    },
+    {
+      "file": "web-admin/src/services/dashboardService.js",
+      "line": 58,
+      "text": "const OPS_SEVERITY_WEIGHT = {"
+    },
+    {
+      "file": "web-admin/src/services/dashboardService.js",
+      "line": 65,
+      "text": "const DEFAULT_WINDOW = {"
+    },
+    {
+      "file": "web-admin/src/services/driverTourPackAdminStatusService.js",
+      "line": 9,
+      "text": "const STATUS_VALUES = new Set(['active', 'cancelled', 'withdrawn', 'expired']);"
+    },
+    {
+      "file": "web-admin/src/services/driverTourPackAdminStatusService.js",
+      "line": 10,
+      "text": "const QUALITY_VALUES = new Set(['complete', 'degraded']);"
+    },
+    {
+      "file": "web-admin/src/services/driverTourPackOperationsService.js",
+      "line": 9,
+      "text": "const ISSUE_STATUSES = new Set(['open', 'acknowledged', 'resolved']);"
+    },
+    {
+      "file": "web-admin/src/services/driverTourPackOperationsService.js",
+      "line": 10,
+      "text": "const ISSUE_TYPES = new Set(['delay', 'vehicle', 'pickup', 'passenger', 'hotel', 'supplier', 'accessibility', 'other']);"
+    },
+    {
+      "file": "web-admin/src/services/driverTourPackOperationsService.js",
+      "line": 11,
+      "text": "const ISSUE_SEVERITIES = new Set(['info', 'warning', 'critical']);"
+    },
+    {
+      "file": "web-admin/src/services/healthService.js",
+      "line": 10,
+      "text": "const HEALTH_COLOR_BY_SEVERITY = {"
+    },
+    {
+      "file": "web-admin/src/services/opsAlertService.js",
+      "line": 42,
+      "text": "const ALLOWED_ORDER_FIELDS = new Set(['createdAtMs', 'lastSeenAtMs', 'severity', 'status']);"
+    },
+    {
+      "file": "web-admin/src/services/opsAlertService.js",
+      "line": 46,
+      "text": "const SEVERITY_WEIGHT = {"
+    },
+    {
+      "file": "web-admin/src/services/passengerService.js",
+      "line": 157,
+      "text": "const REASON_MESSAGES = {"
+    },
+    {
+      "file": "web-admin/src/services/tourCsvService.js",
+      "line": 1,
+      "text": "const REQUIRED_HEADERS = ['tour code', 'name'];"
+    },
+    {
+      "file": "web-admin/src/services/unifiedSyncContract.js",
+      "line": 1,
+      "text": "const HEALTH_STATE = {"
+    },
+    {
+      "file": "web-admin/src/services/unifiedSyncContract.js",
+      "line": 8,
+      "text": "const UNIFIED_SYNC_STATES = {"
+    },
+    {
+      "file": "web-admin/src/services/unifiedSyncContract.js",
+      "line": 43,
+      "text": "const unifiedSyncContract = {"
+    }
+  ]
+}

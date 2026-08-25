@@ -1,0 +1,153 @@
+#!/usr/bin/env node
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const repositoryRoot = path.resolve(__dirname, '../..');
+const definitionPath = path.join(repositoryRoot, 'contracts/definitions/contracts.v1.json');
+const definitions = JSON.parse(fs.readFileSync(definitionPath, 'utf8'));
+
+const outputs = [
+  { path: 'src/shared/contracts/generated/contracts.js', format: 'esm' },
+  { path: 'functions/src/contracts/generated/contracts.js', format: 'cjs' },
+  { path: 'web-admin/src/shared/contracts/generated/contracts.js', format: 'esm' },
+  { path: 'contracts/types/generated/contracts.d.ts', format: 'types' },
+];
+
+const runtimeValidatorSource = `
+const isRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const actualType = (value) => Number.isInteger(value) ? 'integer' : Array.isArray(value) ? 'array' : typeof value;
+const matchesType = (value, expected) => {
+  const types = Array.isArray(expected) ? expected : [expected];
+  return types.some((type) => type === 'object' ? isRecord(value) : type === 'number' ? typeof value === 'number' && Number.isFinite(value) : actualType(value) === type);
+};
+const visitKeys = (value, callback, path = '') => {
+  if (!isRecord(value)) return;
+  Object.entries(value).forEach(([key, nested]) => {
+    callback(key, nested, path ? \`${'${path}'}.${'${key}'}\` : key);
+    if (isRecord(nested)) visitKeys(nested, callback, path ? \`${'${path}'}.${'${key}'}\` : key);
+  });
+};
+const validateContract = (name, value, options = {}) => {
+  const contract = CONTRACTS[name];
+  if (!contract) return { valid: false, errors: [\`unknown contract: ${'${name}'}\`] };
+  const errors = [];
+  if (contract.kind === 'string') {
+    if (typeof value !== 'string') errors.push('value must be a string');
+    else if (contract.pattern && !(new RegExp(contract.pattern, 'u')).test(value)) errors.push('value has an invalid format');
+    if (typeof value === 'string' && contract.maximumLengths?.self && value.length > contract.maximumLengths.self) errors.push('value is too long');
+    return { valid: errors.length === 0, errors };
+  }
+  if (!isRecord(value)) return { valid: false, errors: ['value must be an object'] };
+  const allowed = new Set([...(contract.requiredProperties || []), ...(contract.optionalProperties || [])]);
+  (contract.requiredProperties || []).forEach((property) => {
+    if (!Object.prototype.hasOwnProperty.call(value, property)) errors.push(\`${'${property}'} is required\`);
+  });
+  if (contract.rejectUnknownProperties) Object.keys(value).forEach((property) => {
+    if (!allowed.has(property)) errors.push(\`${'${property}'} is not allowed\`);
+  });
+  Object.entries(contract.properties || {}).forEach(([property, rule]) => {
+    if (!Object.prototype.hasOwnProperty.call(value, property)) return;
+    const candidate = value[property];
+    if (candidate === null && rule.nullable === true) return;
+    if (!matchesType(candidate, rule.type)) errors.push(\`${'${property}'} has an invalid type\`);
+    if (Object.prototype.hasOwnProperty.call(rule, 'const') && candidate !== rule.const) errors.push(\`${'${property}'} has an invalid constant value\`);
+    if (rule.enum && !rule.enum.includes(candidate)) errors.push(\`${'${property}'} has an unexpected value\`);
+    if (typeof candidate === 'string' && rule.minLength && candidate.length < rule.minLength) errors.push(\`${'${property}'} is too short\`);
+    if (typeof candidate === 'string' && rule.maxLength && candidate.length > rule.maxLength) errors.push(\`${'${property}'} is too long\`);
+    if (typeof candidate === 'string' && rule.pattern && !(new RegExp(rule.pattern, 'u')).test(candidate)) errors.push(\`${'${property}'} has an invalid format\`);
+    if (typeof candidate === 'number' && rule.minimum !== undefined && candidate < rule.minimum) errors.push(\`${'${property}'} is below its minimum\`);
+    if (typeof candidate === 'number' && rule.maximum !== undefined && candidate > rule.maximum) errors.push(\`${'${property}'} exceeds its maximum\`);
+    if (Array.isArray(candidate) && rule.maxItems !== undefined && candidate.length > rule.maxItems) errors.push(\`${'${property}'} has too many items\`);
+  });
+  if (options.clientProjection === true) (contract.forbiddenClientProjection || []).forEach((property) => {
+    if (Object.prototype.hasOwnProperty.call(value, property)) errors.push(\`${'${property}'} is forbidden from client projections\`);
+  });
+  for (const constraint of contract.constraints || []) {
+    if (constraint === 'driverPrincipalMatchesDriverId' && value.principalType === 'driver' && value.principalId !== \`driver:${'${value.driverId}'}\`) errors.push('driver principal does not match driverId');
+    if (constraint === 'passengerPrincipalIsOpaque' && value.principalType === 'passenger' && !/^pax_v2_[a-f0-9]{32}$/u.test(value.principalId || '')) errors.push('passenger principal is not opaque');
+    if (constraint === 'expiryAfterIssue' && Number(value.expiresAtMs) <= Number(value.lastAuthenticatedAtMs)) errors.push('session expiry must follow authentication');
+    if (constraint === 'idempotencyEqualsId' && value.id && value.idempotencyKey !== value.id) errors.push('idempotency key must equal the record id');
+    if (constraint === 'noDurableMediaUrls') visitKeys(value, (key) => {
+      if (/^(?:sourceUrl|thumbnailUrl|viewerUrl|downloadUrl|downloadToken)$/u.test(key)) errors.push(\`${'${key}'} is a forbidden durable media field\`);
+    });
+    if (constraint === 'noCredentialFields') visitKeys(value, (key) => {
+      if (/^(?:bookingRef|email|normalizedPassengerEmail|phone|phoneNumber)$/iu.test(key)) errors.push(\`${'${key}'} is a forbidden credential field\`);
+    });
+  }
+  return { valid: errors.length === 0, errors };
+};`;
+
+const generateRuntime = (format) => {
+  const serialized = JSON.stringify(definitions, null, 2);
+  const header = `'use strict';\n\n// GENERATED by scripts/contracts/generateContracts.js. Do not edit manually.\n`;
+  const declarations = `const SCHEMA_SET_VERSION = ${definitions.schemaSetVersion};\nconst CONTRACTS = Object.freeze(${serialized}.contracts);\n${runtimeValidatorSource}\n`;
+  return format === 'cjs'
+    ? `${header}${declarations}\nmodule.exports = { SCHEMA_SET_VERSION, CONTRACTS, validateContract };\n`
+    : `${header}${declarations}\nexport { SCHEMA_SET_VERSION, CONTRACTS, validateContract };\n`;
+};
+
+const propertyType = (rule = {}) => {
+  const typeNames = (Array.isArray(rule.type) ? rule.type : [rule.type]).map((type) => {
+    if (rule.enum) return rule.enum.map((value) => JSON.stringify(value)).join(' | ');
+    if (type === 'integer' || type === 'number') return 'number';
+    if (type === 'boolean') return 'boolean';
+    if (type === 'array') return 'unknown[]';
+    if (type === 'object') return 'Record<string, unknown>';
+    return 'string';
+  });
+  const union = [...new Set(typeNames)].join(' | ');
+  return rule.nullable ? `${union} | null` : union;
+};
+
+const generateTypes = () => {
+  const lines = ['// GENERATED by scripts/contracts/generateContracts.js. Do not edit manually.', ''];
+  for (const [name, contract] of Object.entries(definitions.contracts)) {
+    if (contract.kind === 'string') {
+      lines.push(`export type ${name} = string;`, '');
+      continue;
+    }
+    const required = new Set(contract.requiredProperties || []);
+    lines.push(`export interface ${name} {`);
+    for (const property of [...(contract.requiredProperties || []), ...(contract.optionalProperties || [])]) {
+      lines.push(`  ${property}${required.has(property) ? '' : '?'}: ${propertyType(contract.properties?.[property])};`);
+    }
+    lines.push('}', '');
+  }
+  lines.push('export interface ContractValidationResult {', '  valid: boolean;', '  errors: string[];', '}', '');
+  return `${lines.join('\n')}\n`;
+};
+
+const contentFor = (format) => format === 'types' ? generateTypes() : generateRuntime(format);
+
+const run = ({ check = false } = {}) => {
+  const stale = [];
+  for (const output of outputs) {
+    const absolutePath = path.join(repositoryRoot, output.path);
+    const expected = contentFor(output.format);
+    if (check) {
+      if (!fs.existsSync(absolutePath) || fs.readFileSync(absolutePath, 'utf8') !== expected) stale.push(output.path);
+      continue;
+    }
+    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+    fs.writeFileSync(absolutePath, expected, 'utf8');
+  }
+  if (stale.length > 0) throw new Error(`Generated contract adapters are stale: ${stale.join(', ')}`);
+  return outputs.map((output) => output.path);
+};
+
+if (require.main === module) {
+  try {
+    const check = process.argv.includes('--check');
+    const paths = run({ check });
+    process.stdout.write(check
+      ? `Contract adapters are current (${paths.length} files).\n`
+      : `Generated ${paths.length} contract adapter files.\n`);
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 1;
+  }
+}
+
+module.exports = { definitions, generateRuntime, generateTypes, run };
