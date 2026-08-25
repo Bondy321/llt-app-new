@@ -793,7 +793,7 @@ test('Static contract: support and external link handoffs surface failures', () 
     'screens/LoginScreen.js',
     'screens/ChatScreen.js',
   ].forEach((relativePath) => {
-    const source = readText(relativePath);
+    const source = readMobileModuleSource(relativePath);
     assert.match(source, /Linking\.openURL/);
     assert.match(source, /catch \(/);
     assert.match(source, /Alert\.alert/);

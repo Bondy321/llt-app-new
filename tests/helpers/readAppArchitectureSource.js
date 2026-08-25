@@ -31,6 +31,7 @@ const readMobileModuleSource = (relativePath) => {
   const stylePath = path.join(path.dirname(absolutePath), 'styles', `${baseName}.styles.js`);
   const featureDirectories = {
     'screens/LoginScreen.js': path.join(repositoryRoot, 'src', 'features', 'auth', 'presentation'),
+    'screens/MapScreen.js': path.join(repositoryRoot, 'components', 'map'),
   };
   const featureDirectory = featureDirectories[relativePath];
   return [
