@@ -1,110 +1,30 @@
 // screens/LoginScreen.js
-import createLoginScreenStyles from './styles/LoginScreen.styles';
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { validateBookingReference } from '../services/bookingServiceRealtime';
-import {
-  StyleSheet,
-  Text,
-  View,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  Keyboard,
-  ActivityIndicator,
-  Animated,
-  Image,
-  Alert,
-  Linking,
-  useWindowDimensions,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
-import { LinearGradient } from 'expo-linear-gradient';
-import {
-  COLORS as THEME_COLORS,
-  SPACING as THEME_SPACING,
-  RADIUS as THEME_RADIUS,
-  SHADOWS as THEME_SHADOWS,
-  FONT_WEIGHT as THEME_FONT_WEIGHT,
-} from '../theme';
+import { Alert, Animated, Keyboard, Linking } from 'react-native';
 import loggerService, { maskIdentifier } from '../services/loggerService';
 import { recordBreadcrumb as recordCrashBreadcrumb } from '../services/crashDiagnosticsService';
-import {
-  FONT_SCALE_LIMITS,
-  getResponsiveLayout,
-  responsiveFontSize,
-  responsiveLineHeight,
-} from '../utils/responsiveLayout';
 
 const {
-  LOGIN_MODE_HINTS,
   normalizeLoginFields,
   getLoginInputError,
   createOfflineErrorState,
-  getReferencePlaceholder,
   shouldShowEmailField,
   resolveLoginIdentity,
 } = require('./loginFlow');
 const loginDiagnostics = require('../services/loginDiagnosticsService');
 
-const COLORS = {
-  primaryBlue: THEME_COLORS.primary,
-  secondaryBlue: THEME_COLORS.primaryDark,
-  lightBlue: THEME_COLORS.primaryMuted,
-  white: THEME_COLORS.white,
-  errorRed: THEME_COLORS.error,
-  errorSoft: THEME_COLORS.errorLight,
-  darkText: THEME_COLORS.textPrimary,
-  inputBackground: THEME_COLORS.background,
-  placeholderText: THEME_COLORS.textMuted,
-  border: THEME_COLORS.border,
-  subtleText: THEME_COLORS.textSecondary,
-  success: THEME_COLORS.success,
-  successSoft: THEME_COLORS.successLight,
-  warning: THEME_COLORS.warning,
-  warningSoft: THEME_COLORS.warningLight,
-};
-
-const SPACING = THEME_SPACING || {
-  xs: 4,
-  sm: 8,
-  md: 12,
-  lg: 16,
-  xl: 20,
-  xxl: 24,
-};
-
-const RADIUS = THEME_RADIUS || {
-  sm: 8,
-  md: 12,
-  lg: 16,
-  xl: 20,
-  full: 9999,
-};
-
-const SHADOWS = THEME_SHADOWS || {
-  lg: {},
-  xl: {},
-};
-
-const FONT_WEIGHT = THEME_FONT_WEIGHT || {
-  medium: '500',
-  semibold: '600',
-  bold: '700',
-  extrabold: '800',
-};
+import { COLORS } from '../src/features/auth/presentation/loginPresentationTheme';
+import styles from '../src/features/auth/presentation/loginScreenStyles';
+import useLoginResponsiveLayout from '../src/features/auth/presentation/useLoginResponsiveLayout';
+import LoginScreenView from '../src/features/auth/presentation/LoginScreenView';
 
 const SUPPORT_PHONE = process.env.EXPO_PUBLIC_SUPPORT_PHONE?.trim();
-const LOGIN_LOGO_ASPECT_RATIO = 355 / 886;
-const LOGIN_LOGO_SCALE = 0.67;
-
 const getNetInfoModule = () => {
   try {
     const netInfoModule = require('@react-native-community/netinfo');
     return netInfoModule.default || netInfoModule;
-  } catch (error) {
+  } catch (_error) {
     return null;
   }
 };
@@ -118,98 +38,7 @@ const createErrorState = (message, options = {}) => ({
 });
 
 export default function LoginScreen({ onLoginSuccess, logger, isConnected, resolveOfflineLogin }) {
-  const { width, height, fontScale } = useWindowDimensions();
-  const screenLayout = useMemo(
-    () => getResponsiveLayout({ width, height, fontScale }),
-    [fontScale, height, width]
-  );
-  const baseLogoWidth = Math.min(
-    Math.max(width - screenLayout.horizontalPadding * 2, 180),
-    screenLayout.isLargeText || screenLayout.isCompact ? 230 : 260
-  );
-  const logoWidth = Math.round(baseLogoWidth * LOGIN_LOGO_SCALE);
-  const logoHeight = logoWidth * LOGIN_LOGO_ASPECT_RATIO;
-  const responsiveStyles = useMemo(() => {
-    const appTitleSize = responsiveFontSize(32, screenLayout, {
-      min: 24,
-      max: 32,
-      compactAdjustment: -2,
-      largeTextAdjustment: -5,
-      veryLargeTextAdjustment: -7,
-    });
-    const subtitleSize = responsiveFontSize(14, screenLayout, {
-      min: 12,
-      max: 14,
-      compactAdjustment: -1,
-      largeTextAdjustment: -1,
-      veryLargeTextAdjustment: -2,
-    });
-    const welcomeSize = responsiveFontSize(24, screenLayout, {
-      min: 20,
-      max: 24,
-      compactAdjustment: -1,
-      largeTextAdjustment: -3,
-      veryLargeTextAdjustment: -4,
-    });
-
-    return {
-      scrollContainer: {
-        paddingHorizontal: screenLayout.horizontalPadding,
-        paddingTop: screenLayout.isLargeText ? SPACING.lg : SPACING.xxl,
-      },
-      logoSection: {
-        marginBottom: screenLayout.isLargeText ? SPACING.sm : SPACING.md,
-      },
-      formCard: {
-        padding: screenLayout.cardPadding,
-      },
-      appTitle: {
-        fontSize: appTitleSize,
-        lineHeight: responsiveLineHeight(appTitleSize, 1.16),
-      },
-      appSubtitle: {
-        fontSize: subtitleSize,
-        lineHeight: responsiveLineHeight(subtitleSize, 1.22),
-      },
-      welcomeText: {
-        fontSize: welcomeSize,
-        lineHeight: responsiveLineHeight(welcomeSize, 1.14),
-      },
-      welcomeSubtext: {
-        fontSize: responsiveFontSize(13, screenLayout, {
-          min: 12,
-          max: 13,
-          compactAdjustment: 0,
-          largeTextAdjustment: -1,
-          veryLargeTextAdjustment: -1,
-        }),
-      },
-      hintsRow: screenLayout.isVeryLargeText || screenLayout.isTiny
-        ? { flexDirection: 'column' }
-        : null,
-      hintChip: screenLayout.isLargeText
-        ? { padding: SPACING.sm }
-        : null,
-      input: {
-        fontSize: responsiveFontSize(16, screenLayout, {
-          min: 14,
-          max: 16,
-          compactAdjustment: -1,
-          largeTextAdjustment: -1,
-          veryLargeTextAdjustment: -2,
-        }),
-      },
-      buttonText: {
-        fontSize: responsiveFontSize(17, screenLayout, {
-          min: 15,
-          max: 17,
-          compactAdjustment: -1,
-          largeTextAdjustment: -2,
-          veryLargeTextAdjustment: -2,
-        }),
-      },
-    };
-  }, [screenLayout]);
+  const { height, logoHeight, logoWidth, responsiveStyles } = useLoginResponsiveLayout();
   const [bookingReference, setBookingReference] = useState('');
   const [email, setEmail] = useState('');
   const [errorState, setErrorState] = useState(null);
@@ -272,7 +101,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
     ]).start();
 
     activeLogger?.trackScreen('Login');
-  }, []);
+  }, [activeLogger, formAnimation, logoAnimation]);
 
   const animateButton = () => {
     Animated.sequence([
@@ -589,278 +418,40 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       };
 
   return (
-    <LinearGradient colors={[COLORS.primaryBlue, COLORS.secondaryBlue]} style={styles.gradient}>
-      <SafeAreaView style={styles.safeArea}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.keyboardAvoidingContainer}>
-          <ScrollView
-            ref={scrollRef}
-            contentContainerStyle={[
-              styles.scrollContainer,
-              responsiveStyles.scrollContainer,
-              isKeyboardVisible && styles.scrollContainerKeyboardVisible,
-            ]}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-            automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
-            bounces={!isKeyboardVisible}
-            overScrollMode="never"
-            showsVerticalScrollIndicator={false}
-          >
-            <View style={styles.container}>
-              <Animated.View style={[styles.logoSection, responsiveStyles.logoSection, { opacity: logoAnimation }]}>
-                <Image
-                  source={require('../assets/images/app-logo-llt-cropped.png')}
-                  style={[styles.logoImage, { width: logoWidth, height: logoHeight }]}
-                  resizeMode="contain"
-                />
-                <Text
-                  style={[styles.appTitle, responsiveStyles.appTitle]}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  maxFontSizeMultiplier={FONT_SCALE_LIMITS.display}
-                >
-                  Loch Lomond Travel
-                </Text>
-                <Text
-                  style={[styles.appSubtitle, responsiveStyles.appSubtitle]}
-                  numberOfLines={2}
-                  adjustsFontSizeToFit
-                  maxFontSizeMultiplier={FONT_SCALE_LIMITS.caption}
-                >
-                  The UK's Fastest Growing Coach Tour Operator
-                </Text>
-              </Animated.View>
-
-            <Animated.View style={[styles.formCard, responsiveStyles.formCard, { opacity: formAnimation }]}>
-              <Text
-                style={[styles.welcomeText, responsiveStyles.welcomeText]}
-                numberOfLines={1}
-                maxFontSizeMultiplier={FONT_SCALE_LIMITS.heading}
-              >
-                Welcome aboard
-              </Text>
-              <Text
-                style={[styles.welcomeSubtext, responsiveStyles.welcomeSubtext]}
-                maxFontSizeMultiplier={FONT_SCALE_LIMITS.body}
-              >
-                Sign in securely to access your live itinerary, pickup updates, and tour support.
-              </Text>
-
-              <View style={[styles.networkPillBase, networkStateTone.container]}>
-                <MaterialCommunityIcons name={networkStateTone.icon} size={16} color={networkStateTone.iconColor} />
-                <Text
-                  style={[styles.networkPillText, { color: networkStateTone.textColor }]}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  maxFontSizeMultiplier={FONT_SCALE_LIMITS.caption}
-                >
-                  {networkStateTone.label}
-                </Text>
-              </View>
-
-              <View style={[styles.hintsRow, responsiveStyles.hintsRow]}>
-                {Object.entries(LOGIN_MODE_HINTS).map(([key, hint]) => {
-                  const selected = modeHintFocus === key;
-                  return (
-                    <TouchableOpacity
-                      key={key}
-                      style={[styles.hintChip, responsiveStyles.hintChip, selected && styles.hintChipSelected]}
-                      onPress={() => setModeHintFocus(key)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Select ${hint.label} login hint`}
-                    >
-                      <View style={styles.hintTitleRow}>
-                        <MaterialCommunityIcons
-                          name={key === 'driver' ? 'steering' : 'account-group'}
-                          size={14}
-                          color={selected ? COLORS.primaryBlue : COLORS.subtleText}
-                        />
-                        <Text
-                          style={[styles.hintChipLabel, selected && styles.hintChipLabelSelected]}
-                          numberOfLines={1}
-                          maxFontSizeMultiplier={FONT_SCALE_LIMITS.caption}
-                        >
-                          {hint.label}
-                        </Text>
-                      </View>
-                      <Text
-                        style={[styles.hintChipText, selected && styles.hintChipTextSelected]}
-                        maxFontSizeMultiplier={FONT_SCALE_LIMITS.caption}
-                      >
-                        {hint.hint}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              <View style={[styles.inputContainer, activeInput === 'reference' && styles.inputContainerFocused]}>
-                <MaterialCommunityIcons name="ticket-confirmation-outline" size={22} color={COLORS.primaryBlue} style={styles.inputIcon} />
-                <TextInput
-                  style={[styles.input, responsiveStyles.input]}
-                  value={bookingReference}
-                  onChangeText={handleReferenceChange}
-                  onFocus={() => {
-                    setActiveInput('reference');
-                    scrollRef.current?.scrollTo({ y: height * 0.24, animated: true });
-                  }}
-                  onBlur={() => {
-                    setActiveInput(null);
-                    setFieldTouched((current) => ({ ...current, bookingReference: true }));
-                  }}
-                  placeholder={getReferencePlaceholder(modeHintFocus)}
-                  placeholderTextColor={COLORS.placeholderText}
-                  autoCapitalize="characters"
-                  autoCorrect={false}
-                  maxLength={20}
-                  returnKeyType="go"
-                  onSubmitEditing={handleLogin}
-                  editable={!loading}
-                  accessibilityLabel="Booking reference or driver code"
-                  maxFontSizeMultiplier={FONT_SCALE_LIMITS.form}
-                />
-              </View>
-
-              {emailVisible ? (
-                <View style={[styles.inputContainer, activeInput === 'email' && styles.inputContainerFocused]}>
-                  <MaterialCommunityIcons name="email-outline" size={22} color={COLORS.primaryBlue} style={styles.inputIcon} />
-                  <TextInput
-                    style={[styles.input, responsiveStyles.input]}
-                    value={email}
-                    onChangeText={(text) => {
-                      setEmail(text);
-                      if (errorState && !errorState.reason) clearErrorState();
-                    }}
-                    onFocus={() => {
-                      setActiveInput('email');
-                      scrollRef.current?.scrollTo({ y: height * 0.32, animated: true });
-                    }}
-                    onBlur={() => {
-                      setActiveInput(null);
-                      handleEmailBlur();
-                    }}
-                    placeholder="Booking email"
-                    placeholderTextColor={COLORS.placeholderText}
-                    autoCapitalize="none"
-                    keyboardType="email-address"
-                    autoCorrect={false}
-                    returnKeyType="go"
-                    onSubmitEditing={handleLogin}
-                    editable={!loading}
-                    accessibilityLabel="Booking email address"
-                    maxFontSizeMultiplier={FONT_SCALE_LIMITS.form}
-                  />
-                </View>
-              ) : null}
-
-              {errorState ? (
-                <View style={styles.errorContainer} accessibilityRole="alert" accessibilityLiveRegion="assertive">
-                  <MaterialCommunityIcons name="alert-circle" size={16} color={COLORS.errorRed} />
-                  <View style={styles.errorBody}>
-                    <Text style={styles.errorTitle}>{errorState.title}</Text>
-                    <Text style={styles.errorText}>{errorState.message}</Text>
-                    {errorState.recoverySteps?.length ? (
-                      <TouchableOpacity
-                        style={styles.disclosureButtonCompact}
-                        onPress={() => setShowRecoverySteps((current) => !current)}
-                        accessibilityRole="button"
-                        accessibilityLabel="Show recovery steps"
-                        accessibilityState={{ expanded: showRecoverySteps }}
-                      >
-                        <Text style={styles.disclosureErrorText}>How to recover</Text>
-                        <MaterialCommunityIcons name={showRecoverySteps ? 'chevron-up' : 'chevron-down'} size={16} color={COLORS.errorRed} />
-                      </TouchableOpacity>
-                    ) : null}
-                    {showRecoverySteps
-                      ? errorState.recoverySteps.map((step) => (
-                          <Text key={step} style={styles.recoveryStepText}>
-                            • {step}
-                          </Text>
-                        ))
-                      : null}
-                    {errorState.showOfflineActions ? (
-                      <View style={styles.errorActionsContainer}>
-                        <TouchableOpacity style={styles.errorActionButton} onPress={() => handleOfflineCtaPress('retry_now')} disabled={loading} accessibilityRole="button" accessibilityLabel="Retry sign in now" accessibilityState={{ disabled: loading }}>
-                          <Text style={styles.errorActionText}>Retry now</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.errorActionButton} onPress={() => handleOfflineCtaPress('verify_online')} disabled={loading} accessibilityRole="button" accessibilityLabel="Verify this code online" accessibilityState={{ disabled: loading }}>
-                          <Text style={styles.errorActionText}>I’m connected, verify this code</Text>
-                        </TouchableOpacity>
-                      </View>
-                    ) : null}
-                  </View>
-                </View>
-              ) : null}
-
-              <Animated.View style={{ transform: [{ scale: buttonAnimation }] }}>
-                <TouchableOpacity
-                  style={[styles.button, isSubmitDisabled && styles.buttonDisabled]}
-                  onPress={handleLogin}
-                  activeOpacity={0.9}
-                  disabled={isSubmitDisabled}
-                  accessibilityRole="button"
-                  accessibilityLabel={loading ? 'Verifying your tour access' : 'Access my tour'}
-                  accessibilityState={{ disabled: isSubmitDisabled, busy: loading }}
-                >
-                  <LinearGradient colors={[COLORS.primaryBlue, COLORS.secondaryBlue]} style={styles.buttonGradient}>
-                    {loading ? (
-                      <View style={styles.loadingRow}>
-                        <ActivityIndicator size="small" color={COLORS.white} />
-                        <Text
-                          style={[styles.buttonText, responsiveStyles.buttonText]}
-                          numberOfLines={1}
-                          adjustsFontSizeToFit
-                          maxFontSizeMultiplier={FONT_SCALE_LIMITS.title}
-                        >
-                          Verifying...
-                        </Text>
-                      </View>
-                    ) : (
-                      <View style={styles.buttonContent}>
-                        <Text
-                          style={[styles.buttonText, responsiveStyles.buttonText]}
-                          numberOfLines={1}
-                          adjustsFontSizeToFit
-                          maxFontSizeMultiplier={FONT_SCALE_LIMITS.title}
-                        >
-                          Access My Tour
-                        </Text>
-                        <MaterialCommunityIcons name="arrow-right" size={18} color={COLORS.white} />
-                      </View>
-                    )}
-                  </LinearGradient>
-                </TouchableOpacity>
-              </Animated.View>
-
-              <TouchableOpacity style={styles.disclosureButton} onPress={() => setShowPrimaryHelp((current) => !current)} accessibilityRole="button" accessibilityLabel="Sign-in help" accessibilityState={{ expanded: showPrimaryHelp }}>
-                <Text style={styles.disclosureText}>Sign-in help</Text>
-                <MaterialCommunityIcons name={showPrimaryHelp ? 'chevron-up' : 'chevron-down'} size={16} color={COLORS.primaryBlue} />
-              </TouchableOpacity>
-
-              {showPrimaryHelp ? (
-                <View style={styles.helpPanel}>
-                  <Text style={styles.helpText}>Passengers sign in with booking reference + booking email. Drivers sign in with a D- code.</Text>
-                  <Text style={styles.helpText}>Offline sign-in only works for identities previously verified on this device.</Text>
-                </View>
-              ) : null}
-
-              <TouchableOpacity style={styles.disclosureButton} onPress={() => setShowOfflineHelp((current) => !current)} accessibilityRole="button" accessibilityLabel="Why offline sign-in may be unavailable" accessibilityState={{ expanded: showOfflineHelp }}>
-                <Text style={styles.disclosureText}>Why can’t I log in offline?</Text>
-                <MaterialCommunityIcons name={showOfflineHelp ? 'chevron-up' : 'chevron-down'} size={16} color={COLORS.primaryBlue} />
-              </TouchableOpacity>
-              {showOfflineHelp ? (
-                <View style={styles.helpPanel}>
-                  <Text style={styles.helpText}>First-time codes still need one online verification.</Text>
-                  <Text style={styles.helpText}>Returning users can continue offline only when code and cached identity match exactly.</Text>
-                </View>
-              ) : null}
-            </Animated.View>
-            </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
-    </LinearGradient>
+    <LoginScreenView
+      activeInput={activeInput}
+      bookingReference={bookingReference}
+      buttonAnimation={buttonAnimation}
+      clearErrorState={clearErrorState}
+      email={email}
+      emailVisible={emailVisible}
+      errorState={errorState}
+      formAnimation={formAnimation}
+      handleEmailBlur={handleEmailBlur}
+      handleLogin={handleLogin}
+      handleOfflineCtaPress={handleOfflineCtaPress}
+      handleReferenceChange={handleReferenceChange}
+      height={height}
+      isKeyboardVisible={isKeyboardVisible}
+      isSubmitDisabled={isSubmitDisabled}
+      loading={loading}
+      logoAnimation={logoAnimation}
+      logoHeight={logoHeight}
+      logoWidth={logoWidth}
+      modeHintFocus={modeHintFocus}
+      networkStateTone={networkStateTone}
+      responsiveStyles={responsiveStyles}
+      scrollRef={scrollRef}
+      setActiveInput={setActiveInput}
+      setEmail={setEmail}
+      setFieldTouched={setFieldTouched}
+      setModeHintFocus={setModeHintFocus}
+      setShowOfflineHelp={setShowOfflineHelp}
+      setShowPrimaryHelp={setShowPrimaryHelp}
+      setShowRecoverySteps={setShowRecoverySteps}
+      showOfflineHelp={showOfflineHelp}
+      showPrimaryHelp={showPrimaryHelp}
+      showRecoverySteps={showRecoverySteps}
+    />
   );
 }
-
-const styles = createLoginScreenStyles({ StyleSheet, COLORS, FONT_WEIGHT, RADIUS, SHADOWS, SPACING });

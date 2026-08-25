@@ -29,9 +29,14 @@ const readMobileModuleSource = (relativePath) => {
   const extension = path.extname(absolutePath);
   const baseName = path.basename(absolutePath, extension);
   const stylePath = path.join(path.dirname(absolutePath), 'styles', `${baseName}.styles.js`);
+  const featureDirectories = {
+    'screens/LoginScreen.js': path.join(repositoryRoot, 'src', 'features', 'auth', 'presentation'),
+  };
+  const featureDirectory = featureDirectories[relativePath];
   return [
     fs.readFileSync(absolutePath, 'utf8'),
     ...(fs.existsSync(stylePath) ? [fs.readFileSync(stylePath, 'utf8')] : []),
+    ...(featureDirectory && fs.existsSync(featureDirectory) ? readTree(featureDirectory) : []),
   ].join('\n');
 };
 
