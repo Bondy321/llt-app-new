@@ -591,7 +591,9 @@ test('Static contract: legacy Expo FileSystem methods use the explicit legacy en
     'services/imageOptimizationService.js',
     'services/photoViewerCacheService.js',
   ].forEach((relativePath) => {
-    const source = fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
+    const source = relativePath.startsWith('services/')
+      ? readText(relativePath)
+      : readMobileModuleSource(relativePath);
 
     assert.match(source, /from 'expo-file-system\/legacy'/);
     assert.doesNotMatch(source, /from 'expo-file-system';/);

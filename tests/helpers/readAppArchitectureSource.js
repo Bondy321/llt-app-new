@@ -33,6 +33,7 @@ const readMobileModuleSource = (relativePath) => {
     'screens/LoginScreen.js': path.join(repositoryRoot, 'src', 'features', 'auth', 'presentation'),
     'screens/MapScreen.js': path.join(repositoryRoot, 'components', 'map'),
     'screens/GroupPhotobookScreen.js': path.join(repositoryRoot, 'components', 'group-photobook'),
+    'screens/PhotobookScreen.js': path.join(repositoryRoot, 'components', 'photobook'),
   };
   const featureDirectory = featureDirectories[relativePath];
   return [
