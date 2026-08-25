@@ -127,94 +127,23 @@ export const runHandleAuthStateChange = async ({ initializing, logger, maskIdent
   };
 
 export const runRestoreSession = async ({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, logger, normalizePassengerIdentityProjection, normalizePassengerTourProjection, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setTourCode, setTourData }, validAppSession) => {
+    const deps = { IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, logger, normalizePassengerIdentityProjection, normalizePassengerTourProjection, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setTourCode, setTourData };
     try {
       if (!validAppSession) {
-        await SessionStorage.multiRemove([
-          SESSION_KEYS.TOUR_DATA,
-          SESSION_KEYS.BOOKING_DATA,
-          SESSION_KEYS.LAST_SCREEN,
-          SESSION_KEYS.IDENTITY_BINDING,
-        ]);
+        await clearStoredSessionProjection(deps);
         return false;
       }
-      const [savedTourData, savedBookingData, lastScreen, savedIdentityBinding] = await SessionStorage.multiGet([
-        SESSION_KEYS.TOUR_DATA,
-        SESSION_KEYS.BOOKING_DATA,
-        SESSION_KEYS.LAST_SCREEN,
-        SESSION_KEYS.IDENTITY_BINDING,
-      ]);
-      
-      if (savedIdentityBinding?.[1]) {
-        try {
-          const restoredBinding = JSON.parse(savedIdentityBinding[1]);
-          if (restoredBinding && typeof restoredBinding === 'object'
-            && isOpaquePassengerId(restoredBinding.stablePassengerId)
-            && restoredBinding.identityVersion === IDENTITY_VERSION) {
-            setIdentityBinding(restoredBinding);
-          }
-        } catch (parseError) {
-          logger.warn('Session', 'Failed to parse identity binding payload', { error: parseError.message });
-        }
-      }
-
-      if (savedBookingData[1]) {
-        const storedBookingData = JSON.parse(savedBookingData[1]);
-        const storedTourData = savedTourData[1] ? JSON.parse(savedTourData[1]) : null;
-        const isDriverBooking = Boolean(storedBookingData?.isDriver || storedBookingData?.id?.startsWith('D-'));
-        if (!isDriverBooking && (!isOpaquePassengerId(storedBookingData?.stablePassengerId)
-          || storedBookingData?.identityVersion !== IDENTITY_VERSION)) {
-          await SessionStorage.multiRemove([
-            SESSION_KEYS.TOUR_DATA,
-            SESSION_KEYS.BOOKING_DATA,
-            SESSION_KEYS.LAST_SCREEN,
-            SESSION_KEYS.IDENTITY_BINDING,
-          ]);
-          logger.warn('Session', 'Legacy passenger session invalidated; online verification required');
-          return;
-        }
-        const bookingData = isDriverBooking
-          ? storedBookingData
-          : normalizePassengerIdentityProjection(storedBookingData, storedBookingData?.id);
-        const tourData = isDriverBooking
-          ? storedTourData
-          : normalizePassengerTourProjection(storedTourData, storedTourData?.id);
-        const matchesRole = isDriverBooking
-          ? validAppSession.principalType === 'driver'
-            && validAppSession.driverId === bookingData?.id
-          : validAppSession.principalType === 'passenger'
-            && validAppSession.principalId === bookingData?.stablePassengerId;
-        const matchesTour = validAppSession.tourId === (tourData?.id || bookingData?.assignedTourId || null);
-        if (!bookingData || !matchesRole || !matchesTour || (validAppSession.tourId && !tourData)) {
-          await SessionStorage.multiRemove([
-            SESSION_KEYS.TOUR_DATA,
-            SESSION_KEYS.BOOKING_DATA,
-            SESSION_KEYS.LAST_SCREEN,
-            SESSION_KEYS.IDENTITY_BINDING,
-          ]);
-          logger.warn('Session', 'Saved app data does not match the active secure session');
-          return false;
-        }
-        if (!isDriverBooking) {
-          await SessionStorage.multiSet([
-            [SESSION_KEYS.TOUR_DATA, JSON.stringify(tourData)],
-            [SESSION_KEYS.BOOKING_DATA, JSON.stringify(bookingData)],
-          ]);
-        }
-        const screen = lastScreen[1] || 'Login';
-        
-        setBookingData(bookingData);
-        setTourData(tourData);
-        if (tourData) setTourCode(tourData.tourCode);
-        
-        const fallbackScreen = bookingData.id && bookingData.id.startsWith('D-') ? 'DriverHome' : 'TourHome';
-        const restoredScreen = screen === 'Login' || screen === 'NotificationPreferences' ? fallbackScreen : screen;
-        routeHistoryRef.current.reset();
-        setCurrentScreen(restoredScreen);
-        return true;
-      }
-      return false;
+      const savedEntries = await readStoredSessionProjection(deps);
+      restoreStoredIdentityBinding(deps, savedEntries[3]);
+      return restoreStoredSessionProjection(deps, validAppSession, savedEntries);
     } catch (error) {
       logger.warn('Session', 'Failed to restore session', { error: error.message });
       return false;
     }
   };
+import {
+  clearStoredSessionProjection,
+  readStoredSessionProjection,
+  restoreStoredIdentityBinding,
+  restoreStoredSessionProjection,
+} from './sessionRestorePhases';

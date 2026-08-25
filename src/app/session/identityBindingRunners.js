@@ -3,7 +3,7 @@ export const runPersistPassengerIdentityForUser = async ({ IDENTITY_VERSION, isO
   stablePassengerId,
   identityVersion,
   bookingRef,
-  normalizedPassengerEmail
+  normalizedPassengerEmail: _normalizedPassengerEmail,
 }) => {
     if (!authUid || !realtimeDb || !bookingRef || !isOpaquePassengerId(stablePassengerId)
       || identityVersion !== IDENTITY_VERSION) {
@@ -39,23 +39,26 @@ export const runPersistPassengerIdentityForUser = async ({ IDENTITY_VERSION, isO
     };
   };
 
+const parseStoredEntry = (entry) => (entry && entry[1] ? JSON.parse(entry[1]) : null);
+
 export const runRepairIdentityBindingFromSession = async ({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, normalizePassengerEmail, persistPassengerIdentityForUser, setIdentityBinding, toRealtimeKeySegment }, authUid) => {
     const [savedIdentityBinding, savedBookingData] = await SessionStorage.multiGet([
       SESSION_KEYS.IDENTITY_BINDING,
       SESSION_KEYS.BOOKING_DATA,
     ]);
-    const restoredBinding = savedIdentityBinding?.[1] ? JSON.parse(savedIdentityBinding[1]) : null;
-    const restoredBooking = savedBookingData?.[1] ? JSON.parse(savedBookingData[1]) : null;
-    const stablePassengerId = restoredBinding?.stablePassengerId || restoredBooking?.stablePassengerId || null;
-    const normalizedPassengerEmail = restoredBinding?.normalizedPassengerEmail || normalizePassengerEmail(restoredBooking?.normalizedPassengerEmail);
-    const bookingRef = restoredBinding?.bookingRef || restoredBooking?.id || null;
+    const restoredBinding = parseStoredEntry(savedIdentityBinding) || {};
+    const restoredBooking = parseStoredEntry(savedBookingData) || {};
+    const stablePassengerId = restoredBinding.stablePassengerId || restoredBooking.stablePassengerId || null;
+    const normalizedPassengerEmail = restoredBinding.normalizedPassengerEmail || normalizePassengerEmail(restoredBooking.normalizedPassengerEmail);
+    const bookingRef = restoredBinding.bookingRef || restoredBooking.id || null;
+    const restoredIdentityVersion = restoredBinding.identityVersion || restoredBooking.identityVersion;
 
     if (!isOpaquePassengerId(stablePassengerId) || !normalizedPassengerEmail || !bookingRef
-      || (restoredBinding?.identityVersion || restoredBooking?.identityVersion) !== IDENTITY_VERSION) {
+      || restoredIdentityVersion !== IDENTITY_VERSION) {
       return null;
     }
 
-    const identityVersion = restoredBinding?.identityVersion || IDENTITY_VERSION;
+    const identityVersion = restoredBinding.identityVersion || IDENTITY_VERSION;
     const persisted = await persistPassengerIdentityForUser({
       authUid,
       stablePassengerId,
@@ -85,11 +88,11 @@ export const runHydrateIdentityBindingForCurrentUser = async ({ IDENTITY_VERSION
     try {
       const snapshot = await realtimeDb.ref(`users/${authUid}`).once('value');
       const userProfile = snapshot.val() || {};
-      const stablePassengerId = userProfile?.stablePassengerId;
+      const stablePassengerId = userProfile.stablePassengerId;
 
-      if (!isOpaquePassengerId(stablePassengerId) || userProfile?.identityVersion !== IDENTITY_VERSION) {
+      if (!isOpaquePassengerId(stablePassengerId) || userProfile.identityVersion !== IDENTITY_VERSION) {
         const repairedBinding = await repairIdentityBindingFromSession(authUid);
-        if (repairedBinding?.stablePassengerId) {
+        if (repairedBinding && repairedBinding.stablePassengerId) {
           logger.info('Identity', 'identity_binding_repaired_from_session', {
             authUid: maskIdentifier(authUid),
             stablePassengerId: maskIdentifier(repairedBinding.stablePassengerId),
@@ -104,9 +107,9 @@ export const runHydrateIdentityBindingForCurrentUser = async ({ IDENTITY_VERSION
       const hydratedBinding = {
         stablePassengerId,
         stablePassengerKey: toRealtimeKeySegment(stablePassengerId),
-        identityVersion: userProfile?.identityVersion || IDENTITY_VERSION,
-        bookingRef: userProfile?.bookingRef || null,
-        normalizedPassengerEmail: userProfile?.normalizedPassengerEmail || null,
+        identityVersion: userProfile.identityVersion || IDENTITY_VERSION,
+        bookingRef: userProfile.bookingRef || null,
+        normalizedPassengerEmail: userProfile.normalizedPassengerEmail || null,
         authUid,
       };
 

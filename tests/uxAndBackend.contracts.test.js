@@ -1056,15 +1056,15 @@ test('Static contract: passenger login establishes participant access before ent
   const appSource = readAppArchitectureSource();
   const loginSource = readMobileModuleSource('screens/LoginScreen.js');
 
-  assert.match(appSource, /const authUser = user \|\| auth\?\.currentUser \|\| null/);
-  assert.match(appSource, /const authUid = authUser\?\.uid \|\| null/);
-  assert.match(appSource, /if \(!options\?\.offlineMode && tourDetails\?\.id\) \{/);
-  assert.match(appSource, /await joinTour\(\s*tourDetails\.id,\s*authUid,/);
-  assert.match(appSource, /loginDiagnostics: loginDiagnosticsContext/);
+  assert.match(appSource, /const authUser = stateUser \|\| authCurrentUser/);
+  assert.match(appSource, /const authUid = authUser \? authUser\.uid : null/);
+  assert.match(appSource, /if \(loginOptions\.offlineMode \|\| !tour\.id\) return/);
+  assert.match(appSource, /await joinTour\(tour\.id, authUid, undefined,/);
+  assert.match(appSource, /loginDiagnostics: diagnosticsContext/);
   assert.match(appSource, /joinFailure\.userMessage = 'We could not finish joining your tour session\. Please check your connection and try again\.'/);
   assert.match(appSource, /profileError\.criticalIdentityPersistence = true/);
   assert.match(appSource, /profileError\.userMessage = 'We could not finish securing your tour session\. Please check your connection and try again\.'/);
-  assert.match(appSource, /if \(error\?\.criticalIdentityPersistence\) \{\s*throw error;\s*\}/);
+  assert.match(appSource, /if \(error\.criticalIdentityPersistence\) throw error/);
   assert.doesNotMatch(appSource, /catch \(error\) \{\s*logger\.error\('Tour', 'Error joining tour', \{ error: error\.message \}\);\s*\}/);
 
   assert.match(loginSource, /typeof error\?\.userMessage === 'string'/);
