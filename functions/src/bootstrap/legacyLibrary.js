@@ -14,6 +14,7 @@ const ALLOWED_LIBRARY_MODULES = new Set([
   'driverTourPackOperations',
   'driverTourPackPublisher',
   'loginRateLimiter',
+  'manifestPassengers',
   'managementOidc',
   'passengerIdentity',
   'tourDateIndex',
