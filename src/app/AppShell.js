@@ -1,9 +1,14 @@
+import { runPersistPassengerIdentityForUser, runRepairIdentityBindingFromSession, runHydrateIdentityBindingForCurrentUser } from './session/identityBindingRunners';
+import { runRefreshAppData, runInitializeApp, runRetryInitialization, runHandleAuthStateChange, runRestoreSession } from './session/sessionBootstrapRunners';
+import { runLoadNotificationOnboardingState, runSaveNotificationOnboardingState, runShouldShowNotificationOnboarding, runHandleNotificationOnboardingComplete } from './notifications/notificationOnboardingRunners';
+import { runHandleDriverAssignmentChange } from './driver/driverAssignmentRunners';
+import { runResolveOfflineLogin, runHandleLoginSuccess } from './session/loginRunners';
+import { runClearSessionState, runPurgeLocalSession, runHandleLogout, runHandleAccountDeleted } from './session/logoutRunners';
+import AppShellView from './AppShellView';
+import useNotificationSessionNavigation from './notifications/useNotificationSessionNavigation';
+import useLogoutLifecycle from './session/useLogoutLifecycle';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, Text, Animated, PanResponder, TouchableOpacity } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-
-// Import Firebase services
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { auth, authHelpers, realtimeDb } from '../../firebase';
 import { joinTour } from '../../services/bookingServiceRealtime';
 import logger, { maskIdentifier } from '../../services/loggerService';
@@ -40,41 +45,26 @@ import {
 import loginDiagnostics from '../../services/loginDiagnosticsService';
 import {
   deactivatePushToken,
-  restorePushTokenForSession,
-  subscribeToNotificationResponses,
 } from '../../services/notificationService';
-import { COLORS, styles } from './AppShell.styles';
 import { SESSION_KEYS, SessionStorage, storageMode } from './session/sessionStorage';
 const { clearNotificationFeedCache } = require('../../services/notificationInboxService');
-
-// Import Screens
-import LogoutPendingScreen from '../../screens/LogoutPendingScreen';
-import AppScreenRouter from './navigation/AppScreenRouter';
 import useLoginTransition from './navigation/useLoginTransition';
+import useAppNavigation from './navigation/useAppNavigation';
 const { getLoginTransitionDurationMs } = require('../../screens/loginFlow');
-const { isEligibleEdgeSwipe, shouldCommitEdgeSwipeHome } = require('../../services/swipeHomeNavigation');
-const { markNotificationRead } = require('../../services/notificationInboxService');
-const { createAppRouteHistory } = require('../../utils/appRouteHistory');
 const {
   normalizePassengerIdentityProjection,
   normalizePassengerTourProjection,
 } = require('../../services/passengerDataBoundary');
-
 const IDENTITY_VERSION = PASSENGER_IDENTITY_VERSION;
-
-
 const NOTIFICATION_ONBOARDING_REMINDER_MS = 24 * 60 * 60 * 1000;
 const STARTUP_CONNECTION_ERROR_MESSAGE =
   'We could not connect to tour services. Please check your internet connection and restart the app.';
 
 const { normalizePassengerEmail, resolveOfflineLoginFromCache } = offlineLoginResolver;
-
 export default function AppShell() {
   const [initializing, setInitializing] = useState(true);
   const [user, setUser] = useState(null);
   const [authError, setAuthError] = useState(null);
-
-  const [currentScreen, setCurrentScreen] = useState('Login');
   const [tourCode, setTourCode] = useState('');
   const [tourData, setTourData] = useState(null);
   const [bookingData, setBookingData] = useState(null);
@@ -82,9 +72,6 @@ export default function AppShell() {
   const [appSession, setAppSession] = useState(null);
   const [logoutStatus, setLogoutStatus] = useState({ state: 'idle', error: null, diagnostic: null });
   
-  // State for passing params between screens manually (since we aren't using React Navigation stack)
-  const [screenParams, setScreenParams] = useState({});
-  const [isImageViewerVisible, setIsImageViewerVisible] = useState(false);
   const [driverSessionGeneration, setDriverSessionGeneration] = useState(0);
   const driverIdentityPersistKeyRef = useRef(null);
   const authUnsubscribeRef = useRef(null);
@@ -95,15 +82,12 @@ export default function AppShell() {
     resetLoginTransition,
     startLoginTransition,
   } = useLoginTransition();
-  const notificationNavigateRef = useRef(null);
   const previousDriverOperationalScopeRef = useRef(null);
   const driverLifecyclePurgeRef = useRef(null);
   const driverAssignmentChangeRef = useRef(null);
   const assignmentValidationSeqRef = useRef(0);
-  const appSessionListenerRef = useRef(null);
   const sessionGenerationRef = useRef(0);
   const logoutContextRef = useRef(null);
-  const routeHistoryRef = useRef(createAppRouteHistory());
 
   const isDriverSession = bookingData?.id && bookingData.id.startsWith('D-');
   const canonicalIdentity = useMemo(
@@ -111,16 +95,22 @@ export default function AppShell() {
     [user, bookingData, identityBinding]
   );
   const homeScreen = isDriverSession ? 'DriverHome' : 'TourHome';
-  const canSwipeToHome =
-    currentScreen !== 'Login' &&
-    currentScreen !== 'TourHome' &&
-    currentScreen !== 'DriverHome' &&
-    currentScreen !== 'Chat' &&
-    !isImageViewerVisible;
-
-  const handleViewerVisibilityChange = useCallback((visible) => {
-    setIsImageViewerVisible(Boolean(visible));
-  }, []);
+  const driverTourPackFeature = useDriverTourPackFeatureFlag(isDriverSession ? bookingData?.id : null);
+  const {
+    currentScreen,
+    edgeSwipeResponder,
+    handleViewerVisibilityChange,
+    navigateBack,
+    navigateTo,
+    routeHistoryRef,
+    screenParams,
+    setCurrentScreen,
+    setScreenParams,
+  } = useAppNavigation({
+    driverTourPackFeature,
+    homeScreen,
+    persistScreen: (...args) => saveSession(...args),
+  });
 
   const diagnosticsTourId = isDriverSession
     ? resolveTourId(bookingData?.assignedTourId, tourData?.id, tourData?.tourCode)
@@ -163,14 +153,6 @@ export default function AppShell() {
   const driverTourPackState = useDriverTourPack(driverOperationalScope || {}, {
     enabled: Boolean(driverOperationalScope),
   });
-  const driverTourPackFeature = useDriverTourPackFeatureFlag(isDriverSession ? bookingData?.id : null);
-  useEffect(() => {
-    if (currentScreen !== 'DriverTourPack' || driverTourPackFeature.loading || driverTourPackFeature.enabled) return;
-    routeHistoryRef.current.reset();
-    setCurrentScreen('DriverHome');
-    setScreenParams({});
-    SessionStorage.setItem(SESSION_KEYS.LAST_SCREEN, 'DriverHome').catch(() => undefined);
-  }, [currentScreen, driverTourPackFeature.enabled, driverTourPackFeature.loading]);
   const currentDriverLifecycleScope = useMemo(() => (
     isDriverSession && diagnosticsTourId
       ? {
@@ -199,19 +181,7 @@ export default function AppShell() {
       ].join('|')
     : 'none';
 
-  const refreshAppData = async () => {
-    logger.info('App', 'Refreshing app data');
-    if (!isConnected) return;
-    await Promise.allSettled([
-      offlineSyncService.replayQueue({
-        services: { bookingService, chatService, photoService, driverTourPackActionService },
-        scope: offlineSessionScope,
-      }),
-      offlineSessionScope
-        ? processOfflineSafetyQueue(offlineSessionScope)
-        : Promise.resolve({ deferred: true, reason: 'scope_required' }),
-    ]);
-  };
+  const refreshAppData = (...args) => runRefreshAppData({ bookingService, chatService, driverTourPackActionService, isConnected, logger, offlineSessionScope, offlineSyncService, photoService, processOfflineSafetyQueue }, ...args);
 
   const { isConnected, firebaseConnected } = useDiagnostics({
     onForeground: refreshAppData,
@@ -333,46 +303,7 @@ export default function AppShell() {
     });
   }, [bookingData, currentScreen, homeScreen, identityBinding, isDriverSession, isImageViewerVisible, tourData, user?.uid]);
 
-  const persistPassengerIdentityForUser = async ({
-    authUid,
-    stablePassengerId,
-    identityVersion,
-    bookingRef,
-    normalizedPassengerEmail,
-  }) => {
-    if (!authUid || !realtimeDb || !bookingRef || !isOpaquePassengerId(stablePassengerId)
-      || identityVersion !== IDENTITY_VERSION) {
-      return { profilePersisted: false, bindingPersisted: false };
-    }
-
-    const stablePassengerKey = toRealtimeKeySegment(stablePassengerId);
-    try {
-      const snapshot = await realtimeDb.ref(`users/${authUid}`).once('value');
-      const profile = snapshot.val() || {};
-      const serverIdentityMatches = profile.stablePassengerId === stablePassengerId
-        && profile.stablePassengerKey === stablePassengerKey
-        && profile.privatePhotoOwnerId === stablePassengerId
-        && profile.privatePhotoOwnerKey === stablePassengerKey
-        && profile.identityVersion === IDENTITY_VERSION
-        && profile.bookingRef === bookingRef;
-      if (!serverIdentityMatches) {
-        throw new Error('Server-issued passenger identity does not match the authenticated profile');
-      }
-    } catch (error) {
-      const profileError = new Error('Passenger identity profile verification failed');
-      profileError.userMessage = 'We could not finish securing your tour session. Please check your connection and try again.';
-      profileError.criticalIdentityPersistence = true;
-      profileError.cause = error;
-      throw profileError;
-    }
-
-    return {
-      profilePersisted: true,
-      bindingPersisted: true,
-      bindingMetaPersisted: true,
-      stablePassengerKey,
-    };
-  };
+  const persistPassengerIdentityForUser = (...args) => runPersistPassengerIdentityForUser({ IDENTITY_VERSION, isOpaquePassengerId, realtimeDb, toRealtimeKeySegment }, ...args);
 
   const persistDriverIdentityForUser = useCallback(async ({
     authUid,
@@ -458,346 +389,23 @@ export default function AppShell() {
     user?.uid,
   ]);
 
-  const repairIdentityBindingFromSession = async (authUid) => {
-    const [savedIdentityBinding, savedBookingData] = await SessionStorage.multiGet([
-      SESSION_KEYS.IDENTITY_BINDING,
-      SESSION_KEYS.BOOKING_DATA,
-    ]);
-    const restoredBinding = savedIdentityBinding?.[1] ? JSON.parse(savedIdentityBinding[1]) : null;
-    const restoredBooking = savedBookingData?.[1] ? JSON.parse(savedBookingData[1]) : null;
-    const stablePassengerId = restoredBinding?.stablePassengerId || restoredBooking?.stablePassengerId || null;
-    const normalizedPassengerEmail = restoredBinding?.normalizedPassengerEmail || normalizePassengerEmail(restoredBooking?.normalizedPassengerEmail);
-    const bookingRef = restoredBinding?.bookingRef || restoredBooking?.id || null;
+  const repairIdentityBindingFromSession = (...args) => runRepairIdentityBindingFromSession({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, normalizePassengerEmail, persistPassengerIdentityForUser, setIdentityBinding, toRealtimeKeySegment }, ...args);
 
-    if (!isOpaquePassengerId(stablePassengerId) || !normalizedPassengerEmail || !bookingRef
-      || (restoredBinding?.identityVersion || restoredBooking?.identityVersion) !== IDENTITY_VERSION) {
-      return null;
-    }
+  const hydrateIdentityBindingForCurrentUser = (...args) => runHydrateIdentityBindingForCurrentUser({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, logger, maskIdentifier, realtimeDb, repairIdentityBindingFromSession, setIdentityBinding, toRealtimeKeySegment }, ...args);
 
-    const identityVersion = restoredBinding?.identityVersion || IDENTITY_VERSION;
-    const persisted = await persistPassengerIdentityForUser({
-      authUid,
-      stablePassengerId,
-      identityVersion,
-      bookingRef,
-      normalizedPassengerEmail,
-    });
-    const repairedBinding = {
-      stablePassengerId,
-      stablePassengerKey: persisted.stablePassengerKey || toRealtimeKeySegment(stablePassengerId),
-      identityVersion,
-      bookingRef,
-      normalizedPassengerEmail,
-      authUid,
-    };
+  const initializeApp = (...args) => runInitializeApp({ SESSION_KEYS, STARTUP_CONNECTION_ERROR_MESSAGE, SessionStorage, appSessionService, authHelpers, authUnsubscribeRef, handleAuthStateChange, hydrateIdentityBindingForCurrentUser, localSessionCleanupService, logger, maskIdentifier, recordCrashBreadcrumb, restoreSession, setAppSession, setAuthError, setDiagnosticsAuthUid, setInitializing, setLogoutStatus, setUser }, ...args);
 
-    setIdentityBinding(repairedBinding);
-    await SessionStorage.multiSet([
-      [SESSION_KEYS.IDENTITY_BINDING, JSON.stringify(repairedBinding)],
-    ]);
-    return repairedBinding;
-  };
+  const retryInitialization = (...args) => runRetryInitialization({ initializeApp, setAuthError, setInitializing }, ...args);
 
-  const hydrateIdentityBindingForCurrentUser = async (authUid) => {
-    if (!authUid || !realtimeDb) return;
+  const handleAuthStateChange = (...args) => runHandleAuthStateChange({ initializing, logger, maskIdentifier, recordCrashBreadcrumb, setDiagnosticsAuthUid, setDiagnosticsContext, setInitializing, setUser }, ...args);
 
-    try {
-      const snapshot = await realtimeDb.ref(`users/${authUid}`).once('value');
-      const userProfile = snapshot.val() || {};
-      const stablePassengerId = userProfile?.stablePassengerId;
+  const restoreSession = (...args) => runRestoreSession({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, logger, normalizePassengerIdentityProjection, normalizePassengerTourProjection, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setTourCode, setTourData }, ...args);
 
-      if (!isOpaquePassengerId(stablePassengerId) || userProfile?.identityVersion !== IDENTITY_VERSION) {
-        const repairedBinding = await repairIdentityBindingFromSession(authUid);
-        if (repairedBinding?.stablePassengerId) {
-          logger.info('Identity', 'identity_binding_repaired_from_session', {
-            authUid: maskIdentifier(authUid),
-            stablePassengerId: maskIdentifier(repairedBinding.stablePassengerId),
-            stablePassengerKey: maskIdentifier(repairedBinding.stablePassengerKey),
-          });
-          return;
-        }
-        logger.info('Identity', 'identity_binding_missing', { authUid: maskIdentifier(authUid) });
-        return;
-      }
+  const loadNotificationOnboardingState = (...args) => runLoadNotificationOnboardingState({ SESSION_KEYS, SessionStorage, logger }, ...args);
 
-      const hydratedBinding = {
-        stablePassengerId,
-        stablePassengerKey: toRealtimeKeySegment(stablePassengerId),
-        identityVersion: userProfile?.identityVersion || IDENTITY_VERSION,
-        bookingRef: userProfile?.bookingRef || null,
-        normalizedPassengerEmail: userProfile?.normalizedPassengerEmail || null,
-        authUid,
-      };
+  const saveNotificationOnboardingState = (...args) => runSaveNotificationOnboardingState({ SESSION_KEYS, SessionStorage, logger }, ...args);
 
-      setIdentityBinding(hydratedBinding);
-      await SessionStorage.multiSet([
-        [SESSION_KEYS.IDENTITY_BINDING, JSON.stringify(hydratedBinding)],
-      ]);
-      logger.info('Identity', 'identity_binding_hydrated', {
-        authUid: maskIdentifier(authUid),
-        stablePassengerId: maskIdentifier(stablePassengerId),
-      });
-    } catch (error) {
-      logger.warn('Identity', 'Failed to hydrate identity binding for auth user', {
-        error: error.message,
-        authUid: maskIdentifier(authUid),
-      });
-    }
-  };
-
-  const initializeApp = async () => {
-    let unsubscribe = null;
-    try {
-      setAuthError(null);
-      const currentUser = await authHelpers.ensureAuthenticated();
-      if (currentUser) {
-        setUser(currentUser);
-        logger.setUserId(currentUser.uid);
-        setDiagnosticsAuthUid(currentUser.uid, { flush: true, reason: 'Auth:ensure_authenticated_route_set' });
-        recordCrashBreadcrumb('Auth', 'ensure_authenticated', {
-          hasAuthUid: true,
-          isAnonymous: Boolean(currentUser.isAnonymous),
-          authUidMasked: maskIdentifier(currentUser.uid),
-        }, { remote: true, reason: 'Auth:ensure_authenticated' });
-        logger.info('Auth', 'User authenticated', { uid: maskIdentifier(currentUser.uid) });
-      }
-
-      const pendingEnd = await appSessionService.readPendingEnd();
-      if (pendingEnd) {
-        const [savedTourEntry, savedBookingEntry] = await SessionStorage.multiGet([
-          SESSION_KEYS.TOUR_DATA,
-          SESSION_KEYS.BOOKING_DATA,
-        ]);
-        const cachedForCleanup = await appSessionService.readSession({ allowExpired: true });
-        const parseSaved = (entry) => {
-          try { return entry?.[1] ? JSON.parse(entry[1]) : null; } catch { return null; }
-        };
-        await localSessionCleanupService.cleanup({
-          authUid: currentUser?.uid || pendingEnd.authUid,
-          appSession: cachedForCleanup,
-          bookingData: parseSaved(savedBookingEntry),
-          tourData: parseSaved(savedTourEntry),
-        });
-        await restoreSession(null);
-        setAppSession(null);
-        setLogoutStatus({
-          state: 'pending_network',
-          error: 'We still need to confirm logout with the server.',
-          diagnostic: pendingEnd.sessionId.slice(-6),
-        });
-      } else {
-        const cachedSession = await appSessionService.readSession();
-        let activeSession = cachedSession;
-        if (cachedSession && currentUser?.uid) {
-          try {
-            const verification = await appSessionService.verifyCurrent({
-              authUid: currentUser.uid,
-              expectedSession: cachedSession,
-            });
-            activeSession = verification.valid ? verification.session : null;
-            if (activeSession) await appSessionService.persistSession(activeSession);
-          } catch (error) {
-            // A still-unexpired cached session is the only bounded offline restore.
-            // Reconnect validation and the remote listener remain mandatory.
-            activeSession = cachedSession;
-            logger.warn('Session', 'Secure session verification deferred while offline', {
-              error: error?.message || String(error),
-            });
-          }
-        }
-        if (!activeSession) {
-          await appSessionService.clearSession();
-          await restoreSession(null);
-          setAppSession(null);
-        } else {
-          setAppSession(activeSession);
-          await restoreSession(activeSession);
-          await hydrateIdentityBindingForCurrentUser(currentUser.uid);
-        }
-      }
-
-      if (typeof authUnsubscribeRef.current === 'function') authUnsubscribeRef.current();
-      unsubscribe = authHelpers.onAuthStateChanged(handleAuthStateChange);
-      authUnsubscribeRef.current = unsubscribe;
-
-      setInitializing(false);
-      return unsubscribe;
-    } catch (error) {
-      if (typeof unsubscribe === 'function') unsubscribe();
-      if (authUnsubscribeRef.current === unsubscribe) authUnsubscribeRef.current = null;
-      logger.error('App', 'Initialization error', { error: error.message });
-      setAuthError(STARTUP_CONNECTION_ERROR_MESSAGE);
-      setInitializing(false);
-      return null;
-    }
-  };
-
-  const retryInitialization = async () => {
-    setAuthError(null);
-    setInitializing(true);
-    await initializeApp();
-  };
-
-  const handleAuthStateChange = async (currentUser) => {
-    setUser(currentUser);
-    if (currentUser) {
-      logger.setUserId(currentUser.uid);
-    } else {
-      logger.setUserId(null);
-    }
-    setDiagnosticsAuthUid(currentUser?.uid || null);
-    setDiagnosticsContext('authState', {
-      hasCurrentUser: Boolean(currentUser),
-      isAnonymous: Boolean(currentUser?.isAnonymous),
-      authUidMasked: currentUser?.uid ? maskIdentifier(currentUser.uid) : null,
-    }, { flush: true });
-    recordCrashBreadcrumb('Auth', 'state_changed', {
-      hasCurrentUser: Boolean(currentUser),
-      isAnonymous: Boolean(currentUser?.isAnonymous),
-      authUidMasked: currentUser?.uid ? maskIdentifier(currentUser.uid) : null,
-    }, { remote: true, reason: 'Auth:state_changed' });
-    if (initializing) setInitializing(false);
-  };
-
-  const restoreSession = async (validAppSession) => {
-    try {
-      if (!validAppSession) {
-        await SessionStorage.multiRemove([
-          SESSION_KEYS.TOUR_DATA,
-          SESSION_KEYS.BOOKING_DATA,
-          SESSION_KEYS.LAST_SCREEN,
-          SESSION_KEYS.IDENTITY_BINDING,
-        ]);
-        return false;
-      }
-      const [savedTourData, savedBookingData, lastScreen, savedIdentityBinding] = await SessionStorage.multiGet([
-        SESSION_KEYS.TOUR_DATA,
-        SESSION_KEYS.BOOKING_DATA,
-        SESSION_KEYS.LAST_SCREEN,
-        SESSION_KEYS.IDENTITY_BINDING,
-      ]);
-      
-      if (savedIdentityBinding?.[1]) {
-        try {
-          const restoredBinding = JSON.parse(savedIdentityBinding[1]);
-          if (restoredBinding && typeof restoredBinding === 'object'
-            && isOpaquePassengerId(restoredBinding.stablePassengerId)
-            && restoredBinding.identityVersion === IDENTITY_VERSION) {
-            setIdentityBinding(restoredBinding);
-          }
-        } catch (parseError) {
-          logger.warn('Session', 'Failed to parse identity binding payload', { error: parseError.message });
-        }
-      }
-
-      if (savedBookingData[1]) {
-        const storedBookingData = JSON.parse(savedBookingData[1]);
-        const storedTourData = savedTourData[1] ? JSON.parse(savedTourData[1]) : null;
-        const isDriverBooking = Boolean(storedBookingData?.isDriver || storedBookingData?.id?.startsWith('D-'));
-        if (!isDriverBooking && (!isOpaquePassengerId(storedBookingData?.stablePassengerId)
-          || storedBookingData?.identityVersion !== IDENTITY_VERSION)) {
-          await SessionStorage.multiRemove([
-            SESSION_KEYS.TOUR_DATA,
-            SESSION_KEYS.BOOKING_DATA,
-            SESSION_KEYS.LAST_SCREEN,
-            SESSION_KEYS.IDENTITY_BINDING,
-          ]);
-          logger.warn('Session', 'Legacy passenger session invalidated; online verification required');
-          return;
-        }
-        const bookingData = isDriverBooking
-          ? storedBookingData
-          : normalizePassengerIdentityProjection(storedBookingData, storedBookingData?.id);
-        const tourData = isDriverBooking
-          ? storedTourData
-          : normalizePassengerTourProjection(storedTourData, storedTourData?.id);
-        const matchesRole = isDriverBooking
-          ? validAppSession.principalType === 'driver'
-            && validAppSession.driverId === bookingData?.id
-          : validAppSession.principalType === 'passenger'
-            && validAppSession.principalId === bookingData?.stablePassengerId;
-        const matchesTour = validAppSession.tourId === (tourData?.id || bookingData?.assignedTourId || null);
-        if (!bookingData || !matchesRole || !matchesTour || (validAppSession.tourId && !tourData)) {
-          await SessionStorage.multiRemove([
-            SESSION_KEYS.TOUR_DATA,
-            SESSION_KEYS.BOOKING_DATA,
-            SESSION_KEYS.LAST_SCREEN,
-            SESSION_KEYS.IDENTITY_BINDING,
-          ]);
-          logger.warn('Session', 'Saved app data does not match the active secure session');
-          return false;
-        }
-        if (!isDriverBooking) {
-          await SessionStorage.multiSet([
-            [SESSION_KEYS.TOUR_DATA, JSON.stringify(tourData)],
-            [SESSION_KEYS.BOOKING_DATA, JSON.stringify(bookingData)],
-          ]);
-        }
-        const screen = lastScreen[1] || 'Login';
-        
-        setBookingData(bookingData);
-        setTourData(tourData);
-        if (tourData) setTourCode(tourData.tourCode);
-        
-        const fallbackScreen = bookingData.id && bookingData.id.startsWith('D-') ? 'DriverHome' : 'TourHome';
-        const restoredScreen = screen === 'Login' || screen === 'NotificationPreferences' ? fallbackScreen : screen;
-        routeHistoryRef.current.reset();
-        setCurrentScreen(restoredScreen);
-        return true;
-      }
-      return false;
-    } catch (error) {
-      logger.warn('Session', 'Failed to restore session', { error: error.message });
-      return false;
-    }
-  };
-
-  const loadNotificationOnboardingState = async () => {
-    try {
-      const raw = await SessionStorage.multiGet([SESSION_KEYS.NOTIFICATION_ONBOARDING]);
-      const serialized = raw?.[0]?.[1];
-      if (!serialized) return null;
-      const parsed = JSON.parse(serialized);
-      if (!parsed || typeof parsed !== 'object') return null;
-      return parsed;
-    } catch (error) {
-      logger.warn('NotificationOnboarding', 'Failed to load onboarding state', { error: error.message });
-      return null;
-    }
-  };
-
-  const saveNotificationOnboardingState = async (nextState = {}) => {
-    try {
-      await SessionStorage.multiSet([
-        [SESSION_KEYS.NOTIFICATION_ONBOARDING, JSON.stringify(nextState)],
-      ]);
-    } catch (error) {
-      logger.warn('NotificationOnboarding', 'Failed to persist onboarding state', { error: error.message });
-    }
-  };
-
-  const shouldShowNotificationOnboarding = async ({ userId, audience }) => {
-    const savedState = await loadNotificationOnboardingState();
-    if (!savedState) return true;
-
-    const sameUser = savedState?.userId && userId && savedState.userId === userId;
-    const sameAudience = savedState?.audience === audience;
-    const status = savedState?.status;
-
-    if (status === 'completed' && sameUser && sameAudience) {
-      return false;
-    }
-
-    if (status === 'skipped' && sameUser && sameAudience) {
-      const skippedAtMs = parseTimestampMs(savedState?.updatedAt);
-      if (Number.isFinite(skippedAtMs)) {
-        return (Date.now() - skippedAtMs) >= NOTIFICATION_ONBOARDING_REMINDER_MS;
-      }
-      return false;
-    }
-
-    return true;
-  };
+  const shouldShowNotificationOnboarding = (...args) => runShouldShowNotificationOnboarding({ NOTIFICATION_ONBOARDING_REMINDER_MS, loadNotificationOnboardingState, parseTimestampMs }, ...args);
 
   const saveSession = async (overrides = {}) => {
     try {
@@ -824,82 +432,7 @@ export default function AppShell() {
     }
   };
 
-  const handleDriverAssignmentChange = async ({ assignedTourId }) => {
-    const normalizedAssignedTourId = normalizeTourId(assignedTourId);
-    if (!normalizedAssignedTourId || !realtimeDb) {
-      throw new Error('A valid assigned tour is required.');
-    }
-
-    const nextTourSnapshot = await realtimeDb.ref(`tours/${normalizedAssignedTourId}`).once('value');
-    if (!nextTourSnapshot.exists()) {
-      throw new Error('The assigned tour could not be loaded securely.');
-    }
-    const nextTourData = {
-      id: normalizedAssignedTourId,
-      ...(nextTourSnapshot.val() || {}),
-    };
-    const nextDeparture = driverTourPackService.resolveExactDepartureKey({
-      tourId: normalizedAssignedTourId,
-      startDate: nextTourData.startDate,
-    });
-    if (!nextDeparture.ok) {
-      throw new Error('The assigned tour is missing a valid departure date. Dispatch must correct it before offline use.');
-    }
-
-    const updatedBookingData = {
-      ...(bookingData || {}),
-      assignedTourId: normalizedAssignedTourId,
-      assignedTourCode: nextTourData.tourCode || bookingData?.assignedTourCode || null,
-      assignedDepartureKey: nextDeparture.departureKey,
-    };
-
-    const previousScope = currentDriverLifecycleScope;
-    const previousNormalized = previousScope
-      ? driverOperationalLifecycleService.normalizeScope(previousScope)
-      : null;
-    const nextScope = {
-      authUid: user?.uid || auth?.currentUser?.uid || null,
-      driverId: updatedBookingData.id,
-      departureKey: nextDeparture.departureKey,
-      tourId: normalizedAssignedTourId,
-      startDate: nextTourData.startDate,
-    };
-    const nextNormalized = driverOperationalLifecycleService.normalizeScope(nextScope);
-    const changedDeparture = previousNormalized?.ok
-      && nextNormalized.ok
-      && (previousNormalized.driverId !== nextNormalized.driverId
-        || previousNormalized.departureKey !== nextNormalized.departureKey);
-
-    if (changedDeparture) {
-      const purgeResult = await driverOperationalLifecycleService.purge(previousScope);
-      if (!purgeResult.success) {
-        logger.warn('DriverTourPack', 'Previous assignment data was only partially purged', {
-          failedOperations: purgeResult.failures?.map((failure) => failure.name) || [],
-        });
-      }
-    }
-
-    previousDriverOperationalScopeRef.current = nextScope;
-    driverLifecyclePurgeRef.current = null;
-    setBookingData(updatedBookingData);
-    setTourData(nextTourData);
-    setTourCode(nextTourData.tourCode || '');
-    setDriverSessionGeneration((value) => value + 1);
-
-    try {
-      await SessionStorage.multiSet([
-        [SESSION_KEYS.BOOKING_DATA, JSON.stringify(updatedBookingData)],
-        [SESSION_KEYS.TOUR_DATA, JSON.stringify(nextTourData)],
-      ]);
-    } catch (error) {
-      logger.error('Session', 'Failed to persist driver assignment', { error: error.message, assignedTourId: normalizedAssignedTourId });
-    }
-
-    return {
-      tour: nextTourData,
-      departureKey: nextDeparture.departureKey,
-    };
-  };
+  const handleDriverAssignmentChange = (...args) => runHandleDriverAssignmentChange({ SESSION_KEYS, SessionStorage, auth, bookingData, currentDriverLifecycleScope, driverLifecyclePurgeRef, driverOperationalLifecycleService, driverTourPackService, logger, normalizeTourId, previousDriverOperationalScopeRef, realtimeDb, setBookingData, setDriverSessionGeneration, setTourCode, setTourData, user }, ...args);
   driverAssignmentChangeRef.current = handleDriverAssignmentChange;
 
   useEffect(() => {
@@ -976,757 +509,39 @@ export default function AppShell() {
     };
   }, [currentDriverLifecycleScopeKey, user?.uid]);
 
-  const resolveOfflineLogin = async (reference, normalizedEmail) => {
-    if (await appSessionService.readPendingEnd()) {
-      return { success: false, reason: 'LOGOUT_PENDING', error: 'Logout must finish online before this device can reopen a tour.' };
-    }
-    const cachedAppSession = await appSessionService.readSession();
-    if (!cachedAppSession) {
-      return { success: false, reason: 'ONLINE_VERIFICATION_REQUIRED', error: 'Connect to the internet to start a secure tour session.' };
-    }
-    const result = await resolveOfflineLoginFromCache({
-      reference,
-      normalizedEmail,
-      sessionStorage: SessionStorage,
-      sessionKeys: SESSION_KEYS,
-      offlineSyncService,
-      maskIdentifier,
-      logger,
-    });
-    if (!result?.success) return result;
-    const identityId = result.type === 'driver' ? result.identity?.id : result.identity?.stablePassengerId;
-    const expectedTourId = result.tour?.id || result.identity?.assignedTourId || null;
-    if (cachedAppSession.principalType !== result.type
-      || cachedAppSession.principalId !== (result.type === 'driver' ? `driver:${identityId}` : identityId)
-      || cachedAppSession.tourId !== expectedTourId) {
-      return { success: false, reason: 'SESSION_SCOPE_MISMATCH', error: 'Saved tour data no longer matches this secure session. Reconnect to sign in.' };
-    }
-    return { ...result, appSession: cachedAppSession };
-  };
+  const resolveOfflineLogin = (...args) => runResolveOfflineLogin({ SESSION_KEYS, SessionStorage, appSessionService, logger, maskIdentifier, offlineSyncService, resolveOfflineLoginFromCache }, ...args);
 
-  const handleLoginSuccess = async (reference, tourDetails, bookingOrDriverData, userType = 'passenger', options = {}) => {
-    const targetScreen = userType === 'driver' ? 'DriverHome' : 'TourHome';
-    const authUser = user || auth?.currentUser || null;
-    const authUid = authUser?.uid || null;
-    const loginDiagnosticsContext = options?.loginDiagnostics || (
-      options?.loginDiagnosticId ? { attemptId: options.loginDiagnosticId } : null
-    );
-    await loginDiagnostics.recordLoginDiagnostic('app_login_success_handler_started', {
-      userType,
-      targetScreen,
-      hasAuthUid: Boolean(authUid),
-      authUid,
-      authCurrentUserUid: auth?.currentUser?.uid || null,
-      stateUserUid: user?.uid || null,
-      hasTourDetails: Boolean(tourDetails),
-      tourId: tourDetails?.id || null,
-      tourCode: tourDetails?.tourCode || null,
-      identityId: bookingOrDriverData?.id || null,
-      alreadyHydrated: Boolean(options?.alreadyHydrated),
-      offlineMode: Boolean(options?.offlineMode),
-    }, loginDiagnosticsContext);
-    recordCrashBreadcrumb('Auth', 'login_success_handler_started', {
-      userType,
-      targetScreen,
-      hasAuthUid: Boolean(authUid),
-      hasTourDetails: Boolean(tourDetails),
-      tourId: tourDetails?.id || null,
-      identityId: bookingOrDriverData?.id ? maskIdentifier(bookingOrDriverData.id) : null,
-      alreadyHydrated: Boolean(options?.alreadyHydrated),
-      offlineMode: Boolean(options?.offlineMode),
-    }, { remote: true, reason: 'Auth:login_success_handler_started' });
-    const verifiedAppSession = options?.appSession || await appSessionService.readSession();
-    const expectedPrincipalId = userType === 'driver'
-      ? `driver:${bookingOrDriverData?.id}`
-      : bookingOrDriverData?.stablePassengerId;
-    const expectedTourId = tourDetails?.id || bookingOrDriverData?.assignedTourId || null;
-    if (!verifiedAppSession
-      || verifiedAppSession.principalType !== userType
-      || verifiedAppSession.principalId !== expectedPrincipalId
-      || verifiedAppSession.tourId !== expectedTourId) {
-      const sessionError = new Error('Secure app session unavailable');
-      sessionError.userMessage = 'We could not establish a secure app session. Please reconnect and sign in again.';
-      throw sessionError;
-    }
-    await appSessionService.persistSession(verifiedAppSession);
-    await appSessionService.clearPendingEnd();
-    sessionGenerationRef.current += 1;
-    setAppSession(verifiedAppSession);
-    setLogoutStatus({ state: 'idle', error: null, diagnostic: null });
-    const durationMs = getLoginTransitionDurationMs({ alreadyHydrated: options?.alreadyHydrated });
-    const showInterstitial = !options?.alreadyHydrated;
-    if (showInterstitial) {
-      startLoginTransition({ targetScreen, durationMs });
-    }
+  const handleLoginSuccess = (...args) => runHandleLoginSuccess({ IDENTITY_VERSION, appSessionService, auth, bookingService, driverLifecyclePurgeRef, driverTourPackService, getLoginTransitionDurationMs, identityBinding, joinTour, logger, loginDiagnostics, maskIdentifier, normalizePassengerEmail, offlineSyncService, persistDriverIdentityForUser, persistPassengerIdentityForUser, realtimeDb, recordCrashBreadcrumb, resetLoginTransition, resolveTourId, routeHistoryRef, saveSession, sessionGenerationRef, setAppSession, setBookingData, setCurrentScreen, setIdentityBinding, setLogoutStatus, setScreenParams, setTourCode, setTourData, shouldShowNotificationOnboarding, startLoginTransition, toRealtimeKeySegment, user }, ...args);
 
-    const onboardingAudience = userType === 'driver' ? 'driver' : 'passenger';
-    const shouldOnboardNotifications = await shouldShowNotificationOnboarding({
-      userId: authUid,
-      audience: onboardingAudience,
-    });
-    const postLoginScreen = shouldOnboardNotifications ? 'NotificationPreferences' : targetScreen;
-    await loginDiagnostics.recordLoginDiagnostic('notification_onboarding_decision_resolved', {
-      userType,
-      onboardingAudience,
-      shouldOnboardNotifications,
-      postLoginScreen,
-      hasAuthUid: Boolean(authUid),
-    }, loginDiagnosticsContext);
+  const handleNotificationOnboardingComplete = (...args) => runHandleNotificationOnboardingComplete({ homeScreen, navigateTo, saveNotificationOnboardingState, user }, ...args);
 
-    if (userType === 'driver') {
-      const assignedTourId = resolveTourId(tourDetails?.id, bookingOrDriverData?.assignedTourId);
-      const departureIdentity = assignedTourId && tourDetails
-        ? driverTourPackService.resolveExactDepartureKey({
-            tourId: assignedTourId,
-            startDate: tourDetails.startDate,
-          })
-        : { ok: false };
-      const driverSessionData = {
-        ...bookingOrDriverData,
-        assignedTourId: assignedTourId || null,
-        assignedDepartureKey: departureIdentity.ok ? departureIdentity.departureKey : null,
-      };
-      logger.info('Auth', 'Driver Logged In', { driverId: maskIdentifier(bookingOrDriverData.id) });
-      if (authUid) {
-        try {
-          await loginDiagnostics.recordLoginDiagnostic('driver_identity_persist_started', {
-            authUid,
-            driverId: bookingOrDriverData?.id,
-            assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
-          }, loginDiagnosticsContext);
-          const persisted = await persistDriverIdentityForUser({
-            authUid,
-            driverId: bookingOrDriverData?.id,
-            assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
-          });
-          await loginDiagnostics.recordLoginDiagnostic('driver_identity_persist_succeeded', {
-            authUid,
-            driverId: persisted.driverId,
-            assignedTourId: persisted.assignedTourId || null,
-          }, loginDiagnosticsContext);
-          logger.info('Identity', 'driver_identity_persist_success', {
-            authUid: maskIdentifier(authUid),
-            driverId: maskIdentifier(persisted.driverId),
-            assignedTourId: persisted.assignedTourId || null,
-          });
-          recordCrashBreadcrumb('Identity', 'driver_identity_persist_success', {
-            hasAuthUid: true,
-            driverId: maskIdentifier(persisted.driverId),
-            assignedTourId: persisted.assignedTourId || null,
-          }, { remote: true, reason: 'Identity:driver_identity_persist_success' });
-        } catch (error) {
-          logger.error('Identity', 'driver_identity_persist_failure', {
-            authUid: maskIdentifier(authUid),
-            driverId: maskIdentifier(bookingOrDriverData?.id),
-            assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
-            error: error.message,
-            code: error?.code || null,
-          });
-          await loginDiagnostics.recordLoginDiagnostic('driver_identity_persist_failed', {
-            authUid,
-            driverId: bookingOrDriverData?.id,
-            assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
-            error: loginDiagnostics.summarizeError(error),
-          }, loginDiagnosticsContext);
-          recordCrashBreadcrumb('Identity', 'driver_identity_persist_failure', {
-            hasAuthUid: true,
-            driverId: maskIdentifier(bookingOrDriverData?.id),
-            assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
-            error: error.message,
-            code: error?.code || null,
-          }, { remote: true, reason: 'Identity:driver_identity_persist_failure' });
-        }
-      } else {
-        recordCrashBreadcrumb('Identity', 'driver_identity_persist_skipped_no_auth_user', {
-          driverId: maskIdentifier(bookingOrDriverData?.id),
-          assignedTourId: tourDetails?.id || bookingOrDriverData?.assignedTourId || null,
-        }, { remote: true, reason: 'Identity:driver_identity_persist_skipped_no_auth_user' });
-      }
-      setTourCode(tourDetails?.tourCode || '');
-      setTourData(tourDetails || null);
-      setBookingData(driverSessionData);
-      driverLifecyclePurgeRef.current = null;
-      routeHistoryRef.current.reset();
-      setCurrentScreen(postLoginScreen);
-      recordCrashBreadcrumb('Auth', 'driver_login_session_established', {
-        postLoginScreen,
-        hasAuthUid: Boolean(authUid),
-        driverId: maskIdentifier(bookingOrDriverData?.id),
-        tourId: tourDetails?.id || null,
-      }, { remote: true, reason: 'Auth:driver_login_session_established' });
-      if (tourDetails?.id) {
-        await loginDiagnostics.recordLoginDiagnostic('driver_offline_pack_save_started', {
-          tourId: tourDetails.id,
-          driverId: bookingOrDriverData?.id,
-        }, loginDiagnosticsContext);
-        await offlineSyncService.saveTourPack(tourDetails.id, 'driver', {
-          tour: tourDetails,
-          driver: driverSessionData,
-        }, { ownerId: bookingOrDriverData?.id });
-        await offlineSyncService.setTourPackMeta(
-          tourDetails.id,
-          'driver',
-          { lastSyncedAt: new Date().toISOString() },
-          { ownerId: bookingOrDriverData?.id },
-        );
-        await loginDiagnostics.recordLoginDiagnostic('driver_offline_pack_save_succeeded', {
-          tourId: tourDetails.id,
-          driverId: bookingOrDriverData?.id,
-        }, loginDiagnosticsContext);
-      }
-      await loginDiagnostics.recordLoginDiagnostic('driver_session_save_started', {
-        postLoginScreen,
-        tourId: tourDetails?.id || null,
-        driverId: bookingOrDriverData?.id || null,
-      }, loginDiagnosticsContext);
-      await saveSession({
-        tourData: tourDetails || null,
-        bookingData: driverSessionData,
-        currentScreen: postLoginScreen,
-      });
-      await loginDiagnostics.recordLoginDiagnostic('driver_session_save_succeeded', {
-        postLoginScreen,
-        tourId: tourDetails?.id || null,
-        driverId: bookingOrDriverData?.id || null,
-      }, loginDiagnosticsContext);
+  useNotificationSessionNavigation({
+    authUid: user?.uid,
+    bookingId: bookingData?.id,
+    isDriver: isDriverSession,
+    navigateTo,
+    tourId: tourData?.id,
+  });
 
-      if (shouldOnboardNotifications) {
-        setScreenParams({
-          isOnboarding: true,
-          audience: 'driver',
-          returnTo: 'DriverHome',
-        });
-      }
-      await loginDiagnostics.recordLoginDiagnostic('app_login_success_handler_completed', {
-        userType,
-        postLoginScreen,
-        targetScreen,
-        tourId: tourDetails?.id || null,
-        identityId: bookingOrDriverData?.id || null,
-        shouldOnboardNotifications,
-      }, loginDiagnosticsContext);
-      return;
-    }
+  const clearSessionState = (...args) => runClearSessionState({ SESSION_KEYS, SessionStorage, logger, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setScreenParams, setTourCode, setTourData }, ...args);
 
-    const normalizedBookingData = {
-      ...bookingOrDriverData,
-      normalizedPassengerEmail: normalizePassengerEmail(bookingOrDriverData?.normalizedPassengerEmail),
-    };
-    const { stablePassengerId, identityVersion } = bookingService.resolveVerifiedPassengerIdentity({
-      stablePassengerId: normalizedBookingData?.stablePassengerId,
-      identityVersion: normalizedBookingData?.identityVersion,
-    });
-    const nextIdentityBinding = stablePassengerId
-      ? {
-          stablePassengerId,
-          stablePassengerKey: toRealtimeKeySegment(stablePassengerId),
-          identityVersion: identityVersion || IDENTITY_VERSION,
-          bookingRef: normalizedBookingData?.id || null,
-          normalizedPassengerEmail: normalizedBookingData?.normalizedPassengerEmail || null,
-          authUid,
-        }
-      : null;
+  const purgeLocalSession = (...args) => runPurgeLocalSession({ appSession, auth, bookingData, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, localSessionCleanupService, previousDriverOperationalScopeRef, setAppSession, setDriverSessionGeneration, tourData, user }, ...args);
 
-    if (!options?.offlineMode && tourDetails?.id) {
-      if (!authUid) {
-        resetLoginTransition();
-        const authFailure = new Error('Authenticated tour session unavailable');
-        authFailure.userMessage = 'We could not start a secure tour session. Please check your connection and try again.';
-        await loginDiagnostics.recordLoginDiagnostic('passenger_join_blocked_missing_auth_uid', {
-          tourId: tourDetails.id,
-          authCurrentUserUid: auth?.currentUser?.uid || null,
-          stateUserUid: user?.uid || null,
-        }, loginDiagnosticsContext);
-        throw authFailure;
-      }
+  const handleLogout = (...args) => runHandleLogout({ appSession, appSessionService, auth, bookingData, currentDriverLifecycleScope, logger, logoutContextRef, purgeLocalSession, setAppSession, setLogoutStatus, tourData, user }, ...args);
 
-      try {
-        await loginDiagnostics.recordLoginDiagnostic('passenger_join_tour_started', {
-          tourId: tourDetails.id,
-          authUid,
-          bookingRef: normalizedBookingData?.id || null,
-        }, loginDiagnosticsContext);
-        const joinResult = await joinTour(tourDetails.id, authUid, undefined, {
-          loginDiagnostics: loginDiagnosticsContext,
-          tourProjection: tourDetails,
-        });
-        await loginDiagnostics.recordLoginDiagnostic('passenger_join_tour_succeeded', {
-          tourId: tourDetails.id,
-          authUid,
-          currentParticipants: joinResult?.currentParticipants,
-          alreadyJoined: Boolean(joinResult?.alreadyJoined),
-        }, loginDiagnosticsContext);
-      } catch (error) {
-        resetLoginTransition();
-        logger.error('Tour', 'Error joining tour', {
-          error: error.message,
-          code: error?.code || null,
-          tourId: tourDetails.id,
-          authUid: maskIdentifier(authUid),
-        });
-        await loginDiagnostics.recordLoginDiagnostic('passenger_join_tour_failed', {
-          tourId: tourDetails.id,
-          authUid,
-          bookingRef: normalizedBookingData?.id || null,
-          error: loginDiagnostics.summarizeError(error),
-        }, loginDiagnosticsContext);
-        const joinFailure = new Error('Unable to join tour session');
-        joinFailure.userMessage = 'We could not finish joining your tour session. Please check your connection and try again.';
-        throw joinFailure;
-      }
-    }
+  const retryPendingLogout = useLogoutLifecycle({
+    appSession,
+    isConnected,
+    logoutContextRef,
+    logoutStatus,
+    purgeLocalSession,
+    sessionGenerationRef,
+    setCurrentScreen,
+    setLogoutStatus,
+    userUid: user?.uid,
+  });
 
-    if (nextIdentityBinding) {
-      setIdentityBinding(nextIdentityBinding);
-    }
-
-    logger.info('Navigation', 'Passenger Login', { bookingRef: maskIdentifier(reference) });
-    setTourCode(tourDetails?.tourCode || '');
-    setTourData(tourDetails || null);
-    setBookingData(normalizedBookingData);
-
-    if (authUid && normalizedBookingData?.id && realtimeDb) {
-      try {
-        if (!stablePassengerId || !normalizedBookingData?.normalizedPassengerEmail) {
-          logger.warn('Identity', 'Stable identity unavailable during passenger login', {
-            reason: 'STABLE_ID_UNAVAILABLE',
-            authUid: maskIdentifier(authUid),
-            bookingRef: maskIdentifier(normalizedBookingData.id),
-          });
-        }
-
-        await loginDiagnostics.recordLoginDiagnostic('passenger_identity_persist_started', {
-          authUid,
-          bookingRef: normalizedBookingData.id,
-          normalizedPassengerEmail: normalizedBookingData.normalizedPassengerEmail,
-          stablePassengerId,
-          identityVersion,
-        }, loginDiagnosticsContext);
-        const persisted = await persistPassengerIdentityForUser({
-          authUid,
-          stablePassengerId,
-          identityVersion,
-          bookingRef: normalizedBookingData.id,
-          normalizedPassengerEmail: normalizedBookingData.normalizedPassengerEmail,
-        });
-        await loginDiagnostics.recordLoginDiagnostic('passenger_identity_persist_succeeded', {
-          authUid,
-          bookingRef: normalizedBookingData.id,
-          stablePassengerId,
-          stablePassengerKey: persisted.stablePassengerKey || null,
-        }, loginDiagnosticsContext);
-        logger.info('Identity', 'identity_binding_persist_success', {
-          authUid: maskIdentifier(authUid),
-          bookingRef: maskIdentifier(normalizedBookingData.id),
-          stablePassengerId: stablePassengerId ? maskIdentifier(stablePassengerId) : null,
-          stablePassengerKey: persisted.stablePassengerKey ? maskIdentifier(persisted.stablePassengerKey) : null,
-        });
-      } catch (error) {
-        if (error?.criticalIdentityPersistence) {
-          resetLoginTransition();
-        }
-
-        const sourceError = error?.cause || error;
-        const sourceErrorMessage = sourceError?.message || error?.message || '';
-        const sourceErrorCode = sourceError?.code || error?.code || null;
-        const isIdentityBindingWriteRejected = sourceErrorCode === 'PERMISSION_DENIED'
-          || /permission_denied/i.test(sourceErrorMessage)
-          || /Permission denied/i.test(sourceErrorMessage);
-        logger.error('Identity', 'identity_binding_persist_failure', {
-          error: sourceErrorMessage,
-          code: sourceErrorCode,
-          critical: Boolean(error?.criticalIdentityPersistence),
-          reason: isIdentityBindingWriteRejected ? 'IDENTITY_BINDING_WRITE_DENIED_OR_INVALID' : 'IDENTITY_BINDING_WRITE_FAILED',
-          authUid: maskIdentifier(authUid),
-          bookingRef: maskIdentifier(normalizedBookingData.id),
-          stablePassengerId: stablePassengerId ? maskIdentifier(stablePassengerId) : null,
-          stablePassengerKey: stablePassengerId ? maskIdentifier(toRealtimeKeySegment(stablePassengerId)) : null,
-        });
-        await loginDiagnostics.recordLoginDiagnostic('passenger_identity_persist_failed', {
-          authUid,
-          bookingRef: normalizedBookingData.id,
-          normalizedPassengerEmail: normalizedBookingData.normalizedPassengerEmail,
-          stablePassengerId,
-          stablePassengerKey: stablePassengerId ? toRealtimeKeySegment(stablePassengerId) : null,
-          critical: Boolean(error?.criticalIdentityPersistence),
-          reason: isIdentityBindingWriteRejected ? 'IDENTITY_BINDING_WRITE_DENIED_OR_INVALID' : 'IDENTITY_BINDING_WRITE_FAILED',
-          error: loginDiagnostics.summarizeError(sourceError),
-        }, loginDiagnosticsContext);
-
-        if (error?.criticalIdentityPersistence) {
-          throw error;
-        }
-      }
-    }
-
-    routeHistoryRef.current.reset();
-    setCurrentScreen(postLoginScreen);
-    if (tourDetails?.id) {
-      await loginDiagnostics.recordLoginDiagnostic('passenger_offline_pack_save_started', {
-        tourId: tourDetails.id,
-        bookingRef: normalizedBookingData?.id || null,
-      }, loginDiagnosticsContext);
-      await offlineSyncService.saveTourPack(tourDetails.id, 'passenger', {
-        tour: tourDetails,
-        booking: normalizedBookingData,
-        safety: { emergencyPhone: tourDetails?.driverPhone || null },
-      }, { ownerId: normalizedBookingData?.id });
-      await offlineSyncService.setTourPackMeta(
-        tourDetails.id,
-        'passenger',
-        { lastSyncedAt: new Date().toISOString() },
-        { ownerId: normalizedBookingData?.id },
-      );
-      await loginDiagnostics.recordLoginDiagnostic('passenger_offline_pack_save_succeeded', {
-        tourId: tourDetails.id,
-        bookingRef: normalizedBookingData?.id || null,
-      }, loginDiagnosticsContext);
-    }
-
-    await loginDiagnostics.recordLoginDiagnostic('passenger_session_save_started', {
-      postLoginScreen,
-      tourId: tourDetails?.id || null,
-      bookingRef: normalizedBookingData?.id || null,
-      hasIdentityBinding: Boolean(nextIdentityBinding || identityBinding),
-    }, loginDiagnosticsContext);
-    await saveSession({
-      tourData: tourDetails || null,
-      bookingData: normalizedBookingData,
-      currentScreen: postLoginScreen,
-      identityBinding: nextIdentityBinding || identityBinding,
-    });
-    await loginDiagnostics.recordLoginDiagnostic('passenger_session_save_succeeded', {
-      postLoginScreen,
-      tourId: tourDetails?.id || null,
-      bookingRef: normalizedBookingData?.id || null,
-      hasIdentityBinding: Boolean(nextIdentityBinding || identityBinding),
-    }, loginDiagnosticsContext);
-
-    if (shouldOnboardNotifications) {
-      setScreenParams({
-        isOnboarding: true,
-        audience: 'passenger',
-        returnTo: 'TourHome',
-      });
-    }
-
-    await loginDiagnostics.recordLoginDiagnostic('app_login_success_handler_completed', {
-      userType,
-      postLoginScreen,
-      targetScreen,
-      tourId: tourDetails?.id || null,
-      identityId: normalizedBookingData?.id || bookingOrDriverData?.id || null,
-      shouldOnboardNotifications,
-    }, loginDiagnosticsContext);
-
-  };
-
-  const handleNotificationOnboardingComplete = async ({ status, audience, returnTo }) => {
-    const normalizedStatus = status === 'completed' ? 'completed' : 'skipped';
-    await saveNotificationOnboardingState({
-      status: normalizedStatus,
-      audience,
-      userId: user?.uid || null,
-      updatedAt: new Date().toISOString(),
-    });
-    navigateTo(returnTo || homeScreen, { from: 'NotificationPreferences', onboardingCompleted: normalizedStatus === 'completed' });
-  };
-
-  const navigateTo = useCallback((screen, params = {}, options = {}) => {
-    logger.trackScreen(screen, { from: currentScreen, ...params });
-    if (options.reset === true) {
-      routeHistoryRef.current.reset();
-    } else if (options.replace !== true && screen !== currentScreen) {
-      routeHistoryRef.current.push({ screen: currentScreen, params: screenParams });
-    }
-    setScreenParams(params);
-    setCurrentScreen(screen);
-    saveSession({ currentScreen: screen });
-  }, [currentScreen, screenParams]);
-
-  const navigateBack = useCallback((fallbackScreen, fallbackParams = {}) => {
-    const target = routeHistoryRef.current.pop({ fallbackScreen, fallbackParams });
-    if (!target) return;
-    logger.trackScreen(target.screen, { from: currentScreen, via: 'back' });
-    setScreenParams(target.params);
-    setCurrentScreen(target.screen);
-    saveSession({ currentScreen: target.screen });
-  }, [currentScreen]);
-  notificationNavigateRef.current = navigateTo;
-
-  useEffect(() => {
-    const activeTourId = tourData?.id;
-    const authUserId = user?.uid;
-    const hasAppSession = Boolean(bookingData?.id);
-    if (!authUserId || !hasAppSession) return undefined;
-
-    return subscribeToNotificationResponses({
-      getContext: () => ({
-        activeTourId,
-        isDriver: Boolean(isDriverSession),
-      }),
-      onNavigate: async ({ screen, params }) => {
-        const responseTourId = params?.tourId || activeTourId;
-        if (params?.noticeId && responseTourId) {
-          try {
-            await markNotificationRead({
-              tourId: responseTourId,
-              userId: authUserId,
-              noticeId: params.noticeId,
-            });
-          } catch (error) {
-            logger.warn('Navigation', 'Notification read state could not be persisted', {
-              screen,
-              error: error?.message || String(error),
-            });
-          }
-        }
-        const navigate = notificationNavigateRef.current;
-        if (typeof navigate !== 'function') {
-          throw new Error('Notification navigation is not ready');
-        }
-        navigate(screen, params);
-      },
-    });
-  }, [bookingData?.id, isDriverSession, tourData?.id, user?.uid]);
-
-  useEffect(() => {
-    if (!user?.uid || !tourData?.id) return;
-    restorePushTokenForSession(user.uid).then((result) => {
-      if (!result?.success) {
-        logger.warn('NotificationService', 'Signed-in push token restore was deferred', {
-          error: result?.error || 'unknown',
-        });
-      }
-    });
-  }, [tourData?.id, user?.uid]);
-
-  const edgeSwipeResponder = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => false,
-    onMoveShouldSetPanResponder: (_, gestureState) => {
-        if (!canSwipeToHome) return false;
-        return isEligibleEdgeSwipe(gestureState);
-      },
-    onPanResponderRelease: (_, gestureState) => {
-        if (!canSwipeToHome) return;
-        if (!shouldCommitEdgeSwipeHome(gestureState)) return;
-
-        logger.info('Navigation', 'Edge swipe home navigation triggered', {
-          from: currentScreen,
-          to: homeScreen,
-          dx: gestureState?.dx,
-          vx: gestureState?.vx,
-        });
-        navigateTo(homeScreen, { viaGesture: 'edge-swipe-home' }, { reset: true });
-      },
-    onPanResponderTerminationRequest: () => true,
-    }), [canSwipeToHome, currentScreen, homeScreen, navigateTo]);
-
-  const clearSessionState = async ({ includeNotificationOnboarding = false } = {}) => {
-    const keysToRemove = [
-      SESSION_KEYS.TOUR_DATA,
-      SESSION_KEYS.BOOKING_DATA,
-      SESSION_KEYS.LAST_SCREEN,
-      SESSION_KEYS.IDENTITY_BINDING,
-    ];
-    if (includeNotificationOnboarding) {
-      keysToRemove.push(SESSION_KEYS.NOTIFICATION_ONBOARDING);
-    }
-
-    try {
-      await SessionStorage.multiRemove(keysToRemove);
-    } catch (error) {
-      logger.warn('Auth', 'Persisted session cleanup failed; clearing in-memory session', {
-        error: error?.message || String(error),
-      });
-    } finally {
-      setTourCode('');
-      setTourData(null);
-      setBookingData(null);
-      setIdentityBinding(null);
-      setScreenParams({});
-      routeHistoryRef.current.reset();
-      setCurrentScreen('Login');
-    }
-  };
-
-  const purgeLocalSession = async ({ capturedSession = appSession } = {}) => {
-    const result = await localSessionCleanupService.cleanup({
-      authUid: user?.uid || auth?.currentUser?.uid || null,
-      appSession: capturedSession,
-      bookingData,
-      tourData,
-      driverOperationalScope: currentDriverLifecycleScope,
-    });
-    previousDriverOperationalScopeRef.current = null;
-    driverLifecyclePurgeRef.current = null;
-    setDriverSessionGeneration((value) => value + 1);
-    setAppSession(null);
-    await clearSessionState();
-    return result;
-  };
-
-  const handleLogout = async () => {
-    const authUid = user?.uid || auth?.currentUser?.uid || null;
-    const capturedSession = appSession;
-    logoutContextRef.current = {
-      authUid,
-      appSession: capturedSession,
-      bookingData,
-      tourData,
-      driverOperationalScope: currentDriverLifecycleScope,
-    };
-    if (!authUid || !capturedSession) {
-      const cleanup = await purgeLocalSession({ capturedSession });
-      if (cleanup.success) await appSessionService.completeEnd();
-      return;
-    }
-    setLogoutStatus({ state: 'requesting', error: null, diagnostic: capturedSession.sessionId.slice(-6) });
-    const serverResult = await appSessionService.endSession({ authUid, session: capturedSession });
-    if (serverResult.reason === 'SESSION_CHANGED') {
-      try {
-        const current = await appSessionService.verifyCurrent({ authUid, expectedSession: capturedSession });
-        if (current.reason === 'SESSION_CHANGED' && current.session) {
-          await appSessionService.persistSession(current.session);
-          await appSessionService.clearPendingEnd();
-          setAppSession(current.session);
-          setLogoutStatus({ state: 'idle', error: null, diagnostic: null });
-          return;
-        }
-      } catch (error) {
-        logger.warn('Auth', 'Could not resolve changed session after logout response', { error: error?.message || String(error) });
-      }
-    }
-
-    const cleanup = await purgeLocalSession({ capturedSession });
-    if (!cleanup.success) {
-      setLogoutStatus({
-        state: 'failed',
-        error: 'Some private data could not be removed from this device. Try again before continuing.',
-        diagnostic: capturedSession.sessionId.slice(-6),
-      });
-      return;
-    }
-    if (serverResult.success) {
-      await appSessionService.completeEnd();
-      logoutContextRef.current = null;
-      setLogoutStatus({ state: 'complete', error: null, diagnostic: null });
-      return;
-    }
-    setLogoutStatus({
-      state: 'pending_network',
-      error: serverResult.reason === 'NETWORK_ERROR'
-        ? 'We could not reach the server. Logout will finish automatically when you reconnect.'
-        : 'The server could not confirm logout yet. Try again when connected.',
-      diagnostic: capturedSession.sessionId.slice(-6),
-    });
-  };
-
-  const retryPendingLogout = useCallback(async () => {
-    if (logoutStatus.state === 'requesting') return;
-    setLogoutStatus((current) => ({ ...current, state: 'requesting', error: null }));
-    if (logoutStatus.state === 'failed') {
-      const cleanup = await localSessionCleanupService.cleanup(logoutContextRef.current || {});
-      if (!cleanup.success) {
-        setLogoutStatus((current) => ({
-          ...current,
-          state: 'failed',
-          error: 'Some private data still could not be removed from this device. Please try again.',
-        }));
-        return;
-      }
-    }
-    const result = await appSessionService.retryPendingEnd();
-    if (result.success) {
-      await appSessionService.completeEnd();
-      logoutContextRef.current = null;
-      setLogoutStatus({ state: 'complete', error: null, diagnostic: null });
-      setCurrentScreen('Login');
-      return;
-    }
-    setLogoutStatus((current) => ({
-      ...current,
-      state: 'pending_network',
-      error: result.reason === 'NETWORK_ERROR'
-        ? 'We still cannot reach the server. We will keep trying when the connection returns.'
-        : 'Logout is still awaiting server confirmation. Please try again.',
-    }));
-  }, [logoutStatus.state]);
-
-  useEffect(() => {
-    if (!isConnected || logoutStatus.state !== 'pending_network') return;
-    retryPendingLogout();
-  }, [isConnected, logoutStatus.state, retryPendingLogout]);
-
-  useEffect(() => {
-    if (typeof appSessionListenerRef.current === 'function') appSessionListenerRef.current();
-    appSessionListenerRef.current = null;
-    if (!appSession || !user?.uid || logoutStatus.state !== 'idle') return undefined;
-    const generation = ++sessionGenerationRef.current;
-    const unsubscribe = appSessionService.subscribe({
-      authUid: user.uid,
-      expectedSession: appSession,
-      onRevoked: async ({ reason }) => {
-        if (generation !== sessionGenerationRef.current) return;
-        setLogoutStatus({ state: 'requesting', error: null, diagnostic: appSession.sessionId.slice(-6) });
-        const cleanup = await purgeLocalSession({ capturedSession: appSession });
-        if (cleanup.success) {
-          await appSessionService.completeEnd();
-          setLogoutStatus({ state: 'complete', error: null, diagnostic: null });
-        } else {
-          setLogoutStatus({
-            state: 'failed',
-            error: 'Your session ended remotely, but some local data still needs to be removed. Try again.',
-            diagnostic: appSession.sessionId.slice(-6),
-          });
-        }
-        logger.info('Auth', 'Remote app session revocation handled', { reason });
-      },
-      onError: (error) => logger.warn('Session', 'Remote session listener paused', { error: error?.message || String(error) }),
-    });
-    appSessionListenerRef.current = unsubscribe;
-    return () => {
-      sessionGenerationRef.current += 1;
-      unsubscribe();
-      if (appSessionListenerRef.current === unsubscribe) appSessionListenerRef.current = null;
-    };
-  }, [appSession?.sessionId, logoutStatus.state, user?.uid]);
-
-  const handleAccountDeleted = async (summary = {}) => {
-    try {
-      logger.info('Auth', 'Account deletion completed from UI', {
-        deletedAuthUid: maskIdentifier(summary.deletedAuthUid),
-        replacementAuthUid: maskIdentifier(summary.replacementAuthUid),
-        warningCount: Array.isArray(summary.warnings) ? summary.warnings.length : 0,
-      });
-      const operationalPurge = currentDriverLifecycleScope
-        ? driverOperationalLifecycleService.purge(currentDriverLifecycleScope)
-        : offlineSyncService.setActiveSessionScope(null);
-      const deletedAuthUid = summary.deletedAuthUid || null;
-      const [operationalResult, notificationCacheResult] = await Promise.allSettled([
-        operationalPurge,
-        deletedAuthUid ? clearNotificationFeedCache({ userId: deletedAuthUid }) : Promise.resolve(0),
-      ]);
-      if (operationalResult.status === 'rejected') {
-        logger.warn('Auth', 'Offline operational data could not be cleared after account deletion', {
-          error: operationalResult.reason?.message || String(operationalResult.reason),
-        });
-      }
-      if (notificationCacheResult.status === 'rejected') {
-        logger.warn('Auth', 'Saved notification updates could not be cleared after account deletion', {
-          error: notificationCacheResult.reason?.message || String(notificationCacheResult.reason),
-        });
-      }
-      previousDriverOperationalScopeRef.current = null;
-      driverLifecyclePurgeRef.current = null;
-      setDriverSessionGeneration((value) => value + 1);
-      setAppSession(null);
-      await clearSessionState({ includeNotificationOnboarding: true });
-      setUser(auth?.currentUser || null);
-    } catch (error) {
-      logger.error('Auth', 'Account deletion post-cleanup error', { error: error.message });
-    }
-  };
+  const handleAccountDeleted = (...args) => runHandleAccountDeleted({ auth, clearNotificationFeedCache, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, driverOperationalLifecycleService, logger, maskIdentifier, offlineSyncService, previousDriverOperationalScopeRef, setAppSession, setDriverSessionGeneration, setUser }, ...args);
 
   useEffect(() => {
     if (!isConnected || !firebaseConnected || !offlineSessionScope) return;
@@ -1739,105 +554,45 @@ export default function AppShell() {
     ]);
   }, [isConnected, firebaseConnected, offlineSessionScopeKey]);
 
-  if (initializing) {
-    return (
-      <SafeAreaView style={styles.loadingContainer} edges={['top']}>
-        <ActivityIndicator size="large" color={COLORS.primaryBlue} />
-        <Text style={styles.loadingText}>Connecting to Tour Services...</Text>
-      </SafeAreaView>
-    );
-  }
-
-  if (logoutStatus.state === 'requesting'
-    || logoutStatus.state === 'pending_network'
-    || logoutStatus.state === 'failed') {
-    return (
-      <LogoutPendingScreen
-        isConnected={isConnected}
-        isRetrying={logoutStatus.state === 'requesting'}
-        error={logoutStatus.error}
-        diagnostic={logoutStatus.diagnostic}
-        onRetry={retryPendingLogout}
-      />
-    );
-  }
-
-  if (authError) {
-    return (
-      <SafeAreaView style={styles.loadingContainer} edges={['top']}>
-        <Text style={styles.errorIcon}>⚠️</Text>
-        <Text style={styles.errorTitle}>Connection Error</Text>
-        <Text style={styles.errorText}>{authError}</Text>
-        <Text style={styles.errorDetail}>Check your internet connection, then try again. Your saved tour remains on this device.</Text>
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel="Retry connecting to tour services"
-          style={styles.retryButton}
-          onPress={retryInitialization}
-        >
-          <Text style={styles.retryButtonText}>Try again</Text>
-        </TouchableOpacity>
-      </SafeAreaView>
-    );
-  }
-
   return (
-    <>
-      <StatusBar style="light" backgroundColor={COLORS.statusBarBackground} />
-      <View
-        pointerEvents="none"
-        style={[
-          styles.statusBarScrim,
-          { height: insets.top },
-        ]}
-      />
-      {loginTransition ? (
-        <View style={[styles.loginTransitionOverlay, { top: insets.top + 8 }]}>
-          <Text style={styles.loginTransitionText}>{loginTransition.message}</Text>
-          <View style={styles.loginTransitionTrack}>
-            <Animated.View
-              style={[
-                styles.loginTransitionFill,
-                {
-                  width: loginProgress.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: ['0%', '100%'],
-                  }),
-                },
-              ]}
-            />
-          </View>
-        </View>
-      ) : null}
-      <View style={styles.screenContainer} {...edgeSwipeResponder.panHandlers}>
-        <AppScreenRouter
-          bookingData={bookingData}
-          canonicalIdentity={canonicalIdentity}
-          currentScreen={currentScreen}
-          driverSessionGeneration={driverSessionGeneration}
-          driverTourPackActions={driverTourPackActions}
-          driverTourPackFeature={driverTourPackFeature}
-          driverTourPackState={driverTourPackState}
-          handleAccountDeleted={handleAccountDeleted}
-          handleDriverAssignmentChange={handleDriverAssignmentChange}
-          handleLoginSuccess={handleLoginSuccess}
-          handleLogout={handleLogout}
-          handleNotificationOnboardingComplete={handleNotificationOnboardingComplete}
-          handleViewerVisibilityChange={handleViewerVisibilityChange}
-          homeScreen={homeScreen}
-          identityBinding={identityBinding}
-          isConnected={isConnected}
-          isDriverSession={isDriverSession}
-          navigateBack={navigateBack}
-          navigateTo={navigateTo}
-          offlineSessionScope={offlineSessionScope}
-          resolveOfflineLogin={resolveOfflineLogin}
-          screenParams={screenParams}
-          tourCode={tourCode}
-          tourData={tourData}
-          user={user}
-        />
-      </View>
-    </>
+    <AppShellView
+      authError={authError}
+      edgeSwipeResponder={edgeSwipeResponder}
+      initializing={initializing}
+      insets={insets}
+      isConnected={isConnected}
+      loginProgress={loginProgress}
+      loginTransition={loginTransition}
+      logoutStatus={logoutStatus}
+      retryInitialization={retryInitialization}
+      retryPendingLogout={retryPendingLogout}
+      routerProps={{
+        bookingData,
+        canonicalIdentity,
+        currentScreen,
+        driverSessionGeneration,
+        driverTourPackActions,
+        driverTourPackFeature,
+        driverTourPackState,
+        handleAccountDeleted,
+        handleDriverAssignmentChange,
+        handleLoginSuccess,
+        handleLogout,
+        handleNotificationOnboardingComplete,
+        handleViewerVisibilityChange,
+        homeScreen,
+        identityBinding,
+        isConnected,
+        isDriverSession,
+        navigateBack,
+        navigateTo,
+        offlineSessionScope,
+        resolveOfflineLogin,
+        screenParams,
+        tourCode,
+        tourData,
+        user,
+      }}
+    />
   );
 }

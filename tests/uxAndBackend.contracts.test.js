@@ -473,7 +473,8 @@ test('Static contract: notification taps preserve exact destination context end 
   const preferencesSource = readMobileModuleSource('screens/NotificationPreferencesScreen.js');
   const routingSource = readText('utils/notificationRouting.js');
 
-  assert.match(appSource, /const hasAppSession = Boolean\(bookingData\?\.id\)/);
+  assert.match(appSource, /const hasAppSession = Boolean\(bookingId\)/);
+  assert.match(appSource, /bookingId: bookingData\?\.id/);
   assert.match(appSource, /initialMessageId=\{context\.screenParams\.messageId \|\| null\}/);
   assert.match(appSource, /initialMarketingCategoryKey=\{context\.screenParams\?\.categoryKey \|\| null\}/);
   assert.match(chatSource, /getChatMessageById/);
@@ -644,7 +645,7 @@ test('Static contract: chat connectivity and queue ownership stay wired from app
   const chatSource = readMobileModuleSource('screens/ChatScreen.js');
   const offlineSource = readText('services/offlineSyncService.js');
 
-  assert.match(appSource, /offlineSessionScope=\{offlineSessionScope\}/);
+  assert.match(appSource, /routerProps=\{\{[\s\S]*offlineSessionScope,/);
   assert.match(appSource, /services: \{ bookingService, chatService, photoService, driverTourPackActionService \}/);
   assert.match(chatSource, /isConnected = true/);
   assert.match(chatSource, /offlineSessionScope = null/);
@@ -1014,7 +1015,7 @@ test('Static contract: customer pickup readiness uses only the booking-safe proj
   const mapWebSource = readMobileModuleSource('screens/MapScreen.web.js');
   const boundarySource = readText('services/passengerDataBoundary.js');
 
-  assert.match(appSource, /bookingData=\{bookingData\}/);
+  assert.match(appSource, /routerProps=\{\{[\s\S]*bookingData,/);
   assert.match(homeSource, /formatPickupDate\(pickup\.date \|\| bookingData\.pickupDate\)/);
   assert.match(mapSource, /resolvePrimaryPickup\(bookingData\)/);
   assert.match(mapSource, /Directions to your pickup/);
