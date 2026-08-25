@@ -9,10 +9,19 @@ const { onValueCreated, onValueWritten } = require("firebase-functions/v2/databa
 const { onRequest } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onObjectFinalized } = require("firebase-functions/v2/storage");
-const admin = require("firebase-admin");
-const { Expo } = require("expo-server-sdk");
-const sharp = require("sharp");
 const { createHash, randomUUID } = require("crypto");
+const { admin } = require('./src/bootstrap/firebaseAdmin');
+const {
+  log,
+  maskIdentifier,
+  sanitizeLogData,
+  sanitizeLogText,
+} = require('./src/infrastructure/logging/safeLogger');
+const {
+  getExpoPushClient,
+  isExpoPushToken,
+} = require('./src/infrastructure/notifications/expoPushClient');
+const { createPhotoVariantBuffers } = require('./src/infrastructure/storage/mediaProcessor');
 const { normalizeManifestPassengerRows } = require('./lib/manifestPassengers');
 const {
   INGESTION_LIMITS: DRIVER_TOUR_PACK_INGESTION_LIMITS,
@@ -62,12 +71,6 @@ const {
   cleanupAppSession,
   cleanupDriverLocationForSession,
 } = require('./lib/appSessionCleanup');
-
-// Initialize Firebase Admin
-admin.initializeApp();
-
-// Initialize Expo SDK
-const expo = new Expo();
 
 const NOTIFICATION_RECIPIENT_CAP = 1000;
 const RECIPIENT_CHUNK_SIZE = 200;
@@ -135,84 +138,6 @@ const LEGACY_TOUR_NOTIFICATION_CATEGORY_PREF_KEYS = {
 
 // ==================== UTILITY FUNCTIONS ====================
 
-const maskIdentifier = (value) => {
-  if (value === null || value === undefined) return value;
-  const asString = String(value);
-  if (asString.length <= 4) return '***';
-  return `${asString.slice(0, 2)}***${asString.slice(-2)}`;
-};
-
-const isSensitiveLogKey = (key) => {
-  const normalized = String(key || '').toLowerCase();
-  return /(token|bookingref|clientkey|userid|senderid|senderuid|authuid|participantid|recipientid|email|clientip|ipaddress)/.test(normalized);
-};
-
-const sanitizeLogValue = (key, value) => {
-  if (value === null || value === undefined) return value;
-
-  if (Array.isArray(value)) {
-    return value.map((item) => (
-      isSensitiveLogKey(key) && (typeof item !== 'object' || item === null)
-        ? maskIdentifier(item)
-        : sanitizeLogValue(key, item)
-    ));
-  }
-
-  if (typeof value === 'object') {
-    return Object.entries(value).reduce((sanitized, [childKey, childValue]) => {
-      sanitized[childKey] = sanitizeLogValue(childKey, childValue);
-      return sanitized;
-    }, {});
-  }
-
-  if (/token/.test(String(key || '').toLowerCase())) {
-    return '[redacted]';
-  }
-
-  if (isSensitiveLogKey(key)) {
-    return maskIdentifier(value);
-  }
-
-  return value;
-};
-
-const sanitizeLogData = (data = {}) => sanitizeLogValue('', data) || {};
-
-const sanitizeLogText = (value) => {
-  if (value === null || value === undefined) return value;
-  return String(value)
-    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted-email]')
-    .replace(/([?&]token=)[^&\s]+/gi, '$1[redacted]')
-    .replace(/\bExponentPushToken\[[^\]]+\]/g, 'ExponentPushToken[redacted]')
-    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[redacted-jwt]');
-};
-
-/**
- * Structured logger for better debugging and monitoring
- */
-const log = {
-  info: (message, data = {}) => console.log(JSON.stringify({
-    level: 'info',
-    message,
-    ...sanitizeLogData(data),
-    timestamp: new Date().toISOString(),
-  })),
-  error: (message, error = {}, data = {}) => console.error(JSON.stringify({
-    level: 'error',
-    message,
-    error: sanitizeLogText(error?.message || error || null),
-    stack: error?.stack ? sanitizeLogText(error.stack) : null,
-    ...sanitizeLogData(data),
-    timestamp: new Date().toISOString(),
-  })),
-  warn: (message, data = {}) => console.warn(JSON.stringify({
-    level: 'warn',
-    message,
-    ...sanitizeLogData(data),
-    timestamp: new Date().toISOString(),
-  })),
-};
-
 /**
  * Validates message data
  */
@@ -261,7 +186,7 @@ const normalizePushToken = (token) => {
 
 const isValidPushToken = (token) => {
   const normalizedToken = normalizePushToken(token);
-  return Boolean(normalizedToken && Expo.isExpoPushToken(normalizedToken));
+  return Boolean(normalizedToken && isExpoPushToken(normalizedToken));
 };
 
 const shouldRemoveInvalidToken = (userData, token) => {
@@ -1518,15 +1443,6 @@ const buildPhotoCollectionPath = ({ visibility, tourId, ownerKey }) => {
     return `private_tour_photos/${tourId}/${ownerKey}`;
   }
   return `group_tour_photos/${tourId}`;
-};
-
-const createPhotoVariantBuffers = async (sourceBuffer) => {
-  const [viewerBuffer, thumbnailBuffer] = await Promise.all([
-    sharp(sourceBuffer).rotate().resize({ width: 1600, withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer(),
-    sharp(sourceBuffer).rotate().resize({ width: 480, withoutEnlargement: true }).jpeg({ quality: 72 }).toBuffer(),
-  ]);
-
-  return { viewerBuffer, thumbnailBuffer };
 };
 
 const buildPhotoVariantPaths = ({ visibility, tourId, ownerKey, filename }) => {
@@ -5321,6 +5237,7 @@ exports.processCategoryBroadcastWrite = onValueCreated(
         return null;
       }
 
+      const expo = getExpoPushClient();
       const chunks = expo.chunkPushNotifications(pushMessages);
       let successCount = 0;
       let errorCount = 0;
@@ -5593,6 +5510,7 @@ exports.sendChatNotification = onValueCreated(
         return null;
       }
 
+      const expo = getExpoPushClient();
       const chunks = expo.chunkPushNotifications(pushMessages);
       let successCount = 0;
       let errorCount = 0;
@@ -5758,6 +5676,7 @@ exports.sendInternalChatNotification = onValueCreated(
 
       let successCount = 0;
       let errorCount = 0;
+      const expo = getExpoPushClient();
       for (const chunk of expo.chunkPushNotifications(pushMessages)) {
         try {
           const tickets = await expo.sendPushNotificationsAsync(chunk);
@@ -5873,6 +5792,7 @@ exports.sendSafetyAlertNotification = onValueCreated(
 
       let successCount = 0;
       let errorCount = 0;
+      const expo = getExpoPushClient();
       for (const chunk of expo.chunkPushNotifications(pushMessages)) {
         try {
           const tickets = await expo.sendPushNotificationsAsync(chunk);
@@ -6162,6 +6082,7 @@ exports.sendItineraryNotification = onValueWritten(
         return null;
       }
 
+      const expo = getExpoPushClient();
       const chunks = expo.chunkPushNotifications(pushMessages);
       let successCount = 0;
       let errorCount = 0;
@@ -6353,6 +6274,7 @@ exports.sendDriverTourPackChangeNotification = onValueWritten(
 
       let successCount = 0;
       let errorCount = 0;
+      const expo = getExpoPushClient();
       for (const chunk of expo.chunkPushNotifications(pushMessages)) {
         try {
           const tickets = await expo.sendPushNotificationsAsync(chunk);

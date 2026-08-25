@@ -3,8 +3,9 @@ const assert = require('node:assert/strict');
 const Module = require('node:module');
 
 process.env.FIREBASE_CONFIG = JSON.stringify({ storageBucket: 'demo-bucket.appspot.com' });
+process.env.NODE_ENV = 'test';
 const originalLoad = Module._load;
-Module._load = function mockedLoad(request, parent, isMain) {
+Module._load = function mockedLoad(request, _parent, _isMain) {
   if (request === 'sharp') {
     return () => ({
       rotate: () => ({
@@ -20,6 +21,8 @@ Module._load = function mockedLoad(request, parent, isMain) {
 };
 const { __testables } = require('../functions/index.js');
 const { buildBookingRepairPlan } = require('../functions/scripts/repairDuplicateManifestPassengers.js');
+const { setSharpFactoryForTests } = require('../functions/src/infrastructure/storage/mediaProcessor');
+setSharpFactoryForTests(require('sharp'));
 Module._load = originalLoad;
 
 test('sanitizeLogText redacts sensitive identifiers from Functions error text', () => {
