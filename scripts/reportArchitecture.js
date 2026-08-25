@@ -173,10 +173,13 @@ const createArchitectureReport = () => {
       .filter(Boolean),
   ]));
   const functionsIndex = records.find((record) => record.path === 'functions/index.js');
+  const functionsCompositionRoot = records.find((record) => record.path === 'functions/src/compositionRoot.js');
   const appRoot = records.find((record) => record.path === 'App.js');
-  const functionExports = [...(functionsIndex?.source.matchAll(/^exports\.([A-Za-z_$][\w$]*)\s*=/gmu) || [])]
-    .map((match) => match[1])
-    .sort();
+  const directFunctionExports = [...(functionsIndex?.source.matchAll(/^exports\.([A-Za-z_$][\w$]*)\s*=/gmu) || [])]
+    .map((match) => match[1]);
+  const composedFunctionExports = [...(functionsCompositionRoot?.source.matchAll(/^  ([A-Za-z_$][\w$]*):/gmu) || [])]
+    .map((match) => match[1]);
+  const functionExports = [...new Set([...directFunctionExports, ...composedFunctionExports])].sort();
   const serviceExports = Object.fromEntries([
     'services/chatService.js',
     'services/bookingServiceRealtime.js',
@@ -185,9 +188,13 @@ const createArchitectureReport = () => {
     const record = records.find((candidate) => candidate.path === servicePath);
     return [servicePath, extractCommonJsObjectExports(record?.source || '')];
   }));
-  const mobileRoutes = [...(appRoot?.source.matchAll(/case\s+['"]([A-Za-z0-9_-]+)['"]\s*:/gu) || [])]
-    .map((match) => match[1])
-    .sort();
+  const routeRegistry = records.find((record) => record.path === 'src/app/navigation/routeRenderers.js');
+  const routeRegistrySource = routeRegistry?.source
+    .split('export const APP_ROUTE_RENDERERS = Object.freeze({')[1]?.split('});')[0] || '';
+  const mobileRoutes = [...new Set([
+    ...(appRoot?.source.matchAll(/case\s+['"]([A-Za-z0-9_-]+)['"]\s*:/gu) || []),
+    ...(routeRegistrySource.matchAll(/^  ([A-Za-z0-9_-]+):/gmu) || []),
+  ].map((match) => match[1]))].sort();
 
   return {
     generatedAt: new Date().toISOString(),

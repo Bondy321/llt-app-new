@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { readAppArchitectureSource } = require('./helpers/readAppArchitectureSource');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -16,7 +17,7 @@ test('diagnostics cleanup removes only its own Firebase callback and ignores sta
 });
 
 test('app back navigation restores the actual caller and edge-swipe navigation resets history', () => {
-  const source = readSource('App.js');
+  const source = readAppArchitectureSource();
 
   assert.match(source, /routeHistoryRef\.current\.push\(\{ screen: currentScreen, params: screenParams \}\)/);
   assert.match(source, /routeHistoryRef\.current\.pop\(\{ fallbackScreen, fallbackParams \}\)/);
