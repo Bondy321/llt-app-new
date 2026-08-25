@@ -9,6 +9,7 @@ const {
   logReactionEvent,
   mapReactionFailureReason,
   maskUserId,
+  normalizeReactionUsers,
   resolveRealtimeDb,
   summarizeErrorForDbLog,
   summarizeReactionUsersForDebug,

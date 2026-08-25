@@ -128,3 +128,20 @@ export const runHydrateIdentityBindingForCurrentUser = async ({ IDENTITY_VERSION
       });
     }
   };
+export const runPersistDriverIdentityForUser = async ({ normalizeTourId, realtimeDb }, {
+  authUid,
+  driverId,
+  assignedTourId,
+}) => {
+  const normalizedDriverId = typeof driverId === 'string' ? driverId.trim().toUpperCase() : '';
+  if (!authUid || !normalizedDriverId || !realtimeDb) return { profilePersisted: false };
+
+  await realtimeDb.ref().update({
+    [`drivers/${normalizedDriverId}/lastActive`]: new Date().toISOString(),
+  });
+  return {
+    profilePersisted: true,
+    driverId: normalizedDriverId,
+    assignedTourId: normalizeTourId(assignedTourId) || null,
+  };
+};

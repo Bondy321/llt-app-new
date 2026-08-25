@@ -38,7 +38,7 @@ return (
           <AnimatedCard style={[styles.header, responsiveStyles.header]} delay={0}>
             <View style={[styles.headerBrandMark, responsiveStyles.headerBrandMark]}>
               <Image
-                source={require('../assets/images/logo_for_tour_home.png')}
+                source={require('../../assets/images/logo_for_tour_home.png')}
                 style={[styles.logoImage, responsiveStyles.logoImage]}
               />
             </View>

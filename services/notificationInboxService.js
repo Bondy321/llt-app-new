@@ -77,7 +77,7 @@ const readNotificationCacheGeneration = async ({ userId, storage = notificationC
     const raw = await storage.getItemAsync(feedCacheGenerationKey(userId));
     const parsed = Number(raw);
     if (Number.isSafeInteger(parsed) && parsed >= 0) generation = parsed;
-  } catch (error) {
+  } catch (_error) {
     generation = 0;
   }
   notificationCacheGenerations.set(userId, generation);
@@ -120,7 +120,7 @@ const parseCachedFeed = (raw, {
       items: buildNotificationFeed(noticeMap, readState),
       cachedAtMs: parsed.cachedAtMs,
     };
-  } catch (error) {
+  } catch (_error) {
     return null;
   }
 };
@@ -175,7 +175,7 @@ const persistNotificationFeedCache = async ({
           value && typeof value.cacheOwnerId === 'string' && typeof value.tourId === 'string'
         ));
       }
-    } catch (error) {
+    } catch (_error) {
       indexedScopes = [];
     }
     const nextEntry = { cacheOwnerId: safeCacheOwnerId, tourId };
@@ -234,7 +234,7 @@ const clearNotificationFeedCache = async ({
           value && typeof value.cacheOwnerId === 'string' && typeof value.tourId === 'string'
         ));
       }
-    } catch (error) {
+    } catch (_error) {
       indexedScopes = [];
     }
 

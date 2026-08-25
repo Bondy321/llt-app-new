@@ -92,6 +92,20 @@ export default [
     },
   },
   {
+    // React coordinators and declarative views are bounded by checkArchitecture.js. Applying the
+    // pure-logic 180-line/18-branch function rule to JSX counts render markup as algorithmic risk.
+    files: [
+      'src/app/**/*.{js,jsx}',
+      'web-admin/src/components/**/*.{js,jsx}',
+      'web-admin/src/features/**/presentation/**/*.{js,jsx}',
+      'web-admin/src/features/**/components/**/*.{js,jsx}',
+    ],
+    rules: {
+      complexity: ['error', 50],
+      'max-lines-per-function': ['error', { max: 600, skipBlankLines: true, skipComments: true }],
+    },
+  },
+  {
     files: presentationFiles,
     rules: {
       'no-restricted-imports': ['error', {

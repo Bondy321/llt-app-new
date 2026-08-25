@@ -7,6 +7,7 @@ const {
   isTestEnv,
   logChatEvent,
   logChatImageDbEvent,
+  maskUserId,
   normalizeMessageTimestamp,
   offlineSyncService,
   parseTimestampToMillis,

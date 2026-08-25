@@ -76,6 +76,7 @@ export default function useAppNavigation({ driverTourPackFeature, homeScreen, pe
     currentScreen,
     edgeSwipeResponder,
     handleViewerVisibilityChange,
+    isImageViewerVisible,
     navigateBack,
     navigateTo,
     routeHistoryRef,

@@ -1,6 +1,6 @@
 import createDriverTourPackScreenStyles from './styles/DriverTourPackScreen.styles';
 import { createDriverTourPackPresentation } from '../src/features/driver-tour-pack/presentation/driverTourPackPresentation';
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   StyleSheet,
   Linking,

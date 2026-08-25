@@ -26,7 +26,7 @@ export const usePhotoThumbnailPrefetch = ({ maxBatchSize = 12, enabled = true } 
           prefetchedUrisRef.current.delete(uri);
         });
       });
-    } catch (error) {
+    } catch (_error) {
       uris.forEach((uri) => {
         prefetchedUrisRef.current.delete(uri);
       });

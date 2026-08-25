@@ -176,3 +176,20 @@ test('getCachedPhotoUri returns remote URI when download result is empty', async
   assert.equal(result, remoteUri);
   assert.equal(movedFiles.length, 0);
 });
+
+test('clearPhotoViewerCache returns the filesystem failure instead of throwing a secondary error', async () => {
+  const service = loadServiceWithFsMock({
+    fsImpl: {
+      cacheDirectory: 'file:///cache/',
+      documentDirectory: 'file:///docs/',
+      deleteAsync: async () => {
+        throw new Error('cache delete failed');
+      },
+    },
+  });
+
+  assert.deepEqual(await service.clearPhotoViewerCache(), {
+    success: false,
+    error: 'cache delete failed',
+  });
+});

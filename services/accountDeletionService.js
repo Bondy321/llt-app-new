@@ -13,7 +13,6 @@ const {
   collectPrivatePhotoOwnerIds,
   getDriverId,
   getPassengerBookingRef,
-  safeRealtimeKey,
   toRealtimeKeySegment,
 } = require('../src/features/account/domain/accountIdentityScope');
 

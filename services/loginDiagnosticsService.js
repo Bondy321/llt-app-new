@@ -4,14 +4,14 @@ let Constants = {};
 try {
   const reactNative = require('react-native');
   Platform = reactNative.Platform || Platform;
-} catch (error) {
+} catch (_error) {
   // Diagnostics must be safe to import in non-native tests.
 }
 
 try {
   const constantsModule = require('expo-constants');
   Constants = constantsModule.default || constantsModule || {};
-} catch (error) {
+} catch (_error) {
   Constants = {};
 }
 
@@ -141,7 +141,7 @@ const summarizeUrl = (value) => {
       queryKeyCount: parsed.searchParams ? Array.from(parsed.searchParams.keys()).length : 0,
       totalLength: raw.length,
     };
-  } catch (error) {
+  } catch (_error) {
     return {
       present: true,
       parseable: false,
@@ -234,7 +234,7 @@ const getFirebase = () => {
 
   try {
     return require('../firebase');
-  } catch (error) {
+  } catch (_error) {
     return {};
   }
 };

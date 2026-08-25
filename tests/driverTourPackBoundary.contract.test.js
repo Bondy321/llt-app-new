@@ -35,12 +35,15 @@ test('Gate 6 action state is closed, bounded and exact-driver scoped', () => {
 });
 
 test('the ingestion export is private to the exact management runtime service account', () => {
-  const entrySource = fs.readFileSync(path.join(repositoryRoot, 'functions', 'index.js'), 'utf8');
+  const compositionSource = fs.readFileSync(
+    path.join(repositoryRoot, 'functions', 'src', 'compositionRoot.js'),
+    'utf8',
+  );
   const source = fs.readFileSync(
     path.join(repositoryRoot, 'functions', 'src', 'domains', 'driver-tour-packs', 'ingestionFunction.js'),
     'utf8',
   );
-  assert.match(entrySource, /ingestDriverTourPacks/);
+  assert.match(compositionSource, /ingestDriverTourPacks:\s*driverTourPacks\.ingestDriverTourPacks/);
   assert.match(source, /const ingestDriverTourPacks\s*=\s*onRequest/);
   assert.match(source, /invoker:\s*\[DEFAULT_MANAGEMENT_SYNC_SERVICE_ACCOUNT\]/);
   assert.match(source, /cors:\s*false/);
@@ -48,13 +51,21 @@ test('the ingestion export is private to the exact management runtime service ac
 });
 
 test('the publisher code can write only pack, tombstone, ingestion and PII-free admin-status roots', () => {
-  const source = fs.readFileSync(
+  const publisherSource = fs.readFileSync(
     path.join(repositoryRoot, 'functions', 'lib', 'driverTourPackPublisher.js'),
     'utf8',
   );
-  assert.match(source, /assertWriteRoots\(updates\)/);
-  assert.match(source, /adminStatus:\s*'driver_tour_pack_admin_status'/);
-  assert.doesNotMatch(source, /(?:bookings|tour_manifests|booking_identities)\//);
+  const validationSource = fs.readFileSync(
+    path.join(repositoryRoot, 'functions', 'lib', 'driverTourPackPublisherValidation.js'),
+    'utf8',
+  );
+  assert.match(publisherSource, /assertWriteRoots\(updates\)/);
+  assert.match(validationSource, /adminStatus:\s*'driver_tour_pack_admin_status'/);
+  assert.match(validationSource, /new Set\(Object\.values\(DRIVER_TOUR_PACK_ROOTS\)\)/);
+  assert.doesNotMatch(
+    `${publisherSource}\n${validationSource}`,
+    /(?:bookings|tour_manifests|booking_identities)\//,
+  );
 });
 
 test('the rollout flag denies listing and permits only exact coherent-driver canary reads', () => {

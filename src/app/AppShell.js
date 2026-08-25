@@ -1,4 +1,4 @@
-import { runPersistPassengerIdentityForUser, runRepairIdentityBindingFromSession, runHydrateIdentityBindingForCurrentUser } from './session/identityBindingRunners';
+import { runPersistDriverIdentityForUser, runPersistPassengerIdentityForUser, runRepairIdentityBindingFromSession, runHydrateIdentityBindingForCurrentUser } from './session/identityBindingRunners';
 import { runRefreshAppData, runInitializeApp, runRetryInitialization, runHandleAuthStateChange, runRestoreSession } from './session/sessionBootstrapRunners';
 import { runLoadNotificationOnboardingState, runSaveNotificationOnboardingState, runShouldShowNotificationOnboarding, runHandleNotificationOnboardingComplete } from './notifications/notificationOnboardingRunners';
 import { runHandleDriverAssignmentChange } from './driver/driverAssignmentRunners';
@@ -7,7 +7,7 @@ import { runClearSessionState, runPurgeLocalSession, runHandleLogout, runHandleA
 import AppShellView from './AppShellView';
 import useNotificationSessionNavigation from './notifications/useNotificationSessionNavigation';
 import useLogoutLifecycle from './session/useLogoutLifecycle';
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { auth, authHelpers, realtimeDb } from '../../firebase';
 import { joinTour } from '../../services/bookingServiceRealtime';
@@ -31,7 +31,6 @@ import {
   PASSENGER_IDENTITY_VERSION,
   getCanonicalIdentity,
   isOpaquePassengerId,
-  resolveAuthScopedUserId,
   toRealtimeKeySegment,
 } from '../../services/identityService';
 import { normalizeTourId, resolveTourId } from '../../services/tourIdentityService';
@@ -43,9 +42,6 @@ import {
   setDiagnosticsContext,
 } from '../../services/crashDiagnosticsService';
 import loginDiagnostics from '../../services/loginDiagnosticsService';
-import {
-  deactivatePushToken,
-} from '../../services/notificationService';
 import { SESSION_KEYS, SessionStorage, storageMode } from './session/sessionStorage';
 const { clearNotificationFeedCache } = require('../../services/notificationInboxService');
 import useLoginTransition from './navigation/useLoginTransition';
@@ -100,6 +96,7 @@ export default function AppShell() {
     currentScreen,
     edgeSwipeResponder,
     handleViewerVisibilityChange,
+    isImageViewerVisible,
     navigateBack,
     navigateTo,
     routeHistoryRef,
@@ -198,7 +195,7 @@ export default function AppShell() {
         error: error?.message || String(error),
       });
     });
-  }, [offlineSessionScopeKey]);
+  }, [offlineSessionScope]);
 
   useEffect(() => {
     const previous = previousDriverOperationalScopeRef.current;
@@ -222,6 +219,10 @@ export default function AppShell() {
             failedOperations: result.failures?.map((failure) => failure.name) || [],
           });
         }
+      }).catch((error) => {
+        logger.warn('DriverTourPack', 'Previous driver operational scope purge failed', {
+          error: error?.message || String(error),
+        });
       }).finally(() => {
         // The purge deliberately invalidates the previous replay generation. Restore
         // the newly-derived session scope only after that invalidation has finished.
@@ -232,7 +233,7 @@ export default function AppShell() {
       setDriverSessionGeneration((value) => value + 1);
     }
     previousDriverOperationalScopeRef.current = currentDriverLifecycleScope;
-  }, [currentDriverLifecycleScopeKey]);
+  }, [currentDriverLifecycleScope, currentDriverLifecycleScopeKey, offlineSessionScope]);
 
   useEffect(() => {
     if (!currentDriverLifecycleScope) return;
@@ -249,8 +250,14 @@ export default function AppShell() {
         });
       }
       setDriverSessionGeneration((value) => value + 1);
+    }).catch((error) => {
+      logger.warn('DriverTourPack', 'Expired operational data purge failed', {
+        error: error?.message || String(error),
+        state: driverTourPackState.state,
+      });
     });
   }, [
+    currentDriverLifecycleScope,
     currentDriverLifecycleScopeKey,
     driverTourPackState.revision,
     driverTourPackState.state,
@@ -280,6 +287,8 @@ export default function AppShell() {
       if (typeof authUnsubscribeRef.current === 'function') authUnsubscribeRef.current();
       authUnsubscribeRef.current = null;
     };
+  // Bootstrap and cleanup intentionally run once; runners capture the initial application boundary.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -305,30 +314,9 @@ export default function AppShell() {
 
   const persistPassengerIdentityForUser = (...args) => runPersistPassengerIdentityForUser({ IDENTITY_VERSION, isOpaquePassengerId, realtimeDb, toRealtimeKeySegment }, ...args);
 
-  const persistDriverIdentityForUser = useCallback(async ({
-    authUid,
-    driverId,
-    assignedTourId,
-  }) => {
-    const normalizedDriverId = typeof driverId === 'string' ? driverId.trim().toUpperCase() : '';
-    if (!authUid || !normalizedDriverId || !realtimeDb) {
-      return { profilePersisted: false };
-    }
-
-    const now = Date.now();
-    const updates = {
-      [`drivers/${normalizedDriverId}/lastActive`]: new Date(now).toISOString(),
-    };
-
-    const normalizedAssignedTourId = normalizeTourId(assignedTourId);
-
-    await realtimeDb.ref().update(updates);
-    return {
-      profilePersisted: true,
-      driverId: normalizedDriverId,
-      assignedTourId: normalizedAssignedTourId || null,
-    };
-  }, []);
+  const persistDriverIdentityForUser = useCallback((args) => (
+    runPersistDriverIdentityForUser({ normalizeTourId, realtimeDb }, args)
+  ), []);
 
   useEffect(() => {
     const driverId = typeof bookingData?.id === 'string' && bookingData.id.trim().toUpperCase().startsWith('D-')
@@ -386,6 +374,7 @@ export default function AppShell() {
     bookingData?.id,
     persistDriverIdentityForUser,
     tourData?.id,
+    tourData?.tourCode,
     user?.uid,
   ]);
 
@@ -507,7 +496,15 @@ export default function AppShell() {
       assignmentValidationSeqRef.current += 1;
       assignmentRef.off('value', onValue);
     };
-  }, [currentDriverLifecycleScopeKey, user?.uid]);
+  }, [
+    bookingData,
+    currentDriverLifecycleScope,
+    currentDriverLifecycleScopeKey,
+    routeHistoryRef,
+    setCurrentScreen,
+    setScreenParams,
+    user?.uid,
+  ]);
 
   const resolveOfflineLogin = (...args) => runResolveOfflineLogin({ SESSION_KEYS, SessionStorage, appSessionService, logger, maskIdentifier, offlineSyncService, resolveOfflineLoginFromCache }, ...args);
 
@@ -551,8 +548,12 @@ export default function AppShell() {
         scope: offlineSessionScope,
       }),
       processOfflineSafetyQueue(offlineSessionScope),
-    ]);
-  }, [isConnected, firebaseConnected, offlineSessionScopeKey]);
+    ]).catch((error) => {
+      logger.warn('OfflineSync', 'Foreground replay coordination failed', {
+        error: error?.message || String(error),
+      });
+    });
+  }, [isConnected, firebaseConnected, offlineSessionScope, offlineSessionScopeKey]);
 
   return (
     <AppShellView

@@ -5,13 +5,13 @@ let AsyncStorage;
 
 try {
   SecureStore = require('expo-secure-store');
-} catch (error) {
+} catch (_error) {
   SecureStore = null;
 }
 
 try {
   AsyncStorage = require('@react-native-async-storage/async-storage').default;
-} catch (error) {
+} catch (_error) {
   AsyncStorage = null;
 }
 

@@ -1,4 +1,3 @@
-import React, { useMemo } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import offlineSyncService from '../services/offlineSyncService';
@@ -82,13 +81,8 @@ export default function SyncStatusBanner({
   const Wrapper = onPress ? TouchableOpacity : View;
   const wrapperProps = onPress ? { onPress, activeOpacity: 0.88 } : {};
 
-  const progressValue = useMemo(() => {
-    const mapped = SEVERITY_PROGRESS[state.severity] ?? SEVERITY_PROGRESS.info;
-    if (!showRetry) {
-      return Math.min(mapped + 10, 100);
-    }
-    return mapped;
-  }, [showRetry, state.severity]);
+  const mappedProgress = SEVERITY_PROGRESS[state.severity] ?? SEVERITY_PROGRESS.info;
+  const progressValue = showRetry ? mappedProgress : Math.min(mappedProgress + 10, 100);
 
   return (
     <Wrapper

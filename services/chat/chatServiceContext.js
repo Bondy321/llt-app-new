@@ -12,7 +12,7 @@ const { parseTimestampMs: parseStrictTimestampMs } = require('../timeUtils');
 const { assertTextPassesModeration } = require('../contentModerationService');
 
 const resolveRealtimeDb = createLazyRealtimeDbResolver({
-  loadFirebaseModule: () => (isTestEnv ? null : require('../firebase')),
+  loadFirebaseModule: () => (isTestEnv ? null : require('../../firebase')),
   onLoadError: (error) => {
     if (IS_DEV_RUNTIME) {
       console.warn('Realtime database module is not available yet:', error?.message || String(error));
@@ -22,14 +22,14 @@ const resolveRealtimeDb = createLazyRealtimeDbResolver({
 
 const offlineSyncService = loadOptionalService({
   modulePath: '../offlineSyncService',
-  loadModule: () => require('./offlineSyncService'),
+  loadModule: () => require('../offlineSyncService'),
   serviceLabel: 'Offline sync service',
   isTestEnv,
 });
 
 const loggerServiceModule = loadOptionalService({
   modulePath: '../loggerService',
-  loadModule: () => require('./loggerService'),
+  loadModule: () => require('../loggerService'),
   serviceLabel: 'Logger service',
   isTestEnv,
 });
@@ -538,6 +538,7 @@ module.exports = {
   maskUserId,
   normalizeMessageLimit,
   normalizeMessageTimestamp,
+  normalizeReactionUsers,
   normalizeReactions,
   offlineSyncService,
   parseTimestampToMillis,

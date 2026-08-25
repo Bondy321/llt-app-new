@@ -19,7 +19,7 @@ const decodeFirebaseObjectPath = (url) => {
   if (typeof url !== 'string') return null;
   const match = url.match(/\/o\/([^?]+)/);
   if (!match) return null;
-  try { return decodeURIComponent(match[1]); } catch (error) { return null; }
+  try { return decodeURIComponent(match[1]); } catch (_error) { return null; }
 };
 
 const isGroupObjectPath = (path, tourId) => (

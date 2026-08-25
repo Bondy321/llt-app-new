@@ -46,8 +46,6 @@ const readKeyPage = async ({ ref, after, limit }) => {
   };
 };
 
-const boundedChildren = (value) => Object.entries(value || {}).slice(0, MAX_CHILDREN_PER_PARENT);
-
 const isParticipantBackedByActiveSession = ({ tourId, authUid, record }, activeSessions, nowMs) => {
   const session = activeSessions?.[authUid];
   return Boolean(session

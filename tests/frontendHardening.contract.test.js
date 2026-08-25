@@ -36,7 +36,7 @@ test('web bus map keeps implementation details and raw coordinates out of custom
 });
 
 test('live bus map has a bounded initial wait and a recoverable timeout state', () => {
-  const source = readSource('screens/MapScreen.js');
+  const source = readMobileModuleSource('screens/MapScreen.js');
 
   assert.match(source, /DRIVER_LOCATION_INITIAL_TIMEOUT_MS = 10000/);
   assert.match(source, /setTimeout\(/);
@@ -68,9 +68,9 @@ test('a no-show passenger can dismiss the interruption without hiding their stat
 });
 
 test('photo selection failures and driver location denial have explicit recovery paths', () => {
-  const privateGallery = readSource('screens/PhotobookScreen.js');
-  const groupGallery = readSource('screens/GroupPhotobookScreen.js');
-  const driverHome = readSource('screens/DriverHomeScreen.js');
+  const privateGallery = readMobileModuleSource('screens/PhotobookScreen.js');
+  const groupGallery = readMobileModuleSource('screens/GroupPhotobookScreen.js');
+  const driverHome = readMobileModuleSource('screens/DriverHomeScreen.js');
 
   [privateGallery, groupGallery].forEach((source) => {
     assert.match(source, /Photos unavailable/);

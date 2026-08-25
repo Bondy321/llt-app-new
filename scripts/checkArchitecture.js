@@ -3,11 +3,16 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { createArchitectureReport } = require('./reportArchitecture');
+const {
+  collectProductionFiles,
+  createArchitectureReport,
+  extractSpecifiers,
+} = require('./reportArchitecture');
 const limits = require('./architectureLimits');
 
 const repositoryRoot = path.resolve(__dirname, '..');
 const VAGUE_NAMES = new Set(['helpers.js', 'utils.js', 'common.js', 'misc.js', 'shared.js']);
+const STATIC_ASSET_EXTENSION = /\.(?:avif|gif|jpe?g|png|svg|webp|ttf|otf|woff2?)$/iu;
 
 const isStyleOnly = (filePath) => /(?:^|\/)(?:styles?|theme)(?:\/|\.|$)/u.test(filePath);
 const isHook = (filePath) => /(?:^|\/)use[A-Z][^/]*\.[cm]?[jt]sx?$/u.test(filePath);
@@ -64,6 +69,19 @@ const checkArchitecture = () => {
   }
   if (/\b(?:admin\.database|admin\.storage|process\.env|req\.(?:body|headers|method))\b/u.test(functionsIndex)) {
     failures.push('functions/index.js still contains infrastructure, configuration, or request handling');
+  }
+
+  for (const sourceFile of collectProductionFiles()) {
+    const source = fs.readFileSync(sourceFile, 'utf8');
+    for (const specifier of extractSpecifiers(source)) {
+      if (!specifier.startsWith('.') || !STATIC_ASSET_EXTENSION.test(specifier)) continue;
+      const assetPath = path.resolve(path.dirname(sourceFile), specifier);
+      if (!fs.existsSync(assetPath)) {
+        failures.push(
+          `${path.relative(repositoryRoot, sourceFile)} references missing static asset ${specifier}`,
+        );
+      }
+    }
   }
 
   return { failures, report };

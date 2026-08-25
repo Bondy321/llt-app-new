@@ -32,7 +32,7 @@ const ensureCacheDirectory = async () => {
       await FileSystem.makeDirectoryAsync(CACHE_DIR, { intermediates: true });
     }
     cacheDirReady = true;
-  } catch (error) {
+  } catch (_error) {
     // Soft-fail and allow caller to continue with remote URI.
     cacheDirReady = false;
   }
