@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const clearBookingServiceCache = require('./helpers/clearBookingServiceCache');
 
 const SERVICE_PATH = path.resolve(__dirname, '../services/bookingServiceRealtime.js');
 const FIREBASE_PATH = path.resolve(__dirname, '../firebase.js');
@@ -8,7 +9,7 @@ const FIREBASE_PATH = path.resolve(__dirname, '../firebase.js');
 const loadService = (options = {}) => {
   const previousNodeEnv = process.env.NODE_ENV;
 
-  delete require.cache[SERVICE_PATH];
+  clearBookingServiceCache(SERVICE_PATH);
   delete require.cache[FIREBASE_PATH];
 
   process.env.NODE_ENV = 'development';
