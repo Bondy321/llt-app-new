@@ -44,6 +44,7 @@ const serviceDomainDirectories = {
   'services/bookingServiceRealtime.js': 'booking',
   'services/chatService.js': 'chat',
   'services/notificationService.js': 'notifications',
+  'services/offlineSyncService.js': 'offline-sync',
   'services/photoService.js': 'photo',
   'services/safetyService.js': 'safety',
 };

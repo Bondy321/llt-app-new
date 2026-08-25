@@ -644,7 +644,7 @@ test('Static contract: failed chat sends preserve reply composer context', () =>
 test('Static contract: chat connectivity and queue ownership stay wired from app shell to every send and replay', () => {
   const appSource = readAppArchitectureSource();
   const chatSource = readMobileModuleSource('screens/ChatScreen.js');
-  const offlineSource = readText('services/offlineSyncService.js');
+  const offlineSource = readServiceModuleSource('services/offlineSyncService.js');
 
   assert.match(appSource, /routerProps=\{\{[\s\S]*offlineSessionScope,/);
   assert.match(appSource, /services: \{ bookingService, chatService, photoService, driverTourPackActionService \}/);
@@ -1096,7 +1096,7 @@ test('Static contract: customer-facing error copy avoids raw backend messages', 
 
 test('Static contract: offline data stays scoped to the signed-in tour identity', () => {
   const appSource = readAppArchitectureSource();
-  const offlineSource = readText('services/offlineSyncService.js');
+  const offlineSource = readServiceModuleSource('services/offlineSyncService.js');
   const safetySource = readServiceModuleSource('services/safetyService.js');
   const driverItinerarySource = readMobileModuleSource('screens/DriverItineraryScreen.js');
 
