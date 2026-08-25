@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
+const path = require('node:path');
 
 require('@babel/register')({
   extensions: ['.js', '.jsx'],
@@ -10,6 +11,13 @@ require('@babel/register')({
 });
 
 const originalLoad = Module._load;
+const clearNotificationServiceCache = () => {
+  delete require.cache[require.resolve('../services/notificationService')];
+  const notificationModulesRoot = `${path.sep}services${path.sep}notifications${path.sep}`;
+  Object.keys(require.cache).forEach((cacheKey) => {
+    if (cacheKey.includes(notificationModulesRoot)) delete require.cache[cacheKey];
+  });
+};
 
 const buildNotificationService = ({
   permission = 'granted',
@@ -102,7 +110,7 @@ const buildNotificationService = ({
     return originalLoad(request, parent, isMain);
   };
 
-  delete require.cache[require.resolve('../services/notificationService')];
+  clearNotificationServiceCache();
   const service = require('../services/notificationService');
   return {
     service,
@@ -299,7 +307,7 @@ test('registerForPushNotificationsAsync accepts iOS provisional permissions and 
     return original(request, parent, isMain);
   };
 
-  delete require.cache[require.resolve('../services/notificationService')];
+  clearNotificationServiceCache();
   const service = require('../services/notificationService');
 
   const token = await service.registerForPushNotificationsAsync();
@@ -351,7 +359,7 @@ test('getUserPreferences can throw explicit fetch errors for UI empty/error stat
     return original(request, parent, isMain);
   };
 
-  delete require.cache[require.resolve('../services/notificationService')];
+  clearNotificationServiceCache();
   const service = require('../services/notificationService');
 
   await assert.rejects(
