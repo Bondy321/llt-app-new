@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-08-25T17:41:22.992Z",
-  "sourceFileCount": 391,
+  "generatedAt": "2026-08-25T18:38:36.085Z",
+  "sourceFileCount": 394,
   "byBytes": [
     {
       "path": "web-admin/src/features/dashboard/presentation/DashboardView.jsx",
@@ -9,17 +9,17 @@
     },
     {
       "path": "src/app/AppShell.js",
-      "bytes": 27962,
-      "lines": 599
+      "bytes": 28286,
+      "lines": 600
     },
     {
       "path": "components/tour-home/TourHomeView.js",
-      "bytes": 27393,
+      "bytes": 27396,
       "lines": 592
     },
     {
       "path": "screens/DriverTourPackScreen.js",
-      "bytes": 26199,
+      "bytes": 26192,
       "lines": 497
     },
     {
@@ -63,11 +63,6 @@
       "lines": 478
     },
     {
-      "path": "web-admin/src/components/BroadcastPanel.jsx",
-      "bytes": 21889,
-      "lines": 583
-    },
-    {
       "path": "components/driver-home/DriverHomeController.js",
       "bytes": 21846,
       "lines": 529
@@ -78,14 +73,19 @@
       "lines": 488
     },
     {
+      "path": "web-admin/src/components/BroadcastPanel.jsx",
+      "bytes": 21670,
+      "lines": 571
+    },
+    {
       "path": "components/itinerary/ItineraryController.js",
       "bytes": 21506,
       "lines": 564
     },
     {
       "path": "web-admin/src/services/dashboardService.js",
-      "bytes": 20937,
-      "lines": 573
+      "bytes": 20912,
+      "lines": 572
     },
     {
       "path": "components/photobook/PhotobookController.js",
@@ -109,7 +109,7 @@
     },
     {
       "path": "services/notificationInboxService.js",
-      "bytes": 19688,
+      "bytes": 19692,
       "lines": 536
     },
     {
@@ -129,8 +129,8 @@
     },
     {
       "path": "web-admin/src/features/drivers/components/driverManagementPanels.jsx",
-      "bytes": 19211,
-      "lines": 554
+      "bytes": 19132,
+      "lines": 552
     },
     {
       "path": "functions/lib/driverTourPackPublisher.js",
@@ -139,13 +139,13 @@
     },
     {
       "path": "services/accountDeletionService.js",
-      "bytes": 18374,
-      "lines": 573
+      "bytes": 18355,
+      "lines": 572
     },
     {
       "path": "services/chat/chatServiceContext.js",
-      "bytes": 18231,
-      "lines": 562
+      "bytes": 18262,
+      "lines": 563
     },
     {
       "path": "screens/DriverItineraryScreen.js",
@@ -154,8 +154,8 @@
     },
     {
       "path": "services/chat/chatSendService.js",
-      "bytes": 17878,
-      "lines": 473
+      "bytes": 17892,
+      "lines": 474
     },
     {
       "path": "components/image-viewer/ImageViewerView.js",
@@ -274,18 +274,18 @@
     },
     {
       "path": "web-admin/src/components/Dashboard.jsx",
-      "bytes": 14926,
-      "lines": 405
+      "bytes": 15020,
+      "lines": 406
+    },
+    {
+      "path": "web-admin/src/components/ToursManager.jsx",
+      "bytes": 14752,
+      "lines": 421
     },
     {
       "path": "services/booking/bookingVerifierService.js",
       "bytes": 14711,
       "lines": 407
-    },
-    {
-      "path": "web-admin/src/components/ToursManager.jsx",
-      "bytes": 14688,
-      "lines": 420
     },
     {
       "path": "firebase.js",
@@ -334,8 +334,8 @@
     },
     {
       "path": "web-admin/src/components/ContentModerationPanel.jsx",
-      "bytes": 13545,
-      "lines": 394
+      "bytes": 13609,
+      "lines": 395
     },
     {
       "path": "screens/styles/PassengerManifestScreen.styles.js",
@@ -369,7 +369,7 @@
     },
     {
       "path": "services/loginDiagnosticsService.js",
-      "bytes": 12699,
+      "bytes": 12703,
       "lines": 408
     },
     {
@@ -434,7 +434,7 @@
     },
     {
       "path": "components/TodaysAgendaCard.js",
-      "bytes": 11704,
+      "bytes": 11697,
       "lines": 395
     },
     {
@@ -459,8 +459,8 @@
     },
     {
       "path": "services/chat/chatReactionService.js",
-      "bytes": 11418,
-      "lines": 320
+      "bytes": 11444,
+      "lines": 321
     },
     {
       "path": "functions/src/domains/notifications/notificationPolicy.js",
@@ -498,14 +498,14 @@
       "lines": 384
     },
     {
+      "path": "web-admin/src/components/DriversManager.jsx",
+      "bytes": 10981,
+      "lines": 286
+    },
+    {
       "path": "functions/lib/driverTourPackPublisherValidation.js",
       "bytes": 10937,
       "lines": 277
-    },
-    {
-      "path": "web-admin/src/components/DriversManager.jsx",
-      "bytes": 10936,
-      "lines": 287
     },
     {
       "path": "web-admin/src/features/tours/presentation/CreateTourModal.jsx",
@@ -544,7 +544,7 @@
     },
     {
       "path": "screens/AccountPrivacyScreen.js",
-      "bytes": 10542,
+      "bytes": 10535,
       "lines": 377
     },
     {
@@ -584,8 +584,8 @@
     },
     {
       "path": "screens/DriverHomeScreen.web.js",
-      "bytes": 9845,
-      "lines": 316
+      "bytes": 9817,
+      "lines": 315
     },
     {
       "path": "services/driverTourPackService.js",
@@ -674,12 +674,12 @@
     },
     {
       "path": "web-admin/src/components/Settings.jsx",
-      "bytes": 8605,
-      "lines": 204
+      "bytes": 8470,
+      "lines": 201
     },
     {
       "path": "components/NotificationFeedCard.js",
-      "bytes": 8423,
+      "bytes": 8416,
       "lines": 189
     },
     {
@@ -708,11 +708,6 @@
       "lines": 236
     },
     {
-      "path": "components/ManifestBookingCard.js",
-      "bytes": 8043,
-      "lines": 273
-    },
-    {
       "path": "services/notifications/notificationContext.js",
       "bytes": 8034,
       "lines": 265
@@ -721,6 +716,11 @@
       "path": "components/chat/chatStyles4.js",
       "bytes": 8018,
       "lines": 358
+    },
+    {
+      "path": "components/ManifestBookingCard.js",
+      "bytes": 8015,
+      "lines": 272
     },
     {
       "path": "hooks/usePhotoGalleryData.js",
@@ -743,11 +743,6 @@
       "lines": 205
     },
     {
-      "path": "components/SyncStatusBanner.js",
-      "bytes": 7835,
-      "lines": 265
-    },
-    {
       "path": "components/chat/useChatTextSending.js",
       "bytes": 7824,
       "lines": 209
@@ -756,6 +751,11 @@
       "path": "components/styles/ImageViewer.styles.js",
       "bytes": 7744,
       "lines": 332
+    },
+    {
+      "path": "components/SyncStatusBanner.js",
+      "bytes": 7718,
+      "lines": 259
     },
     {
       "path": "services/passengerDataBoundary.js",
@@ -868,6 +868,11 @@
       "lines": 140
     },
     {
+      "path": "src/app/session/identityBindingRunners.js",
+      "bytes": 6366,
+      "lines": 148
+    },
+    {
       "path": "web-admin/src/services/adminDirectoryService.js",
       "bytes": 6340,
       "lines": 154
@@ -933,11 +938,6 @@
       "lines": 181
     },
     {
-      "path": "src/app/session/identityBindingRunners.js",
-      "bytes": 5783,
-      "lines": 131
-    },
-    {
       "path": "functions/lib/loginRateLimiter.js",
       "bytes": 5685,
       "lines": 159
@@ -988,14 +988,14 @@
       "lines": 79
     },
     {
-      "path": "screens/MapScreen.web.js",
-      "bytes": 5232,
-      "lines": 156
-    },
-    {
       "path": "services/pickupTimeParser.js",
       "bytes": 5220,
       "lines": 179
+    },
+    {
+      "path": "screens/MapScreen.web.js",
+      "bytes": 5204,
+      "lines": 155
     },
     {
       "path": "screens/loginFlow.js",
@@ -1219,8 +1219,8 @@
     },
     {
       "path": "src/app/navigation/useAppNavigation.js",
-      "bytes": 3537,
-      "lines": 87
+      "bytes": 3563,
+      "lines": 88
     },
     {
       "path": "functions/src/infrastructure/logging/safeLogger.js",
@@ -1288,19 +1288,19 @@
       "lines": 66
     },
     {
-      "path": "screens/LogoutPendingScreen.js",
-      "bytes": 3108,
-      "lines": 57
-    },
-    {
       "path": "components/chat/useChatModerationActions.js",
       "bytes": 3099,
       "lines": 92
     },
     {
       "path": "components/ManifestConflictCard.js",
-      "bytes": 3098,
+      "bytes": 3091,
       "lines": 63
+    },
+    {
+      "path": "screens/LogoutPendingScreen.js",
+      "bytes": 3081,
+      "lines": 56
     },
     {
       "path": "functions/src/domains/media/photoVariantFunction.js",
@@ -1548,6 +1548,11 @@
       "lines": 40
     },
     {
+      "path": "web-admin/src/services/driverService.js",
+      "bytes": 1445,
+      "lines": 45
+    },
+    {
       "path": "web-admin/src/services/unifiedSyncContract.js",
       "bytes": 1435,
       "lines": 50
@@ -1571,11 +1576,6 @@
       "path": "components/itinerary/useItinerarySyncPresentation.js",
       "bytes": 1353,
       "lines": 38
-    },
-    {
-      "path": "web-admin/src/services/driverService.js",
-      "bytes": 1352,
-      "lines": 43
     },
     {
       "path": "utils/appRouteHistory.js",
@@ -1708,6 +1708,11 @@
       "lines": 32
     },
     {
+      "path": "web-admin/src/services/broadcastRepository.js",
+      "bytes": 979,
+      "lines": 26
+    },
+    {
       "path": "web-admin/src/utils/notificationCategories.js",
       "bytes": 975,
       "lines": 22
@@ -1756,6 +1761,11 @@
       "path": "functions/src/domains/notifications/adminBroadcastAuthorization.js",
       "bytes": 706,
       "lines": 23
+    },
+    {
+      "path": "web-admin/src/services/accountSecurityService.js",
+      "bytes": 676,
+      "lines": 17
     },
     {
       "path": "functions/src/domains/administration/adminAuthorization.js",
@@ -1908,6 +1918,11 @@
       "lines": 4
     },
     {
+      "path": "web-admin/src/shared/runtime/adminRuntime.js",
+      "bytes": 145,
+      "lines": 5
+    },
+    {
       "path": "functions/src/bootstrap/firebaseAdmin.js",
       "bytes": 138,
       "lines": 8
@@ -1986,8 +2001,8 @@
     },
     {
       "path": "src/app/AppShell.js",
-      "bytes": 27962,
-      "lines": 599
+      "bytes": 28286,
+      "lines": 600
     },
     {
       "path": "components/safety-support/SafetySupportView.js",
@@ -1996,28 +2011,28 @@
     },
     {
       "path": "components/tour-home/TourHomeView.js",
-      "bytes": 27393,
+      "bytes": 27396,
       "lines": 592
-    },
-    {
-      "path": "web-admin/src/components/BroadcastPanel.jsx",
-      "bytes": 21889,
-      "lines": 583
-    },
-    {
-      "path": "services/accountDeletionService.js",
-      "bytes": 18374,
-      "lines": 573
-    },
-    {
-      "path": "web-admin/src/services/dashboardService.js",
-      "bytes": 20937,
-      "lines": 573
     },
     {
       "path": "screens/styles/NotificationPreferencesScreen.styles.js",
       "bytes": 12295,
       "lines": 572
+    },
+    {
+      "path": "services/accountDeletionService.js",
+      "bytes": 18355,
+      "lines": 572
+    },
+    {
+      "path": "web-admin/src/services/dashboardService.js",
+      "bytes": 20912,
+      "lines": 572
+    },
+    {
+      "path": "web-admin/src/components/BroadcastPanel.jsx",
+      "bytes": 21670,
+      "lines": 571
     },
     {
       "path": "components/notification-preferences/NotificationPreferencesView.js",
@@ -2036,8 +2051,8 @@
     },
     {
       "path": "services/chat/chatServiceContext.js",
-      "bytes": 18231,
-      "lines": 562
+      "bytes": 18262,
+      "lines": 563
     },
     {
       "path": "screens/styles/ItineraryScreen.styles.js",
@@ -2045,14 +2060,14 @@
       "lines": 557
     },
     {
-      "path": "web-admin/src/features/drivers/components/driverManagementPanels.jsx",
-      "bytes": 19211,
-      "lines": 554
-    },
-    {
       "path": "components/notification-preferences/NotificationPreferencesController.js",
       "bytes": 19260,
       "lines": 553
+    },
+    {
+      "path": "web-admin/src/features/drivers/components/driverManagementPanels.jsx",
+      "bytes": 19132,
+      "lines": 552
     },
     {
       "path": "functions/lib/driverTourPackSchema.js",
@@ -2066,7 +2081,7 @@
     },
     {
       "path": "services/notificationInboxService.js",
-      "bytes": 19688,
+      "bytes": 19692,
       "lines": 536
     },
     {
@@ -2131,7 +2146,7 @@
     },
     {
       "path": "screens/DriverTourPackScreen.js",
-      "bytes": 26199,
+      "bytes": 26192,
       "lines": 497
     },
     {
@@ -2175,6 +2190,11 @@
       "lines": 475
     },
     {
+      "path": "services/chat/chatSendService.js",
+      "bytes": 17892,
+      "lines": 474
+    },
+    {
       "path": "firebase.js",
       "bytes": 14440,
       "lines": 473
@@ -2182,11 +2202,6 @@
     {
       "path": "screens/TourHomeScreen.js",
       "bytes": 17241,
-      "lines": 473
-    },
-    {
-      "path": "services/chat/chatSendService.js",
-      "bytes": 17878,
       "lines": 473
     },
     {
@@ -2241,8 +2256,8 @@
     },
     {
       "path": "web-admin/src/components/ToursManager.jsx",
-      "bytes": 14688,
-      "lines": 420
+      "bytes": 14752,
+      "lines": 421
     },
     {
       "path": "services/booking/manifestService.js",
@@ -2266,7 +2281,7 @@
     },
     {
       "path": "services/loginDiagnosticsService.js",
-      "bytes": 12699,
+      "bytes": 12703,
       "lines": 408
     },
     {
@@ -2281,8 +2296,8 @@
     },
     {
       "path": "web-admin/src/components/Dashboard.jsx",
-      "bytes": 14926,
-      "lines": 405
+      "bytes": 15020,
+      "lines": 406
     },
     {
       "path": "web-admin/src/components/AddPassengerModal.jsx",
@@ -2301,17 +2316,17 @@
     },
     {
       "path": "components/TodaysAgendaCard.js",
-      "bytes": 11704,
+      "bytes": 11697,
+      "lines": 395
+    },
+    {
+      "path": "web-admin/src/components/ContentModerationPanel.jsx",
+      "bytes": 13609,
       "lines": 395
     },
     {
       "path": "functions/src/domains/notifications/notificationRecipients.js",
       "bytes": 12894,
-      "lines": 394
-    },
-    {
-      "path": "web-admin/src/components/ContentModerationPanel.jsx",
-      "bytes": 13545,
       "lines": 394
     },
     {
@@ -2326,7 +2341,7 @@
     },
     {
       "path": "screens/AccountPrivacyScreen.js",
-      "bytes": 10542,
+      "bytes": 10535,
       "lines": 377
     },
     {
@@ -2421,8 +2436,8 @@
     },
     {
       "path": "services/chat/chatReactionService.js",
-      "bytes": 11418,
-      "lines": 320
+      "bytes": 11444,
+      "lines": 321
     },
     {
       "path": "components/photobook/privatePhotoUploadActions.js",
@@ -2431,8 +2446,8 @@
     },
     {
       "path": "screens/DriverHomeScreen.web.js",
-      "bytes": 9845,
-      "lines": 316
+      "bytes": 9817,
+      "lines": 315
     },
     {
       "path": "services/driver-home/createDriverLocationSharingActions.js",
@@ -2476,8 +2491,8 @@
     },
     {
       "path": "web-admin/src/components/DriversManager.jsx",
-      "bytes": 10936,
-      "lines": 287
+      "bytes": 10981,
+      "lines": 286
     },
     {
       "path": "services/photo/photoMutationService.js",
@@ -2515,14 +2530,14 @@
       "lines": 276
     },
     {
-      "path": "components/ManifestBookingCard.js",
-      "bytes": 8043,
-      "lines": 273
-    },
-    {
       "path": "functions/src/domains/media/groupMediaFunctions.js",
       "bytes": 11643,
       "lines": 273
+    },
+    {
+      "path": "components/ManifestBookingCard.js",
+      "bytes": 8015,
+      "lines": 272
     },
     {
       "path": "services/notifications/notificationRegistrationService.js",
@@ -2545,11 +2560,6 @@
       "lines": 270
     },
     {
-      "path": "components/SyncStatusBanner.js",
-      "bytes": 7835,
-      "lines": 265
-    },
-    {
       "path": "services/notifications/notificationContext.js",
       "bytes": 8034,
       "lines": 265
@@ -2558,6 +2568,11 @@
       "path": "services/offlineLoginResolver.js",
       "bytes": 9252,
       "lines": 262
+    },
+    {
+      "path": "components/SyncStatusBanner.js",
+      "bytes": 7718,
+      "lines": 259
     },
     {
       "path": "hooks/usePhotoGalleryData.js",
@@ -2730,13 +2745,13 @@
       "lines": 204
     },
     {
-      "path": "web-admin/src/components/Settings.jsx",
-      "bytes": 8605,
-      "lines": 204
-    },
-    {
       "path": "functions/src/domains/media/privateMediaFunctions.js",
       "bytes": 8672,
+      "lines": 201
+    },
+    {
+      "path": "web-admin/src/components/Settings.jsx",
+      "bytes": 8470,
       "lines": 201
     },
     {
@@ -2746,7 +2761,7 @@
     },
     {
       "path": "components/NotificationFeedCard.js",
-      "bytes": 8423,
+      "bytes": 8416,
       "lines": 189
     },
     {
@@ -2866,8 +2881,8 @@
     },
     {
       "path": "screens/MapScreen.web.js",
-      "bytes": 5232,
-      "lines": 156
+      "bytes": 5204,
+      "lines": 155
     },
     {
       "path": "utils/notificationRouting.js",
@@ -2918,6 +2933,11 @@
       "path": "screens/loginFlow.js",
       "bytes": 5128,
       "lines": 149
+    },
+    {
+      "path": "src/app/session/identityBindingRunners.js",
+      "bytes": 6366,
+      "lines": 148
     },
     {
       "path": "web-admin/src/services/driverTourPackOperationsService.js",
@@ -2987,11 +3007,6 @@
     {
       "path": "functions/lib/driverLocationExpiryCleanup.js",
       "bytes": 4349,
-      "lines": 131
-    },
-    {
-      "path": "src/app/session/identityBindingRunners.js",
-      "bytes": 5783,
       "lines": 131
     },
     {
@@ -3245,13 +3260,13 @@
       "lines": 88
     },
     {
-      "path": "components/chat/useChatSubscriptionLifecycle.js",
-      "bytes": 3667,
-      "lines": 87
+      "path": "src/app/navigation/useAppNavigation.js",
+      "bytes": 3563,
+      "lines": 88
     },
     {
-      "path": "src/app/navigation/useAppNavigation.js",
-      "bytes": 3537,
+      "path": "components/chat/useChatSubscriptionLifecycle.js",
+      "bytes": 3667,
       "lines": 87
     },
     {
@@ -3401,7 +3416,7 @@
     },
     {
       "path": "components/ManifestConflictCard.js",
-      "bytes": 3098,
+      "bytes": 3091,
       "lines": 63
     },
     {
@@ -3441,8 +3456,8 @@
     },
     {
       "path": "screens/LogoutPendingScreen.js",
-      "bytes": 3108,
-      "lines": 57
+      "bytes": 3081,
+      "lines": 56
     },
     {
       "path": "services/chatService.js",
@@ -3500,6 +3515,11 @@
       "lines": 46
     },
     {
+      "path": "web-admin/src/services/driverService.js",
+      "bytes": 1445,
+      "lines": 45
+    },
+    {
       "path": "web-admin/src/services/tourService.js",
       "bytes": 1004,
       "lines": 44
@@ -3522,11 +3542,6 @@
     {
       "path": "functions/src/infrastructure/auth/appCheckGate.js",
       "bytes": 1427,
-      "lines": 43
-    },
-    {
-      "path": "web-admin/src/services/driverService.js",
-      "bytes": 1352,
       "lines": 43
     },
     {
@@ -3705,6 +3720,11 @@
       "lines": 27
     },
     {
+      "path": "web-admin/src/services/broadcastRepository.js",
+      "bytes": 979,
+      "lines": 26
+    },
+    {
       "path": "services/imageViewerPagerState.js",
       "bytes": 726,
       "lines": 25
@@ -3768,6 +3788,11 @@
       "path": "web-admin/src/features/drivers/domain/driverAssignmentIdentity.js",
       "bytes": 470,
       "lines": 18
+    },
+    {
+      "path": "web-admin/src/services/accountSecurityService.js",
+      "bytes": 676,
+      "lines": 17
     },
     {
       "path": "web-admin/src/services/adminAuthService.js",
@@ -3863,6 +3888,11 @@
       "path": "src/features/auth/presentation/loginScreenStyles.js",
       "bytes": 322,
       "lines": 6
+    },
+    {
+      "path": "web-admin/src/shared/runtime/adminRuntime.js",
+      "bytes": 145,
+      "lines": 5
     },
     {
       "path": "App.js",
@@ -4066,21 +4096,6 @@
       "text": "import { signInWithEmailAndPassword, onAuthStateChanged, signOut, sendPasswordResetEmail } from 'firebase/auth';"
     },
     {
-      "file": "web-admin/src/components/BroadcastPanel.jsx",
-      "line": 2,
-      "text": "import { ref, push, set, onValue, query, orderByChild, limitToLast } from 'firebase/database';"
-    },
-    {
-      "file": "web-admin/src/components/Settings.jsx",
-      "line": 2,
-      "text": "import { updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';"
-    },
-    {
-      "file": "web-admin/src/features/drivers/components/driverManagementPanels.jsx",
-      "line": 2,
-      "text": "import { ref, update } from 'firebase/database';"
-    },
-    {
       "file": "web-admin/src/features/tours/data/tourServiceContext.js",
       "line": 45,
       "text": "import { ref, update, get, onValue, runTransaction } from 'firebase/database';"
@@ -4101,6 +4116,11 @@
       "text": "import { getDatabase, onValue, ref } from \"firebase/database\";"
     },
     {
+      "file": "web-admin/src/services/accountSecurityService.js",
+      "line": 1,
+      "text": "import { EmailAuthProvider, reauthenticateWithCredential, updatePassword } from 'firebase/auth';"
+    },
+    {
       "file": "web-admin/src/services/adminAuthService.js",
       "line": 1,
       "text": "import { get, ref } from 'firebase/database';"
@@ -4116,6 +4136,11 @@
       "text": "import { onValue, ref } from 'firebase/database';"
     },
     {
+      "file": "web-admin/src/services/broadcastRepository.js",
+      "line": 1,
+      "text": "import { limitToLast, onValue, orderByChild, push, query, ref, set } from 'firebase/database';"
+    },
+    {
       "file": "web-admin/src/services/contentModerationService.js",
       "line": 1,
       "text": "import { get, limitToLast, onValue, orderByChild, query, ref, update } from 'firebase/database';"
@@ -4128,7 +4153,7 @@
     {
       "file": "web-admin/src/services/driverService.js",
       "line": 1,
-      "text": "import { ref, runTransaction } from 'firebase/database';"
+      "text": "import { ref, runTransaction, update } from 'firebase/database';"
     },
     {
       "file": "web-admin/src/services/driverTourPackAdminStatusService.js",
@@ -4253,22 +4278,22 @@
   "topLevelMutableCollections": [
     {
       "file": "components/ManifestBookingCard.js",
-      "line": 13,
+      "line": 12,
       "text": "const STATUS_COLORS = {"
     },
     {
       "file": "components/ManifestBookingCard.js",
-      "line": 20,
+      "line": 19,
       "text": "const STATUS_LIGHT_COLORS = {"
     },
     {
       "file": "components/ManifestBookingCard.js",
-      "line": 27,
+      "line": 26,
       "text": "const STATUS_ICONS = {"
     },
     {
       "file": "components/ManifestBookingCard.js",
-      "line": 34,
+      "line": 33,
       "text": "const SYNC_META = {"
     },
     {
@@ -4278,12 +4303,12 @@
     },
     {
       "file": "components/SyncStatusBanner.js",
-      "line": 14,
+      "line": 13,
       "text": "const SEVERITY_STYLES = {"
     },
     {
       "file": "components/SyncStatusBanner.js",
-      "line": 57,
+      "line": 56,
       "text": "const SEVERITY_PROGRESS = {"
     },
     {
@@ -4498,12 +4523,12 @@
     },
     {
       "file": "services/accountDeletionService.js",
-      "line": 28,
+      "line": 27,
       "text": "const APP_SESSION_KEYS = ["
     },
     {
       "file": "services/accountDeletionService.js",
-      "line": 36,
+      "line": 35,
       "text": "const SAFETY_LOCAL_KEYS = ["
     },
     {
@@ -4848,12 +4873,12 @@
     },
     {
       "file": "web-admin/src/components/ContentModerationPanel.jsx",
-      "line": 47,
+      "line": 48,
       "text": "const REPORT_STATUS_COLOR = {"
     },
     {
       "file": "web-admin/src/components/ContentModerationPanel.jsx",
-      "line": 54,
+      "line": 55,
       "text": "const CONTENT_TYPE_LABEL = {"
     },
     {
@@ -4863,7 +4888,7 @@
     },
     {
       "file": "web-admin/src/components/Dashboard.jsx",
-      "line": 17,
+      "line": 18,
       "text": "const BRANCH_LABELS = {"
     },
     {

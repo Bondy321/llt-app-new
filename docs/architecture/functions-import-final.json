@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-25T17:39:29.962Z",
+  "generatedAt": "2026-08-25T17:59:47.291Z",
   "limitations": "Local clean-process require timing is a regression signal only; it is not a Cloud Functions cold-start benchmark.",
   "index": {
     "bytes": 66,
@@ -9,7 +9,7 @@
     ]
   },
   "cleanProcessImport": {
-    "elapsedMs": 406.054,
+    "elapsedMs": 1030.67,
     "sharpLoaded": false,
     "expoServerSdkLoaded": false,
     "loadedModuleCount": 421

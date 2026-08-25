@@ -27,3 +27,5 @@ Production cycles remain zero. Screen/component Firebase SDK imports are zero, a
 ## Web administration
 
 Dashboard and Tours were split behind their existing lazy route boundaries. Production build chunk sizes are recorded in the final engineering report after the clean build. Chunk results are compared with the baseline values in `refactor-baseline.md`; build output is not committed.
+
+The final Vite build transformed 7,046 modules. Its major uncompressed route chunks were ToursManager 76.02 kB, Dashboard 49.89 kB, DriversManager 18.06 kB, BroadcastPanel 15.96 kB, ContentModerationPanel 10.99 kB, and Settings 6.17 kB. The shared Firebase, React, and Mantine chunks were 245.92 kB, 274.16 kB, and 283.80 kB respectively. The increase in the Tours route reflects extracted tour-management responsibilities retained behind the existing lazy boundary; the initial route still does not eagerly load it.
