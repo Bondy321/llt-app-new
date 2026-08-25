@@ -35,8 +35,13 @@ test('Gate 6 action state is closed, bounded and exact-driver scoped', () => {
 });
 
 test('the ingestion export is private to the exact management runtime service account', () => {
-  const source = fs.readFileSync(path.join(repositoryRoot, 'functions', 'index.js'), 'utf8');
-  assert.match(source, /exports\.ingestDriverTourPacks\s*=\s*onRequest/);
+  const entrySource = fs.readFileSync(path.join(repositoryRoot, 'functions', 'index.js'), 'utf8');
+  const source = fs.readFileSync(
+    path.join(repositoryRoot, 'functions', 'src', 'domains', 'driver-tour-packs', 'ingestionFunction.js'),
+    'utf8',
+  );
+  assert.match(entrySource, /ingestDriverTourPacks/);
+  assert.match(source, /const ingestDriverTourPacks\s*=\s*onRequest/);
   assert.match(source, /invoker:\s*\[DEFAULT_MANAGEMENT_SYNC_SERVICE_ACCOUNT\]/);
   assert.match(source, /cors:\s*false/);
   assert.doesNotMatch(source, /ingestDriverTourPacks[\s\S]{0,500}invoker:\s*["']public["']/);
