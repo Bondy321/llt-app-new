@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, Text, Animated, Easing, PanResponder, TouchableOpacity } from 'react-native';
+import { View, ActivityIndicator, Text, Animated, PanResponder, TouchableOpacity } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Import Firebase services
@@ -50,6 +50,7 @@ const { clearNotificationFeedCache } = require('../../services/notificationInbox
 // Import Screens
 import LogoutPendingScreen from '../../screens/LogoutPendingScreen';
 import AppScreenRouter from './navigation/AppScreenRouter';
+import useLoginTransition from './navigation/useLoginTransition';
 const { getLoginTransitionDurationMs } = require('../../screens/loginFlow');
 const { isEligibleEdgeSwipe, shouldCommitEdgeSwipeHome } = require('../../services/swipeHomeNavigation');
 const { markNotificationRead } = require('../../services/notificationInboxService');
@@ -84,13 +85,16 @@ export default function AppShell() {
   // State for passing params between screens manually (since we aren't using React Navigation stack)
   const [screenParams, setScreenParams] = useState({});
   const [isImageViewerVisible, setIsImageViewerVisible] = useState(false);
-  const [loginTransition, setLoginTransition] = useState(null);
   const [driverSessionGeneration, setDriverSessionGeneration] = useState(0);
-  const loginTransitionTimerRef = useRef(null);
-  const loginTransitionAnimationRef = useRef(null);
   const driverIdentityPersistKeyRef = useRef(null);
   const authUnsubscribeRef = useRef(null);
-  const loginProgress = useRef(new Animated.Value(0)).current;
+  const {
+    clearLoginTransitionArtifacts,
+    loginProgress,
+    loginTransition,
+    resetLoginTransition,
+    startLoginTransition,
+  } = useLoginTransition();
   const notificationNavigateRef = useRef(null);
   const previousDriverOperationalScopeRef = useRef(null);
   const driverLifecyclePurgeRef = useRef(null);
@@ -118,41 +122,6 @@ export default function AppShell() {
     setIsImageViewerVisible(Boolean(visible));
   }, []);
 
-  const clearLoginTransitionArtifacts = () => {
-    if (loginTransitionTimerRef.current) {
-      clearTimeout(loginTransitionTimerRef.current);
-      loginTransitionTimerRef.current = null;
-    }
-
-    if (loginTransitionAnimationRef.current) {
-      loginTransitionAnimationRef.current.stop();
-      loginTransitionAnimationRef.current = null;
-    }
-  };
-
-  const startLoginTransition = ({ targetScreen, durationMs }) => {
-    clearLoginTransitionArtifacts();
-    loginProgress.setValue(0);
-    setLoginTransition({
-      targetScreen,
-      message: 'Tour synced - entering dashboard',
-      durationMs,
-    });
-
-    loginTransitionAnimationRef.current = Animated.timing(loginProgress, {
-      toValue: 1,
-      duration: durationMs,
-      easing: Easing.linear,
-      useNativeDriver: false,
-    });
-    loginTransitionAnimationRef.current.start();
-
-    loginTransitionTimerRef.current = setTimeout(() => {
-      clearLoginTransitionArtifacts();
-      setLoginTransition(null);
-      loginProgress.setValue(0);
-    }, durationMs);
-  };
   const diagnosticsTourId = isDriverSession
     ? resolveTourId(bookingData?.assignedTourId, tourData?.id, tourData?.tourCode)
     : resolveTourId(tourData?.id, tourData?.tourCode);
@@ -1260,9 +1229,7 @@ export default function AppShell() {
 
     if (!options?.offlineMode && tourDetails?.id) {
       if (!authUid) {
-        clearLoginTransitionArtifacts();
-        setLoginTransition(null);
-        loginProgress.setValue(0);
+        resetLoginTransition();
         const authFailure = new Error('Authenticated tour session unavailable');
         authFailure.userMessage = 'We could not start a secure tour session. Please check your connection and try again.';
         await loginDiagnostics.recordLoginDiagnostic('passenger_join_blocked_missing_auth_uid', {
@@ -1290,9 +1257,7 @@ export default function AppShell() {
           alreadyJoined: Boolean(joinResult?.alreadyJoined),
         }, loginDiagnosticsContext);
       } catch (error) {
-        clearLoginTransitionArtifacts();
-        setLoginTransition(null);
-        loginProgress.setValue(0);
+        resetLoginTransition();
         logger.error('Tour', 'Error joining tour', {
           error: error.message,
           code: error?.code || null,
@@ -1358,9 +1323,7 @@ export default function AppShell() {
         });
       } catch (error) {
         if (error?.criticalIdentityPersistence) {
-          clearLoginTransitionArtifacts();
-          setLoginTransition(null);
-          loginProgress.setValue(0);
+          resetLoginTransition();
         }
 
         const sourceError = error?.cause || error;
