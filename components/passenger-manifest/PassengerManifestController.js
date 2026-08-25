@@ -29,7 +29,6 @@ export default function PassengerManifestController({ route, navigation, driverT
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Modal State
   const [selectedBooking, setSelectedBooking] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [partialMode, setPartialMode] = useState(false);
