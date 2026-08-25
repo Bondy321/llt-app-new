@@ -76,7 +76,7 @@ verified login -> active session -> user logout / admin revoke / expiry -> no se
 
 Issuance, assignment, logout, revocation, and expiry cleanup serialize through the transactional 30-second lock at `app_session_locks/{authUid}`. A lock can be released only by its opaque owner and an expired lock can be recovered.
 
-`endAppSession` requires Auth, App Check, `POST`, `reason=user_logout`, and the exact expected session ID. A missing session is idempotent success. A different current session returns `SESSION_CHANGED`, so a delayed Session A logout cannot end Session B.
+`endAppSession` requires Auth, `POST`, `reason=user_logout`, and the exact expected session ID. App Check is currently explicitly disabled. A missing session is idempotent success. A different current session returns `SESSION_CHANGED`, so a delayed Session A logout cannot end Session B.
 
 Cleanup removes session-derived authority and ephemeral state: the session, passenger membership and legacy grants, typing/presence, legacy UID read markers, migration requests, live tracking, a matching driver-location publication, and push-token eligibility. It preserves identity bindings, booking and manifest records, operational driver assignment, historical content, reports, photos, reactions, and canonical read history.
 
@@ -87,7 +87,7 @@ The safe session subset is stored at `@LLT:appSession:v1`; it contains no creden
 Logout is two-phase:
 
 1. Persist the exact pending session-end request before network I/O.
-2. Call `endAppSession` with Firebase Auth, App Check, and `expectedSessionId`.
+2. Call `endAppSession` with Firebase Auth and `expectedSessionId`; attach App Check only when its rollout is enabled.
 3. Only confirmed idempotent server success permits the normal logged-out state.
 4. Offline or transient failure enters the blocking `LogoutPendingScreen`; no tour UI is restored. Retry survives a force-close.
 5. `SESSION_CHANGED` cannot clear a newer session and requires secure reauthentication.
@@ -96,7 +96,7 @@ Local cleanup stops replay and removes scoped tour packs, offline actions and lo
 
 ## Media and notifications
 
-All direct client reads and writes under `group_tour_photos/**` and `private_tour_photos/**` in Firebase Storage are denied. The mobile service sends Auth and App Check to server endpoints for upload, delete, and short-lived URL resolution. Each refresh rechecks the active session and current tour authority. RTDB photo records contain Storage paths, not durable Firebase download URLs.
+All direct client reads and writes under `group_tour_photos/**` and `private_tour_photos/**` in Firebase Storage are denied. The mobile service sends Auth to server endpoints for upload, delete, and short-lived URL resolution, and may add App Check after its future rollout. Each refresh rechecks the active session and current tour authority. RTDB photo records contain Storage paths, not durable Firebase download URLs.
 
 Operational notification selection requires an active matching app session in addition to a participant or driver assignment, and logout authoritatively marks the profile push token unavailable. Marketing delivery still requires consent and an active token, so an ended session is not eligible.
 

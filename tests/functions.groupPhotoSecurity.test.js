@@ -108,11 +108,18 @@ test('group media path validation and request bounds reject cross-tour and overs
   }), null);
 });
 
-test('group media App Check fails closed in production and verifies valid tokens', async () => {
+test('group media App Check supports explicit disable, fails closed when missing, and verifies enabled tokens', async () => {
   await assert.rejects(
     __testables.enforceGroupMediaAppCheck({ headers: {} }, { K_SERVICE: 'deployed' }, { verifyToken: async () => {} }),
     (error) => error.code === 'GROUP_MEDIA_APP_CHECK_CONFIGURATION_REQUIRED',
   );
+  let disabledVerificationCalls = 0;
+  assert.equal(await __testables.enforceGroupMediaAppCheck(
+    { headers: {} },
+    { K_SERVICE: 'deployed', REQUIRE_APP_CHECK_FOR_GROUP_MEDIA: 'false' },
+    { verifyToken: async () => { disabledVerificationCalls += 1; } },
+  ), true);
+  assert.equal(disabledVerificationCalls, 0);
   assert.equal(await __testables.enforceGroupMediaAppCheck(
     { headers: {} },
     { K_SERVICE: 'deployed', REQUIRE_APP_CHECK_FOR_GROUP_MEDIA: 'true' },

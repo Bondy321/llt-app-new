@@ -1,15 +1,17 @@
 # Login abuse protection
 
-Passenger and driver login are protected only after Firebase Authentication and App Check have
-been validated. A deployed Gen2 runtime must have `REQUIRE_APP_CHECK_FOR_LOGIN=true`. If that
-setting is missing or false, both login endpoints return `503 SERVICE_UNAVAILABLE`; they never
-silently run without App Check. Tests and the Functions emulator may disable enforcement.
+Passenger and driver login require Firebase Authentication and use authoritative distributed rate
+limits before issuing an active application session. App Check is intentionally disabled until the
+production iOS and Android apps are registered. A deployed Gen2 runtime must set
+`REQUIRE_APP_CHECK_FOR_LOGIN` explicitly: `false` is the approved current mode, `true` enables token
+verification, and a missing value returns `503 SERVICE_UNAVAILABLE` so configuration loss fails
+closed.
 
-Production mobile builds must also enable:
+Production mobile builds currently set:
 
 ```text
-EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK=true
-EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK=true
+EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK=false
+EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK=false
 ```
 
 ## Distributed quota store
@@ -43,14 +45,17 @@ retained. Records are retained for 24 hours beyond the active window to make cle
 
 ## Deployment order
 
-1. Register App Check for the production iOS and Android apps and validate legitimate tokens.
-2. Set production EAS client flags to true.
-3. Set `REQUIRE_APP_CHECK_FOR_LOGIN=true` in the Functions production environment.
-4. Deploy Functions, including the cleanup schedule.
-5. Smoke-test valid, missing-token, invalid-token, and throttled requests.
+Current disabled-mode deployment:
 
-The fail-closed runtime check is a last line of defence, not a substitute for validating production
-environment configuration before deployment. Production and TestFlight workflows do not provide
-false defaults and set `LLT_REQUIRE_PRODUCTION_APPCHECK=true`, causing environment validation to
-reject missing or false client flags. In a deployed Cloud Run runtime, `K_SERVICE` always wins over
-test/emulator environment markers; those markers cannot turn production enforcement off.
+1. Set both production EAS client flags to `false`.
+2. Set `REQUIRE_APP_CHECK_FOR_LOGIN=false` and `REQUIRE_APP_CHECK_FOR_GROUP_MEDIA=false`.
+3. Deploy Functions before publishing the compatible OTA.
+4. Smoke-test authenticated login, media, logout, invalid credentials, stale sessions, and throttling.
+
+Future enablement must register App Check for every production app first, validate legitimate tokens,
+then change client and backend flags together in a staged rollout.
+
+The fail-closed missing-setting check is a last line of defence, not a substitute for validating
+production configuration. Production and TestFlight workflows pin the approved disabled mode
+explicitly rather than inheriting stale secrets. Setting `LLT_REQUIRE_PRODUCTION_APPCHECK=true`
+remains an opt-in rollout guard that rejects false client flags.

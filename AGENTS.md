@@ -196,18 +196,17 @@ Passenger login:
   - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS`
   - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK`
   - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK`
-- Backend App Check enforcement is controlled by `REQUIRE_APP_CHECK_FOR_LOGIN`.
-- Deployed login Functions fail closed unless `REQUIRE_APP_CHECK_FOR_LOGIN=true`; tests and
-  emulators may explicitly keep it off. Production mobile builds must enable both login App Check
-  client flags.
+- Backend App Check enforcement is controlled by `REQUIRE_APP_CHECK_FOR_LOGIN`. It is explicitly
+  disabled with `false` until the production apps are registered; an omitted deployed setting still
+  fails closed so configuration loss cannot silently change the mode.
 - Login abuse quotas are authoritative RTDB transactions under opaque hashed
   `login_rate_limits/v1/*` buckets, shared by every Gen2 instance. The module-local limiter is not
   an acceptable authority for either login endpoint.
-- Production/TestFlight workflows require both client App Check flags to be exactly true. A
-  deployed `K_SERVICE` runtime always requires backend enforcement regardless of test/emulator
-  markers. Broad network quotas use only the trusted platform forwarding hop, never client IDs or
-  User-Agent values. Expiry cleanup compare-and-deletes and drains bounded batches without deleting
-  a concurrently reset bucket.
+- Production/TestFlight workflows currently pin both client App Check flags and
+  `LLT_REQUIRE_PRODUCTION_APPCHECK` to `false`. Enable all client and backend flags together only
+  after a staged registration and token smoke test. Broad network quotas use only the trusted
+  platform forwarding hop, never client IDs or User-Agent values. Expiry cleanup
+  compare-and-deletes and drains bounded batches without deleting a concurrently reset bucket.
 
 Driver login:
 
@@ -855,11 +854,11 @@ Exported functions:
   - HTTPS `POST`
   - region `europe-west1`
   - validates credentials from `booking_identities/{bookingRef}`, then creates/reuses and device-binds the principal in server-only `passenger_identity_security/{bookingRef}`
-  - mandatory App Check enforcement in deployed production; fail-closed configuration guard
-  - distributed atomic rate limits in separate opaque credential-, account-, and broad network-level buckets after auth/App Check validation
+  - Firebase Auth, explicit optional App Check mode, and a fail-closed missing-configuration guard
+  - distributed atomic rate limits in separate opaque credential-, account-, and broad network-level buckets after authentication
 - `verifyDriverLogin`
   - HTTPS `POST`, authenticated, region `europe-west1`
-  - validates driver credentials and mandatory production App Check, then transactionally binds an
+  - validates driver credentials and the configured App Check mode, then transactionally binds an
     unclaimed driver record to the caller and persists server-owned identity helpers
   - rate limited in separate credential-, account-, and broad network-level buckets
 - `cleanupExpiredLoginRateLimits`
@@ -931,7 +930,7 @@ Exported functions:
   - validates caller tour/role access and bounded report/location input
   - atomically writes private, tour, critical-global, and idempotency-lock paths
 - `endAppSession`
-  - authenticated and App-Check-protected HTTPS `POST`, region `europe-west1`, CORS disabled
+  - authenticated and active-session-protected HTTPS `POST`, region `europe-west1`, CORS disabled
   - compare-ends only the exact expected session and removes session-derived authority and ephemeral state
 - `revokeAppSession`
   - operations-admin HTTPS `POST`, region `europe-west1`, allowlisted reasons and optional expected-session compare
@@ -1122,7 +1121,7 @@ Current `test:emulators` runs the complete Realtime Database and Storage rules m
 firebase emulators:exec --project demo-llt-rules --only database "node --test tests/firebaseRules/photoVariants.rules.test.js"
 ```
 
-All client Storage reads and writes under `group_tour_photos/**` and `private_tour_photos/**` are denied. Authenticated, App-Check-protected Functions verify the current app session for upload, short-lived URL resolution and deletion; RTDB metadata stores paths rather than durable download URLs.
+All client Storage reads and writes under `group_tour_photos/**` and `private_tour_photos/**` are denied. Authenticated Functions verify the current app session for upload, short-lived URL resolution and deletion; App Check is explicitly disabled until provider registration is complete. RTDB metadata stores paths rather than durable download URLs.
 
 High-value contract tests to know:
 

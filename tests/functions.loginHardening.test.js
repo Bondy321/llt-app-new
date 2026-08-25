@@ -67,7 +67,7 @@ test('distributed limiter rejects raw or path-unsafe bucket keys', async () => {
   await assert.rejects(() => limiter('network/203.0.113.1', 1, 60000), /opaque key/);
 });
 
-test('production App Check is fail-closed unless explicitly enabled', () => {
+test('production App Check supports explicit enabled or disabled modes and rejects missing configuration', () => {
   assert.equal(__testables.shouldRequireLoginAppCheck({ NODE_ENV: 'test' }), false);
   assert.equal(__testables.shouldRequireLoginAppCheck({
     K_SERVICE: 'verifypassengerlogin',
@@ -77,19 +77,19 @@ test('production App Check is fail-closed unless explicitly enabled', () => {
     () => __testables.shouldRequireLoginAppCheck({ K_SERVICE: 'verifypassengerlogin' }),
     (error) => error.code === 'LOGIN_APP_CHECK_CONFIGURATION_REQUIRED',
   );
-  assert.throws(
-    () => __testables.shouldRequireLoginAppCheck({
-      K_SERVICE: 'verifypassengerlogin',
-      REQUIRE_APP_CHECK_FOR_LOGIN: 'false',
-    }),
-    (error) => error.code === 'LOGIN_APP_CHECK_CONFIGURATION_REQUIRED',
-  );
+  assert.equal(__testables.shouldRequireLoginAppCheck({
+    K_SERVICE: 'verifypassengerlogin',
+    REQUIRE_APP_CHECK_FOR_LOGIN: 'false',
+  }), false);
 });
 
-test('K_SERVICE dominates test and emulator markers while a real local emulator may opt out', () => {
-  assert.throws(() => __testables.shouldRequireLoginAppCheck({
+test('explicit production disable dominates test markers while missing production configuration fails closed', () => {
+  assert.equal(__testables.shouldRequireLoginAppCheck({
     K_SERVICE: 'verifypassengerlogin', NODE_ENV: 'test', FUNCTIONS_EMULATOR: 'true',
     REQUIRE_APP_CHECK_FOR_LOGIN: 'false',
+  }), false);
+  assert.throws(() => __testables.shouldRequireLoginAppCheck({
+    K_SERVICE: 'verifypassengerlogin', NODE_ENV: 'test', FUNCTIONS_EMULATOR: 'true',
   }), (error) => error.code === 'LOGIN_APP_CHECK_CONFIGURATION_REQUIRED');
   assert.equal(__testables.shouldRequireLoginAppCheck({
     FUNCTIONS_EMULATOR: 'true',

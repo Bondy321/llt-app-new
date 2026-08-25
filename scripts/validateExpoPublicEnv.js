@@ -195,11 +195,8 @@ const validateExpoPublicEnv = (env = process.env, options = {}) => {
     }
   });
 
-  const easBuildProfile = String(env.EAS_BUILD_PROFILE || '').trim().toLowerCase();
   const requireProductionAppCheck = options.requireProductionAppCheck === true
-    || env.LLT_REQUIRE_PRODUCTION_APPCHECK === 'true'
-    || easBuildProfile === 'production'
-    || easBuildProfile === 'testflight';
+    || env.LLT_REQUIRE_PRODUCTION_APPCHECK === 'true';
   if (requireProductionAppCheck) {
     [
       'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK',
@@ -209,6 +206,12 @@ const validateExpoPublicEnv = (env = process.env, options = {}) => {
         errors.push(`${name} must be exactly true for production/TestFlight releases`);
       }
     });
+  }
+
+  const useAppCheck = env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK;
+  const requireAppCheck = env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK;
+  if (requireAppCheck === 'true' && useAppCheck !== 'true') {
+    errors.push('EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK cannot be true unless EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK is true');
   }
 
   return { ok: errors.length === 0, errors, platform };

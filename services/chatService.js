@@ -916,23 +916,24 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
     const endpoint = options.endpoint || buildGroupPhotoChatEndpoint(authInstance);
     const fetchFn = options.fetchFn || fetch;
     const appCheckTokenFn = options.appCheckTokenFn || firebaseModule?.getCurrentAppCheckToken;
-    if (!endpoint || !authInstance?.currentUser?.getIdToken || typeof appCheckTokenFn !== 'function') {
+    if (!endpoint || !authInstance?.currentUser?.getIdToken) {
       return { success: false, error: 'Secure group photo messaging is unavailable' };
     }
     const serverPromise = withTimeout(
       (async () => {
         const [token, appCheckToken] = await Promise.all([
           authInstance.currentUser.getIdToken(),
-          appCheckTokenFn(),
+          typeof appCheckTokenFn === 'function' ? appCheckTokenFn() : null,
         ]);
-        if (!token || !appCheckToken) throw new Error('App verification required for group photos');
+        if (!token) throw new Error('Authentication required for group photos');
+        const headers = {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        };
+        if (appCheckToken) headers['x-firebase-appcheck'] = appCheckToken;
         const response = await fetchFn(endpoint, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-            'x-firebase-appcheck': appCheckToken,
-          },
+          headers,
           body: JSON.stringify({
             tourId: validatedTourId,
             photoId,

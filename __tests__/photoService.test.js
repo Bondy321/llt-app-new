@@ -76,6 +76,31 @@ test('uploadPhoto sends group media only through the authenticated server endpoi
   assert.strictEqual(blob.closed, true);
 });
 
+test('uploadPhoto remains authenticated when App Check is explicitly unavailable', async () => {
+  const blob = createMockBlob();
+  let serverHeaders;
+  const result = await uploadPhoto('file://group-no-app-check.jpg', 'tour-77', 'user-9', '', {
+    idempotencyKey: 'idem-group-no-app-check',
+    uploaderName: 'Driver Bond',
+    authInstance: { currentUser: { uid: 'auth-1', getIdToken: async () => 'id-token' } },
+    appCheckTokenFn: async () => null,
+    groupUploadEndpoint: 'https://functions.test/uploadGroupPhoto',
+    fetchFn: async (url, options) => {
+      if (url === 'file://group-no-app-check.jpg') return { ok: true, blob: async () => blob };
+      serverHeaders = options.headers;
+      return { ok: true, json: async () => ({ success: true, photo: {
+        id: 'idem-group-no-app-check', userId: 'user-9', caption: '', uploaderName: 'Driver Bond',
+        storagePath: 'group_tour_photos/tour-77/idem-group-no-app-check.jpg',
+      } }) };
+    },
+  });
+
+  assert.equal(serverHeaders.Authorization, 'Bearer id-token');
+  assert.equal(Object.prototype.hasOwnProperty.call(serverHeaders, 'x-firebase-appcheck'), false);
+  assert.equal(result.id, 'idem-group-no-app-check');
+  assert.strictEqual(blob.closed, true);
+});
+
 test('uploadPhoto requires an auth uid for storage metadata', async () => {
   await assert.rejects(
     uploadPhoto('file://group.jpg', 'tour-77', 'user-9', '', {

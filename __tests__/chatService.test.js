@@ -48,7 +48,7 @@ test('sendImageMessage applies the same moderation gate as text chat', async () 
   assert.match(result.error, /Caption contains wording/);
 });
 
-test('sendImageMessage creates a captionless path-only photo message through the secure Function', async () => {
+test('sendImageMessage creates a captionless path-only photo message with Auth when App Check is unavailable', async () => {
   const sender = {
     name: 'Alex',
     principalId: 'driver:alex',
@@ -67,11 +67,12 @@ test('sendImageMessage creates a captionless path-only photo message through the
       photoId: 'photo-1',
       endpoint: 'https://functions.test/createGroupPhotoChatMessage',
       authInstance: { currentUser: { getIdToken: async () => 'id-token' } },
-      appCheckTokenFn: async () => 'app-check-token',
+      appCheckTokenFn: async () => null,
       fetchFn: async (_url, options) => {
         const payload = JSON.parse(options.body);
         assert.equal(payload.photoId, 'photo-1');
         assert.equal(options.headers.Authorization, 'Bearer id-token');
+        assert.equal(Object.prototype.hasOwnProperty.call(options.headers, 'x-firebase-appcheck'), false);
         return { ok: true, json: async () => ({ success: true, message: {
           id: 'img-stable-1', schemaVersion: 2, type: 'image', text: '',
           idempotencyKey: 'img-stable-1', photoId: 'photo-1', timestamp: 123,
@@ -81,7 +82,7 @@ test('sendImageMessage creates a captionless path-only photo message through the
   );
   await result.serverPromise;
 
-  assert.equal(result.success, true);
+  assert.equal(result.success, true, result.error);
   assert.equal(result.message.photoId, 'photo-1');
   assert.equal(result.message.imageUrl, undefined);
 });

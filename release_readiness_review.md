@@ -4,7 +4,7 @@
 
 The prior photo-access finding and the visible-logout/server-authority gap have been remediated in the repository. Mobile access now requires a server-owned, non-expired `app_sessions/{authUid}` record in addition to matching passenger membership or coherent driver assignment. Normal logout, admin revocation, and scheduled expiry cleanup remove that authority, disable push eligibility, and clear session-owned ephemeral state without rotating the opaque passenger identity or unassigning a driver.
 
-Direct Firebase Storage access to both group and private photo roots is denied. Authenticated, App-Check-protected Functions perform upload, delete, and short-lived media URL resolution after current session/tour verification. The compatible mobile client persists compare-safe logout requests and blocks in a truthful logout-pending state when offline.
+Direct Firebase Storage access to both group and private photo roots is denied. Authenticated, active-session-protected Functions perform upload, delete, and short-lived media URL resolution after current session/tour verification. App Check is explicitly disabled until production provider registration is complete. The compatible mobile client persists compare-safe logout requests and blocks in a truthful logout-pending state when offline.
 
 The strict production cutover still requires the staged order and maintenance-window checks in `docs/app-session-rollout.md`: compatible Functions, TestFlight OTA, bounded dry-run/apply migration, strict RTDB/Storage rules, admin hosting, then production smoke verification. This addendum does not supersede unrelated App Store, production environment, dependency, or physical-device gates below.
 
@@ -224,7 +224,7 @@ Expected fix:
 
 - Populate production EAS/CI env with real values for all required `EXPO_PUBLIC_FIREBASE_*` variables and `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`.
 - Set a real `EXPO_PUBLIC_SUPPORT_PHONE` or remove the optional variable if support phone should not be exposed.
-- Confirm privacy URL, support SMS/email, App Check flags, and verifier URLs are correct for production.
+- Confirm privacy URL, support SMS/email, the explicit disabled App Check flags, and verifier URLs are correct for production.
 - Deploy Cloud Functions before the app build/update, especially:
   - `verifyPassengerLogin`
   - `verifyDriverLogin`
@@ -282,7 +282,7 @@ Verification:
 Evidence:
 
 - `storage_rules.json` denies all direct group/private photo object operations.
-- `functions/index.js` exposes authenticated, App-Check-protected group/private upload, resolution, and deletion endpoints.
+- `functions/index.js` exposes authenticated, active-session-protected group/private upload, resolution, and deletion endpoints.
 - `tests/firebaseRules/storage.rules.test.js`, `tests/functions.groupPhotoSecurity.test.js`, and `__tests__/photoService.test.js` cover direct denial and server mediation.
 
 Current behavior:
@@ -295,7 +295,7 @@ An old Firebase Auth token, stale participant/assignment, guessed path, or copie
 
 Completed implementation:
 
-- Group and private upload/delete/resolve operations use Auth, App Check, current app-session verification, current tour membership/assignment, deterministic ownership, and bounded inputs.
+- Group and private upload/delete/resolve operations use Auth, current app-session verification, current tour membership/assignment, deterministic ownership, and bounded inputs. App Check remains available but explicitly disabled.
 - Metadata no longer requires durable Firebase download URLs.
 - Account deletion removes owned media through backend authority before ending its app session.
 

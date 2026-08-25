@@ -548,7 +548,7 @@ test('Static contract: photo objects are inaccessible directly and all media ope
   assert.match(storageRules, /match \/group_tour_photos\/\{tourId\}\/\{fileName\}[\s\S]*allow read, write: if false/);
   assert.doesNotMatch(photoSource, /getDownloadURL\(/);
   assert.match(photoSource, /throw new Error\('Authenticated user required for photo upload'\)/);
-  assert.match(photoSource, /'x-firebase-appcheck': appCheckToken/);
+  assert.match(photoSource, /if \(appCheckToken\) headers\['x-firebase-appcheck'\] = appCheckToken/);
   assert.match(photoSource, /resolveGroupPhotoMedia/);
   assert.match(photoSource, /uploadGroupPhoto/);
   assert.match(photoSource, /deleteGroupPhoto/);
@@ -825,12 +825,12 @@ test('Static contract: production binary EAS workflows gate release on mobile/ba
   ].forEach((relativePath) => {
     const source = readText(relativePath);
     assert.match(source, /run:\s*npm run security:audit:release/);
-    assert.match(source, /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK:\s*'true'/);
-    assert.match(source, /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK:\s*'true'/);
+    assert.match(source, /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK:\s*'false'/);
+    assert.match(source, /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK:\s*'false'/);
     assert.doesNotMatch(
       source,
       /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_(?:USE|REQUIRE)_APPCHECK:\s*\$\{\{\s*secrets\./,
-      `${relativePath} must not let stale secrets disable production App Check`,
+      `${relativePath} must use the reviewed explicit App Check mode`,
     );
   });
 

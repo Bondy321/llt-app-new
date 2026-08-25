@@ -3207,6 +3207,7 @@ const verifyCurrentTourPhotoAccess = async ({ db, authUid, tourId }) => {
 };
 
 const enforceGroupMediaAppCheck = async (req, env = process.env, appCheck = admin.appCheck()) => {
+  if (env.REQUIRE_APP_CHECK_FOR_GROUP_MEDIA === 'false') return true;
   const required = env.REQUIRE_APP_CHECK_FOR_GROUP_MEDIA === 'true'
     || env.REQUIRE_APP_CHECK_FOR_LOGIN === 'true';
   if (!required && !isDeployedFunctionsRuntime(env)) return true;
@@ -3709,6 +3710,7 @@ const isDeployedFunctionsRuntime = (env = process.env) => Boolean(env.K_SERVICE)
 
 const shouldRequireLoginAppCheck = (env = process.env) => {
   if (env.REQUIRE_APP_CHECK_FOR_LOGIN === 'true') return true;
+  if (env.REQUIRE_APP_CHECK_FOR_LOGIN === 'false') return false;
   if (isDeployedFunctionsRuntime(env)) {
     const error = new Error('Production login App Check enforcement is not configured');
     error.code = 'LOGIN_APP_CHECK_CONFIGURATION_REQUIRED';

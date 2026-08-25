@@ -589,8 +589,9 @@ const buildGroupPhotoAuthHeaders = async (authInstance = auth, appCheckTokenFn =
   const token = await authInstance?.currentUser?.getIdToken?.();
   if (!token) throw new Error('Authenticated user required for group photos');
   const appCheckToken = await appCheckTokenFn?.();
-  if (!appCheckToken) throw new Error('App verification required for group photos');
-  return { Authorization: `Bearer ${token}`, 'x-firebase-appcheck': appCheckToken };
+  const headers = { Authorization: `Bearer ${token}` };
+  if (appCheckToken) headers['x-firebase-appcheck'] = appCheckToken;
+  return headers;
 };
 
 const resolveGroupPhotoMedia = async ({ tourId, photos }, {
@@ -1264,7 +1265,7 @@ const updatePhotoCaption = async (
 
 const uploadPhotoDirect = async (payload = {}) => {
   // Historical offline-queue API name: this delegates to uploadPhoto, which
-  // always uses the authenticated, App-Check-protected media Functions.
+  // always uses authenticated, active-session-protected media Functions.
   let directDiagnostics = {};
 
   try {
