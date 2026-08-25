@@ -5,17 +5,10 @@
 const { onValueWritten } = require('firebase-functions/v2/database');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
+const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { buildDriverTourPackActionProjectionUpdates } = loadLegacyLibrary('driverTourPackOperations');
 const { deriveTourDateIndexUpdate } = loadLegacyLibrary('tourDateIndex');
-
-/** @param {unknown} key */
-const isValidFirebaseKey = (key) => (
-  typeof key === 'string'
-  && key.length > 0
-  && key.length <= 768
-  && !/[.#$\/[\]\x00-\x1F\x7F]/u.test(key)
-);
 
 /** @param {any} snapshot */
 const readSnapshotValue = (snapshot) => (

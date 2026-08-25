@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const ALLOWED_LIBRARY_MODULES = new Set([
   'appSessionCleanup',
+  'appSession',
   'appSessionLock',
   'driverLocationExpiryCleanup',
   'driverTourPackExpiryCleanup',
@@ -13,6 +14,7 @@ const ALLOWED_LIBRARY_MODULES = new Set([
   'driverTourPackPublisher',
   'loginRateLimiter',
   'managementOidc',
+  'passengerIdentity',
   'tourDateIndex',
 ]);
 
