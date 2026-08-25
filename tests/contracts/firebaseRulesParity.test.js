@@ -5,11 +5,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const definitions = require('../../contracts/definitions/contracts.v1.json');
+const { readFunctionsArchitectureSource } = require('../helpers/readAppArchitectureSource');
 
 const repositoryRoot = path.resolve(__dirname, '../..');
 const databaseRules = fs.readFileSync(path.join(repositoryRoot, 'database.rules.json'), 'utf8');
 const storageRules = fs.readFileSync(path.join(repositoryRoot, 'storage_rules.json'), 'utf8');
-const functionsSource = fs.readFileSync(path.join(repositoryRoot, 'functions/index.js'), 'utf8');
+const functionsSource = readFunctionsArchitectureSource();
 const notificationSource = fs.readFileSync(
   path.join(repositoryRoot, 'functions/src/domains/notifications/notificationState.js'),
   'utf8',

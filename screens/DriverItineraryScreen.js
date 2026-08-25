@@ -1,6 +1,6 @@
 // screens/DriverItineraryScreen.js
 import createDriverItineraryScreenStyles from './styles/DriverItineraryScreen.styles';
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -14,11 +14,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { getDriverItinerary } from '../services/bookingServiceRealtime';
-import { realtimeDb } from '../firebase';
 import { COLORS as THEME } from '../theme';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import logger from '../services/loggerService';
 import offlineSyncService from '../services/offlineSyncService';
+import { subscribeToDriverItinerary } from '../services/driverItineraryRealtimeService';
+import { removeLegacyDriverItineraryCache } from '../services/legacyDriverItineraryCache';
 
 const COLORS = {
   primaryBlue: THEME.primary,
@@ -43,7 +43,6 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName, offlin
   const [lastSync, setLastSync] = useState(null);
   const [isOnline, setIsOnline] = useState(true);
 
-  const realtimeListener = useRef(null);
   const retryTimeoutRef = useRef(null);
   const mountedRef = useRef(false);
   const activeRequestIdRef = useRef(0);
@@ -78,7 +77,6 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName, offlin
     loadDriverItinerary();
 
     if (tourId) {
-      const driverItinRef = realtimeDb.ref(`tours/${tourId}/driver_itinerary`);
       logger.info('DriverItineraryScreen', 'Realtime driver itinerary listener starting', { tourId });
 
       const onUpdate = (snapshot) => {
@@ -112,16 +110,17 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName, offlin
         }
       };
 
-      driverItinRef.on('value', onUpdate, onListenerError);
-      realtimeListener.current = { ref: driverItinRef, listener: onUpdate };
+      const unsubscribe = subscribeToDriverItinerary({
+        tourId,
+        onError: onListenerError,
+        onValue: onUpdate,
+      });
 
       return () => {
         mountedRef.current = false;
         clearRetryTimeout();
-        if (realtimeListener.current) {
-          logger.debug('DriverItineraryScreen', 'Realtime driver itinerary listener stopping', { tourId });
-          realtimeListener.current.ref.off('value', realtimeListener.current.listener);
-        }
+        logger.debug('DriverItineraryScreen', 'Realtime driver itinerary listener stopping', { tourId });
+        unsubscribe();
       };
     }
 
@@ -130,6 +129,8 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName, offlin
       clearRetryTimeout();
       logger.debug('DriverItineraryScreen', 'Driver itinerary effect cleaned up without listener', { tourId });
     };
+  // Route identity owns this listener; workflow callbacks intentionally capture that scope.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offlineCacheOwnerId, tourId, tourName]);
 
   const cacheDriverItinerary = async (data) => {
@@ -169,7 +170,7 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName, offlin
         { driverItinerary: null },
         { ownerId: offlineCacheOwnerId },
       );
-      await AsyncStorage.removeItem(`driver_itinerary_${tourId}`);
+      await removeLegacyDriverItineraryCache(tourId);
     } catch (error) {
       logger.warn('DriverItineraryScreen', 'Cache clear failed', { error: error?.message || String(error), tourId });
     }
@@ -196,9 +197,8 @@ export default function DriverItineraryScreen({ onBack, tourId, tourName, offlin
         return cached;
       }
 
-      const legacyCached = await AsyncStorage.getItem(`driver_itinerary_${tourId}`);
-      if (legacyCached) {
-        await AsyncStorage.removeItem(`driver_itinerary_${tourId}`);
+      const removedLegacyCache = await removeLegacyDriverItineraryCache(tourId);
+      if (removedLegacyCache) {
         logger.info('DriverItineraryScreen', 'Unscoped legacy cache removed without reuse', {
           tourId,
         });

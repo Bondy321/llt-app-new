@@ -43,6 +43,10 @@ const readMobileModuleSource = (relativePath) => {
     'screens/ChatScreen.js': path.join(repositoryRoot, 'components', 'chat'),
   };
   const supportingDirectories = {
+    'screens/DriverItineraryScreen.js': [
+      path.join(repositoryRoot, 'services', 'driverItineraryRealtimeService.js'),
+      path.join(repositoryRoot, 'services', 'legacyDriverItineraryCache.js'),
+    ],
     'screens/DriverHomeScreen.js': [path.join(repositoryRoot, 'services', 'driver-home')],
     'screens/SafetySupportScreen.js': [path.join(repositoryRoot, 'services', 'safety-support')],
   };
@@ -52,9 +56,12 @@ const readMobileModuleSource = (relativePath) => {
     fs.readFileSync(absolutePath, 'utf8'),
     ...(fs.existsSync(stylePath) ? [fs.readFileSync(stylePath, 'utf8')] : []),
     ...(featureDirectory && fs.existsSync(featureDirectory) ? readTree(featureDirectory) : []),
-    ...additionalDirectories.flatMap((directory) => (
-      fs.existsSync(directory) ? readTree(directory) : []
-    )),
+    ...additionalDirectories.flatMap((entryPath) => {
+      if (!fs.existsSync(entryPath)) return [];
+      return fs.statSync(entryPath).isDirectory()
+        ? readTree(entryPath)
+        : [fs.readFileSync(entryPath, 'utf8')];
+    }),
   ].join('\n');
 };
 

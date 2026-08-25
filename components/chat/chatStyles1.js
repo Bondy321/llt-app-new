@@ -1,5 +1,5 @@
-import { StyleSheet } from "react-native";
-import { COLORS } from "./chatShared";
+import { Platform, StyleSheet } from 'react-native';
+import COLORS from './chatTheme';
 import { RADIUS, SHADOWS, SPACING, COLORS as THEME } from "../../theme";
 export default StyleSheet.create({
   safeArea: {

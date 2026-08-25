@@ -1111,7 +1111,9 @@ test('Static contract: offline data stays scoped to the signed-in tour identity'
   assert.match(safetySource, /filterSafetyQueueForScope/);
   assert.match(safetySource, /TRUSTED_CONTACTS_KEY_PREFIX = '@LLT:trustedContacts:v2:'/);
   assert.match(driverItinerarySource, /Unscoped legacy cache removed without reuse/);
-  assert.match(driverItinerarySource, /\.on\('value', onUpdate, onListenerError\)/);
+  assert.match(driverItinerarySource, /subscribeToDriverItinerary\(\{/);
+  assert.match(driverItinerarySource, /\.on\('value', onValue, onError\)/);
+  assert.match(driverItinerarySource, /\.off\('value', onValue\)/);
   assert.doesNotMatch(driverItinerarySource, /const migrated = JSON\.parse\(legacyCached\)/);
 });
 
