@@ -345,7 +345,7 @@ export default function createPassengerManifestScreenStyles({ StyleSheet, COLORS
     fontSize: 12,
     fontWeight: FONT_WEIGHT.bold,
   },
-  
+
   listContent: { padding: SPACING.lg, paddingBottom: SPACING.xxxl },
   emptyStateCard: {
     margin: SPACING.lg,

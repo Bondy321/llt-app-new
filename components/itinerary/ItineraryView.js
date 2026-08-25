@@ -505,4 +505,3 @@ return (
     </SafeAreaView>
   );
 }
-

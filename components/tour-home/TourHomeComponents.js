@@ -99,7 +99,6 @@ export const SkeletonLoader = ({ width, height, borderRadius = 8, style }) => {
     />
   );
 };
-
 // Countdown timer component
 export const PickupCountdown = ({ pickupTime, pickupDate }) => {
   const [timeLeft, setTimeLeft] = useState(null);
@@ -171,7 +170,6 @@ export const PickupCountdown = ({ pickupTime, pickupDate }) => {
     </View>
   );
 };
-
 // Quick action button component
 export const QuickActionButton = ({ icon, label, color, onPress, badge, delay = 0, compact = false }) => {
   const scaleAnim = useRef(new Animated.Value(1)).current;
@@ -244,7 +242,6 @@ export const QuickActionButton = ({ icon, label, color, onPress, badge, delay = 
     </Animated.View>
   );
 };
-
 // Driver status component
 export const DriverStatusIndicator = ({ driverName, isLive = false }) => {
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -422,4 +419,3 @@ export const FeatureCard = ({ item, onPress, index, isLarge = false }) => {
     </Animated.View>
   );
 };
-
