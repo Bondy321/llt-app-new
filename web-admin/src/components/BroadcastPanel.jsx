@@ -28,7 +28,6 @@ import {
   Tooltip,
   TextInput,
 } from '@mantine/core';
-import { formatTimeForDisplay, toEpochMsStrict } from '../utils/dateUtils';
 import {
   IconSpeakerphone,
   IconSend,
@@ -50,138 +49,17 @@ import {
   getTourNotificationCategoryLabel,
 } from '../utils/notificationCategories';
 
-const MAX_BROADCAST_LENGTH = 2000;
-const IDEAL_MAX_LENGTH = 240;
-const EMPTY_BROADCAST_HISTORY = Object.freeze([]);
-const DELIVERY_STATUS_META = {
-  queued: { label: 'Queued', color: 'gray' },
-  processing: { label: 'Processing', color: 'blue' },
-  chat_queued: { label: 'Preparing push', color: 'blue' },
-  delivered: { label: 'Push accepted', color: 'green' },
-  partial: { label: 'Partially accepted', color: 'yellow' },
-  no_recipients: { label: 'No eligible recipients', color: 'gray' },
-  failed: { label: 'Failed', color: 'red' },
-};
-
-const messageTemplates = [
-  { value: 'arriving', label: 'Bus Arriving', message: 'The bus is arriving in 5 minutes. Please make your way to the pickup point.' },
-  { value: 'delayed', label: 'Delay Notice', message: 'We apologize for the delay. The bus will arrive in approximately 15 minutes.' },
-  { value: 'departed', label: 'Departed', message: 'The tour has now departed. Thank you for joining us today!' },
-  { value: 'weather', label: 'Weather Update', message: 'Due to weather conditions, please dress appropriately for outdoor activities.' },
-  { value: 'reminder', label: 'General Reminder', message: 'This is a reminder for all passengers on this tour.' },
-  { value: 'custom', label: 'Custom Message', message: '' },
-];
-
-const normalizeTourIdForPath = (value) => {
-  if (typeof value !== 'string') return '';
-  return value.trim();
-};
-
-const isValidFirebaseKeySegment = (value) => {
-  return typeof value === 'string' && value.length > 0 && !/[./$#[\]]/.test(value);
-};
-
-function normalizeBroadcastTimestamp(timestamp) {
-  return toEpochMsStrict(timestamp);
-}
-
-function normalizeBroadcastMessage(targetId, broadcastId, payload = {}, targetType = 'tour') {
-  const message = typeof payload.message === 'string' ? payload.message : '';
-  const normalizedTimestamp = normalizeBroadcastTimestamp(payload.createdAtMs);
-  const categoryKey = payload.categoryKey || targetId;
-  const targetLabel = targetType === 'category'
-    ? payload.categoryLabel || getTourNotificationCategoryLabel(categoryKey)
-    : targetId;
-
-  return {
-    id: broadcastId,
-    tourId: targetType === 'tour' ? targetId : null,
-    categoryKey: targetType === 'category' ? categoryKey : null,
-    categoryLabel: targetType === 'category' ? targetLabel : null,
-    targetType,
-    targetLabel,
-    message,
-    timestamp: normalizedTimestamp ?? payload.createdAtMs ?? null,
-    timestampMs: normalizedTimestamp,
-    createdByUid: payload.createdByUid || null,
-    source: payload.source || null,
-    deliveryStatus: payload.deliveryStatus || 'queued',
-    recipientCount: Number.isFinite(Number(payload.recipientCount)) ? Number(payload.recipientCount) : null,
-    successCount: Number.isFinite(Number(payload.successCount)) ? Number(payload.successCount) : null,
-    errorCount: Number.isFinite(Number(payload.errorCount)) ? Number(payload.errorCount) : null,
-  };
-}
-
-function BroadcastHistoryItem({ broadcast }) {
-  const timestampMs = normalizeBroadcastTimestamp(broadcast.timestamp);
-  const isCategoryBroadcast = broadcast.targetType === 'category';
-  const delivery = DELIVERY_STATUS_META[broadcast.deliveryStatus] || DELIVERY_STATUS_META.queued;
-
-  return (
-    <Paper p="sm" radius="md" withBorder>
-      <Group justify="space-between" mb="xs">
-        <Group gap="xs">
-          <ThemeIcon color={isCategoryBroadcast ? 'blue' : 'orange'} variant="light" size="sm">
-            <IconSpeakerphone size={12} />
-          </ThemeIcon>
-          <Badge size="sm" color={isCategoryBroadcast ? 'blue' : 'orange'} variant="light">
-            {broadcast.targetLabel}
-          </Badge>
-        </Group>
-        <Text size="xs" c="dimmed">
-          {formatTimeForDisplay(timestampMs, 'Unknown time')}
-        </Text>
-      </Group>
-      <Text size="sm">{broadcast.message}</Text>
-      <Group gap="xs" mt="xs">
-        <Badge size="xs" color={delivery.color} variant="light">{delivery.label}</Badge>
-        {broadcast.recipientCount !== null ? (
-          <Text size="xs" c="dimmed">
-            {broadcast.successCount || 0} accepted / {broadcast.errorCount || 0} failed / {broadcast.recipientCount} eligible
-          </Text>
-        ) : null}
-      </Group>
-    </Paper>
-  );
-}
-
-const getMessageTone = (message) => {
-  const trimmed = message.trim();
-  if (!trimmed) {
-    return {
-      label: 'Start drafting your announcement',
-      color: 'gray',
-      icon: <IconInfoCircle size={14} />,
-      helper: 'Templates are a good baseline for consistent communication.',
-    };
-  }
-
-  if (trimmed.length < 24) {
-    return {
-      label: 'Too short for a clear update',
-      color: 'yellow',
-      icon: <IconAlertCircle size={14} />,
-      helper: 'Add context such as place/time so passengers know what to do.',
-    };
-  }
-
-  if (trimmed.length > IDEAL_MAX_LENGTH) {
-    return {
-      label: 'Long message: consider tightening',
-      color: 'orange',
-      icon: <IconAlertCircle size={14} />,
-      helper: 'Push notifications perform best when concise and action-oriented.',
-    };
-  }
-
-  return {
-    label: 'Great length for push notifications',
-    color: 'green',
-    icon: <IconCheck size={14} />,
-    helper: 'Clear and concise. Ready for passenger delivery.',
-  };
-};
-
+import {
+  EMPTY_BROADCAST_HISTORY,
+  IDEAL_MAX_LENGTH,
+  MAX_BROADCAST_LENGTH,
+  getMessageTone,
+  isValidFirebaseKeySegment,
+  messageTemplates,
+  normalizeBroadcastMessage,
+  normalizeTourIdForPath,
+} from '../features/broadcasts/components/broadcastPresentation';
+import BroadcastHistoryItem from '../features/broadcasts/components/BroadcastHistoryItem';
 export function BroadcastPanel() {
   const [tourId, setTourId] = useState('');
   const [targetMode, setTargetMode] = useState('tour');
@@ -258,6 +136,9 @@ export function BroadcastPanel() {
   const hasTarget = isCategoryMode ? Boolean(categoryKey) : Boolean(tourId);
 
   const quality = getMessageTone(message);
+  const QualityIcon = quality.icon === 'check'
+    ? IconCheck
+    : quality.icon === 'alert' ? IconAlertCircle : IconInfoCircle;
   const messageLength = message.trim().length;
   const progress = Math.min(100, Math.round((messageLength / MAX_BROADCAST_LENGTH) * 100));
   const estimatedReadSeconds = Math.max(1, Math.ceil(message.trim().split(/\s+/).filter(Boolean).length / 3));
@@ -561,7 +442,7 @@ export function BroadcastPanel() {
                 />
               </Stack>
 
-              <Alert icon={quality.icon} color={quality.color} variant="light" title={quality.label}>
+              <Alert icon={<QualityIcon size={14} />} color={quality.color} variant="light" title={quality.label}>
                 {quality.helper}
               </Alert>
 

@@ -6,13 +6,11 @@ import NetInfo from '@react-native-community/netinfo';
 import { realtimeDb, updateNetworkState } from '../firebase';
 import logger from '../services/loggerService';
 import offlineSyncService from '../services/offlineSyncService';
-
-const FIREBASE_PROBE_PATH = '.info/serverTimeOffset';
-const PROBE_WINDOWS_MS = {
-  appForeground: 5000,
-  networkReconnect: 8000,
-};
-const SYNC_META_REFRESH_WINDOW_MS = 5000;
+const {
+  FIREBASE_PROBE_PATH,
+  PROBE_WINDOWS_MS,
+  SYNC_META_REFRESH_WINDOW_MS,
+} = require('./diagnosticsPolicy');
 
 const { deriveUnifiedSyncStatus, buildSyncSummary, getLastSuccessAt } = offlineSyncService;
 
@@ -295,15 +293,7 @@ const useDiagnostics = ({ onForeground, activeTourId, role = 'passenger', offlin
     }),
   });
 
-  return {
-    isConnected,
-    firebaseConnected,
-    lastFirebaseError,
-    lastProbeDurationMs,
-    lastSyncAt,
-    queueStats,
-    unifiedSyncStatus,
-  };
+  return { isConnected, firebaseConnected, lastFirebaseError, lastProbeDurationMs, lastSyncAt, queueStats, unifiedSyncStatus };
 };
 
 export default useDiagnostics;
