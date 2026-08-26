@@ -630,6 +630,60 @@ test('validateBookingReference uses the server-safe projection without raw booki
   }
 });
 
+test('validateBookingReference accepts a successful verifier response with no tour code', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verifyPassengerLogin';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => verifiedPassengerPayload({
+        reason: 'OK',
+        tourCode: null,
+        grantExpiresAtMs: Date.now() + 60_000,
+      }),
+    });
+
+    const service = loadServiceWithDb({ drivers: {}, bookings: {}, tours: {} });
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, true);
+    assert.equal(result.type, 'passenger');
+    assert.equal(result.session.principalId, 'pax_v2_0123456789abcdef0123456789abcdef');
+    assert.equal(result.booking.id, 'ABC123');
+    assert.equal(result.booking.tourId, '5112D_8');
+    assert.equal(result.tour.id, '5112D_8');
+    assert.equal(result.tour.isActive, true);
+    assert.notEqual(result.error, 'Verification service returned an unexpected response. Please try again.');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
+test('validateBookingReference rejects an out-of-contract overlong tour code', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verifyPassengerLogin';
+
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => verifiedPassengerPayload({ tourCode: 'X'.repeat(161) }),
+    });
+
+    const service = loadServiceWithDb({ drivers: {}, bookings: {}, tours: {} });
+    const result = await service.validateBookingReference('ABC123', 'traveller@example.com');
+
+    assert.equal(result.valid, false);
+    assert.equal(result.error, 'Verification service returned an unexpected response. Please try again.');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL;
+  }
+});
+
 test('validateBookingReference uses the bounded server participant count without reading participant identities', async () => {
   process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL = 'https://example.test/verifyPassengerLogin';
   process.env.EXPO_PUBLIC_LOGIN_REALTIME_READ_RETRY_BASE_MS = '0';

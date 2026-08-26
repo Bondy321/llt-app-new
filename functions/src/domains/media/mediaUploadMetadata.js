@@ -7,7 +7,7 @@ const {
   normalizeTourKeyForComparison,
   resolveTrimmedString,
   toRealtimeKeySegment,
-} = require('../notifications/notificationPolicy');
+} = require('../../infrastructure/validation/stringNormalization');
 
 /** @param {unknown} rawHeader */
 const normalizeGroupPhotoUploadMetadata = (rawHeader) => {

@@ -6,7 +6,7 @@ const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKe
 const {
   normalizeTourKeyForComparison,
   resolveTrimmedString,
-} = require('../notifications/notificationPolicy');
+} = require('../../infrastructure/validation/stringNormalization');
 
 const SAFETY_CATEGORIES = new Set([
   'delay', 'incident', 'medical', 'lost_passenger', 'vehicle_issue', 'sos',

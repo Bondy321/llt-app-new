@@ -1,4 +1,6 @@
 const NativeAsyncStorage = require('@react-native-async-storage/async-storage').default;
+const { projectValidatedAppSession } = require('../src/app/session/appSessionBoundary');
+const { parseValidatedJson } = require('../src/shared/persistence/jsonBoundary');
 
 const testStorageValues = new Map();
 const testStorage = {
@@ -33,22 +35,23 @@ const isSafeKey = (value) => typeof value === 'string'
 
 const validateAppSession = (input, { nowMs = Date.now(), allowExpired = false } = {}) => {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
-  if (Object.keys(input).some((key) => !SAFE_SESSION_KEYS.has(key))) return null;
-  if (input.schemaVersion !== 1 || !SESSION_ID_PATTERN.test(input.sessionId || '')) return null;
-  if (!Number.isSafeInteger(input.issuedAtMs) || !Number.isSafeInteger(input.expiresAtMs)
-    || input.expiresAtMs <= input.issuedAtMs || (!allowExpired && input.expiresAtMs <= nowMs)) return null;
-  if (!Number.isSafeInteger(input.sessionRevision) || input.sessionRevision < 1) return null;
-  if (input.principalType === 'passenger') {
-    if (!PASSENGER_PRINCIPAL_PATTERN.test(input.principalId || '') || !isSafeKey(input.tourId)
-      || input.driverId !== null) return null;
-  } else if (input.principalType === 'driver') {
-    if (!DRIVER_PRINCIPAL_PATTERN.test(input.principalId || '') || !isSafeKey(input.driverId)
-      || input.principalId !== `driver:${input.driverId}`
-      || (input.tourId !== null && !isSafeKey(input.tourId))) return null;
+  const candidate = projectValidatedAppSession(input);
+  if (!candidate) return null;
+  if (candidate.schemaVersion !== 1 || !SESSION_ID_PATTERN.test(candidate.sessionId || '')) return null;
+  if (!Number.isSafeInteger(candidate.issuedAtMs) || !Number.isSafeInteger(candidate.expiresAtMs)
+    || candidate.expiresAtMs <= candidate.issuedAtMs || (!allowExpired && candidate.expiresAtMs <= nowMs)) return null;
+  if (!Number.isSafeInteger(candidate.sessionRevision) || candidate.sessionRevision < 1) return null;
+  if (candidate.principalType === 'passenger') {
+    if (!PASSENGER_PRINCIPAL_PATTERN.test(candidate.principalId || '') || !isSafeKey(candidate.tourId)
+      || candidate.driverId !== null) return null;
+  } else if (candidate.principalType === 'driver') {
+    if (!DRIVER_PRINCIPAL_PATTERN.test(candidate.principalId || '') || !isSafeKey(candidate.driverId)
+      || candidate.principalId !== `driver:${candidate.driverId}`
+      || (candidate.tourId !== null && !isSafeKey(candidate.tourId))) return null;
   } else {
     return null;
   }
-  return Object.fromEntries([...SAFE_SESSION_KEYS].map((key) => [key, input[key]]));
+  return Object.fromEntries([...SAFE_SESSION_KEYS].map((key) => [key, candidate[key]]));
 };
 
 const validatePendingSessionEnd = (input) => {
@@ -66,11 +69,6 @@ const validatePendingSessionEnd = (input) => {
     requestedAtMs: input.requestedAtMs,
     attemptCount: input.attemptCount,
   };
-};
-
-const parseStored = (raw, validator, options) => {
-  if (!raw) return null;
-  try { return validator(JSON.parse(raw), options); } catch { return null; }
 };
 
 const buildEndpoint = (functionName) => {
@@ -97,7 +95,7 @@ const createAppSessionService = ({
 
   const readSession = async ({ allowExpired = false } = {}) => {
     const raw = await storage.getItem(APP_SESSION_KEY);
-    const parsed = parseStored(raw, validateAppSession, { nowMs: now(), allowExpired });
+    const parsed = parseValidatedJson(raw, validateAppSession, { nowMs: now(), allowExpired });
     if (!parsed && raw) await storage.removeItem(APP_SESSION_KEY);
     return parsed;
   };
@@ -121,7 +119,7 @@ const createAppSessionService = ({
 
   const readPendingEnd = async () => {
     const raw = await storage.getItem(PENDING_SESSION_END_KEY);
-    const parsed = parseStored(raw, validatePendingSessionEnd);
+    const parsed = parseValidatedJson(raw, validatePendingSessionEnd);
     if (!parsed && raw) await storage.removeItem(PENDING_SESSION_END_KEY);
     return parsed;
   };

@@ -21,6 +21,18 @@ export interface AppSession {
   sessionRevision: number;
 }
 
+export interface ClientAppSession {
+  schemaVersion: number;
+  sessionId: string;
+  principalId: string;
+  principalType: "passenger" | "driver";
+  tourId: string | null;
+  driverId: string | null;
+  issuedAtMs: number;
+  expiresAtMs: number;
+  sessionRevision: number;
+}
+
 export interface PassengerParticipantRecord {
   schemaVersion: number;
   userId: string;
@@ -36,7 +48,7 @@ export interface PassengerLoginResponse {
   reason?: string;
   bookingRef?: string;
   tourId?: string;
-  tourCode?: string;
+  tourCode?: string | null;
   stablePassengerId?: string;
   identityVersion?: "pax_v2";
   session?: Record<string, unknown>;
@@ -147,12 +159,20 @@ export interface ResolvedMediaResponse {
 
 export interface NotificationPayload {
   screen: "Chat" | "Itinerary" | "GroupPhotobook" | "NotificationPreferences" | "SafetySupport" | "DriverTourPack";
-  tourId: string;
+  tourId?: string;
   noticeId?: string;
   messageId?: string;
   internalDriverChat?: boolean;
   type?: string;
   departureKey?: string;
+  categoryKey?: string;
+  notificationType?: string;
+  broadcastId?: string;
+  revision?: number;
+  changedSections?: string | unknown[];
+  critical?: boolean;
+  requiresAcknowledgement?: boolean;
+  timestamp?: number;
 }
 
 export interface SafetySubmission {

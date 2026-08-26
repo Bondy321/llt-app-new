@@ -3,8 +3,8 @@
 // @ts-check
 
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
-const { buildPhotoVariantPaths, parseSourcePhotoPath } = require('../media/photoVariants');
-const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../notifications/notificationPolicy');
+const { buildPhotoVariantPaths, parseSourcePhotoPath } = require('../media/public');
+const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 
 /** @type {(...args: any[]) => any} */
 const buildTourDeletionUpdates = ({

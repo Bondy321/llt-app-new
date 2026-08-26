@@ -71,8 +71,8 @@ Shared valid/invalid fixtures reject credential-derived identities, credential e
 - Strict no-emit TypeScript checking covers the new typed boundaries without forcing a legacy-wide conversion.
 - dependency-cruiser enforces cross-runtime and layer direction; the final graph has 404 modules, 1,098 dependencies, and zero violations/cycles.
 - `checkArchitecture.js` enforces bounded file sizes, named exceptions, thin roots/facades, heavy-dependency isolation, and valid relative static-asset references.
-- CI has separate architecture/contracts, mobile, Functions, Firebase rules, admin, and security jobs.
-- EAS build/update/TestFlight workflows require a successful CI run for the exact commit SHA; existing-build submission also verifies its embedded Git SHA. GitHub branch-protection required checks still need to be enabled manually in repository settings.
+- CI has separate architecture/contracts, mobile, Functions, Firebase rules, admin, and security jobs; the architecture job and normal root test path both run `test:architecture`.
+- EAS build/update/TestFlight workflows require a successful CI run for the exact commit SHA; existing-build submission also verifies its embedded Git SHA. The active `standard` ruleset requires the six named CI checks on an up-to-date pull request with resolved conversations.
 
 ## 11. Before-and-after metrics
 
@@ -136,4 +136,4 @@ Firebase paths, 35 deployed Function names, trigger settings, fourteen mobile ro
 - Authenticated admin pages were not driven against production Firebase because that would require credentials and could expose or mutate production data. Their component/service behaviour is covered by tests, and the unauthenticated production bundle was rendered in-browser.
 - Local Functions import timing is not a cloud cold-start benchmark. Node 22 CI remains the authoritative runtime check because the workstation runs Node 24.
 - No deployment was performed, so post-deployment telemetry and cloud-runtime behaviour are intentionally unverified.
-- Branch-protection required checks must be configured manually on GitHub after the CI workflow lands.
+- The `standard` ruleset is the authoritative default-branch protection and must retain its exact six required check contexts.

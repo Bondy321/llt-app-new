@@ -42,7 +42,7 @@ const validateBroadcastData = (broadcastData) => {
     errors.push('Broadcast message must be 1-2000 characters');
   }
 
-  if (typeof broadcastData.createdAtMs !== 'number' || !Number.isFinite(broadcastData.createdAtMs)) {
+  if (!Number.isSafeInteger(broadcastData.createdAtMs) || broadcastData.createdAtMs < 1) {
     errors.push('Missing or invalid createdAtMs');
   }
 

@@ -751,6 +751,15 @@ test('category broadcast validator requires a supported matching category payloa
   });
   assert.equal(missingMessage.valid, false);
   assert.match(missingMessage.errors.join(' '), /Missing broadcast message/);
+
+  [0, -1, 1.5].forEach((createdAtMs) => {
+    const invalidTimestamp = __testables.validateCategoryBroadcastData('day_trips', {
+      ...validPayload,
+      createdAtMs,
+    });
+    assert.equal(invalidTimestamp.valid, false);
+    assert.match(invalidTimestamp.errors.join(' '), /createdAtMs/);
+  });
 });
 
 test('getPushTokenIneligibilityReason reports token and permission suppression reasons', () => {
@@ -1260,6 +1269,28 @@ test('push navigation payloads preserve durable notice and exact destination con
     () => __testables.buildPushNavigationData({ screen: 'Chat' }),
     /requires a tour id/,
   );
+});
+
+test('passenger login response construction preserves an absent tour code as null', () => {
+  const response = __testables.buildPassengerLoginResponse({
+    bookingRef: 'BOOK_1',
+    tourId: 'TOUR_1',
+    tourCode: undefined,
+    stablePassengerId: `pax_v2_${'a'.repeat(32)}`,
+    session: { sessionId: `sess_v1_${'b'.repeat(32)}` },
+    booking: {},
+    tour: {},
+    grantExpiresAtMs: 2000,
+  });
+
+  assert.equal(response.valid, true);
+  assert.equal(response.reason, 'OK');
+  assert.equal(response.tourCode, null);
+  assert.equal(response.identityVersion, 'pax_v2');
+  assert.equal(__testables.buildPassengerLoginResponse({
+    ...response,
+    tourCode: 'X'.repeat(161),
+  }).tourCode, null);
 });
 
 test('category broadcast fanout builds valid marketing payloads without chat-only variables', () => {

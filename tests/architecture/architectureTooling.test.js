@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createArchitectureReport, extractCommonJsObjectExports, extractSpecifiers } = require('../../scripts/reportArchitecture');
 const { resolveLimit } = require('../../scripts/checkArchitecture');
+const dependencyPolicy = require('../../.dependency-cruiser.cjs');
 
 test('architecture report excludes test/build output and reports deterministic public surfaces', () => {
   const report = createArchitectureReport();
@@ -24,4 +25,19 @@ test('architecture limits prioritise explicit entrypoints, screens, hooks, and l
   assert.equal(resolveLimit({ path: 'src/features/chat/ChatScreen.js' }), 500);
   assert.equal(resolveLimit({ path: 'src/features/chat/hooks/useChatController.js' }), 300);
   assert.equal(resolveLimit({ path: 'src/features/chat/domain/messageFormatting.js' }), 600);
+});
+
+test('dependency policy generates private cross-module guards for every runtime', () => {
+  const ruleNames = new Set(dependencyPolicy.forbidden.map((rule) => rule.name));
+  assert.equal(ruleNames.has('functions-domain-driver-auth-uses-public-entrypoints'), true);
+  assert.equal(ruleNames.has('functions-domain-passenger-auth-uses-public-entrypoints'), true);
+  assert.equal(ruleNames.has('mobile-feature-auth-uses-public-entrypoints'), true);
+  assert.equal(ruleNames.has('admin-feature-tours-uses-public-entrypoints'), true);
+
+  const driverRule = dependencyPolicy.forbidden.find(
+    (rule) => rule.name === 'functions-domain-driver-auth-uses-public-entrypoints',
+  );
+  const privateTarget = new RegExp(driverRule.to.path, 'u');
+  assert.equal(privateTarget.test('functions/src/domains/passenger-auth/passengerLoginWorkflow.js'), true);
+  assert.equal(privateTarget.test('functions/src/domains/passenger-auth/public.js'), false);
 });

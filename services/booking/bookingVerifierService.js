@@ -17,6 +17,10 @@ const {
   shouldRequireAppCheckForPassengerVerifier,
   shouldUseAppCheckForPassengerVerifier,
 } = require('./bookingServiceContext');
+const {
+  isDriverLoginResponse,
+  isPassengerLoginResponse,
+} = require('../../src/shared/api/responseBoundaries');
 
 const mapDriverVerifierReason = (reason) => {
   const reasonToMessage = {
@@ -109,6 +113,9 @@ const verifyDriverLoginIdentity = async ({ driverId }) => {
       if (response.status === 404) {
         continue;
       }
+      return { valid: false, error: 'Driver verification returned an unexpected response. Please try again.' };
+    }
+    if (!isDriverLoginResponse(payload)) {
       return { valid: false, error: 'Driver verification returned an unexpected response. Please try again.' };
     }
 
@@ -302,6 +309,9 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email, diagnostics } =
           endpoint,
           status: response.status,
         });
+        return { valid: false, reason: 'VERIFIER_INVALID_RESPONSE' };
+      }
+      if (!isPassengerLoginResponse(payload)) {
         return { valid: false, reason: 'VERIFIER_INVALID_RESPONSE' };
       }
 

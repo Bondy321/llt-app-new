@@ -24,7 +24,7 @@ const {
   normalizeTourKeyForComparison,
   resolveTrimmedString,
   toRealtimeKeySegment,
-} = require('../notifications/notificationPolicy');
+} = require('../../infrastructure/validation/stringNormalization');
 const { verifyActiveAppSession } = loadLegacyLibrary('appSessionAccess');
 
 const PRIVATE_PHOTO_CACHE_CONTROL_HEADER = 'private,no-store';

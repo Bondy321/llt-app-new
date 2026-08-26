@@ -17,7 +17,9 @@ const presentationFiles = [
   'screens/**/*.{js,jsx}',
   'components/**/*.{js,jsx}',
   'src/features/**/components/**/*.{js,jsx}',
+  'src/features/**/presentation/**/*.{js,jsx}',
   'web-admin/src/{components,features/**/components}/**/*.{js,jsx}',
+  'web-admin/src/features/**/presentation/**/*.{js,jsx}',
 ];
 
 export default [

@@ -8,6 +8,7 @@ const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { compactNotificationText, resolveTrimmedString } = require('./notificationPolicy');
+const { buildPushNavigationData } = require('./pushNavigationData');
 const { isOpaquePassengerId } = loadLegacyLibrary('passengerIdentity');
 
 const TOUR_NOTIFICATION_MAX_RECORDS = 100;
@@ -18,14 +19,6 @@ const LEGACY_NOTIFICATION_READ_CLEANUP_CONCURRENCY = 5;
 const LEGACY_NOTIFICATION_READ_CLEANUP_STATE_PATH = 'notification_read_legacy_cleanup_state/v1';
 const LEGACY_NOTIFICATION_READ_CLEANUP_QUEUE_PATH = 'notification_read_legacy_cleanup_queue';
 const LEGACY_NOTIFICATION_READ_CLEANUP_SEED_BATCH_SIZE = 200;
-const PUSH_NOTIFICATION_SCREENS = new Set(['Chat', 'Itinerary', 'GroupPhotobook', 'NotificationPreferences', 'SafetySupport', 'DriverTourPack']);
-
-/** @param {Record<string, any>} target @param {string} key @param {unknown} value */
-const assignTrimmedValue = (target, key, value) => {
-  const resolved = resolveTrimmedString(value);
-  if (resolved) target[key] = resolved;
-};
-
 /** @type {(...args: any[]) => any} */
 const buildTourNotificationId = ({ type, tourId, sourceId }) => {
   const digest = createHash('sha256')
@@ -144,37 +137,6 @@ const buildTourNotificationRecord = ({
     createdAt: new Date(createdAtMs).toISOString(),
     createdAtMs,
   };
-};
-
-/** @type {(...args: any[]) => any} */
-const buildPushNavigationData = (options = {}) => {
-  const screen = options.screen;
-  if (!PUSH_NOTIFICATION_SCREENS.has(screen)) {
-    throw new Error('Unsupported notification destination');
-  }
-
-  const safeTourId = resolveTrimmedString(options.tourId);
-  if (screen !== 'NotificationPreferences' && !safeTourId) {
-    throw new Error('Tour-scoped notification requires a tour id');
-  }
-
-  /** @type {Record<string, any>} */
-  const navigation = { screen, timestamp: options.timestamp ?? Date.now() };
-  assignTrimmedValue(navigation, 'tourId', safeTourId);
-  assignTrimmedValue(navigation, 'noticeId', options.noticeId);
-  assignTrimmedValue(navigation, 'messageId', options.messageId);
-  assignTrimmedValue(navigation, 'notificationType', options.notificationType);
-  assignTrimmedValue(navigation, 'categoryKey', options.categoryKey);
-  assignTrimmedValue(navigation, 'broadcastId', options.broadcastId);
-  assignTrimmedValue(navigation, 'departureKey', options.departureKey);
-  if (options.internalDriverChat === true) navigation.internalDriverChat = true;
-  if (Number.isSafeInteger(options.revision) && options.revision >= 1) navigation.revision = options.revision;
-  if (Array.isArray(options.changedSections) && options.changedSections.length) {
-    navigation.changedSections = options.changedSections.join(',').slice(0, 240);
-  }
-  if (options.critical === true) navigation.critical = true;
-  if (options.requiresAcknowledgement === true) navigation.requiresAcknowledgement = true;
-  return navigation;
 };
 
 /** @type {(...args: any[]) => Promise<any>} */

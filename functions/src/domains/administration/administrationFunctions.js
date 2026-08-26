@@ -12,7 +12,7 @@ const { applyAuthenticatedCors } = require('../../infrastructure/http/adminCors'
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { checkRateLimit, getRequestClientKey } = require('../../infrastructure/rate-limit/requestRateLimiter');
 const { deleteStoragePaths, deleteStoragePrefixes } = require('../../infrastructure/storage/storageDeletion');
-const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../notifications/notificationPolicy');
+const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { verifyOperationsAdminAccess } = require('./adminAuthorization');
 const {
   buildManualPassengerBookingUpdates, createManualPassengerError, findManualPassengerSeatConflicts,

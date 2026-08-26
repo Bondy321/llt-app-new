@@ -5,7 +5,7 @@
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const { hashRateLimitDimension } = require('../../infrastructure/rate-limit/requestRateLimiter');
-const { resolveTrimmedString } = require('../notifications/notificationPolicy');
+const { resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { createDistributedLoginRateLimiter } = loadLegacyLibrary('loginRateLimiter');
 
 const SAFETY_RATE_LIMIT_ROOT = 'safety_rate_limits/v1';
