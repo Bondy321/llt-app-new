@@ -49,6 +49,35 @@
       ".indexOn": ["expiresAtMs"]
     },
 
+    "notification_device_locks": {
+      ".read": false,
+      ".write": false,
+      ".indexOn": ["expiresAtMs"]
+    },
+
+    "notification_device_tombstones": {
+      ".read": false,
+      ".write": false
+    },
+
+    "notification_audience_previews": {
+      ".read": false,
+      ".write": false,
+      ".indexOn": ["expiresAtMs"]
+    },
+
+    "notification_requeue_jobs": {
+      ".read": false,
+      ".write": false,
+      ".indexOn": ["expiresAtMs"]
+    },
+
+    "safety_status_locks": {
+      ".read": false,
+      ".write": false,
+      ".indexOn": ["expiresAtMs"]
+    },
+
     "app_session_events": {
       ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
       ".write": false,
@@ -860,6 +889,31 @@
     },
 
     "notification_job_token_claims": {
+      ".read": false,
+      ".write": false
+    },
+
+    "notification_job_recipients": {
+      ".read": false,
+      ".write": false
+    },
+
+    "notification_job_fanout_queue": {
+      ".read": false,
+      ".write": false
+    },
+
+    "notification_attempt_retry_queue": {
+      ".read": false,
+      ".write": false
+    },
+
+    "notification_receipt_due_queue": {
+      ".read": false,
+      ".write": false
+    },
+
+    "notification_migrations": {
       ".read": false,
       ".write": false
     },

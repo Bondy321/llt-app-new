@@ -12,6 +12,7 @@ const { getNotificationDeliveryPolicy } = require('./notificationDeliveryPolicy'
 const { isActiveSessionRecord } = loadLegacyLibrary('appSession');
 const PAGE_SIZE = 100;
 const PRIMARY_ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
+const DEVICE_MIGRATION_STATE_PATH = 'notification_migrations/device_registry_v1';
 const ELIGIBLE_PERMISSION_STATES = new Set(['granted', 'provisional', 'ephemeral']);
 
 /** @param {string | null | undefined} cursor */
@@ -55,11 +56,23 @@ const loadNotificationAudiencePage = async (db = admin.database(), cursor = null
     }
   }
 
+  const migrationSnapshot = await db.ref(DEVICE_MIGRATION_STATE_PATH).once('value');
+  if (migrationSnapshot.val()?.legacyFallbackEnabled === false) {
+    return {
+      phase: 'users', candidates: [], nextCursor: null, exhausted: true,
+    };
+  }
+
   const usersAfter = decoded.phase === 'users' ? decoded.after : null;
   const page = await readKeyPage(db, 'users', usersAfter, pageSize);
+  const candidates = (await Promise.all(page.entries.map(async ([authUid, profile]) => {
+    const canonicalSnapshot = await db.ref(`notification_devices/${authUid}`).once('value');
+    if (canonicalSnapshot.exists()) return null;
+    return { authUid, profile, source: 'legacy_user' };
+  }))).filter(Boolean);
   return {
     phase: 'users',
-    candidates: page.entries.map(([authUid, profile]) => ({ authUid, profile, source: 'legacy_user' })),
+    candidates,
     nextCursor: page.hasMore ? encodeAudienceCursor('users', page.lastKey) : null,
     exhausted: !page.hasMore,
   };
@@ -67,24 +80,44 @@ const loadNotificationAudiencePage = async (db = admin.database(), cursor = null
 
 /** @param {any} value */
 const normalizePermissionState = (value) => String(value || '').trim().toLowerCase();
-const selectDeviceValue = (deviceValue, legacyValue) => deviceValue || legacyValue;
-const deriveOperationalEligibility = (device, legacy) => (device.operationalEligible !== undefined ? device.operationalEligible === true : String(legacy.pushTokenStatus || '').toUpperCase() === 'ACTIVE');
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+const readCanonicalString = (device, key) => (
+  hasOwn(device, key) && typeof device[key] === 'string' ? device[key].trim() : ''
+);
+const normalizeCanonicalDevice = (candidate, device, legacy) => ({
+  authUid: candidate.authUid,
+  pushToken: readCanonicalString(device, 'pushToken'),
+  status: readCanonicalString(device, 'status').toLowerCase(),
+  permissionState: normalizePermissionState(readCanonicalString(device, 'permissionState')),
+  operationalEligible: device.operationalEligible === true,
+  marketingEligible: device.marketingEligible === true,
+  marketingPreferences: device.marketingPreferences && typeof device.marketingPreferences === 'object'
+    ? device.marketingPreferences
+    : {},
+  platform: readCanonicalString(device, 'platform').toLowerCase(),
+  profile: legacy,
+});
+const normalizeLegacyDevice = (candidate, legacy) => ({
+  authUid: candidate.authUid,
+  pushToken: String(legacy.pushToken || '').trim(),
+  status: String(legacy.pushTokenStatus || '').trim().toLowerCase(),
+  permissionState: normalizePermissionState(legacy.pushPermissionState),
+  operationalEligible: String(legacy.pushTokenStatus || '').toUpperCase() === 'ACTIVE',
+  marketingEligible: false,
+  marketingPreferences: legacy?.preferences?.marketing || {},
+  platform: String(legacy.deviceOS || '').trim().toLowerCase(),
+  profile: legacy,
+});
 
 /** @param {any} candidate @param {any} profile */
 const normalizeNotificationDevice = (candidate, profile) => {
   const device = candidate?.device && typeof candidate.device === 'object' ? candidate.device : {};
   const legacy = profile && typeof profile === 'object' ? profile : {};
-  return {
-    authUid: candidate.authUid,
-    pushToken: typeof device.pushToken === 'string' ? device.pushToken.trim() : String(legacy.pushToken || '').trim(),
-    status: String(selectDeviceValue(device.status, legacy.pushTokenStatus) || '').trim().toLowerCase(),
-    permissionState: normalizePermissionState(selectDeviceValue(device.permissionState, legacy.pushPermissionState)),
-    operationalEligible: deriveOperationalEligibility(device, legacy),
-    marketingEligible: device.marketingEligible === true,
-    marketingPreferences: device.marketingPreferences || legacy?.preferences?.marketing || {},
-    platform: String(device.platform || legacy.deviceOS || '').trim().toLowerCase(),
-    profile: legacy,
-  };
+  const canonical = candidate?.source === 'device'
+    || Object.prototype.hasOwnProperty.call(candidate || {}, 'device');
+  return canonical
+    ? normalizeCanonicalDevice(candidate, device, legacy)
+    : normalizeLegacyDevice(candidate, legacy);
 };
 
 /** @param {any} value @param {string[]} path @param {boolean} fallback */
@@ -196,6 +229,7 @@ const evaluateAudienceCandidate = async ({ db = admin.database(), job, candidate
 };
 
 module.exports = {
+  DEVICE_MIGRATION_STATE_PATH,
   ELIGIBLE_PERMISSION_STATES,
   PAGE_SIZE,
   decodeAudienceCursor,

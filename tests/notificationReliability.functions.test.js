@@ -9,6 +9,14 @@ process.env.FIREBASE_CONFIG = JSON.stringify({
 });
 
 const { __testables } = require('../functions/index.js');
+const { buildNotificationQueueKey } = require('../functions/src/domains/notifications/notificationQueues');
+const notificationWorker = require('../functions/src/domains/notifications/notificationWorker');
+const notificationSourceStatus = require('../functions/src/domains/notifications/notificationSourceStatus');
+const { hashPushToken } = require('../functions/src/domains/notifications/notificationAudiencePage');
+const { shouldReplaceDriverPackChange } = require('../functions/src/domains/notifications/driverTourPackNotificationFunction');
+const { verifyBroadcastAuthor } = require('../functions/src/domains/notifications/broadcastFunctions');
+const notificationAdminFunctions = require('../functions/src/domains/notifications/notificationAdminFunctions');
+const { runNotificationSourceHandoff } = require('../functions/src/domains/notifications/notificationSourceHandoff');
 
 const nowMs = 1_800_000_000_000;
 const expoToken = 'ExponentPushToken[reliability-test-token]';
@@ -33,12 +41,13 @@ const setAtPath = (root, pathName, value) => {
   let current = root;
   keys.slice(0, -1).forEach((key) => { current[key] ||= {}; current = current[key]; });
   if (value === null) delete current[keys.at(-1)];
+  else if (value?.['.sv']?.increment !== undefined) current[keys.at(-1)] = Number(current[keys.at(-1)] || 0) + Number(value['.sv'].increment);
   else current[keys.at(-1)] = clone(value);
 };
 
 const createMemoryDb = (initial = {}) => {
   const data = clone(initial);
-  const snapshot = (value) => ({ val: () => clone(value) });
+  const snapshot = (value) => ({ val: () => clone(value), exists: () => value !== null && value !== undefined });
   const matchesQuery = (entries, query) => entries.filter(([, value]) => {
     if (query.equalTo !== undefined) return value?.[query.orderByChild] === query.equalTo;
     return query.endAt === undefined || Number(value?.[query.orderByChild] || 0) <= query.endAt;
@@ -49,7 +58,7 @@ const createMemoryDb = (initial = {}) => {
       once: async () => {
         const raw = getAtPath(data, pathName);
         if (!query.orderByChild && !query.orderByKey) return snapshot(raw || null);
-        const entries = matchesQuery(Object.entries(raw || {}), query)
+        const entries = (query.orderByKey ? Object.entries(raw || {}).filter(([key]) => query.endAt === undefined || key <= query.endAt) : matchesQuery(Object.entries(raw || {}), query))
           .filter(([key]) => !query.orderByKey || !query.startAfter || key > query.startAfter)
           .slice(0, query.limit);
         return snapshot(Object.fromEntries(entries));
@@ -74,6 +83,18 @@ const createMemoryDb = (initial = {}) => {
     return api;
   };
   return { data, ref };
+};
+
+const queueAttempts = (attempts, kind, dueField) => {
+  const queueRoot = kind === 'receipt' ? 'notification_receipt_due_queue' : 'notification_attempt_retry_queue';
+  const queue = {};
+  const records = {};
+  Object.entries(attempts).forEach(([attemptId, attempt]) => {
+    const queueKey = buildNotificationQueueKey(attempt[dueField], attemptId, 1);
+    records[attemptId] = { ...attempt, attemptId, queueKind: kind, queueKey, queueVersion: 1 };
+    queue[queueKey] = { schemaVersion: 1, kind, targetId: attemptId, dueAtMs: attempt[dueField], version: 1 };
+  });
+  return { notification_delivery_attempts: records, [queueRoot]: queue };
 };
 
 test('delivery policy centrally assigns versioned channels, optional photo preference, and bounded TTL', () => {
@@ -200,7 +221,8 @@ test('audience paging remains cursor-based beyond 1,000 recipients and no notifi
           const records = Object.entries(root === 'users' ? users : {})
             .filter(([key]) => !after || key > after)
             .slice(0, limit);
-          return { val: () => Object.fromEntries(records) };
+          const value = root === 'notification_migrations/device_registry_v1' ? {} : Object.fromEntries(records);
+          return { val: () => value, exists: () => root.startsWith('notification_devices/') ? false : Object.keys(value).length > 0 };
         },
       };
       return query;
@@ -300,19 +322,23 @@ test('ticket persistence distinguishes accepted, retryable, permanent, and confi
   const job = buildJob();
   const recipient = { authUid: 'recipient', token: expoToken, tokenHash: __testables.hashNotificationPushToken(expoToken) };
   const db = createMemoryDb({
+    notification_jobs: { [job.jobId]: job },
     notification_devices: { recipient: { pushToken: expoToken, tokenHash: recipient.tokenHash, status: 'active' } },
     users: { recipient: { pushToken: expoToken } },
+    notification_delivery_attempts: Object.fromEntries(Array.from({ length: 4 }, (_, index) => [`attempt_${index + 1}`, {
+      attemptId: `attempt_${index + 1}`, jobId: job.jobId, status: 'prepared', ticketStatus: 'pending', receiptStatus: 'not_requested', queueVersion: 0, attemptNumber: 1,
+    }])),
   });
   const attemptRef = db.ref('notification_delivery_attempts/attempt_1');
-  const claimed = { attemptRef, attempt: { attemptNumber: 1 } };
+  const claimed = { attemptId: 'attempt_1', attemptRef, attempt: db.data.notification_delivery_attempts.attempt_1 };
   await __testables.persistNotificationTicketResult({ db, job, claimed, recipient, ticket: { status: 'ok', id: 'ticket_1' }, nowMs });
   assert.equal(db.data.notification_delivery_attempts.attempt_1.status, 'receipt_pending');
-  await __testables.persistNotificationTicketResult({ db, job, claimed: { ...claimed, attemptRef: db.ref('notification_delivery_attempts/attempt_2') }, recipient, ticket: { status: 'error', details: { error: 'MessageRateExceeded' } }, nowMs });
+  await __testables.persistNotificationTicketResult({ db, job, claimed: { ...claimed, attemptId: 'attempt_2', attemptRef: db.ref('notification_delivery_attempts/attempt_2') }, recipient, ticket: { status: 'error', details: { error: 'MessageRateExceeded' } }, nowMs });
   assert.equal(db.data.notification_delivery_attempts.attempt_2.status, 'retrying');
-  await __testables.persistNotificationTicketResult({ db, job, claimed: { ...claimed, attemptRef: db.ref('notification_delivery_attempts/attempt_3') }, recipient, ticket: { status: 'error', details: { error: 'DeviceNotRegistered' } }, nowMs });
+  await __testables.persistNotificationTicketResult({ db, job, claimed: { ...claimed, attemptId: 'attempt_3', attemptRef: db.ref('notification_delivery_attempts/attempt_3') }, recipient, ticket: { status: 'error', details: { error: 'DeviceNotRegistered' } }, nowMs });
   assert.equal(db.data.notification_delivery_attempts.attempt_3.status, 'ticket_rejected');
   assert.equal(db.data.notification_devices.recipient.pushToken, null);
-  await __testables.persistNotificationTicketResult({ db, job, claimed: { ...claimed, attemptRef: db.ref('notification_delivery_attempts/attempt_4') }, recipient, ticket: { status: 'error', details: { error: 'InvalidCredentials' } }, nowMs });
+  await __testables.persistNotificationTicketResult({ db, job, claimed: { ...claimed, attemptId: 'attempt_4', attemptRef: db.ref('notification_delivery_attempts/attempt_4') }, recipient, ticket: { status: 'error', details: { error: 'InvalidCredentials' } }, nowMs });
   assert.equal(db.data.notification_delivery_warnings[job.jobId].code, 'InvalidCredentials');
 });
 
@@ -320,11 +346,12 @@ test('receipt processor accepts success, retries temporary errors, warns on conf
   const job = buildJob();
   const tokenHash = __testables.hashNotificationPushToken(expoToken);
   const due = (ticketId, extra = {}) => ({ jobId: job.jobId, recipientUid: 'recipient', installationUid: 'recipient', ticketId, tokenHash, status: 'receipt_pending', ticketStatus: 'ticket_accepted', receiptStatus: 'receipt_pending', receiptDueAtMs: nowMs, receiptWindowExpiresAtMs: nowMs + 60_000, attemptNumber: 1, ...extra });
+  const queued = queueAttempts({ accepted: due('ok'), rate: due('rate'), config: due('config'), stale: due('stale', { tokenHash: 'old-token-hash' }) }, 'receipt', 'receiptDueAtMs');
   const db = createMemoryDb({
     notification_jobs: { [job.jobId]: job },
     notification_devices: { recipient: { pushToken: expoToken, tokenHash, status: 'active' } },
     users: { recipient: { pushToken: expoToken } },
-    notification_delivery_attempts: { accepted: due('ok'), rate: due('rate'), config: due('config'), stale: due('stale', { tokenHash: 'old-token-hash' }) },
+    ...queued,
   });
   const expo = { getPushNotificationReceiptsAsync: async () => ({ ok: { status: 'ok' }, rate: { status: 'error', details: { error: 'MessageRateExceeded' } }, config: { status: 'error', details: { error: 'InvalidCredentials' } }, stale: { status: 'error', details: { error: 'DeviceNotRegistered' } } }) };
   const result = await __testables.processDueNotificationReceipts({ db, nowMs, expo });
@@ -339,18 +366,18 @@ test('receipt processor accepts success, retries temporary errors, warns on conf
 test('missing or failed receipt lookups retry inside their window and reject after expiry', async () => {
   const job = buildJob();
   const pending = (id, expiresAtMs) => ({ jobId: job.jobId, ticketId: id, status: 'receipt_pending', receiptStatus: 'receipt_pending', receiptDueAtMs: nowMs, receiptWindowExpiresAtMs: expiresAtMs });
-  const db = createMemoryDb({ notification_jobs: { [job.jobId]: job }, notification_delivery_attempts: { missing: pending('missing', nowMs + 1), expired: pending('expired', nowMs), failed: pending('failed', nowMs + 1) } });
+  const db = createMemoryDb({ notification_jobs: { [job.jobId]: job }, ...queueAttempts({ missing: pending('missing', nowMs + 1), expired: pending('expired', nowMs), failed: pending('failed', nowMs + 1) }, 'receipt', 'receiptDueAtMs') });
   const missing = await __testables.processDueNotificationReceipts({ db, nowMs, expo: { getPushNotificationReceiptsAsync: async () => ({}) } });
   assert.equal(missing.missing, 2);
   assert.equal(missing.rejected, 1);
   assert.equal(db.data.notification_delivery_attempts.expired.safeErrorCode, 'RECEIPT_EXPIRED');
-  const failedDb = createMemoryDb({ notification_delivery_attempts: { failed: pending('failed', nowMs + 1) } });
+  const failedDb = createMemoryDb({ ...queueAttempts({ failed: pending('failed', nowMs + 1) }, 'receipt', 'receiptDueAtMs') });
   const failed = await __testables.processDueNotificationReceipts({ db: failedDb, nowMs, expo: { getPushNotificationReceiptsAsync: async () => { throw new Error('offline'); } } });
   assert.equal(failed.requestFailed, 1);
   assert.equal(failedDb.data.notification_delivery_attempts.failed.safeErrorCode, 'RECEIPT_REQUEST_FAILED');
 });
 
-test('expired or superseded jobs never send, and a worker crash records a retry with its lease released', async () => {
+test('expired or superseded jobs never send, and a worker crash requeues only fanout with its lease released', async () => {
   for (const job of [{ ...buildJob(), expiresAtMs: nowMs }, { ...buildJob(), supersededByJobId: 'newer_job' }]) {
     const db = createMemoryDb({ notification_jobs: { [job.jobId]: job } });
     let sent = false;
@@ -361,18 +388,19 @@ test('expired or superseded jobs never send, and a worker crash records a retry 
   const job = buildJob({ maxAttempts: 3 });
   const db = createMemoryDb({ notification_jobs: { [job.jobId]: job } });
   const crashed = await __testables.runNotificationJob({ db, jobId: job.jobId, nowMs, expo: { chunkPushNotifications: () => { throw Object.assign(new Error('crash'), { code: 'CRASH' }); } } });
-  assert.equal(crashed.status, 'retrying');
+  assert.equal(crashed.status, 'queued');
   assert.equal(db.data.notification_jobs[job.jobId].lease ?? null, null);
   assert.equal(db.data.notification_jobs[job.jobId].attemptCount, 1);
 });
 
-test('stale sending attempts are recovered exactly once, while retrying attempts keep job reporting retrying', async () => {
+test('stale pre-request attempts are recovered exactly once, while retrying counters keep job reporting retrying', async () => {
   const job = buildJob();
   const tokenHash = __testables.hashNotificationPushToken(expoToken);
   const session = { schemaVersion: 1, sessionId: 'sess_v1_0123456789abcdef0123456789abcdef', authUid: 'recipient', principalId: 'pax_v2_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', principalType: 'passenger', tourId: 'TOUR_1', driverId: null, status: 'active', issuedAtMs: nowMs - 1_000, lastAuthenticatedAtMs: nowMs - 1_000, sessionRevision: 1, expiresAtMs: nowMs + 60_000 };
+  const preparedAttempt = { jobId: job.jobId, recipientUid: 'recipient', installationUid: 'recipient', tokenHash, status: 'prepared', ticketStatus: 'pending', receiptStatus: 'not_requested', attemptNumber: 1, submissionLease: { ownerId: 'lost', expiresAtMs: nowMs }, updatedAtMs: nowMs - __testables.STALE_SENDING_ATTEMPT_MS, availableAtMs: nowMs };
   const db = createMemoryDb({
     notification_jobs: { [job.jobId]: job },
-    notification_delivery_attempts: { stale: { jobId: job.jobId, recipientUid: 'recipient', installationUid: 'recipient', tokenHash, status: 'sending', attemptNumber: 1, updatedAtMs: nowMs - __testables.STALE_SENDING_ATTEMPT_MS, availableAtMs: nowMs } },
+    ...queueAttempts({ stale: preparedAttempt }, 'retry', 'availableAtMs'),
     notification_devices: { recipient: { pushToken: expoToken, tokenHash, status: 'active', permissionState: 'granted', operationalEligible: true } },
     users: { recipient: {} },
     app_sessions: { recipient: session },
@@ -384,6 +412,217 @@ test('stale sending attempts are recovered exactly once, while retrying attempts
   db.data.notification_delivery_attempts.stale.status = 'retrying';
   db.data.notification_delivery_attempts.stale.ticketStatus = 'ticket_rejected';
   db.data.notification_delivery_attempts.stale.receiptStatus = 'not_requested';
+  db.data.notification_jobs[job.jobId].fanoutCompletedAtMs = nowMs;
+  db.data.notification_jobs[job.jobId].counts = { ...db.data.notification_jobs[job.jobId].counts, receiptPending: 0, retrying: 1 };
   await __testables.refreshNotificationJobStatus(db, job.jobId, nowMs);
   assert.equal(db.data.notification_jobs[job.jobId].status, 'retrying');
+});
+
+test('a crash after preparing an attempt cannot strand the recipient before queue publication', async () => {
+  const job = buildJob();
+  const recipient = {
+    authUid: 'recipient-crash-window',
+    token: expoToken,
+    tokenHash: hashPushToken(expoToken),
+  };
+  const attemptId = notificationWorker.buildDeliveryAttemptId(job.jobId, recipient.authUid, 1);
+  const db = createMemoryDb({
+    notification_jobs: { [job.jobId]: job },
+    notification_job_token_claims: { [job.jobId]: { [recipient.tokenHash]: recipient.authUid } },
+    notification_delivery_attempts: {
+      [attemptId]: {
+        schemaVersion: 2,
+        attemptId,
+        generation: 1,
+        jobId: job.jobId,
+        recipientUid: recipient.authUid,
+        installationUid: recipient.authUid,
+        tokenHash: recipient.tokenHash,
+        status: 'prepared',
+        ticketStatus: 'pending',
+        receiptStatus: 'not_requested',
+        retryable: false,
+        attemptNumber: 1,
+        submissionLease: { ownerId: 'crashed-owner', acquiredAtMs: nowMs, expiresAtMs: nowMs + 120_000 },
+        createdAtMs: nowMs,
+        updatedAtMs: nowMs,
+        availableAtMs: nowMs,
+        expiresAtMs: job.expiresAtMs,
+        queueKind: null,
+        queueKey: null,
+        queueVersion: 0,
+      },
+    },
+  });
+
+  const result = await notificationWorker.claimDeliveryAttempt(db, job, recipient, nowMs + 1);
+  const state = db.data;
+  assert.equal(result.claimed, false);
+  assert.equal(state.notification_job_recipients[job.jobId][recipient.authUid].attemptId, attemptId);
+  assert.equal(state.notification_delivery_attempts[attemptId].queueKind, 'retry');
+  assert.equal(Object.keys(state.notification_attempt_retry_queue).length, 1);
+});
+
+test('explicit due queues cannot be starved by unrelated terminal records', async () => {
+  const attempt = { jobId: 'job_due', status: 'receipt_pending', receiptStatus: 'receipt_pending', ticketId: 'ticket_due', receiptDueAtMs: nowMs, receiptWindowExpiresAtMs: nowMs + 60_000 };
+  const queued = queueAttempts({ due_attempt: attempt }, 'receipt', 'receiptDueAtMs');
+  const terminalRecords = Object.fromEntries(Array.from({ length: 1_500 }, (_, index) => [`terminal_${index}`, { status: 'provider_accepted', receiptDueAtMs: null }]));
+  const db = createMemoryDb({ notification_jobs: { job_due: { ...buildJob(), jobId: 'job_due', fanoutCompletedAtMs: nowMs } }, notification_delivery_attempts: { ...terminalRecords, ...queued.notification_delivery_attempts }, notification_receipt_due_queue: queued.notification_receipt_due_queue });
+  const result = await __testables.processDueNotificationReceipts({ db, nowMs, expo: { getPushNotificationReceiptsAsync: async () => ({ ticket_due: { status: 'ok' } }) } });
+  assert.equal(result.checked, 1);
+  assert.equal(db.data.notification_delivery_attempts.due_attempt.status, 'provider_accepted');
+  assert.equal(Object.keys(db.data.notification_receipt_due_queue || {}).length, 0);
+});
+
+test('ambiguous Expo submission is terminal, warns, clears retry work, and is never auto-resent', async () => {
+  const job = buildJob();
+  const recipient = { authUid: 'recipient', token: expoToken, tokenHash: __testables.hashNotificationPushToken(expoToken) };
+  const retrying = { attemptId: 'attempt_retry', jobId: job.jobId, recipientUid: 'recipient', installationUid: 'recipient', tokenHash: recipient.tokenHash, status: 'retrying', ticketStatus: 'ticket_rejected', receiptStatus: 'not_requested', retryable: true, attemptNumber: 1, availableAtMs: nowMs, expiresAtMs: job.expiresAtMs };
+  const queued = queueAttempts({ attempt_retry: retrying }, 'retry', 'availableAtMs');
+  const db = createMemoryDb({ notification_jobs: { [job.jobId]: { ...job, fanoutCompletedAtMs: nowMs, counts: { ...job.counts, eligible: 1, ticketRejected: 1, retrying: 1 } } }, ...queued });
+  let sends = 0;
+  const result = await notificationWorker.retryNotificationDeliveryAttempt({ db, job, attemptId: 'attempt_retry', attempt: queued.notification_delivery_attempts.attempt_retry, recipient, nowMs, expo: { sendPushNotificationsAsync: async () => { sends += 1; throw new Error('socket closed after write'); } } });
+  assert.equal(result.reason, 'SUBMISSION_UNKNOWN');
+  assert.equal(sends, 1);
+  assert.equal(db.data.notification_delivery_attempts.attempt_retry.status, 'submission_unknown');
+  assert.equal(db.data.notification_delivery_warnings[job.jobId].code, 'SUBMISSION_UNKNOWN');
+  assert.equal(Object.keys(db.data.notification_attempt_retry_queue || {}).length, 0);
+  const recovery = await __testables.retryDueNotificationAttempts({ db, nowMs: nowMs + 300_000, expo: { sendPushNotificationsAsync: async () => { sends += 1; return []; } } });
+  assert.equal(recovery.retried, 0);
+  assert.equal(sends, 1);
+});
+
+test('payload byte enforcement measures the real destination token and reports provider headroom', () => {
+  const job = buildJob();
+  const oversizedToken = `ExponentPushToken[${'x'.repeat(3_700)}]`;
+  assert.throws(() => __testables.buildNotificationExpoPushMessage(job, { token: oversizedToken }, nowMs), /provider size limit/iu);
+  assert.equal(notificationWorker.MAX_EXPO_PAYLOAD_BYTES, 3_800);
+});
+
+test('coalescing is monotonic by source order and an older late event cannot supersede newer work', async () => {
+  const db = createMemoryDb();
+  const newer = buildJob({ sourceId: 'newer', coalescingKey: 'tour-state', sourceOrderMs: nowMs + 2 });
+  const older = buildJob({ sourceId: 'older', coalescingKey: 'tour-state', sourceOrderMs: nowMs + 1 });
+  await __testables.enqueueNotificationJob({ db, job: newer });
+  const late = await __testables.enqueueNotificationJob({ db, job: older });
+  assert.equal(late.job.status, 'expired');
+  const state = Object.values(db.data.notification_job_coalescing)[0];
+  assert.equal(state.jobId, newer.jobId);
+  assert.equal(db.data.notification_jobs[newer.jobId].status, 'queued');
+});
+
+test('coalescing handoff retries close a crash after publication before prior expiry', async () => {
+  const db = createMemoryDb();
+  const previous = buildJob({ sourceId: 'previous', coalescingKey: 'crash-safe', sourceOrderMs: nowMs });
+  const next = buildJob({ sourceId: 'next', coalescingKey: 'crash-safe', sourceOrderMs: nowMs + 1 });
+  await __testables.enqueueNotificationJob({ db, job: previous });
+  await assert.rejects(() => __testables.enqueueNotificationJob({ db, job: next, afterCoalescingPublished: async () => { throw new Error('injected crash'); } }), /injected crash/iu);
+  assert.equal(db.data.notification_jobs[previous.jobId].status, 'queued');
+  assert.equal(db.data.notification_jobs[next.jobId].status, 'preparing');
+  assert.equal(Object.values(db.data.notification_job_coalescing)[0].previousJobId, previous.jobId);
+  await __testables.enqueueNotificationJob({ db, job: next });
+  assert.equal(db.data.notification_jobs[previous.jobId].status, 'expired');
+  assert.equal(db.data.notification_jobs[next.jobId].status, 'queued');
+  assert.equal(Object.values(db.data.notification_job_coalescing)[0].previousJobId, null);
+  assert.equal(Object.values(db.data.notification_job_fanout_queue).some((entry) => entry.targetId === previous.jobId), false);
+});
+
+test('safe admin requeue creates a new generation from the current canonical token without restarting fanout', async () => {
+  const job = { ...buildJob(), status: 'provider_rejected', fanoutCompletedAtMs: nowMs, counts: { ...buildJob().counts, eligible: 1, ticketRejected: 1 } };
+  const oldToken = 'ExponentPushToken[old-token]';
+  const newToken = 'ExponentPushToken[new-token]';
+  const oldHash = __testables.hashNotificationPushToken(oldToken);
+  const newHash = __testables.hashNotificationPushToken(newToken);
+  const session = { schemaVersion: 1, sessionId: 'sess_v1_0123456789abcdef0123456789abcdef', authUid: 'recipient', principalId: 'pax_v2_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', principalType: 'passenger', tourId: 'TOUR_1', driverId: null, status: 'active', issuedAtMs: nowMs - 1_000, lastAuthenticatedAtMs: nowMs - 1_000, sessionRevision: 1, expiresAtMs: nowMs + 60_000 };
+  const db = createMemoryDb({ notification_jobs: { [job.jobId]: job }, notification_job_recipients: { [job.jobId]: { recipient: { generation: 1, attemptId: 'old_attempt', tokenHash: oldHash } } }, notification_job_token_claims: { [job.jobId]: { [oldHash]: 'recipient' } }, notification_delivery_attempts: { old_attempt: { attemptId: 'old_attempt', generation: 1, jobId: job.jobId, recipientUid: 'recipient', installationUid: 'recipient', tokenHash: oldHash, status: 'provider_rejected', ticketStatus: 'ticket_rejected', receiptStatus: 'provider_rejected', queueVersion: 0 } }, notification_devices: { recipient: { pushToken: newToken, tokenHash: newHash, status: 'active', permissionState: 'granted', operationalEligible: true } }, users: { recipient: {} }, app_sessions: { recipient: session }, tours: { TOUR_1: { participants: { recipient: { schemaVersion: 2, userId: 'recipient', principalId: session.principalId, sessionId: session.sessionId, sessionExpiresAtMs: session.expiresAtMs } } } } });
+  const result = await __testables.requeueFailedNotificationJob({ db, jobId: job.jobId, nowMs });
+  assert.equal(result.requeued, 1);
+  assert.equal(db.data.notification_delivery_attempts.old_attempt.status, 'superseded');
+  const state = db.data.notification_job_recipients[job.jobId].recipient;
+  assert.equal(state.generation, 2);
+  assert.equal(db.data.notification_delivery_attempts[state.attemptId].tokenHash, newHash);
+  assert.equal(Object.keys(db.data.notification_attempt_retry_queue).length, 1);
+  assert.equal(db.data.notification_job_fanout_queue, undefined);
+});
+
+test('all seven source triggers request retry delivery and terminal timestamps remain first-write stable', async () => {
+  const triggerFiles = ['broadcastFunctions.js', 'chatNotificationFunctions.js', 'itineraryNotificationFunction.js', 'driverTourPackNotificationFunction.js', 'safetyNotificationFunction.js'];
+  const retryDeclarations = triggerFiles.reduce((count, file) => count + (fs.readFileSync(path.join(__dirname, '../functions/src/domains/notifications', file), 'utf8').match(/retry:\s*true/gu) || []).length, 0);
+  assert.equal(retryDeclarations, 7);
+  const job = { ...buildJob(), status: 'receipt_pending', fanoutCompletedAtMs: nowMs, completedAtMs: nowMs - 10_000, counts: { ...buildJob().counts, eligible: 1, receiptAccepted: 1 } };
+  const db = createMemoryDb({ notification_jobs: { [job.jobId]: job } });
+  await __testables.refreshNotificationJobStatus(db, job.jobId, nowMs);
+  assert.equal(db.data.notification_jobs[job.jobId].completedAtMs, nowMs - 10_000);
+});
+
+test('transient author lookups propagate for trigger retry while definite invalid authors return normally', async () => {
+  const transient = Object.assign(new Error('auth unavailable'), { code: 'auth/internal-error' });
+  await assert.rejects(() => verifyBroadcastAuthor('admin', { auth: { getUser: async () => { throw transient; } }, verifyAdmin: async () => true }), transient);
+  assert.equal(await verifyBroadcastAuthor('missing', { auth: { getUser: async () => { throw Object.assign(new Error('missing'), { code: 'auth/user-not-found' }); } }, verifyAdmin: async () => true }), false);
+});
+
+test('driver pack ordering uses revision then source event id and rejects late same-revision events', () => {
+  assert.equal(shouldReplaceDriverPackChange({ revision: 8, sourceEventId: 'event_b', notificationStatus: 'provider_accepted' }, 8, 'event_a'), false);
+  assert.equal(shouldReplaceDriverPackChange({ revision: 8, sourceEventId: 'event_a' }, 8, 'event_b'), true);
+  assert.equal(shouldReplaceDriverPackChange({ revision: 9, sourceEventId: 'event_z' }, 8, 'event_zzzz'), false);
+});
+
+test('delivery reporting separates ticket, pending, accepted and rejected counts and mirrors safety logs', async () => {
+  const job = { ...buildJob(), jobId: 'safety_job', sourceType: 'critical_safety_event', status: 'partial', eventId: 'event_1', senderAuthUid: 'reporter', counts: { eligible: 4, ticketAccepted: 3, receiptPending: 1, receiptAccepted: 1, receiptRejected: 1, ticketRejected: 1, submissionUnknown: 0 } };
+  const base = { notificationDeliveryJobId: job.jobId };
+  const db = createMemoryDb({ tours: { TOUR_1: { safetyAlerts: { event_1: base } } }, globalSafetyAlerts: { event_1: base }, logs: { reporter: { safety: { event_1: base } } } });
+  await notificationSourceStatus.syncNotificationSourceStatus(db, job, nowMs);
+  for (const record of [db.data.tours.TOUR_1.safetyAlerts.event_1, db.data.globalSafetyAlerts.event_1, db.data.logs.reporter.safety.event_1]) {
+    assert.equal(record.notificationSuccessCount, 1);
+    assert.equal(record.notificationErrorCount, 2);
+  }
+});
+
+test('durable audience preview preserves cross-page token dedupe and cumulative counts across requests', async () => {
+  const shared = 'ExponentPushToken[shared-preview-token]';
+  const devices = Object.fromEntries(Array.from({ length: 501 }, (_, index) => {
+    const token = index === 0 || index === 500 ? shared : `ExponentPushToken[preview-${index}]`;
+    return [`user_${String(index).padStart(4, '0')}`, { pushToken: token, tokenHash: __testables.hashNotificationPushToken(token), status: 'active', permissionState: 'granted', marketingEligible: true, marketingPreferences: { day_trips: true } }];
+  }));
+  const job = __testables.buildNotificationPreviewJob({ categoryKey: 'day_trips' }, nowMs);
+  const previewId = 'preview_v1_test';
+  const db = createMemoryDb({ notification_devices: devices, notification_audience_previews: { [previewId]: { schemaVersion: 1, previewId, ownerAuthUid: 'admin', targetKey: 'marketing:day_trips', job, cursor: null, status: 'processing', audience: 0, eligible: 0, skipped: 0, pages: 0, skipReasons: {}, uidClaims: {}, tokenClaims: {}, createdAtMs: nowMs, updatedAtMs: nowMs, expiresAtMs: nowMs + 600_000 } } });
+  const first = await notificationAdminFunctions.processAudiencePreviewChunk(db, previewId, 'admin', nowMs);
+  assert.equal(first.complete, false);
+  const second = await notificationAdminFunctions.processAudiencePreviewChunk(db, previewId, 'admin', nowMs + 1);
+  assert.equal(second.complete, true);
+  assert.equal(second.audience, 501);
+  assert.equal(second.eligible, 500);
+  assert.equal(second.skipReasons.duplicate_token, 1);
+});
+
+test('durable source handoff retries converge across failures before source, before enqueue and before status', async () => {
+  const order = [];
+  await assert.rejects(() => runNotificationSourceHandoff({ persistSource: async () => { order.push('source'); throw new Error('source failed'); }, enqueue: async () => { order.push('enqueue'); }, publishStatus: async () => { order.push('status'); } }), /source failed/iu);
+  assert.deepEqual(order, ['source']);
+
+  const db = createMemoryDb();
+  const job = buildJob({ sourceId: 'durable-handoff' });
+  let failEnqueue = true;
+  const persistSource = () => db.ref().update({ 'durable_sources/source_1': { ready: true } });
+  const enqueue = async () => {
+    if (failEnqueue) { failEnqueue = false; throw new Error('enqueue failed'); }
+    return __testables.enqueueNotificationJob({ db, job });
+  };
+  const publishStatus = (result) => db.ref('durable_sources/source_1').update({ status: result.job.status, jobId: result.jobId });
+  await assert.rejects(() => runNotificationSourceHandoff({ persistSource, enqueue, publishStatus }), /enqueue failed/iu);
+  assert.equal(db.data.durable_sources.source_1.ready, true);
+  assert.equal(db.data.notification_jobs, undefined);
+  await runNotificationSourceHandoff({ persistSource, enqueue, publishStatus });
+  assert.equal(Object.keys(db.data.notification_jobs).length, 1);
+
+  let failStatus = true;
+  const publishWithFailure = async (result) => {
+    if (failStatus) { failStatus = false; throw new Error('status failed'); }
+    return publishStatus(result);
+  };
+  await assert.rejects(() => runNotificationSourceHandoff({ persistSource, enqueue, publishStatus: publishWithFailure }), /status failed/iu);
+  await runNotificationSourceHandoff({ persistSource, enqueue, publishStatus: publishWithFailure });
+  assert.equal(Object.keys(db.data.notification_jobs).length, 1);
+  assert.equal(db.data.durable_sources.source_1.jobId, job.jobId);
 });

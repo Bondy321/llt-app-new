@@ -64,13 +64,14 @@ const buildInternalChatNotificationJob = ({ tourId, messageId, messageData, tour
 };
 
 /** @param {any} input */
-const buildItineraryNotificationJob = ({ tourId, sourceId, change, noticeId, nowMs = Date.now() }) => createNotificationJobRecord({
+const buildItineraryNotificationJob = ({ tourId, sourceId, change, noticeId, nowMs = Date.now(), sourceOrderMs = nowMs }) => createNotificationJobRecord({
   notificationType: NOTIFICATION_TYPES.ITINERARY_CHANGE,
   sourceType: 'itinerary_semantic_change',
   sourceId: `${tourId}:${sourceId}`,
   audienceType: 'tour',
   tourId,
   coalescingKey: `itinerary:${tourId}`,
+  sourceOrderMs,
   presentation: { title: change.title, body: change.body },
   navigation: buildPushNavigationData({
     tourId,
@@ -84,15 +85,16 @@ const buildItineraryNotificationJob = ({ tourId, sourceId, change, noticeId, now
 });
 
 /** @param {any} input */
-const buildDriverTourPackNotificationJob = ({ departureKey, pack, change, noticeId, allowedDriverIds = null, nowMs = Date.now() }) => createNotificationJobRecord({
+const buildDriverTourPackNotificationJob = ({ departureKey, pack, change, noticeId, sourceEventId = 'legacy', allowedDriverIds = null, nowMs = Date.now() }) => createNotificationJobRecord({
   notificationType: NOTIFICATION_TYPES.DRIVER_TOUR_PACK_CHANGE,
   sourceType: 'driver_tour_pack_revision',
-  sourceId: `${departureKey}:${pack.revision}`,
+  sourceId: `${departureKey}:${pack.revision}:${sourceEventId}`,
   audienceType: 'assigned_drivers',
   tourId: pack.tourId,
   departureKey,
   allowedDriverIds,
   coalescingKey: `driver-tour-pack:${departureKey}`,
+  sourceOrderMs: Number.isSafeInteger(pack.revision) ? pack.revision : nowMs,
   presentation: {
     title: 'Operational information changed',
     body: change.critical

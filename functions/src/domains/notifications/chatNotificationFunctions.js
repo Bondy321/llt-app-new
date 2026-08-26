@@ -63,6 +63,7 @@ const sendChatNotification = onValueCreated({
   region: 'europe-west1',
   instance: 'loch-lomond-travel-default-rtdb',
   maxInstances: 10,
+  retry: true,
 }, (event) => enqueueChatEvent(event, false));
 
 const sendInternalChatNotification = onValueCreated({
@@ -70,6 +71,7 @@ const sendInternalChatNotification = onValueCreated({
   region: 'europe-west1',
   instance: 'loch-lomond-travel-default-rtdb',
   maxInstances: 10,
+  retry: true,
 }, (event) => enqueueChatEvent(event, true));
 
 module.exports = {

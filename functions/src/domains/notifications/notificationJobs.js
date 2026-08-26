@@ -6,6 +6,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { buildDeliveryGrouping, getNotificationDeliveryPolicy } = require('./notificationDeliveryPolicy');
+const { buildNotificationQueueKey, buildQueueEntry, QUEUE_ROOTS, transitionQueuedRecord } = require('./notificationQueues');
 
 const JOB_SCHEMA_VERSION = 1;
 const MAX_TITLE_LENGTH = 120;
@@ -106,6 +107,7 @@ const createNotificationJobRecord = (input) => {
     status: 'queued',
     priorityClass: policy.retryClass,
     createdAtMs: nowMs,
+    sourceOrderMs: Number.isSafeInteger(input?.sourceOrderMs) ? input.sourceOrderMs : nowMs,
     updatedAtMs: nowMs,
     availableAtMs: nowMs,
     expiresAtMs,
@@ -122,42 +124,84 @@ const createNotificationJobRecord = (input) => {
   };
 };
 
-/** @param {{ db?: any, job: any }} options */
-const enqueueNotificationJob = async ({ db = admin.database(), job }) => {
+/** @param {{ db?: any, job: any, afterCoalescingPublished?: Function }} options */
+// eslint-disable-next-line complexity -- idempotency, coalescing and activation form one durable handoff
+const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalescingPublished }) => {
   if (!job || !isValidFirebaseKey(job.jobId)) throw new Error('Invalid notification job');
   const jobRef = db.ref(`notification_jobs/${job.jobId}`);
   let created = false;
   const result = await jobRef.transaction((current) => {
     if (current) return;
     created = true;
-    return job;
+    return { ...job, status: 'preparing', queueKind: null, queueKey: null, queueVersion: 0 };
   });
   created = Boolean(created && result?.committed);
 
-  if (created && job.coalescingKey) {
+  let supersededByJobId = null;
+  let supersedesJobId = null;
+  if (job.coalescingKey) {
     const stateRef = db.ref(`notification_job_coalescing/${job.coalescingKey}`);
-    let previousJobId = null;
+    // eslint-disable-next-line complexity -- total ordering must handle legacy and current coalescing records
     await stateRef.transaction((current) => {
-      previousJobId = current?.jobId || null;
-      return { jobId: job.jobId, updatedAtMs: job.createdAtMs };
+      const currentOrder = Number(current?.sourceOrderMs || current?.updatedAtMs || 0);
+      const nextOrder = Number(job.sourceOrderMs || job.createdAtMs || 0);
+      const currentTie = String(current?.sourceId || current?.jobId || '');
+      const nextTie = String(job.sourceId || job.jobId);
+      if (current?.jobId && (currentOrder > nextOrder || (currentOrder === nextOrder && currentTie > nextTie))) {
+        supersededByJobId = current.jobId;
+        return current;
+      }
+      if (current?.jobId === job.jobId) {
+        supersedesJobId = current.previousJobId || null;
+        return current;
+      }
+      supersedesJobId = current?.jobId || null;
+      return {
+        jobId: job.jobId,
+        previousJobId: supersedesJobId,
+        sourceId: job.sourceId,
+        sourceOrderMs: nextOrder,
+        updatedAtMs: job.createdAtMs,
+      };
     });
-    if (previousJobId && previousJobId !== job.jobId && isValidFirebaseKey(previousJobId)) {
-      await db.ref(`notification_jobs/${previousJobId}`).transaction((previous) => {
-        if (!previous || ['provider_accepted', 'provider_rejected', 'partial', 'expired', 'no_recipients'].includes(previous.status)) {
-          return previous;
-        }
-        return {
-          ...previous,
-          status: 'expired',
-          supersededByJobId: job.jobId,
-          updatedAtMs: job.createdAtMs,
-          lease: null,
-        };
+    if (afterCoalescingPublished) await afterCoalescingPublished();
+    if (supersedesJobId && isValidFirebaseKey(supersedesJobId)) {
+      const previousRef = db.ref(`notification_jobs/${supersedesJobId}`);
+      const previous = (await previousRef.once('value')).val();
+      if (previous && !['provider_accepted', 'provider_rejected', 'partial', 'expired', 'no_recipients'].includes(previous.status)) {
+        await transitionQueuedRecord(db, {
+          targetPath: `notification_jobs/${supersedesJobId}`,
+          current: previous,
+          patch: { status: 'expired', supersededByJobId: job.jobId, updatedAtMs: job.createdAtMs, lease: null },
+          targetId: supersedesJobId,
+        });
+      }
+      await stateRef.transaction((current) => current?.jobId === job.jobId && current?.previousJobId === supersedesJobId
+        ? { ...current, previousJobId: null, handoffCompletedAtMs: job.createdAtMs }
+        : current);
+    }
+  }
+
+  if (supersededByJobId) {
+    await jobRef.update({ status: 'expired', supersededByJobId, updatedAtMs: job.createdAtMs, lease: null });
+  } else {
+    const current = (await jobRef.once('value')).val() || job;
+    if (current.status === 'preparing') {
+      const queueVersion = Number(current.queueVersion || 0) + 1;
+      const queueKey = buildNotificationQueueKey(job.availableAtMs, job.jobId, queueVersion);
+      await db.ref().update({
+        [`notification_jobs/${job.jobId}/status`]: 'queued',
+        [`notification_jobs/${job.jobId}/queueKind`]: 'fanout',
+        [`notification_jobs/${job.jobId}/queueKey`]: queueKey,
+        [`notification_jobs/${job.jobId}/queueVersion`]: queueVersion,
+        [`notification_jobs/${job.jobId}/updatedAtMs`]: job.createdAtMs,
+        [`${QUEUE_ROOTS.fanout}/${queueKey}`]: buildQueueEntry('fanout', job.jobId, job.availableAtMs, queueVersion),
       });
     }
   }
 
-  return { created, jobId: job.jobId, job: result?.snapshot?.val?.() || job };
+  const persisted = (await jobRef.once('value')).val() || result?.snapshot?.val?.() || job;
+  return { created, jobId: job.jobId, job: persisted };
 };
 
 /** @param {{ jobRef: any, nowMs?: number, ownerId?: string, leaseMs?: number }} options */
@@ -169,7 +213,7 @@ const acquireNotificationJobLease = async ({
 }) => {
   let acquired = false;
   const transaction = await jobRef.transaction((job) => {
-    if (!job || !['queued', 'retrying', 'fanout_in_progress'].includes(job.status)) return;
+    if (!job || !['queued', 'fanout_in_progress'].includes(job.status)) return;
     if (Number(job.expiresAtMs) <= nowMs || job.supersededByJobId) {
       return { ...job, status: 'expired', lease: null, updatedAtMs: nowMs };
     }

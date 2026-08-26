@@ -17,15 +17,19 @@ const SAFETY_CATEGORIES = new Set([
 const SAFETY_SEVERITIES = new Set(['low', 'medium', 'high', 'critical']);
 
 /** @param {any} input */
-const isValidSafetyAlert = ({ tourId, eventId, alert }) => (
-  isValidFirebaseKey(tourId)
-  && isValidFirebaseKey(eventId)
-  && resolveTrimmedString(alert.tourId) === tourId
-  && resolveTrimmedString(alert.status) === 'pending'
-  && SAFETY_CATEGORIES.has(resolveTrimmedString(alert.category).toLowerCase())
-  && SAFETY_SEVERITIES.has(resolveTrimmedString(alert.severity).toLowerCase())
-  && (alert.schemaVersion !== 2 || resolveTrimmedString(alert.eventId) === eventId)
-);
+const isValidSafetyAlert = ({ tourId, eventId, alert }) => {
+  const category = resolveTrimmedString(alert?.category);
+  const severity = resolveTrimmedString(alert?.severity);
+  return isValidFirebaseKey(tourId)
+    && isValidFirebaseKey(eventId)
+    && resolveTrimmedString(alert?.tourId) === tourId
+    && resolveTrimmedString(alert?.status) === 'pending'
+    && typeof category === 'string'
+    && SAFETY_CATEGORIES.has(category.toLowerCase())
+    && typeof severity === 'string'
+    && SAFETY_SEVERITIES.has(severity.toLowerCase())
+    && (alert?.schemaVersion !== 2 || resolveTrimmedString(alert.eventId) === eventId);
+};
 
 /** @param {any} event */
 const enqueueSafetyEvent = async (event) => {
@@ -42,12 +46,13 @@ const enqueueSafetyEvent = async (event) => {
   const job = buildSafetyNotificationJob({ tourId, eventId, alert, tourName, nowMs });
   const result = await enqueueNotificationJob({ db, job });
   const deliveryUpdate = {
-    notificationDeliveryStatus: 'queued',
+    notificationDeliveryStatus: result.job.status,
     notificationDeliveryJobId: result.jobId,
     notificationUpdatedAtMs: nowMs,
   };
   const updates = Object.fromEntries(Object.entries(deliveryUpdate).flatMap(([key, value]) => [
     [`tours/${tourId}/safetyAlerts/${eventId}/${key}`, value],
+    ...(job.senderAuthUid ? [[`logs/${job.senderAuthUid}/safety/${eventId}/${key}`, value]] : []),
     ...((alert.isSOS === true || alert.severity === 'critical')
       ? [[`globalSafetyAlerts/${eventId}/${key}`, value]]
       : []),
@@ -64,6 +69,7 @@ const sendSafetyAlertNotification = onValueCreated({
   region: 'europe-west1',
   instance: 'loch-lomond-travel-default-rtdb',
   maxInstances: 20,
+  retry: true,
 }, enqueueSafetyEvent);
 
 module.exports = { enqueueSafetyEvent, isValidSafetyAlert, sendSafetyAlertNotification };

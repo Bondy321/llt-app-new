@@ -1,4 +1,4 @@
-import { get, onValue, ref, update } from 'firebase/database';
+import { get, onValue, ref } from 'firebase/database';
 import {
   logFirebaseDebug,
   logFirebaseError,
@@ -8,6 +8,7 @@ import {
   summarizeFirebaseSnapshot,
 } from './firebaseDebug';
 import { nowAsISOString, toEpochMsStrict } from '../utils/dateUtils';
+import { postAdminAction } from './adminActionService';
 import {
   calculateDayDelta,
   getUrgencyBadge,
@@ -392,32 +393,44 @@ export function filterSafetyAlerts(alerts = [], status = 'attention') {
   });
 }
 
-export async function updateSafetyAlertStatus(database, alert, status, actorId = 'web-admin') {
+export async function updateSafetyAlertStatus(_database, alert, status, _actorId = 'web-admin') {
   if (!alert?.paths?.length) throw new Error('Missing safety alert path');
   const nextStatus = normalizeSafetyStatus(status);
-  const payload = {
-    status: nextStatus,
-    statusUpdatedAt: nowAsISOString(),
-    statusUpdatedBy: String(actorId || 'web-admin').slice(0, 128),
+  const actionByStatus = {
+    [SAFETY_STATUS.ACKNOWLEDGED]: 'acknowledge',
+    [SAFETY_STATUS.IN_PROGRESS]: 'start_response',
+    [SAFETY_STATUS.ESCALATED]: 'escalate',
+    [SAFETY_STATUS.RESOLVED]: 'resolve',
   };
+  const action = actionByStatus[nextStatus];
+  if (!action) throw new Error('Unsupported safety status transition');
+  const tourPath = alert.paths.find((path) => path.startsWith('tours/') && path.includes('/safetyAlerts/'));
+  const tourPathParts = tourPath?.split('/') || [];
+  const tourId = cleanString(alert.tourId || tourPathParts[1]);
+  const eventId = cleanString(alert.eventId || tourPathParts.at(-1));
+  if (!tourId || !eventId) throw new Error('Missing safety alert identity');
 
   const timer = startFirebaseDebugTimer('dashboard:safety-alert:update-status', {
     alertId: alert.id,
     requestedStatus: status,
     normalizedStatus: nextStatus,
-    paths: alert.paths,
-    payloadSummary: payload,
+    action,
+    tourId,
+    eventId,
   });
 
   try {
-    const updates = {};
-    alert.paths.forEach((path) => {
-      updates[`${path}/status`] = payload.status;
-      updates[`${path}/statusUpdatedAt`] = payload.statusUpdatedAt;
-      updates[`${path}/statusUpdatedBy`] = payload.statusUpdatedBy;
+    const result = await postAdminAction('getSafetyAlertDetail', { tourId, eventId, action }, {
+      fallbackError: 'The safety alert status could not be updated safely.',
+      reasonMessages: {
+        INVALID_TRANSITION: 'That safety alert has already moved to a later status.',
+        ALREADY_RESOLVED: 'That safety alert has already been resolved.',
+        NOT_AUTHORIZED: 'You are not authorised to update this safety alert.',
+        NOT_FOUND: 'That safety alert no longer exists.',
+      },
     });
-    await update(ref(database), updates);
     timer.success();
+    return result;
   } catch (error) {
     timer.failure(error);
     throw error;

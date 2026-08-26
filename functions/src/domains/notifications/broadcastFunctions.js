@@ -13,6 +13,7 @@ const {
 const { enqueueNotificationJob } = require('./notificationJobs');
 const { buildChatNotificationJob, buildMarketingNotificationJob } = require('./notificationProducerJobs');
 const { buildTourNotificationRecord, persistTourNotification } = require('./notificationState');
+const { runNotificationSourceHandoff } = require('./notificationSourceHandoff');
 
 /** @param {any} value */
 const normalizeSafeMarketingCta = (value) => {
@@ -88,17 +89,19 @@ const updateBroadcastDelivery = async ({ root, targetId, broadcastId, status, de
   await admin.database().ref(`${root}/${targetId}/${broadcastId}`).update(payload);
 };
 
-/** @param {string} authUid */
-const verifyBroadcastAuthor = async (authUid) => {
+/** @param {string} authUid @param {{auth?: any, verifyAdmin?: Function}} dependencies */
+const verifyBroadcastAuthor = async (authUid, { auth = admin.auth(), verifyAdmin = verifyOperationsAdminAccess } = {}) => {
+  let record;
   try {
-    const [record, isAdmin] = await Promise.all([
-      admin.auth().getUser(authUid),
-      verifyOperationsAdminAccess({ authUid }),
-    ]);
-    return Boolean(record && !record.disabled && record.providerData.length > 0 && isAdmin);
-  } catch (_error) {
-    return false;
+    record = await auth.getUser(authUid);
+  } catch (error) {
+    if (error?.code === 'auth/user-not-found' || error?.code === 'auth/invalid-uid') return false;
+    throw error;
   }
+  if (!record || record.disabled || record.providerData.length === 0) return false;
+  // Database/Auth infrastructure failures must escape so the retry-enabled
+  // source trigger can redeliver instead of permanently labelling an author invalid.
+  return verifyAdmin({ authUid });
 };
 
 /** @param {any} event */
@@ -130,10 +133,10 @@ const enqueueTourBroadcastEvent = async (event) => {
   const job = buildChatNotificationJob({
     tourId, messageId: broadcastId, messageData, tourName, isAdmin: true, nowMs: Date.now(),
   });
-  const result = await enqueueNotificationJob({ db, job });
-  await Promise.all([
-    db.ref(`chats/${tourId}/messages/${broadcastId}`).set(messageData),
-    persistTourNotification({
+  const result = await runNotificationSourceHandoff({
+    persistSource: () => Promise.all([
+      db.ref(`chats/${tourId}/messages/${broadcastId}`).set(messageData),
+      persistTourNotification({
       db,
       record: buildTourNotificationRecord({
         type: 'announcement', tourId, sourceId: broadcastId,
@@ -141,12 +144,14 @@ const enqueueTourBroadcastEvent = async (event) => {
         screen: 'Chat', messageId: broadcastId,
         createdAtMs: broadcast.createdAtMs, priority: 'high',
       }),
+      }),
+    ]),
+    enqueue: () => enqueueNotificationJob({ db, job }),
+    publishStatus: (enqueued) => updateBroadcastDelivery({
+      root: 'broadcasts', targetId: tourId, broadcastId, status: enqueued.job.status,
+      details: { deliveryJobId: enqueued.jobId },
     }),
-    updateBroadcastDelivery({
-      root: 'broadcasts', targetId: tourId, broadcastId, status: 'queued',
-      details: { deliveryJobId: result.jobId },
-    }),
-  ]);
+  });
   return { jobId: result.jobId, created: result.created };
 };
 
@@ -166,9 +171,8 @@ const enqueueCategoryBroadcastEvent = async (event) => {
   const nowMs = Date.now();
   const categoryLabel = broadcast.categoryLabel || resolveTourNotificationCategoryLabel(categoryKey);
   const job = buildMarketingNotificationJob({ categoryKey, broadcastId, categoryLabel, broadcast, nowMs });
-  const result = await enqueueNotificationJob({ job });
-  await Promise.all([
-    admin.database().ref(`marketing_notification_details/${broadcastId}`).set({
+  const result = await runNotificationSourceHandoff({
+    persistSource: () => admin.database().ref(`marketing_notification_details/${broadcastId}`).set({
       schemaVersion: 1,
       broadcastId,
       categoryKey,
@@ -180,11 +184,12 @@ const enqueueCategoryBroadcastEvent = async (event) => {
       status: 'active',
       updatedAtMs: nowMs,
     }),
-    updateBroadcastDelivery({
-      root: 'category_broadcasts', targetId: categoryKey, broadcastId, status: 'queued',
-      details: { deliveryJobId: result.jobId },
+    enqueue: () => enqueueNotificationJob({ job }),
+    publishStatus: (enqueued) => updateBroadcastDelivery({
+      root: 'category_broadcasts', targetId: categoryKey, broadcastId, status: enqueued.job.status,
+      details: { deliveryJobId: enqueued.jobId },
     }),
-  ]);
+  });
   return { jobId: result.jobId, created: result.created };
 };
 
@@ -193,6 +198,7 @@ const processBroadcastWrite = onValueCreated({
   region: 'europe-west1',
   instance: 'loch-lomond-travel-default-rtdb',
   maxInstances: 10,
+  retry: true,
 }, enqueueTourBroadcastEvent);
 
 const processCategoryBroadcastWrite = onValueCreated({
@@ -200,6 +206,7 @@ const processCategoryBroadcastWrite = onValueCreated({
   region: 'europe-west1',
   instance: 'loch-lomond-travel-default-rtdb',
   maxInstances: 10,
+  retry: true,
 }, enqueueCategoryBroadcastEvent);
 
 module.exports = {

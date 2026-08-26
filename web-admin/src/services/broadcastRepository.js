@@ -55,12 +55,43 @@ export const queueBroadcast = async ({ rootPath, payload }) => {
 
 export const previewNotificationAudience = (target) => callNotificationAdminEndpoint('previewNotificationAudience', target);
 
+const waitForAdminPoll = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs));
+const MAX_ADMIN_POLL_REQUESTS = 240;
+
+export const previewNotificationAudienceFully = async (target, {
+  onProgress = () => {},
+  shouldContinue = () => true,
+} = {}) => {
+  let request = target;
+  for (let requestCount = 0; requestCount < MAX_ADMIN_POLL_REQUESTS; requestCount += 1) {
+    if (!shouldContinue()) return null;
+    const result = await previewNotificationAudience(request);
+    if (!shouldContinue()) return null;
+    onProgress(result);
+    if (result?.preview?.complete) return result;
+    if (!result?.preview?.previewId) throw new Error('The audience check did not return a continuation identifier.');
+    request = { previewId: result.preview.previewId };
+    await waitForAdminPoll(150);
+  }
+  throw new Error('The audience check did not finish before its safety limit. Please retry.');
+};
+
 export const createServerTestNotification = (requestId) => callNotificationAdminEndpoint(
   'createServerTestNotification',
   { requestId },
 );
 
 export const requeueNotificationJob = (jobId) => callNotificationAdminEndpoint('requeueNotificationJob', { jobId });
+
+export const requeueNotificationJobFully = async (jobId) => {
+  let result = null;
+  for (let requestCount = 0; requestCount < MAX_ADMIN_POLL_REQUESTS; requestCount += 1) {
+    result = await requeueNotificationJob(jobId);
+    if (result?.complete) return result;
+    await waitForAdminPoll(150);
+  }
+  throw new Error('The bounded requeue did not finish before its safety limit. Please retry.');
+};
 
 export const subscribeToNotificationJob = ({ jobId, onData, onError }) => {
   if (!jobId) return () => {};

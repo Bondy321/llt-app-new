@@ -6,33 +6,59 @@ import { createNotificationRegistrationCoordinator } from '../../../services/not
 
 export default function useNotificationSessionNavigation({
   authUid,
+  authContextSettled = true,
   appSession,
   bookingId,
   isConnected,
   isDriver,
   navigateTo,
+  roleContextSettled,
+  sessionContextSettled,
   tourId,
 }) {
   const navigateRef = useRef(navigateTo);
   const coordinatorRef = useRef(null);
+  const responseSubscriptionRef = useRef(null);
+  const responseContextRef = useRef(null);
   navigateRef.current = navigateTo;
+  const hasLiveAppSession = Boolean(
+    bookingId
+    && appSession?.sessionId
+    && Number.isSafeInteger(appSession?.sessionRevision)
+    && appSession.sessionRevision > 0
+    && appSession?.expiresAtMs > Date.now()
+    && appSession?.tourId === tourId,
+  );
+  responseContextRef.current = {
+    activeTourId: hasLiveAppSession ? tourId : null,
+    hasAppSession: hasLiveAppSession,
+    hasAuth: Boolean(authUid),
+    isDriver: hasLiveAppSession && Boolean(isDriver),
+    authContextSettled: authContextSettled !== false,
+    sessionContextSettled: typeof sessionContextSettled === 'boolean'
+      ? sessionContextSettled
+      : hasLiveAppSession,
+    roleContextSettled: typeof roleContextSettled === 'boolean'
+      ? roleContextSettled
+      : Boolean(bookingId),
+  };
   const registrationStateRef = useRef(null);
   registrationStateRef.current = {
     authUid,
     sessionId: appSession?.sessionId || null,
+    sessionRevision: Number.isSafeInteger(appSession?.sessionRevision) ? appSession.sessionRevision : null,
     tourId: tourId || null,
-    operationalEligible: Boolean(appSession?.sessionId && tourId),
+    operationalEligible: hasLiveAppSession,
     isConnected: isConnected !== false,
   };
 
   useEffect(() => {
-    const hasAppSession = Boolean(bookingId && appSession?.sessionId && appSession?.expiresAtMs > Date.now());
     if (!authUid) return undefined;
 
-    return subscribeToNotificationResponses({
-      getContext: () => ({ activeTourId: hasAppSession ? tourId : null, hasAppSession, hasAuth: true, isDriver: hasAppSession && Boolean(isDriver) }),
+    const subscription = subscribeToNotificationResponses({
+      getContext: () => responseContextRef.current || {},
       onNavigate: async ({ screen, params }) => {
-        const responseTourId = params?.tourId || tourId;
+        const responseTourId = params?.tourId || responseContextRef.current?.activeTourId;
         const navigate = navigateRef.current;
         if (typeof navigate !== 'function') throw new Error('Notification navigation is not ready');
         navigate(screen, params);
@@ -47,7 +73,28 @@ export default function useNotificationSessionNavigation({
         }
       },
     });
-  }, [appSession?.expiresAtMs, appSession?.sessionId, authUid, bookingId, isDriver, tourId]);
+    responseSubscriptionRef.current = subscription;
+    return () => {
+      subscription();
+      if (responseSubscriptionRef.current === subscription) responseSubscriptionRef.current = null;
+    };
+  }, [authUid]);
+
+  useEffect(() => {
+    responseSubscriptionRef.current?.retryPending?.();
+  }, [
+    appSession?.expiresAtMs,
+    appSession?.sessionId,
+    appSession?.sessionRevision,
+    authContextSettled,
+    authUid,
+    bookingId,
+    isDriver,
+    navigateTo,
+    roleContextSettled,
+    sessionContextSettled,
+    tourId,
+  ]);
 
   useEffect(() => {
     if (!authUid) return undefined;
@@ -58,15 +105,16 @@ export default function useNotificationSessionNavigation({
       coordinator.stop();
       if (coordinatorRef.current === coordinator) coordinatorRef.current = null;
     };
-  }, [appSession?.sessionId, authUid]);
+  }, [authUid]);
 
   useEffect(() => {
     coordinatorRef.current?.update({
       authUid,
       sessionId: appSession?.sessionId || null,
+      sessionRevision: Number.isSafeInteger(appSession?.sessionRevision) ? appSession.sessionRevision : null,
       tourId: tourId || null,
-      operationalEligible: Boolean(appSession?.sessionId && tourId),
+      operationalEligible: hasLiveAppSession,
       isConnected: isConnected !== false,
     });
-  }, [appSession?.sessionId, authUid, isConnected, tourId]);
+  }, [appSession?.sessionId, appSession?.sessionRevision, authUid, hasLiveAppSession, isConnected, tourId]);
 }

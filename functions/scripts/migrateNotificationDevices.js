@@ -15,6 +15,7 @@ const parseArgs = (argv = []) => {
   const requestedPageSize = Number(readArg(argv, 'page-size'));
   return {
     apply: argv.includes('--apply'),
+    disableLegacyFallback: argv.includes('--disable-legacy-fallback'),
     confirmProject: readArg(argv, 'confirm-project'),
     afterUid: readArg(argv, 'after-uid'),
     pageSize: Number.isSafeInteger(requestedPageSize) && requestedPageSize > 0
@@ -128,12 +129,36 @@ const run = async ({ admin, options, nowMs = Date.now() }) => {
   const db = admin.database();
   const page = await readUserPage({ db, afterUid: options.afterUid, pageSize: options.pageSize });
   const summary = await migratePage({ db, entries: page.entries, apply: options.apply, nowMs });
+  const migrationComplete = !page.nextCursor;
+  let legacyFallbackEnabled = !options.disableLegacyFallback;
+  if (options.disableLegacyFallback && (!options.apply || !migrationComplete)) {
+    throw new Error('Legacy fallback can be disabled only after applying the final migration page');
+  }
+  if (options.apply) {
+    const stateResult = await db.ref('notification_migrations/device_registry_v1').transaction((current = {}) => {
+      const completed = current.completed === true || migrationComplete;
+      return {
+        ...current,
+        schemaVersion: 1,
+        completed,
+        legacyFallbackEnabled: current.legacyFallbackEnabled === false || options.disableLegacyFallback
+          ? false
+          : true,
+        lastCursor: page.nextCursor || null,
+        updatedAtMs: nowMs,
+        ...(completed ? { completedAtMs: Number(current.completedAtMs || nowMs) } : {}),
+      };
+    });
+    legacyFallbackEnabled = stateResult.snapshot.val()?.legacyFallbackEnabled !== false;
+  }
   return {
     mode: options.apply ? 'apply' : 'dry-run',
     projectId,
     ...summary,
     nextCursor: page.nextCursor,
     legacyFieldsPreserved: true,
+    migrationComplete,
+    legacyFallbackEnabled,
   };
 };
 

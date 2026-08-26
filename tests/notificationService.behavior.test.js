@@ -20,6 +20,15 @@ const clearNotificationServiceCache = () => {
     if (cacheKey.includes(notificationModulesRoot)) delete require.cache[cacheKey];
   });
 };
+const memoryStorage = () => {
+  const values = new Map();
+  return {
+    values,
+    getItem: async (key) => values.get(key) ?? null,
+    setItem: async (key, value) => { values.set(key, value); },
+    removeItem: async (key) => { values.delete(key); },
+  };
+};
 
 const buildNotificationService = ({
   permission = 'granted',
@@ -35,6 +44,8 @@ const buildNotificationService = ({
   let permissionChecks = 0;
   let responseHandler = null;
   let responseListenerRemoved = false;
+  let currentLastNotificationResponse = lastNotificationResponse;
+  let clearedNotificationResponses = 0;
   process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = 'demo-notification-project';
   global.fetch = async () => ({
     ok: true,
@@ -58,7 +69,11 @@ const buildNotificationService = ({
         setNotificationChannelAsync: async () => {},
         getPermissionsAsync: async () => { permissionChecks += 1; return { status: permissionStatus }; },
         requestPermissionsAsync: async () => { permissionChecks += 1; return { status: permissionStatus }; },
-        getLastNotificationResponseAsync: async () => lastNotificationResponse,
+        getLastNotificationResponseAsync: async () => currentLastNotificationResponse,
+        clearLastNotificationResponseAsync: async () => {
+          clearedNotificationResponses += 1;
+          currentLastNotificationResponse = null;
+        },
         addNotificationResponseReceivedListener: (handler) => {
           responseHandler = handler;
           return { remove: () => { responseListenerRemoved = true; } };
@@ -132,6 +147,8 @@ const buildNotificationService = ({
     setPermission: (next) => { permissionStatus = next; },
     emitNotificationResponse: (response) => responseHandler?.(response),
     wasResponseListenerRemoved: () => responseListenerRemoved,
+    getClearedNotificationResponses: () => clearedNotificationResponses,
+    setLastNotificationResponse: (response) => { currentLastNotificationResponse = response; },
     getPermissionCheckCount: () => permissionChecks,
   };
 };
@@ -513,4 +530,186 @@ test('notification response can retry after navigation fails and deduplicates on
 
   assert.equal(attempts, 2);
   unsubscribe();
+});
+
+test('cold-start Chat and Itinerary responses survive session hydration and navigate exactly once', async () => {
+  for (const [index, screen] of ['Chat', 'Itinerary'].entries()) {
+    const response = {
+      notification: {
+        request: {
+          identifier: `cold-hydration-${screen}-${index}`,
+          content: { data: {
+            screen,
+            tourId: 'TOUR_1',
+            ...(screen === 'Chat' ? { messageId: `message-${index}` } : {}),
+          } },
+        },
+      },
+    };
+    const storage = memoryStorage();
+    const context = {
+      activeTourId: null,
+      hasAuth: true,
+      isDriver: false,
+      sessionContextSettled: false,
+      roleContextSettled: false,
+    };
+    const harness = buildNotificationService({ lastNotificationResponse: response });
+    const routes = [];
+    const unsubscribe = harness.service.subscribeToNotificationResponses({
+      storage,
+      getContext: () => context,
+      onNavigate: async (route) => routes.push(route),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(routes.length, 0);
+    assert.equal(harness.getClearedNotificationResponses(), 0);
+    assert.ok(storage.values.has('@LLT:pending-notification-response:v1'));
+
+    Object.assign(context, {
+      activeTourId: 'TOUR_1',
+      sessionContextSettled: true,
+      roleContextSettled: true,
+    });
+    await unsubscribe.retryPending();
+    await harness.emitNotificationResponse(response);
+
+    assert.equal(routes.length, 1);
+    assert.equal(routes[0].screen, screen);
+    assert.equal(storage.values.has('@LLT:pending-notification-response:v1'), false);
+    assert.ok(harness.getClearedNotificationResponses() >= 1);
+    unsubscribe();
+  }
+});
+
+test('cold-start Driver Tour Pack waits for driver-role hydration', async () => {
+  const response = { notification: { request: {
+    identifier: 'cold-driver-pack',
+    content: { data: {
+      screen: 'DriverTourPack', tourId: 'TOUR_1', departureKey: '2026-09-10::TOUR_1', revision: 2,
+    } },
+  } } };
+  const storage = memoryStorage();
+  const context = {
+    activeTourId: 'TOUR_1', hasAuth: true, isDriver: false,
+    sessionContextSettled: true, roleContextSettled: false,
+  };
+  const harness = buildNotificationService({ lastNotificationResponse: response });
+  const routes = [];
+  const unsubscribe = harness.service.subscribeToNotificationResponses({
+    storage,
+    getContext: () => context,
+    onNavigate: async (route) => routes.push(route),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(routes.length, 0);
+  assert.equal(harness.getClearedNotificationResponses(), 0);
+
+  context.isDriver = true;
+  context.roleContextSettled = true;
+  await unsubscribe.retryPending();
+  assert.equal(routes.length, 1);
+  assert.equal(routes[0].screen, 'DriverTourPack');
+  unsubscribe();
+});
+
+test('navigation-not-ready is durably deferred and later succeeds exactly once', async () => {
+  const response = { notification: { request: {
+    identifier: 'navigation-not-ready-1',
+    content: { data: { screen: 'Chat', tourId: 'TOUR_1', messageId: 'message-ready' } },
+  } } };
+  const storage = memoryStorage();
+  const harness = buildNotificationService();
+  let ready = false;
+  let navigationCount = 0;
+  const unsubscribe = harness.service.subscribeToNotificationResponses({
+    storage,
+    getContext: () => ({ activeTourId: 'TOUR_1', hasAuth: true, isDriver: false, sessionContextSettled: true }),
+    onNavigate: async () => {
+      if (!ready) throw new Error('Notification navigation is not ready');
+      navigationCount += 1;
+    },
+  });
+  await harness.emitNotificationResponse(response);
+  assert.equal(navigationCount, 0);
+  assert.ok(storage.values.has('@LLT:pending-notification-response:v1'));
+
+  ready = true;
+  await unsubscribe.retryPending();
+  await unsubscribe.retryPending();
+  assert.equal(navigationCount, 1);
+  assert.equal(storage.values.has('@LLT:pending-notification-response:v1'), false);
+  unsubscribe();
+});
+
+test('a pending response has bounded retention and cannot be re-added after expiry', async () => {
+  const response = { notification: { request: {
+    identifier: 'bounded-pending-1',
+    content: { data: { screen: 'Chat', tourId: 'TOUR_1', messageId: 'bounded-message' } },
+  } } };
+  const storage = memoryStorage();
+  let nowMs = 1_000;
+  const harness = buildNotificationService();
+  const unsubscribe = harness.service.subscribeToNotificationResponses({
+    storage,
+    now: () => nowMs,
+    getContext: () => ({ activeTourId: null, sessionContextSettled: false }),
+    onNavigate: async () => assert.fail('expired pending response navigated'),
+  });
+  await harness.emitNotificationResponse(response);
+  assert.ok(storage.values.has('@LLT:pending-notification-response:v1'));
+
+  nowMs += 25 * 60 * 60 * 1_000;
+  await unsubscribe.retryPending();
+  await harness.emitNotificationResponse(response);
+  assert.equal(storage.values.has('@LLT:pending-notification-response:v1'), false);
+  assert.ok(harness.getClearedNotificationResponses() >= 1);
+  unsubscribe();
+});
+
+test('expired and malformed responses are definitively rejected and cleared', async () => {
+  const storage = memoryStorage();
+  const harness = buildNotificationService();
+  const unsubscribe = harness.service.subscribeToNotificationResponses({
+    storage,
+    getContext: () => ({ activeTourId: null, sessionContextSettled: false }),
+    onNavigate: async () => assert.fail('definitively rejected response navigated'),
+  });
+  await harness.emitNotificationResponse({ data: {
+    screen: 'Itinerary', tourId: 'TOUR_1', expiresAtMs: Date.now() - 1,
+  } });
+  await harness.emitNotificationResponse({ data: { screen: 'UnknownRoute' } });
+  assert.equal(harness.getClearedNotificationResponses(), 2);
+  assert.equal(storage.values.has('@LLT:pending-notification-response:v1'), false);
+  unsubscribe();
+});
+
+test('process-restart deduplication clears a lingering handled native response', async () => {
+  const response = { notification: { request: {
+    identifier: 'restart-dedupe-1',
+    content: { data: { screen: 'Itinerary', tourId: 'TOUR_1' } },
+  } } };
+  const storage = memoryStorage();
+  let navigationCount = 0;
+  const firstHarness = buildNotificationService({ lastNotificationResponse: response });
+  const first = firstHarness.service.subscribeToNotificationResponses({
+    storage,
+    getContext: () => ({ activeTourId: 'TOUR_1', sessionContextSettled: true }),
+    onNavigate: async () => { navigationCount += 1; },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  first();
+  assert.equal(navigationCount, 1);
+
+  const secondHarness = buildNotificationService({ lastNotificationResponse: response });
+  const second = secondHarness.service.subscribeToNotificationResponses({
+    storage,
+    getContext: () => ({ activeTourId: 'TOUR_1', sessionContextSettled: true }),
+    onNavigate: async () => { navigationCount += 1; },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(navigationCount, 1);
+  assert.ok(secondHarness.getClearedNotificationResponses() >= 1);
+  second();
 });

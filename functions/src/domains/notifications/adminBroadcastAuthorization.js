@@ -16,8 +16,9 @@ const verifyAdminBroadcast = async (messageData) => {
     return userRecord.providerData.length > 0
       && await verifyOperationsAdminAccess({ authUid: senderUid });
   } catch (error) {
-    log.error('Admin broadcast verification failed', error, { senderUid });
-    return false;
+    if (error?.code === 'auth/user-not-found' || error?.code === 'auth/invalid-uid') return false;
+    log.error('Admin broadcast verification deferred for retry', error, { senderUid });
+    throw error;
   }
 };
 

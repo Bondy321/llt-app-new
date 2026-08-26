@@ -1,4 +1,5 @@
 import { auth } from '../../firebase';
+import { allocateNotificationRegistrationRevision } from './notificationRegistrationRevision';
 
 const endpoint = (name) => {
   const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
@@ -23,16 +24,29 @@ const post = async (name, body, { fetchFn = fetch } = {}) => {
   return payload;
 };
 
-export const reconcileNotificationDevice = (input, options) => post('updateNotificationDeviceRegistration', {
-  action: 'reconcile', ...input,
+const withRegistrationRevision = async (input = {}) => {
+  if (Number.isSafeInteger(input.registrationRevision) && input.registrationRevision > 0) return input;
+  // A Firebase ID token remains mandatory in post(); the fallback exists only
+  // for the brief auth-restoration instant before the SDK exposes its UID.
+  const authUid = auth?.currentUser?.uid || 'authenticated-device';
+  const registrationRevision = await allocateNotificationRegistrationRevision({ authUid });
+  return { ...input, registrationRevision };
+};
+
+export const reconcileNotificationDevice = async (input, options) => post('updateNotificationDeviceRegistration', {
+  action: 'reconcile', ...await withRegistrationRevision(input),
 }, options);
-export const updateNotificationPreferences = (input, options) => post('updateNotificationDeviceRegistration', {
-  action: 'preferences', ...input,
+export const updateNotificationPreferences = async (input, options) => post('updateNotificationDeviceRegistration', {
+  action: 'preferences', ...await withRegistrationRevision(input),
 }, options);
-export const endNotificationDeviceSession = (input = {}, options) => post('updateNotificationDeviceRegistration', {
-  action: 'logout', ...input,
+export const endNotificationDeviceSession = async (input = {}, options) => post('updateNotificationDeviceRegistration', {
+  action: 'logout', ...await withRegistrationRevision(input),
 }, options);
-export const revokeNotificationDevice = (options) => post('updateNotificationDeviceRegistration', { action: 'security_revoke' }, options);
-export const deleteNotificationDevice = (options) => post('updateNotificationDeviceRegistration', { action: 'delete' }, options);
+export const revokeNotificationDevice = async (options) => post('updateNotificationDeviceRegistration', {
+  action: 'security_revoke', ...await withRegistrationRevision(),
+}, options);
+export const deleteNotificationDevice = async (options) => post('updateNotificationDeviceRegistration', {
+  action: 'delete', ...await withRegistrationRevision(),
+}, options);
 export const getMarketingNotificationDetail = (input, options) => post('getMarketingNotificationDetail', input, options);
 export const getSafetyAlertDetail = (input, options) => post('getSafetyAlertDetail', input, options);

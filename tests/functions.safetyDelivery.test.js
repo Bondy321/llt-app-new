@@ -7,6 +7,7 @@ process.env.FIREBASE_CONFIG = JSON.stringify({
 });
 
 const { __testables } = require('../functions/index.js');
+const { enqueueSafetyEvent, isValidSafetyAlert } = require('../functions/src/domains/notifications/safetyNotificationFunction');
 
 const baseInput = (overrides = {}) => ({
   clientEventId: 'safety_event_1',
@@ -79,6 +80,26 @@ test('safety notification copy is urgent but does not expose report details on t
   assert.match(content.body, /critical medical report/);
   assert.doesNotMatch(content.body, /Sensitive medical details/);
   assert.equal(content.priority, 'high');
+});
+
+test('malformed safety category or severity is deliberately skipped before enqueue', async () => {
+  const buildEvent = (alert) => ({
+    params: { tourId: 'TOUR_1', eventId: 'safety_event_1' },
+    data: { val: () => alert },
+  });
+  const validShape = {
+    schemaVersion: 2,
+    eventId: 'safety_event_1',
+    tourId: 'TOUR_1',
+    status: 'pending',
+    category: 'incident',
+    severity: 'high',
+  };
+
+  assert.equal(isValidSafetyAlert({ tourId: 'TOUR_1', eventId: 'safety_event_1', alert: { ...validShape, category: null } }), false);
+  assert.equal(isValidSafetyAlert({ tourId: 'TOUR_1', eventId: 'safety_event_1', alert: { ...validShape, severity: { invalid: true } } }), false);
+  assert.equal(await enqueueSafetyEvent(buildEvent({ ...validShape, category: null })), null);
+  assert.equal(await enqueueSafetyEvent(buildEvent({ ...validShape, severity: { invalid: true } })), null);
 });
 
 test('safety reporter access distinguishes attached passengers and coherent assigned drivers', async () => {

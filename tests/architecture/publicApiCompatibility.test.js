@@ -114,7 +114,7 @@ const EVENT_PATHS = {
   processBroadcastWrite: 'broadcasts/{tourId}/{broadcastId}',
   processCategoryBroadcastWrite: 'category_broadcasts/{categoryKey}/{broadcastId}',
   processNotificationReadMigrationRequest: 'notification_read_migration_requests/{tourId}/{authUid}',
-  processNotificationDeliveryJob: 'notification_jobs/{jobId}',
+  processNotificationDeliveryJob: 'notification_job_fanout_queue/{queueKey}',
   projectDriverTourPackActionState: 'driver_tour_pack_actions/{departureKey}/{driverId}',
   sendChatNotification: 'chats/{tourId}/messages/{messageId}',
   sendDriverTourPackChangeNotification: 'driver_tour_packs/{departureKey}',

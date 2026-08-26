@@ -222,7 +222,9 @@ const renderSafetyAlertDetail = (context) => (
   <SafetyAlertDetailScreen
     tourId={context.screenParams?.tourId || context.tourData?.id}
     eventId={context.screenParams?.eventId}
-    onBack={() => context.navigateBack('DriverHome')}
+    onBack={() => context.navigateBack(
+      context.screenParams?.from || (context.isDriverSession ? 'DriverHome' : 'Login'),
+    )}
   />
 );
 

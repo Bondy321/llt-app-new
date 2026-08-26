@@ -5,8 +5,9 @@ import Constants from 'expo-constants';
 import logger from '../loggerService';
 import { initializeNotificationChannels, primeNotificationPermissions, registerForPushNotificationsAsync } from './notificationRegistrationService';
 import { reconcileNotificationDevice } from './notificationDeviceApiService';
+import { allocateNotificationRegistrationRevision } from './notificationRegistrationRevision';
 
-const RETRY_KEY = '@LLT:notification-registration-retry:v1';
+const RETRY_KEY_PREFIX = '@LLT:notification-registration-retry:v2:';
 const RETRY_BASE_MS = 30_000;
 const RETRY_MAX_MS = 15 * 60_000;
 
@@ -14,6 +15,7 @@ export const createNotificationRegistrationCoordinator = ({
   storage = AsyncStorage,
   notificationApi = Notifications,
   reconcile = reconcileNotificationDevice,
+  allocateRevision = allocateNotificationRegistrationRevision,
   now = () => Date.now(),
 } = {}) => {
   let state = null;
@@ -25,15 +27,31 @@ export const createNotificationRegistrationCoordinator = ({
   let retryTimer = null;
   let tokenSubscription = null;
   let appStateSubscription = null;
+  let active = false;
 
-  const clearRetry = async () => {
+  const retryKey = (snapshot) => {
+    const authUid = typeof snapshot?.authUid === 'string' ? snapshot.authUid.replace(/[^A-Za-z0-9_-]/g, '_') : 'anonymous';
+    const sessionId = typeof snapshot?.sessionId === 'string' ? snapshot.sessionId.replace(/[^A-Za-z0-9_-]/g, '_') : 'marketing';
+    return `${RETRY_KEY_PREFIX}${authUid}:${sessionId}`;
+  };
+
+  const clearRetry = async (snapshot, callGeneration) => {
+    if (!active || callGeneration !== generation) return;
     if (retryTimer) clearTimeout(retryTimer);
     retryTimer = null;
-    await storage.removeItem(RETRY_KEY).catch(() => undefined);
+    await storage.removeItem(retryKey(snapshot)).catch(() => undefined);
   };
-  const scheduleRetry = async (attempt) => {
+  const scheduleRetry = async (snapshot, callGeneration, attempt) => {
+    if (!active || callGeneration !== generation || snapshot !== state) return;
     const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * (2 ** Math.min(attempt, 5)));
-    await storage.setItem(RETRY_KEY, JSON.stringify({ attempt, availableAtMs: now() + delay })).catch(() => undefined);
+    const key = retryKey(snapshot);
+    await storage.setItem(key, JSON.stringify({
+      attempt,
+      availableAtMs: now() + delay,
+      authUid: snapshot.authUid,
+      sessionId: snapshot.sessionId || null,
+    })).catch(() => undefined);
+    if (!active || callGeneration !== generation || snapshot !== state) return;
     if (retryTimer) clearTimeout(retryTimer);
     retryTimer = setTimeout(() => reconcileCurrent('durable_retry'), delay);
   };
@@ -57,25 +75,38 @@ export const createNotificationRegistrationCoordinator = ({
         tokenError.code = 'TOKEN_FETCH_FAILED';
         throw tokenError;
       }
+      const operationalEligible = snapshot.operationalEligible === true
+        && typeof snapshot.sessionId === 'string'
+        && Number.isSafeInteger(snapshot.sessionRevision)
+        && snapshot.sessionRevision > 0
+        && typeof snapshot.tourId === 'string';
+      const registrationRevision = await allocateRevision({ authUid: snapshot.authUid, now });
+      if (!active || callGeneration !== generation || snapshot !== state) return { skipped: true, reason: 'stale' };
       const result = await reconcile({
         pushToken,
         permissionState: permissionData.state,
         permissionCanAskAgain: permissionData.canAskAgain === true,
         ...(snapshot.marketingPreferences ? { marketingPreferences: snapshot.marketingPreferences } : {}),
-        operationalEligible: snapshot.operationalEligible === true,
+        operationalEligible,
         tourId: snapshot.tourId || null,
+        ...(operationalEligible ? {
+          appSessionId: snapshot.sessionId,
+          appSessionRevision: snapshot.sessionRevision,
+        } : {}),
+        registrationRevision,
         appVersion: Constants.expoConfig?.version || null,
         appBuild: Constants.expoConfig?.ios?.buildNumber || Constants.expoConfig?.android?.versionCode?.toString() || null,
         platform: Platform.OS,
       });
-      await clearRetry();
+      if (!active || callGeneration !== generation || snapshot !== state) return { skipped: true, reason: 'stale' };
+      await clearRetry(snapshot, callGeneration);
       return result;
     } catch (error) {
-      // Do not retry an unavailable/blocked permission state: only network/service failures.
-      if (permissionData.state !== 'blocked' && permissionData.state !== 'unavailable') {
-        const retry = JSON.parse(await storage.getItem(RETRY_KEY).catch(() => null) || '{}');
-        await scheduleRetry(Number(retry.attempt || 0) + 1);
-      }
+      if (!active || callGeneration !== generation || snapshot !== state) return { skipped: true, reason: 'stale' };
+      // Permission decisions are not re-prompted, but publishing a disabled
+      // state is still durable and must retry after transport/service failure.
+      const retry = JSON.parse(await storage.getItem(retryKey(snapshot)).catch(() => null) || '{}');
+      await scheduleRetry(snapshot, callGeneration, Number(retry.attempt || 0) + 1);
       logger.warn('NotificationCoordinator', 'Notification registration reconciliation deferred', {
         reason, error: error?.message || String(error),
       });
@@ -113,10 +144,15 @@ export const createNotificationRegistrationCoordinator = ({
   const update = (next) => {
     const changedIdentity = next?.authUid !== state?.authUid || next?.sessionId !== state?.sessionId;
     state = next;
-    if (changedIdentity) generation += 1;
+    if (changedIdentity) {
+      generation += 1;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
+    }
     return reconcileCurrent('state_change');
   };
   const start = (initial) => {
+    active = true;
     state = initial;
     generation += 1;
     initializeNotificationChannels().catch((error) => logger.warn('NotificationCoordinator', 'Android channel setup deferred', { error: error?.message || String(error) }));
@@ -124,15 +160,18 @@ export const createNotificationRegistrationCoordinator = ({
     appStateSubscription = AppState.addEventListener?.('change', (nextState) => {
       if (nextState === 'active') reconcileCurrent('foreground');
     }) || null;
-    storage.getItem(RETRY_KEY).then((raw) => {
+    const initialGeneration = generation;
+    const initialState = state;
+    storage.getItem(retryKey(initialState)).then((raw) => {
       const retry = JSON.parse(raw || '{}');
-      if (!retry.availableAtMs) return;
+      if (!active || initialGeneration !== generation || initialState !== state || !retry.availableAtMs) return;
       if (retry.availableAtMs <= now()) reconcileCurrent('restored_retry');
       else retryTimer = setTimeout(() => reconcileCurrent('restored_retry'), retry.availableAtMs - now());
     }).catch(() => undefined);
     return reconcileCurrent('start');
   };
   const stop = () => {
+    active = false;
     generation += 1;
     state = null;
     pendingReason = null;

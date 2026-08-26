@@ -12,13 +12,21 @@ import {
 import notificationRouting from '../../utils/notificationRouting';
 
 // Configure how notifications behave when the app is open
-const { resolveNotificationRoute } = notificationRouting;
+const {
+  NOTIFICATION_RESPONSE_DISPOSITIONS,
+  getNotificationResponseKey,
+  readNotificationData,
+  resolveNotificationRoute,
+} = notificationRouting;
 const handledNotificationResponseKeys = new Set();
 const handledNotificationResponseTimes = new Map();
 const inFlightNotificationResponseKeys = new Set();
 const MAX_HANDLED_NOTIFICATION_RESPONSES = 50;
 const HANDLED_RESPONSE_KEY = '@LLT:handled-notification-responses:v1';
+const PENDING_RESPONSE_KEY = '@LLT:pending-notification-response:v1';
 const HANDLED_RESPONSE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const PENDING_RESPONSE_RETENTION_MS = 24 * 60 * 60 * 1000;
+const MAX_PENDING_RESPONSE_DATA_LENGTH = 8_192;
 const NOTIFICATION_IO_TIMEOUT_MS = 10000;
 
 const withTimeout = (promise, message, timeoutMs = NOTIFICATION_IO_TIMEOUT_MS) => {
@@ -51,6 +59,8 @@ export const subscribeToNotificationResponses = ({
   getContext = () => ({}),
   onNavigate,
   onRejected = () => {},
+  storage = AsyncStorage,
+  now = () => Date.now(),
 } = {}) => {
   if (typeof onNavigate !== 'function') {
     throw new Error('Notification response navigation callback is required');
@@ -62,39 +72,115 @@ export const subscribeToNotificationResponses = ({
 
   let active = true;
   const persistHandled = async () => {
-    const cutoff = Date.now() - HANDLED_RESPONSE_RETENTION_MS;
+    const cutoff = now() - HANDLED_RESPONSE_RETENTION_MS;
     const entries = [...handledNotificationResponseTimes.entries()]
       .filter(([, handledAtMs]) => handledAtMs > cutoff)
       .slice(-MAX_HANDLED_NOTIFICATION_RESPONSES)
       .map(([key, handledAtMs]) => ({ key, handledAtMs }));
-    await AsyncStorage.setItem(HANDLED_RESPONSE_KEY, JSON.stringify(entries)).catch(() => undefined);
+    await storage.setItem(HANDLED_RESPONSE_KEY, JSON.stringify(entries));
   };
-  const handledReady = Promise.resolve(AsyncStorage.getItem(HANDLED_RESPONSE_KEY)).then((raw) => {
+  const handledReady = Promise.resolve(storage.getItem(HANDLED_RESPONSE_KEY)).then((raw) => {
     const entries = JSON.parse(raw || '[]');
-    const cutoff = Date.now() - HANDLED_RESPONSE_RETENTION_MS;
+    const cutoff = now() - HANDLED_RESPONSE_RETENTION_MS;
     if (!Array.isArray(entries)) return;
     entries.slice(-MAX_HANDLED_NOTIFICATION_RESPONSES).forEach((entry) => {
       const key = typeof entry === 'string' ? entry : entry?.key;
-      const handledAtMs = typeof entry === 'string' ? Date.now() : Number(entry?.handledAtMs || 0);
+      const handledAtMs = typeof entry === 'string' ? now() : Number(entry?.handledAtMs || 0);
       if (typeof key === 'string' && key && handledAtMs > cutoff) {
         handledNotificationResponseKeys.add(key);
         handledNotificationResponseTimes.set(key, handledAtMs);
       }
     });
   }).catch(() => undefined);
+
+  const readPending = async () => {
+    try {
+      const raw = await storage.getItem(PENDING_RESPONSE_KEY);
+      const pending = JSON.parse(raw || 'null');
+      const expired = pending?.schemaVersion === 1
+        && pending?.response
+        && Number.isSafeInteger(pending.storedAtMs)
+        && pending.storedAtMs + PENDING_RESPONSE_RETENTION_MS <= now();
+      if (expired && typeof pending.responseKey === 'string') {
+        handledNotificationResponseKeys.add(pending.responseKey);
+        handledNotificationResponseTimes.set(pending.responseKey, now());
+        await persistHandled().catch(() => undefined);
+      }
+      if (!pending || pending.schemaVersion !== 1 || !pending.response
+        || !Number.isSafeInteger(pending.storedAtMs) || expired) {
+        if (raw) await storage.removeItem(PENDING_RESPONSE_KEY).catch(() => undefined);
+        return null;
+      }
+      return pending;
+    } catch (_error) {
+      await storage.removeItem(PENDING_RESPONSE_KEY).catch(() => undefined);
+      return null;
+    }
+  };
+  const persistPending = async (response) => {
+    const data = readNotificationData(response);
+    const serializedData = JSON.stringify(data || {});
+    if (serializedData.length > MAX_PENDING_RESPONSE_DATA_LENGTH) return false;
+    const responseKey = getNotificationResponseKey(response);
+    const existing = await readPending();
+    const compactResponse = {
+      request: {
+        identifier: responseKey,
+        content: { data },
+      },
+    };
+    await storage.setItem(PENDING_RESPONSE_KEY, JSON.stringify({
+      schemaVersion: 1,
+      responseKey,
+      response: compactResponse,
+      storedAtMs: existing?.responseKey === responseKey ? existing.storedAtMs : now(),
+    }));
+    return true;
+  };
+  const clearPending = async (responseKey) => {
+    const pending = await readPending();
+    if (!pending || pending.responseKey === responseKey) {
+      await storage.removeItem(PENDING_RESPONSE_KEY).catch(() => undefined);
+    }
+  };
+  const clearNativeIfMatching = async (responseKey) => {
+    try {
+      const last = await Notifications.getLastNotificationResponseAsync?.();
+      if (!last || getNotificationResponseKey(last) === responseKey) {
+        await Notifications.clearLastNotificationResponseAsync?.();
+      }
+    } catch (_error) {
+      // A later subscription/retry will consume a lingering handled response.
+    }
+  };
   const handleResponse = async (response) => {
     if (!active || !response) return;
     await handledReady;
     if (!active) return;
+    const responseKey = getNotificationResponseKey(response);
+    if (handledNotificationResponseKeys.has(responseKey)) {
+      await clearPending(responseKey);
+      await clearNativeIfMatching(responseKey);
+      return { accepted: true, disposition: NOTIFICATION_RESPONSE_DISPOSITIONS.ACCEPTED, responseKey };
+    }
     const route = resolveNotificationRoute(response, getContext?.() || {});
+    if (route.disposition === NOTIFICATION_RESPONSE_DISPOSITIONS.TRANSIENTLY_DEFERRED) {
+      const retained = await persistPending(response).catch(() => false);
+      logger.info('NotificationService', 'Notification response deferred', {
+        reason: route.reason,
+        retained,
+      });
+      onRejected(route.reason, route.disposition);
+      return route;
+    }
     if (!route.accepted) {
       logger.info('NotificationService', 'Notification response ignored', { reason: route.reason });
-      onRejected(route.reason);
-      await Notifications.clearLastNotificationResponseAsync?.().catch(() => undefined);
-      return;
+      onRejected(route.reason, route.disposition);
+      await clearPending(responseKey);
+      await clearNativeIfMatching(responseKey);
+      return route;
     }
-    if (handledNotificationResponseKeys.has(route.responseKey)
-      || inFlightNotificationResponseKeys.has(route.responseKey)) return;
+    if (inFlightNotificationResponseKeys.has(route.responseKey)) return route;
 
     inFlightNotificationResponseKeys.add(route.responseKey);
 
@@ -105,26 +191,43 @@ export const subscribeToNotificationResponses = ({
     try {
       await onNavigate(route);
       handledNotificationResponseKeys.add(route.responseKey);
-      handledNotificationResponseTimes.set(route.responseKey, Date.now());
+      handledNotificationResponseTimes.set(route.responseKey, now());
       if (handledNotificationResponseKeys.size > MAX_HANDLED_NOTIFICATION_RESPONSES) {
         const oldestKey = handledNotificationResponseKeys.values().next().value;
         handledNotificationResponseKeys.delete(oldestKey);
         handledNotificationResponseTimes.delete(oldestKey);
       }
-      await persistHandled();
-      await Notifications.clearLastNotificationResponseAsync?.().catch(() => undefined);
+      try {
+        await persistHandled();
+      } catch (error) {
+        logger.warn('NotificationService', 'Handled notification response could not be persisted', {
+          screen: route.screen,
+          error: error?.message || String(error),
+        });
+      }
+      await clearPending(route.responseKey);
+      await clearNativeIfMatching(route.responseKey);
     } catch (error) {
       logger.error('NotificationService', 'Notification response navigation failed', {
         screen: route.screen,
         error: error?.message || String(error),
       });
+      await persistPending(response).catch(() => undefined);
+      onRejected('NAVIGATION_NOT_READY', NOTIFICATION_RESPONSE_DISPOSITIONS.TRANSIENTLY_DEFERRED);
     } finally {
       inFlightNotificationResponseKeys.delete(route.responseKey);
     }
   };
 
   const subscription = Notifications.addNotificationResponseReceivedListener?.(handleResponse);
-  Promise.resolve(Notifications.getLastNotificationResponseAsync?.())
+  const retryPending = async () => {
+    const pending = await readPending();
+    if (pending?.response) return handleResponse(pending.response);
+    return null;
+  };
+  Promise.resolve()
+    .then(retryPending)
+    .then(() => Notifications.getLastNotificationResponseAsync?.())
     .then(handleResponse)
     .catch((error) => {
       logger.warn('NotificationService', 'Cold-start notification response could not be read', {
@@ -132,10 +235,12 @@ export const subscribeToNotificationResponses = ({
       });
     });
 
-  return () => {
+  const unsubscribe = () => {
     active = false;
     subscription?.remove?.();
   };
+  unsubscribe.retryPending = retryPending;
+  return unsubscribe;
 };
 
 // ==================== VALIDATION HELPERS ====================

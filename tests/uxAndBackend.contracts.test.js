@@ -476,8 +476,11 @@ test('Static contract: notification taps preserve exact destination context end 
   const chatSource = readMobileModuleSource('screens/ChatScreen.js');
   const preferencesSource = readMobileModuleSource('screens/NotificationPreferencesScreen.js');
   const routingSource = readText('utils/notificationRouting.js');
+  const sessionNavigationSource = readText('src/app/notifications/useNotificationSessionNavigation.js');
 
-  assert.match(appSource, /const hasAppSession = Boolean\(bookingId && appSession\?\.sessionId/);
+  assert.match(sessionNavigationSource, /const hasLiveAppSession = Boolean\(/);
+  assert.match(sessionNavigationSource, /appSession\?\.sessionRevision/);
+  assert.match(sessionNavigationSource, /appSession\?\.expiresAtMs > Date\.now\(\)/);
   assert.match(appSource, /bookingId: bookingData\?\.id/);
   assert.match(appSource, /initialMessageId=\{context\.screenParams\.messageId \|\| null\}/);
   assert.match(appSource, /initialMarketingCategoryKey=\{context\.screenParams\?\.categoryKey \|\| null\}/);

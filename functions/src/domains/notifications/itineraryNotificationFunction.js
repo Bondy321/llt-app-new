@@ -15,6 +15,7 @@ const {
 } = require('./notificationState');
 
 /** @param {any} event */
+// eslint-disable-next-line complexity -- source validation and durable handoff are intentionally colocated
 const enqueueItineraryEvent = async (event) => {
   const tourId = event.params.tourId;
   if (!isValidFirebaseKey(tourId)) return null;
@@ -38,7 +39,10 @@ const enqueueItineraryEvent = async (event) => {
     priority: 'high',
   });
   await persistTourNotification({ record: notice });
-  const job = buildItineraryNotificationJob({ tourId, sourceId, change, noticeId: notice.noticeId, nowMs });
+  const sourceOrderMs = Number.isSafeInteger(event.data?.after?.val?.()?.updatedAtMs)
+    ? event.data.after.val().updatedAtMs
+    : (Number.isFinite(Date.parse(event.time || '')) ? Date.parse(event.time) : nowMs);
+  const job = buildItineraryNotificationJob({ tourId, sourceId, change, noticeId: notice.noticeId, nowMs, sourceOrderMs });
   const result = await enqueueNotificationJob({ job });
   log.info('Notification source enqueued itinerary job', { tourId, jobId: result.jobId, created: result.created });
   return { jobId: result.jobId, created: result.created };
@@ -49,6 +53,7 @@ const sendItineraryNotification = onValueWritten({
   region: 'europe-west1',
   instance: 'loch-lomond-travel-default-rtdb',
   maxInstances: 10,
+  retry: true,
 }, enqueueItineraryEvent);
 
 module.exports = { enqueueItineraryEvent, sendItineraryNotification };

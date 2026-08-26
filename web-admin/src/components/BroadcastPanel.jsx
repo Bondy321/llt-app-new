@@ -1,36 +1,18 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { getCurrentAdminUser } from '../shared/runtime/adminRuntime';
 import {
   createServerTestNotification,
-  previewNotificationAudience,
+  previewNotificationAudienceFully,
   queueBroadcast,
-  requeueNotificationJob,
+  requeueNotificationJobFully,
   subscribeToBroadcastHistory,
   subscribeToBroadcastTours,
 } from '../services/broadcastRepository';
 import { notifications } from '@mantine/notifications';
 import {
-  Card,
-  Text,
-  Title,
-  Group,
-  Button,
-  Textarea,
-  Stack,
-  Box,
-  Badge,
-  Paper,
-  ThemeIcon,
-  SimpleGrid,
-  Select,
-  SegmentedControl,
-  Alert,
-  Loader,
-  Progress,
-  Divider,
-  RingProgress,
-  ActionIcon,
-  Tooltip,
+  ActionIcon, Alert, Badge, Box, Button, Card, Divider,
+  Group, Loader, Paper, Progress, RingProgress, SegmentedControl,
+  Select, SimpleGrid, Stack, Text, Textarea, ThemeIcon, Title, Tooltip,
 } from '@mantine/core';
 import {
   IconSpeakerphone,
@@ -63,6 +45,11 @@ import {
 import NotificationAudiencePreview from '../features/broadcasts/components/NotificationAudiencePreview';
 import BroadcastDeliveryHistory from '../features/broadcasts/components/BroadcastDeliveryHistory';
 import BroadcastConfirmationModal from '../features/broadcasts/components/BroadcastConfirmationModal';
+
+const buildPreviewTargetKey = (request) => request
+  ? `${request.tourId ? 'tour' : 'category'}:${request.tourId || request.categoryKey}`
+  : '';
+
 export function BroadcastPanel() {
   const [tourId, setTourId] = useState('');
   const [targetMode, setTargetMode] = useState('tour');
@@ -81,6 +68,7 @@ export function BroadcastPanel() {
   const [serverTestLoading, setServerTestLoading] = useState(false);
   const [requeueingJobId, setRequeueingJobId] = useState('');
   const sendInFlightRef = useRef(false);
+  const previewGenerationRef = useRef(0);
 
   useEffect(() => {
     const unsubscribe = subscribeToBroadcastTours({
@@ -139,35 +127,68 @@ export function BroadcastPanel() {
     if (!selectedId || !isValidFirebaseKeySegment(selectedId)) return null;
     return isCategoryMode ? { categoryKey: selectedId } : { tourId: selectedId };
   }, [categoryKey, isCategoryMode, tourId]);
+  const previewTargetKey = buildPreviewTargetKey(previewRequest);
+
+  const storeAudiencePreview = useCallback((result, targetKey, generation) => {
+    if (previewGenerationRef.current !== generation) return false;
+    setAudiencePreview(result?.preview ? { ...result.preview, targetKey } : null);
+    return true;
+  }, []);
 
   const refreshAudiencePreview = async () => {
     if (!previewRequest) return;
+    const generation = previewGenerationRef.current + 1;
+    previewGenerationRef.current = generation;
+    const targetKey = previewTargetKey;
     setPreviewLoading(true);
+    setAudiencePreview(null);
     setPreviewError('');
     try {
-      const result = await previewNotificationAudience(previewRequest);
-      setAudiencePreview(result.preview || null);
+      await previewNotificationAudienceFully(previewRequest, {
+        onProgress: (result) => storeAudiencePreview(result, targetKey, generation),
+        shouldContinue: () => previewGenerationRef.current === generation,
+      });
     } catch (error) {
+      if (previewGenerationRef.current !== generation) return;
       setAudiencePreview(null);
       setPreviewError(error.message || 'Could not calculate the current eligible audience.');
     } finally {
-      setPreviewLoading(false);
+      if (previewGenerationRef.current === generation) setPreviewLoading(false);
     }
   };
 
   useEffect(() => {
-    if (!previewRequest) return undefined;
+    const generation = previewGenerationRef.current + 1;
+    previewGenerationRef.current = generation;
+    const request = previewRequest;
+    const targetKey = previewTargetKey;
     const timer = setTimeout(() => {
-      setPreviewLoading(true);
+      if (previewGenerationRef.current !== generation) return;
       setAudiencePreview(null);
       setPreviewError('');
-      previewNotificationAudience(previewRequest)
-      .then((result) => setAudiencePreview(result.preview || null))
-      .catch((error) => setPreviewError(error.message || 'Could not calculate the current eligible audience.'))
-      .finally(() => setPreviewLoading(false));
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [previewRequest]); // The request is server-authoritative; refresh after every target change.
+      if (!request) {
+        setPreviewLoading(false);
+        return;
+      }
+      setPreviewLoading(true);
+      previewNotificationAudienceFully(request, {
+        onProgress: (result) => storeAudiencePreview(result, targetKey, generation),
+        shouldContinue: () => previewGenerationRef.current === generation,
+      })
+      .catch((error) => {
+        if (previewGenerationRef.current === generation) {
+          setPreviewError(error.message || 'Could not calculate the current eligible audience.');
+        }
+      })
+      .finally(() => {
+        if (previewGenerationRef.current === generation) setPreviewLoading(false);
+      });
+    }, request ? 300 : 0);
+    return () => {
+      clearTimeout(timer);
+      if (previewGenerationRef.current === generation) previewGenerationRef.current += 1;
+    };
+  }, [previewRequest, previewTargetKey, storeAudiencePreview]); // Refresh and invalidate older responses after every target change.
 
   const quality = getMessageTone(message);
   const QualityIcon = quality.icon === 'check'
@@ -252,7 +273,7 @@ export function BroadcastPanel() {
     }
 
     if (!confirmed) {
-      if (!audiencePreview || previewLoading) {
+      if (!audiencePreview || audiencePreview.targetKey !== previewTargetKey || previewLoading) {
         notifications.show({ title: 'Audience check required', message: 'Wait for the current server audience check before confirming this broadcast.', color: 'yellow' });
         return;
       }
@@ -319,8 +340,8 @@ export function BroadcastPanel() {
   const handleRequeue = async (jobId) => {
     setRequeueingJobId(jobId);
     try {
-      await requeueNotificationJob(jobId);
-      notifications.show({ title: 'Requeue requested', message: 'The remaining eligible recipients will be retried using the existing delivery job.', color: 'blue' });
+      const result = await requeueNotificationJobFully(jobId);
+      notifications.show({ title: 'Requeue complete', message: `${result.requeued || 0} eligible recipients were queued; ${result.skipped || 0} were unchanged.`, color: 'blue' });
     } catch (error) {
       notifications.show({ title: 'Cannot requeue job', message: error.message, color: 'red' });
     } finally {

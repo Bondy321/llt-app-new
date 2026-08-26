@@ -68,6 +68,7 @@ module.exports = {
   calculateNotificationRetryDelayMs: notificationJobs.calculateRetryDelayMs,
   acquireNotificationJobLease: notificationJobs.acquireNotificationJobLease,
   loadNotificationAudiencePage: notificationAudiencePage.loadNotificationAudiencePage,
+  normalizeNotificationDevice: notificationAudiencePage.normalizeNotificationDevice,
   evaluateNotificationAudienceCandidate: notificationAudiencePage.evaluateAudienceCandidate,
   hashNotificationPushToken: notificationAudiencePage.hashPushToken,
   buildNotificationDeliveryAttemptId: notificationWorker.buildDeliveryAttemptId,

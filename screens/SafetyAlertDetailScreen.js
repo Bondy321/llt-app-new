@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, SafeAreaView, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, SafeAreaView, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { getSafetyAlertDetail } from '../services/notifications/notificationDeviceApiService';
 
 export default function SafetyAlertDetailScreen({ tourId, eventId, onBack }) {
@@ -18,6 +18,14 @@ export default function SafetyAlertDetailScreen({ tourId, eventId, onBack }) {
       setState((current) => ({ ...current, actionLoading: false, actionError: 'The alert could not be updated. Please try again.' }));
     }
   };
+  const confirmResolve = () => Alert.alert(
+    'Resolve this safety alert?',
+    'Only mark this resolved when the response is complete. This cannot be moved back to an earlier status.',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Mark resolved', style: 'destructive', onPress: () => updateStatus('resolve') },
+    ],
+  );
   return (
     <SafeAreaView style={{ flex: 1, padding: 20 }}>
       <ScrollView>
@@ -40,7 +48,12 @@ export default function SafetyAlertDetailScreen({ tourId, eventId, onBack }) {
                     <Text>Start response</Text>
                   </TouchableOpacity>
                 ) : null}
-                <TouchableOpacity disabled={state.actionLoading} onPress={() => updateStatus('resolve')} accessibilityRole="button">
+                {state.alert.status !== 'escalated' ? (
+                  <TouchableOpacity disabled={state.actionLoading} onPress={() => updateStatus('escalate')} accessibilityRole="button">
+                    <Text>Escalate alert</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity disabled={state.actionLoading} onPress={confirmResolve} accessibilityRole="button">
                   <Text>Mark resolved</Text>
                 </TouchableOpacity>
                 {state.actionLoading ? <ActivityIndicator /> : null}

@@ -15,8 +15,9 @@ const originalClearTimeout = global.clearTimeout;
 
 const deferred = () => {
   let resolve;
-  const promise = new Promise((next) => { resolve = next; });
-  return { promise, resolve };
+  let reject;
+  const promise = new Promise((next, fail) => { resolve = next; reject = fail; });
+  return { promise, reject, resolve };
 };
 
 const flush = async (turns = 12) => {
@@ -33,6 +34,7 @@ const buildCoordinator = ({
   storageValues = {},
   permissionPromise = null,
   reconcilePromise = null,
+  reconcileImpl = null,
   now = () => 1_000,
 } = {}) => {
   const reconciliations = [];
@@ -100,6 +102,7 @@ const buildCoordinator = ({
       return {
         reconcileNotificationDevice: async (input) => {
           reconciliations.push(input);
+          if (reconcileImpl) return reconcileImpl(input, reconciliations.length);
           return reconcilePromise ? reconcilePromise.promise : { success: true };
         },
       };
@@ -109,7 +112,14 @@ const buildCoordinator = ({
 
   clearCoordinator();
   const { createNotificationRegistrationCoordinator } = require('../services/notifications/notificationRegistrationCoordinator');
-  const coordinator = createNotificationRegistrationCoordinator({ now });
+  let registrationRevision = 0;
+  const coordinator = createNotificationRegistrationCoordinator({
+    now,
+    allocateRevision: async () => {
+      registrationRevision += 1;
+      return registrationRevision;
+    },
+  });
   return {
     coordinator,
     reconciliations,
@@ -124,7 +134,7 @@ const buildCoordinator = ({
 };
 
 const activeState = (overrides = {}) => ({
-  authUid: 'auth-1', sessionId: 'sess-1', isConnected: true, operationalEligible: true, tourId: 'TOUR_1', ...overrides,
+  authUid: 'auth-1', sessionId: 'sess-1', sessionRevision: 1, isConnected: true, operationalEligible: true, tourId: 'TOUR_1', ...overrides,
 });
 
 test.afterEach(() => {
@@ -146,6 +156,23 @@ test('coalesces overlapping reconciliation requests into one Expo registration a
   await first;
   await second;
   assert.equal(harness.getChannelsCalls(), 1);
+});
+
+test('binds operational eligibility to the exact app session and a monotonic registration revision', async () => {
+  const harness = buildCoordinator();
+  await harness.coordinator.start(activeState({ sessionId: 'sess-exact', sessionRevision: 7 }));
+  await harness.coordinator.reconcile('manual');
+
+  assert.deepEqual(harness.reconciliations.map((entry) => ({
+    appSessionId: entry.appSessionId,
+    appSessionRevision: entry.appSessionRevision,
+    operationalEligible: entry.operationalEligible,
+    registrationRevision: entry.registrationRevision,
+    tourId: entry.tourId,
+  })), [
+    { appSessionId: 'sess-exact', appSessionRevision: 7, operationalEligible: true, registrationRevision: 1, tourId: 'TOUR_1' },
+    { appSessionId: 'sess-exact', appSessionRevision: 7, operationalEligible: true, registrationRevision: 2, tourId: 'TOUR_1' },
+  ]);
 });
 
 test('foreground activation and reconnect reconcile the current authenticated device', async () => {
@@ -181,6 +208,20 @@ test('persists a bounded durable retry after temporary Expo-token failure and re
   assert.equal(harness.getRegistrationCalls(), 2);
 });
 
+test('durably retries publishing blocked permission without prompting or requesting a token', async () => {
+  const harness = buildCoordinator({
+    permission: { state: 'blocked', granted: false, canAskAgain: false },
+    reconcileImpl: async () => { throw new Error('offline'); },
+  });
+  const result = await harness.coordinator.start(activeState());
+
+  assert.equal(result.success, false);
+  assert.equal(harness.getRegistrationCalls(), 0);
+  assert.equal(harness.reconciliations[0].pushToken, null);
+  assert.equal(harness.storageWrites.length, 1);
+  assert.match(harness.storageWrites[0].key, /notification-registration-retry:v2:auth-1:sess-1/);
+});
+
 test('ignores stale permission work and immediately reconciles the replacement session', async () => {
   const permissionGate = deferred();
   const harness = buildCoordinator({ permissionPromise: permissionGate });
@@ -199,7 +240,7 @@ test('ignores stale permission work and immediately reconciles the replacement s
 
 test('stop removes native and foreground listeners and prevents restored retry from using a cleared session', async () => {
   const harness = buildCoordinator({
-    storageValues: { '@LLT:notification-registration-retry:v1': JSON.stringify({ attempt: 2, availableAtMs: 2_000 }) },
+    storageValues: { '@LLT:notification-registration-retry:v2:auth-1:sess-1': JSON.stringify({ attempt: 2, availableAtMs: 2_000 }) },
   });
   await harness.coordinator.start(activeState());
   await flush();
@@ -212,4 +253,99 @@ test('stop removes native and foreground listeners and prevents restored retry f
   restoredTimer.callback();
   await flush();
   assert.equal(harness.reconciliations.length, 1);
+});
+
+test('a stopped coordinator cannot publish retry state after its server request fails late', async () => {
+  const gate = deferred();
+  const harness = buildCoordinator({ reconcilePromise: gate });
+  const pending = harness.coordinator.start(activeState());
+  await flush();
+  assert.equal(harness.reconciliations.length, 1);
+
+  harness.coordinator.stop();
+  gate.reject(new Error('late network failure'));
+  const result = await pending;
+  await flush();
+
+  assert.deepEqual(result, { skipped: true, reason: 'stale' });
+  assert.equal(harness.storageWrites.length, 0);
+  assert.equal(harness.timers.filter((timer) => !timer.cleared).length, 0);
+});
+
+test('an in-flight old session reconcile is followed by the replacement logout state', async () => {
+  const firstGate = deferred();
+  const harness = buildCoordinator({
+    reconcileImpl: async (_input, callCount) => callCount === 1 ? firstGate.promise : { success: true },
+  });
+  const first = harness.coordinator.start(activeState());
+  await flush();
+  const replacement = harness.coordinator.update(activeState({
+    sessionId: null,
+    sessionRevision: null,
+    tourId: null,
+    operationalEligible: false,
+  }));
+  firstGate.resolve({ success: true });
+  await first;
+  await replacement;
+
+  assert.equal(harness.reconciliations.length, 2);
+  assert.equal(harness.reconciliations[0].operationalEligible, true);
+  assert.equal(harness.reconciliations[1].operationalEligible, false);
+  assert.equal('appSessionId' in harness.reconciliations[1], false);
+  assert.ok(harness.reconciliations[1].registrationRevision > harness.reconciliations[0].registrationRevision);
+});
+
+test('logout awaits the session-bound notification disable before completing local purge', async () => {
+  const gate = deferred();
+  const deviceInputs = [];
+  Module._load = function mocked(request, parent, isMain) {
+    if (request.endsWith('/notificationDeviceApiService')) {
+      return {
+        endNotificationDeviceSession: async (input) => {
+          deviceInputs.push(input);
+          return gate.promise;
+        },
+      };
+    }
+    return originalLoad(request, parent, isMain);
+  };
+  delete require.cache[require.resolve('../src/app/session/logoutRunners')];
+  const { runHandleLogout } = require('../src/app/session/logoutRunners');
+  let purged = false;
+  let completed = false;
+  const session = {
+    sessionId: 'sess_v1_0123456789abcdef0123456789abcdef',
+    sessionRevision: 9,
+    tourId: 'TOUR_1',
+  };
+  const pending = runHandleLogout({
+    appSession: session,
+    appSessionService: {
+      endSession: async () => ({ success: true }),
+      completeEnd: async () => { completed = true; },
+    },
+    auth: { currentUser: { uid: 'auth-1' } },
+    bookingData: null,
+    currentDriverLifecycleScope: null,
+    logger: { warn: () => {} },
+    logoutContextRef: { current: null },
+    purgeLocalSession: async () => { purged = true; return { success: true }; },
+    setAppSession: () => {},
+    setLogoutStatus: () => {},
+    tourData: null,
+    user: { uid: 'auth-1' },
+  });
+  await flush();
+
+  assert.equal(purged, false);
+  assert.deepEqual(deviceInputs, [{
+    appSessionId: session.sessionId,
+    appSessionRevision: 9,
+    tourId: 'TOUR_1',
+  }]);
+  gate.resolve({ success: true });
+  await pending;
+  assert.equal(purged, true);
+  assert.equal(completed, true);
 });
