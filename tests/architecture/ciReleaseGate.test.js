@@ -25,6 +25,15 @@ test('CI defines every required non-release verification job', () => {
     /npm run (?:test:architecture|verify:refactor)/u,
     'Architecture & contracts must run the architecture regression suite',
   );
+  const architectureJob = source.slice(
+    source.indexOf('  architecture-contracts:'),
+    source.indexOf('  mobile-tests:'),
+  );
+  assert.match(
+    architectureJob,
+    /npm --prefix functions ci/u,
+    'Architecture & contracts must install the Function modules loaded by compatibility tests',
+  );
   assert.doesNotMatch(source, /eas\s+(?:update|build|submit)/u);
 });
 

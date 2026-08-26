@@ -24,6 +24,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm --prefix functions ci
       - run: npm run contracts:check
       - run: npm run architecture:check
       - run: npm run lint
