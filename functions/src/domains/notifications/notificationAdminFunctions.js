@@ -36,8 +36,8 @@ const requireAdminRequest = async (req, res) => {
   return auth.uid;
 };
 
-/** @param {any} input @param {number} nowMs */
-const buildPreviewJob = (input, nowMs) => {
+/** @param {any} input @param {number} nowMs @param {string | null} senderAuthUid */
+const buildPreviewJob = (input, nowMs, senderAuthUid = null) => {
   const categoryKey = typeof input?.categoryKey === 'string' ? input.categoryKey.trim().slice(0, 80) : null;
   const tourId = typeof input?.tourId === 'string' ? input.tourId.trim().slice(0, 160) : null;
   const notificationType = categoryKey
@@ -50,6 +50,7 @@ const buildPreviewJob = (input, nowMs) => {
     audienceType: categoryKey ? 'marketing' : 'tour',
     categoryKey,
     tourId,
+    senderAuthUid: categoryKey ? null : senderAuthUid,
     presentation: { title: 'Preview', body: 'Preview' },
     navigation: buildPushNavigationData(categoryKey ? {
       screen: 'MarketingNotificationDetail',
@@ -72,17 +73,30 @@ const calculateNotificationAudiencePreview = async ({ db = admin.database(), job
   let pages = 0;
   let audience = 0;
   let eligible = 0;
+  const uidClaims = new Set();
+  const tokenClaims = new Set();
   /** @type {Record<string, number>} */
   const skipReasons = {};
   do {
     const page = await loadNotificationAudiencePage(db, cursor);
     pages += 1;
     cursor = page.nextCursor;
-    audience += page.candidates.length;
-    const outcomes = await Promise.all(page.candidates.map((candidate) => evaluateAudienceCandidate({ db, job, candidate })));
+    const uniqueCandidates = page.candidates.filter((candidate) => {
+      if (uidClaims.has(candidate.authUid)) return false;
+      uidClaims.add(candidate.authUid);
+      audience += 1;
+      return true;
+    });
+    const outcomes = await Promise.all(uniqueCandidates.map((candidate) => evaluateAudienceCandidate({ db, job, candidate })));
     outcomes.forEach((result) => {
-      if (result.eligible) eligible += 1;
-      else skipReasons[result.reason || 'invalid_token'] = Number(skipReasons[result.reason || 'invalid_token'] || 0) + 1;
+      if (!result.eligible) {
+        skipReasons[result.reason || 'invalid_token'] = Number(skipReasons[result.reason || 'invalid_token'] || 0) + 1;
+      } else if (tokenClaims.has(result.tokenHash)) {
+        skipReasons.duplicate_token = Number(skipReasons.duplicate_token || 0) + 1;
+      } else {
+        tokenClaims.add(result.tokenHash);
+        eligible += 1;
+      }
     });
   } while (cursor && pages < Math.max(1, Math.min(20, maxPages)));
   return {
@@ -175,7 +189,7 @@ async (req, res) => {
     let previewId = typeof req.body?.previewId === 'string' ? req.body.previewId.trim().slice(0, 100) : '';
     if (previewId && !isValidFirebaseKey(previewId)) throw new Error('Invalid preview id');
     if (!previewId) {
-      const job = buildPreviewJob(req.body || {}, nowMs);
+      const job = buildPreviewJob(req.body || {}, nowMs, authUid);
       previewId = `preview_v1_${randomUUID().replace(/-/gu, '')}`;
       await db.ref(`notification_audience_previews/${previewId}`).set({
         schemaVersion: 1, previewId, ownerAuthUid: authUid,
@@ -191,7 +205,7 @@ async (req, res) => {
         throw new Error('Preview not found');
       }
       if (req.body?.tourId || req.body?.categoryKey) {
-        const requestedTarget = buildPreviewTargetKey(buildPreviewJob(req.body || {}, Number(existing.job?.createdAtMs || nowMs)));
+        const requestedTarget = buildPreviewTargetKey(buildPreviewJob(req.body || {}, Number(existing.job?.createdAtMs || nowMs), authUid));
         if (requestedTarget !== existing.targetKey) throw new Error('Preview target mismatch');
       }
     }
@@ -235,7 +249,7 @@ const REQUEUEABLE_STATUSES = new Set(['ticket_rejected', 'provider_rejected', 'p
 const requeueRecipient = async ({ db, job, authUid, state, requeueId, nowMs }) => {
   if (state?.requeueId === requeueId) return state.requeueOutcome || 'skipped';
   const oldAttempt = state?.attemptId ? (await db.ref(`notification_delivery_attempts/${state.attemptId}`).once('value')).val() : null;
-  if (!oldAttempt || oldAttempt.status === 'provider_accepted') return 'skipped';
+  if (!oldAttempt || ['provider_accepted', 'submission_unknown'].includes(oldAttempt.status)) return 'skipped';
   const device = (await db.ref(`notification_devices/${authUid}`).once('value')).val();
   const profile = (await db.ref(`users/${authUid}`).once('value')).val() || {};
   const recipient = await evaluateAudienceCandidate({ db, job, candidate: { authUid, device, profile, source: device ? 'device' : 'legacy_user' }, nowMs });

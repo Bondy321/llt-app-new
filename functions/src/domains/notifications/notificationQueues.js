@@ -77,8 +77,8 @@ const loadDueQueueEntries = async (db, kind, nowMs, limit) => {
  * @param {number} nowMs
  * @param {number} leaseMs
  */
-const claimQueueEntry = async (queueRef, nowMs, leaseMs = 2 * 60 * 1000) => {
-  const ownerId = randomUUID();
+const claimQueueEntry = async (queueRef, nowMs, leaseMs = 2 * 60 * 1000, requestedOwnerId = null) => {
+  const ownerId = requestedOwnerId || randomUUID();
   let claimed = false;
   const transaction = await queueRef.transaction((entry) => {
     if (!entry || Number(entry.dueAtMs || 0) > nowMs) return;
@@ -90,11 +90,45 @@ const claimQueueEntry = async (queueRef, nowMs, leaseMs = 2 * 60 * 1000) => {
   return { claimed: Boolean(claimed && entry?.lease?.ownerId === ownerId), ownerId, entry };
 };
 
+/**
+ * Releases or defers only the exact queue lease owned by this worker. This
+ * prevents a late worker from deleting or unlocking a newer worker's claim.
+ * @param {any} queueRef
+ * @param {string} ownerId
+ * @param {number | null} dueAtMs
+ */
+const releaseClaimedQueueEntry = async (queueRef, ownerId, dueAtMs = null) => {
+  let released = false;
+  const transaction = await queueRef.transaction((entry) => {
+    if (!entry || entry.lease?.ownerId !== ownerId) return;
+    released = true;
+    return {
+      ...entry,
+      ...(Number.isFinite(dueAtMs) ? { dueAtMs: Number(dueAtMs) } : {}),
+      lease: null,
+    };
+  });
+  return { released: Boolean(released && transaction?.committed), entry: transaction?.snapshot?.val?.() || null };
+};
+
+/** @param {any} queueRef @param {string} ownerId */
+const removeClaimedQueueEntry = async (queueRef, ownerId) => {
+  let removed = false;
+  const transaction = await queueRef.transaction((entry) => {
+    if (!entry || entry.lease?.ownerId !== ownerId) return;
+    removed = true;
+    return null;
+  });
+  return Boolean(removed && transaction?.committed);
+};
+
 module.exports = {
   QUEUE_ROOTS,
   buildNotificationQueueKey,
   buildQueueEntry,
   claimQueueEntry,
   loadDueQueueEntries,
+  releaseClaimedQueueEntry,
+  removeClaimedQueueEntry,
   transitionQueuedRecord,
 };

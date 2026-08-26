@@ -5,7 +5,8 @@
 const buildDelivery = (job, nowMs) => {
   const counts = job.counts || {};
   const providerAccepted = Number(counts.receiptAccepted || 0);
-  const rejected = Number(counts.receiptRejected || 0) + Number(counts.ticketRejected || 0) + Number(counts.submissionUnknown || 0);
+  const rejected = Number(counts.receiptRejected || 0) + Number(counts.ticketRejected || 0);
+  const submissionUnknown = Number(counts.submissionUnknown || 0);
   const delivery = {
     deliveryStatus: job.status,
     deliveryJobId: job.jobId,
@@ -17,10 +18,11 @@ const buildDelivery = (job, nowMs) => {
     successCount: providerAccepted,
     rejectedCount: rejected,
     errorCount: rejected,
+    submissionUnknownCount: submissionUnknown,
     skipReasons: job.skipReasons || {},
   };
-  if (['provider_accepted', 'provider_rejected', 'partial', 'expired', 'no_recipients'].includes(job.status)) {
-    delivery.deliveryCompletedAtMs = nowMs;
+  if (['provider_accepted', 'provider_rejected', 'partial', 'submission_unknown', 'expired', 'no_recipients'].includes(job.status)) {
+    delivery.deliveryCompletedAtMs = Number(job.completedAtMs || nowMs);
   }
   return delivery;
 };
@@ -28,7 +30,12 @@ const guardedDeliveryMerge = (ref, jobId, patch) => ref.transaction((current) =>
   if (!current) return current;
   if (current.deliveryJobId && current.deliveryJobId !== jobId) return current;
   if (current.notificationDeliveryJobId && current.notificationDeliveryJobId !== jobId) return current;
-  return { ...current, ...patch };
+  if (Number(current.deliveryUpdatedAtMs || current.notificationUpdatedAtMs || 0)
+    > Number(patch.deliveryUpdatedAtMs || patch.notificationUpdatedAtMs || 0)) return current;
+  const completedAtMs = current.deliveryCompletedAtMs && patch.deliveryCompletedAtMs
+    ? Math.min(Number(current.deliveryCompletedAtMs), Number(patch.deliveryCompletedAtMs))
+    : (current.deliveryCompletedAtMs || patch.deliveryCompletedAtMs);
+  return { ...current, ...patch, ...(completedAtMs ? { deliveryCompletedAtMs: completedAtMs } : {}) };
 });
 const syncBroadcastStatus = (db, job, delivery, _nowMs) => guardedDeliveryMerge(db.ref(`broadcasts/${job.tourId}/${job.navigation.messageId}`), job.jobId, delivery);
 const syncMarketingStatus = (db, job, delivery, nowMs) => Promise.all([guardedDeliveryMerge(db.ref(`category_broadcasts/${job.categoryKey}/${job.navigation.broadcastId}`), job.jobId, delivery), guardedDeliveryMerge(db.ref(`marketing_notification_details/${job.navigation.broadcastId}`), job.jobId, { deliveryStatus: job.status, updatedAtMs: nowMs })]);
@@ -41,6 +48,7 @@ const syncPackStatus = (db, job, delivery, nowMs) => guardedDeliveryMerge(db.ref
       notificationSuccessCount: delivery.successCount,
       notificationRejectedCount: delivery.rejectedCount,
       notificationErrorCount: delivery.errorCount,
+      notificationSubmissionUnknownCount: delivery.submissionUnknownCount,
       notificationSkipReasons: delivery.skipReasons,
       notificationUpdatedAtMs: nowMs,
       deliveryJobId: job.jobId,
@@ -55,6 +63,7 @@ const buildSafetyDeliveryUpdate = (job, delivery, nowMs) => ({
       notificationSuccessCount: delivery.successCount,
       notificationRejectedCount: delivery.rejectedCount,
       notificationErrorCount: delivery.errorCount,
+      notificationSubmissionUnknownCount: delivery.submissionUnknownCount,
       notificationSkipReasons: delivery.skipReasons,
       notificationUpdatedAtMs: nowMs,
     });

@@ -168,11 +168,11 @@ const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalesc
     if (supersedesJobId && isValidFirebaseKey(supersedesJobId)) {
       const previousRef = db.ref(`notification_jobs/${supersedesJobId}`);
       const previous = (await previousRef.once('value')).val();
-      if (previous && !['provider_accepted', 'provider_rejected', 'partial', 'expired', 'no_recipients'].includes(previous.status)) {
+      if (previous && !['provider_accepted', 'provider_rejected', 'partial', 'submission_unknown', 'expired', 'no_recipients'].includes(previous.status)) {
         await transitionQueuedRecord(db, {
           targetPath: `notification_jobs/${supersedesJobId}`,
           current: previous,
-          patch: { status: 'expired', supersededByJobId: job.jobId, updatedAtMs: job.createdAtMs, lease: null },
+          patch: { status: 'expired', supersededByJobId: job.jobId, completedAtMs: Number(previous.completedAtMs || job.createdAtMs), updatedAtMs: job.createdAtMs, lease: null },
           targetId: supersedesJobId,
         });
       }
@@ -183,7 +183,8 @@ const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalesc
   }
 
   if (supersededByJobId) {
-    await jobRef.update({ status: 'expired', supersededByJobId, updatedAtMs: job.createdAtMs, lease: null });
+    const current = (await jobRef.once('value')).val() || job;
+    await jobRef.update({ status: 'expired', supersededByJobId, completedAtMs: Number(current.completedAtMs || job.createdAtMs), updatedAtMs: job.createdAtMs, lease: null });
   } else {
     const current = (await jobRef.once('value')).val() || job;
     if (current.status === 'preparing') {
@@ -204,18 +205,19 @@ const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalesc
   return { created, jobId: job.jobId, job: persisted };
 };
 
-/** @param {{ jobRef: any, nowMs?: number, ownerId?: string, leaseMs?: number }} options */
+/** @param {{ jobRef: any, nowMs?: number, ownerId?: string, leaseMs?: number, leaseExpiresAtMs?: number }} options */
 const acquireNotificationJobLease = async ({
   jobRef,
   nowMs = Date.now(),
   ownerId = randomUUID(),
   leaseMs = DEFAULT_LEASE_MS,
+  leaseExpiresAtMs = nowMs + leaseMs,
 }) => {
   let acquired = false;
   const transaction = await jobRef.transaction((job) => {
     if (!job || !['queued', 'fanout_in_progress'].includes(job.status)) return;
     if (Number(job.expiresAtMs) <= nowMs || job.supersededByJobId) {
-      return { ...job, status: 'expired', lease: null, updatedAtMs: nowMs };
+      return { ...job, status: 'expired', lease: null, completedAtMs: Number(job.completedAtMs || nowMs), updatedAtMs: nowMs };
     }
     if (Number(job.availableAtMs || 0) > nowMs) return;
     if (job.lease && Number(job.lease.expiresAtMs) > nowMs && job.lease.ownerId !== ownerId) return;
@@ -224,7 +226,7 @@ const acquireNotificationJobLease = async ({
       ...job,
       status: 'fanout_in_progress',
       updatedAtMs: nowMs,
-      lease: { ownerId, acquiredAtMs: nowMs, expiresAtMs: nowMs + leaseMs },
+      lease: { ownerId, acquiredAtMs: nowMs, expiresAtMs: leaseExpiresAtMs },
     };
   });
   const job = transaction?.snapshot?.val?.() || null;

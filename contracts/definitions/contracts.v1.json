@@ -397,7 +397,7 @@
       "schemaVersion": 1,
       "kind": "object",
       "requiredProperties": ["schemaVersion", "jobId", "notificationType", "sourceType", "sourceId", "audienceType", "status", "createdAtMs", "availableAtMs", "expiresAtMs", "attemptCount", "maxAttempts", "presentation", "navigation", "counts", "skipReasons"],
-      "optionalProperties": ["tourId", "categoryKey", "departureKey", "eventId", "targetInstallationUid", "senderAuthUid", "senderPrincipalId", "updatedAtMs", "afterRecipientId", "supersededByJobId", "coalescingKey", "priorityClass", "deliveryPolicy", "lease", "fanoutCompletedAtMs", "completedAtMs", "lastErrorCode"],
+      "optionalProperties": ["tourId", "categoryKey", "departureKey", "eventId", "targetInstallationUid", "senderAuthUid", "senderPrincipalId", "updatedAtMs", "afterRecipientId", "supersededByJobId", "coalescingKey", "priorityClass", "deliveryPolicy", "lease", "fanoutCompletedAtMs", "completedAtMs", "lastErrorCode", "lastCommittedPageId", "pageSequence"],
       "properties": {
         "schemaVersion": { "type": "integer", "const": 1 },
         "jobId": { "type": "string", "pattern": "^notif_v1_[a-f0-9]{64}$", "maxLength": 73 },
@@ -405,7 +405,7 @@
         "sourceType": { "type": "string", "maxLength": 80 },
         "sourceId": { "type": "string", "maxLength": 768 },
         "audienceType": { "type": "string", "enum": ["tour", "assigned_drivers", "safety", "marketing", "single_installation"] },
-        "status": { "type": "string", "enum": ["queued", "fanout_in_progress", "ticket_accepted", "ticket_rejected", "receipt_pending", "provider_accepted", "provider_rejected", "retrying", "expired", "partial", "no_recipients"] },
+        "status": { "type": "string", "enum": ["queued", "fanout_in_progress", "ticket_accepted", "ticket_rejected", "receipt_pending", "provider_accepted", "provider_rejected", "retrying", "submission_unknown", "expired", "partial", "no_recipients"] },
         "createdAtMs": { "type": "integer", "minimum": 1 },
         "availableAtMs": { "type": "integer", "minimum": 1 },
         "expiresAtMs": { "type": "integer", "minimum": 1 },
@@ -416,7 +416,7 @@
         "counts": { "type": "object" },
         "skipReasons": { "type": "object" }
       },
-      "enumValues": { "status": ["queued", "fanout_in_progress", "ticket_accepted", "ticket_rejected", "receipt_pending", "provider_accepted", "provider_rejected", "retrying", "expired", "partial", "no_recipients"], "audienceType": ["tour", "assigned_drivers", "safety", "marketing", "single_installation"] },
+      "enumValues": { "status": ["queued", "fanout_in_progress", "ticket_accepted", "ticket_rejected", "receipt_pending", "provider_accepted", "provider_rejected", "retrying", "submission_unknown", "expired", "partial", "no_recipients"], "audienceType": ["tour", "assigned_drivers", "safety", "marketing", "single_installation"] },
       "idPatterns": { "jobId": "^notif_v1_[a-f0-9]{64}$" },
       "maximumLengths": { "jobId": 73, "notificationType": 80, "sourceType": 80, "sourceId": 768 },
       "numericBounds": { "maxAttempts": { "minimum": 1, "maximum": 20 } },

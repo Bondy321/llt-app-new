@@ -5,6 +5,34 @@ production classes begin as deterministic server-owned jobs. `ticket_accepted` m
 message; `provider_accepted` means a later Expo receipt was successful. Neither status proves the
 operating system displayed the notification.
 
+`submission_unknown` is a terminal ambiguity: the server started a request but cannot prove whether
+Expo accepted it. It is not a rejection, a partial delivery claim, or safe evidence that retrying
+cannot duplicate a notification. Source projections report this separately as
+`submissionUnknownCount` (or `notificationSubmissionUnknownCount` on safety/operational records),
+while rejected counts include only known ticket or receipt rejections. `completedAtMs` records the
+job's first terminal transition and source `deliveryCompletedAtMs` mirrors that stable timestamp;
+later receipt/status synchronisation must not move either timestamp.
+
+Expo request errors are classified from the `expo-server-sdk` v4 error shape. HTTP 429/5xx and
+definite pre-connect failures enter bounded durable retry; invalid 4xx/configuration/payload errors
+are permanent; timeouts, connection resets and otherwise ambiguous post-write failures become
+`submission_unknown` and are never automatically resent.
+
+The fan-out queue claim and job lease share one owner and one absolute expiry. The queue pointer is
+retained until page completion, so a killed worker is rediscoverable. A worker blocked by a live
+foreign job lease retains the queue for that lease boundary; only missing, terminal, superseded,
+expired or stale-version work removes the pointer.
+
+Audience accounting uses `eligible + skipped = audience`: audience is the unique UID/installations
+considered, eligible means a durable delivery attempt represents the candidate, and duplicate-token
+losers are skipped only. Each cursor page has a deterministic ID and commits counts plus cursor in
+one owner-checked job transaction. Preview uses the same UID/token partition.
+
+Tour announcements have one activation owner. The broadcast trigger persists both the durable tour
+notice and its explicitly broadcast-owned chat message before it enqueues the deterministic job.
+The chat trigger validates that message but does not enqueue or publish status for it; genuine chat
+messages retain the ordinary chat-owned path.
+
 | Class | Source and deterministic source ID | Audience and active session | Preference / sender | Lock-screen policy | Channel / priority | Expiry, collapse and grouping | Tap route and fallback | Job ID, retry and final state |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Tour announcement | `broadcasts/{tourId}/{broadcastId}` / `tour_announcement:{tourId}:{broadcastId}` | Current tour passengers and assigned drivers; active app session required | `ops.driver_updates`; sender excluded | Admin title and bounded announcement preview; no booking/customer data | `llt_tour_updates_v2`, default | Admin expiry or 24h; no collapse; tag/thread by tour | `Chat` with `tourId`, deterministic announcement `messageId`, `noticeId`; durable tour notice | `notif_v1(sha256(source))`; temporary request/receipt retry; provider outcomes or `partial`, `no_recipients`, `expired` |
@@ -34,6 +62,9 @@ operating system displayed the notification.
 - Ticket, receipt and job timestamps are epoch milliseconds. Retry delay is bounded exponential
   backoff. Provider receipt checks start approximately 15 minutes after ticket creation and expire
   after 24 hours.
+- Delivery accounting keeps Expo ticket acceptance, provider acceptance, known rejection and
+  submission-unknown outcomes distinct. Provider acceptance confirms provider handoff only, never
+  device display. An all-unknown attempted audience resolves to `submission_unknown`, not `partial`.
 
 ## Retention
 

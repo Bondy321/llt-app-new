@@ -1491,7 +1491,9 @@ const CONTRACTS = Object.freeze({
         "lease",
         "fanoutCompletedAtMs",
         "completedAtMs",
-        "lastErrorCode"
+        "lastErrorCode",
+        "lastCommittedPageId",
+        "pageSequence"
       ],
       "properties": {
         "schemaVersion": {
@@ -1536,6 +1538,7 @@ const CONTRACTS = Object.freeze({
             "provider_accepted",
             "provider_rejected",
             "retrying",
+            "submission_unknown",
             "expired",
             "partial",
             "no_recipients"
@@ -1585,6 +1588,7 @@ const CONTRACTS = Object.freeze({
           "provider_accepted",
           "provider_rejected",
           "retrying",
+          "submission_unknown",
           "expired",
           "partial",
           "no_recipients"

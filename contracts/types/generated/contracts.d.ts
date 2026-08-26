@@ -185,7 +185,7 @@ export interface NotificationJob {
   sourceType: string;
   sourceId: string;
   audienceType: "tour" | "assigned_drivers" | "safety" | "marketing" | "single_installation";
-  status: "queued" | "fanout_in_progress" | "ticket_accepted" | "ticket_rejected" | "receipt_pending" | "provider_accepted" | "provider_rejected" | "retrying" | "expired" | "partial" | "no_recipients";
+  status: "queued" | "fanout_in_progress" | "ticket_accepted" | "ticket_rejected" | "receipt_pending" | "provider_accepted" | "provider_rejected" | "retrying" | "submission_unknown" | "expired" | "partial" | "no_recipients";
   createdAtMs: number;
   availableAtMs: number;
   expiresAtMs: number;
@@ -212,6 +212,8 @@ export interface NotificationJob {
   fanoutCompletedAtMs?: string;
   completedAtMs?: string;
   lastErrorCode?: string;
+  lastCommittedPageId?: string;
+  pageSequence?: string;
 }
 
 export interface NotificationDeliveryAttempt {

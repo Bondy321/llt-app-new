@@ -17,6 +17,7 @@ const notificationDeliveryPolicy = require('./domains/notifications/notification
 const notificationJobs = require('./domains/notifications/notificationJobs');
 const notificationAudiencePage = require('./domains/notifications/notificationAudiencePage');
 const notificationWorker = require('./domains/notifications/notificationWorker');
+const expoRequestErrorClassifier = require('./domains/notifications/expoRequestErrorClassifier');
 const notificationReceipts = require('./domains/notifications/notificationReceipts');
 const notificationProducerJobs = require('./domains/notifications/notificationProducerJobs');
 const notificationAdminFunctions = require('./domains/notifications/notificationAdminFunctions');
@@ -73,6 +74,10 @@ module.exports = {
   hashNotificationPushToken: notificationAudiencePage.hashPushToken,
   buildNotificationDeliveryAttemptId: notificationWorker.buildDeliveryAttemptId,
   buildNotificationExpoPushMessage: notificationWorker.buildExpoPushMessage,
+  buildNotificationAudiencePageId: notificationWorker.buildAudiencePageId,
+  classifyExpoRequestError: expoRequestErrorClassifier.classifyExpoRequestError,
+  commitNotificationAudiencePage: notificationWorker.commitNotificationAudiencePage,
+  handleExpoRequestFailure: notificationWorker.handleExpoRequestFailure,
   persistNotificationTicketResult: notificationWorker.persistTicketResult,
   processNotificationJobPage: notificationWorker.processNotificationJobPage,
   runNotificationJob: notificationWorker.runNotificationJob,

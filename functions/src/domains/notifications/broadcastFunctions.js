@@ -68,7 +68,7 @@ const validateCategoryBroadcastData = (categoryKey, broadcastData) => {
 };
 
 const BROADCAST_TERMINAL_STATUSES = new Set([
-  'provider_accepted', 'provider_rejected', 'partial', 'expired', 'no_recipients',
+  'provider_accepted', 'provider_rejected', 'partial', 'submission_unknown', 'expired', 'no_recipients',
   'delivered', 'failed',
 ]);
 
@@ -85,8 +85,17 @@ const updateBroadcastDelivery = async ({ root, targetId, broadcastId, status, de
   if (!isValidFirebaseKey(targetId) || !isValidFirebaseKey(broadcastId)) return;
   const nowMs = Date.now();
   const payload = { deliveryStatus: status, deliveryUpdatedAtMs: nowMs, ...details };
-  if (BROADCAST_TERMINAL_STATUSES.has(status)) payload.deliveryCompletedAtMs = nowMs;
-  await admin.database().ref(`${root}/${targetId}/${broadcastId}`).update(payload);
+  const targetRef = admin.database().ref(`${root}/${targetId}/${broadcastId}`);
+  await targetRef.transaction((current) => {
+    if (!current) return current;
+    if (details.deliveryJobId && current.deliveryJobId === details.deliveryJobId
+      && BROADCAST_TERMINAL_STATUSES.has(current.deliveryStatus)
+      && !BROADCAST_TERMINAL_STATUSES.has(status)) return current;
+    if (BROADCAST_TERMINAL_STATUSES.has(status)) {
+      payload.deliveryCompletedAtMs = Number(current.deliveryCompletedAtMs || nowMs);
+    }
+    return { ...current, ...payload };
+  });
 };
 
 /** @param {string} authUid @param {{auth?: any, verifyAdmin?: Function}} dependencies */
@@ -104,20 +113,24 @@ const verifyBroadcastAuthor = async (authUid, { auth = admin.auth(), verifyAdmin
   return verifyAdmin({ authUid });
 };
 
-/** @param {any} event */
-const enqueueTourBroadcastEvent = async (event) => {
+/** @param {any} event @param {{db?: any, verifyAuthor?: Function, enqueueJob?: Function, persistChat?: Function, persistNotice?: Function, publishStatus?: Function, nowMs?: number}} dependencies */
+const enqueueTourBroadcastEvent = async (event, {
+  db = admin.database(), verifyAuthor = verifyBroadcastAuthor,
+  enqueueJob = enqueueNotificationJob, persistChat = ({ path, message }) => db.ref(path).set(message),
+  persistNotice = persistTourNotification,
+  publishStatus = updateBroadcastDelivery, nowMs = Date.now(),
+} = {}) => { // eslint-disable-line complexity -- source validation and three-stage durable handoff stay explicit
   const { tourId, broadcastId } = event.params;
   const broadcast = event.data?.val?.() || {};
   if (!isValidFirebaseKey(tourId) || !isValidFirebaseKey(broadcastId)) return null;
   const validation = validateBroadcastData(broadcast);
-  if (!validation.valid || !(await verifyBroadcastAuthor(broadcast.createdByUid))) {
-    await updateBroadcastDelivery({
+  if (!validation.valid || !(await verifyAuthor(broadcast.createdByUid))) {
+    await publishStatus({
       root: 'broadcasts', targetId: tourId, broadcastId, status: 'failed',
       details: { deliveryErrorCode: validation.valid ? 'INVALID_AUTHOR' : 'INVALID_PAYLOAD' },
     });
     return null;
   }
-  const db = admin.database();
   const messageData = {
     text: `ANNOUNCEMENT: ${broadcast.message.trim()}`,
     senderName: 'Loch Lomond Travel HQ',
@@ -128,15 +141,16 @@ const enqueueTourBroadcastEvent = async (event) => {
     source: broadcast.source || 'web_admin',
     isDriver: true,
     broadcastId,
+    notificationActivationOwner: 'broadcast_source',
   };
   const tourName = (await db.ref(`tours/${tourId}/name`).once('value')).val() || 'Tour Chat';
   const job = buildChatNotificationJob({
-    tourId, messageId: broadcastId, messageData, tourName, isAdmin: true, nowMs: Date.now(),
+    tourId, messageId: broadcastId, messageData, tourName, isAdmin: true, nowMs,
   });
   const result = await runNotificationSourceHandoff({
     persistSource: () => Promise.all([
-      db.ref(`chats/${tourId}/messages/${broadcastId}`).set(messageData),
-      persistTourNotification({
+      persistChat({ path: `chats/${tourId}/messages/${broadcastId}`, message: messageData }),
+      persistNotice({
       db,
       record: buildTourNotificationRecord({
         type: 'announcement', tourId, sourceId: broadcastId,
@@ -146,8 +160,8 @@ const enqueueTourBroadcastEvent = async (event) => {
       }),
       }),
     ]),
-    enqueue: () => enqueueNotificationJob({ db, job }),
-    publishStatus: (enqueued) => updateBroadcastDelivery({
+    enqueue: () => enqueueJob({ db, job }),
+    publishStatus: (enqueued) => publishStatus({
       root: 'broadcasts', targetId: tourId, broadcastId, status: enqueued.job.status,
       details: { deliveryJobId: enqueued.jobId },
     }),

@@ -8,7 +8,7 @@ const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKe
 const { expoAccessTokenSecret, getExpoPushClient } = require('../../infrastructure/notifications/expoPushClient');
 const { calculateRetryDelayMs } = require('./notificationJobs');
 const { evaluateAudienceCandidate, hashPushToken } = require('./notificationAudiencePage');
-const { QUEUE_ROOTS, claimQueueEntry, loadDueQueueEntries } = require('./notificationQueues');
+const { QUEUE_ROOTS, claimQueueEntry, loadDueQueueEntries, removeClaimedQueueEntry } = require('./notificationQueues');
 const { markSubmissionUnknown, retryNotificationDeliveryAttempt, transitionDeliveryAttempt } = require('./notificationWorker');
 const { syncNotificationSourceStatus } = require('./notificationSourceStatus');
 
@@ -45,7 +45,12 @@ const resolveJobStatus = (job) => {
   if (Number(counts.retrying || 0) > 0) return 'retrying';
   if (Number(counts.receiptPending || 0) > 0) return 'receipt_pending';
   if (Number(counts.receiptAccepted || 0) > 0 && Number(counts.receiptRejected || 0) === 0 && Number(counts.ticketRejected || 0) === 0 && Number(counts.submissionUnknown || 0) === 0) return 'provider_accepted';
-  if (Number(counts.receiptAccepted || 0) > 0 || Number(counts.submissionUnknown || 0) > 0) return 'partial';
+  if (Number(counts.submissionUnknown || 0) > 0) {
+    const known = Number(counts.receiptAccepted || 0) + Number(counts.receiptRejected || 0)
+      + Number(counts.ticketAccepted || 0) + Number(counts.ticketRejected || 0);
+    return known > 0 ? 'partial' : 'submission_unknown';
+  }
+  if (Number(counts.receiptAccepted || 0) > 0) return 'partial';
   if (Number(counts.ticketRejected || 0) > 0 || Number(counts.receiptRejected || 0) > 0) return 'provider_rejected';
   return Number(counts.eligible || 0) === 0 ? 'no_recipients' : 'ticket_rejected';
 };
@@ -57,12 +62,12 @@ const refreshNotificationJobStatus = async (db, jobId, nowMs) => {
   await jobRef.transaction((job) => {
     if (!job) return job;
     const status = resolveJobStatus(job);
-    updated = { ...job, status, updatedAtMs: nowMs, ...(['provider_accepted', 'provider_rejected', 'partial', 'expired', 'no_recipients'].includes(status) ? { completedAtMs: Number(job.completedAtMs || nowMs) } : {}) };
+    updated = { ...job, status, updatedAtMs: nowMs, ...(['provider_accepted', 'provider_rejected', 'partial', 'submission_unknown', 'expired', 'no_recipients'].includes(status) ? { completedAtMs: Number(job.completedAtMs || nowMs) } : {}) };
     return updated;
   });
   if (!updated) return null;
   await syncNotificationSourceStatus(db, updated, nowMs);
-  if (updated.priorityClass === 'critical' && ['provider_rejected', 'partial'].includes(updated.status)) {
+  if (updated.priorityClass === 'critical' && ['provider_rejected', 'partial', 'submission_unknown'].includes(updated.status)) {
     await db.ref(`notification_delivery_warnings/${jobId}`).update({ jobId, tourId: updated.tourId || null, eventId: updated.eventId || null, severity: 'critical', code: updated.status.toUpperCase(), status: 'open', updatedAtMs: nowMs });
   }
   return { status: updated.status, counts: updated.counts || {}, job: updated };
@@ -102,7 +107,7 @@ const processDueNotificationReceipts = async ({ db = admin.database(), nowMs = D
     if (!claimed.claimed) continue;
     const attempt = (await db.ref(`notification_delivery_attempts/${entry.targetId}`).once('value')).val();
     if (!attempt || attempt.queueKey !== queueKey || Number(attempt.queueVersion) !== Number(entry.version) || attempt.receiptStatus !== 'receipt_pending' || typeof attempt.ticketId !== 'string') {
-      await db.ref().update({ [`${QUEUE_ROOTS.receipt}/${queueKey}`]: null });
+      await removeClaimedQueueEntry(db.ref(`${QUEUE_ROOTS.receipt}/${queueKey}`), claimed.ownerId);
       continue;
     }
     due.push([entry.targetId, attempt]);
@@ -133,7 +138,7 @@ const retryDueNotificationAttempts = async ({ db = admin.database(), nowMs = Dat
     if (!claimedQueue.claimed) continue;
     const attemptId = entry.targetId;
     const attempt = (await db.ref(`notification_delivery_attempts/${attemptId}`).once('value')).val();
-    if (!attempt || attempt.queueKey !== queueKey || Number(attempt.queueVersion) !== Number(entry.version)) { await db.ref().update({ [`${QUEUE_ROOTS.retry}/${queueKey}`]: null }); continue; }
+    if (!attempt || attempt.queueKey !== queueKey || Number(attempt.queueVersion) !== Number(entry.version)) { await removeClaimedQueueEntry(db.ref(`${QUEUE_ROOTS.retry}/${queueKey}`), claimedQueue.ownerId); continue; }
     scanned += 1;
     const job = (await db.ref(`notification_jobs/${attempt.jobId}`).once('value')).val();
     if (attempt.status === 'request_started') {
@@ -145,7 +150,10 @@ const retryDueNotificationAttempts = async ({ db = admin.database(), nowMs = Dat
       await transitionDeliveryAttempt(db, attemptId, attempt, { status: 'retrying', retryable: true, availableAtMs: nowMs, submissionLease: null, safeErrorCode: 'PRE_REQUEST_RECOVERY' }, nowMs);
       Object.assign(attempt, (await db.ref(`notification_delivery_attempts/${attemptId}`).once('value')).val() || {});
     }
-    if (attempt.status !== 'retrying') continue;
+    if (attempt.status !== 'retrying') {
+      await removeClaimedQueueEntry(db.ref(`${QUEUE_ROOTS.retry}/${queueKey}`), claimedQueue.ownerId);
+      continue;
+    }
     if (isRetryAttemptExpired(job, nowMs) || Number(attempt.attemptNumber || 0) >= Number(job?.maxAttempts || 8)) {
       await transitionDeliveryAttempt(db, attemptId, attempt, { status: 'provider_rejected', receiptStatus: 'provider_rejected', retryable: false, safeErrorCode: isRetryAttemptExpired(job, nowMs) ? 'JOB_EXPIRED' : 'MAX_ATTEMPTS_REACHED' }, nowMs);
       if (job?.priorityClass === 'critical') await db.ref(`notification_delivery_warnings/${attempt.jobId}`).update({ jobId: attempt.jobId, severity: 'critical', code: isRetryAttemptExpired(job, nowMs) ? 'JOB_EXPIRED' : 'MAX_ATTEMPTS_REACHED', status: 'open', updatedAtMs: nowMs });
@@ -177,7 +185,7 @@ const cleanupOldNotificationDeliveryData = async ({ db = admin.database(), nowMs
   const cutoff = nowMs - RETENTION_MS; const updates = {};
   const oldJobs = (await db.ref('notification_jobs').orderByChild('updatedAtMs').endAt(cutoff).limitToFirst(100).once('value')).val() || {};
   for (const [jobId, job] of Object.entries(oldJobs)) {
-    updates[`notification_jobs/${jobId}`] = null; updates[`notification_job_token_claims/${jobId}`] = null; updates[`notification_job_recipients/${jobId}`] = null; updates[`notification_delivery_warnings/${jobId}`] = null;
+    updates[`notification_jobs/${jobId}`] = null; updates[`notification_job_token_claims/${jobId}`] = null; updates[`notification_job_recipients/${jobId}`] = null; updates[`notification_job_audience_claims/${jobId}`] = null; updates[`notification_delivery_warnings/${jobId}`] = null;
     if (job.queueKey && job.queueKind && QUEUE_ROOTS[job.queueKind]) updates[`${QUEUE_ROOTS[job.queueKind]}/${job.queueKey}`] = null;
     queueExpiredBroadcastDeletion(updates, job);
   }

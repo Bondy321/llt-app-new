@@ -15,8 +15,19 @@ const {
   buildInternalChatNotificationJob,
 } = require('./notificationProducerJobs');
 
-/** @param {any} event @param {boolean} internal */
-const enqueueChatEvent = async (event, internal = false) => {
+/** @param {string} messageId @param {any} messageData */
+const isBroadcastOwnedChatMessage = (messageId, messageData) => (
+  messageData?.notificationActivationOwner === 'broadcast_source'
+  && messageData?.messageType === 'ADMIN_BROADCAST'
+  && typeof messageData?.broadcastId === 'string'
+  && messageData.broadcastId === messageId
+);
+
+/** @param {any} event @param {boolean} internal @param {{db?: any, verifyBroadcast?: Function, enqueueJob?: Function, nowMs?: number}} dependencies */
+const enqueueChatEvent = async (event, internal = false, {
+  db = admin.database(), verifyBroadcast = verifyAdminBroadcast,
+  enqueueJob = enqueueNotificationJob, nowMs = Date.now(),
+} = {}) => { // eslint-disable-line complexity -- validation, ownership and compatibility branches are one source boundary
   const tourId = event.params.tourId;
   const messageId = event.params.messageId;
   const messageData = event.data?.val?.() || {};
@@ -32,18 +43,21 @@ const enqueueChatEvent = async (event, internal = false) => {
     return null;
   }
   const isAdmin = !internal && isAdminBroadcast(messageData.senderId);
-  if (isAdmin && !(await verifyAdminBroadcast(messageData))) {
+  if (isAdmin && !(await verifyBroadcast(messageData))) {
     log.warn('Notification source rejected unauthorised admin announcement', { tourId, messageId });
     return null;
   }
-  const tourName = (await admin.database().ref(`tours/${tourId}/name`).once('value')).val() || 'Tour Chat';
-  const nowMs = Date.now();
+  if (!internal && isAdmin && isBroadcastOwnedChatMessage(messageId, messageData)) {
+    log.info('Broadcast-owned chat message left for source activation owner', { tourId, messageId });
+    return { skipped: true, reason: 'BROADCAST_SOURCE_OWNS_ACTIVATION' };
+  }
+  const tourName = (await db.ref(`tours/${tourId}/name`).once('value')).val() || 'Tour Chat';
   const job = internal
     ? buildInternalChatNotificationJob({ tourId, messageId, messageData, tourName, nowMs })
     : buildChatNotificationJob({ tourId, messageId, messageData, tourName, isAdmin, nowMs });
-  const result = await enqueueNotificationJob({ job });
+  const result = await enqueueJob({ db, job });
   if (isAdmin && messageData.broadcastId) {
-    await admin.database().ref(`broadcasts/${tourId}/${messageData.broadcastId}`).update({
+    await db.ref(`broadcasts/${tourId}/${messageData.broadcastId}`).update({
       deliveryStatus: 'queued',
       deliveryJobId: result.jobId,
       deliveryUpdatedAtMs: nowMs,
@@ -76,6 +90,7 @@ const sendInternalChatNotification = onValueCreated({
 
 module.exports = {
   enqueueChatEvent,
+  isBroadcastOwnedChatMessage,
   sendChatNotification,
   sendInternalChatNotification,
 };

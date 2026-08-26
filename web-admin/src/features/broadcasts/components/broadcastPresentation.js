@@ -17,6 +17,7 @@ const DELIVERY_STATUS_META = {
   provider_accepted: { label: 'Provider accepted', color: 'green' },
   provider_rejected: { label: 'Provider rejected', color: 'red' },
   retrying: { label: 'Retry scheduled', color: 'yellow' },
+  submission_unknown: { label: 'Submission outcome unknown', color: 'orange' },
   delivered: { label: 'Expo ticket accepted (legacy)', color: 'blue' },
   partial: { label: 'Partial delivery result', color: 'yellow' },
   no_recipients: { label: 'No eligible recipients', color: 'gray' },
@@ -85,6 +86,7 @@ function normalizeBroadcastMessage(targetId, broadcastId, payload = {}, targetTy
     recipientCount: Number.isFinite(Number(payload.recipientCount)) ? Number(payload.recipientCount) : null,
     successCount: Number.isFinite(Number(payload.successCount)) ? Number(payload.successCount) : null,
     errorCount: Number.isFinite(Number(payload.errorCount)) ? Number(payload.errorCount) : null,
+    submissionUnknownCount: Number.isFinite(Number(payload.submissionUnknownCount)) ? Number(payload.submissionUnknownCount) : null,
     deliveryJobId: typeof payload.deliveryJobId === 'string' ? payload.deliveryJobId : null,
     skipReasons: payload.skipReasons && typeof payload.skipReasons === 'object' ? payload.skipReasons : {},
     lastErrorCode: typeof payload.deliveryErrorCode === 'string' ? payload.deliveryErrorCode : null,
@@ -96,6 +98,10 @@ const presentSkipReasons = (skipReasons = {}) => Object.entries(skipReasons)
   .slice(0, 4)
   .map(([reason, count]) => `${Number(count)} ${SKIP_REASON_LABELS[reason] || 'skipped'}`)
   .join(', ');
+
+const isBroadcastJobRequeueable = (job) => Boolean(job?.jobId
+  && Number(job?.counts?.submissionUnknown || 0) === 0
+  && ['ticket_rejected', 'provider_rejected', 'partial'].includes(job.status));
 
 const getMessageTone = (message) => {
   const trimmed = message.trim();
@@ -142,6 +148,7 @@ export {
   MAX_BROADCAST_LENGTH,
   getMessageTone,
   isValidFirebaseKeySegment,
+  isBroadcastJobRequeueable,
   messageTemplates,
   normalizeBroadcastMessage,
   normalizeBroadcastTimestamp,

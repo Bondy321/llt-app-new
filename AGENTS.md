@@ -145,7 +145,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `tour_notifications`
 - `notification_read_state`
 - `notification_read_cleanup_jobs` (server-private bounded continuation jobs)
-- `notification_jobs`, `notification_job_coalescing`, `notification_job_token_claims` (server-private durable push outbox, supersession and duplicate-token claims)
+- `notification_jobs`, `notification_job_coalescing`, `notification_job_token_claims`, `notification_job_audience_claims` (server-private durable push outbox, supersession and UID/token deduplication claims)
 - `notification_delivery_attempts`, `notification_delivery_warnings` (server-private ticket/receipt state and visible operations warnings)
 - `notification_devices`, `notification_consents` (server-owned installation push state and explicit marketing consent; self-readable, client-write denied)
 - `marketing_notification_details` (server-owned durable future-tour notification content)
@@ -1324,6 +1324,22 @@ When changing a data contract:
 - Update targeted tests.
 - Update the relevant doc under `docs/`.
 - Update this file if future agents need to know the new contract.
+
+Notification reporting contract:
+
+- Keep `ticket_accepted`, `provider_accepted`, known rejection, and `submission_unknown` distinct.
+- `provider_accepted` confirms provider handoff, not display on the device.
+- Never call an all-unknown result partial delivery or treat an ambiguous submission as safely
+  requeueable; doing so can duplicate a notification.
+- Preserve the first job `completedAtMs` and mirror it as the source `deliveryCompletedAtMs`.
+- Expo request classification is centralized: definite HTTP 429/5xx and pre-connect failures retry;
+  definite invalid/configuration/payload failures reject; ambiguous timeout/reset outcomes do not resend.
+- Fan-out queue and job leases use the same owner/absolute expiry, and the recoverable queue pointer
+  remains until page completion. Never delete a current pointer solely because another worker owns the job.
+- Audience pages atomically commit a deterministic page ID, counters and cursor. Keep
+  `eligible + skipped = audience`, with duplicate-token candidates skipped only, and preserve preview parity.
+- The broadcast trigger alone activates tour announcements after both notice and broadcast-owned chat
+  records exist. The chat trigger validates but skips activation for that explicit ownership marker.
 
 ---
 

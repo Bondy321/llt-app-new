@@ -9,12 +9,14 @@ process.env.FIREBASE_CONFIG = JSON.stringify({
 });
 
 const { __testables } = require('../functions/index.js');
-const { buildNotificationQueueKey } = require('../functions/src/domains/notifications/notificationQueues');
+const { buildNotificationQueueKey, claimQueueEntry } = require('../functions/src/domains/notifications/notificationQueues');
 const notificationWorker = require('../functions/src/domains/notifications/notificationWorker');
 const notificationSourceStatus = require('../functions/src/domains/notifications/notificationSourceStatus');
 const { hashPushToken } = require('../functions/src/domains/notifications/notificationAudiencePage');
 const { shouldReplaceDriverPackChange } = require('../functions/src/domains/notifications/driverTourPackNotificationFunction');
 const { verifyBroadcastAuthor } = require('../functions/src/domains/notifications/broadcastFunctions');
+const { enqueueTourBroadcastEvent } = require('../functions/src/domains/notifications/broadcastFunctions');
+const { enqueueChatEvent, isBroadcastOwnedChatMessage } = require('../functions/src/domains/notifications/chatNotificationFunctions');
 const notificationAdminFunctions = require('../functions/src/domains/notifications/notificationAdminFunctions');
 const { runNotificationSourceHandoff } = require('../functions/src/domains/notifications/notificationSourceHandoff');
 
@@ -67,6 +69,7 @@ const createMemoryDb = (initial = {}) => {
         if (!pathName) Object.entries(patch).forEach(([key, value]) => setAtPath(data, key, value));
         else Object.entries(patch).forEach(([key, value]) => setAtPath(data, `${pathName}/${key}`, value));
       },
+      set: async (value) => setAtPath(data, pathName, value),
       transaction: async (updater) => {
         const current = clone(getAtPath(data, pathName));
         const next = updater(current);
@@ -134,6 +137,18 @@ test('lease acquisition is exclusive and retry backoff is bounded and monotonic'
   assert.equal(recovered.acquired, true);
   assert.ok(__testables.calculateNotificationRetryDelayMs(2) > __testables.calculateNotificationRetryDelayMs(1));
   assert.equal(__testables.calculateNotificationRetryDelayMs(100), 1_800_000);
+});
+
+test('lease-time expiry records one stable completion timestamp', async () => {
+  const job = buildJob();
+  job.expiresAtMs = nowMs - 1;
+  const db = createMemoryDb({ notification_jobs: { [job.jobId]: job } });
+  const first = await __testables.acquireNotificationJobLease({ jobRef: db.ref(`notification_jobs/${job.jobId}`), nowMs, ownerId: 'expiry-worker' });
+  const second = await __testables.acquireNotificationJobLease({ jobRef: db.ref(`notification_jobs/${job.jobId}`), nowMs: nowMs + 5_000, ownerId: 'later-worker' });
+  assert.equal(first.acquired, false);
+  assert.equal(first.job.status, 'expired');
+  assert.equal(first.job.completedAtMs, nowMs);
+  assert.equal(second.job.completedAtMs, nowMs);
 });
 
 test('exact group-photo Function output creates one photo-policy job and honours group_photos preference', async () => {
@@ -238,6 +253,7 @@ test('audience paging remains cursor-based beyond 1,000 recipients and no notifi
   const producerFiles = [
     'broadcastFunctions.js', 'chatNotificationFunctions.js', 'itineraryNotificationFunction.js',
     'driverTourPackNotificationFunction.js', 'safetyNotificationFunction.js', 'notificationProducerJobs.js',
+    'notificationAdminFunctions.js',
   ];
   assert.match(audienceSource, /PAGE_SIZE = 100/u);
   assert.match(audienceSource, /startAfter\(after\)/u);
@@ -625,4 +641,338 @@ test('durable source handoff retries converge across failures before source, bef
   await runNotificationSourceHandoff({ persistSource, enqueue, publishStatus: publishWithFailure });
   assert.equal(Object.keys(db.data.notification_jobs).length, 1);
   assert.equal(db.data.durable_sources.source_1.jobId, job.jobId);
+});
+
+test('Expo SDK request errors classify retryable, permanent and ambiguous outcomes from real v4 shapes', () => {
+  const cases = [
+    [{ statusCode: 429 }, 'retryable', 'EXPO_RATE_LIMITED'],
+    [{ statusCode: 503 }, 'retryable', 'EXPO_HTTP_503'],
+    [{ name: 'FetchError', type: 'system', code: 'ENOTFOUND' }, 'retryable', 'ENOTFOUND'],
+    [{ name: 'FetchError', type: 'system', code: 'ECONNREFUSED' }, 'retryable', 'ECONNREFUSED'],
+    [{ statusCode: 400, code: 'InvalidRequest' }, 'permanent', 'InvalidRequest'],
+    [{ statusCode: 401, code: 'InvalidCredentials' }, 'permanent', 'INVALID_CREDENTIALS'],
+    [{ name: 'FetchError', type: 'request-timeout', code: 'ETIMEDOUT' }, 'unknown', 'SUBMISSION_UNKNOWN'],
+    [{ name: 'FetchError', type: 'system', code: 'ECONNRESET' }, 'unknown', 'SUBMISSION_UNKNOWN'],
+  ];
+  for (const [error, outcome, safeErrorCode] of cases) {
+    const result = __testables.classifyExpoRequestError(error);
+    assert.equal(result.outcome, outcome);
+    assert.equal(result.safeErrorCode, safeErrorCode);
+  }
+});
+
+test('request classifier drives durable retry, permanent rejection, configuration warning and max-attempt visibility', async () => {
+  const run = async (error, attemptNumber = 1, overrides = {}) => {
+    const job = buildJob({ maxAttempts: 2, ...overrides });
+    const attemptId = `attempt_request_${attemptNumber}`;
+    const attempt = {
+      attemptId, jobId: job.jobId, status: 'request_started', ticketStatus: 'pending', receiptStatus: 'not_requested',
+      retryable: false, attemptNumber, availableAtMs: nowMs, expiresAtMs: job.expiresAtMs,
+      queueKind: null, queueKey: null, queueVersion: 0,
+    };
+    const db = createMemoryDb({ notification_jobs: { [job.jobId]: job }, notification_delivery_attempts: { [attemptId]: attempt } });
+    const result = await notificationWorker.handleExpoRequestFailure(db, job, { attemptRef: db.ref(`notification_delivery_attempts/${attemptId}`), attemptId, attempt }, nowMs, error);
+    return { db, job, attemptId, result };
+  };
+  const limited = await run({ statusCode: 429 });
+  assert.equal(limited.db.data.notification_delivery_attempts[limited.attemptId].status, 'retrying');
+  assert.equal(Object.keys(limited.db.data.notification_attempt_retry_queue).length, 1);
+  const unavailable = await run({ statusCode: 503 });
+  assert.equal(unavailable.db.data.notification_delivery_attempts[unavailable.attemptId].status, 'retrying');
+  const badRequest = await run({ statusCode: 400, code: 'InvalidRequest' });
+  assert.equal(badRequest.db.data.notification_delivery_attempts[badRequest.attemptId].status, 'ticket_rejected');
+  const credentials = await run({ statusCode: 401, code: 'InvalidCredentials' });
+  assert.equal(credentials.db.data.notification_delivery_warnings[credentials.job.jobId].code, 'INVALID_CREDENTIALS');
+  const exhausted = await run({ statusCode: 503 }, 2, { notificationType: __testables.NOTIFICATION_TYPES.CRITICAL_SAFETY });
+  assert.equal(exhausted.db.data.notification_delivery_attempts[exhausted.attemptId].safeErrorCode, 'REQUEST_RETRY_EXHAUSTED');
+  assert.equal(exhausted.db.data.notification_delivery_attempts[exhausted.attemptId].retryable, false);
+  assert.equal(exhausted.db.data.notification_delivery_warnings[exhausted.job.jobId].severity, 'critical');
+});
+
+test('initial chunk and individual retry submissions both use the request classifier', async () => {
+  const job = buildJob({ maxAttempts: 4 });
+  const recipient = { authUid: 'recipient', token: expoToken, tokenHash: __testables.hashNotificationPushToken(expoToken) };
+  const initialId = 'attempt_initial_request';
+  const initial = { attemptId: initialId, jobId: job.jobId, status: 'prepared', ticketStatus: 'pending', receiptStatus: 'not_requested', retryable: false, attemptNumber: 1, availableAtMs: nowMs, expiresAtMs: job.expiresAtMs, submissionLease: { ownerId: 'initial', expiresAtMs: nowMs + 120_000 }, queueKind: null, queueKey: null, queueVersion: 0 };
+  const initialDb = createMemoryDb({ notification_jobs: { [job.jobId]: job }, notification_delivery_attempts: { [initialId]: initial } });
+  await notificationWorker.sendPreparedChunks(initialDb, job, [{ recipient, claimed: { attemptRef: initialDb.ref(`notification_delivery_attempts/${initialId}`), attemptId: initialId, attempt: initial }, message: notificationWorker.buildExpoPushMessage(job, recipient, nowMs) }], { chunkPushNotifications: (items) => [items], sendPushNotificationsAsync: async () => { throw Object.assign(new Error('rate limited'), { statusCode: 429 }); } }, nowMs);
+  assert.equal(initialDb.data.notification_delivery_attempts[initialId].status, 'retrying');
+
+  const retryId = 'attempt_retry_request';
+  const retrying = { attemptId: retryId, jobId: job.jobId, recipientUid: recipient.authUid, installationUid: recipient.authUid, tokenHash: recipient.tokenHash, status: 'retrying', ticketStatus: 'ticket_rejected', receiptStatus: 'not_requested', retryable: true, attemptNumber: 1, availableAtMs: nowMs, expiresAtMs: job.expiresAtMs, queueKind: null, queueKey: null, queueVersion: 0 };
+  const retryDb = createMemoryDb({ notification_jobs: { [job.jobId]: job }, notification_delivery_attempts: { [retryId]: retrying } });
+  const retried = await notificationWorker.retryNotificationDeliveryAttempt({ db: retryDb, job, attemptId: retryId, attempt: retrying, recipient, nowMs, expo: { sendPushNotificationsAsync: async () => { throw Object.assign(new Error('unavailable'), { statusCode: 503 }); } } });
+  assert.equal(retried.reason, 'EXPO_HTTP_503');
+  assert.equal(retryDb.data.notification_delivery_attempts[retryId].status, 'retrying');
+  assert.equal(retryDb.data.notification_delivery_attempts[retryId].attemptNumber, 2);
+});
+
+test('queue and job leases share one recovery boundary and preserve the exact one-millisecond gap', async () => {
+  const job = buildJob();
+  const queueKey = buildNotificationQueueKey(nowMs, job.jobId, 1);
+  const queueExpiry = nowMs + 120_000;
+  const jobExpiry = queueExpiry + 1;
+  const db = createMemoryDb({
+    notification_jobs: { [job.jobId]: { ...job, status: 'fanout_in_progress', queueKind: 'fanout', queueKey, queueVersion: 1, lease: { ownerId: 'crashed-worker', acquiredAtMs: nowMs - 1, expiresAtMs: jobExpiry } } },
+    notification_job_fanout_queue: { [queueKey]: { schemaVersion: 1, kind: 'fanout', targetId: job.jobId, dueAtMs: nowMs, version: 1, lease: { ownerId: 'recovery-worker', acquiredAtMs: queueExpiry, expiresAtMs: queueExpiry + 120_000 } } },
+  });
+  const blocked = await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs: queueExpiry, queueKey, queueVersion: 1, queueOwnerId: 'recovery-worker', queueLeaseExpiresAtMs: queueExpiry + 120_000, expo: { chunkPushNotifications: (items) => [items], sendPushNotificationsAsync: async () => [] } });
+  assert.equal(blocked.acquired, false);
+  assert.equal(db.data.notification_job_fanout_queue[queueKey].dueAtMs, jobExpiry);
+  assert.equal(db.data.notification_job_fanout_queue[queueKey].lease, null);
+  const reclaimed = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${queueKey}`), jobExpiry);
+  assert.equal(reclaimed.claimed, true);
+  assert.equal(reclaimed.entry.lease.expiresAtMs, jobExpiry + 120_000);
+  const completed = await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs: jobExpiry, queueKey, queueVersion: 1, queueOwnerId: reclaimed.ownerId, queueLeaseExpiresAtMs: reclaimed.entry.lease.expiresAtMs, expo: { chunkPushNotifications: (items) => [items], sendPushNotificationsAsync: async () => [] } });
+  assert.equal(completed.status, 'no_recipients');
+  assert.equal(db.data.notification_job_fanout_queue?.[queueKey], undefined);
+});
+
+test('fanout queue remains recoverable across crash, terminal stale work and concurrent trigger/scheduler claims', async () => {
+  const job = buildJob({ maxAttempts: 3 });
+  const queueKey = buildNotificationQueueKey(nowMs, job.jobId, 1);
+  const tokenHash = __testables.hashNotificationPushToken(expoToken);
+  const session = { schemaVersion: 1, sessionId: 'sess_v1_0123456789abcdef0123456789abcdef', authUid: 'recipient', principalId: 'pax_v2_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', principalType: 'passenger', tourId: 'TOUR_1', driverId: null, status: 'active', issuedAtMs: nowMs - 1_000, lastAuthenticatedAtMs: nowMs - 1_000, sessionRevision: 1, expiresAtMs: nowMs + 600_000 };
+  const db = createMemoryDb({
+    notification_jobs: { [job.jobId]: { ...job, queueKind: 'fanout', queueKey, queueVersion: 1 } },
+    notification_job_fanout_queue: { [queueKey]: { schemaVersion: 1, kind: 'fanout', targetId: job.jobId, dueAtMs: nowMs, version: 1 } },
+    notification_devices: { recipient: { pushToken: expoToken, tokenHash, status: 'active', permissionState: 'granted', operationalEligible: true } },
+    users: { recipient: {} }, app_sessions: { recipient: session },
+    tours: { TOUR_1: { participants: { recipient: { schemaVersion: 2, userId: 'recipient', principalId: session.principalId, sessionId: session.sessionId, sessionExpiresAtMs: session.expiresAtMs } } } },
+  });
+  const triggerClaim = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${queueKey}`), nowMs);
+  const schedulerClaim = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${queueKey}`), nowMs);
+  assert.equal(triggerClaim.claimed, true);
+  assert.equal(schedulerClaim.claimed, false);
+  const crashed = await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs, queueKey, queueVersion: 1, queueOwnerId: triggerClaim.ownerId, queueLeaseExpiresAtMs: triggerClaim.entry.lease.expiresAtMs, expo: { chunkPushNotifications: () => { throw new Error('hard-boundary simulation'); } } });
+  assert.equal(crashed.status, 'queued');
+  const [recoveryQueueKey] = Object.keys(db.data.notification_job_fanout_queue);
+  assert.ok(recoveryQueueKey);
+  assert.equal(db.data.notification_job_fanout_queue[recoveryQueueKey].lease ?? null, null);
+  db.data.notification_jobs[job.jobId].status = 'provider_accepted';
+  db.data.notification_jobs[job.jobId].completedAtMs = nowMs;
+  db.data.notification_job_fanout_queue[recoveryQueueKey].dueAtMs = nowMs;
+  const terminalClaim = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${recoveryQueueKey}`), nowMs);
+  await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs, queueKey: recoveryQueueKey, queueVersion: terminalClaim.entry.version, queueOwnerId: terminalClaim.ownerId, queueLeaseExpiresAtMs: terminalClaim.entry.lease.expiresAtMs });
+  assert.equal(db.data.notification_job_fanout_queue?.[recoveryQueueKey], undefined);
+});
+
+const buildAudienceState = (entries) => {
+  const notification_devices = {}; const users = {}; const app_sessions = {}; const participants = {};
+  for (const { authUid, token } of entries) {
+    const tokenHash = __testables.hashNotificationPushToken(token);
+    const sessionId = `sess_v1_${authUid.padEnd(32, '0').slice(0, 32).replace(/[^a-f0-9]/gu, 'a')}`;
+    const principalId = `pax_v2_${authUid.padEnd(32, 'b').slice(0, 32).replace(/[^a-f0-9]/gu, 'b')}`;
+    notification_devices[authUid] = { pushToken: token, tokenHash, status: 'active', permissionState: 'granted', operationalEligible: true };
+    users[authUid] = {};
+    app_sessions[authUid] = { schemaVersion: 1, sessionId, authUid, principalId, principalType: 'passenger', tourId: 'TOUR_1', driverId: null, status: 'active', issuedAtMs: nowMs - 1_000, lastAuthenticatedAtMs: nowMs - 1_000, sessionRevision: 1, expiresAtMs: nowMs + 600_000 };
+    participants[authUid] = { schemaVersion: 2, userId: authUid, principalId, sessionId, sessionExpiresAtMs: nowMs + 600_000 };
+  }
+  return { notification_devices, users, app_sessions, tours: { TOUR_1: { participants } } };
+};
+
+test('final fanout retires its queue in receipt and retry phases', async () => {
+  const cases = [
+    { sourceId: 'receipt-final', expectedStatus: 'receipt_pending', send: async () => [{ status: 'ok', id: 'receipt-ticket' }] },
+    { sourceId: 'retry-final', expectedStatus: 'retrying', send: async () => { throw Object.assign(new Error('temporarily unavailable'), { statusCode: 503 }); } },
+  ];
+  for (const item of cases) {
+    const job = buildJob({ sourceId: item.sourceId });
+    const queueKey = buildNotificationQueueKey(nowMs, job.jobId, 1);
+    const audience = buildAudienceState([{ authUid: item.sourceId, token: `ExponentPushToken[${item.sourceId}]` }]);
+    const db = createMemoryDb({
+      notification_jobs: { [job.jobId]: { ...job, queueKind: 'fanout', queueKey, queueVersion: 1 } },
+      notification_job_fanout_queue: { [queueKey]: { schemaVersion: 1, kind: 'fanout', targetId: job.jobId, dueAtMs: nowMs, version: 1 } },
+      ...audience,
+    });
+    const expo = { chunkPushNotifications: (items) => [items], sendPushNotificationsAsync: item.send };
+    const firstClaim = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${queueKey}`), nowMs);
+    const first = await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs, queueKey, queueVersion: 1, queueOwnerId: firstClaim.ownerId, queueLeaseExpiresAtMs: firstClaim.entry.lease.expiresAtMs, expo, syncSourceStatus: async () => {} });
+    assert.equal(first.status, 'queued');
+    const finalClaim = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${queueKey}`), nowMs + 1);
+    const final = await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs: nowMs + 1, queueKey, queueVersion: 1, queueOwnerId: finalClaim.ownerId, queueLeaseExpiresAtMs: finalClaim.entry.lease.expiresAtMs, expo, syncSourceStatus: async () => {} });
+    assert.equal(final.status, item.expectedStatus);
+    assert.equal(final.fanoutComplete, true);
+    assert.equal(db.data.notification_job_fanout_queue?.[queueKey], undefined);
+    assert.equal(db.data.notification_jobs[job.jobId].queueKey, null);
+  }
+});
+
+test('source publication failure after final fanout retries without resending', async () => {
+  const job = buildJob({ sourceId: 'source-sync-recovery' });
+  const queueKey = buildNotificationQueueKey(nowMs, job.jobId, 1);
+  const audience = buildAudienceState([{ authUid: 'sync-recovery', token: 'ExponentPushToken[source-sync-recovery]' }]);
+  const db = createMemoryDb({
+    notification_jobs: { [job.jobId]: { ...job, queueKind: 'fanout', queueKey, queueVersion: 1 } },
+    notification_job_fanout_queue: { [queueKey]: { schemaVersion: 1, kind: 'fanout', targetId: job.jobId, dueAtMs: nowMs, version: 1 } },
+    ...audience,
+  });
+  let sends = 0;
+  let publications = 0;
+  const expo = { chunkPushNotifications: (items) => items.length ? [items] : [], sendPushNotificationsAsync: async (items) => { sends += items.length; return [{ status: 'ok', id: 'source-sync-ticket' }]; } };
+  const syncSourceStatus = async () => { publications += 1; if (publications === 2) throw new Error('source publication unavailable'); };
+  const firstClaim = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${queueKey}`), nowMs);
+  await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs, queueKey, queueVersion: 1, queueOwnerId: firstClaim.ownerId, queueLeaseExpiresAtMs: firstClaim.entry.lease.expiresAtMs, expo, syncSourceStatus });
+  const finalClaim = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${queueKey}`), nowMs + 1);
+  const failed = await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs: nowMs + 1, queueKey, queueVersion: 1, queueOwnerId: finalClaim.ownerId, queueLeaseExpiresAtMs: finalClaim.entry.lease.expiresAtMs, expo, syncSourceStatus });
+  assert.equal(failed.sourceStatusPending, true);
+  assert.equal(db.data.notification_job_fanout_queue[queueKey].lease, null);
+  const retryClaim = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${queueKey}`), nowMs + 2);
+  const recovered = await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs: nowMs + 2, queueKey, queueVersion: 1, queueOwnerId: retryClaim.ownerId, queueLeaseExpiresAtMs: retryClaim.entry.lease.expiresAtMs, expo, syncSourceStatus });
+  assert.equal(recovered.fanoutComplete, true);
+  assert.equal(sends, 1);
+  assert.equal(db.data.notification_job_fanout_queue?.[queueKey], undefined);
+  assert.equal(db.data.notification_jobs[job.jobId].queueKey, null);
+});
+
+test('critical warning publication is replayed after a crash at finalization', async () => {
+  const job = buildJob({ sourceId: 'critical-warning-recovery', notificationType: __testables.NOTIFICATION_TYPES.CRITICAL_SAFETY });
+  const queueKey = buildNotificationQueueKey(nowMs, job.jobId, 1);
+  const db = createMemoryDb({
+    notification_jobs: { [job.jobId]: { ...job, queueKind: 'fanout', queueKey, queueVersion: 1 } },
+    notification_job_fanout_queue: { [queueKey]: { schemaVersion: 1, kind: 'fanout', targetId: job.jobId, dueAtMs: nowMs, version: 1 } },
+  });
+  const sequence = [];
+  let warningAttempts = 0;
+  const syncSourceStatus = async () => { sequence.push('source'); };
+  const publishCriticalWarning = async () => {
+    sequence.push('warning');
+    warningAttempts += 1;
+    if (warningAttempts === 1) throw new Error('warning publication interrupted');
+  };
+  const firstClaim = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${queueKey}`), nowMs);
+  const interrupted = await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs, queueKey, queueVersion: 1, queueOwnerId: firstClaim.ownerId, queueLeaseExpiresAtMs: firstClaim.entry.lease.expiresAtMs, syncSourceStatus, publishCriticalWarning });
+  assert.equal(interrupted.sourceStatusPending, true);
+  assert.deepEqual(sequence, ['source', 'warning']);
+  assert.equal(db.data.notification_job_fanout_queue[queueKey].lease, null);
+  const retryClaim = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${queueKey}`), nowMs + 1);
+  await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs: nowMs + 1, queueKey, queueVersion: 1, queueOwnerId: retryClaim.ownerId, queueLeaseExpiresAtMs: retryClaim.entry.lease.expiresAtMs, syncSourceStatus, publishCriticalWarning });
+  assert.deepEqual(sequence, ['source', 'warning', 'source', 'warning']);
+  assert.equal(db.data.notification_job_fanout_queue?.[queueKey], undefined);
+  assert.equal(db.data.notification_jobs[job.jobId].queueKey, null);
+});
+
+test('actual fanout and preview use the same UID/token partition and page replay cannot double counts', async () => {
+  const sharedToken = 'ExponentPushToken[shared-actual-preview]';
+  const audience = buildAudienceState([{ authUid: 'aa', token: sharedToken }, { authUid: 'bb', token: sharedToken }]);
+  const job = buildJob();
+  const db = createMemoryDb({ notification_jobs: { [job.jobId]: job }, ...audience });
+  let sends = 0;
+  const expo = { chunkPushNotifications: (items) => [items], sendPushNotificationsAsync: async (items) => { sends += items.length; return items.map((_, index) => ({ status: 'ok', id: `ticket-${index}` })); } };
+  const first = await notificationWorker.processNotificationJobPage({ db, jobRef: db.ref(`notification_jobs/${job.jobId}`), job, nowMs, expo });
+  assert.equal(first.status, 'queued');
+  const countsAfterFirst = clone(db.data.notification_jobs[job.jobId].counts);
+  await notificationWorker.processNotificationJobPage({ db, jobRef: db.ref(`notification_jobs/${job.jobId}`), job, nowMs: nowMs + 1, expo });
+  assert.deepEqual(db.data.notification_jobs[job.jobId].counts, countsAfterFirst);
+  const refreshed = clone(db.data.notification_jobs[job.jobId]);
+  await notificationWorker.processNotificationJobPage({ db, jobRef: db.ref(`notification_jobs/${job.jobId}`), job: refreshed, nowMs: nowMs + 2, expo });
+  const actual = db.data.notification_jobs[job.jobId].counts;
+  const previewDb = createMemoryDb(audience);
+  const preview = await notificationAdminFunctions.calculateNotificationAudiencePreview({ db: previewDb, job });
+  assert.equal(sends, 1);
+  assert.deepEqual({ audience: actual.audience, eligible: actual.eligible, skipped: actual.skipped }, { audience: 2, eligible: 1, skipped: 1 });
+  assert.deepEqual({ audience: preview.audience, eligible: preview.eligible, skipped: preview.skipped }, { audience: 2, eligible: 1, skipped: 1 });
+  assert.equal(actual.eligible + actual.skipped, actual.audience);
+});
+
+test('attempt/send crash before page commit recovers without duplicate submission or accounting', async () => {
+  const audience = buildAudienceState([{ authUid: 'cc', token: 'ExponentPushToken[page-crash]' }]);
+  const job = buildJob({ sourceId: 'page-crash-source' });
+  const db = createMemoryDb({ notification_jobs: { [job.jobId]: job }, ...audience });
+  const page = await __testables.loadNotificationAudiencePage(db, null);
+  const pageId = notificationWorker.buildAudiencePageId(job.jobId, null);
+  const prepared = await notificationWorker.prepareDeliveryPage(db, job, page.candidates, pageId, nowMs);
+  let sends = 0;
+  const expo = { chunkPushNotifications: (items) => [items], sendPushNotificationsAsync: async (items) => { sends += items.length; return [{ status: 'ok', id: 'ticket-crash-window' }]; } };
+  await notificationWorker.sendPreparedChunks(db, job, prepared.prepared, expo, nowMs);
+  await notificationWorker.processNotificationJobPage({ db, jobRef: db.ref(`notification_jobs/${job.jobId}`), job, nowMs: nowMs + 1, expo });
+  assert.equal(sends, 1);
+  assert.equal(db.data.notification_jobs[job.jobId].counts.audience, 1);
+  assert.equal(db.data.notification_jobs[job.jobId].counts.eligible, 1);
+  assert.equal(db.data.notification_jobs[job.jobId].counts.skipped, 0);
+});
+
+test('atomic page commits cover count/cursor crash boundaries across more than one page', async () => {
+  const job = buildJob({ sourceId: 'page-commit-source' });
+  const db = createMemoryDb({ notification_jobs: { [job.jobId]: job } });
+  const firstPageId = notificationWorker.buildAudiencePageId(job.jobId, null);
+  const first = await notificationWorker.commitNotificationAudiencePage(db.ref(`notification_jobs/${job.jobId}`), { pageId: firstPageId, expectedCursor: null, nextCursor: 'devices|0100', increments: { audience: 100, eligible: 80, skipped: 20 }, skipReasons: { disabled: 20 }, nowMs });
+  const replay = await notificationWorker.commitNotificationAudiencePage(db.ref(`notification_jobs/${job.jobId}`), { pageId: firstPageId, expectedCursor: null, nextCursor: 'devices|0100', increments: { audience: 100, eligible: 80, skipped: 20 }, skipReasons: { disabled: 20 }, nowMs: nowMs + 1 });
+  const secondPageId = notificationWorker.buildAudiencePageId(job.jobId, 'devices|0100');
+  const second = await notificationWorker.commitNotificationAudiencePage(db.ref(`notification_jobs/${job.jobId}`), { pageId: secondPageId, expectedCursor: 'devices|0100', nextCursor: null, increments: { audience: 5, eligible: 4, skipped: 1 }, skipReasons: { duplicate_token: 1 }, nowMs: nowMs + 2 });
+  assert.equal(first.committed, true);
+  assert.equal(replay.committed, false);
+  assert.equal(second.committed, true);
+  assert.deepEqual({ audience: second.job.counts.audience, eligible: second.job.counts.eligible, skipped: second.job.counts.skipped }, { audience: 105, eligible: 84, skipped: 21 });
+  assert.equal(second.job.counts.eligible + second.job.counts.skipped, second.job.counts.audience);
+});
+
+test('canonical plus legacy duplicate UID is considered once by both page loader and preview', async () => {
+  const token = 'ExponentPushToken[canonical-legacy]';
+  const state = buildAudienceState([{ authUid: 'dd', token }]);
+  state.users.dd = { pushToken: token, pushTokenStatus: 'ACTIVE', pushPermissionState: 'granted' };
+  const db = createMemoryDb(state);
+  const devicesPage = await __testables.loadNotificationAudiencePage(db, null);
+  const usersPage = await __testables.loadNotificationAudiencePage(db, devicesPage.nextCursor);
+  assert.equal(devicesPage.candidates.length, 1);
+  assert.equal(usersPage.candidates.length, 0);
+  const preview = await notificationAdminFunctions.calculateNotificationAudiencePreview({ db, job: buildJob() });
+  assert.equal(preview.audience, 1);
+  assert.equal(preview.eligible, 1);
+});
+
+test('broadcast-owned chat never activates independently while genuine chat still enqueues', async () => {
+  const owned = { text: 'ANNOUNCEMENT: update', senderName: 'HQ', senderId: 'admin_hq_broadcast', senderUid: 'admin', timestamp: nowMs, messageType: 'ADMIN_BROADCAST', isDriver: true, broadcastId: 'broadcast_1', notificationActivationOwner: 'broadcast_source' };
+  assert.equal(isBroadcastOwnedChatMessage('broadcast_1', owned), true);
+  let enqueues = 0;
+  const ownedResult = await enqueueChatEvent({ params: { tourId: 'TOUR_1', messageId: 'broadcast_1' }, data: { val: () => owned } }, false, { db: createMemoryDb(), verifyBroadcast: async () => true, enqueueJob: async () => { enqueues += 1; } });
+  assert.equal(ownedResult.reason, 'BROADCAST_SOURCE_OWNS_ACTIVATION');
+  assert.equal(enqueues, 0);
+  const db = createMemoryDb({ tours: { TOUR_1: { name: 'Tour' } } });
+  const normal = { text: 'Hello', senderName: 'Passenger', senderId: 'pax_v2_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', senderUid: 'passenger', timestamp: nowMs };
+  await enqueueChatEvent({ params: { tourId: 'TOUR_1', messageId: 'message_1' }, data: { val: () => normal } }, false, { db, enqueueJob: async ({ job: queuedJob }) => { enqueues += 1; return { jobId: queuedJob.jobId, job: queuedJob, created: true }; }, nowMs });
+  assert.equal(enqueues, 1);
+});
+
+test('tour broadcast retries every source/enqueue/status failure and converges to one activation', async () => {
+  const event = { params: { tourId: 'TOUR_1', broadcastId: 'broadcast_1' }, data: { val: () => ({ message: 'Update', createdAtMs: nowMs, createdByUid: 'admin', source: 'web_admin' }) } };
+  const createDeps = (db, failures = {}) => ({
+    db, verifyAuthor: async () => true, nowMs,
+    persistChat: async ({ path: targetPath, message }) => { if (failures.chat) { failures.chat = false; throw new Error('chat write failed'); } await db.ref(targetPath).set(message); },
+    persistNotice: async ({ record }) => { if (failures.notice) { failures.notice = false; throw new Error('notice write failed'); } await db.ref(`tour_notifications/TOUR_1/${record.noticeId}`).set(record); },
+    enqueueJob: async ({ job }) => { if (failures.enqueue) { failures.enqueue = false; throw new Error('enqueue failed'); } return __testables.enqueueNotificationJob({ db, job }); },
+    publishStatus: async ({ targetId, broadcastId, status, details }) => { if (failures.status) { failures.status = false; throw new Error('status failed'); } await db.ref(`broadcasts/${targetId}/${broadcastId}`).update({ deliveryStatus: status, ...details }); },
+  });
+  for (const failure of ['chat', 'notice', 'enqueue', 'status']) {
+    const db = createMemoryDb({ tours: { TOUR_1: { name: 'Tour' } }, broadcasts: { TOUR_1: { broadcast_1: event.data.val() } } });
+    const failures = { [failure]: true };
+    const deps = createDeps(db, failures);
+    await assert.rejects(() => enqueueTourBroadcastEvent(event, deps), new RegExp(`${failure === 'status' ? 'status' : failure === 'enqueue' ? 'enqueue' : `${failure} write`} failed`, 'iu'));
+    const chat = db.data.chats?.TOUR_1?.messages?.broadcast_1;
+    if (chat) {
+      let independent = 0;
+      const observed = await enqueueChatEvent({ params: { tourId: 'TOUR_1', messageId: 'broadcast_1' }, data: { val: () => chat } }, false, { db, verifyBroadcast: async () => true, enqueueJob: async () => { independent += 1; } });
+      assert.equal(observed.reason, 'BROADCAST_SOURCE_OWNS_ACTIVATION');
+      assert.equal(independent, 0);
+    }
+    await enqueueTourBroadcastEvent(event, deps);
+    assert.ok(db.data.chats.TOUR_1.messages.broadcast_1);
+    assert.equal(Object.keys(db.data.tour_notifications.TOUR_1).length, 1);
+    assert.equal(Object.keys(db.data.notification_jobs).length, 1);
+  }
+});
+
+test('all-unknown reporting is explicit, stable and cannot be manually requeued', async () => {
+  const job = { ...buildJob(), status: 'submission_unknown', fanoutCompletedAtMs: nowMs, completedAtMs: nowMs - 5_000, counts: { ...buildJob().counts, audience: 1, eligible: 1, submissionUnknown: 1 } };
+  const db = createMemoryDb({ notification_jobs: { [job.jobId]: job }, broadcasts: { TOUR_1: { 'message-1': { deliveryJobId: job.jobId, deliveryCompletedAtMs: nowMs - 5_000 } } }, notification_job_recipients: { [job.jobId]: { recipient: { attemptId: 'unknown_attempt', generation: 1 } } }, notification_delivery_attempts: { unknown_attempt: { attemptId: 'unknown_attempt', jobId: job.jobId, recipientUid: 'recipient', installationUid: 'recipient', status: 'submission_unknown' } } });
+  const refreshed = await __testables.refreshNotificationJobStatus(db, job.jobId, nowMs);
+  assert.equal(refreshed.status, 'submission_unknown');
+  await notificationSourceStatus.syncNotificationSourceStatus(db, { ...job, sourceType: 'tour_announcement' }, nowMs + 10_000);
+  const source = db.data.broadcasts.TOUR_1['message-1'];
+  assert.equal(source.submissionUnknownCount, 1);
+  assert.equal(source.rejectedCount, 0);
+  assert.equal(source.deliveryCompletedAtMs, nowMs - 5_000);
+  const requeue = await __testables.requeueFailedNotificationJob({ db, jobId: job.jobId, nowMs });
+  assert.equal(requeue.success, false);
+  assert.equal(requeue.reason, 'JOB_NOT_REQUEUEABLE');
 });
