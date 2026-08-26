@@ -2,7 +2,7 @@
 
 // @ts-check
 
-const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../notifications/notificationPolicy');
+const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 
 /** @type {(...args: any[]) => any} */
 const normalizeDriverId = (driverId) => {

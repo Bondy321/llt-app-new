@@ -8,8 +8,8 @@ const { enforceLoginAppCheck } = require('../../infrastructure/auth/loginAppChec
 const { verifyRequestAuthUid } = require('../../infrastructure/auth/requestAuth');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { hashRateLimitDimension } = require('../../infrastructure/rate-limit/requestRateLimiter');
-const { buildVerifiedLoginGrantUpdates, issuePassengerAppSession } = require('../app-sessions/sessionIssuance');
-const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../notifications/notificationPolicy');
+const { buildVerifiedLoginGrantUpdates, issuePassengerAppSession } = require('../app-sessions/public');
+const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { buildPassengerSafeBooking, buildPassengerSafeTour } = require('./passengerProjection');
 const { normalizeBookingRef, normalizeEmail } = require('./passengerSanitizer');
 const {

@@ -1,4 +1,5 @@
 import { auth } from '../firebase';
+import { isAdminActionSuccessResponse } from '../shared/api/adminResponseBoundary.js';
 
 const buildFunctionUrl = (functionName) => {
   const environmentKey = `VITE_${functionName.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase()}_URL`;
@@ -29,7 +30,7 @@ export async function postAdminAction(functionName, body, options = {}) {
     body: JSON.stringify(body || {}),
   });
   const payload = await response.json().catch(() => null);
-  if (!response.ok || !payload?.success) {
+  if (!response.ok || !isAdminActionSuccessResponse(payload)) {
     const reason = payload?.reason || 'INTERNAL_ERROR';
     const error = new Error(options.reasonMessages?.[reason] || options.fallbackError || 'The operation could not be completed safely.');
     error.code = reason;

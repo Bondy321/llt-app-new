@@ -210,6 +210,115 @@ const CONTRACTS = Object.freeze({
         "expiryAfterIssue"
       ]
     },
+    "ClientAppSession": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "schemaVersion",
+        "sessionId",
+        "principalId",
+        "principalType",
+        "tourId",
+        "driverId",
+        "issuedAtMs",
+        "expiresAtMs",
+        "sessionRevision"
+      ],
+      "optionalProperties": [],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^sess_v1_[a-f0-9]{32}$",
+          "maxLength": 40
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "principalType": {
+          "type": "string",
+          "enum": [
+            "passenger",
+            "driver"
+          ]
+        },
+        "tourId": {
+          "type": "string",
+          "nullable": true,
+          "pattern": "^[^.#$/\\[\\]\\u0000-\\u001F\\u007F]{1,160}$"
+        },
+        "driverId": {
+          "type": "string",
+          "nullable": true,
+          "maxLength": 160
+        },
+        "issuedAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expiresAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sessionRevision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "enumValues": {
+        "principalType": [
+          "passenger",
+          "driver"
+        ]
+      },
+      "idPatterns": {
+        "sessionId": "^sess_v1_[a-f0-9]{32}$",
+        "passengerPrincipalId": "^pax_v2_[a-f0-9]{32}$"
+      },
+      "maximumLengths": {
+        "principalId": 160,
+        "tourId": 160,
+        "driverId": 160
+      },
+      "numericBounds": {
+        "sessionRevision": {
+          "minimum": 1
+        },
+        "maximumLifetimeMs": 86400000
+      },
+      "nullability": {
+        "tourId": true,
+        "driverId": true
+      },
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [
+        "schemaVersion",
+        "sessionId",
+        "principalId",
+        "principalType",
+        "tourId",
+        "driverId",
+        "issuedAtMs",
+        "expiresAtMs",
+        "sessionRevision"
+      ],
+      "forbiddenClientProjection": [
+        "authUid",
+        "lastAuthenticatedAtMs",
+        "email",
+        "normalizedPassengerEmail"
+      ],
+      "constraints": [
+        "driverPrincipalMatchesDriverId",
+        "passengerPrincipalIsOpaque",
+        "expiryAfterIssue"
+      ]
+    },
     "PassengerParticipantRecord": {
       "schemaVersion": 2,
       "kind": "object",
@@ -1166,15 +1275,22 @@ const CONTRACTS = Object.freeze({
       "schemaVersion": 1,
       "kind": "object",
       "requiredProperties": [
-        "screen",
-        "tourId"
+        "screen"
       ],
       "optionalProperties": [
+        "tourId",
         "noticeId",
         "messageId",
         "internalDriverChat",
         "type",
-        "departureKey"
+        "departureKey",
+        "categoryKey",
+        "notificationType",
+        "broadcastId",
+        "revision",
+        "changedSections",
+        "critical",
+        "requiresAcknowledgement"
       ],
       "properties": {
         "screen": {
@@ -1210,6 +1326,35 @@ const CONTRACTS = Object.freeze({
         "departureKey": {
           "type": "string",
           "maxLength": 160
+        },
+        "categoryKey": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "notificationType": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "broadcastId": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "changedSections": {
+          "type": [
+            "string",
+            "array"
+          ],
+          "maxItems": 13
+        },
+        "critical": {
+          "type": "boolean"
+        },
+        "requiresAcknowledgement": {
+          "type": "boolean"
         }
       },
       "enumValues": {
@@ -1230,9 +1375,16 @@ const CONTRACTS = Object.freeze({
         "noticeId": 160,
         "messageId": 160,
         "type": 80,
-        "departureKey": 160
+        "departureKey": 160,
+        "categoryKey": 80,
+        "notificationType": 80,
+        "broadcastId": 160
       },
-      "numericBounds": {},
+      "numericBounds": {
+        "revision": {
+          "minimum": 1
+        }
+      },
       "nullability": {},
       "rejectUnknownProperties": true,
       "safeClientProjection": [
@@ -1242,7 +1394,14 @@ const CONTRACTS = Object.freeze({
         "messageId",
         "internalDriverChat",
         "type",
-        "departureKey"
+        "departureKey",
+        "categoryKey",
+        "notificationType",
+        "broadcastId",
+        "revision",
+        "changedSections",
+        "critical",
+        "requiresAcknowledgement"
       ],
       "forbiddenClientProjection": [
         "bookingRef",
@@ -1726,7 +1885,7 @@ const validateContract = (name, value, options = {}) => {
   for (const constraint of contract.constraints || []) {
     if (constraint === 'driverPrincipalMatchesDriverId' && value.principalType === 'driver' && value.principalId !== `driver:${value.driverId}`) errors.push('driver principal does not match driverId');
     if (constraint === 'passengerPrincipalIsOpaque' && value.principalType === 'passenger' && !/^pax_v2_[a-f0-9]{32}$/u.test(value.principalId || '')) errors.push('passenger principal is not opaque');
-    if (constraint === 'expiryAfterIssue' && Number(value.expiresAtMs) <= Number(value.lastAuthenticatedAtMs)) errors.push('session expiry must follow authentication');
+    if (constraint === 'expiryAfterIssue' && Number(value.expiresAtMs) <= Number(value.lastAuthenticatedAtMs ?? value.issuedAtMs)) errors.push('session expiry must follow authentication');
     if (constraint === 'idempotencyEqualsId' && value.id && value.idempotencyKey !== value.id) errors.push('idempotency key must equal the record id');
     if (constraint === 'noDurableMediaUrls') visitKeys(value, (key) => {
       if (/^(?:sourceUrl|thumbnailUrl|viewerUrl|downloadUrl|downloadToken)$/u.test(key)) errors.push(`${key} is a forbidden durable media field`);

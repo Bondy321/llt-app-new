@@ -3,8 +3,8 @@
 // @ts-check
 
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
-const { isDriverProfileAssignedToTour } = require('../notifications/notificationRecipients');
-const { resolveTrimmedString } = require('../notifications/notificationPolicy');
+const { isDriverProfileAssignedToTour } = require('../notifications/public');
+const { resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 
 /** @type {(...args: any[]) => Promise<any>} */
 const resolveSafetyReporterAccess = async ({ db, authUid, tourId, requestedRole }) => {

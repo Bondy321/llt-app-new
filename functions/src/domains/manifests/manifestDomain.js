@@ -5,8 +5,8 @@
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
-const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../notifications/notificationPolicy');
-const { cleanPassengerString } = require('../passenger-auth/passengerSanitizer');
+const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
+const { cleanPassengerString } = require('../../infrastructure/validation/passengerNormalization');
 const { normalizeManifestPassengerRows } = loadLegacyLibrary('manifestPassengers');
 
 const OPERATIONS_ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';

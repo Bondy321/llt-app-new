@@ -13,6 +13,7 @@ const {
   auth,
   getCurrentAppCheckToken,
 } = require('./photoServiceContext');
+const { isResolvedMediaResponse } = require('../../src/shared/api/responseBoundaries');
 
 const validateTourId = (tourId) => {
   if (!tourId || typeof tourId !== 'string' || tourId.trim().length === 0) {
@@ -142,8 +143,8 @@ const resolveGroupPhotoMedia = async ({ tourId, photos }, {
       body: JSON.stringify({ tourId, photoIds: batch.map((photo) => photo.id) }),
     });
     const payload = await response.json().catch(() => null);
-    if (!response.ok || payload?.success !== true || !payload.media || typeof payload.media !== 'object'
-      || Array.isArray(payload.media) || Number(payload.expiresAtMs) <= Date.now()) {
+    if (!response.ok || !isResolvedMediaResponse(payload)
+      || Number(payload.expiresAtMs) <= Date.now()) {
       throw new Error('Group photo access could not be authorized');
     }
     Object.assign(resolvedMedia, payload.media);
@@ -173,9 +174,8 @@ const resolvePrivatePhotoMedia = async ({ tourId, ownerKey, photos }, {
       body: JSON.stringify({ tourId, ownerKey, photoIds: batch.map((photo) => photo.id) }),
     });
     const payload = await response.json().catch(() => null);
-    if (!response.ok || payload?.success !== true || !payload.media || typeof payload.media !== 'object'
-      || Array.isArray(payload.media)
-      || (payload.expiresAtMs != null && Number(payload.expiresAtMs) <= Date.now())) {
+    if (!response.ok || !isResolvedMediaResponse(payload)
+      || Number(payload.expiresAtMs) <= Date.now()) {
       throw new Error('Private photo access could not be authorized');
     }
     Object.assign(resolvedMedia, payload.media);

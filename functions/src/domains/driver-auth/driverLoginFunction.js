@@ -8,9 +8,9 @@ const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const { verifyRequestAuthUid } = require('../../infrastructure/auth/requestAuth');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { log } = require('../../infrastructure/logging/safeLogger');
-const { issueDriverAppSession } = require('../app-sessions/sessionIssuance');
-const { buildDriverIdentityProfileUpdates, claimDriverAuthUid, normalizeDriverId, resolveDriverAssignment } = require('../driver-assignment/driverAssignment');
-const { resolveTrimmedString } = require('../notifications/notificationPolicy');
+const { issueDriverAppSession } = require('../app-sessions/public');
+const { buildDriverIdentityProfileUpdates, claimDriverAuthUid, normalizeDriverId, resolveDriverAssignment } = require('../driver-assignment/public');
+const { resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { authorizeDriverLoginSecurity } = require('./driverLoginSecurity');
 const { toClientSession } = loadLegacyLibrary('appSession');
 

@@ -10,8 +10,8 @@ const { acquireManualBookingLock, releaseManualBookingLock } = require('../../in
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { checkRateLimit, getRequestClientKey, hashRateLimitDimension } = require('../../infrastructure/rate-limit/requestRateLimiter');
-const { buildSafeAppSessionEvent } = require('../app-sessions/sessionIssuance');
-const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../notifications/notificationPolicy');
+const { buildSafeAppSessionEvent } = require('../app-sessions/public');
+const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const {
   buildDriverSelfAssignmentUpdates, collectDriverAssignmentConflicts, normalizeDriverId,
 } = require('./driverAssignment');

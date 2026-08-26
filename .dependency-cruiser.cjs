@@ -1,5 +1,27 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const directoryNames = (relativePath) => {
+  const absolutePath = path.join(__dirname, relativePath);
+  if (!fs.existsSync(absolutePath)) return [];
+  return fs.readdirSync(absolutePath, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+};
+
+const privateCrossModuleRules = ({ root, label }) => directoryNames(root).map((moduleName) => ({
+  name: `${label}-${moduleName}-uses-public-entrypoints`,
+  severity: 'error',
+  from: { path: `^${escapeRegex(root)}/${escapeRegex(moduleName)}/` },
+  to: {
+    path: `^${escapeRegex(root)}/(?!${escapeRegex(moduleName)}/)(?![^/]+/(?:public|index)\\.(?:js|jsx)$)`,
+  },
+}));
+
 module.exports = {
   forbidden: [
     {
@@ -56,6 +78,9 @@ module.exports = {
       from: { pathNot: '(?:^|/)(?:tests|__tests__)/|\\.(?:test|spec)\\.' },
       to: { path: '(?:^|/)(?:tests|__tests__)/|\\.(?:test|spec)\\.' },
     },
+    ...privateCrossModuleRules({ root: 'functions/src/domains', label: 'functions-domain' }),
+    ...privateCrossModuleRules({ root: 'src/features', label: 'mobile-feature' }),
+    ...privateCrossModuleRules({ root: 'web-admin/src/features', label: 'admin-feature' }),
   ],
   options: {
     doNotFollow: { path: 'node_modules' },

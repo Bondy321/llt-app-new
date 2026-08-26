@@ -4,8 +4,8 @@
 
 const { randomUUID } = require('node:crypto');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
-const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../notifications/notificationPolicy');
-const { normalizeBookingRef, normalizeEmail } = require('../passenger-auth/passengerSanitizer');
+const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
+const { normalizeBookingRef, normalizeEmail } = require('../../infrastructure/validation/passengerNormalization');
 
 const MANIFEST_STATUS = Object.freeze({
   PENDING: 'PENDING', BOARDED: 'BOARDED', NO_SHOW: 'NO_SHOW', PARTIAL: 'PARTIAL',

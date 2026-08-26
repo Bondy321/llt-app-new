@@ -9,7 +9,7 @@ const { verifyRequestAuthUid } = require('../../infrastructure/auth/requestAuth'
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { checkRateLimit, getRequestClientKey, hashRateLimitDimension } = require('../../infrastructure/rate-limit/requestRateLimiter');
-const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../notifications/notificationPolicy');
+const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { buildTourManifestPayload } = require('./manifestDomain');
 const { verifyActiveAppSession } = loadLegacyLibrary('appSessionAccess');
 

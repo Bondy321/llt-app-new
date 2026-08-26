@@ -20,7 +20,23 @@ test('CI defines every required non-release verification job', () => {
   ]) {
     assert.match(source, new RegExp(`name: ${requiredName.replace(/[&()]/gu, '\\$&')}`));
   }
+  assert.match(
+    source,
+    /npm run (?:test:architecture|verify:refactor)/u,
+    'Architecture & contracts must run the architecture regression suite',
+  );
   assert.doesNotMatch(source, /eas\s+(?:update|build|submit)/u);
+});
+
+test('the normal root test path includes architecture regressions', () => {
+  const packageJson = JSON.parse(read('package.json'));
+  const normalTestPath = [
+    packageJson.scripts.test,
+    packageJson.scripts['test:all'],
+    packageJson.scripts['test:all:fast'],
+    packageJson.scripts['test:all:full'],
+  ].join('\n');
+  assert.match(normalTestPath, /test:architecture/u);
 });
 
 test('every production release workflow requires successful CI for its exact SHA', () => {

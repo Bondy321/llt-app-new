@@ -13,6 +13,7 @@ const {
   recordBookingDiagnostic,
   validateAppSession,
 } = require('./bookingServiceContext');
+const { isDriverAssignmentResponse } = require('../../src/shared/api/responseBoundaries');
 const {
   deriveParentStatusFromPassengers,
   sanitizeTourId,
@@ -371,6 +372,9 @@ const assignDriverToTour = async (driverId, tourCode, options = {}) => {
 
     const payload = await response.json().catch(() => null);
     if (!payload) {
+      throw new Error('The assignment service returned an unexpected response. Please try again.');
+    }
+    if (!isDriverAssignmentResponse(payload)) {
       throw new Error('The assignment service returned an unexpected response. Please try again.');
     }
     if (!response.ok || payload.success !== true) {

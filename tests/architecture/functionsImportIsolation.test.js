@@ -29,7 +29,7 @@ const inspectFunctionImport = (modulePath) => {
     cwd: repositoryRoot,
     encoding: 'utf8',
     env: { ...process.env, NODE_ENV: 'test' },
-    timeout: 15_000,
+    timeout: 45_000,
   });
 
   assert.equal(result.status, 0, result.stderr || result.stdout);

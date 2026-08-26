@@ -5,14 +5,7 @@
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { isValidFirebaseKey } = require('../database/firebaseKey');
 const { log } = require('../logging/safeLogger');
-
-/** @param {any} req */
-const getBearerToken = (req) => {
-  const headerValue = req.headers?.authorization || req.headers?.Authorization;
-  if (typeof headerValue !== 'string') return null;
-  const match = headerValue.match(/^Bearer\s+(.+)$/iu);
-  return match ? match[1]?.trim() || null : null;
-};
+const { getBearerToken } = require('./requestBoundary');
 
 /** @param {any} req */
 const verifyRequestAuthUid = async (req) => {

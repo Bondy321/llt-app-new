@@ -2,8 +2,8 @@
 
 // @ts-check
 
-const { normalizeManifestBooking } = require('../manifests/manifestDomain');
-const { normalizeTourKeyForComparison } = require('../notifications/notificationPolicy');
+const { normalizeManifestBooking } = require('../manifests/public');
+const { normalizeTourKeyForComparison } = require('../../infrastructure/validation/stringNormalization');
 const { cleanPassengerString } = require('./passengerSanitizer');
 
 /** @type {(...args: any[]) => any} */

@@ -11,9 +11,10 @@ const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKe
 const { applyAuthenticatedCors } = require('../../infrastructure/http/adminCors');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { hashRateLimitDimension } = require('../../infrastructure/rate-limit/requestRateLimiter');
-const { verifyOperationsAdminAccess } = require('../administration/adminAuthorization');
-const { resolveTrimmedString } = require('../notifications/notificationPolicy');
-const { distributedLoginRateLimiter } = require('../passenger-auth/passengerLoginSecurity');
+const { verifyOperationsAdminAccess } = require('../administration/public');
+const { resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
+const { distributedLoginRateLimiter } = require('../passenger-auth/public');
+const { normalizeSessionEndRequest } = require('./sessionRequestBoundary');
 const { isValidAppSessionId } = loadLegacyLibrary('appSession');
 const { acquireAppSessionLock, releaseAppSessionLock } = loadLegacyLibrary('appSessionLock');
 const { cleanupAppSession } = loadLegacyLibrary('appSessionCleanup');
@@ -26,8 +27,8 @@ const endAppSession = onRequestWithResult(
     if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
     const requestAuth = await authorizeAppSessionMobileRequest({ req, res });
     if (!requestAuth) return null;
-    const expectedSessionId = resolveTrimmedString(req.body?.expectedSessionId);
-    if (!isValidAppSessionId(expectedSessionId) || req.body?.reason !== 'user_logout') {
+    const { expectedSessionId, reason } = normalizeSessionEndRequest(req.body);
+    if (!isValidAppSessionId(expectedSessionId) || reason !== 'user_logout') {
       return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
     }
     try {

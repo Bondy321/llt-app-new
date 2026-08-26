@@ -10,7 +10,7 @@ const { hashRateLimitDimension } = require('../../infrastructure/rate-limit/requ
 const {
   distributedLoginRateLimiter: sharedDistributedLoginRateLimiter,
   getTrustedRequestNetworkKey,
-} = require('../passenger-auth/passengerLoginSecurity');
+} = require('../passenger-auth/public');
 const { createDistributedLoginRateLimiter } = loadLegacyLibrary('loginRateLimiter');
 
 /** @type {null | ((...args: any[]) => Promise<boolean>)} */

@@ -26,7 +26,7 @@ const {
   normalizeTourKeyForComparison,
   resolveTrimmedString,
   toRealtimeKeySegment,
-} = require('../notifications/notificationPolicy');
+} = require('../../infrastructure/validation/stringNormalization');
 
 const PHOTO_CACHE_CONTROL_HEADER = 'private,max-age=300,no-transform';
 const onRequestWithResult = /** @type {any} */ (onRequest);

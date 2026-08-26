@@ -9,7 +9,7 @@ const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const { verifyRequestAuthUid } = require('../../infrastructure/auth/requestAuth');
 const { acquireManualBookingLock, releaseManualBookingLock } = require('../../infrastructure/database/operationLock');
 const { log } = require('../../infrastructure/logging/safeLogger');
-const { resolveTrimmedString } = require('../notifications/notificationPolicy');
+const { resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { checkSafetySubmissionRateLimit } = require('./safetyRateLimit');
 const {
   buildCanonicalSafetyRecord,

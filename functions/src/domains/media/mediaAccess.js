@@ -8,7 +8,7 @@ const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKe
 const {
   normalizeTourKeyForComparison,
   resolveTrimmedString,
-} = require('../notifications/notificationPolicy');
+} = require('../../infrastructure/validation/stringNormalization');
 const { verifyActiveAppSession } = loadLegacyLibrary('appSessionAccess');
 
 const OPERATIONS_ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';

@@ -1,4 +1,5 @@
 const { normalizeTourId } = require('../services/tourIdentityService');
+const { isSafeNotificationNavigationPayload } = require('../src/app/navigation/notificationNavigationBoundary');
 
 const TOUR_SCOPED_NOTIFICATION_SCREENS = new Set(['Chat', 'Itinerary', 'GroupPhotobook', 'SafetySupport', 'DriverTourPack']);
 const GLOBAL_NOTIFICATION_SCREENS = new Set(['NotificationPreferences']);
@@ -100,6 +101,9 @@ const resolveNotificationRoute = (value, context = {}) => {
   }
   if (screen === 'DriverTourPack' && driverPackDepartureKey.slice(driverPackDepartureKey.indexOf('::') + 2) !== notificationTourId) {
     return { accepted: false, reason: 'DRIVER_PACK_IDENTITY_MISMATCH' };
+  }
+  if (!isSafeNotificationNavigationPayload(data)) {
+    return { accepted: false, reason: 'INVALID_PAYLOAD' };
   }
 
   const params = {

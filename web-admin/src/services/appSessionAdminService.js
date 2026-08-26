@@ -1,6 +1,7 @@
 import { onValue, ref } from 'firebase/database';
 import { db } from '../firebase';
 import { postAdminAction } from './adminActionService';
+import { isValidRemoteAppSession } from '../shared/session/appSessionBoundary.js';
 
 const SESSION_ID_PATTERN = /^sess_v1_[a-f0-9]{32}$/;
 const REVOCATION_REASONS = new Set(['lost_device', 'security_review', 'staff_request', 'account_support']);
@@ -11,6 +12,7 @@ export const maskAppSessionId = (sessionId) => {
 };
 
 export const normalizeAdminAppSession = (value, nowMs = Date.now()) => {
+  if (!isValidRemoteAppSession(value)) return null;
   if (!value || value.schemaVersion !== 1 || value.status !== 'active') return null;
   if (!SESSION_ID_PATTERN.test(value.sessionId || '') || !Number.isFinite(value.expiresAtMs)) return null;
   return {
