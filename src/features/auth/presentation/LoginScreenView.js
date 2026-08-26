@@ -5,6 +5,7 @@ import {
   Platform,
   ScrollView,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -37,6 +38,7 @@ export default function LoginScreenView({
   logoWidth,
   modeHintFocus,
   networkStateTone,
+  onManageFutureTourAlerts,
   responsiveStyles,
   scrollRef,
   setActiveInput,
@@ -125,6 +127,17 @@ export default function LoginScreenView({
               />
               <LoginErrorPanel {...{ errorState, handleOfflineCtaPress, loading, setShowRecoverySteps, showRecoverySteps }} />
               <LoginActions {...{ buttonAnimation, handleLogin, isSubmitDisabled, loading, responsiveStyles, setShowOfflineHelp, setShowPrimaryHelp, showOfflineHelp, showPrimaryHelp }} />
+              {typeof onManageFutureTourAlerts === 'function' ? (
+                <TouchableOpacity
+                  style={styles.disclosureButton}
+                  onPress={onManageFutureTourAlerts}
+                  accessibilityRole="button"
+                  accessibilityLabel="Manage future tour alerts"
+                >
+                  <MaterialCommunityIcons name="bell-outline" size={18} color={COLORS.primaryBlue} />
+                  <Text style={styles.disclosureText}>Manage future tour alerts</Text>
+                </TouchableOpacity>
+              ) : null}
             </Animated.View>
             </View>
           </ScrollView>

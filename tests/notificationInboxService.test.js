@@ -206,6 +206,25 @@ test('notification feed subscription combines bounded notices and read state the
   assert.equal(detached.length, 2);
 });
 
+test('notification detail routes require bounded identifiers, authority and a live expiry', () => {
+  const marketing = resolveNotificationRoute({ data: {
+    screen: 'MarketingNotificationDetail', notificationType: 'category_broadcast',
+    categoryKey: 'day_trips', broadcastId: 'broadcast-1', expiresAtMs: Date.now() + 60_000,
+  } }, { hasAuth: true });
+  assert.equal(marketing.accepted, true);
+  assert.equal(marketing.params.broadcastId, 'broadcast-1');
+  assert.equal(resolveNotificationRoute({ data: {
+    screen: 'MarketingNotificationDetail', notificationType: 'category_broadcast',
+    categoryKey: 'day_trips', broadcastId: 'broadcast-1', expiresAtMs: Date.now() + 60_000,
+  } }, { hasAuth: false }).reason, 'NO_AUTH');
+  assert.equal(resolveNotificationRoute({ data: {
+    screen: 'SafetyAlertDetail', tourId: 'TOUR_1', eventId: 'alert-1', expiresAtMs: Date.now() + 60_000,
+  } }, { activeTourId: 'TOUR_1', isDriver: false }).reason, 'DRIVER_ONLY');
+  assert.equal(resolveNotificationRoute({ data: {
+    screen: 'SafetyAlertDetail', tourId: 'TOUR_1', eventId: 'alert-1', expiresAtMs: Date.now() - 1,
+  } }, { activeTourId: 'TOUR_1', isDriver: true }).reason, 'EXPIRED');
+});
+
 test('notification feed cache is versioned, identity scoped, bounded, and clearable', async () => {
   const values = new Map();
   const storage = {

@@ -1,3 +1,5 @@
+import { endNotificationDeviceSession } from '../../../services/notifications/notificationDeviceApiService';
+
 export const runClearSessionState = async ({ SESSION_KEYS, SessionStorage, logger, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setScreenParams, setTourCode, setTourData }, {
   includeNotificationOnboarding = false
 } = {}) => {
@@ -46,9 +48,16 @@ export const runPurgeLocalSession = async ({ appSession, auth, bookingData, clea
     return result;
   };
 
-export const runHandleLogout = async ({ appSession, appSessionService, auth, bookingData, currentDriverLifecycleScope, logger, logoutContextRef, purgeLocalSession, setAppSession, setLogoutStatus, tourData, user }) => {
+export const runHandleLogout = async ({ appSession, appSessionService, auth, bookingData, currentDriverLifecycleScope, logger, logoutContextRef, notificationDeviceEnd = endNotificationDeviceSession, purgeLocalSession, setAppSession, setLogoutStatus, tourData, user }) => {
     const authUid = user?.uid || auth?.currentUser?.uid || null;
     const capturedSession = appSession;
+    // Server policy keeps marketing only where explicit consent remains, while
+    // immediately removing operational eligibility for this app session.
+    if (authUid) {
+      notificationDeviceEnd().catch((error) => logger.warn('NotificationService', 'Notification logout reconciliation deferred', {
+        error: error?.message || String(error),
+      }));
+    }
     logoutContextRef.current = {
       authUid,
       appSession: capturedSession,

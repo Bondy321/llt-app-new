@@ -1,4 +1,5 @@
 const test = require('node:test');
+const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
@@ -33,6 +34,18 @@ const parseEmulator = () => {
 };
 
 const dbFor = (uid) => testEnv.authenticatedContext(uid).database(databaseURL);
+const loggedOutDb = () => testEnv.unauthenticatedContext().database(databaseURL);
+
+const notificationDevice = (overrides = {}) => ({
+  version: 1,
+  authUid: PASSENGER_UID,
+  status: 'active',
+  operationalEligible: true,
+  marketingEligible: true,
+  marketingPreferences: { day_trips: true },
+  updatedAtMs: 1786525200000,
+  ...overrides,
+});
 
 const notice = (overrides = {}) => ({
   noticeId: NOTICE_ID,
@@ -80,6 +93,49 @@ test.before(async () => {
     await db.ref(`users/${DRIVER_UID}`).set({ driverId: DRIVER_ID });
     await db.ref(`tour_manifests/${TOUR_ID}/assigned_drivers/${DRIVER_ID}`).set(true);
     await db.ref(`tour_notifications/${TOUR_ID}/${NOTICE_ID}`).set(notice());
+    await db.ref().update({
+      [`notification_jobs/job_notify_1`]: {
+        version: 1,
+        jobId: 'job_notify_1',
+        status: 'queued',
+        availableAtMs: 1786525200000,
+        expiresAtMs: 1786611600000,
+        updatedAtMs: 1786525200000,
+        coalescingKey: 'tour:NOTIFY_TOUR_1:announcement',
+      },
+      [`notification_job_coalescing/tour_NOTIFY_TOUR_1`]: { jobId: 'job_notify_1' },
+      [`notification_job_token_claims/job_notify_1/token_hash`]: { claimedAtMs: 1786525200000 },
+      [`notification_delivery_attempts/attempt_notify_1`]: {
+        jobId: 'job_notify_1',
+        status: 'receipt_pending',
+        availableAtMs: 1786525200000,
+        receiptDueAtMs: 1786526100000,
+        expiresAtMs: 1786611600000,
+        updatedAtMs: 1786525200000,
+      },
+      [`notification_delivery_warnings/warning_notify_1`]: {
+        status: 'open', severity: 'warning', updatedAtMs: 1786525200000,
+      },
+      [`notification_devices/${PASSENGER_UID}`]: notificationDevice(),
+      [`notification_devices/${OUTSIDER_UID}`]: notificationDevice({
+        authUid: OUTSIDER_UID,
+        operationalEligible: false,
+        marketingEligible: false,
+      }),
+      [`notification_consents/${PASSENGER_UID}`]: {
+        version: 1, marketing: { day_trips: true }, updatedAtMs: 1786525200000,
+      },
+      [`notification_consents/${OUTSIDER_UID}`]: {
+        version: 1, marketing: { day_trips: false }, updatedAtMs: 1786525200000,
+      },
+      'marketing_notification_details/marketing_notify_1': {
+        version: 1,
+        categoryKey: 'day_trips',
+        status: 'active',
+        expiresAtMs: 1786611600000,
+        updatedAtMs: 1786525200000,
+      },
+    });
     await db.ref().update({
       ...passengerAuthorityUpdates({ uid: PASSENGER_UID, tourId: TOUR_ID, principalId: PASSENGER_PRINCIPAL_KEY, bookingRef: 'NOTIFY_BOOKING_1' }),
       ...driverAuthorityUpdates({ uid: DRIVER_UID, driverId: DRIVER_ID, tourId: TOUR_ID }),
@@ -222,6 +278,70 @@ test('notification read cleanup jobs remain server private', async () => {
   await assertFails(dbFor(ADMIN_UID).ref(
     `notification_read_legacy_cleanup_queue/${TOUR_ID}`
   ).set({ version: 1, afterPrincipalId: null }));
+});
+
+test('new notification delivery roots are server-owned and unreadable to ordinary clients', async () => {
+  const serverRoots = [
+    'notification_jobs/job_notify_1',
+    'notification_job_coalescing/tour_NOTIFY_TOUR_1',
+    'notification_job_token_claims/job_notify_1/token_hash',
+    'notification_delivery_attempts/attempt_notify_1',
+    'notification_delivery_warnings/warning_notify_1',
+    'marketing_notification_details/marketing_notify_1',
+  ];
+
+  for (const rootPath of serverRoots) {
+    await assertFails(dbFor(PASSENGER_UID).ref(rootPath).get());
+    await assertFails(dbFor(PASSENGER_UID).ref(rootPath).set({ forged: true }));
+    await assertFails(loggedOutDb().ref(rootPath).get());
+  }
+
+  await assertFails(dbFor(PASSENGER_UID).ref(`notification_devices/${PASSENGER_UID}`).set(notificationDevice()));
+  await assertFails(dbFor(PASSENGER_UID).ref(`notification_consents/${PASSENGER_UID}`).set({ forged: true }));
+});
+
+test('only self can read private notification device and consent records', async () => {
+  await assertSucceeds(dbFor(PASSENGER_UID).ref(`notification_devices/${PASSENGER_UID}`).get());
+  await assertSucceeds(dbFor(PASSENGER_UID).ref(`notification_consents/${PASSENGER_UID}`).get());
+  await assertFails(dbFor(PASSENGER_UID).ref(`notification_devices/${OUTSIDER_UID}`).get());
+  await assertFails(dbFor(PASSENGER_UID).ref(`notification_consents/${OUTSIDER_UID}`).get());
+  await assertFails(dbFor(PASSENGER_UID).ref('notification_devices').get());
+  await assertFails(dbFor(PASSENGER_UID).ref('notification_consents').get());
+  await assertFails(loggedOutDb().ref(`notification_devices/${PASSENGER_UID}`).get());
+  await assertFails(loggedOutDb().ref(`notification_consents/${PASSENGER_UID}`).get());
+});
+
+test('admins can inspect reporting roots but cannot client-write server-owned notification records', async () => {
+  const reportingRoots = [
+    'notification_jobs/job_notify_1',
+    'notification_delivery_attempts/attempt_notify_1',
+    'notification_delivery_warnings/warning_notify_1',
+    'marketing_notification_details/marketing_notify_1',
+  ];
+  for (const rootPath of reportingRoots) {
+    await assertSucceeds(dbFor(ADMIN_UID).ref(rootPath).get());
+    await assertFails(dbFor(ADMIN_UID).ref(rootPath).set({ forged: true }));
+  }
+  await assertFails(dbFor(ADMIN_UID).ref('notification_job_coalescing/tour_NOTIFY_TOUR_1').get());
+  await assertFails(dbFor(ADMIN_UID).ref('notification_job_token_claims/job_notify_1').get());
+  await assertFails(dbFor(ADMIN_UID).ref('notification_devices').get());
+  await assertFails(dbFor(ADMIN_UID).ref(`notification_devices/${PASSENGER_UID}`).get());
+  await assertFails(dbFor(ADMIN_UID).ref(`notification_consents/${PASSENGER_UID}`).get());
+});
+
+test('notification delivery indexes and server-mediated marketing-preference projection remain explicit', () => {
+  for (const requiredIndex of [
+    '"status", "availableAtMs", "expiresAtMs", "updatedAtMs", "coalescingKey"',
+    '"jobId", "status", "availableAtMs", "receiptDueAtMs", "expiresAtMs", "updatedAtMs"',
+    '"status", "updatedAtMs", "severity"',
+    '"marketingPreferences/day_trips"',
+    '"categoryKey", "status", "expiresAtMs", "updatedAtMs"',
+  ]) {
+    assert.ok(rules.includes(requiredIndex), `missing notification index: ${requiredIndex}`);
+  }
+  assert.ok(rules.includes('"notification_devices"'));
+  assert.ok(rules.includes('"notification_consents"'));
+  assert.ok(rules.includes('".write": false'));
 });
 
 test('legacy read-state migration requests are bound to the active canonical principal', async () => {

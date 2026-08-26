@@ -34,6 +34,8 @@ const PreferenceHealthCard = ({
   marketingEnabledCount,
   marketingTotal,
   isOnboarding,
+  permissionStatus,
+  deviceReadiness,
 }) => {
   const opsRatio = opsTotal ? opsEnabledCount / opsTotal : 0;
   const marketingRatio = marketingTotal ? marketingEnabledCount / marketingTotal : 0;
@@ -55,6 +57,9 @@ const PreferenceHealthCard = ({
             {isOnboarding
               ? 'Turn on the updates you need while travelling.'
               : 'Keep your setup tuned for timely updates.'}
+          </Text>
+          <Text style={styles.healthSubtitle}>
+            Permission: {permissionStatus?.state || 'unavailable'} · Device token: {deviceReadiness?.tokenHealthy ? 'ready' : 'not registered'}
           </Text>
         </View>
         <View style={styles.healthScorePill}>
@@ -125,11 +130,13 @@ export default function NotificationPreferencesView({
   applyMarketingPreset,
   applyOpsPreset,
   emptyStateMessage,
+  deviceReadiness,
   formatTimestamp,
   handleEnableNow,
   handleMarkAllNotificationsRead,
   handleMaybeLater,
   handleOpenNotification,
+  handleOpenSettings,
   handleRetryNotificationFeed,
   handleSave,
   handleTestNotification,
@@ -279,6 +286,8 @@ export default function NotificationPreferencesView({
           marketingEnabledCount={marketingEnabledCount}
           marketingTotal={Object.keys(defaultMarketingPrefs).length}
           isOnboarding={isOnboarding}
+          permissionStatus={permissionStatus}
+          deviceReadiness={deviceReadiness}
         />
 
         {!isOnboarding ? (
@@ -290,6 +299,16 @@ export default function NotificationPreferencesView({
             <Text style={[styles.permissionSummaryState, { color: permissionTone.color }]}>{permissionTone.label}</Text>
             {permissionStatus?.description ? (
               <Text style={styles.permissionSummaryBody}>{permissionStatus.description}</Text>
+            ) : null}
+            {permissionStatus?.state === 'blocked' ? (
+              <TouchableOpacity
+                style={styles.testButton}
+                onPress={handleOpenSettings}
+                accessibilityRole="button"
+                accessibilityLabel="Open device notification settings"
+              >
+                <Text style={styles.testButtonText}>Open device settings</Text>
+              </TouchableOpacity>
             ) : null}
           </View>
         ) : null}
@@ -514,6 +533,18 @@ export default function NotificationPreferencesView({
               )}
             </TouchableOpacity>
 
+            {permissionStatus?.state === 'blocked' ? (
+              <TouchableOpacity
+                style={styles.secondaryOnboardingButton}
+                onPress={handleOpenSettings}
+                disabled={onboardingActionBusy || saving}
+                accessibilityRole="button"
+                accessibilityLabel="Open device notification settings"
+              >
+                <Text style={styles.secondaryOnboardingButtonText}>Open device settings</Text>
+              </TouchableOpacity>
+            ) : null}
+
             <TouchableOpacity
               style={styles.secondaryOnboardingButton}
               onPress={handleMaybeLater}
@@ -533,11 +564,11 @@ export default function NotificationPreferencesView({
             onPress={handleTestNotification}
             disabled={saving}
             accessibilityRole="button"
-            accessibilityLabel="Send a test notification"
+            accessibilityLabel="Send a local display test notification"
             accessibilityState={{ disabled: saving }}
           >
             <MaterialCommunityIcons name="bell-check-outline" size={20} color={COLORS.secondaryText} />
-            <Text style={styles.testButtonText}>Send a test notification</Text>
+            <Text style={styles.testButtonText}>Run local display test</Text>
           </TouchableOpacity>
         ) : null}
 

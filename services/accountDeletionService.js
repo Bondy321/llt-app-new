@@ -5,6 +5,7 @@ import { createPersistenceProvider } from './persistenceProvider';
 import loggerService, { maskIdentifier } from './loggerService';
 import * as photoService from './photoService';
 import appSessionService from './appSessionService';
+import { deleteNotificationDevice } from './notifications/notificationDeviceApiService';
 
 const { normalizeTourId } = require('./tourIdentityService');
 const {
@@ -415,6 +416,7 @@ export const deleteCurrentAccount = async ({
   providerFactory = createPersistenceProvider,
   photoApi = photoService,
   appSessionApi = appSessionService,
+  notificationDeviceDelete = deleteNotificationDevice,
   logger = loggerService,
 } = {}) => {
   const summary = makeSummary();
@@ -502,6 +504,8 @@ export const deleteCurrentAccount = async ({
       await db.ref().update(updates);
       summary.remoteRecordsCleared = Object.keys(updates).length;
     }
+
+    await notificationDeviceDelete();
 
     const sessionEnd = await appSessionApi.endSession({ authUid, session: activeAppSession });
     if (!sessionEnd?.success) {

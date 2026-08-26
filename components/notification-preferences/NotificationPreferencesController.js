@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import * as Notifications from 'expo-notifications';
+import { AppState, Linking } from 'react-native';
 import {
   saveUserPreferences,
   getUserPreferences,
+  getNotificationDeviceReadiness,
   registerForPushNotificationsAsync,
   primeNotificationPermissions,
 } from '../../services/notificationService';
@@ -40,6 +42,7 @@ export default function NotificationPreferencesScreen({
   const [lastSavedAt, setLastSavedAt] = useState('');
   const [testStatus, setTestStatus] = useState({ type: '', message: '' });
   const [permissionStatus, setPermissionStatus] = useState({ state: 'unavailable', description: '' });
+  const [deviceReadiness, setDeviceReadiness] = useState(null);
   const [onboardingActionBusy, setOnboardingActionBusy] = useState(false);
   const [activeOpsPreset, setActiveOpsPreset] = useState('essential');
   const [activeMarketingPreset, setActiveMarketingPreset] = useState('none');
@@ -131,13 +134,14 @@ export default function NotificationPreferencesScreen({
     }
 
     try {
-      const [permissionProbe, saved] = await Promise.all([
+      const [permissionProbe, saved, readiness] = await Promise.all([
         primeNotificationPermissions({
           userId,
           requestIfNeeded: false,
           persistState: false,
         }),
-        getUserPreferences(userId, { throwOnError: true }),
+        getUserPreferences(userId, { throwOnError: true, preferDevice: audience === 'marketing' }),
+        getNotificationDeviceReadiness(userId),
       ]);
       if (!canApplyRequest()) return;
       if (permissionProbe?.success) {
@@ -154,6 +158,7 @@ export default function NotificationPreferencesScreen({
           requestIfNeeded: false,
         });
       }
+      setDeviceReadiness(readiness);
 
       const nextOpsPrefs = saved?.ops
         ? { ...defaultOpsPrefs, ...saved.ops }
@@ -190,6 +195,19 @@ export default function NotificationPreferencesScreen({
     loadPreferences();
   }, [loadPreferences]);
 
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', async (nextState) => {
+      if (nextState !== 'active' || !userId) return;
+      const probe = await primeNotificationPermissions({
+        userId,
+        requestIfNeeded: false,
+        persistState: false,
+      });
+      if (mountedRef.current && probe?.success) setPermissionStatus(probe.data);
+    });
+    return () => subscription.remove();
+  }, [userId]);
+
   const handleSave = async () => {
     if (saving || !userId) return;
     setSaving(true);
@@ -208,7 +226,13 @@ export default function NotificationPreferencesScreen({
         updatedAt: new Date().toISOString(),
       };
 
-      const result = await saveUserPreferences(userId, fullPreferences);
+      // Saving preferences is never an OS-permission prompt. The explicit
+      // onboarding Enable action is the only place that may request it.
+      const result = await saveUserPreferences(userId, fullPreferences, {
+        permissionState: permissionStatus,
+        requestIfNeeded: false,
+        marketingOnly: audience === 'marketing',
+      });
       if (!mountedRef.current) return;
 
       if (result.success) {
@@ -221,6 +245,9 @@ export default function NotificationPreferencesScreen({
         if (result?.permissionState) {
           setPermissionStatus(result.permissionState);
         }
+        getNotificationDeviceReadiness(userId).then((readiness) => {
+          if (mountedRef.current) setDeviceReadiness(readiness);
+        }).catch(() => undefined);
         setInitialOpsPrefs({ ...opsPrefs });
         setInitialMarketingPrefs({ ...marketingPrefs });
         const savedAt = new Date().toISOString();
@@ -317,6 +344,7 @@ export default function NotificationPreferencesScreen({
 
     const saveResult = await saveUserPreferences(userId, fullPreferences, {
       permissionState: permissionProbe.data,
+      marketingOnly: audience === 'marketing',
     });
     if (!mountedRef.current) return;
 
@@ -335,11 +363,23 @@ export default function NotificationPreferencesScreen({
     if (saveResult?.permissionState) {
       setPermissionStatus(saveResult.permissionState);
     }
+    getNotificationDeviceReadiness(userId).then((readiness) => {
+      if (mountedRef.current) setDeviceReadiness(readiness);
+    }).catch(() => undefined);
 
     setOnboardingActionBusy(false);
     logger.info('NotificationPreferences', 'Onboarding enable completed', {
       permissionState: saveResult?.permissionState?.state || permissionProbe.data?.state || 'unknown',
     });
+    if (permissionProbe.data?.granted !== true) {
+      setStatusBanner({
+        type: 'info',
+        message: permissionProbe.data?.state === 'blocked'
+          ? 'Notifications remain blocked. Open device settings, then return here to try again.'
+          : 'Notifications were not enabled. You can try again when you are ready.',
+      });
+      return;
+    }
     await completeOnboarding('completed');
   };
 
@@ -436,6 +476,8 @@ export default function NotificationPreferencesScreen({
 
   const permissionToneByState = {
     granted: { label: 'Enabled', color: COLORS.successGreen, icon: 'check-circle-outline' },
+    provisional: { label: 'Enabled quietly', color: COLORS.primaryBlue, icon: 'bell-outline' },
+    ephemeral: { label: 'Enabled temporarily', color: COLORS.warning, icon: 'clock-outline' },
     denied: { label: 'Not enabled yet', color: COLORS.warning, icon: 'alert-outline' },
     blocked: { label: 'Blocked in device settings', color: COLORS.danger, icon: 'alert-circle-outline' },
     unavailable: { label: 'Unavailable on this device', color: COLORS.secondaryText, icon: 'cellphone-off' },
@@ -450,7 +492,7 @@ export default function NotificationPreferencesScreen({
       });
       setTestStatus({ type: 'progress', message: 'Checking notification permissions...' });
 
-      const token = await registerForPushNotificationsAsync();
+      const token = await registerForPushNotificationsAsync(1, { requestIfNeeded: false });
       if (!mountedRef.current) return;
 
       if (!token) {
@@ -510,11 +552,13 @@ export default function NotificationPreferencesScreen({
       applyMarketingPreset={applyMarketingPreset}
       applyOpsPreset={applyOpsPreset}
       emptyStateMessage={emptyStateMessage}
+      deviceReadiness={deviceReadiness}
       formatTimestamp={notificationFeed.formatTimestamp}
       handleEnableNow={handleEnableNow}
       handleMarkAllNotificationsRead={notificationFeed.markAllRead}
       handleMaybeLater={handleMaybeLater}
       handleOpenNotification={notificationFeed.open}
+      handleOpenSettings={() => Linking.openSettings()}
       handleRetryNotificationFeed={notificationFeed.retry}
       handleSave={handleSave}
       handleTestNotification={handleTestNotification}

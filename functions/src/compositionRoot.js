@@ -16,6 +16,10 @@ const chatNotifications = require('./domains/notifications/chatNotificationFunct
 const driverTourPackNotifications = require('./domains/notifications/driverTourPackNotificationFunction');
 const itineraryNotifications = require('./domains/notifications/itineraryNotificationFunction');
 const notificationReads = require('./domains/notifications/notificationReadFunctions');
+const notificationWorker = require('./domains/notifications/notificationWorker');
+const notificationReceipts = require('./domains/notifications/notificationReceipts');
+const notificationDevices = require('./domains/notifications/notificationDeviceFunctions');
+const notificationAdmin = require('./domains/notifications/notificationAdminFunctions');
 const safetyNotifications = require('./domains/notifications/safetyNotificationFunction');
 const passengerAuth = require('./domains/passenger-auth/passengerLoginFunction');
 const safety = require('./domains/safety/safetyFunction');
@@ -29,6 +33,7 @@ module.exports = {
   cleanupExpiredDriverTourPacks: scheduledCleanup.cleanupExpiredDriverTourPacks,
   cleanupExpiredLoginRateLimits: scheduledCleanup.cleanupExpiredLoginRateLimits,
   cleanupNotificationReadState: notificationReads.cleanupNotificationReadState,
+  cleanupNotificationDeliveryData: notificationReceipts.cleanupNotificationDeliveryData,
   createGroupPhotoChatMessage: groupMedia.createGroupPhotoChatMessage,
   createManualPassengerBooking: administration.createManualPassengerBooking,
   deleteGroupPhoto: groupMedia.deleteGroupPhoto,
@@ -37,14 +42,20 @@ module.exports = {
   endAppSession: sessions.endAppSession,
   generatePhotoVariants: photoVariants.generatePhotoVariants,
   getTourManifest: manifests.getTourManifest,
+  getMarketingNotificationDetail: notificationDevices.getMarketingNotificationDetail,
+  getSafetyAlertDetail: notificationDevices.getSafetyAlertDetail,
   ingestDriverTourPacks: driverTourPacks.ingestDriverTourPacks,
   normalizeTourDateIndexes: tourIndexes.normalizeTourDateIndexes,
   normalizeTourEndDateIndex: tourIndexes.normalizeTourEndDateIndex,
   processBroadcastWrite: broadcasts.processBroadcastWrite,
   processCategoryBroadcastWrite: broadcasts.processCategoryBroadcastWrite,
+  processNotificationDeliveryJob: notificationWorker.processNotificationDeliveryJob,
+  processNotificationReceipts: notificationReceipts.processNotificationReceipts,
   processNotificationReadMigrationRequest: notificationReads.processNotificationReadMigrationRequest,
   projectDriverTourPackActionState: tourIndexes.projectDriverTourPackActionState,
   removeReportedPhoto: administration.removeReportedPhoto,
+  recoverNotificationDeliveryJobs: notificationWorker.recoverNotificationDeliveryJobs,
+  requeueNotificationJob: notificationAdmin.requeueNotificationJob,
   resolveGroupPhotoMedia: groupMedia.resolveGroupPhotoMedia,
   resolvePrivatePhotoMedia: privateMedia.resolvePrivatePhotoMedia,
   revokeAppSession: sessions.revokeAppSession,
@@ -54,6 +65,9 @@ module.exports = {
   sendItineraryNotification: itineraryNotifications.sendItineraryNotification,
   sendSafetyAlertNotification: safetyNotifications.sendSafetyAlertNotification,
   submitSafetyReport: safety.submitSafetyReport,
+  createServerTestNotification: notificationAdmin.createServerTestNotification,
+  previewNotificationAudience: notificationAdmin.previewNotificationAudience,
+  updateNotificationDeviceRegistration: notificationDevices.updateNotificationDeviceRegistration,
   uploadGroupPhoto: groupMedia.uploadGroupPhoto,
   uploadPrivatePhoto: privateMedia.uploadPrivatePhoto,
   verifyDriverLogin: driverAuth.verifyDriverLogin,

@@ -24,6 +24,7 @@ import {
   primeNotificationPermissions,
   registerForPushNotificationsAsync,
 } from './notificationRegistrationService';
+import { updateNotificationPreferences } from './notificationDeviceApiService';
 
 const { resolveAppVersionMetadata } = appMetadataModule;
 
@@ -46,8 +47,11 @@ export const saveUserPreferences = async (userId, preferences, options = {}) => 
 
     // Verify the remote destination before triggering an OS permission prompt.
     // Permission decisions can take human time, so keep a bounded one-minute gate.
+    const preferenceSourceRef = options?.marketingOnly
+      ? realtimeDb.ref(`notification_devices/${validatedUserId}`)
+      : userRef;
     const userSnapshot = await withTimeout(
-      userRef.once('value'),
+      preferenceSourceRef.once('value'),
       'Existing preferences fetch timeout',
     );
     const suppliedPermissionState = options?.permissionState;
@@ -55,11 +59,14 @@ export const saveUserPreferences = async (userId, preferences, options = {}) => 
       ? { success: true, data: suppliedPermissionState }
       : await withTimeout(primeNotificationPermissions({
         userId: validatedUserId,
-        requestIfNeeded: true,
+        requestIfNeeded: options?.requestIfNeeded === true,
         persistState: false,
       }), 'Permission check timeout', 60_000);
 
-    const existingUserData = userSnapshot.val() || {};
+    const rawExistingData = userSnapshot.val() || {};
+    const existingUserData = options?.marketingOnly
+      ? { preferences: { marketing: rawExistingData.marketingPreferences || {} } }
+      : rawExistingData;
     logger.debug('NotificationService', 'Existing notification preference record loaded', {
       userId: maskIdentifier(validatedUserId),
       hasExistingPreferences: Boolean(existingUserData.preferences),
@@ -112,17 +119,29 @@ export const saveUserPreferences = async (userId, preferences, options = {}) => 
       };
 
     const nowIso = new Date().toISOString();
+    const updateServerProjection = (pushToken = null) => updateNotificationPreferences({
+      pushToken,
+      permissionState: permissionState.state,
+      permissionCanAskAgain: permissionState.canAskAgain === true,
+      marketingPreferences: mergedPreferences.marketing,
+      appVersion: Constants.expoConfig?.version || null,
+      appBuild: Constants.expoConfig?.ios?.buildNumber || Constants.expoConfig?.android?.versionCode?.toString() || null,
+      platform: Platform.OS,
+    });
 
     if (!permissionState.granted) {
-      await withTimeout(
-        userRef.update(buildUnavailableTokenPatch({
-          nowIso,
-          existingUserData,
-          permissionState,
-          mergedPreferences,
-        })),
-        'Preferences save timeout'
-      );
+      if (!options?.marketingOnly) {
+        await withTimeout(
+          userRef.update(buildUnavailableTokenPatch({
+            nowIso,
+            existingUserData,
+            permissionState,
+            mergedPreferences,
+          })),
+          'Preferences save timeout'
+        );
+      }
+      await withTimeout(updateServerProjection(), 'Notification consent save timeout');
 
       logger.info('NotificationService', 'Preferences saved without active push token', {
         userId: maskIdentifier(validatedUserId),
@@ -140,15 +159,18 @@ export const saveUserPreferences = async (userId, preferences, options = {}) => 
     const token = await registerForPushNotificationsAsync(3, { permissionGranted: true });
 
     if (!token) {
-      await withTimeout(
-        userRef.update(buildUnavailableTokenPatch({
-          nowIso,
-          existingUserData,
-          permissionState,
-          mergedPreferences,
-        })),
-        'Preferences save timeout'
-      );
+      if (!options?.marketingOnly) {
+        await withTimeout(
+          userRef.update(buildUnavailableTokenPatch({
+            nowIso,
+            existingUserData,
+            permissionState,
+            mergedPreferences,
+          })),
+          'Preferences save timeout'
+        );
+      }
+      await withTimeout(updateServerProjection(), 'Notification consent save timeout');
 
       logger.warn('NotificationService', 'Preferences saved but push token unavailable', {
         userId: maskIdentifier(validatedUserId),
@@ -185,7 +207,8 @@ export const saveUserPreferences = async (userId, preferences, options = {}) => 
       osVersion: appVersionMetadata.osVersion,
     };
 
-    await withTimeout(userRef.update(updateData), 'Preferences save timeout');
+    if (!options?.marketingOnly) await withTimeout(userRef.update(updateData), 'Preferences save timeout');
+    await withTimeout(updateServerProjection(token), 'Notification consent save timeout');
 
     logger.info('NotificationService', 'Preferences saved with active push token', {
       userId: maskIdentifier(validatedUserId),
@@ -326,14 +349,19 @@ export const getUserPreferences = async (userId, options = {}) => {
       throw new Error('Database not initialized');
     }
 
-    const prefsRef = realtimeDb.ref(`users/${validatedUserId}/preferences`);
+    const prefsRef = options?.preferDevice
+      ? realtimeDb.ref(`notification_devices/${validatedUserId}`)
+      : realtimeDb.ref(`users/${validatedUserId}/preferences`);
 
     const snapshot = await withTimeout(
       prefsRef.once('value'),
       'Preferences fetch timeout'
     );
 
-    const preferences = snapshot.val() || null;
+    const sourceValue = snapshot.val() || null;
+    const preferences = options?.preferDevice && sourceValue
+      ? { marketing: sourceValue.marketingPreferences || {} }
+      : sourceValue;
     const normalizedPreferences = preferences ? normalizeNotificationPreferences(preferences) : null;
     logger.info('NotificationService', 'Preference fetch completed', {
       userId: maskIdentifier(validatedUserId),
@@ -353,4 +381,22 @@ export const getUserPreferences = async (userId, options = {}) => {
 
     return null;
   }
+};
+
+export const getNotificationDeviceReadiness = async (userId) => {
+  const validatedUserId = resolveNotificationUserId(userId);
+  if (!realtimeDb) throw new Error('Database not initialized');
+  const snapshot = await withTimeout(
+    realtimeDb.ref(`notification_devices/${validatedUserId}`).once('value'),
+    'Notification readiness fetch timeout',
+  );
+  const device = snapshot.val() || {};
+  return {
+    status: typeof device.status === 'string' ? device.status : 'unregistered',
+    permissionState: typeof device.permissionState === 'string' ? device.permissionState : 'unavailable',
+    tokenHealthy: device.status === 'active' && typeof device.tokenHash === 'string' && device.tokenHash.length === 64,
+    operationalEligible: device.operationalEligible === true,
+    marketingEligible: device.marketingEligible === true,
+    updatedAtMs: Number(device.updatedAtMs || 0),
+  };
 };

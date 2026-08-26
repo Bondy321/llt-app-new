@@ -11,6 +11,8 @@ require('@babel/register')({
 });
 
 const originalLoad = Module._load;
+const originalFetch = global.fetch;
+const originalFirebaseProjectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
 const clearNotificationServiceCache = () => {
   delete require.cache[require.resolve('../services/notificationService')];
   const notificationModulesRoot = `${path.sep}services${path.sep}notifications${path.sep}`;
@@ -33,6 +35,12 @@ const buildNotificationService = ({
   let permissionChecks = 0;
   let responseHandler = null;
   let responseListenerRemoved = false;
+  process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = 'demo-notification-project';
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ success: true }),
+  });
 
   Module._load = function mocked(request, parent, isMain) {
     if (request === 'expo-device') {
@@ -81,7 +89,12 @@ const buildNotificationService = ({
 
     if (request.endsWith('/firebase') || request === '../firebase') {
       return {
-        auth: authUid ? { currentUser: { uid: authUid } } : { currentUser: null },
+        auth: {
+          currentUser: {
+            uid: authUid || '',
+            getIdToken: async () => 'test-firebase-id-token',
+          },
+        },
         realtimeDb: {
           ref: (path = '') => {
             refPaths.push(path);
@@ -125,6 +138,12 @@ const buildNotificationService = ({
 
 test.after(() => {
   Module._load = originalLoad;
+  global.fetch = originalFetch;
+  if (originalFirebaseProjectId === undefined) {
+    delete process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
+  } else {
+    process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = originalFirebaseProjectId;
+  }
 });
 
 test('saveUserPreferences persists canonical preference schema and token metadata', async () => {

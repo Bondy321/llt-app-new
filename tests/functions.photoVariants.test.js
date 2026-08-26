@@ -750,7 +750,7 @@ test('category broadcast validator requires a supported matching category payloa
     message: '',
   });
   assert.equal(missingMessage.valid, false);
-  assert.match(missingMessage.errors.join(' '), /Missing broadcast message/);
+  assert.match(missingMessage.errors.join(' '), /Broadcast message must be 1-2000 characters/);
 
   [0, -1, 1.5].forEach((createdAtMs) => {
     const invalidTimestamp = __testables.validateCategoryBroadcastData('day_trips', {
@@ -1760,7 +1760,7 @@ test('reported photo cleanup resolves source and generated variant storage objec
 
 test('broadcast delivery status distinguishes accepted, partial, failed, and empty fanout', () => {
   assert.equal(__testables.resolveBroadcastDeliveryStatus({ recipientCount: 0 }), 'no_recipients');
-  assert.equal(__testables.resolveBroadcastDeliveryStatus({ recipientCount: 2, successCount: 2 }), 'delivered');
+  assert.equal(__testables.resolveBroadcastDeliveryStatus({ recipientCount: 2, successCount: 2 }), 'ticket_accepted');
   assert.equal(__testables.resolveBroadcastDeliveryStatus({ recipientCount: 2, successCount: 1, errorCount: 1 }), 'partial');
-  assert.equal(__testables.resolveBroadcastDeliveryStatus({ recipientCount: 2, successCount: 0, errorCount: 2 }), 'failed');
+  assert.equal(__testables.resolveBroadcastDeliveryStatus({ recipientCount: 2, successCount: 0, errorCount: 2 }), 'ticket_rejected');
 });

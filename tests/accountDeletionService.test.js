@@ -184,6 +184,7 @@ test('deleteCurrentAccount clears app account records, active-tour content, loca
     },
     deleteUserFn: async (user) => deletedUsers.push(user.uid),
     appSessionApi: createAppSessionApi(),
+    notificationDeviceDelete: async () => ({ success: true }),
   });
 
   assert.equal(result.success, true);
@@ -264,6 +265,7 @@ test('deleteCurrentAccount removes driver-owned internal chat and driver locatio
     },
     deleteUserFn: async () => {},
     appSessionApi: createAppSessionApi(),
+    notificationDeviceDelete: async () => ({ success: true }),
   });
 
   assert.equal(result.success, true);
@@ -309,6 +311,7 @@ test('deleteCurrentAccount does not expose raw backend errors to the account scr
     providerFactory: () => ({ multiDeleteAsync: async () => true }),
     photoApi: {},
     appSessionApi: createAppSessionApi(),
+    notificationDeviceDelete: async () => ({ success: true }),
   });
 
   assert.equal(result.success, false);
@@ -331,6 +334,7 @@ test('account deletion records local provider false results as cleanup warnings'
     },
     deleteUserFn: async () => {},
     appSessionApi: createAppSessionApi(),
+    notificationDeviceDelete: async () => ({ success: true }),
   });
 
   assert.equal(result.success, true);

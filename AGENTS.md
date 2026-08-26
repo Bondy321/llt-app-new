@@ -2,7 +2,7 @@
 
 Welcome, Agent. This file is the operational source of truth for contributors working in this repo. Keep it practical: update it whenever architecture, contracts, commands, or release assumptions materially change.
 
-Last updated: August 21, 2026
+Last updated: August 26, 2026
 
 Architecture source of truth: start with `docs/architecture/overview.md`, then follow `module-boundaries.md` and the runtime-specific document. Keep `App.js` and `functions/index.js` as composition roots; preserve compatibility facades; place Firebase, HTTP, and persistence access behind adapters; update canonical contracts and generated copies together; run `npm run verify:refactor` for structural changes. The detailed rationale lives in `docs/architecture/decisions/` and should not be duplicated here.
 
@@ -108,6 +108,7 @@ Core mobile screens:
 - `MapScreen` plus `MapScreen.web.js`
 - `PhotobookScreen`, `GroupPhotobookScreen`
 - `NotificationPreferencesScreen`
+- `MarketingNotificationDetailScreen`, `SafetyAlertDetailScreen`
 - `SafetySupportScreen`
 
 Web admin routes:
@@ -144,6 +145,10 @@ Do not rename these Realtime Database roots without a full migration:
 - `tour_notifications`
 - `notification_read_state`
 - `notification_read_cleanup_jobs` (server-private bounded continuation jobs)
+- `notification_jobs`, `notification_job_coalescing`, `notification_job_token_claims` (server-private durable push outbox, supersession and duplicate-token claims)
+- `notification_delivery_attempts`, `notification_delivery_warnings` (server-private ticket/receipt state and visible operations warnings)
+- `notification_devices`, `notification_consents` (server-owned installation push state and explicit marketing consent; self-readable, client-write denied)
+- `marketing_notification_details` (server-owned durable future-tour notification content)
 - `web_admin_settings`
 - `booking_identities`
 - `passenger_identity_security` (server-only opaque identity and installation binding; never sync-owned)

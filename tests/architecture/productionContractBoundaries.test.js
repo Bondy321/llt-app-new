@@ -67,7 +67,12 @@ test('focused generated boundary validators fail closed without rejecting valid 
 
   assert.equal(validateResolvedMediaResponse({ success: true, expiresAtMs: 2000, media: {} }).valid, true);
   assert.equal(validateResolvedMediaResponse({ success: true, expiresAtMs: 2000, media: {}, downloadToken: 'secret' }).valid, false);
-  assert.equal(validateNotificationPayload({ screen: 'Chat', tourId: 'TOUR_1', timestamp: 1000 }).valid, true);
+  assert.equal(validateNotificationPayload({
+    screen: 'Chat',
+    tourId: 'TOUR_1',
+    messageId: 'message-1',
+    timestamp: 1000,
+  }).valid, true);
   assert.equal(validateNotificationPayload({ screen: 'Chat', tourId: 'TOUR_1', bookingRef: 'SECRET' }).valid, false);
   ['email', 'phone', 'signedUrl', 'token', 'unexpected'].forEach((field) => {
     assert.equal(validateNotificationPayload({

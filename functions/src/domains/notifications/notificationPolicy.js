@@ -3,6 +3,7 @@
 // @ts-check
 
 const { admin } = require('../../bootstrap/firebaseAdmin');
+const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { isExpoPushToken } = require('../../infrastructure/notifications/expoPushClient');
 const {
@@ -37,37 +38,32 @@ const compactNotificationText = (value, maxLength = 220) => {
 };
 
 
+const validateMessageIdentity = (messageData, errors) => {
+  if (!messageData.senderId || typeof messageData.senderId !== 'string') errors.push('Invalid or missing senderId');
+  if (!messageData.senderName || typeof messageData.senderName !== 'string') errors.push('Invalid or missing senderName');
+};
+const validateMessageText = (messageData, messageType, errors) => {
+  if (typeof messageData.text !== 'string') errors.push('Invalid or missing message text');
+  else if (messageData.text.length > 10000) errors.push('Message text exceeds maximum length (10000 characters)');
+  else if (messageType !== 'image' && messageData.text.trim().length === 0) errors.push('Message text cannot be empty');
+};
+const validateImageMessage = (messageData, errors) => {
+  if (Number(messageData.schemaVersion) === 2) {
+    const photoId = resolveTrimmedString(messageData.photoId);
+    if (!photoId || photoId.length > 160 || !isValidFirebaseKey(photoId)) errors.push('Schema-version 2 image messages require a valid photoId');
+    if (resolveTrimmedString(messageData.imageUrl) || resolveTrimmedString(messageData.thumbnailUrl)) errors.push('Schema-version 2 image messages cannot contain durable media URLs');
+  } else if (!resolveTrimmedString(messageData.imageUrl)) errors.push('Legacy image messages require an imageUrl');
+};
 /** @type {(...args: any[]) => any} */
 const validateMessageData = (messageData) => {
   const errors = [];
-
-  if (!messageData) {
-    errors.push('Message data is null or undefined');
-    return { valid: false, errors };
-  }
-
-  if (!messageData.senderId || typeof messageData.senderId !== 'string') {
-    errors.push('Invalid or missing senderId');
-  }
-
-  if (!messageData.senderName || typeof messageData.senderName !== 'string') {
-    errors.push('Invalid or missing senderName');
-  }
+  if (!messageData) return { valid: false, errors: ['Message data is null or undefined'] };
+  validateMessageIdentity(messageData, errors);
 
   const messageType = resolveTrimmedString(messageData.type) || 'text';
-  if (typeof messageData.text !== 'string') {
-    errors.push('Invalid or missing message text');
-  } else if (messageData.text.length > 10000) {
-    errors.push('Message text exceeds maximum length (10000 characters)');
-  } else if (messageType !== 'image' && messageData.text.trim().length === 0) {
-    errors.push('Message text cannot be empty');
-  }
-
-  if (messageType === 'image' && !resolveTrimmedString(messageData.imageUrl)) {
-    errors.push('Image messages require an imageUrl');
-  } else if (messageType !== 'text' && messageType !== 'image' && messageType !== 'system') {
-    errors.push('Unsupported message type');
-  }
+  validateMessageText(messageData, messageType, errors);
+  if (messageType === 'image') validateImageMessage(messageData, errors);
+  else if (!['text', 'system'].includes(messageType)) errors.push('Unsupported message type');
 
   return { valid: errors.length === 0, errors };
 };
@@ -250,28 +246,7 @@ const chunkArrayDeterministically = (items, size) => {
   return chunks;
 };
 
-/** @type {(...args: any[]) => any} */
-const applyRecipientCap = (participantIds, cap, context = {}) => {
-  if (!Array.isArray(participantIds)) return [];
-  const sortedIds = [...participantIds].sort((a, b) => a.localeCompare(b));
-
-  if (sortedIds.length <= cap) {
-    return sortedIds;
-  }
-
-  const selected = sortedIds.slice(0, cap);
-  log.warn('Participant cap applied for notification run', {
-    ...context,
-    cap,
-    totalParticipants: sortedIds.length,
-    skippedParticipants: sortedIds.length - selected.length,
-  });
-  return selected;
-};
-
-
 module.exports = {
-  applyRecipientCap,
   buildChatNotificationContent,
   buildSafetyNotificationContent,
   chunkArrayDeterministically,

@@ -1,8 +1,8 @@
 const { normalizeTourId } = require('../services/tourIdentityService');
 const { isSafeNotificationNavigationPayload } = require('../src/app/navigation/notificationNavigationBoundary');
 
-const TOUR_SCOPED_NOTIFICATION_SCREENS = new Set(['Chat', 'Itinerary', 'GroupPhotobook', 'SafetySupport', 'DriverTourPack']);
-const GLOBAL_NOTIFICATION_SCREENS = new Set(['NotificationPreferences']);
+const TOUR_SCOPED_NOTIFICATION_SCREENS = new Set(['Chat', 'Itinerary', 'GroupPhotobook', 'SafetySupport', 'DriverTourPack', 'SafetyAlertDetail']);
+const GLOBAL_NOTIFICATION_SCREENS = new Set(['NotificationPreferences', 'MarketingNotificationDetail']);
 const SUPPORTED_MARKETING_CATEGORY_KEYS = new Set([
   'day_trips',
   'mystery_breaks',
@@ -67,6 +67,9 @@ const resolveNotificationRoute = (value, context = {}) => {
   const screen = typeof data.screen === 'string' ? data.screen.trim() : '';
   const notificationTourId = normalizeTourId(data.tourId);
   const activeTourId = normalizeTourId(context.activeTourId);
+  const expiresAtMs = Number.isSafeInteger(data.expiresAtMs) ? data.expiresAtMs : null;
+
+  if (expiresAtMs && expiresAtMs <= Date.now()) return { accepted: false, reason: 'EXPIRED' };
 
   if (!SUPPORTED_NOTIFICATION_SCREENS.has(screen)) {
     return { accepted: false, reason: 'UNSUPPORTED_SCREEN' };
@@ -83,13 +86,14 @@ const resolveNotificationRoute = (value, context = {}) => {
     }
   }
   if (screen === 'DriverTourPack' && context.isDriver !== true) return { accepted: false, reason: 'DRIVER_ONLY' };
-  const marketingCategoryKey = screen === 'NotificationPreferences'
+  if (screen === 'SafetyAlertDetail' && context.isDriver !== true) return { accepted: false, reason: 'DRIVER_ONLY' };
+  const marketingCategoryKey = (screen === 'NotificationPreferences' || screen === 'MarketingNotificationDetail')
     ? readOptionalString(data.categoryKey)
     : null;
   if (marketingCategoryKey && !SUPPORTED_MARKETING_CATEGORY_KEYS.has(marketingCategoryKey)) {
     return { accepted: false, reason: 'UNSUPPORTED_MARKETING_CATEGORY' };
   }
-  if (screen === 'NotificationPreferences'
+  if ((screen === 'NotificationPreferences' || screen === 'MarketingNotificationDetail')
     && data.notificationType === 'category_broadcast'
     && (!marketingCategoryKey || !readOptionalString(data.broadcastId))) {
     return { accepted: false, reason: 'INVALID_MARKETING_NOTIFICATION' };
@@ -135,6 +139,18 @@ const resolveNotificationRoute = (value, context = {}) => {
     params.returnTo = context.isDriver ? 'DriverHome' : 'TourHome';
     params.categoryKey = marketingCategoryKey;
     params.broadcastId = readOptionalString(data.broadcastId);
+  }
+  if (screen === 'MarketingNotificationDetail' && context.hasAuth === false) {
+    return { accepted: false, reason: 'NO_AUTH' };
+  }
+  if (screen === 'MarketingNotificationDetail') {
+    params.categoryKey = marketingCategoryKey;
+    params.broadcastId = readOptionalString(data.broadcastId);
+  }
+  if (screen === 'SafetyAlertDetail') {
+    const eventId = readOptionalString(data.eventId);
+    if (!eventId) return { accepted: false, reason: 'MISSING_EVENT' };
+    params.eventId = eventId;
   }
 
   return {
