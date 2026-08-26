@@ -428,6 +428,7 @@ const CONTRACTS = Object.freeze({
         },
         "tourCode": {
           "type": "string",
+          "nullable": true,
           "maxLength": 160
         },
         "stablePassengerId": {
@@ -473,7 +474,9 @@ const CONTRACTS = Object.freeze({
           "minimum": 1
         }
       },
-      "nullability": {},
+      "nullability": {
+        "tourCode": true
+      },
       "rejectUnknownProperties": true,
       "safeClientProjection": [
         "valid",
@@ -1290,7 +1293,8 @@ const CONTRACTS = Object.freeze({
         "revision",
         "changedSections",
         "critical",
-        "requiresAcknowledgement"
+        "requiresAcknowledgement",
+        "timestamp"
       ],
       "properties": {
         "screen": {
@@ -1355,6 +1359,10 @@ const CONTRACTS = Object.freeze({
         },
         "requiresAcknowledgement": {
           "type": "boolean"
+        },
+        "timestamp": {
+          "type": "integer",
+          "minimum": 1
         }
       },
       "enumValues": {
@@ -1383,6 +1391,9 @@ const CONTRACTS = Object.freeze({
       "numericBounds": {
         "revision": {
           "minimum": 1
+        },
+        "timestamp": {
+          "minimum": 1
         }
       },
       "nullability": {},
@@ -1401,7 +1412,8 @@ const CONTRACTS = Object.freeze({
         "revision",
         "changedSections",
         "critical",
-        "requiresAcknowledgement"
+        "requiresAcknowledgement",
+        "timestamp"
       ],
       "forbiddenClientProjection": [
         "bookingRef",

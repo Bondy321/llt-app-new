@@ -36,8 +36,30 @@ test('focused generated boundary validators fail closed without rejecting valid 
   }).valid, true);
   assert.equal(validateClientAppSession({ ...clientSession, email: 'secret@example.test' }).valid, false);
 
+  const passengerSuccess = {
+    valid: true,
+    reason: 'OK',
+    bookingRef: 'BOOK_1',
+    tourId: 'TOUR_1',
+    tourCode: null,
+    stablePassengerId: clientSession.principalId,
+    identityVersion: 'pax_v2',
+    session: clientSession,
+    booking: {},
+    tour: {},
+    grantExpiresAtMs: 2000,
+  };
+  assert.equal(validatePassengerLoginResponse(passengerSuccess).valid, true);
   assert.equal(validatePassengerLoginResponse({ valid: false, reason: 'INVALID_CREDENTIALS' }).valid, true);
   assert.equal(validatePassengerLoginResponse({ valid: true, session: clientSession, email: 'secret@example.test' }).valid, false);
+  [123, [], {}].forEach((tourCode) => {
+    assert.equal(validatePassengerLoginResponse({ ...passengerSuccess, tourCode }).valid, false);
+  });
+  assert.equal(validatePassengerLoginResponse({
+    ...passengerSuccess,
+    session: { ...clientSession, sessionRevision: 0 },
+  }).valid, false);
+  assert.equal(validatePassengerLoginResponse({ ...passengerSuccess, unexpected: true }).valid, false);
   assert.equal(validateDriverLoginResponse({ valid: false, reason: 'DRIVER_NOT_FOUND' }).valid, true);
   assert.equal(validateDriverLoginResponse({ valid: true, authUid: 'secret' }).valid, false);
   assert.equal(validateDriverAssignmentResponse({ success: false, reason: 'TOUR_NOT_FOUND' }).valid, true);
@@ -45,8 +67,83 @@ test('focused generated boundary validators fail closed without rejecting valid 
 
   assert.equal(validateResolvedMediaResponse({ success: true, expiresAtMs: 2000, media: {} }).valid, true);
   assert.equal(validateResolvedMediaResponse({ success: true, expiresAtMs: 2000, media: {}, downloadToken: 'secret' }).valid, false);
-  assert.equal(validateNotificationPayload({ screen: 'Chat', tourId: 'TOUR_1' }).valid, true);
+  assert.equal(validateNotificationPayload({ screen: 'Chat', tourId: 'TOUR_1', timestamp: 1000 }).valid, true);
   assert.equal(validateNotificationPayload({ screen: 'Chat', tourId: 'TOUR_1', bookingRef: 'SECRET' }).valid, false);
+  ['email', 'phone', 'signedUrl', 'token', 'unexpected'].forEach((field) => {
+    assert.equal(validateNotificationPayload({
+      screen: 'Chat',
+      tourId: 'TOUR_1',
+      timestamp: 1000,
+      [field]: 'secret',
+    }).valid, false);
+  });
+  ['1000', 0, -1, 1.5, null].forEach((timestamp) => {
+    assert.equal(validateNotificationPayload({ screen: 'Chat', tourId: 'TOUR_1', timestamp }).valid, false);
+  });
+});
+
+test('focused validators accept intended login, assignment, and resolved-media variants', () => {
+  const assignedDriverSession = {
+    ...clientSession,
+    principalId: 'driver:D-100',
+    principalType: 'driver',
+    tourId: 'TOUR_1',
+    driverId: 'D-100',
+  };
+  const unassignedDriverSession = { ...assignedDriverSession, tourId: null };
+  assert.equal(validateDriverLoginResponse({
+    valid: true,
+    type: 'driver',
+    driver: {
+      id: 'D-100',
+      name: null,
+      assignedTourId: 'TOUR_1',
+      assignedTourCode: null,
+      hasAssignedTour: true,
+    },
+    tour: { id: 'TOUR_1' },
+    assignmentStatus: 'ASSIGNED',
+    identityClaimed: true,
+    session: assignedDriverSession,
+  }).valid, true);
+  assert.equal(validateDriverLoginResponse({
+    valid: true,
+    type: 'driver',
+    driver: {
+      id: 'D-100',
+      name: null,
+      assignedTourId: null,
+      assignedTourCode: null,
+      hasAssignedTour: false,
+    },
+    tour: null,
+    assignmentStatus: 'UNASSIGNED',
+    identityClaimed: true,
+    session: unassignedDriverSession,
+  }).valid, true);
+  assert.equal(validateDriverAssignmentResponse({
+    success: true,
+    tourId: 'TOUR_1',
+    tourCode: '5001D 1',
+    previousTourId: null,
+    session: assignedDriverSession,
+  }).valid, true);
+  assert.equal(validateResolvedMediaResponse({
+    success: true,
+    expiresAtMs: 2000,
+    media: {
+      sourceOnly: { sourceUrl: 'https://signed.example/source' },
+      variants: {
+        viewerUrl: 'https://signed.example/viewer',
+        thumbnailUrl: 'https://signed.example/thumbnail',
+      },
+    },
+  }).valid, true);
+  assert.equal(validateResolvedMediaResponse({
+    success: true,
+    expiresAtMs: 2000,
+    media: { photo: { downloadToken: 'secret' } },
+  }).valid, false);
 });
 
 test('production boundary modules route untrusted values through focused generated adapters', () => {

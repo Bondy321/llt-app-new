@@ -24,6 +24,7 @@ const { resolveSafetyReporterAccess } = require('./domains/safety/safetyAccess')
 const { checkSafetySubmissionRateLimit } = require('./domains/safety/safetyRateLimit');
 const sessionIssuance = require('./domains/app-sessions/sessionIssuance');
 const passengerProjection = require('./domains/passenger-auth/passengerProjection');
+const passengerLoginWorkflow = require('./domains/passenger-auth/passengerLoginWorkflow');
 const passengerLoginSecurity = require('./domains/passenger-auth/passengerLoginSecurity');
 const driverLoginSecurity = require('./domains/driver-auth/driverLoginSecurity');
 const manualPassengerBooking = require('./domains/administration/manualPassengerBooking');
@@ -81,6 +82,7 @@ module.exports = {
   buildPassengerSafeItinerary: passengerProjection.buildPassengerSafeItinerary,
   buildPassengerSafeBooking: passengerProjection.buildPassengerSafeBooking,
   buildPassengerSafeTour: passengerProjection.buildPassengerSafeTour,
+  buildPassengerLoginResponse: passengerLoginWorkflow.buildPassengerLoginResponse,
   verifyRequestAuthUid,
   verifyCurrentTourPhotoAccess: mediaAccess.verifyCurrentTourPhotoAccess,
   enforceGroupMediaAppCheck,

@@ -22,7 +22,8 @@ const CONTRACTS = Object.freeze({
       "revision",
       "changedSections",
       "critical",
-      "requiresAcknowledgement"
+      "requiresAcknowledgement",
+      "timestamp"
     ],
     "properties": {
       "screen": {
@@ -87,6 +88,10 @@ const CONTRACTS = Object.freeze({
       },
       "requiresAcknowledgement": {
         "type": "boolean"
+      },
+      "timestamp": {
+        "type": "integer",
+        "minimum": 1
       }
     },
     "enumValues": {
@@ -115,6 +120,9 @@ const CONTRACTS = Object.freeze({
     "numericBounds": {
       "revision": {
         "minimum": 1
+      },
+      "timestamp": {
+        "minimum": 1
       }
     },
     "nullability": {},
@@ -133,7 +141,8 @@ const CONTRACTS = Object.freeze({
       "revision",
       "changedSections",
       "critical",
-      "requiresAcknowledgement"
+      "requiresAcknowledgement",
+      "timestamp"
     ],
     "forbiddenClientProjection": [
       "bookingRef",

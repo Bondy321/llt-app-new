@@ -34,6 +34,33 @@ const identityIncompleteFailure = () => ({
   body: { valid: false, reason: 'IDENTITY_INCOMPLETE' },
 });
 
+/** @type {(...args: any[]) => any} */
+const buildPassengerLoginResponse = ({
+  bookingRef,
+  tourId,
+  tourCode,
+  stablePassengerId,
+  session,
+  booking,
+  tour,
+  grantExpiresAtMs,
+}) => {
+  const resolvedTourCode = resolveTrimmedString(tourCode);
+  return {
+    valid: true,
+    reason: 'OK',
+    bookingRef,
+    tourId,
+    tourCode: resolvedTourCode && resolvedTourCode.length <= 160 ? resolvedTourCode : null,
+    stablePassengerId,
+    identityVersion: PASSENGER_IDENTITY_VERSION,
+    session,
+    booking,
+    tour,
+    grantExpiresAtMs,
+  };
+};
+
 /** @type {(...args: any[]) => Promise<any>} */
 const authorizePassengerLoginRequest = async ({ req, bookingRef, email }) => {
   const requestAuth = await verifyRequestAuthUid(req);
@@ -206,19 +233,16 @@ const issueVerifiedPassengerSession = async ({ authUid, context, stablePassenger
   return {
     ok: true,
     status: 200,
-    body: {
-      valid: true,
-      reason: 'OK',
+    body: buildPassengerLoginResponse({
       bookingRef: resolvedBookingRef,
       tourId: canonicalTourId,
-      tourCode: resolveTrimmedString(tourData.tourCode) || null,
+      tourCode: tourData.tourCode,
       stablePassengerId,
-      identityVersion: PASSENGER_IDENTITY_VERSION,
       session: toClientSession(appSession),
       booking: buildPassengerSafeBooking(resolvedBookingRef, bookingSnapshot.val() || {}, canonicalTourId),
       tour: buildPassengerSafeTour(canonicalTourId, tourData),
       grantExpiresAtMs: grantUpdates[`tour_access_grants/${canonicalTourId}/${authUid}`].expiresAtMs,
-    },
+    }),
   };
 };
 
@@ -245,6 +269,7 @@ const executePassengerLogin = async ({ req, bookingRef, email }) => {
 module.exports = {
   authorizePassengerIdentity,
   authorizePassengerLoginRequest,
+  buildPassengerLoginResponse,
   executePassengerLogin,
   issueVerifiedPassengerSession,
   loadPassengerLoginContext,

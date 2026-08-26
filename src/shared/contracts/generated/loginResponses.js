@@ -39,6 +39,7 @@ const CONTRACTS = Object.freeze({
       },
       "tourCode": {
         "type": "string",
+        "nullable": true,
         "maxLength": 160
       },
       "stablePassengerId": {
@@ -84,7 +85,9 @@ const CONTRACTS = Object.freeze({
         "minimum": 1
       }
     },
-    "nullability": {},
+    "nullability": {
+      "tourCode": true
+    },
     "rejectUnknownProperties": true,
     "safeClientProjection": [
       "valid",

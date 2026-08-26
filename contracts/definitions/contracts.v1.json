@@ -134,7 +134,7 @@
         "reason": { "type": "string", "maxLength": 80 },
         "bookingRef": { "type": "string", "maxLength": 160 },
         "tourId": { "type": "string", "maxLength": 160 },
-        "tourCode": { "type": "string", "maxLength": 160 },
+        "tourCode": { "type": "string", "nullable": true, "maxLength": 160 },
         "stablePassengerId": { "type": "string", "pattern": "^pax_v2_[a-f0-9]{32}$" },
         "identityVersion": { "type": "string", "enum": ["pax_v2"] },
         "session": { "type": "object" },
@@ -146,7 +146,7 @@
       "idPatterns": { "stablePassengerId": "^pax_v2_[a-f0-9]{32}$" },
       "maximumLengths": { "reason": 80, "bookingRef": 160, "tourId": 160, "tourCode": 160 },
       "numericBounds": { "grantExpiresAtMs": { "minimum": 1 } },
-      "nullability": {},
+      "nullability": { "tourCode": true },
       "rejectUnknownProperties": true,
       "safeClientProjection": ["valid", "reason", "bookingRef", "tourId", "tourCode", "stablePassengerId", "identityVersion", "session", "booking", "tour", "grantExpiresAtMs"],
       "forbiddenClientProjection": ["email", "normalizedPassengerEmail", "password"]
@@ -362,7 +362,7 @@
       "schemaVersion": 1,
       "kind": "object",
       "requiredProperties": ["screen"],
-      "optionalProperties": ["tourId", "noticeId", "messageId", "internalDriverChat", "type", "departureKey", "categoryKey", "notificationType", "broadcastId", "revision", "changedSections", "critical", "requiresAcknowledgement"],
+      "optionalProperties": ["tourId", "noticeId", "messageId", "internalDriverChat", "type", "departureKey", "categoryKey", "notificationType", "broadcastId", "revision", "changedSections", "critical", "requiresAcknowledgement", "timestamp"],
       "properties": {
         "screen": { "type": "string", "enum": ["Chat", "Itinerary", "GroupPhotobook", "NotificationPreferences", "SafetySupport", "DriverTourPack"] },
         "tourId": { "type": "string", "pattern": "^[^.#$/\\[\\]\\u0000-\\u001F\\u007F]{1,160}$" },
@@ -377,15 +377,16 @@
         "revision": { "type": "integer", "minimum": 1 },
         "changedSections": { "type": ["string", "array"], "maxItems": 13 },
         "critical": { "type": "boolean" },
-        "requiresAcknowledgement": { "type": "boolean" }
+        "requiresAcknowledgement": { "type": "boolean" },
+        "timestamp": { "type": "integer", "minimum": 1 }
       },
       "enumValues": { "screen": ["Chat", "Itinerary", "GroupPhotobook", "NotificationPreferences", "SafetySupport", "DriverTourPack"] },
       "idPatterns": { "tourId": "^[^.#$/\\[\\]\\u0000-\\u001F\\u007F]{1,160}$" },
       "maximumLengths": { "tourId": 160, "noticeId": 160, "messageId": 160, "type": 80, "departureKey": 160, "categoryKey": 80, "notificationType": 80, "broadcastId": 160 },
-      "numericBounds": { "revision": { "minimum": 1 } },
+      "numericBounds": { "revision": { "minimum": 1 }, "timestamp": { "minimum": 1 } },
       "nullability": {},
       "rejectUnknownProperties": true,
-      "safeClientProjection": ["screen", "tourId", "noticeId", "messageId", "internalDriverChat", "type", "departureKey", "categoryKey", "notificationType", "broadcastId", "revision", "changedSections", "critical", "requiresAcknowledgement"],
+      "safeClientProjection": ["screen", "tourId", "noticeId", "messageId", "internalDriverChat", "type", "departureKey", "categoryKey", "notificationType", "broadcastId", "revision", "changedSections", "critical", "requiresAcknowledgement", "timestamp"],
       "forbiddenClientProjection": ["bookingRef", "email", "phone", "signedUrl", "token"]
     },
     "SafetySubmission": {

@@ -48,7 +48,7 @@ export interface PassengerLoginResponse {
   reason?: string;
   bookingRef?: string;
   tourId?: string;
-  tourCode?: string;
+  tourCode?: string | null;
   stablePassengerId?: string;
   identityVersion?: "pax_v2";
   session?: Record<string, unknown>;
@@ -172,6 +172,7 @@ export interface NotificationPayload {
   changedSections?: string | unknown[];
   critical?: boolean;
   requiresAcknowledgement?: boolean;
+  timestamp?: number;
 }
 
 export interface SafetySubmission {

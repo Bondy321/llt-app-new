@@ -37,6 +37,35 @@ const memoryStorage = () => {
 
 test('mobile session validation rejects credentials, extras and expired records', () => {
   assert.deepEqual(validateAppSession(SESSION, { nowMs: 2_000 }), SESSION);
+  assert.deepEqual(validateAppSession({
+    ...SESSION,
+    authUid: 'passenger-auth-uid',
+    status: 'active',
+    lastAuthenticatedAtMs: 1_000,
+    driverId: undefined,
+  }, { nowMs: 2_000 }), null);
+  const { driverId: _firebaseOmittedDriverId, ...firebasePassengerSession } = SESSION;
+  assert.equal(validateAppSession(firebasePassengerSession, { nowMs: 2_000 }), null);
+  assert.deepEqual(validateAppSession({
+    ...firebasePassengerSession,
+    authUid: 'passenger-auth-uid',
+    status: 'active',
+    lastAuthenticatedAtMs: 1_000,
+  }, { nowMs: 2_000 }), SESSION);
+  const firebaseUnassignedDriver = {
+    schemaVersion: 1,
+    sessionId: `sess_v1_${'c'.repeat(32)}`,
+    authUid: 'driver-auth-uid',
+    principalId: 'driver:BONDY',
+    principalType: 'driver',
+    driverId: 'BONDY',
+    status: 'active',
+    issuedAtMs: 1_000,
+    lastAuthenticatedAtMs: 1_000,
+    expiresAtMs: 20_000,
+    sessionRevision: 1,
+  };
+  assert.equal(validateAppSession(firebaseUnassignedDriver, { nowMs: 2_000 }).tourId, null);
   assert.equal(validateAppSession({ ...SESSION, bookingRef: 'SECRET' }, { nowMs: 2_000 }), null);
   assert.equal(validateAppSession({ ...SESSION, email: 'person@example.test' }, { nowMs: 2_000 }), null);
   assert.equal(validateAppSession(SESSION, { nowMs: 20_000 }), null);

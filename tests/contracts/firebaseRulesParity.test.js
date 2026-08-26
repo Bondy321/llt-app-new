@@ -12,7 +12,7 @@ const databaseRules = fs.readFileSync(path.join(repositoryRoot, 'database.rules.
 const storageRules = fs.readFileSync(path.join(repositoryRoot, 'storage_rules.json'), 'utf8');
 const functionsSource = readFunctionsArchitectureSource();
 const notificationSource = fs.readFileSync(
-  path.join(repositoryRoot, 'functions/src/domains/notifications/notificationState.js'),
+  path.join(repositoryRoot, 'functions/src/domains/notifications/pushNavigationData.js'),
   'utf8',
 );
 

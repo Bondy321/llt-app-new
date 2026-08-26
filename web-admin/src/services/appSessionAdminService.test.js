@@ -36,6 +36,26 @@ describe('appSessionAdminService', () => {
     expect(session).not.toHaveProperty('principalId');
   });
 
+  it('accepts Firebase-shaped sessions when a nullable child was omitted', () => {
+    const unassignedDriver = normalizeAdminAppSession({
+      schemaVersion: 1,
+      status: 'active',
+      sessionId: SESSION_ID,
+      principalType: 'driver',
+      principalId: 'driver:D-100',
+      driverId: 'D-100',
+      issuedAtMs: 100,
+      expiresAtMs: 2_000,
+      sessionRevision: 2,
+    }, 1_000);
+
+    expect(unassignedDriver).toEqual(expect.objectContaining({
+      principalType: 'driver',
+      tourId: null,
+      driverId: 'D-100',
+    }));
+  });
+
   it('masks the middle of a valid session ID', () => {
     expect(maskAppSessionId(SESSION_ID)).toBe(`sess_v1_aaa…aaaaaa`);
     expect(maskAppSessionId('bad')).toBe('Unavailable');
