@@ -2,6 +2,8 @@
 
 // @ts-check
 
+const { isTerminalNotificationJobStatus } = require('./notificationJobStatus');
+
 const buildDelivery = (job, nowMs) => {
   const counts = job.counts || {};
   const providerAccepted = Number(counts.receiptAccepted || 0);
@@ -21,7 +23,7 @@ const buildDelivery = (job, nowMs) => {
     submissionUnknownCount: submissionUnknown,
     skipReasons: job.skipReasons || {},
   };
-  if (['provider_accepted', 'provider_rejected', 'partial', 'submission_unknown', 'expired', 'no_recipients'].includes(job.status)) {
+  if (isTerminalNotificationJobStatus(job.status)) {
     delivery.deliveryCompletedAtMs = Number(job.completedAtMs || nowMs);
   }
   return delivery;

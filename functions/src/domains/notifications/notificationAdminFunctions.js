@@ -289,7 +289,7 @@ const requeueFailedNotificationJob = async ({ db = admin.database(), jobId, nowM
       const requeueId = `requeue_v1_${randomUUID().replace(/-/gu, '')}`;
       await stateRef.transaction((current) => current && current.status === 'processing' && Number(current.sourceCompletedAtMs) === sourceCompletedAtMs
         ? current
-        : { schemaVersion: 1, requeueId, jobId, sourceCompletedAtMs, cursor: null, status: 'processing', requeued: 0, skipped: 0, createdAtMs: nowMs, updatedAtMs: nowMs, expiresAtMs: nowMs + (60 * 60 * 1000) });
+        : { schemaVersion: 1, requeueId, jobId, sourceStatus: job.status, sourceCompletedAtMs, cursor: null, status: 'processing', requeued: 0, skipped: 0, createdAtMs: nowMs, updatedAtMs: nowMs, expiresAtMs: nowMs + (60 * 60 * 1000) });
       state = (await stateRef.once('value')).val();
     }
     await jobRef.transaction((current) => current && REQUEUEABLE_STATUSES.has(current.status)
@@ -325,7 +325,10 @@ const requeueFailedNotificationJob = async ({ db = admin.database(), jobId, nowM
     ? { ...current, cursor, status: complete ? 'complete' : 'processing', requeued: Number(current.requeued || 0) + requeued, skipped: Number(current.skipped || 0) + skipped, lease: null, updatedAtMs: nowMs }
     : current);
   state = (await stateRef.once('value')).val();
-  if (complete && Number(state.requeued || 0) === 0) await jobRef.update({ status: 'provider_rejected', completedAtMs: Number(job.completedAtMs || nowMs), updatedAtMs: nowMs });
+  if (complete && Number(state.requeued || 0) === 0) {
+    const terminalStatus = REQUEUEABLE_STATUSES.has(state.sourceStatus) ? state.sourceStatus : 'provider_rejected';
+    await jobRef.update({ status: terminalStatus, completedAtMs: Number(job.completedAtMs || nowMs), updatedAtMs: nowMs });
+  }
   return { success: true, complete, status: state.status, requeueId: state.requeueId, requeued: state.requeued, skipped: state.skipped, job: (await jobRef.once('value')).val() };
 };
 

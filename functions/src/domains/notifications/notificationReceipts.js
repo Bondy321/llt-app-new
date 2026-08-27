@@ -7,6 +7,7 @@ const { admin } = require('../../bootstrap/firebaseAdmin');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { expoAccessTokenSecret, getExpoPushClient } = require('../../infrastructure/notifications/expoPushClient');
 const { calculateRetryDelayMs } = require('./notificationJobs');
+const { isTerminalNotificationJobStatus } = require('./notificationJobStatus');
 const { evaluateAudienceCandidate, hashPushToken } = require('./notificationAudiencePage');
 const { QUEUE_ROOTS, claimQueueEntry, loadDueQueueEntries, removeClaimedQueueEntry } = require('./notificationQueues');
 const { markSubmissionUnknown, retryNotificationDeliveryAttempt, transitionDeliveryAttempt } = require('./notificationWorker');
@@ -51,7 +52,8 @@ const resolveJobStatus = (job) => {
     return known > 0 ? 'partial' : 'submission_unknown';
   }
   if (Number(counts.receiptAccepted || 0) > 0) return 'partial';
-  if (Number(counts.ticketRejected || 0) > 0 || Number(counts.receiptRejected || 0) > 0) return 'provider_rejected';
+  if (Number(counts.receiptRejected || 0) > 0) return 'provider_rejected';
+  if (Number(counts.ticketRejected || 0) > 0) return 'ticket_rejected';
   return Number(counts.eligible || 0) === 0 ? 'no_recipients' : 'ticket_rejected';
 };
 
@@ -62,7 +64,7 @@ const refreshNotificationJobStatus = async (db, jobId, nowMs) => {
   await jobRef.transaction((job) => {
     if (!job) return job;
     const status = resolveJobStatus(job);
-    updated = { ...job, status, updatedAtMs: nowMs, ...(['provider_accepted', 'provider_rejected', 'partial', 'submission_unknown', 'expired', 'no_recipients'].includes(status) ? { completedAtMs: Number(job.completedAtMs || nowMs) } : {}) };
+    updated = { ...job, status, updatedAtMs: nowMs, ...(isTerminalNotificationJobStatus(status) ? { completedAtMs: Number(job.completedAtMs || nowMs) } : {}) };
     return updated;
   });
   if (!updated) return null;

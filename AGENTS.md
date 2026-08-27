@@ -1328,6 +1328,8 @@ When changing a data contract:
 Notification reporting contract:
 
 - Keep `ticket_accepted`, `provider_accepted`, known rejection, and `submission_unknown` distinct.
+- Keep terminal `ticket_rejected` distinct from later receipt-level `provider_rejected`; both retain
+  the first completion timestamp and may enter only the bounded manual requeue workflow.
 - `provider_accepted` confirms provider handoff, not display on the device.
 - Never call an all-unknown result partial delivery or treat an ambiguous submission as safely
   requeueable; doing so can duplicate a notification.

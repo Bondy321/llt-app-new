@@ -13,6 +13,11 @@ while rejected counts include only known ticket or receipt rejections. `complete
 job's first terminal transition and source `deliveryCompletedAtMs` mirrors that stable timestamp;
 later receipt/status synchronisation must not move either timestamp.
 
+`ticket_rejected` is also terminal when every eligible attempt was definitely rejected before an
+Expo ticket was accepted. It remains distinct from `provider_rejected`, which requires a later
+provider-receipt rejection. Both statuses preserve the first completion timestamp and permit the
+bounded manual requeue workflow; automatic retry remains limited to classified temporary failures.
+
 Expo request errors are classified from the `expo-server-sdk` v4 error shape. HTTP 429/5xx and
 definite pre-connect failures enter bounded durable retry; invalid 4xx/configuration/payload errors
 are permanent; timeouts, connection resets and otherwise ambiguous post-write failures become

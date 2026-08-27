@@ -6,6 +6,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { buildDeliveryGrouping, getNotificationDeliveryPolicy } = require('./notificationDeliveryPolicy');
+const { isTerminalNotificationJobStatus } = require('./notificationJobStatus');
 const { buildNotificationQueueKey, buildQueueEntry, QUEUE_ROOTS, transitionQueuedRecord } = require('./notificationQueues');
 
 const JOB_SCHEMA_VERSION = 1;
@@ -168,7 +169,7 @@ const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalesc
     if (supersedesJobId && isValidFirebaseKey(supersedesJobId)) {
       const previousRef = db.ref(`notification_jobs/${supersedesJobId}`);
       const previous = (await previousRef.once('value')).val();
-      if (previous && !['provider_accepted', 'provider_rejected', 'partial', 'submission_unknown', 'expired', 'no_recipients'].includes(previous.status)) {
+      if (previous && !isTerminalNotificationJobStatus(previous.status)) {
         await transitionQueuedRecord(db, {
           targetPath: `notification_jobs/${supersedesJobId}`,
           current: previous,

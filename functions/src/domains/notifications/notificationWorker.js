@@ -13,6 +13,7 @@ const { evaluateAudienceCandidate, loadNotificationAudiencePage } = require('./n
 const { buildAttemptCountDeltaUpdates } = require('./notificationAttemptCounts');
 const { classifyExpoRequestError } = require('./expoRequestErrorClassifier');
 const { finalizeCompletedFanout, publishCriticalFanoutWarning } = require('./notificationFanoutFinalization');
+const { TERMINAL_NOTIFICATION_JOB_STATUSES } = require('./notificationJobStatus');
 const {
   QUEUE_ROOTS,
   claimQueueEntry,
@@ -30,9 +31,6 @@ const RECEIPT_DUE_DELAY_MS = 15 * 60 * 1000;
 const MAX_EXPO_PAYLOAD_BYTES = 3800;
 const RETRYABLE_TICKET_ERRORS = new Set(['MessageRateExceeded', 'ExpoServerError', 'InternalError']);
 const CONFIGURATION_TICKET_ERRORS = new Set(['MismatchSenderId', 'InvalidCredentials']);
-const TERMINAL_JOB_STATUSES = new Set([
-  'provider_accepted', 'provider_rejected', 'partial', 'submission_unknown', 'expired', 'no_recipients',
-]);
 
 /** @param {string} jobId @param {string | null | undefined} afterRecipientId */
 const buildAudiencePageId = (jobId, afterRecipientId) => `page_v1_${createHash('sha256')
@@ -190,7 +188,7 @@ const commitNotificationAudiencePage = async (jobRef, {
       reasons[key] = Number(reasons[key] || 0) + Number(value || 0);
     });
     const status = nextCursor ? 'queued' : resolveFanoutStatus(counts);
-    const terminal = TERMINAL_JOB_STATUSES.has(status);
+    const terminal = TERMINAL_NOTIFICATION_JOB_STATUSES.has(status);
     committed = true;
     return {
       ...current,
@@ -469,7 +467,7 @@ const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.n
         return { acquired: false, status: lease.job.status, fanoutComplete: true, sourceStatusPending: true };
       }
     }
-    const terminal = lease.job && (TERMINAL_JOB_STATUSES.has(lease.job.status)
+    const terminal = lease.job && (TERMINAL_NOTIFICATION_JOB_STATUSES.has(lease.job.status)
       || lease.job.supersededByJobId || Number(lease.job.expiresAtMs || 0) <= nowMs);
     if (terminal) {
       await finalizeCompletedFanout(db, lease.job, nowMs, syncSourceStatus, publishCriticalWarning);
@@ -500,7 +498,7 @@ const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.n
     return { acquired: true, ...result };
   } catch (error) {
     const observed = (await jobRef.once('value')).val() || lease.job;
-    if (observed.fanoutCompletedAtMs || TERMINAL_JOB_STATUSES.has(observed.status)) {
+    if (observed.fanoutCompletedAtMs || TERMINAL_NOTIFICATION_JOB_STATUSES.has(observed.status)) {
       if (queueRef && queueOwnerId) await releaseClaimedQueueEntry(queueRef, queueOwnerId, nowMs);
       log.error('Notification source status publication failed after fanout completion', error, { jobId });
       return { acquired: true, status: observed.status, sourceStatusPending: true };

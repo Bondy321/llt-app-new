@@ -39,5 +39,8 @@ describe('broadcast delivery presentation', () => {
     expect(isBroadcastJobRequeueable({
       jobId: 'job-3', status: 'provider_rejected', counts: { submissionUnknown: 0 },
     })).toBe(true);
+    expect(isBroadcastJobRequeueable({
+      jobId: 'job-4', status: 'ticket_rejected', counts: { submissionUnknown: 0 },
+    })).toBe(true);
   });
 });

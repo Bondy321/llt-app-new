@@ -11,6 +11,7 @@ const {
   resolveTourNotificationCategoryLabel,
 } = require('./notificationPolicy');
 const { enqueueNotificationJob } = require('./notificationJobs');
+const { TERMINAL_NOTIFICATION_JOB_STATUSES } = require('./notificationJobStatus');
 const { buildChatNotificationJob, buildMarketingNotificationJob } = require('./notificationProducerJobs');
 const { buildTourNotificationRecord, persistTourNotification } = require('./notificationState');
 const { runNotificationSourceHandoff } = require('./notificationSourceHandoff');
@@ -68,7 +69,7 @@ const validateCategoryBroadcastData = (categoryKey, broadcastData) => {
 };
 
 const BROADCAST_TERMINAL_STATUSES = new Set([
-  'provider_accepted', 'provider_rejected', 'partial', 'submission_unknown', 'expired', 'no_recipients',
+  ...TERMINAL_NOTIFICATION_JOB_STATUSES,
   'delivered', 'failed',
 ]);
 

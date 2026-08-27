@@ -852,6 +852,67 @@ test('critical warning publication is replayed after a crash at finalization', a
   assert.equal(db.data.notification_jobs[job.jobId].queueKey, null);
 });
 
+test('all permanent ticket rejections finish once, publish stable completion and remain manually requeueable', async () => {
+  const job = buildJob({ sourceType: 'tour_announcement', sourceId: 'all-ticket-rejected' });
+  const queueKey = buildNotificationQueueKey(nowMs, job.jobId, 1);
+  const audience = buildAudienceState([{ authUid: 'ticket-rejected-user', token: 'ExponentPushToken[all-ticket-rejected]' }]);
+  const db = createMemoryDb({
+    notification_jobs: { [job.jobId]: { ...job, queueKind: 'fanout', queueKey, queueVersion: 1 } },
+    notification_job_fanout_queue: { [queueKey]: { schemaVersion: 1, kind: 'fanout', targetId: job.jobId, dueAtMs: nowMs, version: 1 } },
+    broadcasts: { TOUR_1: { 'message-1': { deliveryJobId: job.jobId, deliveryStatus: 'queued' } } },
+    ...audience,
+  });
+  const expo = {
+    chunkPushNotifications: (items) => items.length ? [items] : [],
+    sendPushNotificationsAsync: async (items) => items.map(() => ({ status: 'error', details: { error: 'InvalidCredentials' } })),
+  };
+
+  const firstClaim = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${queueKey}`), nowMs);
+  const first = await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs, queueKey, queueVersion: 1, queueOwnerId: firstClaim.ownerId, queueLeaseExpiresAtMs: firstClaim.entry.lease.expiresAtMs, expo });
+  assert.equal(first.status, 'queued');
+  const finalClaim = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${queueKey}`), nowMs + 1);
+  const final = await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs: nowMs + 1, queueKey, queueVersion: 1, queueOwnerId: finalClaim.ownerId, queueLeaseExpiresAtMs: finalClaim.entry.lease.expiresAtMs, expo });
+  assert.equal(final.status, 'ticket_rejected');
+  const completedAtMs = db.data.notification_jobs[job.jobId].completedAtMs;
+  const sourceCompletedAtMs = db.data.broadcasts.TOUR_1['message-1'].deliveryCompletedAtMs;
+  assert.equal(completedAtMs, nowMs + 1);
+  assert.equal(sourceCompletedAtMs, completedAtMs);
+  assert.equal(Object.keys(db.data.notification_job_fanout_queue || {}).length, 0);
+  assert.equal(Object.keys(db.data.notification_attempt_retry_queue || {}).length, 0);
+  assert.equal(Object.keys(db.data.notification_receipt_due_queue || {}).length, 0);
+
+  const refreshed = await __testables.refreshNotificationJobStatus(db, job.jobId, nowMs + 5_000);
+  assert.equal(refreshed.status, 'ticket_rejected');
+  await notificationSourceStatus.syncNotificationSourceStatus(db, refreshed.job, nowMs + 10_000);
+  db.data.notification_job_fanout_queue ||= {};
+  db.data.notification_job_fanout_queue[queueKey] = { schemaVersion: 1, kind: 'fanout', targetId: job.jobId, dueAtMs: nowMs + 20_000, version: 1 };
+  const staleClaim = await claimQueueEntry(db.ref(`notification_job_fanout_queue/${queueKey}`), nowMs + 20_000);
+  const replay = await notificationWorker.runNotificationJob({ db, jobId: job.jobId, nowMs: nowMs + 20_000, queueKey, queueVersion: 1, queueOwnerId: staleClaim.ownerId, queueLeaseExpiresAtMs: staleClaim.entry.lease.expiresAtMs, expo });
+  assert.equal(replay.status, 'stale_queue');
+  assert.equal(db.data.notification_jobs[job.jobId].status, 'ticket_rejected');
+  assert.equal(db.data.notification_jobs[job.jobId].completedAtMs, completedAtMs);
+  assert.equal(db.data.broadcasts.TOUR_1['message-1'].deliveryCompletedAtMs, sourceCompletedAtMs);
+  assert.equal(Object.keys(db.data.notification_job_fanout_queue || {}).length, 0);
+  assert.equal(Object.keys(db.data.notification_attempt_retry_queue || {}).length, 0);
+  assert.equal(Object.keys(db.data.notification_receipt_due_queue || {}).length, 0);
+
+  const unavailableData = clone(db.data);
+  delete unavailableData.notification_devices;
+  const unavailableDb = createMemoryDb(unavailableData);
+  const unavailableManual = await notificationAdminFunctions.requeueFailedNotificationJob({ db: unavailableDb, jobId: job.jobId, nowMs: nowMs + 25_000 });
+  assert.equal(unavailableManual.success, true);
+  assert.equal(unavailableManual.complete, true);
+  assert.equal(unavailableManual.requeued, 0);
+  assert.equal(unavailableManual.job.status, 'ticket_rejected');
+  assert.equal(unavailableManual.job.completedAtMs, completedAtMs);
+
+  const manual = await notificationAdminFunctions.requeueFailedNotificationJob({ db, jobId: job.jobId, nowMs: nowMs + 30_000 });
+  assert.equal(manual.success, true);
+  assert.equal(manual.complete, true);
+  assert.equal(manual.requeued, 1);
+  assert.equal(manual.job.status, 'retrying');
+});
+
 test('actual fanout and preview use the same UID/token partition and page replay cannot double counts', async () => {
   const sharedToken = 'ExponentPushToken[shared-actual-preview]';
   const audience = buildAudienceState([{ authUid: 'aa', token: sharedToken }, { authUid: 'bb', token: sharedToken }]);
