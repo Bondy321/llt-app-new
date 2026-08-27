@@ -61,7 +61,7 @@ test('allows the admin portal to queue and update a tour broadcast delivery reco
   await assertFails(record.update({ deliveryStatus: 'made_up_status' }));
 });
 
-test('allows queued category records but rejects invalid delivery counts and unauthorized writes', async () => {
+test('allows queued category records but rejects negative delivery counts and unauthorized writes', async () => {
   const payload = {
     ...baseBroadcast(),
     categoryKey: CATEGORY_KEY,
@@ -69,7 +69,9 @@ test('allows queued category records but rejects invalid delivery counts and una
   };
   const record = dbFor(ADMIN_UID).ref(`category_broadcasts/${CATEGORY_KEY}/broadcast_1`);
   await assertSucceeds(record.set(payload));
-  await assertFails(record.update({ recipientCount: 1001 }));
+  // Recipient counts are intentionally unbounded above because delivery is paged;
+  // only malformed or negative counts are invalid.
+  await assertFails(record.update({ recipientCount: -1 }));
   await assertFails(dbFor(OUTSIDER_UID).ref(`broadcasts/${TOUR_ID}/broadcast_2`).set({
     ...baseBroadcast(),
     createdByUid: OUTSIDER_UID,

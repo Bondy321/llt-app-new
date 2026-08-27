@@ -216,6 +216,26 @@ const normalizeGroupPhotoChatRequest = (body) => {
   return input;
 };
 
+/** @param {{ input: any, principalId: string, role: string, serverTimestamp: any }} options */
+const buildGroupPhotoChatMessageRecord = ({ input, principalId, role, serverTimestamp }) => ({
+  schemaVersion: 2,
+  text: input.caption,
+  senderName: input.senderName,
+  senderId: principalId,
+  senderStableId: principalId,
+  senderType: role === 'assigned_driver' ? 'driver' : 'passenger',
+  timestamp: serverTimestamp,
+  clientCreatedAt: input.clientCreatedAt,
+  isDriver: role === 'assigned_driver',
+  status: 'sent',
+  type: 'image',
+  idempotencyKey: input.messageId,
+  photoId: input.photoId,
+});
+
+/** @param {any} message @param {string} messageId */
+const buildGroupPhotoChatResponseMessage = (message, messageId) => ({ ...message, id: messageId });
+
 /** @type {(...args: any[]) => any} */
 const createGroupPhotoChatMessage = onRequestWithResult(
   { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 30, cors: true },
@@ -228,22 +248,12 @@ const createGroupPhotoChatMessage = onRequestWithResult(
     if (!authorization) return null;
     const photoSnapshot = await admin.database().ref(`group_tour_photos/${tourId}/${photoId}`).once('value');
     if (!photoSnapshot.exists()) return res.status(404).json({ success: false, reason: 'PHOTO_NOT_FOUND' });
-    const isDriver = authorization.access.role === 'assigned_driver';
-    const message = {
-      schemaVersion: 2,
-      text: caption,
-      senderName,
-      senderId: authorization.access.principalId,
-      senderStableId: authorization.access.principalId,
-      senderType: isDriver ? 'driver' : 'passenger',
-      timestamp: admin.database.ServerValue.TIMESTAMP,
-      clientCreatedAt,
-      isDriver,
-      status: 'sent',
-      type: 'image',
-      idempotencyKey: messageId,
-      photoId,
-    };
+    const message = buildGroupPhotoChatMessageRecord({
+      input: { caption, senderName, clientCreatedAt, messageId, photoId },
+      principalId: authorization.access.principalId,
+      role: authorization.access.role,
+      serverTimestamp: admin.database.ServerValue.TIMESTAMP,
+    });
     const messageRef = admin.database().ref(`chats/${tourId}/messages/${messageId}`);
     let conflict = false;
     const transaction = await messageRef.transaction(/** @param {any} current */ (current) => {
@@ -256,12 +266,17 @@ const createGroupPhotoChatMessage = onRequestWithResult(
     if (conflict || !transaction.committed) {
       return res.status(409).json({ success: false, reason: 'IDEMPOTENCY_CONFLICT' });
     }
-    return res.status(200).json({ success: true, message: { ...transaction.snapshot.val(), id: messageId } });
+    return res.status(200).json({
+      success: true,
+      message: buildGroupPhotoChatResponseMessage(transaction.snapshot.val(), messageId),
+    });
   },
 );
 
 
 module.exports = {
+  buildGroupPhotoChatMessageRecord,
+  buildGroupPhotoChatResponseMessage,
   createGroupPhotoChatMessage,
   deleteGroupPhoto,
   extensionForGroupPhotoContentType,

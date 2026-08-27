@@ -11,13 +11,22 @@ const { enforceGroupMediaAppCheck } = require('./infrastructure/auth/appCheckGat
 const notificationPolicy = require('./domains/notifications/notificationPolicy');
 const notificationRecipients = require('./domains/notifications/notificationRecipients');
 const notificationDelivery = require('./domains/notifications/notificationDelivery');
+const groupMediaFunctions = require('./domains/media/groupMediaFunctions');
 const notificationState = require('./domains/notifications/notificationState');
+const notificationDeliveryPolicy = require('./domains/notifications/notificationDeliveryPolicy');
+const notificationJobs = require('./domains/notifications/notificationJobs');
+const notificationAudiencePage = require('./domains/notifications/notificationAudiencePage');
+const notificationWorker = require('./domains/notifications/notificationWorker');
+const expoRequestErrorClassifier = require('./domains/notifications/expoRequestErrorClassifier');
+const notificationReceipts = require('./domains/notifications/notificationReceipts');
+const notificationProducerJobs = require('./domains/notifications/notificationProducerJobs');
+const notificationAdminFunctions = require('./domains/notifications/notificationAdminFunctions');
+const notificationDeviceFunctions = require('./domains/notifications/notificationDeviceFunctions');
 const { cleanupInvalidTokens } = require('./domains/notifications/invalidTokenCleanup');
 const broadcastFunctions = require('./domains/notifications/broadcastFunctions');
 const photoVariants = require('./domains/media/photoVariants');
 const photoVariantFunction = require('./domains/media/photoVariantFunction');
 const mediaAccess = require('./domains/media/mediaAccess');
-const groupMediaFunctions = require('./domains/media/groupMediaFunctions');
 const privateMediaFunctions = require('./domains/media/privateMediaFunctions');
 const safetySubmission = require('./domains/safety/safetySubmission');
 const { resolveSafetyReporterAccess } = require('./domains/safety/safetyAccess');
@@ -28,7 +37,7 @@ const passengerLoginWorkflow = require('./domains/passenger-auth/passengerLoginW
 const passengerLoginSecurity = require('./domains/passenger-auth/passengerLoginSecurity');
 const driverLoginSecurity = require('./domains/driver-auth/driverLoginSecurity');
 const manualPassengerBooking = require('./domains/administration/manualPassengerBooking');
-const { verifyOperationsAdminAccess } = require('./domains/administration/adminAuthorization');
+const { verifyOperationsAdminAccess } = require('./domains/administration/public');
 const tourDeletion = require('./domains/administration/tourDeletion');
 const manifestDomain = require('./domains/manifests/manifestDomain');
 const driverAssignment = require('./domains/driver-assignment/driverAssignment');
@@ -45,8 +54,44 @@ const appSessionAccess = loadLegacyLibrary('appSessionAccess');
 const appSessionCleanup = loadLegacyLibrary('appSessionCleanup');
 
 module.exports = {
+  buildGroupPhotoChatMessageRecord: groupMediaFunctions.buildGroupPhotoChatMessageRecord,
+  buildGroupPhotoChatResponseMessage: groupMediaFunctions.buildGroupPhotoChatResponseMessage,
   toRealtimeKeySegment: notificationPolicy.toRealtimeKeySegment,
   validateMessageData: notificationPolicy.validateMessageData,
+  NOTIFICATION_TYPES: notificationDeliveryPolicy.NOTIFICATION_TYPES,
+  CHANNELS: notificationDeliveryPolicy.CHANNELS,
+  SAFE_NOTIFICATION_STATUSES: notificationDeliveryPolicy.SAFE_NOTIFICATION_STATUSES,
+  getNotificationDeliveryPolicy: notificationDeliveryPolicy.getNotificationDeliveryPolicy,
+  buildDeliveryGrouping: notificationDeliveryPolicy.buildDeliveryGrouping,
+  buildNotificationJobId: notificationJobs.buildNotificationJobId,
+  createNotificationJobRecord: notificationJobs.createNotificationJobRecord,
+  enqueueNotificationJob: notificationJobs.enqueueNotificationJob,
+  calculateNotificationRetryDelayMs: notificationJobs.calculateRetryDelayMs,
+  acquireNotificationJobLease: notificationJobs.acquireNotificationJobLease,
+  loadNotificationAudiencePage: notificationAudiencePage.loadNotificationAudiencePage,
+  normalizeNotificationDevice: notificationAudiencePage.normalizeNotificationDevice,
+  evaluateNotificationAudienceCandidate: notificationAudiencePage.evaluateAudienceCandidate,
+  hashNotificationPushToken: notificationAudiencePage.hashPushToken,
+  buildNotificationDeliveryAttemptId: notificationWorker.buildDeliveryAttemptId,
+  buildNotificationExpoPushMessage: notificationWorker.buildExpoPushMessage,
+  buildNotificationAudiencePageId: notificationWorker.buildAudiencePageId,
+  classifyExpoRequestError: expoRequestErrorClassifier.classifyExpoRequestError,
+  commitNotificationAudiencePage: notificationWorker.commitNotificationAudiencePage,
+  handleExpoRequestFailure: notificationWorker.handleExpoRequestFailure,
+  persistNotificationTicketResult: notificationWorker.persistTicketResult,
+  processNotificationJobPage: notificationWorker.processNotificationJobPage,
+  runNotificationJob: notificationWorker.runNotificationJob,
+  refreshNotificationJobStatus: notificationReceipts.refreshNotificationJobStatus,
+  compareAndClearNotificationTokenByHash: notificationReceipts.compareAndClearTokenByHash,
+  processDueNotificationReceipts: notificationReceipts.processDueNotificationReceipts,
+  retryDueNotificationAttempts: notificationReceipts.retryDueNotificationAttempts,
+  STALE_SENDING_ATTEMPT_MS: notificationReceipts.STALE_SENDING_ATTEMPT_MS,
+  buildChatNotificationJob: notificationProducerJobs.buildChatNotificationJob,
+  buildSafetyNotificationJob: notificationProducerJobs.buildSafetyNotificationJob,
+  buildNotificationPreviewJob: notificationAdminFunctions.buildPreviewJob,
+  requeueFailedNotificationJob: notificationAdminFunctions.requeueFailedNotificationJob,
+  readSafetyAlertDetail: notificationDeviceFunctions.readSafetyAlertDetail,
+  updateSafetyAlertStatus: notificationDeviceFunctions.updateSafetyAlertStatus,
   buildChatNotificationContent: notificationPolicy.buildChatNotificationContent,
   buildSafetyNotificationContent: notificationPolicy.buildSafetyNotificationContent,
   normalizeSafetySubmissionInput: safetySubmission.normalizeSafetySubmissionInput,

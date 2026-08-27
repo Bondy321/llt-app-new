@@ -1,5 +1,11 @@
 # Mobile architecture
 
+Notification OS state, token rotation and server reconciliation are owned by the single-flight
+notification registration coordinator. Routine preference saves never prompt. Notification tap
+handling validates the canonical payload, expiry, tour/role authority and exact detail route before
+persisting its bounded handled key. Future-tour marketing uses the persistent Firebase installation
+Auth UID and remains separate from operational app-session authority.
+
 `App.js` delegates to `src/app/AppRoot.js`. `AppRoot` owns providers; `AppShell` coordinates state; runners and hooks own login, restore, logout, notification, offline, and assignment workflows. `AppScreenRouter` renders the stable route registry.
 
 Screens are compatibility entries or bounded controllers. Controllers own lifecycle and orchestration, views receive state/actions, pure presentation modules format data, and repositories hide Firebase. Large features are split by actual responsibility: chat delivery/search/moderation/media/read state, gallery listing/upload/viewing, itinerary edit/sync/rendering, driver location, boarding, passenger home, notifications, and safety.

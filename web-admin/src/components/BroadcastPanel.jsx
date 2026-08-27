@@ -1,32 +1,18 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { getCurrentAdminUser } from '../shared/runtime/adminRuntime';
-import { queueBroadcast, subscribeToBroadcastHistory, subscribeToBroadcastTours } from '../services/broadcastRepository';
+import {
+  createServerTestNotification,
+  previewNotificationAudienceFully,
+  queueBroadcast,
+  requeueNotificationJobFully,
+  subscribeToBroadcastHistory,
+  subscribeToBroadcastTours,
+} from '../services/broadcastRepository';
 import { notifications } from '@mantine/notifications';
 import {
-  Card,
-  Text,
-  Title,
-  Group,
-  Button,
-  Textarea,
-  Stack,
-  Box,
-  Badge,
-  Paper,
-  ThemeIcon,
-  SimpleGrid,
-  Select,
-  SegmentedControl,
-  Alert,
-  ScrollArea,
-  Loader,
-  Modal,
-  Progress,
-  Divider,
-  RingProgress,
-  ActionIcon,
-  Tooltip,
-  TextInput,
+  ActionIcon, Alert, Badge, Box, Button, Card, Divider,
+  Group, Loader, Paper, Progress, RingProgress, SegmentedControl,
+  Select, SimpleGrid, Stack, Text, Textarea, ThemeIcon, Title, Tooltip,
 } from '@mantine/core';
 import {
   IconSpeakerphone,
@@ -36,13 +22,10 @@ import {
   IconCheck,
   IconMessage,
   IconBroadcast,
-  IconHistory,
   IconInfoCircle,
   IconAlertCircle,
-  IconSearch,
   IconWand,
   IconSparkles,
-  IconRefresh,
 } from '@tabler/icons-react';
 import {
   TOUR_NOTIFICATION_CATEGORY_OPTIONS,
@@ -59,7 +42,14 @@ import {
   normalizeBroadcastMessage,
   normalizeTourIdForPath,
 } from '../features/broadcasts/components/broadcastPresentation';
-import BroadcastHistoryItem from '../features/broadcasts/components/BroadcastHistoryItem';
+import NotificationAudiencePreview from '../features/broadcasts/components/NotificationAudiencePreview';
+import BroadcastDeliveryHistory from '../features/broadcasts/components/BroadcastDeliveryHistory';
+import BroadcastConfirmationModal from '../features/broadcasts/components/BroadcastConfirmationModal';
+
+const buildPreviewTargetKey = (request) => request
+  ? `${request.tourId ? 'tour' : 'category'}:${request.tourId || request.categoryKey}`
+  : '';
+
 export function BroadcastPanel() {
   const [tourId, setTourId] = useState('');
   const [targetMode, setTargetMode] = useState('tour');
@@ -72,7 +62,13 @@ export function BroadcastPanel() {
   const [broadcastHistoryState, setBroadcastHistoryState] = useState({ rootPath: '', items: [] });
   const [historyFilter, setHistoryFilter] = useState('');
   const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [audiencePreview, setAudiencePreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+  const [serverTestLoading, setServerTestLoading] = useState(false);
+  const [requeueingJobId, setRequeueingJobId] = useState('');
   const sendInFlightRef = useRef(false);
+  const previewGenerationRef = useRef(0);
 
   useEffect(() => {
     const unsubscribe = subscribeToBroadcastTours({
@@ -126,6 +122,74 @@ export function BroadcastPanel() {
     : tourId ? `Tour ${tourId}` : '';
   const hasTarget = isCategoryMode ? Boolean(categoryKey) : Boolean(tourId);
 
+  const previewRequest = useMemo(() => {
+    const selectedId = isCategoryMode ? categoryKey.trim() : normalizeTourIdForPath(tourId);
+    if (!selectedId || !isValidFirebaseKeySegment(selectedId)) return null;
+    return isCategoryMode ? { categoryKey: selectedId } : { tourId: selectedId };
+  }, [categoryKey, isCategoryMode, tourId]);
+  const previewTargetKey = buildPreviewTargetKey(previewRequest);
+
+  const storeAudiencePreview = useCallback((result, targetKey, generation) => {
+    if (previewGenerationRef.current !== generation) return false;
+    setAudiencePreview(result?.preview ? { ...result.preview, targetKey } : null);
+    return true;
+  }, []);
+
+  const refreshAudiencePreview = async () => {
+    if (!previewRequest) return;
+    const generation = previewGenerationRef.current + 1;
+    previewGenerationRef.current = generation;
+    const targetKey = previewTargetKey;
+    setPreviewLoading(true);
+    setAudiencePreview(null);
+    setPreviewError('');
+    try {
+      await previewNotificationAudienceFully(previewRequest, {
+        onProgress: (result) => storeAudiencePreview(result, targetKey, generation),
+        shouldContinue: () => previewGenerationRef.current === generation,
+      });
+    } catch (error) {
+      if (previewGenerationRef.current !== generation) return;
+      setAudiencePreview(null);
+      setPreviewError(error.message || 'Could not calculate the current eligible audience.');
+    } finally {
+      if (previewGenerationRef.current === generation) setPreviewLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const generation = previewGenerationRef.current + 1;
+    previewGenerationRef.current = generation;
+    const request = previewRequest;
+    const targetKey = previewTargetKey;
+    const timer = setTimeout(() => {
+      if (previewGenerationRef.current !== generation) return;
+      setAudiencePreview(null);
+      setPreviewError('');
+      if (!request) {
+        setPreviewLoading(false);
+        return;
+      }
+      setPreviewLoading(true);
+      previewNotificationAudienceFully(request, {
+        onProgress: (result) => storeAudiencePreview(result, targetKey, generation),
+        shouldContinue: () => previewGenerationRef.current === generation,
+      })
+      .catch((error) => {
+        if (previewGenerationRef.current === generation) {
+          setPreviewError(error.message || 'Could not calculate the current eligible audience.');
+        }
+      })
+      .finally(() => {
+        if (previewGenerationRef.current === generation) setPreviewLoading(false);
+      });
+    }, request ? 300 : 0);
+    return () => {
+      clearTimeout(timer);
+      if (previewGenerationRef.current === generation) previewGenerationRef.current += 1;
+    };
+  }, [previewRequest, previewTargetKey, storeAudiencePreview]); // Refresh and invalidate older responses after every target change.
+
   const quality = getMessageTone(message);
   const QualityIcon = quality.icon === 'check'
     ? IconCheck
@@ -140,12 +204,6 @@ export function BroadcastPanel() {
       label: `${id} - ${tour.name || tour.driverName || 'TBA'}`,
     }))
   ), [tours]);
-
-  const filteredHistory = useMemo(() => {
-    const q = historyFilter.trim().toLowerCase();
-    if (!q) return broadcastHistory;
-    return broadcastHistory.filter((item) => item.message.toLowerCase().includes(q));
-  }, [broadcastHistory, historyFilter]);
 
   const appendSnippet = (snippet) => {
     setSelectedTemplate('custom');
@@ -215,6 +273,10 @@ export function BroadcastPanel() {
     }
 
     if (!confirmed) {
+      if (!audiencePreview || audiencePreview.targetKey !== previewTargetKey || previewLoading) {
+        notifications.show({ title: 'Audience check required', message: 'Wait for the current server audience check before confirming this broadcast.', color: 'yellow' });
+        return;
+      }
       setConfirmationOpen(true);
       return;
     }
@@ -263,13 +325,40 @@ export function BroadcastPanel() {
     }
   };
 
+  const handleServerTest = async () => {
+    setServerTestLoading(true);
+    try {
+      const result = await createServerTestNotification(`web-admin-${Date.now()}`);
+      notifications.show({ title: 'Server test queued', message: `Job ${result.jobId} is running through the Expo ticket and receipt pipeline for this administrator device only.`, color: 'blue' });
+    } catch (error) {
+      notifications.show({ title: 'Server test unavailable', message: error.message, color: 'red' });
+    } finally {
+      setServerTestLoading(false);
+    }
+  };
+
+  const handleRequeue = async (jobId) => {
+    setRequeueingJobId(jobId);
+    try {
+      const result = await requeueNotificationJobFully(jobId);
+      notifications.show({ title: 'Requeue complete', message: `${result.requeued || 0} eligible recipients were queued; ${result.skipped || 0} were unchanged.`, color: 'blue' });
+    } catch (error) {
+      notifications.show({ title: 'Cannot requeue job', message: error.message, color: 'red' });
+    } finally {
+      setRequeueingJobId('');
+    }
+  };
+
   return (
     <Box>
       <Group justify="space-between" mb="xl">
         <div>
           <Title order={2}>Broadcast System</Title>
-          <Text c="dimmed" size="sm">Send tour announcements or future-tour alerts with delivery-safe checks</Text>
+          <Text c="dimmed" size="sm">Server-authoritative audience checks, durable delivery jobs and receipt reporting</Text>
         </div>
+        <Button variant="light" leftSection={<IconSend size={16} />} loading={serverTestLoading} onClick={handleServerTest} disabled={!getCurrentAdminUser()?.uid}>
+          Test my current device
+        </Button>
       </Group>
 
       <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="lg" mb="xl">
@@ -389,6 +478,10 @@ export function BroadcastPanel() {
                 </Paper>
               ) : null}
 
+              {previewRequest ? (
+                <NotificationAudiencePreview preview={audiencePreview} loading={previewLoading} error={previewError} onRefresh={refreshAudiencePreview} />
+              ) : null}
+
               <Select
                 label="Message Template"
                 placeholder="Choose a template or write custom"
@@ -447,7 +540,7 @@ export function BroadcastPanel() {
                 size="lg"
                 color={isCategoryMode ? 'blue' : 'orange'}
                 leftSection={<IconSend size={18} />}
-                disabled={!hasTarget || !message.trim() || loading || !getCurrentAdminUser()?.uid}
+                disabled={!hasTarget || !message.trim() || loading || previewLoading || !audiencePreview || !getCurrentAdminUser()?.uid}
               >
                 {isCategoryMode ? 'Send Tour Type Broadcast' : 'Send Broadcast'}
               </Button>
@@ -489,82 +582,11 @@ export function BroadcastPanel() {
             </Group>
           </Card>
 
-          <Card shadow="sm" padding="lg" radius="md" withBorder>
-            <Group justify="space-between" mb="md">
-              <Group gap="xs">
-                <ThemeIcon color="gray" variant="light" size="lg" radius="md">
-                  <IconHistory size={20} />
-                </ThemeIcon>
-                <Text fw={600}>Recent Broadcasts</Text>
-              </Group>
-              <Badge variant="light" color="gray">{filteredHistory.length}</Badge>
-            </Group>
-
-            <TextInput
-              mb="sm"
-              leftSection={<IconSearch size={14} />}
-              rightSection={historyFilter ? (
-                <Tooltip label="Clear filter">
-                  <ActionIcon variant="subtle" onClick={() => setHistoryFilter('')}>
-                    <IconRefresh size={14} />
-                  </ActionIcon>
-                </Tooltip>
-              ) : null}
-              placeholder="Filter by keyword"
-              value={historyFilter}
-              onChange={(event) => setHistoryFilter(event.currentTarget.value)}
-            />
-
-            {filteredHistory.length > 0 ? (
-              <ScrollArea h={290}>
-                <Stack gap="xs">
-                  {filteredHistory.map((broadcast) => (
-                    <BroadcastHistoryItem key={broadcast.id} broadcast={broadcast} />
-                  ))}
-                </Stack>
-              </ScrollArea>
-            ) : (
-              <Paper p="xl" radius="md" bg="gray.0" ta="center">
-                <ThemeIcon color="gray" variant="light" size="xl" radius="xl" mb="sm">
-                  <IconSpeakerphone size={24} />
-                </ThemeIcon>
-                <Text c="dimmed" size="sm">No matching broadcasts yet</Text>
-              </Paper>
-            )}
-          </Card>
+          <BroadcastDeliveryHistory broadcasts={broadcastHistory} filter={historyFilter} onFilterChange={setHistoryFilter} onClearFilter={() => setHistoryFilter('')} onRequeue={handleRequeue} requeueingJobId={requeueingJobId} />
         </Stack>
       </SimpleGrid>
 
-      <Modal
-        opened={confirmationOpen}
-        onClose={() => !loading && setConfirmationOpen(false)}
-        title="Confirm broadcast delivery"
-        centered
-        closeOnClickOutside={!loading}
-        closeOnEscape={!loading}
-      >
-        <Stack gap="md">
-          <Alert color={isCategoryMode ? 'blue' : 'orange'} icon={<IconAlertCircle size={16} />}>
-            This sends an external notification to the eligible audience for <strong>{selectedTargetLabel}</strong>.
-          </Alert>
-          <Paper withBorder p="md" radius="md">
-            <Text size="sm">{message.trim()}</Text>
-          </Paper>
-          <Group justify="flex-end">
-            <Button variant="light" onClick={() => setConfirmationOpen(false)} disabled={loading}>
-              Cancel
-            </Button>
-            <Button
-              color={isCategoryMode ? 'blue' : 'orange'}
-              leftSection={<IconSend size={16} />}
-              loading={loading}
-              onClick={() => handleSend(null, true)}
-            >
-              Confirm and send
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
+      <BroadcastConfirmationModal opened={confirmationOpen} onClose={() => !loading && setConfirmationOpen(false)} loading={loading} categoryMode={isCategoryMode} targetLabel={selectedTargetLabel} message={message.trim()} preview={audiencePreview} onConfirm={() => handleSend(null, true)} />
     </Box>
   );
 }

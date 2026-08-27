@@ -37,7 +37,7 @@ const createErrorState = (message, options = {}) => ({
   recoverySteps: options.recoverySteps || [],
 });
 
-export default function LoginScreen({ onLoginSuccess, logger, isConnected, resolveOfflineLogin }) {
+export default function LoginScreen({ onLoginSuccess, logger, isConnected, resolveOfflineLogin, onManageFutureTourAlerts }) {
   const { height, logoHeight, logoWidth, responsiveStyles } = useLoginResponsiveLayout();
   const [bookingReference, setBookingReference] = useState('');
   const [email, setEmail] = useState('');
@@ -440,6 +440,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       logoWidth={logoWidth}
       modeHintFocus={modeHintFocus}
       networkStateTone={networkStateTone}
+      onManageFutureTourAlerts={onManageFutureTourAlerts}
       responsiveStyles={responsiveStyles}
       scrollRef={scrollRef}
       setActiveInput={setActiveInput}

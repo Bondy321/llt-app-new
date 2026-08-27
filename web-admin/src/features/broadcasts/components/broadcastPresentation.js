@@ -8,12 +8,36 @@ const IDEAL_MAX_LENGTH = 240;
 const EMPTY_BROADCAST_HISTORY = Object.freeze([]);
 const DELIVERY_STATUS_META = {
   queued: { label: 'Queued', color: 'gray' },
-  processing: { label: 'Processing', color: 'blue' },
-  chat_queued: { label: 'Preparing push', color: 'blue' },
-  delivered: { label: 'Push accepted', color: 'green' },
-  partial: { label: 'Partially accepted', color: 'yellow' },
+  fanout_in_progress: { label: 'Fan-out in progress', color: 'blue' },
+  processing: { label: 'Processing (legacy)', color: 'blue' },
+  chat_queued: { label: 'Queued (legacy)', color: 'blue' },
+  ticket_accepted: { label: 'Expo ticket accepted', color: 'blue' },
+  ticket_rejected: { label: 'Expo ticket rejected', color: 'red' },
+  receipt_pending: { label: 'Awaiting provider receipt', color: 'blue' },
+  provider_accepted: { label: 'Provider accepted', color: 'green' },
+  provider_rejected: { label: 'Provider rejected', color: 'red' },
+  retrying: { label: 'Retry scheduled', color: 'yellow' },
+  submission_unknown: { label: 'Submission outcome unknown', color: 'orange' },
+  delivered: { label: 'Expo ticket accepted (legacy)', color: 'blue' },
+  partial: { label: 'Partial delivery result', color: 'yellow' },
   no_recipients: { label: 'No eligible recipients', color: 'gray' },
+  expired: { label: 'Expired before completion', color: 'gray' },
   failed: { label: 'Failed', color: 'red' },
+};
+
+const SKIP_REASON_LABELS = {
+  no_token: 'no token',
+  permission_denied: 'permission denied',
+  permission_blocked: 'permission blocked',
+  permission_unavailable: 'permission unavailable',
+  inactive_token: 'inactive token',
+  invalid_token: 'invalid token',
+  opted_out: 'opted out',
+  inactive_operational_session: 'inactive session',
+  wrong_tour: 'wrong tour',
+  duplicate_token: 'duplicate token',
+  sender_excluded: 'sender excluded',
+  expired_job: 'expired job',
 };
 
 const messageTemplates = [
@@ -62,8 +86,22 @@ function normalizeBroadcastMessage(targetId, broadcastId, payload = {}, targetTy
     recipientCount: Number.isFinite(Number(payload.recipientCount)) ? Number(payload.recipientCount) : null,
     successCount: Number.isFinite(Number(payload.successCount)) ? Number(payload.successCount) : null,
     errorCount: Number.isFinite(Number(payload.errorCount)) ? Number(payload.errorCount) : null,
+    submissionUnknownCount: Number.isFinite(Number(payload.submissionUnknownCount)) ? Number(payload.submissionUnknownCount) : null,
+    deliveryJobId: typeof payload.deliveryJobId === 'string' ? payload.deliveryJobId : null,
+    skipReasons: payload.skipReasons && typeof payload.skipReasons === 'object' ? payload.skipReasons : {},
+    lastErrorCode: typeof payload.deliveryErrorCode === 'string' ? payload.deliveryErrorCode : null,
   };
 }
+
+const presentSkipReasons = (skipReasons = {}) => Object.entries(skipReasons)
+  .filter(([, count]) => Number(count) > 0)
+  .slice(0, 4)
+  .map(([reason, count]) => `${Number(count)} ${SKIP_REASON_LABELS[reason] || 'skipped'}`)
+  .join(', ');
+
+const isBroadcastJobRequeueable = (job) => Boolean(job?.jobId
+  && Number(job?.counts?.submissionUnknown || 0) === 0
+  && ['ticket_rejected', 'provider_rejected', 'partial'].includes(job.status));
 
 const getMessageTone = (message) => {
   const trimmed = message.trim();
@@ -110,8 +148,10 @@ export {
   MAX_BROADCAST_LENGTH,
   getMessageTone,
   isValidFirebaseKeySegment,
+  isBroadcastJobRequeueable,
   messageTemplates,
   normalizeBroadcastMessage,
   normalizeBroadcastTimestamp,
+  presentSkipReasons,
   normalizeTourIdForPath,
 };

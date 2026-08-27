@@ -455,14 +455,17 @@ test('Static contract: category broadcasts target canonical tour-interest prefer
   assert.match(source, /const processCategoryBroadcastWrite = onValueCreated/);
   assert.match(source, /processCategoryBroadcastWrite: broadcasts\.processCategoryBroadcastWrite/);
   assert.match(source, /ref: '\/category_broadcasts\/\{categoryKey\}\/\{broadcastId\}'/);
-  assert.match(source, /orderByChild\(`preferences\/marketing\/\$\{preferenceKey\}`\)/);
-  assert.match(categoryHandlerSource, /buildCategoryBroadcastPushMessages\(\{/);
+  assert.match(source, /loadNotificationAudiencePage/);
+  assert.match(source, /marketingPreferences/);
+  assert.match(categoryHandlerSource, /buildMarketingNotificationJob\(\{/);
+  assert.match(categoryHandlerSource, /enqueueNotificationJob\(\{/);
   assert.doesNotMatch(categoryHandlerSource, /buildChatNotificationContent/);
   assert.doesNotMatch(categoryHandlerSource, /chunkArrayDeterministically\(\s*validRecipients/);
   assert.match(adminSource, /category_broadcasts\/\$\{targetId\}/);
 
   categoryKeys.forEach((categoryKey) => {
     assert.ok(rules.rules.users['.indexOn'].includes(`preferences/marketing/${categoryKey}`));
+    assert.ok(rules.rules.notification_devices['.indexOn'].includes(`marketingPreferences/${categoryKey}`));
     assert.match(screenSource, new RegExp(categoryKey));
     assert.match(categoryBroadcasts.$categoryKey.$broadcastId['.validate'], new RegExp(categoryKey));
   });
@@ -473,11 +476,16 @@ test('Static contract: notification taps preserve exact destination context end 
   const chatSource = readMobileModuleSource('screens/ChatScreen.js');
   const preferencesSource = readMobileModuleSource('screens/NotificationPreferencesScreen.js');
   const routingSource = readText('utils/notificationRouting.js');
+  const sessionNavigationSource = readText('src/app/notifications/useNotificationSessionNavigation.js');
 
-  assert.match(appSource, /const hasAppSession = Boolean\(bookingId\)/);
+  assert.match(sessionNavigationSource, /const hasLiveAppSession = Boolean\(/);
+  assert.match(sessionNavigationSource, /appSession\?\.sessionRevision/);
+  assert.match(sessionNavigationSource, /appSession\?\.expiresAtMs > Date\.now\(\)/);
   assert.match(appSource, /bookingId: bookingData\?\.id/);
   assert.match(appSource, /initialMessageId=\{context\.screenParams\.messageId \|\| null\}/);
   assert.match(appSource, /initialMarketingCategoryKey=\{context\.screenParams\?\.categoryKey \|\| null\}/);
+  assert.match(appSource, /MarketingNotificationDetailScreen/);
+  assert.match(appSource, /SafetyAlertDetailScreen/);
   assert.match(chatSource, /getChatMessageById/);
   assert.match(chatSource, /initialMessageId/);
   assert.match(preferencesSource, /initialMarketingCategoryKey/);
@@ -973,7 +981,9 @@ test('Static contract: itinerary cache metadata cannot update stale screens', ()
   assert.match(bookingSource, /tours\/\$\{normalizedTourId\}\/itinerary/);
   assert.match(bookingSource, /throw error;/);
   assert.match(functionsSource, /const sendItineraryNotification = onValueWritten/);
-  assert.match(functionsSource, /Skipping metadata-only itinerary notification/);
+  assert.match(functionsSource, /buildItineraryNotificationJob/);
+  assert.match(functionsSource, /coalescingKey: `itinerary:\$\{tourId\}`/);
+  assert.match(functionsSource, /enqueueNotificationJob/);
 });
 
 test('Static contract: preference and manifest screens guard stale async state', () => {

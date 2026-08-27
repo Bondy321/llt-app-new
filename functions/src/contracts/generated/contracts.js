@@ -1290,11 +1290,14 @@ const CONTRACTS = Object.freeze({
         "categoryKey",
         "notificationType",
         "broadcastId",
+        "eventId",
+        "photoId",
         "revision",
         "changedSections",
         "critical",
         "requiresAcknowledgement",
-        "timestamp"
+        "timestamp",
+        "expiresAtMs"
       ],
       "properties": {
         "screen": {
@@ -1305,7 +1308,9 @@ const CONTRACTS = Object.freeze({
             "GroupPhotobook",
             "NotificationPreferences",
             "SafetySupport",
-            "DriverTourPack"
+            "DriverTourPack",
+            "MarketingNotificationDetail",
+            "SafetyAlertDetail"
           ]
         },
         "tourId": {
@@ -1343,6 +1348,14 @@ const CONTRACTS = Object.freeze({
           "type": "string",
           "maxLength": 160
         },
+        "eventId": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "photoId": {
+          "type": "string",
+          "maxLength": 160
+        },
         "revision": {
           "type": "integer",
           "minimum": 1
@@ -1363,6 +1376,10 @@ const CONTRACTS = Object.freeze({
         "timestamp": {
           "type": "integer",
           "minimum": 1
+        },
+        "expiresAtMs": {
+          "type": "integer",
+          "minimum": 1
         }
       },
       "enumValues": {
@@ -1372,7 +1389,9 @@ const CONTRACTS = Object.freeze({
           "GroupPhotobook",
           "NotificationPreferences",
           "SafetySupport",
-          "DriverTourPack"
+          "DriverTourPack",
+          "MarketingNotificationDetail",
+          "SafetyAlertDetail"
         ]
       },
       "idPatterns": {
@@ -1386,13 +1405,18 @@ const CONTRACTS = Object.freeze({
         "departureKey": 160,
         "categoryKey": 80,
         "notificationType": 80,
-        "broadcastId": 160
+        "broadcastId": 160,
+        "eventId": 160,
+        "photoId": 160
       },
       "numericBounds": {
         "revision": {
           "minimum": 1
         },
         "timestamp": {
+          "minimum": 1
+        },
+        "expiresAtMs": {
           "minimum": 1
         }
       },
@@ -1409,11 +1433,14 @@ const CONTRACTS = Object.freeze({
         "categoryKey",
         "notificationType",
         "broadcastId",
+        "eventId",
+        "photoId",
         "revision",
         "changedSections",
         "critical",
         "requiresAcknowledgement",
-        "timestamp"
+        "timestamp",
+        "expiresAtMs"
       ],
       "forbiddenClientProjection": [
         "bookingRef",
@@ -1421,6 +1448,579 @@ const CONTRACTS = Object.freeze({
         "phone",
         "signedUrl",
         "token"
+      ],
+      "constraints": [
+        "notificationRouteSemantics"
+      ]
+    },
+    "NotificationJob": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "schemaVersion",
+        "jobId",
+        "notificationType",
+        "sourceType",
+        "sourceId",
+        "audienceType",
+        "status",
+        "createdAtMs",
+        "availableAtMs",
+        "expiresAtMs",
+        "attemptCount",
+        "maxAttempts",
+        "presentation",
+        "navigation",
+        "counts",
+        "skipReasons"
+      ],
+      "optionalProperties": [
+        "tourId",
+        "categoryKey",
+        "departureKey",
+        "eventId",
+        "targetInstallationUid",
+        "senderAuthUid",
+        "senderPrincipalId",
+        "updatedAtMs",
+        "afterRecipientId",
+        "supersededByJobId",
+        "coalescingKey",
+        "priorityClass",
+        "deliveryPolicy",
+        "lease",
+        "fanoutCompletedAtMs",
+        "completedAtMs",
+        "lastErrorCode",
+        "lastCommittedPageId",
+        "pageSequence"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1
+        },
+        "jobId": {
+          "type": "string",
+          "pattern": "^notif_v1_[a-f0-9]{64}$",
+          "maxLength": 73
+        },
+        "notificationType": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "sourceType": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "sourceId": {
+          "type": "string",
+          "maxLength": 768
+        },
+        "audienceType": {
+          "type": "string",
+          "enum": [
+            "tour",
+            "assigned_drivers",
+            "safety",
+            "marketing",
+            "single_installation"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "fanout_in_progress",
+            "ticket_accepted",
+            "ticket_rejected",
+            "receipt_pending",
+            "provider_accepted",
+            "provider_rejected",
+            "retrying",
+            "submission_unknown",
+            "expired",
+            "partial",
+            "no_recipients"
+          ]
+        },
+        "createdAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "availableAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expiresAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attemptCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "presentation": {
+          "type": "object"
+        },
+        "navigation": {
+          "type": "object"
+        },
+        "counts": {
+          "type": "object"
+        },
+        "skipReasons": {
+          "type": "object"
+        }
+      },
+      "enumValues": {
+        "status": [
+          "queued",
+          "fanout_in_progress",
+          "ticket_accepted",
+          "ticket_rejected",
+          "receipt_pending",
+          "provider_accepted",
+          "provider_rejected",
+          "retrying",
+          "submission_unknown",
+          "expired",
+          "partial",
+          "no_recipients"
+        ],
+        "audienceType": [
+          "tour",
+          "assigned_drivers",
+          "safety",
+          "marketing",
+          "single_installation"
+        ]
+      },
+      "idPatterns": {
+        "jobId": "^notif_v1_[a-f0-9]{64}$"
+      },
+      "maximumLengths": {
+        "jobId": 73,
+        "notificationType": 80,
+        "sourceType": 80,
+        "sourceId": 768
+      },
+      "numericBounds": {
+        "maxAttempts": {
+          "minimum": 1,
+          "maximum": 20
+        }
+      },
+      "nullability": {
+        "tourId": true,
+        "categoryKey": true,
+        "departureKey": true,
+        "eventId": true,
+        "targetInstallationUid": true,
+        "senderAuthUid": true,
+        "senderPrincipalId": true,
+        "afterRecipientId": true,
+        "supersededByJobId": true,
+        "coalescingKey": true
+      },
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [
+        "schemaVersion",
+        "jobId",
+        "notificationType",
+        "sourceType",
+        "sourceId",
+        "audienceType",
+        "status",
+        "createdAtMs",
+        "updatedAtMs",
+        "expiresAtMs",
+        "counts",
+        "skipReasons",
+        "lastErrorCode"
+      ],
+      "forbiddenClientProjection": [
+        "lease",
+        "senderAuthUid",
+        "senderPrincipalId"
+      ],
+      "constraints": [
+        "noCredentialFields",
+        "noDurableMediaUrls"
+      ]
+    },
+    "NotificationDeliveryAttempt": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "schemaVersion",
+        "attemptId",
+        "jobId",
+        "recipientUid",
+        "installationUid",
+        "tokenHash",
+        "status",
+        "ticketStatus",
+        "receiptStatus",
+        "retryable",
+        "attemptNumber",
+        "createdAtMs",
+        "updatedAtMs",
+        "expiresAtMs"
+      ],
+      "optionalProperties": [
+        "ticketId",
+        "receiptDueAtMs",
+        "receiptWindowExpiresAtMs",
+        "availableAtMs",
+        "safeErrorCode",
+        "providerAcceptedAtMs",
+        "receiptCheckCount"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1
+        },
+        "attemptId": {
+          "type": "string",
+          "pattern": "^attempt_v1_[a-f0-9]{64}$",
+          "maxLength": 75
+        },
+        "jobId": {
+          "type": "string",
+          "pattern": "^notif_v1_[a-f0-9]{64}$",
+          "maxLength": 73
+        },
+        "recipientUid": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "installationUid": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "tokenHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "maxLength": 64
+        },
+        "status": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "ticketStatus": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "receiptStatus": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "attemptNumber": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "createdAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "updatedAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expiresAtMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "enumValues": {},
+      "idPatterns": {
+        "attemptId": "^attempt_v1_[a-f0-9]{64}$",
+        "jobId": "^notif_v1_[a-f0-9]{64}$",
+        "tokenHash": "^[a-f0-9]{64}$"
+      },
+      "maximumLengths": {
+        "attemptId": 75,
+        "jobId": 73,
+        "recipientUid": 160,
+        "installationUid": 160,
+        "tokenHash": 64,
+        "status": 40,
+        "ticketStatus": 40,
+        "receiptStatus": 40
+      },
+      "numericBounds": {},
+      "nullability": {
+        "ticketId": true,
+        "receiptDueAtMs": true,
+        "safeErrorCode": true
+      },
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [
+        "schemaVersion",
+        "attemptId",
+        "jobId",
+        "status",
+        "ticketStatus",
+        "receiptStatus",
+        "retryable",
+        "attemptNumber",
+        "createdAtMs",
+        "updatedAtMs",
+        "safeErrorCode"
+      ],
+      "forbiddenClientProjection": [
+        "recipientUid",
+        "installationUid",
+        "tokenHash",
+        "ticketId"
+      ]
+    },
+    "NotificationDevice": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "schemaVersion",
+        "authUid",
+        "provider",
+        "status",
+        "permissionState",
+        "operationalEligible",
+        "marketingEligible",
+        "marketingPreferences",
+        "marketingConsentVersion",
+        "marketingConsentUpdatedAtMs",
+        "updatedAtMs",
+        "createdAtMs"
+      ],
+      "optionalProperties": [
+        "pushToken",
+        "tokenHash",
+        "permissionCanAskAgain",
+        "operationalTourId",
+        "appVersion",
+        "appBuild",
+        "platform",
+        "invalidReason"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1
+        },
+        "authUid": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "provider": {
+          "type": "string",
+          "const": "expo"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "inactive",
+            "denied",
+            "blocked",
+            "unavailable",
+            "invalid"
+          ]
+        },
+        "permissionState": {
+          "type": "string",
+          "enum": [
+            "granted",
+            "provisional",
+            "ephemeral",
+            "denied",
+            "blocked",
+            "unavailable"
+          ]
+        },
+        "operationalEligible": {
+          "type": "boolean"
+        },
+        "marketingEligible": {
+          "type": "boolean"
+        },
+        "marketingPreferences": {
+          "type": "object"
+        },
+        "marketingConsentVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "marketingConsentUpdatedAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "updatedAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "createdAtMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "enumValues": {
+        "status": [
+          "active",
+          "inactive",
+          "denied",
+          "blocked",
+          "unavailable",
+          "invalid"
+        ],
+        "permissionState": [
+          "granted",
+          "provisional",
+          "ephemeral",
+          "denied",
+          "blocked",
+          "unavailable"
+        ]
+      },
+      "idPatterns": {},
+      "maximumLengths": {
+        "authUid": 160
+      },
+      "numericBounds": {},
+      "nullability": {
+        "pushToken": true,
+        "tokenHash": true,
+        "operationalTourId": true
+      },
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [
+        "schemaVersion",
+        "authUid",
+        "status",
+        "permissionState",
+        "permissionCanAskAgain",
+        "operationalEligible",
+        "operationalTourId",
+        "marketingEligible",
+        "marketingPreferences",
+        "marketingConsentVersion",
+        "marketingConsentUpdatedAtMs",
+        "appVersion",
+        "appBuild",
+        "platform",
+        "updatedAtMs"
+      ],
+      "forbiddenClientProjection": [
+        "pushToken",
+        "tokenHash"
+      ]
+    },
+    "MarketingNotificationRecord": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "schemaVersion",
+        "broadcastId",
+        "categoryKey",
+        "title",
+        "body",
+        "createdAtMs",
+        "expiresAtMs",
+        "status",
+        "updatedAtMs"
+      ],
+      "optionalProperties": [
+        "cta"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1
+        },
+        "broadcastId": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "categoryKey": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "createdAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expiresAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "expired",
+            "withdrawn"
+          ]
+        },
+        "updatedAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cta": {
+          "type": "object"
+        }
+      },
+      "enumValues": {
+        "status": [
+          "active",
+          "expired",
+          "withdrawn"
+        ]
+      },
+      "idPatterns": {},
+      "maximumLengths": {
+        "broadcastId": 160,
+        "categoryKey": 80,
+        "title": 120,
+        "body": 2000
+      },
+      "numericBounds": {},
+      "nullability": {},
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [
+        "schemaVersion",
+        "broadcastId",
+        "categoryKey",
+        "title",
+        "body",
+        "createdAtMs",
+        "expiresAtMs",
+        "status",
+        "cta"
+      ],
+      "forbiddenClientProjection": [
+        "pushToken",
+        "token",
+        "bookingRef",
+        "email"
       ]
     },
     "SafetySubmission": {
@@ -1899,6 +2499,14 @@ const validateContract = (name, value, options = {}) => {
     if (constraint === 'passengerPrincipalIsOpaque' && value.principalType === 'passenger' && !/^pax_v2_[a-f0-9]{32}$/u.test(value.principalId || '')) errors.push('passenger principal is not opaque');
     if (constraint === 'expiryAfterIssue' && Number(value.expiresAtMs) <= Number(value.lastAuthenticatedAtMs ?? value.issuedAtMs)) errors.push('session expiry must follow authentication');
     if (constraint === 'idempotencyEqualsId' && value.id && value.idempotencyKey !== value.id) errors.push('idempotency key must equal the record id');
+    if (constraint === 'notificationRouteSemantics') {
+      if (value.timestamp && value.expiresAtMs && Number(value.expiresAtMs) <= Number(value.timestamp)) errors.push('notification expiry must follow timestamp');
+      if (value.screen === 'Chat' && (!value.tourId || !value.messageId)) errors.push('chat notification requires tourId and messageId');
+      if (value.screen === 'Itinerary' && !value.tourId) errors.push('itinerary notification requires tourId');
+      if (value.screen === 'DriverTourPack' && (!value.tourId || !value.departureKey || !value.revision)) errors.push('driver pack notification requires tourId, departureKey and revision');
+      if (value.screen === 'SafetyAlertDetail' && (!value.tourId || !value.eventId)) errors.push('safety detail notification requires tourId and eventId');
+      if (value.screen === 'MarketingNotificationDetail' && (!value.categoryKey || !value.broadcastId || value.tourId)) errors.push('marketing detail notification requires categoryKey and broadcastId without tourId');
+    }
     if (constraint === 'noDurableMediaUrls') visitKeys(value, (key) => {
       if (/^(?:sourceUrl|thumbnailUrl|viewerUrl|downloadUrl|downloadToken)$/u.test(key)) errors.push(`${key} is a forbidden durable media field`);
     });

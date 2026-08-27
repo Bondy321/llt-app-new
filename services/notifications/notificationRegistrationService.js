@@ -35,7 +35,7 @@ export const primeNotificationPermissions = async ({
     const state = resolvePermissionState(permissionResponse);
     const result = {
       state,
-      granted: state === 'granted',
+      granted: ['granted', 'provisional', 'ephemeral'].includes(state),
       canAskAgain: permissionResponse?.canAskAgain !== false,
       status: permissionResponse?.status || 'unknown',
       description: permissionStateDescriptions[state] || permissionStateDescriptions.denied,
@@ -128,14 +128,7 @@ export const registerForPushNotificationsAsync = async (
     // Set up Android notification channel
     if (Platform.OS === 'android') {
       try {
-        await Notifications.setNotificationChannelAsync('default', {
-          name: 'default',
-          importance: Notifications.AndroidImportance.MAX,
-          vibrationPattern: [0, 250, 250, 250],
-          lightColor: '#FF231F7C',
-          enableVibrate: true,
-          showBadge: true,
-        });
+        await initializeNotificationChannels();
       } catch (channelError) {
         logger.warn('NotificationService', 'Android notification channel setup failed', {
           error: channelError?.message || String(channelError),
@@ -220,6 +213,32 @@ export const registerForPushNotificationsAsync = async (
     });
     return null;
   }
+};
+
+// Versioned IDs let Android users retain any explicit choices on the legacy
+// default channel while new server policy can target purpose-specific channels.
+export const initializeNotificationChannels = async () => {
+  if (Platform.OS !== 'android') return;
+  const max = Notifications.AndroidImportance.MAX;
+  const high = Notifications.AndroidImportance.HIGH || max;
+  const normal = Notifications.AndroidImportance.DEFAULT || high;
+  const channels = [
+    ['default', 'Loch Lomond Travel', max],
+    ['llt_safety_v2', 'LLT Safety', max],
+    ['llt_driver_operations_v2', 'Driver Operations', high],
+    ['llt_tour_updates_v2', 'Tour Updates', high],
+    ['llt_group_chat_v2', 'Group Chat', normal],
+    ['llt_group_photos_v2', 'Group Photos', normal],
+    ['llt_future_tours_v2', 'Future Tour Alerts', normal],
+  ];
+  await Promise.all(channels.map(([id, name, importance]) => Notifications.setNotificationChannelAsync(id, {
+    name,
+    importance,
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: '#007DC3',
+    enableVibrate: true,
+    showBadge: true,
+  })));
 };
 
 const buildUnavailableTokenPatch = ({

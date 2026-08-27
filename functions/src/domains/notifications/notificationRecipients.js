@@ -19,96 +19,18 @@ const {
 const { isActiveSessionRecord } = loadLegacyLibrary('appSession');
 
 const USER_PROFILE_FETCH_CHUNK_SIZE = 100;
-const USER_PROFILE_CACHE_TTL_MS = 2 * 60 * 1000;
-const USER_PROFILE_CACHE_MAX_ENTRIES = 5000;
 const OPERATIONS_ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
-/** @type {Map<string, { cachedAt: number, profile: any }>} */
-const userProfileCache = new Map();
 
-/** @type {(...args: any[]) => any} */
-const getCachedUserProfile = (userId) => {
-  const cached = userProfileCache.get(userId);
-  if (!cached) return null;
-
-  if ((Date.now() - cached.cachedAt) > USER_PROFILE_CACHE_TTL_MS) {
-    userProfileCache.delete(userId);
-    return null;
-  }
-
-  return cached.profile;
-};
-
-/** @type {(...args: any[]) => any} */
-const cleanupUserProfileCache = (now = Date.now()) => {
-  let removed = 0;
-  for (const [userId, cached] of userProfileCache.entries()) {
-    if ((now - cached.cachedAt) > USER_PROFILE_CACHE_TTL_MS) {
-      userProfileCache.delete(userId);
-      removed += 1;
-    }
-  }
-
-  return removed;
-};
-
-/** @type {(...args: any[]) => any} */
-const enforceUserProfileCacheCap = () => {
-  if (userProfileCache.size <= USER_PROFILE_CACHE_MAX_ENTRIES) {
-    return 0;
-  }
-
-  const targetSize = Math.floor(USER_PROFILE_CACHE_MAX_ENTRIES * 0.9);
-  const entriesByAge = [...userProfileCache.entries()].sort(([, a], [, b]) => a.cachedAt - b.cachedAt);
-  const evictCount = Math.max(0, userProfileCache.size - targetSize);
-
-  for (let index = 0; index < evictCount; index += 1) {
-    const entry = entriesByAge[index];
-    if (!entry) break;
-    const [userId] = entry;
-    userProfileCache.delete(userId);
-  }
-
-  if (evictCount > 0) {
-    log.warn('Evicted stale user profile cache entries to enforce memory cap', {
-      cacheSizeAfterEvict: userProfileCache.size,
-      cacheSizeCap: USER_PROFILE_CACHE_MAX_ENTRIES,
-      evictedEntries: evictCount,
-    });
-  }
-
-  return evictCount;
-};
-
-/** @type {(...args: any[]) => any} */
-const setCachedUserProfile = (userId, profile) => {
-  cleanupUserProfileCache();
-
-  userProfileCache.set(userId, {
-    profile,
-    cachedAt: Date.now(),
-  });
-
-  enforceUserProfileCacheCap();
-};
+// Compatibility no-op. Mutable notification profiles are intentionally never
+// cached; delivery-time token, permission and preference state is authoritative.
+const setCachedUserProfile = () => {};
 
 /** @type {(participantIds?: string[], context?: Record<string, unknown>) => Promise<Record<string, any>>} */
 const fetchUsersSnapshot = async (participantIds = [], context = {}) => {
   /** @type {Record<string, any>} */
   const usersMap = {};
-  /** @type {string[]} */
-  const cacheMissIds = [];
-
-  participantIds.forEach((userId) => {
-    const cachedProfile = getCachedUserProfile(userId);
-    if (cachedProfile) {
-      usersMap[userId] = cachedProfile;
-    } else {
-      cacheMissIds.push(userId);
-    }
-  });
-
-  const missChunks = chunkArrayDeterministically(cacheMissIds, USER_PROFILE_FETCH_CHUNK_SIZE);
-  for (const chunk of missChunks) {
+  const freshChunks = chunkArrayDeterministically(participantIds, USER_PROFILE_FETCH_CHUNK_SIZE);
+  for (const chunk of freshChunks) {
     const snapshots = await Promise.all(
       chunk.map(/** @param {string} userId */ (userId) => admin.database().ref(`users/${userId}`).once('value')),
     );
@@ -118,16 +40,14 @@ const fetchUsersSnapshot = async (participantIds = [], context = {}) => {
       const userId = chunk[index];
       const profile = snapshot.val();
       usersMap[userId] = profile;
-      setCachedUserProfile(userId, profile);
     });
   }
 
   log.info('Fetched targeted users for notifications', {
     ...context,
     requestedUserCount: participantIds.length,
-    cacheMissCount: cacheMissIds.length,
     resolvedUserCount: Object.keys(usersMap).length,
-    chunkCount: missChunks.length,
+    chunkCount: freshChunks.length,
   });
 
   return usersMap;

@@ -14,6 +14,8 @@ import PassengerManifestScreen from '../../../screens/PassengerManifestScreen';
 import SafetySupportScreen from '../../../screens/SafetySupportScreen';
 import DriverItineraryScreen from '../../../screens/DriverItineraryScreen';
 import DriverTourPackScreen from '../../../screens/DriverTourPackScreen';
+import MarketingNotificationDetailScreen from '../../../screens/MarketingNotificationDetailScreen';
+import SafetyAlertDetailScreen from '../../../screens/SafetyAlertDetailScreen';
 import { resolveAuthScopedUserId, toRealtimeKeySegment } from '../../../services/identityService';
 import { resolveTourId } from '../../../services/tourIdentityService';
 import { SESSION_KEYS, SessionStorage } from '../session/sessionStorage';
@@ -25,6 +27,10 @@ const renderLogin = (context) => (
     {...commonScreenProps(context)}
     onLoginSuccess={context.handleLoginSuccess}
     resolveOfflineLogin={context.resolveOfflineLogin}
+    onManageFutureTourAlerts={() => context.navigateTo('NotificationPreferences', {
+      audience: 'marketing',
+      returnTo: 'Login',
+    })}
   />
 );
 
@@ -186,7 +192,7 @@ const renderMap = (context) => {
 
 const renderNotificationPreferences = (context) => {
   const returnTarget = context.screenParams?.returnTo
-    || (context.isDriverSession ? 'DriverHome' : 'TourHome');
+    || (context.isDriverSession ? 'DriverHome' : (context.bookingData ? 'TourHome' : 'Login'));
   const userId = resolveAuthScopedUserId({ canonicalIdentity: context.canonicalIdentity, authUser: context.user });
   return (
     <NotificationPreferencesScreen
@@ -203,6 +209,24 @@ const renderNotificationPreferences = (context) => {
     />
   );
 };
+
+const renderMarketingNotificationDetail = (context) => (
+  <MarketingNotificationDetailScreen
+    broadcastId={context.screenParams?.broadcastId}
+    categoryKey={context.screenParams?.categoryKey}
+    onBack={() => context.navigateBack('Login')}
+  />
+);
+
+const renderSafetyAlertDetail = (context) => (
+  <SafetyAlertDetailScreen
+    tourId={context.screenParams?.tourId || context.tourData?.id}
+    eventId={context.screenParams?.eventId}
+    onBack={() => context.navigateBack(
+      context.screenParams?.from || (context.isDriverSession ? 'DriverHome' : 'Login'),
+    )}
+  />
+);
 
 const renderAccountPrivacy = (context) => (
   <AccountPrivacyScreen
@@ -229,10 +253,12 @@ export const APP_ROUTE_RENDERERS = Object.freeze({
   Itinerary: renderItinerary,
   Login: renderLogin,
   Map: renderMap,
+  MarketingNotificationDetail: renderMarketingNotificationDetail,
   NotificationPreferences: renderNotificationPreferences,
   PassengerManifest: renderPassengerManifest,
   Photobook: renderPhotobook,
   SafetySupport: renderSafetySupport,
+  SafetyAlertDetail: renderSafetyAlertDetail,
   TourHome: renderTourHome,
 });
 

@@ -1,5 +1,10 @@
 # Web administration architecture
 
+Broadcast creation uses a server-authoritative audience preview and retains deliberate confirmation.
+Delivery reporting distinguishes fan-out, Expo ticket and Expo receipt state; it never exposes raw
+push tokens or describes ticket acceptance as delivery. Requeue and full-pipeline test actions use
+authenticated operations-admin Functions endpoints.
+
 The admin shell authenticates and authorizes operations users, then lazy-loads Dashboard, Drivers, Tours, Broadcast, Moderation, and Settings routes. The loading state is accessible and feature chunks do not enter the initial route bundle.
 
 Large sections are split into feature presentation and data modules while their historic `src/components/*` entrypoints remain compatible. Dashboard and Tours use bounded views/components; tour CRUD, content mutation, CSV import, assignment, and context are separate data responsibilities. Drivers and broadcasts expose focused feature components/domain helpers.

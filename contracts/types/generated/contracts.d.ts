@@ -158,7 +158,7 @@ export interface ResolvedMediaResponse {
 }
 
 export interface NotificationPayload {
-  screen: "Chat" | "Itinerary" | "GroupPhotobook" | "NotificationPreferences" | "SafetySupport" | "DriverTourPack";
+  screen: "Chat" | "Itinerary" | "GroupPhotobook" | "NotificationPreferences" | "SafetySupport" | "DriverTourPack" | "MarketingNotificationDetail" | "SafetyAlertDetail";
   tourId?: string;
   noticeId?: string;
   messageId?: string;
@@ -168,11 +168,112 @@ export interface NotificationPayload {
   categoryKey?: string;
   notificationType?: string;
   broadcastId?: string;
+  eventId?: string;
+  photoId?: string;
   revision?: number;
   changedSections?: string | unknown[];
   critical?: boolean;
   requiresAcknowledgement?: boolean;
   timestamp?: number;
+  expiresAtMs?: number;
+}
+
+export interface NotificationJob {
+  schemaVersion: number;
+  jobId: string;
+  notificationType: string;
+  sourceType: string;
+  sourceId: string;
+  audienceType: "tour" | "assigned_drivers" | "safety" | "marketing" | "single_installation";
+  status: "queued" | "fanout_in_progress" | "ticket_accepted" | "ticket_rejected" | "receipt_pending" | "provider_accepted" | "provider_rejected" | "retrying" | "submission_unknown" | "expired" | "partial" | "no_recipients";
+  createdAtMs: number;
+  availableAtMs: number;
+  expiresAtMs: number;
+  attemptCount: number;
+  maxAttempts: number;
+  presentation: Record<string, unknown>;
+  navigation: Record<string, unknown>;
+  counts: Record<string, unknown>;
+  skipReasons: Record<string, unknown>;
+  tourId?: string;
+  categoryKey?: string;
+  departureKey?: string;
+  eventId?: string;
+  targetInstallationUid?: string;
+  senderAuthUid?: string;
+  senderPrincipalId?: string;
+  updatedAtMs?: string;
+  afterRecipientId?: string;
+  supersededByJobId?: string;
+  coalescingKey?: string;
+  priorityClass?: string;
+  deliveryPolicy?: string;
+  lease?: string;
+  fanoutCompletedAtMs?: string;
+  completedAtMs?: string;
+  lastErrorCode?: string;
+  lastCommittedPageId?: string;
+  pageSequence?: string;
+}
+
+export interface NotificationDeliveryAttempt {
+  schemaVersion: number;
+  attemptId: string;
+  jobId: string;
+  recipientUid: string;
+  installationUid: string;
+  tokenHash: string;
+  status: string;
+  ticketStatus: string;
+  receiptStatus: string;
+  retryable: boolean;
+  attemptNumber: number;
+  createdAtMs: number;
+  updatedAtMs: number;
+  expiresAtMs: number;
+  ticketId?: string;
+  receiptDueAtMs?: string;
+  receiptWindowExpiresAtMs?: string;
+  availableAtMs?: string;
+  safeErrorCode?: string;
+  providerAcceptedAtMs?: string;
+  receiptCheckCount?: string;
+}
+
+export interface NotificationDevice {
+  schemaVersion: number;
+  authUid: string;
+  provider: string;
+  status: "active" | "inactive" | "denied" | "blocked" | "unavailable" | "invalid";
+  permissionState: "granted" | "provisional" | "ephemeral" | "denied" | "blocked" | "unavailable";
+  operationalEligible: boolean;
+  marketingEligible: boolean;
+  marketingPreferences: Record<string, unknown>;
+  marketingConsentVersion: number;
+  marketingConsentUpdatedAtMs: number;
+  updatedAtMs: number;
+  createdAtMs: number;
+  pushToken?: string;
+  tokenHash?: string;
+  permissionCanAskAgain?: string;
+  operationalTourId?: string;
+  appVersion?: string;
+  appBuild?: string;
+  platform?: string;
+  invalidReason?: string;
+}
+
+export interface MarketingNotificationRecord {
+  schemaVersion: number;
+  broadcastId: string;
+  categoryKey: string;
+  title: string;
+  body: string;
+  createdAtMs: number;
+  expiresAtMs: number;
+  status: "active" | "expired" | "withdrawn";
+  updatedAtMs: number;
+  cta?: Record<string, unknown>;
 }
 
 export interface SafetySubmission {

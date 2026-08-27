@@ -513,11 +513,11 @@ export default function AppShell() {
   const handleNotificationOnboardingComplete = (...args) => runHandleNotificationOnboardingComplete({ homeScreen, navigateTo, saveNotificationOnboardingState, user }, ...args);
 
   useNotificationSessionNavigation({
-    authUid: user?.uid,
-    bookingId: bookingData?.id,
-    isDriver: isDriverSession,
-    navigateTo,
-    tourId: tourData?.id,
+    authUid: user?.uid, authContextSettled: !initializing,
+    appSession, bookingId: bookingData?.id,
+    isConnected, isDriver: isDriverSession,
+    navigateTo, roleContextSettled: !initializing,
+    sessionContextSettled: !initializing, tourId: tourData?.id,
   });
 
   const clearSessionState = (...args) => runClearSessionState({ SESSION_KEYS, SessionStorage, logger, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setScreenParams, setTourCode, setTourData }, ...args);

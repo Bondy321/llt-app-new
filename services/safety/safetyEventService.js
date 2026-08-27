@@ -20,6 +20,7 @@ import {
   writeOfflineSafetyQueue,
   writeSafetyEventAtomically,
 } from './safetyContext';
+import { getSafetyAlertDetail } from '../notifications/notificationDeviceApiService';
 
 export async function logSafetyEvent(params) {
   const {
@@ -324,13 +325,14 @@ export async function updateEventStatus(tourId, eventId, newStatus, notes = '') 
   if (!tourId || !eventId) return false;
 
   try {
-    const updates = {
-      status: newStatus,
-      statusUpdatedAt: new Date().toISOString(),
-      statusNotes: notes,
-    };
-
-    await realtimeDb.ref(`tours/${tourId}/safetyAlerts/${eventId}`).update(updates);
+    const action = {
+      acknowledged: 'acknowledge',
+      in_progress: 'start_response',
+      escalated: 'escalate',
+      resolved: 'resolve',
+    }[String(newStatus || '').trim().toLowerCase()];
+    if (!action) return false;
+    await getSafetyAlertDetail({ tourId, eventId, action, notes: String(notes || '').slice(0, 500) });
 
     await logger.info('Safety', 'Event status updated', { eventId, newStatus });
     return true;

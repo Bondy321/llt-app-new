@@ -19,11 +19,14 @@ const CONTRACTS = Object.freeze({
       "categoryKey",
       "notificationType",
       "broadcastId",
+      "eventId",
+      "photoId",
       "revision",
       "changedSections",
       "critical",
       "requiresAcknowledgement",
-      "timestamp"
+      "timestamp",
+      "expiresAtMs"
     ],
     "properties": {
       "screen": {
@@ -34,7 +37,9 @@ const CONTRACTS = Object.freeze({
           "GroupPhotobook",
           "NotificationPreferences",
           "SafetySupport",
-          "DriverTourPack"
+          "DriverTourPack",
+          "MarketingNotificationDetail",
+          "SafetyAlertDetail"
         ]
       },
       "tourId": {
@@ -72,6 +77,14 @@ const CONTRACTS = Object.freeze({
         "type": "string",
         "maxLength": 160
       },
+      "eventId": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "photoId": {
+        "type": "string",
+        "maxLength": 160
+      },
       "revision": {
         "type": "integer",
         "minimum": 1
@@ -92,6 +105,10 @@ const CONTRACTS = Object.freeze({
       "timestamp": {
         "type": "integer",
         "minimum": 1
+      },
+      "expiresAtMs": {
+        "type": "integer",
+        "minimum": 1
       }
     },
     "enumValues": {
@@ -101,7 +118,9 @@ const CONTRACTS = Object.freeze({
         "GroupPhotobook",
         "NotificationPreferences",
         "SafetySupport",
-        "DriverTourPack"
+        "DriverTourPack",
+        "MarketingNotificationDetail",
+        "SafetyAlertDetail"
       ]
     },
     "idPatterns": {
@@ -115,13 +134,18 @@ const CONTRACTS = Object.freeze({
       "departureKey": 160,
       "categoryKey": 80,
       "notificationType": 80,
-      "broadcastId": 160
+      "broadcastId": 160,
+      "eventId": 160,
+      "photoId": 160
     },
     "numericBounds": {
       "revision": {
         "minimum": 1
       },
       "timestamp": {
+        "minimum": 1
+      },
+      "expiresAtMs": {
         "minimum": 1
       }
     },
@@ -138,11 +162,14 @@ const CONTRACTS = Object.freeze({
       "categoryKey",
       "notificationType",
       "broadcastId",
+      "eventId",
+      "photoId",
       "revision",
       "changedSections",
       "critical",
       "requiresAcknowledgement",
-      "timestamp"
+      "timestamp",
+      "expiresAtMs"
     ],
     "forbiddenClientProjection": [
       "bookingRef",
@@ -150,6 +177,9 @@ const CONTRACTS = Object.freeze({
       "phone",
       "signedUrl",
       "token"
+    ],
+    "constraints": [
+      "notificationRouteSemantics"
     ]
   }
 });
@@ -207,6 +237,14 @@ const validateContract = (name, value, options = {}) => {
     if (constraint === 'passengerPrincipalIsOpaque' && value.principalType === 'passenger' && !/^pax_v2_[a-f0-9]{32}$/u.test(value.principalId || '')) errors.push('passenger principal is not opaque');
     if (constraint === 'expiryAfterIssue' && Number(value.expiresAtMs) <= Number(value.lastAuthenticatedAtMs ?? value.issuedAtMs)) errors.push('session expiry must follow authentication');
     if (constraint === 'idempotencyEqualsId' && value.id && value.idempotencyKey !== value.id) errors.push('idempotency key must equal the record id');
+    if (constraint === 'notificationRouteSemantics') {
+      if (value.timestamp && value.expiresAtMs && Number(value.expiresAtMs) <= Number(value.timestamp)) errors.push('notification expiry must follow timestamp');
+      if (value.screen === 'Chat' && (!value.tourId || !value.messageId)) errors.push('chat notification requires tourId and messageId');
+      if (value.screen === 'Itinerary' && !value.tourId) errors.push('itinerary notification requires tourId');
+      if (value.screen === 'DriverTourPack' && (!value.tourId || !value.departureKey || !value.revision)) errors.push('driver pack notification requires tourId, departureKey and revision');
+      if (value.screen === 'SafetyAlertDetail' && (!value.tourId || !value.eventId)) errors.push('safety detail notification requires tourId and eventId');
+      if (value.screen === 'MarketingNotificationDetail' && (!value.categoryKey || !value.broadcastId || value.tourId)) errors.push('marketing detail notification requires categoryKey and broadcastId without tourId');
+    }
     if (constraint === 'noDurableMediaUrls') visitKeys(value, (key) => {
       if (/^(?:sourceUrl|thumbnailUrl|viewerUrl|downloadUrl|downloadToken)$/u.test(key)) errors.push(`${key} is a forbidden durable media field`);
     });

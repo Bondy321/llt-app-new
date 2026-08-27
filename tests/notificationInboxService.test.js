@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const {
   buildNotificationFeed,
@@ -14,6 +16,7 @@ const {
   subscribeToNotificationFeed,
 } = require('../services/notificationInboxService');
 const {
+  NOTIFICATION_RESPONSE_DISPOSITIONS,
   getNotificationResponseKey,
   resolveNotificationRoute,
 } = require('../utils/notificationRouting');
@@ -204,6 +207,65 @@ test('notification feed subscription combines bounded notices and read state the
 
   unsubscribe();
   assert.equal(detached.length, 2);
+});
+
+test('notification response disposition distinguishes hydration from established rejection', () => {
+  const chat = { data: { screen: 'Chat', tourId: 'TOUR_1', messageId: 'message-1' } };
+  const transientTour = resolveNotificationRoute(chat, {
+    activeTourId: null,
+    sessionContextSettled: false,
+  });
+  assert.equal(transientTour.reason, 'NO_ACTIVE_TOUR');
+  assert.equal(transientTour.disposition, NOTIFICATION_RESPONSE_DISPOSITIONS.TRANSIENTLY_DEFERRED);
+
+  const settledTour = resolveNotificationRoute(chat, {
+    activeTourId: null,
+    sessionContextSettled: true,
+  });
+  assert.equal(settledTour.reason, 'NO_ACTIVE_TOUR');
+  assert.equal(settledTour.disposition, NOTIFICATION_RESPONSE_DISPOSITIONS.DEFINITIVELY_REJECTED);
+
+  const driverPack = { data: {
+    screen: 'DriverTourPack', tourId: 'TOUR_1', departureKey: '2026-09-10::TOUR_1', revision: 1,
+  } };
+  assert.equal(resolveNotificationRoute(driverPack, {
+    activeTourId: 'TOUR_1', isDriver: false, roleContextSettled: false,
+  }).disposition, NOTIFICATION_RESPONSE_DISPOSITIONS.TRANSIENTLY_DEFERRED);
+  assert.equal(resolveNotificationRoute(driverPack, {
+    activeTourId: 'TOUR_1', isDriver: false, roleContextSettled: true,
+  }).disposition, NOTIFICATION_RESPONSE_DISPOSITIONS.DEFINITIVELY_REJECTED);
+});
+
+test('notification detail routes require bounded identifiers, authority and a live expiry', () => {
+  const marketing = resolveNotificationRoute({ data: {
+    screen: 'MarketingNotificationDetail', notificationType: 'category_broadcast',
+    categoryKey: 'day_trips', broadcastId: 'broadcast-1', expiresAtMs: Date.now() + 60_000,
+  } }, { hasAuth: true });
+  assert.equal(marketing.accepted, true);
+  assert.equal(marketing.params.broadcastId, 'broadcast-1');
+  assert.equal(resolveNotificationRoute({ data: {
+    screen: 'MarketingNotificationDetail', notificationType: 'category_broadcast',
+    categoryKey: 'day_trips', broadcastId: 'broadcast-1', expiresAtMs: Date.now() + 60_000,
+  } }, { hasAuth: false }).reason, 'NO_AUTH');
+  const operationsSafety = resolveNotificationRoute({ data: {
+    screen: 'SafetyAlertDetail', tourId: 'TOUR_1', eventId: 'alert-1', expiresAtMs: Date.now() + 60_000,
+  } }, { activeTourId: null, hasAuth: true, isDriver: false, sessionContextSettled: true });
+  assert.equal(operationsSafety.accepted, true);
+  assert.equal(operationsSafety.params.from, 'Login');
+  assert.equal(resolveNotificationRoute({ data: {
+    screen: 'SafetyAlertDetail', tourId: 'TOUR_1', eventId: 'alert-1', expiresAtMs: Date.now() + 60_000,
+  } }, { hasAuth: false, authContextSettled: true }).reason, 'NO_AUTH');
+  assert.equal(resolveNotificationRoute({ data: {
+    screen: 'SafetyAlertDetail', tourId: 'TOUR_1', eventId: 'alert-1', expiresAtMs: Date.now() - 1,
+  } }, { activeTourId: 'TOUR_1', isDriver: true }).reason, 'EXPIRED');
+});
+
+test('mobile safety detail exposes escalation and confirms the irreversible resolve action', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'screens', 'SafetyAlertDetailScreen.js'), 'utf8');
+  assert.match(source, /updateStatus\('escalate'\)/u);
+  assert.match(source, /Alert\.alert\(/u);
+  assert.match(source, /Only mark this resolved when the response is complete/u);
+  assert.match(source, /onPress: \(\) => updateStatus\('resolve'\)/u);
 });
 
 test('notification feed cache is versioned, identity scoped, bounded, and clearable', async () => {

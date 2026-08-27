@@ -6,8 +6,12 @@ const firebaseMocks = vi.hoisted(() => ({
   ref: vi.fn((_database, path) => ({ path })),
   update: vi.fn(),
 }));
+const adminActionMocks = vi.hoisted(() => ({
+  postAdminAction: vi.fn(),
+}));
 
 vi.mock('firebase/database', () => firebaseMocks);
+vi.mock('./adminActionService', () => adminActionMocks);
 
 import {
   buildBroadcastActivity,
@@ -148,26 +152,26 @@ describe('dashboardService operations model', () => {
     expect(filterSafetyAlerts(alerts, 'attention')).toHaveLength(1);
   });
 
-  it('updates every mirrored safety alert path in one atomic root write', async () => {
-    firebaseMocks.update.mockResolvedValue();
+  it('sends safety transitions through the authenticated server owner', async () => {
+    adminActionMocks.postAdminAction.mockResolvedValue({ success: true });
     await updateSafetyAlertStatus({}, {
       id: 'event-1',
+      eventId: 'event-1',
+      tourId: 'TOUR_1',
       paths: ['globalSafetyAlerts/global1', 'tours/TOUR_1/safetyAlerts/tour1'],
     }, 'resolved');
 
-    expect(firebaseMocks.update).toHaveBeenCalledTimes(1);
-    expect(firebaseMocks.update).toHaveBeenCalledWith({ path: undefined }, expect.objectContaining({
-      'globalSafetyAlerts/global1/status': 'resolved',
-      'globalSafetyAlerts/global1/statusUpdatedAt': expect.any(String),
-      'globalSafetyAlerts/global1/statusUpdatedBy': 'web-admin',
-      'tours/TOUR_1/safetyAlerts/tour1/status': 'resolved',
-      'tours/TOUR_1/safetyAlerts/tour1/statusUpdatedAt': expect.any(String),
-      'tours/TOUR_1/safetyAlerts/tour1/statusUpdatedBy': 'web-admin',
-    }));
+    expect(adminActionMocks.postAdminAction).toHaveBeenCalledTimes(1);
+    expect(adminActionMocks.postAdminAction).toHaveBeenCalledWith(
+      'getSafetyAlertDetail',
+      { tourId: 'TOUR_1', eventId: 'event-1', action: 'resolve' },
+      expect.any(Object),
+    );
+    expect(firebaseMocks.update).not.toHaveBeenCalled();
   });
 
-  it('updates the reporter private safety history together with operations mirrors', async () => {
-    firebaseMocks.update.mockResolvedValue();
+  it('derives canonical safety identity and lets the server update private and operations mirrors', async () => {
+    adminActionMocks.postAdminAction.mockResolvedValue({ success: true });
     const [alert] = buildSafetyAlerts({
       globalSafetyAlerts: {
         event1: {
@@ -195,11 +199,12 @@ describe('dashboardService operations model', () => {
     });
 
     await updateSafetyAlertStatus({}, alert, 'acknowledged');
-    expect(firebaseMocks.update.mock.calls[0][1]).toEqual(expect.objectContaining({
-      'logs/auth-user-1/safety/event1/status': 'acknowledged',
-      'logs/auth-user-1/safety/event1/statusUpdatedAt': expect.any(String),
-      'logs/auth-user-1/safety/event1/statusUpdatedBy': 'web-admin',
-    }));
+    expect(adminActionMocks.postAdminAction).toHaveBeenCalledWith(
+      'getSafetyAlertDetail',
+      { tourId: 'TOUR_1', eventId: 'event1', action: 'acknowledge' },
+      expect.any(Object),
+    );
+    expect(firebaseMocks.update).not.toHaveBeenCalled();
   });
 
   it('summarizes broadcast activity without exposing author UIDs or raw tokens', () => {
