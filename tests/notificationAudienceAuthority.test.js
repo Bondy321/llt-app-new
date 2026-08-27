@@ -8,7 +8,9 @@ const {
   normalizeNotificationDevice,
 } = require('../functions/src/domains/notifications/notificationAudiencePage');
 const {
+  buildMigrationState,
   buildNotificationDeviceProjection,
+  closeAdminApps,
   parseArgs,
 } = require('../functions/scripts/migrateNotificationDevices');
 
@@ -101,4 +103,32 @@ test('migration cutoff is explicit and projections preserve normal logout market
   });
   assert.equal(projection.device.operationalEligible, false);
   assert.equal(projection.device.marketingEligible, true);
+});
+
+test('migration CLI closes every Firebase Admin app so the process can terminate', async () => {
+  const deleted = [];
+  await closeAdminApps({
+    apps: [
+      { delete: async () => deleted.push('primary') },
+      { delete: async () => deleted.push('secondary') },
+    ],
+  });
+  assert.deepEqual(deleted.sort(), ['primary', 'secondary']);
+});
+
+test('migration state initializes safely when the RTDB transaction starts from null', () => {
+  assert.deepEqual(buildMigrationState({
+    current: null,
+    disableLegacyFallback: false,
+    migrationComplete: true,
+    nextCursor: null,
+    nowMs: 1_800_000_000_000,
+  }), {
+    schemaVersion: 1,
+    completed: true,
+    legacyFallbackEnabled: true,
+    lastCursor: null,
+    updatedAtMs: 1_800_000_000_000,
+    completedAtMs: 1_800_000_000_000,
+  });
 });

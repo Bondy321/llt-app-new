@@ -121,6 +121,28 @@ const migratePage = async ({ db, entries, apply, nowMs }) => {
   return summary;
 };
 
+const buildMigrationState = ({
+  current,
+  disableLegacyFallback,
+  migrationComplete,
+  nextCursor,
+  nowMs,
+}) => {
+  const existing = current || {};
+  const completed = existing.completed === true || migrationComplete;
+  return {
+    ...existing,
+    schemaVersion: 1,
+    completed,
+    legacyFallbackEnabled: existing.legacyFallbackEnabled === false || disableLegacyFallback
+      ? false
+      : true,
+    lastCursor: nextCursor || null,
+    updatedAtMs: nowMs,
+    ...(completed ? { completedAtMs: Number(existing.completedAtMs || nowMs) } : {}),
+  };
+};
+
 const run = async ({ admin, options, nowMs = Date.now() }) => {
   const projectId = admin.app().options.projectId || process.env.GCLOUD_PROJECT || '';
   if (options.apply && (!projectId || options.confirmProject !== projectId)) {
@@ -135,20 +157,15 @@ const run = async ({ admin, options, nowMs = Date.now() }) => {
     throw new Error('Legacy fallback can be disabled only after applying the final migration page');
   }
   if (options.apply) {
-    const stateResult = await db.ref('notification_migrations/device_registry_v1').transaction((current = {}) => {
-      const completed = current.completed === true || migrationComplete;
-      return {
-        ...current,
-        schemaVersion: 1,
-        completed,
-        legacyFallbackEnabled: current.legacyFallbackEnabled === false || options.disableLegacyFallback
-          ? false
-          : true,
-        lastCursor: page.nextCursor || null,
-        updatedAtMs: nowMs,
-        ...(completed ? { completedAtMs: Number(current.completedAtMs || nowMs) } : {}),
-      };
-    });
+    const stateResult = await db.ref('notification_migrations/device_registry_v1').transaction((current) => (
+      buildMigrationState({
+        current,
+        disableLegacyFallback: options.disableLegacyFallback,
+        migrationComplete,
+        nextCursor: page.nextCursor,
+        nowMs,
+      })
+    ));
     legacyFallbackEnabled = stateResult.snapshot.val()?.legacyFallbackEnabled !== false;
   }
   return {
@@ -162,11 +179,19 @@ const run = async ({ admin, options, nowMs = Date.now() }) => {
   };
 };
 
+const closeAdminApps = async (admin) => {
+  await Promise.all((admin?.apps || []).map((app) => app.delete()));
+};
+
 async function main() {
   const admin = require('firebase-admin');
-  if (!admin.apps.length) admin.initializeApp();
-  const result = await run({ admin, options: parseArgs(process.argv.slice(2)) });
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  try {
+    if (!admin.apps.length) admin.initializeApp();
+    const result = await run({ admin, options: parseArgs(process.argv.slice(2)) });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  } finally {
+    await closeAdminApps(admin);
+  }
 }
 
 if (require.main === module) {
@@ -177,7 +202,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildMigrationState,
   buildNotificationDeviceProjection,
+  closeAdminApps,
   migratePage,
   normalizeMarketingPreferences,
   normalizePermissionState,
