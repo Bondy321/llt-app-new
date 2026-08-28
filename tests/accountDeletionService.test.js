@@ -31,19 +31,43 @@ const getPathValue = (data, path = '') => {
   ), data);
 };
 
-const buildDb = (data) => {
+const setPathValue = (data, path, value) => {
+  const segments = path.split('/').filter(Boolean);
+  const leaf = segments.pop();
+  let cursor = data;
+  segments.forEach((segment) => {
+    if (!cursor[segment] || typeof cursor[segment] !== 'object') cursor[segment] = {};
+    cursor = cursor[segment];
+  });
+  if (value === null) delete cursor[leaf];
+  else cursor[leaf] = value;
+};
+
+const buildDb = (data, { rootUpdate } = {}) => {
   const updates = [];
   const refs = [];
+  const transactions = [];
 
   return {
+    data,
     updates,
     refs,
+    transactions,
     ref(path = '') {
       refs.push(path);
       return {
         once: async () => makeSnapshot(getPathValue(data, path)),
         update: async (payload) => {
+          if (path === '' && rootUpdate) await rootUpdate(payload);
           updates.push({ path, payload });
+        },
+        transaction: async (updater) => {
+          const current = getPathValue(data, path);
+          const next = updater(current);
+          transactions.push({ path, current, next });
+          if (next === undefined) return { committed: false, snapshot: makeSnapshot(current) };
+          setPathValue(data, path, next);
+          return { committed: true, snapshot: makeSnapshot(next) };
         },
       };
     },
@@ -90,11 +114,13 @@ const loadService = () => {
   return require('../services/accountDeletionService');
 };
 
-const createAppSessionApi = () => ({
+const createAppSessionApi = (session = {}) => ({
   readSession: async () => ({
     sessionId: 'sess_v1_0123456789abcdef0123456789abcdef',
     principalType: 'passenger',
     tourId: 'TOUR_1',
+    driverId: null,
+    ...session,
   }),
   endSession: async () => ({ success: true }),
   completeEnd: async () => {},
@@ -222,9 +248,10 @@ test('deleteCurrentAccount clears app account records, active-tour content, loca
   assert.ok(providerDeletes.some((entry) => entry.namespace === 'LLT_OFFLINE'));
 });
 
-test('deleteCurrentAccount removes driver-owned chat without client-writing the server location projection', async () => {
+test('driver account deletion releases only its own scalar and preserves shared driver content and projections', async () => {
   const { deleteCurrentAccount } = loadService();
   const db = buildDb({
+    drivers: { 'D-7': { authUid: 'driver-auth-1', currentTourId: 'TOUR_1' } },
     internal_chats: {
       TOUR_1: {
         messages: {
@@ -264,7 +291,9 @@ test('deleteCurrentAccount removes driver-owned chat without client-writing the 
       ensureAuthenticated: async () => ({ uid: 'fresh-driver-auth' }),
     },
     deleteUserFn: async () => {},
-    appSessionApi: createAppSessionApi(),
+    appSessionApi: createAppSessionApi({
+      principalType: 'driver', principalId: 'driver:D-7', driverId: 'D-7',
+    }),
     notificationDeviceDelete: async () => ({ success: true }),
   });
 
@@ -272,10 +301,151 @@ test('deleteCurrentAccount removes driver-owned chat without client-writing the 
 
   const updatePayload = db.updates[0].payload;
   assert.equal(updatePayload['users/driver-auth-1'], null);
-  assert.equal(updatePayload['drivers/D-7/authUid'], null);
+  assert.equal(updatePayload['drivers/D-7/authUid'], undefined);
+  assert.deepEqual(db.transactions, [{
+    path: 'drivers/D-7/authUid', current: 'driver-auth-1', next: null,
+  }]);
+  assert.equal(getPathValue(db.data, 'drivers/D-7/authUid'), null);
   assert.equal(updatePayload['tours/TOUR_1/driverLocation'], undefined);
-  assert.equal(updatePayload['internal_chats/TOUR_1/messages/mine'], null);
+  assert.equal(updatePayload['internal_chats/TOUR_1/messages/mine'], undefined);
   assert.equal(updatePayload['internal_chats/TOUR_1/messages/other'], undefined);
+});
+
+test('policy-off secondary handset deletes only its uid while preserving another uid scalar and shared driver content', async () => {
+  const { deleteCurrentAccount } = loadService();
+  const db = buildDb({
+    drivers: { 'D-7': { authUid: 'driver-auth-owner', currentTourId: 'TOUR_1' } },
+    group_tour_photos: {
+      TOUR_1: { sharedDriverPhoto: { userId: 'driver:D-7' } },
+    },
+    internal_chats: {
+      TOUR_1: { messages: { shared: { senderId: 'driver:D-7', senderStableId: 'driver:D-7', text: 'keep' } } },
+    },
+  });
+  const result = await deleteCurrentAccount({
+    currentUser: { uid: 'driver-auth-secondary' },
+    db,
+    tourData: { id: 'TOUR_1' },
+    bookingData: { id: 'D-7' },
+    canonicalIdentity: {
+      principalId: 'driver:D-7', principalType: 'driver', authUid: 'driver-auth-secondary', driverId: 'D-7',
+    },
+    isDriverSession: true,
+    sessionStorage: { multiRemove: async () => {} },
+    localStorage: { multiRemove: async () => {} },
+    providerFactory: () => ({ multiDeleteAsync: async () => true }),
+    photoApi: {
+      deleteGroupPhoto: async () => assert.fail('shared driver photo must be retained'),
+    },
+    authHelpersOverride: { clearAuthData: async () => {}, ensureAuthenticated: async () => ({ uid: 'fresh' }) },
+    deleteUserFn: async () => {},
+    appSessionApi: createAppSessionApi({
+      principalType: 'driver', principalId: 'driver:D-7', driverId: 'D-7',
+    }),
+    notificationDeviceDelete: async () => ({ success: true }),
+  });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(db.transactions, []);
+  assert.ok(db.refs.includes('drivers/D-7/authUid'));
+  assert.equal(getPathValue(db.data, 'drivers/D-7/authUid'), 'driver-auth-owner');
+  const updatePayload = db.updates[0].payload;
+  assert.equal(updatePayload['users/driver-auth-secondary'], null);
+  assert.equal(updatePayload['users/driver-auth-owner'], undefined);
+  assert.equal(updatePayload['drivers/D-7/authUid'], undefined);
+  assert.equal(updatePayload['internal_chats/TOUR_1/messages/shared'], undefined);
+});
+
+test('driver scalar release is idempotent when the first root cleanup attempt fails', async () => {
+  const { deleteCurrentAccount } = loadService();
+  let rootAttempts = 0;
+  const db = buildDb({ drivers: { 'D-7': { authUid: 'driver-auth-1' } } }, {
+    rootUpdate: async () => {
+      rootAttempts += 1;
+      if (rootAttempts === 1) throw new Error('temporary root update failure');
+    },
+  });
+  const input = {
+    currentUser: { uid: 'driver-auth-1' }, db, tourData: { id: 'TOUR_1' }, bookingData: { id: 'D-7' },
+    canonicalIdentity: { principalId: 'driver:D-7', principalType: 'driver', driverId: 'D-7' },
+    isDriverSession: true,
+    sessionStorage: { multiRemove: async () => {} }, localStorage: { multiRemove: async () => {} },
+    providerFactory: () => ({ multiDeleteAsync: async () => true }), photoApi: {},
+    authHelpersOverride: { clearAuthData: async () => {}, ensureAuthenticated: async () => ({ uid: 'fresh' }) },
+    deleteUserFn: async () => {},
+    appSessionApi: createAppSessionApi({ principalType: 'driver', principalId: 'driver:D-7', driverId: 'D-7' }),
+    notificationDeviceDelete: async () => ({ success: true }),
+  };
+
+  assert.equal((await deleteCurrentAccount(input)).success, false);
+  assert.equal(getPathValue(db.data, 'drivers/D-7/authUid'), null);
+  assert.equal((await deleteCurrentAccount(input)).success, true);
+  assert.equal(rootAttempts, 2);
+  assert.deepEqual(db.transactions.map(({ current, next }) => ({ current, next })), [
+    { current: 'driver-auth-1', next: null },
+  ]);
+});
+
+test('stale booking data cannot redirect scalar cleanup away from the exact active driver session', async () => {
+  const { deleteCurrentAccount } = loadService();
+  const db = buildDb({
+    drivers: {
+      'D-7': { authUid: 'driver-auth-1' },
+      'D-STALE': { authUid: 'driver-auth-1' },
+    },
+  });
+  const result = await deleteCurrentAccount({
+    currentUser: { uid: 'driver-auth-1' },
+    db,
+    tourData: { id: 'STALE_TOUR' },
+    bookingData: { id: 'D-STALE' },
+    canonicalIdentity: { principalId: 'driver:D-STALE', principalType: 'driver', driverId: 'D-STALE' },
+    isDriverSession: true,
+    sessionStorage: { multiRemove: async () => {} }, localStorage: { multiRemove: async () => {} },
+    providerFactory: () => ({ multiDeleteAsync: async () => true }), photoApi: {},
+    authHelpersOverride: { clearAuthData: async () => {}, ensureAuthenticated: async () => ({ uid: 'fresh' }) },
+    deleteUserFn: async () => {},
+    appSessionApi: createAppSessionApi({
+      principalType: 'driver', principalId: 'driver:D-7', driverId: 'D-7', tourId: 'TOUR_1',
+    }),
+    notificationDeviceDelete: async () => ({ success: true }),
+  });
+  assert.equal(result.success, true);
+  assert.equal(getPathValue(db.data, 'drivers/D-7/authUid'), null);
+  assert.equal(getPathValue(db.data, 'drivers/D-STALE/authUid'), 'driver-auth-1');
+  assert.deepEqual(db.transactions.map(({ path }) => path), ['drivers/D-7/authUid']);
+  assert.equal(db.updates[0].payload['tours/STALE_TOUR/liveTracking/driver-auth-1'], undefined);
+  assert.equal(db.updates[0].payload['tours/TOUR_1/liveTracking/driver-auth-1'], null);
+});
+
+test('scalar release survives an unprimed transaction cache and aborts if server ownership raced', async () => {
+  const { __accountDeletionTestables } = loadService();
+  const run = async (serverRetryValue) => {
+    const updaterValues = [];
+    const db = {
+      ref(path) {
+        assert.equal(path, 'drivers/D-7/authUid');
+        return {
+          once: async () => ({ val: () => 'driver-auth-1' }),
+          transaction: async (updater) => {
+            updaterValues.push(updater(null));
+            const retry = updater(serverRetryValue);
+            updaterValues.push(retry);
+            return { committed: retry !== undefined };
+          },
+        };
+      },
+    };
+    const released = await __accountDeletionTestables.releaseOwnedDriverClaim({
+      db, driverId: 'D-7', authUid: 'driver-auth-1',
+    });
+    return { released, updaterValues };
+  };
+
+  assert.deepEqual(await run('driver-auth-1'), { released: true, updaterValues: [null, null] });
+  assert.deepEqual(await run('driver-auth-successor'), {
+    released: false, updaterValues: [null, undefined],
+  });
 });
 
 test('deleteCurrentAccount returns a user-facing error when there is no signed-in app account', async () => {

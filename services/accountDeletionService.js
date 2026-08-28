@@ -7,12 +7,10 @@ import * as photoService from './photoService';
 import appSessionService from './appSessionService';
 import { deleteNotificationDevice } from './notifications/notificationDeviceApiService';
 
-const { normalizeTourId } = require('./tourIdentityService');
 const {
   addIdentity,
   collectIdentityValues,
   collectPrivatePhotoOwnerIds,
-  getDriverId,
   getPassengerBookingRef,
   toRealtimeKeySegment,
 } = require('../src/features/account/domain/accountIdentityScope');
@@ -39,12 +37,6 @@ const SAFETY_LOCAL_KEYS = [
 const SAFETY_QUEUE_KEY = '@LLT:safetyOfflineQueue';
 const TRUSTED_CONTACTS_KEY_PREFIX = '@LLT:trustedContacts:v2:';
 
-const getTourId = (tourData, bookingData) => normalizeTourId(
-  tourData?.id,
-  bookingData?.assignedTourId,
-  tourData?.tourCode
-);
-
 const makeSummary = () => ({
   success: false,
   deletedAuthUid: null,
@@ -54,6 +46,7 @@ const makeSummary = () => ({
   privatePhotosDeleted: 0,
   chatMessagesScrubbed: 0,
   reactionsRemoved: 0,
+  driverClaimReleased: false,
   localStoresCleared: 0,
   warnings: [],
 });
@@ -267,7 +260,7 @@ const buildAccountRecordUpdates = ({
   identities,
   identityBinding,
   tourId,
-  driverId,
+  principalType,
   passengerBookingRef,
 }) => {
   const updates = {};
@@ -292,7 +285,7 @@ const buildAccountRecordUpdates = ({
     }
   });
 
-  if (!driverId) {
+  if (principalType !== 'driver') {
     stableKeys.forEach((stableKey) => {
       const key = toRealtimeKeySegment(stableKey);
       if (key) updates[`identity_bindings/${key}/${authUid}`] = null;
@@ -304,12 +297,23 @@ const buildAccountRecordUpdates = ({
     updates[`passenger_identity_security/${passengerBookingRef}/authorizedAuthUid`] = null;
   }
 
-  if (driverId) {
-    const driverKey = toRealtimeKeySegment(driverId);
-    if (driverKey) updates[`drivers/${driverKey}/authUid`] = null;
-  }
-
   return updates;
+};
+
+const releaseOwnedDriverClaim = async ({ db, driverId, authUid }) => {
+  const driverKey = toRealtimeKeySegment(driverId);
+  if (!driverKey || !authUid) return false;
+  const claimRef = db.ref(`drivers/${driverKey}/authUid`);
+  const observed = await claimRef.once('value');
+  if (observed.val() !== authUid) return false;
+  let firstInvocation = true;
+  const result = await claimRef.transaction((current) => {
+    const wasFirstInvocation = firstInvocation;
+    firstInvocation = false;
+    if (wasFirstInvocation && current === null) return null;
+    return current === authUid ? null : undefined;
+  });
+  return result?.committed === true;
 };
 
 const clearLocalStores = async ({
@@ -396,11 +400,9 @@ const getAccountDeletionErrorMessage = (error) => {
 };
 
 export const deleteCurrentAccount = async ({
-  tourData = null,
   bookingData = null,
   canonicalIdentity = null,
   identityBinding = null,
-  isDriverSession = false,
   sessionStorage = null,
   sessionKeys = null,
   db = realtimeDb,
@@ -431,26 +433,33 @@ export const deleteCurrentAccount = async ({
     };
   }
 
-  const tourId = getTourId(tourData, bookingData);
-  const driverId = getDriverId(bookingData);
-  const passengerBookingRef = getPassengerBookingRef(bookingData);
-  const role = isDriverSession || driverId ? 'driver' : 'passenger';
-  const identities = collectIdentityValues({ authUid, canonicalIdentity, bookingData, identityBinding });
-  const privatePhotoOwnerIds = collectPrivatePhotoOwnerIds({ canonicalIdentity, bookingData, identityBinding });
-  const identitySet = new Set(identities);
-  const encodedIdentitySet = new Set(identities.map(toRealtimeKeySegment).filter(Boolean));
-
   try {
     const activeAppSession = await appSessionApi.readSession();
     if (!activeAppSession) {
       throw new Error('A current secure app session is required for account deletion.');
     }
+    const role = activeAppSession.principalType === 'driver' ? 'driver' : 'passenger';
+    const driverId = role === 'driver' ? activeAppSession.driverId : null;
+    const tourId = activeAppSession.tourId || null;
+    const passengerBookingRef = role === 'passenger' ? getPassengerBookingRef(bookingData) : null;
+    const identities = collectIdentityValues({ authUid, canonicalIdentity, bookingData, identityBinding });
+    const privatePhotoOwnerIds = role === 'driver'
+      ? []
+      : collectPrivatePhotoOwnerIds({ canonicalIdentity, bookingData, identityBinding });
+    const contentIdentities = role === 'driver' ? [authUid] : identities;
+    const identitySet = new Set(contentIdentities);
+    const encodedIdentitySet = new Set(contentIdentities.map(toRealtimeKeySegment).filter(Boolean));
+
     logger.info('AccountDeletion', 'Account deletion started', {
       authUid: maskIdentifier(authUid),
       tourId,
       role,
       identityCount: identities.length,
     });
+
+    if (driverId) {
+      summary.driverClaimReleased = await releaseOwnedDriverClaim({ db, driverId, authUid });
+    }
 
     await deleteOwnedGroupPhotos({
       db,
@@ -474,7 +483,7 @@ export const deleteCurrentAccount = async ({
       identities,
       identityBinding,
       tourId,
-      driverId,
+      principalType: role,
       passengerBookingRef,
     });
 
@@ -560,6 +569,7 @@ export const __accountDeletionTestables = {
   clearOwnedOfflineActions,
   clearOwnedSafetyQueue,
   getAccountDeletionErrorMessage,
+  releaseOwnedDriverClaim,
 };
 
 export default {

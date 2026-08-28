@@ -2,9 +2,11 @@
 
 const {
   buildDriverIdentityProfileUpdates,
+  buildCurrentAssignmentProfileProjection,
   buildDriverAssignmentReconciliationUpdates,
   buildCanonicalDriverAssignmentUpdates,
   claimDriverAuthUid,
+  collectDriverAssignmentConflicts,
   createAssignmentRequestHash,
   createAssignmentTransitionId,
   hashAuthorityIdentifier,
@@ -28,6 +30,7 @@ const {
 module.exports = {
   abandonDriverAssignmentReservation,
   buildDriverIdentityProfileUpdates,
+  buildCurrentAssignmentProfileProjection,
   buildDriverAssignmentReconciliationUpdates,
   buildCanonicalDriverAssignmentUpdates,
   advanceDriverAssignmentTransition,
@@ -36,6 +39,7 @@ module.exports = {
   acquireDriverAssignmentLoginAdmission,
   cleanupExpiredDriverAssignmentRecords,
   claimDriverAuthUid,
+  collectDriverAssignmentConflicts,
   createAssignmentRequestHash,
   createAssignmentTransitionId,
   hashAuthorityIdentifier,

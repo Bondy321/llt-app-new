@@ -29,6 +29,10 @@ const {
 const { isValidAppSessionId } = loadLegacyLibrary('appSession');
 const { acquireAppSessionLock, releaseAppSessionLock } = loadLegacyLibrary('appSessionLock');
 const { cleanupAppSession } = loadLegacyLibrary('appSessionCleanup');
+const {
+  boundedWarningCode,
+  terminalizeOperationJob,
+} = loadLegacyLibrary('operationsTerminalWarnings');
 
 const POLICY_CLEANUP_ROOT = 'driver_login_policy_cleanup/v1';
 const POLICY_EVENT_ROOT = 'driver_login_policy_events';
@@ -40,6 +44,46 @@ const onScheduleWithResult = /** @type {any} */ (onSchedule);
 
 /** @param {string} value */
 const hashIdentifier = (value) => createHash('sha256').update(value).digest('hex').slice(0, 24);
+
+const policyCleanupIdentity = (job) => ({
+  sessionId: job?.sessionId,
+  expiresAtMs: job?.expiresAtMs,
+});
+
+/** @type {(...args: any[]) => Promise<boolean>} */
+const recordDriverPolicyCleanupFailure = async ({ db, authUid, job, nowMs, reason }) => {
+  const result = await db.ref(`${POLICY_CLEANUP_ROOT}/${authUid}`).transaction((current) => {
+    if (!current || current.sessionId !== job?.sessionId || current.expiresAtMs !== job?.expiresAtMs
+      || current.terminalWarningId) {
+      return undefined;
+    }
+    const attemptCount = Number.isSafeInteger(current.attemptCount) ? current.attemptCount + 1 : 1;
+    return {
+      ...current,
+      attemptCount,
+      firstAttemptAtMs: Number.isSafeInteger(current.firstAttemptAtMs) ? current.firstAttemptAtMs : nowMs,
+      lastAttemptAtMs: nowMs,
+      lastFailureReason: boundedWarningCode(reason, 'session_cleanup_retry'),
+    };
+  }, undefined, false);
+  return result?.committed === true;
+};
+
+/** @type {(...args: any[]) => Promise<any>} */
+const terminalizeExpiredDriverPolicyCleanup = ({ db, authUid, job, nowMs }) => terminalizeOperationJob({
+  db,
+  sourcePath: `${POLICY_CLEANUP_ROOT}/${authUid}`,
+  observedJob: job,
+  sourceIdentity: policyCleanupIdentity(job),
+  jobType: 'driver_policy_cleanup',
+  reason: 'retention_expired',
+  identifiers: {
+    authUid,
+    appSessionId: job.sessionId,
+    policyGeneration: job.policyGeneration,
+  },
+  nowMs,
+});
 
 /** @type {(...args: any[]) => Promise<any>} */
 const authorizePolicyAdminRequest = async ({ req, res, rateLimitKey }) => {
@@ -104,21 +148,29 @@ const cleanupExpiredDriverPolicyRecords = async ({
   ]);
   const expiredCleanupJobs = cleanupSnapshot.val() || {};
   const expiredEvents = eventSnapshot.val() || {};
-  const cleanupResults = await Promise.all(Object.entries(expiredCleanupJobs).map(
-    ([authUid, observedValue]) => db.ref(`${POLICY_CLEANUP_ROOT}/${authUid}`).transaction((current) => {
-      const observed = /** @type {any} */ (observedValue);
-      if (!current || current.sessionId !== observed?.sessionId
-        || !Number.isSafeInteger(current.expiresAtMs) || current.expiresAtMs > nowMs) return undefined;
-      return null;
-    }, undefined, false),
-  ));
+  const cleanupResults = [];
+  for (const [authUid, observedValue] of Object.entries(expiredCleanupJobs)) {
+    const observed = /** @type {any} */ (observedValue);
+    try {
+      cleanupResults.push(await terminalizeExpiredDriverPolicyCleanup({
+        db, authUid, job: observed, nowMs,
+      }));
+    } catch (error) {
+      cleanupResults.push({ terminalized: false, sourceDeleted: false, failed: true });
+      log.error('Expired driver policy cleanup warning persistence failed', error, {
+        authUidHash: hashIdentifier(authUid),
+      });
+    }
+  }
   const updates = {};
   Object.keys(expiredEvents).forEach((eventId) => {
     updates[`${POLICY_EVENT_ROOT}/${eventId}`] = null;
   });
   if (Object.keys(updates).length) await db.ref().update(updates);
   return {
-    expiredCleanupJobsDeleted: cleanupResults.filter((result) => result.committed).length,
+    expiredCleanupJobsDeleted: cleanupResults.filter((result) => result.sourceDeleted).length,
+    terminalWarnings: cleanupResults.filter((result) => result.terminalized).length,
+    terminalWarningFailures: cleanupResults.filter((result) => result.failed).length,
     expiredAuditEventsDeleted: Object.keys(expiredEvents).length,
   };
 };
@@ -156,6 +208,7 @@ const buildPolicyTransitionUpdates = async ({ db, current, enforceSingleDevice, 
         authUidHash: hashIdentifier(sessionAuthUid),
         sessionId: session.sessionId,
         policyGeneration: nextGeneration,
+        attemptCount: 0,
         createdAtMs: nowMs,
         expiresAtMs: nowMs + POLICY_CLEANUP_TTL_MS,
       };
@@ -267,6 +320,7 @@ const advanceDriverPolicyTransition = async ({
         authUidHash: hashIdentifier(authUid),
         sessionId: session.sessionId,
         policyGeneration: normalized.policy.generation,
+        attemptCount: 0,
         createdAtMs: nowMs,
         expiresAtMs: nowMs + POLICY_CLEANUP_TTL_MS,
       };
@@ -314,12 +368,32 @@ const advanceDriverPolicyTransition = async ({
 const processDriverLoginPolicyCleanupJobs = async ({ db = admin.database(), nowMs = Date.now(), limit = 50 } = {}) => {
   const snapshot = await db.ref(POLICY_CLEANUP_ROOT).orderByChild('createdAtMs').limitToFirst(limit).once('value');
   const jobs = snapshot.val() || {};
-  const summary = { scanned: 0, cleaned: 0, obsolete: 0, locked: 0, failed: 0 };
+  const summary = {
+    scanned: 0, cleaned: 0, obsolete: 0, locked: 0, failed: 0, expired: 0, terminalWarnings: 0,
+  };
   for (const [authUid, jobValue] of Object.entries(jobs)) {
     const job = /** @type {any} */ (jobValue);
     summary.scanned += 1;
+    if (!Number.isSafeInteger(job?.expiresAtMs) || job.expiresAtMs <= nowMs) {
+      try {
+        const terminal = await terminalizeExpiredDriverPolicyCleanup({ db, authUid, job, nowMs });
+        if (terminal.terminalized) {
+          summary.expired += 1;
+          summary.terminalWarnings += 1;
+        }
+      } catch (error) {
+        summary.failed += 1;
+        log.error('Expired driver policy cleanup warning persistence failed', error, {
+          authUidHash: hashIdentifier(authUid),
+        });
+      }
+      continue;
+    }
     const lock = await acquireAppSessionLock({ db, authUid, operation: 'policy_cleanup', nowMs });
     if (!lock.acquired) {
+      await recordDriverPolicyCleanupFailure({
+        db, authUid, job, nowMs, reason: 'app_session_busy',
+      });
       summary.locked += 1;
       continue;
     }
@@ -327,7 +401,10 @@ const processDriverLoginPolicyCleanupJobs = async ({ db = admin.database(), nowM
       const sessionSnapshot = await db.ref(`app_sessions/${authUid}`).once('value');
       const session = sessionSnapshot.val();
       if (!session || session.sessionId !== job.sessionId) {
-        await db.ref(`${POLICY_CLEANUP_ROOT}/${authUid}`).remove();
+        await db.ref(`${POLICY_CLEANUP_ROOT}/${authUid}`).transaction((current) => (
+          current?.sessionId === job.sessionId && current?.expiresAtMs === job.expiresAtMs
+            ? null : undefined
+        ), undefined, false);
         summary.obsolete += 1;
         continue;
       }
@@ -342,9 +419,15 @@ const processDriverLoginPolicyCleanupJobs = async ({ db = admin.database(), nowM
         disableAllNotificationDelivery: true,
         createEventId: () => db.ref('app_session_events').push().key,
       });
-      await db.ref(`${POLICY_CLEANUP_ROOT}/${authUid}`).remove();
+      await db.ref(`${POLICY_CLEANUP_ROOT}/${authUid}`).transaction((current) => (
+        current?.sessionId === job.sessionId && current?.expiresAtMs === job.expiresAtMs
+          ? null : undefined
+      ), undefined, false);
       summary.cleaned += 1;
     } catch (error) {
+      await recordDriverPolicyCleanupFailure({
+        db, authUid, job, nowMs, reason: error?.code || 'session_cleanup_retry',
+      });
       summary.failed += 1;
       log.error('Driver policy session cleanup failed', error, { authUidHash: hashIdentifier(authUid) });
     } finally {
@@ -450,8 +533,11 @@ const cleanupDriverLoginPolicySessions = onScheduleWithResult(
     const assignmentRetention = await cleanupExpiredDriverAssignmentRecords({
       db: admin.database(), limit: 100,
     });
-    if (summary.failed || summary.locked) log.warn('Driver policy cleanup remains pending', summary);
-    else log.info('Driver policy cleanup completed', { transition, ...summary, ...retention });
+    if (summary.failed || summary.locked || retention.terminalWarningFailures) {
+      log.warn('Driver policy cleanup remains pending', { ...summary, ...retention });
+    } else {
+      log.info('Driver policy cleanup completed', { transition, ...summary, ...retention });
+    }
     return { transition, assignmentTransitions, ...summary, ...retention, assignmentRetention };
   },
 );
@@ -464,6 +550,7 @@ module.exports = {
   countPolicyCleanupJobs,
   getDriverLoginPolicy,
   processDriverLoginPolicyCleanupJobs,
+  recordDriverPolicyCleanupFailure,
   setDriverLoginPolicy,
   toAdminPolicy,
 };

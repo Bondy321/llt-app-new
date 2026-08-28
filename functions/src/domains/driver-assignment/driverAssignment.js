@@ -159,6 +159,76 @@ const readAssignmentRevision = (value) => (
   Number.isSafeInteger(Number(value)) && Number(value) >= 0 ? Number(value) : 0
 );
 
+/** @type {(...args: any[]) => void} */
+const appendAssignmentPickupClear = ({ updates, pickups, tourId, driverIds, assignmentRevision }) => {
+  const pickup = pickups?.[tourId];
+  if (!pickup || pickup.schemaVersion !== 1 || pickup.isSharing !== true
+    || pickup.source !== 'manual' || pickup.mode !== 'pickup'
+    || pickup.tourId !== tourId || !driverIds.has(pickup.driverId)
+    || !Number.isSafeInteger(pickup.assignmentRevision)
+    || pickup.assignmentRevision !== assignmentRevision) return;
+  updates[`driver_location_pickups/${tourId}`] = null;
+};
+
+/** @type {(...args: any[]) => any} */
+const buildCurrentAssignmentProfileProjection = ({
+  isAdmin,
+  operation,
+  driverId,
+  tourId,
+  expectedDriverRevision,
+  expectedTourRevision,
+  driverProfileUpdates,
+  driverData = {},
+  tourData = {},
+  manifestData = {},
+}) => {
+  const normalizedDriverId = normalizeDriverId(driverId);
+  const normalizedTourId = normalizeTourKeyForComparison(tourId);
+  const name = resolveTrimmedString(driverProfileUpdates?.name);
+  const phone = typeof driverProfileUpdates?.phone === 'string'
+    ? driverProfileUpdates.phone.trim()
+    : null;
+  if (!isAdmin || operation !== 'assign' || !normalizedDriverId || !normalizedTourId
+    || (!name && phone === null)) return { status: 'not_applicable' };
+  if (readAssignmentRevision(driverData.assignmentRevision) !== expectedDriverRevision
+    || readAssignmentRevision(tourData.driverAssignmentRevision) !== expectedTourRevision) {
+    return { status: 'stale' };
+  }
+  const exactCurrentAssignment = normalizeTourKeyForComparison(driverData.currentTourId) === normalizedTourId
+    && driverData.assignments?.[normalizedTourId] === true
+    && normalizeDriverId(tourData.driverId) === normalizedDriverId
+    && manifestData.assigned_drivers?.[normalizedDriverId] === true
+    && collectDriverAssignmentConflicts({
+      driverId: normalizedDriverId, tourData, manifestData,
+    }).length === 0;
+  if (!exactCurrentAssignment) return { status: 'assignment_changed' };
+
+  const updates = {};
+  if (name) {
+    updates[`drivers/${normalizedDriverId}/name`] = name;
+    updates[`tours/${normalizedTourId}/driverName`] = name;
+  }
+  if (phone !== null) {
+    updates[`drivers/${normalizedDriverId}/phone`] = phone;
+    updates[`tours/${normalizedTourId}/driverPhone`] = phone;
+  }
+  return {
+    status: 'ready',
+    updates,
+    result: {
+      success: true,
+      operation: 'assign',
+      driverId: normalizedDriverId,
+      tourId: normalizedTourId,
+      tourCode: resolveTrimmedString(tourData.tourCode) || normalizedTourId.replace(/_/g, ' '),
+      previousTourId: normalizedTourId,
+      driverRevision: expectedDriverRevision,
+      tourRevision: expectedTourRevision,
+    },
+  };
+};
+
 /** @param {Record<string, any>} input */
 const createAssignmentRequestHash = (input) => createHash('sha256').update(JSON.stringify({
   operation: resolveTrimmedString(input.operation),
@@ -192,6 +262,14 @@ const isCurrentDriverSession = (session, policy, driverId, nowMs) => {
   return sessionGeneration === policy.generation;
 };
 
+/** @param {any} profile @param {string} driverId */
+const isCurrentDriverProfile = (profile, driverId) => (
+  profile
+  && typeof profile === 'object'
+  && profile.principalType === 'driver'
+  && normalizeDriverId(profile.driverId) === driverId
+);
+
 /** @param {any} value */
 const hashAuthorityIdentifier = (value) => createHash('sha256')
   .update(String(value || ''))
@@ -208,6 +286,7 @@ const buildDriverAssignmentReconciliationUpdates = ({
   driverId,
   targetTourId = null,
   sessions = {},
+  profiles = {},
   devices = {},
   policy,
   driverData = {},
@@ -225,6 +304,7 @@ const buildDriverAssignmentReconciliationUpdates = ({
     .forEach(([authUid, sessionValue]) => {
       const session = /** @type {any} */ (sessionValue);
       if (!isCurrentDriverSession(session, policy, normalizedDriverId, nowMs)) return;
+      if (!isCurrentDriverProfile(profiles?.[authUid], normalizedDriverId)) return;
       if (policy.enforceSingleDevice === true && authUid !== claimedAuthUid) {
         obsoleteAuthUids.push(authUid);
         updates[`driver_login_policy_cleanup/v1/${authUid}`] = {
@@ -291,6 +371,7 @@ const buildCanonicalDriverAssignmentUpdates = ({
   incumbentDriverId = null,
   incumbentDriverData = {},
   incumbentDriversData = {},
+  pickups = {},
   actorId,
   nowMs = Date.now(),
 }) => {
@@ -366,11 +447,35 @@ const buildCanonicalDriverAssignmentUpdates = ({
     }
   }
 
+  const targetOutgoingDriverIds = new Set([
+    normalizeDriverId(tourData.driverId),
+    ...displacedDrivers.keys(),
+    ...(!assigned ? [normalizedDriverId] : []),
+  ].filter(Boolean));
+  appendAssignmentPickupClear({
+    updates,
+    pickups,
+    tourId: normalizedTourId,
+    driverIds: targetOutgoingDriverIds,
+    assignmentRevision: readAssignmentRevision(tourData.driverAssignmentRevision),
+  });
+  if (previousTourId && previousTourId !== normalizedTourId
+    && normalizeDriverId(previousTourData.driverId) === normalizedDriverId) {
+    appendAssignmentPickupClear({
+      updates,
+      pickups,
+      tourId: previousTourId,
+      driverIds: new Set([normalizedDriverId]),
+      assignmentRevision: readAssignmentRevision(previousTourData.driverAssignmentRevision),
+    });
+  }
+
   return { updates, previousTourId, canonicalTourCode };
 };
 
 
 module.exports = {
+  buildCurrentAssignmentProfileProjection,
   buildDriverIdentityProfileUpdates,
   buildDriverLocationTombstone,
   buildDriverAssignmentReconciliationUpdates,

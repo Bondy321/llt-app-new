@@ -18,6 +18,7 @@ const ALLOWED_LIBRARY_MODULES = new Set([
   'loginRateLimiter',
   'manifestPassengers',
   'managementOidc',
+  'operationsTerminalWarnings',
   'passengerIdentity',
   'tourDateIndex',
 ]);

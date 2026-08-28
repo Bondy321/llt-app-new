@@ -234,10 +234,11 @@ const issueVerifiedPassengerSession = async ({ authUid, context, stablePassenger
     bookingRef: resolvedBookingRef,
     identityUpdates,
     grantUpdates,
-    buildRoleClaimUpdates: (session) => ({
+    buildRoleClaimUpdates: (session, replacedSession) => ({
       [`${ROLE_TRANSITION_CLAIM_ROOT}/${authUid}`]: buildPassengerRoleClaimJob({
         authUid,
         session,
+        replacedSession,
         privatePhotoOwnerKey: stablePassengerId,
         nowMs: sessionIssuedAtMs,
       }),

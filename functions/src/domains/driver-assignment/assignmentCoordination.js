@@ -71,16 +71,34 @@ const readDriverSessionPage = async (db, driverId, cursor, limit) => {
     .sort(([left], [right]) => left.localeCompare(right));
   const page = entries.slice(0, limit);
   return {
-    entries: page,
+    authUids: page.map(([authUid]) => authUid),
     hasMore: entries.length > limit,
     cursor: page.length ? page[page.length - 1][0] : cursor,
   };
+};
+
+/** @param {any} db @param {string[]} authUids */
+const loadLockedAssignmentReconciliationState = async (db, authUids) => {
+  const entries = await Promise.all(authUids.map(async (authUid) => {
+    const [sessionSnapshot, profileSnapshot, deviceSnapshot] = await Promise.all([
+      db.ref(`app_sessions/${authUid}`).once('value'),
+      db.ref(`users/${authUid}`).once('value'),
+      db.ref(`notification_devices/${authUid}`).once('value'),
+    ]);
+    return [authUid, {
+      session: sessionSnapshot.val() || null,
+      profile: profileSnapshot.val() || null,
+      device: deviceSnapshot.val() || null,
+    }];
+  }));
+  return Object.fromEntries(entries);
 };
 
 module.exports = {
   ACTIVE_ASSIGNMENT_ROOT,
   acquireDriverAssignmentBarrier,
   acquireDriverAssignmentLoginAdmission,
+  loadLockedAssignmentReconciliationState,
   readDriverSessionPage,
   releaseDriverAssignmentBarrier,
   releaseDriverAssignmentLoginAdmission,

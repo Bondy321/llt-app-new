@@ -25,6 +25,7 @@ const {
   abandonDriverAssignmentReservation,
   advanceDriverAssignmentTransition,
   acquireDriverAssignmentBarrier,
+  buildCurrentAssignmentProfileProjection,
   collectDriverAssignmentConflicts,
   createAssignmentRequestHash,
   createAssignmentTransitionId,
@@ -263,6 +264,53 @@ const assignDriverToTour = onRequestWithResult(
       if (isAdmin && (readAssignmentRevision(initialDriver.assignmentRevision) !== input.expectedDriverRevision
         || readAssignmentRevision(initialTour.driverAssignmentRevision) !== input.expectedTourRevision)) {
         return reject(res, 409, 'ASSIGNMENT_STALE');
+      }
+
+      const initialProfileProjection = buildCurrentAssignmentProfileProjection({
+        isAdmin,
+        operation: input.operation,
+        driverId: input.driverId,
+        tourId: input.tourId,
+        expectedDriverRevision: input.expectedDriverRevision,
+        expectedTourRevision: input.expectedTourRevision,
+        driverProfileUpdates: input.driverProfileUpdates,
+        driverData: initialDriver,
+        tourData: initialTour,
+        manifestData: initialManifestSnapshot.val() || {},
+      });
+      if (initialProfileProjection.status === 'ready') {
+        const profileLockPaths = [
+          `driver_assignment_locks/drivers/${input.driverId}`,
+          `driver_assignment_locks/tours/${input.tourId}`,
+        ].sort();
+        const locksAcquired = await acquireDriverAssignmentLocks({
+          db,
+          lockPaths: profileLockPaths,
+          owner: lockOwner,
+          acquiredLocks: acquiredAssignmentLocks,
+        });
+        if (!locksAcquired) return inProgress(res, { status: 'lock_wait' });
+        const [lockedDriverSnapshot, lockedTourSnapshot, lockedManifestSnapshot] = await Promise.all([
+          db.ref(`drivers/${input.driverId}`).once('value'),
+          db.ref(`tours/${input.tourId}`).once('value'),
+          db.ref(`tour_manifests/${input.tourId}`).once('value'),
+        ]);
+        const lockedProjection = buildCurrentAssignmentProfileProjection({
+          isAdmin,
+          operation: input.operation,
+          driverId: input.driverId,
+          tourId: input.tourId,
+          expectedDriverRevision: input.expectedDriverRevision,
+          expectedTourRevision: input.expectedTourRevision,
+          driverProfileUpdates: input.driverProfileUpdates,
+          driverData: lockedDriverSnapshot.val() || {},
+          tourData: lockedTourSnapshot.val() || {},
+          manifestData: lockedManifestSnapshot.val() || {},
+        });
+        if (lockedProjection.status === 'stale') return reject(res, 409, 'ASSIGNMENT_STALE');
+        if (lockedProjection.status !== 'ready') return reject(res, 409, 'ASSIGNMENT_ALREADY_CHANGED');
+        await db.ref().update(lockedProjection.updates);
+        return res.status(200).json(lockedProjection.result);
       }
 
       const admissionId = `assignment_${transitionId}`;

@@ -91,7 +91,7 @@ const issuePassengerAppSession = async ({
     const existingSession = existingSnapshot.val();
     const session = buildPassengerSessionRecord({ authUid, principalId, tourId, nowMs });
     const participant = buildPassengerParticipantRecord({ session });
-    const roleClaimUpdates = await buildRoleClaimUpdates(session);
+    const roleClaimUpdates = await buildRoleClaimUpdates(session, existingSession || null);
     if (!roleClaimUpdates || typeof roleClaimUpdates !== 'object' || Array.isArray(roleClaimUpdates)) {
       throw new Error('buildRoleClaimUpdates must return an update map');
     }

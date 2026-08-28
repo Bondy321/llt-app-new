@@ -10,6 +10,9 @@ process.env.FIREBASE_CONFIG = JSON.stringify({
 });
 
 const { __testables } = require('../functions/index.js');
+const {
+  recordDriverPolicyCleanupFailure,
+} = require('../functions/src/domains/driver-auth/driverDevicePolicyFunctions');
 
 const SESSION_A = `sess_v1_${'a'.repeat(32)}`;
 const SESSION_B = `sess_v1_${'b'.repeat(32)}`;
@@ -137,17 +140,87 @@ test('cleanup progress counts only jobs from the policy generation being enabled
   assert.equal(__testables.countDriverLoginPolicyCleanupJobs(null, 4), 0);
 });
 
-test('expired policy cleanup jobs and audit events are removed in one bounded update', async () => {
+test('repeated policy cleanup failures persist bounded attempt history for terminalization', async () => {
+  const path = 'driver_login_policy_cleanup/v1/uid-retry';
+  let value = {
+    schemaVersion: 1,
+    sessionId: SESSION_A,
+    policyGeneration: 4,
+    attemptCount: 0,
+    createdAtMs: 1,
+    expiresAtMs: 100,
+  };
+  const db = {
+    ref(requestedPath) {
+      assert.equal(requestedPath, path);
+      return {
+        async transaction(updater) {
+          const next = updater(value);
+          if (next === undefined) return { committed: false, snapshot: snapshot(value) };
+          value = next;
+          return { committed: true, snapshot: snapshot(value) };
+        },
+      };
+    },
+  };
+  const job = { ...value };
+  assert.equal(await recordDriverPolicyCleanupFailure({
+    db, authUid: 'uid-retry', job, nowMs: 10, reason: 'NETWORK/DETAIL should be bounded',
+  }), true);
+  assert.equal(await recordDriverPolicyCleanupFailure({
+    db, authUid: 'uid-retry', job, nowMs: 20, reason: 'SESSION_CLEANUP_RETRY',
+  }), true);
+  assert.equal(value.attemptCount, 2);
+  assert.equal(value.firstAttemptAtMs, 10);
+  assert.equal(value.lastAttemptAtMs, 20);
+  assert.equal(value.lastFailureReason, 'session_cleanup_retry');
+  assert.equal(JSON.stringify(value).includes('DETAIL should'), false);
+
+  value = {
+    ...value,
+    terminalWarningId: `warning_v1_${'c'.repeat(32)}`,
+    terminalizationStartedAtMs: 30,
+  };
+  const claimed = { ...value };
+  assert.equal(await recordDriverPolicyCleanupFailure({
+    db, authUid: 'uid-retry', job, nowMs: 40, reason: 'late_failure',
+  }), false);
+  assert.deepEqual(value, claimed);
+});
+
+test('expired policy cleanup jobs become terminal warnings before source deletion', async () => {
   let updates = null;
+  const cleanupJob = {
+    schemaVersion: 1,
+    authUidHash: 'already-hashed-auth',
+    sessionId: SESSION_A,
+    policyGeneration: 4,
+    attemptCount: 3,
+    firstAttemptAtMs: 40,
+    lastAttemptAtMs: 80,
+    lastFailureReason: 'SESSION_CLEANUP_RETRY',
+    createdAtMs: 1,
+    expiresAtMs: 100,
+  };
   const values = {
-    'driver_login_policy_cleanup/v1': { 'uid-old': { expiresAtMs: 100 } },
+    'driver_login_policy_cleanup/v1': { 'uid-old': cleanupJob },
+    'driver_login_policy_cleanup/v1/uid-old': cleanupJob,
     driver_login_policy_events: { 'event-old': { expiresAtMs: 100 } },
   };
   const db = {
+    values,
     ref(path = '') {
       if (path === '') return { update: async (value) => { updates = value; } };
-      if (path === 'driver_login_policy_cleanup/v1/uid-old') return {
-        transaction: async (updater) => ({ committed: updater(values['driver_login_policy_cleanup/v1']['uid-old']) === null }),
+      if (path.startsWith('operations_terminal_warnings/v1/')
+        || path === 'driver_login_policy_cleanup/v1/uid-old') return {
+        transaction: async (updater) => {
+          const current = values[path] ?? null;
+          const next = updater(current);
+          if (next === undefined) return { committed: false, snapshot: snapshot(current) };
+          if (next === null) delete values[path];
+          else values[path] = next;
+          return { committed: true, snapshot: snapshot(next) };
+        },
       };
       return {
         orderByChild: (field) => {
@@ -166,11 +239,24 @@ test('expired policy cleanup jobs and audit events are removed in one bounded up
   };
   assert.deepEqual(await __testables.cleanupExpiredDriverPolicyRecords({ db, nowMs: 200, limit: 25 }), {
     expiredCleanupJobsDeleted: 1,
+    terminalWarnings: 1,
+    terminalWarningFailures: 0,
     expiredAuditEventsDeleted: 1,
   });
   assert.deepEqual(updates, {
     'driver_login_policy_events/event-old': null,
   });
+  assert.equal(values['driver_login_policy_cleanup/v1/uid-old'], undefined);
+  const warning = Object.entries(values).find(([path]) => path.startsWith('operations_terminal_warnings/v1/'))?.[1];
+  assert.ok(warning);
+  assert.equal(warning.jobType, 'driver_policy_cleanup');
+  assert.equal(warning.reason, 'retention_expired');
+  assert.equal(warning.attemptCount, 3);
+  assert.equal(warning.firstAttemptAtMs, 40);
+  assert.equal(warning.lastAttemptAtMs, 80);
+  assert.equal(warning.status, 'open');
+  assert.equal(JSON.stringify(warning).includes('uid-old'), false);
+  assert.equal(JSON.stringify(warning).includes(SESSION_A), false);
 });
 
 test('expiry cleanup cannot delete a replacement job for a newer exact session', async () => {
@@ -188,10 +274,13 @@ test('expiry cleanup cannot delete a replacement job for a newer exact session',
       if (path === 'driver_login_policy_cleanup/v1/uid-raced') return {
         transaction: async (updater) => {
           const replacement = { sessionId: SESSION_B, expiresAtMs: 500 };
-          transactionCommitted = updater(replacement) === null;
+          transactionCommitted = updater(replacement) !== undefined;
           return { committed: transactionCommitted };
         },
       };
+      if (path.startsWith('operations_terminal_warnings/v1/')) {
+        assert.fail('a replacement source job must not produce a terminal warning');
+      }
       if (path === '') return { update: async () => assert.fail('no batch update expected') };
       throw new Error(`Unexpected ref: ${path}`);
     },

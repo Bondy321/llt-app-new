@@ -10,6 +10,8 @@ const APP_SESSION_LOCK_OPERATIONS = new Set([
   'revoke',
   'cleanup',
   'policy_cleanup',
+  'role_claim_cleanup',
+  'driver_location_pickup',
 ]);
 
 const createAppSessionOperationId = (randomBytesFn = randomBytes) => (

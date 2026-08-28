@@ -27,6 +27,7 @@ const {
   ACTIVE_ASSIGNMENT_ROOT,
   acquireDriverAssignmentBarrier,
   acquireDriverAssignmentLoginAdmission,
+  loadLockedAssignmentReconciliationState,
   readDriverSessionPage,
   releaseDriverAssignmentBarrier,
   releaseDriverAssignmentLoginAdmission,
@@ -35,6 +36,10 @@ const {
   acquireAssignmentLocationInvalidations,
   releaseDriverLocationProjectionInvalidation,
 } = require('./assignmentLocationInvalidation');
+const {
+  cleanupExpiredDriverAssignmentRecords,
+  recordAssignmentTransitionFailure,
+} = require('./assignmentTransitionRetention');
 
 const TRANSITION_ROOT = 'driver_assignment_transitions/v1';
 const TRANSITION_QUEUE_ROOT = 'driver_assignment_transition_queue/v1';
@@ -65,6 +70,7 @@ const reserveDriverAssignmentTransition = async ({
 }) => {
   const result = await db.ref(`${TRANSITION_ROOT}/${transitionId}`).transaction((current) => {
     const retryingOwnedSemanticReservation = current?.status === 'aborted'
+      && !current.terminalWarningId
       && current.actorHash === reservation.actorHash
       && current.requestHash === reservation.requestHash
       && current.idempotencyPath === reservation.idempotencyPath;
@@ -124,12 +130,6 @@ const acquireSortedAssignmentLocks = async ({ db, paths, owner, acquired }) => {
   }
   return true;
 };
-
-/** @param {any} db @param {string[]} authUids */
-const loadDevices = async (db, authUids) => Object.fromEntries(await Promise.all(authUids.map(async (authUid) => {
-  const snapshot = await db.ref(`notification_devices/${authUid}`).once('value');
-  return [authUid, snapshot.val() || null];
-})));
 
 /** @type {(...args: any[]) => Promise<void>} */
 const commitReconciliationAfterCleanup = async ({ db, cleanupTasks, updates }) => {
@@ -220,13 +220,21 @@ const applyCanonicalTransition = async ({ db, transitionId, transition, nowMs })
     if (transition.operation === 'unassign' && incumbentDriverId && incumbentDriverId !== transition.driverId) {
       return failTransition({ db, transitionId, transition, reason: 'ASSIGNMENT_ALREADY_CHANGED', nowMs });
     }
-    const [previousTourSnapshot, displacedDriverEntries] = await Promise.all([
+    const affectedPickupTourIds = [...new Set([
+      transition.tourId,
+      ...(previousTourId && previousTourId !== transition.tourId ? [previousTourId] : []),
+    ])];
+    const [previousTourSnapshot, displacedDriverEntries, pickupEntries] = await Promise.all([
       previousTourId && previousTourId !== transition.tourId
         ? db.ref(`tours/${previousTourId}`).once('value')
         : Promise.resolve(null),
       Promise.all(displacedDriverIds.map(async (driverId) => {
         const snapshot = await db.ref(`drivers/${driverId}`).once('value');
         return [driverId, snapshot.val() || {}];
+      })),
+      Promise.all(affectedPickupTourIds.map(async (tourId) => {
+        const snapshot = await db.ref(`driver_location_pickups/${tourId}`).once('value');
+        return [tourId, snapshot.val() || null];
       })),
     ]);
     const incumbentDriversData = Object.fromEntries(displacedDriverEntries);
@@ -246,6 +254,7 @@ const applyCanonicalTransition = async ({ db, transitionId, transition, nowMs })
       incumbentDriverId,
       incumbentDriverData: incumbentDriversData[incumbentDriverId] || {},
       incumbentDriversData,
+      pickups: Object.fromEntries(pickupEntries),
       actorId: `${transition.actorType}:${transition.actorHash}`,
       nowMs,
     });
@@ -308,7 +317,7 @@ const reconcileTransitionSessionPage = async ({ db, transitionId, transition, no
   }
   const cursorField = incumbent ? 'incumbentSessionCursor' : 'subjectSessionCursor';
   const page = await readDriverSessionPage(db, driverId, transition[cursorField] || null, pageSize);
-  const authUids = page.entries.map(([authUid]) => authUid);
+  const authUids = [...page.authUids].sort((left, right) => left.localeCompare(right));
   const sessionLocks = [];
   const deviceLocks = [];
   try {
@@ -326,12 +335,15 @@ const reconcileTransitionSessionPage = async ({ db, transitionId, transition, no
       deviceLocks.push({ lockRef: deviceLock.lockRef, owner: deviceOwner });
     }
     const driverData = (await db.ref(`drivers/${driverId}`).once('value')).val() || {};
-    const sessions = Object.fromEntries(page.entries);
-    const devices = await loadDevices(db, authUids);
+    const lockedState = await loadLockedAssignmentReconciliationState(db, authUids);
+    const sessions = Object.fromEntries(authUids.map((authUid) => [authUid, lockedState[authUid].session]));
+    const profiles = Object.fromEntries(authUids.map((authUid) => [authUid, lockedState[authUid].profile]));
+    const devices = Object.fromEntries(authUids.map((authUid) => [authUid, lockedState[authUid].device]));
     const reconciliation = buildDriverAssignmentReconciliationUpdates({
       driverId,
       targetTourId: incumbent ? null : (transition.operation === 'assign' ? transition.tourId : null),
       sessions,
+      profiles,
       devices,
       policy: transition.policy,
       driverData,
@@ -510,10 +522,19 @@ const processDriverAssignmentTransitions = async ({
           await db.ref(`${TRANSITION_QUEUE_ROOT}/${transitionId}`).remove();
         }
       } catch (error) {
+        let failureRecorded = false;
+        try {
+          failureRecorded = await recordAssignmentTransitionFailure({
+            db, transitionId, nowMs: nowMs + step, reason: error?.code || 'CLEANUP_RETRY',
+          });
+        } catch (_recordError) {
+          failureRecorded = false;
+        }
         result = {
           status: 'cleanup_retry',
           progressed: false,
           errorCode: error?.code || 'CLEANUP_RETRY',
+          failureRecorded,
         };
       }
       if (!result.progressed || result.completed || result.status === 'failed') break;
@@ -521,46 +542,6 @@ const processDriverAssignmentTransitions = async ({
     results.push(result);
   }
   return { scanned: transitionIds.length, results };
-};
-
-/** @type {(...args: any[]) => Promise<any>} */
-const cleanupExpiredDriverAssignmentRecords = async ({ db, nowMs = Date.now(), limit = 50 } = {}) => {
-  const [retentionSnapshot, transitionSnapshot] = await Promise.all([
-    db.ref(ASSIGNMENT_RETENTION_ROOT).orderByChild('expiresAtMs')
-      .startAt(0).endAt(nowMs).limitToFirst(limit).once('value'),
-    db.ref(TRANSITION_ROOT).orderByChild('expiresAtMs')
-      .startAt(0).endAt(nowMs).limitToFirst(limit).once('value'),
-  ]);
-  const retention = retentionSnapshot.val() || {};
-  const transitions = transitionSnapshot.val() || {};
-  const updates = {};
-  let transitionsDeleted = 0;
-  Object.entries(retention).forEach(([retentionId, value]) => {
-    const targetPath = typeof value?.targetPath === 'string' ? value.targetPath : '';
-    if (/^driver_assignment_idempotency\/v1\/[a-f0-9]{24}\/[a-f0-9]{24}$/.test(targetPath)) {
-      updates[targetPath] = null;
-    }
-    updates[`${ASSIGNMENT_RETENTION_ROOT}/${retentionId}`] = null;
-  });
-  for (const [transitionId, transition] of Object.entries(transitions)) {
-    if (!['completed', 'failed', 'aborted'].includes(transition?.status)) continue;
-    transitionsDeleted += 1;
-    updates[`${TRANSITION_ROOT}/${transitionId}`] = null;
-    updates[`${TRANSITION_QUEUE_ROOT}/${transitionId}`] = null;
-    if (transition?.admissionId) {
-      updates[`driver_login_policy/v1/loginAdmissions/${transition.admissionId}`] = null;
-    }
-    for (const driverId of readTransitionDriverIds(transition)) {
-      await db.ref(`${ACTIVE_ASSIGNMENT_ROOT}/${driverId}`).transaction((current) => (
-        current?.transitionId === transitionId ? null : undefined
-      ), undefined, false);
-    }
-  }
-  if (Object.keys(updates).length) await db.ref().update(updates);
-  return {
-    idempotencyRecordsDeleted: Object.keys(retention).length,
-    transitionsDeleted,
-  };
 };
 
 module.exports = {
@@ -578,7 +559,9 @@ module.exports = {
   cleanupExpiredDriverAssignmentRecords,
   commitReconciliationAfterCleanup,
   processDriverAssignmentTransitions,
+  recordAssignmentTransitionFailure,
   readDriverSessionPage,
+  reconcileTransitionSessionPage,
   reserveDriverAssignmentTransition,
   releaseDriverAssignmentBarrier,
   releaseDriverAssignmentLoginAdmission,
