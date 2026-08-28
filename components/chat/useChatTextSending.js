@@ -13,10 +13,11 @@ export default function useChatTextSending(context, late) {
     internalDriverChat,
     isConnected,
     isDriver,
+    offlineSessionScope,
     logSenderIdentityPath,
     passengerStableId,
     principalId,
-    realtimeActorId,
+    statusActorId,
     refreshQueueStats,
     replyingToMessage,
     requiresPassengerStableIdForWrites,
@@ -56,8 +57,9 @@ export default function useChatTextSending(context, late) {
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
-    setTypingStatus(tourId, realtimeActorId, userName, false, isDriver, undefined, {
-      scope: chatScope
+    setTypingStatus(tourId, statusActorId, userName, false, isDriver, undefined, {
+      scope: chatScope,
+      sessionScope: offlineSessionScope
     });
     if (requiresPassengerStableIdForWrites && !passengerStableId) {
       setInputText(trimmed);
@@ -198,7 +200,7 @@ export default function useChatTextSending(context, late) {
       await refreshQueueStats();
     }
     setSending(false);
-  }, [sending, inputText, replyingToMessage, setSending, setInputText, setReplyingToMessage, typingTimeoutRef, tourId, realtimeActorId, userName, isDriver, chatScope, requiresPassengerStableIdForWrites, passengerStableId, buildChatSenderInfo, logSenderIdentityPath, internalDriverChat, setMessages, scrollToBottom, showTransientFeedback, principalId, authUid, isConnected, refreshQueueStats]);
+  }, [sending, inputText, replyingToMessage, setSending, setInputText, setReplyingToMessage, typingTimeoutRef, tourId, statusActorId, userName, isDriver, chatScope, offlineSessionScope, requiresPassengerStableIdForWrites, passengerStableId, buildChatSenderInfo, logSenderIdentityPath, internalDriverChat, setMessages, scrollToBottom, showTransientFeedback, principalId, authUid, isConnected, refreshQueueStats]);
   Object.assign(late.current, {
     handleSendMessage
   });

@@ -198,9 +198,13 @@ const CONTRACTS = Object.freeze({
     ],
     "optionalProperties": [
       "reason",
+      "operation",
+      "driverId",
       "tourId",
       "tourCode",
       "previousTourId",
+      "driverRevision",
+      "tourRevision",
       "session"
     ],
     "properties": {
@@ -210,6 +214,17 @@ const CONTRACTS = Object.freeze({
       "reason": {
         "type": "string",
         "maxLength": 80
+      },
+      "operation": {
+        "type": "string",
+        "enum": [
+          "assign",
+          "unassign"
+        ]
+      },
+      "driverId": {
+        "type": "string",
+        "maxLength": 160
       },
       "tourId": {
         "type": "string",
@@ -224,21 +239,42 @@ const CONTRACTS = Object.freeze({
         "nullable": true,
         "maxLength": 160
       },
+      "driverRevision": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "tourRevision": {
+        "type": "integer",
+        "minimum": 0
+      },
       "session": {
         "type": "object"
       }
     },
-    "enumValues": {},
+    "enumValues": {
+      "operation": [
+        "assign",
+        "unassign"
+      ]
+    },
     "idPatterns": {
       "tourId": "^[^.#$/\\[\\]\\u0000-\\u001F\\u007F]{1,160}$"
     },
     "maximumLengths": {
       "reason": 80,
+      "driverId": 160,
       "tourId": 160,
       "tourCode": 160,
       "previousTourId": 160
     },
-    "numericBounds": {},
+    "numericBounds": {
+      "driverRevision": {
+        "minimum": 0
+      },
+      "tourRevision": {
+        "minimum": 0
+      }
+    },
     "nullability": {
       "previousTourId": true
     },
@@ -246,9 +282,13 @@ const CONTRACTS = Object.freeze({
     "safeClientProjection": [
       "success",
       "reason",
+      "operation",
+      "driverId",
       "tourId",
       "tourCode",
       "previousTourId",
+      "driverRevision",
+      "tourRevision",
       "session"
     ],
     "forbiddenClientProjection": [

@@ -2,17 +2,10 @@
 
 const { createHash } = require('crypto');
 const { isActiveSessionRecord, isValidAppSessionId } = require('./appSession');
+const { cleanupChatStatusForAppSession } = require('./chatPresenceProjection');
+const { cleanupDriverLocationsForAppSession } = require('./driverLocationProjection');
 
 const NOTIFICATION_DEVICE_LOCK_TTL_MS = 30 * 1000;
-
-const toRealtimeKeySegment = (value) => String(value || '')
-  .replace(/%/g, '%25')
-  .replace(/\./g, '%2E')
-  .replace(/#/g, '%23')
-  .replace(/\$/g, '%24')
-  .replace(/\//g, '%2F')
-  .replace(/\[/g, '%5B')
-  .replace(/\]/g, '%5D');
 
 const buildNotificationDeviceCleanupUpdates = ({
   session,
@@ -55,8 +48,7 @@ const buildAppSessionCleanupUpdates = ({
   nowMs = Date.now(),
 } = {}) => {
   if (!session || !isValidAppSessionId(session.sessionId)) throw new Error('Valid app session required');
-  const { authUid, tourId, principalId, principalType } = session;
-  const actorKey = toRealtimeKeySegment(principalId);
+  const { authUid, tourId, principalType } = session;
   const updates = { [`app_sessions/${authUid}`]: null };
   if (userProfile !== null) {
     updates[`users/${authUid}/pushToken`] = null;
@@ -68,10 +60,6 @@ const buildAppSessionCleanupUpdates = ({
     updates[`tours/${tourId}/liveTracking/${authUid}`] = null;
     updates[`notification_read_state/${tourId}/${authUid}`] = null;
     updates[`notification_read_migration_requests/${tourId}/${authUid}`] = null;
-    updates[`chats/${tourId}/typing/${actorKey}`] = null;
-    updates[`chats/${tourId}/presence/${actorKey}`] = null;
-    updates[`internal_chats/${tourId}/typing/${actorKey}`] = null;
-    updates[`internal_chats/${tourId}/presence/${actorKey}`] = null;
   }
   if (principalType === 'passenger' && tourId) {
     updates[`tours/${tourId}/participants/${authUid}`] = null;
@@ -133,17 +121,30 @@ const buildAppSessionEvent = ({ session, eventType, reason, actorType, nowMs = D
   expiresAtMs: nowMs + (30 * 24 * 60 * 60 * 1000),
 });
 
-const cleanupDriverLocationForSession = async ({ db, session } = {}) => {
-  if (!db || session?.principalType !== 'driver' || !session.tourId) return { removed: false };
-  const ref = db.ref(`tours/${session.tourId}/driverLocation`);
-  const result = await ref.transaction((current) => {
-    if (!current || current.appSessionId !== session.sessionId || current.driverId !== session.driverId) {
-      return undefined;
-    }
-    return null;
-  }, undefined, false);
-  return { removed: Boolean(result.committed && !result.snapshot.exists()) };
+const cleanupLiveStateForSession = async ({ db, session, nowMs = Date.now() } = {}) => {
+  if (!db || !isValidAppSessionId(session?.sessionId)) {
+    return { location: { removed: 0 }, chat: { removed: 0 } };
+  }
+  const [location, chat] = await Promise.all([
+    cleanupDriverLocationsForAppSession({
+      database: db,
+      appSessionId: session.sessionId,
+      expectedTourId: session.principalType === 'driver' ? session.tourId : null,
+      nowMs,
+    }),
+    cleanupChatStatusForAppSession({
+      database: db,
+      appSessionId: session.sessionId,
+      expectedTourId: session.tourId,
+      expectedActorKey: session.principalId,
+      expectedPrincipalType: session.principalType,
+      nowMs,
+    }),
+  ]);
+  return { location, chat };
 };
+
+const cleanupDriverLocationForSession = cleanupLiveStateForSession;
 
 const cleanupAppSession = async ({
   db,
@@ -179,6 +180,7 @@ const cleanupAppSession = async ({
       db.ref(`users/${session.authUid}`).once('value'),
       db.ref(`notification_devices/${session.authUid}`).once('value'),
     ]);
+    await cleanupLiveStateForSession({ db, session, nowMs });
     const updates = buildAppSessionCleanupUpdates({
       session,
       userProfile: userSnapshot.exists() ? (userSnapshot.val() || {}) : null,
@@ -191,7 +193,6 @@ const cleanupAppSession = async ({
       updates[`app_session_events/${eventId}`] = buildAppSessionEvent({ session, eventType, reason, actorType, nowMs });
     }
     await db.ref().update(updates);
-    await cleanupDriverLocationForSession({ db, session });
     return { updates, eventId };
   } finally {
     await releaseNotificationDeviceLock({ lockRef: notificationLock.lockRef, owner: notificationLockOwner });
@@ -204,6 +205,7 @@ module.exports = {
   buildNotificationDeviceCleanupUpdates,
   acquireNotificationDeviceLock,
   cleanupDriverLocationForSession,
+  cleanupLiveStateForSession,
   cleanupAppSession,
   isActiveSessionRecord,
   releaseNotificationDeviceLock,

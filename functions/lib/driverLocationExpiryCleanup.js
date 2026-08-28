@@ -1,10 +1,12 @@
 'use strict';
 
+const { reconcileDriverLocationProjection } = require('./driverLocationProjection');
+
 const DRIVER_LOCATION_EXPIRY_CLEANUP_LIMITS = Object.freeze({
   maxLocationsPerRun: 100,
 });
 
-const TOURS_ROOT = 'tours';
+const DRIVER_LOCATION_SESSIONS_ROOT = 'driver_location_sessions';
 
 /**
  * Removes only disconnect-safe live-location leases that are still expired when their
@@ -17,6 +19,7 @@ async function cleanupExpiredDriverLocations({
   database,
   nowMs = Date.now(),
   limit = DRIVER_LOCATION_EXPIRY_CLEANUP_LIMITS.maxLocationsPerRun,
+  reconcileProjection = reconcileDriverLocationProjection,
 } = {}) {
   if (!database || typeof database.ref !== 'function') {
     throw new TypeError('A Realtime Database instance is required.');
@@ -28,35 +31,40 @@ async function cleanupExpiredDriverLocations({
     throw new RangeError(`limit must be 1-${DRIVER_LOCATION_EXPIRY_CLEANUP_LIMITS.maxLocationsPerRun}.`);
   }
 
-  const snapshot = await database.ref(TOURS_ROOT)
-    .orderByChild('driverLocation/cleanupAtMs')
+  const snapshot = await database.ref(DRIVER_LOCATION_SESSIONS_ROOT)
+    .orderByChild('cleanupAtMs')
     .startAt(1)
     .endAt(nowMs)
     .limitToFirst(limit)
     .get();
   const candidates = snapshot.exists() ? snapshot.val() || {} : {};
   let removed = 0;
-  let restoredPickups = 0;
+  const affectedTours = new Set();
 
-  await Promise.all(Object.entries(candidates).map(async ([tourId, tour]) => {
-    const candidate = tour?.driverLocation;
+  await Promise.all(Object.entries(candidates).map(async ([sourceKey, candidate]) => {
     if (!isExpiredLiveDriverLocation(candidate, nowMs)) return;
 
-    const result = await database.ref(`${TOURS_ROOT}/${tourId}/driverLocation`).transaction((current) => {
+    const result = await database.ref(`${DRIVER_LOCATION_SESSIONS_ROOT}/${sourceKey}`).transaction((current) => {
       if (!isSameExpiredLiveDriverLocation(current, candidate, nowMs)) return undefined;
-      return normalizePickupFallback(current.fallbackPickup);
+      return null;
     }, undefined, false);
     if (result?.committed) {
       removed += 1;
-      if (normalizePickupFallback(candidate.fallbackPickup)) restoredPickups += 1;
+      affectedTours.add(candidate.tourId);
     }
   }));
+
+  const reconciledTours = [...affectedTours].sort();
+  for (const tourId of reconciledTours) {
+    await reconcileProjection({ database, tourId, nowMs });
+  }
 
   return {
     ok: true,
     scanned: Object.keys(candidates).length,
     removed,
-    restoredPickups,
+    restoredPickups: 0,
+    reconciledTours,
     hasMore: Object.keys(candidates).length >= limit,
     cleanedAtMs: nowMs,
   };
@@ -103,9 +111,14 @@ function isExpiredLiveDriverLocation(location, nowMs) {
     location
     && typeof location === 'object'
     && location.mode === 'live'
-    && location.schemaVersion === 1
-    && typeof location.sessionId === 'string'
-    && location.sessionId.length > 0
+    && location.schemaVersion === 2
+    && location.source === 'auto'
+    && typeof location.appSessionId === 'string'
+    && location.appSessionId.length > 0
+    && typeof location.liveSharingSessionId === 'string'
+    && location.liveSharingSessionId.length > 0
+    && typeof location.tourId === 'string'
+    && location.tourId.length > 0
     && Number.isSafeInteger(location.timestamp)
     && Number.isSafeInteger(location.cleanupAtMs)
     && location.cleanupAtMs <= nowMs,
@@ -115,7 +128,9 @@ function isExpiredLiveDriverLocation(location, nowMs) {
 function isSameExpiredLiveDriverLocation(current, candidate, nowMs) {
   return Boolean(
     isExpiredLiveDriverLocation(current, nowMs)
-    && current.sessionId === candidate.sessionId
+    && current.appSessionId === candidate.appSessionId
+    && current.liveSharingSessionId === candidate.liveSharingSessionId
+    && current.tourId === candidate.tourId
     && current.timestamp === candidate.timestamp
     && current.cleanupAtMs === candidate.cleanupAtMs,
   );

@@ -15,7 +15,7 @@ import {
   DRIVER_LOCATION_MAX_ACTIONABLE_ACCURACY_METERS,
 } from '../../utils/driverLocation';
 export default function createDriverLocationCaptureActions(context) {
-  const { activeTourId, activeTourIdRef, addressText, driverData, driverIdRef, locationAccuracy, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setConfirmingLocation, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, successAnim } = context;
+  const { activeTourId, activeTourIdRef, addressText, driverData, driverIdRef, locationAccuracy, locationSessionScope, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setConfirmingLocation, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, successAnim } = context;
   const getAddressFromCoords = async (latitude, longitude, targetTourId) => {
     try {
       logger.debug('DriverHomeScreen', 'Reverse geocode started', {
@@ -110,6 +110,8 @@ export default function createDriverLocationCaptureActions(context) {
       dbInstance: realtimeDb,
       isScopeCurrent,
       sessionId,
+      sessionScope: locationSessionScope,
+      driverId: targetDriverId,
     });
     if (persistedLocation.skipped) {
       logger.info('DriverHomeScreen', 'Driver location upload skipped for revoked scope', {
@@ -151,6 +153,10 @@ export default function createDriverLocationCaptureActions(context) {
         actionLabel: 'Join Tour',
         actionHandler: () => setJoinModalVisible(true),
       });
+      return;
+    }
+    if (!locationSessionScope?.sessionId || !locationSessionScope?.authUid) {
+      showBanner({ type: 'warning', message: 'Your secure driver session is still syncing. Try again in a moment.' });
       return;
     }
 

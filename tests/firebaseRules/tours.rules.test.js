@@ -6,7 +6,7 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
-const { passengerAuthorityUpdates, driverAuthorityUpdates } = require('./sessionFixtures');
+const { passengerAuthorityUpdates, driverAuthorityUpdates, sessionIdFor } = require('./sessionFixtures');
 
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const PROJECT_ID = 'demo-llt-tour-rules';
@@ -42,6 +42,35 @@ let testEnv;
 let dbUrl;
 
 const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
+
+const buildRawDriverLocation = ({
+  uid = DRIVER_AUTH_UID,
+  driverId = DRIVER_ID,
+  tourId = TOUR_ID,
+  appSessionId = sessionIdFor(uid),
+  liveSharingSessionId = 'location_rules_123',
+  manual = false,
+  overrides = {},
+} = {}) => ({
+  schemaVersion: 2,
+  isSharing: true,
+  mode: manual ? 'pickup' : 'live',
+  source: manual ? 'manual' : 'auto',
+  latitude: 56.0,
+  longitude: -4.6,
+  timestamp: { '.sv': 'timestamp' },
+  accuracy: 12,
+  updatedBy: 'Driver Palmer',
+  authUid: uid,
+  appSessionId,
+  driverId,
+  tourId,
+  ...(manual ? {} : {
+    liveSharingSessionId,
+    cleanupAtMs: Date.now() + (30 * 60 * 1000),
+  }),
+  ...overrides,
+});
 
 test.before(async () => {
   const emulator = parseHost();
@@ -153,13 +182,31 @@ test('denies passengers from writing driver-only tour location fields', async ()
   }));
 });
 
-test('allows assigned drivers, but not unassigned drivers, to write driver tour fields', async () => {
-  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/driverLocation`).set({
+test('allows raw location and staged legacy location only until the server projection revision appears', async () => {
+  const liveSharingSessionId = 'location_assigned_123';
+  await assertSucceeds(
+    dbFor(DRIVER_AUTH_UID)
+      .ref(`driver_location_sessions/${sessionIdFor(DRIVER_AUTH_UID)}|${liveSharingSessionId}`)
+      .set(buildRawDriverLocation({ liveSharingSessionId })),
+  );
+  const legacyLocationRef = dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/driverLocation`);
+  await assertSucceeds(legacyLocationRef.set({
+    schemaVersion: 1,
+    isSharing: true,
+    mode: 'pickup',
+    source: 'manual',
     latitude: 56.0,
     longitude: -4.6,
-    timestamp: '2026-05-23T19:42:00.000Z',
+    accuracy: 12,
+    timestamp: { '.sv': 'timestamp' },
     updatedBy: 'Driver Palmer',
   }));
+
+  await testEnv.withSecurityRulesDisabled((context) => (
+    context.database(dbUrl).ref(`tours/${TOUR_ID}/driverLocation/projectionRevision`).set(1)
+  ));
+  await assertFails(legacyLocationRef.update({ timestamp: { '.sv': 'timestamp' } }));
+  await assertFails(legacyLocationRef.remove());
 
   await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/itinerary`).set({
     title: 'Client itinerary',
@@ -170,118 +217,50 @@ test('allows assigned drivers, but not unassigned drivers, to write driver tour 
     '07:30 vehicle checks\n08:00 depart depot',
   ));
 
-  await assertFails(dbFor(OTHER_DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/driverLocation`).set({
-    latitude: 56.0,
-    longitude: -4.6,
-    timestamp: '2026-05-23T19:42:00.000Z',
-  }));
+  await assertFails(
+    dbFor(OTHER_DRIVER_AUTH_UID)
+      .ref(`driver_location_sessions/${sessionIdFor(OTHER_DRIVER_AUTH_UID)}|location_unassigned_123`)
+      .set(buildRawDriverLocation({
+        uid: OTHER_DRIVER_AUTH_UID,
+        driverId: OTHER_DRIVER_ID,
+        tourId: 'OTHER_TOUR',
+        liveSharingSessionId: 'location_unassigned_123',
+      })),
+  );
 });
 
-test('validates versioned driver location records and accepts server timestamps', async () => {
-  const locationRef = dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/driverLocation`);
-  const cleanupAtMs = Date.now() + (30 * 60 * 1000);
-  await assertSucceeds(locationRef.set({
-    schemaVersion: 1,
-    isSharing: true,
-    mode: 'live',
-    source: 'auto',
-    latitude: 56.0,
-    longitude: -4.6,
-    timestamp: { '.sv': 'timestamp' },
-    accuracy: 12,
-    updatedBy: 'Driver Palmer',
-    sessionId: 'session_rules_123',
-    cleanupAtMs,
-    fallbackPickup: {
-      schemaVersion: 1,
-      isSharing: true,
-      mode: 'pickup',
-      source: 'manual',
-      latitude: 56.1,
-      longitude: -4.7,
-      timestamp: Date.now() - 60_000,
-      address: 'Pier Road',
-    },
-  }));
+test('validates v2 raw driver location records and accepts server timestamps', async () => {
+  const appSessionId = sessionIdFor(DRIVER_AUTH_UID);
+  const liveSharingSessionId = 'location_schema_123';
+  const locationRef = dbFor(DRIVER_AUTH_UID)
+    .ref(`driver_location_sessions/${appSessionId}|${liveSharingSessionId}`);
 
-  await assertFails(locationRef.set({
-    schemaVersion: 1,
-    isSharing: true,
-    mode: 'live',
-    source: 'auto',
-    latitude: 56.0,
-    longitude: -4.6,
-    timestamp: { '.sv': 'timestamp' },
-    sessionId: 'bad',
-    cleanupAtMs,
-  }));
-
-  await assertFails(locationRef.set({
-    schemaVersion: 1,
-    isSharing: true,
-    mode: 'live',
-    source: 'auto',
-    latitude: 56.0,
-    longitude: -4.6,
-    timestamp: { '.sv': 'timestamp' },
-    sessionId: 'session_rules_123',
-    cleanupAtMs: Date.now() + (5 * 60 * 1000),
-  }));
-
-  await assertFails(locationRef.set({
-    schemaVersion: 1,
-    isSharing: true,
-    mode: 'live',
-    source: 'auto',
-    latitude: 56.0,
-    longitude: -4.6,
-    timestamp: { '.sv': 'timestamp' },
-    sessionId: 'session_rules_123',
-    cleanupAtMs,
-    fallbackPickup: {
-      schemaVersion: 1,
-      isSharing: true,
-      mode: 'pickup',
-      source: 'manual',
-      latitude: 56.1,
-      longitude: -4.7,
-      timestamp: Date.now() - 60_000,
-      unexpectedPrivateField: 'must-not-leak',
-    },
-  }));
-
-  await assertFails(locationRef.set({
-    schemaVersion: 1,
-    isSharing: true,
-    mode: 'live',
-    source: 'manual',
-    latitude: 56.0,
-    longitude: -4.6,
-    timestamp: { '.sv': 'timestamp' },
-  }));
-
-  await assertFails(locationRef.set({
-    schemaVersion: 1,
-    isSharing: true,
-    mode: 'live',
-    source: 'auto',
-    latitude: 56.0,
-    longitude: -4.6,
-    timestamp: Date.now() + (10 * 60 * 1000),
-  }));
-
-  await assertFails(locationRef.set({
-    schemaVersion: 1,
-    isSharing: true,
-    mode: 'pickup',
-    source: 'manual',
-    latitude: 56.0,
-    longitude: -4.6,
-    timestamp: { '.sv': 'timestamp' },
-    unexpectedField: 'not allowed',
-  }));
-
+  await assertSucceeds(locationRef.set(buildRawDriverLocation({ liveSharingSessionId })));
+  await assertFails(locationRef.set(buildRawDriverLocation({
+    liveSharingSessionId,
+    overrides: { cleanupAtMs: Date.now() + (5 * 60 * 1000) },
+  })));
+  await assertFails(locationRef.set(buildRawDriverLocation({
+    liveSharingSessionId,
+    overrides: { timestamp: Date.now() + (10 * 60 * 1000) },
+  })));
+  await assertFails(locationRef.set(buildRawDriverLocation({
+    liveSharingSessionId,
+    overrides: { source: 'manual' },
+  })));
+  await assertFails(locationRef.set(buildRawDriverLocation({
+    liveSharingSessionId,
+    overrides: { unexpectedPrivateField: 'must-not-leak' },
+  })));
   await assertSucceeds(locationRef.remove());
+
+  const pickupRef = dbFor(DRIVER_AUTH_UID).ref(`driver_location_pickups/${TOUR_ID}`);
+  await assertSucceeds(pickupRef.set(buildRawDriverLocation({ manual: true })));
+  await assertFails(pickupRef.set(buildRawDriverLocation({
+    manual: true,
+    overrides: { unexpectedField: 'not allowed' },
+  })));
+  await assertSucceeds(pickupRef.remove());
 });
 
 test('validates itinerary content, revision metadata, and driver-only text shape', async () => {

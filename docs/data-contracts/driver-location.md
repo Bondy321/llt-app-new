@@ -1,18 +1,44 @@
 # Driver Location and Find My Bus Contract
 
-Date: 23 August 2026
+Date: 28 August 2026
 
-The canonical shared driver point lives at:
+The passenger-compatible projection remains:
 
 ```text
 tours/{tourId}/driverLocation
 ```
 
-Only an assigned, verified driver or operations admin may publish or remove this record. Driver reassignment and unassignment clear the previous location in the same authoritative multi-path update so a new driver never inherits another driver's point.
+It is server-owned. Mobile and web clients cannot publish or remove it directly.
+
+## Source records
+
+Automatic live sharing is isolated by app session and sharing lifecycle:
+
+```text
+driver_location_sessions/{appSessionId}|{liveSharingSessionId}
+```
+
+The canonical fixed pickup source is separate:
+
+```text
+driver_location_pickups/{tourId}
+```
+
+Both use schema version 2 and carry exact `authUid`, `appSessionId`, `driverId`, and
+`tourId` ownership. A live source additionally carries `liveSharingSessionId` and
+`cleanupAtMs`. Coordinates, server-resolved timestamps, and accuracy from 0 to
+10,000 metres are mandatory and bounded for live sources. Rules require the path
+key to match both lifecycle IDs and bind every write or exact-leaf delete to the
+current active driver session, current policy generation, user mapping, and exact
+manifest assignment.
+
+Only a live leaf arms `onDisconnect`, and only for its own composite key. A fixed
+pickup is never embedded as a live fallback and cannot be touched by a stale
+handset's disconnect handler.
 
 ## Versioned record
 
-New mobile clients publish schema version 1:
+The server projects the selected source to schema version 1:
 
 ```ts
 {
@@ -23,16 +49,19 @@ New mobile clients publish schema version 1:
   latitude: number,
   longitude: number,
   timestamp: ServerValue.TIMESTAMP,
-  sessionId?: string,        // required for source: auto
-  cleanupAtMs?: number,      // required for source: auto; 30-minute lease
-  fallbackPickup?: Pickup,   // prior fixed point while source: auto
   accuracy?: number,
   address?: string,
-  updatedBy?: string
+  updatedBy?: string,
+  projectionRevision: number
 }
 ```
 
-`manual` must pair with `pickup`; `auto` must pair with `live`. New auto publications own an opaque session and a server-validated 30-minute cleanup lease. Coordinates, accuracy, lease bounds, session format, text lengths, allowed fields, and the resolved server timestamp are bounded by Realtime Database rules. Legacy unversioned records remain writable during the mobile rollout, but all new code writes the strict schema.
+`manual` pairs with `pickup`; `auto` pairs with `live`. A retryable Function
+re-reads all current sources, validates their live authority, chooses the newest
+valid live source with a deterministic ownership tie-break, and falls back to the
+canonical pickup only when no valid live leaf remains. Projection leases and
+monotonic revisions prevent a delayed trigger from overwriting newer state. No
+client may write the projection or its private revision state.
 
 ## Passenger presentation
 
@@ -52,11 +81,11 @@ Passenger location is optional. Opening Find My Bus checks existing foreground p
 - Manual "Set pickup" publishes `mode: pickup`.
 - Foreground auto-share publishes `mode: live` at most once every three minutes and prevents overlapping work within the same lifecycle.
 - Enabling auto-share verifies permission before persisting the preference.
-- Starting auto-share transactionally carries forward the current validated manual pickup point as a nested fallback. Disabling auto-share transactionally replaces only the exact live session with that fixed point.
+- Starting auto-share creates only the lifecycle-owned live leaf. Disabling it compare-deletes only that exact leaf; the independent pickup remains available to the projector.
 - A failed withdrawal leaves auto-share enabled and exposes a retry action; the UI must not claim sharing stopped before the remote record is removed.
-- Backgrounding, disabling, reassignment, logout, or unmount immediately withdraws the exact live session owned by that screen lifecycle. Firebase `onDisconnect` removal (or fixed-point restoration) is armed after every live write as a second path.
+- Backgrounding, disabling, reassignment, logout, or unmount immediately withdraws the exact live session owned by that screen lifecycle. Firebase `onDisconnect` removal is armed before every live write as a second path.
 - Every auto-share lifecycle owns a unique session. Cancellation is checked after native location capture and again after the service write; an older cleanup can never remove a newer session.
-- A scheduled backend cleanup queries the indexed `driverLocation/cleanupAtMs` lease in bounded batches and transactionally removes only the exact expired session, restoring a validated fixed point when present. This caps precise-coordinate retention even if both client cleanup paths fail.
+- A scheduled backend cleanup queries `driver_location_sessions/cleanupAtMs` in bounded batches and compare-deletes only the exact expired lifecycle, then reconciles each affected tour. This caps precise-coordinate retention even if both client cleanup paths fail.
 - The driver reconciles the persisted server timestamp through a realtime subscription; local device time is never presented as authoritative publication time.
 - Manual previews are bound to the tour and driver identity active at capture time. Assignment changes invalidate the preview, and reverse-geocode results are applied only to the matching request.
 
@@ -66,6 +95,22 @@ Passenger location is optional. Opening Find My Bus checks existing foreground p
 - Subscription errors expose an explicit retry action.
 - Initial and duplicate or replayed snapshots do not trigger update haptics; only a changed publication after the initial snapshot does.
 - Live and fixed pickup markers use different labels. Stale and low-accuracy points cannot launch directions or calculate distance or ETA.
+
+## Session cleanup and legacy compatibility
+
+Logout, policy cleanup, assignment change, and account deletion query raw source
+records by exact `appSessionId`, compare-delete only those records, and reconcile
+the affected projections. Ending handset A therefore cannot remove handset B.
+
+Existing `tours/{tourId}/driverLocation` records remain readable by the unchanged
+passenger contract during cutover. They are not promoted into trusted schema-v2
+sources because legacy records do not contain enough session ownership to prove
+authority. The first trusted source reconciliation replaces that compatibility
+snapshot. A fixed pickup that must persist must be republished by a currently
+authorised driver; migration must never invent an Auth UID or app session. Old
+clients that still write the shared path are intentionally denied after the new
+rules cutover, so Functions and rules must be ready before releasing the 1.0.5
+mobile binary.
 
 ## Verification
 

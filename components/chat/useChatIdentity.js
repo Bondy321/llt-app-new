@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import offlineSyncService from '../../services/offlineSyncService';
 import { maskIdentifier } from '../../services/loggerService';
-import { isRealtimeKeySegment, resolveRealtimeActorId, toRealtimeKeySegment } from '../../services/identityService';
+import { isRealtimeKeySegment, resolveChatStatusActorId, resolveRealtimeActorId, toRealtimeKeySegment } from '../../services/identityService';
 import { maskReactionDebugIds, summarizeReactionDebugId, rawReactionDebugIds, logChatReactionDebug } from "./chatShared";
 export default function useChatIdentity(context, late) {
   const {
@@ -18,9 +18,8 @@ export default function useChatIdentity(context, late) {
   } = context;
   const authUid = canonicalIdentity?.authUid || currentUser?.uid || null;
   const realtimeActorId = useMemo(() => {
-    // Internal driver-chat rules deliberately key read state, typing and
-    // presence by the stable driver principal. Group chat continues to prefer
-    // the auth UID so passenger sessions keep their existing identity shape.
+    // Message, reaction, and read-state compatibility keeps the established
+    // actor key. Presence and typing use statusActorId below instead.
     if (internalDriverChat && isDriver && principalId.startsWith('driver:')) {
       return isRealtimeKeySegment(principalId) ? principalId : toRealtimeKeySegment(principalId);
     }
@@ -29,6 +28,9 @@ export default function useChatIdentity(context, late) {
       principalId
     }) || principalId;
   }, [authUid, internalDriverChat, isDriver, principalId]);
+  const statusActorId = useMemo(() => resolveChatStatusActorId({
+    sessionScope: offlineSessionScope
+  }), [offlineSessionScope]);
   const currentReactionUserIds = useMemo(() => {
     const candidates = [realtimeActorId, principalId, passengerStableId, authUid, toRealtimeKeySegment(principalId), toRealtimeKeySegment(passengerStableId)];
     return Array.from(new Set(candidates.filter(Boolean)));
@@ -76,6 +78,7 @@ export default function useChatIdentity(context, late) {
   Object.assign(late.current, {
     authUid,
     realtimeActorId,
+    statusActorId,
     currentReactionUserIds,
     userName,
     chatQueueScope,
@@ -86,6 +89,7 @@ export default function useChatIdentity(context, late) {
   return {
     authUid,
     realtimeActorId,
+    statusActorId,
     currentReactionUserIds,
     userName,
     chatQueueScope,

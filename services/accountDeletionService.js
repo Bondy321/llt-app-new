@@ -269,7 +269,6 @@ const buildAccountRecordUpdates = ({
   tourId,
   driverId,
   passengerBookingRef,
-  includeDriverLocation,
 }) => {
   const updates = {};
   updates[`users/${authUid}`] = null;
@@ -308,10 +307,6 @@ const buildAccountRecordUpdates = ({
   if (driverId) {
     const driverKey = toRealtimeKeySegment(driverId);
     if (driverKey) updates[`drivers/${driverKey}/authUid`] = null;
-  }
-
-  if (includeDriverLocation && tourId) {
-    updates[`tours/${tourId}/driverLocation`] = null;
   }
 
   return updates;
@@ -481,7 +476,6 @@ export const deleteCurrentAccount = async ({
       tourId,
       driverId,
       passengerBookingRef,
-      includeDriverLocation: role === 'driver',
     });
 
     let chatUpdates = {};

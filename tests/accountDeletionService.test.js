@@ -222,7 +222,7 @@ test('deleteCurrentAccount clears app account records, active-tour content, loca
   assert.ok(providerDeletes.some((entry) => entry.namespace === 'LLT_OFFLINE'));
 });
 
-test('deleteCurrentAccount removes driver-owned internal chat and driver location state', async () => {
+test('deleteCurrentAccount removes driver-owned chat without client-writing the server location projection', async () => {
   const { deleteCurrentAccount } = loadService();
   const db = buildDb({
     internal_chats: {
@@ -273,7 +273,7 @@ test('deleteCurrentAccount removes driver-owned internal chat and driver locatio
   const updatePayload = db.updates[0].payload;
   assert.equal(updatePayload['users/driver-auth-1'], null);
   assert.equal(updatePayload['drivers/D-7/authUid'], null);
-  assert.equal(updatePayload['tours/TOUR_1/driverLocation'], null);
+  assert.equal(updatePayload['tours/TOUR_1/driverLocation'], undefined);
   assert.equal(updatePayload['internal_chats/TOUR_1/messages/mine'], null);
   assert.equal(updatePayload['internal_chats/TOUR_1/messages/other'], undefined);
 });

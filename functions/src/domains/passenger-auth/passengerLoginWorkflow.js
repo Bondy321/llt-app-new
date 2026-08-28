@@ -8,7 +8,13 @@ const { enforceLoginAppCheck } = require('../../infrastructure/auth/loginAppChec
 const { verifyRequestAuthUid } = require('../../infrastructure/auth/requestAuth');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { hashRateLimitDimension } = require('../../infrastructure/rate-limit/requestRateLimiter');
-const { buildVerifiedLoginGrantUpdates, issuePassengerAppSession } = require('../app-sessions/public');
+const {
+  ROLE_TRANSITION_CLAIM_ROOT,
+  buildPassengerRoleClaimJob,
+  buildVerifiedLoginGrantUpdates,
+  issuePassengerAppSession,
+  reconcilePassengerRoleClaimJob,
+} = require('../app-sessions/public');
 const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { buildPassengerSafeBooking, buildPassengerSafeTour } = require('./passengerProjection');
 const { normalizeBookingRef, normalizeEmail } = require('./passengerSanitizer');
@@ -24,6 +30,7 @@ const {
   ensureOpaquePassengerIdentity,
   isOpaquePassengerId,
 } = loadLegacyLibrary('passengerIdentity');
+const { buildPassengerCustomClaims } = require('./passengerRoleClaims');
 const { toClientSession } = loadLegacyLibrary('appSession');
 
 /** @param {number} status @param {string} reason */
@@ -32,6 +39,11 @@ const identityIncompleteFailure = () => ({
   ok: false,
   status: 200,
   body: { valid: false, reason: 'IDENTITY_INCOMPLETE' },
+});
+const roleTransitionInProgressFailure = () => ({
+  ok: false,
+  status: 503,
+  body: { valid: false, reason: 'ROLE_TRANSITION_IN_PROGRESS' },
 });
 
 /** @type {(...args: any[]) => any} */
@@ -214,12 +226,6 @@ const issueVerifiedPassengerSession = async ({ authUid, context, stablePassenger
     nowMs: sessionIssuedAtMs,
   });
   if (!identityUpdates) return identityIncompleteFailure();
-  const authUser = await admin.auth().getUser(authUid);
-  await admin.auth().setCustomUserClaims(authUid, {
-    ...(authUser.customClaims || {}),
-    privatePhotoOwnerKey: stablePassengerId,
-    passengerIdentityVersion: PASSENGER_IDENTITY_VERSION,
-  });
   const appSession = await issuePassengerAppSession({
     db: database,
     authUid,
@@ -228,8 +234,30 @@ const issueVerifiedPassengerSession = async ({ authUid, context, stablePassenger
     bookingRef: resolvedBookingRef,
     identityUpdates,
     grantUpdates,
+    buildRoleClaimUpdates: (session) => ({
+      [`${ROLE_TRANSITION_CLAIM_ROOT}/${authUid}`]: buildPassengerRoleClaimJob({
+        authUid,
+        session,
+        privatePhotoOwnerKey: stablePassengerId,
+        nowMs: sessionIssuedAtMs,
+      }),
+    }),
     nowMs: sessionIssuedAtMs,
   });
+  try {
+    const claimResult = await reconcilePassengerRoleClaimJob({
+      db: database,
+      auth: admin.auth(),
+      authUid,
+      buildClaims: buildPassengerCustomClaims,
+    });
+    if (!claimResult.completed) return roleTransitionInProgressFailure();
+  } catch (error) {
+    log.warn('Passenger role claim projection remains retryable', {
+      errorCode: error?.code || 'CLAIM_RETRY',
+    });
+    return roleTransitionInProgressFailure();
+  }
   return {
     ok: true,
     status: 200,
@@ -269,6 +297,7 @@ const executePassengerLogin = async ({ req, bookingRef, email }) => {
 module.exports = {
   authorizePassengerIdentity,
   authorizePassengerLoginRequest,
+  buildPassengerCustomClaims,
   buildPassengerLoginResponse,
   executePassengerLogin,
   issueVerifiedPassengerSession,

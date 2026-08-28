@@ -41,7 +41,7 @@ const COLORS = {
 };
 
 // Minimal map style for preview
-export default function DriverHomeController({ driverData, onLogout, onNavigate, onDriverAssignmentChange, driverTourPackState, driverTourPackFeature }) {
+export default function DriverHomeController({ driverData, locationSessionScope = null, onLogout, onNavigate, onDriverAssignmentChange, driverTourPackState, driverTourPackFeature }) {
   const [updatingLocation, setUpdatingLocation] = useState(false);
   const [lastLocationUpdate, setLastLocationUpdate] = useState(null);
   const [locationAccuracy, setLocationAccuracy] = useState(null);
@@ -348,9 +348,9 @@ export default function DriverHomeController({ driverData, onLogout, onNavigate,
   }, [activeTourId, driverData?.id]);
 
   // Reverse geocode to get address
-  const { getAddressFromCoords, captureCurrentLocationWithPermission, uploadLocationUpdate, handleCaptureLocation, handleConfirmLocation } = createDriverLocationCaptureActions({ activeTourId, activeTourIdRef, addressText, driverData, driverIdRef, locationAccuracy, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setConfirmingLocation, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, successAnim });
+  const { getAddressFromCoords, captureCurrentLocationWithPermission, uploadLocationUpdate, handleCaptureLocation, handleConfirmLocation } = createDriverLocationCaptureActions({ activeTourId, activeTourIdRef, addressText, driverData, driverIdRef, locationAccuracy, locationSessionScope, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setConfirmingLocation, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, successAnim });
 
-  const { handleToggleAutoShare, handleRefetchLocation } = createDriverLocationSharingActions({ activeTourId, activeTourIdRef, autoShareEnabled, autoShareEnabledRef, autoShareGenerationRef, autoShareInFlightRef, autoShareInitialLocationRef, autoSharePreferenceKey, autoShareSessionRef, autoShareToggleInFlightRef, captureCurrentLocationWithPermission, driverData, driverIdRef, getAddressFromCoords, isAppActive, isAppActiveRef, lastLocationAddressRef, locationBusyRef, persistenceRef, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setAutoShareEnabled, setAutoShareLastRunAt, setAutoShareSaving, setAutoShareStatus, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, uploadLocationUpdate });
+  const { handleToggleAutoShare, handleRefetchLocation } = createDriverLocationSharingActions({ activeTourId, activeTourIdRef, autoShareEnabled, autoShareEnabledRef, autoShareGenerationRef, autoShareInFlightRef, autoShareInitialLocationRef, autoSharePreferenceKey, autoShareSessionRef, autoShareToggleInFlightRef, captureCurrentLocationWithPermission, driverData, driverIdRef, getAddressFromCoords, isAppActive, isAppActiveRef, lastLocationAddressRef, locationBusyRef, locationSessionScope, persistenceRef, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setAutoShareEnabled, setAutoShareLastRunAt, setAutoShareSaving, setAutoShareStatus, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, uploadLocationUpdate });
 
   const handleOpenChat = () => {
     if (!activeTourId) {

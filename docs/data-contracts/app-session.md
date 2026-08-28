@@ -37,7 +37,32 @@ Invariants:
 - Passenger and assigned-driver sessions normally expire after 12 hours. A valid unassigned-driver session expires after one hour. Every TTL is bounded between five minutes and 24 hours.
 - Clients may read only their own record and cannot write any field.
 - `driverLoginPolicyGeneration` is server-only and binds driver sessions to the current device-policy generation. Legacy generation-less driver sessions are generation zero only before the first policy record is written.
-- `app_session_locks` and `app_session_events` are server-private.
+- `app_session_locks`, `app_session_events`, and
+  `app_session_role_claim_jobs` are server-private.
+
+## Role transitions
+
+Session issuance owns role transition; persistent profile data is never allowed to
+decide the current role. Issuing a passenger session atomically clears
+`users/{authUid}/driverId`, `driverPrincipalId`, and `driverAssignedTourId` in the
+same RTDB root update that installs the passenger session, durable passenger
+identity, and an exact-session job under
+`app_session_role_claim_jobs/v1/{authUid}`. A retryable worker then removes every
+known legacy driver-authority custom claim from Firebase Auth and compare-deletes
+the job only if the same passenger session is still current. A stale job is
+discarded without touching a replacement session. This process does not delete
+`drivers/{driverId}`, operational assignment history, the opaque passenger
+identity, or private-photo ownership.
+
+Issuing a driver session preserves those durable passenger fields. A failed RTDB
+root update changes neither role and never starts the Auth claim update. If Auth is
+temporarily unavailable after a successful passenger transition, RTDB remains the
+current-role authority, the login returns `ROLE_TRANSITION_IN_PROGRESS`, and the
+job remains retryable for its bounded 30-day retention window. Repeated
+passenger-to-driver-to-passenger
+transitions therefore preserve durable identity while all driver-only rules bind
+directly to the active driver app session, current policy generation, user mapping,
+and exact manifest assignment; legacy custom claims never grant RTDB authority.
 
 ## Passenger membership
 
@@ -68,7 +93,7 @@ Driver tour access requires all of the following to agree:
 - `drivers/{driverId}/authUid` only while single-device enforcement is enabled;
 - `tour_manifests/{tourId}/assigned_drivers/{driverId}`.
 
-An operational assignment remains after logout but cannot grant mobile access. With enforcement off, several verified handsets may hold independent sessions for the same driver. Assignment changes compare the expected session, increment `sessionRevision`, preserve the policy generation, update the session tour, and remove only old location/presence state owned by that session. See `driver-login-policy.md` for transition and cleanup behavior.
+An operational assignment remains after logout but cannot grant mobile access. With enforcement off, several verified handsets may hold independent sessions for the same driver. The server-owned assignment mutation finds every active current-generation driver session and updates each session revision, authentication time, bounded expiry, user assignment helper, and notification-device operational tour. With enforcement on it preserves only the claimed UID and queues exact cleanup for obsolete sessions. See `driver-login-policy.md` and `driver-assignment.md`.
 
 ## Session state transitions
 
@@ -81,7 +106,7 @@ Issuance, assignment, logout, revocation, and expiry cleanup serialize through t
 
 `endAppSession` requires Auth, `POST`, `reason=user_logout`, and the exact expected session ID. App Check is currently explicitly disabled. A missing session is idempotent success. A different current session returns `SESSION_CHANGED`, so a delayed Session A logout cannot end Session B.
 
-Cleanup removes session-derived authority and ephemeral state: the session, passenger membership and legacy grants, typing/presence, legacy UID read markers, migration requests, live tracking, a matching driver-location publication, and push-token eligibility. It preserves identity bindings, booking and manifest records, operational driver assignment, historical content, reports, photos, reactions, and canonical read history.
+Cleanup removes session-derived authority and ephemeral state: the session, passenger membership and legacy grants, per-session typing/presence sources, legacy UID read markers, migration requests, live tracking, exact owned driver-location sources, and operational push eligibility. Location and chat projections are reconciled after exact owned leaves are removed. It preserves identity bindings, booking and manifest records, operational driver assignment, marketing consent, historical content, reports, photos, reactions, and canonical read history.
 
 ## Mobile behavior
 

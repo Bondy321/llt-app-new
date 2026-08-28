@@ -6,6 +6,7 @@ const {
   isOpaquePassengerId,
   isRealtimeKeySegment,
   resolveAuthScopedUserId,
+  resolveChatStatusActorId,
   resolveRealtimeActorId,
   toRealtimeKeySegment,
 } = require('../services/identityService');
@@ -69,6 +70,17 @@ test('resolveRealtimeActorId prefers auth UID and falls back to encoded principa
     }),
     'pax_v1:T123659:msandreayoung@yahoo_2E_co_2E_uk'
   );
+});
+
+test('chat status identity uses the exact app-session principal instead of the auth UID', () => {
+  const principalId = `pax_v2_${'c'.repeat(32)}`;
+  assert.equal(resolveRealtimeActorId({ authUid: 'firebase-auth-uid', principalId }), 'firebase-auth-uid');
+  assert.equal(resolveChatStatusActorId({
+    sessionScope: { authUid: 'firebase-auth-uid', principalId },
+  }), principalId);
+  assert.equal(resolveChatStatusActorId({
+    sessionScope: { authUid: 'firebase-auth-uid', principalId: 'unsafe/principal' },
+  }), null);
 });
 
 test('canonical passenger identity accepts only opaque server-issued v2 principals', () => {

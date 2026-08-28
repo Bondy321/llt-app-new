@@ -315,5 +315,17 @@ test('claimed drivers cannot manufacture manifest assignment authority', async (
 });
 
 test('allows a claimed driver to unlink only their own auth uid for account deletion', async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref().update({
+      'driver_login_policy/v1': {
+        schemaVersion: 1,
+        enforceSingleDevice: false,
+        generation: 0,
+        revision: 4,
+        updatedAtMs: Date.now(),
+      },
+      [`app_sessions/${DRIVER_AUTH_UID}/driverLoginPolicyGeneration`]: 0,
+    });
+  });
   await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}/authUid`).remove());
 });

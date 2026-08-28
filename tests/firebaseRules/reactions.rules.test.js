@@ -7,7 +7,7 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
-const { passengerAuthorityUpdates, driverAuthorityUpdates } = require('./sessionFixtures');
+const { passengerAuthorityUpdates, driverAuthorityUpdates, sessionIdFor } = require('./sessionFixtures');
 const { sendInternalDriverMessage } = require('../../services/chatService');
 const { toRealtimeKeySegment } = require('../../services/identityService');
 
@@ -48,6 +48,22 @@ let testEnv;
 let dbUrl;
 
 const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
+
+const buildChatStatus = ({ uid, principalId, principalType, scope = 'group', kind }) => ({
+  schemaVersion: 2,
+  actorKey: principalId,
+  appSessionId: sessionIdFor(uid),
+  authUid: uid,
+  principalId,
+  principalType,
+  tourId: TOUR_ID,
+  tourActorKey: `${TOUR_ID}|${principalId}`,
+  scope,
+  name: principalType === 'driver' ? 'Driver Bondy' : 'Passenger One',
+  isDriver: principalType === 'driver',
+  timestamp: { '.sv': 'timestamp' },
+  expiresAtMs: Date.now() + (kind === 'typing' ? 10_000 : (5 * 60 * 1000)),
+});
 
 const seedMessage = async () => {
   await testEnv.withSecurityRulesDisabled(async (context) => {
@@ -345,41 +361,101 @@ test('denies driver principal reaction leaf writes when driver auth profile does
   await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`${REACTION_PATH}/${DRIVER_PRINCIPAL_ID}`).set(true));
 });
 
-test('allows principal-based typing writes via users/{auth.uid} + identity_bindings', async () => {
+test('allows passenger typing only through its exact raw app-session leaf', async () => {
   await assertSucceeds(
-    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/typing/${PASSENGER_PRINCIPAL_KEY}`).set({
-      name: 'Passenger One',
-      timestamp: Date.now(),
-    })
+    dbFor(PASSENGER_AUTH_UID)
+      .ref(`chat_typing_sessions/group/${sessionIdFor(PASSENGER_AUTH_UID)}`)
+      .set(buildChatStatus({
+        uid: PASSENGER_AUTH_UID,
+        principalId: PASSENGER_PRINCIPAL_ID,
+        principalType: 'passenger',
+        kind: 'typing',
+      }))
   );
 });
 
-test('allows principal-based presence writes via users/{auth.uid} + identity_bindings', async () => {
+test('allows passenger presence only through its exact raw app-session leaf', async () => {
   await assertSucceeds(
-    dbFor(PASSENGER_AUTH_UID).ref(`chats/${TOUR_ID}/presence/${PASSENGER_PRINCIPAL_KEY}`).set({
-      name: 'Passenger One',
-      lastSeen: Date.now(),
-      online: true,
-    })
+    dbFor(PASSENGER_AUTH_UID)
+      .ref(`chat_presence_sessions/group/${sessionIdFor(PASSENGER_AUTH_UID)}`)
+      .set(buildChatStatus({
+        uid: PASSENGER_AUTH_UID,
+        principalId: PASSENGER_PRINCIPAL_ID,
+        principalType: 'passenger',
+        kind: 'presence',
+      }))
   );
 });
 
-test('allows driver principal typing and presence writes via verified driver auth profile', async () => {
+test('allows driver typing and presence through verified raw app-session leaves', async () => {
   await assertSucceeds(
-    dbFor(DRIVER_AUTH_UID).ref(`chats/${TOUR_ID}/typing/${DRIVER_PRINCIPAL_ID}`).set({
-      name: 'Driver Bondy',
-      timestamp: Date.now(),
-      isDriver: true,
-    })
+    dbFor(DRIVER_AUTH_UID)
+      .ref(`chat_typing_sessions/group/${sessionIdFor(DRIVER_AUTH_UID)}`)
+      .set(buildChatStatus({
+        uid: DRIVER_AUTH_UID,
+        principalId: DRIVER_PRINCIPAL_ID,
+        principalType: 'driver',
+        kind: 'typing',
+      }))
   );
   await assertSucceeds(
-    dbFor(DRIVER_AUTH_UID).ref(`chats/${TOUR_ID}/presence/${DRIVER_PRINCIPAL_ID}`).set({
-      name: 'Driver Bondy',
-      lastSeen: Date.now(),
-      online: true,
-      isDriver: true,
-    })
+    dbFor(DRIVER_AUTH_UID)
+      .ref(`chat_presence_sessions/group/${sessionIdFor(DRIVER_AUTH_UID)}`)
+      .set(buildChatStatus({
+        uid: DRIVER_AUTH_UID,
+        principalId: DRIVER_PRINCIPAL_ID,
+        principalType: 'driver',
+        kind: 'presence',
+      }))
   );
+});
+
+test('staged legacy chat status works only before a server projection revision is present', async () => {
+  const groupTypingPath = `chats/${TOUR_ID}/typing/${PASSENGER_AUTH_UID}`;
+  const groupPresencePath = `chats/${TOUR_ID}/presence/${PASSENGER_AUTH_UID}`;
+  const internalTypingPath = `internal_chats/${INTERNAL_TOUR_ID}/typing/${DRIVER_PRINCIPAL_ID}`;
+  const internalPresencePath = `internal_chats/${INTERNAL_TOUR_ID}/presence/${DRIVER_PRINCIPAL_ID}`;
+
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(groupTypingPath).set({
+    name: 'Passenger One',
+    isDriver: false,
+    timestamp: Date.now(),
+  }));
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(groupPresencePath).set({
+    name: 'Passenger One',
+    isDriver: false,
+    lastSeen: Date.now(),
+    online: true,
+  }));
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(internalTypingPath).set({
+    name: 'Driver Bondy',
+    isDriver: true,
+    timestamp: Date.now(),
+  }));
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(internalPresencePath).set({
+    name: 'Driver Bondy',
+    isDriver: true,
+    lastSeen: Date.now(),
+    online: true,
+  }));
+
+  await testEnv.withSecurityRulesDisabled((context) => context.database(dbUrl).ref().update({
+    [`${groupTypingPath}/projectionRevision`]: 1,
+    [`${groupPresencePath}/projectionRevision`]: 1,
+    [`${internalTypingPath}/projectionRevision`]: 1,
+    [`${internalPresencePath}/projectionRevision`]: 1,
+  }));
+
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(groupTypingPath).remove());
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(groupPresencePath).update({
+    online: false,
+    lastSeen: Date.now(),
+  }));
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(internalTypingPath).remove());
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(internalPresencePath).update({
+    online: false,
+    lastSeen: Date.now(),
+  }));
 });
 
 test('denies principal-based chat writes when identity_bindings ownership is missing', async () => {
@@ -471,21 +547,28 @@ test('allows internal driver lastRead server timestamps through canonical driver
   );
 });
 
-test('allows internal driver typing and presence only for assigned driver principals', async () => {
+test('allows internal driver typing and presence only through assigned raw app-session leaves', async () => {
   await assertSucceeds(
-    dbFor(DRIVER_AUTH_UID).ref(`internal_chats/${INTERNAL_TOUR_ID}/typing/${DRIVER_PRINCIPAL_ID}`).set({
-      name: 'Driver Bondy',
-      timestamp: Date.now(),
-      isDriver: true,
-    })
+    dbFor(DRIVER_AUTH_UID)
+      .ref(`chat_typing_sessions/internal/${sessionIdFor(DRIVER_AUTH_UID)}`)
+      .set(buildChatStatus({
+        uid: DRIVER_AUTH_UID,
+        principalId: DRIVER_PRINCIPAL_ID,
+        principalType: 'driver',
+        scope: 'internal',
+        kind: 'typing',
+      }))
   );
   await assertSucceeds(
-    dbFor(DRIVER_AUTH_UID).ref(`internal_chats/${INTERNAL_TOUR_ID}/presence/${DRIVER_PRINCIPAL_ID}`).set({
-      name: 'Driver Bondy',
-      lastSeen: Date.now(),
-      online: true,
-      isDriver: true,
-    })
+    dbFor(DRIVER_AUTH_UID)
+      .ref(`chat_presence_sessions/internal/${sessionIdFor(DRIVER_AUTH_UID)}`)
+      .set(buildChatStatus({
+        uid: DRIVER_AUTH_UID,
+        principalId: DRIVER_PRINCIPAL_ID,
+        principalType: 'driver',
+        scope: 'internal',
+        kind: 'presence',
+      }))
   );
 
   await assertFails(

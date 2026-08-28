@@ -4,5 +4,10 @@ const {
   distributedLoginRateLimiter,
   getTrustedRequestNetworkKey,
 } = require('./passengerLoginSecurity');
+const { buildPassengerCustomClaims } = require('./passengerRoleClaims');
 
-module.exports = { distributedLoginRateLimiter, getTrustedRequestNetworkKey };
+module.exports = {
+  buildPassengerCustomClaims,
+  distributedLoginRateLimiter,
+  getTrustedRequestNetworkKey,
+};

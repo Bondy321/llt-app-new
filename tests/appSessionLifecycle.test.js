@@ -14,6 +14,13 @@ const { acquireAppSessionLock, releaseAppSessionLock } = require('../functions/l
 const { verifyActiveAppSession } = require('../functions/lib/appSessionAccess');
 const { buildAppSessionCleanupUpdates, cleanupAppSession } = require('../functions/lib/appSessionCleanup');
 const {
+  buildRoleTransitionCleanupUpdates,
+} = require('../functions/src/domains/app-sessions/roleTransition');
+const {
+  issueDriverAppSession,
+  issuePassengerAppSession,
+} = require('../functions/src/domains/app-sessions/sessionIssuance');
+const {
   buildCutoverUpdates,
   closeAdminApps,
   isParticipantBackedByActiveSession,
@@ -23,23 +30,54 @@ const {
 const PASSENGER_ID = `pax_v2_${'a'.repeat(32)}`;
 const SESSION_ID = `sess_v1_${'b'.repeat(32)}`;
 
+const chatStatusSource = ({ session, scope = 'group', timestamp, expiresAtMs }) => ({
+  schemaVersion: 2,
+  authUid: session.authUid,
+  appSessionId: session.sessionId,
+  actorKey: session.principalId,
+  principalId: session.principalId,
+  principalType: session.principalType,
+  tourId: session.tourId,
+  tourActorKey: `${session.tourId}|${session.principalId}`,
+  scope,
+  name: session.principalType === 'driver' ? 'Driver' : 'Passenger',
+  isDriver: session.principalType === 'driver',
+  timestamp,
+  expiresAtMs,
+});
+
 const snapshot = (value) => ({
   val: () => value,
   exists: () => value !== null && value !== undefined,
 });
 
-const createTransactionDb = (initial = {}) => {
+const createTransactionDb = (initial = {}, { rootUpdateError = null } = {}) => {
   const state = { ...initial };
   return {
     state,
     ref(path = '') {
-      return {
-        async once() { return snapshot(state[path]); },
+      const query = { child: null, equal: undefined };
+      const readValue = () => {
+        if (!query.child) return state[path];
+        const prefix = path ? `${path}/` : '';
+        return Object.fromEntries(Object.entries(state)
+          .filter(([key, value]) => key.startsWith(prefix)
+            && !key.slice(prefix.length).includes('/')
+            && (query.equal === undefined || value?.[query.child] === query.equal))
+          .map(([key, value]) => [key.slice(prefix.length), value]));
+      };
+      const ref = {
+        orderByChild(child) { query.child = child; return ref; },
+        equalTo(value) { query.equal = value; return ref; },
+        async get() { return snapshot(readValue()); },
+        async once() { return snapshot(readValue()); },
         async update(updates) {
+          if (path === '' && rootUpdateError) throw rootUpdateError;
           Object.entries(updates).forEach(([key, value]) => {
             if (value === null) delete state[key]; else state[key] = value;
           });
         },
+        push() { return { key: 'event-role-transition' }; },
         async transaction(updater) {
           const next = updater(state[path] ?? null);
           if (next === undefined) return { committed: false, snapshot: snapshot(state[path]) };
@@ -47,6 +85,7 @@ const createTransactionDb = (initial = {}) => {
           return { committed: true, snapshot: snapshot(next) };
         },
       };
+      return ref;
     },
   };
 };
@@ -118,6 +157,22 @@ test('per-UID lock serialises contenders, recovers expiry and releases only for 
     db, authUid: 'uid-1', operation: 'cleanup', owner: 'owner-c', nowMs: 31_000,
   })).acquired, true);
   assert.equal(await releaseAppSessionLock({ db, authUid: 'uid-1', owner: 'owner-c' }), true);
+});
+
+test('policy cleanup is an admitted app-session lock operation', async () => {
+  const db = createTransactionDb();
+  const lock = await acquireAppSessionLock({
+    db,
+    authUid: 'uid-policy-cleanup',
+    operation: 'policy_cleanup',
+    owner: 'policy-cleanup-owner',
+    nowMs: 100,
+  });
+  assert.equal(lock.acquired, true);
+  assert.equal(lock.lock.operation, 'policy_cleanup');
+  assert.equal(await releaseAppSessionLock({
+    db, authUid: 'uid-policy-cleanup', owner: 'policy-cleanup-owner',
+  }), true);
 });
 
 test('active access requires the matching live session and schema-v2 participant', async () => {
@@ -222,6 +277,283 @@ test('cleanup removes only ephemeral authority and rejects a changed session', a
     db, session, expectedSessionId: `sess_v1_${'d'.repeat(32)}`,
   }), (error) => error.code === 'SESSION_CHANGED');
   assert.ok(db.state['app_sessions/uid-p']);
+});
+
+test('role transition cleanup clears current driver authority without touching durable identities or assignments', () => {
+  const passengerUpdates = buildRoleTransitionCleanupUpdates({
+    authUid: 'uid-role-transition',
+    targetPrincipalType: 'passenger',
+  });
+  assert.deepEqual(passengerUpdates, {
+    'users/uid-role-transition/driverId': null,
+    'users/uid-role-transition/driverPrincipalId': null,
+    'users/uid-role-transition/driverAssignedTourId': null,
+  });
+  assert.equal(Object.keys(passengerUpdates).some((key) => key.includes('stablePassenger')), false);
+  assert.equal(Object.keys(passengerUpdates).some((key) => key.includes('privatePhotoOwner')), false);
+  assert.equal(Object.keys(passengerUpdates).some((key) => key.startsWith('drivers/')), false);
+  assert.equal(Object.keys(passengerUpdates).some((key) => key.startsWith('tour_manifests/')), false);
+
+  assert.deepEqual(buildRoleTransitionCleanupUpdates({
+    authUid: 'uid-role-transition',
+    targetPrincipalType: 'driver',
+  }), {});
+  assert.throws(() => buildRoleTransitionCleanupUpdates({
+    authUid: 'unsafe/uid',
+    targetPrincipalType: 'passenger',
+  }), /invalid app-session role transition/i);
+});
+
+test('passenger issuance commits driver cleanup and durable passenger identity in one root update', async () => {
+  const nowMs = 1_800_000_000_000;
+  const oldDriverSession = buildDriverSessionRecord({
+    authUid: 'uid-role-transition',
+    driverId: 'D-ROLE',
+    tourId: 'TOUR_OLD',
+    sessionId: `sess_v1_${'6'.repeat(32)}`,
+    nowMs: nowMs - 1_000,
+  });
+  const durableProfile = {
+    stablePassengerId: PASSENGER_ID,
+    stablePassengerKey: PASSENGER_ID,
+    privatePhotoOwnerId: PASSENGER_ID,
+    privatePhotoOwnerKey: PASSENGER_ID,
+    identityVersion: 'pax_v2',
+    bookingRef: 'BOOK-ROLE',
+    driverId: 'D-ROLE',
+    driverPrincipalId: 'driver:D-ROLE',
+    driverAssignedTourId: 'TOUR_OLD',
+    principalType: 'driver',
+  };
+  const db = createTransactionDb({
+    'app_sessions/uid-role-transition': oldDriverSession,
+    'users/uid-role-transition': durableProfile,
+  });
+
+  let roleClaimSession = null;
+  const issued = await issuePassengerAppSession({
+    db,
+    authUid: 'uid-role-transition',
+    principalId: PASSENGER_ID,
+    tourId: 'TOUR_NEW',
+    identityUpdates: {
+      'users/uid-role-transition/stablePassengerId': PASSENGER_ID,
+      'users/uid-role-transition/privatePhotoOwnerId': PASSENGER_ID,
+    },
+    grantUpdates: {},
+    buildRoleClaimUpdates: (session) => {
+      roleClaimSession = session;
+      return { 'auth_claim_updates/uid-role-transition': { role: 'passenger', sessionId: session.sessionId } };
+    },
+    nowMs,
+  });
+
+  assert.equal(issued.principalType, 'passenger');
+  assert.equal(db.state['users/uid-role-transition/driverId'], undefined);
+  assert.equal(db.state['users/uid-role-transition/driverPrincipalId'], undefined);
+  assert.equal(db.state['users/uid-role-transition/driverAssignedTourId'], undefined);
+  assert.equal(db.state['users/uid-role-transition/stablePassengerId'], PASSENGER_ID);
+  assert.equal(db.state['users/uid-role-transition/privatePhotoOwnerId'], PASSENGER_ID);
+  assert.equal(db.state['drivers/D-ROLE'], undefined);
+  assert.equal(db.state['tour_manifests/TOUR_OLD/assigned_drivers/D-ROLE'], undefined);
+  assert.equal(db.state['app_sessions/uid-role-transition'].principalType, 'passenger');
+  assert.equal(roleClaimSession.sessionId, issued.sessionId);
+  assert.equal(db.state['auth_claim_updates/uid-role-transition'].sessionId, issued.sessionId);
+});
+
+test('passenger session replacement removes its exact chat leaves before publishing the new session', async () => {
+  const nowMs = 1_800_000_010_000;
+  const oldSession = buildPassengerSessionRecord({
+    authUid: 'uid-chat-replace',
+    principalId: PASSENGER_ID,
+    tourId: 'TOUR_CHAT',
+    sessionId: `sess_v1_${'8'.repeat(32)}`,
+    nowMs: nowMs - 1_000,
+  });
+  const rawPresence = chatStatusSource({
+    session: oldSession,
+    timestamp: nowMs - 100,
+    expiresAtMs: nowMs + 60_000,
+  });
+  const db = createTransactionDb({
+    'app_sessions/uid-chat-replace': oldSession,
+    'users/uid-chat-replace': { principalType: 'passenger', stablePassengerId: PASSENGER_ID },
+    [`chat_presence_sessions/group/${oldSession.sessionId}`]: rawPresence,
+    [`chats/TOUR_CHAT/presence/${PASSENGER_ID}`]: {
+      name: 'Passenger', online: true, lastSeen: nowMs - 100,
+    },
+    [`chats/TOUR_CHAT/typing/${PASSENGER_ID}`]: {
+      name: 'Passenger', isTyping: true, timestamp: nowMs - 100,
+    },
+  });
+
+  const issued = await issuePassengerAppSession({
+    db,
+    authUid: oldSession.authUid,
+    principalId: PASSENGER_ID,
+    tourId: 'TOUR_CHAT',
+    identityUpdates: {},
+    grantUpdates: {},
+    nowMs,
+  });
+
+  assert.notEqual(issued.sessionId, oldSession.sessionId);
+  assert.equal(db.state[`chat_presence_sessions/group/${oldSession.sessionId}`], undefined);
+  assert.equal(db.state[`chats/TOUR_CHAT/presence/${PASSENGER_ID}`].online, false);
+  assert.equal(db.state[`chats/TOUR_CHAT/typing/${PASSENGER_ID}`].isTyping, false);
+  assert.ok(db.state[`chats/TOUR_CHAT/typing/${PASSENGER_ID}`].timestamp <= nowMs - 10_001);
+});
+
+test('driver replacement removes an exact manual pickup and publishes its tombstone before the new session', async () => {
+  const nowMs = 1_800_000_020_000;
+  const oldSession = buildDriverSessionRecord({
+    authUid: 'uid-manual-replace',
+    driverId: 'D-MANUAL',
+    tourId: 'TOUR_MANUAL',
+    sessionId: `sess_v1_${'9'.repeat(32)}`,
+    nowMs: nowMs - 1_000,
+  });
+  const db = createTransactionDb({
+    'app_sessions/uid-manual-replace': oldSession,
+    'users/uid-manual-replace': { principalType: 'driver', driverId: 'D-MANUAL' },
+    'driver_location_pickups/TOUR_MANUAL': {
+      schemaVersion: 2,
+      source: 'manual',
+      mode: 'pickup',
+      authUid: oldSession.authUid,
+      appSessionId: oldSession.sessionId,
+      driverId: 'D-MANUAL',
+      tourId: 'TOUR_MANUAL',
+      latitude: 55.9,
+      longitude: -4.3,
+      timestamp: nowMs - 100,
+    },
+    'tours/TOUR_MANUAL/driverLocation': {
+      schemaVersion: 1,
+      isSharing: true,
+      source: 'manual',
+      mode: 'pickup',
+      latitude: 55.9,
+      longitude: -4.3,
+      timestamp: nowMs - 100,
+    },
+  });
+
+  await issuePassengerAppSession({
+    db,
+    authUid: oldSession.authUid,
+    principalId: PASSENGER_ID,
+    tourId: 'TOUR_NEW',
+    identityUpdates: {},
+    grantUpdates: {},
+    nowMs,
+  });
+
+  assert.equal(db.state['driver_location_pickups/TOUR_MANUAL'], undefined);
+  assert.equal(db.state['tours/TOUR_MANUAL/driverLocation'].isSharing, false);
+  assert.equal(db.state['app_sessions/uid-manual-replace'].principalType, 'passenger');
+});
+
+test('replacement cleanup failure preserves the old root session and a retry reconciles already-deleted chat leaves', async () => {
+  const nowMs = 1_800_000_030_000;
+  const oldSession = buildPassengerSessionRecord({
+    authUid: 'uid-cleanup-retry',
+    principalId: PASSENGER_ID,
+    tourId: 'TOUR_RETRY',
+    sessionId: `sess_v1_${'a'.repeat(32)}`,
+    nowMs: nowMs - 1_000,
+  });
+  const db = createTransactionDb({
+    'app_sessions/uid-cleanup-retry': oldSession,
+    'users/uid-cleanup-retry': { principalType: 'passenger', stablePassengerId: PASSENGER_ID },
+    [`chat_presence_sessions/group/${oldSession.sessionId}`]: chatStatusSource({
+      session: oldSession,
+      timestamp: nowMs - 100,
+      expiresAtMs: nowMs + 60_000,
+    }),
+    [`chats/TOUR_RETRY/presence/${PASSENGER_ID}`]: {
+      name: 'Passenger', online: true, lastSeen: nowMs - 100,
+    },
+    [`chat_status_projection_state/group/TOUR_RETRY/${PASSENGER_ID}`]: {
+      leaseOwner: 'paused-cleanup',
+      leaseRevision: 1,
+      leaseExpiresAtMs: nowMs + 30_000,
+    },
+  });
+
+  const issue = () => issuePassengerAppSession({
+    db,
+    authUid: oldSession.authUid,
+    principalId: PASSENGER_ID,
+    tourId: 'TOUR_RETRY',
+    identityUpdates: {},
+    grantUpdates: {},
+    nowMs,
+  });
+  await assert.rejects(issue(), (error) => error.code === 'CHAT_STATUS_PROJECTION_BUSY');
+  assert.equal(db.state['app_sessions/uid-cleanup-retry'].sessionId, oldSession.sessionId);
+  assert.equal(db.state[`chat_presence_sessions/group/${oldSession.sessionId}`], undefined);
+  assert.equal(db.state[`chats/TOUR_RETRY/presence/${PASSENGER_ID}`].online, true);
+
+  db.state[`chat_status_projection_state/group/TOUR_RETRY/${PASSENGER_ID}`] = { revision: 0 };
+  const issued = await issue();
+  assert.notEqual(issued.sessionId, oldSession.sessionId);
+  assert.equal(db.state[`chats/TOUR_RETRY/presence/${PASSENGER_ID}`].online, false);
+});
+
+test('driver issuance preserves durable passenger ownership and a failed atomic update changes no role state', async () => {
+  const nowMs = 1_800_000_100_000;
+  const passengerSession = buildPassengerSessionRecord({
+    authUid: 'uid-role-transition',
+    principalId: PASSENGER_ID,
+    tourId: 'TOUR_A',
+    sessionId: `sess_v1_${'7'.repeat(32)}`,
+    nowMs: nowMs - 1_000,
+  });
+  const durableProfile = {
+    stablePassengerId: PASSENGER_ID,
+    privatePhotoOwnerId: PASSENGER_ID,
+    identityVersion: 'pax_v2',
+    bookingRef: 'BOOK-ROLE',
+    principalType: 'passenger',
+  };
+  const db = createTransactionDb({
+    'app_sessions/uid-role-transition': passengerSession,
+    'users/uid-role-transition': durableProfile,
+  });
+  await issueDriverAppSession({
+    db,
+    authUid: 'uid-role-transition',
+    driverId: 'D-ROLE',
+    tourId: 'TOUR_DRIVER',
+    driverLoginPolicyGeneration: 2,
+    profileUpdates: {
+      'users/uid-role-transition/driverId': 'D-ROLE',
+      'users/uid-role-transition/driverPrincipalId': 'driver:D-ROLE',
+      'users/uid-role-transition/driverAssignedTourId': 'TOUR_DRIVER',
+      'users/uid-role-transition/principalType': 'driver',
+    },
+    nowMs,
+  });
+  assert.equal(db.state['users/uid-role-transition'].stablePassengerId, PASSENGER_ID);
+  assert.equal(db.state['users/uid-role-transition'].privatePhotoOwnerId, PASSENGER_ID);
+  assert.equal(db.state['app_sessions/uid-role-transition'].principalType, 'driver');
+
+  const failedDb = createTransactionDb({
+    'app_sessions/uid-role-transition': passengerSession,
+    'users/uid-role-transition': durableProfile,
+  }, { rootUpdateError: new Error('simulated root update failure') });
+  await assert.rejects(issueDriverAppSession({
+    db: failedDb,
+    authUid: 'uid-role-transition',
+    driverId: 'D-ROLE',
+    tourId: 'TOUR_DRIVER',
+    profileUpdates: { 'users/uid-role-transition/driverId': 'D-ROLE' },
+    nowMs,
+  }), /simulated root update failure/);
+  assert.equal(failedDb.state['app_sessions/uid-role-transition'].principalType, 'passenger');
+  assert.equal(failedDb.state['users/uid-role-transition'].principalType, 'passenger');
+  assert.equal(failedDb.state['users/uid-role-transition/driverId'], undefined);
 });
 
 test('cutover migration is dry-run-first, bounded and never synthesises trusted sessions', () => {

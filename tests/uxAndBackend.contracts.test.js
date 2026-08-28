@@ -76,7 +76,7 @@ test('deriveUnifiedSyncStatus maps network/backend/queue into canonical sync sta
 
 test('Static contract: principal-owned chat reaction/typing/presence writes stay aligned with security rules', () => {
   // Intentional static check: these are Firebase Rules expressions, not executable JS exports.
-  // We pin exact policy strings so auth principal equivalence across three write paths cannot drift.
+  // We pin the legacy projection bridge separately from the exact-session sources.
   const rules = readJson('database.rules.json');
   const chatRules = rules.rules.chats.$tourId;
   const internalChatRules = rules.rules.internal_chats.$tourId;
@@ -95,15 +95,23 @@ test('Static contract: principal-owned chat reaction/typing/presence writes stay
   for (const driverWriteRule of [expectedPrincipalWrite, expectedInternalDriverWrite, expectedInternalDriverLastReadWrite]) {
     assert.match(driverWriteRule, /driver_login_policy\/v1\/generation/);
     assert.match(driverWriteRule, /driverLoginPolicyGeneration/);
-    assert.match(driverWriteRule, /enforceSingleDevice/);
+  assert.match(driverWriteRule, /enforceSingleDevice/);
   }
   assert.equal(chatRules.messages.$messageId.reactions.$emoji['.write'], false);
-  assert.equal(chatRules.messages.$messageId.reactions.$emoji.$id['.write'], expectedPrincipalWrite);
+  assert.match(chatRules.messages.$messageId.reactions.$emoji.$id['.write'], /app_sessions/);
+  assert.match(chatRules.messages.$messageId.reactions.$emoji.$id['.write'], /driver_login_policy/);
+  assert.match(expectedPrincipalWrite, /!data\.child\('projectionRevision'\)\.exists\(\)/);
   assert.equal(chatRules.typing.$id['.write'], expectedPrincipalWrite);
   assert.equal(chatRules.presence.$id['.write'], expectedPrincipalWrite);
   assert.equal(internalChatRules.lastRead.$principalId['.write'], expectedInternalDriverLastReadWrite);
   assert.equal(internalChatRules.typing.$id['.write'], expectedInternalDriverWrite);
   assert.equal(internalChatRules.presence.$id['.write'], expectedInternalDriverWrite);
+  for (const sourceRoot of [rules.rules.chat_presence_sessions, rules.rules.chat_typing_sessions]) {
+    const sourceWrite = sourceRoot.$scope.$appSessionId['.write'];
+    assert.match(sourceWrite, /sessionId'\)\.val\(\) === \$appSessionId/);
+    assert.match(sourceWrite, /principalId'\)\.val\(\)/);
+    assert.match(sourceWrite, /expiresAtMs'\)\.val\(\) > now/);
+  }
 });
 
 test('Static contract: identity bindings are server-owned except exact owner cleanup', () => {
@@ -204,8 +212,7 @@ test('Static contract: tour metadata writes stay least-privilege', () => {
   assert.equal(tourRules.driver_itinerary['.read'], undefined);
   assert.match(rules.rules.bookings.$bookingRef['.read'], /assigned_drivers/);
   assert.doesNotMatch(rules.rules.bookings.$bookingRef['.read'], /booking_access_grants|participants/);
-  assert.notEqual(tourRules['.write'], 'auth != null');
-  assert.match(tourRules['.write'], /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
+  assert.equal(tourRules['.write'], false);
   assert.match(tourRules.participants.$userId['.write'], /admin_users/);
   assert.doesNotMatch(tourRules.participants.$userId['.write'], /tour_access_grants|auth\.uid === \$userId/);
   assert.notEqual(tourRules.participants.$userId['.write'], "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')");
@@ -872,19 +879,24 @@ test('Static contract: production binary EAS workflows gate release on mobile/ba
   assert.match(agentsDoc, /Production binary EAS workflows test backend changes but do not deploy Firebase backend artifacts/);
 });
 
-test('Static contract: main pushes publish an iOS OTA only to the TestFlight channel', () => {
+test('Static contract: main pushes plan an iOS OTA only for bundle-safe TestFlight changes', () => {
   const source = readText('.github/workflows/eas-update.yml');
   const easConfig = JSON.parse(readText('eas.json'));
   const packageJson = JSON.parse(readText('package.json'));
 
   assert.match(source, /push:\s*\n\s*branches:\s*\n\s*- main/);
+  assert.match(source, /workflow_dispatch:/);
+  assert.match(source, /plan-update:/);
+  assert.match(source, /needs\.plan-update\.outputs\.should_publish/);
+  assert.match(source, /EAS_BUILD_PROFILE:\s*testflight/);
   assert.match(source, /EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT:\s*'true'/);
-  assert.match(source, /eas update --channel testflight --platform ios --environment production/);
+  assert.match(source, /npm run update:testflight -- --non-interactive/);
   assert.doesNotMatch(source, /eas update --channel production/);
   assert.doesNotMatch(source, /npm run test:emulators/);
   assert.doesNotMatch(source, /npm run test:functions:scripts/);
   assert.equal(easConfig.build?.testflight?.channel, 'testflight');
-  assert.match(packageJson.scripts['update:testflight'], /--channel testflight --platform ios/);
+  assert.match(packageJson.scripts['update:testflight'], /runEasUpdate\.js --target=testflight/);
+  assert.match(packageJson.scripts['update:prod'], /runEasUpdate\.js --target=production/);
 });
 
 test('Static contract: production binary workflows verify EAS remote version state before building', () => {
@@ -926,7 +938,7 @@ test('Static contract: TestFlight App Store Connect key is created only after EA
 
 test('Static contract: Android production submit profile targets customer release track', () => {
   const easConfig = JSON.parse(readText('eas.json'));
-  assert.equal(easConfig.cli?.version, '>= 16.0.1');
+  assert.equal(easConfig.cli?.version, '22.6.0');
   assert.equal(easConfig.submit?.production?.android?.track, 'production');
 });
 

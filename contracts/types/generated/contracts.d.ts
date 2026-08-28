@@ -72,9 +72,13 @@ export interface DriverLoginResponse {
 export interface DriverAssignmentResponse {
   success: boolean;
   reason?: string;
+  operation?: "assign" | "unassign";
+  driverId?: string;
   tourId?: string;
   tourCode?: string;
   previousTourId?: string | null;
+  driverRevision?: number;
+  tourRevision?: number;
   session?: Record<string, unknown>;
 }
 
@@ -111,6 +115,31 @@ export interface ChatPresenceRecord {
   lastSeen: number | Record<string, unknown>;
   name: string;
   isDriver: boolean;
+  projectionRevision?: number;
+}
+
+export interface ChatTypingRecord {
+  isTyping: boolean;
+  timestamp: number | Record<string, unknown>;
+  name: string;
+  isDriver: boolean;
+  projectionRevision?: number;
+}
+
+export interface ChatStatusSessionRecord {
+  schemaVersion: number;
+  authUid: string;
+  appSessionId: string;
+  actorKey: string;
+  principalId: string;
+  principalType: "passenger" | "driver";
+  tourId: string;
+  tourActorKey: string;
+  scope: "group" | "internal";
+  name: string;
+  isDriver: boolean;
+  timestamp: number | Record<string, unknown>;
+  expiresAtMs: number;
 }
 
 export interface GroupPhotoRecord {
@@ -295,14 +324,34 @@ export interface SafetySubmission {
 
 export interface DriverLocationRecord {
   schemaVersion: number;
+  isSharing: boolean;
+  timestamp: number | Record<string, unknown>;
+  mode?: "pickup" | "live";
+  source?: "auto" | "manual";
+  latitude?: number;
+  longitude?: number;
+  accuracy?: number;
+  address?: string;
+  updatedBy?: string;
+  projectionRevision?: number;
+}
+
+export interface DriverLocationSourceRecord {
+  schemaVersion: number;
+  authUid: string;
+  appSessionId: string;
+  driverId: string;
+  tourId: string;
   source: "auto" | "manual";
+  mode: "live" | "pickup";
   latitude: number;
   longitude: number;
-  accuracy: number;
   timestamp: number | Record<string, unknown>;
-  sessionId?: string;
-  label?: string;
-  publishedBy?: string;
+  accuracy?: number;
+  liveSharingSessionId?: string;
+  cleanupAtMs?: number;
+  address?: string;
+  updatedBy?: string;
 }
 
 export interface DriverTourPackActionResult {
