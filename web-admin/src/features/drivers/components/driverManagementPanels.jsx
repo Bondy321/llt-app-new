@@ -5,7 +5,7 @@ import { APP_SESSION_REVOCATION_REASONS, maskAppSessionId, revokeAppSession, sub
 import { notifications } from '@mantine/notifications';
 import { formatDateTimeForDisplay } from '../../../utils/dateUtils';
 import { Alert, Avatar, Badge, Box, Button, Card, Divider, Group, Modal, Paper, Pill, Select, SimpleGrid, Stack, Tabs, Text, TextInput, ThemeIcon, Title } from '@mantine/core';
-import { IconBus, IconCalendar, IconCheck, IconId, IconInfoCircle, IconMap, IconPhone, IconPlus, IconShieldLock, IconUser } from '@tabler/icons-react';
+import { IconBus, IconCalendar, IconCheck, IconId, IconInfoCircle, IconMap, IconPhone, IconPlus, IconShieldLock, IconUser, IconUserPlus } from '@tabler/icons-react';
 import { normalizeAssignmentTourIdInput, resolveAssignmentTourIdInput } from '../domain/driverAssignmentIdentity';
 
 // Driver Card Component for the sidebar
