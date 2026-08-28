@@ -11,7 +11,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  plan-update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_publish: ${{ steps.plan.outputs.should_publish }}
+      reason: ${{ steps.plan.outputs.reason }}
+    steps:
+      - name: Checkout repository at triggering commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Plan automatic TestFlight OTA
+        id: plan
+        env:
+          LLT_RELEASE_BASE_SHA: ${{ github.event.before }}
+        run: node scripts/release/planEasUpdate.js --event=${{ github.event_name }} --base=${{ env.LLT_RELEASE_BASE_SHA }} --head=${{ github.sha }} --github-output=$GITHUB_OUTPUT
+
   publish-testflight-update:
+    needs: plan-update
+    if: ${{ needs.plan-update.outputs.should_publish == 'true' }}
     runs-on: ubuntu-latest
     environment: production
     permissions:
@@ -19,6 +46,7 @@ jobs:
       contents: read
     env:
       CI: true
+      EAS_BUILD_PROFILE: testflight
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
       EXPO_PUBLIC_FIREBASE_API_KEY: ${{ secrets.EXPO_PUBLIC_FIREBASE_API_KEY }}
       EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN }}
@@ -73,9 +101,12 @@ jobs:
       - name: Setup Expo and EAS CLI
         uses: expo/expo-github-action@v8
         with:
-          expo-version: latest
-          eas-version: latest
+          eas-version: 22.6.0
+          packager: npm
           token: ${{ env.EXPO_TOKEN }}
+
+      - name: Verify pinned release CLIs
+        run: node scripts/release/checkCliVersions.js --check-eas
 
       - name: Sync EAS production environment
         run: npm run sync:eas-env:production -- --platform=ios
@@ -90,4 +121,4 @@ jobs:
 
       - name: Publish TestFlight channel update
         run: |
-          eas update --channel testflight --platform ios --environment production --non-interactive --message "TestFlight CI update: ${{ github.sha }}"
+          npm run update:testflight -- --non-interactive --message "TestFlight CI update: ${{ github.sha }}"

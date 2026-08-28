@@ -17,13 +17,22 @@ jobs:
   architecture-contracts:
     name: Architecture & contracts
     runs-on: ubuntu-latest
+    env:
+      LLT_RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      LLT_RELEASE_HEAD_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: node scripts/release/checkCliVersions.js
+      - run: npm run release:compatibility:check -- --base=${{ env.LLT_RELEASE_BASE_SHA }} --head=${{ env.LLT_RELEASE_HEAD_SHA }}
+      - run: npm run release:config:check
+      - run: npm run test:release
       - run: npm --prefix functions ci
       - run: npm run contracts:check
       - run: npm run architecture:check
