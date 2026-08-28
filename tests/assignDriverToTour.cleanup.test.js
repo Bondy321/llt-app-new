@@ -85,9 +85,12 @@ test('assignDriverToTour uses the authenticated server endpoint and returns cano
       assert.equal(capturedRequest.url, 'https://europe-west1-demo-project.cloudfunctions.net/assignDriverToTour');
       assert.equal(capturedRequest.options.headers.Authorization, 'Bearer driver-id-token');
       assert.deepEqual(JSON.parse(capturedRequest.options.body), {
+        operation: 'assign',
         driverId: 'D-BONDY',
         tourCode: '6000a 1',
         expectedSessionId: CURRENT_SESSION.sessionId,
+        expectedSessionRevision: CURRENT_SESSION.sessionRevision,
+        idempotencyKey: `driver-assignment:${CURRENT_SESSION.sessionId}:${CURRENT_SESSION.sessionRevision}:6000A_1`,
       });
       assert.deepEqual(result, {
         success: true,

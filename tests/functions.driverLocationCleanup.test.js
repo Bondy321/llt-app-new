@@ -60,11 +60,14 @@ function createMockDatabase(initialState, { beforeTransaction } = {}) {
   };
 }
 
-function liveLocation({ sessionId = 'session-a', timestamp = 100, cleanupAtMs = 200 } = {}) {
+function liveLocation({ appSessionId = 'session-a', liveSharingSessionId = 'live-session-a', tourId = 'tour_1', timestamp = 100, cleanupAtMs = 200 } = {}) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    source: 'auto',
     mode: 'live',
-    sessionId,
+    appSessionId,
+    liveSharingSessionId,
+    tourId,
     timestamp,
     cleanupAtMs,
     latitude: 56.1,
@@ -75,18 +78,20 @@ function liveLocation({ sessionId = 'session-a', timestamp = 100, cleanupAtMs = 
 test('removes expired disconnect-safe live driver locations and is idempotent', async () => {
   const nowMs = 1_000;
   const database = createMockDatabase({
-    tours: {
-      expired: { driverLocation: liveLocation({ cleanupAtMs: nowMs }) },
-      future: { driverLocation: liveLocation({ cleanupAtMs: nowMs + 1 }) },
+    driver_location_sessions: {
+      expired: liveLocation({ tourId: 'expired', cleanupAtMs: nowMs }),
+      future: liveLocation({ tourId: 'future', cleanupAtMs: nowMs + 1 }),
     },
   });
+  const reconciled = [];
 
-  const result = await cleanupExpiredDriverLocations({ database, nowMs });
-  assert.deepEqual(result, { ok: true, scanned: 1, removed: 1, restoredPickups: 0, hasMore: false, cleanedAtMs: nowMs });
-  assert.equal(database.state.tours.expired.driverLocation, undefined);
-  assert.ok(database.state.tours.future.driverLocation);
+  const result = await cleanupExpiredDriverLocations({ database, nowMs, reconcileProjection: async ({ tourId }) => reconciled.push(tourId) });
+  assert.deepEqual(result, { ok: true, scanned: 1, removed: 1, pickupsScanned: 0, pickupsRemoved: 0, restoredPickups: 0, reconciledTours: ['expired'], hasMore: false, cleanedAtMs: nowMs });
+  assert.equal(database.state.driver_location_sessions.expired, undefined);
+  assert.ok(database.state.driver_location_sessions.future);
+  assert.deepEqual(reconciled, ['expired']);
 
-  const retry = await cleanupExpiredDriverLocations({ database, nowMs });
+  const retry = await cleanupExpiredDriverLocations({ database, nowMs, reconcileProjection: async () => {} });
   assert.equal(retry.removed, 0);
 });
 
@@ -94,42 +99,42 @@ test('preserves a live location refreshed after the candidate query', async () =
   const nowMs = 1_000;
   let refreshed = false;
   const database = createMockDatabase({
-    tours: { tour_1: { driverLocation: liveLocation({ sessionId: 'old', timestamp: 10, cleanupAtMs: nowMs }) } },
+    driver_location_sessions: { old: liveLocation({ appSessionId: 'old', timestamp: 10, cleanupAtMs: nowMs }) },
   }, {
     beforeTransaction: ({ path, write }) => {
-      if (!refreshed && path === 'tours/tour_1/driverLocation') {
+      if (!refreshed && path === 'driver_location_sessions/old') {
         refreshed = true;
-        write(path, liveLocation({ sessionId: 'new', timestamp: 999, cleanupAtMs: nowMs + 60_000 }));
+        write(path, liveLocation({ appSessionId: 'new', liveSharingSessionId: 'live-session-new', timestamp: 999, cleanupAtMs: nowMs + 60_000 }));
       }
     },
   });
 
-  const result = await cleanupExpiredDriverLocations({ database, nowMs });
+  const result = await cleanupExpiredDriverLocations({ database, nowMs, reconcileProjection: async () => {} });
   assert.equal(result.removed, 0);
-  assert.deepEqual(database.state.tours.tour_1.driverLocation, liveLocation({ sessionId: 'new', timestamp: 999, cleanupAtMs: nowMs + 60_000 }));
+  assert.deepEqual(database.state.driver_location_sessions.old, liveLocation({ appSessionId: 'new', liveSharingSessionId: 'live-session-new', timestamp: 999, cleanupAtMs: nowMs + 60_000 }));
 });
 
 test('preserves manual, malformed, and records without a cleanup lease', async () => {
   const nowMs = 1_000;
   const database = createMockDatabase({
-    tours: {
-      manual: { driverLocation: { ...liveLocation({ cleanupAtMs: nowMs }), mode: 'pickup' } },
-      malformed: { driverLocation: { schemaVersion: 1, mode: 'live', cleanupAtMs: nowMs } },
-      legacy: { driverLocation: { latitude: 56.1, longitude: -4.6, timestamp: 100 } },
+    driver_location_sessions: {
+      manual: { ...liveLocation({ cleanupAtMs: nowMs }), mode: 'pickup', source: 'manual' },
+      malformed: { schemaVersion: 2, mode: 'live', cleanupAtMs: nowMs },
+      legacy: { latitude: 56.1, longitude: -4.6, timestamp: 100, cleanupAtMs: nowMs },
     },
   });
 
-  const result = await cleanupExpiredDriverLocations({ database, nowMs });
+  const result = await cleanupExpiredDriverLocations({ database, nowMs, reconcileProjection: async () => {} });
   assert.equal(result.removed, 0);
-  assert.ok(database.state.tours.manual.driverLocation);
-  assert.ok(database.state.tours.malformed.driverLocation);
-  assert.ok(database.state.tours.legacy.driverLocation);
+  assert.ok(database.state.driver_location_sessions.manual);
+  assert.ok(database.state.driver_location_sessions.malformed);
+  assert.ok(database.state.driver_location_sessions.legacy);
 });
 
-test('expired live coordinates restore the validated fixed pickup fallback', async () => {
+test('expired live coordinates leave the separate fixed pickup source untouched', async () => {
   const nowMs = 1_000;
   const fallbackPickup = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     isSharing: true,
     mode: 'pickup',
     source: 'manual',
@@ -139,30 +144,81 @@ test('expired live coordinates restore the validated fixed pickup fallback', asy
     address: '  Pier Road  ',
   };
   const database = createMockDatabase({
-    tours: {
-      tour_1: {
-        driverLocation: { ...liveLocation({ cleanupAtMs: nowMs }), fallbackPickup },
-      },
-    },
+    driver_location_sessions: { live: liveLocation({ cleanupAtMs: nowMs }) },
+    driver_location_pickups: { tour_1: fallbackPickup },
   });
 
-  const result = await cleanupExpiredDriverLocations({ database, nowMs });
+  const result = await cleanupExpiredDriverLocations({ database, nowMs, reconcileProjection: async () => {} });
   assert.equal(result.removed, 1);
-  assert.equal(result.restoredPickups, 1);
-  assert.deepEqual(database.state.tours.tour_1.driverLocation, { ...fallbackPickup, address: 'Pier Road' });
+  assert.equal(result.restoredPickups, 0);
+  assert.deepEqual(database.state.driver_location_pickups.tour_1, fallbackPickup);
+});
+
+test('expires assignment-owned pickups with compare-safe deletion and projection reconciliation', async () => {
+  const nowMs = 10_000;
+  const expired = {
+    schemaVersion: 1,
+    isSharing: true,
+    source: 'manual',
+    mode: 'pickup',
+    driverId: 'D-ONE',
+    tourId: 'tour_1',
+    assignmentRevision: 5,
+    latitude: 56.2,
+    longitude: -4.7,
+    timestamp: 5_000,
+    publishedAtMs: 5_000,
+    expiresAtMs: nowMs,
+  };
+  const reconciled = [];
+  const database = createMockDatabase({ driver_location_pickups: { tour_1: expired } });
+  const result = await cleanupExpiredDriverLocations({
+    database,
+    nowMs,
+    reconcileProjection: async ({ tourId }) => reconciled.push(tourId),
+  });
+  assert.equal(result.pickupsScanned, 1);
+  assert.equal(result.pickupsRemoved, 1);
+  assert.equal(database.state.driver_location_pickups.tour_1, undefined);
+  assert.deepEqual(reconciled, ['tour_1']);
+});
+
+test('preserves a refreshed pickup after the expiry query', async () => {
+  const nowMs = 10_000;
+  const expired = {
+    schemaVersion: 1, isSharing: true, source: 'manual', mode: 'pickup',
+    driverId: 'D-ONE', tourId: 'tour_1', assignmentRevision: 5,
+    latitude: 56.2, longitude: -4.7, timestamp: 5_000,
+    publishedAtMs: 5_000, expiresAtMs: nowMs,
+  };
+  const refreshed = { ...expired, timestamp: 9_000, publishedAtMs: 9_000, expiresAtMs: nowMs + 60_000 };
+  let replaced = false;
+  const database = createMockDatabase({ driver_location_pickups: { tour_1: expired } }, {
+    beforeTransaction: ({ path, write }) => {
+      if (!replaced && path === 'driver_location_pickups/tour_1') {
+        replaced = true;
+        write(path, refreshed);
+      }
+    },
+  });
+  const result = await cleanupExpiredDriverLocations({ database, nowMs, reconcileProjection: async () => {} });
+  assert.equal(result.pickupsRemoved, 0);
+  assert.deepEqual(database.state.driver_location_pickups.tour_1, refreshed);
 });
 
 test('enforces bounded batches and validates cleanup inputs', async () => {
   const nowMs = 1_000;
-  const tours = Object.fromEntries(Array.from({ length: 101 }, (_, index) => [
+  const locations = Object.fromEntries(Array.from({ length: 101 }, (_, index) => [
     `tour_${String(index).padStart(3, '0')}`,
-    { driverLocation: liveLocation({ sessionId: `session-${index}`, timestamp: index, cleanupAtMs: nowMs }) },
+    liveLocation({ appSessionId: `session-${index}`, liveSharingSessionId: `live-session-${index}`, tourId: `tour_${String(index).padStart(3, '0')}`, timestamp: index, cleanupAtMs: nowMs }),
   ]));
-  const database = createMockDatabase({ tours });
+  const database = createMockDatabase({ driver_location_sessions: locations });
 
-  const firstBatch = await cleanupExpiredDriverLocations({ database, nowMs, limit: 100 });
-  assert.deepEqual(firstBatch, { ok: true, scanned: 100, removed: 100, restoredPickups: 0, hasMore: true, cleanedAtMs: nowMs });
-  assert.ok(database.state.tours.tour_100.driverLocation);
+  const firstBatch = await cleanupExpiredDriverLocations({ database, nowMs, limit: 100, reconcileProjection: async () => {} });
+  assert.equal(firstBatch.scanned, 100);
+  assert.equal(firstBatch.removed, 100);
+  assert.equal(firstBatch.hasMore, true);
+  assert.ok(database.state.driver_location_sessions.tour_100);
   await assert.rejects(() => cleanupExpiredDriverLocations({ database, nowMs, limit: 101 }), /limit must be 1-100/);
   await assert.rejects(() => cleanupExpiredDriverLocations({ database, nowMs: -1 }), /non-negative safe integer/);
   await assert.rejects(() => cleanupExpiredDriverLocations({ nowMs }), /Realtime Database instance/);

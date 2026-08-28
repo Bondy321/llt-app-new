@@ -2,7 +2,7 @@
 
 Welcome, Agent. This file is the operational source of truth for contributors working in this repo. Keep it practical: update it whenever architecture, contracts, commands, or release assumptions materially change.
 
-Last updated: August 26, 2026
+Last updated: August 28, 2026
 
 Architecture source of truth: start with `docs/architecture/overview.md`, then follow `module-boundaries.md` and the runtime-specific document. Keep `App.js` and `functions/index.js` as composition roots; preserve compatibility facades; place Firebase, HTTP, and persistence access behind adapters; update canonical contracts and generated copies together; run `npm run verify:refactor` for structural changes. The detailed rationale lives in `docs/architecture/decisions/` and should not be duplicated here.
 
@@ -41,36 +41,36 @@ Backend region rule:
 
 Mobile:
 
-- Expo SDK `55` (`expo ~55.0.28`)
+- Expo SDK `55` (`expo ~55.0.30`)
 - React Native `0.83.10`
 - React `19.2.0`
-- Firebase JS SDK `^12.17.1`
-- `expo-notifications ~55.0.25`
+- Firebase JS SDK `12.17.1` (lockfile resolution)
+- `expo-notifications ~55.0.27`
 - `expo-image ~55.0.11`
-- `expo-image-manipulator ~55.0.19`
-- `expo-file-system ~55.0.24`
-- `expo-secure-store ~55.0.16`
+- `expo-image-manipulator ~55.0.21`
+- `expo-file-system ~55.0.26`
+- `expo-secure-store ~55.0.18`
 - `@react-native-async-storage/async-storage 2.2.0`
 - `react-native-maps 1.27.2`
 - Import `MaterialCommunityIcons` from `@expo/vector-icons/build/MaterialCommunityIcons.js`; the package barrel causes Metro to emit every icon font family and the package shim is not directly resolvable by Node 24 tests.
 
 Web admin:
 
-- React `^19.2.0`
-- Vite `^7.3.6`
-- Mantine `^8.3.9`
-- React Router `^7.18.2`
-- Firebase JS SDK `^12.17.1`
-- Vitest `^4.1.10`
+- React `19.2.8` (lockfile resolution)
+- Vite `7.3.6` (lockfile resolution)
+- Mantine `8.3.18` (lockfile resolution)
+- React Router `7.18.2` (lockfile resolution)
+- Firebase JS SDK `12.17.1` (lockfile resolution)
+- Vitest `4.1.10` (lockfile resolution)
 
 Functions:
 
 - Cloud Functions Gen 2 only
 - Node runtime target `22`
-- `firebase-functions ^7.3.2`
-- `firebase-admin ^13.7.0`
-- `expo-server-sdk ^4.0.0`
-- `sharp ^0.33.5`
+- `firebase-functions 7.3.2` (lockfile resolution)
+- `firebase-admin 13.10.0` (lockfile resolution)
+- `expo-server-sdk 4.0.0` (lockfile resolution)
+- `sharp 0.35.3` (lockfile resolution)
 
 ---
 
@@ -164,7 +164,11 @@ Do not rename these Realtime Database roots without a full migration:
 - `login_rate_limits` (server-private opaque abuse-prevention counters)
 - `safety_rate_limits` (server-private opaque safety-submission counters)
 - `driver_login_policy` (server-owned single-device toggle; missing is materialised as off before driver session issue)
-- `driver_login_policy_locks`, `driver_login_policy_cleanup`, `driver_login_policy_events` (server-private transition serialization, exact-session cleanup and audit)
+- `driver_login_policy/v1/loginAdmissions`, `driver_login_claim_reservations` (server-private login admission fences and per-driver claims)
+- transition fields under `driver_login_policy/v1`, plus `driver_login_policy_cleanup` and `driver_login_policy_events` (server-private resumable transition state, exact-session cleanup and audit)
+- `driver_assignment_locks`, `driver_assignment_idempotency`, `driver_assignment_transitions` (server-private assignment serialization, replay and continuation state; assignment audit uses bounded `app_session_events`)
+- `driver_location_sessions`, `driver_location_pickups`, `driver_location_projection_state`, `live_state_rollout` (private per-session live sources, assignment-owned canonical pickup, projection fencing, and explicit rollout authority)
+- `chat_presence_sessions`, `chat_typing_sessions`, `chat_status_projection_state` (private per-session status sources and projection fencing)
 
 Admin UID hardcoded in rules:
 
@@ -231,6 +235,8 @@ Driver login:
 - Driver login resolves driver profile, assignment context, and driver home tour context.
 - `assignDriverToTour` is the only mobile assignment mutation path; mobile clients never
   write driver, user-authority, tour-driver, or manifest-assignment nodes directly.
+- Web admin calls the same server-owned mutation with expected driver/tour revisions and
+  an idempotency key. It must never calculate the canonical multi-root write from a browser snapshot.
 - Canonical driver principal for identity-sensitive paths is `driver:{DRIVER_ID}`.
 
 Application session authority:
@@ -721,15 +727,17 @@ mobile profiles without including free-text incident details on the lock screen.
 
 Driver location:
 
-- Canonical passenger/driver live bus path: `tours/{tourId}/driverLocation`.
+- Canonical passenger read path: server-owned `tours/{tourId}/driverLocation`.
 - Source contract: `docs/data-contracts/driver-location.md`.
-- Versioned records use a server timestamp and distinguish fixed `pickup` points from foreground `live` sharing.
-- Driver Home writes manual and auto-share location updates through `services/driverLocationService.js`; each foreground auto-share lifecycle owns an opaque session, preserves any validated fixed pickup fallback, arms Firebase disconnect removal/restoration, and transactionally withdraws only its exact live state on disable/background/reassignment/unmount.
-- Auto locations carry a server-validated `cleanupAtMs` lease. `cleanupExpiredDriverLocations` runs every 15 minutes, queries the indexed lease in bounded batches, and compare-deletes only the exact expired session.
+- Driver Home writes schema-v2 live sources through `services/driverLocationService.js` at `driver_location_sessions/{appSessionId}|{liveSharingSessionId}`. Manual pickup publication uses the trusted `updateDriverLocationPickup` Function; clients never access `driver_location_pickups/{tourId}` directly.
+- Each foreground auto-share lifecycle arms disconnect removal against only its exact private leaf before publishing. It never stores a fixed pickup as a shared fallback.
+- Retryable Functions validate current authority and project the newest valid live leaf, or the separate pickup, with monotonic revisions. Clients cannot write the projection.
+- Auto locations require bounded accuracy and carry a server-validated `cleanupAtMs` lease. Assignment-owned pickups contain the current driver/tour/revision without Auth or app-session lifetime fields and have a bounded `expiresAtMs`. `cleanupExpiredDriverLocations` runs every 15 minutes, queries both indexed leases in bounded batches, compare-deletes only exact expired publications, and reconciles affected tours.
 - Map and Tour Home derive presentation through `utils/driverLocation.js`. Live points cover the three-minute cadence, become non-actionable when stale or worse than 500m accuracy, and disappear after 30 minutes; manual pickup points remain destinations without a live label.
 - Find My Bus derives connection truth from Firebase `.info/connected`, retries subscription failures explicitly, and haptics only on a changed publication after the initial snapshot.
 - Find My Bus does not require passenger location permission to show the driver point. Permission is requested only when the passenger chooses to show/refresh their own position.
-- Driver reassignment/unassignment clears the former tour's location atomically so passengers never inherit another driver's coordinates.
+- Driver reassignment/unassignment clears affected assignment-owned pickups, cleans raw live state for every reconciled app session, and reprojects former tours so passengers never inherit another driver's coordinates.
+- `live_state_rollout/v1` is private explicit operations state: missing means compatibility and source writes never advance phase. This release refuses cutover with `LIVE_STATE_CUTOVER_PREREQUISITE_NOT_MET`; an untouched 1.0.4 direct RTDB writer cannot receive a literal update-required response, so compatibility remains mandatory until a future reviewed client-mapping or zero-supported-legacy-client prerequisite is proven.
 - Auto-share checks lifecycle cancellation after native location capture and after the service write. Logout, backgrounding, reassignment, disable, or unmount must revoke the exact session so late coordinates never return to the former tour.
 
 Safety UX:
@@ -1177,7 +1185,7 @@ Many root npm scripts use POSIX-style `NODE_ENV=test`. CI runs on Linux. On nati
 Mobile config:
 
 - Use `app.config.js`; there is no static `app.json`.
-- Version: `1.0.4`
+- Version: `1.0.5` (canonical source: `package.json`; `app.config.js` must require it)
 - iOS build number: `3` local baseline; production increments are managed remotely by EAS
 - Android version code: `3` local baseline; production increments are managed remotely by EAS
 - Runtime version policy: `appVersion`
@@ -1223,6 +1231,18 @@ npm run update:dev
 npm run update:testflight
 npm run update:prod
 ```
+
+All update scripts route through `scripts/release/runEasUpdate.js`, set the exact
+`EAS_BUILD_PROFILE`/channel/environment tuple, and run profile-parity checks before
+invoking EAS CLI (the workflows pin version 22.6.0 and `eas.json` enforces the same version). CI uses the deterministic path-aware no-op gate
+for a `main` push and retains an explicit manual dispatch. Never call bare
+`eas update` from a release workflow.
+
+Native-impacting changes are guarded by `npm run release:compatibility:check`.
+The guard fingerprints the production dependency graph, Expo native config and
+plugins, EAS native build properties, and any checked-in iOS/Android projects; a
+changed native fingerprint requires a changed app/runtime identity. See
+`docs/release-compatibility.md`.
 
 Environment validation:
 

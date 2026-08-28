@@ -1154,6 +1154,7 @@ test('tour deletion plan removes all tour-scoped app data and canonical assignme
     },
     contentReports: { report_1: { tourId: 'TOUR_1' }, report_2: { tourId: 'OTHER' } },
     globalSafetyAlerts: { alert_1: { tourId: 'TOUR_1' }, alert_2: { tourId: 'OTHER' } },
+    driverLocationSourceKeys: ['session-a|live-a'],
   });
 
   for (const path of [
@@ -1179,6 +1180,9 @@ test('tour deletion plan removes all tour-scoped app data and canonical assignme
     'drivers/D-BOB/assignments/TOUR_1',
     'content_reports/report_1',
     'globalSafetyAlerts/alert_1',
+    'driver_location_pickups/TOUR_1',
+    'driver_location_projection_state/TOUR_1',
+    'driver_location_sessions/session-a|live-a',
   ]) {
     assert.equal(updates[path], null, `${path} must be deleted`);
   }
@@ -1194,6 +1198,8 @@ test('tour deletion retry plan remains safe when the primary tour is already abs
   assert.equal(updates['group_tour_photos/TOUR_1'], null);
   assert.equal(updates['private_tour_photos/TOUR_1'], null);
   assert.equal(updates['tour_access_grants/TOUR_1'], null);
+  assert.equal(updates['driver_location_pickups/TOUR_1'], null);
+  assert.equal(updates['driver_location_projection_state/TOUR_1'], null);
 });
 
 test('tour notification ids are deterministic, compact, and scoped by source', () => {

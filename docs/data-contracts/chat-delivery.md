@@ -7,6 +7,25 @@ This contract covers group chat, internal driver chat, offline replay, photo mes
 - Group: `chats/{tourId}/messages/{messageId}`
 - Driver team: `internal_chats/{tourId}/messages/{messageId}`
 
+Presence and typing writes use private per-session sources:
+
+- `chat_presence_sessions/{scope}/{appSessionId}`
+- `chat_typing_sessions/{scope}/{appSessionId}`
+
+where `scope` is `group` or `internal`. Each schema-v2 leaf binds its path session,
+Auth UID, principal, tour, actor key, role, server timestamp, and bounded expiry to
+the exact current app session. Passengers may use only group scope. Drivers require
+the same current policy generation and manifest assignment as other driver-only
+surfaces.
+
+Retryable backend projections preserve the existing aggregate read paths at
+`chats|internal_chats/{tourId}/presence|typing/{actorKey}`. A principal remains
+online while any valid presence leaf exists and remains typing while any
+non-expired typing leaf exists. Projection revisions prevent delayed events from
+regressing the aggregate. Disconnect, unmount, logout, and cleanup remove only the
+owning session leaf; a bounded scheduled cleanup removes expired leaves and
+reconciles the affected actor.
+
 ## Version 2 message
 
 New clients write `schemaVersion: 2`. Every logical send owns one Firebase-safe `messageId`; `idempotencyKey` must equal that path key. Creation uses a transaction that writes only when the path is absent, so a lost acknowledgement, offline replay, or manual retry cannot duplicate or overwrite the message.

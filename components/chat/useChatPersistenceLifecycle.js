@@ -8,7 +8,7 @@ export default function useChatPersistenceLifecycle(context, late) {
     draftStorageKey,
     inputText,
     markActiveChatRead,
-    realtimeActorId,
+    statusActorId,
     setDraftRestored,
     setInputText,
     setPresenceInfo,
@@ -92,12 +92,12 @@ export default function useChatPersistenceLifecycle(context, late) {
   // Subscribe to typing indicators
   // Subscribe to typing indicators
   useEffect(() => {
-    if (!tourId || !realtimeActorId) return;
-    const unsubscribe = subscribeToTypingIndicators(tourId, realtimeActorId, setTypingUsers, undefined, {
+    if (!tourId || !statusActorId) return;
+    const unsubscribe = subscribeToTypingIndicators(tourId, statusActorId, setTypingUsers, undefined, {
       scope: chatScope
     });
     return () => unsubscribe();
-  }, [chatScope, tourId, realtimeActorId, setTypingUsers]);
+  }, [chatScope, tourId, statusActorId, setTypingUsers]);
 
   // Subscribe to presence
   // Subscribe to presence

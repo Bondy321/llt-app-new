@@ -127,11 +127,15 @@ export default function Settings() {
         ? `${result.cleanup.cleaned} of ${result.cleanup.queued} old session record(s) cleaned; ${result.cleanup.pending} remain queued.`
         : 'There were no current driver sessions to clean up.';
       notifications.show({
-        title: enforceSingleDevice ? 'Single-device login enabled' : 'Multiple driver handsets allowed',
-        message: enforceSingleDevice
+        title: result.policy.transition
+          ? 'Driver sign-in change in progress'
+          : (enforceSingleDevice ? 'Single-device login enabled' : 'Multiple driver handsets allowed'),
+        message: result.policy.transition
+          ? `Driver sign-in settings are being updated. ${cleanupSummary}`
+          : enforceSingleDevice
           ? `Existing driver access was revoked immediately. ${cleanupSummary} The next handset to log in becomes the linked device.`
           : 'Drivers can now use their driver code on more than one valid handset.',
-        color: result.cleanup.pending ? 'yellow' : 'green',
+        color: result.policy.transition || result.cleanup.pending ? 'yellow' : 'green',
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Driver device settings could not be updated.';
@@ -276,8 +280,8 @@ export default function Settings() {
                   <Group gap="xs">
                     <Text fw={500}>Limit each driver code to one handset</Text>
                     {driverPolicy && (
-                      <Badge color={driverPolicy.enforceSingleDevice ? 'orange' : 'green'} variant="light">
-                        {driverPolicy.enforceSingleDevice ? 'On' : 'Off'}
+                      <Badge color={driverPolicy.transition ? 'yellow' : (driverPolicy.enforceSingleDevice ? 'orange' : 'green')} variant="light">
+                        {driverPolicy.transition ? 'Updating' : (driverPolicy.enforceSingleDevice ? 'On' : 'Off')}
                       </Badge>
                     )}
                   </Group>
@@ -290,7 +294,7 @@ export default function Settings() {
                   aria-busy={loadingDriverPolicy || savingDriverPolicy}
                   aria-describedby="driver-policy-status"
                   checked={driverPolicy?.enforceSingleDevice === true}
-                  disabled={loadingDriverPolicy || savingDriverPolicy || !driverPolicy}
+                  disabled={loadingDriverPolicy || savingDriverPolicy || !driverPolicy || Boolean(driverPolicy.transition)}
                   onChange={handleDriverPolicyToggle}
                 />
               </Group>
@@ -302,6 +306,8 @@ export default function Settings() {
                   ? 'Applying the driver handset setting…'
                   : !driverPolicy
                     ? 'The current driver handset setting is unavailable.'
+                    : driverPolicy.transition
+                      ? 'Driver sign-in settings are being updated. Please wait before making another change.'
                     : driverPolicy.enforceSingleDevice
                       ? 'Single-device enforcement is active.'
                       : 'Multiple verified company handsets are allowed.'}

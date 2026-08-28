@@ -24,8 +24,11 @@ const {
 
 const mapDriverVerifierReason = (reason) => {
   const reasonToMessage = {
+    ASSIGNMENT_IN_PROGRESS: 'Driver assignment is being updated. Please try again.',
     DRIVER_ALREADY_LINKED: 'This driver code is already linked to another device. Please contact dispatch if this is unexpected.',
+    DRIVER_LOGIN_IN_PROGRESS: 'Another sign-in for this driver is finishing. Please try again.',
     DRIVER_NOT_FOUND: 'Driver code not found',
+    DRIVER_POLICY_CHANGE_IN_PROGRESS: 'Driver sign-in settings are being updated. Please try again.',
     INVALID_CREDENTIALS: 'Secure driver sign-in is still starting. Please wait a moment and try again.',
     INVALID_INPUT: 'Invalid driver code provided',
     METHOD_NOT_ALLOWED: 'Driver verification is currently unavailable. Please update the app and try again shortly.',

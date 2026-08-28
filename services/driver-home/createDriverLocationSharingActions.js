@@ -17,7 +17,7 @@ const AUTO_SHARE_INTERVAL_MS = 3 * 60 * 1000;
 
 
 export default function createDriverLocationSharingActions(context) {
-  const { activeTourId, activeTourIdRef, autoShareEnabled, autoShareEnabledRef, autoShareGenerationRef, autoShareInFlightRef, autoShareInitialLocationRef, autoSharePreferenceKey, autoShareSessionRef, autoShareToggleInFlightRef, captureCurrentLocationWithPermission, driverData, driverIdRef, getAddressFromCoords, isAppActive, isAppActiveRef, lastLocationAddressRef, locationBusyRef, persistenceRef, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setAutoShareEnabled, setAutoShareLastRunAt, setAutoShareSaving, setAutoShareStatus, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, uploadLocationUpdate } = context;
+  const { activeTourId, activeTourIdRef, autoShareEnabled, autoShareEnabledRef, autoShareGenerationRef, autoShareInFlightRef, autoShareInitialLocationRef, autoSharePreferenceKey, autoShareSessionRef, autoShareToggleInFlightRef, captureCurrentLocationWithPermission, driverData, driverIdRef, getAddressFromCoords, isAppActive, isAppActiveRef, lastLocationAddressRef, locationBusyRef, locationSessionScope, persistenceRef, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setAutoShareEnabled, setAutoShareLastRunAt, setAutoShareSaving, setAutoShareStatus, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, uploadLocationUpdate } = context;
   const handleToggleAutoShare = async (enabled) => {
     logger.info('DriverHomeScreen', 'Auto-share toggle requested', {
       activeTourId,
@@ -31,6 +31,10 @@ export default function createDriverLocationSharingActions(context) {
         actionLabel: 'Join Tour',
         actionHandler: () => setJoinModalVisible(true),
       });
+      return;
+    }
+    if (enabled && (!locationSessionScope?.sessionId || !locationSessionScope?.authUid)) {
+      showBanner({ type: 'warning', message: 'Your secure driver session is still syncing. Try again in a moment.' });
       return;
     }
 
@@ -56,6 +60,7 @@ export default function createDriverLocationSharingActions(context) {
         autoShareEnabledRef.current = false;
         const withdrawal = await withdrawLiveDriverLocation({
           tourId: activeSession?.tourId || activeTourId,
+          appSessionId: activeSession?.appSessionId || locationSessionScope?.sessionId,
           dbInstance: realtimeDb,
           expectedSessionId: activeSession?.sessionId,
         });
@@ -110,7 +115,8 @@ export default function createDriverLocationSharingActions(context) {
     const sessionId = createDriverLocationSessionId();
     const targetTourId = activeTourId;
     const targetDriverId = driverData?.id || '';
-    const session = { generation, sessionId, tourId: targetTourId, driverId: targetDriverId };
+    const appSessionId = locationSessionScope?.sessionId || '';
+    const session = { generation, sessionId, appSessionId, tourId: targetTourId, driverId: targetDriverId };
     autoShareGenerationRef.current = generation;
     autoShareSessionRef.current = session;
     const isScopeCurrent = () => (
@@ -121,6 +127,7 @@ export default function createDriverLocationSharingActions(context) {
       && isAppActiveRef.current
       && activeTourIdRef.current === targetTourId
       && driverIdRef.current === targetDriverId
+      && locationSessionScope?.sessionId === appSessionId
     );
 
     const runAutoShare = async () => {
@@ -211,6 +218,7 @@ export default function createDriverLocationSharingActions(context) {
       }
       withdrawLiveDriverLocation({
         tourId: targetTourId,
+        appSessionId,
         dbInstance: realtimeDb,
         expectedSessionId: sessionId,
       }).catch((error) => {
@@ -225,6 +233,8 @@ export default function createDriverLocationSharingActions(context) {
     activeTourId,
     driverData?.id,
     isAppActive,
+    locationSessionScope?.authUid,
+    locationSessionScope?.sessionId,
   ]);
 
   // Refetch location in preview modal

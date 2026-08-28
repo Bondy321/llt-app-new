@@ -14,13 +14,46 @@ const { checkRateLimit, getRequestClientKey } = require('../../infrastructure/ra
 const { deleteStoragePaths, deleteStoragePrefixes } = require('../../infrastructure/storage/storageDeletion');
 const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { verifyOperationsAdminAccess } = require('./adminAuthorization');
+const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const {
   buildManualPassengerBookingUpdates, createManualPassengerError, findManualPassengerSeatConflicts,
   normalizeBookingRef, normalizeManualPassengerPayload,
 } = require('./manualPassengerBooking');
 const { buildTourDeletionUpdates, getBookingsForTour, resolveReportedPhotoStoragePaths } = require('./tourDeletion');
 
+const {
+  acquireDriverLocationProjectionInvalidation,
+  releaseDriverLocationProjectionInvalidation,
+} = loadLegacyLibrary('driverLocationProjection');
+
 const TOUR_DELETION_LOCK_TTL_MS = 10 * 60 * 1000;
+
+const acquireTourDeletionFences = async ({ db, tourId, lockOwner }) => {
+  const assignmentTourLockPath = `driver_assignment_locks/tours/${tourId}`;
+  const assignmentTourLockAcquired = await acquireManualBookingLock({
+    db,
+    path: assignmentTourLockPath,
+    owner: lockOwner,
+    nowMs: Date.now(),
+    ttlMs: TOUR_DELETION_LOCK_TTL_MS,
+  });
+  if (!assignmentTourLockAcquired) return { acquired: false, assignmentTourLockPath };
+  try {
+    const locationInvalidation = await acquireDriverLocationProjectionInvalidation({
+      database: db,
+      tourId,
+      leaseOwner: `tour_deletion:${lockOwner}`,
+      nowMs: Date.now(),
+    });
+    return { acquired: true, assignmentTourLockPath, locationInvalidation };
+  } catch (error) {
+    await releaseManualBookingLock({ db, path: assignmentTourLockPath, owner: lockOwner });
+    if (error?.code === 'DRIVER_LOCATION_PROJECTION_BUSY') {
+      return { acquired: false, assignmentTourLockPath };
+    }
+    throw error;
+  }
+};
 
 /** @type {Record<string, number>} */
 const MANUAL_BOOKING_STATUS_BY_REASON = Object.freeze({
@@ -235,13 +268,22 @@ const deleteTourData = onRequestWithResult(
     });
     if (!lockAcquired) return res.status(409).json({ success: false, reason: 'DELETE_IN_PROGRESS' });
 
+    let locationInvalidation = null;
+    let assignmentTourLockAcquired = false;
+    let assignmentTourLockPath = null;
     try {
-      const [tourSnapshot, driversSnapshot, driverUsersSnapshot, reportsSnapshot, safetySnapshot] = await Promise.all([
+      const fences = await acquireTourDeletionFences({ db, tourId, lockOwner });
+      assignmentTourLockAcquired = fences.acquired;
+      assignmentTourLockPath = fences.assignmentTourLockPath;
+      locationInvalidation = fences.locationInvalidation || null;
+      if (!fences.acquired) return res.status(409).json({ success: false, reason: 'DELETE_IN_PROGRESS' });
+      const [tourSnapshot, driversSnapshot, driverUsersSnapshot, reportsSnapshot, safetySnapshot, locationSourcesSnapshot] = await Promise.all([
         db.ref(`tours/${tourId}`).once('value'),
         db.ref('drivers').once('value'),
         db.ref('users').orderByChild('driverAssignedTourId').equalTo(tourId).once('value'),
         db.ref('content_reports').once('value'),
         db.ref('globalSafetyAlerts').once('value'),
+        db.ref('driver_location_sessions').orderByChild('tourId').equalTo(tourId).once('value'),
       ]);
       const tourExisted = tourSnapshot.exists();
       const tour = tourSnapshot.val() || {};
@@ -253,16 +295,20 @@ const deleteTourData = onRequestWithResult(
         driverUsers: driverUsersSnapshot.val() || {},
         contentReports: reportsSnapshot.val() || {},
         globalSafetyAlerts: safetySnapshot.val() || {},
+        driverLocationSourceKeys: Object.keys(locationSourcesSnapshot.val() || {}),
       });
       const deletedStorageObjects = await deleteStoragePrefixes({
         prefixes: [`group_tour_photos/${tourId}/`, `private_tour_photos/${tourId}/`],
       });
+      const projectionStatePath = `driver_location_projection_state/${tourId}`;
+      delete updates[projectionStatePath];
       await db.ref().update(updates);
+      await db.ref(projectionStatePath).remove();
 
       const summary = {
         bookingsDeleted: Object.keys(bookings).length,
         storageObjectsDeleted: deletedStorageObjects,
-        databasePathsDeleted: Object.keys(updates).filter((path) => updates[path] === null).length,
+        databasePathsDeleted: Object.keys(updates).filter((path) => updates[path] === null).length + 1,
         alreadyDeleted: !tourExisted,
       };
       log.info('Tour deletion completed', { tourId, ...summary });
@@ -271,6 +317,15 @@ const deleteTourData = onRequestWithResult(
       log.error('Tour deletion failed', error, { tourId });
       return res.status(500).json({ success: false, reason: 'INTERNAL_ERROR' });
     } finally {
+      if (locationInvalidation) {
+        await releaseDriverLocationProjectionInvalidation({
+          database: db,
+          invalidation: locationInvalidation,
+        }).catch(() => {});
+      }
+      if (assignmentTourLockAcquired) {
+        await releaseManualBookingLock({ db, path: assignmentTourLockPath, owner: lockOwner });
+      }
       await releaseManualBookingLock({ db, path: lockPath, owner: lockOwner });
     }
   },

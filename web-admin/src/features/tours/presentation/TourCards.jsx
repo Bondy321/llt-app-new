@@ -108,6 +108,8 @@ export function TourCard({
     close: closeAssignModal
   }] = useDisclosure(false);
   const [selectedDriver, setSelectedDriver] = useState('');
+  const [assignmentPending, setAssignmentPending] = useState(false);
+  const [assignmentStatus, setAssignmentStatus] = useState('');
   const driverOptions = Object.entries(drivers).map(([id, driver]) => ({
     value: id,
     label: `${driver.name} (${id})`
@@ -115,6 +117,8 @@ export function TourCard({
   const handleAssign = async () => {
     if (!selectedDriver) return;
     const driver = drivers[selectedDriver];
+    setAssignmentPending(true);
+    setAssignmentStatus('Updating the driver assignment safely…');
     try {
       await assignDriver(tourId, selectedDriver, {
         name: driver.name,
@@ -128,15 +132,24 @@ export function TourCard({
       });
       closeAssignModal();
       setSelectedDriver('');
+      setAssignmentStatus('Driver assignment completed.');
     } catch (error) {
+      const continuing = error?.code === 'ASSIGNMENT_IN_PROGRESS';
+      setAssignmentStatus(continuing
+        ? `Assignment is continuing (${error?.continuation?.status || 'in progress'}). Retry to advance it.`
+        : error.message);
       notifications.show({
-        title: 'Assignment Failed',
+        title: continuing ? 'Assignment in progress' : 'Assignment Failed',
         message: error.message,
-        color: 'red'
+        color: continuing ? 'yellow' : 'red'
       });
+    } finally {
+      setAssignmentPending(false);
     }
   };
   const handleUnassign = async () => {
+    setAssignmentPending(true);
+    setAssignmentStatus('Updating the driver assignment safely…');
     try {
       await unassignDriver(tourId);
       notifications.show({
@@ -144,12 +157,19 @@ export function TourCard({
         message: `Tour ${tourId} is now unassigned`,
         color: 'blue'
       });
+      setAssignmentStatus('Driver unassignment completed.');
     } catch (error) {
+      const continuing = error?.code === 'ASSIGNMENT_IN_PROGRESS';
+      setAssignmentStatus(continuing
+        ? `Unassignment is continuing (${error?.continuation?.status || 'in progress'}). Retry to advance it.`
+        : error.message);
       notifications.show({
-        title: 'Error',
+        title: continuing ? 'Unassignment in progress' : 'Error',
         message: error.message,
-        color: 'red'
+        color: continuing ? 'yellow' : 'red'
       });
+    } finally {
+      setAssignmentPending(false);
     }
   };
   const isAssigned = tour.driverName && tour.driverName !== 'TBA';
@@ -276,9 +296,13 @@ export function TourCard({
 
           <Select label="Select Driver" placeholder="Choose a driver" data={driverOptions} value={selectedDriver} onChange={setSelectedDriver} searchable clearable leftSection={<IconUsers size={16} />} />
 
+          {assignmentStatus && <Text role="status" aria-live="polite" size="sm" c="dimmed">
+              {assignmentStatus}
+            </Text>}
+
           <Group justify="flex-end" mt="md">
-            <Button variant="light" onClick={closeAssignModal}>Cancel</Button>
-            <Button onClick={handleAssign} disabled={!selectedDriver}>
+            <Button variant="light" onClick={closeAssignModal} disabled={assignmentPending}>Cancel</Button>
+            <Button onClick={handleAssign} disabled={!selectedDriver} loading={assignmentPending}>
               Assign Driver
             </Button>
           </Group>

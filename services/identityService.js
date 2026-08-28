@@ -45,6 +45,11 @@ const resolveRealtimeActorId = ({ authUid = null, principalId = null } = {}) => 
     : toRealtimeKeySegment(normalizedPrincipalId);
 };
 
+const resolveChatStatusActorId = ({ sessionScope = null } = {}) => {
+  const principalId = resolveTrimmedString(sessionScope?.principalId);
+  return isRealtimeKeySegment(principalId) ? principalId : null;
+};
+
 const resolveDriverId = ({ bookingData = {}, identityBinding = {} } = {}) => (
   resolveTrimmedString(bookingData?.driverId)
   || resolveTrimmedString(bookingData?.id)
@@ -111,6 +116,7 @@ module.exports = {
   getCanonicalIdentity,
   isOpaquePassengerId,
   resolveAuthScopedUserId,
+  resolveChatStatusActorId,
   resolveRealtimeActorId,
   isRealtimeKeySegment,
   toRealtimeKeySegment,

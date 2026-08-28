@@ -41,4 +41,10 @@ export async function createDriver({ name, code, phone = '' }) {
   return { id: driverId, driver };
 }
 
-export const updateDriverContactProjection = (updates) => update(ref(db), updates);
+export const updateDriverContactProjection = ({ driverId, name, phone = '' }) => {
+  if (!driverId) throw new Error('Driver ID is required.');
+  return update(ref(db), {
+    [`drivers/${driverId}/name`]: String(name || '').trim(),
+    [`drivers/${driverId}/phone`]: String(phone || '').trim(),
+  });
+};

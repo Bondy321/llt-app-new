@@ -1,106 +1,111 @@
-# App Session Security Rollout
+# App Session and Live-State Security Rollout
 
-## Release principle
+This rollout is ordered. Do not deploy strict RTDB rules before the Functions,
+explicit stable-OFF policy, and read-only preflight are verified. Do not let a
+source write or projector trigger select the live-state phase.
 
-This is a forced-secure-relogin cutover. Never infer a trusted session from a legacy participant row, access grant, driver assignment, or push token. Do not deploy strict rules until the compatible Functions and TestFlight OTA are available.
+Run the repository tests, emulator tests, web-admin build, Expo environment
+validation, release security audit, and `git diff --check` from the exact release
+commit. Confirm the Firebase project is `loch-lomond-travel` and retain a current
+RTDB export outside the repository without credentials, sessions, or raw backup
+data in Git.
 
-No native dependency or Expo config change is part of this rollout, so publish the mobile change through `.github/workflows/eas-update.yml`; do not create a new iOS binary.
+## Required order
 
-## Preflight
-
-From the exact release commit on `main`:
-
-```powershell
-npm test
-npm run test:emulators
-npm run build:web-admin
-npm run validate:expo-env
-npm run security:audit:release
-git diff --check
-```
-
-Confirm Firebase CLI and GitHub CLI target `loch-lomond-travel`, ensure a current RTDB backup/export exists outside the repository, and announce a short login maintenance window. Do not put raw database backup data, credentials, session IDs, or push tokens in Git.
-
-## Safe staged order
-
-### 1. Deploy compatible backend
-
-Deploy Functions first. This adds session-aware login, logout/revocation, cleanup, and private/group media endpoints while the old mobile binary can still launch:
+### 1. Deploy Functions
 
 ```powershell
 $env:FUNCTIONS_DISCOVERY_TIMEOUT='60'
 firebase deploy --only functions --project loch-lomond-travel
 ```
 
-Verify the new HTTPS and scheduled Functions exist in `europe-west1`, and run authenticated smoke checks for passenger login, driver login, and admin session visibility. Do not expose request tokens in logs.
+Verify the new HTTPS, trigger, and scheduled Functions in `europe-west1`, including
+`updateDriverLocationPickup`, `getLiveStateRollout`, and `setLiveStateRollout`.
 
-### 2. Publish the compatible TestFlight OTA
+### 2. Dry-run, then materialise explicit stable OFF generation zero
 
-Push the verified commit to `main`. The `EAS Update — TestFlight` workflow publishes iOS JavaScript to the isolated `testflight` channel. Manually dispatch only if the push trigger did not run:
-
-```powershell
-gh workflow run eas-update.yml --ref main
-gh run list --workflow eas-update.yml --limit 5
-```
-
-Wait for a successful workflow and confirm a TestFlight device receives the update. Exercise fresh passenger and driver logins, server-mediated group/private media, normal logout, offline logout-pending/retry, and a remote admin revoke. This stage does not rebuild iOS.
-
-### 3. Inventory and force secure re-login
-
-Dry-run pages first. Keep every returned continuation cursor and repeat until all three are null:
+The materialiser never replaces a present malformed, transitioning, enabled, or
+non-zero-generation policy.
 
 ```powershell
-npm --prefix functions run migrate:app-sessions -- --project=loch-lomond-travel --limit=25
+npm --prefix functions run materialize:driver-policy -- --project=loch-lomond-travel
+npm --prefix functions run materialize:driver-policy -- --project=loch-lomond-travel --apply --confirm-project=loch-lomond-travel
 ```
 
-Review counts for invalid participants, grants, push tokens, multi-tour UIDs, inferred-only sessions, and truncated parents. Any `truncatedParents` entry must be investigated; apply refuses it.
+The exact safe state is schema 1, `enforceSingleDevice: false`, `generation: 0`,
+`revision >= 1`, a positive `updatedAtMs`, and `transitionPhase: stable` with no
+active transition fields.
 
-During the maintenance window, apply one bounded page at a time with the page's exact cursors and a new protected backup filename:
+### 3. Run the read-only strict-rules preflight
 
 ```powershell
-npm --prefix functions run migrate:app-sessions -- --project=loch-lomond-travel --apply --confirm-project=loch-lomond-travel --cutover=FORCE_SECURE_RELOGIN --backup=C:\secure-backups\app-session-page-001.json --limit=25
+npm --prefix functions run preflight:strict-rules -- --project=loch-lomond-travel
 ```
 
-The script writes only leaf-level/multipath removals, deactivates legacy push tokens not backed by a current session, preserves exact session-bound participants and tokens, does not create sessions, and verifies every changed path. Require `postRunAudit.passed=true` for each page. Never commit the backup.
+Stop on any failure. Missing state is not acceptable at this boundary.
 
-### 4. Deploy strict data and media rules
-
-Immediately after the bounded cutover succeeds, enforce app sessions and deny direct private/group Storage access:
+### 4. Deploy strict Realtime Database and Storage rules
 
 ```powershell
 firebase deploy --only database,storage --project loch-lomond-travel
 ```
 
-Legacy clients and locally cached legacy sessions must now fail closed and perform secure online login. A stale participant, stale assignment, old Auth token, or stable private owner claim cannot restore access.
+Verify direct client access to private pickup, rollout, operation, policy, and
+projection-state roots is denied while compatibility-phase 1.0.4 shared live-state
+writes still behave as tested.
 
-### 5. Deploy operations UI
-
-Deploy the session inspection/revocation controls:
+### 5. Deploy web admin
 
 ```powershell
 npm run deploy:web-admin -- --project loch-lomond-travel
 ```
 
-Confirm an operations admin can see masked session state and revoke a current session, and that a non-admin cannot call the endpoint or read protected admin data.
+Verify an operations admin can use the server-owned assignment and policy flows,
+and that a non-admin cannot call them or read private state.
 
-## Post-cutover verification
+### 6. Release the 1.0.5 native binary
 
-- Old participant/grant rows from every migration page are gone.
-- A passenger with a fresh verified login has one matching session and schema-v2 participant row.
-- A logged-out passenger's still-valid Firebase token receives permission denied on tour, chat, manifest, notification, report, log, and photo metadata paths.
-- A logged-out assigned driver cannot read or write operational tour paths and receives no operational push.
-- Direct Storage access to both photo roots fails for signed-in and signed-out callers.
-- Function media resolution succeeds only for a current member/assigned driver and returns expiring URLs with private/no-store response policy.
-- Normal logout preserves opaque passenger identity and `authorizedAuthUid`; same-installation re-login works, another UID still gets `REAUTHORIZE_REQUIRED`.
-- `app_session_events` contains only bounded safe audit data and cleanup removes expired events.
-- Monitor Cloud Functions errors, RTDB permission denials, logout-pending support reports, active-session counts, push-recipient counts, media authorization failures, and driver access.
+Runtime 1.0.5 requires its matching native binary. Build and distribute that
+binary before publishing any 1.0.5 OTA. Verify passenger and driver login,
+multi-device live sharing, trusted pickup publication/withdrawal, assignment,
+logout, revoke, offline pending logout, and photo/media boundaries on devices.
+
+### 7. Observe mixed-version operation
+
+Keep `live_state_rollout/v1` missing or explicitly `compatibility`. Observe 1.0.4
+and 1.0.5 traffic, projection retries, RTDB denials, session cleanup, assignment
+completion, pickup retention, and support reports. A source write does not advance
+the phase. Do not treat a successful Function/rules deploy as device uptake.
+
+### 8. Keep live state in compatibility
+
+Cutover is not operationally available in this release. A request to set
+`phase: cutover` fails with `LIVE_STATE_CUTOVER_PREREQUISITE_NOT_MET`, even with
+valid admin authentication and the current revision. Keep the state missing or
+explicitly `compatibility`.
+
+The schema, projector, and rules retain cutover characterization for a future
+reviewed release. That release must first prove either a prior 1.0.4 OTA that maps
+permission denial to an explicit update-required experience, or a verified
+zero-supported-legacy-client gate. An untouched 1.0.4 binary writes RTDB directly,
+so this release cannot honestly provide it a literal `UPDATE_REQUIRED` response.
+
+## Existing app-session migration
+
+If legacy session data still needs removal, run `migrate:app-sessions` dry-run
+pages first and apply only bounded pages using `FORCE_SECURE_RELOGIN`, exact
+cursors, an explicit project confirmation, and protected external backups. Never
+synthesise trusted sessions from participant rows, grants, assignments, or tokens.
 
 ## Rollback
 
-Prefer forward fixes. Restoring auth-wide or participant-only access is not an acceptable rollback.
-
-- Functions: retain the new endpoints. Roll forward a backend bug while sessions remain authoritative.
-- Mobile: publish a corrected OTA to `testflight`; do not move users back to a client that directly addresses Storage.
-- Migration: the protected page backups are evidence/recovery inputs, but do not blindly restore participant rows, access grants, or active push tokens. Validate each proposed leaf against a newly verified app session.
-- Rules: if a false denial blocks service, deploy a narrowly scoped, time-bounded rule correction that still requires an active app session. Never restore `auth != null`, stable-claim-only private media, or assignment-only driver authority.
-- If secure operation cannot be restored quickly, keep the app in forced online re-login/maintenance mode and preserve the denial boundary.
+- Prefer a forward Function fix while keeping private roots and app sessions
+  authoritative.
+- Remain explicitly in `compatibility`. The current endpoint cannot enable
+  cutover. If a future or externally imported state is already cutover, a reviewed
+  revision-checked return to `compatibility` is the safe direction and mixed-version
+  behavior must be verified again.
+- Never restore auth-wide, participant-only, assignment-only, or direct private
+  pickup access.
+- A corrected 1.0.5 OTA requires the matching 1.0.5 binary already installed;
+  otherwise distribute a corrected binary.

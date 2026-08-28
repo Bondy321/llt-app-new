@@ -1,11 +1,15 @@
 {
   "cli": {
-    "version": ">= 16.0.1",
+    "version": "22.6.0",
     "promptToConfigurePushNotifications": false,
     "appVersionSource": "remote"
   },
   "build": {
-    "base": {},
+    "base": {
+      "env": {
+        "EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT": "false"
+      }
+    },
     "development": {
       "extends": "base",
       "environment": "development",

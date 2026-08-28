@@ -111,6 +111,18 @@ const getChatMessagesPath = (tourId, scope = 'group') =>
 const getChatActorStatusPath = (tourId, statusType, scope = 'group') =>
   `${getChatRootPath(tourId, scope)}/${statusType}`;
 
+const getChatSessionStatusPath = (statusType, scope = 'group', appSessionId) => {
+  if (statusType !== 'presence' && statusType !== 'typing') {
+    throw new Error('A valid chat status type is required');
+  }
+  const normalizedSessionId = typeof appSessionId === 'string' ? appSessionId.trim() : '';
+  if (!/^sess_v1_[a-f0-9]{32}$/.test(normalizedSessionId)) {
+    throw new Error('A valid app session ID is required');
+  }
+  const root = statusType === 'presence' ? 'chat_presence_sessions' : 'chat_typing_sessions';
+  return `${root}/${normalizeChatScope(scope)}/${normalizedSessionId}`;
+};
+
 const buildTimestampQuery = (messagesRef, {
   limit,
   beforeTimestamp = null,
@@ -165,6 +177,7 @@ module.exports = {
   buildMessagesFromSnapshot,
   buildTimestampQuery,
   getChatActorStatusPath,
+  getChatSessionStatusPath,
   getChatMessagesPath,
   hydrateGroupPhotoMessages,
   normalizeChatScope,

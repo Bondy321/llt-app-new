@@ -273,3 +273,22 @@ test('validateBookingReference maps claimed driver verifier failures to support 
     delete process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL;
   }
 });
+
+test('validateBookingReference maps driver policy transitions to accurate retriable copy', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL = 'https://example.test/verifyDriverLogin';
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: false,
+    status: 503,
+    json: async () => ({ valid: false, reason: 'DRIVER_POLICY_CHANGE_IN_PROGRESS' }),
+  });
+  try {
+    const service = loadServiceWithDb({ drivers: {}, tours: {}, tour_manifests: {} });
+    const result = await service.validateBookingReference('D-BONDY', 'driver@example.com');
+    assert.equal(result.valid, false);
+    assert.equal(result.error, 'Driver sign-in settings are being updated. Please try again.');
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL;
+  }
+});

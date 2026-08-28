@@ -264,6 +264,12 @@ const createMockRealtimeDb = (initialData = {}) => {
         return context;
       };
       context.onDisconnect = () => ({
+        remove: async () => {
+          context.onDisconnectRemove = true;
+        },
+        cancel: async () => {
+          context.onDisconnectCancel = true;
+        },
         update: async (patch) => {
           context.onDisconnectUpdate = cloneValue(patch);
           return patch;
@@ -567,6 +573,17 @@ test('message deletion is owner-only and clears retained photo download URLs', a
 
 test('internal driver typing and presence use internal chat status paths', async () => {
   const mockDb = createMockRealtimeDb();
+  const sessionId = 'sess_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const statusOptions = {
+    scope: 'internal',
+    sessionScope: {
+      authUid: 'uid_driver_bondy',
+      sessionId,
+      principalId: 'driver:BONDY',
+      role: 'driver',
+      tourId: 'tour-internal',
+    },
+  };
 
   const typingResult = await setTypingStatus(
     'tour-internal',
@@ -575,7 +592,7 @@ test('internal driver typing and presence use internal chat status paths', async
     true,
     true,
     mockDb,
-    { scope: 'internal' }
+    statusOptions
   );
   const presenceResult = await setOnlinePresence(
     'tour-internal',
@@ -584,15 +601,17 @@ test('internal driver typing and presence use internal chat status paths', async
     true,
     true,
     mockDb,
-    { scope: 'internal' }
+    statusOptions
   );
 
   assert.equal(typingResult.success, true);
   assert.equal(presenceResult.success, true);
-  assert.equal(mockDb.refCalls[0].path, 'internal_chats/tour-internal/typing/driver:BONDY');
-  assert.equal(mockDb.refCalls[1].path, 'internal_chats/tour-internal/presence/driver:BONDY');
+  assert.equal(mockDb.refCalls[0].path, `chat_typing_sessions/internal/${sessionId}`);
+  assert.equal(mockDb.refCalls[1].path, `chat_presence_sessions/internal/${sessionId}`);
   assert.equal(mockDb.refCalls[0].setCalls[0].isDriver, true);
   assert.equal(mockDb.refCalls[1].setCalls[0].isDriver, true);
+  assert.equal(mockDb.refCalls[0].setCalls[0].actorKey, 'driver:BONDY');
+  assert.equal(mockDb.refCalls[1].onDisconnectRemove, true);
 });
 
 test('internal chat status subscriptions read internal typing and presence paths', () => {

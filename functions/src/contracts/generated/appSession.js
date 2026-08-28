@@ -137,6 +137,8 @@ const CONTRACTS = Object.freeze({
     ],
     "constraints": [
       "driverPrincipalMatchesDriverId",
+      "driverRequiresPolicyGeneration",
+      "passengerForbidsPolicyGeneration",
       "passengerPrincipalIsOpaque",
       "expiryAfterIssue"
     ]

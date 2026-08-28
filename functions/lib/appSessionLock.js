@@ -3,7 +3,16 @@
 const { randomBytes } = require('crypto');
 
 const APP_SESSION_LOCK_TTL_MS = 30 * 1000;
-const APP_SESSION_LOCK_OPERATIONS = new Set(['issue', 'end', 'assign', 'revoke', 'cleanup']);
+const APP_SESSION_LOCK_OPERATIONS = new Set([
+  'issue',
+  'end',
+  'assign',
+  'revoke',
+  'cleanup',
+  'policy_cleanup',
+  'role_claim_cleanup',
+  'driver_location_pickup',
+]);
 
 const createAppSessionOperationId = (randomBytesFn = randomBytes) => (
   `op_v1_${randomBytesFn(16).toString('hex')}`

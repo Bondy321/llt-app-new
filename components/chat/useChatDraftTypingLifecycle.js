@@ -3,6 +3,7 @@ import { useCallback, useEffect } from 'react';
 import { Keyboard, Platform } from 'react-native';
 import { setTypingStatus, setOnlinePresence } from '../../services/chatService';
 import offlineSyncService from '../../services/offlineSyncService';
+const CHAT_PRESENCE_HEARTBEAT_MS = 2 * 60 * 1000;
 export default function useChatDraftTypingLifecycle(context, late) {
   const {
     chatQueueScope,
@@ -11,7 +12,8 @@ export default function useChatDraftTypingLifecycle(context, late) {
     inputText,
     isAtBottomRef,
     isDriver,
-    realtimeActorId,
+    offlineSessionScope,
+    statusActorId,
     scrollToBottom,
     setDraftRestored,
     setInputText,
@@ -45,19 +47,25 @@ export default function useChatDraftTypingLifecycle(context, late) {
   // Set online presence on mount/unmount
   // Set online presence on mount/unmount
   useEffect(() => {
-    if (!tourId || !realtimeActorId) return;
-    setOnlinePresence(tourId, realtimeActorId, userName, true, isDriver, undefined, {
-      scope: chatScope
+    if (!tourId || !statusActorId) return;
+    const publishPresence = () => setOnlinePresence(tourId, statusActorId, userName, true, isDriver, undefined, {
+      scope: chatScope,
+      sessionScope: offlineSessionScope
     });
+    publishPresence();
+    const heartbeat = setInterval(publishPresence, CHAT_PRESENCE_HEARTBEAT_MS);
     return () => {
-      setOnlinePresence(tourId, realtimeActorId, userName, false, isDriver, undefined, {
-        scope: chatScope
+      clearInterval(heartbeat);
+      setOnlinePresence(tourId, statusActorId, userName, false, isDriver, undefined, {
+        scope: chatScope,
+        sessionScope: offlineSessionScope
       });
-      setTypingStatus(tourId, realtimeActorId, userName, false, isDriver, undefined, {
-        scope: chatScope
+      setTypingStatus(tourId, statusActorId, userName, false, isDriver, undefined, {
+        scope: chatScope,
+        sessionScope: offlineSessionScope
       });
     };
-  }, [chatScope, tourId, realtimeActorId, userName, isDriver]);
+  }, [chatScope, tourId, statusActorId, userName, isDriver, offlineSessionScope]);
 
   // Keyboard listeners
   // Keyboard listeners
@@ -92,7 +100,7 @@ export default function useChatDraftTypingLifecycle(context, late) {
       setDraftRestored(false);
     }
     setInputText(text);
-    if (!tourId || !realtimeActorId) return;
+    if (!tourId || !statusActorId) return;
 
     // Clear existing timeout
     if (typingTimeoutRef.current) {
@@ -101,22 +109,25 @@ export default function useChatDraftTypingLifecycle(context, late) {
 
     // Set typing status
     if (text.trim().length > 0) {
-      setTypingStatus(tourId, realtimeActorId, userName, true, isDriver, undefined, {
-        scope: chatScope
+      setTypingStatus(tourId, statusActorId, userName, true, isDriver, undefined, {
+        scope: chatScope,
+        sessionScope: offlineSessionScope
       });
 
       // Clear typing after 3 seconds of inactivity
       typingTimeoutRef.current = setTimeout(() => {
-        setTypingStatus(tourId, realtimeActorId, userName, false, isDriver, undefined, {
-          scope: chatScope
+        setTypingStatus(tourId, statusActorId, userName, false, isDriver, undefined, {
+          scope: chatScope,
+          sessionScope: offlineSessionScope
         });
       }, 3000);
     } else {
-      setTypingStatus(tourId, realtimeActorId, userName, false, isDriver, undefined, {
-        scope: chatScope
+      setTypingStatus(tourId, statusActorId, userName, false, isDriver, undefined, {
+        scope: chatScope,
+        sessionScope: offlineSessionScope
       });
     }
-  }, [draftRestored, inputText, setInputText, tourId, realtimeActorId, typingTimeoutRef, setDraftRestored, userName, isDriver, chatScope]);
+  }, [draftRestored, inputText, setInputText, tourId, statusActorId, typingTimeoutRef, setDraftRestored, userName, isDriver, chatScope, offlineSessionScope]);
 
   // Send message handler
   Object.assign(late.current, {

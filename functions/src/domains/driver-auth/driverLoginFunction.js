@@ -1,23 +1,36 @@
 'use strict';
 
+/* eslint-disable complexity -- login coordinates independent policy, assignment and claim admissions */
+
 // @ts-check
 
 const { onRequest } = require('firebase-functions/v2/https');
+const { randomUUID } = require('node:crypto');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const { verifyRequestAuthUid } = require('../../infrastructure/auth/requestAuth');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { issueDriverAppSession } = require('../app-sessions/public');
-const { buildDriverIdentityProfileUpdates, claimDriverAuthUid, normalizeDriverId, resolveDriverAssignment } = require('../driver-assignment/public');
+const {
+  acquireDriverAssignmentLoginAdmission,
+  buildDriverIdentityProfileUpdates,
+  normalizeDriverId,
+  releaseDriverAssignmentLoginAdmission,
+  resolveDriverAssignment,
+} = require('../driver-assignment/public');
 const { resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { authorizeDriverLoginSecurity } = require('./driverLoginSecurity');
 const {
-  acquireDriverLoginPolicyLock,
+  acquireDriverLoginAdmission,
+  completeDriverLoginAdmission,
   driverBindingAllowedByPolicy,
   ensureDriverLoginPolicy,
   readDriverLoginPolicy,
-  releaseDriverLoginPolicyLock,
+  hashPolicyIdentifier,
+  releaseDriverLoginAdmission,
+  releaseDriverLoginClaim,
+  reserveDriverLoginClaim,
 } = require('./driverDevicePolicy');
 const { toClientSession } = loadLegacyLibrary('appSession');
 
@@ -33,19 +46,17 @@ const resolveAssignmentStatus = (assignedTourId, resolvedTour) => {
 const loadAuthorizedDriver = async ({ db, driverId, authUid, policy }) => {
   const driverSnapshot = await db.ref(`drivers/${driverId}`).once('value');
   if (!driverSnapshot.exists()) {
-    log.warn('Driver login rejected: driver not found', { driverId, authUid });
+    log.warn('Driver login rejected: driver not found', {
+      driverId, authUidHash: hashPolicyIdentifier(authUid),
+    });
     return { allowed: false, status: 200, reason: 'DRIVER_NOT_FOUND' };
   }
   const driverData = driverSnapshot.val() || {};
   const claimedAuthUid = resolveTrimmedString(driverData.authUid);
   if (!driverBindingAllowedByPolicy({ policy, authUid, claimedAuthUid })) {
-    log.warn('Driver login rejected: driver code already linked to another auth uid', { driverId, authUid });
-    return { allowed: false, status: 403, reason: 'DRIVER_ALREADY_LINKED' };
-  }
-  if (!policy.enforceSingleDevice) return { allowed: true, driverData };
-  const claimResult = await claimDriverAuthUid({ db, driverId, authUid });
-  if (!claimResult.claimed) {
-    log.warn('Driver login rejected: driver claim lost to another auth uid', { driverId, authUid });
+    log.warn('Driver login rejected: driver code already linked to another auth uid', {
+      driverId, authUidHash: hashPolicyIdentifier(authUid),
+    });
     return { allowed: false, status: 403, reason: 'DRIVER_ALREADY_LINKED' };
   }
   return { allowed: true, driverData };
@@ -82,15 +93,35 @@ const verifyDriverLogin = onRequestWithResult(
     if (!security.allowed) return res.status(security.status).json({ valid: false, reason: security.reason });
 
     const db = admin.database();
-    const policyLock = await acquireDriverLoginPolicyLock({ db });
-    if (!policyLock.acquired) {
-      return res.status(503).json({ valid: false, reason: 'TRY_AGAIN_LATER' });
-    }
+    let admission = null;
+    let claimReservation = null;
+    let admissionCompleted = false;
+    let assignmentLoginAdmission = null;
 
     try {
+      assignmentLoginAdmission = await acquireDriverAssignmentLoginAdmission({
+        db,
+        driverId,
+        admissionId: `driver_login_${randomUUID()}`,
+        authUidHash: hashPolicyIdentifier(requestAuth.uid),
+      });
+      if (!assignmentLoginAdmission.acquired) {
+        return res.status(409).json({ valid: false, reason: 'ASSIGNMENT_IN_PROGRESS' });
+      }
       let policyContext = await readDriverLoginPolicy({ db });
       if (policyContext.isDefault) policyContext = await ensureDriverLoginPolicy({ db });
-      const policy = policyContext.policy;
+      admission = await acquireDriverLoginAdmission({
+        db,
+        authUid: requestAuth.uid,
+        driverId,
+      });
+      if (!admission.acquired) {
+        const reason = admission.reason === 'POLICY_CONFIGURATION_INVALID'
+          ? 'SERVICE_UNAVAILABLE'
+          : 'DRIVER_POLICY_CHANGE_IN_PROGRESS';
+        return res.status(503).json({ valid: false, reason });
+      }
+      const policy = admission.policy;
       const driverAccess = await loadAuthorizedDriver({
         db, driverId, authUid: requestAuth.uid, policy,
       });
@@ -99,36 +130,62 @@ const verifyDriverLogin = onRequestWithResult(
       }
       const { driverData } = driverAccess;
 
+      if (policy.enforceSingleDevice) {
+        claimReservation = await reserveDriverLoginClaim({
+          db,
+          driverId,
+          admissionId: admission.admissionId,
+        });
+        if (!claimReservation.acquired) {
+          return res.status(409).json({ valid: false, reason: 'DRIVER_LOGIN_IN_PROGRESS' });
+        }
+        const latestDriver = (await db.ref(`drivers/${driverId}`).once('value')).val() || {};
+        const currentClaim = resolveTrimmedString(latestDriver.authUid);
+        if (currentClaim && currentClaim !== requestAuth.uid) {
+          return res.status(403).json({ valid: false, reason: 'DRIVER_ALREADY_LINKED' });
+        }
+      }
+
       const assignment = await resolveDriverAssignment({ driverId, driverData, db });
       const assignedTourCode = assignment.assignedTourCode;
       const resolvedTour = await resolveDriverLoginTour({ db, assignment });
 
       const nowMs = Date.now();
-      const currentPolicy = (await readDriverLoginPolicy({ db })).policy;
-      if (currentPolicy.revision !== policy.revision
-        || currentPolicy.generation !== policy.generation
-        || currentPolicy.enforceSingleDevice !== policy.enforceSingleDevice) {
-        return res.status(503).json({ valid: false, reason: 'TRY_AGAIN_LATER' });
-      }
       const driverProfileUpdates = buildDriverIdentityProfileUpdates({
         driverId,
         authUid: requestAuth.uid,
         assignedTourId: assignment.assignedTourId,
         nowMs,
       });
+      if (policy.enforceSingleDevice) {
+        driverProfileUpdates[`drivers/${driverId}/authUid`] = requestAuth.uid;
+        driverProfileUpdates[claimReservation.path] = null;
+      }
       const appSession = await issueDriverAppSession({
         db,
         authUid: requestAuth.uid,
         driverId,
         tourId: assignment.assignedTourId,
-        driverLoginPolicyGeneration: currentPolicy.generation,
+        driverLoginPolicyGeneration: policy.generation,
         profileUpdates: driverProfileUpdates,
         nowMs,
       });
+      admissionCompleted = await completeDriverLoginAdmission({
+        db, admissionId: admission.admissionId, policy,
+      });
+      if (!admissionCompleted) {
+        // Issuance has already committed atomically. Never hide that new
+        // session behind a non-success response; policy-generation checks
+        // still fail closed if a barrier somehow advanced after admission.
+        log.warn('Driver login admission completion lost its policy fence', {
+          driverId,
+          authUidHash: hashPolicyIdentifier(requestAuth.uid),
+        });
+      }
 
       log.info('Driver login reference validated', {
         driverId,
-        authUid: requestAuth.uid,
+        authUidHash: hashPolicyIdentifier(requestAuth.uid),
         assignedTourId: assignment.assignedTourId,
         assignmentSource: assignment.assignmentSource,
         hasResolvedTour: Boolean(resolvedTour),
@@ -146,20 +203,31 @@ const verifyDriverLogin = onRequestWithResult(
         },
         tour: resolvedTour,
         assignmentStatus: resolveAssignmentStatus(assignment.assignedTourId, resolvedTour),
-        identityClaimed: currentPolicy.enforceSingleDevice,
+        identityClaimed: policy.enforceSingleDevice,
         session: toClientSession(appSession),
       });
     } catch (error) {
       log.error('Driver login verification failed', error, {
         driverId,
-        authUid: requestAuth.uid,
+        authUidHash: hashPolicyIdentifier(requestAuth.uid),
       });
-      const reason = /** @type {{ code?: string }} */ (error)?.code === 'POLICY_CONFIGURATION_INVALID'
+      const code = /** @type {{ code?: string }} */ (error)?.code;
+      const reason = code === 'POLICY_CONFIGURATION_INVALID'
         ? 'SERVICE_UNAVAILABLE'
-        : 'INTERNAL_ERROR';
-      return res.status(reason === 'SERVICE_UNAVAILABLE' ? 503 : 500).json({ valid: false, reason });
+        : (code === 'SESSION_IN_PROGRESS' ? 'SESSION_IN_PROGRESS' : 'INTERNAL_ERROR');
+      return res.status(reason === 'INTERNAL_ERROR' ? 500 : 503).json({ valid: false, reason });
     } finally {
-      await releaseDriverLoginPolicyLock({ db, owner: policyLock.owner });
+      if (claimReservation?.acquired && !admissionCompleted) {
+        await releaseDriverLoginClaim({ db, driverId, admissionId: admission?.admissionId });
+      }
+      if (admission?.acquired && !admissionCompleted) {
+        await releaseDriverLoginAdmission({ db, admissionId: admission.admissionId });
+      }
+      if (assignmentLoginAdmission?.acquired) {
+        await releaseDriverAssignmentLoginAdmission({
+          db, driverId, admissionId: assignmentLoginAdmission.admissionId,
+        });
+      }
     }
   }
 );

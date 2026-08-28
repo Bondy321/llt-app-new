@@ -15,7 +15,9 @@
     "repair:manifest-duplicates": "node scripts/repairDuplicateManifestPassengers.js",
     "migrate:opaque-passenger-identities": "node scripts/migrateOpaquePassengerIdentities.js",
     "migrate:app-sessions": "node scripts/migrateAppSessions.js",
-    "migrate:notification-devices": "node scripts/migrateNotificationDevices.js"
+    "migrate:notification-devices": "node scripts/migrateNotificationDevices.js",
+    "preflight:strict-rules": "node scripts/strictRulesPreflight.js",
+    "materialize:driver-policy": "node scripts/strictRulesPreflight.js --materialize"
   },
   "engines": {
     "node": "22"

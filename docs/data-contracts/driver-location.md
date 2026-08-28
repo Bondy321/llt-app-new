@@ -1,79 +1,135 @@
 # Driver Location and Find My Bus Contract
 
-Date: 23 August 2026
+Date: 28 August 2026
 
-The canonical shared driver point lives at:
+Passengers continue to read the server-owned compatibility projection at
+`tours/{tourId}/driverLocation`. Clients cannot write or remove that projection.
+
+## Private sources
+
+Foreground live sharing remains installation-lifecycle owned:
 
 ```text
-tours/{tourId}/driverLocation
+driver_location_sessions/{appSessionId}|{liveSharingSessionId}
 ```
 
-Only an assigned, verified driver or operations admin may publish or remove this record. Driver reassignment and unassignment clear the previous location in the same authoritative multi-path update so a new driver never inherits another driver's point.
+Its schema-v2 record contains exact `authUid`, `appSessionId`, `driverId`,
+`tourId`, `liveSharingSessionId`, bounded coordinates and accuracy, a server
+timestamp, and `cleanupAtMs`. The handset arms `onDisconnect` before writing.
+Logout, role/session replacement, unmount, backgrounding, and disabling sharing
+compare-delete only the exact live leaf.
 
-## Versioned record
+A manual fixed pickup is assignment owned, not installation owned:
 
-New mobile clients publish schema version 1:
+```text
+driver_location_pickups/{tourId}
+```
 
 ```ts
 {
   schemaVersion: 1,
   isSharing: true,
-  mode: 'pickup' | 'live',
-  source: 'manual' | 'auto',
+  source: 'manual',
+  mode: 'pickup',
+  driverId: string,
+  tourId: string,
+  assignmentRevision: number,
   latitude: number,
   longitude: number,
-  timestamp: ServerValue.TIMESTAMP,
-  sessionId?: string,        // required for source: auto
-  cleanupAtMs?: number,      // required for source: auto; 30-minute lease
-  fallbackPickup?: Pickup,   // prior fixed point while source: auto
   accuracy?: number,
   address?: string,
-  updatedBy?: string
+  updatedBy?: string,
+  timestamp: number,
+  publishedAtMs: number,
+  expiresAtMs: number
 }
 ```
 
-`manual` must pair with `pickup`; `auto` must pair with `live`. New auto publications own an opaque session and a server-validated 30-minute cleanup lease. Coordinates, accuracy, lease bounds, session format, text lengths, allowed fields, and the resolved server timestamp are bounded by Realtime Database rules. Legacy unversioned records remain writable during the mobile rollout, but all new code writes the strict schema.
+The pickup never contains `authUid` or `appSessionId`. All client reads and
+writes at this root are denied. `updateDriverLocationPickup` is the only mobile
+mutation boundary. It validates Firebase Auth, the exact current app session,
+an explicitly materialised stable driver policy, the current driver/tour and
+manifest assignment, and the assignment revision while holding the same sorted
+driver/tour locks used by assignment. It then stamps the private record from
+server-owned state. Withdrawal compare-deletes only the same driver, tour, and
+assignment revision.
 
-## Passenger presentation
+The pickup therefore survives logout, app-session refresh, another handset, and
+a creator role change while the assignment remains current. Reassignment,
+unassignment, and tour deletion clear the source under their server-owned
+operation. The scheduled location cleanup also queries `expiresAtMs` in bounded
+batches, compare-deletes the exact expired publication, and reconciles the tour.
+Expiry is thirty days after the later of publication or indexed tour end, capped
+at 400 days after publication.
 
-- A manual pickup point is a fixed destination. It remains actionable without being labelled live.
-- An automatic live point is `live` for four minutes (covering the three-minute foreground cadence), `recent` until ten minutes, and stale until thirty minutes.
-- A point with reported accuracy worse than 500 metres remains visible for context but is not actionable.
-- A stale live point may remain visible for context but cannot launch directions or calculate travel metrics.
-- At thirty minutes, live coordinates expire from the passenger presentation.
-- Far-future, malformed, explicitly withdrawn, and missing records are unavailable.
-- Freshness is recalculated every 30 seconds; it does not depend on another Firebase update or render.
-- Removing the Firebase record immediately clears passenger state. Snapshot deletion must never leave the old marker in memory.
+## Projection and rollout
 
-Passenger location is optional. Opening Find My Bus checks existing foreground permission without prompting. The driver point still renders when passenger permission is absent. The passenger chooses the location control to request permission for distance, travel estimate, and two-point recentering.
+The projector validates every current source, chooses the newest valid live
+source with a stable ownership tie-break, and otherwise uses the valid pickup.
+The public schema remains:
 
-## Driver lifecycle
+```ts
+{
+  schemaVersion: 1,
+  isSharing: boolean,
+  mode?: 'pickup' | 'live',
+  source?: 'manual' | 'auto',
+  latitude?: number,
+  longitude?: number,
+  timestamp: number,
+  accuracy?: number,
+  address?: string,
+  updatedBy?: string,
+  projectionRevision?: number
+}
+```
 
-- Manual "Set pickup" publishes `mode: pickup`.
-- Foreground auto-share publishes `mode: live` at most once every three minutes and prevents overlapping work within the same lifecycle.
-- Enabling auto-share verifies permission before persisting the preference.
-- Starting auto-share transactionally carries forward the current validated manual pickup point as a nested fallback. Disabling auto-share transactionally replaces only the exact live session with that fixed point.
-- A failed withdrawal leaves auto-share enabled and exposes a retry action; the UI must not claim sharing stopped before the remote record is removed.
-- Backgrounding, disabling, reassignment, logout, or unmount immediately withdraws the exact live session owned by that screen lifecycle. Firebase `onDisconnect` removal (or fixed-point restoration) is armed after every live write as a second path.
-- Every auto-share lifecycle owns a unique session. Cancellation is checked after native location capture and again after the service write; an older cleanup can never remove a newer session.
-- A scheduled backend cleanup queries the indexed `driverLocation/cleanupAtMs` lease in bounded batches and transactionally removes only the exact expired session, restoring a validated fixed point when present. This caps precise-coordinate retention even if both client cleanup paths fail.
-- The driver reconciles the persisted server timestamp through a realtime subscription; local device time is never presented as authoritative publication time.
-- Manual previews are bound to the tour and driver identity active at capture time. Assignment changes invalidate the preview, and reverse-geocode results are applied only to the matching request.
+Projection leases prevent concurrent regressions. Rollout state is private and
+explicit at `live_state_rollout/v1`:
 
-## Passenger delivery
+```ts
+{
+  schemaVersion: 1,
+  phase: 'compatibility' | 'cutover',
+  projectionRevision: number,
+  updatedAtMs: number
+}
+```
 
-- Connectivity comes from Firebase `.info/connected`; a cached driver snapshot does not cause a false `Connected` label while offline.
-- Subscription errors expose an explicit retry action.
-- Initial and duplicate or replayed snapshots do not trigger update haptics; only a changed publication after the initial snapshot does.
-- Live and fixed pickup markers use different labels. Stale and low-accuracy points cannot launch directions or calculate distance or ETA.
+A server projection re-reads the rollout record immediately before publishing.
+If phase or rollout revision changed during source validation, it publishes
+nothing and lets the retryable trigger recompute against the current phase.
+
+Missing state means compatibility. In compatibility, old shared-path writes
+remain available and the server does not add `projectionRevision` to the public
+shape. A source write never changes rollout phase. Only the authenticated admin
+rollout endpoint can revision-check a phase request. This release refuses every
+request to enable cutover with `LIVE_STATE_CUTOVER_PREREQUISITE_NOT_MET`; therefore
+mixed 1.0.4/1.0.5 operation remains in compatibility. The cutover schema and rules
+remain characterized for future readiness, but are not an available operation.
+
+In the future-characterized cutover phase, trusted pickup requests below mobile
+1.0.5 receive HTTP 426 with `UPDATE_REQUIRED`. An untouched 1.0.4 binary writes
+RTDB directly and can receive only Firebase permission denied. A future change
+must add a prior client mapping capability or prove no supported legacy clients
+remain before enabling that phase.
+
+## Passenger and driver presentation
+
+- A pickup is an actionable fixed destination and is never labelled live.
+- A live point covers the three-minute cadence, becomes non-actionable when stale
+  or worse than 500 metres accuracy, and disappears after thirty minutes.
+- Passenger location permission is optional; it is requested only when the
+  passenger chooses to show or refresh their own position.
+- Firebase `.info/connected` supplies connection truth. Snapshot deletion clears
+  old markers, subscription failure has a retry action, and only a changed
+  publication after the initial snapshot triggers update haptics.
 
 ## Verification
 
 ```text
 npm run test:mobile:ux
 npm run test:functions:scripts
-npm run test:web-admin
 npm run test:emulators
+npm run test:contracts
 ```
-
-Changes to assignment cleanup or the versioned record validation require Functions and Realtime Database rules deployment before the corresponding mobile release.

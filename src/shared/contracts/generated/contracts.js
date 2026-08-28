@@ -215,6 +215,8 @@ const CONTRACTS = Object.freeze({
       ],
       "constraints": [
         "driverPrincipalMatchesDriverId",
+        "driverRequiresPolicyGeneration",
+        "passengerForbidsPolicyGeneration",
         "passengerPrincipalIsOpaque",
         "expiryAfterIssue"
       ]
@@ -596,9 +598,13 @@ const CONTRACTS = Object.freeze({
       ],
       "optionalProperties": [
         "reason",
+        "operation",
+        "driverId",
         "tourId",
         "tourCode",
         "previousTourId",
+        "driverRevision",
+        "tourRevision",
         "session"
       ],
       "properties": {
@@ -608,6 +614,17 @@ const CONTRACTS = Object.freeze({
         "reason": {
           "type": "string",
           "maxLength": 80
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "assign",
+            "unassign"
+          ]
+        },
+        "driverId": {
+          "type": "string",
+          "maxLength": 160
         },
         "tourId": {
           "type": "string",
@@ -622,21 +639,42 @@ const CONTRACTS = Object.freeze({
           "nullable": true,
           "maxLength": 160
         },
+        "driverRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tourRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
         "session": {
           "type": "object"
         }
       },
-      "enumValues": {},
+      "enumValues": {
+        "operation": [
+          "assign",
+          "unassign"
+        ]
+      },
       "idPatterns": {
         "tourId": "^[^.#$/\\[\\]\\u0000-\\u001F\\u007F]{1,160}$"
       },
       "maximumLengths": {
         "reason": 80,
+        "driverId": 160,
         "tourId": 160,
         "tourCode": 160,
         "previousTourId": 160
       },
-      "numericBounds": {},
+      "numericBounds": {
+        "driverRevision": {
+          "minimum": 0
+        },
+        "tourRevision": {
+          "minimum": 0
+        }
+      },
       "nullability": {
         "previousTourId": true
       },
@@ -644,9 +682,13 @@ const CONTRACTS = Object.freeze({
       "safeClientProjection": [
         "success",
         "reason",
+        "operation",
+        "driverId",
         "tourId",
         "tourCode",
         "previousTourId",
+        "driverRevision",
+        "tourRevision",
         "session"
       ],
       "forbiddenClientProjection": [
@@ -893,7 +935,9 @@ const CONTRACTS = Object.freeze({
         "name",
         "isDriver"
       ],
-      "optionalProperties": [],
+      "optionalProperties": [
+        "projectionRevision"
+      ],
       "properties": {
         "online": {
           "type": "boolean"
@@ -910,6 +954,10 @@ const CONTRACTS = Object.freeze({
         },
         "isDriver": {
           "type": "boolean"
+        },
+        "projectionRevision": {
+          "type": "integer",
+          "minimum": 1
         }
       },
       "enumValues": {},
@@ -917,19 +965,209 @@ const CONTRACTS = Object.freeze({
       "maximumLengths": {
         "name": 100
       },
-      "numericBounds": {},
+      "numericBounds": {
+        "projectionRevision": {
+          "minimum": 1
+        }
+      },
       "nullability": {},
       "rejectUnknownProperties": true,
       "safeClientProjection": [
         "online",
         "lastSeen",
         "name",
-        "isDriver"
+        "isDriver",
+        "projectionRevision"
       ],
       "forbiddenClientProjection": [
         "bookingRef",
         "email",
         "phone"
+      ]
+    },
+    "ChatTypingRecord": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "isTyping",
+        "timestamp",
+        "name",
+        "isDriver"
+      ],
+      "optionalProperties": [
+        "projectionRevision"
+      ],
+      "properties": {
+        "isTyping": {
+          "type": "boolean"
+        },
+        "timestamp": {
+          "type": [
+            "integer",
+            "object"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "isDriver": {
+          "type": "boolean"
+        },
+        "projectionRevision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "enumValues": {},
+      "idPatterns": {},
+      "maximumLengths": {
+        "name": 100
+      },
+      "numericBounds": {
+        "projectionRevision": {
+          "minimum": 1
+        }
+      },
+      "nullability": {},
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [
+        "isTyping",
+        "timestamp",
+        "name",
+        "isDriver",
+        "projectionRevision"
+      ],
+      "forbiddenClientProjection": [
+        "bookingRef",
+        "email",
+        "phone"
+      ]
+    },
+    "ChatStatusSessionRecord": {
+      "schemaVersion": 2,
+      "kind": "object",
+      "requiredProperties": [
+        "schemaVersion",
+        "authUid",
+        "appSessionId",
+        "actorKey",
+        "principalId",
+        "principalType",
+        "tourId",
+        "tourActorKey",
+        "scope",
+        "name",
+        "isDriver",
+        "timestamp",
+        "expiresAtMs"
+      ],
+      "optionalProperties": [],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 2
+        },
+        "authUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "appSessionId": {
+          "type": "string",
+          "pattern": "^sess_v1_[a-f0-9]{32}$"
+        },
+        "actorKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "principalType": {
+          "type": "string",
+          "enum": [
+            "passenger",
+            "driver"
+          ]
+        },
+        "tourId": {
+          "type": "string",
+          "pattern": "^[^.#$/\\[\\]\\u0000-\\u001F\\u007F]{1,160}$"
+        },
+        "tourActorKey": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 401
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "group",
+            "internal"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "isDriver": {
+          "type": "boolean"
+        },
+        "timestamp": {
+          "type": [
+            "integer",
+            "object"
+          ]
+        },
+        "expiresAtMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "enumValues": {
+        "principalType": [
+          "passenger",
+          "driver"
+        ],
+        "scope": [
+          "group",
+          "internal"
+        ]
+      },
+      "idPatterns": {
+        "appSessionId": "^sess_v1_[a-f0-9]{32}$"
+      },
+      "maximumLengths": {
+        "authUid": 160,
+        "actorKey": 240,
+        "principalId": 160,
+        "tourId": 160,
+        "tourActorKey": 401,
+        "name": 100
+      },
+      "numericBounds": {
+        "expiresAtMs": {
+          "minimum": 1
+        }
+      },
+      "nullability": {},
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [],
+      "forbiddenClientProjection": [
+        "authUid",
+        "appSessionId"
+      ],
+      "constraints": [
+        "pathSessionMatchesAppSessionId",
+        "tourActorKeyMatchesTourAndActor",
+        "roleMatchesIsDriver",
+        "internalRequiresDriver",
+        "expiryAfterTimestamp"
       ]
     },
     "GroupPhotoRecord": {
@@ -2204,21 +2442,33 @@ const CONTRACTS = Object.freeze({
       "kind": "object",
       "requiredProperties": [
         "schemaVersion",
+        "isSharing",
+        "timestamp"
+      ],
+      "optionalProperties": [
+        "mode",
         "source",
         "latitude",
         "longitude",
         "accuracy",
-        "timestamp"
-      ],
-      "optionalProperties": [
-        "sessionId",
-        "label",
-        "publishedBy"
+        "address",
+        "updatedBy",
+        "projectionRevision"
       ],
       "properties": {
         "schemaVersion": {
           "type": "integer",
           "const": 1
+        },
+        "isSharing": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "pickup",
+            "live"
+          ]
         },
         "source": {
           "type": "string",
@@ -2248,32 +2498,33 @@ const CONTRACTS = Object.freeze({
             "object"
           ]
         },
-        "sessionId": {
+        "address": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9_-]{8,80}$"
+          "maxLength": 500
         },
-        "label": {
+        "updatedBy": {
           "type": "string",
-          "maxLength": 160
+          "maxLength": 100
         },
-        "publishedBy": {
-          "type": "string",
-          "maxLength": 160
+        "projectionRevision": {
+          "type": "integer",
+          "minimum": 1
         }
       },
       "enumValues": {
+        "mode": [
+          "pickup",
+          "live"
+        ],
         "source": [
           "auto",
           "manual"
         ]
       },
-      "idPatterns": {
-        "sessionId": "^[A-Za-z0-9_-]{8,80}$"
-      },
+      "idPatterns": {},
       "maximumLengths": {
-        "sessionId": 80,
-        "label": 160,
-        "publishedBy": 160
+        "address": 500,
+        "updatedBy": 100
       },
       "numericBounds": {
         "latitude": {
@@ -2287,25 +2538,385 @@ const CONTRACTS = Object.freeze({
         "accuracy": {
           "minimum": 0,
           "maximum": 100000
+        },
+        "projectionRevision": {
+          "minimum": 1
         }
       },
       "nullability": {},
       "rejectUnknownProperties": true,
       "safeClientProjection": [
         "schemaVersion",
+        "isSharing",
+        "mode",
         "source",
         "latitude",
         "longitude",
         "accuracy",
         "timestamp",
-        "sessionId",
-        "label",
-        "publishedBy"
+        "address",
+        "updatedBy",
+        "projectionRevision"
       ],
       "forbiddenClientProjection": [
         "authUid",
+        "appSessionId",
+        "driverId",
+        "tourId",
+        "liveSharingSessionId",
         "bookingRef",
         "email"
+      ],
+      "constraints": [
+        "sharingRequiresCoordinates",
+        "modeMatchesSource"
+      ]
+    },
+    "DriverLocationSourceRecord": {
+      "schemaVersion": 2,
+      "kind": "object",
+      "requiredProperties": [
+        "schemaVersion",
+        "authUid",
+        "appSessionId",
+        "driverId",
+        "tourId",
+        "source",
+        "mode",
+        "latitude",
+        "longitude",
+        "accuracy",
+        "timestamp",
+        "liveSharingSessionId",
+        "cleanupAtMs"
+      ],
+      "optionalProperties": [
+        "address",
+        "updatedBy"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 2
+        },
+        "authUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "appSessionId": {
+          "type": "string",
+          "pattern": "^sess_v1_[a-f0-9]{32}$"
+        },
+        "driverId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "tourId": {
+          "type": "string",
+          "pattern": "^[^.#$/\\[\\]\\u0000-\\u001F\\u007F]{1,100}$"
+        },
+        "source": {
+          "type": "string",
+          "const": "auto"
+        },
+        "mode": {
+          "type": "string",
+          "const": "live"
+        },
+        "latitude": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "longitude": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "accuracy": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "timestamp": {
+          "type": [
+            "integer",
+            "object"
+          ]
+        },
+        "liveSharingSessionId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,80}$"
+        },
+        "cleanupAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "updatedBy": {
+          "type": "string",
+          "maxLength": 100
+        }
+      },
+      "enumValues": {
+        "source": [
+          "auto"
+        ],
+        "mode": [
+          "live"
+        ]
+      },
+      "idPatterns": {
+        "appSessionId": "^sess_v1_[a-f0-9]{32}$",
+        "tourId": "^[^.#$/\\[\\]\\u0000-\\u001F\\u007F]{1,100}$",
+        "liveSharingSessionId": "^[A-Za-z0-9_-]{8,80}$"
+      },
+      "maximumLengths": {
+        "authUid": 128,
+        "driverId": 100,
+        "tourId": 100,
+        "liveSharingSessionId": 80,
+        "address": 500,
+        "updatedBy": 100
+      },
+      "numericBounds": {
+        "latitude": {
+          "minimum": -90,
+          "maximum": 90
+        },
+        "longitude": {
+          "minimum": -180,
+          "maximum": 180
+        },
+        "accuracy": {
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "cleanupAtMs": {
+          "minimum": 1
+        }
+      },
+      "nullability": {},
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [],
+      "forbiddenClientProjection": [
+        "authUid",
+        "appSessionId"
+      ],
+      "constraints": [
+        "pathMatchesOwnership",
+        "liveRequiresLifecycleCleanupAndAccuracy"
+      ]
+    },
+    "DriverLocationPickupRecord": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "schemaVersion",
+        "isSharing",
+        "source",
+        "mode",
+        "driverId",
+        "tourId",
+        "assignmentRevision",
+        "latitude",
+        "longitude",
+        "timestamp",
+        "publishedAtMs",
+        "expiresAtMs"
+      ],
+      "optionalProperties": [
+        "accuracy",
+        "address",
+        "updatedBy"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1
+        },
+        "isSharing": {
+          "type": "boolean",
+          "const": true
+        },
+        "source": {
+          "type": "string",
+          "const": "manual"
+        },
+        "mode": {
+          "type": "string",
+          "const": "pickup"
+        },
+        "driverId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "tourId": {
+          "type": "string",
+          "pattern": "^[^.#$/\\[\\]\\u0000-\\u001F\\u007F]{1,100}$"
+        },
+        "assignmentRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "latitude": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "longitude": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "accuracy": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "timestamp": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "publishedAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expiresAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "updatedBy": {
+          "type": "string",
+          "maxLength": 100
+        }
+      },
+      "enumValues": {
+        "isSharing": [
+          true
+        ],
+        "source": [
+          "manual"
+        ],
+        "mode": [
+          "pickup"
+        ]
+      },
+      "idPatterns": {
+        "tourId": "^[^.#$/\\[\\]\\u0000-\\u001F\\u007F]{1,100}$"
+      },
+      "maximumLengths": {
+        "driverId": 100,
+        "tourId": 100,
+        "address": 500,
+        "updatedBy": 100
+      },
+      "numericBounds": {
+        "assignmentRevision": {
+          "minimum": 0
+        },
+        "latitude": {
+          "minimum": -90,
+          "maximum": 90
+        },
+        "longitude": {
+          "minimum": -180,
+          "maximum": 180
+        },
+        "accuracy": {
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "timestamp": {
+          "minimum": 1
+        },
+        "publishedAtMs": {
+          "minimum": 1
+        },
+        "expiresAtMs": {
+          "minimum": 1
+        }
+      },
+      "nullability": {},
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [],
+      "forbiddenClientProjection": [
+        "authUid",
+        "appSessionId",
+        "driverId",
+        "tourId",
+        "assignmentRevision"
+      ],
+      "constraints": [
+        "assignmentOwnedPickup",
+        "expiryAfterPublication"
+      ]
+    },
+    "LiveStateRolloutRecord": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "schemaVersion",
+        "phase",
+        "projectionRevision",
+        "updatedAtMs"
+      ],
+      "optionalProperties": [],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "compatibility",
+            "cutover"
+          ]
+        },
+        "projectionRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "updatedAtMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "enumValues": {
+        "phase": [
+          "compatibility",
+          "cutover"
+        ]
+      },
+      "idPatterns": {},
+      "maximumLengths": {},
+      "numericBounds": {
+        "projectionRevision": {
+          "minimum": 1
+        },
+        "updatedAtMs": {
+          "minimum": 1
+        }
+      },
+      "nullability": {},
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [],
+      "forbiddenClientProjection": [
+        "schemaVersion",
+        "phase",
+        "projectionRevision",
+        "updatedAtMs"
       ]
     },
     "DriverTourPackActionResult": {

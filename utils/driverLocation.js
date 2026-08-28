@@ -1,6 +1,7 @@
 import { parseTimestampMs } from '../services/timeUtils.js';
 
 export const DRIVER_LOCATION_SCHEMA_VERSION = 1;
+export const DRIVER_LOCATION_SOURCE_SCHEMA_VERSION = 2;
 export const DRIVER_LOCATION_LIVE_MS = 4 * 60 * 1000;
 export const DRIVER_LOCATION_RECENT_MS = 10 * 60 * 1000;
 export const DRIVER_LOCATION_STALE_MS = 30 * 60 * 1000;
@@ -11,6 +12,36 @@ export const DRIVER_LOCATION_MAX_ACTIONABLE_ACCURACY_METERS = 500;
 const readBoundedText = (value, maxLength) => {
   if (typeof value !== 'string') return '';
   return value.trim().slice(0, maxLength);
+};
+
+const APP_SESSION_ID_PATTERN = /^sess_v1_[a-f0-9]{32}$/;
+const LIVE_SHARING_SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
+
+const requireBoundedIdentifier = (value, pattern, message) => {
+  const normalized = readBoundedText(value, 100);
+  if (!pattern.test(normalized)) throw new Error(message);
+  return normalized;
+};
+
+const requireNonEmptyBoundedText = (value, maxLength, message) => {
+  if (typeof value !== 'string') throw new Error(message);
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maxLength) throw new Error(message);
+  return normalized;
+};
+
+export const buildDriverLocationSessionKey = (appSessionId, liveSharingSessionId) => {
+  const normalizedAppSessionId = requireBoundedIdentifier(
+    appSessionId,
+    APP_SESSION_ID_PATTERN,
+    'A valid app session ID is required',
+  );
+  const normalizedLiveSharingSessionId = requireBoundedIdentifier(
+    liveSharingSessionId,
+    LIVE_SHARING_SESSION_ID_PATTERN,
+    'A valid live-sharing session ID is required',
+  );
+  return `${normalizedAppSessionId}|${normalizedLiveSharingSessionId}`;
 };
 
 export const normalizeDriverCoordinates = (value) => {
@@ -191,18 +222,25 @@ export const buildDriverLocationPayload = ({
     timestamp: { '.sv': 'timestamp' },
   };
 
+  const normalizedAccuracy = Number(accuracy);
+  const hasBoundedAccuracy = Number.isFinite(normalizedAccuracy)
+    && normalizedAccuracy >= 0
+    && normalizedAccuracy <= 10000;
+
   if (normalizedSource === 'auto') {
     const normalizedSessionId = readBoundedText(sessionId, 80);
     if (!/^[A-Za-z0-9_-]{8,80}$/.test(normalizedSessionId)) {
       throw new Error('A valid live-sharing session ID is required');
     }
+    if (!hasBoundedAccuracy) {
+      throw new Error('A bounded live-location accuracy is required');
+    }
     payload.sessionId = normalizedSessionId;
     payload.cleanupAtMs = nowMs + DRIVER_LOCATION_CLEANUP_MS;
   }
 
-  const normalizedAccuracy = Number(accuracy);
-  if (Number.isFinite(normalizedAccuracy) && normalizedAccuracy >= 0) {
-    payload.accuracy = Math.min(normalizedAccuracy, 10000);
+  if (hasBoundedAccuracy) {
+    payload.accuracy = normalizedAccuracy;
   }
 
   const safeAddress = readBoundedText(address, 500);
@@ -210,5 +248,56 @@ export const buildDriverLocationPayload = ({
   const safeUpdatedBy = readBoundedText(updatedBy, 100);
   if (safeUpdatedBy) payload.updatedBy = safeUpdatedBy;
 
+  return payload;
+};
+
+export const buildDriverLocationSourcePayload = ({
+  latitude,
+  longitude,
+  accuracy,
+  address,
+  updatedBy,
+  source = 'manual',
+  liveSharingSessionId,
+  authUid,
+  appSessionId,
+  driverId,
+  tourId,
+  nowMs = Date.now(),
+}) => {
+  const publicPayload = buildDriverLocationPayload({
+    latitude,
+    longitude,
+    accuracy,
+    address,
+    updatedBy,
+    source,
+    sessionId: liveSharingSessionId,
+    nowMs,
+  });
+  const normalizedAuthUid = requireNonEmptyBoundedText(authUid, 128, 'A valid authenticated user ID is required');
+  const normalizedDriverId = requireNonEmptyBoundedText(driverId, 100, 'A valid driver ID is required');
+  const normalizedTourId = requireNonEmptyBoundedText(tourId, 100, 'A valid tour ID is required');
+  const normalizedAppSessionId = requireBoundedIdentifier(
+    appSessionId,
+    APP_SESSION_ID_PATTERN,
+    'A valid app session ID is required',
+  );
+  const payload = {
+    ...publicPayload,
+    schemaVersion: DRIVER_LOCATION_SOURCE_SCHEMA_VERSION,
+    authUid: normalizedAuthUid,
+    appSessionId: normalizedAppSessionId,
+    driverId: normalizedDriverId,
+    tourId: normalizedTourId,
+  };
+  delete payload.sessionId;
+  if (publicPayload.mode === 'live') {
+    payload.liveSharingSessionId = requireBoundedIdentifier(
+      liveSharingSessionId,
+      LIVE_SHARING_SESSION_ID_PATTERN,
+      'A valid live-sharing session ID is required',
+    );
+  }
   return payload;
 };

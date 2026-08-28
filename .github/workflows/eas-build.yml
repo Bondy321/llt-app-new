@@ -26,6 +26,7 @@ jobs:
       contents: read
     env:
       CI: true
+      EAS_BUILD_PROFILE: production
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
       EXPO_PUBLIC_FIREBASE_API_KEY: ${{ secrets.EXPO_PUBLIC_FIREBASE_API_KEY }}
       EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN }}
@@ -99,9 +100,12 @@ jobs:
       - name: Setup Expo and EAS CLI
         uses: expo/expo-github-action@v8
         with:
-          expo-version: latest
-          eas-version: latest
+          eas-version: 22.6.0
+          packager: npm
           token: ${{ env.EXPO_TOKEN }}
+
+      - name: Verify pinned release CLIs
+        run: node scripts/release/checkCliVersions.js --check-eas
 
       - name: Sync EAS production environment
         run: npm run sync:eas-env:production -- --platform=${{ github.event.inputs.platform }}

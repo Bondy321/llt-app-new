@@ -32,6 +32,7 @@ const safetySubmission = require('./domains/safety/safetySubmission');
 const { resolveSafetyReporterAccess } = require('./domains/safety/safetyAccess');
 const { checkSafetySubmissionRateLimit } = require('./domains/safety/safetyRateLimit');
 const sessionIssuance = require('./domains/app-sessions/sessionIssuance');
+const roleTransition = require('./domains/app-sessions/roleTransition');
 const passengerProjection = require('./domains/passenger-auth/passengerProjection');
 const passengerLoginWorkflow = require('./domains/passenger-auth/passengerLoginWorkflow');
 const passengerLoginSecurity = require('./domains/passenger-auth/passengerLoginSecurity');
@@ -54,6 +55,8 @@ const appSession = loadLegacyLibrary('appSession');
 const appSessionLock = loadLegacyLibrary('appSessionLock');
 const appSessionAccess = loadLegacyLibrary('appSessionAccess');
 const appSessionCleanup = loadLegacyLibrary('appSessionCleanup');
+const chatPresenceProjection = loadLegacyLibrary('chatPresenceProjection');
+const driverLocationProjection = loadLegacyLibrary('driverLocationProjection');
 
 module.exports = {
   buildGroupPhotoChatMessageRecord: groupMediaFunctions.buildGroupPhotoChatMessageRecord,
@@ -131,6 +134,10 @@ module.exports = {
   buildPassengerSafeBooking: passengerProjection.buildPassengerSafeBooking,
   buildPassengerSafeTour: passengerProjection.buildPassengerSafeTour,
   buildPassengerLoginResponse: passengerLoginWorkflow.buildPassengerLoginResponse,
+  buildPassengerCustomClaims: passengerLoginWorkflow.buildPassengerCustomClaims,
+  buildPassengerRoleClaimJob: roleTransition.buildPassengerRoleClaimJob,
+  processPassengerRoleClaimJobs: roleTransition.processPassengerRoleClaimJobs,
+  reconcilePassengerRoleClaimJob: roleTransition.reconcilePassengerRoleClaimJob,
   verifyRequestAuthUid,
   verifyCurrentTourPhotoAccess: mediaAccess.verifyCurrentTourPhotoAccess,
   enforceGroupMediaAppCheck,
@@ -215,6 +222,13 @@ module.exports = {
   buildAppSessionEvent: appSessionCleanup.buildAppSessionEvent,
   cleanupAppSession: appSessionCleanup.cleanupAppSession,
   cleanupDriverLocationForSession: appSessionCleanup.cleanupDriverLocationForSession,
+  buildDriverLocationProjection: driverLocationProjection.buildDriverLocationProjection,
+  cleanupDriverLocationsForAppSession: driverLocationProjection.cleanupDriverLocationsForAppSession,
+  reconcileDriverLocationProjection: driverLocationProjection.reconcileDriverLocationProjection,
+  buildChatStatusProjection: chatPresenceProjection.buildChatStatusProjection,
+  cleanupChatStatusForAppSession: chatPresenceProjection.cleanupChatStatusForAppSession,
+  cleanupExpiredChatStatusSessions: chatPresenceProjection.cleanupExpiredChatStatusSessions,
+  reconcileChatActorStatus: chatPresenceProjection.reconcileChatActorStatus,
   normalizePrivatePhotoUploadMetadata: privateMediaFunctions.normalizePrivatePhotoUploadMetadata,
   reservePrivatePhotoRecord: privateMediaFunctions.reservePrivatePhotoRecord,
 };

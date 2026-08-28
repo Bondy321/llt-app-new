@@ -25,23 +25,42 @@ import {
   formatDateToDDMMYYYY,
 } from './tourServiceContext';
 
+const SERVER_OWNED_ASSIGNMENT_FIELDS = new Set([
+  'driverId',
+  'driverName',
+  'driverPhone',
+  'driverAssignmentRevision',
+]);
+
+const stripServerOwnedAssignmentFields = (tourData = {}) => Object.fromEntries(
+  Object.entries(tourData).filter(([field]) => !SERVER_OWNED_ASSIGNMENT_FIELDS.has(field)),
+);
+
+const assertNoServerOwnedAssignmentFields = (updates = {}) => {
+  const reservedField = Object.keys(updates).find((field) => SERVER_OWNED_ASSIGNMENT_FIELDS.has(field));
+  if (reservedField) {
+    throw new Error(`${reservedField} is a server-owned driver assignment field. Use the assignment action instead.`);
+  }
+};
+
 export const createTour = async (tourData, _createdBy = 'admin') => {
-  const tourCode = trimTourCode(tourData?.tourCode);
+  const safeTourData = stripServerOwnedAssignmentFields(tourData);
+  const tourCode = trimTourCode(safeTourData.tourCode);
   if (!tourCode) {
     throw new Error('Tour code is required to create a tour.');
   }
 
   const tourId = generateTourId(tourCode);
-  assertChronologicalTourDates(tourData);
-  assertValidTourCapacity({ ...DEFAULT_TOUR, ...tourData });
+  assertChronologicalTourDates(safeTourData);
+  assertValidTourCapacity({ ...DEFAULT_TOUR, ...safeTourData });
   const newTour = {
     ...DEFAULT_TOUR,
-    ...tourData,
+    ...safeTourData,
     tourCode,
-    ...buildTourDateIndexFields(tourData),
+    ...buildTourDateIndexFields(safeTourData),
     // Ensure itinerary structure is correct
-    itinerary: tourData.itinerary || {
-      title: tourData.name || '',
+    itinerary: safeTourData.itinerary || {
+      title: safeTourData.name || '',
       days: []
     }
   };
@@ -106,6 +125,7 @@ export const createTourFromTemplate = async (templateKey, overrides = {}, create
  * @param {Object} updates - Fields to update
  */
 export const updateTour = async (tourId, updates) => {
+  assertNoServerOwnedAssignmentFields(updates);
   const tourRef = ref(db, `tours/${tourId}`);
   const snapshot = await get(tourRef);
   if (!snapshot?.exists?.()) {
@@ -243,8 +263,6 @@ export const duplicateTour = async (tourId, createdBy = 'admin') => {
   Object.assign(newTour, {
     name: `${existingTour.name || 'Tour'} (Copy)`,
     tourCode: newTourCode,
-    driverName: 'TBA',
-    driverPhone: '',
     currentParticipants: 0,
   });
 

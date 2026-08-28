@@ -14,6 +14,7 @@ const buildTourDeletionUpdates = ({
   driverUsers = {},
   contentReports = {},
   globalSafetyAlerts = {},
+  driverLocationSourceKeys = [],
 }) => {
   /** @type {Record<string, any>} */
   const updates = {
@@ -33,7 +34,13 @@ const buildTourDeletionUpdates = ({
     [`manual_booking_creation_locks/tours/${tourId}`]: null,
     [`driver_assignment_locks/tours/${tourId}`]: null,
     [`safety_submission_locks/${tourId}`]: null,
+    [`driver_location_pickups/${tourId}`]: null,
+    [`driver_location_projection_state/${tourId}`]: null,
   };
+
+  driverLocationSourceKeys.forEach((sourceKey) => {
+    if (isValidFirebaseKey(sourceKey)) updates[`driver_location_sessions/${sourceKey}`] = null;
+  });
 
   Object.keys(bookings).forEach((bookingRef) => {
     updates[`bookings/${bookingRef}`] = null;
