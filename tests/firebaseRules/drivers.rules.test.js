@@ -1,4 +1,5 @@
 const test = require('node:test');
+const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
@@ -25,6 +26,22 @@ const parseHost = () => {
 };
 
 const rules = fs.readFileSync(path.resolve(__dirname, '../../database.rules.json'), 'utf8');
+
+const findDriverAuthorityRulesWithoutPolicy = (value, currentPath = [], missing = []) => {
+  if (typeof value === 'string') {
+    if (value.includes("root.child('app_sessions/' + auth.uid + '/principalType').val() === 'driver'")
+      && !value.includes('driver_login_policy/v1')) {
+      missing.push(currentPath.join('/'));
+    }
+    return missing;
+  }
+  if (value && typeof value === 'object') {
+    Object.entries(value).forEach(([key, child]) => {
+      findDriverAuthorityRulesWithoutPolicy(child, [...currentPath, key], missing);
+    });
+  }
+  return missing;
+};
 
 let testEnv;
 let dbUrl;
@@ -56,6 +73,13 @@ test.before(async () => {
       currentTourId: '5203L_22',
     });
     await db.ref('admin_users/delegated-admin-1').set(true);
+    await db.ref('driver_login_policy/v1').set({
+      schemaVersion: 1,
+      enforceSingleDevice: false,
+      generation: 0,
+      revision: 1,
+      updatedAtMs: Date.now(),
+    });
     await db.ref('tours/TOUR_1').set({
       tourCode: 'TOUR 1',
       driverName: 'TBA',
@@ -75,6 +99,10 @@ test.after(async () => {
   if (testEnv) {
     await testEnv.cleanup();
   }
+});
+
+test('every RTDB driver authority branch applies the device policy generation', () => {
+  assert.deepEqual(findDriverAuthorityRulesWithoutPolicy(JSON.parse(rules)), []);
 });
 
 test('denies arbitrary driver record creation by authenticated clients', async () => {
@@ -157,6 +185,111 @@ test('denies claimed drivers from editing assignment or profile authority fields
   await assertFails(driverDb.ref(`drivers/${CLAIMED_DRIVER_ID}/currentTourCode`).set('OTHER TOUR'));
   await assertFails(driverDb.ref(`drivers/${CLAIMED_DRIVER_ID}/name`).set('Forged Name'));
   await assertFails(driverDb.ref(`drivers/${CLAIMED_DRIVER_ID}/assignments/OTHER_TOUR`).set(true));
+});
+
+test('off permits a second current handset while on requires the claimed handset and current generation', async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref().update({
+      ...driverAuthorityUpdates({
+        uid: DRIVER_AUTH_UID,
+        driverId: CLAIMED_DRIVER_ID,
+        tourId: '5203L_22',
+        driverLoginPolicyGeneration: 3,
+      }),
+      ...driverAuthorityUpdates({
+        uid: OTHER_AUTH_UID,
+        driverId: CLAIMED_DRIVER_ID,
+        tourId: '5203L_22',
+        driverLoginPolicyGeneration: 3,
+      }),
+      [`drivers/${CLAIMED_DRIVER_ID}/authUid`]: DRIVER_AUTH_UID,
+      'driver_login_policy/v1': {
+        schemaVersion: 1,
+        enforceSingleDevice: false,
+        generation: 3,
+        revision: 1,
+        updatedAtMs: Date.now(),
+      },
+    });
+  });
+
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}`).get());
+  await assertSucceeds(dbFor(OTHER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}`).get());
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref().update({
+      'driver_login_policy/v1/enforceSingleDevice': true,
+      'driver_login_policy/v1/generation': 4,
+      'driver_login_policy/v1/revision': 2,
+      'driver_login_policy/v1/updatedAtMs': Date.now(),
+      [`drivers/${CLAIMED_DRIVER_ID}/authUid`]: null,
+    });
+  });
+  const staleDriverDb = dbFor(DRIVER_AUTH_UID);
+  await assertFails(staleDriverDb.ref(`drivers/${CLAIMED_DRIVER_ID}`).get());
+  await assertFails(dbFor(OTHER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}`).get());
+
+  for (const path of [
+    'tours/5203L_22/driverLocation',
+    'tours/5203L_22/itinerary',
+    'tours/5203L_22/safetyAlerts',
+    'tours/5203L_22/liveTracking/passenger-1',
+    'group_tour_photos/5203L_22',
+    'broadcasts/5203L_22',
+    'tour_notifications/5203L_22',
+    `notification_read_state/5203L_22/driver:${CLAIMED_DRIVER_ID}`,
+  ]) {
+    await assertFails(staleDriverDb.ref(path).get(), `${path} must reject the stale handset`);
+  }
+  await assertFails(staleDriverDb.ref('content_reports/stale-driver-report').set({
+    reportId: 'stale-driver-report',
+    reporterAuthUid: DRIVER_AUTH_UID,
+    tourId: '5203L_22',
+    status: 'open',
+  }));
+  await assertFails(
+    staleDriverDb.ref(`notification_read_state/5203L_22/driver:${CLAIMED_DRIVER_ID}/notice-1`).set(true),
+  );
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref().update({
+      [`app_sessions/${DRIVER_AUTH_UID}/driverLoginPolicyGeneration`]: 4,
+      [`drivers/${CLAIMED_DRIVER_ID}/authUid`]: DRIVER_AUTH_UID,
+    });
+  });
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}`).get());
+  await assertFails(dbFor(OTHER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}`).get());
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.database(dbUrl);
+    await db.ref('driver_login_policy').remove();
+    await db.ref(`app_sessions/${OTHER_AUTH_UID}`).remove();
+    await db.ref(`users/${OTHER_AUTH_UID}`).remove();
+    await db.ref(`app_sessions/${DRIVER_AUTH_UID}/driverLoginPolicyGeneration`).remove();
+  });
+
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}`).get());
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref('driver_login_policy/v1').get());
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref('driver_login_policy/v1').set({
+    schemaVersion: 1,
+    enforceSingleDevice: true,
+    generation: 999,
+    revision: 999,
+    updatedAtMs: Date.now(),
+  }));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref('driver_login_policy/v1').set({
+      schemaVersion: 1,
+      enforceSingleDevice: false,
+      generation: 'invalid',
+      revision: 3,
+      updatedAtMs: Date.now(),
+    });
+  });
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}`).get());
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref('driver_login_policy').remove();
+  });
 });
 
 test('driverAssignedTourId is server-owned even when a client proposes the current assignment', async () => {

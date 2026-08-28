@@ -20,7 +20,9 @@ const CONTRACTS = Object.freeze({
       "expiresAtMs",
       "sessionRevision"
     ],
-    "optionalProperties": [],
+    "optionalProperties": [
+      "driverLoginPolicyGeneration"
+    ],
     "properties": {
       "schemaVersion": {
         "type": "integer",
@@ -79,6 +81,10 @@ const CONTRACTS = Object.freeze({
       "sessionRevision": {
         "type": "integer",
         "minimum": 1
+      },
+      "driverLoginPolicyGeneration": {
+        "type": "integer",
+        "minimum": 0
       }
     },
     "enumValues": {
@@ -103,6 +109,9 @@ const CONTRACTS = Object.freeze({
     "numericBounds": {
       "sessionRevision": {
         "minimum": 1
+      },
+      "driverLoginPolicyGeneration": {
+        "minimum": 0
       },
       "maximumLifetimeMs": 86400000
     },

@@ -3,6 +3,7 @@
 // @ts-check
 
 const { admin } = require('../../bootstrap/firebaseAdmin');
+const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const {
@@ -18,6 +19,13 @@ const {
   resolveTourNotificationCategoryLabel,
   resolveTrimmedString,
 } = require('./notificationPolicy');
+const {
+  driverBindingAllowedByPolicy,
+  driverSessionMatchesPolicyGeneration,
+  readDriverLoginPolicy,
+} = require('../driver-auth/public');
+
+const { isActiveSessionRecord } = loadLegacyLibrary('appSession');
 
 const USER_PROFILE_FETCH_CHUNK_SIZE = 100;
 
@@ -70,11 +78,42 @@ const loadDriverProfile = async (driverId) => {
   return snapshot.val() || null;
 };
 
+/** @type {(...args: any[]) => Promise<string[]>} */
+const loadDriverSessionAuthUids = async (driverId, { tourId, driverData, db = admin.database(), nowMs = Date.now() }) => {
+  const [sessionsSnapshot, policyContext] = await Promise.all([
+    db.ref('app_sessions').orderByChild('driverId').equalTo(driverId).once('value'),
+    readDriverLoginPolicy({ db }),
+  ]);
+  const candidates = Object.entries(sessionsSnapshot.val() || {});
+  const results = await Promise.all(candidates.map(async ([authUid, sessionValue]) => {
+    const session = /** @type {any} */ (sessionValue);
+    if (!isValidFirebaseKey(authUid)
+      || !isActiveSessionRecord(session, { nowMs })
+      || session.authUid !== authUid
+      || session.principalType !== 'driver'
+      || session.driverId !== driverId
+      || session.tourId !== tourId
+      || !driverSessionMatchesPolicyGeneration(session, policyContext.policy)
+      || !driverBindingAllowedByPolicy({
+        policy: policyContext.policy, authUid, claimedAuthUid: driverData?.authUid,
+      })) return null;
+    const profile = (await db.ref(`users/${authUid}`).once('value')).val() || {};
+    return profile.driverId === driverId
+      && profile.driverPrincipalId === session.principalId
+      && profile.principalType === 'driver'
+      && profile.driverAssignedTourId === tourId
+      ? authUid
+      : null;
+  }));
+  return results.filter(Boolean).sort((left, right) => left.localeCompare(right));
+};
+
 /** @type {(...args: any[]) => Promise<any>} */
 const resolveAssignedDriverRecipientIds = async ({
   tourId,
   manifestData = {},
   loadProfile = loadDriverProfile,
+  loadSessionAuthUids = loadDriverSessionAuthUids,
   context = {},
 }) => {
   const driverIds = collectAssignedDriverIds(manifestData);
@@ -97,20 +136,25 @@ const resolveAssignedDriverRecipientIds = async ({
       }
     }));
 
-    profileResults.forEach(/** @param {any} result */ ({ driverData }) => {
+    for (const { driverId, driverData } of profileResults) {
       if (!driverData || typeof driverData !== 'object') {
-        return;
+        continue;
       }
 
       if (!isDriverProfileAssignedToTour(driverData, tourId)) {
-        return;
+        continue;
       }
-
-      const authUid = resolveTrimmedString(driverData.authUid);
-      if (authUid && isValidFirebaseKey(authUid)) {
-        recipientIds.add(authUid);
+      try {
+        const sessionUids = await loadSessionAuthUids(driverId, { tourId, driverData });
+        sessionUids.forEach((authUid) => recipientIds.add(authUid));
+      } catch (error) {
+        log.warn('Failed to resolve assigned driver sessions for notification fanout', {
+          ...context,
+          driverId,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
-    });
+    }
   }
 
   log.info('Resolved assigned driver notification recipients', {
@@ -129,6 +173,7 @@ const resolveChatSenderDeliveryIds = async (options = {}) => {
   const manifestData = defaultValue(options.manifestData, {});
   const messageData = defaultValue(options.messageData, {});
   const loadProfile = defaultValue(options.loadProfile, loadDriverProfile);
+  const loadSessionAuthUids = defaultValue(options.loadSessionAuthUids, loadDriverSessionAuthUids);
   const loadIdentityBindings = defaultValue(options.loadIdentityBindings, loadIdentityBindingsForPrincipal);
   const context = defaultValue(options.context, {});
   const senderStableId = resolveTrimmedString(messageData.senderStableId);
@@ -156,8 +201,7 @@ const resolveChatSenderDeliveryIds = async (options = {}) => {
     if (!driverData || !isDriverProfileAssignedToTour(driverData, tourId)) {
       return [];
     }
-    const authUid = resolveTrimmedString(driverData.authUid);
-    return authUid && isValidFirebaseKey(authUid) ? [authUid] : [];
+    return loadSessionAuthUids(driverId, { tourId, driverData });
   } catch (error) {
     log.warn('Failed to resolve chat sender driver profile', {
       ...context,
@@ -202,6 +246,7 @@ module.exports = {
   buildCategoryBroadcastPushMessages,
   isAdminBroadcast,
   loadDriverProfile,
+  loadDriverSessionAuthUids,
   resolveAssignedDriverRecipientIds,
   resolveChatSenderDeliveryIds,
   verifyParticipant,

@@ -163,6 +163,8 @@ Do not rename these Realtime Database roots without a full migration:
 - `driver_tour_pack_issues`
 - `login_rate_limits` (server-private opaque abuse-prevention counters)
 - `safety_rate_limits` (server-private opaque safety-submission counters)
+- `driver_login_policy` (server-owned single-device toggle; missing is materialised as off before driver session issue)
+- `driver_login_policy_locks`, `driver_login_policy_cleanup`, `driver_login_policy_events` (server-private transition serialization, exact-session cleanup and audit)
 
 Admin UID hardcoded in rules:
 
@@ -218,8 +220,14 @@ Passenger login:
 Driver login:
 
 - Driver codes use `D-*` style identifiers.
-- `verifyDriverLogin` validates the code, transactionally claims an unclaimed driver record
-  for the authenticated Firebase UID, and writes the server-owned driver identity fields.
+- `verifyDriverLogin` validates the code and writes server-owned driver identity/session fields.
+  The admin-controlled `driver_login_policy/v1/enforceSingleDevice` flag defaults off. When on,
+  login transactionally claims the driver record for one Firebase UID; when off, several verified
+  handsets may hold independent active sessions for the same driver code.
+- Every driver session carries the current policy generation. Enabling single-device mode increments
+  it, immediately invalidates earlier sessions, clears old scalar claims, and queues exact-session
+  cleanup. The next verified handset to log in claims the driver. See
+  `docs/data-contracts/driver-login-policy.md`.
 - Driver login resolves driver profile, assignment context, and driver home tour context.
 - `assignDriverToTour` is the only mobile assignment mutation path; mobile clients never
   write driver, user-authority, tour-driver, or manifest-assignment nodes directly.

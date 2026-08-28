@@ -139,6 +139,64 @@ test('active access requires the matching live session and schema-v2 participant
   assert.equal((await verifyActiveAppSession({ db, authUid: 'uid-p', expectedTourId: 'TOUR_A', nowMs })).reason, 'SESSION_INACTIVE');
 });
 
+test('driver access follows policy generation and applies the scalar claim only when enabled', async () => {
+  const nowMs = 10_000;
+  const session = buildDriverSessionRecord({
+    authUid: 'uid-driver-b',
+    driverId: 'D-1',
+    tourId: 'TOUR_A',
+    driverLoginPolicyGeneration: 3,
+    sessionId: SESSION_ID,
+    nowMs: 1_000,
+    expiresAtMs: 20_000,
+  });
+  const db = createTransactionDb({
+    'app_sessions/uid-driver-b': session,
+    'users/uid-driver-b': {
+      driverId: 'D-1',
+      driverPrincipalId: 'driver:D-1',
+      driverAssignedTourId: 'TOUR_A',
+      principalType: 'driver',
+    },
+    'drivers/D-1': { authUid: 'uid-driver-a', currentTourId: 'TOUR_A' },
+    'tour_manifests/TOUR_A/assigned_drivers/D-1': true,
+    'driver_login_policy/v1': {
+      schemaVersion: 1,
+      enforceSingleDevice: false,
+      generation: 3,
+      revision: 1,
+      updatedAtMs: 9_000,
+    },
+  });
+
+  assert.equal((await verifyActiveAppSession({
+    db, authUid: 'uid-driver-b', expectedTourId: 'TOUR_A', expectedRole: 'driver', nowMs,
+  })).allowed, true);
+
+  db.state['driver_login_policy/v1'] = {
+    ...db.state['driver_login_policy/v1'],
+    enforceSingleDevice: true,
+    revision: 2,
+  };
+  assert.equal((await verifyActiveAppSession({
+    db, authUid: 'uid-driver-b', expectedTourId: 'TOUR_A', expectedRole: 'driver', nowMs,
+  })).reason, 'DRIVER_PROFILE_MISMATCH');
+
+  db.state['drivers/D-1'] = { authUid: 'uid-driver-b', currentTourId: 'TOUR_A' };
+  assert.equal((await verifyActiveAppSession({
+    db, authUid: 'uid-driver-b', expectedTourId: 'TOUR_A', expectedRole: 'driver', nowMs,
+  })).allowed, true);
+
+  db.state['driver_login_policy/v1'] = {
+    ...db.state['driver_login_policy/v1'],
+    generation: 4,
+    revision: 3,
+  };
+  assert.equal((await verifyActiveAppSession({
+    db, authUid: 'uid-driver-b', expectedTourId: 'TOUR_A', expectedRole: 'driver', nowMs,
+  })).reason, 'DRIVER_POLICY_MISMATCH');
+});
+
 test('cleanup removes only ephemeral authority and rejects a changed session', async () => {
   const session = buildPassengerSessionRecord({
     authUid: 'uid-p', principalId: PASSENGER_ID, tourId: 'TOUR_A', sessionId: SESSION_ID,

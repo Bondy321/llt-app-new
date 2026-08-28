@@ -19,6 +19,7 @@ export interface AppSession {
   lastAuthenticatedAtMs: number;
   expiresAtMs: number;
   sessionRevision: number;
+  driverLoginPolicyGeneration?: number;
 }
 
 export interface ClientAppSession {

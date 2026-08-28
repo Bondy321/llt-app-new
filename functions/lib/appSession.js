@@ -93,6 +93,7 @@ const buildDriverSessionRecord = ({
   authUid,
   driverId,
   tourId = null,
+  driverLoginPolicyGeneration = 0,
   sessionId = createAppSessionId(),
   nowMs = Date.now(),
   expiresAtMs = calculateSessionExpiry({ principalType: 'driver', tourId, nowMs }),
@@ -103,6 +104,9 @@ const buildDriverSessionRecord = ({
   if (!isValidFirebaseKey(driverId) || !isValidDriverPrincipal(principalId, driverId)) {
     throw new Error('Invalid driver principal');
   }
+  if (!Number.isSafeInteger(driverLoginPolicyGeneration) || driverLoginPolicyGeneration < 0) {
+    throw new Error('Invalid driver login policy generation');
+  }
   return {
     schemaVersion: APP_SESSION_SCHEMA_VERSION,
     sessionId,
@@ -111,6 +115,7 @@ const buildDriverSessionRecord = ({
     principalType: 'driver',
     tourId,
     driverId,
+    driverLoginPolicyGeneration,
     status: 'active',
     issuedAtMs: nowMs,
     lastAuthenticatedAtMs: nowMs,
@@ -149,6 +154,9 @@ const isActiveSessionRecord = (session, { nowMs = Date.now() } = {}) => {
   if (session.principalType === 'driver') {
     return isValidFirebaseKey(session.driverId)
       && isValidDriverPrincipal(session.principalId, session.driverId)
+      && (!Object.prototype.hasOwnProperty.call(session, 'driverLoginPolicyGeneration')
+        || (Number.isSafeInteger(session.driverLoginPolicyGeneration)
+          && session.driverLoginPolicyGeneration >= 0))
       && (session.tourId === null || isValidFirebaseKey(session.tourId));
   }
   return false;
