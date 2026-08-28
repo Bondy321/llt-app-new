@@ -14,6 +14,23 @@ const normalizePolicy = (payload) => {
     revision: policy.revision,
     updatedAtMs: policy.updatedAtMs,
     isDefault: policy.isDefault === true,
+    transition: policy.transition === null || policy.transition === undefined
+      ? null
+      : (() => {
+        if (!policy.transition || !['draining', 'cleanup'].includes(policy.transition.phase)
+          || typeof policy.transition.transitionId !== 'string'
+          || typeof policy.transition.targetEnforceSingleDevice !== 'boolean') {
+          throw new Error('The server returned an invalid driver login policy transition.');
+        }
+        return {
+          phase: policy.transition.phase,
+          transitionId: policy.transition.transitionId,
+          targetEnforceSingleDevice: policy.transition.targetEnforceSingleDevice,
+          sessionsScanned: normalizeCleanupCount(policy.transition.sessionsScanned),
+          sessionsQueued: normalizeCleanupCount(policy.transition.sessionsQueued),
+          driversScanned: normalizeCleanupCount(policy.transition.driversScanned),
+        };
+      })(),
   };
 };
 
@@ -42,8 +59,7 @@ export async function setDriverLoginPolicy({ enforceSingleDevice, expectedRevisi
     fallbackError: 'Driver device settings could not be updated.',
     reasonMessages: {
       POLICY_CHANGED: 'This setting changed in another session. Refresh it and try again.',
-      POLICY_CHANGE_IN_PROGRESS: 'Another driver device change is already in progress. Try again shortly.',
-      TOO_MANY_DRIVER_SESSIONS: 'There are too many active driver sessions to enable this safely. Contact support.',
+      DRIVER_POLICY_CHANGE_IN_PROGRESS: 'Driver sign-in settings are already being updated. Please try again.',
     },
   });
   return {

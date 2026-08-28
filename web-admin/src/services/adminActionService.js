@@ -34,6 +34,9 @@ export async function postAdminAction(functionName, body, options = {}) {
     const reason = payload?.reason || 'INTERNAL_ERROR';
     const error = new Error(options.reasonMessages?.[reason] || options.fallbackError || 'The operation could not be completed safely.');
     error.code = reason;
+    if (payload?.continuation && typeof payload.continuation === 'object') {
+      error.continuation = payload.continuation;
+    }
     throw error;
   }
 

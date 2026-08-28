@@ -1,5 +1,7 @@
 'use strict';
 
+/* eslint-disable complexity -- resumable policy phases deliberately keep every fence explicit */
+
 // @ts-check
 
 const { createHash } = require('node:crypto');
@@ -13,10 +15,15 @@ const { log } = require('../../infrastructure/logging/safeLogger');
 const { checkRateLimit } = require('../../infrastructure/rate-limit/requestRateLimiter');
 const { verifyOperationsAdminAccess } = require('../administration/public');
 const {
+  cleanupExpiredDriverAssignmentRecords,
+  processDriverAssignmentTransitions,
+} = require('../driver-assignment/public');
+const {
   DRIVER_LOGIN_POLICY_PATH,
-  acquireDriverLoginPolicyLock,
+  beginDriverPolicyTransition,
+  normalizeDriverLoginPolicy,
   readDriverLoginPolicy,
-  releaseDriverLoginPolicyLock,
+  readDriverPolicyTransition,
 } = require('./driverDevicePolicy');
 
 const { isValidAppSessionId } = loadLegacyLibrary('appSession');
@@ -25,7 +32,7 @@ const { cleanupAppSession } = loadLegacyLibrary('appSessionCleanup');
 
 const POLICY_CLEANUP_ROOT = 'driver_login_policy_cleanup/v1';
 const POLICY_EVENT_ROOT = 'driver_login_policy_events';
-const MAX_DRIVER_SESSIONS_PER_TRANSITION = 500;
+const POLICY_TRANSITION_PAGE_SIZE = 100;
 const POLICY_CLEANUP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const POLICY_AUDIT_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const onRequestWithResult = /** @type {any} */ (onRequest);
@@ -69,6 +76,16 @@ const toAdminPolicy = (normalized) => ({
   revision: normalized.policy.revision,
   updatedAtMs: normalized.policy.updatedAtMs,
   isDefault: normalized.isDefault,
+  transition: normalized.transition?.phase && normalized.transition.phase !== 'stable'
+    ? {
+      phase: normalized.transition.phase,
+      transitionId: normalized.transition.transitionId,
+      targetEnforceSingleDevice: normalized.transition.targetEnforceSingleDevice,
+      sessionsScanned: normalized.transition.sessionsScanned,
+      sessionsQueued: normalized.transition.sessionsQueued,
+      driversScanned: normalized.transition.driversScanned,
+    }
+    : null,
 });
 
 /** @param {unknown} jobs @param {number} policyGeneration */
@@ -126,16 +143,11 @@ const buildPolicyTransitionUpdates = async ({ db, current, enforceSingleDevice, 
   if (enforceSingleDevice && !current.policy.enforceSingleDevice) {
     const [sessionSnapshot, driversSnapshot] = await Promise.all([
       db.ref('app_sessions').orderByChild('principalType').equalTo('driver')
-        .limitToFirst(MAX_DRIVER_SESSIONS_PER_TRANSITION + 1).once('value'),
+        .limitToFirst(POLICY_TRANSITION_PAGE_SIZE).once('value'),
       db.ref('drivers').once('value'),
     ]);
     const sessions = sessionSnapshot.val() || {};
     const entries = Object.entries(sessions);
-    if (entries.length > MAX_DRIVER_SESSIONS_PER_TRANSITION) {
-      const error = /** @type {Error & { code?: string }} */ (new Error('Too many active driver sessions'));
-      error.code = 'TOO_MANY_DRIVER_SESSIONS';
-      throw error;
-    }
     entries.forEach(([sessionAuthUid, sessionValue]) => {
       const session = /** @type {any} */ (sessionValue);
       if (!isValidAppSessionId(session?.sessionId)) return;
@@ -171,6 +183,131 @@ const buildPolicyTransitionUpdates = async ({ db, current, enforceSingleDevice, 
     expiresAtMs: nowMs + POLICY_AUDIT_TTL_MS,
   };
   return { updates, nextPolicy, queuedSessionCount, clearedClaimCount };
+};
+
+/** @type {(...args: any[]) => Promise<any>} */
+const readBoundedKeyPage = async ({ db, path, cursor = null, limit = POLICY_TRANSITION_PAGE_SIZE }) => {
+  let query = db.ref(path).orderByKey();
+  if (cursor) query = query.startAt(cursor);
+  const snapshot = await query.limitToFirst(limit + (cursor ? 2 : 1)).once('value');
+  const entries = Object.entries(snapshot.val() || {})
+    .filter(([key]) => key !== cursor)
+    .sort(([left], [right]) => left.localeCompare(right));
+  const page = entries.slice(0, limit);
+  return {
+    entries: page,
+    hasMore: entries.length > limit,
+    cursor: page.length ? page[page.length - 1][0] : cursor,
+  };
+};
+
+/** @type {(...args: any[]) => Promise<any>} */
+const advanceDriverPolicyTransition = async ({
+  db = admin.database(), nowMs = Date.now(), pageSize = POLICY_TRANSITION_PAGE_SIZE,
+} = {}) => {
+  const policyRef = db.ref(DRIVER_LOGIN_POLICY_PATH);
+  let rawPolicy = (await policyRef.once('value')).val();
+  let normalized = normalizeDriverLoginPolicy(rawPolicy);
+  if (!normalized.valid) {
+    const error = /** @type {Error & { code?: string }} */ (new Error('Driver login policy is malformed'));
+    error.code = 'POLICY_CONFIGURATION_INVALID';
+    throw error;
+  }
+  let transition = readDriverPolicyTransition(rawPolicy);
+  if (transition.phase === 'stable') return { status: 'stable', progressed: false };
+
+  if (transition.phase === 'draining') {
+    let drainOutcome = 'waiting';
+    const drainResult = await policyRef.transaction((currentValue) => {
+      const current = normalizeDriverLoginPolicy(currentValue);
+      const currentTransition = readDriverPolicyTransition(currentValue);
+      if (!current.valid || currentTransition.phase !== 'draining'
+        || currentTransition.transitionId !== transition.transitionId) return undefined;
+      const activeAdmissions = Object.fromEntries(Object.entries(currentValue?.loginAdmissions || {})
+        .filter(([, admission]) => /** @type {any} */ (admission)?.durableUntilExplicitRelease === true
+          || Number(/** @type {any} */ (admission)?.expiresAtMs || 0) > nowMs));
+      if (Object.keys(activeAdmissions).length) {
+        drainOutcome = 'waiting';
+        return { ...currentValue, loginAdmissions: activeAdmissions };
+      }
+      drainOutcome = 'barrier_committed';
+      return {
+        ...currentValue,
+        enforceSingleDevice: true,
+        generation: current.policy.generation + 1,
+        transitionPhase: 'cleanup',
+        transitionStage: 'sessions',
+        transitionBarrierAtMs: nowMs,
+        loginAdmissions: null,
+      };
+    }, undefined, false);
+    if (!drainResult?.committed) return { status: 'contended', progressed: false };
+    if (drainOutcome === 'waiting') return { status: 'draining', progressed: true };
+    rawPolicy = drainResult.snapshot.val();
+    normalized = normalizeDriverLoginPolicy(rawPolicy);
+    transition = readDriverPolicyTransition(rawPolicy);
+  }
+
+  const stage = rawPolicy?.transitionStage || 'sessions';
+  if (stage === 'sessions') {
+    const page = await readBoundedKeyPage({
+      db, path: 'app_sessions', cursor: transition.sessionCursor, limit: pageSize,
+    });
+    const updates = {};
+    let queued = 0;
+    page.entries.forEach(([authUid, sessionValue]) => {
+      const session = /** @type {any} */ (sessionValue);
+      if (session?.principalType !== 'driver' || !isValidAppSessionId(session?.sessionId)) return;
+      const generation = Number.isSafeInteger(session.driverLoginPolicyGeneration)
+        ? session.driverLoginPolicyGeneration
+        : 0;
+      if (generation === normalized.policy.generation) return;
+      updates[`${POLICY_CLEANUP_ROOT}/${authUid}`] = {
+        schemaVersion: 1,
+        authUidHash: hashIdentifier(authUid),
+        sessionId: session.sessionId,
+        policyGeneration: normalized.policy.generation,
+        createdAtMs: nowMs,
+        expiresAtMs: nowMs + POLICY_CLEANUP_TTL_MS,
+      };
+      queued += 1;
+    });
+    updates[`${DRIVER_LOGIN_POLICY_PATH}/transitionSessionsScanned`] = transition.sessionsScanned + page.entries.length;
+    updates[`${DRIVER_LOGIN_POLICY_PATH}/transitionSessionsQueued`] = transition.sessionsQueued + queued;
+    updates[`${DRIVER_LOGIN_POLICY_PATH}/transitionSessionCursor`] = page.cursor;
+    if (!page.hasMore) {
+      updates[`${DRIVER_LOGIN_POLICY_PATH}/transitionStage`] = 'drivers';
+      updates[`${DRIVER_LOGIN_POLICY_PATH}/transitionDriverCursor`] = null;
+    }
+    await db.ref().update(updates);
+    return { status: page.hasMore ? 'cleanup_sessions' : 'cleanup_drivers', progressed: true, queued };
+  }
+
+  const driverPage = await readBoundedKeyPage({
+    db, path: 'drivers', cursor: transition.driverCursor, limit: pageSize,
+  });
+  const updates = {};
+  driverPage.entries.forEach(([driverId, driverValue]) => {
+    if (typeof /** @type {any} */ (driverValue)?.authUid === 'string') {
+      updates[`drivers/${driverId}/authUid`] = null;
+    }
+  });
+  updates[`${DRIVER_LOGIN_POLICY_PATH}/transitionDriversScanned`] = transition.driversScanned + driverPage.entries.length;
+  updates[`${DRIVER_LOGIN_POLICY_PATH}/transitionDriverCursor`] = driverPage.cursor;
+  if (!driverPage.hasMore) {
+    Object.assign(updates, {
+      [`${DRIVER_LOGIN_POLICY_PATH}/transitionPhase`]: 'stable',
+      [`${DRIVER_LOGIN_POLICY_PATH}/transitionStage`]: null,
+      [`${DRIVER_LOGIN_POLICY_PATH}/transitionId`]: null,
+      [`${DRIVER_LOGIN_POLICY_PATH}/targetEnforceSingleDevice`]: null,
+      [`${DRIVER_LOGIN_POLICY_PATH}/transitionStartedAtMs`]: null,
+      [`${DRIVER_LOGIN_POLICY_PATH}/transitionBarrierAtMs`]: null,
+      [`${DRIVER_LOGIN_POLICY_PATH}/transitionSessionCursor`]: null,
+      [`${DRIVER_LOGIN_POLICY_PATH}/transitionDriverCursor`]: null,
+    });
+  }
+  await db.ref().update(updates);
+  return { status: driverPage.hasMore ? 'cleanup_drivers' : 'stable', progressed: true };
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
@@ -243,65 +380,56 @@ const setDriverLoginPolicy = onRequestWithResult(
       return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
     }
 
-    const lock = await acquireDriverLoginPolicyLock({ db: access.db });
-    if (!lock.acquired) {
-      return res.status(409).json({ success: false, reason: 'POLICY_CHANGE_IN_PROGRESS' });
-    }
-    let transition = null;
     try {
-      const current = await readDriverLoginPolicy({ db: access.db });
-      if (current.policy.revision !== expectedRevision) {
-        return res.status(409).json({ success: false, reason: 'POLICY_CHANGED' });
-      }
-      if (current.policy.enforceSingleDevice === requested) {
-        return res.status(200).json({
-          success: true, policy: toAdminPolicy(current), changed: false,
-          cleanup: { queued: 0, cleaned: 0, pending: 0 },
-        });
-      }
-      transition = await buildPolicyTransitionUpdates({
+      const started = await beginDriverPolicyTransition({
         db: access.db,
-        current,
         enforceSingleDevice: requested,
-        authUid: access.authUid,
+        expectedRevision,
+        actorHash: hashIdentifier(access.authUid),
         nowMs: Date.now(),
       });
-      await access.db.ref().update(transition.updates);
-    } catch (error) {
-      const code = /** @type {{ code?: string }} */ (error)?.code;
-      log.error('Driver login policy change failed', error);
-      const reason = code === 'TOO_MANY_DRIVER_SESSIONS' ? code : 'INTERNAL_ERROR';
-      return res.status(reason === 'TOO_MANY_DRIVER_SESSIONS' ? 409 : 500).json({ success: false, reason });
-    } finally {
-      await releaseDriverLoginPolicyLock({ db: access.db, owner: lock.owner });
-    }
-
-    let cleanup = { scanned: 0, cleaned: 0, obsolete: 0, locked: 0, failed: 0 };
-    let pending = requested ? transition.queuedSessionCount : 0;
-    try {
-      if (requested) {
-        cleanup = await processDriverLoginPolicyCleanupJobs({ db: access.db, limit: 100 });
-        const pendingSnapshot = await access.db.ref(POLICY_CLEANUP_ROOT).once('value');
-        pending = countPolicyCleanupJobs(pendingSnapshot.val(), transition.nextPolicy.generation);
+      if (started.reason) {
+        const reason = started.reason;
+        return res.status(reason === 'POLICY_CONFIGURATION_INVALID' ? 500 : 409)
+          .json({ success: false, reason });
       }
-    } catch (error) {
-      log.error('Immediate driver policy cleanup pass failed; scheduled retry retained', error, {
-        queuedSessionCount: transition.queuedSessionCount,
+
+      if (started.started) {
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          const progress = await advanceDriverPolicyTransition({ db: access.db, pageSize: 100 });
+          if (!progress.progressed || progress.status === 'stable' || progress.status === 'draining') break;
+        }
+      }
+      const current = await readDriverLoginPolicy({ db: access.db });
+      const cleanup = requested
+        ? await processDriverLoginPolicyCleanupJobs({ db: access.db, limit: 100 })
+        : { cleaned: 0 };
+      const queued = current.transition?.sessionsQueued || 0;
+      const pending = current.transition?.phase && current.transition.phase !== 'stable'
+        ? Math.max(0, queued - cleanup.cleaned)
+        : 0;
+      const eventId = access.db.ref(POLICY_EVENT_ROOT).push().key;
+      await access.db.ref(`${POLICY_EVENT_ROOT}/${eventId}`).set({
+        schemaVersion: 1,
+        eventType: 'driver_login_policy_change_requested',
+        enforceSingleDevice: requested,
+        policyGeneration: current.policy.generation,
+        policyRevision: current.policy.revision,
+        actorAuthUidHash: hashIdentifier(access.authUid),
+        transitionId: current.transition?.transitionId || null,
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + POLICY_AUDIT_TTL_MS,
       });
+      return res.status(200).json({
+        success: true,
+        changed: started.changed === true,
+        policy: toAdminPolicy(current),
+        cleanup: { queued, cleaned: cleanup.cleaned, pending },
+      });
+    } catch (error) {
+      log.error('Driver login policy change failed', error);
+      return res.status(500).json({ success: false, reason: 'INTERNAL_ERROR' });
     }
-    log.info('Driver login policy changed', {
-      enforceSingleDevice: requested,
-      policyRevision: transition.nextPolicy.revision,
-      policyGeneration: transition.nextPolicy.generation,
-      queuedSessionCount: transition.queuedSessionCount,
-      cleanupPendingCount: pending,
-    });
-    return res.status(200).json({
-      success: true,
-      changed: true,
-      policy: toAdminPolicy({ policy: transition.nextPolicy, isDefault: false }),
-      cleanup: { queued: transition.queuedSessionCount, cleaned: cleanup.cleaned, pending },
-    });
   },
 );
 
@@ -315,16 +443,22 @@ const cleanupDriverLoginPolicySessions = onScheduleWithResult(
     maxInstances: 1,
   },
   async () => {
+    const assignmentTransitions = await processDriverAssignmentTransitions({ db: admin.database(), limit: 5 });
+    const transition = await advanceDriverPolicyTransition({ pageSize: 100 });
     const summary = await processDriverLoginPolicyCleanupJobs({ limit: 100 });
     const retention = await cleanupExpiredDriverPolicyRecords({ limit: 100 });
+    const assignmentRetention = await cleanupExpiredDriverAssignmentRecords({
+      db: admin.database(), limit: 100,
+    });
     if (summary.failed || summary.locked) log.warn('Driver policy cleanup remains pending', summary);
-    else log.info('Driver policy cleanup completed', { ...summary, ...retention });
-    return { ...summary, ...retention };
+    else log.info('Driver policy cleanup completed', { transition, ...summary, ...retention });
+    return { transition, assignmentTransitions, ...summary, ...retention, assignmentRetention };
   },
 );
 
 module.exports = {
   buildPolicyTransitionUpdates,
+  advanceDriverPolicyTransition,
   cleanupExpiredDriverPolicyRecords,
   cleanupDriverLoginPolicySessions,
   countPolicyCleanupJobs,

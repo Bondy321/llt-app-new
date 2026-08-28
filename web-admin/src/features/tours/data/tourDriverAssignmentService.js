@@ -1,270 +1,205 @@
 import {
-  ref,
-  update,
-  get,
   db,
-  nowAsISOString,
-  trimTourCode,
+  get,
   normalizeAssignmentTourId,
-  resolveAssignmentTourId,
-  getDriverSnapshotValue,
+  nowAsISOString,
+  postAdminAction,
+  ref,
+  trimTourCode,
 } from './tourServiceContext';
 
-export const assignDriver = async (tourId, driverId, driverInfo) => {
-  await applyDriverAssignmentMutation({
-    tourId,
-    driverId,
-    driverCode: driverId,
-    driverInfo,
-    isAssigned: true,
-  });
+/* eslint-disable complexity -- compatibility projection helper enumerates canonical paths */
 
-  return { tourId, driverId, assigned: true };
+const ASSIGNMENT_REASON_MESSAGES = {
+  ASSIGNMENT_ALREADY_CHANGED: 'The assignment changed while this request was being processed. Refresh and try again.',
+  ASSIGNMENT_IN_PROGRESS: 'Another assignment change is still in progress. Wait a moment and try again.',
+  ASSIGNMENT_STALE: 'This tour or driver changed after you opened it. Refresh before trying again.',
+  DRIVER_POLICY_CHANGE_IN_PROGRESS: 'Driver sign-in settings are being updated. Please try again.',
+  IDEMPOTENCY_CONFLICT: 'This assignment request no longer matches the original action. Refresh and try again.',
+  POLICY_CONFIGURATION_INVALID: 'Driver sign-in settings need administrator attention before assignments can change.',
+  TOUR_INACTIVE: 'This tour is inactive and cannot be assigned.',
+  TOUR_NOT_FOUND: 'The tour no longer exists. Refresh the tour list.',
+  DRIVER_NOT_FOUND: 'The driver no longer exists. Refresh the driver list.',
 };
 
-/**
- * Unassign driver from a tour
- * @param {string} tourId - Tour ID
- * @param {string} driverId - Driver ID (optional)
- */
-export const unassignDriver = async (tourId, driverId = null) => {
-  await applyDriverAssignmentMutation({
-    tourId,
-    driverId,
-    driverCode: driverId,
-    driverInfo: { name: 'TBA', phone: '' },
-    isAssigned: false,
-  });
+const readRevision = (value) => (
+  Number.isSafeInteger(Number(value)) && Number(value) >= 0 ? Number(value) : 0
+);
 
-  return { tourId, unassigned: true };
+const createIdempotencyKey = (operation, tourId, driverId) => {
+  const nonce = globalThis.crypto?.randomUUID?.()
+    || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `admin-assignment:${operation}:${tourId}:${driverId}:${nonce}`;
 };
 
-const getDriverAssignmentContext = async (tourId, explicitDriverId = null) => {
+// A 409 continuation is not a failed assignment attempt. Keep the exact key
+// and optimistic revisions until that transition completes so a UI retry
+// resumes the same durable server transition instead of creating a contender.
+const pendingAssignmentAttempts = new Map();
+
+const runAssignmentAttempt = async ({ operation, context, options, driverProfileUpdates }) => {
+  const attemptPath = `${operation}:${context.tourId}:${context.driverId}`;
+  const explicitKey = options.idempotencyKey || null;
+  const existing = explicitKey ? null : pendingAssignmentAttempts.get(attemptPath);
+  const attempt = existing || {
+    idempotencyKey: explicitKey || createIdempotencyKey(operation, context.tourId, context.driverId),
+    expectedDriverRevision: options.expectedDriverRevision
+      ?? readRevision(context.driver.assignmentRevision),
+    expectedTourRevision: options.expectedTourRevision
+      ?? readRevision(context.tour.driverAssignmentRevision),
+    driverProfileUpdates,
+  };
+  if (!explicitKey && !existing) pendingAssignmentAttempts.set(attemptPath, attempt);
+  try {
+    const result = await postAssignment({
+      operation,
+      tourId: context.tourId,
+      driverId: context.driverId,
+      ...attempt,
+    });
+    if (!explicitKey && pendingAssignmentAttempts.get(attemptPath) === attempt) {
+      pendingAssignmentAttempts.delete(attemptPath);
+    }
+    return result;
+  } catch (error) {
+    if (error?.code !== 'ASSIGNMENT_IN_PROGRESS'
+      && !explicitKey && pendingAssignmentAttempts.get(attemptPath) === attempt) {
+      pendingAssignmentAttempts.delete(attemptPath);
+    }
+    throw error;
+  }
+};
+
+const loadAssignmentContext = async (tourId, explicitDriverId = null) => {
   const normalizedTourId = normalizeAssignmentTourId(tourId);
+  if (!normalizedTourId) throw new Error('Tour ID is required for driver assignment');
   const [tourSnapshot, manifestSnapshot] = await Promise.all([
     get(ref(db, `tours/${normalizedTourId}`)),
     get(ref(db, `tour_manifests/${normalizedTourId}`)),
   ]);
-
+  if (!tourSnapshot.exists()) throw new Error('The tour no longer exists. Refresh the tour list.');
   const tour = tourSnapshot.val() || {};
-  const manifest = manifestSnapshot.val() || {};
-  const manifestDrivers = manifest.assigned_drivers || {};
-  const manifestDriverIds = Object.keys(manifestDrivers);
-  const resolvedDriverId = explicitDriverId || manifestDriverIds[0] || null;
-
-  const driver = await getDriverSnapshotValue(resolvedDriverId);
-  const currentTourId = resolveAssignmentTourId(driver.currentTourId);
-  const assignments = driver.assignments || {};
-  const tourCode = trimTourCode(tour?.tourCode);
-  if (!tourCode) {
-    throw new Error('Tour code is required for driver assignment');
-  }
-
-  const knownTourIds = new Set([
-    ...Object.keys(assignments).map(normalizeAssignmentTourId).filter(Boolean),
-    ...(currentTourId ? [currentTourId] : []),
-  ]);
-
-  const staleManifestDriverProfiles = {};
-  await Promise.all(
-    manifestDriverIds
-      .filter((manifestDriverId) => manifestDriverId !== resolvedDriverId)
-      .map(async (manifestDriverId) => {
-        staleManifestDriverProfiles[manifestDriverId] = await getDriverSnapshotValue(manifestDriverId);
-      })
-  );
-
+  const manifestDrivers = Object.keys(manifestSnapshot.val()?.assigned_drivers || {});
+  const driverId = explicitDriverId || tour.driverId || manifestDrivers[0] || null;
+  if (!driverId) throw new Error('No assigned driver was found. Refresh the tour list.');
+  const driverSnapshot = await get(ref(db, `drivers/${driverId}`));
+  if (!driverSnapshot.exists()) throw new Error('The driver no longer exists. Refresh the driver list.');
   return {
     tourId: normalizedTourId,
-    tourCode,
-    driverId: resolvedDriverId,
-    existingTourDriverId: typeof tour.driverId === 'string' ? tour.driverId.trim() : null,
-    driverCode: resolvedDriverId,
-    driverAuthUid: driver.authUid || null,
-    manifestDriverIds,
-    staleManifestDriverProfiles,
-    currentTourId,
-    assignments,
-    knownTourIds,
+    driverId,
+    tour: tour,
+    driver: driverSnapshot.val() || {},
   };
 };
 
-const buildTourDriverFields = (tourId, driverId, driverInfo, isAssigned) => ({
-  [`tours/${tourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',
-  [`tours/${tourId}/driverPhone`]: isAssigned ? (driverInfo.phone || '') : '',
-  [`tours/${tourId}/driverId`]: isAssigned ? (driverId || null) : null,
+const postAssignment = async ({
+  operation,
+  tourId,
+  driverId,
+  driverProfileUpdates = null,
+  expectedDriverRevision,
+  expectedTourRevision,
+  idempotencyKey,
+}) => postAdminAction('assignDriverToTour', {
+  operation,
+  tourId,
+  driverId,
+  expectedDriverRevision,
+  expectedTourRevision,
+  idempotencyKey,
+  ...(driverProfileUpdates ? { driverProfileUpdates } : {}),
+}, {
+  configurationError: 'Driver assignment is not configured for this deployment.',
+  fallbackError: 'The driver assignment could not be completed safely.',
+  reasonMessages: ASSIGNMENT_REASON_MESSAGES,
 });
 
-const appendDriverIdentityUpdates = (updates, { driverId, driverInfo, isAssigned, tourId }) => {
-  const driverAuthUid = typeof driverInfo?.authUid === 'string' ? driverInfo.authUid.trim() : '';
-  if (!driverAuthUid) return;
-  Object.assign(updates, {
-    [`users/${driverAuthUid}/driverId`]: driverId,
-    [`users/${driverAuthUid}/driverPrincipalId`]: `driver:${driverId}`,
-    [`users/${driverAuthUid}/driverAssignedTourId`]: isAssigned ? tourId : null,
-    [`users/${driverAuthUid}/principalType`]: 'driver',
-    [`users/${driverAuthUid}/lastUpdated`]: Date.now(),
+export const assignDriver = async (tourId, driverId, _driverInfo = {}, options = {}) => {
+  const context = await loadAssignmentContext(tourId, driverId);
+  return runAssignmentAttempt({
+    operation: 'assign',
+    context,
+    options,
+    driverProfileUpdates: options.driverProfileUpdates || null,
   });
 };
 
-const appendManifestAssignmentUpdates = (updates, {
-  actorId, assignedAt, driverId, isAssigned, tourCode, tourId,
-}) => {
-  updates[`tour_manifests/${tourId}/assigned_drivers/${driverId}`] = isAssigned ? true : null;
-  updates[`tour_manifests/${tourId}/assigned_driver_codes/${driverId}`] = isAssigned
-    ? { driverId, tourId, tourCode, assignedAt, assignedBy: actorId }
-    : null;
+export const unassignDriver = async (tourId, driverId = null, options = {}) => {
+  const context = await loadAssignmentContext(tourId, driverId);
+  return runAssignmentAttempt({
+    operation: 'unassign',
+    context,
+    options,
+    driverProfileUpdates: options.driverProfileUpdates || null,
+  });
 };
 
 /**
- * Build canonical multi-path updates for driver assignment mutations.
- * Mirrors mobile assignDriverToTour() contract for cross-platform consistency.
+ * Retained as a pure compatibility helper for import/export tooling. Production
+ * assignment mutations use the authenticated server action above.
  */
 export const buildDriverAssignmentUpdates = ({
   tourId,
   driverId,
-  driverCode: _driverCode,
   tourCode,
-  driverInfo,
+  driverInfo = {},
   isAssigned,
   actorId = 'web-admin',
   assignedAt = nowAsISOString(),
 }) => {
   const normalizedTourId = normalizeAssignmentTourId(tourId);
-  if (!normalizedTourId) {
-    throw new Error('Tour ID is required for driver assignment');
-  }
   const normalizedTourCode = trimTourCode(tourCode);
-  if (isAssigned && !normalizedTourCode) {
-    throw new Error('Tour code is required for driver assignment');
-  }
-
-  const updates = buildTourDriverFields(normalizedTourId, driverId, driverInfo, isAssigned);
-
-  if (!driverId) {
-    return updates;
-  }
-
-  updates[`drivers/${driverId}/currentTourId`] = isAssigned ? normalizedTourId : null;
-  updates[`drivers/${driverId}/currentTourCode`] = isAssigned ? normalizedTourCode : null;
-  updates[`drivers/${driverId}/assignments/${normalizedTourId}`] = isAssigned ? true : null;
-
-  appendDriverIdentityUpdates(updates, {
-    driverId, driverInfo, isAssigned, tourId: normalizedTourId,
+  if (!normalizedTourId) throw new Error('Tour ID is required for driver assignment');
+  if (isAssigned && !normalizedTourCode) throw new Error('Tour code is required for driver assignment');
+  const updates = {
+    [`tours/${normalizedTourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',
+    [`tours/${normalizedTourId}/driverPhone`]: isAssigned ? (driverInfo.phone || '') : '',
+    [`tours/${normalizedTourId}/driverId`]: isAssigned ? (driverId || null) : null,
+  };
+  if (!driverId) return updates;
+  Object.assign(updates, {
+    [`drivers/${driverId}/currentTourId`]: isAssigned ? normalizedTourId : null,
+    [`drivers/${driverId}/currentTourCode`]: isAssigned ? normalizedTourCode : null,
+    [`drivers/${driverId}/assignments/${normalizedTourId}`]: isAssigned ? true : null,
+    [`tour_manifests/${normalizedTourId}/assigned_drivers/${driverId}`]: isAssigned ? true : null,
+    [`tour_manifests/${normalizedTourId}/assigned_driver_codes/${driverId}`]: isAssigned ? {
+      driverId,
+      tourId: normalizedTourId,
+      tourCode: normalizedTourCode,
+      assignedAt,
+      assignedBy: actorId,
+    } : null,
   });
-  appendManifestAssignmentUpdates(updates, {
-    actorId,
-    assignedAt,
-    driverId,
-    isAssigned,
-    tourCode: normalizedTourCode,
-    tourId: normalizedTourId,
+  const authUid = typeof driverInfo.authUid === 'string' ? driverInfo.authUid.trim() : '';
+  if (authUid) Object.assign(updates, {
+    [`users/${authUid}/driverId`]: driverId,
+    [`users/${authUid}/driverPrincipalId`]: `driver:${driverId}`,
+    [`users/${authUid}/driverAssignedTourId`]: isAssigned ? normalizedTourId : null,
+    [`users/${authUid}/principalType`]: 'driver',
+    [`users/${authUid}/lastUpdated`]: Date.now(),
   });
-
   return updates;
-};
-
-const appendDriverProfileUpdates = (updates, driverId, driverProfileUpdates) => {
-  const nextName = typeof driverProfileUpdates?.name === 'string'
-    ? driverProfileUpdates.name.trim()
-    : '';
-  const nextPhone = typeof driverProfileUpdates?.phone === 'string'
-    ? driverProfileUpdates.phone.trim()
-    : null;
-  if (nextName) updates[`drivers/${driverId}/name`] = nextName;
-  if (nextPhone !== null) updates[`drivers/${driverId}/phone`] = nextPhone;
-};
-
-const appendPreviousTourCleanup = (updates, assignment, driverId, targetTourId) => {
-  const cleanupTourIds = new Set(assignment.knownTourIds || []);
-  cleanupTourIds.delete(targetTourId);
-  for (const oldTourId of cleanupTourIds) {
-    Object.assign(updates, {
-      [`drivers/${driverId}/assignments/${oldTourId}`]: null,
-      [`tour_manifests/${oldTourId}/assigned_drivers/${driverId}`]: null,
-      [`tour_manifests/${oldTourId}/assigned_driver_codes/${driverId}`]: null,
-      [`tours/${oldTourId}/driverName`]: 'TBA',
-      [`tours/${oldTourId}/driverPhone`]: '',
-      [`tours/${oldTourId}/driverId`]: null,
-      [`tours/${oldTourId}/driverLocation`]: null,
-    });
-  }
-};
-
-const appendStaleDriverCleanup = (updates, assignment, resolvedDriverId, targetTourId) => {
-  for (const existingDriverId of assignment.manifestDriverIds || []) {
-    if (existingDriverId === resolvedDriverId) continue;
-    const staleProfile = assignment.staleManifestDriverProfiles?.[existingDriverId] || {};
-    const staleCurrentTourId = resolveAssignmentTourId(staleProfile.currentTourId);
-    updates[`drivers/${existingDriverId}/assignments/${targetTourId}`] = null;
-    updates[`tour_manifests/${targetTourId}/assigned_drivers/${existingDriverId}`] = null;
-    updates[`tour_manifests/${targetTourId}/assigned_driver_codes/${existingDriverId}`] = null;
-    if (!staleCurrentTourId || staleCurrentTourId === targetTourId) {
-      updates[`drivers/${existingDriverId}/currentTourId`] = null;
-      updates[`drivers/${existingDriverId}/currentTourCode`] = null;
-    }
-    const staleAuthUid = typeof staleProfile.authUid === 'string' ? staleProfile.authUid.trim() : '';
-    if (staleAuthUid) {
-      updates[`users/${staleAuthUid}/driverAssignedTourId`] = null;
-      updates[`users/${staleAuthUid}/lastUpdated`] = Date.now();
-    }
-  }
 };
 
 export const applyDriverAssignmentMutation = async ({
   tourId,
   driverId,
-  driverCode,
-  driverInfo,
+  driverInfo = {},
   isAssigned,
-  actorId,
   driverProfileUpdates,
-}) => {
-  const normalizedTourId = normalizeAssignmentTourId(tourId);
-  if (!normalizedTourId) {
-    throw new Error('Tour ID is required for driver assignment');
-  }
-
-  const assignment = await getDriverAssignmentContext(normalizedTourId, driverId);
-  const resolvedDriverId = driverId || assignment.driverId;
-  const resolvedDriverCode = driverCode || assignment.driverCode;
-
-  const updates = buildTourDriverFields(normalizedTourId, resolvedDriverId, driverInfo, isAssigned);
-
-  if (!resolvedDriverId) {
-    await update(ref(db), updates);
-    return;
-  }
-
-  appendDriverProfileUpdates(updates, resolvedDriverId, driverProfileUpdates);
-  appendPreviousTourCleanup(updates, assignment, resolvedDriverId, normalizedTourId);
-  appendStaleDriverCleanup(updates, assignment, resolvedDriverId, normalizedTourId);
-
-  Object.assign(
-    updates,
-    buildDriverAssignmentUpdates({
-      tourId: normalizedTourId,
-      driverId: resolvedDriverId,
-      driverCode: resolvedDriverCode,
-      tourCode: assignment.tourCode,
-      driverInfo: {
-        ...driverInfo,
-        authUid: driverInfo?.authUid || assignment.driverAuthUid || null,
-      },
-      isAssigned,
-      actorId,
-    }),
-  );
-
-  if (!isAssigned || assignment.existingTourDriverId !== resolvedDriverId) {
-    updates[`tours/${normalizedTourId}/driverLocation`] = null;
-  }
-
-  await update(ref(db), updates);
-};
-
-/**
- * Update tour active status
- * @param {string} tourId - Tour ID
- * @param {boolean} isActive - Active status
- */
+  expectedDriverRevision,
+  expectedTourRevision,
+  idempotencyKey,
+}) => (isAssigned
+  ? assignDriver(tourId, driverId, driverInfo, {
+    driverProfileUpdates,
+    expectedDriverRevision,
+    expectedTourRevision,
+    idempotencyKey,
+  })
+  : unassignDriver(tourId, driverId, {
+    driverProfileUpdates,
+    expectedDriverRevision,
+    expectedTourRevision,
+    idempotencyKey,
+  }));

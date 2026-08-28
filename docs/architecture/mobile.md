@@ -17,6 +17,10 @@ Rules:
 - Subscribe once per scope and always return cleanup.
 - Keep Firebase, fetch, AsyncStorage, and SecureStore out of visual components.
 - Map structured service reason codes to safe copy at the feature boundary.
+- Treat `DRIVER_POLICY_CHANGE_IN_PROGRESS` as retriable sign-in maintenance and show
+  “Driver sign-in settings are being updated. Please try again.”
+- Bind live location, presence, and typing writes to the memoized current app-session
+  scope. A lifecycle may arm disconnect cleanup only for its own private leaf.
 - Prefer pure models for dates, pickup presentation, pagination merges, and action decisions.
 - Add a focused behavior test before changing a compatibility entry.
 

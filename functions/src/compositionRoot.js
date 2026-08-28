@@ -2,10 +2,12 @@
 
 const administration = require('./domains/administration/administrationFunctions');
 const sessions = require('./domains/app-sessions/sessionFunctions');
+const roleTransitionClaims = require('./domains/app-sessions/roleTransitionClaimFunctions');
 const assignment = require('./domains/driver-assignment/driverAssignmentFunction');
 const driverAuth = require('./domains/driver-auth/driverLoginFunction');
 const driverDevicePolicy = require('./domains/driver-auth/driverDevicePolicyFunctions');
 const driverTourPacks = require('./domains/driver-tour-packs/ingestionFunction');
+const liveState = require('./domains/live-state/liveStateFunctions');
 const scheduledCleanup = require('./domains/maintenance/scheduledCleanupFunctions');
 const tourIndexes = require('./domains/maintenance/tourIndexFunctions');
 const manifests = require('./domains/manifests/manifestFunction');
@@ -30,6 +32,7 @@ module.exports = {
   __testables: testableRegistry,
   assignDriverToTour: assignment.assignDriverToTour,
   cleanupExpiredAppSessions: scheduledCleanup.cleanupExpiredAppSessions,
+  cleanupExpiredChatStatusSessions: liveState.cleanupExpiredChatStatusSessions,
   cleanupExpiredDriverLocations: scheduledCleanup.cleanupExpiredDriverLocations,
   cleanupExpiredDriverTourPacks: scheduledCleanup.cleanupExpiredDriverTourPacks,
   cleanupExpiredLoginRateLimits: scheduledCleanup.cleanupExpiredLoginRateLimits,
@@ -54,6 +57,10 @@ module.exports = {
   processCategoryBroadcastWrite: broadcasts.processCategoryBroadcastWrite,
   processNotificationDeliveryJob: notificationWorker.processNotificationDeliveryJob,
   processNotificationReceipts: notificationReceipts.processNotificationReceipts,
+  projectChatPresenceSession: liveState.projectChatPresenceSession,
+  projectChatTypingSession: liveState.projectChatTypingSession,
+  projectDriverLocationPickup: liveState.projectDriverLocationPickup,
+  projectDriverLocationSession: liveState.projectDriverLocationSession,
   processNotificationReadMigrationRequest: notificationReads.processNotificationReadMigrationRequest,
   projectDriverTourPackActionState: tourIndexes.projectDriverTourPackActionState,
   removeReportedPhoto: administration.removeReportedPhoto,
@@ -62,6 +69,7 @@ module.exports = {
   resolveGroupPhotoMedia: groupMedia.resolveGroupPhotoMedia,
   resolvePrivatePhotoMedia: privateMedia.resolvePrivatePhotoMedia,
   revokeAppSession: sessions.revokeAppSession,
+  reconcilePassengerRoleClaims: roleTransitionClaims.reconcilePassengerRoleClaims,
   sendChatNotification: chatNotifications.sendChatNotification,
   sendDriverTourPackChangeNotification: driverTourPackNotifications.sendDriverTourPackChangeNotification,
   sendInternalChatNotification: chatNotifications.sendInternalChatNotification,

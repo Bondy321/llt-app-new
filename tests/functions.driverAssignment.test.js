@@ -44,8 +44,14 @@ test('driver self-assignment update keeps every canonical path coherent and remo
   assert.equal(result.updates['tours/5112D_8/driverId'], null);
   assert.equal(result.updates['tours/5112D_8/driverName'], null);
   assert.equal(result.updates['tours/5112D_8/driverPhone'], null);
-  assert.equal(result.updates['tours/5112D_8/driverLocation'], null);
-  assert.equal(result.updates['tours/6000A_1/driverLocation'], null);
+  const expectedLocationTombstone = {
+    schemaVersion: 1,
+    isSharing: false,
+    timestamp: Date.parse('2026-08-12T15:00:00.000Z'),
+    projectionRevision: 1,
+  };
+  assert.deepEqual(result.updates['tours/5112D_8/driverLocation'], expectedLocationTombstone);
+  assert.deepEqual(result.updates['tours/6000A_1/driverLocation'], expectedLocationTombstone);
 });
 
 test('driver self-assignment does not erase old tour metadata owned by another driver', () => {

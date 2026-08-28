@@ -184,6 +184,7 @@ const validateBookingReference = async (reference, email, options = {}) => {
         INVALID_CREDENTIALS: 'Login details could not be verified. Please check your details and try again.',
         REAUTHORIZE_REQUIRED: 'This booking is secured to another device or needs a security review. Please contact Loch Lomond Travel to restore access.',
         IDENTITY_INCOMPLETE: 'We found this booking but could not complete login. Please contact support if this keeps happening.',
+        ROLE_TRANSITION_IN_PROGRESS: 'Your secure session is still being updated. Please wait a moment and try again.',
         INVALID_INPUT: 'Invalid login details provided',
         TRY_AGAIN_LATER: 'Too many verification attempts. Please wait a moment and try again.',
         INTERNAL_ERROR: 'Verification service is temporarily unavailable. Please try again shortly.',

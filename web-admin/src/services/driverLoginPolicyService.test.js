@@ -28,6 +28,7 @@ describe('driverLoginPolicyService', () => {
       revision: 0,
       updatedAtMs: null,
       isDefault: true,
+      transition: null,
     });
     expect(postAdminAction).toHaveBeenCalledWith('getDriverLoginPolicy', {}, expect.any(Object));
   });

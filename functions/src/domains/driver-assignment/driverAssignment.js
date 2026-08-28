@@ -1,8 +1,23 @@
 'use strict';
 
+/* eslint-disable complexity -- canonical multi-path reconciliation enumerates guarded branches */
+
 // @ts-check
 
+const { createHash } = require('node:crypto');
 const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
+
+const DRIVER_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const UNASSIGNED_DRIVER_SESSION_TTL_MS = 60 * 60 * 1000;
+const POLICY_CLEANUP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** @param {any} current @param {number} nowMs */
+const buildDriverLocationTombstone = (current, nowMs) => ({
+  schemaVersion: 1,
+  isSharing: false,
+  timestamp: nowMs,
+  projectionRevision: readAssignmentRevision(current?.projectionRevision) + 1,
+});
 
 /** @type {(...args: any[]) => any} */
 const normalizeDriverId = (driverId) => {
@@ -118,7 +133,7 @@ const buildDriverSelfAssignmentUpdates = ({
   if (previousTourId !== tourId) {
     // Never carry coordinates from an earlier assignment (or a previous driver
     // on the target tour) into the newly authorized driver session.
-    updates[`tours/${tourId}/driverLocation`] = null;
+    updates[`tours/${tourId}/driverLocation`] = buildDriverLocationTombstone(tourData.driverLocation, nowMs);
   }
 
   if (previousTourId && previousTourId !== tourId) {
@@ -130,7 +145,224 @@ const buildDriverSelfAssignmentUpdates = ({
       updates[`tours/${previousTourId}/driverId`] = null;
       updates[`tours/${previousTourId}/driverName`] = null;
       updates[`tours/${previousTourId}/driverPhone`] = null;
-      updates[`tours/${previousTourId}/driverLocation`] = null;
+      updates[`tours/${previousTourId}/driverLocation`] = buildDriverLocationTombstone(
+        previousTourData.driverLocation, nowMs,
+      );
+    }
+  }
+
+  return { updates, previousTourId, canonicalTourCode };
+};
+
+/** @param {unknown} value */
+const readAssignmentRevision = (value) => (
+  Number.isSafeInteger(Number(value)) && Number(value) >= 0 ? Number(value) : 0
+);
+
+/** @param {Record<string, any>} input */
+const createAssignmentRequestHash = (input) => createHash('sha256').update(JSON.stringify({
+  operation: resolveTrimmedString(input.operation),
+  driverId: normalizeDriverId(input.driverId),
+  tourId: normalizeTourKeyForComparison(input.tourId),
+  expectedDriverRevision: readAssignmentRevision(input.expectedDriverRevision),
+  expectedTourRevision: readAssignmentRevision(input.expectedTourRevision),
+  driverProfileUpdates: input.driverProfileUpdates ? {
+    name: resolveTrimmedString(input.driverProfileUpdates.name),
+    phone: typeof input.driverProfileUpdates.phone === 'string'
+      ? input.driverProfileUpdates.phone.trim()
+      : null,
+  } : null,
+})).digest('hex');
+
+/** @param {{ actorHash: string, idempotencyId: string }} input */
+const createAssignmentTransitionId = ({ actorHash, idempotencyId }) => createHash('sha256')
+  .update(`${actorHash}:${idempotencyId}`)
+  .digest('hex')
+  .slice(0, 40);
+
+/** @param {any} session @param {any} policy @param {string} driverId @param {number} nowMs */
+const isCurrentDriverSession = (session, policy, driverId, nowMs) => {
+  if (!session || typeof session !== 'object' || session.principalType !== 'driver'
+    || session.driverId !== driverId || session.status !== 'active'
+    || !Number.isSafeInteger(session.expiresAtMs) || session.expiresAtMs <= nowMs
+    || !Number.isSafeInteger(session.sessionRevision) || session.sessionRevision < 1) return false;
+  const sessionGeneration = Number.isSafeInteger(session.driverLoginPolicyGeneration)
+    ? session.driverLoginPolicyGeneration
+    : 0;
+  return sessionGeneration === policy.generation;
+};
+
+/** @param {any} value */
+const hashAuthorityIdentifier = (value) => createHash('sha256')
+  .update(String(value || ''))
+  .digest('hex')
+  .slice(0, 24);
+
+/**
+ * Builds assignment-owned handset authority updates without replacing a notification-device
+ * record. Marketing consent, token and permission fields are therefore preserved verbatim.
+ *
+ * @type {(...args: any[]) => any}
+ */
+const buildDriverAssignmentReconciliationUpdates = ({
+  driverId,
+  targetTourId = null,
+  sessions = {},
+  devices = {},
+  policy,
+  driverData = {},
+  nowMs = Date.now(),
+}) => {
+  const normalizedDriverId = normalizeDriverId(driverId);
+  const normalizedTourId = targetTourId ? normalizeTourKeyForComparison(targetTourId) : null;
+  const claimedAuthUid = resolveTrimmedString(driverData.authUid);
+  const updates = {};
+  const reconciledAuthUids = [];
+  const obsoleteAuthUids = [];
+
+  Object.entries(sessions || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .forEach(([authUid, sessionValue]) => {
+      const session = /** @type {any} */ (sessionValue);
+      if (!isCurrentDriverSession(session, policy, normalizedDriverId, nowMs)) return;
+      if (policy.enforceSingleDevice === true && authUid !== claimedAuthUid) {
+        obsoleteAuthUids.push(authUid);
+        updates[`driver_login_policy_cleanup/v1/${authUid}`] = {
+          schemaVersion: 1,
+          authUidHash: hashAuthorityIdentifier(authUid),
+          sessionId: session.sessionId,
+          policyGeneration: policy.generation,
+          createdAtMs: nowMs,
+          expiresAtMs: nowMs + POLICY_CLEANUP_TTL_MS,
+        };
+        return;
+      }
+
+      const nextRevision = session.sessionRevision + 1;
+      const nextSession = {
+        ...session,
+        tourId: normalizedTourId,
+        lastAuthenticatedAtMs: nowMs,
+        expiresAtMs: nowMs + (normalizedTourId ? DRIVER_SESSION_TTL_MS : UNASSIGNED_DRIVER_SESSION_TTL_MS),
+        sessionRevision: nextRevision,
+      };
+      reconciledAuthUids.push(authUid);
+      updates[`app_sessions/${authUid}`] = nextSession;
+      updates[`users/${authUid}/driverId`] = normalizedDriverId;
+      updates[`users/${authUid}/driverPrincipalId`] = `driver:${normalizedDriverId}`;
+      updates[`users/${authUid}/driverAssignedTourId`] = normalizedTourId;
+      updates[`users/${authUid}/principalType`] = 'driver';
+      updates[`users/${authUid}/lastUpdated`] = nowMs;
+
+      const device = devices?.[authUid];
+      if (!device || typeof device !== 'object') return;
+      const exactOperationalBinding = device.operationalEligible === true
+        && device.operationalSessionId === session.sessionId
+        && Number(device.operationalSessionRevision) === session.sessionRevision;
+      const devicePath = `notification_devices/${authUid}`;
+      updates[`${devicePath}/operationalEligible`] = Boolean(normalizedTourId && exactOperationalBinding);
+      updates[`${devicePath}/operationalTourId`] = normalizedTourId && exactOperationalBinding
+        ? normalizedTourId
+        : null;
+      updates[`${devicePath}/operationalSessionId`] = normalizedTourId && exactOperationalBinding
+        ? session.sessionId
+        : null;
+      updates[`${devicePath}/operationalSessionRevision`] = normalizedTourId && exactOperationalBinding
+        ? nextRevision
+        : null;
+      updates[`${devicePath}/registrationRevision`] = readAssignmentRevision(device.registrationRevision) + 1;
+      updates[`${devicePath}/lastMutationAction`] = 'assignment_reconcile';
+      updates[`${devicePath}/lastMutationSessionId`] = session.sessionId;
+      updates[`${devicePath}/authorityUpdatedAtMs`] = nowMs;
+      updates[`${devicePath}/updatedAtMs`] = nowMs;
+    });
+
+  return { updates, reconciledAuthUids, obsoleteAuthUids };
+};
+
+/** @type {(...args: any[]) => any} */
+const buildCanonicalDriverAssignmentUpdates = ({
+  operation,
+  driverId,
+  driverData = {},
+  tourId,
+  tourData = {},
+  previousTourData = {},
+  incumbentDriverId = null,
+  incumbentDriverData = {},
+  incumbentDriversData = {},
+  actorId,
+  nowMs = Date.now(),
+}) => {
+  const assigned = operation === 'assign';
+  const normalizedDriverId = normalizeDriverId(driverId);
+  const normalizedTourId = normalizeTourKeyForComparison(tourId);
+  const previousTourId = normalizeTourKeyForComparison(driverData.currentTourId);
+  const canonicalTourCode = resolveTrimmedString(tourData.tourCode) || normalizedTourId.replace(/_/g, ' ');
+  const assignedAt = new Date(nowMs).toISOString();
+  const updates = {
+    [`tours/${normalizedTourId}/driverId`]: assigned ? normalizedDriverId : null,
+    [`tours/${normalizedTourId}/driverName`]: assigned
+      ? (resolveTrimmedString(driverData.name) || normalizedDriverId)
+      : 'TBA',
+    [`tours/${normalizedTourId}/driverPhone`]: assigned
+      ? (resolveTrimmedString(driverData.phone) || null)
+      : '',
+    [`tours/${normalizedTourId}/driverLocation`]: buildDriverLocationTombstone(
+      tourData.driverLocation, nowMs,
+    ),
+    [`tours/${normalizedTourId}/driverAssignmentRevision`]: readAssignmentRevision(tourData.driverAssignmentRevision) + 1,
+    [`drivers/${normalizedDriverId}/currentTourId`]: assigned ? normalizedTourId : null,
+    [`drivers/${normalizedDriverId}/currentTourCode`]: assigned ? canonicalTourCode : null,
+    [`drivers/${normalizedDriverId}/assignments/${normalizedTourId}`]: assigned ? true : null,
+    [`drivers/${normalizedDriverId}/assignmentRevision`]: readAssignmentRevision(driverData.assignmentRevision) + 1,
+    [`tour_manifests/${normalizedTourId}/assigned_drivers/${normalizedDriverId}`]: assigned ? true : null,
+    [`tour_manifests/${normalizedTourId}/assigned_driver_codes/${normalizedDriverId}`]: assigned ? {
+      driverId: normalizedDriverId,
+      tourId: normalizedTourId,
+      tourCode: canonicalTourCode,
+      assignedAt,
+      assignedBy: actorId,
+    } : null,
+  };
+
+  if (previousTourId && previousTourId !== normalizedTourId) {
+    updates[`drivers/${normalizedDriverId}/assignments/${previousTourId}`] = null;
+    updates[`tour_manifests/${previousTourId}/assigned_drivers/${normalizedDriverId}`] = null;
+    updates[`tour_manifests/${previousTourId}/assigned_driver_codes/${normalizedDriverId}`] = null;
+    if (normalizeDriverId(previousTourData.driverId) === normalizedDriverId) {
+      updates[`tours/${previousTourId}/driverId`] = null;
+      updates[`tours/${previousTourId}/driverName`] = 'TBA';
+      updates[`tours/${previousTourId}/driverPhone`] = '';
+      updates[`tours/${previousTourId}/driverLocation`] = buildDriverLocationTombstone(
+        previousTourData.driverLocation, nowMs,
+      );
+      updates[`tours/${previousTourId}/driverAssignmentRevision`] = readAssignmentRevision(
+        previousTourData.driverAssignmentRevision,
+      ) + 1;
+    }
+  }
+
+  const displacedDrivers = new Map(Object.entries(incumbentDriversData || {})
+    .map(([candidateDriverId, candidateData]) => [normalizeDriverId(candidateDriverId), candidateData || {}])
+    .filter(([candidateDriverId]) => candidateDriverId && candidateDriverId !== normalizedDriverId));
+  const normalizedIncumbent = normalizeDriverId(incumbentDriverId);
+  if (normalizedIncumbent && normalizedIncumbent !== normalizedDriverId
+    && !displacedDrivers.has(normalizedIncumbent)) {
+    displacedDrivers.set(normalizedIncumbent, incumbentDriverData || {});
+  }
+  if (assigned) {
+    for (const [displacedDriverId, displacedDriverData] of displacedDrivers) {
+      updates[`drivers/${displacedDriverId}/assignments/${normalizedTourId}`] = null;
+      updates[`tour_manifests/${normalizedTourId}/assigned_drivers/${displacedDriverId}`] = null;
+      updates[`tour_manifests/${normalizedTourId}/assigned_driver_codes/${displacedDriverId}`] = null;
+      if (normalizeTourKeyForComparison(displacedDriverData.currentTourId) === normalizedTourId) {
+        updates[`drivers/${displacedDriverId}/currentTourId`] = null;
+        updates[`drivers/${displacedDriverId}/currentTourCode`] = null;
+      }
+      updates[`drivers/${displacedDriverId}/assignmentRevision`] = readAssignmentRevision(
+        displacedDriverData.assignmentRevision,
+      ) + 1;
     }
   }
 
@@ -140,9 +372,16 @@ const buildDriverSelfAssignmentUpdates = ({
 
 module.exports = {
   buildDriverIdentityProfileUpdates,
+  buildDriverLocationTombstone,
+  buildDriverAssignmentReconciliationUpdates,
+  buildCanonicalDriverAssignmentUpdates,
   buildDriverSelfAssignmentUpdates,
   claimDriverAuthUid,
   collectDriverAssignmentConflicts,
+  createAssignmentRequestHash,
+  createAssignmentTransitionId,
+  hashAuthorityIdentifier,
   normalizeDriverId,
+  readAssignmentRevision,
   resolveDriverAssignment,
 };

@@ -292,11 +292,15 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
 
 const mapDriverAssignmentReason = (reason) => {
   const reasonToMessage = {
+    ASSIGNMENT_ALREADY_CHANGED: 'The assignment changed while this request was being processed. Refresh and try again.',
     ASSIGNMENT_IN_PROGRESS: 'Another assignment is being processed. Please wait a moment and try again.',
+    ASSIGNMENT_STALE: 'The assignment has changed. Refresh the tour and try again.',
+    DRIVER_POLICY_CHANGE_IN_PROGRESS: 'Driver sign-in settings are being updated. Please try again.',
     DRIVER_NOT_FOUND: 'Your driver profile could not be found. Please contact dispatch.',
     INTERNAL_ERROR: 'The assignment service is temporarily unavailable. Please try again shortly.',
     INVALID_CREDENTIALS: 'Secure driver access is still starting. Please wait a moment and try again.',
     INVALID_INPUT: 'Enter a valid tour code.',
+    IDEMPOTENCY_CONFLICT: 'This assignment request no longer matches the original action. Refresh and try again.',
     METHOD_NOT_ALLOWED: 'The assignment service is unavailable in this app version. Please update the app.',
     NOT_AUTHORIZED: 'This device is not linked to that driver profile. Please sign in again or contact dispatch.',
     SESSION_CHANGED: 'Your secure driver session changed. Sign in again before assigning a tour.',
@@ -358,9 +362,12 @@ const assignDriverToTour = async (driverId, tourCode, options = {}) => {
           Authorization: `Bearer ${firebaseAuthResult.token}`,
         },
         body: JSON.stringify({
+          operation: 'assign',
           driverId: validatedDriverId,
           tourCode: validatedTourCode,
           expectedSessionId: currentAppSession.sessionId,
+          expectedSessionRevision: currentAppSession.sessionRevision,
+          idempotencyKey: `driver-assignment:${currentAppSession.sessionId}:${currentAppSession.sessionRevision}:${sanitizeTourId(validatedTourCode)}`,
         }),
       });
     } catch (error) {

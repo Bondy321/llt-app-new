@@ -368,132 +368,59 @@ describe('buildDriverAssignmentUpdates', () => {
   });
 });
 
-describe('applyDriverAssignmentMutation integration snapshots', () => {
+describe('server-owned driver assignment mutations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    updateMock.mockResolvedValue(undefined);
+    postAdminActionMock.mockResolvedValue({ success: true });
   });
 
   const setupPathSnapshots = (pathMap) => {
     getMock.mockImplementation(async ({ path }) => buildSnapshot(pathMap[path]));
   };
 
-  it('assign fresh writes canonical driver/tour/manifest links', async () => {
+  it('assign sends expected revisions and never writes canonical paths directly', async () => {
     setupPathSnapshots({
-      'tours/TOUR_A': { tourCode: '5100D 1' },
+      'tours/TOUR_A': { tourCode: '5100D 1', driverAssignmentRevision: 7 },
       'tour_manifests/TOUR_A': { assigned_drivers: {} },
-      'drivers/D-ALICE': { assignments: {}, authUid: 'driver-auth-alice' },
+      'drivers/D-ALICE': { assignmentRevision: 3 },
     });
 
     const { assignDriver } = await import('./tourService.js');
     await assignDriver('TOUR_A', 'D-ALICE', { name: 'Alice', phone: '+44' });
 
-    const [, updates] = updateMock.mock.calls[0];
-    expect(updates['drivers/D-ALICE/currentTourId']).toBe('TOUR_A');
-    expect(updates['drivers/D-ALICE/currentTourCode']).toBe('5100D 1');
-    expect(updates['drivers/D-ALICE/assignments/TOUR_A']).toBe(true);
-    expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-ALICE']).toBe(true);
-    expect(updates['tour_manifests/TOUR_A/assigned_driver_codes/D-ALICE']).toMatchObject({
+    expect(postAdminActionMock).toHaveBeenCalledWith('assignDriverToTour', expect.objectContaining({
+      operation: 'assign',
       driverId: 'D-ALICE',
       tourId: 'TOUR_A',
-      tourCode: '5100D 1',
-    });
-    expect(updates['users/driver-auth-alice/driverId']).toBe('D-ALICE');
-    expect(updates['users/driver-auth-alice/driverAssignedTourId']).toBe('TOUR_A');
-    expect(updates['tours/TOUR_A/driverLocation']).toBeNull();
+      expectedDriverRevision: 3,
+      expectedTourRevision: 7,
+      idempotencyKey: expect.stringContaining('admin-assignment:assign:TOUR_A:D-ALICE:'),
+    }), expect.any(Object));
+    expect(updateMock).not.toHaveBeenCalled();
   });
 
-  it('keeps a current driver location when reapplying the same assignment', async () => {
+  it('unassign resolves the current driver and sends a revision-checked action', async () => {
     setupPathSnapshots({
-      'tours/TOUR_A': { tourCode: '5100D 1', driverId: 'D-ALICE' },
+      'tours/TOUR_A': { tourCode: '5100D 1', driverId: 'D-ALICE', driverAssignmentRevision: 4 },
       'tour_manifests/TOUR_A': { assigned_drivers: { 'D-ALICE': true } },
-      'drivers/D-ALICE': { currentTourId: 'TOUR_A', assignments: { TOUR_A: true } },
-    });
-
-    const { assignDriver } = await import('./tourService.js');
-    await assignDriver('TOUR_A', 'D-ALICE', { name: 'Alice', phone: '+44' });
-
-    const [, updates] = updateMock.mock.calls[0];
-    expect(updates['tours/TOUR_A/driverLocation']).toBeUndefined();
-  });
-
-  it('reassign old->new clears old manifest links in same multi-path update', async () => {
-    setupPathSnapshots({
-      'tours/TOUR_NEW': { tourCode: '5100D 2' },
-      'tour_manifests/TOUR_NEW': { assigned_drivers: {} },
-      'drivers/D-ALICE': {
-        currentTourId: 'TOUR OLD',
-        assignments: { TOUR_OLD: true },
-      },
-    });
-
-    const { assignDriver } = await import('./tourService.js');
-    await assignDriver('TOUR_NEW', 'D-ALICE', { name: 'Alice', phone: '+44' });
-
-    const [, updates] = updateMock.mock.calls[0];
-    expect(updates['drivers/D-ALICE/assignments/TOUR_OLD']).toBeNull();
-    expect(updates['tour_manifests/TOUR_OLD/assigned_drivers/D-ALICE']).toBeNull();
-    expect(updates['tour_manifests/TOUR_OLD/assigned_driver_codes/D-ALICE']).toBeNull();
-    expect(updates['tours/TOUR_OLD/driverName']).toBe('TBA');
-    expect(updates['tours/TOUR_OLD/driverPhone']).toBe('');
-    expect(updates['tours/TOUR_OLD/driverLocation']).toBeNull();
-    expect(updates['tours/TOUR_NEW/driverLocation']).toBeNull();
-    expect(updates['drivers/D-ALICE/currentTourId']).toBe('TOUR_NEW');
-  });
-
-  it('unassign removes all required paths and resets tour driver display', async () => {
-    setupPathSnapshots({
-      'tours/TOUR_A': { tourCode: '5100D 1' },
-      'tour_manifests/TOUR_A': { assigned_drivers: { 'D-ALICE': true } },
-      'drivers/D-ALICE': {
-        currentTourId: 'TOUR_A',
-        assignments: { TOUR_A: true },
-      },
+      'drivers/D-ALICE': { assignmentRevision: 9 },
     });
 
     const { unassignDriver } = await import('./tourService.js');
-    await unassignDriver('TOUR_A', 'D-ALICE');
+    await unassignDriver('TOUR_A');
 
-    const [, updates] = updateMock.mock.calls[0];
-    expect(updates['drivers/D-ALICE/currentTourId']).toBeNull();
-    expect(updates['drivers/D-ALICE/currentTourCode']).toBeNull();
-    expect(updates['drivers/D-ALICE/assignments/TOUR_A']).toBeNull();
-    expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-ALICE']).toBeNull();
-    expect(updates['tour_manifests/TOUR_A/assigned_driver_codes/D-ALICE']).toBeNull();
-    expect(updates['tours/TOUR_A/driverName']).toBe('TBA');
-    expect(updates['tours/TOUR_A/driverPhone']).toBe('');
-    expect(updates['tours/TOUR_A/driverLocation']).toBeNull();
+    expect(postAdminActionMock).toHaveBeenCalledWith('assignDriverToTour', expect.objectContaining({
+      operation: 'unassign',
+      driverId: 'D-ALICE',
+      tourId: 'TOUR_A',
+      expectedDriverRevision: 9,
+      expectedTourRevision: 4,
+      idempotencyKey: expect.stringContaining('admin-assignment:unassign:TOUR_A:D-ALICE:'),
+    }), expect.any(Object));
+    expect(updateMock).not.toHaveBeenCalled();
   });
 
-  it('stale manifest cleanup enforces single-driver policy on target tour', async () => {
-    setupPathSnapshots({
-      'tours/TOUR_A': { tourCode: '5100D 1' },
-      'tour_manifests/TOUR_A': {
-        assigned_drivers: { 'D-OLD': true, 'D-STALE': true },
-      },
-      'drivers/D-NEW': { assignments: {} },
-      'drivers/D-OLD': { currentTourId: 'TOUR_A', authUid: 'old-auth-uid' },
-      'drivers/D-STALE': { currentTourId: ' /// ### ' },
-    });
-
-    const { assignDriver } = await import('./tourService.js');
-    await assignDriver('TOUR_A', 'D-NEW', { name: 'New Driver', phone: '' });
-
-    const [, updates] = updateMock.mock.calls[0];
-    expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-OLD']).toBeNull();
-    expect(updates['tour_manifests/TOUR_A/assigned_driver_codes/D-OLD']).toBeNull();
-    expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-STALE']).toBeNull();
-    expect(updates['tour_manifests/TOUR_A/assigned_driver_codes/D-STALE']).toBeNull();
-    expect(updates['drivers/D-OLD/assignments/TOUR_A']).toBeNull();
-    expect(updates['drivers/D-STALE/assignments/TOUR_A']).toBeNull();
-    expect(updates['drivers/D-OLD/currentTourId']).toBeNull();
-    expect(updates['drivers/D-OLD/currentTourCode']).toBeNull();
-    expect(updates['drivers/D-STALE/currentTourId']).toBeNull();
-    expect(updates['users/old-auth-uid/driverAssignedTourId']).toBeNull();
-    expect(updates['tour_manifests/TOUR_A/assigned_drivers/D-NEW']).toBe(true);
-  });
-
-  it('can update driver profile details in the same assignment mutation', async () => {
+  it('keeps contact edits inside the same server-owned assignment action', async () => {
     setupPathSnapshots({
       'tours/TOUR_A': { tourCode: '5100D 1' },
       'tour_manifests/TOUR_A': { assigned_drivers: {} },
@@ -509,10 +436,34 @@ describe('applyDriverAssignmentMutation integration snapshots', () => {
       driverProfileUpdates: { name: 'Alice Updated', phone: '+44 7000' },
     });
 
-    const [, updates] = updateMock.mock.calls[0];
-    expect(updates['drivers/D-ALICE/name']).toBe('Alice Updated');
-    expect(updates['drivers/D-ALICE/phone']).toBe('+44 7000');
-    expect(updates['tours/TOUR_A/driverName']).toBe('Alice Updated');
+    expect(postAdminActionMock).toHaveBeenCalledWith('assignDriverToTour', expect.objectContaining({
+      operation: 'assign',
+      driverProfileUpdates: { name: 'Alice Updated', phone: '+44 7000' },
+    }), expect.any(Object));
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('reuses the exact assignment attempt after an in-progress continuation', async () => {
+    setupPathSnapshots({
+      'tours/TOUR_RETRY': { tourCode: '5100D 2', driverAssignmentRevision: 6 },
+      'tour_manifests/TOUR_RETRY': { assigned_drivers: {} },
+      'drivers/D-RETRY': { assignmentRevision: 4 },
+    });
+    postAdminActionMock
+      .mockRejectedValueOnce(Object.assign(new Error('still running'), { code: 'ASSIGNMENT_IN_PROGRESS' }))
+      .mockResolvedValueOnce({ success: true });
+
+    const { assignDriver } = await import('./tourService.js');
+    await expect(assignDriver('TOUR_RETRY', 'D-RETRY')).rejects.toMatchObject({
+      code: 'ASSIGNMENT_IN_PROGRESS',
+    });
+    await assignDriver('TOUR_RETRY', 'D-RETRY');
+
+    const firstPayload = postAdminActionMock.mock.calls[0][1];
+    const retryPayload = postAdminActionMock.mock.calls[1][1];
+    expect(retryPayload.idempotencyKey).toBe(firstPayload.idempotencyKey);
+    expect(retryPayload.expectedDriverRevision).toBe(firstPayload.expectedDriverRevision);
+    expect(retryPayload.expectedTourRevision).toBe(firstPayload.expectedTourRevision);
   });
 });
 

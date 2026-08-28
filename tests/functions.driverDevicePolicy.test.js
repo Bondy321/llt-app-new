@@ -32,6 +32,14 @@ test('missing policy is explicitly default-off while malformed saved policy fail
     },
   });
   assert.equal(__testables.normalizeDriverLoginPolicy({ enforceSingleDevice: false }).valid, false);
+  assert.equal(__testables.normalizeDriverLoginPolicy({
+    schemaVersion: 1,
+    enforceSingleDevice: false,
+    generation: 1,
+    revision: 1,
+    updatedAtMs: 100,
+    transitionPhase: 'surprise',
+  }).valid, false);
 });
 
 test('binding is ignored only while policy is off and generation remains mandatory', () => {
