@@ -330,8 +330,6 @@ export const validateTourCsvRows = (csvContent, options = {}) => {
         startDate: normalizeDateForStorage(startDate),
         endDate: normalizeDateForStorage(endDate),
         isActive: active ?? true,
-        driverName: 'TBA',
-        driverPhone: '',
         maxParticipants,
         currentParticipants,
         pickupPoints: pickupPointsResult.value,

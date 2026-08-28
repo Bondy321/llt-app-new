@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const runTransactionMock = vi.fn();
+const updateMock = vi.fn();
 const refMock = vi.fn((_database, path) => ({ path }));
 
 vi.mock('firebase/database', () => ({
   ref: refMock,
   runTransaction: runTransactionMock,
+  update: updateMock,
 }));
 vi.mock('../firebase', () => ({ db: { __mock: true } }));
 
@@ -35,5 +37,21 @@ describe('driverService', () => {
 
     const { createDriver } = await import('./driverService');
     await expect(createDriver({ name: 'Replacement', code: 'D-ALICE' })).rejects.toThrow(/already in use/i);
+  });
+
+  it('updates only the safe driver profile fields', async () => {
+    const { updateDriverContactProjection } = await import('./driverService');
+
+    await updateDriverContactProjection({
+      driverId: 'D-ALICE',
+      name: ' Alice ',
+      phone: ' 01234 ',
+      currentTourId: 'TOUR_FORGED',
+    });
+
+    expect(updateMock).toHaveBeenCalledWith({ path: undefined }, {
+      'drivers/D-ALICE/name': 'Alice',
+      'drivers/D-ALICE/phone': '01234',
+    });
   });
 });

@@ -126,30 +126,72 @@ test('allows admin driver record creation', async () => {
   }));
 });
 
-test('allows a delegated operations admin to list portal collections and apply a canonical assignment', async () => {
-  const delegatedDb = dbFor(DELEGATED_ADMIN_UID);
-  await assertSucceeds(delegatedDb.ref('drivers').get());
-  await assertSucceeds(delegatedDb.ref('tours').get());
-  await assertSucceeds(delegatedDb.ref('tour_manifests').get());
+test('allows operations admins to list portal collections but denies every canonical assignment leaf', async () => {
+  for (const adminUid of [ADMIN_UID, DELEGATED_ADMIN_UID]) {
+    const adminDb = dbFor(adminUid);
+    await assertSucceeds(adminDb.ref('drivers').get());
+    await assertSucceeds(adminDb.ref('tours').get());
+    await assertSucceeds(adminDb.ref('tour_manifests').get());
 
-  await assertSucceeds(delegatedDb.ref().update({
-    'tours/TOUR_1/driverName': 'Claimed Driver',
-    'tours/TOUR_1/driverPhone': '+44 7700 900000',
-    [`tours/TOUR_1/driverId`]: CLAIMED_DRIVER_ID,
-    [`drivers/${CLAIMED_DRIVER_ID}/currentTourId`]: 'TOUR_1',
-    [`drivers/${CLAIMED_DRIVER_ID}/currentTourCode`]: 'TOUR 1',
-    [`drivers/${CLAIMED_DRIVER_ID}/assignments/TOUR_1`]: true,
-    [`tour_manifests/TOUR_1/assigned_drivers/${CLAIMED_DRIVER_ID}`]: true,
-    [`tour_manifests/TOUR_1/assigned_driver_codes/${CLAIMED_DRIVER_ID}`]: {
-      driverId: CLAIMED_DRIVER_ID,
-      tourId: 'TOUR_1',
-      tourCode: 'TOUR 1',
-      assignedAt: '2026-08-12T10:00:00.000Z',
-      assignedBy: DELEGATED_ADMIN_UID,
-    },
-    [`users/${DRIVER_AUTH_UID}/driverAssignedTourId`]: 'TOUR_1',
-    [`users/${DRIVER_AUTH_UID}/lastUpdated`]: 1786538400000,
-  }));
+    const deniedWrites = [
+      adminDb.ref(`drivers/${CLAIMED_DRIVER_ID}/currentTourId`).set('TOUR_1'),
+      adminDb.ref(`drivers/${CLAIMED_DRIVER_ID}/currentTourCode`).set('TOUR 1'),
+      adminDb.ref(`drivers/${CLAIMED_DRIVER_ID}/assignments/TOUR_1`).set(true),
+      adminDb.ref(`drivers/${CLAIMED_DRIVER_ID}/assignmentRevision`).set(2),
+      adminDb.ref('tours/TOUR_1/driverName').set('Claimed Driver'),
+      adminDb.ref('tours/TOUR_1/driverPhone').set('+44 7700 900000'),
+      adminDb.ref('tours/TOUR_1/driverId').set(CLAIMED_DRIVER_ID),
+      adminDb.ref('tours/TOUR_1/driverAssignmentRevision').set(2),
+      adminDb.ref(`tour_manifests/TOUR_1/assigned_drivers/${CLAIMED_DRIVER_ID}`).set(true),
+      adminDb.ref(`tour_manifests/TOUR_1/assigned_driver_codes/${CLAIMED_DRIVER_ID}`).set({
+        driverId: CLAIMED_DRIVER_ID,
+        tourId: 'TOUR_1',
+        tourCode: 'TOUR 1',
+        assignedAt: '2026-08-12T10:00:00.000Z',
+        assignedBy: adminUid,
+      }),
+      adminDb.ref(`users/${DRIVER_AUTH_UID}/driverAssignedTourId`).set('TOUR_1'),
+    ];
+    for (const write of deniedWrites) await assertFails(write);
+  }
+});
+
+test('denies canonical assignment changes hidden inside otherwise safe parent updates', async () => {
+  for (const adminUid of [ADMIN_UID, DELEGATED_ADMIN_UID]) {
+    const adminDb = dbFor(adminUid);
+    await assertFails(adminDb.ref(`drivers/${CLAIMED_DRIVER_ID}`).update({
+      name: 'Safe-looking name',
+      currentTourId: 'TOUR_1',
+    }));
+    await assertFails(adminDb.ref('tours/TOUR_1').update({
+      name: 'Safe-looking tour name',
+      driverName: 'Forged assignment projection',
+    }));
+    await assertFails(adminDb.ref('tour_manifests/TOUR_1').update({
+      assigned_drivers: { [CLAIMED_DRIVER_ID]: true },
+    }));
+    await assertFails(adminDb.ref(`users/${DRIVER_AUTH_UID}`).update({
+      lastUpdated: 1786538400000,
+      driverAssignedTourId: 'TOUR_1',
+    }));
+  }
+});
+
+test('preserves narrowly safe operations-admin driver profile writes', async () => {
+  for (const adminUid of [ADMIN_UID, DELEGATED_ADMIN_UID]) {
+    const driverId = `D-SAFE-${adminUid === ADMIN_UID ? 'PRIMARY' : 'DELEGATED'}`;
+    const adminDb = dbFor(adminUid);
+    await assertSucceeds(adminDb.ref(`drivers/${driverId}`).set({
+      id: driverId,
+      name: 'Safe Driver',
+      phone: '+44 7700 900001',
+      createdAt: '2026-08-28T10:00:00.000Z',
+    }));
+    await assertSucceeds(adminDb.ref(`drivers/${driverId}`).update({
+      name: 'Updated Safe Driver',
+      phone: '+44 7700 900002',
+    }));
+  }
 });
 
 test('delegated operations admins cannot grant or revoke admin access', async () => {

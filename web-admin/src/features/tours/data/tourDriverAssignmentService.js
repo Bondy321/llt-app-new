@@ -2,13 +2,9 @@ import {
   db,
   get,
   normalizeAssignmentTourId,
-  nowAsISOString,
   postAdminAction,
   ref,
-  trimTourCode,
 } from './tourServiceContext';
-
-/* eslint-disable complexity -- compatibility projection helper enumerates canonical paths */
 
 const ASSIGNMENT_REASON_MESSAGES = {
   ASSIGNMENT_ALREADY_CHANGED: 'The assignment changed while this request was being processed. Refresh and try again.',
@@ -132,53 +128,6 @@ export const unassignDriver = async (tourId, driverId = null, options = {}) => {
     options,
     driverProfileUpdates: options.driverProfileUpdates || null,
   });
-};
-
-/**
- * Retained as a pure compatibility helper for import/export tooling. Production
- * assignment mutations use the authenticated server action above.
- */
-export const buildDriverAssignmentUpdates = ({
-  tourId,
-  driverId,
-  tourCode,
-  driverInfo = {},
-  isAssigned,
-  actorId = 'web-admin',
-  assignedAt = nowAsISOString(),
-}) => {
-  const normalizedTourId = normalizeAssignmentTourId(tourId);
-  const normalizedTourCode = trimTourCode(tourCode);
-  if (!normalizedTourId) throw new Error('Tour ID is required for driver assignment');
-  if (isAssigned && !normalizedTourCode) throw new Error('Tour code is required for driver assignment');
-  const updates = {
-    [`tours/${normalizedTourId}/driverName`]: isAssigned ? driverInfo.name : 'TBA',
-    [`tours/${normalizedTourId}/driverPhone`]: isAssigned ? (driverInfo.phone || '') : '',
-    [`tours/${normalizedTourId}/driverId`]: isAssigned ? (driverId || null) : null,
-  };
-  if (!driverId) return updates;
-  Object.assign(updates, {
-    [`drivers/${driverId}/currentTourId`]: isAssigned ? normalizedTourId : null,
-    [`drivers/${driverId}/currentTourCode`]: isAssigned ? normalizedTourCode : null,
-    [`drivers/${driverId}/assignments/${normalizedTourId}`]: isAssigned ? true : null,
-    [`tour_manifests/${normalizedTourId}/assigned_drivers/${driverId}`]: isAssigned ? true : null,
-    [`tour_manifests/${normalizedTourId}/assigned_driver_codes/${driverId}`]: isAssigned ? {
-      driverId,
-      tourId: normalizedTourId,
-      tourCode: normalizedTourCode,
-      assignedAt,
-      assignedBy: actorId,
-    } : null,
-  });
-  const authUid = typeof driverInfo.authUid === 'string' ? driverInfo.authUid.trim() : '';
-  if (authUid) Object.assign(updates, {
-    [`users/${authUid}/driverId`]: driverId,
-    [`users/${authUid}/driverPrincipalId`]: `driver:${driverId}`,
-    [`users/${authUid}/driverAssignedTourId`]: isAssigned ? normalizedTourId : null,
-    [`users/${authUid}/principalType`]: 'driver',
-    [`users/${authUid}/lastUpdated`]: Date.now(),
-  });
-  return updates;
 };
 
 export const applyDriverAssignmentMutation = async ({

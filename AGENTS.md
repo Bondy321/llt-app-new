@@ -167,7 +167,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `driver_login_policy/v1/loginAdmissions`, `driver_login_claim_reservations` (server-private login admission fences and per-driver claims)
 - transition fields under `driver_login_policy/v1`, plus `driver_login_policy_cleanup` and `driver_login_policy_events` (server-private resumable transition state, exact-session cleanup and audit)
 - `driver_assignment_locks`, `driver_assignment_idempotency`, `driver_assignment_transitions` (server-private assignment serialization, replay and continuation state; assignment audit uses bounded `app_session_events`)
-- `driver_location_sessions`, `driver_location_pickups`, `driver_location_projection_state` (private per-session live sources, canonical pickup and projection fencing)
+- `driver_location_sessions`, `driver_location_pickups`, `driver_location_projection_state`, `live_state_rollout` (private per-session live sources, assignment-owned canonical pickup, projection fencing, and explicit rollout authority)
 - `chat_presence_sessions`, `chat_typing_sessions`, `chat_status_projection_state` (private per-session status sources and projection fencing)
 
 Admin UID hardcoded in rules:
@@ -729,14 +729,15 @@ Driver location:
 
 - Canonical passenger read path: server-owned `tours/{tourId}/driverLocation`.
 - Source contract: `docs/data-contracts/driver-location.md`.
-- Driver Home writes schema-v2 raw sources through `services/driverLocationService.js`: manual pickup at `driver_location_pickups/{tourId}` and live state at `driver_location_sessions/{appSessionId}|{liveSharingSessionId}`.
+- Driver Home writes schema-v2 live sources through `services/driverLocationService.js` at `driver_location_sessions/{appSessionId}|{liveSharingSessionId}`. Manual pickup publication uses the trusted `updateDriverLocationPickup` Function; clients never access `driver_location_pickups/{tourId}` directly.
 - Each foreground auto-share lifecycle arms disconnect removal against only its exact private leaf before publishing. It never stores a fixed pickup as a shared fallback.
 - Retryable Functions validate current authority and project the newest valid live leaf, or the separate pickup, with monotonic revisions. Clients cannot write the projection.
-- Auto locations require bounded accuracy and carry a server-validated `cleanupAtMs` lease. `cleanupExpiredDriverLocations` runs every 15 minutes, queries the private indexed lease in bounded batches, compare-deletes only the exact expired session, and reconciles affected tours.
+- Auto locations require bounded accuracy and carry a server-validated `cleanupAtMs` lease. Assignment-owned pickups contain the current driver/tour/revision without Auth or app-session lifetime fields and have a bounded `expiresAtMs`. `cleanupExpiredDriverLocations` runs every 15 minutes, queries both indexed leases in bounded batches, compare-deletes only exact expired publications, and reconciles affected tours.
 - Map and Tour Home derive presentation through `utils/driverLocation.js`. Live points cover the three-minute cadence, become non-actionable when stale or worse than 500m accuracy, and disappear after 30 minutes; manual pickup points remain destinations without a live label.
 - Find My Bus derives connection truth from Firebase `.info/connected`, retries subscription failures explicitly, and haptics only on a changed publication after the initial snapshot.
 - Find My Bus does not require passenger location permission to show the driver point. Permission is requested only when the passenger chooses to show/refresh their own position.
-- Driver reassignment/unassignment cleans raw state for every reconciled app session and reprojects the former tour so passengers never inherit another driver's coordinates.
+- Driver reassignment/unassignment clears affected assignment-owned pickups, cleans raw live state for every reconciled app session, and reprojects former tours so passengers never inherit another driver's coordinates.
+- `live_state_rollout/v1` is private explicit operations state: missing means compatibility and source writes never advance phase. This release refuses cutover with `LIVE_STATE_CUTOVER_PREREQUISITE_NOT_MET`; an untouched 1.0.4 direct RTDB writer cannot receive a literal update-required response, so compatibility remains mandatory until a future reviewed client-mapping or zero-supported-legacy-client prerequisite is proven.
 - Auto-share checks lifecycle cancellation after native location capture and after the service write. Logout, backgrounding, reassignment, disable, or unmount must revoke the exact session so late coordinates never return to the former tour.
 
 Safety UX:

@@ -342,16 +342,41 @@ export interface DriverLocationSourceRecord {
   appSessionId: string;
   driverId: string;
   tourId: string;
-  source: "auto" | "manual";
-  mode: "live" | "pickup";
+  source: string;
+  mode: string;
   latitude: number;
   longitude: number;
+  accuracy: number;
   timestamp: number | Record<string, unknown>;
-  accuracy?: number;
-  liveSharingSessionId?: string;
-  cleanupAtMs?: number;
+  liveSharingSessionId: string;
+  cleanupAtMs: number;
   address?: string;
   updatedBy?: string;
+}
+
+export interface DriverLocationPickupRecord {
+  schemaVersion: number;
+  isSharing: boolean;
+  source: string;
+  mode: string;
+  driverId: string;
+  tourId: string;
+  assignmentRevision: number;
+  latitude: number;
+  longitude: number;
+  timestamp: number;
+  publishedAtMs: number;
+  expiresAtMs: number;
+  accuracy?: number;
+  address?: string;
+  updatedBy?: string;
+}
+
+export interface LiveStateRolloutRecord {
+  schemaVersion: number;
+  phase: "compatibility" | "cutover";
+  projectionRevision: number;
+  updatedAtMs: number;
 }
 
 export interface DriverTourPackActionResult {

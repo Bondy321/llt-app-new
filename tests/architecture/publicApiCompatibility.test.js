@@ -41,6 +41,7 @@ const EXPECTED_FUNCTION_EXPORTS = [
   'endAppSession',
   'generatePhotoVariants',
   'getDriverLoginPolicy',
+  'getLiveStateRollout',
   'getMarketingNotificationDetail',
   'getSafetyAlertDetail',
   'getTourManifest',
@@ -71,8 +72,10 @@ const EXPECTED_FUNCTION_EXPORTS = [
   'sendItineraryNotification',
   'sendSafetyAlertNotification',
   'setDriverLoginPolicy',
+  'setLiveStateRollout',
   'submitSafetyReport',
   'updateNotificationDeviceRegistration',
+  'updateDriverLocationPickup',
   'uploadGroupPhoto',
   'uploadPrivatePhoto',
   'verifyDriverLogin',
@@ -260,7 +263,7 @@ test('high-value HTTP reason codes remain represented at the backend boundary', 
     'METHOD_NOT_ALLOWED', 'NOT_AUTHENTICATED', 'NOT_AUTHORIZED', 'NOT_FOUND', 'NOT_OWNER',
     'ORIGIN_NOT_ALLOWED', 'PHOTO_NOT_FOUND', 'ROLE_TRANSITION_IN_PROGRESS', 'SERVICE_UNAVAILABLE', 'SESSION_CHANGED',
     'SESSION_IN_PROGRESS', 'SUBMISSION_IN_PROGRESS', 'TOUR_ALREADY_ASSIGNED', 'TOUR_INACTIVE',
-    'TOUR_NOT_FOUND', 'TRY_AGAIN_LATER', 'UNSUPPORTED_CONTENT',
+    'TOUR_NOT_FOUND', 'TRY_AGAIN_LATER', 'UNSUPPORTED_CONTENT', 'UPDATE_REQUIRED',
   ];
   for (const code of expectedReasonCodes) assert.match(source, new RegExp(`['\"]${code}['\"]`, 'u'), code);
 });

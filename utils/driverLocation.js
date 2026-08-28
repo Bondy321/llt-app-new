@@ -23,6 +23,13 @@ const requireBoundedIdentifier = (value, pattern, message) => {
   return normalized;
 };
 
+const requireNonEmptyBoundedText = (value, maxLength, message) => {
+  if (typeof value !== 'string') throw new Error(message);
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maxLength) throw new Error(message);
+  return normalized;
+};
+
 export const buildDriverLocationSessionKey = (appSessionId, liveSharingSessionId) => {
   const normalizedAppSessionId = requireBoundedIdentifier(
     appSessionId,
@@ -268,18 +275,14 @@ export const buildDriverLocationSourcePayload = ({
     sessionId: liveSharingSessionId,
     nowMs,
   });
-  const normalizedAuthUid = readBoundedText(authUid, 128);
-  const normalizedDriverId = readBoundedText(driverId, 100);
-  const normalizedTourId = readBoundedText(tourId, 100);
+  const normalizedAuthUid = requireNonEmptyBoundedText(authUid, 128, 'A valid authenticated user ID is required');
+  const normalizedDriverId = requireNonEmptyBoundedText(driverId, 100, 'A valid driver ID is required');
+  const normalizedTourId = requireNonEmptyBoundedText(tourId, 100, 'A valid tour ID is required');
   const normalizedAppSessionId = requireBoundedIdentifier(
     appSessionId,
     APP_SESSION_ID_PATTERN,
     'A valid app session ID is required',
   );
-  if (!normalizedAuthUid) throw new Error('A valid authenticated user ID is required');
-  if (!normalizedDriverId) throw new Error('A valid driver ID is required');
-  if (!normalizedTourId) throw new Error('A valid tour ID is required');
-
   const payload = {
     ...publicPayload,
     schemaVersion: DRIVER_LOCATION_SOURCE_SCHEMA_VERSION,

@@ -104,6 +104,8 @@
     },
     { "name": "manual driver location", "contract": "DriverLocationRecord", "value": { "schemaVersion": 1, "isSharing": true, "mode": "pickup", "source": "manual", "latitude": 56.2, "longitude": -4.7, "accuracy": 10, "timestamp": 1000, "projectionRevision": 1 } },
     { "name": "private live driver source", "contract": "DriverLocationSourceRecord", "clientProjection": false, "value": { "schemaVersion": 2, "authUid": "auth-driver-1", "appSessionId": "sess_v1_0123456789abcdef0123456789abcdef", "driverId": "D-100", "tourId": "5112D_8", "source": "auto", "mode": "live", "latitude": 56.2, "longitude": -4.7, "accuracy": 10, "timestamp": 1000, "liveSharingSessionId": "live_001", "cleanupAtMs": 2000 } },
+    { "name": "private assignment-owned driver pickup", "contract": "DriverLocationPickupRecord", "clientProjection": false, "value": { "schemaVersion": 1, "isSharing": true, "source": "manual", "mode": "pickup", "driverId": "D-100", "tourId": "5112D_8", "assignmentRevision": 4, "latitude": 56.2, "longitude": -4.7, "accuracy": 10, "timestamp": 1000, "publishedAtMs": 1000, "expiresAtMs": 2000 } },
+    { "name": "private explicit live-state rollout", "contract": "LiveStateRolloutRecord", "clientProjection": false, "value": { "schemaVersion": 1, "phase": "compatibility", "projectionRevision": 1, "updatedAtMs": 1000 } },
     { "name": "queued tour-pack action", "contract": "DriverTourPackActionResult", "value": { "success": true, "queued": true } },
     { "name": "safe HTTP error", "contract": "StandardHttpErrorResponse", "value": { "success": false, "reason": "INVALID_INPUT", "status": 400, "retryable": false } }
   ],

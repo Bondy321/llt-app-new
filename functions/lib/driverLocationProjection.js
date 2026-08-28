@@ -1,5 +1,19 @@
 'use strict';
 
+const {
+  buildAssignmentOwnedDriverLocationPickup,
+  hasCurrentPickupAssignmentAuthority,
+  isValidAssignmentOwnedDriverLocationPickup,
+  removeDriverLocationPickupIfAssignmentMatches,
+} = require('./driverLocationPickup');
+const {
+  LIVE_STATE_CUTOVER_PHASE,
+  isLiveStateClientSupported,
+  normalizeLiveStateRollout,
+  readLiveStateRollout,
+  transitionLiveStateRollout,
+} = require('./liveStateRollout');
+
 const DRIVER_LOCATION_SOURCE_SCHEMA_VERSION = 2;
 const PUBLIC_DRIVER_LOCATION_SCHEMA_VERSION = 1;
 const PROJECTION_LEASE_MS = 30_000;
@@ -19,6 +33,12 @@ function normalizeBoundedText(value, maxLength) {
   return typeof value === 'string' ? value.trim().slice(0, maxLength) : '';
 }
 
+function isNonEmptyBoundedText(value, maxLength) {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= maxLength;
+}
+
 function isValidLiveSource(record, nowMs) {
   return Boolean(
     isObject(record)
@@ -32,27 +52,16 @@ function isValidLiveSource(record, nowMs) {
     && isSafeTimestamp(record.timestamp)
     && isSafeTimestamp(record.cleanupAtMs)
     && record.cleanupAtMs > nowMs
-    && normalizeBoundedText(record.authUid, 128)
-    && normalizeBoundedText(record.appSessionId, 100)
-    && normalizeBoundedText(record.liveSharingSessionId, 80)
-    && normalizeBoundedText(record.driverId, 100)
-    && normalizeBoundedText(record.tourId, 100)
+    && isNonEmptyBoundedText(record.authUid, 128)
+    && isNonEmptyBoundedText(record.appSessionId, 100)
+    && isNonEmptyBoundedText(record.liveSharingSessionId, 80)
+    && isNonEmptyBoundedText(record.driverId, 100)
+    && isNonEmptyBoundedText(record.tourId, 100)
   );
 }
 
-function isValidManualSource(record) {
-  return Boolean(
-    isObject(record)
-    && record.schemaVersion === DRIVER_LOCATION_SOURCE_SCHEMA_VERSION
-    && record.source === 'manual'
-    && record.mode === 'pickup'
-    && normalizeCoordinates(record)
-    && isSafeTimestamp(record.timestamp)
-    && normalizeBoundedText(record.authUid, 128)
-    && normalizeBoundedText(record.appSessionId, 100)
-    && normalizeBoundedText(record.driverId, 100)
-    && normalizeBoundedText(record.tourId, 100)
-  );
+function isValidManualSource(record, nowMs = Date.now()) {
+  return isValidAssignmentOwnedDriverLocationPickup(record, nowMs);
 }
 
 function sourceTieBreak(record) {
@@ -92,7 +101,7 @@ function buildDriverLocationProjection({ liveRecords = [], manualRecord = null, 
     .filter((record) => isValidLiveSource(record, nowMs))
     .sort(compareLiveSources)[0] || null;
   if (selectedLive) return toPublicProjection(selectedLive);
-  return isValidManualSource(manualRecord) ? toPublicProjection(manualRecord) : null;
+  return isValidManualSource(manualRecord, nowMs) ? toPublicProjection(manualRecord) : null;
 }
 
 function snapshotValue(snapshot) {
@@ -179,7 +188,11 @@ async function acquireDriverLocationProjectionInvalidation({
   if (!isSafeTimestamp(nowMs)) throw new Error('nowMs must be a non-negative safe integer');
 
   const stateRef = database.ref(`driver_location_projection_state/${normalizedTourId}`);
-  const publicLocation = await readValue(database.ref(`tours/${normalizedTourId}/driverLocation`));
+  const [publicLocation, rolloutContext] = await Promise.all([
+    readValue(database.ref(`tours/${normalizedTourId}/driverLocation`)),
+    readLiveStateRollout({ database }),
+  ]);
+  const cutover = rolloutContext.rollout.phase === LIVE_STATE_CUTOVER_PHASE;
   const publicRevision = publicProjectionRevision(publicLocation);
   const leaseResult = await stateRef.transaction((current) => {
     const state = isObject(current) ? current : {};
@@ -217,7 +230,7 @@ async function acquireDriverLocationProjectionInvalidation({
       schemaVersion: PUBLIC_DRIVER_LOCATION_SCHEMA_VERSION,
       isSharing: false,
       timestamp: nowMs,
-      projectionRevision: state.revision,
+      ...(cutover ? { projectionRevision: state.revision } : {}),
     },
   };
 }
@@ -245,11 +258,23 @@ async function reconcileDriverLocationProjection({
   nowMs = Date.now(),
   leaseOwner = `driver_location_${nowMs}_${Math.random().toString(36).slice(2, 10)}`,
   validateLiveRecord = hasCurrentDriverAuthority,
+  readRollout = readLiveStateRollout,
 } = {}) {
   if (!database?.ref) throw new Error('A Realtime Database instance is required');
   const normalizedTourId = normalizeBoundedText(tourId, 100);
   if (!normalizedTourId) throw new Error('A tour ID is required');
   if (!isSafeTimestamp(nowMs)) throw new Error('nowMs must be a non-negative safe integer');
+  const tourRecord = await readValue(database.ref(`tours/${normalizedTourId}`));
+  if (!isObject(tourRecord)) {
+    return {
+      ok: true,
+      tourId: normalizedTourId,
+      revision: null,
+      projection: null,
+      published: false,
+      reason: 'TOUR_MISSING',
+    };
+  }
   const stateRef = database.ref(`driver_location_projection_state/${normalizedTourId}`);
   const leaseResult = await stateRef.transaction((current) => {
     const state = isObject(current) ? current : {};
@@ -271,10 +296,11 @@ async function reconcileDriverLocationProjection({
   }
 
   try {
-    const [liveEntries, manualRecord, currentPublicLocation] = await Promise.all([
+    const [liveEntries, manualRecord, currentPublicLocation, rolloutContext] = await Promise.all([
       readLiveSources(database, normalizedTourId),
       readValue(database.ref(`driver_location_pickups/${normalizedTourId}`)),
       readValue(database.ref(`tours/${normalizedTourId}/driverLocation`)),
+      readRollout({ database }),
     ]);
     const authority = await Promise.all(liveEntries.map(async ({ sourceKey, record }) => ({
       sourceKey,
@@ -282,8 +308,8 @@ async function reconcileDriverLocationProjection({
       valid: isValidLiveSource(record, nowMs)
         && await validateLiveRecord(database, record, nowMs, sourceKey),
     })));
-    const validManualRecord = isValidManualSource(manualRecord)
-      && await validateLiveRecord(database, manualRecord, nowMs, 'manual');
+    const validManualRecord = isValidManualSource(manualRecord, nowMs)
+      && await hasCurrentPickupAssignmentAuthority(database, manualRecord, nowMs);
     const projection = buildDriverLocationProjection({
       liveRecords: authority.filter(({ valid }) => valid).map(({ record }) => record),
       manualRecord: validManualRecord ? manualRecord : null,
@@ -310,17 +336,28 @@ async function reconcileDriverLocationProjection({
       throw error;
     }
     const revision = snapshotValue(finalized.snapshot)?.revision;
+    const latestRolloutContext = await readRollout({ database });
+    const rolloutChanged = latestRolloutContext.isDefault !== rolloutContext.isDefault
+      || latestRolloutContext.rollout.phase !== rolloutContext.rollout.phase
+      || latestRolloutContext.rollout.projectionRevision !== rolloutContext.rollout.projectionRevision
+      || latestRolloutContext.rollout.updatedAtMs !== rolloutContext.rollout.updatedAtMs;
+    if (rolloutChanged) {
+      const error = new Error('Live-state rollout changed before projection publication');
+      error.code = 'LIVE_STATE_ROLLOUT_CHANGED';
+      throw error;
+    }
+    const cutover = rolloutContext.rollout.phase === LIVE_STATE_CUTOVER_PHASE;
     const publicProjection = projection
-      ? { ...projection, projectionRevision: revision }
+      ? { ...projection, ...(cutover ? { projectionRevision: revision } : {}) }
       : {
           schemaVersion: PUBLIC_DRIVER_LOCATION_SCHEMA_VERSION,
           isSharing: false,
           timestamp: nowMs,
-          projectionRevision: revision,
+          ...(cutover ? { projectionRevision: revision } : {}),
         };
     const publicResult = await database.ref(`tours/${normalizedTourId}/driverLocation`).transaction((current) => {
       const currentRevision = publicProjectionRevision(current);
-      if (currentRevision >= revision) return undefined;
+      if (cutover && currentRevision >= revision) return undefined;
       return publicProjection;
     }, undefined, false);
     if (publicResult?.committed !== true) {
@@ -365,9 +402,7 @@ async function cleanupDriverLocationsForAppSession({
   if (!normalizedSessionId) throw new Error('An app session ID is required');
   let liveQuery = database.ref('driver_location_sessions').orderByChild('appSessionId');
   if (typeof liveQuery.equalTo === 'function') liveQuery = liveQuery.equalTo(normalizedSessionId);
-  let pickupQuery = database.ref('driver_location_pickups').orderByChild('appSessionId');
-  if (typeof pickupQuery.equalTo === 'function') pickupQuery = pickupQuery.equalTo(normalizedSessionId);
-  const [records, pickups] = await Promise.all([readValue(liveQuery), readValue(pickupQuery)]);
+  const records = await readValue(liveQuery);
   const matches = Object.entries(isObject(records) ? records : {})
     .filter(([, record]) => record?.appSessionId === normalizedSessionId);
   const tours = new Set();
@@ -380,17 +415,6 @@ async function cleanupDriverLocationsForAppSession({
     if (result?.committed) {
       removed += 1;
       if (candidate?.tourId) tours.add(candidate.tourId);
-    }
-  }
-  for (const [tourId, candidate] of Object.entries(isObject(pickups) ? pickups : {})) {
-    if (candidate?.appSessionId !== normalizedSessionId) continue;
-    const result = await database.ref(`driver_location_pickups/${tourId}`).transaction((current) => {
-      if (!current || current.appSessionId !== normalizedSessionId) return undefined;
-      return null;
-    }, undefined, false);
-    if (result?.committed) {
-      removed += 1;
-      tours.add(candidate?.tourId || tourId);
     }
   }
   const normalizedExpectedTourId = normalizeBoundedText(expectedTourId, 100);
@@ -411,6 +435,7 @@ module.exports = {
   DRIVER_LOCATION_SOURCE_SCHEMA_VERSION,
   PROJECTION_LEASE_MS,
   acquireDriverLocationProjectionInvalidation,
+  buildAssignmentOwnedDriverLocationPickup,
   buildDriverLocationProjection,
   cleanupDriverLocationsForAppSession,
   collectChangedTours,
@@ -418,8 +443,14 @@ module.exports = {
   isValidLiveSource,
   isValidManualSource,
   hasCurrentDriverAuthority,
+  hasCurrentPickupAssignmentAuthority,
+  isLiveStateClientSupported,
+  normalizeLiveStateRollout,
+  readLiveStateRollout,
+  removeDriverLocationPickupIfAssignmentMatches,
   releaseDriverLocationProjectionInvalidation,
   reconcileDriverLocationProjection,
   reconcileDriverLocationSourceChange,
+  transitionLiveStateRollout,
   toPublicProjection,
 };

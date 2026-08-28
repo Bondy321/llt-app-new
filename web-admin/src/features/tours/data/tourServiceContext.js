@@ -14,8 +14,6 @@
  * │   ├── startDate                # Start date (DD/MM/YYYY format)
  * │   ├── endDate                  # End date (DD/MM/YYYY format)
  * │   ├── isActive                 # Whether tour is currently active
- * │   ├── driverName               # Assigned driver name or 'TBA'
- * │   ├── driverPhone              # Driver contact number
  * │   ├── maxParticipants          # Maximum passenger capacity
  * │   ├── currentParticipants      # Current passenger count
  * │   ├── pickupPoints             # Array of pickup locations
@@ -63,8 +61,6 @@ export const DEFAULT_TOUR = {
   startDate: '',
   endDate: '',
   isActive: true,
-  driverName: 'TBA',
-  driverPhone: '',
   maxParticipants: 53,
   currentParticipants: 0,
   pickupPoints: [],

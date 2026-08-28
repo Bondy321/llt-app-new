@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildDriverLocationPayload,
+  buildDriverLocationSourcePayload,
   getDriverLocationPresentation,
   getDriverLocationSnapshotKey,
   getDriverLocationStatusMeta,
@@ -124,6 +125,29 @@ test('location payload uses a server timestamp and bounded schema', () => {
   }), /accuracy/);
 });
 
+test('private live-source identity bounds match the backend and rules contract', () => {
+  const build = (overrides = {}) => buildDriverLocationSourcePayload({
+    latitude: 56,
+    longitude: -4,
+    accuracy: 8,
+    source: 'auto',
+    liveSharingSessionId: 'live_session_1',
+    authUid: 'a'.repeat(128),
+    appSessionId: TEST_APP_SESSION_ID,
+    driverId: 'D'.repeat(100),
+    tourId: 'T'.repeat(100),
+    nowMs: 1_000,
+    ...overrides,
+  });
+  const boundary = build();
+  assert.equal(boundary.authUid.length, 128);
+  assert.equal(boundary.driverId.length, 100);
+  assert.equal(boundary.tourId.length, 100);
+  assert.throws(() => build({ authUid: 'a'.repeat(129) }), /authenticated user ID/i);
+  assert.throws(() => build({ driverId: 'D'.repeat(101) }), /driver ID/i);
+  assert.throws(() => build({ tourId: 'T'.repeat(101) }), /tour ID/i);
+});
+
 test('live session IDs are opaque, bounded, and collision-ready', () => {
   const id = createDriverLocationSessionId(() => 1234, () => 0.123456789);
   assert.match(id, /^loc_[a-z0-9]+_[a-z0-9]{8,10}$/);
@@ -131,6 +155,13 @@ test('live session IDs are opaque, bounded, and collision-ready', () => {
 
 test('publish and withdraw use separate durable pickup and exact live-session paths', async () => {
   const calls = [];
+  const pickupMutations = [];
+  const pickupMutation = async (request) => {
+    pickupMutations.push(request);
+    return request.operation === 'publish'
+      ? { success: true, pickup: { ...request.location, timestamp: 1234 } }
+      : { success: true, removed: true };
+  };
   const dbInstance = {
     ref(path) {
       calls.push({ path, set: [], remove: 0 });
@@ -160,8 +191,13 @@ test('publish and withdraw use separate durable pickup and exact live-session pa
     sessionScope: { ...TEST_SESSION_SCOPE, tourId: '5112D_8' },
     dbInstance,
     now: () => 1234,
+    pickupMutation,
   });
-  await withdrawDriverLocation({ tourId: '5112D 8', dbInstance });
+  await withdrawDriverLocation({
+    tourId: '5112D 8',
+    sessionScope: { ...TEST_SESSION_SCOPE, tourId: '5112D_8' },
+    pickupMutation,
+  });
   const liveWithdrawal = await withdrawLiveDriverLocation({
     tourId: '5112D 8',
     appSessionId: TEST_APP_SESSION_ID,
@@ -170,15 +206,15 @@ test('publish and withdraw use separate durable pickup and exact live-session pa
   });
 
   assert.equal(published.timestamp, 1234);
+  assert.deepEqual(pickupMutations.map(({ operation, tourId }) => ({ operation, tourId })), [
+    { operation: 'publish', tourId: '5112D_8' },
+    { operation: 'withdraw', tourId: '5112D_8' },
+  ]);
   assert.deepEqual(calls.map((call) => call.path), [
-    'driver_location_pickups/5112D_8',
-    'driver_location_pickups/5112D_8',
     `driver_location_sessions/${TEST_APP_SESSION_ID}|session_live_1`,
   ]);
-  assert.equal(calls[0].set.length, 1);
-  assert.equal(calls[1].remove, 1);
   assert.equal(liveWithdrawal.removed, false);
-  assert.equal(calls[2].transactionValue, undefined);
+  assert.equal(calls[0].transactionValue, undefined);
 });
 
 test('stopping live sharing does not mutate a missing exact live leaf', async () => {
@@ -312,6 +348,12 @@ test('live sharing and fixed pickup remain separate across withdrawal', async ()
     address: 'Pier Road',
   };
   const values = new Map();
+  const pickupMutations = [];
+  const pickupMutation = async (request) => {
+    pickupMutations.push(request);
+    if (request.operation === 'publish') values.set('trusted-pickup', pickup);
+    return { success: true, pickup };
+  };
   const dbInstance = {
     ref(path) {
       return {
@@ -341,6 +383,7 @@ test('live sharing and fixed pickup remain separate across withdrawal', async ()
     sessionScope: TEST_SESSION_SCOPE,
     dbInstance,
     now: () => 500,
+    pickupMutation,
   });
 
   await publishDriverLocation({
@@ -352,7 +395,7 @@ test('live sharing and fixed pickup remain separate across withdrawal', async ()
     dbInstance,
     now: () => 1000,
   });
-  assert.ok(values.has('driver_location_pickups/TOUR_1'));
+  assert.ok(values.has('trusted-pickup'));
   assert.ok(values.has(`driver_location_sessions/${TEST_APP_SESSION_ID}|session_live`));
 
   const result = await withdrawLiveDriverLocation({
@@ -362,7 +405,8 @@ test('live sharing and fixed pickup remain separate across withdrawal', async ()
     expectedSessionId: 'session_live',
   });
   assert.equal(result.removed, true);
-  assert.ok(values.has('driver_location_pickups/TOUR_1'));
+  assert.ok(values.has('trusted-pickup'));
+  assert.equal(pickupMutations.length, 1);
   assert.equal(values.has(`driver_location_sessions/${TEST_APP_SESSION_ID}|session_live`), false);
 });
 

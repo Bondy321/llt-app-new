@@ -7,6 +7,17 @@ const DRIVER_LOCATION_EXPIRY_CLEANUP_LIMITS = Object.freeze({
 });
 
 const DRIVER_LOCATION_SESSIONS_ROOT = 'driver_location_sessions';
+const DRIVER_LOCATION_PICKUPS_ROOT = 'driver_location_pickups';
+
+const queryExpired = async ({ database, root, orderBy, nowMs, limit }) => {
+  const snapshot = await database.ref(root)
+    .orderByChild(orderBy)
+    .startAt(1)
+    .endAt(nowMs)
+    .limitToFirst(limit)
+    .get();
+  return snapshot.exists() ? snapshot.val() || {} : {};
+};
 
 /**
  * Removes only disconnect-safe live-location leases that are still expired when their
@@ -31,14 +42,12 @@ async function cleanupExpiredDriverLocations({
     throw new RangeError(`limit must be 1-${DRIVER_LOCATION_EXPIRY_CLEANUP_LIMITS.maxLocationsPerRun}.`);
   }
 
-  const snapshot = await database.ref(DRIVER_LOCATION_SESSIONS_ROOT)
-    .orderByChild('cleanupAtMs')
-    .startAt(1)
-    .endAt(nowMs)
-    .limitToFirst(limit)
-    .get();
-  const candidates = snapshot.exists() ? snapshot.val() || {} : {};
+  const [candidates, pickupCandidates] = await Promise.all([
+    queryExpired({ database, root: DRIVER_LOCATION_SESSIONS_ROOT, orderBy: 'cleanupAtMs', nowMs, limit }),
+    queryExpired({ database, root: DRIVER_LOCATION_PICKUPS_ROOT, orderBy: 'expiresAtMs', nowMs, limit }),
+  ]);
   let removed = 0;
+  let pickupsRemoved = 0;
   const affectedTours = new Set();
 
   await Promise.all(Object.entries(candidates).map(async ([sourceKey, candidate]) => {
@@ -54,6 +63,18 @@ async function cleanupExpiredDriverLocations({
     }
   }));
 
+  await Promise.all(Object.entries(pickupCandidates).map(async ([tourId, candidate]) => {
+    if (!isExpiredDriverLocationPickup(candidate, tourId, nowMs)) return;
+    const result = await database.ref(`${DRIVER_LOCATION_PICKUPS_ROOT}/${tourId}`).transaction((current) => {
+      if (!isSameExpiredDriverLocationPickup(current, candidate, tourId, nowMs)) return undefined;
+      return null;
+    }, undefined, false);
+    if (result?.committed) {
+      pickupsRemoved += 1;
+      affectedTours.add(tourId);
+    }
+  }));
+
   const reconciledTours = [...affectedTours].sort();
   for (const tourId of reconciledTours) {
     await reconcileProjection({ database, tourId, nowMs });
@@ -63,11 +84,39 @@ async function cleanupExpiredDriverLocations({
     ok: true,
     scanned: Object.keys(candidates).length,
     removed,
+    pickupsScanned: Object.keys(pickupCandidates).length,
+    pickupsRemoved,
     restoredPickups: 0,
     reconciledTours,
-    hasMore: Object.keys(candidates).length >= limit,
+    hasMore: Object.keys(candidates).length >= limit || Object.keys(pickupCandidates).length >= limit,
     cleanedAtMs: nowMs,
   };
+}
+
+function isExpiredDriverLocationPickup(location, tourId, nowMs) {
+  return Boolean(
+    location && typeof location === 'object'
+    && location.schemaVersion === 1
+    && location.isSharing === true
+    && location.mode === 'pickup'
+    && location.source === 'manual'
+    && location.tourId === tourId
+    && typeof location.driverId === 'string' && location.driverId.length > 0
+    && Number.isSafeInteger(location.assignmentRevision) && location.assignmentRevision >= 0
+    && Number.isSafeInteger(location.publishedAtMs) && location.publishedAtMs > 0
+    && Number.isSafeInteger(location.expiresAtMs) && location.expiresAtMs > 0
+    && location.expiresAtMs <= nowMs
+  );
+}
+
+function isSameExpiredDriverLocationPickup(current, candidate, tourId, nowMs) {
+  return Boolean(
+    isExpiredDriverLocationPickup(current, tourId, nowMs)
+    && current.driverId === candidate.driverId
+    && current.assignmentRevision === candidate.assignmentRevision
+    && current.publishedAtMs === candidate.publishedAtMs
+    && current.expiresAtMs === candidate.expiresAtMs
+  );
 }
 
 function normalizePickupFallback(location) {
@@ -140,6 +189,8 @@ module.exports = {
   DRIVER_LOCATION_EXPIRY_CLEANUP_LIMITS,
   cleanupExpiredDriverLocations,
   isExpiredLiveDriverLocation,
+  isExpiredDriverLocationPickup,
   isSameExpiredLiveDriverLocation,
+  isSameExpiredDriverLocationPickup,
   normalizePickupFallback,
 };

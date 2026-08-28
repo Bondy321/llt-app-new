@@ -127,6 +127,7 @@ test('live withdrawal compares both app-session and live-sharing ownership', asy
 
 test('manual pickup uses a durable source separate from live disconnect state', async () => {
   const db = createRealtimeHarness();
+  const mutations = [];
   await publishDriverLocation({
     tourId: 'TOUR_1',
     location: { latitude: 56.3, longitude: -4.3 },
@@ -134,7 +135,30 @@ test('manual pickup uses a durable source separate from live disconnect state', 
     sessionScope: scope(APP_SESSION_A, 'uid_a'),
     dbInstance: db,
     now: () => 3_000,
+    pickupMutation: async (request) => {
+      mutations.push(request);
+      return {
+        success: true,
+        pickup: {
+          schemaVersion: 1,
+          isSharing: true,
+          source: 'manual',
+          mode: 'pickup',
+          driverId: 'D-ONE',
+          tourId: 'TOUR_1',
+          assignmentRevision: 7,
+          latitude: 56.3,
+          longitude: -4.3,
+          timestamp: 3_000,
+          publishedAtMs: 3_000,
+          expiresAtMs: 4_000,
+        },
+      };
+    },
   });
-  assert.ok(db.values.has('driver_location_pickups/TOUR_1'));
+  assert.equal(mutations.length, 1);
+  assert.equal(mutations[0].operation, 'publish');
+  assert.equal(mutations[0].sessionScope.sessionId, APP_SESSION_A);
+  assert.equal(Object.hasOwn(mutations[0], 'dbInstance'), false);
   assert.equal([...db.values.keys()].some((path) => path.startsWith('driver_location_sessions/')), false);
 });

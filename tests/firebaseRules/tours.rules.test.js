@@ -1,4 +1,5 @@
 const test = require('node:test');
+const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
@@ -182,7 +183,7 @@ test('denies passengers from writing driver-only tour location fields', async ()
   }));
 });
 
-test('allows raw location and staged legacy location only until the server projection revision appears', async () => {
+test('keeps the 1.0.4 location bridge until explicit rollout cutover', async () => {
   const liveSharingSessionId = 'location_assigned_123';
   await assertSucceeds(
     dbFor(DRIVER_AUTH_UID)
@@ -202,11 +203,37 @@ test('allows raw location and staged legacy location only until the server proje
     updatedBy: 'Driver Palmer',
   }));
 
-  await testEnv.withSecurityRulesDisabled((context) => (
-    context.database(dbUrl).ref(`tours/${TOUR_ID}/driverLocation/projectionRevision`).set(1)
-  ));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const adminDb = context.database(dbUrl);
+    await adminDb.ref('live_state_rollout/v1').set({
+      schemaVersion: 1,
+      phase: 'compatibility',
+      revision: 1,
+      updatedAtMs: Date.now(),
+    });
+    await adminDb.ref(`tours/${TOUR_ID}/driverLocation/projectionRevision`).set(1);
+  });
+  await assertSucceeds(legacyLocationRef.set({
+    latitude: 56.01,
+    longitude: -4.61,
+    timestamp: { '.sv': 'timestamp' },
+  }));
+
+  await testEnv.withSecurityRulesDisabled((context) => context.database(dbUrl).ref('live_state_rollout/v1').set({
+    schemaVersion: 1,
+    phase: 'cutover',
+    revision: 2,
+    updatedAtMs: Date.now(),
+  }));
   await assertFails(legacyLocationRef.update({ timestamp: { '.sv': 'timestamp' } }));
   await assertFails(legacyLocationRef.remove());
+
+  await testEnv.withSecurityRulesDisabled((context) => context.database(dbUrl).ref('live_state_rollout/v1').set({
+    schemaVersion: 1,
+    phase: 'compatibility',
+    revision: 3,
+    updatedAtMs: Date.now(),
+  }));
 
   await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/itinerary`).set({
     title: 'Client itinerary',
@@ -255,12 +282,12 @@ test('validates v2 raw driver location records and accepts server timestamps', a
   await assertSucceeds(locationRef.remove());
 
   const pickupRef = dbFor(DRIVER_AUTH_UID).ref(`driver_location_pickups/${TOUR_ID}`);
-  await assertSucceeds(pickupRef.set(buildRawDriverLocation({ manual: true })));
+  await assertFails(pickupRef.set(buildRawDriverLocation({ manual: true })));
   await assertFails(pickupRef.set(buildRawDriverLocation({
     manual: true,
     overrides: { unexpectedField: 'not allowed' },
   })));
-  await assertSucceeds(pickupRef.remove());
+  await assertFails(pickupRef.remove());
 });
 
 test('validates itinerary content, revision metadata, and driver-only text shape', async () => {
@@ -365,9 +392,24 @@ test('versioned live sharing uses bounded coordinates, server time, and owner-on
 });
 
 test('allows admin tour metadata management', async () => {
+  const safeCreateRef = dbFor(ADMIN_UID).ref('tours/SAFE_CREATE_1');
+  const safeCreation = await assertSucceeds(safeCreateRef.transaction(
+    (existing) => (existing === null ? {
+      name: 'Safe created tour',
+      tourCode: 'SAFE CREATE 1',
+      days: 1,
+      isActive: true,
+      maxParticipants: 53,
+      currentParticipants: 0,
+      pickupPoints: [],
+      itinerary: { title: 'Safe created tour', days: [] },
+    } : undefined),
+  ));
+  assert.equal(safeCreation.committed, true);
+
   await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/name`).set('Admin updated tour'));
   await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}`).update({ isActive: false }));
-  await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/driverId`).set(DRIVER_ID));
+  await assertFails(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/driverId`).set(DRIVER_ID));
   await assertFails(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/driverId`).set('D-MISSING'));
   const startDateEpochMs = Date.UTC(2026, 7, 22);
   const endDateEpochMs = Date.UTC(2026, 7, 24);
@@ -382,15 +424,13 @@ test('allows admin tour metadata management', async () => {
   );
 });
 
-test('allows hardcoded admin web console collection reads and root multi-path updates', async () => {
+test('allows hardcoded admin web console reads and safe root multi-path profile updates', async () => {
   await assertSucceeds(dbFor(ADMIN_UID).ref('tours').get());
   await assertSucceeds(dbFor(ADMIN_UID).ref('drivers').get());
   await assertSucceeds(dbFor(ADMIN_UID).ref('tour_manifests').get());
 
   await assertSucceeds(dbFor(ADMIN_UID).ref().update({
     [`drivers/${DRIVER_ID}/phone`]: '07123 456789',
-    [`tours/${TOUR_ID}/driverName`]: 'Driver Palmer',
-    [`tours/${TOUR_ID}/driverPhone`]: '07123 456789',
-    [`tour_manifests/${TOUR_ID}/assigned_drivers/${DRIVER_ID}`]: true,
+    [`tours/${TOUR_ID}/name`]: 'Safe tour metadata',
   }));
 });

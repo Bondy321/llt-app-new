@@ -64,6 +64,8 @@ describe('tourService CSV preview integration', () => {
     expect(result.rows[1].existsInDb).toBe(false);
     expect(result.rows[1].action).toBe('create');
     expect(result.rows[1].existingTourId).toBeNull();
+    expect(result.rows[1].tour).not.toHaveProperty('driverName');
+    expect(result.rows[1].tour).not.toHaveProperty('driverPhone');
   });
 });
 
@@ -115,6 +117,10 @@ describe('tour identity invariants', () => {
     const result = await createTour({
       name: 'Highlands',
       tourCode: ' 5112D 8 ',
+      driverName: 'Forged Driver',
+      driverPhone: '+44 7000 000000',
+      driverId: 'D-FORGED',
+      driverAssignmentRevision: 99,
     });
 
     expect(result.id).toBe('5112D_8');
@@ -126,6 +132,10 @@ describe('tour identity invariants', () => {
     );
     const updater = runTransactionMock.mock.calls[0][1];
     expect(updater(null)).toEqual(expect.objectContaining({ name: 'Highlands', tourCode: '5112D 8' }));
+    for (const reservedField of ['driverName', 'driverPhone', 'driverId', 'driverAssignmentRevision']) {
+      expect(result.tour).not.toHaveProperty(reservedField);
+      expect(updater(null)).not.toHaveProperty(reservedField);
+    }
     expect(updater({ name: 'Existing' })).toBeUndefined();
   });
 
@@ -181,10 +191,12 @@ describe('tour identity invariants', () => {
     expect(result.tour).toMatchObject({
       name: 'Original Tour (Copy)',
       tourCode: 'TA 1_COPY_2',
-      driverName: 'TBA',
-      driverPhone: '',
       currentParticipants: 0,
     });
+    expect(result.tour).not.toHaveProperty('driverName');
+    expect(result.tour).not.toHaveProperty('driverPhone');
+    expect(result.tour).not.toHaveProperty('driverId');
+    expect(result.tour).not.toHaveProperty('driverAssignmentRevision');
     expect(runTransactionMock).toHaveBeenCalledWith(
       { path: 'tours/TA_1_COPY_2' },
       expect.any(Function),
@@ -230,6 +242,17 @@ describe('tour identity invariants', () => {
     })).rejects.toThrow(/end date cannot be before/i);
 
     expect(runTransactionMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects canonical assignment fields in generic normal-client tour updates', async () => {
+    getMock.mockResolvedValue(buildSnapshot({ tourCode: '5112D 8' }));
+    const { updateTour } = await import('./tourService.js');
+
+    for (const reservedField of ['driverName', 'driverPhone', 'driverId', 'driverAssignmentRevision']) {
+      await expect(updateTour('5112D_8', { [reservedField]: 'forged' }))
+        .rejects.toThrow(/server-owned driver assignment/i);
+    }
     expect(updateMock).not.toHaveBeenCalled();
   });
 
@@ -323,48 +346,10 @@ describe('tour identity invariants', () => {
 });
 
 
-describe('buildDriverAssignmentUpdates', () => {
-  it('writes canonical assigned_driver_codes payload on assignment', async () => {
-    const { buildDriverAssignmentUpdates } = await import('./tourService.js');
-
-    const updates = buildDriverAssignmentUpdates({
-      tourId: '5112d 8',
-      driverId: 'D-BONDY',
-      driverCode: 'D-BONDY',
-      tourCode: '5112D 8',
-      driverInfo: { name: 'James Bondy', phone: '+441234', authUid: 'driver-auth-1' },
-      isAssigned: true,
-      actorId: 'uid_web_admin_1',
-      assignedAt: '2026-02-01T10:15:00.000Z',
-    });
-
-    expect(updates['tour_manifests/5112D_8/assigned_driver_codes/D-BONDY']).toEqual({
-      driverId: 'D-BONDY',
-      tourId: '5112D_8',
-      tourCode: '5112D 8',
-      assignedAt: '2026-02-01T10:15:00.000Z',
-      assignedBy: 'uid_web_admin_1',
-    });
-    expect(updates['users/driver-auth-1/driverId']).toBe('D-BONDY');
-    expect(updates['users/driver-auth-1/driverPrincipalId']).toBe('driver:D-BONDY');
-    expect(updates['users/driver-auth-1/driverAssignedTourId']).toBe('5112D_8');
-    expect(updates['users/driver-auth-1/principalType']).toBe('driver');
-    expect(updates['users/driver-auth-1/lastUpdated']).toEqual(expect.any(Number));
-  });
-
-  it('removes canonical payload on unassignment', async () => {
-    const { buildDriverAssignmentUpdates } = await import('./tourService.js');
-
-    const updates = buildDriverAssignmentUpdates({
-      tourId: '5112D_8',
-      driverId: 'D-BONDY',
-      driverCode: 'D-BONDY',
-      tourCode: '5112D 8',
-      driverInfo: { name: 'TBA', phone: '' },
-      isAssigned: false,
-    });
-
-    expect(updates['tour_manifests/5112D_8/assigned_driver_codes/D-BONDY']).toBeNull();
+describe('server-owned assignment API surface', () => {
+  it('does not export a normal-client canonical update builder', async () => {
+    const tourService = await import('./tourService.js');
+    expect(tourService).not.toHaveProperty('buildDriverAssignmentUpdates');
   });
 });
 

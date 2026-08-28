@@ -6,6 +6,7 @@ const {
   buildDriverLocationProjection,
   cleanupDriverLocationsForAppSession,
   hasCurrentDriverAuthority,
+  isValidLiveSource,
   reconcileDriverLocationProjection,
   reconcileDriverLocationSourceChange,
   releaseDriverLocationProjectionInvalidation,
@@ -70,18 +71,37 @@ const live = (appSessionId, liveSharingSessionId, timestamp, latitude) => ({
   cleanupAtMs: 100_000,
 });
 
+const rolloutContext = (phase, projectionRevision) => ({
+  valid: true,
+  isDefault: false,
+  rollout: { schemaVersion: 1, phase, projectionRevision, updatedAtMs: projectionRevision * 100 },
+});
+
+test('private live-source validation rejects identifiers beyond canonical limits', () => {
+  const source = live('app_a', 'live_a', 100, 56.1);
+  source.authUid = 'a'.repeat(128);
+  source.driverId = 'D'.repeat(100);
+  source.tourId = 'T'.repeat(100);
+  assert.equal(isValidLiveSource(source, 300), true);
+  assert.equal(isValidLiveSource({ ...source, authUid: 'a'.repeat(129) }, 300), false);
+  assert.equal(isValidLiveSource({ ...source, driverId: 'D'.repeat(101) }, 300), false);
+  assert.equal(isValidLiveSource({ ...source, tourId: 'T'.repeat(101) }, 300), false);
+});
+
 test('location projection recomputes newest source and deterministic fallback without leaking ownership', () => {
   const manual = {
-    schemaVersion: 2,
+    schemaVersion: 1,
+    isSharing: true,
     source: 'manual',
     mode: 'pickup',
-    authUid: 'uid_manual',
-    appSessionId: 'app_manual',
     driverId: 'D-ONE',
     tourId: 'TOUR_1',
+    assignmentRevision: 1,
     latitude: 55,
     longitude: -4,
     timestamp: 10,
+    publishedAtMs: 10,
+    expiresAtMs: 10_000,
   };
   const a = live('app_a', 'live_a', 100, 56.1);
   const b = live('app_b', 'live_b', 200, 56.2);
@@ -133,6 +153,7 @@ test('a delayed stale source event re-reads current leaves and cannot regress th
       v1: { schemaVersion: 1, enforceSingleDevice: false, generation: 0 },
     },
     drivers: { 'D-ONE': {} },
+    tours: { TOUR_1: {} },
     tour_manifests: { TOUR_1: { assigned_drivers: { 'D-ONE': true } } },
   });
 
@@ -144,7 +165,7 @@ test('a delayed stale source event re-reads current leaves and cannot regress th
   });
   assert.equal(delayedADelete.results[0].projection.latitude, 56.2);
   assert.equal(database.state.tours.TOUR_1.driverLocation.latitude, 56.2);
-  assert.equal(database.state.tours.TOUR_1.driverLocation.projectionRevision, 1);
+  assert.equal(database.state.tours.TOUR_1.driverLocation.projectionRevision, undefined);
 
   const delayedAPublish = await reconcileDriverLocationSourceChange({
     database,
@@ -154,7 +175,107 @@ test('a delayed stale source event re-reads current leaves and cannot regress th
   });
   assert.equal(delayedAPublish.results[0].projection.latitude, 56.2);
   assert.equal(database.state.driver_location_projection_state.TOUR_1.revision, 2);
+  assert.equal(database.state.tours.TOUR_1.driverLocation.projectionRevision, undefined);
+});
+
+test('mixed 1.0.4 and 1.0.5 projection behavior changes only after explicit rollout cutover', async () => {
+  const source = live('app_a', 'live_a', 100, 56.1);
+  const database = createProjectionDatabase({
+    driver_location_sessions: { app_a: source },
+    app_sessions: {
+      [source.authUid]: {
+        sessionId: source.appSessionId,
+        authUid: source.authUid,
+        status: 'active',
+        principalType: 'driver',
+        principalId: 'driver:D-ONE',
+        driverId: 'D-ONE',
+        tourId: 'TOUR_1',
+        driverLoginPolicyGeneration: 0,
+        expiresAtMs: 10_000,
+      },
+    },
+    users: { [source.authUid]: { principalType: 'driver', driverId: 'D-ONE', driverAssignedTourId: 'TOUR_1' } },
+    driver_login_policy: { v1: { schemaVersion: 1, enforceSingleDevice: false, generation: 0 } },
+    drivers: { 'D-ONE': {} },
+    tours: { TOUR_1: {} },
+    tour_manifests: { TOUR_1: { assigned_drivers: { 'D-ONE': true } } },
+  });
+
+  await reconcileDriverLocationProjection({ database, tourId: 'TOUR_1', nowMs: 300 });
+  assert.equal(database.state.live_state_rollout, undefined);
+  assert.equal(database.state.tours.TOUR_1.driverLocation.projectionRevision, undefined);
+
+  database.state.live_state_rollout = {
+    v1: { schemaVersion: 1, phase: 'cutover', projectionRevision: 1, updatedAtMs: 301 },
+  };
+  await reconcileDriverLocationProjection({ database, tourId: 'TOUR_1', nowMs: 302 });
   assert.equal(database.state.tours.TOUR_1.driverLocation.projectionRevision, 2);
+  assert.equal(database.state.live_state_rollout.v1.projectionRevision, 1);
+});
+
+test('compatibility to cutover change in flight defers publication and converges on retry', async () => {
+  const source = live('app_a', 'live_a', 100, 56.1);
+  const database = createProjectionDatabase({ driver_location_sessions: { app_a: source }, tours: { TOUR_1: {} } });
+  const reads = [rolloutContext('compatibility', 1), rolloutContext('cutover', 2)];
+  await assert.rejects(reconcileDriverLocationProjection({
+    database,
+    tourId: 'TOUR_1',
+    nowMs: 300,
+    validateLiveRecord: async () => true,
+    readRollout: async () => reads.shift(),
+  }), (error) => error.code === 'LIVE_STATE_ROLLOUT_CHANGED');
+  assert.equal(database.state.tours.TOUR_1.driverLocation, undefined);
+
+  await reconcileDriverLocationProjection({
+    database,
+    tourId: 'TOUR_1',
+    nowMs: 301,
+    validateLiveRecord: async () => true,
+    readRollout: async () => rolloutContext('cutover', 2),
+  });
+  assert.equal(database.state.tours.TOUR_1.driverLocation.projectionRevision, 2);
+});
+
+test('cutover to compatibility change in flight defers publication and removes revision on retry', async () => {
+  const source = live('app_a', 'live_a', 100, 56.1);
+  const database = createProjectionDatabase({
+    driver_location_sessions: { app_a: source },
+    tours: { TOUR_1: { driverLocation: { schemaVersion: 1, isSharing: true, timestamp: 90, projectionRevision: 4 } } },
+  });
+  const reads = [rolloutContext('cutover', 4), rolloutContext('compatibility', 5)];
+  await assert.rejects(reconcileDriverLocationProjection({
+    database,
+    tourId: 'TOUR_1',
+    nowMs: 300,
+    validateLiveRecord: async () => true,
+    readRollout: async () => reads.shift(),
+  }), (error) => error.code === 'LIVE_STATE_ROLLOUT_CHANGED');
+  assert.equal(database.state.tours.TOUR_1.driverLocation.projectionRevision, 4);
+
+  await reconcileDriverLocationProjection({
+    database,
+    tourId: 'TOUR_1',
+    nowMs: 301,
+    validateLiveRecord: async () => true,
+    readRollout: async () => rolloutContext('compatibility', 5),
+  });
+  assert.equal(database.state.tours.TOUR_1.driverLocation.projectionRevision, undefined);
+});
+
+test('a delayed source trigger cannot recreate a deleted tour', async () => {
+  const source = live('app_a', 'live_a', 100, 56.1);
+  const database = createProjectionDatabase({ driver_location_sessions: { app_a: source } });
+  const result = await reconcileDriverLocationProjection({
+    database,
+    tourId: 'TOUR_1',
+    nowMs: 300,
+    validateLiveRecord: async () => true,
+  });
+  assert.equal(result.published, false);
+  assert.equal(result.reason, 'TOUR_MISSING');
+  assert.equal(database.state.tours, undefined);
+  assert.equal(database.state.driver_location_projection_state, undefined);
 });
 
 test('projection authority requires the canonical driver principal, profile, generation and manifest', async () => {
@@ -217,21 +338,28 @@ test('projection authority fails closed until a valid policy record is materiali
 
 test('the first manual projection after an assignment tombstone advances the public revision', async () => {
   const manual = {
-    schemaVersion: 2,
+    schemaVersion: 1,
+    isSharing: true,
     source: 'manual',
     mode: 'pickup',
-    authUid: 'uid-manual',
-    appSessionId: 'app-manual',
     driverId: 'D-ONE',
     tourId: 'TOUR_1',
+    assignmentRevision: 4,
     latitude: 55.9,
     longitude: -4.3,
     timestamp: 400,
+    publishedAtMs: 400,
+    expiresAtMs: 10_000,
   };
   const database = createProjectionDatabase({
     driver_location_pickups: { TOUR_1: manual },
+    live_state_rollout: { v1: { schemaVersion: 1, phase: 'cutover', projectionRevision: 1, updatedAtMs: 100 } },
+    drivers: { 'D-ONE': { currentTourId: 'TOUR_1' } },
+    tour_manifests: { TOUR_1: { assigned_drivers: { 'D-ONE': true } } },
     tours: {
       TOUR_1: {
+        driverId: 'D-ONE',
+        driverAssignmentRevision: 4,
         driverLocation: {
           schemaVersion: 1,
           isSharing: false,
@@ -257,7 +385,11 @@ test('the first manual projection after an assignment tombstone advances the pub
 
 test('assignment invalidation waits out a paused projector and reserves a newer tombstone revision', async () => {
   const source = live('app_a', 'live_a', 100, 56.1);
-  const database = createProjectionDatabase({ driver_location_sessions: { app_a: source } });
+  const database = createProjectionDatabase({
+    driver_location_sessions: { app_a: source },
+    live_state_rollout: { v1: { schemaVersion: 1, phase: 'cutover', projectionRevision: 1, updatedAtMs: 100 } },
+    tours: { TOUR_1: {} },
+  });
   let allowValidation;
   let validationStarted;
   const started = new Promise((resolve) => { validationStarted = resolve; });
@@ -301,7 +433,7 @@ test('assignment invalidation waits out a paused projector and reserves a newer 
   assert.equal(database.state.driver_location_projection_state.TOUR_1.leaseOwner, undefined);
 });
 
-test('location cleanup retries the expected old tour after a partial raw-source deletion', async () => {
+test('location cleanup preserves assignment-owned pickup while retrying the expected old tour', async () => {
   const manual = {
     schemaVersion: 2,
     source: 'manual',
@@ -344,7 +476,7 @@ test('location cleanup retries the expected old tour after a partial raw-source 
     expectedTourId: 'TOUR_1',
     nowMs: 300,
   }), (error) => error.code === 'DRIVER_LOCATION_PROJECTION_BUSY');
-  assert.equal(database.state.driver_location_pickups.TOUR_1, undefined);
+  assert.deepEqual(database.state.driver_location_pickups.TOUR_1, manual);
   assert.equal(database.state.tours.TOUR_1.driverLocation.isSharing, true);
 
   database.state.driver_location_projection_state.TOUR_1 = { revision: 0 };

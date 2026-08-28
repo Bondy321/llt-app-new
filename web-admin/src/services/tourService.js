@@ -25,7 +25,6 @@ export {
 export {
   applyDriverAssignmentMutation,
   assignDriver,
-  buildDriverAssignmentUpdates,
   unassignDriver,
 } from '../features/tours/data/tourDriverAssignmentService';
 export {

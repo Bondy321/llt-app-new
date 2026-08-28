@@ -331,6 +331,7 @@ test('passenger issuance commits driver cleanup and durable passenger identity i
   });
 
   let roleClaimSession = null;
+  let roleClaimReplacedSession = null;
   const issued = await issuePassengerAppSession({
     db,
     authUid: 'uid-role-transition',
@@ -341,8 +342,9 @@ test('passenger issuance commits driver cleanup and durable passenger identity i
       'users/uid-role-transition/privatePhotoOwnerId': PASSENGER_ID,
     },
     grantUpdates: {},
-    buildRoleClaimUpdates: (session) => {
+    buildRoleClaimUpdates: (session, replacedSession) => {
       roleClaimSession = session;
+      roleClaimReplacedSession = replacedSession;
       return { 'auth_claim_updates/uid-role-transition': { role: 'passenger', sessionId: session.sessionId } };
     },
     nowMs,
@@ -358,6 +360,8 @@ test('passenger issuance commits driver cleanup and durable passenger identity i
   assert.equal(db.state['tour_manifests/TOUR_OLD/assigned_drivers/D-ROLE'], undefined);
   assert.equal(db.state['app_sessions/uid-role-transition'].principalType, 'passenger');
   assert.equal(roleClaimSession.sessionId, issued.sessionId);
+  assert.equal(roleClaimReplacedSession.sessionId, oldDriverSession.sessionId);
+  assert.equal(roleClaimReplacedSession.driverId, 'D-ROLE');
   assert.equal(db.state['auth_claim_updates/uid-role-transition'].sessionId, issued.sessionId);
 });
 
@@ -404,7 +408,7 @@ test('passenger session replacement removes its exact chat leaves before publish
   assert.ok(db.state[`chats/TOUR_CHAT/typing/${PASSENGER_ID}`].timestamp <= nowMs - 10_001);
 });
 
-test('driver replacement removes an exact manual pickup and publishes its tombstone before the new session', async () => {
+test('driver replacement preserves an assignment-owned pickup across app-session lifecycle changes', async () => {
   const nowMs = 1_800_000_020_000;
   const oldSession = buildDriverSessionRecord({
     authUid: 'uid-manual-replace',
@@ -416,17 +420,22 @@ test('driver replacement removes an exact manual pickup and publishes its tombst
   const db = createTransactionDb({
     'app_sessions/uid-manual-replace': oldSession,
     'users/uid-manual-replace': { principalType: 'driver', driverId: 'D-MANUAL' },
+    'drivers/D-MANUAL': { currentTourId: 'TOUR_MANUAL' },
+    'tours/TOUR_MANUAL': { driverId: 'D-MANUAL', driverAssignmentRevision: 4 },
+    'tour_manifests/TOUR_MANUAL/assigned_drivers/D-MANUAL': true,
     'driver_location_pickups/TOUR_MANUAL': {
-      schemaVersion: 2,
+      schemaVersion: 1,
+      isSharing: true,
       source: 'manual',
       mode: 'pickup',
-      authUid: oldSession.authUid,
-      appSessionId: oldSession.sessionId,
       driverId: 'D-MANUAL',
       tourId: 'TOUR_MANUAL',
+      assignmentRevision: 4,
       latitude: 55.9,
       longitude: -4.3,
       timestamp: nowMs - 100,
+      publishedAtMs: nowMs - 100,
+      expiresAtMs: nowMs + 10_000,
     },
     'tours/TOUR_MANUAL/driverLocation': {
       schemaVersion: 1,
@@ -449,8 +458,8 @@ test('driver replacement removes an exact manual pickup and publishes its tombst
     nowMs,
   });
 
-  assert.equal(db.state['driver_location_pickups/TOUR_MANUAL'], undefined);
-  assert.equal(db.state['tours/TOUR_MANUAL/driverLocation'].isSharing, false);
+  assert.equal(db.state['driver_location_pickups/TOUR_MANUAL'].assignmentRevision, 4);
+  assert.equal(db.state['tours/TOUR_MANUAL/driverLocation'].isSharing, true);
   assert.equal(db.state['app_sessions/uid-manual-replace'].principalType, 'passenger');
 });
 

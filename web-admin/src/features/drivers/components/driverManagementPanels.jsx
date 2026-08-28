@@ -249,19 +249,27 @@ function DriverDetailsPanel({ driverId, driver }) {
             },
           });
         }
-      } else {
-        const updates = {
-          [`drivers/${driverId}/name`]: nextName,
-          [`drivers/${driverId}/phone`]: nextPhone,
-        };
-
-        // Sync name/phone to all assigned tours without changing assignment ownership.
-        assignments.forEach((tourId) => {
-          updates[`tours/${tourId}/driverName`] = nextName;
-          updates[`tours/${tourId}/driverPhone`] = nextPhone;
+      } else if (currentTourId) {
+        await applyDriverAssignmentMutation({
+          tourId: currentTourId,
+          driverId,
+          driverInfo: {
+            name: nextName,
+            phone: nextPhone,
+            authUid: driver.authUid || '',
+          },
+          isAssigned: true,
+          driverProfileUpdates: {
+            name: nextName,
+            phone: nextPhone,
+          },
         });
-
-        await updateDriverContactProjection(updates);
+      } else {
+        await updateDriverContactProjection({
+          driverId,
+          name: nextName,
+          phone: nextPhone,
+        });
       }
 
       notifications.show({

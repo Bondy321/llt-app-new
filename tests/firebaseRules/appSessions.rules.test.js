@@ -344,7 +344,7 @@ test('a coherently assigned active driver session writes raw location and an unr
   await assertSucceeds(db.ref(`driver_location_sessions/${DRIVER_SESSION_ID}|${liveSharingSessionId}`).set(
     buildLocationPayload({ liveSharingSessionId }),
   ));
-  await assertSucceeds(db.ref(`driver_location_pickups/${TOUR_ID}`).set(
+  await assertFails(db.ref(`driver_location_pickups/${TOUR_ID}`).set(
     buildLocationPayload({ manual: true }),
   ));
   await assertSucceeds(db.ref(`tours/${TOUR_ID}/driverLocation`).set({
@@ -356,6 +356,34 @@ test('a coherently assigned active driver session writes raw location and an unr
   const actionPath = `driver_tour_pack_actions/departure-1/${DRIVER_ID}/schemaVersion`;
   await testEnv.withSecurityRulesDisabled((context) => context.database(dbUrl).ref(actionPath).set(1));
   await assertSucceeds(db.ref(actionPath).remove());
+});
+
+test('explicit cutover rejects 1.0.4 shared location, presence, and typing bridges', async () => {
+  const db = dbFor(DRIVER_UID);
+  const driverPrincipalId = `driver:${DRIVER_ID}`;
+  const legacyLocation = db.ref(`tours/${TOUR_ID}/driverLocation`);
+  const legacyPaths = [
+    db.ref(`chats/${TOUR_ID}/presence/${driverPrincipalId}`),
+    db.ref(`chats/${TOUR_ID}/typing/${driverPrincipalId}`),
+    db.ref(`internal_chats/${TOUR_ID}/presence/${driverPrincipalId}`),
+    db.ref(`internal_chats/${TOUR_ID}/typing/${driverPrincipalId}`),
+  ];
+
+  await assertSucceeds(legacyLocation.set({ latitude: 56, longitude: -4.5, timestamp: Date.now() }));
+  await assertSucceeds(legacyPaths[0].set({ name: 'Driver', isDriver: true, lastSeen: NOW, online: true }));
+  await assertSucceeds(legacyPaths[1].set({ name: 'Driver', isDriver: true, timestamp: NOW }));
+  await assertSucceeds(legacyPaths[2].set({ name: 'Driver', isDriver: true, lastSeen: NOW, online: true }));
+  await assertSucceeds(legacyPaths[3].set({ name: 'Driver', isDriver: true, timestamp: NOW }));
+
+  await testEnv.withSecurityRulesDisabled((context) => context.database(dbUrl).ref('live_state_rollout/v1').set({
+    schemaVersion: 1,
+    phase: 'cutover',
+    revision: 1,
+    updatedAtMs: Date.now(),
+  }));
+
+  await assertFails(legacyLocation.update({ timestamp: Date.now() }));
+  for (const legacyPath of legacyPaths) await assertFails(legacyPath.remove());
 });
 
 test('driver-only writes require a materialized policy and an exact session generation claim', async () => {
@@ -511,27 +539,27 @@ test('raw location writes bind the exact session, driver, tour, key, schema, and
   await assertSucceeds(db.ref(sourcePath).remove());
 
   const pickupPath = `driver_location_pickups/${TOUR_ID}`;
-  await assertSucceeds(db.ref(pickupPath).set(buildLocationPayload({ manual: true })));
+  await assertFails(db.ref(pickupPath).set(buildLocationPayload({ manual: true })));
   await assertFails(otherDb.ref(pickupPath).remove());
   await assertFails(db.ref(`driver_location_pickups/${OTHER_TOUR_ID}`).set(
     buildLocationPayload({ manual: true, tourId: OTHER_TOUR_ID }),
   ));
-  await assertSucceeds(db.ref(pickupPath).remove());
+  await assertFails(db.ref(pickupPath).remove());
 });
 
-test('raw pickup ownership follows the current handset without giving stale handsets delete authority', async () => {
+test('canonical pickup projection is server-owned for every handset', async () => {
   const pickupPath = `driver_location_pickups/${TOUR_ID}`;
   const driverA = dbFor(DRIVER_UID);
   const driverB = dbFor(DRIVER_UID_B);
 
-  await assertSucceeds(driverA.ref(pickupPath).set(buildLocationPayload({ manual: true })));
-  await assertSucceeds(driverB.ref(pickupPath).set(buildLocationPayload({
+  await assertFails(driverA.ref(pickupPath).set(buildLocationPayload({ manual: true })));
+  await assertFails(driverB.ref(pickupPath).set(buildLocationPayload({
     uid: DRIVER_UID_B,
     appSessionId: DRIVER_SESSION_ID_B,
     manual: true,
   })));
   await assertFails(driverA.ref(pickupPath).remove());
-  await assertSucceeds(driverB.ref(pickupPath).remove());
+  await assertFails(driverB.ref(pickupPath).remove());
 });
 
 test('raw chat status writes bind exact group ownership and deny malformed or internal passenger state', async () => {

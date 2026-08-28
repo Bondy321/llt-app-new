@@ -38,6 +38,25 @@ test('all shared valid fixtures are accepted by the generated Functions adapter'
   }
 });
 
+test('driver live-source identifiers accept exact canonical bounds and reject one character over', () => {
+  const fixture = fixtures.valid.find(({ contract }) => contract === 'DriverLocationSourceRecord').value;
+  const boundary = {
+    ...fixture,
+    authUid: 'a'.repeat(128),
+    driverId: 'D'.repeat(100),
+    tourId: 'T'.repeat(100),
+  };
+  assert.equal(generated.validateContract('DriverLocationSourceRecord', boundary).valid, true);
+  for (const [property, value] of [
+    ['authUid', 'a'.repeat(129)],
+    ['driverId', 'D'.repeat(101)],
+    ['tourId', 'T'.repeat(101)],
+  ]) {
+    const result = generated.validateContract('DriverLocationSourceRecord', { ...boundary, [property]: value });
+    assert.equal(result.valid, false, property);
+  }
+});
+
 test('credential, identity, session, media, bounds, route, and version fixtures fail closed', () => {
   for (const fixture of fixtures.invalid) {
     const result = generated.validateContract(fixture.contract, fixture.value, { clientProjection: true });

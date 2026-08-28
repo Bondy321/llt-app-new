@@ -11,10 +11,10 @@ receipt reconciliation, and `cleanupNotificationDeliveryData` applies bounded re
 Domains currently cover administration, app sessions, driver assignment, driver authentication, driver Tour Packs, live-state projections, maintenance, manifests, media, notifications, passenger authentication, and safety. Infrastructure covers auth, database operations, HTTP boundaries, safe logging, notifications, distributed rate limits, and Storage/media processing.
 
 `domains/live-state` owns retryable RTDB triggers for private driver-location and
-chat-status sources. The pure projection modules live behind the legacy-library
-allowlist so session cleanup can remove exact owned leaves and reconcile the
-unchanged client read paths without moving backend decisions into a composition
-root.
+chat-status sources, the trusted assignment-owned pickup mutation, and private
+revision-checked live-state rollout administration. The pure projection modules
+live behind the legacy-library allowlist so session cleanup removes exact live
+leaves without erasing durable pickups and reconciles unchanged client read paths.
 
 Driver assignment is one server-owned mutation for both operations admins and
 mobile self-assignment. The Function owns revision checks, sorted locks,

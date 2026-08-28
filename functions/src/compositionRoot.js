@@ -8,6 +8,8 @@ const driverAuth = require('./domains/driver-auth/driverLoginFunction');
 const driverDevicePolicy = require('./domains/driver-auth/driverDevicePolicyFunctions');
 const driverTourPacks = require('./domains/driver-tour-packs/ingestionFunction');
 const liveState = require('./domains/live-state/liveStateFunctions');
+const liveStateRollout = require('./domains/live-state/liveStateRolloutFunctions');
+const driverLocationPickup = require('./domains/live-state/driverLocationPickupFunctions');
 const scheduledCleanup = require('./domains/maintenance/scheduledCleanupFunctions');
 const tourIndexes = require('./domains/maintenance/tourIndexFunctions');
 const manifests = require('./domains/manifests/manifestFunction');
@@ -49,6 +51,7 @@ module.exports = {
   getTourManifest: manifests.getTourManifest,
   getMarketingNotificationDetail: notificationDevices.getMarketingNotificationDetail,
   getDriverLoginPolicy: driverDevicePolicy.getDriverLoginPolicy,
+  getLiveStateRollout: liveStateRollout.getLiveStateRollout,
   getSafetyAlertDetail: notificationDevices.getSafetyAlertDetail,
   ingestDriverTourPacks: driverTourPacks.ingestDriverTourPacks,
   normalizeTourDateIndexes: tourIndexes.normalizeTourDateIndexes,
@@ -76,10 +79,12 @@ module.exports = {
   sendItineraryNotification: itineraryNotifications.sendItineraryNotification,
   sendSafetyAlertNotification: safetyNotifications.sendSafetyAlertNotification,
   setDriverLoginPolicy: driverDevicePolicy.setDriverLoginPolicy,
+  setLiveStateRollout: liveStateRollout.setLiveStateRollout,
   submitSafetyReport: safety.submitSafetyReport,
   createServerTestNotification: notificationAdmin.createServerTestNotification,
   previewNotificationAudience: notificationAdmin.previewNotificationAudience,
   updateNotificationDeviceRegistration: notificationDevices.updateNotificationDeviceRegistration,
+  updateDriverLocationPickup: driverLocationPickup.updateDriverLocationPickup,
   uploadGroupPhoto: groupMedia.uploadGroupPhoto,
   uploadPrivatePhoto: privateMedia.uploadPrivatePhoto,
   verifyDriverLogin: driverAuth.verifyDriverLogin,

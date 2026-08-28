@@ -60,6 +60,7 @@ export const publishDriverLocation = async ({
   appSessionId,
   authUid,
   driverId,
+  pickupMutation,
 }) => {
   const publishedAtMs = now();
   const normalizedTourId = resolveTourScope(tourId, dbInstance);
@@ -70,6 +71,31 @@ export const publishDriverLocation = async ({
     driverId,
     tourId: normalizedTourId,
   });
+  if (!isScopeCurrent()) {
+    return {
+      success: false,
+      skipped: true,
+      reason: 'DRIVER_LOCATION_SCOPE_REVOKED',
+    };
+  }
+  if (source !== 'auto') {
+    const mutatePickup = pickupMutation
+      || (await import('./driverLocationPickupApi.js')).mutateDriverLocationPickup;
+    const result = await mutatePickup({
+      operation: 'publish',
+      tourId: normalizedTourId,
+      location,
+      address,
+      sessionScope: { ...sessionScope, ...ownership },
+    });
+    const storedLocation = result.pickup || null;
+    return {
+      success: true,
+      ...(storedLocation || {}),
+      timestamp: storedLocation?.timestamp ?? publishedAtMs,
+      storedLocation,
+    };
+  }
   const payload = buildDriverLocationSourcePayload({
     ...location,
     source,
@@ -79,42 +105,24 @@ export const publishDriverLocation = async ({
     ...ownership,
     nowMs: publishedAtMs,
   });
-  if (!isScopeCurrent()) {
-    return {
-      success: false,
-      skipped: true,
-      reason: 'DRIVER_LOCATION_SCOPE_REVOKED',
-    };
-  }
-  const isLive = source === 'auto';
-  const { locationRef, sessionKey = null } = isLive
-    ? resolveLiveLocationRef({
+  const { locationRef, sessionKey = null } = resolveLiveLocationRef({
       appSessionId: ownership.appSessionId,
       liveSharingSessionId: sessionId,
       dbInstance,
-    })
-    : { locationRef: dbInstance.ref(`driver_location_pickups/${normalizedTourId}`) };
-  const disconnectHandler = isLive ? locationRef.onDisconnect?.() : null;
-  if (source === 'auto') {
-    try {
-      if (typeof disconnectHandler?.remove !== 'function') throw new Error('Realtime disconnect cleanup is unavailable');
-      // Arm the exact source leaf before publishing so a failed registration
-      // can never leave an unowned live-location record behind.
-      await disconnectHandler.remove();
-      await locationRef.set(payload);
-    } catch (error) {
-      await withdrawLiveDriverLocation({
-        tourId: normalizedTourId,
-        appSessionId: ownership.appSessionId,
-        dbInstance,
-        expectedSessionId: payload.liveSharingSessionId,
-      }).catch(() => {});
-      throw error;
-    }
-  } else {
-    // A fixed pickup point is a separate durable source and is never targeted
-    // by a live session's disconnect registration.
+    });
+  const disconnectHandler = locationRef.onDisconnect?.();
+  try {
+    if (typeof disconnectHandler?.remove !== 'function') throw new Error('Realtime disconnect cleanup is unavailable');
+    await disconnectHandler.remove();
     await locationRef.set(payload);
+  } catch (error) {
+    await withdrawLiveDriverLocation({
+      tourId: normalizedTourId,
+      appSessionId: ownership.appSessionId,
+      dbInstance,
+      expectedSessionId: payload.liveSharingSessionId,
+    }).catch(() => {});
+    throw error;
   }
 
   if (!isScopeCurrent()) {
@@ -147,11 +155,12 @@ export const publishDriverLocation = async ({
   };
 };
 
-export const withdrawDriverLocation = async ({ tourId, dbInstance }) => {
-  const normalizedTourId = resolveTourScope(tourId, dbInstance);
-  const locationRef = dbInstance.ref(`driver_location_pickups/${normalizedTourId}`);
-  await locationRef.remove();
-  return { success: true };
+export const withdrawDriverLocation = async ({ tourId, sessionScope, pickupMutation }) => {
+  const normalizedTourId = normalizeTourId(tourId);
+  if (!normalizedTourId) throw new Error('A valid tour ID is required');
+  const mutatePickup = pickupMutation
+    || (await import('./driverLocationPickupApi.js')).mutateDriverLocationPickup;
+  return mutatePickup({ operation: 'withdraw', tourId: normalizedTourId, sessionScope });
 };
 
 export const withdrawLiveDriverLocation = async ({

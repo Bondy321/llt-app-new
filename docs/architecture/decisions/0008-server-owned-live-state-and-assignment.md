@@ -23,14 +23,20 @@ and bounded audit. The web admin is no longer an independent authority writer.
 
 - Delayed source triggers cannot regress public state because projection writes
   carry monotonic revisions.
-- A temporary, additive rules bridge permits an installed legacy client to keep
-  writing only while the shared compatibility record has no server-owned
-  `projectionRevision`. The first versioned server projection is an irreversible
-  per-record cutover: subsequent legacy writes and stale `onDisconnect` actions
-  are denied. Existing read shapes remain compatible throughout the bridge.
-- The safe order is compatible Functions plus bridge rules, then the 1.0.5 native
-  binary, then uptake/telemetry observation. Removing the legacy branch is a
-  separate later backend release after the supported old-binary population is
-  below the approved threshold. No deployment is performed by this change set.
+- `live_state_rollout/v1` is the sole private rollout authority. Missing state is
+  compatibility; source activity never changes phase. Compatibility preserves the
+  legacy public shape and shared writers. An authenticated, revision-checked admin
+  mutation revision-checks phase changes. This release refuses cutover with
+  `LIVE_STATE_CUTOVER_PREREQUISITE_NOT_MET`; future cutover characterization keeps
+  `projectionRevision` and legacy-writer denial ready without making them operable.
+- The safe order is Functions, stable-OFF policy materialisation, read-only strict
+  preflight, strict rules, web admin, the 1.0.5 native binary, mixed-version
+  observation, then continued compatibility. A later reviewed release may enable
+  cutover only after legacy clients can show an explicit update-required outcome
+  or no supported legacy clients remain. No deployment is performed by this change set.
+- Manual pickups are assignment-owned server-private records. A trusted Function
+  stamps the exact assignment revision while holding assignment locks; app-session
+  lifecycle changes cannot erase them, while assignment changes, tour deletion,
+  explicit compare-safe withdrawal, and bounded expiry do.
 - Assignment or policy work above a synchronous bound must expose durable progress
   and resume; success is returned only after the authoritative mutation is complete.

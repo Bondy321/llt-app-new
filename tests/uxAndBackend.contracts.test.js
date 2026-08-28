@@ -100,7 +100,8 @@ test('Static contract: principal-owned chat reaction/typing/presence writes stay
   assert.equal(chatRules.messages.$messageId.reactions.$emoji['.write'], false);
   assert.match(chatRules.messages.$messageId.reactions.$emoji.$id['.write'], /app_sessions/);
   assert.match(chatRules.messages.$messageId.reactions.$emoji.$id['.write'], /driver_login_policy/);
-  assert.match(expectedPrincipalWrite, /!data\.child\('projectionRevision'\)\.exists\(\)/);
+  assert.match(expectedPrincipalWrite, /live_state_rollout\/v1/);
+  assert.match(expectedPrincipalWrite, /phase'\)\.val\(\) === 'compatibility'/);
   assert.equal(chatRules.typing.$id['.write'], expectedPrincipalWrite);
   assert.equal(chatRules.presence.$id['.write'], expectedPrincipalWrite);
   assert.equal(internalChatRules.lastRead.$principalId['.write'], expectedInternalDriverLastReadWrite);
@@ -185,9 +186,10 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   assert.equal(rules.rules.users.$userId.driverPrincipalId['.validate'], '!newData.exists() || newData.isString()');
   assert.equal(rules.rules.users.$userId.driverAssignedTourId['.validate'], '!newData.exists() || newData.isString() || newData.val() === null');
   assert.equal(rules.rules.users.$userId.principalType['.validate'], "!newData.exists() || newData.val() === 'passenger' || newData.val() === 'driver'");
-  ['driverId', 'driverPrincipalId', 'driverAssignedTourId', 'principalType', 'lastUpdated'].forEach((field) => {
+  ['driverId', 'driverPrincipalId', 'principalType', 'lastUpdated'].forEach((field) => {
     assert.match(rules.rules.users.$userId[field]['.write'], /admin_users/);
   });
+  assert.equal(rules.rules.users.$userId.driverAssignedTourId['.write'], false);
   assert.match(
     rules.rules.globalSafetyAlerts.$eventId['.write'],
     /auth\.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'/,
@@ -212,7 +214,10 @@ test('Static contract: tour metadata writes stay least-privilege', () => {
   assert.equal(tourRules.driver_itinerary['.read'], undefined);
   assert.match(rules.rules.bookings.$bookingRef['.read'], /assigned_drivers/);
   assert.doesNotMatch(rules.rules.bookings.$bookingRef['.read'], /booking_access_grants|participants/);
-  assert.equal(tourRules['.write'], false);
+  assert.match(tourRules['.write'], /admin_users/);
+  for (const assignmentField of ['driverId', 'driverName', 'driverPhone', 'driverAssignmentRevision', 'driverLocation']) {
+    assert.match(tourRules['.write'], new RegExp(`newData\\.child\\('${assignmentField}'\\)\\.val\\(\\) === data\\.child\\('${assignmentField}'\\)\\.val\\(\\)`));
+  }
   assert.match(tourRules.participants.$userId['.write'], /admin_users/);
   assert.doesNotMatch(tourRules.participants.$userId['.write'], /tour_access_grants|auth\.uid === \$userId/);
   assert.notEqual(tourRules.participants.$userId['.write'], "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')");
@@ -315,8 +320,8 @@ test('Static contract: driver identity and assignment authority are server-owned
   assert.match(authUidWriteRule, /data\.val\(\) === auth\.uid && !newData\.exists\(\)/);
   assert.doesNotMatch(authUidWriteRule, /!data\.child\('authUid'\)\.exists\(\)/);
   assert.match(lastActiveWriteRule, /root\.child\('drivers\/' \+ \$driverId \+ '\/authUid'\)\.val\(\) === auth\.uid/);
-  assert.doesNotMatch(assignedDriverWriteRule, /drivers\//);
-  assert.doesNotMatch(assignedDriverCodeWriteRule, /drivers\//);
+  assert.equal(assignedDriverWriteRule, false);
+  assert.equal(assignedDriverCodeWriteRule, false);
   assert.match(functionsSource, /const assignDriverToTour = onRequestWithResult/);
   assert.match(functionsSource, /assignDriverToTour: assignment\.assignDriverToTour/);
   assert.match(functionsSource, /claimDriverAuthUid/);

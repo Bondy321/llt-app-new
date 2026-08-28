@@ -410,7 +410,7 @@ test('allows driver typing and presence through verified raw app-session leaves'
   );
 });
 
-test('staged legacy chat status works only before a server projection revision is present', async () => {
+test('legacy chat status remains compatible until the explicit rollout cutover', async () => {
   const groupTypingPath = `chats/${TOUR_ID}/typing/${PASSENGER_AUTH_UID}`;
   const groupPresencePath = `chats/${TOUR_ID}/presence/${PASSENGER_AUTH_UID}`;
   const internalTypingPath = `internal_chats/${INTERNAL_TOUR_ID}/typing/${DRIVER_PRINCIPAL_ID}`;
@@ -444,6 +444,36 @@ test('staged legacy chat status works only before a server projection revision i
     [`${groupPresencePath}/projectionRevision`]: 1,
     [`${internalTypingPath}/projectionRevision`]: 1,
     [`${internalPresencePath}/projectionRevision`]: 1,
+  }));
+
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(groupTypingPath).set({
+    name: 'Passenger One',
+    isDriver: false,
+    timestamp: Date.now(),
+  }));
+  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(groupPresencePath).set({
+    name: 'Passenger One',
+    isDriver: false,
+    online: false,
+    lastSeen: Date.now(),
+  }));
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(internalTypingPath).set({
+    name: 'Driver Bondy',
+    isDriver: true,
+    timestamp: Date.now(),
+  }));
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(internalPresencePath).set({
+    name: 'Driver Bondy',
+    isDriver: true,
+    online: false,
+    lastSeen: Date.now(),
+  }));
+
+  await testEnv.withSecurityRulesDisabled((context) => context.database(dbUrl).ref('live_state_rollout/v1').set({
+    schemaVersion: 1,
+    phase: 'cutover',
+    revision: 1,
+    updatedAtMs: Date.now(),
   }));
 
   await assertFails(dbFor(PASSENGER_AUTH_UID).ref(groupTypingPath).remove());

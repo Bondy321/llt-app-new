@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const rules = require(path.resolve(__dirname, '../../database.rules.json')).rules;
@@ -15,7 +16,6 @@ const EXPECTED_DRIVER_BRANCH_WRITERS = [
   'chat_presence_sessions/$scope/$appSessionId/.write',
   'chat_typing_sessions/$scope/$appSessionId/.write',
   'content_reports/$reportId/.write',
-  'driver_location_pickups/$tourId/.write',
   'driver_location_sessions/$sourceKey/.write',
   'driver_tour_pack_actions/$departureKey/$driverId/hotelCompletion/$hotelId/state/.write',
   'driver_tour_pack_actions/$departureKey/$driverId/hotelCompletion/$hotelId/updatedAtMs/.write',
@@ -66,7 +66,7 @@ const collectReviewedDriverBranchWriters = () => EXPECTED_DRIVER_BRANCH_WRITERS.
 
 test('explicit inventory resolves every reviewed driver-branch write authority', () => {
   const found = collectReviewedDriverBranchWriters();
-  assert.equal(found.length, 46, 'driver branch inventory changed without an authority review');
+  assert.equal(found.length, 45, 'driver branch inventory changed without an authority review');
   for (const { path: rulePath, expression } of found) {
     assert.equal(typeof expression, 'string', `${rulePath} is missing from the explicit driver branch inventory`);
   }
@@ -100,7 +100,7 @@ test('every driver branch directly binds complete active-session authority', () 
 
 test('every driver session write requires strict policy authority and no active assignment transition', () => {
   const found = collectReviewedDriverBranchWriters();
-  assert.equal(found.length, 46, 'driver write inventory changed without a strict-policy review');
+  assert.equal(found.length, 45, 'driver write inventory changed without a strict-policy review');
 
   const requiredFragments = [
     "driver_login_policy/v1/schemaVersion').val() === 1",
@@ -134,9 +134,10 @@ test('every driver session write requires strict policy authority and no active 
   }
 });
 
-test('legacy projection writes stop permanently at projectionRevision while raw cleanup queries stay indexed', () => {
+test('legacy projection writes are gated only by explicit rollout while raw cleanup queries stay indexed', () => {
   assert.equal(rules.tours['.write'], false);
-  assert.equal(rules.tours.$tourId['.write'], false);
+  assert.equal(typeof rules.tours.$tourId['.write'], 'string');
+  assert.ok(rules.tours.$tourId['.write'].includes("newData.child('driverLocation').val() === data.child('driverLocation').val()"));
   assert.equal(rules.chats['.write'], false);
   assert.equal(rules.internal_chats['.write'], false);
   assert.equal(rules.driver_location_projection_state['.write'], false);
@@ -150,12 +151,19 @@ test('legacy projection writes stop permanently at projectionRevision while raw 
     rules.internal_chats.$tourId.presence.$id,
   ]) {
     assert.equal(typeof projectionRule['.write'], 'string');
-    assert.ok(projectionRule['.write'].includes("!data.child('projectionRevision').exists()"));
+    assert.ok(!projectionRule['.write'].includes("!data.child('projectionRevision').exists()"));
+    assert.ok(projectionRule['.write'].includes("!root.child('live_state_rollout/v1').exists()"));
+    assert.ok(projectionRule['.write'].includes("live_state_rollout/v1/phase').val() === 'compatibility'"));
     assert.ok(projectionRule['.validate'].includes("!newData.child('projectionRevision').exists()"));
   }
 
   assert.deepEqual(rules.driver_location_sessions['.indexOn'], ['cleanupAtMs', 'tourId', 'appSessionId']);
-  assert.deepEqual(rules.driver_location_pickups['.indexOn'], ['appSessionId']);
+  assert.equal(rules.driver_location_pickups['.write'], false);
+  assert.equal(rules.driver_location_pickups.$tourId['.write'], false);
+  assert.deepEqual(rules.driver_location_pickups['.indexOn'], ['expiresAtMs']);
+  assert.ok(rules.driver_location_pickups.$tourId['.validate'].includes("newData.child('assignmentRevision').isNumber()"));
+  assert.ok(rules.driver_location_pickups.$tourId['.validate'].includes("!newData.child('authUid').exists()"));
+  assert.ok(rules.driver_location_pickups.$tourId['.validate'].includes("!newData.child('appSessionId').exists()"));
   assert.deepEqual(rules.chat_presence_sessions.$scope['.indexOn'], ['tourActorKey', 'expiresAtMs']);
   assert.deepEqual(rules.chat_typing_sessions.$scope['.indexOn'], ['tourActorKey', 'expiresAtMs']);
 
@@ -188,4 +196,85 @@ test('driver login and assignment coordination roots are explicit server-only co
   assert.equal(rules.app_session_role_claim_jobs['.read'], false);
   assert.equal(rules.app_session_role_claim_jobs['.write'], false);
   assert.deepEqual(rules.app_session_role_claim_jobs.v1['.indexOn'], ['createdAtMs', 'expiresAtMs']);
+});
+
+test('canonical assignment fields have no granting client ancestor or leaf', () => {
+  assert.equal(rules.drivers['.write'], false);
+  assert.equal(rules.tour_manifests['.write'], false);
+  assert.equal(rules.users['.write'], false);
+
+  const driverParentWrite = rules.drivers.$driverId['.write'];
+  assert.equal(typeof driverParentWrite, 'string');
+  for (const field of ['currentTourId', 'currentTourCode', 'assignments', 'assignmentRevision']) {
+    assert.ok(
+      driverParentWrite.includes(`newData.child('${field}').val() === data.child('${field}').val()`),
+      `safe driver profile writes must preserve ${field}`,
+    );
+  }
+
+  const userParentWrite = rules.users.$userId['.write'];
+  assert.equal(typeof userParentWrite, 'string');
+  assert.ok(userParentWrite.includes("newData.child('driverAssignedTourId').val() === data.child('driverAssignedTourId').val()"));
+
+  const tourParentWrite = rules.tours.$tourId['.write'];
+  for (const field of ['driverId', 'driverName', 'driverPhone', 'driverAssignmentRevision']) {
+    assert.ok(
+      tourParentWrite.includes(`newData.child('${field}').val() === data.child('${field}').val()`),
+      `safe tour metadata writes must preserve ${field}`,
+    );
+  }
+
+  for (const rule of [
+    rules.tours.$tourId.driverName,
+    rules.tours.$tourId.driverPhone,
+    rules.tours.$tourId.driverId,
+    rules.tour_manifests.$tourId.assigned_drivers.$driverId,
+    rules.tour_manifests.$tourId.assigned_driver_codes.$driverId,
+    rules.users.$userId.driverAssignedTourId,
+  ]) {
+    assert.equal(rule['.write'], false);
+  }
+});
+
+test('normal web clients contain no direct canonical assignment update map', () => {
+  const root = path.resolve(__dirname, '../..');
+  const assignmentService = fs.readFileSync(
+    path.join(root, 'web-admin/src/features/tours/data/tourDriverAssignmentService.js'),
+    'utf8',
+  );
+  const driverPanel = fs.readFileSync(
+    path.join(root, 'web-admin/src/features/drivers/components/driverManagementPanels.jsx'),
+    'utf8',
+  );
+  const publicTourService = fs.readFileSync(path.join(root, 'web-admin/src/services/tourService.js'), 'utf8');
+
+  for (const source of [assignmentService, driverPanel]) {
+    assert.doesNotMatch(source, /`tours\/\$\{[^}]+\}\/driver(?:Id|Name|Phone|AssignmentRevision)`/);
+    assert.doesNotMatch(source, /`drivers\/\$\{[^}]+\}\/(?:currentTourId|currentTourCode|assignments|assignmentRevision)/);
+    assert.doesNotMatch(source, /`tour_manifests\/\$\{[^}]+\}\/assigned_driver/);
+    assert.doesNotMatch(source, /`users\/\$\{[^}]+\}\/driverAssignedTourId`/);
+  }
+  assert.doesNotMatch(publicTourService, /buildDriverAssignmentUpdates/);
+});
+
+test('live-state rollout and terminal warnings are explicit server-owned contracts', () => {
+  assert.equal(rules.live_state_rollout['.read'], false);
+  assert.equal(rules.live_state_rollout['.write'], false);
+  assert.equal(rules.operations_terminal_warnings['.write'], false);
+  assert.equal(typeof rules.operations_terminal_warnings['.read'], 'string');
+  assert.deepEqual(
+    rules.operations_terminal_warnings.v1['.indexOn'],
+    ['status', 'jobType', 'retainUntilMs', 'createdAtMs'],
+  );
+
+  for (const projectionRule of [
+    rules.tours.$tourId.driverLocation,
+    rules.chats.$tourId.typing.$id,
+    rules.chats.$tourId.presence.$id,
+    rules.internal_chats.$tourId.typing.$id,
+    rules.internal_chats.$tourId.presence.$id,
+  ]) {
+    assert.ok(projectionRule['.write'].includes("!root.child('live_state_rollout/v1').exists()"));
+    assert.ok(projectionRule['.write'].includes("live_state_rollout/v1/phase').val() === 'compatibility'"));
+  }
 });
