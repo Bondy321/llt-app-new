@@ -8,6 +8,11 @@ const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { isValidPushToken, userWantsTourCategoryBroadcast } = require('./notificationPolicy');
 const { getNotificationDeliveryPolicy } = require('./notificationDeliveryPolicy');
+const {
+  driverBindingAllowedByPolicy,
+  driverSessionMatchesPolicyGeneration,
+  readDriverLoginPolicy,
+} = require('../driver-auth/public');
 
 const { isActiveSessionRecord } = loadLegacyLibrary('appSession');
 const PAGE_SIZE = 100;
@@ -163,9 +168,19 @@ const resolvePassengerAuthority = async (db, authUid, tourId, session, nowMs) =>
 const resolveDriverAuthority = async (db, authUid, profile, tourId, session) => {
   const driverId = String(session.driverId || profile?.driverId || '').trim();
   if (!isValidFirebaseKey(driverId)) return { allowed: false, reason: 'wrong_tour' };
-  const driverSnapshot = await db.ref(`drivers/${driverId}`).once('value');
+  const [driverSnapshot, policyContext] = await Promise.all([
+    db.ref(`drivers/${driverId}`).once('value'),
+    readDriverLoginPolicy({ db }),
+  ]);
   const driver = driverSnapshot.val() || {};
-  if (driver.authUid !== authUid || driver.currentTourId !== tourId) {
+  if (!driverSessionMatchesPolicyGeneration(session, policyContext.policy)
+    || !driverBindingAllowedByPolicy({
+      policy: policyContext.policy, authUid, claimedAuthUid: driver.authUid,
+    })
+    || profile?.driverId !== driverId
+    || profile?.driverPrincipalId !== session.principalId
+    || profile?.principalType !== 'driver'
+    || driver.currentTourId !== tourId) {
     return { allowed: false, reason: 'wrong_tour' };
   }
   const assignmentSnapshot = await db.ref(`tour_manifests/${tourId}/assigned_drivers/${driverId}`).once('value');

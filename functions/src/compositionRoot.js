@@ -4,6 +4,7 @@ const administration = require('./domains/administration/administrationFunctions
 const sessions = require('./domains/app-sessions/sessionFunctions');
 const assignment = require('./domains/driver-assignment/driverAssignmentFunction');
 const driverAuth = require('./domains/driver-auth/driverLoginFunction');
+const driverDevicePolicy = require('./domains/driver-auth/driverDevicePolicyFunctions');
 const driverTourPacks = require('./domains/driver-tour-packs/ingestionFunction');
 const scheduledCleanup = require('./domains/maintenance/scheduledCleanupFunctions');
 const tourIndexes = require('./domains/maintenance/tourIndexFunctions');
@@ -32,6 +33,7 @@ module.exports = {
   cleanupExpiredDriverLocations: scheduledCleanup.cleanupExpiredDriverLocations,
   cleanupExpiredDriverTourPacks: scheduledCleanup.cleanupExpiredDriverTourPacks,
   cleanupExpiredLoginRateLimits: scheduledCleanup.cleanupExpiredLoginRateLimits,
+  cleanupDriverLoginPolicySessions: driverDevicePolicy.cleanupDriverLoginPolicySessions,
   cleanupNotificationReadState: notificationReads.cleanupNotificationReadState,
   cleanupNotificationDeliveryData: notificationReceipts.cleanupNotificationDeliveryData,
   createGroupPhotoChatMessage: groupMedia.createGroupPhotoChatMessage,
@@ -43,6 +45,7 @@ module.exports = {
   generatePhotoVariants: photoVariants.generatePhotoVariants,
   getTourManifest: manifests.getTourManifest,
   getMarketingNotificationDetail: notificationDevices.getMarketingNotificationDetail,
+  getDriverLoginPolicy: driverDevicePolicy.getDriverLoginPolicy,
   getSafetyAlertDetail: notificationDevices.getSafetyAlertDetail,
   ingestDriverTourPacks: driverTourPacks.ingestDriverTourPacks,
   normalizeTourDateIndexes: tourIndexes.normalizeTourDateIndexes,
@@ -64,6 +67,7 @@ module.exports = {
   sendInternalChatNotification: chatNotifications.sendInternalChatNotification,
   sendItineraryNotification: itineraryNotifications.sendItineraryNotification,
   sendSafetyAlertNotification: safetyNotifications.sendSafetyAlertNotification,
+  setDriverLoginPolicy: driverDevicePolicy.setDriverLoginPolicy,
   submitSafetyReport: safety.submitSafetyReport,
   createServerTestNotification: notificationAdmin.createServerTestNotification,
   previewNotificationAudience: notificationAdmin.previewNotificationAudience,

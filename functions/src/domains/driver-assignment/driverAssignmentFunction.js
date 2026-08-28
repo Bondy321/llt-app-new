@@ -74,7 +74,7 @@ const acquireDriverAssignmentLocks = async ({ db, lockPaths, owner, acquiredLock
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
-const loadAssignableDriverTour = async ({ db, driverId, authUid, tourId }) => {
+const loadAssignableDriverTour = async ({ db, driverId, authUid, expectedSessionId, tourId }) => {
   const [driverSnapshot, tourSnapshot, manifestSnapshot] = await Promise.all([
     db.ref(`drivers/${driverId}`).once('value'),
     db.ref(`tours/${tourId}`).once('value'),
@@ -82,7 +82,14 @@ const loadAssignableDriverTour = async ({ db, driverId, authUid, tourId }) => {
   ]);
   if (!driverSnapshot.exists()) return { valid: false, status: 404, reason: 'DRIVER_NOT_FOUND' };
   const driverData = driverSnapshot.val() || {};
-  if (resolveTrimmedString(driverData.authUid) !== authUid) {
+  const currentAccess = await verifyActiveAppSession({
+    db,
+    authUid,
+    expectedRole: 'driver',
+    expectedSessionId,
+    allowUnassignedDriver: true,
+  });
+  if (!currentAccess.allowed || currentAccess.session.driverId !== driverId) {
     return { valid: false, status: 403, reason: 'NOT_AUTHORIZED' };
   }
   if (!tourSnapshot.exists()) return { valid: false, status: 404, reason: 'TOUR_NOT_FOUND' };
@@ -156,7 +163,7 @@ const assignDriverToTour = onRequestWithResult(
       }
 
       const context = await loadAssignableDriverTour({
-        db, driverId, authUid: requestAuth.uid, tourId,
+        db, driverId, authUid: requestAuth.uid, expectedSessionId, tourId,
       });
       if (!context.valid) {
         return res.status(context.status).json({ success: false, reason: context.reason });

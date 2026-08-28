@@ -112,6 +112,7 @@ const issueDriverAppSession = async ({
   authUid,
   driverId,
   tourId,
+  driverLoginPolicyGeneration = 0,
   profileUpdates,
   nowMs = Date.now(),
 }) => {
@@ -129,7 +130,9 @@ const issueDriverAppSession = async ({
       db.ref(`users/${authUid}`).once('value'),
     ]);
     const existingSession = existingSnapshot.val();
-    const session = buildDriverSessionRecord({ authUid, driverId, tourId, nowMs });
+    const session = buildDriverSessionRecord({
+      authUid, driverId, tourId, driverLoginPolicyGeneration, nowMs,
+    });
     const updates = existingSession?.sessionId
       ? buildAppSessionCleanupUpdates({ session: existingSession, userProfile: userSnapshot.val() || {}, nowMs })
       : {};

@@ -34,6 +34,21 @@ test('focused generated boundary validators fail closed without rejecting valid 
     status: 'active',
     lastAuthenticatedAtMs: 1000,
   }).valid, true);
+  assert.equal(validateRemoteAppSession({
+    schemaVersion: 1,
+    sessionId: `sess_v1_${'c'.repeat(32)}`,
+    authUid: 'driver-firebase-uid',
+    principalId: 'driver:D-ONE',
+    principalType: 'driver',
+    tourId: 'TOUR_1',
+    driverId: 'D-ONE',
+    driverLoginPolicyGeneration: 2,
+    status: 'active',
+    issuedAtMs: 1000,
+    lastAuthenticatedAtMs: 1000,
+    expiresAtMs: 2000,
+    sessionRevision: 1,
+  }).valid, true);
   assert.equal(validateClientAppSession({ ...clientSession, email: 'secret@example.test' }).valid, false);
 
   const passengerSuccess = {

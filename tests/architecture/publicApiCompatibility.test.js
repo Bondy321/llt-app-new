@@ -24,6 +24,7 @@ const readJavaScriptTree = (directory) => fs.readdirSync(directory, { withFileTy
 const EXPECTED_FUNCTION_EXPORTS = [
   '__testables',
   'assignDriverToTour',
+  'cleanupDriverLoginPolicySessions',
   'cleanupExpiredAppSessions',
   'cleanupExpiredDriverLocations',
   'cleanupExpiredDriverTourPacks',
@@ -38,6 +39,7 @@ const EXPECTED_FUNCTION_EXPORTS = [
   'deleteTourData',
   'endAppSession',
   'generatePhotoVariants',
+  'getDriverLoginPolicy',
   'getMarketingNotificationDetail',
   'getSafetyAlertDetail',
   'getTourManifest',
@@ -62,6 +64,7 @@ const EXPECTED_FUNCTION_EXPORTS = [
   'sendInternalChatNotification',
   'sendItineraryNotification',
   'sendSafetyAlertNotification',
+  'setDriverLoginPolicy',
   'submitSafetyReport',
   'updateNotificationDeviceRegistration',
   'uploadGroupPhoto',
@@ -125,6 +128,7 @@ const EVENT_PATHS = {
   normalizeTourEndDateIndex: 'tours/{tourId}/endDate',
 };
 const SCHEDULES = {
+  cleanupDriverLoginPolicySessions: 'every 15 minutes',
   cleanupExpiredAppSessions: 'every 15 minutes',
   cleanupExpiredDriverLocations: 'every 15 minutes',
   cleanupExpiredDriverTourPacks: 'every 6 hours',
@@ -200,6 +204,7 @@ test('Function trigger type, path, schedule, region, and resource settings remai
   assert.deepEqual(
     Object.fromEntries(Object.entries(endpoints).filter(([, value]) => value.memory !== null).map(([name, value]) => [name, value.memory])),
     {
+      cleanupDriverLoginPolicySessions: 256,
       cleanupExpiredAppSessions: 256,
       cleanupExpiredDriverLocations: 256,
       cleanupExpiredDriverTourPacks: 256,

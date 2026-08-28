@@ -47,14 +47,16 @@ test('chat sender delivery resolution recognizes passengers and coherently assig
     manifestData: { assigned_drivers: { BONDY: true } },
     messageData: { senderId: 'driver:BONDY', senderStableId: 'driver:BONDY', isDriver: true },
     loadProfile: async () => ({ authUid: 'driver-auth', currentTourId: 'TOUR_1' }),
+    loadSessionAuthUids: async () => ['driver-auth-a', 'driver-auth-b'],
   });
-  assert.deepEqual(driverIds, ['driver-auth']);
+  assert.deepEqual(driverIds, ['driver-auth-a', 'driver-auth-b']);
 
   const staleDriverIds = await __testables.resolveChatSenderDeliveryIds({
     tourId: 'TOUR_1',
     manifestData: { assigned_drivers: { BONDY: true } },
     messageData: { senderId: 'driver:BONDY', senderStableId: 'driver:BONDY', isDriver: true },
     loadProfile: async () => ({ authUid: 'driver-auth', currentTourId: 'OTHER_TOUR' }),
+    loadSessionAuthUids: async () => ['driver-auth'],
   });
   assert.deepEqual(staleDriverIds, []);
 });

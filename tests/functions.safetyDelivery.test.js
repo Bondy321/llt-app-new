@@ -103,12 +103,24 @@ test('malformed safety category or severity is deliberately skipped before enque
 });
 
 test('safety reporter access distinguishes attached passengers and coherent assigned drivers', async () => {
-  const makeDb = ({ participant = false, user = {}, manifest = {}, driver = {} }) => ({
+  const makeDb = ({
+    participant = false,
+    user = {},
+    manifest = {},
+    driver = {},
+    session = null,
+    policy = null,
+  }) => ({
     ref: (path) => ({
       once: async () => {
         let value = null;
         if (path.includes('/participants/')) value = participant ? true : null;
+        else if (path.startsWith('app_sessions/')) value = session;
+        else if (path === 'driver_login_policy/v1') value = policy;
         else if (path.startsWith('users/')) value = user;
+        else if (path.startsWith('tour_manifests/') && path.includes('/assigned_drivers/')) {
+          value = manifest?.assigned_drivers?.[path.split('/').at(-1)] ?? null;
+        }
         else if (path.startsWith('tour_manifests/')) value = manifest;
         else if (path.startsWith('drivers/')) value = driver;
         return { exists: () => value !== null, val: () => value };
@@ -126,9 +138,36 @@ test('safety reporter access distinguishes attached passengers and coherent assi
 
   const assignedDriver = await __testables.resolveSafetyReporterAccess({
     db: makeDb({
-      user: { driverId: 'BONDY' },
+      user: {
+        driverId: 'BONDY',
+        driverPrincipalId: 'driver:BONDY',
+        principalType: 'driver',
+        driverAssignedTourId: 'TOUR_1',
+      },
       manifest: { assigned_drivers: { BONDY: true } },
       driver: { authUid: 'driver-auth', currentTourId: 'TOUR_1' },
+      session: {
+        schemaVersion: 1,
+        sessionId: `sess_v1_${'a'.repeat(32)}`,
+        authUid: 'driver-auth',
+        principalId: 'driver:BONDY',
+        principalType: 'driver',
+        tourId: 'TOUR_1',
+        driverId: 'BONDY',
+        status: 'active',
+        issuedAtMs: 1,
+        lastAuthenticatedAtMs: 1,
+        expiresAtMs: 4_000_000_000_000,
+        sessionRevision: 1,
+        driverLoginPolicyGeneration: 0,
+      },
+      policy: {
+        schemaVersion: 1,
+        enforceSingleDevice: false,
+        generation: 0,
+        revision: 1,
+        updatedAtMs: 1,
+      },
     }),
     authUid: 'driver-auth',
     tourId: 'TOUR_1',

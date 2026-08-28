@@ -8,6 +8,7 @@ const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKe
 const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { cleanPassengerString } = require('../../infrastructure/validation/passengerNormalization');
 const { normalizeManifestPassengerRows } = loadLegacyLibrary('manifestPassengers');
+const { verifyActiveAppSession } = loadLegacyLibrary('appSessionAccess');
 
 const OPERATIONS_ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const MANIFEST_STATUS = Object.freeze({
@@ -139,12 +140,10 @@ const verifyTourManifestAccess = async ({ authUid, tourId, db = admin.database()
     return { allowed: false, reason: 'NOT_TOUR_MEMBER' };
   }
 
-  const [driverSnapshot, assignedDriverSnapshot] = await Promise.all([
-    db.ref(`drivers/${driverId}/authUid`).once('value'),
-    db.ref(`tour_manifests/${tourId}/assigned_drivers/${driverId}`).once('value'),
-  ]);
-
-  if (driverSnapshot.val() === authUid && assignedDriverSnapshot.val() === true) {
+  const access = await verifyActiveAppSession({
+    db, authUid, expectedTourId: tourId, expectedRole: 'driver',
+  });
+  if (access.allowed && access.driverId === driverId) {
     return { allowed: true, role: 'assigned_driver', driverId };
   }
 

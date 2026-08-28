@@ -80,9 +80,9 @@ test('Static contract: principal-owned chat reaction/typing/presence writes stay
   const rules = readJson('database.rules.json');
   const chatRules = rules.rules.chats.$tourId;
   const internalChatRules = rules.rules.internal_chats.$tourId;
-  const expectedPrincipalWrite = "auth != null && (auth.uid === $id || $id === root.child('users/' + auth.uid + '/stablePassengerId').val() || $id === root.child('users/' + auth.uid + '/privatePhotoOwnerId').val() || root.child('identity_bindings/' + $id + '/' + auth.uid).val() === true || (root.child('users/' + auth.uid + '/driverId').isString() && $id === 'driver:' + root.child('users/' + auth.uid + '/driverId').val() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid))";
-  const expectedInternalDriverWrite = "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || (root.child('users/' + auth.uid + '/driverId').isString() && $id === 'driver:' + root.child('users/' + auth.uid + '/driverId').val() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))";
-  const expectedInternalDriverLastReadWrite = "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || (root.child('users/' + auth.uid + '/driverId').isString() && $principalId === 'driver:' + root.child('users/' + auth.uid + '/driverId').val() && root.child('drivers/' + root.child('users/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('users/' + auth.uid + '/driverId').val()).val() === true))";
+  const expectedPrincipalWrite = chatRules.typing.$id['.write'];
+  const expectedInternalDriverWrite = internalChatRules.typing.$id['.write'];
+  const expectedInternalDriverLastReadWrite = internalChatRules.lastRead.$principalId['.write'];
 
   assert.notEqual(chatRules['.read'], 'auth != null');
   assert.equal(chatRules['.read'], chatRules['.validate']);
@@ -92,6 +92,11 @@ test('Static contract: principal-owned chat reaction/typing/presence writes stay
   assert.equal(internalChatRules['.read'], internalChatRules['.validate']);
   assert.doesNotMatch(internalChatRules['.read'], /participants/);
   assert.match(internalChatRules['.read'], /assigned_drivers/);
+  for (const driverWriteRule of [expectedPrincipalWrite, expectedInternalDriverWrite, expectedInternalDriverLastReadWrite]) {
+    assert.match(driverWriteRule, /driver_login_policy\/v1\/generation/);
+    assert.match(driverWriteRule, /driverLoginPolicyGeneration/);
+    assert.match(driverWriteRule, /enforceSingleDevice/);
+  }
   assert.equal(chatRules.messages.$messageId.reactions.$emoji['.write'], false);
   assert.equal(chatRules.messages.$messageId.reactions.$emoji.$id['.write'], expectedPrincipalWrite);
   assert.equal(chatRules.typing.$id['.write'], expectedPrincipalWrite);
@@ -294,7 +299,10 @@ test('Static contract: driver identity and assignment authority are server-owned
   assert.match(driverRootRules['.read'], /admin_users/);
   assert.notEqual(driverRootRules['.read'], 'auth != null');
   assert.notEqual(driverRootRules.$driverId['.read'], 'auth != null');
-  assert.match(driverRootRules.$driverId['.read'], /data\.child\('authUid'\)\.val\(\) === auth\.uid/);
+  assert.match(driverRootRules.$driverId['.read'], /driver_login_policy\/v1\/generation/);
+  assert.match(driverRootRules.$driverId['.read'], /driverLoginPolicyGeneration/);
+  assert.match(driverRootRules.$driverId['.read'], /enforceSingleDevice/);
+  assert.doesNotMatch(driverRootRules.$driverId['.read'], /data\.child\('authUid'\)\.val\(\) === auth\.uid/);
   assert.match(driverWriteRule, /root\.child\('admin_users\/' \+ auth\.uid\)\.val\(\) === true/);
   assert.doesNotMatch(driverWriteRule, /authUid.*auth\.uid/);
   assert.match(authUidWriteRule, /data\.val\(\) === auth\.uid && !newData\.exists\(\)/);

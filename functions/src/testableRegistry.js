@@ -36,6 +36,8 @@ const passengerProjection = require('./domains/passenger-auth/passengerProjectio
 const passengerLoginWorkflow = require('./domains/passenger-auth/passengerLoginWorkflow');
 const passengerLoginSecurity = require('./domains/passenger-auth/passengerLoginSecurity');
 const driverLoginSecurity = require('./domains/driver-auth/driverLoginSecurity');
+const driverDevicePolicy = require('./domains/driver-auth/driverDevicePolicy');
+const driverDevicePolicyFunctions = require('./domains/driver-auth/driverDevicePolicyFunctions');
 const manualPassengerBooking = require('./domains/administration/manualPassengerBooking');
 const { verifyOperationsAdminAccess } = require('./domains/administration/public');
 const tourDeletion = require('./domains/administration/tourDeletion');
@@ -104,6 +106,7 @@ module.exports = {
   collectAssignedDriverIds: notificationRecipients.collectAssignedDriverIds,
   isDriverProfileAssignedToTour: notificationRecipients.isDriverProfileAssignedToTour,
   resolveAssignedDriverRecipientIds: notificationDelivery.resolveAssignedDriverRecipientIds,
+  loadDriverSessionAuthUids: notificationDelivery.loadDriverSessionAuthUids,
   getPushTokenIneligibilityReason: notificationPolicy.getPushTokenIneligibilityReason,
   shouldRemoveInvalidToken: notificationPolicy.shouldRemoveInvalidToken,
   cleanupInvalidTokens,
@@ -154,6 +157,14 @@ module.exports = {
   collectDriverAssignmentConflicts: driverAssignment.collectDriverAssignmentConflicts,
   buildDriverSelfAssignmentUpdates: driverAssignment.buildDriverSelfAssignmentUpdates,
   checkDriverLoginRateLimits: driverLoginSecurity.checkDriverLoginRateLimits,
+  normalizeDriverLoginPolicy: driverDevicePolicy.normalizeDriverLoginPolicy,
+  driverBindingAllowedByPolicy: driverDevicePolicy.driverBindingAllowedByPolicy,
+  driverSessionMatchesPolicyGeneration: driverDevicePolicy.driverSessionMatchesPolicyGeneration,
+  ensureDriverLoginPolicy: driverDevicePolicy.ensureDriverLoginPolicy,
+  buildDriverLoginPolicyTransitionUpdates: driverDevicePolicyFunctions.buildPolicyTransitionUpdates,
+  cleanupExpiredDriverPolicyRecords: driverDevicePolicyFunctions.cleanupExpiredDriverPolicyRecords,
+  countDriverLoginPolicyCleanupJobs: driverDevicePolicyFunctions.countPolicyCleanupJobs,
+  processDriverLoginPolicyCleanupJobs: driverDevicePolicyFunctions.processDriverLoginPolicyCleanupJobs,
   validateCategoryBroadcastData: broadcastFunctions.validateCategoryBroadcastData,
   userWantsTourCategoryBroadcast: notificationPolicy.userWantsTourCategoryBroadcast,
   resolveBroadcastDeliveryStatus: broadcastFunctions.resolveBroadcastDeliveryStatus,

@@ -304,10 +304,29 @@ test('safety detail authorizes sessionless operations and current assigned drive
     principalId: 'driver:D1',
     principalType: 'driver',
     driverId: 'D1',
+    driverLoginPolicyGeneration: 0,
   };
   const db = memoryDb({
-    users: { [adminUid]: {}, [session.authUid]: {}, [driverUid]: { driverId: 'D1' } },
+    users: {
+      [adminUid]: {},
+      [session.authUid]: {},
+      [driverUid]: {
+        driverId: 'D1',
+        driverPrincipalId: 'driver:D1',
+        principalType: 'driver',
+        driverAssignedTourId: 'TOUR_1',
+      },
+    },
     app_sessions: { [session.authUid]: session, [driverUid]: driverSession },
+    driver_login_policy: {
+      v1: {
+        schemaVersion: 1,
+        enforceSingleDevice: false,
+        generation: 0,
+        revision: 1,
+        updatedAtMs: nowMs - 1_000,
+      },
+    },
     drivers: { D1: { authUid: driverUid, currentTourId: 'TOUR_1' } },
     tour_manifests: { TOUR_1: { assigned_drivers: { D1: true } } },
     tours: { TOUR_1: { safetyAlerts: { event_1: { status: 'pending', message: 'Summary' } } } },

@@ -50,7 +50,7 @@
       "schemaVersion": 1,
       "kind": "object",
       "requiredProperties": ["schemaVersion", "sessionId", "authUid", "principalId", "principalType", "tourId", "driverId", "status", "issuedAtMs", "lastAuthenticatedAtMs", "expiresAtMs", "sessionRevision"],
-      "optionalProperties": [],
+      "optionalProperties": ["driverLoginPolicyGeneration"],
       "properties": {
         "schemaVersion": { "type": "integer", "const": 1 },
         "sessionId": { "type": "string", "pattern": "^sess_v1_[a-f0-9]{32}$", "maxLength": 40 },
@@ -63,12 +63,13 @@
         "issuedAtMs": { "type": "integer", "minimum": 1 },
         "lastAuthenticatedAtMs": { "type": "integer", "minimum": 1 },
         "expiresAtMs": { "type": "integer", "minimum": 1 },
-        "sessionRevision": { "type": "integer", "minimum": 1 }
+        "sessionRevision": { "type": "integer", "minimum": 1 },
+        "driverLoginPolicyGeneration": { "type": "integer", "minimum": 0 }
       },
       "enumValues": { "principalType": ["passenger", "driver"], "status": ["active"] },
       "idPatterns": { "sessionId": "^sess_v1_[a-f0-9]{32}$", "passengerPrincipalId": "^pax_v2_[a-f0-9]{32}$" },
       "maximumLengths": { "authUid": 160, "principalId": 160, "tourId": 160, "driverId": 160 },
-      "numericBounds": { "sessionRevision": { "minimum": 1 }, "maximumLifetimeMs": 86400000 },
+      "numericBounds": { "sessionRevision": { "minimum": 1 }, "driverLoginPolicyGeneration": { "minimum": 0 }, "maximumLifetimeMs": 86400000 },
       "nullability": { "tourId": true, "driverId": true },
       "rejectUnknownProperties": true,
       "safeClientProjection": ["schemaVersion", "sessionId", "principalId", "principalType", "tourId", "driverId", "issuedAtMs", "expiresAtMs", "sessionRevision"],

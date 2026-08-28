@@ -42,10 +42,18 @@ const passengerAuthorityUpdates = ({ uid, tourId, principalId = passengerIdFor(u
   };
 };
 
-const driverAuthorityUpdates = ({ uid, driverId, tourId, nowMs = Date.now() }) => {
+const driverAuthorityUpdates = ({ uid, driverId, tourId, driverLoginPolicyGeneration = 0, nowMs = Date.now() }) => {
   const principalId = `driver:${driverId}`;
   const session = baseSession({ uid, principalType: 'driver', principalId, driverId, tourId, nowMs });
+  session.driverLoginPolicyGeneration = driverLoginPolicyGeneration;
   return {
+    'driver_login_policy/v1': {
+      schemaVersion: 1,
+      enforceSingleDevice: false,
+      generation: 0,
+      revision: 1,
+      updatedAtMs: nowMs,
+    },
     [`app_sessions/${uid}`]: session,
     [`users/${uid}/driverId`]: driverId,
     [`users/${uid}/driverPrincipalId`]: principalId,

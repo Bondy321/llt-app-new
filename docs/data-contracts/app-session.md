@@ -19,6 +19,7 @@ Only Admin SDK code may create, rotate, update, revoke, or delete this record:
   "principalType": "passenger or driver",
   "tourId": "normalised-tour-id or null",
   "driverId": "D-... or null",
+  "driverLoginPolicyGeneration": "driver sessions only; non-negative integer",
   "status": "active",
   "issuedAtMs": 123,
   "lastAuthenticatedAtMs": 123,
@@ -35,6 +36,7 @@ Invariants:
 - Driver `principalId` is exactly `driver:{driverId}`.
 - Passenger and assigned-driver sessions normally expire after 12 hours. A valid unassigned-driver session expires after one hour. Every TTL is bounded between five minutes and 24 hours.
 - Clients may read only their own record and cannot write any field.
+- `driverLoginPolicyGeneration` is server-only and binds driver sessions to the current device-policy generation. Legacy generation-less driver sessions are generation zero only before the first policy record is written.
 - `app_session_locks` and `app_session_events` are server-private.
 
 ## Passenger membership
@@ -62,10 +64,11 @@ Driver tour access requires all of the following to agree:
 - active, non-expired `app_sessions/{authUid}` driver session;
 - session `driverId`, `principalId`, and `tourId`;
 - `users/{authUid}/driverId` and current assigned tour;
-- `drivers/{driverId}/authUid`;
+- current `driver_login_policy/v1` generation;
+- `drivers/{driverId}/authUid` only while single-device enforcement is enabled;
 - `tour_manifests/{tourId}/assigned_drivers/{driverId}`.
 
-An operational assignment remains after logout but cannot grant mobile access. Assignment changes compare the expected session, increment `sessionRevision`, update the session tour, and remove only old location/presence state owned by that session.
+An operational assignment remains after logout but cannot grant mobile access. With enforcement off, several verified handsets may hold independent sessions for the same driver. Assignment changes compare the expected session, increment `sessionRevision`, preserve the policy generation, update the session tour, and remove only old location/presence state owned by that session. See `driver-login-policy.md` for transition and cleanup behavior.
 
 ## Session state transitions
 

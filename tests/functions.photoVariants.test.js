@@ -865,10 +865,13 @@ test('resolveAssignedDriverRecipientIds maps assigned driver records to auth uid
       },
     },
     loadProfile: async (driverId) => profiles[driverId] || null,
+    loadSessionAuthUids: async (driverId) => (
+      driverId === 'D-BONDY' ? ['driver-auth-1', 'driver-auth-2'] : []
+    ),
     context: { tourId: '5112D_8', notificationType: 'itinerary' },
   });
 
-  assert.deepEqual(result, ['driver-auth-1']);
+  assert.deepEqual(result, ['driver-auth-1', 'driver-auth-2']);
 });
 
 test('parseSourcePhotoPath resolves group and private source paths only', () => {

@@ -8,6 +8,21 @@ const {
 
 const denied = (reason) => ({ allowed: false, reason });
 
+const normalizeDriverLoginPolicy = (value) => {
+  if (value === null || value === undefined) {
+    return { valid: true, enforceSingleDevice: false, generation: 0 };
+  }
+  const valid = value && typeof value === 'object' && !Array.isArray(value)
+    && value.schemaVersion === 1
+    && typeof value.enforceSingleDevice === 'boolean'
+    && Number.isSafeInteger(value.generation) && value.generation >= 0
+    && Number.isSafeInteger(value.revision) && value.revision >= 1
+    && Number.isSafeInteger(value.updatedAtMs) && value.updatedAtMs > 0;
+  return valid
+    ? { valid: true, enforceSingleDevice: value.enforceSingleDevice, generation: value.generation }
+    : { valid: false, enforceSingleDevice: true, generation: -1 };
+};
+
 const verifyActiveAppSession = async ({
   db,
   authUid,
@@ -55,16 +70,24 @@ const verifyActiveAppSession = async ({
       return denied('PASSENGER_PROFILE_MISMATCH');
     }
   } else {
-    const [userSnapshot, driverSnapshot] = await Promise.all([
+    const [userSnapshot, driverSnapshot, policySnapshot] = await Promise.all([
       db.ref(`users/${authUid}`).once('value'),
       db.ref(`drivers/${session.driverId}`).once('value'),
+      db.ref('driver_login_policy/v1').once('value'),
     ]);
     const user = userSnapshot.val() || {};
     const driver = driverSnapshot.val() || {};
+    const policy = normalizeDriverLoginPolicy(policySnapshot.val());
+    const sessionGeneration = Number.isSafeInteger(session.driverLoginPolicyGeneration)
+      ? session.driverLoginPolicyGeneration
+      : 0;
+    if (!policy.valid || sessionGeneration !== policy.generation) {
+      return denied('DRIVER_POLICY_MISMATCH');
+    }
     if (user.driverId !== session.driverId
       || user.driverPrincipalId !== session.principalId
       || user.principalType !== 'driver'
-      || driver.authUid !== authUid) {
+      || (policy.enforceSingleDevice && driver.authUid !== authUid)) {
       return denied('DRIVER_PROFILE_MISMATCH');
     }
     if (session.tourId) {

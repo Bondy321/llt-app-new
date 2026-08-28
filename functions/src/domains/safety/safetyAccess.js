@@ -5,6 +5,8 @@
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { isDriverProfileAssignedToTour } = require('../notifications/public');
 const { resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
+const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
+const { verifyActiveAppSession } = loadLegacyLibrary('appSessionAccess');
 
 /** @type {(...args: any[]) => Promise<any>} */
 const resolveSafetyReporterAccess = async ({ db, authUid, tourId, requestedRole }) => {
@@ -17,12 +19,14 @@ const resolveSafetyReporterAccess = async ({ db, authUid, tourId, requestedRole 
   const manifestData = manifestSnapshot.val() || {};
   const driverId = resolveTrimmedString(userData.driverId);
   let isAssignedDriver = false;
-  /** @type {any} */
-  let driverData = {};
   if (driverId && isValidFirebaseKey(driverId) && manifestData?.assigned_drivers?.[driverId] === true) {
     const driverSnapshot = await db.ref(`drivers/${driverId}`).once('value');
-    driverData = driverSnapshot.val() || {};
-    isAssignedDriver = resolveTrimmedString(driverData.authUid) === authUid
+    const driverData = driverSnapshot.val() || {};
+    const sessionAccess = await verifyActiveAppSession({
+      db, authUid, expectedTourId: tourId, expectedRole: 'driver',
+    });
+    isAssignedDriver = sessionAccess.allowed
+      && sessionAccess.driverId === driverId
       && isDriverProfileAssignedToTour(driverData, tourId);
   }
 
