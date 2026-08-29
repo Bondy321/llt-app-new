@@ -101,8 +101,54 @@ test('request persists its receipt before networking and sends no deletion scope
   assert.deepEqual(body, { expectedSessionId: SESSION_ID, deletionReceipt: RECEIPT });
   assert.ok(events.findIndex(([kind]) => kind === 'set') < events.findIndex(([kind]) => kind === 'fetch'));
   const pending = await api.readPending();
+  assert.equal(pending.schemaVersion, 2);
+  assert.equal(pending.originalAuthUid, 'auth-old');
   assert.equal(pending.state, 'accepted');
   assert.equal(Object.prototype.hasOwnProperty.call(pending, 'expectedSessionId'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'originalAuthUid'), false);
+});
+
+test('request fails closed before persistence or networking without one valid original Auth UID', async () => {
+  for (const uid of [null, '', 'contains/slash', 'x'.repeat(129)]) {
+    const storage = makeStorage();
+    let fetchCalls = 0;
+    const api = createAccountDeletionService({
+      persistence: storage,
+      generateReceipt: () => RECEIPT,
+      getFirebase: () => ({
+        auth: { currentUser: uid == null ? null : { uid, getIdToken: async () => 'token' } },
+        authHelpers: {},
+        getCurrentAppCheckToken: async () => null,
+      }),
+      fetchFn: async () => { fetchCalls += 1; return response(500, {}); },
+    });
+    const result = await api.requestDeletion({ expectedSessionId: SESSION_ID });
+    assert.equal(result.reason, 'AUTH_UNAVAILABLE', String(uid));
+    assert.equal(storage.values.has(ACCOUNT_DELETION_PENDING_KEY), false, String(uid));
+    assert.equal(fetchCalls, 0, String(uid));
+  }
+});
+
+test('request refuses an Auth identity change after durable recovery state is written', async () => {
+  const storage = makeStorage();
+  let currentUser = { uid: 'auth-old', getIdToken: async () => 'token-old' };
+  let fetchCalls = 0;
+  const api = createAccountDeletionService({
+    persistence: {
+      ...storage,
+      async setItemAsync(key, value) {
+        await storage.setItemAsync(key, value);
+        currentUser = { uid: 'auth-replacement', getIdToken: async () => 'token-replacement' };
+      },
+    },
+    generateReceipt: () => RECEIPT,
+    getFirebase: () => firebaseBoundary({ currentUser }),
+    fetchFn: async () => { fetchCalls += 1; return response(500, {}); },
+  });
+  const result = await api.requestDeletion({ expectedSessionId: SESSION_ID });
+  assert.equal(result.reason, 'AUTH_UNAVAILABLE');
+  assert.equal(fetchCalls, 0);
+  assert.equal((await api.readPending()).originalAuthUid, 'auth-old');
 });
 
 test('transport failure and service recreation reuse the same persisted receipt', async () => {
@@ -160,8 +206,9 @@ test('concurrent request taps share one reservation request', async () => {
 
 test('status replaces a deleted original Auth identity and remains receipt-only', async () => {
   const pending = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     deletionReceipt: RECEIPT,
+    originalAuthUid: 'auth-old',
     state: 'accepted',
     phase: 'auth_delete',
     retryable: true,
@@ -218,8 +265,9 @@ test('receipt is cleared only by the explicit post-cleanup completion step', asy
   const storage = makeStorage();
   const api = createAccountDeletionService({ persistence: storage, getFirebase: () => firebaseBoundary() });
   const record = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     deletionReceipt: RECEIPT,
+    originalAuthUid: 'auth-old',
     state: 'completed',
     phase: 'completed',
     retryable: false,
@@ -233,15 +281,19 @@ test('receipt is cleared only by the explicit post-cleanup completion step', asy
   };
   await api.writePending(record);
   await api.markCompletionHandled();
-  assert.equal((await api.readPending()).completionHandled, true);
+  assert.deepEqual(
+    { completionHandled: (await api.readPending()).completionHandled, originalAuthUid: (await api.readPending()).originalAuthUid },
+    { completionHandled: true, originalAuthUid: 'auth-old' },
+  );
   await api.clearPending();
   assert.equal(await api.readPending(), null);
 });
 
 test('strict boundaries reject unknown properties and malformed server progress', () => {
   const valid = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     deletionReceipt: RECEIPT,
+    originalAuthUid: 'auth-old',
     state: 'requesting',
     expectedSessionId: SESSION_ID,
     createdAtMs: 100,
@@ -254,6 +306,11 @@ test('strict boundaries reject unknown properties and malformed server progress'
   assert.ok(validatePendingAccountDeletion(valid));
   assert.equal(validatePendingAccountDeletion({ ...valid, bookingRef: 'B123' }), null);
   assert.equal(validatePendingAccountDeletion({ ...valid, deletionReceipt: 'weak' }), null);
+  assert.equal(validatePendingAccountDeletion({ ...valid, originalAuthUid: 'contains/slash' }), null);
+  assert.equal(validatePendingAccountDeletion({ ...valid, originalAuthUid: 'x'.repeat(129) }), null);
+  const { originalAuthUid: _missingOriginalAuthUid, ...missingOriginalAuthUid } = valid;
+  assert.equal(validatePendingAccountDeletion(missingOriginalAuthUid), null);
+  assert.equal(validatePendingAccountDeletion({ ...valid, schemaVersion: 1 }), null);
   assert.equal(validateAccountDeletionResponse({
     success: true, status: 'pending', phase: 'chat_scrub', retryable: true, authUid: 'secret',
   }), null);

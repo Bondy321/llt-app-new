@@ -417,6 +417,7 @@ export interface PendingAccountDeletionRecord {
   schemaVersion: number;
   state: "requesting" | "accepted" | "pending" | "waiting_for_connection" | "requires_attention" | "completed";
   deletionReceipt: string;
+  originalAuthUid: string;
   createdAtMs: number;
   updatedAtMs: number;
   localCleanupComplete: boolean;

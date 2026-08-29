@@ -20,9 +20,15 @@ export const DATA_REQUEST_EMAIL =
 export const ACCOUNT_DELETION_PENDING_KEY = 'pending_v1';
 
 const SESSION_ID_PATTERN = /^sess_v1_[a-f0-9]{32}$/u;
+const ORIGINAL_AUTH_UID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
 const isPlainObject = (value) => Boolean(value)
   && typeof value === 'object'
   && !Array.isArray(value);
+
+export const normalizeOriginalAuthUid = (value) => {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return ORIGINAL_AUTH_UID_PATTERN.test(normalized) ? normalized : null;
+};
 
 export const validatePendingAccountDeletion = (input) => {
   if (!isPlainObject(input) || !validatePendingAccountDeletionRecord(input).valid) return null;
@@ -125,7 +131,11 @@ export const createAccountDeletionService = ({
 
   const clearPending = () => persistence.deleteItemAsync(ACCOUNT_DELETION_PENDING_KEY);
 
-  const post = async (functionName, body, { freshAuthOnFailure = false, freshAuthAttempted = false } = {}) => {
+  const post = async (functionName, body, {
+    expectedAuthUid = null,
+    freshAuthOnFailure = false,
+    freshAuthAttempted = false,
+  } = {}) => {
     const firebase = getFirebase();
     const endpoint = buildEndpoint(functionName);
     if (!endpoint) return genericFailure('ENDPOINT_UNAVAILABLE');
@@ -137,6 +147,9 @@ export const createAccountDeletionService = ({
         currentUser = await firebase.authHelpers?.replaceWithFreshAnonymous?.();
       }
       if (!currentUser?.getIdToken) return genericFailure('AUTH_UNAVAILABLE');
+      if (expectedAuthUid && currentUser.uid !== expectedAuthUid) {
+        return genericFailure('AUTH_UNAVAILABLE');
+      }
       token = await currentUser.getIdToken();
     } catch {
       if (!freshAuthOnFailure) return genericFailure('AUTH_UNAVAILABLE');
@@ -210,10 +223,13 @@ export const createAccountDeletionService = ({
         if (!SESSION_ID_PATTERN.test(expectedSessionId || '')) {
           return genericFailure('SESSION_REQUIRED');
         }
+        const originalAuthUid = normalizeOriginalAuthUid(getFirebase()?.auth?.currentUser?.uid);
+        if (!originalAuthUid) return genericFailure('AUTH_UNAVAILABLE');
         const createdAtMs = now();
         pending = await writePending({
-          schemaVersion: 1,
+          schemaVersion: 2,
           deletionReceipt: generateReceipt(),
+          originalAuthUid,
           state: 'requesting',
           expectedSessionId,
           createdAtMs,
@@ -232,7 +248,7 @@ export const createAccountDeletionService = ({
       const response = await post('requestAccountDeletion', {
         expectedSessionId: pending.expectedSessionId,
         deletionReceipt: pending.deletionReceipt,
-      });
+      }, { expectedAuthUid: pending.originalAuthUid });
       if (!response.success) {
         const reason = String(response.reason || 'ACCOUNT_DELETION_STATUS_UNAVAILABLE').slice(0, 80);
         pending = await writePending({ ...pending, lastErrorReason: reason, updatedAtMs: now() });
@@ -353,6 +369,7 @@ export const deleteCurrentAccount = ({ appSession } = {}) => accountDeletionServ
 
 export const __accountDeletionTestables = {
   validateAccountDeletionResponse,
+  normalizeOriginalAuthUid,
   validatePendingAccountDeletion,
 };
 

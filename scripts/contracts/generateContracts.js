@@ -201,7 +201,8 @@ const validateNotificationPayload = (value) => combineResults(
 `;
   const accountDeletionHelpers = `
 ${combinationHelpers}
-const ACCOUNT_DELETION_PRIVATE_FIELDS = new Set(['deletionId', 'authUid', 'bookingRef', 'email', 'phone', 'phoneNumber', 'driverId', 'tourId', 'storagePath', 'messageId']);
+const ACCOUNT_DELETION_REMOTE_PRIVATE_FIELDS = new Set(['deletionId', 'authUid', 'originalAuthUid', 'bookingRef', 'email', 'phone', 'phoneNumber', 'driverId', 'tourId', 'storagePath', 'messageId']);
+const ACCOUNT_DELETION_PENDING_PRIVATE_FIELDS = new Set(['deletionId', 'authUid', 'bookingRef', 'email', 'phone', 'phoneNumber', 'driverId', 'tourId', 'storagePath', 'messageId']);
 const validateOptionalSafeSummary = (value) => isRecord(value) && Object.prototype.hasOwnProperty.call(value, 'summary')
   ? validateAccountDeletionSafeSummary(value.summary)
   : { valid: true, errors: [] };
@@ -217,29 +218,29 @@ const validateAccountDeletionReceipt = (value) => validateContract('AccountDelet
 const validateAccountDeletionSafePhase = (value) => validateContract('AccountDeletionSafePhase', value, { clientProjection: true });
 const validateAccountDeletionSafeSummary = (value) => combineResults(
   validateContract('AccountDeletionSafeSummary', value, { clientProjection: true }),
-  rejectKeysDeep(value, ACCOUNT_DELETION_PRIVATE_FIELDS),
+  rejectKeysDeep(value, ACCOUNT_DELETION_REMOTE_PRIVATE_FIELDS),
 );
 const validateAccountDeletionRequest = (value) => combineResults(
   validateContract('AccountDeletionRequest', value, { clientProjection: true }),
-  rejectKeysDeep(value, ACCOUNT_DELETION_PRIVATE_FIELDS),
+  rejectKeysDeep(value, ACCOUNT_DELETION_REMOTE_PRIVATE_FIELDS),
 );
 const validateAccountDeletionAcceptedResponse = (value) => combineResults(
   validateContract('AccountDeletionAcceptedResponse', value, { clientProjection: true }),
-  rejectKeysDeep(value, ACCOUNT_DELETION_PRIVATE_FIELDS),
+  rejectKeysDeep(value, ACCOUNT_DELETION_REMOTE_PRIVATE_FIELDS),
 );
 const validateAccountDeletionStatusRequest = (value) => combineResults(
   validateContract('AccountDeletionStatusRequest', value, { clientProjection: true }),
-  rejectKeysDeep(value, ACCOUNT_DELETION_PRIVATE_FIELDS),
+  rejectKeysDeep(value, ACCOUNT_DELETION_REMOTE_PRIVATE_FIELDS),
 );
 const validateAccountDeletionStatusResponse = (value) => combineResults(
   validateContract('AccountDeletionStatusResponse', value, { clientProjection: true }),
   validateOptionalSafeSummary(value),
-  rejectKeysDeep(value, ACCOUNT_DELETION_PRIVATE_FIELDS),
+  rejectKeysDeep(value, ACCOUNT_DELETION_REMOTE_PRIVATE_FIELDS),
 );
 const validatePendingAccountDeletionRecord = (value) => combineResults(
   validateContract('PendingAccountDeletionRecord', value, { clientProjection: true }),
   validateOptionalSafeSummary(value),
-  rejectKeysDeep(value, ACCOUNT_DELETION_PRIVATE_FIELDS),
+  rejectKeysDeep(value, ACCOUNT_DELETION_PENDING_PRIVATE_FIELDS),
 );
 const validateAccountDeletionRolloutRecord = (value) => validateContract('AccountDeletionRolloutRecord', value);
 const projectAccountDeletionRequest = (value) => projectContract('AccountDeletionRequest', value);

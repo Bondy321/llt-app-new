@@ -3311,12 +3311,13 @@ const CONTRACTS = Object.freeze({
       ]
     },
     "PendingAccountDeletionRecord": {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "kind": "object",
       "requiredProperties": [
         "schemaVersion",
         "state",
         "deletionReceipt",
+        "originalAuthUid",
         "createdAtMs",
         "updatedAtMs",
         "localCleanupComplete",
@@ -3336,7 +3337,7 @@ const CONTRACTS = Object.freeze({
       "properties": {
         "schemaVersion": {
           "type": "integer",
-          "const": 1
+          "const": 2
         },
         "state": {
           "type": "string",
@@ -3354,6 +3355,12 @@ const CONTRACTS = Object.freeze({
           "pattern": "^delrec_v1_[a-f0-9]{64}$",
           "minLength": 74,
           "maxLength": 74
+        },
+        "originalAuthUid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$",
+          "minLength": 1,
+          "maxLength": 128
         },
         "expectedSessionId": {
           "type": "string",
@@ -3441,10 +3448,12 @@ const CONTRACTS = Object.freeze({
       },
       "idPatterns": {
         "deletionReceipt": "^delrec_v1_[a-f0-9]{64}$",
+        "originalAuthUid": "^[A-Za-z0-9_-]{1,128}$",
         "expectedSessionId": "^sess_v1_[a-f0-9]{32}$"
       },
       "maximumLengths": {
         "deletionReceipt": 74,
+        "originalAuthUid": 128,
         "expectedSessionId": 40,
         "lastErrorReason": 80
       },
@@ -3476,6 +3485,7 @@ const CONTRACTS = Object.freeze({
         "schemaVersion",
         "state",
         "deletionReceipt",
+        "originalAuthUid",
         "expectedSessionId",
         "phase",
         "retryable",
@@ -3502,7 +3512,8 @@ const CONTRACTS = Object.freeze({
         "messageId"
       ],
       "constraints": [
-        "expectedSessionIdOnlyWhileRequesting"
+        "expectedSessionIdOnlyWhileRequesting",
+        "originalAuthUidLocalOnlyNeverTransmitted"
       ]
     },
     "AccountDeletionRolloutRecord": {

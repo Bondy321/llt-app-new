@@ -412,10 +412,13 @@ idempotent success. Completion is not published until Auth deletion is confirmed
 ## Mobile recovery contract
 
 Mobile stores a versioned pending record in the dedicated `LLT_ACCOUNT_DELETION` secure persistence
-namespace. Before acceptance it includes the receipt and expected session ID. After acceptance it
-removes the session ID and retains only the receipt; safe `state`/phase, timestamps and counts;
-bounded request/status attempts and last safe reason; and the `localCleanupComplete` and
-`completionHandled` markers. Local states are `requesting`, `accepted`, `pending`,
+namespace. Schema v2 includes the receipt, the original Firebase Auth UID used only to select local
+cleanup state, and—before acceptance—the expected session ID. The original UID is captured from the
+current authenticated user and durably persisted before the first request. It is never sent to an
+account-deletion Function, logged, displayed, or copied into app-session persistence. After acceptance
+the record removes the session ID and retains the receipt and original local-cleanup UID; safe
+`state`/phase, timestamps and counts; bounded request/status attempts and last safe reason; and the
+`localCleanupComplete` and `completionHandled` markers. Local states are `requesting`, `accepted`, `pending`,
 `waiting_for_connection`, `requires_attention`, and `completed`.
 
 After acceptance, initial local cleanup removes account/session identity, offline queues/assets, driver
@@ -429,7 +432,8 @@ status screen. It polls with bounded backoff, retries on foreground/connectivity
 a manual retry only for retryable `requires_attention`. Non-retryable attention state remains blocking
 and directs the user to support. Normal login remains unavailable while the receipt is pending.
 After confirmed `completed`, the lifecycle first ensures scoped local cleanup has succeeded, persists
-`completionHandled`, and only then clears the receipt and allows normal login to resume.
+`completionHandled`, and only then clears the complete secure recovery record—including the original
+UID and receipt—and allows normal login to resume.
 
 ## Logging, warnings and retention
 

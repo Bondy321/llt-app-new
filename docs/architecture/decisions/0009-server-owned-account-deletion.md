@@ -95,12 +95,14 @@ or hashes rather than raw exception messages or customer data. Structured loggin
 and path fields and redacts exception message/stack text; expired terminal warnings are removed by
 bounded retention cleanup.
 
-The mobile app persists the receipt in its dedicated secure account-deletion namespace before making
-the request. Once the server accepts the reservation it purges local account/session/offline state,
-replaces Firebase Auth with a fresh anonymous installation, and polls status by receipt. Startup and
-login remain blocked by the local pending receipt until completion; app termination and lost responses
-therefore resume rather than restart deletion. The receipt is the only account-deletion state excluded
-from the initial local purge and is removed only after confirmed completion and final local cleanup.
+The mobile app persists the receipt and validated original Auth UID in its dedicated secure
+account-deletion namespace before making the request. The UID is local-only cleanup scope: it is not
+part of the public app-session projection and is never transmitted to the deletion endpoints. Once the
+server accepts the reservation the app purges local account/session/offline state using that captured
+UID, replaces Firebase Auth with a fresh anonymous installation, and polls status by receipt. Startup
+and login remain blocked by the local pending record until completion; app termination and lost
+responses therefore resume rather than restart deletion. The secure recovery record is excluded from
+the initial local purge and is removed only after confirmed completion and final local cleanup.
 
 `account_deletion_rollout/v1` controls removal of legacy client deletion permissions. A missing record
 means `compatibility`. A valid compatibility record preserves the temporary legacy rule paths while

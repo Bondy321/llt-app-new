@@ -121,9 +121,10 @@ test('status and summary contracts expose only bounded aggregate progress', () =
 
 test('pending local state is exact and excludes server identifiers and passenger data', () => {
   const pending = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     state: 'requesting',
     deletionReceipt: RECEIPT,
+    originalAuthUid: 'original_auth_uid-1',
     expectedSessionId: SESSION_ID,
     phase: 'reserved',
     retryable: true,
@@ -147,6 +148,11 @@ test('pending local state is exact and excludes server identifiers and passenger
   assert.equal(validate('PendingAccountDeletionRecord', { ...pending, phase: 'retrying' }).valid, false);
   assert.equal(validate('PendingAccountDeletionRecord', { ...pending, completedAtMs: 0 }).valid, false);
   assert.equal(validate('PendingAccountDeletionRecord', { ...pending, statusAttempts: 1001 }).valid, false);
+  assert.equal(validate('PendingAccountDeletionRecord', { ...pending, originalAuthUid: 'contains/slash' }).valid, false);
+  assert.equal(validate('PendingAccountDeletionRecord', { ...pending, originalAuthUid: 'x'.repeat(129) }).valid, false);
+  const { originalAuthUid: _originalAuthUid, ...withoutOriginalAuthUid } = pending;
+  assert.equal(validate('PendingAccountDeletionRecord', withoutOriginalAuthUid).valid, false);
+  assert.equal(validate('PendingAccountDeletionRecord', { ...pending, schemaVersion: 1 }).valid, false);
   assert.equal(focused.validatePendingAccountDeletionRecord({ ...pending, state: 'pending' }).valid, false);
   const { expectedSessionId: _expectedSessionId, ...afterRequest } = pending;
   assert.equal(focused.validatePendingAccountDeletionRecord({ ...afterRequest, state: 'pending' }).valid, true);

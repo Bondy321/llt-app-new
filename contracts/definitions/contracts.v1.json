@@ -826,14 +826,15 @@
       "forbiddenClientProjection": ["deletionId", "deletionReceipt", "authUid", "bookingRef", "email", "phone", "driverId", "tourId", "storagePath", "messageId"]
     },
     "PendingAccountDeletionRecord": {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "kind": "object",
-      "requiredProperties": ["schemaVersion", "state", "deletionReceipt", "createdAtMs", "updatedAtMs", "localCleanupComplete", "completionHandled"],
+      "requiredProperties": ["schemaVersion", "state", "deletionReceipt", "originalAuthUid", "createdAtMs", "updatedAtMs", "localCleanupComplete", "completionHandled"],
       "optionalProperties": ["expectedSessionId", "phase", "retryable", "completedAtMs", "summary", "lastCheckedAtMs", "requestAttempts", "statusAttempts", "lastErrorReason"],
       "properties": {
-        "schemaVersion": { "type": "integer", "const": 1 },
+        "schemaVersion": { "type": "integer", "const": 2 },
         "state": { "type": "string", "enum": ["requesting", "accepted", "pending", "waiting_for_connection", "requires_attention", "completed"] },
         "deletionReceipt": { "type": "string", "pattern": "^delrec_v1_[a-f0-9]{64}$", "minLength": 74, "maxLength": 74 },
+        "originalAuthUid": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$", "minLength": 1, "maxLength": 128 },
         "expectedSessionId": { "type": "string", "pattern": "^sess_v1_[a-f0-9]{32}$", "maxLength": 40 },
         "phase": { "type": "string", "enum": ["reserved", "live_state_cleanup", "authority_release", "group_media", "private_media", "chat_scrub", "account_records", "auth_delete", "completed"] },
         "retryable": { "type": "boolean" },
@@ -849,14 +850,14 @@
         "lastErrorReason": { "type": "string", "minLength": 1, "maxLength": 80 }
       },
       "enumValues": { "state": ["requesting", "accepted", "pending", "waiting_for_connection", "requires_attention", "completed"], "phase": ["reserved", "live_state_cleanup", "authority_release", "group_media", "private_media", "chat_scrub", "account_records", "auth_delete", "completed"] },
-      "idPatterns": { "deletionReceipt": "^delrec_v1_[a-f0-9]{64}$", "expectedSessionId": "^sess_v1_[a-f0-9]{32}$" },
-      "maximumLengths": { "deletionReceipt": 74, "expectedSessionId": 40, "lastErrorReason": 80 },
+      "idPatterns": { "deletionReceipt": "^delrec_v1_[a-f0-9]{64}$", "originalAuthUid": "^[A-Za-z0-9_-]{1,128}$", "expectedSessionId": "^sess_v1_[a-f0-9]{32}$" },
+      "maximumLengths": { "deletionReceipt": 74, "originalAuthUid": 128, "expectedSessionId": 40, "lastErrorReason": 80 },
       "numericBounds": { "createdAtMs": { "minimum": 1 }, "updatedAtMs": { "minimum": 1 }, "completedAtMs": { "minimum": 1 }, "lastCheckedAtMs": { "minimum": 1 }, "requestAttempts": { "minimum": 0, "maximum": 1000 }, "statusAttempts": { "minimum": 0, "maximum": 1000 } },
       "nullability": {},
       "rejectUnknownProperties": true,
-      "safeClientProjection": ["schemaVersion", "state", "deletionReceipt", "expectedSessionId", "phase", "retryable", "completedAtMs", "summary", "createdAtMs", "updatedAtMs", "lastCheckedAtMs", "requestAttempts", "statusAttempts", "localCleanupComplete", "completionHandled", "lastErrorReason"],
+      "safeClientProjection": ["schemaVersion", "state", "deletionReceipt", "originalAuthUid", "expectedSessionId", "phase", "retryable", "completedAtMs", "summary", "createdAtMs", "updatedAtMs", "lastCheckedAtMs", "requestAttempts", "statusAttempts", "localCleanupComplete", "completionHandled", "lastErrorReason"],
       "forbiddenClientProjection": ["deletionId", "authUid", "bookingRef", "email", "phone", "driverId", "tourId", "storagePath", "messageId"],
-      "constraints": ["expectedSessionIdOnlyWhileRequesting"]
+      "constraints": ["expectedSessionIdOnlyWhileRequesting", "originalAuthUidLocalOnlyNeverTransmitted"]
     },
     "AccountDeletionRolloutRecord": {
       "schemaVersion": 1,

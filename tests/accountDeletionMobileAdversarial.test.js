@@ -77,10 +77,12 @@ Module._load = originalLoad;
 
 const SESSION_ID = `sess_v1_${'a'.repeat(32)}`;
 const RECEIPT = `delrec_v1_${'b'.repeat(64)}`;
+const ORIGINAL_AUTH_UID = 'original-auth-uid';
 
 const pendingRecord = (overrides = {}) => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   deletionReceipt: RECEIPT,
+  originalAuthUid: ORIGINAL_AUTH_UID,
   state: 'accepted',
   phase: 'reserved',
   retryable: true,
@@ -150,7 +152,10 @@ test('the durable receipt survives the actual local purge while offline and noti
   assert.equal(calls.some(([kind]) => kind === 'notification-cache'), true);
   assert.equal(calls.some(([kind]) => kind === 'photo-cache'), true);
   assert.equal(removedKeys.some((key) => key.includes(ACCOUNT_DELETION_PENDING_KEY)), false);
-  assert.equal((await deletionService.readPending()).deletionReceipt, RECEIPT);
+  assert.deepEqual(
+    { deletionReceipt: (await deletionService.readPending()).deletionReceipt, originalAuthUid: (await deletionService.readPending()).originalAuthUid },
+    { deletionReceipt: RECEIPT, originalAuthUid: ORIGINAL_AUTH_UID },
+  );
 });
 
 test('pending deletion blocks both offline restoration and normal login before either action runs', async () => {
@@ -247,6 +252,7 @@ test('completion finalizer clears only after cleanup, is single-flight, and is i
   assert.equal(blocked.success, false);
   assert.equal(blocked.reason, 'LOCAL_CLEANUP_REQUIRED');
   assert.equal((await service.readPending()).deletionReceipt, RECEIPT);
+  assert.equal((await service.readPending()).originalAuthUid, ORIGINAL_AUTH_UID);
 
   await service.markLocalCleanupComplete();
   const [left, right] = await Promise.all([

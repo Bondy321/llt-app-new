@@ -1,3 +1,5 @@
+import { normalizeOriginalAuthUid } from '../../../services/accountDeletionService';
+
 const parseSaved = (entry) => {
   try { return entry?.[1] ? JSON.parse(entry[1]) : null; } catch { return null; }
 };
@@ -33,9 +35,7 @@ export const runPurgePendingAccountDeletion = async ({
     SESSION_KEYS.BOOKING_DATA,
   ]);
   const cachedSession = await appSessionService.readSession({ allowExpired: true });
-  const originalAuthUid = typeof cachedSession?.authUid === 'string' && cachedSession.authUid.trim()
-    ? cachedSession.authUid.trim()
-    : null;
+  const originalAuthUid = normalizeOriginalAuthUid(pending.originalAuthUid);
   if (!originalAuthUid) {
     return {
       success: false,
