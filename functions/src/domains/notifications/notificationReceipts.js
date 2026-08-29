@@ -63,6 +63,7 @@ const refreshNotificationJobStatus = async (db, jobId, nowMs) => {
   let updated = null;
   await jobRef.transaction((job) => {
     if (!job) return job;
+    if (job.status === 'privacy_deleted') return job;
     const status = resolveJobStatus(job);
     updated = { ...job, status, updatedAtMs: nowMs, ...(isTerminalNotificationJobStatus(status) ? { completedAtMs: Number(job.completedAtMs || nowMs) } : {}) };
     return updated;

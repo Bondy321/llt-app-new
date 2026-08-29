@@ -1,6 +1,7 @@
 'use strict';
 
 const administration = require('./domains/administration/administrationFunctions');
+const accountDeletion = require('./domains/account-deletion/accountDeletionFunctions');
 const sessions = require('./domains/app-sessions/sessionFunctions');
 const roleTransitionClaims = require('./domains/app-sessions/roleTransitionClaimFunctions');
 const assignment = require('./domains/driver-assignment/driverAssignmentFunction');
@@ -32,6 +33,10 @@ const testableRegistry = require('./testableRegistry');
 
 module.exports = {
   __testables: testableRegistry,
+  getAccountDeletionStatus: accountDeletion.getAccountDeletionStatus,
+  processAccountDeletionJobs: accountDeletion.processAccountDeletionJobs,
+  requestAccountDeletion: accountDeletion.requestAccountDeletion,
+  retryAccountDeletion: accountDeletion.retryAccountDeletion,
   assignDriverToTour: assignment.assignDriverToTour,
   cleanupExpiredAppSessions: scheduledCleanup.cleanupExpiredAppSessions,
   cleanupExpiredChatStatusSessions: liveState.cleanupExpiredChatStatusSessions,

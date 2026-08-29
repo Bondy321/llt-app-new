@@ -1,19 +1,13 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { deleteUser } from 'firebase/auth';
-import { auth, authHelpers, realtimeDb } from '../firebase';
+import { auth, authHelpers, getCurrentAppCheckToken } from '../firebase';
+import {
+  projectAccountDeletionAcceptedResponse,
+  projectAccountDeletionStatusResponse,
+  projectPendingAccountDeletionRecord,
+  validateAccountDeletionAcceptedResponse,
+  validateAccountDeletionStatusResponse,
+  validatePendingAccountDeletionRecord,
+} from '../src/shared/contracts/generated/accountDeletion';
 import { createPersistenceProvider } from './persistenceProvider';
-import loggerService, { maskIdentifier } from './loggerService';
-import * as photoService from './photoService';
-import appSessionService from './appSessionService';
-import { deleteNotificationDevice } from './notifications/notificationDeviceApiService';
-
-const {
-  addIdentity,
-  collectIdentityValues,
-  collectPrivatePhotoOwnerIds,
-  getPassengerBookingRef,
-  toRealtimeKeySegment,
-} = require('../src/features/account/domain/accountIdentityScope');
 
 export const PRIVACY_POLICY_URL =
   process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL?.trim()
@@ -23,557 +17,348 @@ export const DATA_REQUEST_EMAIL =
   process.env.EXPO_PUBLIC_DATA_REQUEST_EMAIL?.trim()
   || 'support@lochlomondtravel.com';
 
-const APP_SESSION_KEYS = [
-  '@LLT:tourData',
-  '@LLT:bookingData',
-  '@LLT:lastScreen',
-  '@LLT:notificationOnboarding',
-  '@LLT:identityBinding',
-];
+export const ACCOUNT_DELETION_PENDING_KEY = 'pending_v1';
 
-const SAFETY_LOCAL_KEYS = [
-  '@LLT:trustedContacts',
-];
-const SAFETY_QUEUE_KEY = '@LLT:safetyOfflineQueue';
-const TRUSTED_CONTACTS_KEY_PREFIX = '@LLT:trustedContacts:v2:';
+const SESSION_ID_PATTERN = /^sess_v1_[a-f0-9]{32}$/u;
+const isPlainObject = (value) => Boolean(value)
+  && typeof value === 'object'
+  && !Array.isArray(value);
 
-const makeSummary = () => ({
-  success: false,
-  deletedAuthUid: null,
-  replacementAuthUid: null,
-  remoteRecordsCleared: 0,
-  groupPhotosDeleted: 0,
-  privatePhotosDeleted: 0,
-  chatMessagesScrubbed: 0,
-  reactionsRemoved: 0,
-  driverClaimReleased: false,
-  localStoresCleared: 0,
-  warnings: [],
+export const validatePendingAccountDeletion = (input) => {
+  if (!isPlainObject(input) || !validatePendingAccountDeletionRecord(input).valid) return null;
+  if (input.updatedAtMs < input.createdAtMs) return null;
+  if (input.state === 'requesting' && !SESSION_ID_PATTERN.test(input.expectedSessionId || '')) return null;
+  if (input.state === 'completed'
+    && (input.phase !== 'completed'
+      || !Number.isSafeInteger(input.completedAtMs)
+      || input.completedAtMs < input.createdAtMs)) return null;
+  return projectPendingAccountDeletionRecord(input);
+};
+
+export const validateAccountDeletionResponse = (input) => {
+  if (!isPlainObject(input)) return null;
+  const validation = input.status === 'accepted'
+    ? validateAccountDeletionAcceptedResponse(input)
+    : validateAccountDeletionStatusResponse(input);
+  if (!validation.valid) return null;
+  if (input.status === 'completed'
+    && (input.phase !== 'completed' || !Number.isSafeInteger(input.completedAtMs))) return null;
+  return input.status === 'accepted'
+    ? projectAccountDeletionAcceptedResponse(input)
+    : projectAccountDeletionStatusResponse(input);
+};
+
+export const generateDeletionReceipt = ({ cryptoObject = globalThis.crypto } = {}) => {
+  if (!cryptoObject || typeof cryptoObject.getRandomValues !== 'function') {
+    const error = new Error('Secure random generation is unavailable on this device.');
+    error.code = 'SECURE_RANDOM_UNAVAILABLE';
+    throw error;
+  }
+  const bytes = new Uint8Array(32);
+  cryptoObject.getRandomValues(bytes);
+  return `delrec_v1_${Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('')}`;
+};
+
+const buildEndpoint = (functionName) => {
+  const overrides = {
+    requestAccountDeletion: process.env.EXPO_PUBLIC_REQUEST_ACCOUNT_DELETION_URL,
+    getAccountDeletionStatus: process.env.EXPO_PUBLIC_ACCOUNT_DELETION_STATUS_URL,
+    retryAccountDeletion: process.env.EXPO_PUBLIC_RETRY_ACCOUNT_DELETION_URL,
+  };
+  const override = overrides[functionName]?.trim();
+  if (override) return override;
+  const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID?.trim();
+  return projectId
+    ? `https://europe-west1-${projectId}.cloudfunctions.net/${functionName}`
+    : null;
+};
+
+const createDefaultPersistence = () => createPersistenceProvider({
+  namespace: 'LLT_ACCOUNT_DELETION',
+  preferredStorage: 'secure-store',
+  migrateFrom: ['async-storage'],
+  allowMemoryFallback: process.env.NODE_ENV === 'test',
 });
 
-const parseStoredArray = (raw) => {
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw !== 'string' || !raw.trim()) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+const parsePending = (raw) => {
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  try { return validatePendingAccountDeletion(JSON.parse(raw)); } catch { return null; }
 };
 
-const matchesDeletedIdentity = (value, identitySet) => (
-  typeof value === 'string' && identitySet.has(value.trim())
-);
+const genericFailure = (reason = 'ACCOUNT_DELETION_STATUS_UNAVAILABLE') => ({
+  success: false,
+  reason,
+  error: reason === 'NETWORK_ERROR'
+    ? 'We cannot reach account services yet. Your deletion request is still saved on this device.'
+    : 'We could not confirm account deletion status. Please try again.',
+});
 
-const clearOwnedSafetyQueue = async (localStorage, identitySet) => {
-  if (typeof localStorage?.getItem !== 'function') return;
-  const raw = await localStorage.getItem(SAFETY_QUEUE_KEY);
-  if (!raw) return;
-  const queue = parseStoredArray(raw);
-  const retained = queue.filter((event) => !(
-    matchesDeletedIdentity(event?.sessionScope?.principalId, identitySet)
-    || matchesDeletedIdentity(event?.principalId, identitySet)
-    || matchesDeletedIdentity(event?.userId, identitySet)
-  ));
-  if (retained.length === 0) await localStorage.removeItem?.(SAFETY_QUEUE_KEY);
-  else if (retained.length !== queue.length) await localStorage.setItem?.(SAFETY_QUEUE_KEY, JSON.stringify(retained));
-};
-
-const clearOwnedOfflineActions = async (offlineStorage, identitySet) => {
-  if (typeof offlineStorage?.getItemAsync !== 'function') {
-    // Compatibility fallback for injected/older providers that do not expose
-    // reads. The production durable provider supports selective cleanup.
-    const deleted = await offlineStorage?.multiDeleteAsync?.(['queue_v1']);
-    if (deleted === false) {
-      throw new Error('The offline action queue could not be cleared.');
-    }
-    return;
-  }
-  const raw = await offlineStorage.getItemAsync('queue_v1');
-  if (!raw) return;
-  const queue = parseStoredArray(raw);
-  const retained = queue.filter((action) => !(
-    matchesDeletedIdentity(action?.scope?.principalId, identitySet)
-    || matchesDeletedIdentity(action?.payload?.principalId, identitySet)
-    || matchesDeletedIdentity(action?.payload?.userId, identitySet)
-    || matchesDeletedIdentity(action?.payload?.ownerId, identitySet)
-  ));
-  if (retained.length === queue.length) return;
-  if (retained.length === 0 && typeof offlineStorage.deleteItemAsync === 'function') {
-    await offlineStorage.deleteItemAsync('queue_v1');
-  } else {
-    await offlineStorage.setItemAsync('queue_v1', JSON.stringify(retained));
-  }
-};
-
-const warn = (summary, label, error) => {
-  summary.warnings.push({
-    label,
-    message: error?.message || String(error || 'Unknown error'),
-  });
-};
-
-const snapshotChildren = (snapshot) => {
-  const children = [];
-  if (!snapshot?.exists?.()) return children;
-  snapshot.forEach((child) => {
-    children.push({ key: child.key, value: child.val() || {} });
-  });
-  return children;
-};
-
-const readChildren = async (db, path) => {
-  const snapshot = await db.ref(path).once('value');
-  return snapshotChildren(snapshot);
-};
-
-const matchesIdentity = (value, identitySet, encodedIdentitySet) => {
-  if (typeof value !== 'string' || !value.trim()) return false;
-  const normalized = value.trim();
-  return identitySet.has(normalized) || encodedIdentitySet.has(normalized);
-};
-
-const deleteOwnedGroupPhotos = async ({ db, tourId, identitySet, encodedIdentitySet, photoApi, summary }) => {
-  if (!tourId || !photoApi?.deleteGroupPhoto) return;
-
-  const photos = await readChildren(db, `group_tour_photos/${tourId}`);
-  for (const { key, value } of photos) {
-    const ownerId = value?.userId || value?.ownerId || value?.privateOwnerId;
-    if (!matchesIdentity(ownerId, identitySet, encodedIdentitySet)) continue;
-
-    try {
-      await photoApi.deleteGroupPhoto(tourId, key, ownerId);
-      summary.groupPhotosDeleted += 1;
-    } catch (error) {
-      warn(summary, 'group_photo_delete_failed', error);
-    }
-  }
-};
-
-const deletePrivatePhotos = async ({ db, tourId, ownerIds, photoApi, summary }) => {
-  if (!tourId || !photoApi?.deletePrivatePhoto) return;
-
-  for (const ownerId of ownerIds) {
-    const ownerKey = toRealtimeKeySegment(ownerId);
-    if (!ownerKey) continue;
-
-    let photos = [];
-    try {
-      photos = await readChildren(db, `private_tour_photos/${tourId}/${ownerKey}`);
-    } catch (error) {
-      warn(summary, 'private_photo_scan_failed', error);
-      continue;
-    }
-
-    for (const { key } of photos) {
-      try {
-        await photoApi.deletePrivatePhoto(tourId, ownerId, key);
-        summary.privatePhotosDeleted += 1;
-      } catch (error) {
-        warn(summary, 'private_photo_delete_failed', error);
-      }
-    }
-  }
-};
-
-const buildChatScrubUpdates = ({
-  rootPath,
-  messages,
-  identitySet,
-  encodedIdentitySet,
-  deletedBy,
-  summary,
-  messageCleanupMode = 'soft-delete',
-}) => {
-  const updates = {};
-  const now = new Date().toISOString();
-
-  for (const { key, value } of messages) {
-    const messagePath = `${rootPath}/messages/${key}`;
-    const senderMatches = matchesIdentity(value?.senderId, identitySet, encodedIdentitySet)
-      || matchesIdentity(value?.senderStableId, identitySet, encodedIdentitySet);
-
-    if (senderMatches && messageCleanupMode === 'remove') {
-      updates[messagePath] = null;
-      summary.chatMessagesScrubbed += 1;
-      continue;
-    }
-
-    if (senderMatches && !value?.deleted) {
-      updates[`${messagePath}/deleted`] = true;
-      updates[`${messagePath}/text`] = '';
-      updates[`${messagePath}/imageUrl`] = null;
-      updates[`${messagePath}/thumbnailUrl`] = null;
-      updates[`${messagePath}/deletedAt`] = now;
-      updates[`${messagePath}/deletedBy`] = deletedBy;
-      summary.chatMessagesScrubbed += 1;
-    }
-
-    const reactions = value?.reactions && typeof value.reactions === 'object' ? value.reactions : {};
-    Object.entries(reactions).forEach(([emoji, userMap]) => {
-      if (!userMap || typeof userMap !== 'object') return;
-      Object.keys(userMap).forEach((actorKey) => {
-        if (!matchesIdentity(actorKey, identitySet, encodedIdentitySet)) return;
-        updates[`${messagePath}/reactions/${emoji}/${actorKey}`] = null;
-        summary.reactionsRemoved += 1;
-      });
-    });
-  }
-
-  return updates;
-};
-
-const scrubChatContent = async ({ db, tourId, identitySet, encodedIdentitySet, deletedBy, includeInternal, summary }) => {
-  if (!tourId) return {};
-
-  const groupRoot = `chats/${tourId}`;
-  const groupMessages = await readChildren(db, `${groupRoot}/messages`);
-  const updates = buildChatScrubUpdates({
-    rootPath: groupRoot,
-    messages: groupMessages,
-    identitySet,
-    encodedIdentitySet,
-    deletedBy,
-    summary,
-  });
-
-  if (includeInternal) {
-    const internalRoot = `internal_chats/${tourId}`;
-    const internalMessages = await readChildren(db, `${internalRoot}/messages`);
-    Object.assign(updates, buildChatScrubUpdates({
-      rootPath: internalRoot,
-      messages: internalMessages,
-      identitySet,
-      encodedIdentitySet,
-      deletedBy,
-      summary,
-      messageCleanupMode: 'remove',
-    }));
-  }
-
-  return updates;
-};
-
-const buildAccountRecordUpdates = ({
-  authUid,
-  identities,
-  identityBinding,
-  tourId,
-  principalType,
-  passengerBookingRef,
-}) => {
-  const updates = {};
-  updates[`users/${authUid}`] = null;
-  updates[`logs/${authUid}`] = null;
-  if (tourId) {
-    updates[`tours/${tourId}/participants/${authUid}`] = null;
-    updates[`tour_access_grants/${tourId}/${authUid}`] = null;
-    updates[`tours/${tourId}/liveTracking/${authUid}`] = null;
-    updates[`notification_read_state/${tourId}/${authUid}`] = null;
-    updates[`notification_read_migration_requests/${tourId}/${authUid}`] = null;
-  }
-
-  const stableKeys = new Set();
-  addIdentity(stableKeys, identityBinding?.stablePassengerKey);
-  addIdentity(stableKeys, identityBinding?.stablePassengerId);
-  identities.forEach((identity) => {
-    if (!identity.startsWith('driver:') && identity !== authUid) addIdentity(stableKeys, identity);
-    if (tourId) {
-      const principalKey = toRealtimeKeySegment(identity);
-      if (principalKey) updates[`notification_read_state/${tourId}/${principalKey}`] = null;
-    }
-  });
-
-  if (principalType !== 'driver') {
-    stableKeys.forEach((stableKey) => {
-      const key = toRealtimeKeySegment(stableKey);
-      if (key) updates[`identity_bindings/${key}/${authUid}`] = null;
-    });
-  }
-
-  if (passengerBookingRef) {
-    updates[`booking_access_grants/${passengerBookingRef}/${authUid}`] = null;
-    updates[`passenger_identity_security/${passengerBookingRef}/authorizedAuthUid`] = null;
-  }
-
-  return updates;
-};
-
-const releaseOwnedDriverClaim = async ({ db, driverId, authUid }) => {
-  const driverKey = toRealtimeKeySegment(driverId);
-  if (!driverKey || !authUid) return false;
-  const claimRef = db.ref(`drivers/${driverKey}/authUid`);
-  const observed = await claimRef.once('value');
-  if (observed.val() !== authUid) return false;
-  let firstInvocation = true;
-  const result = await claimRef.transaction((current) => {
-    const wasFirstInvocation = firstInvocation;
-    firstInvocation = false;
-    if (wasFirstInvocation && current === null) return null;
-    return current === authUid ? null : undefined;
-  });
-  return result?.committed === true;
-};
-
-const clearLocalStores = async ({
-  localStorage,
-  sessionStorage,
-  sessionKeys,
-  providerFactory,
-  tourId,
-  role,
-  packOwnerId,
-  identities,
-  summary,
-}) => {
-  const sessionKeyValues = sessionKeys ? Object.values(sessionKeys).filter(Boolean) : APP_SESSION_KEYS;
-
-  const clearTasks = [
-    sessionStorage?.multiRemove?.(sessionKeyValues),
-    localStorage?.multiRemove?.([...APP_SESSION_KEYS, ...SAFETY_LOCAL_KEYS]),
-  ].filter(Boolean);
-
-  const authStorage = providerFactory({ namespace: 'LLT_AUTH' });
-  const logStorage = providerFactory({
-    namespace: 'LLT_LOGS',
-    preferredStorage: 'async-storage',
-    allowMemoryFallback: false,
-    migrateFrom: ['secure-store'],
-  });
-  const offlineStorage = providerFactory({
-    namespace: 'LLT_OFFLINE',
-    preferredStorage: 'async-storage',
-    allowMemoryFallback: false,
-    migrateFrom: ['secure-store'],
-  });
-  const identitySet = new Set(identities || []);
-
-  clearTasks.push(authStorage.multiDeleteAsync(['LLT_authUser', 'LLT_authToken']));
-  clearTasks.push(logStorage.multiDeleteAsync(['app_logs']));
-
-  const offlineKeys = [];
-  if (tourId && role) {
-    offlineKeys.push(`tour_pack_${role}_${tourId}`);
-    offlineKeys.push(`tour_pack_meta_${role}_${tourId}`);
-    const normalizedPackOwnerId = typeof packOwnerId === 'string'
-      ? encodeURIComponent(packOwnerId.trim().toUpperCase())
-      : null;
-    if (normalizedPackOwnerId) {
-      offlineKeys.push(`tour_pack_v2_${role}_${tourId}_${normalizedPackOwnerId}`);
-      offlineKeys.push(`tour_pack_meta_v2_${role}_${tourId}_${normalizedPackOwnerId}`);
-    }
-  }
-  if (offlineKeys.length > 0) clearTasks.push(offlineStorage.multiDeleteAsync(offlineKeys));
-  clearTasks.push(clearOwnedOfflineActions(offlineStorage, identitySet));
-  clearTasks.push(clearOwnedSafetyQueue(localStorage, identitySet));
-  if (typeof localStorage?.multiRemove === 'function') {
-    clearTasks.push(localStorage.multiRemove((identities || []).map(
-      (identity) => `${TRUSTED_CONTACTS_KEY_PREFIX}${encodeURIComponent(identity)}`,
-    )));
-  }
-
-  const results = await Promise.allSettled(clearTasks);
-  summary.localStoresCleared = results.filter(
-    (result) => result.status === 'fulfilled' && result.value !== false,
-  ).length;
-  results.forEach((result) => {
-    if (result.status === 'rejected') {
-      warn(summary, 'local_cleanup_failed', result.reason);
-    } else if (result.value === false) {
-      warn(summary, 'local_cleanup_failed', new Error('A local storage provider could not clear its records.'));
-    }
-  });
-};
-
-const getAccountDeletionErrorMessage = (error) => {
-  if (error?.code === 'auth/requires-recent-login') {
-    return 'Please restart the app and try Delete account again so we can refresh your secure session.';
-  }
-  if (/network|offline|timeout|timed out/i.test(`${error?.code || ''} ${error?.message || ''}`)) {
-    return 'Account deletion could not reach app services. Check your connection and try again.';
-  }
-  if (/permission|unauthori[sz]ed/i.test(`${error?.code || ''} ${error?.message || ''}`)) {
-    return 'Account deletion could not verify all required permissions. Sign in again and retry.';
-  }
-  return 'Account deletion could not be completed safely. Please try again.';
-};
-
-export const deleteCurrentAccount = async ({
-  bookingData = null,
-  canonicalIdentity = null,
-  identityBinding = null,
-  sessionStorage = null,
-  sessionKeys = null,
-  db = realtimeDb,
-  currentUser = auth?.currentUser || null,
-  deleteUserFn = deleteUser,
-  authHelpersOverride = authHelpers,
-  localStorage = AsyncStorage,
-  providerFactory = createPersistenceProvider,
-  photoApi = photoService,
-  appSessionApi = appSessionService,
-  notificationDeviceDelete = deleteNotificationDevice,
-  logger = loggerService,
+export const createAccountDeletionService = ({
+  persistence = createDefaultPersistence(),
+  fetchFn = (...args) => fetch(...args),
+  now = () => Date.now(),
+  generateReceipt = () => generateDeletionReceipt(),
+  getFirebase = () => ({ auth, authHelpers, getCurrentAppCheckToken }),
 } = {}) => {
-  const summary = makeSummary();
-  const authUid = currentUser?.uid || null;
+  let requestInFlight = null;
+  let statusInFlight = null;
+  let completionInFlight = null;
 
-  if (!authUid) {
-    return {
-      ...summary,
-      error: 'No signed-in app account is available to delete.',
-    };
-  }
+  const writePending = async (record) => {
+    const valid = validatePendingAccountDeletion(record);
+    if (!valid) throw new Error('Account deletion recovery state is invalid.');
+    await persistence.setItemAsync(ACCOUNT_DELETION_PENDING_KEY, JSON.stringify(valid));
+    return valid;
+  };
 
-  if (!db?.ref) {
-    return {
-      ...summary,
-      error: 'Account deletion requires an internet connection to reach app services.',
-    };
-  }
-
-  try {
-    const activeAppSession = await appSessionApi.readSession();
-    if (!activeAppSession) {
-      throw new Error('A current secure app session is required for account deletion.');
+  const readPending = async () => {
+    const raw = await persistence.getItemAsync(ACCOUNT_DELETION_PENDING_KEY);
+    if (raw == null || raw === '') return null;
+    const pending = parsePending(raw);
+    if (!pending) {
+      const error = new Error('Saved account deletion recovery state is invalid.');
+      error.code = 'ACCOUNT_DELETION_RECOVERY_CORRUPT';
+      throw error;
     }
-    const role = activeAppSession.principalType === 'driver' ? 'driver' : 'passenger';
-    const driverId = role === 'driver' ? activeAppSession.driverId : null;
-    const tourId = activeAppSession.tourId || null;
-    const passengerBookingRef = role === 'passenger' ? getPassengerBookingRef(bookingData) : null;
-    const identities = collectIdentityValues({ authUid, canonicalIdentity, bookingData, identityBinding });
-    const privatePhotoOwnerIds = role === 'driver'
-      ? []
-      : collectPrivatePhotoOwnerIds({ canonicalIdentity, bookingData, identityBinding });
-    const contentIdentities = role === 'driver' ? [authUid] : identities;
-    const identitySet = new Set(contentIdentities);
-    const encodedIdentitySet = new Set(contentIdentities.map(toRealtimeKeySegment).filter(Boolean));
+    return pending;
+  };
 
-    logger.info('AccountDeletion', 'Account deletion started', {
-      authUid: maskIdentifier(authUid),
-      tourId,
-      role,
-      identityCount: identities.length,
-    });
+  const clearPending = () => persistence.deleteItemAsync(ACCOUNT_DELETION_PENDING_KEY);
 
-    if (driverId) {
-      summary.driverClaimReleased = await releaseOwnedDriverClaim({ db, driverId, authUid });
-    }
-
-    await deleteOwnedGroupPhotos({
-      db,
-      tourId,
-      identitySet,
-      encodedIdentitySet,
-      photoApi,
-      summary,
-    });
-
-    await deletePrivatePhotos({
-      db,
-      tourId,
-      ownerIds: privatePhotoOwnerIds,
-      photoApi,
-      summary,
-    });
-
-    const recordUpdates = buildAccountRecordUpdates({
-      authUid,
-      identities,
-      identityBinding,
-      tourId,
-      principalType: role,
-      passengerBookingRef,
-    });
-
-    let chatUpdates = {};
+  const post = async (functionName, body, { freshAuthOnFailure = false, freshAuthAttempted = false } = {}) => {
+    const firebase = getFirebase();
+    const endpoint = buildEndpoint(functionName);
+    if (!endpoint) return genericFailure('ENDPOINT_UNAVAILABLE');
+    let currentUser;
+    let token;
     try {
-      chatUpdates = await scrubChatContent({
-        db,
-        tourId,
-        identitySet,
-        encodedIdentitySet,
-        deletedBy: authUid,
-        includeInternal: role === 'driver',
-        summary,
-      });
-    } catch (error) {
-      warn(summary, 'chat_scrub_failed', error);
-    }
-
-    const updates = { ...recordUpdates, ...chatUpdates };
-    if (Object.keys(updates).length > 0) {
-      await db.ref().update(updates);
-      summary.remoteRecordsCleared = Object.keys(updates).length;
-    }
-
-    await notificationDeviceDelete();
-
-    const sessionEnd = await appSessionApi.endSession({ authUid, session: activeAppSession });
-    if (!sessionEnd?.success) {
-      throw new Error('Account deletion could not revoke the active app session.');
-    }
-    await appSessionApi.completeEnd();
-
-    if (typeof authHelpersOverride?.clearAuthData === 'function') {
-      await authHelpersOverride.clearAuthData();
-    }
-
-    await deleteUserFn(currentUser);
-    summary.deletedAuthUid = authUid;
-
-    await clearLocalStores({
-      localStorage,
-      sessionStorage,
-      sessionKeys,
-      providerFactory,
-      tourId,
-      role,
-      packOwnerId: bookingData?.id || null,
-      identities,
-      summary,
-    });
-
-    if (typeof authHelpersOverride?.ensureAuthenticated === 'function') {
+      currentUser = firebase.auth?.currentUser || null;
+      if (!currentUser && freshAuthOnFailure) {
+        currentUser = await firebase.authHelpers?.replaceWithFreshAnonymous?.();
+      }
+      if (!currentUser?.getIdToken) return genericFailure('AUTH_UNAVAILABLE');
+      token = await currentUser.getIdToken();
+    } catch {
+      if (!freshAuthOnFailure) return genericFailure('AUTH_UNAVAILABLE');
       try {
-        const replacementUser = await authHelpersOverride.ensureAuthenticated();
-        summary.replacementAuthUid = replacementUser?.uid || null;
-      } catch (error) {
-        warn(summary, 'replacement_auth_failed', error);
+        currentUser = await firebase.authHelpers?.replaceWithFreshAnonymous?.();
+        token = await currentUser?.getIdToken?.();
+      } catch {
+        return genericFailure('AUTH_UNAVAILABLE');
       }
     }
+    if (!token) return genericFailure('AUTH_UNAVAILABLE');
+    const appCheckToken = await firebase.getCurrentAppCheckToken?.();
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+    if (appCheckToken) headers['x-firebase-appcheck'] = appCheckToken;
+    let response;
+    try {
+      response = await fetchFn(endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+    } catch {
+      return genericFailure('NETWORK_ERROR');
+    }
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      if (response.status === 401 && freshAuthOnFailure && !freshAuthAttempted) {
+        try {
+          await firebase.authHelpers?.replaceWithFreshAnonymous?.();
+        } catch {
+          return genericFailure('AUTH_UNAVAILABLE');
+        }
+        return post(functionName, body, { freshAuthOnFailure: true, freshAuthAttempted: true });
+      }
+      const reason = typeof payload?.reason === 'string' && payload.reason.length <= 100
+        ? payload.reason
+        : 'ACCOUNT_DELETION_STATUS_UNAVAILABLE';
+      return genericFailure(reason);
+    }
+    const valid = validateAccountDeletionResponse(payload);
+    return valid || genericFailure('INVALID_SERVER_RESPONSE');
+  };
 
-    summary.success = true;
-    logger.info('AccountDeletion', 'Account deletion completed', {
-      authUid: maskIdentifier(authUid),
-      replacementAuthUid: maskIdentifier(summary.replacementAuthUid),
-      warningCount: summary.warnings.length,
-      remoteRecordsCleared: summary.remoteRecordsCleared,
-    });
-    return summary;
-  } catch (error) {
-    logger.error('AccountDeletion', 'Account deletion failed', {
-      authUid: maskIdentifier(authUid),
-      error: error?.message || String(error),
-      code: error?.code || null,
-    });
-    return {
-      ...summary,
-      error: getAccountDeletionErrorMessage(error),
+  const applyServerStatus = async (pending, response) => {
+    if (!response?.success) return response;
+    const updatedAtMs = now();
+    const updatedRecord = {
+      ...pending,
+      state: response.status,
+      phase: response.phase,
+      retryable: response.retryable,
+      updatedAtMs,
+      lastCheckedAtMs: updatedAtMs,
     };
-  }
+    delete updatedRecord.expectedSessionId;
+    delete updatedRecord.lastErrorReason;
+    if (response.completedAtMs !== undefined) updatedRecord.completedAtMs = response.completedAtMs;
+    else delete updatedRecord.completedAtMs;
+    if (response.summary !== undefined) updatedRecord.summary = response.summary;
+    else delete updatedRecord.summary;
+    const updated = await writePending(updatedRecord);
+    return { ...response, pending: updated };
+  };
+
+  const requestDeletion = async ({ expectedSessionId } = {}) => {
+    if (requestInFlight) return requestInFlight;
+    requestInFlight = (async () => {
+      let pending = await readPending();
+      if (pending && pending.state !== 'requesting') return pollStatus();
+      if (!pending) {
+        if (!SESSION_ID_PATTERN.test(expectedSessionId || '')) {
+          return genericFailure('SESSION_REQUIRED');
+        }
+        const createdAtMs = now();
+        pending = await writePending({
+          schemaVersion: 1,
+          deletionReceipt: generateReceipt(),
+          state: 'requesting',
+          expectedSessionId,
+          createdAtMs,
+          updatedAtMs: createdAtMs,
+          requestAttempts: 0,
+          statusAttempts: 0,
+          localCleanupComplete: false,
+          completionHandled: false,
+        });
+      }
+      pending = await writePending({
+        ...pending,
+        requestAttempts: Math.min((pending.requestAttempts || 0) + 1, 1000),
+        updatedAtMs: now(),
+      });
+      const response = await post('requestAccountDeletion', {
+        expectedSessionId: pending.expectedSessionId,
+        deletionReceipt: pending.deletionReceipt,
+      });
+      if (!response.success) {
+        const reason = String(response.reason || 'ACCOUNT_DELETION_STATUS_UNAVAILABLE').slice(0, 80);
+        pending = await writePending({ ...pending, lastErrorReason: reason, updatedAtMs: now() });
+        return { ...response, pending };
+      }
+      return applyServerStatus(pending, response);
+    })();
+    try { return await requestInFlight; } finally { requestInFlight = null; }
+  };
+
+  const pollStatus = async () => {
+    if (statusInFlight) return statusInFlight;
+    statusInFlight = (async () => {
+      const pending = await readPending();
+      if (!pending) return genericFailure('NO_PENDING_DELETION');
+      if (pending.state === 'requesting') {
+        return requestDeletion({ expectedSessionId: pending.expectedSessionId });
+      }
+      const checkedAtMs = now();
+      const checking = await writePending({
+        ...pending,
+        statusAttempts: Math.min((pending.statusAttempts || 0) + 1, 1000),
+        lastCheckedAtMs: checkedAtMs,
+        updatedAtMs: checkedAtMs,
+      });
+      const response = await post('getAccountDeletionStatus', {
+        deletionReceipt: checking.deletionReceipt,
+      }, { freshAuthOnFailure: true });
+      if (!response.success) {
+        const reason = String(response.reason || 'ACCOUNT_DELETION_STATUS_UNAVAILABLE').slice(0, 80);
+        const failed = await writePending({
+          ...checking,
+          state: response.reason === 'NETWORK_ERROR' ? 'waiting_for_connection' : checking.state,
+          lastErrorReason: reason,
+          updatedAtMs: now(),
+        });
+        return { ...response, pending: failed };
+      }
+      return applyServerStatus(checking, response);
+    })();
+    try { return await statusInFlight; } finally { statusInFlight = null; }
+  };
+
+  const retryDeletion = async () => {
+    const pending = await readPending();
+    if (!pending) return genericFailure('NO_PENDING_DELETION');
+    if (pending.state === 'requesting') return requestDeletion({ expectedSessionId: pending.expectedSessionId });
+    const checkedAtMs = now();
+    const checking = await writePending({
+      ...pending,
+      statusAttempts: Math.min((pending.statusAttempts || 0) + 1, 1000),
+      lastCheckedAtMs: checkedAtMs,
+      updatedAtMs: checkedAtMs,
+    });
+    const response = await post('retryAccountDeletion', {
+      deletionReceipt: checking.deletionReceipt,
+    }, { freshAuthOnFailure: true });
+    if (!response.success) {
+      const reason = String(response.reason || 'ACCOUNT_DELETION_STATUS_UNAVAILABLE').slice(0, 80);
+      const failed = await writePending({
+        ...checking,
+        state: response.reason === 'NETWORK_ERROR' ? 'waiting_for_connection' : checking.state,
+        lastErrorReason: reason,
+        updatedAtMs: now(),
+      });
+      return { ...response, pending: failed };
+    }
+    return applyServerStatus(checking, response);
+  };
+
+  const markLocalCleanupComplete = async () => {
+    const pending = await readPending();
+    if (!pending) return null;
+    return writePending({ ...pending, localCleanupComplete: true, updatedAtMs: now() });
+  };
+
+  const markCompletionHandled = async () => {
+    const pending = await readPending();
+    if (!pending || pending.state !== 'completed') return null;
+    return writePending({ ...pending, completionHandled: true, updatedAtMs: now() });
+  };
+
+  const finalizeCompletedRecovery = async () => {
+    if (completionInFlight) return completionInFlight;
+    completionInFlight = (async () => {
+      let pending = await readPending();
+      if (!pending) return { success: true, alreadyComplete: true, pending: null };
+      if (pending.state !== 'completed' || pending.localCleanupComplete !== true) {
+        return { success: false, reason: 'LOCAL_CLEANUP_REQUIRED', pending };
+      }
+      if (!pending.completionHandled) pending = await markCompletionHandled();
+      await clearPending();
+      return { success: true, pending };
+    })();
+    try { return await completionInFlight; } finally { completionInFlight = null; }
+  };
+
+  return {
+    clearPending,
+    finalizeCompletedRecovery,
+    markCompletionHandled,
+    markLocalCleanupComplete,
+    pollStatus,
+    readPending,
+    requestDeletion,
+    retryDeletion,
+    writePending,
+  };
 };
+
+const accountDeletionService = createAccountDeletionService();
+
+// Compatibility export for the screen boundary. The result now represents
+// durable server acceptance, never handset-coordinated completion.
+export const deleteCurrentAccount = ({ appSession } = {}) => accountDeletionService.requestDeletion({
+  expectedSessionId: appSession?.sessionId || null,
+});
 
 export const __accountDeletionTestables = {
-  clearOwnedOfflineActions,
-  clearOwnedSafetyQueue,
-  getAccountDeletionErrorMessage,
-  releaseOwnedDriverClaim,
+  validateAccountDeletionResponse,
+  validatePendingAccountDeletion,
 };
 
 export default {
+  ACCOUNT_DELETION_PENDING_KEY,
   DATA_REQUEST_EMAIL,
   PRIVACY_POLICY_URL,
-  deleteCurrentAccount,
+  ...accountDeletionService,
 };

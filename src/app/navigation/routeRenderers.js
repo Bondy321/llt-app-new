@@ -18,7 +18,6 @@ import MarketingNotificationDetailScreen from '../../../screens/MarketingNotific
 import SafetyAlertDetailScreen from '../../../screens/SafetyAlertDetailScreen';
 import { resolveAuthScopedUserId, toRealtimeKeySegment } from '../../../services/identityService';
 import { resolveTourId } from '../../../services/tourIdentityService';
-import { SESSION_KEYS, SessionStorage } from '../session/sessionStorage';
 
 const commonScreenProps = (context) => ({ isConnected: context.isConnected, logger: context.logger });
 
@@ -233,14 +232,9 @@ const renderAccountPrivacy = (context) => (
   <AccountPrivacyScreen
     onBack={() => context.navigateBack(context.screenParams?.from || context.homeScreen)}
     onLogout={context.handleLogout}
-    onAccountDeleted={context.handleAccountDeleted}
-    tourData={context.tourData}
+    onDeleteAccount={context.handleStartAccountDeletion}
     bookingData={context.bookingData}
-    canonicalIdentity={context.canonicalIdentity}
-    identityBinding={context.identityBinding}
     isDriverSession={context.isDriverSession}
-    sessionStorage={SessionStorage}
-    sessionKeys={SESSION_KEYS}
   />
 );
 

@@ -104,8 +104,10 @@ const persistOperationsTerminalWarning = async ({ db, warning }) => {
   const path = `${OPERATIONS_TERMINAL_WARNING_ROOT}/${warning.warningId}`;
   let created = false;
   const result = await db.ref(path).transaction((current) => {
+    // Firebase may invoke the updater repeatedly after contention. Reflect the
+    // final observed state instead of retaining `true` from an earlier attempt.
+    created = !current;
     if (!current) {
-      created = true;
       return warning;
     }
     if (current.warningId !== warning.warningId || current.jobType !== warning.jobType) return undefined;
@@ -135,6 +137,26 @@ const persistOperationsTerminalWarning = async ({ db, warning }) => {
   }, undefined, false);
   if (!result?.committed) throw new Error('Operations terminal warning write was contended');
   return { created, path, warning: result.snapshot.val() };
+};
+
+const cleanupExpiredOperationsTerminalWarnings = async ({
+  db, nowMs = Date.now(), limit = 100,
+}) => {
+  const snapshot = await db.ref(OPERATIONS_TERMINAL_WARNING_ROOT)
+    .orderByChild('retainUntilMs').startAt(1).endAt(nowMs).limitToFirst(limit).once('value');
+  let removed = 0;
+  for (const [warningId, expected] of Object.entries(snapshot.val() || {})) {
+    let matched = false;
+    const result = await db.ref(`${OPERATIONS_TERMINAL_WARNING_ROOT}/${warningId}`).transaction((current) => {
+      if (!current || current.warningId !== warningId
+        || current.retainUntilMs !== expected.retainUntilMs
+        || Number(current.retainUntilMs || 0) > nowMs) return undefined;
+      matched = true;
+      return null;
+    }, undefined, false);
+    removed += Number(matched && result?.committed);
+  }
+  return removed;
 };
 
 /** @param {unknown} current @param {Record<string, unknown>} sourceIdentity */
@@ -231,6 +253,7 @@ module.exports = {
   OPERATIONS_TERMINAL_WARNING_ROOT,
   boundedWarningCode,
   buildOperationsTerminalWarning,
+  cleanupExpiredOperationsTerminalWarnings,
   hashTerminalWarningIdentifier,
   persistOperationsTerminalWarning,
   terminalizeOperationJob,

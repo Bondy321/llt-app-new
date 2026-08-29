@@ -24,6 +24,67 @@
       ".write": false
     },
 
+    "account_deletion_jobs": {
+      ".read": false,
+      ".write": false,
+      "v1": {
+        ".indexOn": ["retainUntilMs", "retryRequestedAtMs"]
+      }
+    },
+
+    "account_deletion_queue": {
+      ".read": false,
+      ".write": false
+    },
+
+    "account_deletion_active": {
+      ".read": false,
+      ".write": false
+    },
+
+    "account_deletion_completion_tombstones": {
+      ".read": false,
+      ".write": false
+    },
+
+    "account_deletion_locks": {
+      ".read": false,
+      ".write": false
+    },
+
+    "account_deletion_passenger_active": {
+      ".read": false,
+      ".write": false
+    },
+
+    "account_deletion_passenger_locks": {
+      ".read": false,
+      ".write": false
+    },
+
+    "account_deletion_uid_tombstones": {
+      ".read": false,
+      ".write": false
+    },
+
+    "media_record_locks": {
+      ".read": false,
+      ".write": false
+    },
+
+    "account_deletion_rollout": {
+      ".read": false,
+      ".write": false,
+      "v1": {
+        ".validate": "!newData.exists() || (newData.hasChildren(['schemaVersion', 'phase', 'revision', 'updatedAtMs']) && newData.child('schemaVersion').val() === 1 && (newData.child('phase').val() === 'compatibility' || newData.child('phase').val() === 'server_only') && newData.child('revision').isNumber() && newData.child('revision').val() >= 1 && newData.child('updatedAtMs').isNumber() && newData.child('updatedAtMs').val() > 0)",
+        "schemaVersion": { ".validate": true },
+        "phase": { ".validate": true },
+        "revision": { ".validate": true },
+        "updatedAtMs": { ".validate": true },
+        "$other": { ".validate": false }
+      }
+    },
+
     "live_state_rollout": {
       ".read": false,
       ".write": false,
@@ -275,7 +336,7 @@
         ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true) && newData.child('currentTourId').val() === data.child('currentTourId').val() && newData.child('currentTourCode').val() === data.child('currentTourCode').val() && newData.child('assignments').val() === data.child('assignments').val() && newData.child('assignmentRevision').val() === data.child('assignmentRevision').val()",
         ".validate": "!newData.exists() || (newData.hasChildren(['name']) && newData.child('name').isString() && newData.child('name').val().length > 0 && newData.child('name').val().length <= 120 && (!newData.child('id').exists() || (newData.child('id').isString() && newData.child('id').val() === $driverId)) && (!newData.child('phone').exists() || newData.child('phone').isString()) && (!newData.child('authUid').exists() || newData.child('authUid').isString()) && (!newData.child('currentTourId').exists() || newData.child('currentTourId').isString()) && (!newData.child('currentTourCode').exists() || newData.child('currentTourCode').isString()) && (!newData.child('lastActive').exists() || newData.child('lastActive').isString() || newData.child('lastActive').isNumber()) && (!newData.child('createdAt').exists() || newData.child('createdAt').isString() || newData.child('createdAt').isNumber()) && (!newData.child('assignments').exists() || newData.child('assignments').hasChildren()))",
         "authUid": {
-          ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/authUid').val() === auth.uid && root.child('app_sessions/' + auth.uid + '/principalType').val() === 'driver' && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now && root.child('app_sessions/' + auth.uid + '/driverId').isString() && root.child('app_sessions/' + auth.uid + '/driverId').val() === $driverId && root.child('users/' + auth.uid + '/driverId').isString() && root.child('users/' + auth.uid + '/driverId').val() === root.child('app_sessions/' + auth.uid + '/driverId').val() && root.child('drivers/' + $driverId).exists() && root.child('app_sessions/' + auth.uid + '/tourId').isString() && (root.child('driver_login_policy/v1/schemaVersion').val() === 1 && root.child('driver_login_policy/v1/enforceSingleDevice').isBoolean() && root.child('driver_login_policy/v1/generation').isNumber() && root.child('driver_login_policy/v1/generation').val() >= 0 && root.child('app_sessions/' + auth.uid + '/driverLoginPolicyGeneration').val() === root.child('driver_login_policy/v1/generation').val() && (root.child('driver_login_policy/v1/enforceSingleDevice').val() === false || (root.child('driver_login_policy/v1/enforceSingleDevice').val() === true && root.child('drivers/' + $driverId + '/authUid').val() === auth.uid))) && !root.child('driver_assignment_active/v1').child($driverId).child('transitionId').exists() && root.child('tour_manifests/' + root.child('app_sessions/' + auth.uid + '/tourId').val() + '/assigned_drivers/' + $driverId).val() === true && data.val() === auth.uid && !newData.exists()))",
+          ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/authUid').val() === auth.uid && root.child('app_sessions/' + auth.uid + '/principalType').val() === 'driver' && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now && root.child('app_sessions/' + auth.uid + '/driverId').isString() && root.child('app_sessions/' + auth.uid + '/driverId').val() === $driverId && root.child('users/' + auth.uid + '/driverId').isString() && root.child('users/' + auth.uid + '/driverId').val() === root.child('app_sessions/' + auth.uid + '/driverId').val() && root.child('drivers/' + $driverId).exists() && root.child('app_sessions/' + auth.uid + '/tourId').isString() && (root.child('driver_login_policy/v1/schemaVersion').val() === 1 && root.child('driver_login_policy/v1/enforceSingleDevice').isBoolean() && root.child('driver_login_policy/v1/generation').isNumber() && root.child('driver_login_policy/v1/generation').val() >= 0 && root.child('app_sessions/' + auth.uid + '/driverLoginPolicyGeneration').val() === root.child('driver_login_policy/v1/generation').val() && (root.child('driver_login_policy/v1/enforceSingleDevice').val() === false || (root.child('driver_login_policy/v1/enforceSingleDevice').val() === true && root.child('drivers/' + $driverId + '/authUid').val() === auth.uid))) && !root.child('driver_assignment_active/v1').child($driverId).child('transitionId').exists() && root.child('tour_manifests/' + root.child('app_sessions/' + auth.uid + '/tourId').val() + '/assigned_drivers/' + $driverId).val() === true && data.val() === auth.uid && !newData.exists() && (!root.child('account_deletion_rollout/v1').exists() || (root.child('account_deletion_rollout/v1/schemaVersion').val() === 1 && root.child('account_deletion_rollout/v1/phase').val() === 'compatibility' && root.child('account_deletion_rollout/v1/revision').isNumber() && root.child('account_deletion_rollout/v1/revision').val() >= 1 && root.child('account_deletion_rollout/v1/updatedAtMs').isNumber() && root.child('account_deletion_rollout/v1/updatedAtMs').val() > 0))))",
           ".validate": "!newData.exists() || (newData.isString() && newData.val().length > 0 && newData.val().length <= 160)"
         },
         "lastActive": {
@@ -833,7 +894,7 @@
       ".indexOn": ["driverAssignedTourId", "preferences/marketing/day_trips", "preferences/marketing/mystery_breaks", "preferences/marketing/scotland_highlands_islands", "preferences/marketing/isle_of_ireland", "preferences/marketing/european_breaks", "preferences/marketing/steam_train_tours", "preferences/marketing/cruises_ferries", "preferences/marketing/theatre_concerts", "preferences/marketing/sporting_breaks", "preferences/marketing/history_military_breaks", "preferences/marketing/mystery_tours", "preferences/marketing/scotland_classics", "preferences/marketing/hiking_nature", "preferences/marketing/steam_trains"],
       "$userId": {
         ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (auth.uid === $userId && root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/authUid').val() === auth.uid && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now))",
-        ".write": "auth != null && (((auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true) && newData.child('driverAssignedTourId').val() === data.child('driverAssignedTourId').val()) || (auth.uid === $userId && root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/authUid').val() === auth.uid && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now && !newData.exists()))",
+        ".write": "auth != null && (((auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true) && newData.child('driverAssignedTourId').val() === data.child('driverAssignedTourId').val()) || (auth.uid === $userId && root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/authUid').val() === auth.uid && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now && !newData.exists() && (!root.child('account_deletion_rollout/v1').exists() || (root.child('account_deletion_rollout/v1/schemaVersion').val() === 1 && root.child('account_deletion_rollout/v1/phase').val() === 'compatibility' && root.child('account_deletion_rollout/v1/revision').isNumber() && root.child('account_deletion_rollout/v1/revision').val() >= 1 && root.child('account_deletion_rollout/v1/updatedAtMs').isNumber() && root.child('account_deletion_rollout/v1/updatedAtMs').val() > 0))))",
         ".validate": "!newData.exists() || ((auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (auth.uid === $userId && root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/authUid').val() === auth.uid && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now)) && (!newData.child('pushToken').exists() || newData.child('pushToken').val() === null || (newData.child('pushTokenStatus').val() === 'ACTIVE' && (newData.child('pushPermissionState').val() === 'granted' || newData.child('pushPermissionState').val() === 'provisional' || newData.child('pushPermissionState').val() === 'ephemeral'))) && (!newData.child('stablePassengerId').exists() || (data.child('stablePassengerId').exists() && newData.child('stablePassengerId').val() === data.child('stablePassengerId').val() && newData.child('stablePassengerId').val().matches(/^pax_v2_[a-f0-9]{32}$/) && newData.child('stablePassengerKey').val() === data.child('stablePassengerKey').val() && newData.child('privatePhotoOwnerId').val() === data.child('privatePhotoOwnerId').val() && newData.child('privatePhotoOwnerKey').val() === data.child('privatePhotoOwnerKey').val() && newData.child('identityVersion').val() === 'pax_v2' && newData.child('bookingRef').val() === data.child('bookingRef').val())) && (!newData.child('driverId').exists() || ((data.child('driverId').exists() && newData.child('driverId').val() === data.child('driverId').val() && newData.child('driverPrincipalId').val() === data.child('driverPrincipalId').val()) || (newData.child('driverPrincipalId').val() === 'driver:' + newData.child('driverId').val() && root.child('drivers/' + newData.child('driverId').val() + '/authUid').val() === $userId))))",
         "pushToken": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.val() === null || (newData.isString() && newData.val().length <= 240 && newData.val().matches(/^Expo(nent)?PushToken\\[[A-Za-z0-9_-]{1,200}\\]$/))" },
         "pushTokenStatus": { ".write": "auth != null && (auth.uid === $userId || auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23')", ".validate": "!newData.exists() || newData.val() === 'ACTIVE' || newData.val() === 'INVALID' || newData.val() === 'UNAVAILABLE'" },
@@ -926,7 +987,7 @@
       "$stablePassengerId": {
         ".read": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
         "$uid": {
-          ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (auth.uid === $uid && data.val() === true && !newData.exists() && root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now))",
+          ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (auth.uid === $uid && data.val() === true && !newData.exists() && root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now && (!root.child('account_deletion_rollout/v1').exists() || (root.child('account_deletion_rollout/v1/schemaVersion').val() === 1 && root.child('account_deletion_rollout/v1/phase').val() === 'compatibility' && root.child('account_deletion_rollout/v1/revision').isNumber() && root.child('account_deletion_rollout/v1/revision').val() >= 1 && root.child('account_deletion_rollout/v1/updatedAtMs').isNumber() && root.child('account_deletion_rollout/v1/updatedAtMs').val() > 0))))",
           ".validate": "!newData.exists() || newData.val() === true"
         }
       }
@@ -969,7 +1030,7 @@
       ".write": "auth != null && auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23'",
       "$userId": {
         ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || (auth.uid === $userId && root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now))",
-        ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || (auth.uid === $userId && root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now))",
+        ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || (auth.uid === $userId && root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now && (newData.exists() || (!root.child('account_deletion_rollout/v1').exists() || (root.child('account_deletion_rollout/v1/schemaVersion').val() === 1 && root.child('account_deletion_rollout/v1/phase').val() === 'compatibility' && root.child('account_deletion_rollout/v1/revision').isNumber() && root.child('account_deletion_rollout/v1/revision').val() >= 1 && root.child('account_deletion_rollout/v1/updatedAtMs').isNumber() && root.child('account_deletion_rollout/v1/updatedAtMs').val() > 0)))))",
         "safety": {
           "$eventId": {
             "status": {
@@ -1273,7 +1334,7 @@
       ".write": false,
       "$bookingRef": {
         "authorizedAuthUid": {
-          ".write": "auth != null && data.val() === auth.uid && !newData.exists() && root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now"
+          ".write": "auth != null && data.val() === auth.uid && !newData.exists() && root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now && (!root.child('account_deletion_rollout/v1').exists() || (root.child('account_deletion_rollout/v1/schemaVersion').val() === 1 && root.child('account_deletion_rollout/v1/phase').val() === 'compatibility' && root.child('account_deletion_rollout/v1/revision').isNumber() && root.child('account_deletion_rollout/v1/revision').val() >= 1 && root.child('account_deletion_rollout/v1/updatedAtMs').isNumber() && root.child('account_deletion_rollout/v1/updatedAtMs').val() > 0))"
         }
       }
     }

@@ -8,12 +8,30 @@ const APP_LOCAL_KEYS = [
   '@LLT:bookingData',
   '@LLT:lastScreen',
   '@LLT:identityBinding',
+  '@LLT:notificationOnboarding',
   '@LLT:appSession:v1',
+  '@LLT:pendingSessionEnd:v1',
   '@LLT:safetyOfflineQueue',
   '@LLT:safetyOfflineQueue:corruptBackup',
   '@LLT:trustedContacts',
   'LLT_LOGS_app_logs',
 ];
+
+const safeStorageSegment = (value) => (
+  typeof value === 'string' && value.trim() ? value.trim().replace(/[^A-Za-z0-9_-]/gu, '_') : null
+);
+
+const notificationLifecycleKeys = ({ authUid, sessionId }) => {
+  const keys = [
+    '@LLT:handled-notification-responses:v1',
+    '@LLT:pending-notification-response:v1',
+  ];
+  const safeUid = safeStorageSegment(authUid);
+  const safeSession = safeStorageSegment(sessionId);
+  if (safeUid) keys.push(`@LLT:notification-registration-revision:v1:${safeUid}`);
+  if (safeUid) keys.push(`@LLT:notification-registration-retry:v2:${safeUid}:${safeSession || 'marketing'}`);
+  return keys;
+};
 
 const loadPhotoCacheService = () => {
   try { return require('./photoViewerCacheService'); } catch { return null; }
@@ -44,6 +62,10 @@ const createLocalSessionCleanupService = ({
       const operations = {
         stopOfflineReplay: () => offline.setActiveSessionScope(null),
         clearSessionKeys: () => storage.multiRemove(APP_LOCAL_KEYS),
+        clearNotificationLifecycle: () => storage.multiRemove(notificationLifecycleKeys({
+          authUid,
+          sessionId: appSession?.sessionId || null,
+        })),
         clearNotificationCache: () => authUid ? clearNotifications({ userId: authUid }) : Promise.resolve(0),
         clearPhotoCache: () => photoCache?.clearPhotoViewerCache?.() || Promise.resolve({ success: true }),
       };

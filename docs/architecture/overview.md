@@ -32,4 +32,7 @@ Dependency direction is inward: composition may depend on features and shared mo
 - Change a cross-runtime shape in `contracts/definitions/contracts.v1.json`, update fixtures, run `npm run contracts:generate`, and verify rules parity with `npm run contracts:check`.
 - Remove a compatibility facade only after all consumers move and public API characterization proves that removal is deliberate.
 
-See [module boundaries](./module-boundaries.md), [testing](./testing.md), and the decision records under `decisions/`.
+See [module boundaries](./module-boundaries.md), [testing](./testing.md), and the decision records under
+`decisions/`. Server-owned account deletion is defined by
+[ADR 0009](./decisions/0009-server-owned-account-deletion.md) and the
+[account-deletion contract](../data-contracts/account-deletion.md).

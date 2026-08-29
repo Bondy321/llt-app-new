@@ -2,9 +2,9 @@
 
 Welcome, Agent. This file is the operational source of truth for contributors working in this repo. Keep it practical: update it whenever architecture, contracts, commands, or release assumptions materially change.
 
-Last updated: August 28, 2026
+Last updated: August 29, 2026
 
-Architecture source of truth: start with `docs/architecture/overview.md`, then follow `module-boundaries.md` and the runtime-specific document. Keep `App.js` and `functions/index.js` as composition roots; preserve compatibility facades; place Firebase, HTTP, and persistence access behind adapters; update canonical contracts and generated copies together; run `npm run verify:refactor` for structural changes. The detailed rationale lives in `docs/architecture/decisions/` and should not be duplicated here.
+Architecture source of truth: start with `docs/architecture/overview.md`, then follow `module-boundaries.md` and the runtime-specific document. Account deletion is specified by `docs/data-contracts/account-deletion.md`, ADR 0009 and `docs/operations/account-deletion.md`; do not duplicate or weaken that preservation boundary. Keep `App.js` and `functions/index.js` as composition roots; preserve compatibility facades; place Firebase, HTTP, and persistence access behind adapters; update canonical contracts and generated copies together; run `npm run verify:refactor` for structural changes. The detailed rationale lives in `docs/architecture/decisions/` and should not be duplicated here.
 
 ---
 
@@ -148,6 +148,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `notification_jobs`, `notification_job_coalescing`, `notification_job_token_claims`, `notification_job_audience_claims` (server-private durable push outbox, supersession and UID/token deduplication claims)
 - `notification_delivery_attempts`, `notification_delivery_warnings` (server-private ticket/receipt state and visible operations warnings)
 - `notification_devices`, `notification_consents` (server-owned installation push state and explicit marketing consent; self-readable, client-write denied)
+- `notification_device_tombstones` (server-private permanent UID anti-recreation fence; account deletion creates/preserves it under the device lock)
 - `marketing_notification_details` (server-owned durable future-tour notification content)
 - `web_admin_settings`
 - `booking_identities`
@@ -169,6 +170,8 @@ Do not rename these Realtime Database roots without a full migration:
 - `driver_assignment_locks`, `driver_assignment_idempotency`, `driver_assignment_transitions` (server-private assignment serialization, replay and continuation state; assignment audit uses bounded `app_session_events`)
 - `driver_location_sessions`, `driver_location_pickups`, `driver_location_projection_state`, `live_state_rollout` (private per-session live sources, assignment-owned canonical pickup, projection fencing, and explicit rollout authority)
 - `chat_presence_sessions`, `chat_typing_sessions`, `chat_status_projection_state` (private per-session status sources and projection fencing)
+- `account_deletion_jobs`, `account_deletion_queue`, `account_deletion_active`, `account_deletion_passenger_active`, `account_deletion_locks`, `account_deletion_passenger_locks`, `account_deletion_uid_tombstones`, `account_deletion_completion_tombstones`, `account_deletion_rollout` (server-private durable deletion work, queue/leases, UID and passenger admission barriers, serialization, permanent deleted-UID/completion fencing and compatibility policy)
+- `media_record_locks` (server-private per-photo serialization shared by normal upload/delete endpoints and durable account deletion)
 
 Admin UID hardcoded in rules:
 
@@ -249,6 +252,10 @@ Application session authority:
 - Offline logout is a durable blocking pending state, not a completed logout. Startup retries it, and no tour UI may be restored while it is pending.
 - Admin revocation uses `revokeAppSession`; session expiry cleanup runs every 15 minutes. Both share the same compare-safe cleanup and distributed lock boundary.
 - Normal logout preserves Firebase Auth, `passenger_identity_security`, `authorizedAuthUid`, opaque passenger identity, historical content and operational driver assignment. Explicit account deletion remains a separate workflow.
+- Explicit account deletion is server-owned and receipt-resumable. Mobile supplies only the exact
+  session ID and a high-entropy receipt; Functions derive and persist private scope, install a
+  non-expiring login barrier before destructive work, delete Auth last, and expose only a PII-free
+  receipt status. See `docs/data-contracts/account-deletion.md`.
 
 Stable passenger identity:
 
@@ -256,7 +263,9 @@ Stable passenger identity:
 - Passenger principals must never contain booking reference, email, phone, name, or other customer data.
 - `verifyPassengerLogin` transactionally creates/reuses the opaque ID and persists the user profile and bindings with Admin SDK authority. Clients never derive or bind passenger identities.
 - A booking is bound to its first verified Firebase Auth UID through `passenger_identity_security/{bookingRef}/authorizedAuthUid`; a different UID receives `REAUTHORIZE_REQUIRED`. This server-only root is separate from sync-owned `booking_identities`, so imports cannot erase security state. Migration locks ambiguous multi-UID legacy bookings for operations review.
-- The only client mutation allowed in `passenger_identity_security` is deletion of `authorizedAuthUid` by that exact currently bound UID during explicit account deletion; clients cannot read, create, replace, or reassign a security record.
+- Account deletion compare-removes `authorizedAuthUid` through the server workflow. Clients cannot
+  read, create, replace or reassign a security record; the temporary direct-delete compatibility rule
+  must not be used by new code and is removed only by the later `server_only` rollout.
 - Use `toRealtimeKeySegment(stablePassengerId)` before using stable identities as path segments.
 - Encoded keys are required for:
   - `identity_bindings/{stablePassengerKey}/{authUid}`
@@ -955,6 +964,20 @@ Exported functions:
 - `endAppSession`
   - authenticated and active-session-protected HTTPS `POST`, region `europe-west1`, CORS disabled
   - compare-ends only the exact expected session and removes session-derived authority and ephemeral state
+- `requestAccountDeletion`
+  - authenticated HTTPS `POST`, region `europe-west1`, CORS disabled
+  - derives trusted scope from the exact app session and atomically reserves a private durable job,
+    queue entry and non-expiring login barrier before destructive work
+- `getAccountDeletionStatus`
+  - authenticated receipt-capability HTTPS `POST`, region `europe-west1`, CORS disabled
+  - works after fresh anonymous Auth and returns only status, phase, retryability, safe timestamps/counts
+- `retryAccountDeletion`
+  - authenticated receipt-capability HTTPS `POST`, region `europe-west1`, CORS disabled
+  - requeues `requires_attention` work without changing its private scope or durable cursors
+- `processAccountDeletionJobs`
+  - scheduled every five minutes in `europe-west1`, one scheduler instance
+  - claims at most 10 due jobs through exact queue/job leases and removes at most 50 expired,
+    private-scope-free completion records per run
 - `revokeAppSession`
   - operations-admin HTTPS `POST`, region `europe-west1`, allowlisted reasons and optional expected-session compare
   - uses the same lock and cleanup path as normal logout without unassigning drivers or rotating passenger identity
@@ -1046,8 +1069,8 @@ Important RTDB invariants:
 - Online passenger login must persist `users/{authUid}/bookingRef` before entering the app; that caller-owned profile link keeps exact manifest-row access working after short-lived grants expire.
 - Driver-code login uses `verifyDriverLogin`; assignments resolve from `drivers/{driverId}/currentTourId`.
 - Driver identity and assignment authority are server-owned. Claimed clients can update only
-  `drivers/{driverId}/lastActive` and remove their own `authUid` during account deletion;
-  they cannot self-assign through manifest or profile helper paths.
+  `drivers/{driverId}/lastActive`; account deletion compare-removes an exact matching `authUid`
+  through the server workflow. Clients cannot self-assign through manifest or profile helper paths.
 - Passenger manifest loading uses the `getTourManifest` HTTPS function; the mobile app must not scan `/bookings` to assemble manifests in production.
 - Release order matters for backend access changes: deploy Functions first, then Realtime Database/Storage rules, then EAS update/build. Production binary EAS workflows test backend changes but do not deploy Firebase backend artifacts; the fast TestFlight OTA workflow assumes verification was completed before merge.
 - `bookings/{bookingRef}` writes are admin-only.
@@ -1057,7 +1080,9 @@ Important RTDB invariants:
 - Chat reaction, typing, presence, and read-state actor leaves are identity-scoped.
 - Private photos allow access by auth UID, raw stable identity, encoded stable key, raw private owner, encoded private owner key, or identity binding.
 - Passenger profile creation and new `identity_bindings` writes must match the caller's canonical short-lived `booking_access_grants` identity; an authenticated client cannot self-assert an arbitrary passenger identity.
-- `identity_bindings` and `identity_bindings_meta` are server/admin-owned; passenger clients cannot create, rotate, or delete bindings.
+- `identity_bindings` and `identity_bindings_meta` are server/admin-owned; passenger clients cannot
+  create or rotate bindings. New account-deletion code uses the server workflow; compatibility rules
+  temporarily retain the legacy exact self-delete until the separately approved `server_only` cutover.
 - `broadcasts` writes are admin-only and require numeric `createdAtMs`.
 - `category_broadcasts` writes are admin-only, require numeric `createdAtMs`, and target canonical future-tour preference keys under `users/{uid}/preferences/marketing`.
 - `users` validates push token metadata, identity metadata, driver helper fields, and notification preferences.

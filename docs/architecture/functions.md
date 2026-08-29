@@ -8,7 +8,16 @@ receipt reconciliation, and `cleanupNotificationDeliveryData` applies bounded re
 
 `functions/index.js` imports and re-exports `functions/src/compositionRoot.js`. The composition root registers every deployed object exactly once. Domains contain business policy; infrastructure contains reusable runtime mechanics and may not make domain decisions.
 
-Domains currently cover administration, app sessions, driver assignment, driver authentication, driver Tour Packs, live-state projections, maintenance, manifests, media, notifications, passenger authentication, and safety. Infrastructure covers auth, database operations, HTTP boundaries, safe logging, notifications, distributed rate limits, and Storage/media processing.
+Domains currently cover account deletion, administration, app sessions, driver assignment, driver authentication, driver Tour Packs, live-state projections, maintenance, manifests, media, notifications, passenger authentication, and safety. Infrastructure covers auth, database operations, HTTP boundaries, safe logging, notifications, distributed rate limits, and Storage/media processing.
+
+`domains/account-deletion` owns the authenticated request/status/retry protocol, trusted scope
+derivation, non-expiring login barrier, private job/queue leases, bounded media/chat cursors, retry and
+completion retention. The initial request supplies only an exact session ID and an opaque receipt;
+Functions derive all customer/driver/tour ownership. Workers may commit only under an exact
+owner/revision/phase lease, use the notification and media domains through internal trusted helpers,
+progressively shred private scope, delete Firebase Auth last, and retain only a minimal receipt-derived
+completion marker after detailed-record expiry. See ADR 0009, `docs/data-contracts/account-deletion.md`, and
+`docs/operations/account-deletion.md` before changing this domain.
 
 `domains/live-state` owns retryable RTDB triggers for private driver-location and
 chat-status sources, the trusted assignment-owned pickup mutation, and private
@@ -34,3 +43,8 @@ To add a Function:
 6. Keep `functions/index.js` free of paths, parsing, and rules.
 
 Never rename deployed exports or alter regions, paths, schedules, resource settings, CORS, request shapes, or reason codes without a compatibility layer.
+
+The prepared account-deletion public exports are `requestAccountDeletion`,
+`getAccountDeletionStatus`, and `retryAccountDeletion`. `processAccountDeletionJobs` is the private
+five-minute scheduler that claims at most 10 due jobs and removes at most 50 expired completion records
+per run. Their existence in source does not mean they have been deployed.

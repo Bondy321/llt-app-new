@@ -8,11 +8,21 @@ Auth UID and remains separate from operational app-session authority.
 
 `App.js` delegates to `src/app/AppRoot.js`. `AppRoot` owns providers; `AppShell` coordinates state; runners and hooks own login, restore, logout, notification, offline, and assignment workflows. `AppScreenRouter` renders the stable route registry.
 
+Account deletion is a separate blocking lifecycle, not an expanded logout. The service generates and
+persists an opaque receipt before requesting deletion, sends only that receipt and the exact app-session
+ID, then discards the session ID after server acceptance. Runners purge scoped local data, replace Auth
+with a fresh anonymous installation and resume receipt-only status polling across startup, reconnect and
+foreground transitions. While a receipt is pending, routing stays on the deletion status screen and all
+normal login/tour restoration remains blocked. See `docs/data-contracts/account-deletion.md`.
+
 Screens are compatibility entries or bounded controllers. Controllers own lifecycle and orchestration, views receive state/actions, pure presentation modules format data, and repositories hide Firebase. Large features are split by actual responsibility: chat delivery/search/moderation/media/read state, gallery listing/upload/viewing, itinerary edit/sync/rendering, driver location, boarding, passenger home, notifications, and safety.
 
 Rules:
 
 - Never derive passenger identity on-device. Use the server-issued `pax_v2_…` principal and `app_sessions` authority.
+- Never derive or submit account-deletion booking, tour, principal, driver, media, chat or Storage
+  scope on-device. Preserve the secure receipt through initial cleanup and clear it only after confirmed
+  completion and final local cleanup.
 - Keep route names and screen prop contracts stable.
 - Subscribe once per scope and always return cleanup.
 - Keep Firebase, fetch, AsyncStorage, and SecureStore out of visual components.

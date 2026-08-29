@@ -77,6 +77,16 @@ const resolveJobScope = (input) => ({
 });
 const buildJobDeliveryPolicy = (policy, grouping) => ({ channelId: policy.channelId, priority: policy.priority, sound: policy.sound, interruptionLevel: policy.interruptionLevel, lockScreenPreviewPolicy: policy.lockScreenPreviewPolicy, mayCoalesce: policy.mayCoalesce, ttlMs: policy.ttlMs, collapseId: grouping.collapseId, androidTag: grouping.androidTag, iosThreadId: grouping.iosThreadId, requiresActiveSession: policy.requiresActiveSession, bypassesOptionalPreferences: policy.bypassesOptionalPreferences });
 
+const ensureNotificationFanoutQueue = async (db, job) => {
+  if (job?.status !== 'queued' || job.queueKind !== 'fanout'
+    || !isValidFirebaseKey(job.jobId) || !isValidFirebaseKey(job.queueKey)
+    || !Number.isSafeInteger(job.queueVersion) || job.queueVersion < 1) return false;
+  await db.ref(`${QUEUE_ROOTS.fanout}/${job.queueKey}`).transaction((current) => current || (
+    buildQueueEntry('fanout', job.jobId, Number(job.availableAtMs || job.createdAtMs), job.queueVersion)
+  ));
+  return true;
+};
+
 /** @param {any} input */
 const createNotificationJobRecord = (input) => {
   const nowMs = Number.isSafeInteger(input?.nowMs) ? input.nowMs : Date.now();
@@ -184,25 +194,39 @@ const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalesc
   }
 
   if (supersededByJobId) {
-    const current = (await jobRef.once('value')).val() || job;
-    await jobRef.update({ status: 'expired', supersededByJobId, completedAtMs: Number(current.completedAtMs || job.createdAtMs), updatedAtMs: job.createdAtMs, lease: null });
+    await jobRef.transaction((current) => current?.status === 'preparing' ? {
+      ...current,
+      status: 'expired',
+      supersededByJobId,
+      completedAtMs: Number(current.completedAtMs || job.createdAtMs),
+      updatedAtMs: job.createdAtMs,
+      lease: null,
+    } : undefined);
   } else {
-    const current = (await jobRef.once('value')).val() || job;
-    if (current.status === 'preparing') {
+    let activation = null;
+    const activated = await jobRef.transaction((current) => {
+      if (current?.status !== 'preparing') return undefined;
       const queueVersion = Number(current.queueVersion || 0) + 1;
       const queueKey = buildNotificationQueueKey(job.availableAtMs, job.jobId, queueVersion);
-      await db.ref().update({
-        [`notification_jobs/${job.jobId}/status`]: 'queued',
-        [`notification_jobs/${job.jobId}/queueKind`]: 'fanout',
-        [`notification_jobs/${job.jobId}/queueKey`]: queueKey,
-        [`notification_jobs/${job.jobId}/queueVersion`]: queueVersion,
-        [`notification_jobs/${job.jobId}/updatedAtMs`]: job.createdAtMs,
-        [`${QUEUE_ROOTS.fanout}/${queueKey}`]: buildQueueEntry('fanout', job.jobId, job.availableAtMs, queueVersion),
-      });
-    }
+      activation = { queueKey, queueVersion };
+      return {
+        ...current,
+        status: 'queued',
+        queueKind: 'fanout',
+        queueKey,
+        queueVersion,
+        updatedAtMs: job.createdAtMs,
+      };
+    });
+    if (activated?.committed && activation) await ensureNotificationFanoutQueue(db, {
+      ...job, status: 'queued', queueKind: 'fanout', ...activation,
+    });
   }
 
   const persisted = (await jobRef.once('value')).val() || result?.snapshot?.val?.() || job;
+  // Trigger replay repairs the non-atomic preparing -> queued -> queue handoff.
+  // Privacy and terminal states fail closed because only exact queued jobs qualify.
+  await ensureNotificationFanoutQueue(db, persisted);
   return { created, jobId: job.jobId, job: persisted };
 };
 
@@ -249,5 +273,6 @@ module.exports = {
   calculateRetryDelayMs,
   createNotificationJobRecord,
   enqueueNotificationJob,
+  ensureNotificationFanoutQueue,
   safeCoalescingKey,
 };

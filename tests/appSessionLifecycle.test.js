@@ -21,6 +21,10 @@ const {
   issuePassengerAppSession,
 } = require('../functions/src/domains/app-sessions/sessionIssuance');
 const {
+  derivePassengerAccountDeletionKey,
+  deriveUidAccountDeletionTombstoneKey,
+} = require('../functions/src/domains/account-deletion/accountDeletionBoundary');
+const {
   buildCutoverUpdates,
   closeAdminApps,
   isParticipantBackedByActiveSession,
@@ -563,6 +567,80 @@ test('driver issuance preserves durable passenger ownership and a failed atomic 
   assert.equal(failedDb.state['app_sessions/uid-role-transition'].principalType, 'passenger');
   assert.equal(failedDb.state['users/uid-role-transition'].principalType, 'passenger');
   assert.equal(failedDb.state['users/uid-role-transition/driverId'], undefined);
+});
+
+test('passenger issuance fails closed behind a booking-scoped deletion barrier', async () => {
+  const nowMs = 1_800_000_200_000;
+  const bookingRef = 'BOOK-DELETING';
+  const authUid = 'fresh-anonymous-passenger';
+  const db = createTransactionDb({
+    [`account_deletion_passenger_active/v1/${derivePassengerAccountDeletionKey(bookingRef)}`]: {
+      schemaVersion: 1, deletionId: `acctdel_v1_${'d'.repeat(64)}`, status: 'pending',
+    },
+  });
+  await assert.rejects(issuePassengerAppSession({
+    db,
+    authUid,
+    principalId: PASSENGER_ID,
+    tourId: 'TOUR_BLOCKED',
+    bookingRef,
+    identityUpdates: { [`identity_bindings/${PASSENGER_ID}/${authUid}`]: true },
+    grantUpdates: {},
+    nowMs,
+    clock: () => nowMs,
+  }), (error) => error.code === 'ACCOUNT_DELETION_IN_PROGRESS');
+  assert.equal(db.state[`app_sessions/${authUid}`], undefined);
+  assert.equal(db.state[`identity_bindings/${PASSENGER_ID}/${authUid}`], undefined);
+});
+
+test('permanent UID tombstone blocks stale deleted-user tokens after completion', async () => {
+  const nowMs = 1_800_000_210_000;
+  const authUid = 'deleted-auth-uid';
+  const db = createTransactionDb({
+    [`account_deletion_uid_tombstones/v1/${deriveUidAccountDeletionTombstoneKey(authUid)}`]: {
+      schemaVersion: 1, permanent: true, createdAtMs: nowMs - 10_000,
+    },
+  });
+  await assert.rejects(issueDriverAppSession({
+    db,
+    authUid,
+    driverId: 'D-DELETED',
+    tourId: null,
+    profileUpdates: { [`users/${authUid}/driverId`]: 'D-DELETED' },
+    nowMs,
+    clock: () => nowMs,
+  }), (error) => error.code === 'ACCOUNT_DELETION_IN_PROGRESS');
+  assert.equal(db.state[`app_sessions/${authUid}`], undefined);
+  assert.equal(db.state[`users/${authUid}/driverId`], undefined);
+});
+
+test('expired issuance owner cannot write after deletion takes over the app-session lock', async () => {
+  const nowMs = 1_800_000_220_000;
+  const authUid = 'stale-issuer';
+  const db = createTransactionDb();
+  let clockCalls = 0;
+  await assert.rejects(issueDriverAppSession({
+    db,
+    authUid,
+    driverId: 'D-STALE',
+    tourId: null,
+    profileUpdates: { [`users/${authUid}/driverId`]: 'D-STALE' },
+    nowMs,
+    clock: () => {
+      clockCalls += 1;
+      db.state[`app_session_locks/${authUid}`] = {
+        owner: 'account-deletion-owner', operation: 'revoke',
+        createdAtMs: nowMs + 181_000, expiresAtMs: nowMs + 361_000,
+      };
+      db.state[`account_deletion_active/v1/${authUid}`] = {
+        deletionId: `acctdel_v1_${'e'.repeat(64)}`,
+      };
+      return nowMs + 181_000;
+    },
+  }), (error) => error.code === 'SESSION_IN_PROGRESS');
+  assert.equal(clockCalls, 1);
+  assert.equal(db.state[`app_sessions/${authUid}`], undefined);
+  assert.equal(db.state[`users/${authUid}/driverId`], undefined);
 });
 
 test('cutover migration is dry-run-first, bounded and never synthesises trusted sessions', () => {

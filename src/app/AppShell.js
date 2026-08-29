@@ -3,10 +3,11 @@ import { runRefreshAppData, runInitializeApp, runRetryInitialization, runHandleA
 import { runLoadNotificationOnboardingState, runSaveNotificationOnboardingState, runShouldShowNotificationOnboarding, runHandleNotificationOnboardingComplete } from './notifications/notificationOnboardingRunners';
 import { runHandleDriverAssignmentChange } from './driver/driverAssignmentRunners';
 import { runResolveOfflineLogin, runHandleLoginSuccess } from './session/loginRunners';
-import { runClearSessionState, runPurgeLocalSession, runHandleLogout, runHandleAccountDeleted } from './session/logoutRunners';
+import { runClearSessionState, runPurgeLocalSession, runHandleLogout } from './session/logoutRunners';
 import AppShellView from './AppShellView';
 import useNotificationSessionNavigation from './notifications/useNotificationSessionNavigation';
 import useLogoutLifecycle from './session/useLogoutLifecycle';
+import useAccountDeletionShellLifecycle from './session/useAccountDeletionShellLifecycle';
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { auth, authHelpers, realtimeDb } from '../../firebase';
@@ -43,7 +44,6 @@ import {
 } from '../../services/crashDiagnosticsService';
 import loginDiagnostics from '../../services/loginDiagnosticsService';
 import { SESSION_KEYS, SessionStorage, storageMode } from './session/sessionStorage';
-const { clearNotificationFeedCache } = require('../../services/notificationInboxService');
 import useLoginTransition from './navigation/useLoginTransition';
 import useAppNavigation from './navigation/useAppNavigation';
 const { getLoginTransitionDurationMs } = require('../../screens/loginFlow');
@@ -55,8 +55,8 @@ const IDENTITY_VERSION = PASSENGER_IDENTITY_VERSION;
 const NOTIFICATION_ONBOARDING_REMINDER_MS = 24 * 60 * 60 * 1000;
 const STARTUP_CONNECTION_ERROR_MESSAGE =
   'We could not connect to tour services. Please check your internet connection and restart the app.';
-
 const { normalizePassengerEmail, resolveOfflineLoginFromCache } = offlineLoginResolver;
+// eslint-disable-next-line complexity -- composes mutually exclusive session and recovery lifecycles
 export default function AppShell() {
   const [initializing, setInitializing] = useState(true);
   const [user, setUser] = useState(null);
@@ -67,6 +67,7 @@ export default function AppShell() {
   const [identityBinding, setIdentityBinding] = useState(null);
   const [appSession, setAppSession] = useState(null);
   const [logoutStatus, setLogoutStatus] = useState({ state: 'idle', error: null, diagnostic: null });
+  const [accountDeletionStatus, setAccountDeletionStatus] = useState({ state: 'idle', phase: null, retryable: false, error: null, completedAtMs: null });
 
   const [driverSessionGeneration, setDriverSessionGeneration] = useState(0);
   const driverIdentityPersistKeyRef = useRef(null);
@@ -115,7 +116,7 @@ export default function AppShell() {
   const diagnosticsRole = bookingData?.id?.startsWith('D-') ? 'driver' : 'passenger';
   const offlineSessionScope = useMemo(() => {
     const principalId = canonicalIdentity?.principalId;
-    if (!appSession || !diagnosticsTourId || !principalId || principalId === 'anonymous'
+    if (accountDeletionStatus.state !== 'idle' || !appSession || !diagnosticsTourId || !principalId || principalId === 'anonymous'
       || appSession.tourId !== diagnosticsTourId || appSession.principalId !== principalId) return null;
     return {
       tourId: diagnosticsTourId,
@@ -125,7 +126,7 @@ export default function AppShell() {
       cacheOwnerId: bookingData?.id || principalId,
       sessionId: appSession.sessionId,
     };
-  }, [appSession, bookingData?.id, canonicalIdentity?.authUid, canonicalIdentity?.principalId, diagnosticsRole, diagnosticsTourId]);
+  }, [accountDeletionStatus.state, appSession, bookingData?.id, canonicalIdentity?.authUid, canonicalIdentity?.principalId, diagnosticsRole, diagnosticsTourId]);
   const offlineSessionScopeKey = offlineSessionScope
     ? `${offlineSessionScope.tourId}|${offlineSessionScope.role}|${offlineSessionScope.principalId}|${offlineSessionScope.cacheOwnerId}`
     : 'none';
@@ -382,7 +383,7 @@ export default function AppShell() {
 
   const hydrateIdentityBindingForCurrentUser = (...args) => runHydrateIdentityBindingForCurrentUser({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, logger, maskIdentifier, realtimeDb, repairIdentityBindingFromSession, setIdentityBinding, toRealtimeKeySegment }, ...args);
 
-  const initializeApp = (...args) => runInitializeApp({ SESSION_KEYS, STARTUP_CONNECTION_ERROR_MESSAGE, SessionStorage, appSessionService, authHelpers, authUnsubscribeRef, handleAuthStateChange, hydrateIdentityBindingForCurrentUser, localSessionCleanupService, logger, maskIdentifier, recordCrashBreadcrumb, restoreSession, setAppSession, setAuthError, setDiagnosticsAuthUid, setInitializing, setLogoutStatus, setUser }, ...args);
+  const initializeApp = (...args) => runInitializeApp({ SESSION_KEYS, STARTUP_CONNECTION_ERROR_MESSAGE, SessionStorage, appSessionService, authHelpers, authUnsubscribeRef, handleAuthStateChange, hydrateIdentityBindingForCurrentUser, localSessionCleanupService, logger, maskIdentifier, recordCrashBreadcrumb, restoreSession, setAccountDeletionStatus, setAppSession, setAuthError, setDiagnosticsAuthUid, setInitializing, setLogoutStatus, setUser }, ...args);
 
   const retryInitialization = (...args) => runRetryInitialization({ initializeApp, setAuthError, setInitializing }, ...args);
 
@@ -513,11 +514,10 @@ export default function AppShell() {
   const handleNotificationOnboardingComplete = (...args) => runHandleNotificationOnboardingComplete({ homeScreen, navigateTo, saveNotificationOnboardingState, user }, ...args);
 
   useNotificationSessionNavigation({
-    authUid: user?.uid, authContextSettled: !initializing,
-    appSession, bookingId: bookingData?.id,
-    isConnected, isDriver: isDriverSession,
-    navigateTo, roleContextSettled: !initializing,
-    sessionContextSettled: !initializing, tourId: tourData?.id,
+    authUid: accountDeletionStatus.state === 'idle' ? user?.uid : null,
+    appSession: accountDeletionStatus.state === 'idle' ? appSession : null,
+    authContextSettled: !initializing, bookingId: bookingData?.id, isConnected, isDriver: isDriverSession,
+    navigateTo, roleContextSettled: !initializing, sessionContextSettled: !initializing, tourId: tourData?.id,
   });
 
   const clearSessionState = (...args) => runClearSessionState({ SESSION_KEYS, SessionStorage, logger, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setScreenParams, setTourCode, setTourData }, ...args);
@@ -527,21 +527,18 @@ export default function AppShell() {
   const handleLogout = (...args) => runHandleLogout({ appSession, appSessionService, auth, bookingData, currentDriverLifecycleScope, logger, logoutContextRef, purgeLocalSession, setAppSession, setLogoutStatus, tourData, user }, ...args);
 
   const retryPendingLogout = useLogoutLifecycle({
-    appSession,
-    isConnected,
-    logoutContextRef,
-    logoutStatus,
-    purgeLocalSession,
-    sessionGenerationRef,
-    setCurrentScreen,
-    setLogoutStatus,
+    appSession, disabled: accountDeletionStatus.state !== 'idle', isConnected,
+    logoutContextRef, logoutStatus, purgeLocalSession, sessionGenerationRef,
+    setCurrentScreen, setLogoutStatus,
     userUid: user?.uid,
   });
 
-  const handleAccountDeleted = (...args) => runHandleAccountDeleted({ auth, clearNotificationFeedCache, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, driverOperationalLifecycleService, logger, maskIdentifier, offlineSyncService, previousDriverOperationalScopeRef, setAppSession, setDriverSessionGeneration, setUser }, ...args);
-
+  const { finishAccountDeletion, handleStartAccountDeletion, retryAccountDeletion } = useAccountDeletionShellLifecycle({
+    accountDeletionStatus, appSession, driverOperationalScope: currentDriverLifecycleScope, isConnected,
+    setAccountDeletionStatus, setAppSession, setCurrentScreen, setUser,
+  });
   useEffect(() => {
-    if (!isConnected || !firebaseConnected || !offlineSessionScope) return;
+    if (accountDeletionStatus.state !== 'idle' || !isConnected || !firebaseConnected || !offlineSessionScope) return;
     Promise.allSettled([
       offlineSyncService.replayQueue({
         services: { bookingService, chatService, photoService, driverTourPackActionService },
@@ -553,10 +550,11 @@ export default function AppShell() {
         error: error?.message || String(error),
       });
     });
-  }, [isConnected, firebaseConnected, offlineSessionScope, offlineSessionScopeKey]);
+  }, [accountDeletionStatus.state, isConnected, firebaseConnected, offlineSessionScope, offlineSessionScopeKey]);
 
   return (
     <AppShellView
+      accountDeletionStatus={accountDeletionStatus}
       authError={authError}
       edgeSwipeResponder={edgeSwipeResponder}
       initializing={initializing}
@@ -567,6 +565,8 @@ export default function AppShell() {
       logoutStatus={logoutStatus}
       retryInitialization={retryInitialization}
       retryPendingLogout={retryPendingLogout}
+      retryAccountDeletion={retryAccountDeletion}
+      finishAccountDeletion={finishAccountDeletion}
       routerProps={{
         bookingData,
         canonicalIdentity,
@@ -575,7 +575,7 @@ export default function AppShell() {
         driverTourPackActions,
         driverTourPackFeature,
         driverTourPackState,
-        handleAccountDeleted,
+        handleStartAccountDeletion,
         handleDriverAssignmentChange,
         handleLoginSuccess,
         handleLogout,

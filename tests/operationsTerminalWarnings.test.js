@@ -90,6 +90,31 @@ test('idempotent warning persistence preserves acknowledgement and resolution me
   assert.equal(retry.warning.lastAttemptAtMs, 50);
 });
 
+test('warning persistence reports the final transaction attempt after contention', async () => {
+  const warning = buildOperationsTerminalWarning({
+    jobType: 'account_deletion', reason: 'storage_unavailable',
+    identifiers: { deletionId: 'deletion-a' }, attemptCount: 2,
+    firstAttemptAtMs: 10, lastAttemptAtMs: 20, expiresAtMs: 30, nowMs: 40,
+  });
+  const successor = { ...warning, attemptCount: 3, updatedAtMs: 50 };
+  const db = {
+    ref() {
+      return {
+        async transaction(updater) {
+          assert.deepEqual(updater(null), warning);
+          const merged = updater(successor);
+          return { committed: true, snapshot: snapshot(merged) };
+        },
+      };
+    },
+  };
+
+  const result = await persistOperationsTerminalWarning({ db, warning });
+  assert.equal(result.created, false);
+  assert.equal(result.warning.attemptCount, 3);
+  assert.equal(result.warning.updatedAtMs, 50);
+});
+
 test('source job is deleted only after warning persistence and is retained when warning storage fails', async () => {
   const sourcePath = 'cleanup_jobs/uid-a';
   const job = {

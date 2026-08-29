@@ -12,10 +12,24 @@ export const runRefreshAppData = async ({ bookingService, chatService, driverTou
     ]);
   };
 
-export const runInitializeApp = async ({ SESSION_KEYS, STARTUP_CONNECTION_ERROR_MESSAGE, SessionStorage, appSessionService, authHelpers, authUnsubscribeRef, handleAuthStateChange, hydrateIdentityBindingForCurrentUser, localSessionCleanupService, logger, maskIdentifier, recordCrashBreadcrumb, restoreSession, setAppSession, setAuthError, setDiagnosticsAuthUid, setInitializing, setLogoutStatus, setUser }) => {
+export const runInitializeApp = async ({ SESSION_KEYS, STARTUP_CONNECTION_ERROR_MESSAGE, SessionStorage, accountDeletionService, appSessionService, authHelpers, authUnsubscribeRef, handleAuthStateChange, hydrateIdentityBindingForCurrentUser, localSessionCleanupService, logger, maskIdentifier, recordCrashBreadcrumb, restoreSession, setAccountDeletionStatus, setAppSession, setAuthError, setDiagnosticsAuthUid, setInitializing, setLogoutStatus, setUser, toAccountDeletionUiState }) => {
+    const deletionService = accountDeletionService || defaultAccountDeletionService;
+    const projectDeletionUiState = toAccountDeletionUiState || defaultToAccountDeletionUiState;
     let unsubscribe = null;
     try {
       setAuthError(null);
+      const pendingDeletion = await deletionService.readPending();
+      if (pendingDeletion) {
+        setAccountDeletionStatus(projectDeletionUiState(pendingDeletion));
+        setAppSession(null);
+        const recoveryUser = await authHelpers.ensureAuthenticated();
+        setUser(recoveryUser);
+        if (typeof authUnsubscribeRef.current === 'function') authUnsubscribeRef.current();
+        unsubscribe = authHelpers.onAuthStateChanged(handleAuthStateChange);
+        authUnsubscribeRef.current = unsubscribe;
+        setInitializing(false);
+        return unsubscribe;
+      }
       const currentUser = await authHelpers.ensureAuthenticated();
       if (currentUser) {
         setUser(currentUser);
@@ -147,3 +161,5 @@ import {
   restoreStoredIdentityBinding,
   restoreStoredSessionProjection,
 } from './sessionRestorePhases';
+import defaultAccountDeletionService from '../../../services/accountDeletionService';
+import { toAccountDeletionUiState as defaultToAccountDeletionUiState } from './accountDeletionRunners';

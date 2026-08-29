@@ -19,7 +19,8 @@ Module._load = function mockedLoad(request, _parent, _isMain) {
   }
   return originalLoad.apply(this, arguments);
 };
-const { __testables } = require('../functions/index.js');
+const functionsExports = require('../functions/index.js');
+const { __testables } = functionsExports;
 const { buildBookingRepairPlan } = require('../functions/scripts/repairDuplicateManifestPassengers.js');
 const { setSharpFactoryForTests } = require('../functions/src/infrastructure/storage/mediaProcessor');
 setSharpFactoryForTests(require('sharp'));
@@ -1008,6 +1009,31 @@ test('generatePhotoVariantsForRecord dry run reports target variant paths withou
   assert.equal(result.thumbnailPath, 'group_tour_photos/tour-1/thumbnails/source_thumb.jpg');
 });
 
+const createVariantRecordHarness = (initialRecord, updates) => {
+  let current = structuredClone(initialRecord);
+  const snapshot = () => ({
+    exists: () => current !== null && current !== undefined,
+    val: () => structuredClone(current),
+  });
+  return {
+    child: (photoId) => ({
+      once: async () => snapshot(),
+      transaction: async (updater) => {
+        const next = updater(structuredClone(current));
+        if (next === undefined) return { committed: false, snapshot: snapshot() };
+        current = structuredClone(next);
+        updates.push({ photoId, payload: structuredClone(next) });
+        return { committed: true, snapshot: snapshot() };
+      },
+    }),
+  };
+};
+
+const variantLockDeps = {
+  acquireMediaRecordLockFn: async () => ({ acquired: true, owner: 'variant-test' }),
+  releaseMediaRecordLockFn: async () => true,
+};
+
 test('generatePhotoVariantsForRecord writes ready variant fields', async () => {
   const savedPaths = [];
   const saveMetadataByPath = {};
@@ -1019,18 +1045,21 @@ test('generatePhotoVariantsForRecord writes ready variant fields', async () => {
       getMetadata: async () => [{ metadata: { authUid: 'auth-1' } }],
       setMetadata: async (metadata) => sourceMetadataUpdates.push(metadata),
       save: async (_buffer, options) => {
+        assert.equal(updates[0]?.payload?.variantStatus, 'processing');
+        assert.equal(updates[0]?.payload?.viewerStoragePath,
+          'group_tour_photos/tour-1/viewers/source_viewer.jpg');
+        assert.equal(updates[0]?.payload?.thumbnailStoragePath,
+          'group_tour_photos/tour-1/thumbnails/source_thumb.jpg');
         savedPaths.push(path);
         saveMetadataByPath[path] = options?.metadata?.metadata || {};
       },
     }),
   };
-  const dbRoot = {
-    child: (photoId) => ({
-      update: async (payload) => {
-        updates.push({ photoId, payload });
-      },
-    }),
+  const photoRecord = {
+    idempotencyKey: 'idem-1',
+    storagePath: 'group_tour_photos/tour-1/source.jpg',
   };
+  const dbRoot = createVariantRecordHarness(photoRecord, updates);
 
   const result = await __testables.generatePhotoVariantsForRecord({
     bucketName: 'demo-bucket.appspot.com',
@@ -1039,10 +1068,8 @@ test('generatePhotoVariantsForRecord writes ready variant fields', async () => {
     photoId: 'photo-1',
     storageBucket,
     dbRoot,
-    photoRecord: {
-      idempotencyKey: 'idem-1',
-      storagePath: 'group_tour_photos/tour-1/source.jpg',
-    },
+    photoRecord,
+    ...variantLockDeps,
   });
 
   assert.equal(result.status, 'ready');
@@ -1051,9 +1078,12 @@ test('generatePhotoVariantsForRecord writes ready variant fields', async () => {
     'group_tour_photos/tour-1/thumbnails/source_thumb.jpg',
   ]);
   assert.equal(updates[0].photoId, 'photo-1');
-  assert.equal(updates[0].payload.variantStatus, 'ready');
-  assert.equal(updates[0].payload.viewerUrl, null);
-  assert.equal(updates[0].payload.thumbnailUrl, null);
+  assert.equal(updates[0].payload.variantStatus, 'processing');
+  assert.equal(updates[0].payload.viewerStoragePath,
+    'group_tour_photos/tour-1/viewers/source_viewer.jpg');
+  assert.equal(updates.at(-1).payload.variantStatus, 'ready');
+  assert.equal(updates.at(-1).payload.viewerUrl, null);
+  assert.equal(updates.at(-1).payload.thumbnailUrl, null);
   assert.deepEqual(saveMetadataByPath['group_tour_photos/tour-1/viewers/source_viewer.jpg'], {
     visibility: 'group', sourceRole: 'viewer',
   });
@@ -1083,7 +1113,9 @@ test('private variant generation revokes source tokens and creates path-only tok
       save: async (_buffer, options) => { savedMetadata[path] = options.metadata.metadata; },
     }),
   };
-  const dbRoot = { child: () => ({ update: async (payload) => updates.push(payload) }) };
+  const photoRecord = { storagePath: sourcePath };
+  const transactionUpdates = [];
+  const dbRoot = createVariantRecordHarness(photoRecord, transactionUpdates);
   const result = await __testables.generatePhotoVariantsForRecord({
     bucketName: 'demo-bucket.appspot.com',
     visibility: 'private',
@@ -1092,7 +1124,8 @@ test('private variant generation revokes source tokens and creates path-only tok
     photoId: 'photo-1',
     storageBucket,
     dbRoot,
-    photoRecord: { storagePath: sourcePath },
+    photoRecord,
+    ...variantLockDeps,
   });
   assert.equal(result.status, 'ready');
   assert.deepEqual(sourceMetadataUpdates, [{ metadata: {
@@ -1103,6 +1136,7 @@ test('private variant generation revokes source tokens and creates path-only tok
   } }]);
   assert.deepEqual(savedMetadata[result.viewerPath], { visibility: 'private', sourceRole: 'viewer' });
   assert.deepEqual(savedMetadata[result.thumbnailPath], { visibility: 'private', sourceRole: 'thumbnail' });
+  updates.push(transactionUpdates.at(-1).payload);
   assert.equal(updates[0].viewerUrl, null);
   assert.equal(updates[0].thumbnailUrl, null);
 });
@@ -1116,13 +1150,10 @@ test('generatePhotoVariantsForRecord marks failed when source download fails', a
       },
     }),
   };
-  const dbRoot = {
-    child: (photoId) => ({
-      update: async (payload) => {
-        updates.push({ photoId, payload });
-      },
-    }),
+  const photoRecord = {
+    storagePath: 'private_tour_photos/tour-1/owner-1/source.jpg',
   };
+  const dbRoot = createVariantRecordHarness(photoRecord, updates);
 
   const result = await __testables.generatePhotoVariantsForRecord({
     bucketName: 'demo-bucket.appspot.com',
@@ -1132,16 +1163,103 @@ test('generatePhotoVariantsForRecord marks failed when source download fails', a
     photoId: 'photo-2',
     storageBucket,
     dbRoot,
-    photoRecord: {
-      storagePath: 'private_tour_photos/tour-1/owner-1/source.jpg',
-    },
+    photoRecord,
+    ...variantLockDeps,
   });
 
   assert.equal(result.status, 'failed');
-  assert.equal(result.error, 'download failed');
-  assert.equal(updates[0].photoId, 'photo-2');
-  assert.equal(updates[0].payload.variantStatus, 'failed');
-  assert.equal(updates[0].payload.variantError, 'download failed');
+  assert.equal(result.error, 'VARIANT_GENERATION_FAILED');
+  assert.equal(updates.at(-1).photoId, 'photo-2');
+  assert.equal(updates.at(-1).payload.variantStatus, 'failed');
+  assert.equal(updates.at(-1).payload.variantError, 'VARIANT_GENERATION_FAILED');
+});
+
+test('partial variant failure generation-deletes created objects and retains discoverable paths', async () => {
+  const sourcePath = 'group_tour_photos/tour-1/source.jpg';
+  const viewerPath = 'group_tour_photos/tour-1/viewers/source_viewer.jpg';
+  const thumbnailPath = 'group_tour_photos/tour-1/thumbnails/source_thumb.jpg';
+  const deletes = [];
+  const updates = [];
+  const storageBucket = {
+    file: (path) => {
+      if (path === sourcePath) {
+        return {
+          download: async () => [Buffer.from('source')],
+          getMetadata: async () => [{ metadata: {} }],
+          setMetadata: async () => {},
+        };
+      }
+      if (path === viewerPath) {
+        return {
+          save: async () => {},
+          getMetadata: async () => [{ generation: 'viewer-generation-1' }],
+          delete: async (options) => deletes.push({ path, options }),
+        };
+      }
+      assert.equal(path, thumbnailPath);
+      return { save: async () => { throw Object.assign(new Error('thumbnail save failed'), { code: 'EIO' }); } };
+    },
+  };
+  const photoRecord = { storagePath: sourcePath };
+  const result = await __testables.generatePhotoVariantsForRecord({
+    bucketName: 'demo-bucket.appspot.com',
+    visibility: 'group',
+    tourId: 'tour-1',
+    photoId: 'photo-partial',
+    storageBucket,
+    dbRoot: createVariantRecordHarness(photoRecord, updates),
+    photoRecord,
+    ...variantLockDeps,
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.deepEqual(deletes, [{
+    path: viewerPath,
+    options: { ignoreNotFound: true, ifGenerationMatch: 'viewer-generation-1' },
+  }]);
+  assert.equal(updates[0].payload.variantStatus, 'processing');
+  assert.equal(updates[0].payload.viewerStoragePath, viewerPath);
+  assert.equal(updates[0].payload.thumbnailStoragePath, thumbnailPath);
+  assert.equal(updates.at(-1).payload.variantStatus, 'failed');
+});
+
+test('Storage finalize surfaces media-lock contention for platform retry', async () => {
+  assert.equal(functionsExports.generatePhotoVariants.__endpoint.eventTrigger.retry, true);
+  await assert.rejects(() => __testables.processPhotoVariantObject({
+    data: {
+      bucket: 'demo-bucket.appspot.com',
+      name: 'group_tour_photos/tour-1/source.jpg',
+      metadata: { variant: 'source' },
+    },
+  }, {
+    database: { ref: () => ({}) },
+    findPhotoRecordByStoragePathFn: async () => ({
+      photoId: 'photo-contended',
+      photoRecord: { storagePath: 'group_tour_photos/tour-1/source.jpg', variantStatus: 'processing' },
+    }),
+    generatePhotoVariantsForRecordFn: async () => ({ status: 'retry' }),
+  }), (error) => error.code === 'PHOTO_VARIANT_RETRY');
+});
+
+test('delayed variant work never recreates metadata after account deletion removed the record', async () => {
+  const updates = [];
+  let storageTouched = false;
+  const result = await __testables.generatePhotoVariantsForRecord({
+    bucketName: 'demo-bucket.appspot.com',
+    visibility: 'group',
+    tourId: 'tour-1',
+    photoId: 'photo-deleted',
+    storageBucket: { file: () => {
+      storageTouched = true;
+      return {};
+    } },
+    dbRoot: createVariantRecordHarness(null, updates),
+    photoRecord: { storagePath: 'group_tour_photos/tour-1/deleted.jpg' },
+    ...variantLockDeps,
+  });
+  assert.deepEqual(result, { status: 'skipped', reason: 'record-changed', photoId: 'photo-deleted' });
+  assert.equal(storageTouched, false);
+  assert.deepEqual(updates, []);
 });
 
 test('tour deletion plan removes all tour-scoped app data and canonical assignment links', () => {

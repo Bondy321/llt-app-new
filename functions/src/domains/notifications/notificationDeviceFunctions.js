@@ -138,23 +138,51 @@ const ignoredDeviceMutation = (reason) => ({
   body: { success: true, ignored: true, reason },
 });
 const removeNotificationDeviceRecords = async (db, authUid, existing, input, nowMs) => {
+  const [consentSnapshot, tombstoneSnapshot] = await Promise.all([
+    db.ref(`notification_consents/${authUid}`).once('value'),
+    db.ref(`notification_device_tombstones/${authUid}`).once('value'),
+  ]);
+  const tombstone = tombstoneSnapshot.val() || null;
+  if ((!existing || Object.keys(existing).length === 0) && !consentSnapshot.exists()
+    && tombstone?.permanent === true) {
+    return { status: 200, body: { success: true, deleted: true, alreadyDeleted: true } };
+  }
   const suppliedRevision = readPositiveRevision(input?.registrationRevision ?? input?.mutationRevision);
   const registrationRevision = Math.max(
     suppliedRevision || 0,
     (readPositiveRevision(existing?.registrationRevision) || 0) + 1,
+    (readPositiveRevision(tombstone?.registrationRevision) || 0) + 1,
   );
   await db.ref().update({
     [`notification_devices/${authUid}`]: null,
     [`notification_consents/${authUid}`]: null,
     [`notification_device_tombstones/${authUid}`]: {
       schemaVersion: 1,
-      authUid,
       permanent: true,
       registrationRevision,
       deletedAtMs: nowMs,
     },
   });
   return { status: 200, body: { success: true, deleted: true } };
+};
+
+/** @param {{ db?: any, authUid: string, nowMs?: number, owner?: string }} options */
+const deleteNotificationAccountState = async ({
+  db = admin.database(), authUid, nowMs = Date.now(), owner = randomUUID(),
+}) => {
+  if (!isValidFirebaseKey(authUid)) throw new Error('Invalid notification account UID');
+  const lock = await acquireNotificationDeviceLock({ db, authUid, owner, nowMs });
+  if (!lock.acquired) {
+    const error = /** @type {Error & { code?: string }} */ (new Error('Notification device update in progress'));
+    error.code = 'DEVICE_UPDATE_IN_PROGRESS';
+    throw error;
+  }
+  try {
+    const existing = (await db.ref(`notification_devices/${authUid}`).once('value')).val() || {};
+    return removeNotificationDeviceRecords(db, authUid, existing, {}, nowMs);
+  } finally {
+    await releaseNotificationDeviceLock({ lockRef: lock.lockRef, owner });
+  }
 };
 const staleRequestedSession = ({ action, requestedSessionId, session }) => Boolean(
   ['logout', 'preferences', 'reconcile'].includes(action)
@@ -392,9 +420,11 @@ module.exports = {
   DEVICE_ACTIONS,
   PERMISSION_STATES,
   createTokenHash,
+  deleteNotificationAccountState,
   getMarketingNotificationDetail,
   getSafetyAlertDetail,
   normalizeMarketingPreferences,
+  removeNotificationDeviceRecords,
   readMarketingNotificationDetail,
   readSafetyAlertDetail,
   updateSafetyAlertStatus,

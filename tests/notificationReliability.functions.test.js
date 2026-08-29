@@ -47,7 +47,7 @@ const setAtPath = (root, pathName, value) => {
   else current[keys.at(-1)] = clone(value);
 };
 
-const createMemoryDb = (initial = {}) => {
+const createMemoryDb = (initial = {}, { beforeTransaction = null } = {}) => {
   const data = clone(initial);
   const snapshot = (value) => ({ val: () => clone(value), exists: () => value !== null && value !== undefined });
   const matchesQuery = (entries, query) => entries.filter(([, value]) => {
@@ -71,6 +71,7 @@ const createMemoryDb = (initial = {}) => {
       },
       set: async (value) => setAtPath(data, pathName, value),
       transaction: async (updater) => {
+        if (beforeTransaction) await beforeTransaction({ pathName, data });
         const current = clone(getAtPath(data, pathName));
         const next = updater(current);
         if (next !== undefined) setAtPath(data, pathName, next);
@@ -118,6 +119,178 @@ test('jobs are deterministic, opaque, idempotency-safe, and reject sensitive pre
   assert.equal(job.status, 'queued');
   assert.equal(job.counts.receiptPending, 0);
   assert.throws(() => buildJob({ navigation: { imageUrl: 'https://durable.example', screen: 'Chat' } }), /forbidden field/iu);
+});
+
+test('photo notification identity canonicalizes whitespace exactly once for producer and deletion', () => {
+  const job = __testables.buildChatNotificationJob({
+    tourId: 'TOUR_1',
+    messageId: 'message-photo',
+    messageData: {
+      schemaVersion: 2,
+      type: 'image',
+      photoId: '  photo_1  ',
+      senderName: 'Passenger',
+      senderId: 'passenger-principal',
+      text: '',
+    },
+    nowMs,
+  });
+  assert.equal(job.navigation.photoId, 'photo_1');
+  assert.equal(job.jobId, __testables.buildNotificationJobId(
+    'group_photo_message', 'TOUR_1:message-photo:photo_1',
+  ));
+});
+
+test('privacy tombstone wins a concurrent preparing-to-queued activation', async () => {
+  const job = buildJob({ sourceId: 'privacy-activation-race' });
+  let injected = false;
+  const db = createMemoryDb({}, {
+    beforeTransaction: ({ pathName, data }) => {
+      const current = getAtPath(data, pathName);
+      if (injected || pathName !== `notification_jobs/${job.jobId}`
+        || current?.status !== 'preparing') return;
+      injected = true;
+      setAtPath(data, pathName, {
+        schemaVersion: 1,
+        jobId: job.jobId,
+        status: 'privacy_deleted',
+        createdAtMs: nowMs,
+        updatedAtMs: nowMs,
+        completedAtMs: nowMs,
+        expiresAtMs: nowMs + 60_000,
+      });
+    },
+  });
+  const result = await __testables.enqueueNotificationJob({ db, job });
+  assert.equal(result.job.status, 'privacy_deleted');
+  assert.equal(db.data.notification_jobs[job.jobId].status, 'privacy_deleted');
+  assert.equal(db.data.notification_job_fanout_queue, undefined);
+});
+
+test('trigger replay repairs a queued notification whose queue publication crashed', async () => {
+  const job = buildJob({ sourceId: 'queue-publication-recovery' });
+  let failQueuePublication = true;
+  const db = createMemoryDb({}, {
+    beforeTransaction: ({ pathName }) => {
+      if (!failQueuePublication || !pathName.startsWith('notification_job_fanout_queue/')) return;
+      failQueuePublication = false;
+      throw new Error('injected queue publication failure');
+    },
+  });
+
+  await assert.rejects(
+    () => __testables.enqueueNotificationJob({ db, job }),
+    /injected queue publication failure/,
+  );
+  const queued = db.data.notification_jobs[job.jobId];
+  assert.equal(queued.status, 'queued');
+  assert.equal(getAtPath(db.data, `notification_job_fanout_queue/${queued.queueKey}`), undefined);
+
+  const replay = await __testables.enqueueNotificationJob({ db, job });
+  assert.equal(replay.created, false);
+  assert.equal(replay.job.status, 'queued');
+  assert.equal(
+    getAtPath(db.data, `notification_job_fanout_queue/${queued.queueKey}`).targetId,
+    job.jobId,
+  );
+});
+
+test('stale leased worker cannot send after a privacy tombstone commits', async () => {
+  const staleJob = {
+    ...buildJob({ sourceId: 'privacy-send-race' }),
+    status: 'fanout_in_progress',
+    lease: { ownerId: 'stale-worker', acquiredAtMs: nowMs, expiresAtMs: nowMs + 120_000 },
+  };
+  const db = createMemoryDb({
+    notification_jobs: {
+      [staleJob.jobId]: {
+        schemaVersion: 1,
+        jobId: staleJob.jobId,
+        status: 'privacy_deleted',
+        createdAtMs: nowMs,
+        updatedAtMs: nowMs,
+        completedAtMs: nowMs,
+        expiresAtMs: nowMs + 60_000,
+      },
+    },
+  });
+  let sent = false;
+  await assert.rejects(() => notificationWorker.processNotificationJobPage({
+    db,
+    jobRef: db.ref(`notification_jobs/${staleJob.jobId}`),
+    job: staleJob,
+    nowMs,
+    leaseOwnerId: 'stale-worker',
+    expo: {
+      chunkPushNotifications: (messages) => [messages],
+      sendPushNotificationsAsync: async () => { sent = true; return []; },
+    },
+  }), (error) => error.code === 'NOTIFICATION_JOB_LEASE_LOST');
+  assert.equal(sent, false);
+});
+
+test('retry submission cannot send stale content after a privacy tombstone commits', async () => {
+  const staleJob = {
+    ...buildJob({
+      sourceId: 'privacy-retry-race',
+      presentation: { title: 'Private Passenger', body: 'secret' },
+    }),
+    status: 'retrying',
+    fanoutCompletedAtMs: nowMs,
+  };
+  const attemptId = 'attempt_privacy_retry';
+  const recipient = {
+    authUid: 'recipient', token: expoToken, tokenHash: __testables.hashNotificationPushToken(expoToken),
+  };
+  const attempt = {
+    attemptId,
+    jobId: staleJob.jobId,
+    recipientUid: recipient.authUid,
+    installationUid: recipient.authUid,
+    tokenHash: recipient.tokenHash,
+    status: 'retrying',
+    ticketStatus: 'ticket_rejected',
+    receiptStatus: 'not_requested',
+    retryable: true,
+    attemptNumber: 1,
+    availableAtMs: nowMs,
+    expiresAtMs: staleJob.expiresAtMs,
+  };
+  let tombstoned = false;
+  const db = createMemoryDb({
+    notification_jobs: { [staleJob.jobId]: staleJob },
+    notification_delivery_attempts: { [attemptId]: attempt },
+  }, {
+    beforeTransaction: ({ pathName, data }) => {
+      if (tombstoned || pathName !== `notification_jobs/${staleJob.jobId}`) return;
+      tombstoned = true;
+      setAtPath(data, pathName, {
+        schemaVersion: 1,
+        jobId: staleJob.jobId,
+        status: 'privacy_deleted',
+        createdAtMs: nowMs,
+        updatedAtMs: nowMs,
+        completedAtMs: nowMs,
+        expiresAtMs: nowMs + 60_000,
+      });
+    },
+  });
+  let sent = false;
+
+  const result = await notificationWorker.retryNotificationDeliveryAttempt({
+    db,
+    job: staleJob,
+    attemptId,
+    attempt,
+    recipient,
+    nowMs,
+    expo: { sendPushNotificationsAsync: async () => { sent = true; return []; } },
+  });
+
+  assert.equal(result.reason, 'JOB_NOT_CLAIMED');
+  assert.equal(sent, false);
+  assert.equal(db.data.notification_jobs[staleJob.jobId].status, 'privacy_deleted');
+  assert.equal(db.data.notification_jobs[staleJob.jobId].presentation, undefined);
 });
 
 test('lease acquisition is exclusive and retry backoff is bounded and monotonic', async () => {
