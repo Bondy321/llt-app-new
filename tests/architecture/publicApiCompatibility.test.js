@@ -190,6 +190,15 @@ test('Firebase Function exports retain their complete public names', () => {
   assert.deepEqual(Object.keys(functions).sort(), EXPECTED_FUNCTION_EXPORTS);
 });
 
+test('test-only Function registry contains no deployable trigger metadata', () => {
+  const functions = require('../../functions');
+  const nestedTriggerNames = Object.entries(functions.__testables)
+    .filter(([, value]) => value?.__endpoint)
+    .map(([name]) => name)
+    .sort();
+  assert.deepEqual(nestedTriggerNames, []);
+});
+
 test('major mobile compatibility services retain their complete public APIs', () => {
   const report = createArchitectureReport();
   assert.deepEqual(report.serviceExports, EXPECTED_SERVICE_EXPORTS);
