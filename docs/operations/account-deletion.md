@@ -30,8 +30,10 @@ Phases are `reserved`, `live_state_cleanup`, `authority_release`, `group_media`,
 2. A safe `accepted` response means the server job, queue entry, non-expiring UID login barrier,
    permanent hashed UID tombstone, any passenger hashed-booking barrier and captured session
    revocation are durable. It does not mean every deletion phase has completed.
-3. The device purges scoped local data, creates a fresh anonymous Auth installation and polls
-   `getAccountDeletionStatus` using only the receipt.
+3. The device purges scoped local data, persists the secure local-only `commit_prepared` marker, clears
+   ordinary session keys, marks local cleanup `complete`, creates a fresh anonymous Auth installation
+   and polls `getAccountDeletionStatus` using only the receipt. A restart from `commit_prepared` repeats
+   only the idempotent ordinary-key removal and completion write; it never guesses or broadens scope.
 4. App termination, offline state, timeout, duplicate request or lost response must resume the same
    receipt. Do not create a second receipt when a pending record exists.
 5. The device remains on the blocking status screen until the server reports `completed` and final

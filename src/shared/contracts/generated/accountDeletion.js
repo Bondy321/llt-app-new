@@ -452,7 +452,7 @@ const CONTRACTS = Object.freeze({
     ]
   },
   "PendingAccountDeletionRecord": {
-    "schemaVersion": 2,
+    "schemaVersion": 3,
     "kind": "object",
     "requiredProperties": [
       "schemaVersion",
@@ -461,6 +461,7 @@ const CONTRACTS = Object.freeze({
       "originalAuthUid",
       "createdAtMs",
       "updatedAtMs",
+      "localCleanupState",
       "localCleanupComplete",
       "completionHandled"
     ],
@@ -478,7 +479,7 @@ const CONTRACTS = Object.freeze({
     "properties": {
       "schemaVersion": {
         "type": "integer",
-        "const": 2
+        "const": 3
       },
       "state": {
         "type": "string",
@@ -554,6 +555,14 @@ const CONTRACTS = Object.freeze({
         "minimum": 0,
         "maximum": 1000
       },
+      "localCleanupState": {
+        "type": "string",
+        "enum": [
+          "not_started",
+          "commit_prepared",
+          "complete"
+        ]
+      },
       "localCleanupComplete": {
         "type": "boolean"
       },
@@ -585,6 +594,11 @@ const CONTRACTS = Object.freeze({
         "account_records",
         "auth_delete",
         "completed"
+      ],
+      "localCleanupState": [
+        "not_started",
+        "commit_prepared",
+        "complete"
       ]
     },
     "idPatterns": {
@@ -637,6 +651,7 @@ const CONTRACTS = Object.freeze({
       "lastCheckedAtMs",
       "requestAttempts",
       "statusAttempts",
+      "localCleanupState",
       "localCleanupComplete",
       "completionHandled",
       "lastErrorReason"

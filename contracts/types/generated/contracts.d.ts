@@ -420,6 +420,7 @@ export interface PendingAccountDeletionRecord {
   originalAuthUid: string;
   createdAtMs: number;
   updatedAtMs: number;
+  localCleanupState: "not_started" | "commit_prepared" | "complete";
   localCleanupComplete: boolean;
   completionHandled: boolean;
   expectedSessionId?: string;

@@ -412,20 +412,25 @@ idempotent success. Completion is not published until Auth deletion is confirmed
 ## Mobile recovery contract
 
 Mobile stores a versioned pending record in the dedicated `LLT_ACCOUNT_DELETION` secure persistence
-namespace. Schema v2 includes the receipt, the original Firebase Auth UID used only to select local
+namespace. Schema v3 includes the receipt, the original Firebase Auth UID used only to select local
 cleanup state, and—before acceptance—the expected session ID. The original UID is captured from the
 current authenticated user and durably persisted before the first request. It is never sent to an
 account-deletion Function, logged, displayed, or copied into app-session persistence. After acceptance
 the record removes the session ID and retains the receipt and original local-cleanup UID; safe
 `state`/phase, timestamps and counts; bounded request/status attempts and last safe reason; and the
-`localCleanupComplete` and `completionHandled` markers. Local states are `requesting`, `accepted`, `pending`,
+`localCleanupState`, `localCleanupComplete`, and `completionHandled` markers. Cleanup states are
+`not_started`, `commit_prepared`, and `complete`; local deletion states are `requesting`, `accepted`, `pending`,
 `waiting_for_connection`, `requires_attention`, and `completed`.
 
-After acceptance, initial local cleanup removes account/session identity, offline queues/assets, driver
-caches, notification feed and registration state, photo viewer cache, safety queues, trusted contacts
-and logs for the captured local scope. It does not remove another principal's shared-device state or the
-receipt. The app then signs out/deletes local Auth persistence and creates a fresh anonymous Firebase
-Auth user for status calls.
+After acceptance, initial local cleanup removes offline queues/assets, driver caches, notification feed
+and registration state, photo viewer cache, safety queues, trusted contacts and logs for the validated
+captured local scope. It does not remove another principal's shared-device state or the receipt. Only
+after every scoped purge succeeds does the app durably set `commit_prepared`; it then removes ordinary
+session, booking, tour and identity keys and durably sets `complete`. A restart from `commit_prepared`
+repeats only the ordinary-key removal and complete-marker write, even if those keys are already absent.
+The marker contains no passenger, driver, booking or tour scope and is never sent to Functions or logged.
+The app then signs out/deletes local Auth persistence and creates a fresh anonymous Firebase Auth user
+for status calls.
 
 Startup detects the pending receipt before restoring tour/login UI and routes to the blocking deletion
 status screen. It polls with bounded backoff, retries on foreground/connectivity recovery, and exposes

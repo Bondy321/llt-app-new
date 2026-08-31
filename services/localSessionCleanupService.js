@@ -46,8 +46,10 @@ const createLocalSessionCleanupService = ({
   beforeSessionKeyCommit = null,
 } = {}) => {
   let cleanupInFlight = null;
+  let scopedCleanupInFlight = null;
+  let sessionKeyCommitInFlight = null;
 
-  const cleanup = async ({
+  const prepareScopedCleanup = async ({
     authUid,
     appSession,
     bookingData,
@@ -55,8 +57,8 @@ const createLocalSessionCleanupService = ({
     driverOperationalScope = null,
     requireCompleteScope = false,
   } = {}) => {
-    if (cleanupInFlight) return cleanupInFlight;
-    cleanupInFlight = (async () => {
+    if (scopedCleanupInFlight) return scopedCleanupInFlight;
+    scopedCleanupInFlight = (async () => {
       const role = appSession?.principalType || (bookingData?.isDriver ? 'driver' : 'passenger');
       const tourId = appSession?.tourId || tourData?.id || null;
       const principalId = appSession?.principalId || null;
@@ -155,20 +157,6 @@ const createLocalSessionCleanupService = ({
       const failures = Object.entries(results)
         .filter(([, result]) => result.success === false)
         .map(([name, result]) => ({ name, error: result.error }));
-      if (failures.length === 0) {
-        try {
-          if (beforeSessionKeyCommit) await beforeSessionKeyCommit();
-          const value = await storage.multiRemove(APP_LOCAL_KEYS);
-          results.clearSessionKeys = { success: true, value };
-        } catch (error) {
-          const commitFailure = {
-            name: 'clearSessionKeys',
-            error: error?.message || String(error),
-          };
-          failures.push(commitFailure);
-          results.clearSessionKeys = { success: false, error: commitFailure.error };
-        }
-      }
       return {
         success: failures.length === 0,
         role,
@@ -178,10 +166,53 @@ const createLocalSessionCleanupService = ({
         results,
       };
     })();
+    try { return await scopedCleanupInFlight; } finally { scopedCleanupInFlight = null; }
+  };
+
+  const commitSessionKeys = async () => {
+    if (sessionKeyCommitInFlight) return sessionKeyCommitInFlight;
+    sessionKeyCommitInFlight = (async () => {
+      try {
+        if (beforeSessionKeyCommit) await beforeSessionKeyCommit();
+        const value = await storage.multiRemove(APP_LOCAL_KEYS);
+        return {
+          success: true,
+          attempted: ['clearSessionKeys'],
+          failures: [],
+          results: { clearSessionKeys: { success: true, value } },
+        };
+      } catch (error) {
+        const failure = { name: 'clearSessionKeys', error: error?.message || String(error) };
+        return {
+          success: false,
+          attempted: ['clearSessionKeys'],
+          failures: [failure],
+          results: { clearSessionKeys: { success: false, error: failure.error } },
+        };
+      }
+    })();
+    try { return await sessionKeyCommitInFlight; } finally { sessionKeyCommitInFlight = null; }
+  };
+
+  const cleanup = async (scope = {}) => {
+    if (cleanupInFlight) return cleanupInFlight;
+    cleanupInFlight = (async () => {
+      const prepared = await prepareScopedCleanup(scope);
+      if (!prepared.success) return prepared;
+      const commit = await commitSessionKeys();
+      return {
+        success: commit.success,
+        role: prepared.role,
+        tourId: prepared.tourId,
+        attempted: [...prepared.attempted, ...commit.attempted],
+        failures: [...prepared.failures, ...commit.failures],
+        results: { ...prepared.results, ...commit.results },
+      };
+    })();
     try { return await cleanupInFlight; } finally { cleanupInFlight = null; }
   };
 
-  return { cleanup };
+  return { cleanup, commitSessionKeys, prepareScopedCleanup };
 };
 
 const localSessionCleanupService = createLocalSessionCleanupService();

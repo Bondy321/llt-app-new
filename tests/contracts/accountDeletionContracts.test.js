@@ -56,10 +56,12 @@ test('public request, accepted response, and status request reject unknown or pr
 
   for (const [contract, value] of [
     ['AccountDeletionRequest', { ...request, authUid: 'private' }],
+    ['AccountDeletionRequest', { ...request, localCleanupState: 'commit_prepared' }],
     ['AccountDeletionRequest', { ...request, expectedSessionId: 'session-guess' }],
     ['AccountDeletionAcceptedResponse', { ...accepted, deletionId: 'private' }],
     ['AccountDeletionAcceptedResponse', { ...accepted, status: 'pending' }],
     ['AccountDeletionStatusRequest', { ...statusRequest, expectedSessionId: SESSION_ID }],
+    ['AccountDeletionStatusRequest', { ...statusRequest, localCleanupState: 'commit_prepared' }],
   ]) {
     assert.equal(validate(contract, value).valid, false, contract);
   }
@@ -98,6 +100,7 @@ test('status and summary contracts expose only bounded aggregate progress', () =
   for (const unsafe of [
     { ...status, deletionReceipt: RECEIPT },
     { ...status, deletionId: 'private' },
+    { ...status, localCleanupState: 'complete' },
     { ...status, status: 'failed' },
     { ...status, phase: 'retrying' },
   ]) {
@@ -121,7 +124,7 @@ test('status and summary contracts expose only bounded aggregate progress', () =
 
 test('pending local state is exact and excludes server identifiers and passenger data', () => {
   const pending = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     state: 'requesting',
     deletionReceipt: RECEIPT,
     originalAuthUid: 'original_auth_uid-1',
@@ -132,6 +135,7 @@ test('pending local state is exact and excludes server identifiers and passenger
     updatedAtMs: 1000,
     requestAttempts: 0,
     statusAttempts: 0,
+    localCleanupState: 'not_started',
     localCleanupComplete: false,
     completionHandled: false,
   };
@@ -152,7 +156,8 @@ test('pending local state is exact and excludes server identifiers and passenger
   assert.equal(validate('PendingAccountDeletionRecord', { ...pending, originalAuthUid: 'x'.repeat(129) }).valid, false);
   const { originalAuthUid: _originalAuthUid, ...withoutOriginalAuthUid } = pending;
   assert.equal(validate('PendingAccountDeletionRecord', withoutOriginalAuthUid).valid, false);
-  assert.equal(validate('PendingAccountDeletionRecord', { ...pending, schemaVersion: 1 }).valid, false);
+  assert.equal(validate('PendingAccountDeletionRecord', { ...pending, schemaVersion: 2 }).valid, false);
+  assert.equal(validate('PendingAccountDeletionRecord', { ...pending, localCleanupState: 'unknown' }).valid, false);
   assert.equal(focused.validatePendingAccountDeletionRecord({ ...pending, state: 'pending' }).valid, false);
   const { expectedSessionId: _expectedSessionId, ...afterRequest } = pending;
   assert.equal(focused.validatePendingAccountDeletionRecord({ ...afterRequest, state: 'pending' }).valid, true);

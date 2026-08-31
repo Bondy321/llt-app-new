@@ -34,6 +34,7 @@ export const validatePendingAccountDeletion = (input) => {
   if (!isPlainObject(input) || !validatePendingAccountDeletionRecord(input).valid) return null;
   if (input.updatedAtMs < input.createdAtMs) return null;
   if (input.state === 'requesting' && !SESSION_ID_PATTERN.test(input.expectedSessionId || '')) return null;
+  if ((input.localCleanupState === 'complete') !== (input.localCleanupComplete === true)) return null;
   if (input.state === 'completed'
     && (input.phase !== 'completed'
       || !Number.isSafeInteger(input.completedAtMs)
@@ -88,7 +89,18 @@ const createDefaultPersistence = () => createPersistenceProvider({
 
 const parsePending = (raw) => {
   if (typeof raw !== 'string' || !raw.trim()) return null;
-  try { return validatePendingAccountDeletion(JSON.parse(raw)); } catch { return null; }
+  try {
+    const parsed = JSON.parse(raw);
+    const candidate = parsed?.schemaVersion === 2
+      && !Object.prototype.hasOwnProperty.call(parsed, 'localCleanupState')
+      ? {
+          ...parsed,
+          schemaVersion: 3,
+          localCleanupState: parsed.localCleanupComplete === true ? 'complete' : 'not_started',
+        }
+      : parsed;
+    return validatePendingAccountDeletion(candidate);
+  } catch { return null; }
 };
 
 const genericFailure = (reason = 'ACCOUNT_DELETION_STATUS_UNAVAILABLE') => ({
@@ -110,15 +122,38 @@ export const createAccountDeletionService = ({
   let reservationInFlight = null;
   let statusInFlight = null;
   let completionInFlight = null;
+  let pendingWriteTail = Promise.resolve();
 
-  const writePending = async (record) => {
-    const valid = validatePendingAccountDeletion(record);
-    if (!valid) throw new Error('Account deletion recovery state is invalid.');
-    await persistence.setItemAsync(ACCOUNT_DELETION_PENDING_KEY, JSON.stringify(valid));
-    return valid;
+  const localCleanupRank = (state) => ({ not_started: 0, commit_prepared: 1, complete: 2 }[state] ?? -1);
+
+  const writePending = (record) => {
+    const operation = pendingWriteTail.catch(() => {}).then(async () => {
+      let valid = validatePendingAccountDeletion(record);
+      if (!valid) throw new Error('Account deletion recovery state is invalid.');
+      const currentRaw = await persistence.getItemAsync(ACCOUNT_DELETION_PENDING_KEY);
+      const current = parsePending(currentRaw);
+      if (current?.deletionReceipt === valid.deletionReceipt) {
+        if (localCleanupRank(current.localCleanupState) > localCleanupRank(valid.localCleanupState)) {
+          valid = validatePendingAccountDeletion({
+            ...valid,
+            localCleanupState: current.localCleanupState,
+            localCleanupComplete: current.localCleanupComplete,
+          });
+        }
+        if (current.completionHandled && !valid.completionHandled) {
+          valid = validatePendingAccountDeletion({ ...valid, completionHandled: true });
+        }
+      }
+      if (!valid) throw new Error('Account deletion recovery state is invalid.');
+      await persistence.setItemAsync(ACCOUNT_DELETION_PENDING_KEY, JSON.stringify(valid));
+      return valid;
+    });
+    pendingWriteTail = operation.catch(() => {});
+    return operation;
   };
 
   const readPending = async () => {
+    await pendingWriteTail.catch(() => {});
     const raw = await persistence.getItemAsync(ACCOUNT_DELETION_PENDING_KEY);
     if (raw == null || raw === '') return null;
     const pending = parsePending(raw);
@@ -126,6 +161,10 @@ export const createAccountDeletionService = ({
       const error = new Error('Saved account deletion recovery state is invalid.');
       error.code = 'ACCOUNT_DELETION_RECOVERY_CORRUPT';
       throw error;
+    }
+    const persisted = JSON.parse(raw);
+    if (persisted.schemaVersion !== pending.schemaVersion) {
+      return writePending(pending);
     }
     return pending;
   };
@@ -290,7 +329,7 @@ export const createAccountDeletionService = ({
         if (!originalAuthUid) return genericFailure('AUTH_UNAVAILABLE');
         const createdAtMs = now();
         pending = await writePending({
-          schemaVersion: 2,
+          schemaVersion: 3,
           deletionReceipt: generateReceipt(),
           originalAuthUid,
           state: 'requesting',
@@ -299,6 +338,7 @@ export const createAccountDeletionService = ({
           updatedAtMs: createdAtMs,
           requestAttempts: 0,
           statusAttempts: 0,
+          localCleanupState: 'not_started',
           localCleanupComplete: false,
           completionHandled: false,
         });
@@ -369,10 +409,34 @@ export const createAccountDeletionService = ({
     return applyServerStatus(checking, response);
   };
 
+  const markLocalCleanupCommitPrepared = async () => {
+    const pending = await readPending();
+    if (!pending) return null;
+    if (pending.localCleanupState === 'complete' || pending.localCleanupState === 'commit_prepared') {
+      return pending;
+    }
+    return writePending({
+      ...pending,
+      localCleanupState: 'commit_prepared',
+      localCleanupComplete: false,
+      updatedAtMs: now(),
+    });
+  };
+
   const markLocalCleanupComplete = async () => {
     const pending = await readPending();
     if (!pending) return null;
-    return writePending({ ...pending, localCleanupComplete: true, updatedAtMs: now() });
+    if (pending.localCleanupState !== 'commit_prepared' && pending.localCleanupState !== 'complete') {
+      const error = new Error('Local cleanup commit has not been prepared.');
+      error.code = 'LOCAL_CLEANUP_NOT_PREPARED';
+      throw error;
+    }
+    return writePending({
+      ...pending,
+      localCleanupState: 'complete',
+      localCleanupComplete: true,
+      updatedAtMs: now(),
+    });
   };
 
   const markCompletionHandled = async () => {
@@ -386,7 +450,9 @@ export const createAccountDeletionService = ({
     completionInFlight = (async () => {
       let pending = await readPending();
       if (!pending) return { success: true, alreadyComplete: true, pending: null };
-      if (pending.state !== 'completed' || pending.localCleanupComplete !== true) {
+      if (pending.state !== 'completed'
+        || pending.localCleanupState !== 'complete'
+        || pending.localCleanupComplete !== true) {
         return { success: false, reason: 'LOCAL_CLEANUP_REQUIRED', pending };
       }
       if (!pending.completionHandled) pending = await markCompletionHandled();
@@ -400,6 +466,7 @@ export const createAccountDeletionService = ({
     clearPending,
     finalizeCompletedRecovery,
     markCompletionHandled,
+    markLocalCleanupCommitPrepared,
     markLocalCleanupComplete,
     pollStatus,
     readPending,

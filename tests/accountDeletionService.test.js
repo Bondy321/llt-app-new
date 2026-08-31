@@ -101,7 +101,8 @@ test('request persists its receipt before networking and sends no deletion scope
   assert.deepEqual(body, { expectedSessionId: SESSION_ID, deletionReceipt: RECEIPT });
   assert.ok(events.findIndex(([kind]) => kind === 'set') < events.findIndex(([kind]) => kind === 'fetch'));
   const pending = await api.readPending();
-  assert.equal(pending.schemaVersion, 2);
+  assert.equal(pending.schemaVersion, 3);
+  assert.equal(pending.localCleanupState, 'not_started');
   assert.equal(pending.originalAuthUid, 'auth-old');
   assert.equal(pending.state, 'accepted');
   assert.equal(Object.prototype.hasOwnProperty.call(pending, 'expectedSessionId'), false);
@@ -480,11 +481,54 @@ test('status replaces a deleted original Auth identity and remains receipt-only'
   assert.equal(bodies[1].authorization, 'Bearer fresh-token');
 });
 
+test('a late status response cannot regress a prepared or complete local cleanup commit', async () => {
+  const storage = makeStorage();
+  let enteredFetch;
+  let releaseFetch;
+  const fetchEntered = new Promise((resolve) => { enteredFetch = resolve; });
+  const fetchGate = new Promise((resolve) => { releaseFetch = resolve; });
+  const api = createAccountDeletionService({
+    persistence: storage,
+    now: () => 210,
+    getFirebase: () => firebaseBoundary(),
+    fetchFn: async () => {
+      enteredFetch();
+      await fetchGate;
+      return response(200, { success: true, status: 'pending', phase: 'chat_scrub', retryable: true });
+    },
+  });
+  await api.writePending({
+    schemaVersion: 3,
+    deletionReceipt: RECEIPT,
+    originalAuthUid: 'auth-old',
+    state: 'accepted',
+    phase: 'reserved',
+    retryable: true,
+    createdAtMs: 100,
+    updatedAtMs: 100,
+    requestAttempts: 1,
+    statusAttempts: 0,
+    localCleanupState: 'not_started',
+    localCleanupComplete: false,
+    completionHandled: false,
+  });
+  const status = api.pollStatus();
+  await fetchEntered;
+  await api.markLocalCleanupCommitPrepared();
+  await api.markLocalCleanupComplete();
+  releaseFetch();
+  await status;
+  const pending = await api.readPending();
+  assert.equal(pending.localCleanupState, 'complete');
+  assert.equal(pending.localCleanupComplete, true);
+  assert.equal(pending.state, 'pending');
+});
+
 test('receipt is cleared only by the explicit post-cleanup completion step', async () => {
   const storage = makeStorage();
   const api = createAccountDeletionService({ persistence: storage, getFirebase: () => firebaseBoundary() });
   const record = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     deletionReceipt: RECEIPT,
     originalAuthUid: 'auth-old',
     state: 'completed',
@@ -494,6 +538,7 @@ test('receipt is cleared only by the explicit post-cleanup completion step', asy
     updatedAtMs: 200,
     requestAttempts: 1,
     statusAttempts: 1,
+    localCleanupState: 'complete',
     localCleanupComplete: true,
     completionHandled: false,
     completedAtMs: 200,
@@ -508,9 +553,66 @@ test('receipt is cleared only by the explicit post-cleanup completion step', asy
   assert.equal(await api.readPending(), null);
 });
 
+test('local cleanup completion requires and preserves the durable prepared phase', async () => {
+  const storage = makeStorage();
+  const api = createAccountDeletionService({ persistence: storage, now: () => 250 });
+  await api.writePending({
+    schemaVersion: 3,
+    deletionReceipt: RECEIPT,
+    originalAuthUid: 'auth-old',
+    state: 'accepted',
+    phase: 'reserved',
+    retryable: true,
+    createdAtMs: 100,
+    updatedAtMs: 100,
+    requestAttempts: 1,
+    statusAttempts: 0,
+    localCleanupState: 'not_started',
+    localCleanupComplete: false,
+    completionHandled: false,
+  });
+  await assert.rejects(api.markLocalCleanupComplete(), { code: 'LOCAL_CLEANUP_NOT_PREPARED' });
+  assert.equal((await api.readPending()).localCleanupState, 'not_started');
+  const prepared = await api.markLocalCleanupCommitPrepared();
+  assert.equal(prepared.localCleanupState, 'commit_prepared');
+  assert.equal(prepared.localCleanupComplete, false);
+  const complete = await api.markLocalCleanupComplete();
+  assert.equal(complete.localCleanupState, 'complete');
+  assert.equal(complete.localCleanupComplete, true);
+});
+
+test('legacy schema-v2 pending recovery is upgraded in place without adding scope', async () => {
+  const legacy = {
+    schemaVersion: 2,
+    deletionReceipt: RECEIPT,
+    originalAuthUid: 'auth-old',
+    state: 'accepted',
+    phase: 'reserved',
+    retryable: true,
+    createdAtMs: 100,
+    updatedAtMs: 100,
+    requestAttempts: 1,
+    statusAttempts: 0,
+    localCleanupComplete: false,
+    completionHandled: false,
+  };
+  const storage = makeStorage({ [ACCOUNT_DELETION_PENDING_KEY]: JSON.stringify(legacy) });
+  const api = createAccountDeletionService({ persistence: storage });
+  const upgraded = await api.readPending();
+  assert.equal(upgraded.schemaVersion, 3);
+  assert.equal(upgraded.localCleanupState, 'not_started');
+  assert.equal(upgraded.originalAuthUid, 'auth-old');
+  const persisted = JSON.parse(storage.values.get(ACCOUNT_DELETION_PENDING_KEY));
+  assert.equal(persisted.schemaVersion, 3);
+  assert.equal(persisted.localCleanupState, 'not_started');
+  for (const forbidden of ['principalId', 'driverId', 'tourId', 'bookingRef']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(persisted, forbidden), false, forbidden);
+  }
+});
+
 test('strict boundaries reject unknown properties and malformed server progress', () => {
   const valid = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     deletionReceipt: RECEIPT,
     originalAuthUid: 'auth-old',
     state: 'requesting',
@@ -519,6 +621,7 @@ test('strict boundaries reject unknown properties and malformed server progress'
     updatedAtMs: 100,
     requestAttempts: 0,
     statusAttempts: 0,
+    localCleanupState: 'not_started',
     localCleanupComplete: false,
     completionHandled: false,
   };
@@ -529,7 +632,9 @@ test('strict boundaries reject unknown properties and malformed server progress'
   assert.equal(validatePendingAccountDeletion({ ...valid, originalAuthUid: 'x'.repeat(129) }), null);
   const { originalAuthUid: _missingOriginalAuthUid, ...missingOriginalAuthUid } = valid;
   assert.equal(validatePendingAccountDeletion(missingOriginalAuthUid), null);
-  assert.equal(validatePendingAccountDeletion({ ...valid, schemaVersion: 1 }), null);
+  assert.equal(validatePendingAccountDeletion({ ...valid, schemaVersion: 2 }), null);
+  assert.equal(validatePendingAccountDeletion({ ...valid, localCleanupState: 'complete' }), null);
+  assert.equal(validatePendingAccountDeletion({ ...valid, localCleanupComplete: true }), null);
   assert.equal(validateAccountDeletionResponse({
     success: true, status: 'pending', phase: 'chat_scrub', retryable: true, authUid: 'secret',
   }), null);

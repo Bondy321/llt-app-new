@@ -99,7 +99,10 @@ The mobile app persists the receipt and validated original Auth UID in its dedic
 account-deletion namespace before making the request. The UID is local-only cleanup scope: it is not
 part of the public app-session projection and is never transmitted to the deletion endpoints. Once the
 server accepts the reservation the app purges local account/session/offline state using that captured
-UID, replaces Firebase Auth with a fresh anonymous installation, and polls status by receipt. Startup
+UID. It then persists a local-only `commit_prepared` write-ahead marker before clearing ordinary session
+keys and marking local cleanup complete. A restart from the prepared phase can safely repeat only that
+final idempotent key commit without reconstructing deleted identifiers. The app then replaces Firebase
+Auth with a fresh anonymous installation and polls status by receipt. Startup
 and login remain blocked by the local pending record until completion; app termination and lost
 responses therefore resume rather than restart deletion. The secure recovery record is excluded from
 the initial local purge and is removed only after confirmed completion and final local cleanup.

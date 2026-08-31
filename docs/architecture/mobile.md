@@ -9,9 +9,10 @@ Auth UID and remains separate from operational app-session authority.
 `App.js` delegates to `src/app/AppRoot.js`. `AppRoot` owns providers; `AppShell` coordinates state; runners and hooks own login, restore, logout, notification, offline, and assignment workflows. `AppScreenRouter` renders the stable route registry.
 
 Account deletion is a separate blocking lifecycle, not an expanded logout. The service generates an
-opaque receipt and captures the validated original Auth UID in a secure schema-v2 local record before
+opaque receipt and captures the validated original Auth UID in a secure schema-v3 local record before
 requesting deletion. It sends only the receipt and exact app-session ID, never the local cleanup UID,
 then discards the session ID after server acceptance. Runners purge the captured UID's scoped local data,
+persist a local-only `commit_prepared` write-ahead marker, and only then clear ordinary session keys,
 replace Auth with a fresh anonymous installation and resume receipt-only status polling across startup,
 reconnect and foreground transitions. While a receipt is pending, routing stays on the deletion status
 screen and all normal login/tour restoration remains blocked. See `docs/data-contracts/account-deletion.md`.

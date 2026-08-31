@@ -46,6 +46,7 @@ const PENDING = {
   state: 'pending',
   phase: 'chat_scrub',
   retryable: true,
+  localCleanupState: 'not_started',
   localCleanupComplete: false,
   originalAuthUid: ORIGINAL_AUTH_UID,
 };
@@ -119,7 +120,7 @@ test('real persisted session projection uses the secure pending UID for cleanup 
     now: () => 100,
   });
   await beforeRestartDeletion.writePending({
-    schemaVersion: 2,
+    schemaVersion: 3,
     deletionReceipt: RECEIPT,
     originalAuthUid: ORIGINAL_AUTH_UID,
     state: 'accepted',
@@ -129,6 +130,7 @@ test('real persisted session projection uses the secure pending UID for cleanup 
     updatedAtMs: 100,
     requestAttempts: 1,
     statusAttempts: 0,
+    localCleanupState: 'not_started',
     localCleanupComplete: false,
     completionHandled: false,
   });
@@ -164,10 +166,14 @@ test('real persisted session projection uses the secure pending UID for cleanup 
       },
     },
     localSessionCleanupService: {
-      cleanup: async (scope) => {
+      prepareScopedCleanup: async (scope) => {
         assert.equal((await accountDeletionService.readPending()).originalAuthUid, ORIGINAL_AUTH_UID);
-        calls.push(['cleanup', scope]);
+        calls.push(['prepare', scope]);
         return { success: true };
+      },
+      commitSessionKeys: async () => {
+        calls.push(['commit']);
+        return { success: true, attempted: ['clearSessionKeys'], failures: [], results: {} };
       },
     },
     setAppSession: (value) => calls.push(['app-session', value]),
@@ -175,7 +181,7 @@ test('real persisted session projection uses the secure pending UID for cleanup 
   });
 
   assert.equal(result.success, true);
-  assert.equal(calls[0][0], 'cleanup');
+  assert.equal(calls[0][0], 'prepare');
   assert.equal(calls[0][1].authUid, ORIGINAL_AUTH_UID);
   assert.equal(Object.prototype.hasOwnProperty.call(calls[0][1].appSession, 'authUid'), false);
   assert.equal(calls.at(-1)[0], 'user');
@@ -196,7 +202,7 @@ test('missing or malformed pending original UID cannot select a cleanup scope', 
       accountDeletionService: { readPending: async () => ({ ...PENDING, originalAuthUid }) },
       appSessionService: { readSession: async () => null },
       authHelpers: { replaceWithFreshAnonymous: async () => ({ uid: 'must-not-run' }) },
-      localSessionCleanupService: { cleanup: async () => { cleanupCalled = true; return { success: true }; } },
+      localSessionCleanupService: { prepareScopedCleanup: async () => { cleanupCalled = true; return { success: true }; } },
       setAppSession: () => {},
       setUser: () => {},
     });
@@ -213,11 +219,12 @@ test('failed local purge retains pending recovery state and does not replace Aut
     SessionStorage: { multiGet: async () => [['tour', null], ['booking', null]] },
     accountDeletionService: {
       readPending: async () => PENDING,
+      markLocalCleanupCommitPrepared: async () => { marked = true; },
       markLocalCleanupComplete: async () => { marked = true; },
     },
     appSessionService: { readSession: async () => null, completeEnd: async () => {} },
     authHelpers: { replaceWithFreshAnonymous: async () => { replaced = true; } },
-    localSessionCleanupService: { cleanup: async () => ({ success: false, failures: [{ name: 'cache' }] }) },
+    localSessionCleanupService: { prepareScopedCleanup: async () => ({ success: false, failures: [{ name: 'cache' }] }) },
     setAppSession: () => {},
     setUser: () => {},
   });
