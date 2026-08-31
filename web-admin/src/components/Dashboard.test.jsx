@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -20,6 +20,11 @@ const opsMocks = vi.hoisted(() => ({
   subscribeToOpsAlerts: vi.fn(),
   acknowledgeOpsAlert: vi.fn(),
   resolveOpsAlert: vi.fn(),
+}));
+
+const debugMocks = vi.hoisted(() => ({
+  logFirebaseDebug: vi.fn(),
+  logFirebaseError: vi.fn(),
 }));
 
 vi.mock('../firebase', () => ({
@@ -44,6 +49,19 @@ vi.mock('@mantine/notifications', () => ({
     show: vi.fn(),
   },
 }));
+
+vi.mock('../services/firebaseDebug', async () => {
+  const actual = await vi.importActual('../services/firebaseDebug');
+  return {
+    ...actual,
+    getRuntimeDebugContext: vi.fn(() => ({})),
+    logFirebaseDebug: (...args) => debugMocks.logFirebaseDebug(...args),
+    logFirebaseError: (...args) => debugMocks.logFirebaseError(...args),
+    startFirebaseDebugTimer: vi.fn(() => ({ success: vi.fn(), failure: vi.fn() })),
+    summarizeDataValue: vi.fn(() => ({})),
+    summarizeDatabaseInstance: vi.fn(() => ({})),
+  };
+});
 
 vi.mock('../services/opsAlertService', async () => {
   const actual = await vi.importActual('../services/opsAlertService');
@@ -214,5 +232,46 @@ describe('Dashboard ops alerts panel', () => {
     ]));
     expect(screen.getByText('12 passengers / 0 known seats')).toBeInTheDocument();
     expect(screen.queryByText('999 passengers / 0 known seats')).not.toBeInTheDocument();
+  });
+
+  it('gates shadow comparison until every required listener has loaded successfully', async () => {
+    rolloutPhase = 'shadow';
+    const callbacks = new Map();
+    databaseMocks.onValue.mockImplementation((dbRef, callback) => {
+      const path = pathOf(dbRef);
+      if (path === 'admin_dashboard_rollout/v1') {
+        callback({ val: () => ({ schemaVersion: 1, phase: rolloutPhase }) });
+      } else {
+        callbacks.set(path, callback);
+      }
+      return vi.fn();
+    });
+    renderDashboard();
+
+    const requiredPaths = [
+      'drivers',
+      'tours',
+      'tour_manifests',
+      'globalSafetyAlerts',
+      'broadcasts',
+      'admin_dashboard/v1/tours',
+      'admin_dashboard/v1/safety_attention',
+      'admin_dashboard/v1/recent_broadcasts',
+      'admin_dashboard/v1/summary',
+    ];
+    await waitFor(() => requiredPaths.forEach((path) => expect(callbacks.has(path)).toBe(true)));
+    await act(async () => {
+      requiredPaths.slice(0, -1).forEach((path) => callbacks.get(path)({ val: () => ({}), size: 0 }));
+    });
+    expect(debugMocks.logFirebaseDebug).not.toHaveBeenCalledWith(
+      'dashboard:projection:shadow-compare', expect.anything(), expect.anything(),
+    );
+
+    await act(async () => {
+      callbacks.get('admin_dashboard/v1/summary')({ val: () => ({}) });
+    });
+    await waitFor(() => expect(debugMocks.logFirebaseDebug).toHaveBeenCalledWith(
+      'dashboard:projection:shadow-compare', expect.anything(), expect.anything(),
+    ));
   });
 });

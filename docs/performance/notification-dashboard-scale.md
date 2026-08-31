@@ -74,13 +74,19 @@ compare-safe transactions so retries and out-of-order events cannot restore an
 older projection. A per-tour lock and durable completion watermark coalesce
 overlapping parent/child trigger deliveries while preserving crash recovery.
 All-time tour aggregates are split across 32 deterministic shards. Publication
-reads their parent once, derives a monotonic revision from the ordered 32 shard
-revisions, and fingerprints those revisions with the output fields. The window
-publisher performs one bounded `orderByKey` query and applies the same protocol
-to the ordered Europe/London day rows. Only a newer revision commits; an exact
-revision/fingerprint duplicate is a no-op, while an equal-revision fingerprint
-conflict is reread and then fails closed. Per-tour completion markers also reject
-lower projection revisions. Wall-clock timestamps are metadata, never ordering
+reads their parent once and retains a fixed `all_time_v1` generation plus the
+sum of the ordered 32 shard revisions as its source revision. The window
+publisher performs one bounded `orderByKey` query and stores a strictly
+validated `start-day..end-day` Europe/London generation separately from the sum
+of the ordered day-row revisions. A newer generation commits even if its source
+revision is lower; an older generation is stale regardless of revision. Within
+one generation, only a higher source revision commits. An exact
+generation/revision/fingerprint duplicate is a no-op, while an equal
+generation/revision fingerprint conflict is reread and then fails closed. The
+scheduled result reports the committed generation, committed source revision,
+outcome and current summary fields, so a stale worker cannot report its rejected
+candidate as authoritative. Per-tour completion markers also reject lower
+projection revisions. Wall-clock timestamps are metadata, never ordering
 authority. Calendar-day buckets and a scheduled 15-minute refresh maintain the
 operating-window scorecards independently of the 500-row client list cap. The
 same refresh pages all projected broadcasts in the trailing 24-hour window and
@@ -91,7 +97,10 @@ Projection mode uses hard-bounded queries on `tours/startAtMs`,
 `recent_broadcasts/createdAtMs`, plus one direct summary listener.
 `admin_dashboard_rollout/v1` accepts `legacy`, `shadow`, and `projection`;
 missing, malformed, or unknown state resolves to `legacy`. Shadow renders the
-legacy dashboard and performs only bounded background projection comparisons.
+legacy dashboard and performs only bounded background projection comparisons
+after every required legacy and projection section has completed one successful
+initial listener load. Listener errors keep comparison gated until a subsequent
+successful load, preventing transient listener-order mismatches.
 It compares tour list fields; safety compound tour/event identity, status,
 severity and attention state; broadcast compound tour/broadcast identity,
 delivery status, created timestamp and optional recipient count; and the

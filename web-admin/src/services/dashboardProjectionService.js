@@ -17,6 +17,14 @@ export const DASHBOARD_PROJECTION_SCHEMA_VERSION = 1;
 export const DASHBOARD_TOUR_LIMIT = 500;
 export const DASHBOARD_SAFETY_LIMIT = 80;
 export const DASHBOARD_BROADCAST_LIMIT = 40;
+export const DASHBOARD_SHADOW_REQUIRED_LOADS = Object.freeze({
+  legacy: Object.freeze([
+    'drivers', 'tours', 'tourManifests', 'globalSafetyAlerts', 'broadcasts',
+  ]),
+  projection: Object.freeze([
+    'tours', 'safetyAttention', 'recentBroadcasts', 'summary',
+  ]),
+});
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const BROADCAST_RETENTION_MS = 30 * DAY_MS;
@@ -61,6 +69,19 @@ export function resolveDashboardRolloutPhase(value) {
   return value?.schemaVersion === DASHBOARD_PROJECTION_SCHEMA_VERSION && VALID_PHASES.has(value?.phase)
     ? value.phase
     : 'legacy';
+}
+
+export function createDashboardShadowReadiness() {
+  return Object.fromEntries(Object.entries(DASHBOARD_SHADOW_REQUIRED_LOADS).map(([source, keys]) => [
+    source,
+    Object.fromEntries(keys.map((key) => [key, false])),
+  ]));
+}
+
+export function isDashboardShadowComparisonReady(readiness = {}) {
+  return Object.entries(DASHBOARD_SHADOW_REQUIRED_LOADS).every(([source, keys]) => (
+    keys.every((key) => readiness?.[source]?.[key] === true)
+  ));
 }
 
 export function getDashboardProjectionQueryPlan({

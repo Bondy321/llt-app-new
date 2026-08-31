@@ -10,7 +10,9 @@ import { SAFETY_STATUS, buildOperationsDashboardModel, filterSafetyAlerts, reval
 import { buildOperationsDashboardProjectionModel } from '../services/dashboardProjectionModel';
 import {
   compareDashboardProjectionSections,
+  createDashboardShadowReadiness,
   fetchDashboardProjection,
+  isDashboardShadowComparisonReady,
   subscribeToDashboardProjection,
   subscribeToDashboardRollout,
 } from '../services/dashboardProjectionService';
@@ -76,6 +78,7 @@ export default function Dashboard() {
   });
   const [rolloutPhase, setRolloutPhase] = useState('legacy');
   const [rolloutLoaded, setRolloutLoaded] = useState(false);
+  const [shadowReadiness, setShadowReadiness] = useState(createDashboardShadowReadiness);
   const [branchLoading, setBranchLoading] = useState(createBranchState(true));
   const [branchErrors, setBranchErrors] = useState({});
   const [branchSyncedAt, setBranchSyncedAt] = useState({});
@@ -129,6 +132,7 @@ export default function Dashboard() {
   }), []);
   useEffect(() => {
     if (!rolloutLoaded) return undefined;
+    setShadowReadiness(createDashboardShadowReadiness());
     logFirebaseDebug('dashboard:component:mount', {
       database: summarizeDatabaseInstance(db),
       runtime: getRuntimeDebugContext(),
@@ -193,6 +197,10 @@ export default function Dashboard() {
             ...current,
             [key]: value
           }));
+          setShadowReadiness(current => ({
+            ...current,
+            legacy: { ...current.legacy, [key]: true }
+          }));
           recordSuccess(key, syncedAt, value);
         },
         onError: recordError
@@ -202,6 +210,10 @@ export default function Dashboard() {
       sourceUnsubscribers.push(...subscribeToDashboardProjection(db, {}, {
         onData: (key, value, syncedAt) => {
           setProjectionData(current => ({ ...current, [key]: value }));
+          setShadowReadiness(current => ({
+            ...current,
+            projection: { ...current.projection, [key]: true }
+          }));
           if (key === 'summary') {
             recordSuccess('drivers', syncedAt, value);
             recordSuccess('tourManifests', syncedAt, value);
@@ -260,7 +272,7 @@ export default function Dashboard() {
     };
   }, [rolloutLoaded, rolloutPhase]);
   useEffect(() => {
-    if (rolloutPhase !== 'shadow') return;
+    if (rolloutPhase !== 'shadow' || !isDashboardShadowComparisonReady(shadowReadiness)) return;
     const comparison = compareDashboardProjectionSections({
       legacyModel: legacyDashboardModel,
       projectionModel: projectedDashboardModel,
@@ -269,7 +281,7 @@ export default function Dashboard() {
       projectionBroadcasts: projectionData.recentBroadcasts
     });
     logFirebaseDebug('dashboard:projection:shadow-compare', comparison, comparison.matches ? 'info' : 'warn');
-  }, [branchData.broadcasts, legacyDashboardModel, projectedDashboardModel, projectionData.recentBroadcasts, projectionData.tours, rolloutPhase]);
+  }, [branchData.broadcasts, legacyDashboardModel, projectedDashboardModel, projectionData.recentBroadcasts, projectionData.tours, rolloutPhase, shadowReadiness]);
   const handleRefresh = async () => {
     setRefreshing(true);
     const refreshTimer = startFirebaseDebugTimer('dashboard:manual-refresh:ui', {

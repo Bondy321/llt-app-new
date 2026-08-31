@@ -17,11 +17,14 @@ vi.mock('firebase/database', () => firebaseMocks);
 import {
   DASHBOARD_BROADCAST_LIMIT,
   DASHBOARD_SAFETY_LIMIT,
+  DASHBOARD_SHADOW_REQUIRED_LOADS,
   DASHBOARD_TOUR_LIMIT,
   compareDashboardProjectionSections,
   compareDashboardProjectionRows,
+  createDashboardShadowReadiness,
   fetchDashboardProjection,
   getDashboardProjectionQueryPlan,
+  isDashboardShadowComparisonReady,
   resolveDashboardRolloutPhase,
   subscribeToDashboardProjection,
   subscribeToDashboardRollout,
@@ -228,6 +231,18 @@ describe('dashboardProjectionService', () => {
     subscribeToDashboardRollout({}, onPhase, vi.fn());
     expect(firebaseMocks.ref).toHaveBeenCalledWith({}, 'admin_dashboard_rollout/v1');
     expect(onPhase).toHaveBeenCalledWith('projection');
+  });
+
+  it('waits for one successful initial load from every legacy and projection section', () => {
+    const readiness = createDashboardShadowReadiness();
+    expect(isDashboardShadowComparisonReady(readiness)).toBe(false);
+    Object.entries(DASHBOARD_SHADOW_REQUIRED_LOADS).forEach(([source, keys]) => {
+      keys.forEach((key) => { readiness[source][key] = true; });
+    });
+    readiness.projection.summary = false;
+    expect(isDashboardShadowComparisonReady(readiness)).toBe(false);
+    readiness.projection.summary = true;
+    expect(isDashboardShadowComparisonReady(readiness)).toBe(true);
   });
 
   it('compares only bounded safe row fields in shadow mode', () => {

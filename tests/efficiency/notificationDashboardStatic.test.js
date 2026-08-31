@@ -45,6 +45,7 @@ test('projection mode is composed only from hard-bounded projection queries', ()
   assert.doesNotMatch(projectionService, /ref\(database,\s*['"](?:tours|tour_manifests|drivers|broadcasts|globalSafetyAlerts)['"]\)/u);
   assert.match(dashboard, /rolloutPhase === 'legacy' \|\| rolloutPhase === 'shadow'/u);
   assert.match(dashboard, /rolloutPhase === 'projection' \|\| rolloutPhase === 'shadow'/u);
+  assert.match(dashboard, /isDashboardShadowComparisonReady\(shadowReadiness\)/u);
 });
 
 test('common projection triggers are leaf scoped rather than whole-root projectors', () => {

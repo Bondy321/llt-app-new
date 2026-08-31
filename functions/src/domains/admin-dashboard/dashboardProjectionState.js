@@ -11,7 +11,69 @@ const {
 const COUNT_LOCK_TTL_MS = 30_000;
 const COUNT_LOCK_ATTEMPTS = 20;
 const COUNT_LOCK_RETRY_MAX_MS = 250;
-const CONSISTENT_SUMMARY_PROTOCOL_VERSION = 1;
+const CONSISTENT_SUMMARY_PROTOCOL_VERSION = 2;
+const SUMMARY_GENERATION_KEY_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
+const SUMMARY_DAY_KEY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+const isValidSummaryDayKey = (value) => {
+  const match = SUMMARY_DAY_KEY_PATTERN.exec(String(value || ''));
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+};
+
+const normalizeSummaryGeneration = ({
+  generationKey,
+  generationStartDayKey,
+  generationEndDayKey,
+}) => {
+  const hasDayRange = generationStartDayKey !== undefined || generationEndDayKey !== undefined;
+  if (hasDayRange) {
+    if (!isValidSummaryDayKey(generationStartDayKey)
+      || !isValidSummaryDayKey(generationEndDayKey)
+      || generationStartDayKey > generationEndDayKey) {
+      throw new TypeError('Dashboard summary generation must be a valid ordered day range');
+    }
+    const compoundKey = `${generationStartDayKey}..${generationEndDayKey}`;
+    if (generationKey !== undefined && generationKey !== compoundKey) {
+      throw new TypeError('Dashboard summary generation key does not match its day range');
+    }
+    return {
+      kind: 'day-range',
+      key: compoundKey,
+      startDayKey: generationStartDayKey,
+      endDayKey: generationEndDayKey,
+    };
+  }
+  if (!SUMMARY_GENERATION_KEY_PATTERN.test(String(generationKey || ''))) {
+    throw new TypeError('Dashboard summary fixed generation key is invalid');
+  }
+  return { kind: 'fixed', key: generationKey };
+};
+
+const compareSummaryGenerations = (left, right) => {
+  if (left.kind !== right.kind) {
+    throw new TypeError('Dashboard summary generation kinds do not match');
+  }
+  if (left.kind === 'day-range') {
+    return left.startDayKey.localeCompare(right.startDayKey)
+      || left.endDayKey.localeCompare(right.endDayKey);
+  }
+  return left.key.localeCompare(right.key);
+};
+
+const normalizeSummarySourceRevision = (value) => {
+  const revision = Number(value);
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw new TypeError('Dashboard summary source revision must be a non-negative safe integer');
+  }
+  return revision;
+};
 
 const eventOrder = (event) => ({
   sourceEventAtMs: Number.isFinite(Date.parse(event?.time || '')) ? Date.parse(event.time) : Date.now(),
@@ -62,28 +124,67 @@ const commitSummaryDomain = async ({ db, domain, revision, fields, nowMs }) => {
 const commitConsistentSummaryDomain = async ({
   db,
   domain,
-  revision,
+  generationKey,
+  generationStartDayKey,
+  generationEndDayKey,
+  sourceRevision,
   sourceFingerprint,
   fields,
   nowMs,
 }) => {
   const revisionField = `${domain}Revision`;
+  const sourceRevisionField = `${domain}SourceRevision`;
+  const generationKeyField = `${domain}GenerationKey`;
+  const generationStartField = `${domain}GenerationStartDayKey`;
+  const generationEndField = `${domain}GenerationEndDayKey`;
   const fingerprintField = `${domain}Fingerprint`;
   const protocolField = `${domain}ConsistencyProtocol`;
   const updatedAtField = `${domain}UpdatedAtMs`;
-  const candidateRevision = Number(revision || 0);
+  const candidateGeneration = normalizeSummaryGeneration({
+    generationKey,
+    generationStartDayKey,
+    generationEndDayKey,
+  });
+  const candidateRevision = normalizeSummarySourceRevision(sourceRevision);
+  if (typeof sourceFingerprint !== 'string' || !sourceFingerprint) {
+    throw new TypeError('Dashboard summary source fingerprint is required');
+  }
   let outcome = 'pending';
   const result = await db.ref(`${DASHBOARD_ROOT}/summary`).transaction((current) => {
-    const hasCurrentProtocol = current?.[protocolField] === CONSISTENT_SUMMARY_PROTOCOL_VERSION
-      && Number.isFinite(Number(current?.[revisionField]))
-      && typeof current?.[fingerprintField] === 'string';
-    if (hasCurrentProtocol) {
-      const currentRevision = Number(current[revisionField]);
-      if (currentRevision > candidateRevision) {
+    if (current?.[protocolField] === CONSISTENT_SUMMARY_PROTOCOL_VERSION) {
+      let currentGeneration;
+      let currentRevision;
+      try {
+        currentGeneration = normalizeSummaryGeneration({
+          generationKey: current[generationKeyField],
+          generationStartDayKey: current[generationStartField],
+          generationEndDayKey: current[generationEndField],
+        });
+        currentRevision = normalizeSummarySourceRevision(current[sourceRevisionField]);
+        if (typeof current[fingerprintField] !== 'string' || !current[fingerprintField]) {
+          throw new TypeError('Dashboard summary stored fingerprint is invalid');
+        }
+      } catch (_error) {
+        outcome = 'inconsistent';
+        return undefined;
+      }
+      let generationOrder;
+      try {
+        generationOrder = compareSummaryGenerations(currentGeneration, candidateGeneration);
+      } catch (_error) {
+        outcome = 'inconsistent';
+        return undefined;
+      }
+      if (generationOrder > 0) {
         outcome = 'stale';
         return current;
       }
-      if (currentRevision === candidateRevision) {
+      if (generationOrder < 0) {
+        outcome = 'applied';
+      } else if (currentRevision > candidateRevision) {
+        outcome = 'stale';
+        return current;
+      } else if (currentRevision === candidateRevision) {
         if (current[fingerprintField] === sourceFingerprint) {
           outcome = 'idempotent';
           return current;
@@ -92,21 +193,31 @@ const commitConsistentSummaryDomain = async ({
         return undefined;
       }
     }
-    outcome = 'applied';
+    if (outcome !== 'applied') {
+      outcome = 'applied';
+    }
     return {
       ...(current || {}),
       schemaVersion: DASHBOARD_SCHEMA_VERSION,
       ...fields,
       [revisionField]: candidateRevision,
+      [sourceRevisionField]: candidateRevision,
+      [generationKeyField]: candidateGeneration.key,
+      ...(candidateGeneration.kind === 'day-range' ? {
+        [generationStartField]: candidateGeneration.startDayKey,
+        [generationEndField]: candidateGeneration.endDayKey,
+      } : {}),
       [fingerprintField]: sourceFingerprint,
       [protocolField]: CONSISTENT_SUMMARY_PROTOCOL_VERSION,
       [updatedAtField]: Math.max(Number(current?.[updatedAtField] || 0), Number(nowMs || 0)),
     };
   }, undefined, false);
   if (outcome === 'inconsistent') {
-    const error = new Error(`Dashboard ${domain} summary has conflicting fingerprints at revision ${candidateRevision}`);
+    const error = new Error(`Dashboard ${domain} summary is inconsistent at generation ${candidateGeneration.key} revision ${candidateRevision}`);
     error.code = 'DASHBOARD_SUMMARY_INCONSISTENT';
     error.domain = domain;
+    error.generationKey = candidateGeneration.key;
+    error.sourceRevision = candidateRevision;
     error.revision = candidateRevision;
     throw error;
   }

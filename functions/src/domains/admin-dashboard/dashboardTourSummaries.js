@@ -20,6 +20,7 @@ const DASHBOARD_MAX_FUTURE_DAYS = 14;
 const DASHBOARD_MAX_OVERDUE_DAYS = 7;
 const DASHBOARD_TIME_ZONE = 'Europe/London';
 const SUMMARY_PUBLISH_ATTEMPTS = 3;
+const ALL_TIME_SUMMARY_GENERATION_KEY = 'all_time_v1';
 
 const dashboardDayKey = (epochMs) => {
   if (!Number.isFinite(Number(epochMs))) return null;
@@ -63,13 +64,17 @@ const sumAggregateRows = (rows) => rows.reduce((total, row) => {
   return total;
 }, {});
 
-const aggregateRevision = (orderedRows) => orderedRows.reduce(
-  (total, { row }) => total + Math.max(0, Number(row?.revision || 0)),
-  0,
-);
+const aggregateRevision = (orderedRows) => orderedRows.reduce((total, { row }) => {
+  const revision = Number(row?.revision || 0);
+  if (!Number.isSafeInteger(revision) || revision < 0 || !Number.isSafeInteger(total + revision)) {
+    throw new TypeError('Dashboard aggregate source revision must remain a non-negative safe integer');
+  }
+  return total + revision;
+}, 0);
 
-const summarySourceFingerprint = ({ domain, orderedRows, fields }) => fingerprint({
+const summarySourceFingerprint = ({ domain, generation, orderedRows, fields }) => fingerprint({
   domain,
+  generation,
   sourceRevisions: orderedRows.map(({ key, row }) => ({
     key,
     revision: Math.max(0, Number(row?.revision || 0)),
@@ -85,7 +90,10 @@ const commitLoadedSummary = async ({ db, domain, loadCandidate, nowMs }) => {
       const commit = await commitConsistentSummaryDomain({
         db,
         domain,
-        revision: candidate.revision,
+        generationKey: candidate.generationKey,
+        generationStartDayKey: candidate.generationStartDayKey,
+        generationEndDayKey: candidate.generationEndDayKey,
+        sourceRevision: candidate.sourceRevision,
         sourceFingerprint: candidate.sourceFingerprint,
         fields: candidate.fields,
         nowMs,
@@ -97,6 +105,25 @@ const commitLoadedSummary = async ({ db, domain, loadCandidate, nowMs }) => {
     }
   }
   throw lastError;
+};
+
+const toCommittedSummaryResult = ({ domain, candidate, commit }) => {
+  const value = commit.value || {};
+  const generation = {
+    key: value[`${domain}GenerationKey`] || null,
+  };
+  if (typeof value[`${domain}GenerationStartDayKey`] === 'string') {
+    generation.startDayKey = value[`${domain}GenerationStartDayKey`];
+  }
+  if (typeof value[`${domain}GenerationEndDayKey`] === 'string') {
+    generation.endDayKey = value[`${domain}GenerationEndDayKey`];
+  }
+  return {
+    generation,
+    sourceRevision: Number(value[`${domain}SourceRevision`] || 0),
+    commitOutcome: commit.outcome,
+    summary: Object.fromEntries(Object.keys(candidate.fields).map((field) => [field, value[field]])),
+  };
 };
 
 const buildStableTourContribution = (currentProjection) => { // eslint-disable-line complexity -- mirrors the stable all-time dashboard scorecards
@@ -149,9 +176,11 @@ const loadStableTourSummaryCandidate = async (db, instrumentation) => {
     missingDateOperationalTours: Number(summary.missingDateOperationalTours || 0),
     highLoadTours: Number(summary.highLoadTours || 0),
   };
+  const generation = { key: ALL_TIME_SUMMARY_GENERATION_KEY };
   return {
-    revision: aggregateRevision(orderedRows),
-    sourceFingerprint: summarySourceFingerprint({ domain: 'tour', orderedRows, fields }),
+    generationKey: generation.key,
+    sourceRevision: aggregateRevision(orderedRows),
+    sourceFingerprint: summarySourceFingerprint({ domain: 'tour', generation, orderedRows, fields }),
     fields,
   };
 };
@@ -163,11 +192,15 @@ const publishStableTourSummary = async ({ db, nowMs = Date.now(), instrumentatio
     nowMs,
     loadCandidate: () => loadStableTourSummaryCandidate(db, instrumentation),
   });
-  return candidate.fields;
+  return toCommittedSummaryResult({ domain: 'tour', candidate, commit: candidate.commit });
 };
 
 const publishDashboardWindowSummary = async ({ db, nowMs = Date.now(), instrumentation }) => {
   const dayKeys = dashboardWindowDayKeys(nowMs);
+  const generation = {
+    startDayKey: dayKeys[0],
+    endDayKey: dayKeys.at(-1),
+  };
   const candidate = await commitLoadedSummary({
     db,
     domain: 'window',
@@ -202,17 +235,15 @@ const publishDashboardWindowSummary = async ({ db, nowMs = Date.now(), instrumen
         attentionWindowTours: attentionTours,
       };
       return {
-        revision: aggregateRevision(orderedRows),
-        sourceFingerprint: summarySourceFingerprint({ domain: 'window', orderedRows, fields }),
+        generationStartDayKey: generation.startDayKey,
+        generationEndDayKey: generation.endDayKey,
+        sourceRevision: aggregateRevision(orderedRows),
+        sourceFingerprint: summarySourceFingerprint({ domain: 'window', generation, orderedRows, fields }),
         fields,
       };
     },
   });
-  return {
-    upcomingTours: candidate.fields.upcomingTours,
-    assignedUpcomingTours: candidate.fields.assignedUpcomingTours,
-    attentionTours: candidate.fields.attentionWindowTours,
-  };
+  return toCommittedSummaryResult({ domain: 'window', candidate, commit: candidate.commit });
 };
 
 const reconcileTourDaySummary = async ({ db, tourId, order, instrumentation }) => {

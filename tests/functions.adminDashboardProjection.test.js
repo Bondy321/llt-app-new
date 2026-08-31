@@ -357,8 +357,206 @@ test('server-owned day buckets keep upcoming dashboard metrics above the 500-row
     } } } },
   });
   const summary = await publishDashboardWindowSummary({ db, nowMs });
-  assert.deepEqual(summary, { upcomingTours: 750, assignedUpcomingTours: 600, attentionTours: 750 });
+  assert.equal(summary.commitOutcome, 'applied');
+  assert.deepEqual(summary.summary, {
+    upcomingTours: 750,
+    assignedUpcomingTours: 600,
+    unassignedUpcomingTours: 150,
+    upcomingAssignmentCoveragePercent: 80,
+    attentionWindowTours: 750,
+  });
   assert.equal(db.read('admin_dashboard/v1/summary/upcomingAssignmentCoveragePercent'), 80);
+});
+
+test('empty day summaries roll to a newer midnight generation at source revision zero', async () => {
+  const db = new FakeDatabase();
+  const beforeMidnight = Date.parse('2026-06-10T22:59:59.999Z');
+  const afterMidnight = Date.parse('2026-06-10T23:00:00.000Z');
+  const before = await publishDashboardWindowSummary({ db, nowMs: beforeMidnight });
+  const after = await publishDashboardWindowSummary({ db, nowMs: afterMidnight });
+
+  assert.equal(before.sourceRevision, 0);
+  assert.equal(after.sourceRevision, 0);
+  assert.equal(after.commitOutcome, 'applied');
+  assert.ok(after.generation.startDayKey > before.generation.startDayKey);
+  assert.equal(db.read('admin_dashboard/v1/summary/windowGenerationKey'), after.generation.key);
+});
+
+test('an outgoing revision 25 day and incoming revision zero day lower the source sum', async () => {
+  const oldNowMs = Date.parse('2026-06-10T12:00:00.000Z');
+  const newNowMs = Date.parse('2026-06-11T12:00:00.000Z');
+  const outgoingDay = dashboardWindowDayKeys(oldNowMs)[0];
+  const db = new FakeDatabase({ admin_dashboard: { v1: { internal: { tour_day_summaries: {
+    [outgoingDay]: { revision: 25, activeTours: 3, assignedActiveTours: 2 },
+  } } } } });
+
+  const oldWindow = await publishDashboardWindowSummary({ db, nowMs: oldNowMs });
+  const newWindow = await publishDashboardWindowSummary({ db, nowMs: newNowMs });
+  assert.equal(oldWindow.sourceRevision, 25);
+  assert.equal(newWindow.sourceRevision, 0);
+});
+
+test('a newer window generation commits despite a lower revision sum', async () => {
+  const oldNowMs = Date.parse('2026-06-10T12:00:00.000Z');
+  const newNowMs = Date.parse('2026-06-11T12:00:00.000Z');
+  const outgoingDay = dashboardWindowDayKeys(oldNowMs)[0];
+  const db = new FakeDatabase({ admin_dashboard: { v1: { internal: { tour_day_summaries: {
+    [outgoingDay]: { revision: 25, activeTours: 3, assignedActiveTours: 2 },
+  } } } } });
+
+  const oldWindow = await publishDashboardWindowSummary({ db, nowMs: oldNowMs });
+  const newWindow = await publishDashboardWindowSummary({ db, nowMs: newNowMs });
+  assert.equal(oldWindow.commitOutcome, 'applied');
+  assert.equal(newWindow.commitOutcome, 'applied');
+  assert.ok(newWindow.generation.key > oldWindow.generation.key);
+  assert.equal(db.read('admin_dashboard/v1/summary/windowSourceRevision'), 0);
+  assert.equal(db.read('admin_dashboard/v1/summary/attentionWindowTours'), 0);
+});
+
+test('a delayed prior-window worker cannot overwrite or report over a newer generation', async () => {
+  const oldNowMs = Date.parse('2026-06-10T12:00:00.000Z');
+  const newNowMs = Date.parse('2026-06-11T12:00:00.000Z');
+  const dayPath = 'admin_dashboard/v1/internal/tour_day_summaries';
+  const outgoingDay = dashboardWindowDayKeys(oldNowMs)[0];
+  const db = new FakeDatabase({ admin_dashboard: { v1: { internal: { tour_day_summaries: {
+    [outgoingDay]: { revision: 50, activeTours: 10, assignedActiveTours: 4 },
+  } } } } });
+  const captured = deferred();
+  const release = deferred();
+  let delayed = true;
+  db.onceInterceptor = async ({ path, snapshot }) => {
+    if (path === dayPath && delayed) {
+      delayed = false;
+      captured.resolve();
+      await release.promise;
+    }
+    return snapshot;
+  };
+
+  const oldWorker = publishDashboardWindowSummary({ db, nowMs: oldNowMs });
+  await captured.promise;
+  const newWindow = await publishDashboardWindowSummary({ db, nowMs: newNowMs });
+  release.resolve();
+  const oldResult = await oldWorker;
+
+  assert.equal(newWindow.commitOutcome, 'applied');
+  assert.equal(oldResult.commitOutcome, 'stale');
+  assert.deepEqual(oldResult.generation, newWindow.generation);
+  assert.equal(oldResult.sourceRevision, 0);
+  assert.deepEqual(oldResult.summary, newWindow.summary);
+  assert.equal(oldResult.summary.attentionWindowTours, 0);
+});
+
+test('several skipped days advance directly to the next scheduled generation', async () => {
+  const oldNowMs = Date.parse('2026-06-10T12:00:00.000Z');
+  const resumedNowMs = Date.parse('2026-06-15T12:00:00.000Z');
+  const outgoingDay = dashboardWindowDayKeys(oldNowMs)[0];
+  const db = new FakeDatabase({ admin_dashboard: { v1: { internal: { tour_day_summaries: {
+    [outgoingDay]: { revision: 30, activeTours: 2, assignedActiveTours: 1 },
+  } } } } });
+
+  const oldWindow = await publishDashboardWindowSummary({ db, nowMs: oldNowMs });
+  const resumedWindow = await publishDashboardWindowSummary({ db, nowMs: resumedNowMs });
+  assert.equal(oldWindow.sourceRevision, 30);
+  assert.equal(resumedWindow.sourceRevision, 0);
+  assert.equal(resumedWindow.commitOutcome, 'applied');
+  assert.equal(resumedWindow.generation.startDayKey, '2026-06-08');
+  assert.equal(resumedWindow.generation.endDayKey, '2026-06-29');
+});
+
+test('March Europe/London DST rollover advances one calendar generation', async () => {
+  const db = new FakeDatabase();
+  const beforeMidnight = Date.parse('2026-03-28T23:59:59.999Z');
+  const afterMidnight = Date.parse('2026-03-29T00:00:00.000Z');
+  assert.equal(dashboardDayKey(Date.parse('2026-03-29T00:30:00.000Z')), '2026-03-29');
+  assert.equal(dashboardDayKey(Date.parse('2026-03-29T01:30:00.000Z')), '2026-03-29');
+  const before = await publishDashboardWindowSummary({ db, nowMs: beforeMidnight });
+  const after = await publishDashboardWindowSummary({ db, nowMs: afterMidnight });
+  assert.equal(before.generation.startDayKey, '2026-03-21');
+  assert.equal(after.generation.startDayKey, '2026-03-22');
+  assert.equal(after.generation.endDayKey, '2026-04-12');
+  assert.equal(after.commitOutcome, 'applied');
+});
+
+test('October Europe/London DST rollover advances one calendar generation', async () => {
+  const db = new FakeDatabase();
+  const beforeMidnight = Date.parse('2026-10-24T22:59:59.999Z');
+  const afterMidnight = Date.parse('2026-10-24T23:00:00.000Z');
+  assert.equal(dashboardDayKey(Date.parse('2026-10-25T00:30:00.000Z')), '2026-10-25');
+  assert.equal(dashboardDayKey(Date.parse('2026-10-25T01:30:00.000Z')), '2026-10-25');
+  const before = await publishDashboardWindowSummary({ db, nowMs: beforeMidnight });
+  const after = await publishDashboardWindowSummary({ db, nowMs: afterMidnight });
+  assert.equal(before.generation.startDayKey, '2026-10-17');
+  assert.equal(after.generation.startDayKey, '2026-10-18');
+  assert.equal(after.generation.endDayKey, '2026-11-08');
+  assert.equal(after.commitOutcome, 'applied');
+});
+
+test('an expired edge-day tour leaves every applicable window count', async () => {
+  const oldNowMs = Date.parse('2026-06-10T12:00:00.000Z');
+  const newNowMs = Date.parse('2026-06-11T12:00:00.000Z');
+  const outgoingDay = dashboardWindowDayKeys(oldNowMs)[0];
+  const db = new FakeDatabase({ admin_dashboard: { v1: { internal: { tour_day_summaries: {
+    [outgoingDay]: { revision: 1, activeTours: 2, assignedActiveTours: 1 },
+  } } } } });
+  const before = await publishDashboardWindowSummary({ db, nowMs: oldNowMs });
+  const after = await publishDashboardWindowSummary({ db, nowMs: newNowMs });
+  assert.equal(before.summary.attentionWindowTours, 2);
+  assert.equal(before.summary.unassignedUpcomingTours, 1);
+  assert.equal(after.summary.attentionWindowTours, 0);
+  assert.equal(after.summary.unassignedUpcomingTours, 0);
+  assert.equal(after.summary.upcomingTours, 0);
+  assert.equal(after.summary.assignedUpcomingTours, 0);
+});
+
+test('a new future-edge tour enters every appropriate window count', async () => {
+  const oldNowMs = Date.parse('2026-06-10T12:00:00.000Z');
+  const newNowMs = Date.parse('2026-06-11T12:00:00.000Z');
+  const incomingDay = dashboardWindowDayKeys(newNowMs).at(-1);
+  const db = new FakeDatabase({ admin_dashboard: { v1: { internal: { tour_day_summaries: {
+    [incomingDay]: { revision: 1, activeTours: 2, assignedActiveTours: 1 },
+  } } } } });
+  const before = await publishDashboardWindowSummary({ db, nowMs: oldNowMs });
+  const after = await publishDashboardWindowSummary({ db, nowMs: newNowMs });
+  assert.equal(before.summary.attentionWindowTours, 0);
+  assert.equal(after.summary.attentionWindowTours, 2);
+  assert.equal(after.summary.upcomingTours, 2);
+  assert.equal(after.summary.assignedUpcomingTours, 1);
+  assert.equal(after.summary.unassignedUpcomingTours, 1);
+});
+
+test('window publication performs exactly one bounded day-range query', async () => {
+  const nowMs = Date.parse('2026-06-10T12:00:00.000Z');
+  const dayKeys = dashboardWindowDayKeys(nowMs);
+  const db = new FakeDatabase();
+  const instrumentation = {};
+  let observedQuery = null;
+  db.onceInterceptor = ({ path, queryOptions, snapshot }) => {
+    if (path === 'admin_dashboard/v1/internal/tour_day_summaries') observedQuery = queryOptions;
+    return snapshot;
+  };
+  await publishDashboardWindowSummary({ db, nowMs, instrumentation });
+  assert.equal(instrumentation.queries, 1);
+  assert.equal(instrumentation.directReads || 0, 0);
+  assert.equal(observedQuery.orderByKey, true);
+  assert.equal(observedQuery.startAt.value, dayKeys[0]);
+  assert.equal(observedQuery.endAt, dayKeys.at(-1));
+});
+
+test('all-time publication remains one atomic 32-shard parent read with a fixed generation', async () => {
+  const db = new FakeDatabase({ admin_dashboard: { v1: { internal: { tour_summary_shards: {
+    '00': { revision: 1, totalTours: 1, operationalTours: 1 },
+    '31': { revision: 2, totalTours: 2, operationalTours: 1 },
+  } } } } });
+  const instrumentation = {};
+  const result = await publishStableTourSummary({ db, nowMs: 1, instrumentation });
+  assert.equal(instrumentation.directReads, 1);
+  assert.equal(instrumentation.queries || 0, 0);
+  assert.deepEqual(result.generation, { key: 'all_time_v1' });
+  assert.equal(result.sourceRevision, 3);
+  assert.equal(result.summary.totalTours, 3);
+  assert.equal(db.read('admin_dashboard/v1/summary/tourGenerationKey'), 'all_time_v1');
+  assert.equal(db.read('admin_dashboard/v1/summary/tourSourceRevision'), 3);
 });
 
 test('stale backfill shard snapshot cannot overwrite a complete live summary regardless of wall clock', async () => {
@@ -391,6 +589,8 @@ test('stale backfill shard snapshot cannot overwrite a complete live summary reg
   const summary = db.read('admin_dashboard/v1/summary');
   assert.equal(summary.totalTours, 2);
   assert.equal(summary.tourRevision, 2);
+  assert.equal(summary.tourSourceRevision, 2);
+  assert.equal(summary.tourGenerationKey, 'all_time_v1');
   assert.equal(summary.tourUpdatedAtMs, 1);
   assert.equal(staleInstrumentation.directReads, 1);
   assert.equal(liveInstrumentation.directReads, 1);
@@ -499,6 +699,7 @@ test('concurrent day-bucket changes cannot regress the bounded window summary', 
   assert.equal(summary.upcomingTours, 3);
   assert.equal(summary.attentionWindowTours, 3);
   assert.equal(summary.windowRevision, 2);
+  assert.equal(summary.windowSourceRevision, 2);
   assert.equal(staleInstrumentation.queries, 1);
   assert.equal(liveInstrumentation.queries, 1);
   assert.equal(staleInstrumentation.directReads || 0, 0);
@@ -532,16 +733,19 @@ test('completion markers reject stale revisions and make exact duplicates no-ops
 test('summary commits accept exact duplicates and fail closed on equal-revision fingerprint conflicts', async () => {
   const db = new FakeDatabase();
   const first = await commitConsistentSummaryDomain({
-    db, domain: 'tour', revision: 5, sourceFingerprint: 'same', fields: { totalTours: 5 }, nowMs: 10,
+    db, domain: 'tour', generationKey: 'all_time_v1', sourceRevision: 5,
+    sourceFingerprint: 'same', fields: { totalTours: 5 }, nowMs: 10,
   });
   assert.equal(first.outcome, 'applied');
   const duplicate = await commitConsistentSummaryDomain({
-    db, domain: 'tour', revision: 5, sourceFingerprint: 'same', fields: { totalTours: 5 }, nowMs: 99,
+    db, domain: 'tour', generationKey: 'all_time_v1', sourceRevision: 5,
+    sourceFingerprint: 'same', fields: { totalTours: 5 }, nowMs: 99,
   });
   assert.equal(duplicate.outcome, 'idempotent');
   assert.equal(db.read('admin_dashboard/v1/summary/tourUpdatedAtMs'), 10);
   await assert.rejects(() => commitConsistentSummaryDomain({
-    db, domain: 'tour', revision: 5, sourceFingerprint: 'different', fields: { totalTours: 4 }, nowMs: 100,
+    db, domain: 'tour', generationKey: 'all_time_v1', sourceRevision: 5,
+    sourceFingerprint: 'different', fields: { totalTours: 4 }, nowMs: 100,
   }), (error) => error?.code === 'DASHBOARD_SUMMARY_INCONSISTENT');
   assert.equal(db.read('admin_dashboard/v1/summary/totalTours'), 5);
 });
