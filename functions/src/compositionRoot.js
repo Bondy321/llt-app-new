@@ -1,6 +1,7 @@
 'use strict';
 
 const administration = require('./domains/administration/administrationFunctions');
+const adminDashboard = require('./domains/admin-dashboard/dashboardProjectionFunctions');
 const accountDeletion = require('./domains/account-deletion/accountDeletionFunctions');
 const sessions = require('./domains/app-sessions/sessionFunctions');
 const roleTransitionClaims = require('./domains/app-sessions/roleTransitionClaimFunctions');
@@ -26,6 +27,7 @@ const notificationWorker = require('./domains/notifications/notificationWorker')
 const notificationReceipts = require('./domains/notifications/notificationReceipts');
 const notificationDevices = require('./domains/notifications/notificationDeviceFunctions');
 const notificationAdmin = require('./domains/notifications/notificationAdminFunctions');
+const notificationMarketingAudience = require('./domains/notifications/notificationMarketingAudienceProjection');
 const safetyNotifications = require('./domains/notifications/safetyNotificationFunction');
 const passengerAuth = require('./domains/passenger-auth/passengerLoginFunction');
 const safety = require('./domains/safety/safetyFunction');
@@ -34,6 +36,28 @@ const testableRegistry = require('./testableRegistry');
 module.exports = {
   __testables: testableRegistry,
   getAccountDeletionStatus: accountDeletion.getAccountDeletionStatus,
+  projectDashboardDriver: adminDashboard.projectDashboardDriver,
+  projectDashboardManifestAssignment: adminDashboard.projectDashboardManifestAssignment,
+  projectDashboardManifestAssignmentCode: adminDashboard.projectDashboardManifestAssignmentCode,
+  projectDashboardManifestBooking: adminDashboard.projectDashboardManifestBooking,
+  projectDashboardParticipant: adminDashboard.projectDashboardParticipant,
+  projectDashboardRecentBroadcast: adminDashboard.projectDashboardRecentBroadcast,
+  projectDashboardSafetyAttention: adminDashboard.projectDashboardSafetyAttention,
+  projectDashboardTourActive: adminDashboard.projectDashboardTourActive,
+  projectDashboardTourAssignmentRevision: adminDashboard.projectDashboardTourAssignmentRevision,
+  projectDashboardTourCapacity: adminDashboard.projectDashboardTourCapacity,
+  projectDashboardTourCode: adminDashboard.projectDashboardTourCode,
+  projectDashboardTourCreated: adminDashboard.projectDashboardTourCreated,
+  projectDashboardTourDeleted: adminDashboard.projectDashboardTourDeleted,
+  projectDashboardTourDriverName: adminDashboard.projectDashboardTourDriverName,
+  projectDashboardTourEndIndex: adminDashboard.projectDashboardTourEndIndex,
+  projectDashboardTourName: adminDashboard.projectDashboardTourName,
+  projectDashboardTourPassengerScalar: adminDashboard.projectDashboardTourPassengerScalar,
+  projectDashboardTourStartDate: adminDashboard.projectDashboardTourStartDate,
+  projectDashboardTourStartIndex: adminDashboard.projectDashboardTourStartIndex,
+  refreshDashboardTimeWindows: adminDashboard.refreshDashboardTimeWindowsScheduled,
+  projectNotificationMarketingAudienceConsent: notificationMarketingAudience.projectNotificationMarketingAudienceOnConsentWrite,
+  projectNotificationMarketingAudience: notificationMarketingAudience.projectNotificationMarketingAudienceOnDeviceWrite,
   processAccountDeletionJobs: accountDeletion.processAccountDeletionJobs,
   requestAccountDeletion: accountDeletion.requestAccountDeletion,
   retryAccountDeletion: accountDeletion.retryAccountDeletion,

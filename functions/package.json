@@ -16,6 +16,8 @@
     "migrate:opaque-passenger-identities": "node scripts/migrateOpaquePassengerIdentities.js",
     "migrate:app-sessions": "node scripts/migrateAppSessions.js",
     "migrate:notification-devices": "node scripts/migrateNotificationDevices.js",
+    "backfill:notification-marketing-audience": "node scripts/backfillNotificationMarketingAudience.js",
+    "backfill:admin-dashboard": "node scripts/backfillAdminDashboard.js",
     "preflight:strict-rules": "node scripts/strictRulesPreflight.js",
     "materialize:driver-policy": "node scripts/strictRulesPreflight.js --materialize"
   },
