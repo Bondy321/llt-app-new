@@ -124,15 +124,16 @@ export default function Dashboard() {
   }, [branchErrors, branchLoading, branchSyncedAt, healthSignals, healthSnapshot]);
   useEffect(() => subscribeToDashboardRollout(db, phase => {
     setRolloutPhase(phase);
+    setShadowReadiness(createDashboardShadowReadiness());
     setRolloutLoaded(true);
   }, error => {
     logFirebaseError('dashboard:rollout:error', error, { fallbackPhase: 'legacy' });
     setRolloutPhase('legacy');
+    setShadowReadiness(createDashboardShadowReadiness());
     setRolloutLoaded(true);
   }), []);
   useEffect(() => {
     if (!rolloutLoaded) return undefined;
-    setShadowReadiness(createDashboardShadowReadiness());
     logFirebaseDebug('dashboard:component:mount', {
       database: summarizeDatabaseInstance(db),
       runtime: getRuntimeDebugContext(),
