@@ -10,7 +10,8 @@ const { applyAuthenticatedCors } = require('../../infrastructure/http/adminCors'
 const { verifyOperationsAdminAccess } = require('../administration/public');
 const { buildPushNavigationData } = require('./pushNavigationData');
 const { NOTIFICATION_TYPES } = require('./notificationDeliveryPolicy');
-const { evaluateAudienceCandidate, loadNotificationAudiencePage } = require('./notificationAudiencePage');
+const { evaluateAudienceCandidate } = require('./notificationAudiencePage');
+const { enumerateNotificationAudiencePage, mapWithBoundedConcurrency } = require('./notificationAudienceEnumerators');
 const { createNotificationJobRecord, enqueueNotificationJob } = require('./notificationJobs');
 const { buildDeliveryAttemptId, transitionDeliveryAttempt } = require('./notificationWorker');
 
@@ -78,7 +79,7 @@ const calculateNotificationAudiencePreview = async ({ db = admin.database(), job
   /** @type {Record<string, number>} */
   const skipReasons = {};
   do {
-    const page = await loadNotificationAudiencePage(db, cursor);
+    const page = await enumerateNotificationAudiencePage({ db, job, cursor });
     pages += 1;
     cursor = page.nextCursor;
     const uniqueCandidates = page.candidates.filter((candidate) => {
@@ -87,7 +88,9 @@ const calculateNotificationAudiencePreview = async ({ db = admin.database(), job
       audience += 1;
       return true;
     });
-    const outcomes = await Promise.all(uniqueCandidates.map((candidate) => evaluateAudienceCandidate({ db, job, candidate })));
+    const outcomes = await mapWithBoundedConcurrency(
+      uniqueCandidates, 10, (candidate) => evaluateAudienceCandidate({ db, job, candidate }),
+    );
     outcomes.forEach((result) => {
       if (!result.eligible) {
         skipReasons[result.reason || 'invalid_token'] = Number(skipReasons[result.reason || 'invalid_token'] || 0) + 1;
@@ -147,7 +150,7 @@ const processAudiencePreviewChunk = async (db, previewId, ownerAuthUid, nowMs) =
   let audience = Number(state.audience || 0);
   let eligible = Number(state.eligible || 0);
   do {
-    const page = await loadNotificationAudiencePage(db, cursor);
+    const page = await enumerateNotificationAudiencePage({ db, job: state.job, cursor });
     pages += 1;
     cursor = page.nextCursor;
     const unclaimed = page.candidates.filter((candidate) => {
@@ -156,7 +159,9 @@ const processAudiencePreviewChunk = async (db, previewId, ownerAuthUid, nowMs) =
       audience += 1;
       return true;
     });
-    const outcomes = await Promise.all(unclaimed.map((candidate) => evaluateAudienceCandidate({ db, job: state.job, candidate, nowMs })));
+    const outcomes = await mapWithBoundedConcurrency(
+      unclaimed, 10, (candidate) => evaluateAudienceCandidate({ db, job: state.job, candidate, nowMs }),
+    );
     outcomes.forEach((result) => {
       if (!result.eligible) {
         const reason = result.reason || 'invalid_token';

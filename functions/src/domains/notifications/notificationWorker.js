@@ -9,29 +9,27 @@ const { admin } = require('../../bootstrap/firebaseAdmin');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { expoAccessTokenSecret, getExpoPushClient } = require('../../infrastructure/notifications/expoPushClient');
 const { acquireNotificationJobLease, calculateRetryDelayMs } = require('./notificationJobs');
-const { evaluateAudienceCandidate, loadNotificationAudiencePage } = require('./notificationAudiencePage');
+const { enumerateNotificationAudiencePage } = require('./notificationAudienceEnumerators');
+const { createNotificationAudiencePreparation } = require('./notificationAudiencePreparation');
 const { buildAttemptCountDeltaUpdates } = require('./notificationAttemptCounts');
 const { classifyExpoRequestError } = require('./expoRequestErrorClassifier');
 const { finalizeCompletedFanout, publishCriticalFanoutWarning } = require('./notificationFanoutFinalization');
 const { TERMINAL_NOTIFICATION_JOB_STATUSES } = require('./notificationJobStatus');
-const {
-  QUEUE_ROOTS,
-  claimQueueEntry,
-  loadDueQueueEntries,
-  releaseClaimedQueueEntry,
-  removeClaimedQueueEntry,
-  transitionQueuedRecord,
-} = require('./notificationQueues');
+const { QUEUE_ROOTS, claimQueueEntry, loadDueQueueEntries, releaseClaimedQueueEntry,
+  removeClaimedQueueEntry, transitionQueuedRecord } = require('./notificationQueues');
 const { syncNotificationSourceStatus } = require('./notificationSourceStatus');
 const { createNotificationRetrySubmission } = require('./notificationRetrySubmission');
+const { removeMarketingAudienceForRevision } = require('./notificationMarketingAudience');
 
-const MAX_CONCURRENCY = 10;
 const RECEIPT_DUE_DELAY_MS = 15 * 60 * 1000;
 // Expo documents a 4 KiB payload ceiling. Keep headroom for provider-added
 // envelope fields that are not represented by the SDK message object.
 const MAX_EXPO_PAYLOAD_BYTES = 3800;
 const RETRYABLE_TICKET_ERRORS = new Set(['MessageRateExceeded', 'ExpoServerError', 'InternalError']);
 const CONFIGURATION_TICKET_ERRORS = new Set(['MismatchSenderId', 'InvalidCredentials']);
+const recordMetric = (metrics, key, amount = 1) => {
+  if (metrics && typeof metrics === 'object') metrics[key] = Number(metrics[key] || 0) + amount;
+};
 /** @param {string} jobId @param {string | null | undefined} afterRecipientId */
 const buildAudiencePageId = (jobId, afterRecipientId) => `page_v1_${createHash('sha256')
   .update(`${jobId}\u0000${afterRecipientId || 'START'}`)
@@ -107,13 +105,14 @@ const mapWithConcurrency = async (items, concurrency, callback) => {
 
 /** @param {any} db @param {any} job @param {any} recipient @param {number} nowMs @param {number} generation */
 // eslint-disable-next-line complexity -- exact attempt/token idempotency handles every recoverable crash window
-const claimDeliveryAttempt = async (db, job, recipient, nowMs, generation = 1) => {
+const claimDeliveryAttempt = async (db, job, recipient, nowMs, generation = 1, metrics = null) => {
   const attemptId = buildDeliveryAttemptId(job.jobId, recipient.authUid, generation);
   const recipientRef = db.ref(`notification_job_recipients/${job.jobId}/${recipient.authUid}`);
+  recordMetric(metrics, 'rtdbDirectReads');
   const existingRecipient = (await recipientRef.once('value')).val();
   if (existingRecipient) {
     const existingAttempt = existingRecipient.attemptId
-      ? (await db.ref(`notification_delivery_attempts/${existingRecipient.attemptId}`).once('value')).val()
+      ? (recordMetric(metrics, 'rtdbDirectReads'), (await db.ref(`notification_delivery_attempts/${existingRecipient.attemptId}`).once('value')).val())
       : null;
     const represented = Boolean(existingAttempt && existingAttempt.jobId === job.jobId);
     return {
@@ -125,6 +124,7 @@ const claimDeliveryAttempt = async (db, job, recipient, nowMs, generation = 1) =
     };
   }
   const tokenClaimRef = db.ref(`notification_job_token_claims/${job.jobId}/${recipient.tokenHash}`);
+  recordMetric(metrics, 'transactionAttempts');
   const tokenClaim = await tokenClaimRef.transaction((current) => current || recipient.authUid);
   if (tokenClaim.snapshot.val() !== recipient.authUid) return { claimed: false, represented: false, reason: 'duplicate_token' };
   const attemptRef = db.ref(`notification_delivery_attempts/${attemptId}`);
@@ -139,6 +139,7 @@ const claimDeliveryAttempt = async (db, job, recipient, nowMs, generation = 1) =
     expiresAtMs: Number(job.expiresAtMs), safeErrorCode: null,
     queueKind: null, queueKey: null, queueVersion: 0, countsPublished: false,
   };
+  recordMetric(metrics, 'transactionAttempts');
   const transaction = await attemptRef.transaction((current) => current || attempt);
   let persisted = transaction?.snapshot?.val?.() || null;
   const claimed = persisted?.submissionLease?.ownerId === leaseOwnerId;
@@ -159,6 +160,8 @@ const claimDeliveryAttempt = async (db, job, recipient, nowMs, generation = 1) =
   await recipientRef.transaction((current) => current || {
     generation, attemptId, tokenHash: recipient.tokenHash, status: 'claimed', updatedAtMs: nowMs,
   });
+  recordMetric(metrics, 'transactionAttempts');
+  if (claimed) recordMetric(metrics, 'attemptClaims');
   return { claimed, represented: Boolean(persisted), attemptId, attemptRef, attempt: persisted };
 };
 
@@ -170,7 +173,7 @@ const claimDeliveryAttempt = async (db, job, recipient, nowMs, generation = 1) =
  * @param {any} input
  */
 const commitNotificationAudiencePage = async (jobRef, {
-  pageId, expectedCursor, nextCursor, increments, skipReasons, nowMs, leaseOwnerId = null,
+  pageId, expectedCursor, nextCursor, increments, skipReasons, audienceComparison = null, nowMs, leaseOwnerId = null,
 }) => {
   let committed = false;
   // eslint-disable-next-line complexity -- one transaction owns the complete page state machine
@@ -187,6 +190,10 @@ const commitNotificationAudiencePage = async (jobRef, {
     Object.entries(skipReasons).forEach(([key, value]) => {
       reasons[key] = Number(reasons[key] || 0) + Number(value || 0);
     });
+    const comparison = { ...(current.audienceComparison || {}) };
+    Object.entries(audienceComparison || {}).forEach(([key, value]) => {
+      comparison[key] = Number(comparison[key] || 0) + Number(value || 0);
+    });
     const status = nextCursor ? 'queued' : resolveFanoutStatus(counts);
     const terminal = TERMINAL_NOTIFICATION_JOB_STATUSES.has(status);
     committed = true;
@@ -194,6 +201,7 @@ const commitNotificationAudiencePage = async (jobRef, {
       ...current,
       counts,
       skipReasons: reasons,
+      ...(audienceComparison ? { audienceComparison: comparison } : {}),
       status,
       afterRecipientId: nextCursor || null,
       availableAtMs: nextCursor ? nowMs : current.availableAtMs,
@@ -209,10 +217,33 @@ const commitNotificationAudiencePage = async (jobRef, {
 };
 
 /** @param {any} db @param {any} recipient @param {string} reason @param {number} nowMs */
-const compareAndInvalidateToken = async (db, recipient, reason, nowMs) => Promise.all([
-  db.ref(`notification_devices/${recipient.authUid}`).transaction((device) => (!device || device.tokenHash !== recipient.tokenHash ? device : { ...device, pushToken: null, status: 'invalid', invalidReason: reason, updatedAtMs: nowMs })),
-  db.ref(`users/${recipient.authUid}`).transaction((profile) => (!profile || String(profile.pushToken || '').trim() !== recipient.token ? profile : { ...profile, pushToken: null, pushTokenStatus: 'INVALID', pushTokenInvalidReason: reason, pushTokenUpdatedAt: new Date(nowMs).toISOString() })),
-]);
+const compareAndInvalidateToken = async (db, recipient, reason, nowMs) => {
+  let invalidatedRevision = 0;
+  await db.ref(`notification_devices/${recipient.authUid}`).transaction((device) => {
+    if (!device || device.tokenHash !== recipient.tokenHash) return device;
+    invalidatedRevision = Number(device.registrationRevision || 0) + 1;
+    return {
+      ...device,
+      pushToken: null,
+      tokenHash: null,
+      status: 'invalid',
+      invalidReason: reason,
+      operationalEligible: false,
+      operationalTourId: null,
+      operationalSessionId: null,
+      operationalSessionRevision: null,
+      marketingEligible: false,
+      registrationRevision: invalidatedRevision,
+      updatedAtMs: nowMs,
+    };
+  });
+  await db.ref(`users/${recipient.authUid}`).transaction((profile) => (!profile || String(profile.pushToken || '').trim() !== recipient.token ? profile : { ...profile, pushToken: null, pushTokenStatus: 'INVALID', pushTokenInvalidReason: reason, pushTokenUpdatedAt: new Date(nowMs).toISOString() }));
+  if (invalidatedRevision) {
+    await removeMarketingAudienceForRevision({
+      db, authUid: recipient.authUid, registrationRevision: invalidatedRevision,
+    });
+  }
+};
 
 /** @param {any} options */
 const persistTicketResult = async ({ db, job, claimed, recipient, ticket, nowMs }) => {
@@ -304,40 +335,12 @@ const markRequestStarted = async (db, claimed, nowMs) => {
   return started;
 };
 
-/** @param {any} db @param {string} jobId @param {string} authUid @param {string} pageId */
-const claimAudienceCandidate = async (db, jobId, authUid, pageId) => {
-  const claim = await db.ref(`notification_job_audience_claims/${jobId}/${authUid}`).transaction((current) => current || pageId);
-  return claim?.snapshot?.val?.() === pageId;
-};
-
-const prepareDeliveryPage = async (db, job, candidates, pageId, nowMs) => {
-  const skipReasons = {}; const prepared = []; let eligibleCount = 0; let audienceCount = 0;
-  const uniqueCandidates = [];
-  for (const candidate of candidates) {
-    if (await claimAudienceCandidate(db, job.jobId, candidate.authUid, pageId)) uniqueCandidates.push(candidate);
-  }
-  audienceCount = uniqueCandidates.length;
-  const evaluations = await mapWithConcurrency(uniqueCandidates, MAX_CONCURRENCY, async (candidate) => ({ result: await evaluateAudienceCandidate({ db, job, candidate, nowMs }) }));
-  for (const { result } of evaluations) {
-    const reason = result.eligible ? null : (result.reason || 'invalid_token');
-    if (reason) { skipReasons[reason] = Number(skipReasons[reason] || 0) + 1; continue; }
-    const claimed = await claimDeliveryAttempt(db, job, result, nowMs);
-    if (!claimed.claimed && !claimed.represented) {
-      const claimReason = claimed.reason || 'duplicate_token';
-      skipReasons[claimReason] = Number(skipReasons[claimReason] || 0) + 1;
-      continue;
-    }
-    eligibleCount += 1;
-    if (!claimed.claimed) continue;
-    try {
-      prepared.push({ recipient: result, claimed, message: buildExpoPushMessage(job, result, nowMs) });
-    } catch (_error) {
-      const current = claimed.attempt;
-      await transitionDeliveryAttempt(db, claimed.attemptId, current, { status: 'ticket_rejected', ticketStatus: 'ticket_rejected', retryable: false, submissionLease: null, safeErrorCode: 'PAYLOAD_TOO_LARGE' }, nowMs);
-    }
-  }
-  return { prepared, skipReasons, eligibleCount, audienceCount };
-};
+const { claimAudienceCandidate, prepareDeliveryPage } = createNotificationAudiencePreparation({
+  buildExpoPushMessage,
+  claimDeliveryAttempt,
+  mapWithConcurrency,
+  transitionDeliveryAttempt,
+});
 
 const sendPreparedChunks = async (db, job, prepared, expo, nowMs) => {
   for (const chunk of expo.chunkPushNotifications(prepared.map((item) => item.message))) {
@@ -392,11 +395,8 @@ const renewNotificationJobSubmissionFence = async ({
   return Boolean(renewed && result?.committed);
 };
 
-const {
-  acquireNotificationRetrySubmissionFence,
-  releaseNotificationRetrySubmissionFence,
-  retryNotificationDeliveryAttempt,
-} = createNotificationRetrySubmission({
+const { acquireNotificationRetrySubmissionFence, releaseNotificationRetrySubmissionFence,
+  retryNotificationDeliveryAttempt } = createNotificationRetrySubmission({
   buildExpoPushMessage,
   handleExpoRequestFailure,
   persistTicketResult,
@@ -405,7 +405,7 @@ const {
 });
 
 /** @param {{ db?: any, jobRef: any, job: any, nowMs?: number, expo?: any, leaseOwnerId?: string | null, syncSourceStatus?: Function, publishCriticalWarning?: Function }} options */
-const processNotificationJobPage = async ({ db = admin.database(), jobRef, job, nowMs = Date.now(), expo = getExpoPushClient(), leaseOwnerId = null, syncSourceStatus = syncNotificationSourceStatus, publishCriticalWarning = publishCriticalFanoutWarning }) => {
+const processNotificationJobPage = async ({ db = admin.database(), jobRef, job, nowMs = Date.now(), expo = getExpoPushClient(), leaseOwnerId = null, syncSourceStatus = syncNotificationSourceStatus, publishCriticalWarning = publishCriticalFanoutWarning, metrics = null }) => {
   if (job.supersededByJobId || Number(job.expiresAtMs) <= nowMs) {
     const completedAtMs = Number(job.completedAtMs || nowMs);
     await transitionQueuedRecord(db, { targetPath: `notification_jobs/${job.jobId}`, current: job, patch: { status: 'expired', lease: null, completedAtMs, updatedAtMs: nowMs }, targetId: job.jobId });
@@ -414,8 +414,10 @@ const processNotificationJobPage = async ({ db = admin.database(), jobRef, job, 
   }
   const expectedCursor = job.afterRecipientId || null;
   const pageId = buildAudiencePageId(job.jobId, expectedCursor);
-  const page = await loadNotificationAudiencePage(db, expectedCursor);
-  const { prepared, skipReasons, eligibleCount, audienceCount } = await prepareDeliveryPage(db, job, page.candidates, pageId, nowMs);
+  const page = await enumerateNotificationAudiencePage({ db, job, cursor: expectedCursor, metrics });
+  const { prepared, skipReasons, eligibleCount, audienceCount, audienceComparison } = await prepareDeliveryPage(
+    db, job, page.candidates, pageId, nowMs, metrics, page.shadowIndexedCandidates || [],
+  );
   const increments = { audience: audienceCount, eligible: eligibleCount, skipped: Object.values(skipReasons).reduce((sum, count) => sum + count, 0) };
   if (!(await renewNotificationJobSubmissionFence({
     jobRef, leaseOwnerId, nowMs, requiredStatus: 'fanout_in_progress',
@@ -426,7 +428,7 @@ const processNotificationJobPage = async ({ db = admin.database(), jobRef, job, 
   }
   await sendPreparedChunks(db, job, prepared, expo, nowMs);
   const committed = await commitNotificationAudiencePage(jobRef, {
-    pageId, expectedCursor, nextCursor: page.nextCursor, increments, skipReasons, nowMs, leaseOwnerId,
+    pageId, expectedCursor, nextCursor: page.nextCursor, increments, skipReasons, audienceComparison, nowMs, leaseOwnerId,
   });
   const latest = committed.job || (await jobRef.once('value')).val() || job;
   if (!committed.committed) return { status: latest.status, fanoutComplete: Boolean(latest.fanoutCompletedAtMs), replayed: true, increments: {}, skipReasons: {} };
@@ -588,12 +590,10 @@ const recoverNotificationDeliveryJobs = onSchedule({ schedule: 'every 5 minutes'
   return { scanned: due.length, processed };
 });
 
-module.exports = {
-  MAX_EXPO_PAYLOAD_BYTES, RECEIPT_DUE_DELAY_MS, buildAttemptCountDeltaUpdates,
-  buildAudiencePageId, buildDeliveryAttemptId, buildExpoPushMessage, claimAudienceCandidate,
-  claimDeliveryAttempt, commitNotificationAudiencePage, handleExpoRequestFailure, mapWithConcurrency,
-  markSubmissionUnknown, persistTicketResult, prepareDeliveryPage, processNotificationDeliveryJob,
-  processNotificationJobPage, recoverNotificationDeliveryJobs, retryNotificationDeliveryAttempt,
-  acquireNotificationRetrySubmissionFence, releaseNotificationRetrySubmissionFence,
-  renewNotificationJobSubmissionFence, runNotificationJob, sendPreparedChunks, transitionDeliveryAttempt,
-};
+module.exports = { MAX_EXPO_PAYLOAD_BYTES, RECEIPT_DUE_DELAY_MS, buildAttemptCountDeltaUpdates,
+  buildAudiencePageId, buildDeliveryAttemptId, buildExpoPushMessage, claimAudienceCandidate, claimDeliveryAttempt,
+  commitNotificationAudiencePage, handleExpoRequestFailure, mapWithConcurrency, markSubmissionUnknown,
+  persistTicketResult, prepareDeliveryPage, processNotificationDeliveryJob, processNotificationJobPage,
+  recoverNotificationDeliveryJobs, retryNotificationDeliveryAttempt, acquireNotificationRetrySubmissionFence,
+  releaseNotificationRetrySubmissionFence, renewNotificationJobSubmissionFence, runNotificationJob,
+  sendPreparedChunks, transitionDeliveryAttempt };

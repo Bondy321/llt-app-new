@@ -220,6 +220,40 @@ test('security revoke clears the token and both operational and marketing delive
   assert.equal(revoked.status, 'revoked');
 });
 
+test('an already-applied device mutation repairs consent and marketing membership', async () => {
+  const canonical = device({
+    operationalEligible: false,
+    operationalTourId: null,
+    operationalSessionId: null,
+    operationalSessionRevision: null,
+    registrationRevision: 6,
+    lastMutationAction: 'preferences',
+    lastMutationSessionId: session.sessionId,
+  });
+  const db = memoryDb({
+    app_sessions: { [session.authUid]: session },
+    notification_devices: { [session.authUid]: canonical },
+  });
+  const result = await updateNotificationDevice({
+    db,
+    authUid: session.authUid,
+    nowMs,
+    input: {
+      action: 'preferences',
+      registrationRevision: 6,
+      appSessionId: session.sessionId,
+      permissionState: 'granted',
+      marketingPreferences: { day_trips: true },
+    },
+  });
+  assert.equal(result.body.reason, 'ALREADY_APPLIED');
+  assert.equal(db.data.notification_consents[session.authUid].registrationRevision, 6);
+  assert.deepEqual(
+    db.data.notification_marketing_audience.v1.day_trips[session.authUid],
+    { schemaVersion: 1, registrationRevision: 6 },
+  );
+});
+
 test('safety transitions update every existing mirror atomically and reject regressions', async () => {
   const adminUid = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
   const alert = {
