@@ -2,10 +2,12 @@ import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, Animated, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import LogoutPendingScreen from '../../screens/LogoutPendingScreen';
+import AccountDeletionPendingScreen from '../../screens/AccountDeletionPendingScreen';
 import AppScreenRouter from './navigation/AppScreenRouter';
 import { COLORS, styles } from './AppShell.styles';
 
 export default function AppShellView({
+  accountDeletionStatus,
   authError,
   edgeSwipeResponder,
   initializing,
@@ -16,6 +18,8 @@ export default function AppShellView({
   logoutStatus,
   retryInitialization,
   retryPendingLogout,
+  retryAccountDeletion,
+  finishAccountDeletion,
   routerProps,
 }) {
   if (initializing) {
@@ -24,6 +28,20 @@ export default function AppShellView({
         <ActivityIndicator size="large" color={COLORS.primaryBlue} />
         <Text style={styles.loadingText}>Connecting to Tour Services...</Text>
       </SafeAreaView>
+    );
+  }
+
+  if (accountDeletionStatus.state !== 'idle') {
+    return (
+      <AccountDeletionPendingScreen
+        state={accountDeletionStatus.state}
+        phase={accountDeletionStatus.phase}
+        error={accountDeletionStatus.error}
+        isConnected={isConnected}
+        isRetrying={false}
+        onRetry={retryAccountDeletion}
+        onDone={finishAccountDeletion}
+      />
     );
   }
 

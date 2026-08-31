@@ -12,6 +12,7 @@ const { verifyRequestAuthUid } = require('../../infrastructure/auth/requestAuth'
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { issueDriverAppSession } = require('../app-sessions/public');
+const { ensureNoActiveAccountDeletion } = require('../account-deletion/public');
 const {
   acquireDriverAssignmentLoginAdmission,
   buildDriverIdentityProfileUpdates,
@@ -99,6 +100,7 @@ const verifyDriverLogin = onRequestWithResult(
     let assignmentLoginAdmission = null;
 
     try {
+      await ensureNoActiveAccountDeletion({ db, authUid: requestAuth.uid });
       assignmentLoginAdmission = await acquireDriverAssignmentLoginAdmission({
         db,
         driverId,
@@ -207,15 +209,19 @@ const verifyDriverLogin = onRequestWithResult(
         session: toClientSession(appSession),
       });
     } catch (error) {
+      const code = /** @type {{ code?: string }} */ (error)?.code;
+      if (code === 'ACCOUNT_DELETION_IN_PROGRESS') {
+        return res.status(409).json({ valid: false, reason: 'ACCOUNT_DELETION_IN_PROGRESS' });
+      }
       log.error('Driver login verification failed', error, {
         driverId,
         authUidHash: hashPolicyIdentifier(requestAuth.uid),
       });
-      const code = /** @type {{ code?: string }} */ (error)?.code;
       const reason = code === 'POLICY_CONFIGURATION_INVALID'
         ? 'SERVICE_UNAVAILABLE'
         : (code === 'SESSION_IN_PROGRESS' ? 'SESSION_IN_PROGRESS' : 'INTERNAL_ERROR');
-      return res.status(reason === 'INTERNAL_ERROR' ? 500 : 503).json({ valid: false, reason });
+      const status = reason === 'INTERNAL_ERROR' ? 500 : 503;
+      return res.status(status).json({ valid: false, reason });
     } finally {
       if (claimReservation?.acquired && !admissionCompleted) {
         await releaseDriverLoginClaim({ db, driverId, admissionId: admission?.admissionId });

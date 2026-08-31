@@ -58,10 +58,28 @@ const releaseAppSessionLock = async ({ db, authUid, owner } = {}) => {
   return Boolean(result.committed && !result.snapshot.exists());
 };
 
+const renewAppSessionLock = async ({
+  db,
+  authUid,
+  owner,
+  nowMs = Date.now(),
+  ttlMs = APP_SESSION_LOCK_TTL_MS,
+} = {}) => {
+  if (!db || !authUid || !owner || !Number.isFinite(nowMs) || !Number.isFinite(ttlMs) || ttlMs <= 0) {
+    throw new Error('Invalid app session lock renewal request');
+  }
+  const result = await db.ref(`app_session_locks/${authUid}`).transaction((current) => {
+    if (!current || current.owner !== owner || Number(current.expiresAtMs || 0) <= nowMs) return undefined;
+    return { ...current, expiresAtMs: nowMs + ttlMs };
+  }, undefined, false);
+  return Boolean(result?.committed && result.snapshot.val()?.owner === owner);
+};
+
 module.exports = {
   APP_SESSION_LOCK_TTL_MS,
   APP_SESSION_LOCK_OPERATIONS,
   createAppSessionOperationId,
   acquireAppSessionLock,
+  renewAppSessionLock,
   releaseAppSessionLock,
 };

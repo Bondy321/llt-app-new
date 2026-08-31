@@ -39,6 +39,12 @@ Invariants:
 - `driverLoginPolicyGeneration` is server-only and binds driver sessions to the current device-policy generation. Legacy generation-less driver sessions are generation zero only before the first policy record is written.
 - `app_session_locks`, `app_session_events`, and
   `app_session_role_claim_jobs` are server-private.
+- `account_deletion_active/v1/{authUid}` is a separate non-expiring server-owned barrier. Session
+  issuance fails closed with `ACCOUNT_DELETION_IN_PROGRESS` whenever it is present or malformed. A
+  permanent hashed `account_deletion_uid_tombstones/v1/{uidHash}` fence also rejects stale tokens after
+  Auth deletion. Passenger issuance additionally holds and checks the hashed-booking
+  `account_deletion_passenger_locks`/`account_deletion_passenger_active` boundary before identity
+  authorization and again before its atomic write.
 
 ## Role transitions
 
@@ -107,6 +113,26 @@ Issuance, assignment, logout, revocation, and expiry cleanup serialize through t
 `endAppSession` requires Auth, `POST`, `reason=user_logout`, and the exact expected session ID. App Check is currently explicitly disabled. A missing session is idempotent success. A different current session returns `SESSION_CHANGED`, so a delayed Session A logout cannot end Session B.
 
 Cleanup removes session-derived authority and ephemeral state: the session, passenger membership and legacy grants, per-session typing/presence sources, legacy UID read markers, migration requests, live tracking, exact owned driver-location sources, and operational push eligibility. Location and chat projections are reconciled after exact owned leaves are removed. It preserves identity bindings, booking and manifest records, operational driver assignment, marketing consent, historical content, reports, photos, reactions, and canonical read history.
+
+## Account deletion boundary
+
+Account deletion is not `endAppSession` with additional client writes. The authenticated
+`requestAccountDeletion` workflow validates the exact current session, derives trusted role/identity
+scope, and atomically installs a durable private job, queue entry and non-expiring login barrier before
+destructive work. The captured session is revoked during reservation; all later phases use stored
+server-derived scope and remain resumable after the original Firebase Auth user is removed.
+
+Passenger and driver session issuance check the barrier at the same serialized authority boundary used
+for session creation. No new session may race or replace an accepted deletion. Missing rollout state is
+compatibility, malformed rollout state fails closed, and `server_only` is reserved for a separate later
+cutover.
+
+Normal logout preservation remains unchanged. Explicit deletion additionally compare-removes the
+captured passenger binding/security UID or driver scalar, UID account/log/notification records and
+trusted passenger-owned active-tour content, while preserving bookings, booking identity metadata,
+tours/manifests, legal/accounting/operational records, driver profiles/assignments, assignment-owned
+pickups and shared driver-principal content. Auth deletion is last. The canonical contract is
+[`account-deletion.md`](./account-deletion.md).
 
 ## Mobile behavior
 

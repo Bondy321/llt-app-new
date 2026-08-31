@@ -424,10 +424,10 @@ test('Static contract: curated ops alerts stay separate from raw logs and schema
 test('Static contract: Functions error logger redacts exception text', () => {
   const source = readFunctionsArchitectureSource();
 
-  assert.match(source, /const sanitizeLogText = \(value\) =>/);
-  assert.match(source, /error: sanitizeLogText\(\(error && typeof error === 'object' && 'message' in error\)/);
-  assert.match(source, /\? sanitizeLogText\(error\.stack\)\s+: null/);
-  assert.match(source, /sanitizeLogText,/);
+  assert.match(source, /normalizedKey === 'error'/);
+  assert.match(source, /return '\[redacted-error\]'/);
+  assert.match(source, /error: sanitizeLogValue\(/);
+  assert.match(source, /\? sanitizeLogValue\('stack', error\.stack\)\s+: null/);
 });
 
 test('Static contract: dashboard broadcast root reads and writes stay Firebase-backed', () => {

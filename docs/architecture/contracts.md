@@ -2,9 +2,21 @@
 
 `contracts/definitions/contracts.v1.json` is the canonical data-only schema set. `contracts/fixtures/contracts.v1.json` contains valid and invalid examples. `contracts/types` contains declarations. `scripts/contracts/generateContracts.js` produces deployment-local adapters for mobile, Functions, and web admin so Functions never import runtime code outside their deployment package.
 
-The schema set defines PassengerPrincipalId, DriverPrincipalId, AppSessionId, AppSession, PassengerParticipantRecord, PassengerLoginResponse, DriverLoginResponse, DriverAssignmentResponse, ChatMessage, ChatReaction, ChatPresenceRecord, ChatTypingRecord, ChatStatusSessionRecord, GroupPhotoRecord, PrivatePhotoRecord, ResolvedMediaResponse, NotificationPayload, SafetySubmission, DriverLocationRecord, DriverLocationSourceRecord, DriverTourPackActionResult, and StandardHttpErrorResponse.
+The schema set defines PassengerPrincipalId, DriverPrincipalId, AppSessionId, AppSession,
+PassengerParticipantRecord, PassengerLoginResponse, DriverLoginResponse, DriverAssignmentResponse,
+ChatMessage, ChatReaction, ChatPresenceRecord, ChatTypingRecord, ChatStatusSessionRecord,
+GroupPhotoRecord, PrivatePhotoRecord, ResolvedMediaResponse, NotificationPayload, SafetySubmission,
+DriverLocationRecord, DriverLocationSourceRecord, DriverTourPackActionResult, AccountDeletionReceipt,
+AccountDeletionSafePhase, AccountDeletionSafeSummary, AccountDeletionRequest,
+AccountDeletionAcceptedResponse, AccountDeletionStatusRequest, AccountDeletionStatusResponse,
+AccountDeletionRolloutRecord, and StandardHttpErrorResponse.
 
 Each contract records schema version, required/optional fields, enums, patterns, bounds, nullability, unknown-field policy, safe projection, and forbidden client fields. Fixtures reject credential-shaped identities, extra credential fields, malformed IDs/tours, mismatched drivers, durable media URLs, unknown session fields, invalid routes/schema versions, and unbounded text.
+
+Account-deletion public projections deliberately omit the receipt/deletion ID, UID/session, booking,
+email/phone, passenger/driver/tour, Storage path, message, cursor, lease and failure fields. The exact
+workflow and private schema are documented in `docs/data-contracts/account-deletion.md`; do not widen
+the generated safe projections to expose operational job state.
 
 Change workflow:
 

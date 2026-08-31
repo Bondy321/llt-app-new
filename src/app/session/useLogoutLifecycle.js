@@ -5,6 +5,7 @@ import logger from '../../../services/loggerService';
 
 export default function useLogoutLifecycle({
   appSession,
+  disabled = false,
   isConnected,
   logoutContextRef,
   logoutStatus,
@@ -55,7 +56,7 @@ export default function useLogoutLifecycle({
   useEffect(() => {
     if (typeof appSessionListenerRef.current === 'function') appSessionListenerRef.current();
     appSessionListenerRef.current = null;
-    if (!appSession || !userUid || logoutStatus.state !== 'idle') return undefined;
+    if (disabled || !appSession || !userUid || logoutStatus.state !== 'idle') return undefined;
     const generation = ++sessionGenerationRef.current;
     const unsubscribe = appSessionService.subscribe({
       authUid: userUid,
@@ -86,7 +87,7 @@ export default function useLogoutLifecycle({
       unsubscribe();
       if (appSessionListenerRef.current === unsubscribe) appSessionListenerRef.current = null;
     };
-  }, [appSession, logoutStatus.state, purgeLocalSession, sessionGenerationRef, setLogoutStatus, userUid]);
+  }, [appSession, disabled, logoutStatus.state, purgeLocalSession, sessionGenerationRef, setLogoutStatus, userUid]);
 
   return retryPendingLogout;
 }

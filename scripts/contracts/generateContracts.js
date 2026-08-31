@@ -21,8 +21,12 @@ const outputs = [
   { path: 'src/shared/contracts/generated/mediaResponses.d.ts', format: 'focused-types', focus: 'mediaResponses' },
   { path: 'src/shared/contracts/generated/notificationPayload.js', format: 'cjs', focus: 'notificationPayload' },
   { path: 'src/shared/contracts/generated/notificationPayload.d.ts', format: 'focused-types', focus: 'notificationPayload' },
+  { path: 'src/shared/contracts/generated/accountDeletion.js', format: 'cjs', focus: 'accountDeletion' },
+  { path: 'src/shared/contracts/generated/accountDeletion.d.ts', format: 'focused-types', focus: 'accountDeletion' },
   { path: 'functions/src/contracts/generated/appSession.js', format: 'cjs', focus: 'appSession' },
   { path: 'functions/src/contracts/generated/appSession.d.ts', format: 'focused-types', focus: 'appSession' },
+  { path: 'functions/src/contracts/generated/accountDeletion.js', format: 'cjs', focus: 'accountDeletion' },
+  { path: 'functions/src/contracts/generated/accountDeletion.d.ts', format: 'focused-types', focus: 'accountDeletion' },
   { path: 'web-admin/src/shared/contracts/generated/appSession.js', format: 'esm', focus: 'appSession' },
   { path: 'web-admin/src/shared/contracts/generated/appSession.d.ts', format: 'focused-types', focus: 'appSession' },
 ];
@@ -32,6 +36,17 @@ const focusedContracts = Object.freeze({
   loginResponses: ['PassengerLoginResponse', 'DriverLoginResponse', 'DriverAssignmentResponse', 'ClientAppSession'],
   mediaResponses: ['ResolvedMediaResponse'],
   notificationPayload: ['NotificationPayload'],
+  accountDeletion: [
+    'AccountDeletionReceipt',
+    'AccountDeletionSafePhase',
+    'AccountDeletionSafeSummary',
+    'AccountDeletionRequest',
+    'AccountDeletionAcceptedResponse',
+    'AccountDeletionStatusRequest',
+    'AccountDeletionStatusResponse',
+    'PendingAccountDeletionRecord',
+    'AccountDeletionRolloutRecord',
+  ],
 });
 
 const runtimeValidatorSource = `
@@ -102,6 +117,7 @@ const validateContract = (name, value, options = {}) => {
     if (constraint === 'noCredentialFields') visitKeys(value, (key) => {
       if (/^(?:bookingRef|email|normalizedPassengerEmail|phone|phoneNumber)$/iu.test(key)) errors.push(\`${'${key}'} is a forbidden credential field\`);
     });
+    if (constraint === 'expectedSessionIdOnlyWhileRequesting' && Object.prototype.hasOwnProperty.call(value, 'expectedSessionId') && value.state !== 'requesting') errors.push('expectedSessionId is only allowed while requesting');
   }
   return { valid: errors.length === 0, errors };
 };`;
@@ -183,17 +199,95 @@ const validateNotificationPayload = (value) => combineResults(
   rejectKeysDeep(value, new Set(['bookingRef', 'email', 'phone', 'signedUrl', 'token'])),
 );
 `;
+  const accountDeletionHelpers = `
+${combinationHelpers}
+const ACCOUNT_DELETION_REMOTE_PRIVATE_FIELDS = new Set(['deletionId', 'authUid', 'originalAuthUid', 'bookingRef', 'email', 'phone', 'phoneNumber', 'driverId', 'tourId', 'storagePath', 'messageId']);
+const ACCOUNT_DELETION_PENDING_PRIVATE_FIELDS = new Set(['deletionId', 'authUid', 'bookingRef', 'email', 'phone', 'phoneNumber', 'driverId', 'tourId', 'storagePath', 'messageId']);
+const validateOptionalSafeSummary = (value) => isRecord(value) && Object.prototype.hasOwnProperty.call(value, 'summary')
+  ? validateAccountDeletionSafeSummary(value.summary)
+  : { valid: true, errors: [] };
+const projectContract = (name, value) => {
+  if (!isRecord(value)) return {};
+  const projected = {};
+  for (const key of CONTRACTS[name].safeClientProjection || []) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) projected[key] = value[key];
+  }
+  return projected;
+};
+const validateAccountDeletionReceipt = (value) => validateContract('AccountDeletionReceipt', value, { clientProjection: true });
+const validateAccountDeletionSafePhase = (value) => validateContract('AccountDeletionSafePhase', value, { clientProjection: true });
+const validateAccountDeletionSafeSummary = (value) => combineResults(
+  validateContract('AccountDeletionSafeSummary', value, { clientProjection: true }),
+  rejectKeysDeep(value, ACCOUNT_DELETION_REMOTE_PRIVATE_FIELDS),
+);
+const validateAccountDeletionRequest = (value) => combineResults(
+  validateContract('AccountDeletionRequest', value, { clientProjection: true }),
+  rejectKeysDeep(value, ACCOUNT_DELETION_REMOTE_PRIVATE_FIELDS),
+);
+const validateAccountDeletionAcceptedResponse = (value) => combineResults(
+  validateContract('AccountDeletionAcceptedResponse', value, { clientProjection: true }),
+  rejectKeysDeep(value, ACCOUNT_DELETION_REMOTE_PRIVATE_FIELDS),
+);
+const validateAccountDeletionStatusRequest = (value) => combineResults(
+  validateContract('AccountDeletionStatusRequest', value, { clientProjection: true }),
+  rejectKeysDeep(value, ACCOUNT_DELETION_REMOTE_PRIVATE_FIELDS),
+);
+const validateAccountDeletionStatusResponse = (value) => combineResults(
+  validateContract('AccountDeletionStatusResponse', value, { clientProjection: true }),
+  validateOptionalSafeSummary(value),
+  rejectKeysDeep(value, ACCOUNT_DELETION_REMOTE_PRIVATE_FIELDS),
+);
+const validatePendingAccountDeletionRecord = (value) => combineResults(
+  validateContract('PendingAccountDeletionRecord', value, { clientProjection: true }),
+  validateOptionalSafeSummary(value),
+  rejectKeysDeep(value, ACCOUNT_DELETION_PENDING_PRIVATE_FIELDS),
+);
+const validateAccountDeletionRolloutRecord = (value) => validateContract('AccountDeletionRolloutRecord', value);
+const projectAccountDeletionRequest = (value) => projectContract('AccountDeletionRequest', value);
+const projectAccountDeletionAcceptedResponse = (value) => projectContract('AccountDeletionAcceptedResponse', value);
+const projectAccountDeletionStatusRequest = (value) => projectContract('AccountDeletionStatusRequest', value);
+const projectAccountDeletionStatusResponse = (value) => {
+  const projected = projectContract('AccountDeletionStatusResponse', value);
+  if (isRecord(projected.summary)) projected.summary = projectContract('AccountDeletionSafeSummary', projected.summary);
+  return projected;
+};
+const projectPendingAccountDeletionRecord = (value) => {
+  const projected = projectContract('PendingAccountDeletionRecord', value);
+  if (isRecord(projected.summary)) projected.summary = projectContract('AccountDeletionSafeSummary', projected.summary);
+  return projected;
+};
+const projectAccountDeletionRolloutRecord = (value) => projectContract('AccountDeletionRolloutRecord', value);
+`;
   const helpersByFocus = {
     appSession: sessionHelpers,
     loginResponses: loginHelpers,
     mediaResponses: mediaHelpers,
     notificationPayload: notificationHelpers,
+    accountDeletion: accountDeletionHelpers,
   };
   const exportsByFocus = {
     appSession: ['SCHEMA_SET_VERSION', 'validateClientAppSession', 'validateRemoteAppSession'],
     loginResponses: ['SCHEMA_SET_VERSION', 'validatePassengerLoginResponse', 'validateDriverLoginResponse', 'validateDriverAssignmentResponse'],
     mediaResponses: ['SCHEMA_SET_VERSION', 'validateResolvedMediaResponse'],
     notificationPayload: ['SCHEMA_SET_VERSION', 'validateNotificationPayload'],
+    accountDeletion: [
+      'SCHEMA_SET_VERSION',
+      'validateAccountDeletionReceipt',
+      'validateAccountDeletionSafePhase',
+      'validateAccountDeletionSafeSummary',
+      'validateAccountDeletionRequest',
+      'validateAccountDeletionAcceptedResponse',
+      'validateAccountDeletionStatusRequest',
+      'validateAccountDeletionStatusResponse',
+      'validatePendingAccountDeletionRecord',
+      'validateAccountDeletionRolloutRecord',
+      'projectAccountDeletionRequest',
+      'projectAccountDeletionAcceptedResponse',
+      'projectAccountDeletionStatusRequest',
+      'projectAccountDeletionStatusResponse',
+      'projectPendingAccountDeletionRecord',
+      'projectAccountDeletionRolloutRecord',
+    ],
   };
   const helpers = helpersByFocus[focus];
   const exports = exportsByFocus[focus].join(', ');
@@ -239,6 +333,17 @@ const generateFocusedTypes = (focus) => {
     loginResponses: ['validatePassengerLoginResponse', 'validateDriverLoginResponse', 'validateDriverAssignmentResponse'],
     mediaResponses: ['validateResolvedMediaResponse'],
     notificationPayload: ['validateNotificationPayload'],
+    accountDeletion: [
+      'validateAccountDeletionReceipt',
+      'validateAccountDeletionSafePhase',
+      'validateAccountDeletionSafeSummary',
+      'validateAccountDeletionRequest',
+      'validateAccountDeletionAcceptedResponse',
+      'validateAccountDeletionStatusRequest',
+      'validateAccountDeletionStatusResponse',
+      'validatePendingAccountDeletionRecord',
+      'validateAccountDeletionRolloutRecord',
+    ],
   };
   const validators = exportsByFocus[focus];
   if (!validators) throw new Error(`Unknown focused contract declaration: ${focus}`);
@@ -247,6 +352,14 @@ const generateFocusedTypes = (focus) => {
     'export const SCHEMA_SET_VERSION: number;',
     'export interface ContractValidationResult { valid: boolean; errors: string[]; }',
     ...validators.map((name) => `export function ${name}(value: unknown): ContractValidationResult;`),
+    ...(focus === 'accountDeletion' ? [
+      'export function projectAccountDeletionRequest(value: unknown): Record<string, unknown>;',
+      'export function projectAccountDeletionAcceptedResponse(value: unknown): Record<string, unknown>;',
+      'export function projectAccountDeletionStatusRequest(value: unknown): Record<string, unknown>;',
+      'export function projectAccountDeletionStatusResponse(value: unknown): Record<string, unknown>;',
+      'export function projectPendingAccountDeletionRecord(value: unknown): Record<string, unknown>;',
+      'export function projectAccountDeletionRolloutRecord(value: unknown): Record<string, unknown>;',
+    ] : []),
     '',
   ].join('\n');
 };

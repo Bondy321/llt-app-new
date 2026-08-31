@@ -32,6 +32,15 @@ const {
 } = loadLegacyLibrary('passengerIdentity');
 const { buildPassengerCustomClaims } = require('./passengerRoleClaims');
 const { toClientSession } = loadLegacyLibrary('appSession');
+const { acquireAppSessionLock, releaseAppSessionLock } = loadLegacyLibrary('appSessionLock');
+const {
+  acquirePassengerAccountDeletionLock,
+  ensureNoActiveAccountDeletion,
+  ensureNoActivePassengerAccountDeletion,
+  releasePassengerAccountDeletionLock,
+} = require('../account-deletion/public');
+
+const PASSENGER_LOGIN_LOCK_TTL_MS = 3 * 60 * 1000;
 
 /** @param {number} status @param {string} reason */
 const failure = (status, reason) => ({ ok: false, status, body: { valid: false, reason } });
@@ -206,7 +215,9 @@ const authorizePassengerIdentity = async ({ authUid, context, bookingRef, networ
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
-const issueVerifiedPassengerSession = async ({ authUid, context, stablePassengerId }) => {
+const issueVerifiedPassengerSession = async ({
+  authUid, context, stablePassengerId, appSessionLock = null, passengerDeletionLock = null,
+}) => {
   const { bookingSnapshot, canonicalTourId, database, resolvedBookingRef, tourData } = context;
   const sessionIssuedAtMs = Date.now();
   const grantUpdates = buildVerifiedLoginGrantUpdates({
@@ -244,6 +255,8 @@ const issueVerifiedPassengerSession = async ({ authUid, context, stablePassenger
       }),
     }),
     nowMs: sessionIssuedAtMs,
+    existingAppSessionLock: appSessionLock,
+    existingPassengerDeletionLock: passengerDeletionLock,
   });
   try {
     const claimResult = await reconcilePassengerRoleClaimJob({
@@ -279,20 +292,76 @@ const issueVerifiedPassengerSession = async ({ authUid, context, stablePassenger
 const executePassengerLogin = async ({ req, bookingRef, email }) => {
   const requestAccess = await authorizePassengerLoginRequest({ req, bookingRef, email });
   if (!requestAccess.ok) return requestAccess;
+  try {
+    await ensureNoActiveAccountDeletion({ db: admin.database(), authUid: requestAccess.authUid });
+  } catch (error) {
+    if (error?.code === 'ACCOUNT_DELETION_IN_PROGRESS') {
+      return failure(409, 'ACCOUNT_DELETION_IN_PROGRESS');
+    }
+    throw error;
+  }
   const context = await loadPassengerLoginContext({ bookingRef, email, networkDimension: requestAccess.networkDimension });
   if (!context.ok) return context;
-  const identityAccess = await authorizePassengerIdentity({
+  const lockNowMs = Date.now();
+  const appSessionLock = await acquireAppSessionLock({
+    db: context.database,
     authUid: requestAccess.authUid,
-    context,
-    bookingRef,
-    networkDimension: requestAccess.networkDimension,
+    operation: 'issue',
+    nowMs: lockNowMs,
+    ttlMs: PASSENGER_LOGIN_LOCK_TTL_MS,
   });
-  if (!identityAccess.ok) return identityAccess;
-  return issueVerifiedPassengerSession({
-    authUid: requestAccess.authUid,
-    context,
-    stablePassengerId: identityAccess.stablePassengerId,
-  });
+  if (!appSessionLock.acquired) {
+    try {
+      await ensureNoActiveAccountDeletion({ db: context.database, authUid: requestAccess.authUid });
+    } catch (error) {
+      if (error?.code === 'ACCOUNT_DELETION_IN_PROGRESS') {
+        return failure(409, 'ACCOUNT_DELETION_IN_PROGRESS');
+      }
+      throw error;
+    }
+    return failure(503, 'SESSION_IN_PROGRESS');
+  }
+  let passengerDeletionLock = null;
+  try {
+    await ensureNoActiveAccountDeletion({ db: context.database, authUid: requestAccess.authUid });
+    passengerDeletionLock = await acquirePassengerAccountDeletionLock({
+      db: context.database,
+      bookingRef: context.resolvedBookingRef,
+      ownerId: appSessionLock.owner,
+      nowMs: lockNowMs,
+      ttlMs: PASSENGER_LOGIN_LOCK_TTL_MS,
+    });
+    if (!passengerDeletionLock.acquired) return failure(503, 'SESSION_IN_PROGRESS');
+    await ensureNoActivePassengerAccountDeletion({
+      db: context.database, bookingRef: context.resolvedBookingRef,
+    });
+    const identityAccess = await authorizePassengerIdentity({
+      authUid: requestAccess.authUid,
+      context,
+      bookingRef,
+      networkDimension: requestAccess.networkDimension,
+    });
+    if (!identityAccess.ok) return identityAccess;
+    return await issueVerifiedPassengerSession({
+      authUid: requestAccess.authUid,
+      context,
+      stablePassengerId: identityAccess.stablePassengerId,
+      appSessionLock,
+      passengerDeletionLock,
+    });
+  } catch (error) {
+    if (error?.code === 'ACCOUNT_DELETION_IN_PROGRESS') {
+      return failure(409, 'ACCOUNT_DELETION_IN_PROGRESS');
+    }
+    throw error;
+  } finally {
+    if (passengerDeletionLock?.acquired) {
+      await releasePassengerAccountDeletionLock({ lock: passengerDeletionLock });
+    }
+    await releaseAppSessionLock({
+      db: context.database, authUid: requestAccess.authUid, owner: appSessionLock.owner,
+    });
+  }
 };
 
 module.exports = {

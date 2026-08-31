@@ -11,6 +11,7 @@ import {
   getReactNativePersistence,
   initializeAuth,
   onAuthStateChanged,
+  signOut,
   signInAnonymously,
 } from 'firebase/auth';
 import { createPersistenceProvider } from './services/persistenceProvider.js';
@@ -382,6 +383,18 @@ const authHelpers = {
     }
     
     return this.signInAnonymouslyPersistent();
+  },
+
+  async replaceWithFreshAnonymous() {
+    assertAuthAvailable('replace authentication for account deletion recovery');
+    await resolveAuthRestoreReady();
+    if (auth.currentUser) {
+      await signOut(auth);
+    }
+    await authPersistence.clearAuthState();
+    const result = await signInAnonymously(auth);
+    await authPersistence.saveAuthState(result.user);
+    return result.user;
   },
 
   onAuthStateChanged(callback) {

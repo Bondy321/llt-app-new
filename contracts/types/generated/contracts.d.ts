@@ -372,6 +372,75 @@ export interface DriverLocationPickupRecord {
   updatedBy?: string;
 }
 
+export type AccountDeletionReceipt = string;
+
+export type AccountDeletionSafePhase = string;
+
+export interface AccountDeletionSafeSummary {
+  recordsRemoved: number;
+  storageObjectsRemoved: number;
+  chatMessagesScrubbed: number;
+  reactionsRemoved: number;
+}
+
+export interface AccountDeletionRequest {
+  expectedSessionId: string;
+  deletionReceipt: string;
+  clientVersion?: string;
+}
+
+export interface AccountDeletionAcceptedResponse {
+  success: boolean;
+  status: string;
+  phase: "reserved" | "live_state_cleanup" | "authority_release" | "group_media" | "private_media" | "chat_scrub" | "account_records" | "auth_delete" | "completed";
+  retryable: boolean;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+}
+
+export interface AccountDeletionStatusRequest {
+  deletionReceipt: string;
+}
+
+export interface AccountDeletionStatusResponse {
+  success: boolean;
+  status: "accepted" | "pending" | "requires_attention" | "completed";
+  phase: "reserved" | "live_state_cleanup" | "authority_release" | "group_media" | "private_media" | "chat_scrub" | "account_records" | "auth_delete" | "completed";
+  retryable: boolean;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+  completedAtMs?: number;
+  summary?: Record<string, unknown>;
+}
+
+export interface PendingAccountDeletionRecord {
+  schemaVersion: number;
+  state: "requesting" | "accepted" | "pending" | "waiting_for_connection" | "requires_attention" | "completed";
+  deletionReceipt: string;
+  originalAuthUid: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  localCleanupState: "not_started" | "commit_prepared" | "complete";
+  localCleanupComplete: boolean;
+  completionHandled: boolean;
+  expectedSessionId?: string;
+  phase?: "reserved" | "live_state_cleanup" | "authority_release" | "group_media" | "private_media" | "chat_scrub" | "account_records" | "auth_delete" | "completed";
+  retryable?: boolean;
+  completedAtMs?: number;
+  summary?: Record<string, unknown>;
+  lastCheckedAtMs?: number;
+  requestAttempts?: number;
+  statusAttempts?: number;
+  lastErrorReason?: string;
+}
+
+export interface AccountDeletionRolloutRecord {
+  schemaVersion: number;
+  phase: "compatibility" | "server_only";
+  revision: number;
+  updatedAtMs: number;
+}
+
 export interface LiveStateRolloutRecord {
   schemaVersion: number;
   phase: "compatibility" | "cutover";

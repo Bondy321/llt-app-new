@@ -23,6 +23,7 @@ const {
   transitionQueuedRecord,
 } = require('./notificationQueues');
 const { syncNotificationSourceStatus } = require('./notificationSourceStatus');
+const { createNotificationRetrySubmission } = require('./notificationRetrySubmission');
 
 const MAX_CONCURRENCY = 10;
 const RECEIPT_DUE_DELAY_MS = 15 * 60 * 1000;
@@ -31,7 +32,6 @@ const RECEIPT_DUE_DELAY_MS = 15 * 60 * 1000;
 const MAX_EXPO_PAYLOAD_BYTES = 3800;
 const RETRYABLE_TICKET_ERRORS = new Set(['MessageRateExceeded', 'ExpoServerError', 'InternalError']);
 const CONFIGURATION_TICKET_ERRORS = new Set(['MismatchSenderId', 'InvalidCredentials']);
-
 /** @param {string} jobId @param {string | null | undefined} afterRecipientId */
 const buildAudiencePageId = (jobId, afterRecipientId) => `page_v1_${createHash('sha256')
   .update(`${jobId}\u0000${afterRecipientId || 'START'}`)
@@ -304,38 +304,6 @@ const markRequestStarted = async (db, claimed, nowMs) => {
   return started;
 };
 
-/** Retry worker is the only owner allowed to submit a retry generation. */
-const retryNotificationDeliveryAttempt = async ({ db = admin.database(), job, attemptId, attempt, recipient, nowMs = Date.now(), expo = getExpoPushClient() }) => {
-  const attemptRef = db.ref(`notification_delivery_attempts/${attemptId}`);
-  let message;
-  try { message = buildExpoPushMessage(job, recipient, nowMs); } catch (_error) {
-    await transitionDeliveryAttempt(db, attemptId, attempt, { status: 'ticket_rejected', ticketStatus: 'ticket_rejected', retryable: false, safeErrorCode: 'PAYLOAD_TOO_LARGE' }, nowMs);
-    return { success: false, reason: 'PAYLOAD_TOO_LARGE' };
-  }
-  const ownerId = randomUUID(); let acquired = false;
-  const lease = await attemptRef.transaction((current) => {
-    if (!current || current.status !== 'retrying' || Number(current.availableAtMs || 0) > nowMs) return;
-    if (current.retryLease && Number(current.retryLease.expiresAtMs || 0) > nowMs) return;
-    acquired = true;
-    return { ...current, retryLease: { ownerId, acquiredAtMs: nowMs, expiresAtMs: nowMs + 120_000 }, updatedAtMs: nowMs };
-  });
-  const leased = lease?.snapshot?.val?.() || attempt;
-  if (!acquired || leased.retryLease?.ownerId !== ownerId) return { success: false, reason: 'NOT_CLAIMED' };
-  const sending = await transitionDeliveryAttempt(db, attemptId, leased, {
-    status: 'request_started', requestStartedAtMs: nowMs,
-    attemptNumber: Number(leased.attemptNumber || 0) + 1,
-  }, nowMs);
-  let tickets;
-  try {
-    tickets = await expo.sendPushNotificationsAsync([message]);
-  } catch (error) {
-    const classified = await handleExpoRequestFailure(db, job, { attemptRef, attemptId, attempt: sending }, nowMs, error);
-    return { success: false, reason: classified.outcome === 'unknown' ? 'SUBMISSION_UNKNOWN' : classified.safeErrorCode };
-  }
-  await persistTicketResult({ db, job, claimed: { attemptRef, attemptId, attempt: sending }, recipient, ticket: tickets[0], nowMs });
-  return { success: true };
-};
-
 /** @param {any} db @param {string} jobId @param {string} authUid @param {string} pageId */
 const claimAudienceCandidate = async (db, jobId, authUid, pageId) => {
   const claim = await db.ref(`notification_job_audience_claims/${jobId}/${authUid}`).transaction((current) => current || pageId);
@@ -404,6 +372,38 @@ const resolveFanoutStatus = (counts) => {
   return Number(counts.eligible || 0) === 0 ? 'no_recipients' : 'ticket_rejected';
 };
 
+const renewNotificationJobSubmissionFence = async ({
+  jobRef, leaseOwnerId, nowMs, ttlMs = 2 * 60 * 1000, requiredStatus = null,
+}) => {
+  if (!leaseOwnerId) return true;
+  let renewed = false;
+  const result = await jobRef.transaction((current) => {
+    if (!current || (requiredStatus && current.status !== requiredStatus)
+      || current.status === 'privacy_deleted' || current.status === 'expired'
+      || current.supersededByJobId || current.lease?.ownerId !== leaseOwnerId
+      || Number(current.lease.expiresAtMs || 0) <= nowMs) return undefined;
+    renewed = true;
+    return {
+      ...current,
+      updatedAtMs: nowMs,
+      lease: { ...current.lease, expiresAtMs: nowMs + ttlMs },
+    };
+  });
+  return Boolean(renewed && result?.committed);
+};
+
+const {
+  acquireNotificationRetrySubmissionFence,
+  releaseNotificationRetrySubmissionFence,
+  retryNotificationDeliveryAttempt,
+} = createNotificationRetrySubmission({
+  buildExpoPushMessage,
+  handleExpoRequestFailure,
+  persistTicketResult,
+  renewNotificationJobSubmissionFence,
+  transitionDeliveryAttempt,
+});
+
 /** @param {{ db?: any, jobRef: any, job: any, nowMs?: number, expo?: any, leaseOwnerId?: string | null, syncSourceStatus?: Function, publishCriticalWarning?: Function }} options */
 const processNotificationJobPage = async ({ db = admin.database(), jobRef, job, nowMs = Date.now(), expo = getExpoPushClient(), leaseOwnerId = null, syncSourceStatus = syncNotificationSourceStatus, publishCriticalWarning = publishCriticalFanoutWarning }) => {
   if (job.supersededByJobId || Number(job.expiresAtMs) <= nowMs) {
@@ -417,6 +417,13 @@ const processNotificationJobPage = async ({ db = admin.database(), jobRef, job, 
   const page = await loadNotificationAudiencePage(db, expectedCursor);
   const { prepared, skipReasons, eligibleCount, audienceCount } = await prepareDeliveryPage(db, job, page.candidates, pageId, nowMs);
   const increments = { audience: audienceCount, eligible: eligibleCount, skipped: Object.values(skipReasons).reduce((sum, count) => sum + count, 0) };
+  if (!(await renewNotificationJobSubmissionFence({
+    jobRef, leaseOwnerId, nowMs, requiredStatus: 'fanout_in_progress',
+  }))) {
+    const error = new Error('Notification job lease changed before provider submission');
+    error.code = 'NOTIFICATION_JOB_LEASE_LOST';
+    throw error;
+  }
   await sendPreparedChunks(db, job, prepared, expo, nowMs);
   const committed = await commitNotificationAudiencePage(jobRef, {
     pageId, expectedCursor, nextCursor: page.nextCursor, increments, skipReasons, nowMs, leaseOwnerId,
@@ -587,5 +594,6 @@ module.exports = {
   claimDeliveryAttempt, commitNotificationAudiencePage, handleExpoRequestFailure, mapWithConcurrency,
   markSubmissionUnknown, persistTicketResult, prepareDeliveryPage, processNotificationDeliveryJob,
   processNotificationJobPage, recoverNotificationDeliveryJobs, retryNotificationDeliveryAttempt,
-  runNotificationJob, sendPreparedChunks, transitionDeliveryAttempt,
+  acquireNotificationRetrySubmissionFence, releaseNotificationRetrySubmissionFence,
+  renewNotificationJobSubmissionFence, runNotificationJob, sendPreparedChunks, transitionDeliveryAttempt,
 };

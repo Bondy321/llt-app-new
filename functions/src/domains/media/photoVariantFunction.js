@@ -34,7 +34,7 @@ const isPhotoVariantRecordReady = ({ visibility: _visibility, photoRecord }) => 
 };
 
 /** @param {any} event */
-const processPhotoVariantObject = async (event) => {
+const processPhotoVariantObject = async (event, dependencies = {}) => {
     const objectData = event.data || {};
     const bucketName = objectData.bucket;
     const objectPath = objectData.name || "";
@@ -58,15 +58,18 @@ const processPhotoVariantObject = async (event) => {
       return null;
     }
 
-    const dbRoot = admin.database().ref(buildPhotoCollectionPath({ visibility, tourId, ownerKey }));
-    const match = await findPhotoRecordByStoragePath({ dbRoot, objectPath });
+    const database = dependencies.database || admin.database();
+    const findRecord = dependencies.findPhotoRecordByStoragePathFn || findPhotoRecordByStoragePath;
+    const generateVariants = dependencies.generatePhotoVariantsForRecordFn || generatePhotoVariantsForRecord;
+    const dbRoot = database.ref(buildPhotoCollectionPath({ visibility, tourId, ownerKey }));
+    const match = await findRecord({ dbRoot, objectPath });
     if (!match) return null;
     const { photoId, photoRecord } = match;
     if (isPhotoVariantRecordReady({ visibility, photoRecord })) {
       return null;
     }
 
-    await generatePhotoVariantsForRecord({
+    const outcome = await generateVariants({
       bucketName,
       visibility,
       tourId,
@@ -77,6 +80,13 @@ const processPhotoVariantObject = async (event) => {
         storagePath: objectPath,
       },
     });
+    if (outcome?.status === 'retry') {
+      const error = /** @type {Error & { code?: string }} */ (
+        new Error('Photo variant generation is contended')
+      );
+      error.code = 'PHOTO_VARIANT_RETRY';
+      throw error;
+    }
 
     return null;
   };
@@ -87,6 +97,7 @@ const generatePhotoVariants = onObjectFinalized(
     // We keep this trigger in us-east1 to match Firebase free-tier bucket location.
     region: "us-east1",
     maxInstances: 10,
+    retry: true,
   },
   processPhotoVariantObject,
 );

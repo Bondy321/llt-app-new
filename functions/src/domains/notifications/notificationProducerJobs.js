@@ -9,10 +9,26 @@ const { createNotificationJobRecord } = require('./notificationJobs');
 const { buildTourNotificationId } = require('./notificationState');
 
 const resolveChatJobShape = ({ tourId, messageId, messageData, isAdmin }) => {
-  const isPhoto = Number(messageData?.schemaVersion) === 2 && messageData?.type === 'image';
-  return { isPhoto, notificationType: isAdmin ? NOTIFICATION_TYPES.TOUR_ANNOUNCEMENT : (isPhoto ? NOTIFICATION_TYPES.GROUP_PHOTO : NOTIFICATION_TYPES.GROUP_CHAT), sourceType: isAdmin ? 'tour_announcement' : (isPhoto ? 'group_photo_message' : 'group_chat_message'), sourceId: isAdmin && resolveTrimmedString(messageData?.broadcastId) ? `${tourId}:${messageData.broadcastId}` : `${tourId}:${messageId}${isPhoto ? `:${messageData.photoId}` : ''}`, noticeId: isAdmin ? buildTourNotificationId({ type: 'announcement', tourId, sourceId: messageData.broadcastId || messageId }) : null };
+  const photoId = resolveTrimmedString(messageData?.photoId);
+  const broadcastId = resolveTrimmedString(messageData?.broadcastId);
+  const isPhoto = Number(messageData?.schemaVersion) === 2
+    && messageData?.type === 'image' && Boolean(photoId);
+  return {
+    isPhoto,
+    photoId,
+    notificationType: isAdmin ? NOTIFICATION_TYPES.TOUR_ANNOUNCEMENT
+      : (isPhoto ? NOTIFICATION_TYPES.GROUP_PHOTO : NOTIFICATION_TYPES.GROUP_CHAT),
+    sourceType: isAdmin ? 'tour_announcement'
+      : (isPhoto ? 'group_photo_message' : 'group_chat_message'),
+    sourceId: isAdmin && broadcastId
+      ? `${tourId}:${broadcastId}`
+      : `${tourId}:${messageId}${isPhoto ? `:${photoId}` : ''}`,
+    noticeId: isAdmin
+      ? buildTourNotificationId({ type: 'announcement', tourId, sourceId: broadcastId || messageId })
+      : null,
+  };
 };
-const buildChatNavigation = (tourId, messageId, messageData, shape, nowMs, isAdmin) => buildPushNavigationData({ tourId, screen: 'Chat', messageId, noticeId: shape.noticeId, photoId: shape.isPhoto ? messageData.photoId : null, notificationType: shape.notificationType, timestamp: Number(messageData?.timestamp) || nowMs, expiresAtMs: nowMs + (isAdmin ? 24 * 60 * 60 * 1000 : 6 * 60 * 60 * 1000) });
+const buildChatNavigation = (tourId, messageId, messageData, shape, nowMs, isAdmin) => buildPushNavigationData({ tourId, screen: 'Chat', messageId, noticeId: shape.noticeId, photoId: shape.isPhoto ? shape.photoId : null, notificationType: shape.notificationType, timestamp: Number(messageData?.timestamp) || nowMs, expiresAtMs: nowMs + (isAdmin ? 24 * 60 * 60 * 1000 : 6 * 60 * 60 * 1000) });
 /** @param {any} input */
 const buildChatNotificationJob = ({
   tourId,
@@ -179,4 +195,5 @@ module.exports = {
   buildItineraryNotificationJob,
   buildMarketingNotificationJob,
   buildSafetyNotificationJob,
+  resolveChatJobShape,
 };

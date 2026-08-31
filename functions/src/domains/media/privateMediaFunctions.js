@@ -21,6 +21,12 @@ const {
   normalizeGroupPhotoUploadMetadata,
 } = require('./mediaUploadMetadata');
 const {
+  acquireMediaRecordLock,
+  mediaRecordFingerprint,
+  readStorageObjectGeneration,
+  releaseMediaRecordLock,
+} = require('./groupMediaFunctions');
+const {
   normalizeTourKeyForComparison,
   resolveTrimmedString,
   toRealtimeKeySegment,
@@ -29,6 +35,170 @@ const { verifyActiveAppSession } = loadLegacyLibrary('appSessionAccess');
 
 const PRIVATE_PHOTO_CACHE_CONTROL_HEADER = 'private,no-store';
 const onRequestWithResult = /** @type {any} */ (onRequest);
+
+const deletePrivateStorageObjectIgnoringMissing = async (bucket, path, expectedGeneration) => {
+  if (expectedGeneration === 'missing') return false;
+  if (!expectedGeneration) {
+    const error = /** @type {Error & { code?: string }} */ (new Error('Storage generation is unavailable'));
+    error.code = 'MEDIA_GENERATION_UNAVAILABLE';
+    throw error;
+  }
+  const file = bucket.file(path);
+  try {
+    await file.delete({
+      ignoreNotFound: true,
+      ifGenerationMatch: expectedGeneration,
+    });
+    return true;
+  } catch (error) {
+    const code = /** @type {{ code?: unknown }} */ (error || {}).code;
+    if (code === 412 || code === '412') {
+      const changed = /** @type {Error & { code?: string }} */ (new Error('Storage object changed'));
+      changed.code = 'MEDIA_OBJECT_CHANGED';
+      throw changed;
+    }
+    if (code !== 404 && code !== '404') throw error;
+    return false;
+  }
+};
+
+/**
+ * Deletes only an exact private-photo record owned by a trusted private owner.
+ * @param {{ db: any, bucket: any, tourId: string, ownerKey: string, photoId: string, trustedOwnerKeys: string[], assertCanDelete?: (() => Promise<any>) }} options
+ */
+const deleteOwnedPrivatePhotoRecordUnlocked = async ({
+  db, bucket, tourId, ownerKey, photoId, trustedOwnerKeys, assertCanDelete = null,
+// eslint-disable-next-line complexity -- exact owner/path comparison intentionally fails closed at each field
+}) => {
+  if (!isValidFirebaseKey(tourId) || !isValidFirebaseKey(ownerKey) || !isValidFirebaseKey(photoId)) {
+    throw new Error('Invalid private photo key');
+  }
+  const owners = new Set((Array.isArray(trustedOwnerKeys) ? trustedOwnerKeys : []).filter(isValidFirebaseKey));
+  if (!owners.has(ownerKey)) throw new Error('Trusted private photo owner is required');
+  const recordRef = db.ref(`private_tour_photos/${tourId}/${ownerKey}/${photoId}`);
+  const snapshot = await recordRef.once('value');
+  if (!snapshot.exists()) return { deleted: false, alreadyDeleted: true, storageObjectsRemoved: 0 };
+  const observed = snapshot.val() || {};
+  if (!owners.has(observed.userId) || observed.userId !== ownerKey) {
+    return { deleted: false, alreadyDeleted: false, reason: 'NOT_OWNER' };
+  }
+  const captured = {
+    userId: observed.userId,
+    storagePath: observed.storagePath ?? null,
+    viewerStoragePath: observed.viewerStoragePath ?? null,
+    thumbnailStoragePath: observed.thumbnailStoragePath ?? null,
+  };
+  const capturedPaths = [captured.storagePath, captured.viewerStoragePath, captured.thumbnailStoragePath];
+  if (capturedPaths.some((path) => path !== null
+    && !isPrivateMediaPathForRecord({ path, tourId, ownerKey }))) {
+    const error = /** @type {Error & { code?: string }} */ (new Error('Private photo path is invalid'));
+    error.code = 'MEDIA_PATH_INVALID';
+    throw error;
+  }
+  const fingerprint = mediaRecordFingerprint(observed);
+  const existingClaim = observed._serverDeletion?.status === 'deleting'
+    ? observed._serverDeletion
+    : null;
+  if (existingClaim && (existingClaim.recordFingerprint !== fingerprint
+    || !existingClaim.generations || typeof existingClaim.generations !== 'object')) {
+    const error = /** @type {Error & { code?: string }} */ (new Error('Private photo claim changed'));
+    error.code = 'MEDIA_RECORD_CHANGED';
+    throw error;
+  }
+  const generations = existingClaim?.generations || {};
+  if (!existingClaim) {
+    for (const field of ['storagePath', 'viewerStoragePath', 'thumbnailStoragePath']) {
+      const path = captured[field];
+      if (path === null) continue;
+      const generation = await readStorageObjectGeneration(bucket.file(path));
+      if (!generation) {
+        const error = /** @type {Error & { code?: string }} */ (new Error('Storage generation is unavailable'));
+        error.code = 'MEDIA_GENERATION_UNAVAILABLE';
+        throw error;
+      }
+      generations[field] = generation;
+    }
+  }
+  let claimState = 'changed';
+  const claim = await recordRef.transaction((current) => {
+    if (!current) {
+      claimState = 'missing';
+      return current;
+    }
+    if (mediaRecordFingerprint(current) !== fingerprint) {
+      claimState = 'changed';
+      return undefined;
+    }
+    claimState = 'claimed';
+    return {
+      ...current,
+      _serverDeletion: {
+        schemaVersion: 1,
+        status: 'deleting',
+        recordFingerprint: fingerprint,
+        generations,
+      },
+    };
+  }, undefined, false);
+  if (claimState === 'missing') return { deleted: false, alreadyDeleted: true, storageObjectsRemoved: 0 };
+  if (!claim?.committed || claimState !== 'claimed') {
+    const error = /** @type {Error & { code?: string }} */ (new Error('Private photo claim changed'));
+    error.code = 'MEDIA_RECORD_CHANGED';
+    throw error;
+  }
+  const paths = [...new Set(capturedPaths.filter((path) => path !== null))];
+  for (const path of paths) {
+    if (assertCanDelete) await assertCanDelete();
+    const field = ['storagePath', 'viewerStoragePath', 'thumbnailStoragePath']
+      .find((candidate) => captured[candidate] === path);
+    await deletePrivateStorageObjectIgnoringMissing(bucket, path, generations[field]);
+  }
+  if (assertCanDelete) await assertCanDelete();
+  let matched = false;
+  let missingDuringCompare = false;
+  const result = await recordRef.transaction((current) => {
+    matched = false;
+    missingDuringCompare = false;
+    if (!current) {
+      missingDuringCompare = true;
+      return current;
+    }
+    if (current._serverDeletion?.status !== 'deleting'
+      || current._serverDeletion?.recordFingerprint !== fingerprint
+      || mediaRecordFingerprint(current) !== fingerprint) return undefined;
+    matched = true;
+    return null;
+  }, undefined, false);
+  if (missingDuringCompare) {
+    return { deleted: false, alreadyDeleted: true, storageObjectsRemoved: paths.length };
+  }
+  if (!matched || !result?.committed) {
+    const error = /** @type {Error & { code?: string }} */ (new Error('Private photo changed during deletion'));
+    error.code = 'MEDIA_RECORD_CHANGED';
+    throw error;
+  }
+  return { deleted: true, alreadyDeleted: false, storageObjectsRemoved: paths.length };
+};
+
+const deleteOwnedPrivatePhotoRecord = async (options) => {
+  const lock = await acquireMediaRecordLock({
+    db: options.db,
+    visibility: 'private',
+    tourId: options.tourId,
+    ownerKey: options.ownerKey,
+    photoId: options.photoId,
+  });
+  if (!lock.acquired) {
+    const error = /** @type {Error & { code?: string }} */ (new Error('Private photo mutation in progress'));
+    error.code = 'MEDIA_MUTATION_IN_PROGRESS';
+    throw error;
+  }
+  try {
+    return await deleteOwnedPrivatePhotoRecordUnlocked(options);
+  } finally {
+    await releaseMediaRecordLock(lock);
+  }
+};
 
 /** @type {(...args: any[]) => any} */
 const resolvePrivatePhotoMedia = onRequestWithResult(
@@ -74,6 +244,10 @@ const reservePrivatePhotoRecord = async ({ db, input, principalId, contentType, 
   let deduped = false;
   const result = await recordRef.transaction(/** @param {any} current */ (current) => {
     if (current) {
+      if (current._serverDeletion?.status === 'deleting') {
+        conflict = true;
+        return undefined;
+      }
       if (current.idempotencyKey === input.idempotencyKey && current.userId === principalId
         && current.storagePath === storagePath) {
         deduped = true;
@@ -123,35 +297,51 @@ const uploadPrivatePhoto = onRequestWithResult(
       || !GROUP_MEDIA_ALLOWED_TYPES.has(contentType)) {
       return res.status(400).json({ success: false, reason: 'INVALID_IMAGE' });
     }
-    const reservation = await reservePrivatePhotoRecord({
-      db: admin.database(),
-      input,
-      principalId: access.principalId,
-      contentType,
-      fileSize: body.length,
+    const db = admin.database();
+    const photoId = toRealtimeKeySegment(input.idempotencyKey);
+    const mutationLock = await acquireMediaRecordLock({
+      db,
+      visibility: 'private',
+      tourId: input.tourId,
+      ownerKey: access.principalId,
+      photoId,
     });
-    if (!reservation.success) return res.status(409).json({ success: false, reason: reservation.reason });
-    const file = admin.storage().bucket().file(reservation.storagePath);
-    if (!reservation.deduped || !(await file.exists())[0]) {
-      await file.save(body, {
-        resumable: false,
-        metadata: {
-          contentType,
-          cacheControl: PRIVATE_PHOTO_CACHE_CONTROL_HEADER,
-          metadata: { visibility: 'private', sourceRole: 'source' },
+    if (!mutationLock.acquired) {
+      return res.status(409).json({ success: false, reason: 'MEDIA_MUTATION_IN_PROGRESS' });
+    }
+    try {
+      const reservation = await reservePrivatePhotoRecord({
+        db,
+        input,
+        principalId: access.principalId,
+        contentType,
+        fileSize: body.length,
+      });
+      if (!reservation.success) return res.status(409).json({ success: false, reason: reservation.reason });
+      const file = admin.storage().bucket().file(reservation.storagePath);
+      if (!reservation.deduped || !(await file.exists())[0]) {
+        await file.save(body, {
+          resumable: false,
+          metadata: {
+            contentType,
+            cacheControl: PRIVATE_PHOTO_CACHE_CONTROL_HEADER,
+            metadata: { visibility: 'private', sourceRole: 'source' },
+          },
+        });
+      }
+      return res.status(200).json({
+        success: true,
+        photo: {
+          id: reservation.photoId,
+          userId: access.principalId,
+          caption: input.caption,
+          storagePath: reservation.storagePath,
+          deduped: reservation.deduped,
         },
       });
+    } finally {
+      await releaseMediaRecordLock(mutationLock);
     }
-    return res.status(200).json({
-      success: true,
-      photo: {
-        id: reservation.photoId,
-        userId: access.principalId,
-        caption: input.caption,
-        storagePath: reservation.storagePath,
-        deduped: reservation.deduped,
-      },
-    });
   },
 );
 
@@ -182,17 +372,23 @@ const deletePrivatePhoto = onRequestWithResult(
     if (record.userId !== access.principalId) {
       return res.status(403).json({ success: false, reason: 'NOT_OWNER' });
     }
-    const paths = [record.storagePath, record.viewerStoragePath, record.thumbnailStoragePath]
-      .filter((path) => isPrivateMediaPathForRecord({ path, tourId, ownerKey: access.principalId }));
-    await Promise.all(paths.map((path) => admin.storage().bucket().file(path).delete({ ignoreNotFound: true })));
-    await recordRef.remove();
-    return res.status(200).json({ success: true, alreadyDeleted: false });
+    const deletion = await deleteOwnedPrivatePhotoRecord({
+      db: admin.database(),
+      bucket: admin.storage().bucket(),
+      tourId,
+      ownerKey: access.principalId,
+      photoId,
+      trustedOwnerKeys: [access.principalId],
+    });
+    if (deletion.reason === 'NOT_OWNER') return res.status(403).json({ success: false, reason: 'NOT_OWNER' });
+    return res.status(200).json({ success: true, alreadyDeleted: deletion.alreadyDeleted });
   },
 );
 
 
 module.exports = {
   deletePrivatePhoto,
+  deleteOwnedPrivatePhotoRecord,
   normalizePrivatePhotoUploadMetadata,
   reservePrivatePhotoRecord,
   resolvePrivatePhotoMedia,

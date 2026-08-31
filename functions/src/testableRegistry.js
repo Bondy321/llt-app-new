@@ -44,6 +44,11 @@ const { verifyOperationsAdminAccess } = require('./domains/administration/public
 const tourDeletion = require('./domains/administration/tourDeletion');
 const manifestDomain = require('./domains/manifests/manifestDomain');
 const driverAssignment = require('./domains/driver-assignment/driverAssignment');
+const accountDeletionBoundary = require('./domains/account-deletion/accountDeletionBoundary');
+const accountDeletionCoordination = require('./domains/account-deletion/accountDeletionCoordination');
+const accountDeletionFunctions = require('./domains/account-deletion/accountDeletionFunctions');
+const accountDeletionScope = require('./domains/account-deletion/accountDeletionScope');
+const accountDeletionWorker = require('./domains/account-deletion/accountDeletionWorker');
 
 const passengerIdentity = loadLegacyLibrary('passengerIdentity');
 const loginRateLimiter = loadLegacyLibrary('loginRateLimiter');
@@ -59,6 +64,14 @@ const chatPresenceProjection = loadLegacyLibrary('chatPresenceProjection');
 const driverLocationProjection = loadLegacyLibrary('driverLocationProjection');
 
 module.exports = {
+  ...accountDeletionBoundary,
+  ...accountDeletionCoordination,
+  ...accountDeletionFunctions,
+  ...accountDeletionScope,
+  ...accountDeletionWorker,
+  deleteNotificationAccountState: notificationDeviceFunctions.deleteNotificationAccountState,
+  deleteOwnedGroupPhotoRecord: groupMediaFunctions.deleteOwnedGroupPhotoRecord,
+  deleteOwnedPrivatePhotoRecord: privateMediaFunctions.deleteOwnedPrivatePhotoRecord,
   buildGroupPhotoChatMessageRecord: groupMediaFunctions.buildGroupPhotoChatMessageRecord,
   buildGroupPhotoChatResponseMessage: groupMediaFunctions.buildGroupPhotoChatResponseMessage,
   toRealtimeKeySegment: notificationPolicy.toRealtimeKeySegment,

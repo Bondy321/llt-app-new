@@ -15,7 +15,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import {
   DATA_REQUEST_EMAIL,
   PRIVACY_POLICY_URL,
-  deleteCurrentAccount,
 } from '../services/accountDeletionService';
 import logger, { maskIdentifier } from '../services/loggerService';
 import { COLORS, FONT_WEIGHT, RADIUS, SHADOWS, SPACING } from '../theme';
@@ -73,14 +72,9 @@ const RowButton = ({ icon, title, subtitle, onPress, destructive = false, disabl
 export default function AccountPrivacyScreen({
   onBack,
   onLogout,
-  onAccountDeleted,
-  tourData,
+  onDeleteAccount,
   bookingData,
-  canonicalIdentity,
-  identityBinding,
   isDriverSession = false,
-  sessionStorage,
-  sessionKeys,
 }) {
   const [deleting, setDeleting] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
@@ -88,41 +82,21 @@ export default function AccountPrivacyScreen({
 
   const handleDeleteConfirmed = async () => {
     setDeleting(true);
-    setStatusMessage('Deleting your app account...');
+    setStatusMessage('Securing your deletion request...');
+    let result;
+    try {
+      result = await onDeleteAccount?.();
+    } catch {
+      result = { success: false, error: 'The secure deletion request could not be saved. Please try again.' };
+    }
 
-    const result = await deleteCurrentAccount({
-      tourData,
-      bookingData,
-      canonicalIdentity,
-      identityBinding,
-      isDriverSession,
-      sessionStorage,
-      sessionKeys,
-    });
-
-    setDeleting(false);
-
-    if (!result.success) {
+    if (!result?.success) {
+      setDeleting(false);
       setStatusMessage('');
       Alert.alert('Account deletion failed', result.error || 'Please check your connection and try again.');
       return;
     }
-
-    const warningText = result.warnings?.length
-      ? ' Some shared tour records may require manual review by Loch Lomond Travel.'
-      : '';
-
-    setStatusMessage('Account deleted.');
-    Alert.alert(
-      'Account deleted',
-      `Your app account and local app data were deleted.${warningText}`,
-      [
-        {
-          text: 'Done',
-          onPress: () => onAccountDeleted?.(result),
-        },
-      ]
-    );
+    setStatusMessage('Deletion accepted. It will continue safely if you close the app.');
   };
 
   const handleDeletePress = () => {
@@ -133,7 +107,9 @@ export default function AccountPrivacyScreen({
 
     Alert.alert(
       'Delete account?',
-      'This removes your app account, notification preferences, local offline data, and your active-tour app content where possible. Your travel booking may still be retained by Loch Lomond Travel where required.',
+      isDriverSession
+        ? 'This removes your driver app account, notification preferences, and local offline data. Shared operational chat, media, assignments, and canonical operations records are retained. Deletion may continue securely after this app is closed.'
+        : 'This removes your app account, notification preferences, local offline data, and passenger-authored active-tour chat and media where possible. Deletion may continue securely after this app is closed. Your travel booking may still be retained by Loch Lomond Travel where required.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -202,7 +178,9 @@ export default function AccountPrivacyScreen({
           <RowButton
             icon="account-remove-outline"
             title="Delete account"
-            subtitle="Remove this app account and app-stored data from this device and active tour."
+            subtitle={isDriverSession
+              ? 'Remove this driver app account and local data; shared operational records are retained.'
+              : 'Remove this app account, local data, and passenger-authored active-tour content.'}
             onPress={handleDeletePress}
             destructive
             disabled={deleting}

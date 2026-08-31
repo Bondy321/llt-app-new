@@ -14,7 +14,15 @@ const maskIdentifier = (value) => {
 /** @param {unknown} key */
 const isSensitiveLogKey = (key) => {
   const normalized = String(key || '').toLowerCase();
-  return /(token|bookingref|clientkey|userid|senderid|senderuid|authuid|participantid|recipientid|email|clientip|ipaddress)/u.test(normalized);
+  const sensitiveFragments = [
+    'token', 'receipt', 'bookingref', 'clientkey', 'userid', 'senderid', 'senderuid',
+    'authuid', 'adminuid', 'participantid', 'recipientid', 'driverid', 'tourid',
+    'tourcode', 'principalid', 'principalkey', 'sessionid', 'deletionid', 'messageid',
+    'photoid', 'eventid', 'jobid', 'runid', 'sourceid', 'warningid', 'attemptid',
+    'installationuid', 'ownerkey', 'stablepassenger', 'email', 'clientip', 'ipaddress',
+  ];
+  return normalized === 'path' || normalized.endsWith('path')
+    || sensitiveFragments.some((fragment) => normalized.includes(fragment));
 };
 
 /**
@@ -24,6 +32,10 @@ const isSensitiveLogKey = (key) => {
  */
 const sanitizeLogValue = (key, value) => {
   if (value === null || value === undefined) return value;
+  const normalizedKey = String(key || '').toLowerCase();
+  if (normalizedKey === 'error' || normalizedKey === 'stack' || normalizedKey === 'exception') {
+    return '[redacted-error]';
+  }
   if (Array.isArray(value)) {
     return value.map((item) => (
       isSensitiveLogKey(key) && (typeof item !== 'object' || item === null)
@@ -37,7 +49,7 @@ const sanitizeLogValue = (key, value) => {
       return sanitized;
     }, /** @type {LogData} */ ({}));
   }
-  if (/token/u.test(String(key || '').toLowerCase())) return '[redacted]';
+  if (/token/u.test(normalizedKey)) return '[redacted]';
   if (isSensitiveLogKey(key)) return maskIdentifier(value);
   return value;
 };
@@ -67,9 +79,15 @@ const createSafeLogger = ({ consoleAdapter = console, now = () => new Date().toI
   error: (message, error = {}, data = {}) => consoleAdapter.error(JSON.stringify({
     level: 'error',
     message,
-    error: sanitizeLogText((error && typeof error === 'object' && 'message' in error) ? error.message : (error || null)),
+    error: sanitizeLogValue(
+      'error',
+      (error && typeof error === 'object' && 'message' in error) ? error.message : (error || null),
+    ),
+    errorCode: (error && typeof error === 'object' && 'code' in error)
+      ? String(error.code || '').slice(0, 80)
+      : null,
     stack: (error && typeof error === 'object' && 'stack' in error && error.stack)
-      ? sanitizeLogText(error.stack)
+      ? sanitizeLogValue('stack', error.stack)
       : null,
     ...sanitizeLogData(data),
     timestamp: now(),

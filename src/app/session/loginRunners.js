@@ -5,6 +5,7 @@ import {
   prepareLoginContext,
   resolvePostLoginDestination,
 } from './loginSessionPhases';
+import defaultAccountDeletionService from '../../../services/accountDeletionService';
 
 export const runResolveOfflineLogin = async (deps, reference, normalizedEmail) => {
   const {
@@ -16,6 +17,10 @@ export const runResolveOfflineLogin = async (deps, reference, normalizedEmail) =
     offlineSyncService,
     resolveOfflineLoginFromCache,
   } = deps;
+  const accountDeletionService = deps.accountDeletionService || defaultAccountDeletionService;
+  if (await accountDeletionService.readPending()) {
+    return { success: false, reason: 'ACCOUNT_DELETION_IN_PROGRESS', error: 'Account deletion must finish before this device can open a tour.' };
+  }
   if (await appSessionService.readPendingEnd()) {
     return { success: false, reason: 'LOGOUT_PENDING', error: 'Logout must finish online before this device can reopen a tour.' };
   }
@@ -55,6 +60,12 @@ export const runHandleLoginSuccess = async (
   userType = 'passenger',
   options = {},
 ) => {
+  const accountDeletionService = deps.accountDeletionService || defaultAccountDeletionService;
+  if (await accountDeletionService.readPending()) {
+    const error = new Error('Account deletion must finish before another tour can be opened.');
+    error.code = 'ACCOUNT_DELETION_IN_PROGRESS';
+    throw error;
+  }
   const context = await prepareLoginContext(
     deps,
     reference,

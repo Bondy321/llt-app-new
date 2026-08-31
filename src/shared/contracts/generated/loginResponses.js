@@ -474,6 +474,7 @@ const validateContract = (name, value, options = {}) => {
     if (constraint === 'noCredentialFields') visitKeys(value, (key) => {
       if (/^(?:bookingRef|email|normalizedPassengerEmail|phone|phoneNumber)$/iu.test(key)) errors.push(`${key} is a forbidden credential field`);
     });
+    if (constraint === 'expectedSessionIdOnlyWhileRequesting' && Object.prototype.hasOwnProperty.call(value, 'expectedSessionId') && value.state !== 'requesting') errors.push('expectedSessionId is only allowed while requesting');
   }
   return { valid: errors.length === 0, errors };
 };
