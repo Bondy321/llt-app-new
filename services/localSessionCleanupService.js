@@ -43,6 +43,7 @@ const createLocalSessionCleanupService = ({
   driverLifecycle = driverOperationalLifecycleService,
   clearNotifications = clearNotificationFeedCache,
   photoCache = loadPhotoCacheService(),
+  beforeSessionKeyCommit = null,
 } = {}) => {
   let cleanupInFlight = null;
 
@@ -52,16 +53,69 @@ const createLocalSessionCleanupService = ({
     bookingData,
     tourData,
     driverOperationalScope = null,
+    requireCompleteScope = false,
   } = {}) => {
     if (cleanupInFlight) return cleanupInFlight;
     cleanupInFlight = (async () => {
       const role = appSession?.principalType || (bookingData?.isDriver ? 'driver' : 'passenger');
       const tourId = appSession?.tourId || tourData?.id || null;
       const principalId = appSession?.principalId || null;
-      const ownerId = bookingData?.id || null;
+      const ownerId = role === 'driver'
+        ? appSession?.driverId || bookingData?.id || null
+        : bookingData?.id || null;
+      const resolvedDriverOperationalScope = role === 'driver' && tourId
+        ? {
+            authUid,
+            driverId: appSession?.driverId || bookingData?.id || null,
+            departureKey: bookingData?.assignedDepartureKey
+              || (!requireCompleteScope ? driverOperationalScope?.departureKey : null)
+              || null,
+            tourId,
+            startDate: tourData?.startDate
+              || (!requireCompleteScope ? driverOperationalScope?.startDate : null)
+              || null,
+          }
+        : null;
+      const normalizedDriverScope = resolvedDriverOperationalScope
+        ? driverLifecycle.normalizeScope?.(resolvedDriverOperationalScope)
+        : null;
+      const driverScopeValid = !resolvedDriverOperationalScope
+        || (normalizedDriverScope ? normalizedDriverScope.ok === true && Boolean(normalizedDriverScope.packScope) : Boolean(
+          resolvedDriverOperationalScope.driverId
+          && resolvedDriverOperationalScope.tourId
+          && (resolvedDriverOperationalScope.departureKey || resolvedDriverOperationalScope.startDate),
+        ));
+      const projectedTourId = tourData?.id || bookingData?.assignedTourId || null;
+      const storedProjectionMatches = role === 'passenger'
+        ? bookingData?.stablePassengerId === principalId
+          && appSession?.tourId === projectedTourId
+        : appSession?.driverId === ownerId
+          && principalId === `driver:${ownerId}`
+          && appSession?.tourId === projectedTourId;
+      const completeScope = Boolean(
+        typeof authUid === 'string' && authUid.trim()
+        && appSession?.sessionId
+        && (role === 'passenger' || role === 'driver')
+        && principalId
+        && storedProjectionMatches
+        && (role === 'passenger'
+          ? tourId && ownerId
+          : ownerId && driverScopeValid),
+      );
+      if (requireCompleteScope && !completeScope) {
+        return {
+          success: false,
+          role,
+          tourId,
+          attempted: [],
+          failures: [{ name: 'validateCleanupScope', error: 'LOCAL_CLEANUP_SCOPE_INCOMPLETE' }],
+          results: {
+            validateCleanupScope: { success: false, error: 'LOCAL_CLEANUP_SCOPE_INCOMPLETE' },
+          },
+        };
+      }
       const operations = {
         stopOfflineReplay: () => offline.setActiveSessionScope(null),
-        clearSessionKeys: () => storage.multiRemove(APP_LOCAL_KEYS),
         clearNotificationLifecycle: () => storage.multiRemove(notificationLifecycleKeys({
           authUid,
           sessionId: appSession?.sessionId || null,
@@ -70,8 +124,8 @@ const createLocalSessionCleanupService = ({
         clearPhotoCache: () => photoCache?.clearPhotoViewerCache?.() || Promise.resolve({ success: true }),
       };
 
-      if (role === 'driver' && driverOperationalScope) {
-        operations.clearDriverOperationalData = () => driverLifecycle.purge(driverOperationalScope);
+      if (role === 'driver' && resolvedDriverOperationalScope) {
+        operations.clearDriverOperationalData = () => driverLifecycle.purge(resolvedDriverOperationalScope);
       } else if (tourId && ownerId) {
         operations.clearTourPack = () => offline.purgeTourPack(tourId, role, { ownerId });
       }
@@ -101,6 +155,20 @@ const createLocalSessionCleanupService = ({
       const failures = Object.entries(results)
         .filter(([, result]) => result.success === false)
         .map(([name, result]) => ({ name, error: result.error }));
+      if (failures.length === 0) {
+        try {
+          if (beforeSessionKeyCommit) await beforeSessionKeyCommit();
+          const value = await storage.multiRemove(APP_LOCAL_KEYS);
+          results.clearSessionKeys = { success: true, value };
+        } catch (error) {
+          const commitFailure = {
+            name: 'clearSessionKeys',
+            error: error?.message || String(error),
+          };
+          failures.push(commitFailure);
+          results.clearSessionKeys = { success: false, error: commitFailure.error };
+        }
+      }
       return {
         success: failures.length === 0,
         role,

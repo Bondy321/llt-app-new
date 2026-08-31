@@ -66,6 +66,7 @@ const {
   createLocalSessionCleanupService,
 } = require('../services/localSessionCleanupService');
 const {
+  runPurgePendingAccountDeletion,
   toAccountDeletionUiState,
 } = require('../src/app/session/accountDeletionRunners');
 const {
@@ -78,6 +79,9 @@ Module._load = originalLoad;
 const SESSION_ID = `sess_v1_${'a'.repeat(32)}`;
 const RECEIPT = `delrec_v1_${'b'.repeat(64)}`;
 const ORIGINAL_AUTH_UID = 'original-auth-uid';
+const TOUR_KEY = '@LLT:tourData';
+const BOOKING_KEY = '@LLT:bookingData';
+const APP_SESSION_KEY = '@LLT:appSession:v1';
 
 const pendingRecord = (overrides = {}) => ({
   schemaVersion: 2,
@@ -105,6 +109,56 @@ const firebaseBoundary = () => ({
   auth: { currentUser: { uid: 'recovery-auth', getIdToken: async () => 'recovery-token' } },
   authHelpers: {},
   getCurrentAppCheckToken: async () => null,
+});
+
+const makeLocalStorage = (entries = {}) => {
+  const values = new Map(Object.entries(entries));
+  return {
+    values,
+    async getItem(key) { return values.get(key) ?? null; },
+    async setItem(key, value) { values.set(key, value); },
+    async removeItem(key) { values.delete(key); },
+    async multiGet(keys) { return keys.map((key) => [key, values.get(key) ?? null]); },
+    async multiRemove(keys) { keys.forEach((key) => values.delete(key)); },
+  };
+};
+
+const makeCleanupRunner = ({ deletionService, localStorage, cleanupService }) => ({
+  SESSION_KEYS: { TOUR_DATA: TOUR_KEY, BOOKING_DATA: BOOKING_KEY },
+  SessionStorage: localStorage,
+  accountDeletionService: deletionService,
+  appSessionService: {
+    readSession: async () => {
+      const raw = localStorage.values.get(APP_SESSION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    },
+    completeEnd: async () => { throw new Error('cleanup owns the final session-key commit'); },
+  },
+  authHelpers: { replaceWithFreshAnonymous: async () => ({ uid: 'fresh-recovery-auth' }) },
+  localSessionCleanupService: cleanupService,
+  setAppSession: () => {},
+  setUser: () => {},
+});
+
+const makeCleanupDependencies = ({ storage, offlineOverrides = {}, driverLifecycle, beforeSessionKeyCommit } = {}) => ({
+  storage,
+  offline: {
+    setActiveSessionScope: async () => ({ success: true }),
+    purgeTourPack: async () => ({ success: true }),
+    purgeActionsForScope: async () => ({ success: true }),
+    ...offlineOverrides,
+  },
+  driverLifecycle: driverLifecycle || { purge: async () => ({ success: true }) },
+  clearNotifications: async () => 0,
+  photoCache: { clearPhotoViewerCache: async () => ({ success: true }) },
+  beforeSessionKeyCommit,
+});
+
+const makeScopedLocalStorage = ({ appSession, bookingData, tourData }) => makeLocalStorage({
+  ...Object.fromEntries(APP_LOCAL_KEYS.map((key) => [key, 'private-local-value'])),
+  [APP_SESSION_KEY]: JSON.stringify(appSession),
+  [BOOKING_KEY]: JSON.stringify(bookingData),
+  [TOUR_KEY]: JSON.stringify(tourData),
 });
 
 test('the durable receipt survives the actual local purge while offline and notification caches are cleared', async () => {
@@ -141,7 +195,7 @@ test('the durable receipt survives the actual local purge while offline and noti
       principalId: 'passenger-principal',
       tourId: 'TOUR_LOCAL',
     },
-    bookingData: { id: 'BOOK_LOCAL' },
+    bookingData: { id: 'BOOK_LOCAL', stablePassengerId: 'passenger-principal' },
     tourData: { id: 'TOUR_LOCAL' },
   });
 
@@ -156,6 +210,293 @@ test('the durable receipt survives the actual local purge while offline and noti
     { deletionReceipt: (await deletionService.readPending()).deletionReceipt, originalAuthUid: (await deletionService.readPending()).originalAuthUid },
     { deletionReceipt: RECEIPT, originalAuthUid: ORIGINAL_AUTH_UID },
   );
+});
+
+test('passenger Tour Pack failure retains scope keys and recreation retries the exact scoped purge', async () => {
+  const appSession = {
+    sessionId: SESSION_ID,
+    principalType: 'passenger',
+    principalId: 'passenger-principal',
+    tourId: 'TOUR_LOCAL',
+  };
+  const localStorage = makeScopedLocalStorage({
+    appSession,
+    bookingData: { id: 'BOOK_LOCAL', stablePassengerId: 'passenger-principal' },
+    tourData: { id: 'TOUR_LOCAL' },
+  });
+  const deletionService = createAccountDeletionService({ persistence: makePersistence(), now: () => 200 });
+  await deletionService.writePending(pendingRecord());
+  const packs = new Set([
+    'TOUR_LOCAL|passenger|BOOK_LOCAL',
+    'TOUR_LOCAL|passenger|BOOK_OTHER',
+  ]);
+  const packScopes = [];
+  let packAttempts = 0;
+  const offlineOverrides = {
+    purgeTourPack: async (tourId, role, { ownerId }) => {
+      const key = `${tourId}|${role}|${ownerId}`;
+      packScopes.push(key);
+      packAttempts += 1;
+      if (packAttempts === 1) return { success: false, error: 'injected Tour Pack failure' };
+      packs.delete(key);
+      return { success: true };
+    },
+  };
+
+  const firstCleanup = createLocalSessionCleanupService(makeCleanupDependencies({
+    storage: localStorage,
+    offlineOverrides,
+  }));
+  const first = await runPurgePendingAccountDeletion(makeCleanupRunner({
+    deletionService,
+    localStorage,
+    cleanupService: firstCleanup,
+  }));
+  assert.equal(first.success, false);
+  assert.deepEqual(first.failures, [{ name: 'clearTourPack', error: 'injected Tour Pack failure' }]);
+  assert.equal((await deletionService.readPending()).localCleanupComplete, false);
+  [TOUR_KEY, BOOKING_KEY, APP_SESSION_KEY].forEach((key) => assert.equal(localStorage.values.has(key), true, key));
+  assert.equal(packs.has('TOUR_LOCAL|passenger|BOOK_LOCAL'), true);
+
+  const restartedCleanup = createLocalSessionCleanupService(makeCleanupDependencies({
+    storage: localStorage,
+    offlineOverrides,
+  }));
+  const resumed = await runPurgePendingAccountDeletion(makeCleanupRunner({
+    deletionService,
+    localStorage,
+    cleanupService: restartedCleanup,
+  }));
+  assert.equal(resumed.success, true);
+  assert.deepEqual(packScopes, [
+    'TOUR_LOCAL|passenger|BOOK_LOCAL',
+    'TOUR_LOCAL|passenger|BOOK_LOCAL',
+  ]);
+  APP_LOCAL_KEYS.forEach((key) => assert.equal(localStorage.values.has(key), false, key));
+  assert.equal(packs.has('TOUR_LOCAL|passenger|BOOK_LOCAL'), false);
+  assert.equal(packs.has('TOUR_LOCAL|passenger|BOOK_OTHER'), true, 'another principal must be preserved');
+  assert.equal((await deletionService.readPending()).localCleanupComplete, true);
+});
+
+test('account-deletion cleanup rejects a mismatched persisted principal before touching local data', async () => {
+  const localStorage = makeScopedLocalStorage({
+    appSession: {
+      sessionId: SESSION_ID,
+      principalType: 'passenger',
+      principalId: 'passenger-principal',
+      tourId: 'TOUR_LOCAL',
+    },
+    bookingData: { id: 'BOOK_LOCAL', stablePassengerId: 'different-principal' },
+    tourData: { id: 'TOUR_LOCAL' },
+  });
+  let operationCalls = 0;
+  const cleanup = createLocalSessionCleanupService(makeCleanupDependencies({
+    storage: localStorage,
+    offlineOverrides: {
+      setActiveSessionScope: async () => { operationCalls += 1; },
+      purgeTourPack: async () => { operationCalls += 1; return { success: true }; },
+      purgeActionsForScope: async () => { operationCalls += 1; return { success: true }; },
+    },
+  }));
+  const result = await cleanup.cleanup({
+    authUid: ORIGINAL_AUTH_UID,
+    appSession: JSON.parse(localStorage.values.get(APP_SESSION_KEY)),
+    bookingData: JSON.parse(localStorage.values.get(BOOKING_KEY)),
+    tourData: JSON.parse(localStorage.values.get(TOUR_KEY)),
+    requireCompleteScope: true,
+  });
+  assert.equal(result.success, false);
+  assert.deepEqual(result.failures, [{ name: 'validateCleanupScope', error: 'LOCAL_CLEANUP_SCOPE_INCOMPLETE' }]);
+  assert.equal(operationCalls, 0);
+  APP_LOCAL_KEYS.forEach((key) => assert.equal(localStorage.values.has(key), true, key));
+});
+
+test('scoped offline queue failure retains scope keys and recreation retries without purging another principal', async () => {
+  const appSession = {
+    sessionId: SESSION_ID,
+    principalType: 'passenger',
+    principalId: 'passenger-principal',
+    tourId: 'TOUR_QUEUE',
+  };
+  const localStorage = makeScopedLocalStorage({
+    appSession,
+    bookingData: { id: 'BOOK_QUEUE', stablePassengerId: 'passenger-principal' },
+    tourData: { id: 'TOUR_QUEUE' },
+  });
+  const deletionService = createAccountDeletionService({ persistence: makePersistence(), now: () => 300 });
+  await deletionService.writePending(pendingRecord());
+  const queues = new Set([
+    'TOUR_QUEUE|passenger-principal|passenger|BOOK_QUEUE',
+    'TOUR_QUEUE|passenger-other|passenger|BOOK_OTHER',
+  ]);
+  const queueScopes = [];
+  let queueAttempts = 0;
+  const offlineOverrides = {
+    purgeActionsForScope: async ({ scope }) => {
+      const key = `${scope.tourId}|${scope.principalId}|${scope.role}|${scope.cacheOwnerId}`;
+      queueScopes.push({ ...scope });
+      queueAttempts += 1;
+      if (queueAttempts === 1) return { success: false, error: 'injected queue failure' };
+      queues.delete(key);
+      return { success: true };
+    },
+  };
+
+  const first = await runPurgePendingAccountDeletion(makeCleanupRunner({
+    deletionService,
+    localStorage,
+    cleanupService: createLocalSessionCleanupService(makeCleanupDependencies({
+      storage: localStorage,
+      offlineOverrides,
+    })),
+  }));
+  assert.equal(first.success, false);
+  assert.equal((await deletionService.readPending()).localCleanupComplete, false);
+  [TOUR_KEY, BOOKING_KEY, APP_SESSION_KEY].forEach((key) => assert.equal(localStorage.values.has(key), true, key));
+  assert.equal(queues.has('TOUR_QUEUE|passenger-principal|passenger|BOOK_QUEUE'), true);
+
+  const resumed = await runPurgePendingAccountDeletion(makeCleanupRunner({
+    deletionService,
+    localStorage,
+    cleanupService: createLocalSessionCleanupService(makeCleanupDependencies({
+      storage: localStorage,
+      offlineOverrides,
+    })),
+  }));
+  assert.equal(resumed.success, true);
+  assert.equal(queueScopes.length, 2);
+  assert.deepEqual(queueScopes[0], queueScopes[1]);
+  assert.deepEqual(queueScopes[1], {
+    tourId: 'TOUR_QUEUE',
+    principalId: 'passenger-principal',
+    role: 'passenger',
+    authUid: ORIGINAL_AUTH_UID,
+    cacheOwnerId: 'BOOK_QUEUE',
+  });
+  assert.equal(queues.has('TOUR_QUEUE|passenger-principal|passenger|BOOK_QUEUE'), false);
+  assert.equal(queues.has('TOUR_QUEUE|passenger-other|passenger|BOOK_OTHER'), true);
+});
+
+test('driver purge failure retains persisted coordinates and recreation rebuilds the exact operational scope', async () => {
+  const appSession = {
+    sessionId: SESSION_ID,
+    principalType: 'driver',
+    principalId: 'driver:D-ALPHA',
+    driverId: 'D-ALPHA',
+    tourId: 'TOUR_DRIVER',
+  };
+  const localStorage = makeScopedLocalStorage({
+    appSession,
+    bookingData: { id: 'D-ALPHA', isDriver: true, assignedDepartureKey: '2026-09-01::TOUR_DRIVER' },
+    tourData: { id: 'TOUR_DRIVER', startDate: '2026-09-01' },
+  });
+  const deletionService = createAccountDeletionService({ persistence: makePersistence(), now: () => 400 });
+  await deletionService.writePending(pendingRecord());
+  const driverStores = new Set(['TOUR_DRIVER|D-ALPHA', 'TOUR_OTHER|D-BETA']);
+  const scopes = [];
+  let attempts = 0;
+  const driverLifecycle = {
+    purge: async (scope) => {
+      scopes.push({ ...scope });
+      attempts += 1;
+      if (attempts === 1) return { success: false, error: 'injected driver purge failure' };
+      driverStores.delete(`${scope.tourId}|${scope.driverId}`);
+      return { success: true };
+    },
+  };
+
+  const first = await runPurgePendingAccountDeletion(makeCleanupRunner({
+    deletionService,
+    localStorage,
+    cleanupService: createLocalSessionCleanupService(makeCleanupDependencies({
+      storage: localStorage,
+      driverLifecycle,
+    })),
+  }));
+  assert.equal(first.success, false);
+  assert.equal((await deletionService.readPending()).localCleanupComplete, false);
+  [TOUR_KEY, BOOKING_KEY, APP_SESSION_KEY].forEach((key) => assert.equal(localStorage.values.has(key), true, key));
+  assert.equal(driverStores.has('TOUR_DRIVER|D-ALPHA'), true);
+
+  const resumed = await runPurgePendingAccountDeletion(makeCleanupRunner({
+    deletionService,
+    localStorage,
+    cleanupService: createLocalSessionCleanupService(makeCleanupDependencies({
+      storage: localStorage,
+      driverLifecycle,
+    })),
+  }));
+  assert.equal(resumed.success, true);
+  assert.deepEqual(scopes, [
+    {
+      authUid: ORIGINAL_AUTH_UID,
+      driverId: 'D-ALPHA',
+      departureKey: '2026-09-01::TOUR_DRIVER',
+      tourId: 'TOUR_DRIVER',
+      startDate: '2026-09-01',
+    },
+    {
+      authUid: ORIGINAL_AUTH_UID,
+      driverId: 'D-ALPHA',
+      departureKey: '2026-09-01::TOUR_DRIVER',
+      tourId: 'TOUR_DRIVER',
+      startDate: '2026-09-01',
+    },
+  ]);
+  assert.equal(driverStores.has('TOUR_DRIVER|D-ALPHA'), false);
+  assert.equal(driverStores.has('TOUR_OTHER|D-BETA'), true);
+});
+
+test('termination before final session-key commit leaves scope durable for an idempotent restart', async () => {
+  const appSession = {
+    sessionId: SESSION_ID,
+    principalType: 'passenger',
+    principalId: 'passenger-principal',
+    tourId: 'TOUR_COMMIT',
+  };
+  const localStorage = makeScopedLocalStorage({
+    appSession,
+    bookingData: { id: 'BOOK_COMMIT', stablePassengerId: 'passenger-principal' },
+    tourData: { id: 'TOUR_COMMIT' },
+  });
+  const deletionService = createAccountDeletionService({ persistence: makePersistence(), now: () => 500 });
+  await deletionService.writePending(pendingRecord());
+  const scopes = [];
+  const offlineOverrides = {
+    purgeTourPack: async (tourId, role, { ownerId }) => {
+      scopes.push(`${tourId}|${role}|${ownerId}`);
+      return { success: true };
+    },
+  };
+  const interrupted = await runPurgePendingAccountDeletion(makeCleanupRunner({
+    deletionService,
+    localStorage,
+    cleanupService: createLocalSessionCleanupService(makeCleanupDependencies({
+      storage: localStorage,
+      offlineOverrides,
+      beforeSessionKeyCommit: async () => { throw new Error('simulated termination before commit'); },
+    })),
+  }));
+  assert.equal(interrupted.success, false);
+  assert.deepEqual(interrupted.failures, [{ name: 'clearSessionKeys', error: 'simulated termination before commit' }]);
+  assert.equal((await deletionService.readPending()).localCleanupComplete, false);
+  APP_LOCAL_KEYS.forEach((key) => assert.equal(localStorage.values.has(key), true, key));
+
+  const resumed = await runPurgePendingAccountDeletion(makeCleanupRunner({
+    deletionService,
+    localStorage,
+    cleanupService: createLocalSessionCleanupService(makeCleanupDependencies({
+      storage: localStorage,
+      offlineOverrides,
+    })),
+  }));
+  assert.equal(resumed.success, true);
+  assert.deepEqual(scopes, [
+    'TOUR_COMMIT|passenger|BOOK_COMMIT',
+    'TOUR_COMMIT|passenger|BOOK_COMMIT',
+  ]);
+  APP_LOCAL_KEYS.forEach((key) => assert.equal(localStorage.values.has(key), false, key));
+  assert.equal((await deletionService.readPending()).localCleanupComplete, true);
 });
 
 test('pending deletion blocks both offline restoration and normal login before either action runs', async () => {

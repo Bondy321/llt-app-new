@@ -107,6 +107,7 @@ export const createAccountDeletionService = ({
   getFirebase = () => ({ auth, authHelpers, getCurrentAppCheckToken }),
 } = {}) => {
   let requestInFlight = null;
+  let reservationInFlight = null;
   let statusInFlight = null;
   let completionInFlight = null;
 
@@ -182,12 +183,21 @@ export const createAccountDeletionService = ({
         } catch {
           return genericFailure('AUTH_UNAVAILABLE');
         }
-        return post(functionName, body, { freshAuthOnFailure: true, freshAuthAttempted: true });
+        return post(functionName, body, {
+          expectedAuthUid,
+          freshAuthOnFailure: true,
+          freshAuthAttempted: true,
+        });
       }
       const reason = typeof payload?.reason === 'string' && payload.reason.length <= 100
         ? payload.reason
         : 'ACCOUNT_DELETION_STATUS_UNAVAILABLE';
-      return genericFailure(reason);
+      return {
+        ...genericFailure(reason),
+        httpStatus: response.status,
+        confirmedStatusUnavailable: response.status === 404
+          && payload?.reason === 'ACCOUNT_DELETION_STATUS_UNAVAILABLE',
+      };
     }
     const valid = validateAccountDeletionResponse(payload);
     return valid || genericFailure('INVALID_SERVER_RESPONSE');
@@ -214,11 +224,64 @@ export const createAccountDeletionService = ({
     return { ...response, pending: updated };
   };
 
+  const submitInitialRequest = async (pending) => {
+    if (reservationInFlight) return reservationInFlight;
+    reservationInFlight = (async () => {
+      const requesting = await writePending({
+        ...pending,
+        requestAttempts: Math.min((pending.requestAttempts || 0) + 1, 1000),
+        updatedAtMs: now(),
+      });
+      const response = await post('requestAccountDeletion', {
+        expectedSessionId: requesting.expectedSessionId,
+        deletionReceipt: requesting.deletionReceipt,
+      }, { expectedAuthUid: requesting.originalAuthUid });
+      if (!response.success) {
+        const reason = String(response.reason || 'ACCOUNT_DELETION_STATUS_UNAVAILABLE').slice(0, 80);
+        const failed = await writePending({ ...requesting, lastErrorReason: reason, updatedAtMs: now() });
+        return { ...response, pending: failed };
+      }
+      return applyServerStatus(requesting, response);
+    })();
+    try { return await reservationInFlight; } finally { reservationInFlight = null; }
+  };
+
+  const reconcileRequesting = async (pending) => {
+    const checkedAtMs = now();
+    const checking = await writePending({
+      ...pending,
+      statusAttempts: Math.min((pending.statusAttempts || 0) + 1, 1000),
+      lastCheckedAtMs: checkedAtMs,
+      updatedAtMs: checkedAtMs,
+    });
+    const response = await post('getAccountDeletionStatus', {
+      deletionReceipt: checking.deletionReceipt,
+    }, { freshAuthOnFailure: true });
+    if (response.success) return applyServerStatus(checking, response);
+
+    const reason = String(response.reason || 'ACCOUNT_DELETION_STATUS_UNAVAILABLE').slice(0, 80);
+    const failed = await writePending({
+      ...checking,
+      state: 'requesting',
+      lastErrorReason: reason,
+      updatedAtMs: now(),
+    });
+    if (response.confirmedStatusUnavailable !== true) {
+      return { ...response, pending: failed };
+    }
+
+    const currentAuthUid = normalizeOriginalAuthUid(getFirebase()?.auth?.currentUser?.uid);
+    if (currentAuthUid !== failed.originalAuthUid) {
+      return { ...response, pending: failed };
+    }
+    return submitInitialRequest(failed);
+  };
+
   const requestDeletion = async ({ expectedSessionId } = {}) => {
     if (requestInFlight) return requestInFlight;
     requestInFlight = (async () => {
       let pending = await readPending();
-      if (pending && pending.state !== 'requesting') return pollStatus();
+      if (pending) return pollStatus();
       if (!pending) {
         if (!SESSION_ID_PATTERN.test(expectedSessionId || '')) {
           return genericFailure('SESSION_REQUIRED');
@@ -240,32 +303,19 @@ export const createAccountDeletionService = ({
           completionHandled: false,
         });
       }
-      pending = await writePending({
-        ...pending,
-        requestAttempts: Math.min((pending.requestAttempts || 0) + 1, 1000),
-        updatedAtMs: now(),
-      });
-      const response = await post('requestAccountDeletion', {
-        expectedSessionId: pending.expectedSessionId,
-        deletionReceipt: pending.deletionReceipt,
-      }, { expectedAuthUid: pending.originalAuthUid });
-      if (!response.success) {
-        const reason = String(response.reason || 'ACCOUNT_DELETION_STATUS_UNAVAILABLE').slice(0, 80);
-        pending = await writePending({ ...pending, lastErrorReason: reason, updatedAtMs: now() });
-        return { ...response, pending };
-      }
-      return applyServerStatus(pending, response);
+      return submitInitialRequest(pending);
     })();
     try { return await requestInFlight; } finally { requestInFlight = null; }
   };
 
   const pollStatus = async () => {
+    if (reservationInFlight) return reservationInFlight;
     if (statusInFlight) return statusInFlight;
     statusInFlight = (async () => {
       const pending = await readPending();
       if (!pending) return genericFailure('NO_PENDING_DELETION');
       if (pending.state === 'requesting') {
-        return requestDeletion({ expectedSessionId: pending.expectedSessionId });
+        return reconcileRequesting(pending);
       }
       const checkedAtMs = now();
       const checking = await writePending({
@@ -295,7 +345,7 @@ export const createAccountDeletionService = ({
   const retryDeletion = async () => {
     const pending = await readPending();
     if (!pending) return genericFailure('NO_PENDING_DELETION');
-    if (pending.state === 'requesting') return requestDeletion({ expectedSessionId: pending.expectedSessionId });
+    if (pending.state === 'requesting') return pollStatus();
     const checkedAtMs = now();
     const checking = await writePending({
       ...pending,

@@ -47,12 +47,12 @@ export const runPurgePendingAccountDeletion = async ({
     appSession: cachedSession,
     bookingData: parseSaved(savedBookingEntry),
     driverOperationalScope,
+    requireCompleteScope: true,
     tourData: parseSaved(savedTourEntry),
   });
   if (!cleanup.success) return cleanup;
-  await appSessionService.completeEnd();
-  setAppSession(null);
   const nextPending = await accountDeletionService.markLocalCleanupComplete();
+  setAppSession(null);
   const recoveryUser = await authHelpers.replaceWithFreshAnonymous();
   setUser(recoveryUser);
   return { success: true, pending: nextPending, recoveryUser };

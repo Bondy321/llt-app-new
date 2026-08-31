@@ -169,16 +169,208 @@ test('transport failure and service recreation reuse the same persisted receipt'
     generateReceipt: () => { throw new Error('must not regenerate'); },
     now: () => 200,
     getFirebase: () => firebaseBoundary(),
-    fetchFn: async (_url, options) => {
+    fetchFn: async (url, options) => {
       bodies.push(JSON.parse(options.body));
+      if (url.includes('getAccountDeletionStatus')) {
+        return response(404, { success: false, reason: 'ACCOUNT_DELETION_STATUS_UNAVAILABLE' });
+      }
       return response(202, { success: true, status: 'accepted', phase: 'reserved', retryable: true });
     },
   });
   const accepted = await restarted.requestDeletion({ expectedSessionId: SESSION_ID });
   assert.equal(accepted.success, true);
-  assert.equal(bodies.length, 2);
+  assert.equal(bodies.length, 3);
   assert.equal(bodies[0].deletionReceipt, RECEIPT);
-  assert.equal(bodies[1].deletionReceipt, RECEIPT);
+  assert.deepEqual(bodies[1], { deletionReceipt: RECEIPT });
+  assert.equal(bodies[2].deletionReceipt, RECEIPT);
+});
+
+test('lost accepted response recovers requesting state by receipt after Auth replacement', async () => {
+  const storage = makeStorage();
+  let backendAccepted = false;
+  const endpoints = [];
+  const beforeRestart = createAccountDeletionService({
+    persistence: storage,
+    generateReceipt: () => RECEIPT,
+    now: () => 100,
+    getFirebase: () => firebaseBoundary(),
+    fetchFn: async (url) => {
+      endpoints.push(url);
+      backendAccepted = true;
+      throw new Error('accepted response was lost');
+    },
+  });
+  const lost = await beforeRestart.requestDeletion({ expectedSessionId: SESSION_ID });
+  assert.equal(lost.reason, 'NETWORK_ERROR');
+  assert.equal((await beforeRestart.readPending()).state, 'requesting');
+
+  const staleReplacement = { uid: 'replacement-auth', getIdToken: async () => 'stale-token' };
+  const freshReplacement = { uid: 'fresh-recovery-auth', getIdToken: async () => 'fresh-token' };
+  let currentUser = staleReplacement;
+  let replacements = 0;
+  let statusCalls = 0;
+  const restarted = createAccountDeletionService({
+    persistence: storage,
+    generateReceipt: () => { throw new Error('must not generate a second receipt'); },
+    now: () => 200,
+    getFirebase: () => firebaseBoundary({
+      currentUser,
+      replaceWithFreshAnonymous: async () => {
+        replacements += 1;
+        currentUser = freshReplacement;
+        return freshReplacement;
+      },
+    }),
+    fetchFn: async (url, options) => {
+      endpoints.push(url);
+      assert.equal(url.includes('getAccountDeletionStatus'), true);
+      assert.deepEqual(JSON.parse(options.body), { deletionReceipt: RECEIPT });
+      statusCalls += 1;
+      if (statusCalls === 1) return response(401, { success: false, reason: 'INVALID_CREDENTIALS' });
+      assert.equal(backendAccepted, true);
+      return response(200, { success: true, status: 'pending', phase: 'chat_scrub', retryable: true });
+    },
+  });
+
+  const recovered = await restarted.requestDeletion({ expectedSessionId: SESSION_ID });
+  assert.equal(recovered.status, 'pending');
+  assert.equal(recovered.pending.deletionReceipt, RECEIPT);
+  assert.equal(replacements, 1);
+  assert.equal(endpoints.filter((url) => url.includes('requestAccountDeletion')).length, 1);
+  assert.equal(endpoints.filter((url) => url.includes('getAccountDeletionStatus')).length, 2);
+});
+
+test('requesting status not-found retries the reservation only for the original Auth UID', async () => {
+  const originalPending = {
+    schemaVersion: 2,
+    deletionReceipt: RECEIPT,
+    originalAuthUid: 'auth-old',
+    state: 'requesting',
+    expectedSessionId: SESSION_ID,
+    createdAtMs: 100,
+    updatedAtMs: 100,
+    requestAttempts: 1,
+    statusAttempts: 0,
+    localCleanupComplete: false,
+    completionHandled: false,
+  };
+  const originalStorage = makeStorage({ [ACCOUNT_DELETION_PENDING_KEY]: JSON.stringify(originalPending) });
+  const originalEndpoints = [];
+  const originalApi = createAccountDeletionService({
+    persistence: originalStorage,
+    now: () => 200,
+    getFirebase: () => firebaseBoundary(),
+    fetchFn: async (url, options) => {
+      originalEndpoints.push({ url, body: JSON.parse(options.body) });
+      return url.includes('getAccountDeletionStatus')
+        ? response(404, { success: false, reason: 'ACCOUNT_DELETION_STATUS_UNAVAILABLE' })
+        : response(202, { success: true, status: 'accepted', phase: 'reserved', retryable: true });
+    },
+  });
+  const retried = await originalApi.pollStatus();
+  assert.equal(retried.status, 'accepted');
+  assert.equal(originalEndpoints.length, 2);
+  assert.deepEqual(originalEndpoints[0].body, { deletionReceipt: RECEIPT });
+  assert.deepEqual(originalEndpoints[1].body, { expectedSessionId: SESSION_ID, deletionReceipt: RECEIPT });
+  assert.equal(retried.pending.requestAttempts, 2);
+
+  const changedStorage = makeStorage({ [ACCOUNT_DELETION_PENDING_KEY]: JSON.stringify(originalPending) });
+  const changedEndpoints = [];
+  const changedApi = createAccountDeletionService({
+    persistence: changedStorage,
+    now: () => 300,
+    getFirebase: () => firebaseBoundary({
+      currentUser: { uid: 'changed-auth', getIdToken: async () => 'changed-token' },
+    }),
+    fetchFn: async (url, options) => {
+      changedEndpoints.push({ url, body: JSON.parse(options.body) });
+      return response(404, { success: false, reason: 'ACCOUNT_DELETION_STATUS_UNAVAILABLE' });
+    },
+  });
+  const fenced = await changedApi.retryDeletion();
+  assert.equal(fenced.success, false);
+  assert.equal(fenced.reason, 'ACCOUNT_DELETION_STATUS_UNAVAILABLE');
+  assert.equal(fenced.pending.state, 'requesting');
+  assert.equal(fenced.pending.deletionReceipt, RECEIPT);
+  assert.equal(fenced.pending.requestAttempts, 1);
+  assert.equal(changedEndpoints.length, 1);
+  assert.equal(changedEndpoints[0].url.includes('getAccountDeletionStatus'), true);
+  assert.deepEqual(changedEndpoints[0].body, { deletionReceipt: RECEIPT });
+
+  const opaqueStorage = makeStorage({ [ACCOUNT_DELETION_PENDING_KEY]: JSON.stringify(originalPending) });
+  let opaqueCalls = 0;
+  const opaqueApi = createAccountDeletionService({
+    persistence: opaqueStorage,
+    now: () => 350,
+    getFirebase: () => firebaseBoundary(),
+    fetchFn: async () => {
+      opaqueCalls += 1;
+      return response(404, {});
+    },
+  });
+  const opaque = await opaqueApi.pollStatus();
+  assert.equal(opaque.reason, 'ACCOUNT_DELETION_STATUS_UNAVAILABLE');
+  assert.equal(opaque.pending.state, 'requesting');
+  assert.equal(opaque.pending.requestAttempts, 1);
+  assert.equal(opaqueCalls, 1, 'an opaque 404 is not proof that the receipt is absent');
+});
+
+test('requesting reconciliation preserves its receipt across network, Auth and service failures', async () => {
+  const basePending = {
+    schemaVersion: 2,
+    deletionReceipt: RECEIPT,
+    originalAuthUid: 'auth-old',
+    state: 'requesting',
+    expectedSessionId: SESSION_ID,
+    createdAtMs: 100,
+    updatedAtMs: 100,
+    requestAttempts: 1,
+    statusAttempts: 0,
+    localCleanupComplete: false,
+    completionHandled: false,
+  };
+  const cases = [
+    {
+      name: 'network',
+      getFirebase: () => firebaseBoundary(),
+      fetchFn: async () => { throw new Error('offline'); },
+      reason: 'NETWORK_ERROR',
+    },
+    {
+      name: 'auth',
+      getFirebase: () => ({
+        auth: { currentUser: null },
+        authHelpers: { replaceWithFreshAnonymous: async () => null },
+        getCurrentAppCheckToken: async () => null,
+      }),
+      fetchFn: async () => { throw new Error('must not call'); },
+      reason: 'AUTH_UNAVAILABLE',
+    },
+    {
+      name: 'service',
+      getFirebase: () => firebaseBoundary(),
+      fetchFn: async () => response(503, {
+        success: false,
+        reason: 'ACCOUNT_DELETION_TEMPORARILY_UNAVAILABLE',
+      }),
+      reason: 'ACCOUNT_DELETION_TEMPORARILY_UNAVAILABLE',
+    },
+  ];
+  for (const failureCase of cases) {
+    const storage = makeStorage({ [ACCOUNT_DELETION_PENDING_KEY]: JSON.stringify(basePending) });
+    const api = createAccountDeletionService({
+      persistence: storage,
+      generateReceipt: () => { throw new Error('must not generate a replacement receipt'); },
+      now: () => 400,
+      getFirebase: failureCase.getFirebase,
+      fetchFn: failureCase.fetchFn,
+    });
+    const result = await api.pollStatus();
+    assert.equal(result.reason, failureCase.reason, failureCase.name);
+    assert.equal(result.pending.state, 'requesting', failureCase.name);
+    assert.equal(result.pending.deletionReceipt, RECEIPT, failureCase.name);
+    assert.equal(result.pending.requestAttempts, 1, failureCase.name);
+  }
 });
 
 test('concurrent request taps share one reservation request', async () => {
@@ -201,6 +393,33 @@ test('concurrent request taps share one reservation request', async () => {
   const second = api.requestDeletion({ expectedSessionId: SESSION_ID });
   release();
   assert.deepEqual(await first, await second);
+  assert.equal(calls, 1);
+});
+
+test('status polling during the first reservation shares the in-flight request', async () => {
+  const storage = makeStorage();
+  let calls = 0;
+  let enteredFetch;
+  let releaseFetch;
+  const fetchEntered = new Promise((resolve) => { enteredFetch = resolve; });
+  const fetchGate = new Promise((resolve) => { releaseFetch = resolve; });
+  const api = createAccountDeletionService({
+    persistence: storage,
+    generateReceipt: () => RECEIPT,
+    now: () => 100,
+    getFirebase: () => firebaseBoundary(),
+    fetchFn: async () => {
+      calls += 1;
+      enteredFetch();
+      await fetchGate;
+      return response(202, { success: true, status: 'accepted', phase: 'reserved', retryable: true });
+    },
+  });
+  const request = api.requestDeletion({ expectedSessionId: SESSION_ID });
+  await fetchEntered;
+  const status = api.pollStatus();
+  releaseFetch();
+  assert.deepEqual(await request, await status);
   assert.equal(calls, 1);
 });
 
