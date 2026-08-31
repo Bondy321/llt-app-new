@@ -63,10 +63,17 @@ const appSessionCleanup = loadLegacyLibrary('appSessionCleanup');
 const chatPresenceProjection = loadLegacyLibrary('chatPresenceProjection');
 const driverLocationProjection = loadLegacyLibrary('driverLocationProjection');
 
+// Firebase recursively discovers any nested value carrying Function endpoint metadata.
+// Keep the real triggers only at the composition root while retaining the pure helpers
+// from this mixed module for direct unit tests.
+const accountDeletionFunctionTestables = Object.fromEntries(
+  Object.entries(accountDeletionFunctions).filter(([, value]) => !value?.__endpoint),
+);
+
 module.exports = {
   ...accountDeletionBoundary,
   ...accountDeletionCoordination,
-  ...accountDeletionFunctions,
+  ...accountDeletionFunctionTestables,
   ...accountDeletionScope,
   ...accountDeletionWorker,
   deleteNotificationAccountState: notificationDeviceFunctions.deleteNotificationAccountState,
