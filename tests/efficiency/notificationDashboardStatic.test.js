@@ -77,3 +77,15 @@ test('new high-cardinality paths do not create unbounded Promise.all work', () =
     /Promise\.all\(\s*(?:candidates|devices|users|tours|drivers|bookings|records|items)\.map\(/u,
   );
 });
+
+test('required architecture CI installs every workspace and runs the exact efficiency gate', () => {
+  const workflow = read('.github/workflows/ci.yml');
+  const requiredJob = workflow.slice(
+    workflow.indexOf('  architecture-contracts:'),
+    workflow.indexOf('\n  mobile-tests:'),
+  );
+  assert.match(requiredJob, /- run: npm ci/u);
+  assert.match(requiredJob, /- run: npm --prefix functions ci/u);
+  assert.match(requiredJob, /- run: npm --prefix web-admin ci/u);
+  assert.match(requiredJob, /- run: npm run efficiency:check/u);
+});

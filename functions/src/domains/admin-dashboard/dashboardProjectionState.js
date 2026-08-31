@@ -11,6 +11,7 @@ const {
 const COUNT_LOCK_TTL_MS = 30_000;
 const COUNT_LOCK_ATTEMPTS = 20;
 const COUNT_LOCK_RETRY_MAX_MS = 250;
+const CONSISTENT_SUMMARY_PROTOCOL_VERSION = 1;
 
 const eventOrder = (event) => ({
   sourceEventAtMs: Number.isFinite(Date.parse(event?.time || '')) ? Date.parse(event.time) : Date.now(),
@@ -56,6 +57,103 @@ const commitSummaryDomain = async ({ db, domain, revision, fields, nowMs }) => {
     };
   }, undefined, false);
   return result.snapshot?.val?.() || null;
+};
+
+const commitConsistentSummaryDomain = async ({
+  db,
+  domain,
+  revision,
+  sourceFingerprint,
+  fields,
+  nowMs,
+}) => {
+  const revisionField = `${domain}Revision`;
+  const fingerprintField = `${domain}Fingerprint`;
+  const protocolField = `${domain}ConsistencyProtocol`;
+  const updatedAtField = `${domain}UpdatedAtMs`;
+  const candidateRevision = Number(revision || 0);
+  let outcome = 'pending';
+  const result = await db.ref(`${DASHBOARD_ROOT}/summary`).transaction((current) => {
+    const hasCurrentProtocol = current?.[protocolField] === CONSISTENT_SUMMARY_PROTOCOL_VERSION
+      && Number.isFinite(Number(current?.[revisionField]))
+      && typeof current?.[fingerprintField] === 'string';
+    if (hasCurrentProtocol) {
+      const currentRevision = Number(current[revisionField]);
+      if (currentRevision > candidateRevision) {
+        outcome = 'stale';
+        return current;
+      }
+      if (currentRevision === candidateRevision) {
+        if (current[fingerprintField] === sourceFingerprint) {
+          outcome = 'idempotent';
+          return current;
+        }
+        outcome = 'inconsistent';
+        return undefined;
+      }
+    }
+    outcome = 'applied';
+    return {
+      ...(current || {}),
+      schemaVersion: DASHBOARD_SCHEMA_VERSION,
+      ...fields,
+      [revisionField]: candidateRevision,
+      [fingerprintField]: sourceFingerprint,
+      [protocolField]: CONSISTENT_SUMMARY_PROTOCOL_VERSION,
+      [updatedAtField]: Math.max(Number(current?.[updatedAtField] || 0), Number(nowMs || 0)),
+    };
+  }, undefined, false);
+  if (outcome === 'inconsistent') {
+    const error = new Error(`Dashboard ${domain} summary has conflicting fingerprints at revision ${candidateRevision}`);
+    error.code = 'DASHBOARD_SUMMARY_INCONSISTENT';
+    error.domain = domain;
+    error.revision = candidateRevision;
+    throw error;
+  }
+  return { outcome, value: result.snapshot?.val?.() || null };
+};
+
+const commitTourProjectionCompletion = async ({
+  db,
+  tourId,
+  projectionRevision,
+  sourceFingerprint,
+  completedAtMs = Date.now(),
+}) => {
+  const candidateRevision = Number(projectionRevision || 0);
+  let outcome = 'pending';
+  const result = await db.ref(
+    `${DASHBOARD_ROOT}/internal/tour_projection_completion/${tourId}`,
+  ).transaction((current) => {
+    const currentRevision = Number(current?.projectionRevision || 0);
+    if (current && currentRevision > candidateRevision) {
+      outcome = 'stale';
+      return current;
+    }
+    if (current && currentRevision === candidateRevision) {
+      if (current.sourceFingerprint === sourceFingerprint) {
+        outcome = 'idempotent';
+        return current;
+      }
+      outcome = 'inconsistent';
+      return undefined;
+    }
+    outcome = 'applied';
+    return {
+      schemaVersion: DASHBOARD_SCHEMA_VERSION,
+      projectionRevision: candidateRevision,
+      sourceFingerprint,
+      completedAtMs: Number(completedAtMs || 0),
+    };
+  }, undefined, false);
+  if (outcome === 'inconsistent') {
+    const error = new Error(`Dashboard tour completion conflicts at revision ${candidateRevision}`);
+    error.code = 'DASHBOARD_COMPLETION_INCONSISTENT';
+    error.tourId = tourId;
+    error.revision = candidateRevision;
+    throw error;
+  }
+  return { outcome, value: result.snapshot?.val?.() || null };
 };
 
 const makeTombstone = (identity, order) => ({
@@ -218,7 +316,9 @@ module.exports = {
   acquireCountLock,
   commitCompareSafeProjection,
   commitCompareSafePublicProjection,
+  commitConsistentSummaryDomain,
   commitSummaryDomain,
+  commitTourProjectionCompletion,
   eventOrder,
   mapWithConcurrency,
   readValue,

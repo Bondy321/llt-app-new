@@ -9,7 +9,7 @@ import { HEALTH_STATE, buildHealthSnapshot } from '../services/healthService';
 import { SAFETY_STATUS, buildOperationsDashboardModel, filterSafetyAlerts, revalidateDashboardBranches, subscribeToDashboardBranches, updateSafetyAlertStatus } from '../services/dashboardService';
 import { buildOperationsDashboardProjectionModel } from '../services/dashboardProjectionModel';
 import {
-  compareDashboardProjectionRows,
+  compareDashboardProjectionSections,
   fetchDashboardProjection,
   subscribeToDashboardProjection,
   subscribeToDashboardRollout,
@@ -261,9 +261,15 @@ export default function Dashboard() {
   }, [rolloutLoaded, rolloutPhase]);
   useEffect(() => {
     if (rolloutPhase !== 'shadow') return;
-    const comparison = compareDashboardProjectionRows(legacyDashboardModel.tourRows, projectionData.tours);
+    const comparison = compareDashboardProjectionSections({
+      legacyModel: legacyDashboardModel,
+      projectionModel: projectedDashboardModel,
+      projectionTours: projectionData.tours,
+      legacyBroadcasts: branchData.broadcasts,
+      projectionBroadcasts: projectionData.recentBroadcasts
+    });
     logFirebaseDebug('dashboard:projection:shadow-compare', comparison, comparison.matches ? 'info' : 'warn');
-  }, [legacyDashboardModel.tourRows, projectionData.tours, rolloutPhase]);
+  }, [branchData.broadcasts, legacyDashboardModel, projectedDashboardModel, projectionData.recentBroadcasts, projectionData.tours, rolloutPhase]);
   const handleRefresh = async () => {
     setRefreshing(true);
     const refreshTimer = startFirebaseDebugTimer('dashboard:manual-refresh:ui', {

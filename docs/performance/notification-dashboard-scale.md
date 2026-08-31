@@ -73,11 +73,18 @@ reread current canonical state and use deterministic fingerprints plus
 compare-safe transactions so retries and out-of-order events cannot restore an
 older projection. A per-tour lock and durable completion watermark coalesce
 overlapping parent/child trigger deliveries while preserving crash recovery.
-All-time tour aggregates are split across 32 deterministic shards. Calendar-day
-tour buckets and a scheduled 15-minute refresh maintain the operating-window
-scorecards independently of the 500-row client list cap. The same refresh pages
-all projected broadcasts in the trailing 24-hour window and advances retention
-cleanup even when no new broadcast arrives.
+All-time tour aggregates are split across 32 deterministic shards. Publication
+reads their parent once, derives a monotonic revision from the ordered 32 shard
+revisions, and fingerprints those revisions with the output fields. The window
+publisher performs one bounded `orderByKey` query and applies the same protocol
+to the ordered Europe/London day rows. Only a newer revision commits; an exact
+revision/fingerprint duplicate is a no-op, while an equal-revision fingerprint
+conflict is reread and then fails closed. Per-tour completion markers also reject
+lower projection revisions. Wall-clock timestamps are metadata, never ordering
+authority. Calendar-day buckets and a scheduled 15-minute refresh maintain the
+operating-window scorecards independently of the 500-row client list cap. The
+same refresh pages all projected broadcasts in the trailing 24-hour window and
+advances retention cleanup even when no new broadcast arrives.
 
 Projection mode uses hard-bounded queries on `tours/startAtMs`,
 `safety_attention/attentionSortKey`, and
@@ -85,6 +92,13 @@ Projection mode uses hard-bounded queries on `tours/startAtMs`,
 `admin_dashboard_rollout/v1` accepts `legacy`, `shadow`, and `projection`;
 missing, malformed, or unknown state resolves to `legacy`. Shadow renders the
 legacy dashboard and performs only bounded background projection comparisons.
+It compares tour list fields; safety compound tour/event identity, status,
+severity and attention state; broadcast compound tour/broadcast identity,
+delivery status, created timestamp and optional recipient count; and the
+displayed driver, tour, operating-window, assignment, passenger/capacity,
+high-load, safety and broadcast-count metrics. Diagnostics contain only bounded
+counts and fixed reason categories—never messages, coordinates, reporter IDs,
+complete identifier arrays or other private incident data.
 
 The dashboard backfill pages indexed tours, uses bounded concurrency and a
 compare-and-swap resume cursor, writes compare-safely, omits passenger-level
@@ -157,6 +171,13 @@ to 50,000 unrelated booking rows.
 | Driver assignment move | Current driver plus old/new assignment summaries | At most 2 tours |
 | Safety event update | One current canonical event | 1 attention row |
 | Broadcast update | One current canonical broadcast | 1 recent row; pruning examines at most 20 expired rows |
+
+Stable tour-summary publication now uses one atomic read of the bounded shard
+parent instead of 32 independent child reads. Operating-window publication now
+uses one bounded day-key range query instead of 22 individual day reads. The
+controlled race tests pause stale publishers, allow a complete publisher to
+commit, and prove that neither a later wall clock nor the same millisecond lets
+the stale candidate or completion marker regress the result.
 
 ## Rollout and backfill procedure
 

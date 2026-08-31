@@ -15,14 +15,19 @@ const {
 const {
   commitCompareSafeProjection,
   commitCompareSafePublicProjection,
+  commitConsistentSummaryDomain,
+  commitTourProjectionCompletion,
   dashboardDayKey,
+  dashboardWindowDayKeys,
   handleBroadcastWrite,
   handleDriverWrite,
   handleSafetyWrite,
   publishDashboardWindowSummary,
+  publishStableTourSummary,
   reconcileAggregateContribution,
   refreshDashboardBroadcastWindowSummary,
   recomputeTourProjection,
+  tourSummaryShardId,
 } = require('../functions/src/domains/admin-dashboard/dashboardProjectionFunctions');
 const {
   backfillTourPage,
@@ -59,6 +64,7 @@ const firebaseKeyCompare = (left, right) => {
 class FakeDatabase {
   constructor(seed = {}) {
     this.value = clone(seed);
+    this.onceInterceptor = null;
   }
 
   read(path = '') {
@@ -86,7 +92,12 @@ class FakeDatabase {
     const makeRef = (queryOptions = {}) => ({
       once: async () => {
         const raw = db.read(path);
-        if ((!queryOptions.orderByChild && !queryOptions.orderByKey) || !raw || typeof raw !== 'object') return makeSnapshot(raw);
+        if ((!queryOptions.orderByChild && !queryOptions.orderByKey) || !raw || typeof raw !== 'object') {
+          const plainSnapshot = makeSnapshot(raw);
+          return db.onceInterceptor
+            ? db.onceInterceptor({ path, queryOptions, snapshot: plainSnapshot })
+            : plainSnapshot;
+        }
         const orderedValue = (key, value) => (
           queryOptions.orderByChild ? value?.[queryOptions.orderByChild] : key
         );
@@ -109,12 +120,17 @@ class FakeDatabase {
             && queryOptions.startAfter.key !== undefined
             && firebaseKeyCompare(key, queryOptions.startAfter.key) > 0);
         });
-        if (Number.isFinite(queryOptions.endAt)) {
-          entries = entries.filter(([, value]) => Number(value?.[queryOptions.orderByChild] || 0) <= queryOptions.endAt);
+        if (queryOptions.endAt !== undefined) {
+          entries = entries.filter(([key, value]) => (
+            compareValue(orderedValue(key, value), queryOptions.endAt) <= 0
+          ));
         }
         if (Number.isSafeInteger(queryOptions.limitToFirst)) entries = entries.slice(0, queryOptions.limitToFirst);
         if (Number.isSafeInteger(queryOptions.limitToLast)) entries = entries.slice(-queryOptions.limitToLast);
-        return makeSnapshot(Object.fromEntries(entries), entries);
+        const querySnapshot = makeSnapshot(Object.fromEntries(entries), entries);
+        return db.onceInterceptor
+          ? db.onceInterceptor({ path, queryOptions, snapshot: querySnapshot })
+          : querySnapshot;
       },
       set: async (value) => db.write(path, value),
       update: async (updates) => {
@@ -140,6 +156,12 @@ class FakeDatabase {
     return makeRef();
   }
 }
+
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((resolver) => { resolve = resolver; });
+  return { promise, resolve };
+};
 
 test('tour projection preserves every passenger-count fallback without personal fields', () => {
   assert.equal(countManifestBookings({ bookings: {
@@ -339,6 +361,191 @@ test('server-owned day buckets keep upcoming dashboard metrics above the 500-row
   assert.equal(db.read('admin_dashboard/v1/summary/upcomingAssignmentCoveragePercent'), 80);
 });
 
+test('stale backfill shard snapshot cannot overwrite a complete live summary regardless of wall clock', async () => {
+  const shardPath = 'admin_dashboard/v1/internal/tour_summary_shards';
+  const db = new FakeDatabase({ admin_dashboard: { v1: { internal: { tour_summary_shards: {
+    '00': { revision: 1, totalTours: 1, operationalTours: 1, assignedOperationalTours: 1 },
+  } } } } });
+  const captured = deferred();
+  const release = deferred();
+  let delayed = true;
+  db.onceInterceptor = async ({ path, snapshot }) => {
+    if (path === shardPath && delayed) {
+      delayed = false;
+      captured.resolve();
+      await release.promise;
+    }
+    return snapshot;
+  };
+  const staleInstrumentation = {};
+  const staleBackfill = publishStableTourSummary({ db, nowMs: 9_999, instrumentation: staleInstrumentation });
+  await captured.promise;
+  db.write(`${shardPath}/01`, {
+    revision: 1, totalTours: 1, operationalTours: 1, assignedOperationalTours: 0,
+  });
+  const liveInstrumentation = {};
+  await publishStableTourSummary({ db, nowMs: 1, instrumentation: liveInstrumentation });
+  release.resolve();
+  await staleBackfill;
+
+  const summary = db.read('admin_dashboard/v1/summary');
+  assert.equal(summary.totalTours, 2);
+  assert.equal(summary.tourRevision, 2);
+  assert.equal(summary.tourUpdatedAtMs, 1);
+  assert.equal(staleInstrumentation.directReads, 1);
+  assert.equal(liveInstrumentation.directReads, 1);
+});
+
+test('two stable-summary workers in the same millisecond retain the complete shard snapshot', async () => {
+  const shardPath = 'admin_dashboard/v1/internal/tour_summary_shards';
+  const db = new FakeDatabase({ admin_dashboard: { v1: { internal: { tour_summary_shards: {
+    '00': { revision: 1, totalTours: 1, operationalTours: 1 },
+  } } } } });
+  const captured = deferred();
+  const release = deferred();
+  let delayed = true;
+  db.onceInterceptor = async ({ path, snapshot }) => {
+    if (path === shardPath && delayed) {
+      delayed = false;
+      captured.resolve();
+      await release.promise;
+    }
+    return snapshot;
+  };
+  const workerA = publishStableTourSummary({ db, nowMs: 123 });
+  await captured.promise;
+  db.write(`${shardPath}/17`, { revision: 1, totalTours: 1, operationalTours: 1 });
+  await publishStableTourSummary({ db, nowMs: 123 });
+  release.resolve();
+  await workerA;
+  assert.equal(db.read('admin_dashboard/v1/summary/totalTours'), 2);
+  assert.equal(db.read('admin_dashboard/v1/summary/tourRevision'), 2);
+});
+
+test('real backfill and live trigger overlap cannot regress the all-time summary', async () => {
+  const backfillTourId = 'BACKFILL_TOUR';
+  const liveTourId = Array.from({ length: 100 }, (_, index) => `LIVE_TOUR_${index}`)
+    .find((tourId) => tourSummaryShardId(tourId) !== tourSummaryShardId(backfillTourId));
+  const nowMs = 1_800_000_000_000;
+  const shardPath = 'admin_dashboard/v1/internal/tour_summary_shards';
+  const db = new FakeDatabase({ tours: {
+    [backfillTourId]: {
+      tourCode: 'BACKFILL', name: 'Backfill Tour', startDateEpochMs: nowMs, currentParticipants: 2,
+    },
+    [liveTourId]: {
+      tourCode: 'LIVE', name: 'Live Tour', startDateEpochMs: nowMs, currentParticipants: 3,
+    },
+  } });
+  const captured = deferred();
+  const release = deferred();
+  let delayed = true;
+  db.onceInterceptor = async ({ path, snapshot }) => {
+    if (path === shardPath && delayed) {
+      delayed = false;
+      captured.resolve();
+      await release.promise;
+    }
+    return snapshot;
+  };
+  const backfill = backfillTourPage({
+    db,
+    entries: [[backfillTourId, {}]],
+    options: { apply: true, memberPageSize: 10, concurrency: 1 },
+    nowMs,
+  });
+  await captured.promise;
+  await recomputeTourProjection({
+    db,
+    tourId: liveTourId,
+    order: { sourceEventAtMs: nowMs, sourceEventId: 'live-trigger' },
+  });
+  release.resolve();
+  await backfill;
+  assert.equal(db.read('admin_dashboard/v1/summary/totalTours'), 2);
+  assert.equal(db.read('admin_dashboard/v1/summary/totalPassengers'), 5);
+  assert.equal(db.read('admin_dashboard/v1/summary/tourRevision'), 2);
+});
+
+test('concurrent day-bucket changes cannot regress the bounded window summary', async () => {
+  const nowMs = 1_800_000_000_000;
+  const dayKeys = dashboardWindowDayKeys(nowMs);
+  const today = dayKeys[7];
+  const tomorrow = dayKeys[8];
+  const dayPath = 'admin_dashboard/v1/internal/tour_day_summaries';
+  const db = new FakeDatabase({ admin_dashboard: { v1: { internal: { tour_day_summaries: {
+    [today]: { revision: 1, activeTours: 1, assignedActiveTours: 1 },
+  } } } } });
+  const captured = deferred();
+  const release = deferred();
+  let delayed = true;
+  db.onceInterceptor = async ({ path, snapshot }) => {
+    if (path === dayPath && delayed) {
+      delayed = false;
+      captured.resolve();
+      await release.promise;
+    }
+    return snapshot;
+  };
+  const staleInstrumentation = {};
+  const workerA = publishDashboardWindowSummary({ db, nowMs, instrumentation: staleInstrumentation });
+  await captured.promise;
+  db.write(`${dayPath}/${tomorrow}`, { revision: 1, activeTours: 2, assignedActiveTours: 1 });
+  const liveInstrumentation = {};
+  await publishDashboardWindowSummary({ db, nowMs, instrumentation: liveInstrumentation });
+  release.resolve();
+  await workerA;
+
+  const summary = db.read('admin_dashboard/v1/summary');
+  assert.equal(summary.upcomingTours, 3);
+  assert.equal(summary.attentionWindowTours, 3);
+  assert.equal(summary.windowRevision, 2);
+  assert.equal(staleInstrumentation.queries, 1);
+  assert.equal(liveInstrumentation.queries, 1);
+  assert.equal(staleInstrumentation.directReads || 0, 0);
+});
+
+test('completion markers reject stale revisions and make exact duplicates no-ops', async () => {
+  const db = new FakeDatabase();
+  const first = await commitTourProjectionCompletion({
+    db, tourId: 'TOUR_1', projectionRevision: 2, sourceFingerprint: 'new', completedAtMs: 10,
+  });
+  assert.equal(first.outcome, 'applied');
+  const stale = await commitTourProjectionCompletion({
+    db, tourId: 'TOUR_1', projectionRevision: 1, sourceFingerprint: 'old', completedAtMs: 99,
+  });
+  assert.equal(stale.outcome, 'stale');
+  const duplicate = await commitTourProjectionCompletion({
+    db, tourId: 'TOUR_1', projectionRevision: 2, sourceFingerprint: 'new', completedAtMs: 99,
+  });
+  assert.equal(duplicate.outcome, 'idempotent');
+  assert.deepEqual(db.read('admin_dashboard/v1/internal/tour_projection_completion/TOUR_1'), {
+    schemaVersion: 1,
+    projectionRevision: 2,
+    sourceFingerprint: 'new',
+    completedAtMs: 10,
+  });
+  await assert.rejects(() => commitTourProjectionCompletion({
+    db, tourId: 'TOUR_1', projectionRevision: 2, sourceFingerprint: 'conflict', completedAtMs: 100,
+  }), (error) => error?.code === 'DASHBOARD_COMPLETION_INCONSISTENT');
+});
+
+test('summary commits accept exact duplicates and fail closed on equal-revision fingerprint conflicts', async () => {
+  const db = new FakeDatabase();
+  const first = await commitConsistentSummaryDomain({
+    db, domain: 'tour', revision: 5, sourceFingerprint: 'same', fields: { totalTours: 5 }, nowMs: 10,
+  });
+  assert.equal(first.outcome, 'applied');
+  const duplicate = await commitConsistentSummaryDomain({
+    db, domain: 'tour', revision: 5, sourceFingerprint: 'same', fields: { totalTours: 5 }, nowMs: 99,
+  });
+  assert.equal(duplicate.outcome, 'idempotent');
+  assert.equal(db.read('admin_dashboard/v1/summary/tourUpdatedAtMs'), 10);
+  await assert.rejects(() => commitConsistentSummaryDomain({
+    db, domain: 'tour', revision: 5, sourceFingerprint: 'different', fields: { totalTours: 4 }, nowMs: 100,
+  }), (error) => error?.code === 'DASHBOARD_SUMMARY_INCONSISTENT');
+  assert.equal(db.read('admin_dashboard/v1/summary/totalTours'), 5);
+});
+
 test('driver move recomputes only symmetric-difference tours when legacy assignments are unchanged', async () => {
   const nowMs = Date.now();
   const assignments = Object.fromEntries(Array.from({ length: 50 }, (_, index) => [`LEGACY_${index}`, true]));
@@ -384,7 +591,8 @@ test('tour recomputation has fixed reads independent of unrelated history and us
   const instrumentation = {};
   await recomputeTourProjection({ db, tourId: 'TOUR_1', order: { sourceEventAtMs: 10, sourceEventId: 'event' }, instrumentation });
   assert.equal(instrumentation.toursRecomputed, 1);
-  assert.equal(instrumentation.directReads, 73);
+  assert.equal(instrumentation.directReads, 20);
+  assert.equal(instrumentation.queries, 1);
   assert.equal(db.read('admin_dashboard/v1/tours/TOUR_1').passengerCount, 50_000);
   assert.equal(db.read('admin_dashboard/v1/tours/TOUR_1').isAssigned, true);
   assert.equal(db.read('admin_dashboard/v1/summary').totalTours, 1);

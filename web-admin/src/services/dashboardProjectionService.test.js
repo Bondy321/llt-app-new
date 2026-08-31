@@ -18,6 +18,7 @@ import {
   DASHBOARD_BROADCAST_LIMIT,
   DASHBOARD_SAFETY_LIMIT,
   DASHBOARD_TOUR_LIMIT,
+  compareDashboardProjectionSections,
   compareDashboardProjectionRows,
   fetchDashboardProjection,
   getDashboardProjectionQueryPlan,
@@ -44,6 +45,42 @@ const executeInMemoryPlan = (records, plan) => {
   if (Number.isSafeInteger(plan.limitToLast)) entries = entries.slice(-plan.limitToLast);
   return Object.fromEntries(entries);
 };
+
+const shadowFixture = () => ({
+  legacyModel: {
+    tourRows: [{
+      id: 'TOUR_1', name: 'Tour', tourCode: 'T1', startAtMs: 1_000,
+      isAssigned: true, passengerCount: 10,
+    }],
+    safetyAlerts: [{
+      id: 'tour:EVENT_1', eventId: 'EVENT_1', tourId: 'TOUR_1', status: 'pending',
+      severity: 'high', requiresAttention: true, timestampMs: 900,
+    }],
+    metrics: { totalDrivers: 2, assignedDrivers: 1, totalTours: 1, safetyAttentionAlerts: 1 },
+    broadcastActivity: { totalCount: 1, last24hCount: 1, tourCount: 1 },
+  },
+  projectionModel: {
+    safetyAlerts: [{
+      id: 'projection:EVENT_1', eventId: 'EVENT_1', tourId: 'TOUR_1', status: 'pending',
+      severity: 'high', requiresAttention: true, timestampMs: 900,
+    }],
+    metrics: { totalDrivers: 2, assignedDrivers: 1, totalTours: 1, safetyAttentionAlerts: 1 },
+    broadcastActivity: { totalCount: 1, last24hCount: 1, tourCount: 1 },
+  },
+  projectionTours: {
+    TOUR_1: { displayName: 'Tour', tourCode: 'T1', startAtMs: 1_000, isAssigned: true, passengerCount: 10 },
+  },
+  legacyBroadcasts: {
+    TOUR_1: { BROADCAST_1: { deliveryStatus: 'delivered', createdAtMs: 900, recipientCount: 3 } },
+  },
+  projectionBroadcasts: {
+    BROADCAST_1: {
+      broadcastId: 'BROADCAST_1', tourId: 'TOUR_1', deliveryStatus: 'delivered',
+      createdAtMs: 900, recipientCount: 3,
+    },
+  },
+  options: { nowMs: 1_000 },
+});
 
 describe('dashboardProjectionService', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -229,5 +266,78 @@ describe('dashboardProjectionService', () => {
     expect(comparison.projectionCount).toBe(DASHBOARD_TOUR_LIMIT);
     expect(comparison.missingProjection).toBe(0);
     expect(comparison.matches).toBe(true);
+  });
+
+  it('shadow comparison covers tours, safety, broadcasts and displayed summary metrics', () => {
+    const comparison = compareDashboardProjectionSections(shadowFixture());
+    expect(comparison.matches).toBe(true);
+    expect(Object.keys(comparison.sections)).toEqual([
+      'tours', 'safetyAttention', 'recentBroadcasts', 'summary',
+    ]);
+    expect(comparison.sections.summary.fieldCount).toBe(20);
+  });
+
+  it('detects a safety mismatch when tour rows still match', () => {
+    const fixture = shadowFixture();
+    fixture.projectionModel.safetyAlerts[0].severity = 'critical';
+    const comparison = compareDashboardProjectionSections(fixture);
+    expect(comparison.sections.tours.matches).toBe(true);
+    expect(comparison.sections.safetyAttention.matches).toBe(false);
+    expect(comparison.sections.safetyAttention.reasonCounts.severityMismatch).toBe(1);
+  });
+
+  it('detects a broadcast mismatch when tour rows still match', () => {
+    const fixture = shadowFixture();
+    fixture.projectionBroadcasts.BROADCAST_1.deliveryStatus = 'failed';
+    const comparison = compareDashboardProjectionSections(fixture);
+    expect(comparison.sections.tours.matches).toBe(true);
+    expect(comparison.sections.recentBroadcasts.reasonCounts.deliveryStatusMismatch).toBe(1);
+  });
+
+  it('detects displayed summary drift when all bounded rows match', () => {
+    const fixture = shadowFixture();
+    fixture.projectionModel.metrics.totalDrivers = 3;
+    const comparison = compareDashboardProjectionSections(fixture);
+    expect(comparison.sections.tours.matches).toBe(true);
+    expect(comparison.sections.safetyAttention.matches).toBe(true);
+    expect(comparison.sections.recentBroadcasts.matches).toBe(true);
+    expect(comparison.sections.summary.reasonCounts.totalDriversMismatch).toBe(1);
+  });
+
+  it('detects an incorrectly retained resolved safety row', () => {
+    const fixture = shadowFixture();
+    fixture.legacyModel.safetyAlerts = [{
+      id: 'tour:EVENT_1', eventId: 'EVENT_1', tourId: 'TOUR_1', status: 'resolved',
+      severity: 'high', requiresAttention: false, timestampMs: 900,
+    }];
+    fixture.projectionModel.safetyAlerts = [{
+      id: 'projection:EVENT_1', eventId: 'EVENT_1', tourId: 'TOUR_1', status: 'resolved',
+      severity: 'high', requiresAttention: false, timestampMs: 900,
+    }];
+    const comparison = compareDashboardProjectionSections(fixture);
+    expect(comparison.sections.safetyAttention.unexpectedProjection).toBe(1);
+  });
+
+  it('detects one missing recent broadcast', () => {
+    const fixture = shadowFixture();
+    fixture.projectionBroadcasts = {};
+    const comparison = compareDashboardProjectionSections(fixture);
+    expect(comparison.sections.recentBroadcasts.missingProjection).toBe(1);
+  });
+
+  it('never emits private safety or broadcast fields in shadow diagnostics', () => {
+    const fixture = shadowFixture();
+    fixture.legacyModel.safetyAlerts[0] = {
+      ...fixture.legacyModel.safetyAlerts[0],
+      message: 'PRIVATE INCIDENT MESSAGE',
+      coordinates: { latitude: 1, longitude: 2 },
+      reporterAuthUid: 'PRIVATE REPORTER',
+    };
+    fixture.legacyBroadcasts.TOUR_1.BROADCAST_1.message = 'PRIVATE BROADCAST MESSAGE';
+    const serialized = JSON.stringify(compareDashboardProjectionSections(fixture));
+    expect(serialized).not.toContain('PRIVATE');
+    expect(serialized).not.toContain('message');
+    expect(serialized).not.toContain('coordinates');
+    expect(serialized).not.toContain('reporterAuthUid');
   });
 });

@@ -25,7 +25,9 @@ const {
   acquireCountLock,
   commitCompareSafeProjection,
   commitCompareSafePublicProjection,
+  commitConsistentSummaryDomain,
   commitSummaryDomain,
+  commitTourProjectionCompletion,
   eventOrder,
   mapWithConcurrency,
   readValue,
@@ -36,6 +38,7 @@ const {
   dashboardDayKey,
   dashboardWindowDayKeys,
   publishDashboardWindowSummary,
+  publishStableTourSummary,
   reconcileTourDaySummary,
   recomputeTourSummaryDomains,
   tourSummaryShardId,
@@ -134,13 +137,14 @@ const recomputeTourProjection = async ({ db, tourId, order, instrumentation }) =
       return { ...commit, aggregateRecomputed: false };
     }
     await recomputeTourSummaryDomains({ db, tourId, order, instrumentation });
-    await db.ref(completionPath).set({
-      schemaVersion: DASHBOARD_SCHEMA_VERSION,
+    const completionCommit = await commitTourProjectionCompletion({
+      db,
+      tourId,
       projectionRevision: Number(currentProjection?.projectionRevision || 0),
       sourceFingerprint: currentProjection?.sourceFingerprint || 'deleted',
       completedAtMs: Date.now(),
     });
-    return { ...commit, aggregateRecomputed: true };
+    return { ...commit, aggregateRecomputed: true, completionOutcome: completionCommit.outcome };
   } finally {
     await releaseCountLock({ db, lockPath, owner });
   }
@@ -535,7 +539,9 @@ module.exports = {
   acquireCountLock,
   commitCompareSafeProjection,
   commitCompareSafePublicProjection,
+  commitConsistentSummaryDomain,
   commitSummaryDomain,
+  commitTourProjectionCompletion,
   countRecentBroadcastWindow,
   dashboardDayKey,
   dashboardWindowDayKeys,
@@ -547,6 +553,7 @@ module.exports = {
   mapWithConcurrency,
   pruneExpiredBroadcastProjections,
   publishDashboardWindowSummary,
+  publishStableTourSummary,
   publishBroadcastSummary,
   publishSafetySummary,
   projectDashboardManifestAssignmentCode,

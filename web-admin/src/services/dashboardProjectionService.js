@@ -21,6 +21,29 @@ export const DASHBOARD_BROADCAST_LIMIT = 40;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const BROADCAST_RETENTION_MS = 30 * DAY_MS;
 const VALID_PHASES = new Set(['legacy', 'shadow', 'projection']);
+const SAFETY_SEVERITY_WEIGHT = Object.freeze({ low: 1, medium: 2, high: 3, critical: 4 });
+const SUMMARY_COMPARISON_FIELDS = Object.freeze([
+  'totalDrivers',
+  'assignedDrivers',
+  'availableDrivers',
+  'totalTours',
+  'operationalTours',
+  'upcomingTours',
+  'assignedUpcomingTours',
+  'unassignedUpcomingTours',
+  'missingDateOperationalTours',
+  'upcomingAssignmentCoveragePercent',
+  'activeAssignmentCoveragePercent',
+  'totalPassengers',
+  'totalKnownCapacity',
+  'passengerLoadPercent',
+  'unknownCapacityTours',
+  'highLoadTours',
+  'safetyAttentionAlerts',
+  'broadcastTotalCount',
+  'broadcastLast24hCount',
+  'broadcastTourCount',
+]);
 
 const asRecord = (value) => (
   value && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -180,5 +203,174 @@ export function compareDashboardProjectionRows(legacyRows = [], projectionRows =
     unexpectedProjection,
     fieldMismatch,
     matches: missingProjection === 0 && unexpectedProjection === 0 && fieldMismatch === 0,
+  };
+}
+
+const normalizedEventId = (row = {}) => {
+  if (typeof row.eventId === 'string' && row.eventId) return row.eventId;
+  const id = String(row.id || '');
+  const separator = id.indexOf(':');
+  return separator >= 0 ? id.slice(separator + 1) : id;
+};
+
+const compareBoundedRows = ({ legacyRows, projectionRows, keyFor, fields }) => {
+  const legacyById = new Map(legacyRows.map((row) => [keyFor(row), row]));
+  const projectedById = new Map(projectionRows.map((row) => [keyFor(row), row]));
+  const reasonCounts = Object.fromEntries(fields.map((field) => [`${field}Mismatch`, 0]));
+  let missingProjection = 0;
+  let unexpectedProjection = 0;
+  let fieldMismatch = 0;
+  legacyById.forEach((legacy, id) => {
+    const projected = projectedById.get(id);
+    if (!projected) {
+      missingProjection += 1;
+      return;
+    }
+    let rowMismatch = false;
+    fields.forEach((field) => {
+      if (!Object.is(legacy[field], projected[field])) {
+        reasonCounts[`${field}Mismatch`] += 1;
+        rowMismatch = true;
+      }
+    });
+    if (rowMismatch) fieldMismatch += 1;
+  });
+  projectedById.forEach((_row, id) => {
+    if (!legacyById.has(id)) unexpectedProjection += 1;
+  });
+  return {
+    legacyCount: legacyById.size,
+    projectionCount: projectedById.size,
+    missingProjection,
+    unexpectedProjection,
+    fieldMismatch,
+    reasonCounts,
+    matches: missingProjection === 0 && unexpectedProjection === 0 && fieldMismatch === 0,
+  };
+};
+
+const comparableSafety = (row = {}) => ({
+  tourId: String(row.tourId || ''),
+  eventId: normalizedEventId(row),
+  status: String(row.status || 'pending'),
+  severity: String(row.severity || 'medium'),
+  requiresAttention: Boolean(row.requiresAttention),
+  timestampMs: Number(row.timestampMs || 0),
+});
+
+const compareSafetyAttention = (legacyModel = {}, projectionModel = {}, limit) => {
+  const legacyRows = (Array.isArray(legacyModel.safetyAlerts) ? legacyModel.safetyAlerts : [])
+    .map(comparableSafety)
+    .filter((row) => row.requiresAttention)
+    .sort((left, right) => (
+      (SAFETY_SEVERITY_WEIGHT[right.severity] || 0) - (SAFETY_SEVERITY_WEIGHT[left.severity] || 0)
+      || right.timestampMs - left.timestampMs
+      || left.tourId.localeCompare(right.tourId)
+      || left.eventId.localeCompare(right.eventId)
+    ))
+    .slice(0, limit);
+  const projectionRows = (Array.isArray(projectionModel.safetyAlerts) ? projectionModel.safetyAlerts : [])
+    .map(comparableSafety)
+    .slice(0, limit);
+  return compareBoundedRows({
+    legacyRows,
+    projectionRows,
+    keyFor: (row) => `${row.tourId}\u0000${row.eventId}`,
+    fields: ['status', 'severity', 'requiresAttention'],
+  });
+};
+
+const comparableBroadcast = ({ tourId, broadcastId, row }) => ({
+  tourId: String(tourId || ''),
+  broadcastId: String(broadcastId || ''),
+  deliveryStatus: String(row?.deliveryStatus || 'queued'),
+  createdAtMs: Number(row?.createdAtMs || 0),
+  recipientCount: row?.recipientCount !== null && row?.recipientCount !== undefined
+    && Number.isFinite(Number(row.recipientCount)) ? Number(row.recipientCount) : null,
+});
+
+const boundedLegacyBroadcasts = (broadcasts, plan) => Object.entries(asRecord(broadcasts))
+  .flatMap(([tourId, rows]) => Object.entries(asRecord(rows)).map(([broadcastId, row]) => (
+    comparableBroadcast({ tourId, broadcastId, row })
+  )))
+  .filter((row) => row.createdAtMs >= plan.startAt)
+  .sort((left, right) => left.createdAtMs - right.createdAtMs
+    || left.tourId.localeCompare(right.tourId)
+    || left.broadcastId.localeCompare(right.broadcastId))
+  .slice(-plan.limitToLast);
+
+const boundedProjectionBroadcasts = (broadcasts, plan) => Object.entries(withoutTombstones(broadcasts))
+  .map(([id, row]) => comparableBroadcast({
+    tourId: row?.tourId,
+    broadcastId: row?.broadcastId || id,
+    row,
+  }))
+  .filter((row) => row.createdAtMs >= plan.startAt)
+  .sort((left, right) => left.createdAtMs - right.createdAtMs
+    || left.tourId.localeCompare(right.tourId)
+    || left.broadcastId.localeCompare(right.broadcastId))
+  .slice(-plan.limitToLast);
+
+const compareRecentBroadcasts = (legacyBroadcasts, projectionBroadcasts, plan) => compareBoundedRows({
+  legacyRows: boundedLegacyBroadcasts(legacyBroadcasts, plan),
+  projectionRows: boundedProjectionBroadcasts(projectionBroadcasts, plan),
+  keyFor: (row) => `${row.tourId}\u0000${row.broadcastId}`,
+  fields: ['deliveryStatus', 'createdAtMs', 'recipientCount'],
+});
+
+const displayedSummary = (model = {}) => ({
+  ...Object.fromEntries(SUMMARY_COMPARISON_FIELDS
+    .filter((field) => !field.startsWith('broadcast'))
+    .map((field) => [field, model.metrics?.[field] ?? null])),
+  broadcastTotalCount: model.broadcastActivity?.totalCount ?? null,
+  broadcastLast24hCount: model.broadcastActivity?.last24hCount ?? null,
+  broadcastTourCount: model.broadcastActivity?.tourCount ?? null,
+});
+
+const compareDisplayedSummary = (legacyModel, projectionModel) => {
+  const legacy = displayedSummary(legacyModel);
+  const projection = displayedSummary(projectionModel);
+  const reasonCounts = Object.fromEntries(SUMMARY_COMPARISON_FIELDS.map((field) => [
+    `${field}Mismatch`, Object.is(legacy[field], projection[field]) ? 0 : 1,
+  ]));
+  const fieldMismatch = Object.values(reasonCounts).reduce((total, count) => total + count, 0);
+  return { fieldCount: SUMMARY_COMPARISON_FIELDS.length, fieldMismatch, reasonCounts, matches: fieldMismatch === 0 };
+};
+
+export function compareDashboardProjectionSections({
+  legacyModel = {},
+  projectionModel = {},
+  projectionTours = {},
+  legacyBroadcasts = {},
+  projectionBroadcasts = {},
+  options = {},
+} = {}) {
+  const plan = getDashboardProjectionQueryPlan(options);
+  const sections = {
+    tours: compareDashboardProjectionRows(legacyModel.tourRows, projectionTours, options),
+    safetyAttention: compareSafetyAttention(legacyModel, projectionModel, plan.safetyAttention.limitToLast),
+    recentBroadcasts: compareRecentBroadcasts(
+      legacyBroadcasts,
+      projectionBroadcasts,
+      plan.recentBroadcasts,
+    ),
+    summary: compareDisplayedSummary(legacyModel, projectionModel),
+  };
+  const reasonCounts = {
+    tourMissing: sections.tours.missingProjection,
+    tourUnexpected: sections.tours.unexpectedProjection,
+    tourFieldMismatch: sections.tours.fieldMismatch,
+    safetyMissing: sections.safetyAttention.missingProjection,
+    safetyUnexpected: sections.safetyAttention.unexpectedProjection,
+    safetyFieldMismatch: sections.safetyAttention.fieldMismatch,
+    broadcastMissing: sections.recentBroadcasts.missingProjection,
+    broadcastUnexpected: sections.recentBroadcasts.unexpectedProjection,
+    broadcastFieldMismatch: sections.recentBroadcasts.fieldMismatch,
+    summaryFieldMismatch: sections.summary.fieldMismatch,
+  };
+  return {
+    matches: Object.values(sections).every((section) => section.matches),
+    reasonCounts,
+    sections,
   };
 }
