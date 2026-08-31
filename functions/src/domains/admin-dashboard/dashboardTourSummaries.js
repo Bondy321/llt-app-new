@@ -1,0 +1,224 @@
+'use strict';
+
+// @ts-check
+
+const {
+  DASHBOARD_ROOT,
+  DASHBOARD_SCHEMA_VERSION,
+  fingerprint,
+} = require('./dashboardProjection');
+const {
+  acquireCountLock,
+  commitSummaryDomain,
+  readValue,
+  reconcileAggregateContribution,
+  releaseCountLock,
+} = require('./dashboardProjectionState');
+
+const TOUR_SUMMARY_SHARD_COUNT = 32;
+const DASHBOARD_MAX_FUTURE_DAYS = 14;
+const DASHBOARD_MAX_OVERDUE_DAYS = 7;
+const DASHBOARD_TIME_ZONE = 'Europe/London';
+
+const dashboardDayKey = (epochMs) => {
+  if (!Number.isFinite(Number(epochMs))) return null;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: DASHBOARD_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(Number(epochMs)));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return values.year && values.month && values.day
+    ? `${values.year}-${values.month}-${values.day}`
+    : null;
+};
+
+const shiftDashboardDayKey = (dayKey, days) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dayKey || ''));
+  if (!match) return null;
+  const shifted = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + days));
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(shifted.getUTCDate()).padStart(2, '0')}`;
+};
+
+const dashboardWindowDayKeys = (nowMs = Date.now()) => {
+  const today = dashboardDayKey(nowMs);
+  if (!today) return [];
+  return Array.from(
+    { length: DASHBOARD_MAX_OVERDUE_DAYS + DASHBOARD_MAX_FUTURE_DAYS + 1 },
+    (_, index) => shiftDashboardDayKey(today, index - DASHBOARD_MAX_OVERDUE_DAYS),
+  ).filter(Boolean);
+};
+
+const tourSummaryShardId = (tourId) => String(
+  Number.parseInt(fingerprint({ tourId }).slice(0, 8), 16) % TOUR_SUMMARY_SHARD_COUNT,
+).padStart(2, '0');
+
+const sumAggregateRows = (rows) => rows.reduce((total, row) => {
+  Object.entries(row && typeof row === 'object' ? row : {}).forEach(([field, value]) => {
+    if (['schemaVersion', 'revision', 'updatedAtMs'].includes(field)) return;
+    if (Number.isFinite(Number(value))) total[field] = Number(total[field] || 0) + Number(value);
+  });
+  return total;
+}, {});
+
+const buildStableTourContribution = (currentProjection) => { // eslint-disable-line complexity -- mirrors the stable all-time dashboard scorecards
+  if (!currentProjection || currentProjection.deleted === true) return {};
+  const operational = currentProjection.isActive !== false;
+  const knownCapacity = operational && currentProjection.hasKnownCapacity === true;
+  const hasValidStart = currentProjection.startAtMs !== null
+    && currentProjection.startAtMs !== undefined
+    && Number.isFinite(Number(currentProjection.startAtMs));
+  return {
+    totalTours: 1,
+    operationalTours: operational ? 1 : 0,
+    assignedOperationalTours: operational && currentProjection.isAssigned ? 1 : 0,
+    totalPassengers: operational ? Number(currentProjection.passengerCount || 0) : 0,
+    totalKnownCapacity: knownCapacity ? Number(currentProjection.capacity || 0) : 0,
+    unknownCapacityTours: operational && !knownCapacity ? 1 : 0,
+    missingDateOperationalTours: operational && !hasValidStart ? 1 : 0,
+    highLoadTours: knownCapacity
+      && (Number(currentProjection.loadPercent || 0) >= 85
+        || Number(currentProjection.passengerCount || 0) > Number(currentProjection.capacity || 0)) ? 1 : 0,
+  };
+};
+
+const loadStableTourSummary = async (db, instrumentation) => {
+  const rows = await Promise.all(Array.from({ length: TOUR_SUMMARY_SHARD_COUNT }, (_, index) => (
+    readValue(
+      db,
+      `${DASHBOARD_ROOT}/internal/tour_summary_shards/${String(index).padStart(2, '0')}`,
+      instrumentation,
+    )
+  )));
+  return sumAggregateRows(rows);
+};
+
+const publishDashboardWindowSummary = async ({ db, nowMs = Date.now(), instrumentation }) => {
+  const dayKeys = dashboardWindowDayKeys(nowMs);
+  const rows = await Promise.all(dayKeys.map((dayKey) => (
+    readValue(db, `${DASHBOARD_ROOT}/internal/tour_day_summaries/${dayKey}`, instrumentation)
+  )));
+  const upcomingRows = rows.slice(DASHBOARD_MAX_OVERDUE_DAYS);
+  const upcomingTours = upcomingRows.reduce((sum, row) => sum + Number(row?.activeTours || 0), 0);
+  const assignedUpcomingTours = upcomingRows
+    .reduce((sum, row) => sum + Number(row?.assignedActiveTours || 0), 0);
+  const attentionTours = rows.reduce((sum, row) => sum + Number(row?.activeTours || 0), 0);
+  const assignedAttentionTours = rows
+    .reduce((sum, row) => sum + Number(row?.assignedActiveTours || 0), 0);
+  await commitSummaryDomain({
+    db,
+    domain: 'window',
+    revision: nowMs,
+    nowMs,
+    fields: {
+      upcomingTours,
+      assignedUpcomingTours,
+      unassignedUpcomingTours: Math.max(0, attentionTours - assignedAttentionTours),
+      upcomingAssignmentCoveragePercent: upcomingTours > 0
+        ? Math.round((assignedUpcomingTours / upcomingTours) * 100)
+        : null,
+      attentionWindowTours: attentionTours,
+    },
+  });
+  return { upcomingTours, assignedUpcomingTours, attentionTours };
+};
+
+const reconcileTourDaySummary = async ({ db, tourId, order, instrumentation }) => {
+  const owner = `tour-day:${order.sourceEventId || order.sourceEventAtMs}`;
+  const stateLockPath = `${DASHBOARD_ROOT}/internal/count_locks/tour_day_state/${tourId}`;
+  if (!(await acquireCountLock({ db, lockPath: stateLockPath, owner }))) {
+    const error = new Error('Dashboard tour-day reconciliation is already in progress');
+    error.code = 'DASHBOARD_TOUR_DAY_LOCKED';
+    throw error;
+  }
+  try {
+    const [currentProjection, priorState] = await Promise.all([
+      readValue(db, `${DASHBOARD_ROOT}/tours/${tourId}`, instrumentation),
+      readValue(db, `${DASHBOARD_ROOT}/internal/tour_day_state/${tourId}`, instrumentation),
+    ]);
+    const currentDayKey = currentProjection && currentProjection.deleted !== true
+      ? dashboardDayKey(currentProjection.startAtMs)
+      : null;
+    const priorDayKey = typeof priorState?.dayKey === 'string' ? priorState.dayKey : null;
+    const affectedDayKeys = [...new Set([priorDayKey, currentDayKey].filter(Boolean))];
+    for (const dayKey of affectedDayKeys) {
+      await reconcileAggregateContribution({
+        db,
+        type: 'tour_day',
+        scopeId: dayKey,
+        memberId: tourId,
+        owner: `${owner}:${dayKey}`,
+        nowMs: order.sourceEventAtMs,
+        aggregatePath: `${DASHBOARD_ROOT}/internal/tour_day_summaries/${dayKey}`,
+        loadCurrentContribution: async () => (
+          currentDayKey === dayKey && currentProjection?.isActive !== false
+            ? {
+              activeTours: 1,
+              assignedActiveTours: currentProjection?.isAssigned ? 1 : 0,
+            }
+            : {}
+        ),
+      });
+    }
+    await db.ref(`${DASHBOARD_ROOT}/internal/tour_day_state/${tourId}`).set(currentDayKey ? {
+      schemaVersion: DASHBOARD_SCHEMA_VERSION,
+      dayKey: currentDayKey,
+      updatedAtMs: Math.max(Number(priorState?.updatedAtMs || 0), Number(order.sourceEventAtMs || 0)),
+    } : null);
+  } finally {
+    await releaseCountLock({ db, lockPath: stateLockPath, owner });
+  }
+};
+
+const recomputeTourSummaryDomains = async ({ db, tourId, order, instrumentation }) => {
+  const shardId = tourSummaryShardId(tourId);
+  await reconcileAggregateContribution({
+    db,
+    type: 'tour',
+    scopeId: shardId,
+    memberId: tourId,
+    owner: `tour:${order.sourceEventId || order.sourceEventAtMs}`,
+    nowMs: order.sourceEventAtMs,
+    aggregatePath: `${DASHBOARD_ROOT}/internal/tour_summary_shards/${shardId}`,
+    loadCurrentContribution: async () => buildStableTourContribution(
+      await readValue(db, `${DASHBOARD_ROOT}/tours/${tourId}`, instrumentation),
+    ),
+  });
+  const summary = await loadStableTourSummary(db, instrumentation);
+  const summaryNowMs = Date.now();
+  const operationalTours = Number(summary.operationalTours || 0);
+  const totalKnownCapacity = Number(summary.totalKnownCapacity || 0);
+  await commitSummaryDomain({
+    db,
+    domain: 'tour',
+    revision: summaryNowMs,
+    nowMs: summaryNowMs,
+    fields: {
+      totalTours: Number(summary.totalTours || 0),
+      operationalTours,
+      activeAssignmentCoveragePercent: operationalTours > 0
+        ? Math.round((Number(summary.assignedOperationalTours || 0) / operationalTours) * 100)
+        : null,
+      totalPassengers: Number(summary.totalPassengers || 0),
+      totalKnownCapacity,
+      passengerLoadPercent: totalKnownCapacity > 0
+        ? Math.round((Number(summary.totalPassengers || 0) / totalKnownCapacity) * 100)
+        : null,
+      unknownCapacityTours: Number(summary.unknownCapacityTours || 0),
+      missingDateOperationalTours: Number(summary.missingDateOperationalTours || 0),
+      highLoadTours: Number(summary.highLoadTours || 0),
+    },
+  });
+  await reconcileTourDaySummary({ db, tourId, order, instrumentation });
+  await publishDashboardWindowSummary({ db, nowMs: Date.now(), instrumentation });
+};
+
+module.exports = {
+  dashboardDayKey,
+  dashboardWindowDayKeys,
+  publishDashboardWindowSummary,
+  reconcileTourDaySummary,
+  recomputeTourSummaryDomains,
+  tourSummaryShardId,
+};

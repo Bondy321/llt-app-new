@@ -8,6 +8,9 @@ const databaseMocks = vi.hoisted(() => ({
   onValue: vi.fn(),
   query: vi.fn((baseRef, ...constraints) => ({ baseRef, constraints })),
   orderByChild: vi.fn((field) => ({ type: 'orderByChild', field })),
+  startAt: vi.fn((value) => ({ type: 'startAt', value })),
+  endAt: vi.fn((value) => ({ type: 'endAt', value })),
+  limitToFirst: vi.fn((limit) => ({ type: 'limitToFirst', limit })),
   limitToLast: vi.fn((limit) => ({ type: 'limitToLast', limit })),
   get: vi.fn(),
   update: vi.fn(),
@@ -28,6 +31,9 @@ vi.mock('firebase/database', () => ({
   onValue: (...args) => databaseMocks.onValue(...args),
   query: (...args) => databaseMocks.query(...args),
   orderByChild: (...args) => databaseMocks.orderByChild(...args),
+  startAt: (...args) => databaseMocks.startAt(...args),
+  endAt: (...args) => databaseMocks.endAt(...args),
+  limitToFirst: (...args) => databaseMocks.limitToFirst(...args),
   limitToLast: (...args) => databaseMocks.limitToLast(...args),
   get: (...args) => databaseMocks.get(...args),
   update: (...args) => databaseMocks.update(...args),
@@ -51,6 +57,9 @@ vi.mock('../services/opsAlertService', async () => {
 
 import Dashboard from './Dashboard';
 
+let rolloutPhase = 'legacy';
+const pathOf = (source) => source.path || source.baseRef?.path;
+
 const renderDashboard = () => render(
   <MantineProvider>
     <MemoryRouter>
@@ -61,17 +70,35 @@ const renderDashboard = () => render(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  rolloutPhase = 'legacy';
   databaseMocks.onValue.mockImplementation((dbRef, callback) => {
-    if (dbRef.path === 'drivers') {
+    const path = pathOf(dbRef);
+    if (path === 'admin_dashboard_rollout/v1') {
+      callback({ val: () => ({ schemaVersion: 1, phase: rolloutPhase }) });
+    }
+
+    if (path === 'drivers') {
       callback({ val: () => ({ D1: { name: 'Driver One', currentTourId: 'TOUR_1', createdAt: '2026-05-28T10:00:00.000Z' } }) });
     }
 
-    if (dbRef.path === 'tours') {
-      callback({ val: () => ({ TOUR_1: { name: 'Tour One', driverName: 'Driver One', currentParticipants: 12, startDate: '28/05/2026' } }) });
+    if (path === 'tours') {
+      callback({ val: () => ({ TOUR_1: { name: 'Tour One', driverName: 'Driver One', currentParticipants: 12, startDate: '01/09/2026' } }) });
     }
 
-    if (['tour_manifests', 'globalSafetyAlerts', 'broadcasts'].includes(dbRef.path)) {
+    if (['tour_manifests', 'globalSafetyAlerts', 'broadcasts'].includes(path)) {
       callback({ val: () => ({}) });
+    }
+
+    if (path === 'admin_dashboard/v1/tours') {
+      callback({ val: () => ({ TOUR_1: { displayName: 'Projected Tour', passengerCount: 12, startAtMs: 1780000000000 } }), size: 1 });
+    }
+
+    if (['admin_dashboard/v1/safety_attention', 'admin_dashboard/v1/recent_broadcasts'].includes(path)) {
+      callback({ val: () => ({}), size: 0 });
+    }
+
+    if (path === 'admin_dashboard/v1/summary') {
+      callback({ val: () => ({ totalDrivers: 1, totalTours: 1, activeTours: 1, totalPassengers: 999 }) });
     }
 
     return vi.fn();
@@ -132,5 +159,60 @@ describe('Dashboard ops alerts panel', () => {
         expect.any(Function),
       );
     });
+
+    const listenedPaths = databaseMocks.onValue.mock.calls.map(([source]) => pathOf(source));
+    expect(listenedPaths).toEqual(expect.arrayContaining([
+      'drivers',
+      'tours',
+      'tour_manifests',
+      'globalSafetyAlerts',
+      'broadcasts',
+    ]));
+    expect(listenedPaths).not.toContain('admin_dashboard/v1/tours');
+  });
+
+  it('projection phase attaches only bounded projection data listeners', async () => {
+    rolloutPhase = 'projection';
+    renderDashboard();
+
+    expect(await screen.findByText('Operations / Health / Errors')).toBeInTheDocument();
+    const listenedPaths = databaseMocks.onValue.mock.calls.map(([source]) => pathOf(source));
+    expect(listenedPaths).toEqual(expect.arrayContaining([
+      'admin_dashboard/v1/tours',
+      'admin_dashboard/v1/safety_attention',
+      'admin_dashboard/v1/recent_broadcasts',
+      'admin_dashboard/v1/summary',
+    ]));
+    expect(listenedPaths).not.toEqual(expect.arrayContaining([
+      'drivers',
+      'tours',
+      'tour_manifests',
+      'globalSafetyAlerts',
+      'broadcasts',
+    ]));
+    expect(databaseMocks.limitToFirst).toHaveBeenCalledWith(500);
+    expect(databaseMocks.limitToLast).toHaveBeenCalledWith(80);
+    expect(databaseMocks.limitToLast).toHaveBeenCalledWith(40);
+  });
+
+  it('shadow phase keeps the legacy render while subscribing to bounded projections', async () => {
+    rolloutPhase = 'shadow';
+    renderDashboard();
+
+    expect(await screen.findByText('Operations / Health / Errors')).toBeInTheDocument();
+    const listenedPaths = databaseMocks.onValue.mock.calls.map(([source]) => pathOf(source));
+    expect(listenedPaths).toEqual(expect.arrayContaining([
+      'drivers',
+      'tours',
+      'tour_manifests',
+      'globalSafetyAlerts',
+      'broadcasts',
+      'admin_dashboard/v1/tours',
+      'admin_dashboard/v1/safety_attention',
+      'admin_dashboard/v1/recent_broadcasts',
+      'admin_dashboard/v1/summary',
+    ]));
+    expect(screen.getByText('12 passengers / 0 known seats')).toBeInTheDocument();
+    expect(screen.queryByText('999 passengers / 0 known seats')).not.toBeInTheDocument();
   });
 });

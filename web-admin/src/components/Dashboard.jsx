@@ -7,6 +7,13 @@ import { IconActivity, IconClock, IconRefresh } from '@tabler/icons-react';
 import { getAdminDatabase, getCurrentAdminUser } from '../shared/runtime/adminRuntime';
 import { HEALTH_STATE, buildHealthSnapshot } from '../services/healthService';
 import { SAFETY_STATUS, buildOperationsDashboardModel, filterSafetyAlerts, revalidateDashboardBranches, subscribeToDashboardBranches, updateSafetyAlertStatus } from '../services/dashboardService';
+import { buildOperationsDashboardProjectionModel } from '../services/dashboardProjectionModel';
+import {
+  compareDashboardProjectionRows,
+  fetchDashboardProjection,
+  subscribeToDashboardProjection,
+  subscribeToDashboardRollout,
+} from '../services/dashboardProjectionService';
 import { acknowledgeOpsAlert, buildOpsAlertStats, fetchOpsAlerts, filterOpsAlerts, resolveOpsAlert, subscribeToOpsAlerts } from '../services/opsAlertService';
 import { getRuntimeDebugContext, logFirebaseDebug, logFirebaseError, startFirebaseDebugTimer, summarizeDataValue, summarizeDatabaseInstance } from '../services/firebaseDebug';
 import { formatLongDateForDisplay, nowAsISOString } from '../utils/dateUtils';
@@ -61,6 +68,14 @@ export default function Dashboard() {
     globalSafetyAlerts: {},
     broadcasts: {}
   });
+  const [projectionData, setProjectionData] = useState({
+    tours: {},
+    safetyAttention: {},
+    recentBroadcasts: {},
+    summary: {}
+  });
+  const [rolloutPhase, setRolloutPhase] = useState('legacy');
+  const [rolloutLoaded, setRolloutLoaded] = useState(false);
   const [branchLoading, setBranchLoading] = useState(createBranchState(true));
   const [branchErrors, setBranchErrors] = useState({});
   const [branchSyncedAt, setBranchSyncedAt] = useState({});
@@ -81,10 +96,15 @@ export default function Dashboard() {
   });
   const healthSnapshot = useMemo(() => buildHealthSnapshot(healthSignals), [healthSignals]);
   const opsAlertStats = useMemo(() => buildOpsAlertStats(opsAlerts), [opsAlerts]);
-  const dashboardModel = useMemo(() => buildOperationsDashboardModel({
+  const legacyDashboardModel = useMemo(() => buildOperationsDashboardModel({
     ...branchData,
     opsAlerts
   }), [branchData, opsAlerts]);
+  const projectedDashboardModel = useMemo(() => buildOperationsDashboardProjectionModel({
+    ...projectionData,
+    opsAlerts
+  }), [opsAlerts, projectionData]);
+  const dashboardModel = rolloutPhase === 'projection' ? projectedDashboardModel : legacyDashboardModel;
   const visibleOpsAlerts = useMemo(() => filterOpsAlerts(opsAlerts, {
     severity: opsSeverityFilter,
     status: opsStatusFilter
@@ -99,13 +119,23 @@ export default function Dashboard() {
       branchSyncedAt
     }, healthSnapshot.state === HEALTH_STATE.ONLINE_HEALTHY ? 'info' : 'warn');
   }, [branchErrors, branchLoading, branchSyncedAt, healthSignals, healthSnapshot]);
+  useEffect(() => subscribeToDashboardRollout(db, phase => {
+    setRolloutPhase(phase);
+    setRolloutLoaded(true);
+  }, error => {
+    logFirebaseError('dashboard:rollout:error', error, { fallbackPhase: 'legacy' });
+    setRolloutPhase('legacy');
+    setRolloutLoaded(true);
+  }), []);
   useEffect(() => {
+    if (!rolloutLoaded) return undefined;
     logFirebaseDebug('dashboard:component:mount', {
       database: summarizeDatabaseInstance(db),
       runtime: getRuntimeDebugContext(),
       initialBrowserOnline: typeof navigator === 'undefined' ? null : navigator.onLine,
       opsAlertQuery: OPS_ALERT_QUERY,
-      watchedBranches: Object.keys(BRANCH_LABELS)
+      watchedBranches: Object.keys(BRANCH_LABELS),
+      rolloutPhase
     }, 'info');
     const recordSuccess = (key, syncedAt, value) => {
       logFirebaseDebug('dashboard:component:record-success', {
@@ -155,16 +185,40 @@ export default function Dashboard() {
         pendingFailedOperations: current.pendingFailedOperations + 1
       }));
     };
-    const unsubscribeBranches = subscribeToDashboardBranches(db, {
-      onData: (key, value, syncedAt) => {
-        setBranchData(current => ({
-          ...current,
-          [key]: value
-        }));
-        recordSuccess(key, syncedAt, value);
-      },
-      onError: recordError
-    });
+    const sourceUnsubscribers = [];
+    if (rolloutPhase === 'legacy' || rolloutPhase === 'shadow') {
+      sourceUnsubscribers.push(...subscribeToDashboardBranches(db, {
+        onData: (key, value, syncedAt) => {
+          setBranchData(current => ({
+            ...current,
+            [key]: value
+          }));
+          recordSuccess(key, syncedAt, value);
+        },
+        onError: recordError
+      }));
+    }
+    if (rolloutPhase === 'projection' || rolloutPhase === 'shadow') {
+      sourceUnsubscribers.push(...subscribeToDashboardProjection(db, {}, {
+        onData: (key, value, syncedAt) => {
+          setProjectionData(current => ({ ...current, [key]: value }));
+          if (key === 'summary') {
+            recordSuccess('drivers', syncedAt, value);
+            recordSuccess('tourManifests', syncedAt, value);
+          } else {
+            const branchKey = key === 'safetyAttention' ? 'globalSafetyAlerts'
+              : key === 'recentBroadcasts' ? 'broadcasts' : key;
+            recordSuccess(branchKey, syncedAt, value);
+          }
+        },
+        onError: (key, error) => {
+          const branchKey = key === 'safetyAttention' ? 'globalSafetyAlerts'
+            : key === 'recentBroadcasts' ? 'broadcasts'
+              : key === 'summary' ? 'drivers' : key;
+          recordError(branchKey, error);
+        }
+      }));
+    }
     const unsubscribeOpsAlerts = subscribeToOpsAlerts(db, OPS_ALERT_QUERY, alerts => {
       setOpsAlerts(alerts);
       recordSuccess('opsAlerts', nowAsISOString(), Object.fromEntries(alerts.map(alert => [alert.id, {
@@ -199,12 +253,17 @@ export default function Dashboard() {
       logFirebaseDebug('dashboard:component:unmount', {
         database: summarizeDatabaseInstance(db)
       }, 'info');
-      unsubscribeBranches.forEach(unsubscribe => unsubscribe());
+      sourceUnsubscribers.forEach(unsubscribe => unsubscribe());
       unsubscribeOpsAlerts();
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, []);
+  }, [rolloutLoaded, rolloutPhase]);
+  useEffect(() => {
+    if (rolloutPhase !== 'shadow') return;
+    const comparison = compareDashboardProjectionRows(legacyDashboardModel.tourRows, projectionData.tours);
+    logFirebaseDebug('dashboard:projection:shadow-compare', comparison, comparison.matches ? 'info' : 'warn');
+  }, [legacyDashboardModel.tourRows, projectionData.tours, rolloutPhase]);
   const handleRefresh = async () => {
     setRefreshing(true);
     const refreshTimer = startFirebaseDebugTimer('dashboard:manual-refresh:ui', {
@@ -214,14 +273,37 @@ export default function Dashboard() {
       opsAlertQuery: OPS_ALERT_QUERY
     });
     try {
-      const [branches, refreshedOpsAlerts] = await Promise.all([revalidateDashboardBranches(db), fetchOpsAlerts(db, OPS_ALERT_QUERY)]);
-      setBranchData({
-        drivers: branches.drivers,
-        tours: branches.tours,
-        tourManifests: branches.tourManifests,
-        globalSafetyAlerts: branches.globalSafetyAlerts,
-        broadcasts: branches.broadcasts
-      });
+      const projectionMode = rolloutPhase === 'projection';
+      const shadowMode = rolloutPhase === 'shadow';
+      const [branches, refreshedOpsAlerts, shadowProjection] = await Promise.all([
+        projectionMode ? fetchDashboardProjection(db) : revalidateDashboardBranches(db),
+        fetchOpsAlerts(db, OPS_ALERT_QUERY),
+        shadowMode ? fetchDashboardProjection(db) : Promise.resolve(null)
+      ]);
+      if (projectionMode) {
+        setProjectionData({
+          tours: branches.tours,
+          safetyAttention: branches.safetyAttention,
+          recentBroadcasts: branches.recentBroadcasts,
+          summary: branches.summary
+        });
+      } else {
+        setBranchData({
+          drivers: branches.drivers,
+          tours: branches.tours,
+          tourManifests: branches.tourManifests,
+          globalSafetyAlerts: branches.globalSafetyAlerts,
+          broadcasts: branches.broadcasts
+        });
+      }
+      if (shadowProjection) {
+        setProjectionData({
+          tours: shadowProjection.tours,
+          safetyAttention: shadowProjection.safetyAttention,
+          recentBroadcasts: shadowProjection.recentBroadcasts,
+          summary: shadowProjection.summary
+        });
+      }
       setOpsAlerts(refreshedOpsAlerts);
       setBranchLoading(createBranchState(false));
       setBranchErrors({});
@@ -242,13 +324,10 @@ export default function Dashboard() {
         lastSuccessfulSyncAt: branches.revalidatedAt
       });
       refreshTimer.success({
-        branchSummaries: {
-          drivers: summarizeDataValue(branches.drivers),
-          tours: summarizeDataValue(branches.tours),
-          tourManifests: summarizeDataValue(branches.tourManifests),
-          globalSafetyAlerts: summarizeDataValue(branches.globalSafetyAlerts),
-          broadcasts: summarizeDataValue(branches.broadcasts)
-        },
+        rolloutPhase,
+        dashboardSummary: projectionMode
+          ? summarizeDataValue(branches.summary)
+          : summarizeDataValue(branches.tours),
         opsAlertsCount: refreshedOpsAlerts.length,
         revalidatedAt: branches.revalidatedAt
       });
