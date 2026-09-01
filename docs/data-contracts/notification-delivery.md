@@ -5,6 +5,8 @@ production classes begin as deterministic server-owned jobs. `ticket_accepted` m
 message; `provider_accepted` means a later Expo receipt was successful. Neither status proves the
 operating system displayed the notification.
 
+Retention operations and rollback are specified in `docs/operations/notification-retention.md`.
+
 `submission_unknown` is a terminal ambiguity: the server started a request but cannot prove whether
 Expo accepted it. It is not a rejection, a partial delivery claim, or safe evidence that retrying
 cannot duplicate a notification. Source projections report this separately as
@@ -73,11 +75,42 @@ messages retain the ordinary chat-owned path.
 
 ## Retention
 
-- Completed/no-recipient/expired jobs and attempts: 30 days.
-- Provider ticket/receipt records: 30 days.
-- Marketing detail records: through explicit expiry, then at most 30 additional days.
-- Active/retrying jobs and unresolved receipts are not removed before their delivery/receipt windows
-  end. Cleanup is scheduled and bounded.
+- Ordinary notification jobs and their attempts remain for at least 30 days after the job's immutable
+  first `completedAtMs`. Recognised terminal jobs are `ticket_rejected`, `provider_accepted`,
+  `provider_rejected`, `partial`, `submission_unknown`, `expired`, and `no_recipients`.
+- A server-owned `retentionDueAtMs` may be written once as `completedAtMs + 30 days`. It is discovery
+  metadata, never delivery authority, and later status/source refreshes must not move it.
+- Missing, malformed, non-terminal, leased, retrying/requeued, transitioning, or explicitly held jobs
+  fail closed. `updatedAtMs` by itself never makes a job eligible.
+- Account-deletion `privacy_deleted` jobs are content-free anti-recreation tombstones. Ordinary
+  retention must not schedule them or shorten their explicit tombstone expiry; they become eligible
+  only at that expiry.
+- Retention work is private and durable under `notification_retention/v1`. A due queue discovers work,
+  a leased job advances through bounded attempt pages and child/source cleanup phases, and every
+  destructive page rereads the canonical notification job and exact rollout revision.
+- `notification_retention_rollout/v1` is the server-owned authority. Missing or malformed state means
+  `legacy`. A shadow pass binds its aggregate fingerprint and revision; the first `compactor` revision
+  remains paused with `canaryPassed=false`. A bounded canary binds its own fingerprint and revision,
+  and only a second compare-safe compactor transition activates scheduled deletion.
+- Attempt, recipient, UID/token-claim, runnable-queue, warning, coalescing, marketing-detail, and owned
+  source cleanup is compare-safe. A source or coalescing pointer that no longer names the retained job
+  is preserved.
+- The parent job is deleted last. A crash before that point leaves resumable private state; a crash
+  after it cannot expose a live child as delivery authority because delivery/retry paths require the
+  canonical job and its current generation.
+- Destructive pages carry a durable commit marker and an extended lease longer than the scheduled
+  Function timeout. Manual requeue cannot cancel that marker after expiry; only retention recovery
+  may replay the bounded unit and clear the marker at a durable phase boundary.
+- Orphan repair is key-paged, timestamp-watermarked, and bounded. It never treats an orphan attempt or
+  queue pointer as delivery authority and never scans an unbounded root in one invocation.
+- A processing manual requeue persists `recoveryDueAtMs`. The scheduled retention worker resumes it
+  through a rollout-bound compound cursor, so an unrecoverable bounded prefix cannot starve later
+  crashed requeues. Completed states clear the recovery field before ordinary one-hour expiry.
+- Legacy compatibility cleanup keeps independent rollout-bound cursors for jobs, terminal attempts,
+  marketing details, and requeue recovery; preserved leading records cannot permanently block later
+  eligible cleanup.
+- Marketing detail records remain through explicit expiry and then no more than 30 additional days.
+  Audience previews and manual-requeue state retain their existing ten-minute and one-hour lifetimes.
 
 ## Endpoint authentication boundary
 

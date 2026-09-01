@@ -14,6 +14,13 @@ const { evaluateAudienceCandidate } = require('./notificationAudiencePage');
 const { enumerateNotificationAudiencePage, mapWithBoundedConcurrency } = require('./notificationAudienceEnumerators');
 const { createNotificationJobRecord, enqueueNotificationJob } = require('./notificationJobs');
 const { buildDeliveryAttemptId, transitionDeliveryAttempt } = require('./notificationWorker');
+const {
+  NOTIFICATION_RETENTION_IN_PROGRESS,
+  recoverNotificationRetentionFenceIfInactive,
+  recoverZeroResultNotificationRequeue,
+  isNotificationLifecycleRetentionFenced,
+  nextNotificationRetentionGeneration,
+} = require('./notificationRetentionIntegration');
 
 /** @param {any} req @param {any} res */
 const requireAdminRequest = async (req, res) => {
@@ -249,7 +256,39 @@ const createServerTestNotification = onRequest({ region: 'europe-west1', maxInst
 });
 
 const REQUEUE_PAGE_SIZE = 100;
+const REQUEUE_COMPLETION_RETENTION_MS = 60 * 60 * 1000;
 const REQUEUEABLE_STATUSES = new Set(['ticket_rejected', 'provider_rejected', 'partial', 'expired']);
+
+const activateNotificationJobRequeue = async ({ jobRef, job, nowMs }) => {
+  const leaseOwnerId = randomUUID();
+  let acquired = false;
+  let retentionBlocked = false;
+  let busy = false;
+  const lease = await jobRef.transaction((current) => {
+    if (!current || !REQUEUEABLE_STATUSES.has(current.status)
+      || Number(current.completedAtMs || 0) !== Number(job.completedAtMs || 0)
+      || Number(current.retentionGeneration || 0) !== Number(job.retentionGeneration || 0)) return undefined;
+    if (isNotificationLifecycleRetentionFenced(current, nowMs)) {
+      retentionBlocked = true;
+      return undefined;
+    }
+    if (current.supersededByJobId) return undefined;
+    if (current.lease && Number(current.lease.expiresAtMs || 0) > nowMs) {
+      busy = true;
+      return undefined;
+    }
+    acquired = true;
+    return { ...current, lease: { ownerId: leaseOwnerId, acquiredAtMs: nowMs, expiresAtMs: nowMs + 120_000 } };
+  });
+  const leasedJob = lease?.snapshot?.val?.() || null;
+  return {
+    acquired: Boolean(acquired && leasedJob?.lease?.ownerId === leaseOwnerId),
+    busy,
+    job: leasedJob,
+    leaseOwnerId,
+    retentionBlocked,
+  };
+};
 
 const requeueRecipient = async ({ db, job, authUid, state, requeueId, nowMs }) => {
   if (state?.requeueId === requeueId) return state.requeueOutcome || 'skipped';
@@ -285,25 +324,59 @@ const requeueRecipient = async ({ db, job, authUid, state, requeueId, nowMs }) =
 const requeueFailedNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.now() }) => {
   const jobRef = db.ref(`notification_jobs/${jobId}`);
   let job = (await jobRef.once('value')).val();
-  if (!job || Number(job.expiresAtMs || 0) <= nowMs) return { success: false, reason: 'JOB_NOT_REQUEUEABLE' };
+  if (isNotificationLifecycleRetentionFenced(job, nowMs)) {
+    await recoverNotificationRetentionFenceIfInactive(db, jobId, nowMs);
+    job = (await jobRef.once('value')).val();
+    if (isNotificationLifecycleRetentionFenced(job, nowMs)) {
+      return { success: false, reason: NOTIFICATION_RETENTION_IN_PROGRESS };
+    }
+  }
+  if (!job || job.supersededByJobId || Number(job.expiresAtMs || 0) <= nowMs) {
+    return { success: false, reason: 'JOB_NOT_REQUEUEABLE' };
+  }
   const stateRef = db.ref(`notification_requeue_jobs/${jobId}`);
   let state = (await stateRef.once('value')).val();
   const sourceCompletedAtMs = Number(job.completedAtMs || job.updatedAtMs || 0);
   if (REQUEUEABLE_STATUSES.has(job.status)) {
+    const activation = await activateNotificationJobRequeue({ jobRef, job, nowMs });
+    if (activation.retentionBlocked) {
+      return { success: false, reason: NOTIFICATION_RETENTION_IN_PROGRESS };
+    }
+    if (!activation.acquired) {
+      return { success: false, reason: activation.busy ? 'JOB_BUSY' : 'JOB_NOT_REQUEUEABLE' };
+    }
+    job = activation.job;
     if (!state || state.status === 'complete' || Number(state.sourceCompletedAtMs) !== sourceCompletedAtMs) {
       const requeueId = `requeue_v1_${randomUUID().replace(/-/gu, '')}`;
       await stateRef.transaction((current) => current && current.status === 'processing' && Number(current.sourceCompletedAtMs) === sourceCompletedAtMs
         ? current
-        : { schemaVersion: 1, requeueId, jobId, sourceStatus: job.status, sourceCompletedAtMs, cursor: null, status: 'processing', requeued: 0, skipped: 0, createdAtMs: nowMs, updatedAtMs: nowMs, expiresAtMs: nowMs + (60 * 60 * 1000) });
+        : { schemaVersion: 1, requeueId, jobId, sourceStatus: job.status, sourceCompletedAtMs, cursor: null, status: 'processing', requeued: 0, skipped: 0, createdAtMs: nowMs, updatedAtMs: nowMs, expiresAtMs: null, recoveryDueAtMs: nowMs });
       state = (await stateRef.once('value')).val();
     }
-    await jobRef.transaction((current) => current && REQUEUEABLE_STATUSES.has(current.status)
-      ? { ...current, status: 'retrying', lease: null, updatedAtMs: nowMs, lastErrorCode: null }
-      : current);
+    let retentionBlocked = false;
+    await jobRef.transaction((current) => {
+      if (!current || current.lease?.ownerId !== activation.leaseOwnerId) return undefined;
+      if (isNotificationLifecycleRetentionFenced(current, nowMs)) {
+        retentionBlocked = true;
+        return undefined;
+      }
+      return {
+        ...current,
+        status: 'retrying',
+        retentionGeneration: nextNotificationRetentionGeneration(current),
+        lease: null,
+        updatedAtMs: nowMs,
+        lastErrorCode: null,
+      };
+    });
+    if (retentionBlocked) return { success: false, reason: NOTIFICATION_RETENTION_IN_PROGRESS };
     job = (await jobRef.once('value')).val();
   }
   if (!state || state.status !== 'processing' || job?.status !== 'retrying') {
-    if (state?.status === 'complete') return { success: true, complete: true, requeueId: state.requeueId, requeued: state.requeued, skipped: state.skipped, job };
+    if (state?.status === 'complete') {
+      job = await recoverZeroResultNotificationRequeue({ db, jobId, state, nowMs });
+      return { success: true, complete: true, requeueId: state.requeueId, requeued: state.requeued, skipped: state.skipped, job };
+    }
     return { success: false, reason: 'JOB_NOT_REQUEUEABLE' };
   }
   const leaseOwner = randomUUID(); let acquired = false;
@@ -311,7 +384,13 @@ const requeueFailedNotificationJob = async ({ db = admin.database(), jobId, nowM
     if (!current || current.status !== 'processing') return current;
     if (current.lease && Number(current.lease.expiresAtMs || 0) > nowMs) return current;
     acquired = true;
-    return { ...current, lease: { ownerId: leaseOwner, expiresAtMs: nowMs + 120_000 }, updatedAtMs: nowMs };
+    return {
+      ...current,
+      expiresAtMs: null,
+      lease: { ownerId: leaseOwner, expiresAtMs: nowMs + 120_000 },
+      recoveryDueAtMs: nowMs + 120_000,
+      updatedAtMs: nowMs,
+    };
   });
   state = lease?.snapshot?.val?.() || state;
   if (!acquired) return { success: true, complete: false, status: 'processing', requeueId: state.requeueId, requeued: state.requeued, skipped: state.skipped };
@@ -327,12 +406,11 @@ const requeueFailedNotificationJob = async ({ db = admin.database(), jobId, nowM
   const complete = records.length <= REQUEUE_PAGE_SIZE;
   const cursor = complete || !selected.length ? null : selected[selected.length - 1][0];
   await stateRef.transaction((current) => current?.lease?.ownerId === leaseOwner
-    ? { ...current, cursor, status: complete ? 'complete' : 'processing', requeued: Number(current.requeued || 0) + requeued, skipped: Number(current.skipped || 0) + skipped, lease: null, updatedAtMs: nowMs }
+    ? { ...current, cursor, status: complete ? 'complete' : 'processing', requeued: Number(current.requeued || 0) + requeued, skipped: Number(current.skipped || 0) + skipped, lease: null, expiresAtMs: complete ? nowMs + REQUEUE_COMPLETION_RETENTION_MS : null, recoveryDueAtMs: complete ? null : nowMs, updatedAtMs: nowMs }
     : current);
   state = (await stateRef.once('value')).val();
   if (complete && Number(state.requeued || 0) === 0) {
-    const terminalStatus = REQUEUEABLE_STATUSES.has(state.sourceStatus) ? state.sourceStatus : 'provider_rejected';
-    await jobRef.update({ status: terminalStatus, completedAtMs: Number(job.completedAtMs || nowMs), updatedAtMs: nowMs });
+    job = await recoverZeroResultNotificationRequeue({ db, jobId, state, nowMs });
   }
   return { success: true, complete, status: state.status, requeueId: state.requeueId, requeued: state.requeued, skipped: state.skipped, job: (await jobRef.once('value')).val() };
 };

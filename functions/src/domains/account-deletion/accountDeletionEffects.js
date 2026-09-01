@@ -4,7 +4,13 @@
 
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { deleteOwnedGroupPhotoRecord, deleteOwnedPrivatePhotoRecord } = require('../media/public');
-const { buildNotificationJobId, resolveChatJobShape } = require('../notifications/public');
+const {
+  buildNotificationJobId,
+  NOTIFICATION_RETENTION_MS,
+  nextNotificationRetentionGeneration,
+  resolveChatJobShape,
+  scheduleNotificationRetentionIfEligible,
+} = require('../notifications/public');
 const {
   ACCOUNT_DELETION_CHAT_PAGE_SIZE,
   ACCOUNT_DELETION_MEDIA_PAGE_SIZE,
@@ -130,6 +136,7 @@ const redactAuthoredChatNotificationJob = async ({
     const observedJob = (await jobRef.once('value')).val();
     let replacedExisting = false;
     let blockedByLiveLease = false;
+    const privacyExpiresAtMs = nowMs + NOTIFICATION_RETENTION_MS;
     const result = await jobRef.transaction((current) => {
       blockedByLiveLease = Boolean(current?.lease
         && Number(current.lease.expiresAtMs || 0) > nowMs);
@@ -143,7 +150,9 @@ const redactAuthoredChatNotificationJob = async ({
         createdAtMs: Number(current?.createdAtMs || nowMs),
         updatedAtMs: nowMs,
         completedAtMs: nowMs,
-        expiresAtMs: nowMs + (30 * 24 * 60 * 60 * 1000),
+        expiresAtMs: privacyExpiresAtMs,
+        retentionDueAtMs: privacyExpiresAtMs,
+        retentionGeneration: nextNotificationRetentionGeneration(current),
       };
     }, undefined, false);
     if (!result?.committed) {
@@ -171,6 +180,14 @@ const redactAuthoredChatNotificationJob = async ({
         ? { [`${queueRoots[observedJob.queueKind]}/${observedJob.queueKey}`]: null }
         : {}),
     });
+    const retention = await scheduleNotificationRetentionIfEligible(db, result.snapshot.val(), nowMs);
+    if (!['scheduled', 'already_scheduled', 'queue_repaired'].includes(retention?.reason)) {
+      const error = /** @type {Error & { code?: string }} */ (
+        new Error('Authored notification privacy retention was not durably scheduled')
+      );
+      error.code = 'ACCOUNT_DELETION_NOTIFICATION_RETENTION_NOT_DURABLE';
+      throw error;
+    }
     recordsRemoved += Number(replacedExisting);
   }
   return recordsRemoved;

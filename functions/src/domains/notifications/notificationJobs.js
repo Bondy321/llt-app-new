@@ -7,6 +7,10 @@ const { admin } = require('../../bootstrap/firebaseAdmin');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { buildDeliveryGrouping, getNotificationDeliveryPolicy } = require('./notificationDeliveryPolicy');
 const { isTerminalNotificationJobStatus } = require('./notificationJobStatus');
+const {
+  isNotificationLifecycleRetentionFenced,
+  scheduleNotificationRetentionIfEligible,
+} = require('./notificationRetentionIntegration');
 const { buildNotificationQueueKey, buildQueueEntry, QUEUE_ROOTS, transitionQueuedRecord } = require('./notificationQueues');
 
 const JOB_SCHEMA_VERSION = 1;
@@ -179,7 +183,8 @@ const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalesc
     if (supersedesJobId && isValidFirebaseKey(supersedesJobId)) {
       const previousRef = db.ref(`notification_jobs/${supersedesJobId}`);
       const previous = (await previousRef.once('value')).val();
-      if (previous && !isTerminalNotificationJobStatus(previous.status)) {
+      if (previous && !isTerminalNotificationJobStatus(previous.status)
+        && !isNotificationLifecycleRetentionFenced(previous, job.createdAtMs)) {
         await transitionQueuedRecord(db, {
           targetPath: `notification_jobs/${supersedesJobId}`,
           current: previous,
@@ -187,6 +192,8 @@ const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalesc
           targetId: supersedesJobId,
         });
       }
+      const persistedPrevious = (await previousRef.once('value')).val();
+      await scheduleNotificationRetentionIfEligible(db, persistedPrevious, job.createdAtMs);
       await stateRef.transaction((current) => current?.jobId === job.jobId && current?.previousJobId === supersedesJobId
         ? { ...current, previousJobId: null, handoffCompletedAtMs: job.createdAtMs }
         : current);
@@ -227,6 +234,7 @@ const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalesc
   // Trigger replay repairs the non-atomic preparing -> queued -> queue handoff.
   // Privacy and terminal states fail closed because only exact queued jobs qualify.
   await ensureNotificationFanoutQueue(db, persisted);
+  await scheduleNotificationRetentionIfEligible(db, persisted, Number(persisted.updatedAtMs || job.createdAtMs));
   return { created, jobId: job.jobId, job: persisted };
 };
 
@@ -241,6 +249,7 @@ const acquireNotificationJobLease = async ({
   let acquired = false;
   const transaction = await jobRef.transaction((job) => {
     if (!job || !['queued', 'fanout_in_progress'].includes(job.status)) return;
+    if (isNotificationLifecycleRetentionFenced(job, nowMs)) return;
     if (Number(job.expiresAtMs) <= nowMs || job.supersededByJobId) {
       return { ...job, status: 'expired', lease: null, completedAtMs: Number(job.completedAtMs || nowMs), updatedAtMs: nowMs };
     }

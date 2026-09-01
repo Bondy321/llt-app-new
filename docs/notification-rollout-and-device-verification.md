@@ -39,19 +39,57 @@ sends; pause producers or the worker through a reviewed operational change if ne
 
 ## Retention and operational review
 
-- Notification jobs, hashed-token attempts, tickets and receipts: 30 days after their last update.
-- Marketing details: bounded expiry, then no more than 30 additional days.
-- Delivery warnings: removed with their retained job; open warnings remain visible during that
-  window.
-- Coalescing and duplicate-token claims: compare-safely removed with the retained job.
-- Runnable queue entries: removed atomically when work completes, becomes terminal, or receives a
-  replacement due time. A queue item is not a reporting/audit record.
-- Admin audience-preview state: server-private, owner/target-bound and expires after 10 minutes;
-  repeated requests resume its bounded cursor and retain UID/token deduplication claims.
-- Admin requeue state: server-private, job-bound and expires after one hour; each request processes
-  at most 100 recipient records and resumes the same idempotent requeue generation.
-- Existing broadcast history: retained for operations during rollout; a later reviewed retention
-  migration should apply the business-record retention period rather than deleting it implicitly.
+- Notification jobs, hashed-token attempts, tickets and receipts remain for at least 30 days after
+  the immutable first job completion. `updatedAtMs` alone is not an eligibility boundary.
+- Active, retrying, requeued, leased, transitioning, held, malformed and unknown-status jobs fail
+  closed. The worker rereads the canonical job before every bounded destructive page.
+- Account-deletion `privacy_deleted` jobs are content-free anti-recreation fences. They remain until
+  their explicit tombstone expiry; ordinary job retention cannot shorten that lifetime.
+- Marketing details remain through explicit expiry and then no more than 30 additional days.
+- Delivery warnings, coalescing pointers and UID/token claims are compare-safely reconciled. A source
+  or coalescing record that no longer points to the retained job is preserved.
+- Runnable queue entries are removed only when their target, version and owner still match. A queue
+  item is not reporting or delivery authority.
+- Admin audience-preview state remains server-private and expires after 10 minutes. Admin requeue
+  state remains server-private, expires after one hour, and retains its durable generation/cursor.
+- Existing broadcast history remains an operations-owned business record; compaction removes it only
+  where the notification source contract explicitly owns that deletion.
+
+## Retention rollout
+
+Code deployment is compatibility-first. The private `notification_retention_rollout/v1` record has
+three phases: `legacy`, `shadow`, and `compactor`. Missing state means `legacy`; malformed state
+disables destructive compaction. Every transition is an expected-phase/expected-revision transaction.
+
+1. Deploy RTDB rules first so the new roots are private and the canonical discovery indexes exist.
+2. Deploy Functions while rollout remains `legacy`. Confirm the stable
+   `cleanupNotificationDeliveryData` export and new retention worker exports are active.
+3. Run the retention preflight in default dry-run mode. Keep only aggregate counts and hashed cursors.
+4. Run guarded preparation pages with `--apply --confirm-project=<exact-project-id>` until the durable
+   progress record is complete. Preparation may add retention metadata/work; it deletes no canonical
+   notification data.
+5. Compare-and-set the rollout to `shadow`. The compactor plans bounded work but is not authoritative;
+   safety mismatches, budget breaches or malformed candidates fail the gate.
+6. Persist a passing bounded shadow comparison, then compare-and-set the exact shadow revision to the
+   paused `compactor` gate using the matching preparation evidence digest. While `canaryPassed=false`,
+   scheduled and normal cycles perform no retention mutation.
+7. Run one synchronous bounded canary through the exact production compactor code. The first canary is
+   one ordinary job and at most one 250-attempt page; it must leave no unexpected child/queue/orphan and
+   no retention warning. Persist and fingerprint the result against the paused rollout revision.
+   On any failure, compare-and-set the rollout back to `legacy` and process no further jobs.
+8. Compare-and-set the paused compactor revision to active `compactor` with
+   `--activate-after-canary`. Permit one normal bounded invocation only after that activation succeeds.
+
+The rollout manager defaults to read-only. Every mutation requires `--apply`, exact project
+confirmation, the observed rollout revision, and the current evidence digest for forward transitions.
+A transition back to `legacy` needs no forward gate. It increments the revision, fencing stale worker
+workers before another destructive page or phase; at most an already-started bounded page can settle.
+Preserve retention jobs, queues, progress, evidence and warnings during rollback.
+
+Synchronous production evidence consists of deployed Function/rule inspection, exact-head CI,
+aggregate preflight/preparation output, bounded shadow counters, bounded canary residual checks,
+rollout rereads and masked Function logs. Retention activation does not require a physical device,
+billing comparison, a multi-day wait or human-only observation.
 
 `ticket_accepted` means Expo accepted the request. `provider_accepted` means Expo later returned a
 successful receipt. Neither status proves the device displayed the notification.
@@ -84,6 +122,6 @@ until the focused notification suites, full repository validation, emulator rule
 Expo Doctor and both platform exports pass. External APNs/FCM credentials and physical devices are
 release prerequisites, not outcomes that can be inferred from repository tests.
 
-As of this repository change, none of the external steps above has been performed: no production
-Firebase deployment or migration, no Expo enhanced-security change, no APNs/FCM credential check,
-and no physical-device or authenticated live-admin verification.
+Record deployment, preparation, shadow, canary and activation evidence in the release report rather
+than embedding an environment snapshot in this runbook. Expo enhanced security, App Check, mobile
+publication and physical-device notification verification remain separate release boundaries.

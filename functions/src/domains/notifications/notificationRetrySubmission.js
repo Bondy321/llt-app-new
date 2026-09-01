@@ -6,6 +6,7 @@ const { randomUUID } = require('node:crypto');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { getExpoPushClient } = require('../../infrastructure/notifications/expoPushClient');
 const { DEFAULT_LEASE_MS } = require('./notificationJobs');
+const { isNotificationLifecycleRetentionFenced } = require('./notificationRetentionIntegration');
 
 const createNotificationRetrySubmission = ({
   buildExpoPushMessage,
@@ -20,6 +21,7 @@ const createNotificationRetrySubmission = ({
     let acquired = false;
     const result = await jobRef.transaction((current) => {
       if (!current || current.jobId !== observedJob?.jobId
+        || isNotificationLifecycleRetentionFenced(current, nowMs)
         || current.status === 'privacy_deleted' || current.status === 'expired'
         || current.supersededByJobId || Number(current.expiresAtMs || 0) <= nowMs
         || !current.presentation?.title || !current.presentation?.body) return undefined;

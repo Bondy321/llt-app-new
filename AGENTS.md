@@ -5,6 +5,7 @@ Welcome, Agent. This file is the operational source of truth for contributors wo
 Last updated: August 29, 2026
 
 Architecture source of truth: start with `docs/architecture/overview.md`, then follow `module-boundaries.md` and the runtime-specific document. Account deletion is specified by `docs/data-contracts/account-deletion.md`, ADR 0009 and `docs/operations/account-deletion.md`; do not duplicate or weaken that preservation boundary. Keep `App.js` and `functions/index.js` as composition roots; preserve compatibility facades; place Firebase, HTTP, and persistence access behind adapters; update canonical contracts and generated copies together; run `npm run verify:refactor` for structural changes. The detailed rationale lives in `docs/architecture/decisions/` and should not be duplicated here.
+Notification retention is specified by `docs/data-contracts/notification-delivery.md`, `docs/performance/notification-retention-scale.md`, and `docs/operations/notification-retention.md`.
 
 ---
 
@@ -147,6 +148,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `notification_read_cleanup_jobs` (server-private bounded continuation jobs)
 - `notification_jobs`, `notification_job_coalescing`, `notification_job_token_claims`, `notification_job_audience_claims` (server-private durable push outbox, supersession and UID/token deduplication claims)
 - `notification_delivery_attempts`, `notification_delivery_warnings` (server-private ticket/receipt state and visible operations warnings)
+- `notification_retention/v1` and `notification_retention_rollout/v1` (server-private durable retention jobs, due queue, repair/progress evidence and compatibility-first rollout authority)
 - `notification_devices`, `notification_consents` (server-owned installation push state and explicit marketing consent; self-readable, client-write denied)
 - `notification_device_tombstones` (server-private permanent UID anti-recreation fence; account deletion creates/preserves it under the device lock)
 - `marketing_notification_details` (server-owned durable future-tour notification content)
@@ -943,6 +945,12 @@ Exported functions:
 - `processNotificationReadMigrationRequest`
   - retry-enabled RTDB create trigger on `/notification_read_migration_requests/{tourId}/{authUid}` in `europe-west1`
   - validates the requested key against the server-side passenger/driver profile, deletes ambiguous legacy UID read markers without attribution, and records completion on the user profile
+- `cleanupNotificationDeliveryData`
+  - remains the stable scheduled export name for notification retention compatibility
+- defaults to the legacy path when rollout state is absent; `shadow` plans and compares bounded work without making the compactor authoritative; the first `compactor` revision is scheduler-paused until its exact bounded canary evidence is activated, after which `compactor` drains durable retention jobs
+  - ordinary eligibility uses a recognised terminal status plus immutable first `completedAtMs`/`retentionDueAtMs`, and rejects active leases, requeue, incompatible transitions and holds
+  - preserves account-deletion privacy tombstones until their explicit expiry and deletes each parent only after bounded child, queue, source and coalescing reconciliation
+  - every destructive page is fenced by the exact rollout revision so returning to `legacy` stops stale workers
 - `generatePhotoVariants`
   - Storage finalize trigger
   - region `us-east1`

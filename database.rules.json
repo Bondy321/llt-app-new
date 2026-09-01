@@ -179,6 +179,21 @@
       ".indexOn": ["expiresAtMs"]
     },
 
+    "notification_retention": {
+      ".read": false,
+      ".write": false,
+      "v1": {
+        "jobs": {
+          ".indexOn": ["retentionDueAtMs", "leaseExpiresAtMs"]
+        }
+      }
+    },
+
+    "notification_retention_rollout": {
+      ".read": false,
+      ".write": false
+    },
+
     "notification_device_tombstones": {
       ".read": false,
       ".write": false
@@ -193,7 +208,7 @@
     "notification_requeue_jobs": {
       ".read": false,
       ".write": false,
-      ".indexOn": ["expiresAtMs"]
+      ".indexOn": ["expiresAtMs", "recoveryDueAtMs"]
     },
 
     "safety_status_locks": {
@@ -1190,7 +1205,7 @@
     "notification_jobs": {
       ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
       ".write": false,
-      ".indexOn": ["status", "availableAtMs", "expiresAtMs", "updatedAtMs", "coalescingKey"]
+      ".indexOn": ["status", "availableAtMs", "completedAtMs", "expiresAtMs", "retentionDueAtMs", "updatedAtMs", "coalescingKey"]
     },
 
     "notification_job_coalescing": {
@@ -1236,7 +1251,7 @@
     "notification_delivery_attempts": {
       ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
       ".write": false,
-      ".indexOn": ["jobId", "status", "availableAtMs", "receiptDueAtMs", "expiresAtMs", "updatedAtMs"]
+      ".indexOn": ["jobId", "status", "availableAtMs", "receiptDueAtMs", "expiresAtMs", "retentionDueAtMs", "updatedAtMs"]
     },
 
     "notification_delivery_warnings": {
@@ -1277,7 +1292,7 @@
     "marketing_notification_details": {
       ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
       ".write": false,
-      ".indexOn": ["categoryKey", "status", "expiresAtMs", "updatedAtMs"]
+      ".indexOn": ["categoryKey", "status", "expiresAtMs", "retentionDueAtMs", "updatedAtMs"]
     },
 
     "notification_read_legacy_cleanup_state": {

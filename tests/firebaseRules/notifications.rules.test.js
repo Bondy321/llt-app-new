@@ -300,6 +300,24 @@ test('new notification delivery roots are server-owned and unreadable to ordinar
   await assertFails(dbFor(PASSENGER_UID).ref(`notification_consents/${PASSENGER_UID}`).set({ forged: true }));
 });
 
+test('retention work and rollout state remain private even from authenticated administrators', async () => {
+  const privatePaths = [
+    'notification_retention/v1/jobs/job_notify_1',
+    'notification_retention/v1/queue/0000000000001_job_notify_1',
+    'notification_retention/v1/repair/orphan_attempts',
+    'notification_retention/v1/preparation',
+    'notification_retention/v1/evidence/run_1',
+    'notification_retention_rollout/v1',
+  ];
+  for (const rootPath of privatePaths) {
+    await assertFails(loggedOutDb().ref(rootPath).get());
+    await assertFails(dbFor(PASSENGER_UID).ref(rootPath).get());
+    await assertFails(dbFor(PASSENGER_UID).ref(rootPath).set({ forged: true }));
+    await assertFails(dbFor(ADMIN_UID).ref(rootPath).get());
+    await assertFails(dbFor(ADMIN_UID).ref(rootPath).set({ forged: true }));
+  }
+});
+
 test('only self can read private notification device and consent records', async () => {
   await assertSucceeds(dbFor(PASSENGER_UID).ref(`notification_devices/${PASSENGER_UID}`).get());
   await assertSucceeds(dbFor(PASSENGER_UID).ref(`notification_consents/${PASSENGER_UID}`).get());
@@ -331,16 +349,18 @@ test('admins can inspect reporting roots but cannot client-write server-owned no
 
 test('notification delivery indexes and server-mediated marketing-preference projection remain explicit', () => {
   for (const requiredIndex of [
-    '"status", "availableAtMs", "expiresAtMs", "updatedAtMs", "coalescingKey"',
-    '"jobId", "status", "availableAtMs", "receiptDueAtMs", "expiresAtMs", "updatedAtMs"',
+    '"status", "availableAtMs", "completedAtMs", "expiresAtMs", "retentionDueAtMs", "updatedAtMs", "coalescingKey"',
+    '"jobId", "status", "availableAtMs", "receiptDueAtMs", "expiresAtMs", "retentionDueAtMs", "updatedAtMs"',
     '"status", "updatedAtMs", "severity"',
     '"marketingPreferences/day_trips"',
-    '"categoryKey", "status", "expiresAtMs", "updatedAtMs"',
+    '"categoryKey", "status", "expiresAtMs", "retentionDueAtMs", "updatedAtMs"',
   ]) {
     assert.ok(rules.includes(requiredIndex), `missing notification index: ${requiredIndex}`);
   }
   assert.ok(rules.includes('"notification_devices"'));
   assert.ok(rules.includes('"notification_consents"'));
+  assert.ok(rules.includes('"notification_retention"'));
+  assert.ok(rules.includes('"notification_retention_rollout"'));
   assert.ok(rules.includes('".write": false'));
 });
 
