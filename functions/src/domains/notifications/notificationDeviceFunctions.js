@@ -10,6 +10,10 @@ const { verifyRequestAuthUid } = require('../../infrastructure/auth/requestAuth'
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { applyAuthenticatedCors } = require('../../infrastructure/http/adminCors');
 const { isValidPushToken, TOUR_NOTIFICATION_CATEGORY_KEYS } = require('./notificationPolicy');
+const {
+  buildMarketingAudienceUpdates,
+  persistMarketingAudienceForDevice,
+} = require('./notificationMarketingAudience');
 const { isOperationsAdmin, resolveOperationalAuthority } = require('./notificationAudiencePage');
 const { transitionSafetyAlertStatus } = require('../safety/public');
 
@@ -145,6 +149,7 @@ const removeNotificationDeviceRecords = async (db, authUid, existing, input, now
   const tombstone = tombstoneSnapshot.val() || null;
   if ((!existing || Object.keys(existing).length === 0) && !consentSnapshot.exists()
     && tombstone?.permanent === true) {
+    await db.ref().update(buildMarketingAudienceUpdates({ authUid, device: null }));
     return { status: 200, body: { success: true, deleted: true, alreadyDeleted: true } };
   }
   const suppliedRevision = readPositiveRevision(input?.registrationRevision ?? input?.mutationRevision);
@@ -156,6 +161,7 @@ const removeNotificationDeviceRecords = async (db, authUid, existing, input, now
   await db.ref().update({
     [`notification_devices/${authUid}`]: null,
     [`notification_consents/${authUid}`]: null,
+    ...buildMarketingAudienceUpdates({ authUid, device: null }),
     [`notification_device_tombstones/${authUid}`]: {
       schemaVersion: 1,
       permanent: true,
@@ -236,8 +242,22 @@ const applyNotificationDeviceMutation = async ({
     });
     return nextRecord;
   }, undefined, false);
-  if (!result?.committed || !nextRecord) return ignoredDeviceMutation(ignoredReason || 'STALE_DEVICE_MUTATION');
+  if (!result?.committed || !nextRecord) {
+    if (ignoredReason === 'ALREADY_APPLIED') {
+      const canonical = result?.snapshot?.val?.()
+        || (await ref.once('value')).val();
+      const canonicalRevision = readPositiveRevision(canonical?.registrationRevision);
+      if (canonical && canonicalRevision) {
+        await persistNotificationConsent({
+          db, authUid, nextRecord: canonical, registrationRevision: canonicalRevision, nowMs,
+        });
+        await persistMarketingAudienceForDevice({ db, authUid, device: canonical });
+      }
+    }
+    return ignoredDeviceMutation(ignoredReason || 'STALE_DEVICE_MUTATION');
+  }
   await persistNotificationConsent({ db, authUid, nextRecord, registrationRevision, nowMs });
+  await persistMarketingAudienceForDevice({ db, authUid, device: nextRecord });
   return { status: 200, body: { success: true, device: { permissionState: nextRecord.permissionState, operationalEligible: nextRecord.operationalEligible, marketingEligible: nextRecord.marketingEligible, status: nextRecord.status, tokenHash: nextRecord.tokenHash, registrationRevision, updatedAtMs: nowMs } } };
 };
 const processLockedNotificationDeviceUpdate = async ({ db, ref, authUid, input, action, nowMs }) => {

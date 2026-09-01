@@ -215,7 +215,7 @@ function buildCurrentDriverByTour(drivers) {
   return byTour;
 }
 
-function getTourDateMeta(startDate, nowDate, windowOptions) {
+export function getTourDateMeta(startDate, nowDate, windowOptions) {
   const parsed = parseTriageDate(startDate);
   if (!parsed.success) {
     return {
@@ -281,11 +281,11 @@ function buildTourRows({ drivers, tours, tourManifests }, options = {}) {
   });
 }
 
-function normalizeSafetyStatus(status) {
+export function normalizeSafetyStatus(status) {
   return Object.values(SAFETY_STATUS).includes(status) ? status : SAFETY_STATUS.PENDING;
 }
 
-function normalizeSafetySeverity(severity) {
+export function normalizeSafetySeverity(severity) {
   return Object.keys(SAFETY_SEVERITY_WEIGHT).includes(severity) ? severity : 'medium';
 }
 

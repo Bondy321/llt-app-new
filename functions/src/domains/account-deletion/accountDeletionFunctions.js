@@ -12,6 +12,7 @@ const { enforceGroupMediaAppCheck } = require('../../infrastructure/auth/appChec
 const { verifyRequestAuthUid } = require('../../infrastructure/auth/requestAuth');
 const { hashRateLimitDimension } = require('../../infrastructure/rate-limit/requestRateLimiter');
 const { distributedLoginRateLimiter } = require('../passenger-auth/public');
+const { buildMarketingAudienceUpdates } = require('../notifications/public');
 const {
   projectAccountDeletionAcceptedResponse,
   projectAccountDeletionRequest,
@@ -279,6 +280,7 @@ const reserveAccountDeletion = async ({ db, authUid, input, deletionId, nowMs = 
     Object.assign(cleanupUpdates, {
       [`notification_devices/${authUid}`]: null,
       [`notification_consents/${authUid}`]: null,
+      ...buildMarketingAudienceUpdates({ authUid, device: null }),
       [`notification_device_tombstones/${authUid}`]: {
         schemaVersion: 1,
         permanent: true,

@@ -170,6 +170,14 @@ const passengerFixture = (overrides = {}) => {
       operationalSessionId: SESSION_ID,
     },
     'notification_consents/uid-account-delete': { registrationRevision: 7, marketingEligible: true },
+    'notification_marketing_audience/v1/day_trips/uid-account-delete': {
+      schemaVersion: 1,
+      registrationRevision: 7,
+    },
+    'notification_marketing_audience/v1/theatre_concerts/uid-account-delete': {
+      schemaVersion: 1,
+      registrationRevision: 7,
+    },
     'passenger_identity_security/BOOK_DELETE': {
       authorizedAuthUid: AUTH_UID,
       passengerPrincipalId: PASSENGER_ID,
@@ -243,6 +251,8 @@ test('accepted reservation creates a monotonic permanent notification tombstone 
   assert.ok(tombstone.registrationRevision > 11);
   assert.equal(db.read('notification_devices/uid-account-delete'), undefined);
   assert.equal(db.read('notification_consents/uid-account-delete'), undefined);
+  assert.equal(db.read('notification_marketing_audience/v1/day_trips/uid-account-delete'), undefined);
+  assert.equal(db.read('notification_marketing_audience/v1/theatre_concerts/uid-account-delete'), undefined);
 });
 
 test('atomic reservation failure leaves session, authority, delivery, and workflow roots unchanged', async () => {
@@ -259,6 +269,8 @@ test('atomic reservation failure leaves session, authority, delivery, and workfl
   assert.equal(db.read('app_sessions/uid-account-delete').sessionId, SESSION_ID);
   assert.equal(db.read('notification_devices/uid-account-delete').pushToken, 'ExponentPushToken[private]');
   assert.equal(db.read('notification_consents/uid-account-delete').registrationRevision, 7);
+  assert.equal(db.read('notification_marketing_audience/v1/day_trips/uid-account-delete').registrationRevision, 7);
+  assert.equal(db.read('notification_marketing_audience/v1/theatre_concerts/uid-account-delete').registrationRevision, 7);
   assert.equal(db.read('tours/TOUR_DELETE/participants/uid-account-delete').sessionId, SESSION_ID);
   assert.equal(db.read('passenger_identity_security/BOOK_DELETE/authorizedAuthUid'), AUTH_UID);
   assert.equal(db.read('account_deletion_jobs/v1'), undefined);

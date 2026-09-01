@@ -12,6 +12,7 @@ const { evaluateAudienceCandidate, hashPushToken } = require('./notificationAudi
 const { QUEUE_ROOTS, claimQueueEntry, loadDueQueueEntries, removeClaimedQueueEntry } = require('./notificationQueues');
 const { markSubmissionUnknown, retryNotificationDeliveryAttempt, transitionDeliveryAttempt } = require('./notificationWorker');
 const { syncNotificationSourceStatus } = require('./notificationSourceStatus');
+const { removeMarketingAudienceForRevision } = require('./notificationMarketingAudience');
 
 const RECEIPT_BATCH_LIMIT = 1000;
 const RECEIPT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -25,10 +26,25 @@ const compareAndClearTokenByHash = async (db, attempt, reason, nowMs) => {
   const uid = attempt.installationUid || attempt.recipientUid;
   if (!uid) return false;
   let cleared = false;
+  let invalidatedRevision = 0;
   await db.ref(`notification_devices/${uid}`).transaction((device) => {
     if (!device || device.tokenHash !== attempt.tokenHash) return device;
     cleared = true;
-    return { ...device, pushToken: null, status: 'invalid', invalidReason: reason, updatedAtMs: nowMs };
+    invalidatedRevision = Number(device.registrationRevision || 0) + 1;
+    return {
+      ...device,
+      pushToken: null,
+      tokenHash: null,
+      status: 'invalid',
+      invalidReason: reason,
+      operationalEligible: false,
+      operationalTourId: null,
+      operationalSessionId: null,
+      operationalSessionRevision: null,
+      marketingEligible: false,
+      registrationRevision: invalidatedRevision,
+      updatedAtMs: nowMs,
+    };
   });
   await db.ref(`users/${uid}`).transaction((profile) => {
     const token = String(profile?.pushToken || '').trim();
@@ -36,6 +52,9 @@ const compareAndClearTokenByHash = async (db, attempt, reason, nowMs) => {
     cleared = true;
     return { ...profile, pushToken: null, pushTokenStatus: 'INVALID', pushTokenInvalidReason: reason, pushTokenUpdatedAt: new Date(nowMs).toISOString() };
   });
+  if (invalidatedRevision) {
+    await removeMarketingAudienceForRevision({ db, authUid: uid, registrationRevision: invalidatedRevision });
+  }
   return cleared;
 };
 

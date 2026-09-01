@@ -14,6 +14,7 @@
     "test:services": "vitest run src/services",
     "test:utils": "vitest run src/utils",
     "test:all": "vitest run",
+    "test:efficiency": "vitest run src/services/dashboardProjectionService.test.js src/components/Dashboard.test.jsx",
     "test:watch": "vitest"
   },
   "dependencies": {

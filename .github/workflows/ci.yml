@@ -28,12 +28,18 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+            web-admin/package-lock.json
       - run: npm ci
       - run: node scripts/release/checkCliVersions.js
       - run: npm run release:compatibility:check -- --base=${{ env.LLT_RELEASE_BASE_SHA }} --head=${{ env.LLT_RELEASE_HEAD_SHA }}
       - run: npm run release:config:check
       - run: npm run test:release
       - run: npm --prefix functions ci
+      - run: npm --prefix web-admin ci
+      - run: npm run efficiency:check
       - run: npm run contracts:check
       - run: npm run architecture:check
       - run: npm run lint
