@@ -200,7 +200,7 @@ const SCHEDULES = {
   reconcilePassengerRoleClaims: 'every 15 minutes',
   recoverNotificationDeliveryJobs: 'every 5 minutes',
   refreshDashboardTimeWindows: 'every 15 minutes',
-  cleanupNotificationDeliveryData: 'every 24 hours',
+  cleanupNotificationDeliveryData: 'every 15 minutes',
 };
 const HTTP_FUNCTIONS = EXPECTED_FUNCTION_EXPORTS.filter((name) => (
   name !== '__testables'
@@ -268,6 +268,7 @@ test('Function trigger type, path, schedule, region, and resource settings remai
     assert.equal(endpoints[name].schedule, schedule, name);
     assert.equal(endpoints[name].timeZone, 'Europe/London', name);
   }
+  assert.equal(endpoints.cleanupNotificationDeliveryData.timeout, 540);
   assert.equal(endpoints.generatePhotoVariants.type, 'storage-finalized');
   assert.deepEqual(endpoints.generatePhotoVariants.region, ['us-east1']);
   for (const [name, endpoint] of Object.entries(endpoints)) {

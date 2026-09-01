@@ -684,9 +684,12 @@ test('chat page removes copied reply attribution without deleting the replying m
   assert.equal(db.read('chats/TOUR_CONCURRENT/messages/b-other-reply/replyTo'), undefined);
   const privacyTombstone = db.read(`notification_jobs/${notificationJobId}`);
   assert.deepEqual(Object.keys(privacyTombstone).sort(), [
-    'completedAtMs', 'createdAtMs', 'expiresAtMs', 'jobId', 'schemaVersion', 'status', 'updatedAtMs',
+    'completedAtMs', 'createdAtMs', 'expiresAtMs', 'jobId', 'retentionDueAtMs',
+    'retentionGeneration', 'schemaVersion', 'status', 'updatedAtMs',
   ]);
   assert.equal(privacyTombstone.status, 'privacy_deleted');
+  assert.equal(privacyTombstone.retentionDueAtMs, privacyTombstone.expiresAtMs);
+  assert.equal(privacyTombstone.retentionGeneration, 1);
   assert.equal(JSON.stringify(privacyTombstone).includes('Private Passenger'), false);
   assert.equal(db.read('notification_job_fanout_queue/private-queue-key'), undefined);
 });
