@@ -18,6 +18,12 @@
     "migrate:notification-devices": "node scripts/migrateNotificationDevices.js",
     "backfill:notification-marketing-audience": "node scripts/backfillNotificationMarketingAudience.js",
     "backfill:admin-dashboard": "node scripts/backfillAdminDashboard.js",
+    "retention:preflight": "node scripts/notificationRetentionPreflight.js",
+    "retention:prepare": "node scripts/notificationRetentionPreparation.js",
+    "retention:rollout": "node scripts/notificationRetentionRollout.js",
+    "retention:shadow": "node scripts/notificationRetentionShadow.js",
+    "retention:canary": "node scripts/notificationRetentionCanary.js",
+    "retention:run": "node scripts/notificationRetentionRun.js",
     "preflight:strict-rules": "node scripts/strictRulesPreflight.js",
     "materialize:driver-policy": "node scripts/strictRulesPreflight.js --materialize"
   },

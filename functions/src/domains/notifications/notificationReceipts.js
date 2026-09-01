@@ -2,21 +2,42 @@
 
 // @ts-check
 
+const { createHash, randomUUID } = require('node:crypto');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { admin } = require('../../bootstrap/firebaseAdmin');
-const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { expoAccessTokenSecret, getExpoPushClient } = require('../../infrastructure/notifications/expoPushClient');
 const { calculateRetryDelayMs } = require('./notificationJobs');
 const { isTerminalNotificationJobStatus } = require('./notificationJobStatus');
 const { evaluateAudienceCandidate, hashPushToken } = require('./notificationAudiencePage');
-const { QUEUE_ROOTS, claimQueueEntry, loadDueQueueEntries, removeClaimedQueueEntry } = require('./notificationQueues');
+const { QUEUE_ROOTS, claimQueueEntry, loadDueQueueEntries, releaseClaimedQueueEntry,
+  removeClaimedQueueEntry } = require('./notificationQueues');
 const { markSubmissionUnknown, retryNotificationDeliveryAttempt, transitionDeliveryAttempt } = require('./notificationWorker');
 const { syncNotificationSourceStatus } = require('./notificationSourceStatus');
 const { removeMarketingAudienceForRevision } = require('./notificationMarketingAudience');
+const {
+  DEFAULT_RETENTION_BUDGETS,
+  TERMINAL_NOTIFICATION_ATTEMPT_STATUSES,
+  cleanupExpiredNotificationRequeueState,
+  readNotificationRetentionRollout,
+  removeLegacyRetentionOwnership,
+  runNotificationRetentionCycle,
+} = require('../notification-retention/public');
+const {
+  compareDeleteLegacySource,
+  deleteFencedLegacyJob,
+  fenceLegacyJob,
+  legacyRolloutAuthorized,
+  releaseLegacyFence,
+  renewLegacyFence,
+} = require('./notificationLegacyFence');
+const {
+  NOTIFICATION_RETENTION_MS: RETENTION_MS,
+  isNotificationLifecycleRetentionFenced,
+  scheduleNotificationRetentionIfEligible,
+} = require('./notificationRetentionIntegration');
 
 const RECEIPT_BATCH_LIMIT = 1000;
 const RECEIPT_WINDOW_MS = 24 * 60 * 60 * 1000;
-const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const STALE_SENDING_ATTEMPT_MS = 2 * 60 * 1000;
 const TEMPORARY_RECEIPT_ERRORS = new Set(['MessageRateExceeded']);
 const CONFIGURATION_RECEIPT_ERRORS = new Set(['MismatchSenderId', 'InvalidCredentials']);
@@ -80,18 +101,32 @@ const resolveJobStatus = (job) => {
 const refreshNotificationJobStatus = async (db, jobId, nowMs) => {
   const jobRef = db.ref(`notification_jobs/${jobId}`);
   let updated = null;
+  let retained = null;
   await jobRef.transaction((job) => {
     if (!job) return job;
-    if (job.status === 'privacy_deleted') return job;
+    if (job.status === 'privacy_deleted' || isNotificationLifecycleRetentionFenced(job, nowMs)) {
+      retained = job;
+      return job;
+    }
     const status = resolveJobStatus(job);
     updated = { ...job, status, updatedAtMs: nowMs, ...(isTerminalNotificationJobStatus(status) ? { completedAtMs: Number(job.completedAtMs || nowMs) } : {}) };
     return updated;
   });
+  if (retained) return {
+    status: retained.status, counts: retained.counts || {}, job: retained, retentionFenced: true,
+  };
   if (!updated) return null;
+  let schedulingError = null;
+  try {
+    await scheduleNotificationRetentionIfEligible(db, updated, nowMs);
+  } catch (error) {
+    schedulingError = error;
+  }
   await syncNotificationSourceStatus(db, updated, nowMs);
   if (updated.priorityClass === 'critical' && ['provider_rejected', 'partial', 'submission_unknown'].includes(updated.status)) {
     await db.ref(`notification_delivery_warnings/${jobId}`).update({ jobId, tourId: updated.tourId || null, eventId: updated.eventId || null, severity: 'critical', code: updated.status.toUpperCase(), status: 'open', updatedAtMs: nowMs });
   }
+  if (schedulingError) throw schedulingError;
   return { status: updated.status, counts: updated.counts || {}, job: updated };
 };
 
@@ -124,12 +159,22 @@ const processReceipt = async (db, attemptId, attempt, receipt, nowMs) => {
 const processDueNotificationReceipts = async ({ db = admin.database(), nowMs = Date.now(), expo = getExpoPushClient() } = {}) => {
   const queue = await loadDueQueueEntries(db, 'receipt', nowMs, RECEIPT_BATCH_LIMIT);
   const due = [];
+  const observedJobs = new Map();
   for (const [queueKey, entry] of queue) {
     const claimed = await claimQueueEntry(db.ref(`${QUEUE_ROOTS.receipt}/${queueKey}`), nowMs);
     if (!claimed.claimed) continue;
     const attempt = (await db.ref(`notification_delivery_attempts/${entry.targetId}`).once('value')).val();
     if (!attempt || attempt.queueKey !== queueKey || Number(attempt.queueVersion) !== Number(entry.version) || attempt.receiptStatus !== 'receipt_pending' || typeof attempt.ticketId !== 'string') {
       await removeClaimedQueueEntry(db.ref(`${QUEUE_ROOTS.receipt}/${queueKey}`), claimed.ownerId);
+      continue;
+    }
+    if (!observedJobs.has(attempt.jobId)) {
+      observedJobs.set(attempt.jobId, (await db.ref(`notification_jobs/${attempt.jobId}`).once('value')).val());
+    }
+    if (isNotificationLifecycleRetentionFenced(observedJobs.get(attempt.jobId), nowMs)) {
+      await releaseClaimedQueueEntry(
+        db.ref(`${QUEUE_ROOTS.receipt}/${queueKey}`), claimed.ownerId, nowMs + STALE_SENDING_ATTEMPT_MS,
+      );
       continue;
     }
     due.push([entry.targetId, attempt]);
@@ -163,6 +208,12 @@ const retryDueNotificationAttempts = async ({ db = admin.database(), nowMs = Dat
     if (!attempt || attempt.queueKey !== queueKey || Number(attempt.queueVersion) !== Number(entry.version)) { await removeClaimedQueueEntry(db.ref(`${QUEUE_ROOTS.retry}/${queueKey}`), claimedQueue.ownerId); continue; }
     scanned += 1;
     const job = (await db.ref(`notification_jobs/${attempt.jobId}`).once('value')).val();
+    if (isNotificationLifecycleRetentionFenced(job, nowMs)) {
+      await releaseClaimedQueueEntry(
+        db.ref(`${QUEUE_ROOTS.retry}/${queueKey}`), claimedQueue.ownerId, nowMs + STALE_SENDING_ATTEMPT_MS,
+      );
+      continue;
+    }
     if (attempt.status === 'request_started') {
       await markSubmissionUnknown(db, job || { jobId: attempt.jobId, priorityClass: 'standard' }, { attemptRef: db.ref(`notification_delivery_attempts/${attemptId}`), attemptId, attempt }, nowMs, new Error('Stale submission lease'));
       await refreshNotificationJobStatus(db, attempt.jobId, nowMs);
@@ -197,32 +248,310 @@ const retryDueNotificationAttempts = async ({ db = admin.database(), nowMs = Dat
   return { scanned, retried };
 };
 
-const queueExpiredBroadcastDeletion = (updates, job) => {
-  const navigation = job?.navigation || {};
-  if (job?.sourceType === 'tour_announcement' && isValidFirebaseKey(job.tourId) && isValidFirebaseKey(navigation.messageId)) updates[`broadcasts/${job.tourId}/${navigation.messageId}`] = null;
-  if (job?.sourceType === 'future_tour_category_broadcast' && isValidFirebaseKey(job.categoryKey) && isValidFirebaseKey(navigation.broadcastId)) updates[`category_broadcasts/${job.categoryKey}/${navigation.broadcastId}`] = null;
+const compareDeleteLegacyQueuePointer = async ({ db, record, targetId }) => {
+  const root = QUEUE_ROOTS[record?.queueKind];
+  if (!root || typeof record?.queueKey !== 'string' || !record.queueKey) return false;
+  let deleted = false;
+  const result = await db.ref(`${root}/${record.queueKey}`).transaction((current) => {
+    if (!current || current.targetId !== targetId
+      || Number(current.version) !== Number(record.queueVersion)) return undefined;
+    deleted = true;
+    return null;
+  }, undefined, false);
+  return Boolean(deleted && result?.committed);
 };
 
-const cleanupOldNotificationDeliveryData = async ({ db = admin.database(), nowMs = Date.now() } = {}) => {
-  const cutoff = nowMs - RETENTION_MS; const updates = {};
-  const oldJobs = (await db.ref('notification_jobs').orderByChild('updatedAtMs').endAt(cutoff).limitToFirst(100).once('value')).val() || {};
-  for (const [jobId, job] of Object.entries(oldJobs)) {
-    updates[`notification_jobs/${jobId}`] = null; updates[`notification_job_token_claims/${jobId}`] = null; updates[`notification_job_recipients/${jobId}`] = null; updates[`notification_job_audience_claims/${jobId}`] = null; updates[`notification_delivery_warnings/${jobId}`] = null;
-    if (job.queueKey && job.queueKind && QUEUE_ROOTS[job.queueKind]) updates[`${QUEUE_ROOTS[job.queueKind]}/${job.queueKey}`] = null;
-    queueExpiredBroadcastDeletion(updates, job);
+const compareDeleteLegacyAttempt = async ({ db, attemptId, expected, nowMs }) => {
+  if ((await db.ref(`notification_jobs/${expected?.jobId}`).once('value')).val()) return false;
+  let deleted = false;
+  const result = await db.ref(`notification_delivery_attempts/${attemptId}`).transaction((current) => {
+    if (!current || current.jobId !== expected.jobId || current.status !== expected.status
+      || !TERMINAL_NOTIFICATION_ATTEMPT_STATUSES.has(current.status)
+      || Number(current.retentionDueAtMs || 0) !== Number(expected.retentionDueAtMs || 0)
+      || !Number.isSafeInteger(current.retentionDueAtMs)
+      || current.retentionDueAtMs > nowMs) return undefined;
+    deleted = true;
+    return null;
+  }, undefined, false);
+  if (!deleted || !result?.committed) return false;
+  if ((await db.ref(`notification_jobs/${expected.jobId}`).once('value')).val()) {
+    await db.ref(`notification_delivery_attempts/${attemptId}`).transaction((current) => (
+      current || expected
+    ), undefined, false);
+    return false;
   }
-  for (const root of ['notification_delivery_attempts', 'marketing_notification_details']) {
-    const records = (await db.ref(root).orderByChild('updatedAtMs').endAt(cutoff).limitToFirst(100).once('value')).val() || {};
-    Object.entries(records).forEach(([key, value]) => { updates[`${root}/${key}`] = null; if (value?.queueKey && value?.queueKind && QUEUE_ROOTS[value.queueKind]) updates[`${QUEUE_ROOTS[value.queueKind]}/${value.queueKey}`] = null; });
+  await compareDeleteLegacyQueuePointer({ db, record: expected, targetId: attemptId });
+  return true;
+};
+
+const compareDeleteLegacyMarketingDetail = async ({ db, detailId, expected, nowMs }) => {
+  const expectedOwner = expected?.deliveryJobId || expected?.notificationDeliveryJobId;
+  if (typeof expectedOwner !== 'string' || !expectedOwner) return false;
+  if ((await db.ref(`notification_jobs/${expectedOwner}`).once('value')).val()) return false;
+  let deleted = false;
+  const result = await db.ref(`marketing_notification_details/${detailId}`).transaction((current) => {
+    const currentOwner = current?.deliveryJobId || current?.notificationDeliveryJobId;
+    if (!current || currentOwner !== expectedOwner
+      || !Number.isSafeInteger(current.retentionDueAtMs)
+      || Number(current.retentionDueAtMs) !== Number(expected.retentionDueAtMs)
+      || current.retentionDueAtMs > nowMs) return undefined;
+    deleted = true;
+    return null;
+  }, undefined, false);
+  if (!deleted || !result?.committed) return false;
+  if ((await db.ref(`notification_jobs/${expectedOwner}`).once('value')).val()) {
+    await db.ref(`marketing_notification_details/${detailId}`).transaction((current) => (
+      current || expected
+    ), undefined, false);
+    return false;
   }
-  const expiredPreviews = (await db.ref('notification_audience_previews').orderByChild('expiresAtMs').endAt(nowMs).limitToFirst(100).once('value')).val() || {};
-  Object.keys(expiredPreviews).forEach((previewId) => { updates[`notification_audience_previews/${previewId}`] = null; });
-  const expiredRequeues = (await db.ref('notification_requeue_jobs').orderByChild('expiresAtMs').endAt(nowMs).limitToFirst(100).once('value')).val() || {};
-  Object.keys(expiredRequeues).forEach((requeueId) => { updates[`notification_requeue_jobs/${requeueId}`] = null; });
-  await db.ref().update(updates); return { deleted: Object.keys(updates).length };
+  return true;
+};
+
+const compareDeleteExactExpiry = async ({ db, root, key, expected, nowMs }) => {
+  let deleted = false;
+  const result = await db.ref(`${root}/${key}`).transaction((current) => {
+    if (!current || !Number.isSafeInteger(current.expiresAtMs)
+      || current.expiresAtMs !== expected.expiresAtMs || current.expiresAtMs > nowMs) return undefined;
+    deleted = true;
+    return null;
+  }, undefined, false);
+  return Boolean(deleted && result?.committed);
+};
+
+const loadLegacyJobPage = async ({ db, cutoff, authorization }) => {
+  const cursorRef = db.ref('notification_retention/v1/repair/legacy_cleanup_cursor');
+  const saved = (await cursorRef.once('value')).val();
+  const cursor = saved?.rolloutPhase === authorization.phase
+    && Number(saved?.rolloutRevision) === Number(authorization.revision)
+    && saved?.rolloutFingerprint === authorization.rawFingerprint
+    && Number.isSafeInteger(saved?.updatedAtMs) && typeof saved?.jobId === 'string'
+    ? saved : null;
+  let query = db.ref('notification_jobs').orderByChild('updatedAtMs');
+  if (cursor) query = query.startAfter(cursor.updatedAtMs, cursor.jobId);
+  const entries = Object.entries((await query.endAt(cutoff).limitToFirst(101)
+    .once('value')).val() || {}).sort(([leftKey, left], [rightKey, right]) => (
+    Number(left?.updatedAtMs || 0) - Number(right?.updatedAtMs || 0)
+      || leftKey.localeCompare(rightKey)
+  ));
+  return { cursorRef, entries: entries.slice(0, 100), hasMore: entries.length > 100 };
+};
+
+const persistLegacyJobCursor = async ({ page, authorization, nowMs }) => {
+  const last = page.entries.at(-1);
+  await page.cursorRef.set(page.hasMore && last ? {
+    schemaVersion: 1,
+    rolloutPhase: authorization.phase,
+    rolloutRevision: authorization.revision,
+    rolloutFingerprint: authorization.rawFingerprint,
+    updatedAtMs: Number(last[1]?.updatedAtMs || 0),
+    jobId: last[0],
+    cursorUpdatedAtMs: nowMs,
+  } : null);
+};
+
+const loadLegacyIndexedPage = async ({
+  db, root, field, endAt, cursorName, authorization,
+}) => {
+  const cursorRef = db.ref(`notification_retention/v1/repair/${cursorName}`);
+  const saved = (await cursorRef.once('value')).val();
+  const cursor = saved?.rolloutPhase === authorization.phase
+    && Number(saved?.rolloutRevision) === Number(authorization.revision)
+    && saved?.rolloutFingerprint === authorization.rawFingerprint
+    && Number.isSafeInteger(saved?.value) && typeof saved?.key === 'string'
+    ? saved : null;
+  let query = db.ref(root).orderByChild(field);
+  query = cursor ? query.startAfter(cursor.value, cursor.key) : query.startAt(1);
+  const entries = Object.entries((await query.endAt(endAt).limitToFirst(101)
+    .once('value')).val() || {}).sort(([leftKey, left], [rightKey, right]) => (
+    Number(left?.[field] || 0) - Number(right?.[field] || 0)
+      || leftKey.localeCompare(rightKey)
+  ));
+  return {
+    cursorRef, field, entries: entries.slice(0, 100), hasMore: entries.length > 100,
+  };
+};
+
+const persistLegacyIndexedCursor = async ({ page, authorization, nowMs }) => {
+  const last = page.entries.at(-1);
+  await page.cursorRef.set(page.hasMore && last ? {
+    schemaVersion: 1,
+    rolloutPhase: authorization.phase,
+    rolloutRevision: authorization.revision,
+    rolloutFingerprint: authorization.rawFingerprint,
+    value: Number(last[1]?.[page.field] || 0),
+    key: last[0],
+    cursorUpdatedAtMs: nowMs,
+  } : null);
+};
+
+const cleanupOldNotificationDeliveryData = async ({
+  db = admin.database(), nowMs = Date.now(), expectedRolloutPhase = null,
+  expectedRolloutRevision = null, resumeRequeue = null,
+} = {}) => { // eslint-disable-line complexity -- every destructive page reauthorizes exact rollout
+  const observedRollout = await readNotificationRetentionRollout({ db });
+  const rolloutRaw = (await db.ref('notification_retention_rollout/v1').once('value')).val();
+  const authorization = {
+    phase: expectedRolloutPhase || observedRollout.phase,
+    revision: Number.isSafeInteger(expectedRolloutRevision)
+      ? expectedRolloutRevision : observedRollout.revision,
+    rawFingerprint: createHash('sha256').update(JSON.stringify(rolloutRaw ?? null)).digest('hex'),
+  };
+  if (!['legacy', 'shadow'].includes(authorization.phase)
+    || !(await legacyRolloutAuthorized({ db, authorization }))) {
+    return { deleted: 0, rolloutChanged: true };
+  }
+  const leaseOwnerId = `legacy_retention_${randomUUID().replace(/-/gu, '')}`;
+  const cutoff = nowMs - RETENTION_MS;
+  let deleted = 0;
+  if (typeof resumeRequeue === 'function') {
+    const recoveries = await loadLegacyIndexedPage({
+      db,
+      root: 'notification_requeue_jobs',
+      field: 'recoveryDueAtMs',
+      endAt: nowMs,
+      cursorName: 'legacy_requeue_recovery_cursor',
+      authorization,
+    });
+    for (const [jobId, state] of recoveries.entries) {
+      if (!(await legacyRolloutAuthorized({ db, authorization }))) {
+        return { deleted, rolloutChanged: true };
+      }
+      if (state?.status === 'processing') await resumeRequeue({ db, jobId, nowMs });
+    }
+    if (!(await legacyRolloutAuthorized({ db, authorization }))) {
+      return { deleted, rolloutChanged: true };
+    }
+    await persistLegacyIndexedCursor({ page: recoveries, authorization, nowMs });
+  }
+  const oldJobs = await loadLegacyJobPage({ db, cutoff, authorization });
+  for (const [jobId, job] of oldJobs.entries) {
+    if (!(await legacyRolloutAuthorized({ db, authorization }))) {
+      return { deleted, rolloutChanged: true };
+    }
+    let fenced = await fenceLegacyJob({
+      db, jobId, expected: job, nowMs, authorization, leaseOwnerId,
+    });
+    if (!fenced) continue;
+    if (!(await legacyRolloutAuthorized({ db, authorization }))) {
+      await releaseLegacyFence({ db, jobId, fenced });
+      return { deleted, rolloutChanged: true };
+    }
+    fenced = await renewLegacyFence({
+      db,
+      jobId,
+      fenced,
+      nowMs,
+      leaseMs: DEFAULT_RETENTION_BUDGETS.destructiveCommitLeaseMs,
+    });
+    if (!fenced) continue;
+    const updates = {
+      [`notification_job_token_claims/${jobId}`]: null,
+      [`notification_job_recipients/${jobId}`]: null,
+      [`notification_job_audience_claims/${jobId}`]: null,
+      [`notification_delivery_warnings/${jobId}`]: null,
+    };
+    await db.ref().update(updates);
+    deleted += Object.keys(updates).length;
+    fenced = await renewLegacyFence({ db, jobId, fenced, nowMs });
+    if (!fenced) continue;
+    deleted += await compareDeleteLegacySource({ db, jobId, job: fenced });
+    deleted += Number(await compareDeleteLegacyQueuePointer({
+      db, record: fenced, targetId: jobId,
+    }));
+    fenced = await renewLegacyFence({ db, jobId, fenced, nowMs });
+    if (!fenced) continue;
+    const canonicalDeleted = await deleteFencedLegacyJob({
+      db, jobId, fenced, authorization,
+    });
+    deleted += Number(canonicalDeleted);
+    if (canonicalDeleted) await removeLegacyRetentionOwnership({ db, jobId, job: fenced });
+  }
+  if (!(await legacyRolloutAuthorized({ db, authorization }))) {
+    return { deleted, rolloutChanged: true };
+  }
+  await persistLegacyJobCursor({ page: oldJobs, authorization, nowMs });
+  const attempts = await loadLegacyIndexedPage({
+    db,
+    root: 'notification_delivery_attempts',
+    field: 'retentionDueAtMs',
+    endAt: nowMs,
+    cursorName: 'legacy_attempt_cleanup_cursor',
+    authorization,
+  });
+  for (const [attemptId, attempt] of attempts.entries) {
+    if (!(await legacyRolloutAuthorized({ db, authorization }))) {
+      return { deleted, rolloutChanged: true };
+    }
+    deleted += Number(await compareDeleteLegacyAttempt({ db, attemptId, expected: attempt, nowMs }));
+  }
+  if (!(await legacyRolloutAuthorized({ db, authorization }))) {
+    return { deleted, rolloutChanged: true };
+  }
+  await persistLegacyIndexedCursor({ page: attempts, authorization, nowMs });
+  const details = await loadLegacyIndexedPage({
+    db,
+    root: 'marketing_notification_details',
+    field: 'retentionDueAtMs',
+    endAt: nowMs,
+    cursorName: 'legacy_marketing_detail_cleanup_cursor',
+    authorization,
+  });
+  for (const [detailId, detail] of details.entries) {
+    if (!(await legacyRolloutAuthorized({ db, authorization }))) {
+      return { deleted, rolloutChanged: true };
+    }
+    deleted += Number(await compareDeleteLegacyMarketingDetail({ db, detailId, expected: detail, nowMs }));
+  }
+  if (!(await legacyRolloutAuthorized({ db, authorization }))) {
+    return { deleted, rolloutChanged: true };
+  }
+  await persistLegacyIndexedCursor({ page: details, authorization, nowMs });
+  const expiredPreviews = (await db.ref('notification_audience_previews').orderByChild('expiresAtMs')
+    .startAt(1).endAt(nowMs).limitToFirst(100).once('value')).val() || {};
+  for (const [previewId, preview] of Object.entries(expiredPreviews)) {
+    if (!(await legacyRolloutAuthorized({ db, authorization }))) {
+      return { deleted, rolloutChanged: true };
+    }
+    deleted += Number(await compareDeleteExactExpiry({
+      db, root: 'notification_audience_previews', key: previewId, expected: preview, nowMs,
+    }));
+  }
+  const expiredRequeues = (await db.ref('notification_requeue_jobs').orderByChild('expiresAtMs')
+    .startAt(1).endAt(nowMs).limitToFirst(100).once('value')).val() || {};
+  for (const [requeueId, requeue] of Object.entries(expiredRequeues)) {
+    if (!(await legacyRolloutAuthorized({ db, authorization }))) {
+      return { deleted, rolloutChanged: true };
+    }
+    const cleaned = await cleanupExpiredNotificationRequeueState({
+      db, jobId: requeueId, expected: requeue, nowMs,
+    });
+    deleted += Number(cleaned.deleted);
+  }
+  return { deleted, rolloutChanged: false };
 };
 
 const processNotificationReceipts = onSchedule({ schedule: 'every 15 minutes', timeZone: 'Europe/London', region: 'europe-west1', secrets: [expoAccessTokenSecret], maxInstances: 1 }, async () => ({ receipts: await processDueNotificationReceipts(), retries: await retryDueNotificationAttempts() }));
-const cleanupNotificationDeliveryData = onSchedule({ schedule: 'every 24 hours', timeZone: 'Europe/London', region: 'europe-west1', maxInstances: 1 }, async () => cleanupOldNotificationDeliveryData());
+const cleanupNotificationDeliveryData = onSchedule({
+  schedule: 'every 15 minutes',
+  timeZone: 'Europe/London',
+  region: 'europe-west1',
+  maxInstances: 1,
+  timeoutSeconds: DEFAULT_RETENTION_BUDGETS.functionTimeoutSeconds,
+}, async () => {
+  const db = admin.database();
+  const nowMs = Date.now();
+  return runNotificationRetentionCycle({
+    db,
+    nowMs,
+    resumeRequeue: (options) => require('./notificationAdminFunctions')
+      .requeueFailedNotificationJob(options),
+    legacyCleanup: (options = {}) => cleanupOldNotificationDeliveryData({
+      ...options,
+      db: options.db || db,
+      nowMs: Number.isSafeInteger(options.nowMs) ? options.nowMs : nowMs,
+    }),
+  });
+});
 
 module.exports = { RECEIPT_BATCH_LIMIT, RECEIPT_WINDOW_MS, RETENTION_MS, STALE_SENDING_ATTEMPT_MS, cleanupNotificationDeliveryData, cleanupOldNotificationDeliveryData, compareAndClearTokenByHash, processDueNotificationReceipts, processNotificationReceipts, refreshNotificationJobStatus, retryDueNotificationAttempts };

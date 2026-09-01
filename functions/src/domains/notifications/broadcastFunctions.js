@@ -15,6 +15,7 @@ const { TERMINAL_NOTIFICATION_JOB_STATUSES } = require('./notificationJobStatus'
 const { buildChatNotificationJob, buildMarketingNotificationJob } = require('./notificationProducerJobs');
 const { buildTourNotificationRecord, persistTourNotification } = require('./notificationState');
 const { runNotificationSourceHandoff } = require('./notificationSourceHandoff');
+const { NOTIFICATION_RETENTION_MS } = require('./notificationRetentionIntegration');
 
 /** @param {any} value */
 const normalizeSafeMarketingCta = (value) => {
@@ -30,6 +31,45 @@ const normalizeSafeMarketingCta = (value) => {
   } catch (_error) {
     return null;
   }
+};
+
+const isMatchingMarketingDetailSource = (current, expected) => Boolean(
+  current && typeof current === 'object'
+  && (!current.broadcastId || current.broadcastId === expected.broadcastId)
+  && current.categoryKey === expected.categoryKey
+  && Number(current.createdAtMs) === Number(expected.createdAtMs)
+  && Number(current.expiresAtMs) === Number(expected.expiresAtMs)
+  && current.title === expected.title
+  && current.body === expected.body
+  && JSON.stringify(current.cta ?? null) === JSON.stringify(expected.cta ?? null)
+);
+
+const persistMarketingNotificationDetail = async ({ db, broadcastId, detail }) => {
+  let ownershipConflict = false;
+  const result = await db.ref(`marketing_notification_details/${broadcastId}`).transaction((current) => {
+    if (!current) return detail;
+    const expectedRetentionDueAtMs = Number(current.expiresAtMs) + NOTIFICATION_RETENTION_MS;
+    const existingRetentionDueAtMs = Number(current.retentionDueAtMs || 0);
+    if (!isMatchingMarketingDetailSource(current, detail)
+      || (current.deliveryJobId && current.deliveryJobId !== detail.deliveryJobId)
+      || !Number.isSafeInteger(expectedRetentionDueAtMs)
+      || (existingRetentionDueAtMs > 0 && existingRetentionDueAtMs !== expectedRetentionDueAtMs)) {
+      ownershipConflict = true;
+      return undefined;
+    }
+    return {
+      ...current,
+      broadcastId: detail.broadcastId,
+      deliveryJobId: detail.deliveryJobId,
+      retentionDueAtMs: expectedRetentionDueAtMs,
+    };
+  });
+  if (ownershipConflict || !result?.committed) {
+    const error = new Error('Marketing notification detail source ownership changed');
+    error.code = 'MARKETING_NOTIFICATION_DETAIL_OWNERSHIP_CONFLICT';
+    throw error;
+  }
+  return result.snapshot.val();
 };
 
 /** @param {any} broadcastData */
@@ -186,18 +226,25 @@ const enqueueCategoryBroadcastEvent = async (event) => {
   const nowMs = Date.now();
   const categoryLabel = broadcast.categoryLabel || resolveTourNotificationCategoryLabel(categoryKey);
   const job = buildMarketingNotificationJob({ categoryKey, broadcastId, categoryLabel, broadcast, nowMs });
+  const marketingDetail = {
+    schemaVersion: 1,
+    broadcastId,
+    categoryKey,
+    deliveryJobId: job.jobId,
+    title: `New ${categoryLabel} tour alert`.slice(0, 120),
+    body: broadcast.message.trim().slice(0, 2000),
+    createdAtMs: broadcast.createdAtMs,
+    expiresAtMs: job.expiresAtMs,
+    retentionDueAtMs: job.expiresAtMs + NOTIFICATION_RETENTION_MS,
+    cta: normalizeSafeMarketingCta(broadcast.cta),
+    status: 'active',
+    updatedAtMs: nowMs,
+  };
   const result = await runNotificationSourceHandoff({
-    persistSource: () => admin.database().ref(`marketing_notification_details/${broadcastId}`).set({
-      schemaVersion: 1,
-      broadcastId,
-      categoryKey,
-      title: `New ${categoryLabel} tour alert`.slice(0, 120),
-      body: broadcast.message.trim().slice(0, 2000),
-      createdAtMs: broadcast.createdAtMs,
-      expiresAtMs: job.expiresAtMs,
-      cta: normalizeSafeMarketingCta(broadcast.cta),
-      status: 'active',
-      updatedAtMs: nowMs,
+    // Trigger replay must not move the explicit content/retention boundary or
+    // overwrite delivery state already published by the durable worker.
+    persistSource: () => persistMarketingNotificationDetail({
+      db: admin.database(), broadcastId, detail: marketingDetail,
     }),
     enqueue: () => enqueueNotificationJob({ job }),
     publishStatus: (enqueued) => updateBroadcastDelivery({
@@ -234,5 +281,7 @@ module.exports = {
   validateBroadcastData,
   validateCategoryBroadcastData,
   normalizeSafeMarketingCta,
+  persistMarketingNotificationDetail,
+  isMatchingMarketingDetailSource,
   verifyBroadcastAuthor,
 };

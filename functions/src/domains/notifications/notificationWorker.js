@@ -13,13 +13,24 @@ const { enumerateNotificationAudiencePage } = require('./notificationAudienceEnu
 const { createNotificationAudiencePreparation } = require('./notificationAudiencePreparation');
 const { buildAttemptCountDeltaUpdates } = require('./notificationAttemptCounts');
 const { classifyExpoRequestError } = require('./expoRequestErrorClassifier');
-const { finalizeCompletedFanout, publishCriticalFanoutWarning } = require('./notificationFanoutFinalization');
+const { publishCriticalFanoutWarning } = require('./notificationFanoutFinalization');
+const {
+  finalizeAndScheduleCompletedFanout,
+  renewNotificationJobSubmissionFence,
+  settleCompletedFanoutQueue,
+} = require('./notificationFanoutRetention');
 const { TERMINAL_NOTIFICATION_JOB_STATUSES } = require('./notificationJobStatus');
 const { QUEUE_ROOTS, claimQueueEntry, loadDueQueueEntries, releaseClaimedQueueEntry,
   removeClaimedQueueEntry, transitionQueuedRecord } = require('./notificationQueues');
 const { syncNotificationSourceStatus } = require('./notificationSourceStatus');
 const { createNotificationRetrySubmission } = require('./notificationRetrySubmission');
 const { removeMarketingAudienceForRevision } = require('./notificationMarketingAudience');
+const {
+  isNotificationLifecycleRetentionFenced,
+  scheduleNotificationRetentionIfEligible,
+  withNotificationAttemptRetentionBoundary,
+} = require('./notificationRetentionIntegration');
+const { mapWithConcurrency, resolveFanoutStatus } = require('./notificationWorkerUtils');
 
 const RECEIPT_DUE_DELAY_MS = 15 * 60 * 1000;
 // Expo documents a 4 KiB payload ceiling. Keep headroom for provider-added
@@ -47,7 +58,8 @@ const buildDeliveryAttemptId = (jobId, authUid, generation = 1) => `attempt_v2_$
  * @param {any} db @param {string} attemptId @param {any} current @param {any} patch @param {number} nowMs
  */
 const transitionDeliveryAttempt = async (db, attemptId, current, patch, nowMs) => {
-  const next = { ...current, ...patch, updatedAtMs: nowMs };
+  const retentionPatch = withNotificationAttemptRetentionBoundary(current, patch, nowMs);
+  const next = { ...current, ...retentionPatch, updatedAtMs: nowMs };
   let queueKind = null;
   let dueAtMs = null;
   if (next.status === 'retrying') { queueKind = 'retry'; dueAtMs = next.availableAtMs; }
@@ -59,7 +71,7 @@ const transitionDeliveryAttempt = async (db, attemptId, current, patch, nowMs) =
   const queue = await transitionQueuedRecord(db, {
     targetPath: `notification_delivery_attempts/${attemptId}`,
     current,
-    patch: { ...patch, updatedAtMs: nowMs },
+    patch: { ...retentionPatch, updatedAtMs: nowMs },
     queueKind,
     dueAtMs,
     targetId: attemptId,
@@ -93,14 +105,6 @@ const buildExpoPushMessage = (job, recipient, nowMs = Date.now()) => {
     throw error;
   }
   return message;
-};
-
-/** @param {any[]} items @param {number} concurrency @param {(item: any) => Promise<any>} callback */
-const mapWithConcurrency = async (items, concurrency, callback) => {
-  const results = new Array(items.length); let nextIndex = 0;
-  const worker = async () => { while (nextIndex < items.length) { const index = nextIndex; nextIndex += 1; results[index] = await callback(items[index]); } };
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-  return results;
 };
 
 /** @param {any} db @param {any} job @param {any} recipient @param {number} nowMs @param {number} generation */
@@ -179,6 +183,7 @@ const commitNotificationAudiencePage = async (jobRef, {
   // eslint-disable-next-line complexity -- one transaction owns the complete page state machine
   const transaction = await jobRef.transaction((current) => {
     if (!current) return;
+    if (isNotificationLifecycleRetentionFenced(current, nowMs)) return;
     if ((current.afterRecipientId || null) !== (expectedCursor || null)) return;
     if (current.lastCommittedPageId === pageId) return;
     if (leaseOwnerId && current.lease?.ownerId !== leaseOwnerId) return;
@@ -364,37 +369,6 @@ const sendPreparedChunks = async (db, job, prepared, expo, nowMs) => {
   }
 };
 
-const resolveFanoutStatus = (counts) => {
-  if (Number(counts.retrying || 0) > 0) return 'retrying';
-  if (Number(counts.receiptPending || 0) > 0) return 'receipt_pending';
-  if (Number(counts.submissionUnknown || 0) > 0) {
-    const known = Number(counts.ticketAccepted || 0) + Number(counts.ticketRejected || 0)
-      + Number(counts.receiptAccepted || 0) + Number(counts.receiptRejected || 0);
-    return known > 0 ? 'partial' : 'submission_unknown';
-  }
-  return Number(counts.eligible || 0) === 0 ? 'no_recipients' : 'ticket_rejected';
-};
-
-const renewNotificationJobSubmissionFence = async ({
-  jobRef, leaseOwnerId, nowMs, ttlMs = 2 * 60 * 1000, requiredStatus = null,
-}) => {
-  if (!leaseOwnerId) return true;
-  let renewed = false;
-  const result = await jobRef.transaction((current) => {
-    if (!current || (requiredStatus && current.status !== requiredStatus)
-      || current.status === 'privacy_deleted' || current.status === 'expired'
-      || current.supersededByJobId || current.lease?.ownerId !== leaseOwnerId
-      || Number(current.lease.expiresAtMs || 0) <= nowMs) return undefined;
-    renewed = true;
-    return {
-      ...current,
-      updatedAtMs: nowMs,
-      lease: { ...current.lease, expiresAtMs: nowMs + ttlMs },
-    };
-  });
-  return Boolean(renewed && result?.committed);
-};
-
 const { acquireNotificationRetrySubmissionFence, releaseNotificationRetrySubmissionFence,
   retryNotificationDeliveryAttempt } = createNotificationRetrySubmission({
   buildExpoPushMessage,
@@ -405,11 +379,16 @@ const { acquireNotificationRetrySubmissionFence, releaseNotificationRetrySubmiss
 });
 
 /** @param {{ db?: any, jobRef: any, job: any, nowMs?: number, expo?: any, leaseOwnerId?: string | null, syncSourceStatus?: Function, publishCriticalWarning?: Function }} options */
+// eslint-disable-next-line complexity -- expiry, durable fanout and retention fencing share one leased state transition
 const processNotificationJobPage = async ({ db = admin.database(), jobRef, job, nowMs = Date.now(), expo = getExpoPushClient(), leaseOwnerId = null, syncSourceStatus = syncNotificationSourceStatus, publishCriticalWarning = publishCriticalFanoutWarning, metrics = null }) => {
   if (job.supersededByJobId || Number(job.expiresAtMs) <= nowMs) {
+    if (!(await renewNotificationJobSubmissionFence({
+      jobRef, leaseOwnerId, nowMs, requiredStatus: 'fanout_in_progress',
+    }))) return { status: 'retention_fenced', fanoutComplete: false, replayed: true };
     const completedAtMs = Number(job.completedAtMs || nowMs);
     await transitionQueuedRecord(db, { targetPath: `notification_jobs/${job.jobId}`, current: job, patch: { status: 'expired', lease: null, completedAtMs, updatedAtMs: nowMs }, targetId: job.jobId });
-    await finalizeCompletedFanout(db, { ...job, status: 'expired', completedAtMs }, nowMs, syncSourceStatus, publishCriticalWarning);
+    const expiredJob = { ...job, status: 'expired', lease: null, completedAtMs };
+    await finalizeAndScheduleCompletedFanout(db, expiredJob, nowMs, syncSourceStatus, publishCriticalWarning);
     return { status: 'expired', fanoutComplete: true };
   }
   const expectedCursor = job.afterRecipientId || null;
@@ -436,15 +415,9 @@ const processNotificationJobPage = async ({ db = admin.database(), jobRef, job, 
     await syncSourceStatus(db, latest, nowMs);
     return { status: 'queued', fanoutComplete: false, nextCursor: page.nextCursor, increments, skipReasons };
   }
-  await finalizeCompletedFanout(db, latest, nowMs, syncSourceStatus, publishCriticalWarning);
+  await finalizeAndScheduleCompletedFanout(db, latest, nowMs, syncSourceStatus, publishCriticalWarning);
   return { status: latest.status, fanoutComplete: true, increments, skipReasons };
 };
-
-/** @param {any} jobRef @param {string} queueKey */
-const clearCompletedFanoutPointer = (jobRef, queueKey) => jobRef.transaction((current) => {
-  if (!current || current.queueKey !== queueKey || !current.fanoutCompletedAtMs) return;
-  return { ...current, queueKind: null, queueKey: null, queueVersion: Number(current.queueVersion || 0) + 1 };
-});
 
 /** @param {{ db?: any, jobId: string, nowMs?: number, expo?: any, queueKey?: string, queueVersion?: number, queueOwnerId?: string, queueLeaseExpiresAtMs?: number, syncSourceStatus?: Function, publishCriticalWarning?: Function }} options */
 // eslint-disable-next-line complexity -- lease recovery and durable rescheduling must remain one worker transaction boundary
@@ -452,6 +425,12 @@ const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.n
   const jobRef = db.ref(`notification_jobs/${jobId}`);
   const queueRef = queueKey ? db.ref(`${QUEUE_ROOTS.fanout}/${queueKey}`) : null;
   const before = (await jobRef.once('value')).val();
+  if (isNotificationLifecycleRetentionFenced(before, nowMs)) {
+    if (queueRef && queueOwnerId) {
+      await releaseClaimedQueueEntry(queueRef, queueOwnerId, nowMs + 2 * 60 * 1000);
+    }
+    return { acquired: false, status: 'retention_fenced' };
+  }
   if (queueKey && (!before || before.queueKey !== queueKey || Number(before.queueVersion) !== Number(queueVersion))) {
     if (queueOwnerId) await removeClaimedQueueEntry(queueRef, queueOwnerId);
     return { acquired: false, status: 'stale_queue' };
@@ -464,12 +443,17 @@ const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.n
     ...(queueLeaseExpiresAtMs ? { leaseExpiresAtMs: queueLeaseExpiresAtMs } : {}),
   });
   if (!lease.acquired) {
+    if (isNotificationLifecycleRetentionFenced(lease.job, nowMs)) {
+      if (queueRef && queueOwnerId) {
+        await releaseClaimedQueueEntry(queueRef, queueOwnerId, nowMs + 2 * 60 * 1000);
+      }
+      return { acquired: false, status: 'retention_fenced' };
+    }
     if (lease.job?.fanoutCompletedAtMs && (!queueKey || lease.job.queueKey === queueKey)) {
       try {
-        await finalizeCompletedFanout(db, lease.job, nowMs, syncSourceStatus, publishCriticalWarning);
-        if (queueRef && queueOwnerId) await removeClaimedQueueEntry(queueRef, queueOwnerId);
-        if (queueKey) await clearCompletedFanoutPointer(jobRef, queueKey);
-        return { acquired: false, status: lease.job.status, fanoutComplete: true };
+        await finalizeAndScheduleCompletedFanout(db, lease.job, nowMs, syncSourceStatus, publishCriticalWarning);
+        const retired = await settleCompletedFanoutQueue({ jobRef, queueRef, queueKey, queueOwnerId, nowMs });
+        return { acquired: false, status: retired ? lease.job.status : 'retention_fenced', fanoutComplete: true };
       } catch (error) {
         if (queueRef && queueOwnerId) await releaseClaimedQueueEntry(queueRef, queueOwnerId, nowMs);
         log.error('Notification source status publication retry failed after fanout completion', error, { jobId });
@@ -479,9 +463,8 @@ const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.n
     const terminal = lease.job && (TERMINAL_NOTIFICATION_JOB_STATUSES.has(lease.job.status)
       || lease.job.supersededByJobId || Number(lease.job.expiresAtMs || 0) <= nowMs);
     if (terminal) {
-      await finalizeCompletedFanout(db, lease.job, nowMs, syncSourceStatus, publishCriticalWarning);
-      if (queueRef && queueOwnerId) await removeClaimedQueueEntry(queueRef, queueOwnerId);
-      if (queueKey) await clearCompletedFanoutPointer(jobRef, queueKey);
+      await finalizeAndScheduleCompletedFanout(db, lease.job, nowMs, syncSourceStatus, publishCriticalWarning);
+      await settleCompletedFanoutQueue({ jobRef, queueRef, queueKey, queueOwnerId, nowMs });
     } else if (queueRef && queueOwnerId && lease.job?.lease?.expiresAtMs) {
       // A competing live worker still owns the page. Keep the only recovery
       // pointer and make it claimable at that exact job-lease boundary.
@@ -500,14 +483,27 @@ const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.n
     const result = await processNotificationJobPage({ db, jobRef, job: lease.job, nowMs, leaseOwnerId, syncSourceStatus, publishCriticalWarning, ...(expo ? { expo } : {}) });
     if (queueRef && queueOwnerId) {
       if (result.fanoutComplete) {
-        await removeClaimedQueueEntry(queueRef, queueOwnerId);
-        await clearCompletedFanoutPointer(jobRef, queueKey);
+        await settleCompletedFanoutQueue({ jobRef, queueRef, queueKey, queueOwnerId, nowMs });
       } else if (result.status === 'queued') await releaseClaimedQueueEntry(queueRef, queueOwnerId, nowMs);
+      else if (result.status === 'retention_fenced') {
+        await releaseClaimedQueueEntry(queueRef, queueOwnerId, nowMs + 2 * 60 * 1000);
+      }
     }
     return { acquired: true, ...result };
   } catch (error) {
     const observed = (await jobRef.once('value')).val() || lease.job;
+    if (isNotificationLifecycleRetentionFenced(observed, nowMs)) {
+      if (queueRef && queueOwnerId) {
+        await releaseClaimedQueueEntry(queueRef, queueOwnerId, nowMs + 2 * 60 * 1000);
+      }
+      return { acquired: true, status: 'retention_fenced' };
+    }
     if (observed.fanoutCompletedAtMs || TERMINAL_NOTIFICATION_JOB_STATUSES.has(observed.status)) {
+      try {
+        await scheduleNotificationRetentionIfEligible(db, observed, nowMs);
+      } catch (scheduleError) {
+        log.error('Notification retention scheduling failed after fanout completion', scheduleError, { jobId });
+      }
       if (queueRef && queueOwnerId) await releaseClaimedQueueEntry(queueRef, queueOwnerId, nowMs);
       log.error('Notification source status publication failed after fanout completion', error, { jobId });
       return { acquired: true, status: observed.status, sourceStatusPending: true };
@@ -537,9 +533,8 @@ const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.n
       });
       if (expired) {
         const terminalJob = (await jobRef.once('value')).val() || observed;
-        await finalizeCompletedFanout(db, terminalJob, nowMs, syncSourceStatus, publishCriticalWarning);
-        await removeClaimedQueueEntry(queueRef, queueOwnerId);
-        await clearCompletedFanoutPointer(jobRef, queueKey);
+        await finalizeAndScheduleCompletedFanout(db, terminalJob, nowMs, syncSourceStatus, publishCriticalWarning);
+        await settleCompletedFanoutQueue({ jobRef, queueRef, queueKey, queueOwnerId, nowMs });
       } else {
         const queuedJob = (await jobRef.once('value')).val() || observed;
         await transitionQueuedRecord(db, {
