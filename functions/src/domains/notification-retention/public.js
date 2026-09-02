@@ -14,6 +14,7 @@ const {
   isNotificationRetentionFenced,
   nextNotificationRetentionGeneration,
 } = require('./eligibility');
+const { RETENTION_ENGINE_PROTOCOL_MANIFEST } = require('./protocol');
 
 // These narrow delegates keep this lifecycle-owned public boundary stable while
 // the state machine remains split into focused, acyclic implementation modules.
@@ -45,28 +46,65 @@ const recoverZeroResultRequeue = (options) => require('./requeueRecovery')
   .recoverZeroResultRequeue(options);
 const cleanupExpiredNotificationRequeueState = (options) => require('./requeueRecovery')
   .cleanupExpiredNotificationRequeueState(options);
+const isManualRequeueBlockedByRetentionState = (options) => require('./requeueRecovery')
+  .isManualRequeueBlockedByRetentionState(options);
+const retryNotificationRetentionAttention = (options) => require('./requeueRecovery')
+  .retryNotificationRetentionAttention(options);
+const abandonNotificationRetentionAttention = (options) => require('./requeueRecovery')
+  .abandonNotificationRetentionAttention(options);
+const readEffectiveNotificationRetentionAttention = (db, jobId, state) => (
+  require('./requeueRecovery').readEffectiveAttention(db, jobId, state)
+);
+const writeRetentionDeploymentHeartbeat = (options) => require('./protocol')
+  .writeRetentionDeploymentHeartbeat(options);
+const readRetentionDeploymentHeartbeat = (options) => require('./protocol')
+  .readRetentionDeploymentHeartbeat(options);
+const classifyRetentionHeartbeat = (options) => require('./protocol')
+  .classifyRetentionHeartbeat(options);
+const buildRetentionDeploymentProof = (options) => require('./deploymentAttestation')
+  .buildRetentionDeploymentAttestation(options);
+const classifyRetentionDeploymentProof = (options) => require('./deploymentAttestation')
+  .classifyRetentionDeploymentAttestation(options);
+const readRetentionDeploymentProof = (options) => require('./deploymentAttestation')
+  .readRetentionDeploymentAttestation(options);
+const writeRetentionDeploymentProof = (options) => require('./deploymentAttestation')
+  .writeRetentionDeploymentAttestation(options);
+const compiledRetentionProtocol = () => require('./protocol').compiledRetentionProtocol();
 
 module.exports = {
   DEFAULT_RETENTION_BUDGETS,
   NOTIFICATION_RETENTION_PATHS,
   ORDINARY_TERMINAL_NOTIFICATION_JOB_STATUSES,
   RETENTION_MS,
+  RETENTION_ENGINE_PROTOCOL_MANIFEST,
   TERMINAL_NOTIFICATION_ATTEMPT_STATUSES,
   classifyNotificationRetentionEligibility,
+  abandonNotificationRetentionAttention,
+  classifyRetentionHeartbeat,
+  classifyRetentionDeploymentProof,
+  compiledRetentionProtocol,
   buildCanaryEvidenceFingerprint,
+  buildRetentionDeploymentProof,
   buildShadowEvidenceFingerprint,
   cleanupExpiredNotificationRequeueState,
   ensureNotificationRetentionCanaryFixture,
   ensureNotificationRetentionScheduled,
   isNotificationRetentionFenced,
+  isManualRequeueBlockedByRetentionState,
   nextNotificationRetentionGeneration,
   recoverInactiveCompactorFence,
   recoverZeroResultRequeue,
   readNotificationRetentionRollout,
+  readRetentionDeploymentHeartbeat,
+  readRetentionDeploymentProof,
+  readEffectiveNotificationRetentionAttention,
   removeLegacyRetentionOwnership,
   runNotificationRetentionCycle,
   runNotificationRetentionPreflight,
   runNotificationRetentionPreflightAll,
   runNotificationRetentionPreparation,
+  retryNotificationRetentionAttention,
   transitionNotificationRetentionRollout,
+  writeRetentionDeploymentHeartbeat,
+  writeRetentionDeploymentProof,
 };

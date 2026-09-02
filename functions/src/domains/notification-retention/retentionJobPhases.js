@@ -8,6 +8,7 @@ const {
   TERMINAL_NOTIFICATION_ATTEMPT_STATUSES,
 } = require('./constants');
 const {
+  commitIrreversibleWork,
   jobMatchesState,
   markRequiresAttention,
   ownsExactFence,
@@ -22,6 +23,7 @@ const {
   safeInteger,
 } = require('./retentionEngineRuntime');
 const { recordCanaryFinalizationProof } = require('./canaryFixture');
+const { compiledRetentionProtocol } = require('./protocol');
 
 const loadAttemptPage = async ({ context, limit, metrics }) => {
   const snapshot = await context.db.ref('notification_delivery_attempts').orderByChild('jobId')
@@ -74,6 +76,7 @@ const buildAttemptDeletionUpdate = async ({ context, attempts, metrics, nowMs })
     && attempts[0][1]?.canaryFixtureFingerprint === canaryFingerprint) {
     updates[`${NOTIFICATION_RETENTION_PATHS.evidence}/canary_attempt_proofs/${canaryFingerprint}`] = {
       schemaVersion: 1,
+      ...compiledRetentionProtocol(),
       rolloutRevision: context.expectedRolloutRevision,
       fixtureFingerprint: canaryFingerprint,
       generation: context.state.generation,
@@ -125,6 +128,9 @@ const processAttemptPage = async ({ context, nowMs, metrics }) => {
     leaseMs: context.budgets.destructiveCommitLeaseMs,
   }))) return { stopped: true, reason: 'lease_lost_before_attempt_commit' };
   await context.db.ref().update(deletion.updates);
+  if (!(await commitIrreversibleWork({
+    context, nowMs, deleted: page.selected.length, metrics,
+  }))) return { stopped: true, reason: 'irreversible_boundary_conflict' };
   if (!(await verifyAndRenewFence({ context, nowMs, metrics }))) {
     return { stopped: true, reason: 'lease_lost_after_idempotent_update' };
   }
@@ -140,6 +146,9 @@ const processAttemptPage = async ({ context, nowMs, metrics }) => {
     attemptsScanned: safeInteger(context.state.attemptsScanned) + page.selected.length,
     attemptsDeleted: safeInteger(context.state.attemptsDeleted) + page.selected.length,
     deletionCount: safeInteger(context.state.deletionCount) + page.selected.length,
+    irreversibleWorkStarted: true,
+    firstDestructiveCommitAtMs: context.state.firstDestructiveCommitAtMs,
+    committedDeletionCount: context.state.committedDeletionCount,
     destructiveCommit: null,
   };
   const phaseAdvanced = await transitionStatePhase({
@@ -173,7 +182,7 @@ const deleteExpiredRequeueState = async ({ context, nowMs, metrics }) => {
     metrics.updatePaths += 1;
     maxMetric(metrics, 'maxUpdatePaths', 1);
   }
-  return !active;
+  return { safe: !active, deleted: Number(deleted && result?.committed) };
 };
 
 const processJobChildren = async ({ context, nowMs, metrics }) => {
@@ -183,10 +192,14 @@ const processJobChildren = async ({ context, nowMs, metrics }) => {
     metrics,
     leaseMs: context.budgets.destructiveCommitLeaseMs,
   }))) return false;
-  if (!(await deleteExpiredRequeueState({ context, nowMs, metrics }))) {
+  const requeueDeletion = await deleteExpiredRequeueState({ context, nowMs, metrics });
+  if (!requeueDeletion.safe) {
     await markRequiresAttention({ context, reason: 'active_requeue_after_fence', nowMs, metrics });
     return false;
   }
+  if (requeueDeletion.deleted > 0 && !(await commitIrreversibleWork({
+    context, nowMs, deleted: requeueDeletion.deleted, metrics,
+  }))) return false;
   const updates = {
     [`notification_job_token_claims/${context.jobId}`]: null,
     [`notification_job_recipients/${context.jobId}`]: null,
@@ -200,6 +213,9 @@ const processJobChildren = async ({ context, nowMs, metrics }) => {
   const pathCount = Object.keys(updates).length;
   if (pathCount > context.budgets.maxUpdatePaths) return false;
   await context.db.ref().update(updates);
+  if (!(await commitIrreversibleWork({
+    context, nowMs, deleted: pathCount, metrics,
+  }))) return false;
   metrics.updatePaths += pathCount;
   maxMetric(metrics, 'maxUpdatePaths', pathCount);
   return transitionStatePhase({
@@ -208,7 +224,10 @@ const processJobChildren = async ({ context, nowMs, metrics }) => {
     nextPhase: 'source_records',
     nowMs,
     patch: {
-      deletionCount: safeInteger(context.state.deletionCount) + pathCount,
+      deletionCount: safeInteger(context.state.deletionCount) + pathCount + requeueDeletion.deleted,
+      irreversibleWorkStarted: true,
+      firstDestructiveCommitAtMs: context.state.firstDestructiveCommitAtMs,
+      committedDeletionCount: context.state.committedDeletionCount,
       destructiveCommit: null,
     },
     metrics,
@@ -236,16 +255,23 @@ const compareDeleteSource = async ({
 
 const reconcileCoalescing = async ({ context, metrics }) => {
   const key = context.job.coalescingKey;
-  if (typeof key !== 'string' || !key) return true;
+  if (typeof key !== 'string' || !key) return 0;
+  let changed = false;
   const result = await context.db.ref(`notification_job_coalescing/${key}`)
     .transaction((current) => {
       if (!current) return current;
-      if (current.jobId === context.jobId) return null;
-      if (current.previousJobId === context.jobId) return { ...current, previousJobId: null };
+      if (current.jobId === context.jobId) {
+        changed = true;
+        return null;
+      }
+      if (current.previousJobId === context.jobId) {
+        changed = true;
+        return { ...current, previousJobId: null };
+      }
       return current;
     }, undefined, false);
   metrics.transactions += 1;
-  return result?.committed !== false;
+  return Number(changed && result?.committed);
 };
 
 const validMarketingDueAtMs = (job) => {
@@ -261,14 +287,15 @@ const processSources = async ({ context, nowMs, metrics }) => {
     leaseMs: context.budgets.destructiveCommitLeaseMs,
   }))) return false;
   const job = context.job;
+  let sourceDeletions = 0;
   if (job.sourceType === 'tour_announcement' && job.tourId && job.navigation?.messageId) {
-    await compareDeleteSource({
+    sourceDeletions += Number(await compareDeleteSource({
       ref: context.db.ref(`broadcasts/${job.tourId}/${job.navigation.messageId}`),
       jobId: context.jobId,
       expectedCreatedAtMs: job.sourceOrderMs,
       nowMs,
       metrics,
-    });
+    }));
   }
   if (job.sourceType === 'future_tour_category_broadcast'
     && job.categoryKey && job.navigation?.broadcastId) {
@@ -277,13 +304,13 @@ const processSources = async ({ context, nowMs, metrics }) => {
       await markRequiresAttention({ context, reason: 'marketing_expiry_invalid', nowMs, metrics });
       return false;
     }
-    await compareDeleteSource({
+    sourceDeletions += Number(await compareDeleteSource({
       ref: context.db.ref(`category_broadcasts/${job.categoryKey}/${job.navigation.broadcastId}`),
       jobId: context.jobId,
       expectedCreatedAtMs: job.sourceOrderMs,
       nowMs,
       metrics,
-    });
+    }));
     const deleted = await compareDeleteSource({
       ref: context.db.ref(`marketing_notification_details/${job.navigation.broadcastId}`),
       jobId: context.jobId,
@@ -292,14 +319,26 @@ const processSources = async ({ context, nowMs, metrics }) => {
       metrics,
     });
     metrics.marketingDetailsDeleted += Number(deleted);
+    sourceDeletions += Number(deleted);
   }
-  await reconcileCoalescing({ context, metrics });
+  sourceDeletions += await reconcileCoalescing({ context, metrics });
+  if (sourceDeletions > 0 && !(await commitIrreversibleWork({
+    context, nowMs, deleted: sourceDeletions, metrics,
+  }))) return false;
   return transitionStatePhase({
     context,
     expectedPhase: 'source_records',
     nextPhase: 'finalize',
     nowMs,
-    patch: { destructiveCommit: null },
+    patch: {
+      ...(sourceDeletions > 0 ? {
+        deletionCount: safeInteger(context.state.deletionCount) + sourceDeletions,
+        irreversibleWorkStarted: true,
+        firstDestructiveCommitAtMs: context.state.firstDestructiveCommitAtMs,
+        committedDeletionCount: context.state.committedDeletionCount,
+      } : {}),
+      destructiveCommit: null,
+    },
     metrics,
   });
 };
@@ -383,10 +422,20 @@ const cleanupCompletedRetentionOwnership = async ({ context, metrics }) => {
 };
 
 const finalizeJob = async ({ context, nowMs, metrics }) => {
-  if (!(await verifyAndRenewFence({ context, nowMs, metrics }))) return false;
+  if (!(await verifyAndRenewFence({
+    context, nowMs, metrics, leaseMs: context.budgets.destructiveCommitLeaseMs,
+  }))) return false;
   if (!(await verifyFinalizationChildren({ context, nowMs, metrics }))) return false;
   if (!(await recordCanaryFinalizationProof({ context, nowMs }))) return false;
   if (!(await deleteCanonicalJob({ context, metrics }))) return false;
+  if (!(await commitIrreversibleWork({ context, nowMs, deleted: 1, metrics }))) {
+    const successorState = (await context.db.ref(
+      `${NOTIFICATION_RETENTION_PATHS.jobs}/${context.jobId}`,
+    ).once('value')).val();
+    metrics.queries += 1;
+    if (!successorState
+      || Number(successorState.generation) <= Number(context.state.generation)) return false;
+  }
   await cleanupCompletedRetentionOwnership({ context, metrics });
   metrics.jobsCompleted += 1;
   context.state = { ...context.state, status: 'completed', phase: 'completed', lease: null };

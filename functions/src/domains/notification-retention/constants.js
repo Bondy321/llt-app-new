@@ -3,6 +3,7 @@
 // @ts-check
 
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const NOTIFICATION_RETENTION_SCHEMA_VERSION = 1;
 
 const NOTIFICATION_RETENTION_ROOT = 'notification_retention/v1';
 const NOTIFICATION_RETENTION_ROLLOUT_ROOT = 'notification_retention_rollout/v1';
@@ -14,6 +15,9 @@ const NOTIFICATION_RETENTION_PATHS = Object.freeze({
   repair: `${NOTIFICATION_RETENTION_ROOT}/repair`,
   preparation: `${NOTIFICATION_RETENTION_ROOT}/preparation`,
   evidence: `${NOTIFICATION_RETENTION_ROOT}/evidence`,
+  attention: `${NOTIFICATION_RETENTION_ROOT}/attention`,
+  deploymentHeartbeats: `${NOTIFICATION_RETENTION_ROOT}/deployment_heartbeats`,
+  deploymentAttestations: `${NOTIFICATION_RETENTION_ROOT}/deployment_attestations`,
   canaryFixture: `${NOTIFICATION_RETENTION_ROOT}/evidence/canary_fixture`,
   rollout: NOTIFICATION_RETENTION_ROLLOUT_ROOT,
 });
@@ -39,6 +43,7 @@ const TERMINAL_NOTIFICATION_ATTEMPT_STATUSES = new Set([
 
 const NOTIFICATION_RETENTION_ROLLOUT_PHASES = new Set([
   'legacy',
+  'paused',
   'shadow',
   'compactor',
 ]);
@@ -71,6 +76,7 @@ module.exports = {
   DEFAULT_RETENTION_BUDGETS,
   NOTIFICATION_RETENTION_PATHS,
   NOTIFICATION_RETENTION_ROLLOUT_PHASES,
+  NOTIFICATION_RETENTION_SCHEMA_VERSION,
   NOTIFICATION_RETENTION_ROLLOUT_ROOT,
   NOTIFICATION_RETENTION_ROOT,
   ORDINARY_TERMINAL_NOTIFICATION_JOB_STATUSES,

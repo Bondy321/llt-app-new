@@ -5,6 +5,7 @@
 const { createHash, randomUUID } = require('node:crypto');
 const { NOTIFICATION_RETENTION_PATHS, RETENTION_MS } = require('./constants');
 const { ensureNotificationRetentionScheduled, readNotificationRetentionRollout } = require('./state');
+const { compiledRetentionProtocol, protocolEvidenceMatches } = require('./protocol');
 
 const fixtureIdentity = (rollout) => {
   const fixtureFingerprint = createHash('sha256').update(JSON.stringify([
@@ -12,6 +13,7 @@ const fixtureIdentity = (rollout) => {
     Number(rollout?.revision || 0),
     rollout?.evidenceDigest || '',
     rollout?.shadowEvidenceFingerprint || '',
+    rollout?.expectedEngineProtocolId || '',
   ])).digest('hex');
   return {
     fixtureFingerprint,
@@ -73,6 +75,7 @@ const buildFixtureAttempt = ({ identity, job }) => ({
 });
 
 const controlMatches = (current, expected) => current && expected
+  && protocolEvidenceMatches(current)
   && current.fixtureFingerprint === expected.fixtureFingerprint
   && Number(current.rolloutRevision) === Number(expected.rolloutRevision)
   && current.evidenceDigest === expected.evidenceDigest
@@ -83,6 +86,7 @@ const controlMatches = (current, expected) => current && expected
 const rolloutStillMatches = async ({ db, rollout }) => {
   const current = await readNotificationRetentionRollout({ db });
   return current.valid && current.phase === 'compactor' && current.canaryPassed === false
+    && protocolEvidenceMatches(current) && protocolEvidenceMatches(rollout)
     && current.revision === rollout.revision && current.evidenceDigest === rollout.evidenceDigest;
 };
 
@@ -161,6 +165,7 @@ const recordCanaryFinalizationProof = async ({ context, nowMs }) => {
     .ref(`${NOTIFICATION_RETENTION_PATHS.evidence}/canary_attempt_proofs/${fingerprint}`)
     .once('value')).val();
   if (!attemptProof || attemptProof.schemaVersion !== 1
+    || !protocolEvidenceMatches(attemptProof)
     || attemptProof.fixtureFingerprint !== fingerprint
     || Number(attemptProof.rolloutRevision) !== Number(context.expectedRolloutRevision)
     || Number(attemptProof.generation) !== Number(context.state.generation)
@@ -192,7 +197,8 @@ const recordCanaryFinalizationProof = async ({ context, nowMs }) => {
 
 // eslint-disable-next-line complexity -- fixture reservation validates every resumable collision state
 const ensureNotificationRetentionCanaryFixture = async ({ db, rollout, nowMs = Date.now() }) => {
-  if (!rollout?.valid || rollout.phase !== 'compactor' || rollout.canaryPassed !== false) {
+  if (!rollout?.valid || !protocolEvidenceMatches(rollout)
+    || rollout.phase !== 'compactor' || rollout.canaryPassed !== false) {
     return { ready: false, reason: 'canary_rollout_mismatch' };
   }
   const identity = fixtureIdentity(rollout);
@@ -227,6 +233,7 @@ const ensureNotificationRetentionCanaryFixture = async ({ db, rollout, nowMs = D
       owned = true;
       return {
         schemaVersion: 1,
+        ...compiledRetentionProtocol(),
         rolloutRevision: rollout.revision,
         evidenceDigest: rollout.evidenceDigest,
         fixtureFingerprint: identity.fixtureFingerprint,
@@ -288,6 +295,8 @@ const readExactCanaryFixture = async ({ db, rollout, fixtureFingerprint, jobId }
   const control = (await db.ref(NOTIFICATION_RETENTION_PATHS.canaryFixture).once('value')).val();
   const identity = fixtureIdentity(rollout);
   return control?.schemaVersion === 1
+    && protocolEvidenceMatches(control)
+    && protocolEvidenceMatches(rollout)
     && ['ready', 'completed'].includes(control.status)
     && control.fixtureFingerprint === identity.fixtureFingerprint
     && control.fixtureFingerprint === fixtureFingerprint

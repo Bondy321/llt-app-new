@@ -15,6 +15,8 @@ const {
   runNotificationRetentionCycle,
 } = require('../../functions/src/domains/notification-retention/public');
 const { createNotificationRetentionMemoryDb } = require('../helpers/notificationRetentionMemoryDb');
+const RETENTION_PROTOCOL = require('../../functions/src/domains/notification-retention/public')
+  .compiledRetentionProtocol();
 
 const NOW_MS = 1_800_000_000_000;
 const JOB_ID = 'notif_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -31,6 +33,7 @@ const shadowEvidence = () => {
     compactorScanned: 1,
     legacyScanned: 1,
     hasMore: false,
+    ...RETENTION_PROTOCOL,
   };
   return { ...evidence, evidenceFingerprint: buildShadowEvidenceFingerprint(evidence) };
 };
@@ -50,6 +53,7 @@ const canaryEvidence = () => {
     failures: 0,
     fixtureFingerprint: 'b'.repeat(64),
     fixtureCompleted: true,
+    ...RETENTION_PROTOCOL,
   };
   return { ...evidence, evidenceFingerprint: buildCanaryEvidenceFingerprint(evidence) };
 };
@@ -73,6 +77,8 @@ const rollout = (phase = 'compactor') => ({
     }
     : {}),
   updatedAtMs: NOW_MS - 1,
+  ...RETENTION_PROTOCOL,
+  expectedEngineProtocolId: RETENTION_PROTOCOL.retentionEngineProtocolId,
 });
 
 const canonicalJob = (jobId, overrides = {}) => ({
@@ -493,7 +499,7 @@ test('shadow evidence resumes durably beyond 500 jobs without retaining identity
   assert.equal(db.getAtPath('notification_retention/v1/evidence/shadow/status'), 'passed');
   assert.equal(db.getAtPath('notification_retention/v1/evidence/shadow/compactorScanned'), 501);
   assert.equal(db.getAtPath('notification_retention/v1/evidence/shadow/legacyScanned'), 501);
-  assert.equal(legacyRuns, 1);
+  assert.equal(legacyRuns, 0, 'shadow never invokes retired legacy mutation');
   assert.ok(resumed.metrics.maxRecordsInMemory <= 26);
 });
 

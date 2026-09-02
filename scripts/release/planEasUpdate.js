@@ -6,6 +6,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { buildNativeSnapshot } = require('./nativeCompatibility');
 const { createUpdatePlan } = require('./updatePlan');
+const { classifyPackageChange, PACKAGE_PATHS } = require('./packageChange');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -21,6 +22,12 @@ const readChangedPaths = (baseRef, headRef) => execFileSync(
   ['diff', '--name-only', '--diff-filter=ACDMRTUXB', baseRef, headRef],
   { cwd: ROOT, encoding: 'utf8' },
 ).split(/\r?\n/u).filter(Boolean);
+
+const readJsonAtRef = (ref, fileName) => execFileSync(
+  'git',
+  ['show', `${ref}:${fileName}`],
+  { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+);
 
 const appendOutputs = (outputPath, plan) => {
   if (!outputPath) return;
@@ -43,10 +50,21 @@ const planFromGit = ({ eventName, baseRef, headRef }) => {
   const changedPaths = readChangedPaths(baseRef, headRef);
   const baseSnapshot = buildNativeSnapshot(baseRef);
   const headSnapshot = buildNativeSnapshot(headRef);
+  const hasPackageChange = changedPaths.some((fileName) => PACKAGE_PATHS.has(fileName.replaceAll('\\', '/')));
+  const packageChange = hasPackageChange
+    ? classifyPackageChange({
+      changedPaths,
+      basePackageJson: readJsonAtRef(baseRef, 'package.json'),
+      headPackageJson: readJsonAtRef(headRef, 'package.json'),
+      basePackageLock: readJsonAtRef(baseRef, 'package-lock.json'),
+      headPackageLock: readJsonAtRef(headRef, 'package-lock.json'),
+    })
+    : undefined;
   return createUpdatePlan({
     eventName,
     changedPaths,
     nativeChanged: baseSnapshot.nativeDigest !== headSnapshot.nativeDigest,
+    packageChange,
   });
 };
 
@@ -65,4 +83,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { appendOutputs, isUsableSha, planFromGit, readChangedPaths };
+module.exports = { appendOutputs, isUsableSha, planFromGit, readChangedPaths, readJsonAtRef };

@@ -27,7 +27,7 @@ permission to delete or deliver. Before interpreting a stalled item, verify:
 
 | Signal | Required response |
 | --- | --- |
-| Missing or malformed rollout | Enter only the raw-fingerprint-bound legacy revision-zero compatibility path; never run shadow or compactor work. |
+| Missing or malformed rollout | Legacy compatibility is fail-closed and performs no deletion. Compare-and-set the rollout to `paused` before preparation or repair. |
 | Malformed canonical job or completion boundary | Fail closed; do not create or advance destructive work. |
 | Live fanout lease, requeue or incompatible transition | Defer the job without consuming its fairness slot; reread later. |
 | Retention lease contention | Preserve queue and cursor; the exact owner/revision may continue until expiry. |
@@ -37,7 +37,7 @@ permission to delete or deliver. Before interpreting a stalled item, verify:
 | Orphan parent reappears during repair | Preserve the child; the canonical reread wins. |
 | A crashed requeue cannot resume from the current bounded prefix | Advance the rollout-bound recovery cursor; preserve the failed record and reach later due work on the next invocation. |
 | Update-path, page, query or memory budget reached | Commit only the completed bounded page, release/renew safely, and return `hasMore`. |
-| Shadow mismatch, canary residual or retention warning | Stop activation and return/retain `legacy`. Preserve canonical and private state. |
+| Shadow mismatch, canary residual, protocol/heartbeat mismatch or retention warning | Stop activation and compare-safely enter/retain `paused`. Preserve canonical and private state. |
 
 Do not manually broad-delete a notification root, edit a cursor around a malformed record, clear a
 live lease, or infer eligibility from `updatedAtMs`. Operations warnings use deterministic hashed
@@ -45,15 +45,14 @@ identifiers; investigate through authorised backend logs without exposing the ra
 
 ## Immediate rollback
 
-Compare-and-set `notification_retention_rollout/v1` to `legacy` with the exact observed revision,
+Compare-and-set `notification_retention_rollout/v1` to `paused` with the exact observed revision,
 `--apply`, and exact project confirmation. A backward transition is never blocked by forward evidence
 gates. The revision increment invalidates every older compactor worker before another destructive
 page, phase or auxiliary sweep. An already-started bounded page can settle; its stale worker cannot
 advance durable state or report its deletion metrics, and no later destructive unit may begin.
-If a process was killed after installing a canonical fence, legacy/shadow recovery compare-cancels
-only the exact lease-versioned fence whose matching state lease and revision are expired. The
-missing-rollout legacy fallback is limited to revision zero and is bound to the exact raw rollout
-fingerprint. Foreign, malformed, superseded and live fences remain fail-closed.
+If a process was killed after installing a canonical fence, only exact compactor recovery may reclaim
+the lease-versioned fence. Fail-closed legacy and read-only shadow execution never cancel or mutate
+retention ownership. Foreign, malformed, superseded and live fences remain fail-closed.
 
 Before a root update or source deletion, the worker marks a durable destructive commit and extends
 its lease to 660 seconds, which is longer than the 540-second Function timeout. Even after that lease
@@ -75,10 +74,12 @@ expected rollout phase, and mutations compare the exact revision.
 
 ```text
 npm --prefix functions run retention:rollout -- status --confirm-project=<firebase-project-id>
-npm --prefix functions run retention:preflight -- --confirm-project=<firebase-project-id> --expected-phase=legacy
-npm --prefix functions run retention:prepare -- --confirm-project=<firebase-project-id> --expected-phase=legacy
-npm --prefix functions run retention:prepare -- --apply --confirm-project=<firebase-project-id> --expected-phase=legacy --expected-revision=<revision>
-npm --prefix functions run retention:rollout -- set --apply --confirm-project=<firebase-project-id> --expected-phase=legacy --expected-revision=<revision> --phase=shadow --preparation-complete --evidence-digest=<digest>
+npm --prefix functions run retention:rollout -- set --apply --confirm-project=<firebase-project-id> --expected-phase=legacy --expected-revision=0 --phase=paused
+npm --prefix functions run retention:attest -- attest --apply --confirm-project=<firebase-project-id> --expected-phase=paused --expected-revision=<revision>
+npm --prefix functions run retention:preflight -- --confirm-project=<firebase-project-id> --expected-phase=paused
+npm --prefix functions run retention:prepare -- --confirm-project=<firebase-project-id> --expected-phase=paused
+npm --prefix functions run retention:prepare -- --apply --confirm-project=<firebase-project-id> --expected-phase=paused --expected-revision=<revision>
+npm --prefix functions run retention:rollout -- set --apply --confirm-project=<firebase-project-id> --expected-phase=paused --expected-revision=<revision> --phase=shadow --preparation-complete --evidence-digest=<digest>
 npm --prefix functions run retention:shadow -- --apply --confirm-project=<firebase-project-id> --expected-phase=shadow --expected-revision=<revision>
 npm --prefix functions run retention:rollout -- set --apply --confirm-project=<firebase-project-id> --expected-phase=shadow --expected-revision=<revision> --phase=compactor --preparation-complete --evidence-digest=<digest>
 npm --prefix functions run retention:canary -- --apply --confirm-project=<firebase-project-id> --expected-phase=compactor --expected-revision=<revision> --evidence-digest=<digest>
@@ -87,7 +88,7 @@ npm --prefix functions run retention:run -- --apply --confirm-project=<firebase-
 ```
 
 Preparation and shadow are resumable, not single-shot commands. Repeat the preparation apply command
-with the same exact legacy revision until its bounded result reports `preparationComplete=true`,
+with the same exact paused revision until its bounded result reports `preparationComplete=true`,
 rereading rollout status between invocations. Rerun once more to prove idempotence. After entering
 shadow, repeat the exact-revision shadow command until the durable shadow evidence reports
 `status=passed` and `hasMore=false`; stop on any mismatch, attention count, revision change, or failed
@@ -104,14 +105,47 @@ scheduled cycles reject the paused state. Rerunning the same canary is evidence-
 The ready rollback command is:
 
 ```text
-npm --prefix functions run retention:rollout -- set --apply --confirm-project=<firebase-project-id> --expected-phase=compactor --expected-revision=<revision> --phase=legacy
+npm --prefix functions run retention:rollout -- set --apply --confirm-project=<firebase-project-id> --expected-phase=compactor --expected-revision=<revision> --phase=paused
 ```
 
 From shadow, use the same compare-safe form with the exact shadow phase and revision:
 
 ```text
-npm --prefix functions run retention:rollout -- set --apply --confirm-project=<firebase-project-id> --expected-phase=shadow --expected-revision=<revision> --phase=legacy
+npm --prefix functions run retention:rollout -- set --apply --confirm-project=<firebase-project-id> --expected-phase=shadow --expected-revision=<revision> --phase=paused
 ```
+
+## Protocol and attention recovery
+
+The scheduled Function writes a protocol-specific heartbeat on every invocation. While the rollout
+is paused, `retention:attest` uses the active Google credential to read the deployed RTDB rules,
+Cloud Functions v2 configuration and exact Cloud Scheduler job. It writes a protocol-specific
+24-hour deployment attestation only when the semantic rules digest, Node runtime, region, timeout,
+maximum instances, cron, timezone, scheduler identity and fresh heartbeat all match the compiled
+manifest. Preparation, shadow, canary and rollout records bind the same `retentionEngineProtocolId`,
+source digest, rules digest and trigger digest. Every forward transition requires both the fresh
+heartbeat and fresh deployment attestation; destructive cycles continue to require the immutable
+matching attestation proof. Missing, expired or mismatched deployment proof fails closed to `paused`.
+Refresh the proof before its 24-hour expiry using the exact observed `compactor` revision; the probe
+does not alter rollout phase or notification data. If it expires, the next scheduled cycle pauses the
+rollout and the full preparation/shadow/canary activation sequence is required again.
+
+Preparation first drains a bounded, resumable `updatedAtMs` scan of historical v1/v2 attempts that
+lack `retentionDueAtMs`; its exact cursor is `(updatedAtMs, attemptId)`. The scan walks the complete
+RTDB value ordering so missing, zero, future and non-numeric timestamps cannot sit beyond a numeric
+bound. Object-valued timestamps cannot form an RTDB query endpoint, so the first such bounded page
+is warned and deliberately blocks progress until repaired. Unknown, non-terminal or unsafe records
+are preserved and warned. Orphan discovery cannot complete ahead of that migration.
+
+Inspect or repair only one exact private attention record at a time:
+
+```text
+npm --prefix functions run retention:attention -- inspect --confirm-project=<firebase-project-id> --job-id=<private-job-id>
+npm --prefix functions run retention:attention -- retry --apply --confirm-project=<firebase-project-id> --job-id=<private-job-id> --expected-phase=paused --expected-revision=<revision> --expected-generation=<generation> --attention-fingerprint=<fingerprint>
+npm --prefix functions run retention:attention -- abandon --apply --confirm-project=<firebase-project-id> --job-id=<private-job-id> --expected-phase=paused --expected-revision=<revision> --expected-generation=<generation> --attention-fingerprint=<fingerprint>
+```
+
+`abandon` is rejected after any irreversible work. Retry preserves the exact generation and restores
+its due pointer. Output is hashed and bounded; it never prints the private job identifier.
 
 ## Rules-first deployment scope
 
@@ -125,8 +159,9 @@ node_modules\.bin\firebase.cmd deploy --only functions:cleanupNotificationDelive
 
 If the CLI reports a quota-project 403, set `GOOGLE_CLOUD_QUOTA_PROJECT=loch-lomond-travel` for that
 shell and rerun the same exact command. Do not deploy Hosting, unrelated Functions, App Check, or an
-OTA/mobile build. Reread deployed rules, export schedule, timeout and private rollout state before
-any production preparation or phase mutation.
+OTA/mobile build. Pause the exact scheduler after the Functions deployment, invoke it once only to
+write the new heartbeat, then run `retention:attest` and retain only its bounded aggregate result.
+Do not begin production preparation or a forward phase transition without a valid attestation.
 
 After preparation, a nonzero count of safely classified historical orphans is repair work, not an
 activation blocker. Any malformed or ambiguous orphan increments `requiresAttention` and blocks a

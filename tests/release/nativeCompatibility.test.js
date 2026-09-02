@@ -80,6 +80,30 @@ test('a JavaScript-only source change does not require a new runtime identity', 
   assert.deepEqual(compareNativeSnapshots(previous, javascriptOnly).changedCategories, []);
 });
 
+test('a known pure-JavaScript production dependency does not change native compatibility', () => {
+  const previousFiles = makeFiles();
+  const changedFiles = makeFiles();
+  const previousPackage = JSON.parse(previousFiles['package.json']);
+  const changedPackage = JSON.parse(changedFiles['package.json']);
+  const previousLock = JSON.parse(previousFiles['package-lock.json']);
+  const changedLock = JSON.parse(changedFiles['package-lock.json']);
+  previousPackage.dependencies.firebase = '12.0.0';
+  changedPackage.dependencies.firebase = '12.1.0';
+  previousLock.packages[''].dependencies.firebase = '12.0.0';
+  changedLock.packages[''].dependencies.firebase = '12.1.0';
+  previousLock.packages['node_modules/firebase'] = { version: '12.0.0' };
+  changedLock.packages['node_modules/firebase'] = { version: '12.1.0' };
+  previousFiles['package.json'] = JSON.stringify(previousPackage);
+  changedFiles['package.json'] = JSON.stringify(changedPackage);
+  previousFiles['package-lock.json'] = JSON.stringify(previousLock);
+  changedFiles['package-lock.json'] = JSON.stringify(changedLock);
+
+  const previous = buildNativeSnapshotFromFiles(previousFiles);
+  const changed = buildNativeSnapshotFromFiles(changedFiles);
+
+  assert.deepEqual(compareNativeSnapshots(previous, changed).changedCategories, []);
+});
+
 test('custom config-plugin and dynamically discovered native-project changes require a new runtime', () => {
   const previous = buildNativeSnapshotFromFiles(makeFiles());
   const pluginChange = buildNativeSnapshotFromFiles(makeFiles({ plugin: 'module.exports = (config) => ({...config});\n' }));

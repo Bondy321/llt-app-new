@@ -20,6 +20,12 @@ const {
   setAtPath,
 } = require('./helpers/notificationRetentionMemoryDb');
 const { buildRetentionQueueKey } = require('../functions/src/domains/notification-retention/state');
+const RETENTION_PROTOCOL = retention.compiledRetentionProtocol();
+const protocolRollout = (value) => ({
+  ...value,
+  ...RETENTION_PROTOCOL,
+  expectedEngineProtocolId: RETENTION_PROTOCOL.retentionEngineProtocolId,
+});
 
 const NOW_MS = 1_800_000_000_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -174,7 +180,7 @@ test('guarded execution rejects a rollout change before any mode can mutate', as
   assert.equal(legacyCalled, false);
 });
 
-test('legacy and shadow results report a mid-cycle rollout change as incomplete', async () => {
+test('legacy and shadow ignore the retired compatibility mutation path', async () => {
   const legacyDb = createNotificationRetentionMemoryDb({});
   const legacy = await retention.runNotificationRetentionCycle({
     db: legacyDb,
@@ -182,10 +188,10 @@ test('legacy and shadow results report a mid-cycle rollout change as incomplete'
     legacyCleanup: async () => ({ deleted: 0, rolloutChanged: true }),
   });
   assert.equal(legacy.mode, 'legacy');
-  assert.equal(legacy.hasMore, true);
-  assert.equal(legacy.budgetExhaustionReason, 'rollout_changed');
+  assert.equal(legacy.hasMore, false);
+  assert.equal(legacy.budgetExhaustionReason, 'legacy_fail_closed');
 
-  const shadowRollout = {
+  const shadowRollout = protocolRollout({
     schemaVersion: 1,
     phase: 'shadow',
     revision: 8,
@@ -198,7 +204,7 @@ test('legacy and shadow results report a mid-cycle rollout change as incomplete'
     canaryEvidenceFingerprint: null,
     canaryEvidenceRevision: null,
     updatedAtMs: NOW_MS,
-  };
+  });
   const shadowDb = createNotificationRetentionMemoryDb({
     notification_retention_rollout: { v1: shadowRollout },
   });
@@ -221,8 +227,9 @@ test('legacy and shadow results report a mid-cycle rollout change as incomplete'
     },
   });
   assert.equal(shadow.mode, 'shadow');
-  assert.equal(shadow.hasMore, true);
-  assert.equal(shadow.budgetExhaustionReason, 'rollout_changed');
+  assert.equal(shadow.hasMore, false);
+  assert.equal(shadow.budgetExhaustionReason, null);
+  assert.equal((await retention.readNotificationRetentionRollout({ db: shadowDb })).phase, 'shadow');
 });
 
 const compactorShadowEvidence = (rolloutRevision = 8) => {
@@ -237,6 +244,7 @@ const compactorShadowEvidence = (rolloutRevision = 8) => {
     compactorScanned: 1,
     legacyScanned: 1,
     hasMore: false,
+    ...RETENTION_PROTOCOL,
   };
   return { ...evidence, evidenceFingerprint: retention.buildShadowEvidenceFingerprint(evidence) };
 };
@@ -256,6 +264,7 @@ const compactorCanaryEvidence = (rolloutRevision = 9, shadow = compactorShadowEv
     failures: 0,
     fixtureFingerprint: 'a'.repeat(64),
     fixtureCompleted: true,
+    ...RETENTION_PROTOCOL,
   };
   return { ...evidence, evidenceFingerprint: retention.buildCanaryEvidenceFingerprint(evidence) };
 };
@@ -273,11 +282,13 @@ const compactorRollout = () => ({
   canaryEvidenceFingerprint: compactorCanaryEvidence().evidenceFingerprint,
   canaryEvidenceRevision: 9,
   updatedAtMs: NOW_MS - 1,
+  ...RETENTION_PROTOCOL,
+  expectedEngineProtocolId: RETENTION_PROTOCOL.retentionEngineProtocolId,
 });
 
 test('paused compactor permits only the explicit bounded canary before activation', async () => {
   const shadow = compactorShadowEvidence();
-  const pausedRollout = {
+  const pausedRollout = protocolRollout({
     schemaVersion: 1,
     phase: 'compactor',
     revision: 9,
@@ -290,7 +301,7 @@ test('paused compactor permits only the explicit bounded canary before activatio
     canaryEvidenceFingerprint: null,
     canaryEvidenceRevision: null,
     updatedAtMs: NOW_MS - 1,
-  };
+  });
   const job = terminalJob({ retentionGeneration: 0 });
   const db = createNotificationRetentionMemoryDb({
     notification_retention_rollout: { v1: pausedRollout },
@@ -391,9 +402,9 @@ test('paused compactor permits only the explicit bounded canary before activatio
   assert.equal(normal.mode, 'compactor');
 });
 
-test('a bounded partial canary fails, cancels its fence and cannot activate', async () => {
+test('a bounded partial canary fails, retains its cumulative fence and cannot activate', async () => {
   const shadow = compactorShadowEvidence();
-  const pausedRollout = {
+  const pausedRollout = protocolRollout({
     schemaVersion: 1, phase: 'compactor', revision: 9,
     preparationComplete: true, preparationRolloutRevision: 7,
     evidenceDigest: 'retention-recovery-evidence',
@@ -401,7 +412,7 @@ test('a bounded partial canary fails, cancels its fence and cannot activate', as
     shadowEvidenceRevision: 8, canaryPassed: false,
     canaryEvidenceFingerprint: null, canaryEvidenceRevision: null,
     updatedAtMs: NOW_MS - 1,
-  };
+  });
   const db = createNotificationRetentionMemoryDb({
     notification_retention_rollout: { v1: pausedRollout },
     notification_retention: { v1: { evidence: { shadow } } },
@@ -435,7 +446,10 @@ test('a bounded partial canary fails, cancels its fence and cannot activate', as
   assert.equal(result.canaryEvidenceStatus, 'failed');
   assert.equal(result.metrics.jobsClaimed, 1);
   assert.equal(result.metrics.jobsCompleted, 0);
-  assert.equal(db.getAtPath(`notification_jobs/${fixture.jobId}/retentionFence`), null);
+  assert.equal(
+    db.getAtPath(`notification_jobs/${fixture.jobId}/retentionFence/irreversibleWorkStarted`),
+    true,
+  );
   assert.equal(db.getAtPath(`notification_retention/v1/jobs/${fixture.jobId}/status`), 'queued');
   const activation = await retention.transitionNotificationRetentionRollout({
     db, expectedPhase: 'compactor', expectedRevision: 9, nextPhase: 'compactor',
@@ -448,7 +462,7 @@ test('a bounded partial canary fails, cancels its fence and cannot activate', as
 
 test('canary fails closed when a non-compactor worker removed its synthetic attempt', async () => {
   const shadow = compactorShadowEvidence();
-  const pausedRollout = {
+  const pausedRollout = protocolRollout({
     schemaVersion: 1, phase: 'compactor', revision: 9,
     preparationComplete: true, preparationRolloutRevision: 7,
     evidenceDigest: 'retention-recovery-evidence',
@@ -456,7 +470,7 @@ test('canary fails closed when a non-compactor worker removed its synthetic atte
     shadowEvidenceRevision: 8, canaryPassed: false,
     canaryEvidenceFingerprint: null, canaryEvidenceRevision: null,
     updatedAtMs: NOW_MS - 1,
-  };
+  });
   const db = createNotificationRetentionMemoryDb({
     notification_retention_rollout: { v1: pausedRollout },
     notification_retention: { v1: { evidence: { shadow } } },
@@ -482,7 +496,7 @@ test('canary fails closed when a non-compactor worker removed its synthetic atte
 
 test('canary recovers a crash after final deletion but before completion proof', async () => {
   const shadow = compactorShadowEvidence();
-  const pausedRollout = {
+  const pausedRollout = protocolRollout({
     schemaVersion: 1, phase: 'compactor', revision: 9,
     preparationComplete: true, preparationRolloutRevision: 7,
     evidenceDigest: 'retention-recovery-evidence',
@@ -490,7 +504,7 @@ test('canary recovers a crash after final deletion but before completion proof',
     shadowEvidenceRevision: 8, canaryPassed: false,
     canaryEvidenceFingerprint: null, canaryEvidenceRevision: null,
     updatedAtMs: NOW_MS - 1,
-  };
+  });
   let crashAfterStateDelete = false;
   let crashed = false;
   const db = createNotificationRetentionMemoryDb({
@@ -544,7 +558,7 @@ test('canary recovers a crash after final deletion but before completion proof',
 
 test('a completed canary control is compare-safely replaced by a newer rollout canary', async () => {
   const firstShadow = compactorShadowEvidence();
-  const firstRollout = {
+  const firstRollout = protocolRollout({
     schemaVersion: 1, phase: 'compactor', revision: 9,
     preparationComplete: true, preparationRolloutRevision: 7,
     evidenceDigest: 'retention-recovery-evidence',
@@ -552,7 +566,7 @@ test('a completed canary control is compare-safely replaced by a newer rollout c
     shadowEvidenceRevision: 8, canaryPassed: false,
     canaryEvidenceFingerprint: null, canaryEvidenceRevision: null,
     updatedAtMs: NOW_MS - 1,
-  };
+  });
   const db = createNotificationRetentionMemoryDb({
     notification_retention_rollout: { v1: firstRollout },
     notification_retention: { v1: { evidence: { shadow: firstShadow } } },
@@ -573,14 +587,14 @@ test('a completed canary control is compare-safely replaced by a newer rollout c
   assert.equal(firstResult.canaryEvidenceStatus, 'passed', JSON.stringify(firstResult));
 
   const secondShadow = compactorShadowEvidence(11);
-  const secondRollout = {
+  const secondRollout = protocolRollout({
     ...firstRollout,
     revision: 12,
     evidenceDigest: 'retention-recovery-evidence-next',
     shadowEvidenceFingerprint: secondShadow.evidenceFingerprint,
     shadowEvidenceRevision: 11,
     updatedAtMs: NOW_MS + 1,
-  };
+  });
   await db.ref('notification_retention/v1/evidence/shadow').set(secondShadow);
   await db.ref('notification_retention_rollout/v1').set(secondRollout);
   const secondFixture = await retention.ensureNotificationRetentionCanaryFixture({
@@ -607,7 +621,7 @@ test('a completed canary control is compare-safely replaced by a newer rollout c
 
 test('a newer rollout reconciles an abandoned ready canary fixture', async () => {
   const firstShadow = compactorShadowEvidence();
-  const firstRollout = {
+  const firstRollout = protocolRollout({
     schemaVersion: 1, phase: 'compactor', revision: 9,
     preparationComplete: true, preparationRolloutRevision: 7,
     evidenceDigest: 'retention-recovery-evidence',
@@ -615,7 +629,7 @@ test('a newer rollout reconciles an abandoned ready canary fixture', async () =>
     shadowEvidenceRevision: 8, canaryPassed: false,
     canaryEvidenceFingerprint: null, canaryEvidenceRevision: null,
     updatedAtMs: NOW_MS - 1,
-  };
+  });
   const db = createNotificationRetentionMemoryDb({
     notification_retention_rollout: { v1: firstRollout },
     notification_retention: { v1: { evidence: { shadow: firstShadow } } },
@@ -624,11 +638,11 @@ test('a newer rollout reconciles an abandoned ready canary fixture', async () =>
     db, rollout: { ...firstRollout, valid: true }, nowMs: NOW_MS,
   });
   const secondShadow = compactorShadowEvidence(11);
-  const secondRollout = {
+  const secondRollout = protocolRollout({
     ...firstRollout, revision: 12, evidenceDigest: 'next-evidence',
     shadowEvidenceFingerprint: secondShadow.evidenceFingerprint,
     shadowEvidenceRevision: 11, updatedAtMs: NOW_MS + 1,
-  };
+  });
   await db.ref('notification_retention/v1/evidence/shadow').set(secondShadow);
   await db.ref('notification_retention_rollout/v1').set(secondRollout);
   const next = await retention.ensureNotificationRetentionCanaryFixture({
@@ -642,7 +656,7 @@ test('a newer rollout reconciles an abandoned ready canary fixture', async () =>
 
 test('a newer rollout reconciles an expired creating canary reservation', async () => {
   const shadow = compactorShadowEvidence();
-  const firstRollout = {
+  const firstRollout = protocolRollout({
     schemaVersion: 1, phase: 'compactor', revision: 9,
     preparationComplete: true, preparationRolloutRevision: 7,
     evidenceDigest: 'retention-recovery-evidence',
@@ -650,7 +664,7 @@ test('a newer rollout reconciles an expired creating canary reservation', async 
     shadowEvidenceRevision: 8, canaryPassed: false,
     canaryEvidenceFingerprint: null, canaryEvidenceRevision: null,
     updatedAtMs: NOW_MS - 1,
-  };
+  });
   const db = createNotificationRetentionMemoryDb({
     notification_retention_rollout: { v1: firstRollout },
     notification_retention: { v1: { evidence: { shadow } } },
@@ -663,11 +677,11 @@ test('a newer rollout reconciles an expired creating canary reservation', async 
     ...oldControl, status: 'creating', ownerId: 'crashed-owner', leaseExpiresAtMs: NOW_MS,
   });
   const nextShadow = compactorShadowEvidence(11);
-  const nextRollout = {
+  const nextRollout = protocolRollout({
     ...firstRollout, revision: 12, evidenceDigest: 'next-evidence',
     shadowEvidenceFingerprint: nextShadow.evidenceFingerprint,
     shadowEvidenceRevision: 11, updatedAtMs: NOW_MS + 1,
-  };
+  });
   await db.ref('notification_retention/v1/evidence/shadow').set(nextShadow);
   await db.ref('notification_retention_rollout/v1').set(nextRollout);
   const next = await retention.ensureNotificationRetentionCanaryFixture({
@@ -789,8 +803,8 @@ test('expired processing requeue state survives cleanup and resumes from its exa
   assert.equal(preserved.requeueId, requeueId);
   assert.equal(preserved.cursor, 'recipient_cursor');
   assert.equal(preserved.requeued, 4);
-  assert.equal(preserved.expiresAtMs, null);
-  assert.equal(preserved.lease, null);
+  assert.equal(preserved.expiresAtMs, NOW_MS - 1);
+  assert.equal(preserved.lease.ownerId, 'crashed-requeue');
   const resumed = await requeueFailedNotificationJob({ db, jobId: JOB_ID, nowMs: NOW_MS + 1 });
   assert.equal(resumed.success, true);
   assert.equal(resumed.complete, true);
@@ -916,10 +930,14 @@ test('manual requeue cannot take over an active compactor page commit', async ()
     db,
     nowMs: NOW_MS + retention.DEFAULT_RETENTION_BUDGETS.destructiveCommitLeaseMs + 2,
   });
-  assert.equal(recovered.deleted > 0, true);
-  assert.equal(handoffTakeover?.success, false);
-  assert.equal(handoffTakeover?.reason, 'NOTIFICATION_RETENTION_IN_PROGRESS');
-  assert.equal(db.getAtPath(`notification_jobs/${JOB_ID}`), undefined);
+  assert.equal(recovered.deleted, 0);
+  assert.equal(recovered.failClosed, true);
+  assert.equal(handoffTakeover, null);
+  assert.ok(db.getAtPath(`notification_jobs/${JOB_ID}`));
+  assert.equal(
+    db.getAtPath(`notification_jobs/${JOB_ID}/retentionFence/irreversibleWorkStarted`),
+    true,
+  );
 });
 
 test('compactor requeue recovery cursor advances beyond a hundred unrecoverable records', async () => {
@@ -1024,42 +1042,32 @@ test('active compactor recovers a stale legacy fence after its exact lease expir
     retentionGeneration: 0,
     updatedAtMs: NOW_MS - (40 * DAY_MS),
   });
-  const shadowRollout = {
-    schemaVersion: 1, phase: 'shadow', revision: 8,
-    preparationComplete: true, preparationRolloutRevision: 7,
-    evidenceDigest: 'retention-recovery-evidence',
-    shadowEvidenceFingerprint: null, shadowEvidenceRevision: null,
-    canaryPassed: false, canaryEvidenceFingerprint: null, canaryEvidenceRevision: null,
-    updatedAtMs: NOW_MS - 1,
-  };
-  let armed = false;
-  let crashed = false;
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: shadowRollout },
+    notification_retention_rollout: { v1: compactorRollout() },
     notification_retention: { v1: { evidence: {
       shadow: compactorShadowEvidence(), canary: compactorCanaryEvidence(),
     } } },
     notification_jobs: { [JOB_ID]: job },
-  }, {
-    afterTransaction: ({ data, pathName, next }) => {
-      if (!armed || crashed || pathName !== `notification_jobs/${JOB_ID}`
-        || next?.retentionFence?.kind !== 'legacy') return;
-      crashed = true;
-      setAtPath(data, 'notification_retention_rollout/v1', compactorRollout());
-      throw new Error('legacy_fence_hard_crash');
-    },
   });
   await retention.ensureNotificationRetentionScheduled({ db, jobId: JOB_ID, job, nowMs: NOW_MS });
-  armed = true;
-  await assert.rejects(() => cleanupOldNotificationDeliveryData({
-    db, nowMs: NOW_MS, expectedRolloutPhase: 'shadow', expectedRolloutRevision: 8,
-  }), /legacy_fence_hard_crash/u);
-  const early = await retention.runNotificationRetentionCycle({
-    db, nowMs: NOW_MS, ownerId: 'legacy-fence-too-early',
+  await db.ref(`notification_jobs/${JOB_ID}`).update({
+    retentionGeneration: 1,
+    retentionFence: {
+      fenceId: 'legacy_retention_fence_v2_expired_precommit',
+      kind: 'legacy',
+      status: 'active',
+      completedAtMs: job.completedAtMs,
+      generation: 1,
+      leaseOwnerId: 'expired-legacy-owner',
+      leaseRevision: 1,
+      leaseExpiresAtMs: NOW_MS - 1,
+      rolloutPhase: 'shadow',
+      rolloutRevision: 8,
+      commitStatus: null,
+    },
   });
-  assert.equal(early.metrics.jobsCompleted, 0);
   const recovered = await retention.runNotificationRetentionCycle({
-    db, nowMs: NOW_MS + retention.DEFAULT_RETENTION_BUDGETS.leaseMs + 1,
+    db, nowMs: NOW_MS,
     ownerId: 'legacy-fence-recovered',
   });
   assert.equal(recovered.metrics.jobsCompleted, 1);
@@ -1219,6 +1227,7 @@ test('evidence revocation preserves an in-flight commit fence and retention resu
 for (const crashPoint of ['attempt_page', 'job_children', 'source_record', 'canonical_parent']) {
   test(`a restart resumes safely after a crash following ${crashPoint} deletion`, async () => {
     let crashed = false;
+    let recoveryPromotedCumulativeBoundary = false;
     const crashOnce = () => {
       if (crashed) return;
       crashed = true;
@@ -1233,7 +1242,14 @@ for (const crashPoint of ['attempt_page', 'job_children', 'source_record', 'cano
         if (crashPoint === 'job_children'
           && paths.some((entry) => entry.startsWith(`notification_job_recipients/${JOB_ID}`))) crashOnce();
       },
-      afterTransaction: async ({ pathName, committed, next }) => {
+      afterTransaction: async ({ pathName, committed, current, next }) => {
+        if (pathName === `notification_retention/v1/jobs/${JOB_ID}`
+          && current?.destructiveCommit
+          && current?.irreversibleWorkStarted !== true
+          && next?.lease?.ownerId === 'restart-worker'
+          && next?.irreversibleWorkStarted === true) {
+          recoveryPromotedCumulativeBoundary = true;
+        }
         if (!committed || next !== null) return;
         if (crashPoint === 'source_record' && pathName === 'broadcasts/test-tour/test-message') crashOnce();
         if (crashPoint === 'canonical_parent' && pathName === `notification_jobs/${JOB_ID}`) crashOnce();
@@ -1244,6 +1260,9 @@ for (const crashPoint of ['attempt_page', 'job_children', 'source_record', 'cano
       new RegExp(`simulated crash after ${crashPoint}`, 'u'),
     );
     assert.equal(crashed, true);
+    const cumulativeBoundaryAlreadyDurable = db.getAtPath(
+      `notification_retention/v1/jobs/${JOB_ID}/irreversibleWorkStarted`,
+    ) === true;
     const restarted = await retention.runNotificationRetentionCycle({
       db,
       nowMs: NOW_MS + retention.DEFAULT_RETENTION_BUDGETS.destructiveCommitLeaseMs + 1,
@@ -1256,6 +1275,7 @@ for (const crashPoint of ['attempt_page', 'job_children', 'source_record', 'cano
       state: db.getAtPath(`notification_retention/v1/jobs/${JOB_ID}`),
       queue: db.getAtPath('notification_retention/v1/queue'),
     }));
+    assert.equal(cumulativeBoundaryAlreadyDurable || recoveryPromotedCumulativeBoundary, true);
     assert.equal(db.getAtPath(`notification_jobs/${JOB_ID}`), undefined);
     assert.equal(db.getAtPath(`notification_retention/v1/jobs/${JOB_ID}`), undefined);
     assert.equal(Object.keys(db.getAtPath('notification_retention/v1/queue') || {}).length, 0);
@@ -1371,6 +1391,403 @@ test('attempt cleanup removes only an exact queue version and fail-closes on non
   assert.equal(Object.keys(db.getAtPath('operations_terminal_warnings/v1') || {}).length, 1);
 });
 
+test('a later nonterminal page retains cumulative fencing and resumes only through exact attention retry', async () => {
+  const jobId = `notif_v1_${'d'.repeat(64)}`;
+  const job = terminalJob({
+    jobId, status: 'provider_rejected', retentionGeneration: 0,
+    expiresAtMs: NOW_MS + DAY_MS,
+  });
+  const db = createNotificationRetentionMemoryDb({
+    notification_retention_rollout: { v1: compactorRollout() },
+    notification_retention: { v1: { evidence: {
+      shadow: compactorShadowEvidence(), canary: compactorCanaryEvidence(),
+    } } },
+    notification_jobs: { [jobId]: job },
+    notification_delivery_attempts: {
+      a_terminal: {
+        attemptId: 'a_terminal', jobId, status: 'provider_rejected', retentionDueAtMs: NOW_MS,
+      },
+      b_nonterminal: {
+        attemptId: 'b_nonterminal', jobId, status: 'retrying', retentionDueAtMs: NOW_MS,
+      },
+    },
+  });
+  await retention.writeRetentionDeploymentHeartbeat({ db, nowMs: NOW_MS });
+  await retention.ensureNotificationRetentionScheduled({ db, jobId, job, nowMs: NOW_MS });
+  const result = await retention.runNotificationRetentionCycle({
+    db,
+    nowMs: NOW_MS,
+    ownerId: 'cumulative-attention-worker',
+    budgets: { pageSize: 1, maxAttemptsPerJob: 10, maxAttemptsPerJobPerCycle: 10 },
+  });
+
+  assert.equal(result.metrics.attemptsDeleted, 1);
+  assert.equal(db.getAtPath('notification_delivery_attempts/a_terminal'), undefined);
+  assert.equal(db.getAtPath('notification_delivery_attempts/b_nonterminal/status'), 'retrying');
+  const state = db.getAtPath(`notification_retention/v1/jobs/${jobId}`);
+  assert.equal(state.status, 'requires_attention');
+  assert.equal(state.irreversibleWorkStarted, true);
+  assert.equal(state.committedDeletionCount, 1);
+  assert.equal(state.firstDestructiveCommitAtMs, NOW_MS);
+  assert.equal(state.destructiveCommit, null);
+  assert.equal(state.retentionDueAtMs, NOW_MS);
+  const fence = db.getAtPath(`notification_jobs/${jobId}/retentionFence`);
+  assert.equal(fence.irreversibleWorkStarted, true);
+  assert.equal(fence.firstDestructiveCommitAtMs, NOW_MS);
+  assert.equal(fence.irreversibleGeneration, state.generation);
+  assert.equal(fence.commitStatus, 'destructive');
+  const attention = db.getAtPath(`notification_retention/v1/attention/${jobId}`);
+  assert.match(attention.attentionFingerprint, /^attention_v1_[a-f0-9]{32}$/u);
+  assert.equal(db.getAtPath(`notification_retention/v1/queue/${state.queueKey}`), undefined);
+  assert.equal(state.attention.attentionFingerprint, attention.attentionFingerprint);
+  assert.equal(attention.irreversibleWorkStarted, true);
+  assert.equal(attention.committedDeletionCount, 1);
+
+  const manual = await requeueFailedNotificationJob({ db, jobId, nowMs: NOW_MS + 1 });
+  assert.equal(manual.success, false);
+  assert.equal(manual.reason, 'NOTIFICATION_RETENTION_IN_PROGRESS');
+  await db.ref(`notification_jobs/${jobId}`).update({
+    retentionFence: null,
+    retentionGeneration: Math.max(0, state.generation - 1),
+  });
+  const stateGuarded = await requeueFailedNotificationJob({ db, jobId, nowMs: NOW_MS + 1 });
+  assert.equal(stateGuarded.success, false);
+  assert.equal(stateGuarded.reason, 'NOTIFICATION_RETENTION_IN_PROGRESS');
+
+  await db.ref('notification_delivery_attempts/b_nonterminal').update({
+    status: 'provider_rejected',
+  });
+  const retried = await retention.retryNotificationRetentionAttention({
+    db,
+    jobId,
+    expected: {
+      generation: attention.generation,
+      attentionFingerprint: attention.attentionFingerprint,
+    },
+    nowMs: NOW_MS + 2,
+  });
+  assert.equal(retried.retried, true);
+  assert.equal(db.getAtPath(`notification_retention/v1/jobs/${jobId}/status`), 'queued');
+  assert.equal(db.getAtPath(`notification_retention/v1/attention/${jobId}`), undefined);
+  const completed = await retention.runNotificationRetentionCycle({
+    db,
+    nowMs: NOW_MS + 2,
+    ownerId: 'cumulative-attention-resume',
+    budgets: { pageSize: 1, maxAttemptsPerJob: 10, maxAttemptsPerJobPerCycle: 10 },
+  });
+  assert.equal(completed.metrics.jobsCompleted, 1, JSON.stringify({
+    completed,
+    state: db.getAtPath(`notification_retention/v1/jobs/${jobId}`),
+    job: db.getAtPath(`notification_jobs/${jobId}`),
+  }));
+  assert.equal(db.getAtPath(`notification_jobs/${jobId}`), undefined);
+});
+
+test('warning persistence is the commit boundary before attention can release ownership', async () => {
+  const jobId = `notif_v1_${'e'.repeat(64)}`;
+  const job = terminalJob({ jobId, retentionGeneration: 0 });
+  const db = createNotificationRetentionMemoryDb({
+    notification_retention_rollout: { v1: compactorRollout() },
+    notification_retention: { v1: { evidence: {
+      shadow: compactorShadowEvidence(), canary: compactorCanaryEvidence(),
+    } } },
+    notification_jobs: { [jobId]: job },
+    notification_delivery_attempts: {
+      blocked_attempt: {
+        attemptId: 'blocked_attempt', jobId, status: 'retrying', retentionDueAtMs: NOW_MS,
+      },
+    },
+  }, {
+    beforeTransaction: ({ pathName }) => {
+      if (pathName.startsWith('operations_terminal_warnings/v1/')) {
+        throw new Error('warning_store_unavailable');
+      }
+    },
+  });
+  await retention.writeRetentionDeploymentHeartbeat({ db, nowMs: NOW_MS });
+  await retention.ensureNotificationRetentionScheduled({ db, jobId, job, nowMs: NOW_MS });
+  const result = await retention.runNotificationRetentionCycle({
+    db, nowMs: NOW_MS, ownerId: 'warning-first-attention-worker',
+  });
+  const state = db.getAtPath(`notification_retention/v1/jobs/${jobId}`);
+  assert.equal(result.metrics.jobsRequiresAttention, 1);
+  assert.equal(state.status, 'queued');
+  assert.equal(state.retentionDueAtMs, NOW_MS);
+  assert.ok(db.getAtPath(`notification_jobs/${jobId}/retentionFence`));
+  assert.ok(db.getAtPath(`notification_retention/v1/queue/${state.queueKey}`));
+  assert.equal(db.getAtPath(`notification_retention/v1/attention/${jobId}`), undefined);
+});
+
+test('a crash before attention projection leaves authoritative state non-claimable and repairable', async () => {
+  const jobId = `notif_v1_${'6'.repeat(64)}`;
+  const job = terminalJob({ jobId, retentionGeneration: 0 });
+  let projectionCrashed = false;
+  const db = createNotificationRetentionMemoryDb({
+    notification_retention_rollout: { v1: compactorRollout() },
+    notification_retention: { v1: { evidence: {
+      shadow: compactorShadowEvidence(), canary: compactorCanaryEvidence(),
+    } } },
+    notification_jobs: { [jobId]: job },
+    notification_delivery_attempts: {
+      blocked_attempt: {
+        attemptId: 'blocked_attempt', jobId, status: 'retrying', retentionDueAtMs: NOW_MS,
+      },
+    },
+  }, {
+    beforeTransaction: ({ pathName }) => {
+      if (!projectionCrashed
+        && pathName === `notification_retention/v1/attention/${jobId}`) {
+        projectionCrashed = true;
+        throw new Error('attention_projection_crash');
+      }
+    },
+  });
+  await retention.writeRetentionDeploymentHeartbeat({ db, nowMs: NOW_MS });
+  await retention.ensureNotificationRetentionScheduled({ db, jobId, job, nowMs: NOW_MS });
+
+  await assert.rejects(
+    retention.runNotificationRetentionCycle({
+      db, nowMs: NOW_MS, ownerId: 'attention-crash-worker',
+    }),
+    /attention_projection_crash/u,
+  );
+  const stateAfterCrash = db.getAtPath(`notification_retention/v1/jobs/${jobId}`);
+  assert.equal(stateAfterCrash.status, 'requires_attention');
+  assert.equal(stateAfterCrash.lease, null);
+  assert.match(stateAfterCrash.attention.attentionFingerprint, /^attention_v1_[a-f0-9]{32}$/u);
+  assert.equal(db.getAtPath(`notification_retention/v1/attention/${jobId}`), undefined);
+  assert.ok(db.getAtPath(`notification_retention/v1/queue/${stateAfterCrash.queueKey}`));
+
+  const repairCycle = await retention.runNotificationRetentionCycle({
+    db, nowMs: NOW_MS + 1, ownerId: 'attention-repair-worker',
+  });
+  assert.equal(repairCycle.metrics.attemptsDeleted, 0);
+  assert.equal(db.getAtPath('notification_delivery_attempts/blocked_attempt/status'), 'retrying');
+  assert.equal(db.getAtPath(`notification_retention/v1/jobs/${jobId}/status`), 'requires_attention');
+  const projected = db.getAtPath(`notification_retention/v1/attention/${jobId}`);
+  assert.equal(projected.attentionFingerprint, stateAfterCrash.attention.attentionFingerprint);
+  assert.equal(db.getAtPath(`notification_retention/v1/queue/${stateAfterCrash.queueKey}`), undefined);
+
+  await db.ref('notification_delivery_attempts/blocked_attempt').update({
+    status: 'provider_rejected',
+  });
+  const retried = await retention.retryNotificationRetentionAttention({
+    db,
+    jobId,
+    expected: {
+      generation: stateAfterCrash.generation,
+      attentionFingerprint: stateAfterCrash.attention.attentionFingerprint,
+    },
+    nowMs: NOW_MS + 2,
+  });
+  assert.equal(retried.retried, true);
+  assert.equal(db.getAtPath(`notification_retention/v1/jobs/${jobId}/status`), 'queued');
+});
+
+test('completed child deletion followed by invalid source metadata remains fenced and repairable', async () => {
+  const jobId = `notif_v1_${'9'.repeat(64)}`;
+  const job = terminalJob({
+    jobId,
+    retentionGeneration: 0,
+    sourceType: 'future_tour_category_broadcast',
+    categoryKey: 'safe_category',
+    navigation: { broadcastId: 'safe_broadcast' },
+    expiresAtMs: Number.MAX_SAFE_INTEGER,
+  });
+  const db = createNotificationRetentionMemoryDb({
+    notification_retention_rollout: { v1: compactorRollout() },
+    notification_retention: { v1: { evidence: {
+      shadow: compactorShadowEvidence(), canary: compactorCanaryEvidence(),
+    } } },
+    notification_jobs: { [jobId]: job },
+    notification_job_recipients: { [jobId]: { bounded_recipient: { status: 'skipped' } } },
+  });
+  await retention.ensureNotificationRetentionScheduled({ db, jobId, job, nowMs: NOW_MS });
+  const result = await retention.runNotificationRetentionCycle({
+    db, nowMs: NOW_MS, ownerId: 'child-then-invalid-source',
+  });
+  assert.equal(result.metrics.jobsCompleted, 0);
+  assert.equal(db.getAtPath(`notification_job_recipients/${jobId}`), undefined);
+  const state = db.getAtPath(`notification_retention/v1/jobs/${jobId}`);
+  assert.equal(state.phase, 'source_records');
+  assert.equal(state.status, 'requires_attention');
+  assert.equal(state.irreversibleWorkStarted, true);
+  assert.ok(state.committedDeletionCount >= 4);
+  assert.equal(db.getAtPath(`notification_jobs/${jobId}/retentionFence/irreversibleWorkStarted`), true);
+  assert.equal(db.getAtPath(`notification_retention/v1/queue/${state.queueKey}`), undefined);
+  const attention = db.getAtPath(`notification_retention/v1/attention/${jobId}`);
+  assert.ok(attention);
+  assert.equal(state.attention.attentionFingerprint, attention.attentionFingerprint);
+});
+
+test('rollout revocation after a completed page preserves the cumulative fence', async () => {
+  const jobId = `notif_v1_${'1'.repeat(64)}`;
+  const job = terminalJob({
+    jobId, status: 'provider_rejected', retentionGeneration: 0,
+    expiresAtMs: NOW_MS + DAY_MS,
+  });
+  let revokedAfterTransition = false;
+  const db = createNotificationRetentionMemoryDb({
+    notification_retention_rollout: { v1: compactorRollout() },
+    notification_retention: { v1: { evidence: {
+      shadow: compactorShadowEvidence(), canary: compactorCanaryEvidence(),
+    } } },
+    notification_jobs: { [jobId]: job },
+    notification_delivery_attempts: {
+      a_first: {
+        attemptId: 'a_first', jobId, status: 'provider_rejected', retentionDueAtMs: NOW_MS,
+      },
+      b_second: {
+        attemptId: 'b_second', jobId, status: 'provider_rejected', retentionDueAtMs: NOW_MS,
+      },
+    },
+  }, {
+    afterTransaction: ({ data, pathName, next }) => {
+      if (revokedAfterTransition
+        || pathName !== `notification_retention/v1/jobs/${jobId}`
+        || next?.attemptPagesProcessed !== 1
+        || next?.destructiveCommit !== null) return;
+      revokedAfterTransition = true;
+      setAtPath(data, 'notification_retention_rollout/v1', {
+        schemaVersion: 1,
+        phase: 'legacy',
+        revision: compactorRollout().revision + 1,
+        preparationComplete: false,
+        updatedAtMs: NOW_MS + 1,
+      });
+    },
+  });
+  await retention.writeRetentionDeploymentHeartbeat({ db, nowMs: NOW_MS });
+  await retention.ensureNotificationRetentionScheduled({ db, jobId, job, nowMs: NOW_MS });
+  const result = await retention.runNotificationRetentionCycle({
+    db,
+    nowMs: NOW_MS,
+    ownerId: 'post-page-rollout-revocation',
+    budgets: { pageSize: 1, maxAttemptsPerJob: 10, maxAttemptsPerJobPerCycle: 10 },
+  });
+
+  assert.equal(revokedAfterTransition, true);
+  assert.equal(result.budgetExhaustionReason, 'rollout_changed');
+  assert.equal(result.metrics.attemptsDeleted, 1);
+  assert.equal(db.getAtPath('notification_delivery_attempts/a_first'), undefined);
+  assert.ok(db.getAtPath('notification_delivery_attempts/b_second'));
+  const state = db.getAtPath(`notification_retention/v1/jobs/${jobId}`);
+  assert.equal(state.status, 'queued');
+  assert.equal(state.irreversibleWorkStarted, true);
+  assert.equal(state.committedDeletionCount, 1);
+  assert.equal(state.destructiveCommit, null);
+  const fence = db.getAtPath(`notification_jobs/${jobId}/retentionFence`);
+  assert.equal(fence.irreversibleWorkStarted, true);
+  assert.equal(fence.commitStatus, 'destructive');
+  assert.ok(db.getAtPath(`notification_retention/v1/queue/${state.queueKey}`));
+  const manual = await requeueFailedNotificationJob({ db, jobId, nowMs: NOW_MS + 2 });
+  assert.equal(manual.success, false);
+  assert.equal(manual.reason, 'NOTIFICATION_RETENTION_IN_PROGRESS');
+});
+
+test('zero-work attention requires an exact fingerprint to retry or abandon', async () => {
+  const retryJobId = `notif_v1_${'f'.repeat(64)}`;
+  const abandonJobId = `notif_v1_${'0'.repeat(64)}`;
+  const retryJob = terminalJob({ jobId: retryJobId, retentionGeneration: 0 });
+  const abandonJob = terminalJob({ jobId: abandonJobId, retentionGeneration: 0 });
+  const db = createNotificationRetentionMemoryDb({
+    notification_retention_rollout: { v1: compactorRollout() },
+    notification_retention: { v1: { evidence: {
+      shadow: compactorShadowEvidence(), canary: compactorCanaryEvidence(),
+    } } },
+    notification_jobs: { [retryJobId]: retryJob, [abandonJobId]: abandonJob },
+    notification_delivery_attempts: {
+      retry_blocked: {
+        attemptId: 'retry_blocked', jobId: retryJobId, status: 'retrying', retentionDueAtMs: NOW_MS,
+      },
+      abandon_blocked: {
+        attemptId: 'abandon_blocked', jobId: abandonJobId, status: 'retrying', retentionDueAtMs: NOW_MS,
+      },
+    },
+  });
+  await retention.writeRetentionDeploymentHeartbeat({ db, nowMs: NOW_MS });
+  await retention.ensureNotificationRetentionScheduled({
+    db, jobId: retryJobId, job: retryJob, nowMs: NOW_MS,
+  });
+  await retention.ensureNotificationRetentionScheduled({
+    db, jobId: abandonJobId, job: abandonJob, nowMs: NOW_MS,
+  });
+  await retention.runNotificationRetentionCycle({
+    db, nowMs: NOW_MS, ownerId: 'zero-work-attention-worker',
+  });
+
+  const retryAttention = db.getAtPath(`notification_retention/v1/attention/${retryJobId}`);
+  const staleRetry = await retention.retryNotificationRetentionAttention({
+    db,
+    jobId: retryJobId,
+    expected: { generation: retryAttention.generation, attentionFingerprint: 'attention_v1_bad' },
+    nowMs: NOW_MS + 1,
+  });
+  assert.equal(staleRetry.reason, 'attention_changed');
+  const retried = await retention.retryNotificationRetentionAttention({
+    db,
+    jobId: retryJobId,
+    expected: {
+      generation: retryAttention.generation,
+      attentionFingerprint: retryAttention.attentionFingerprint,
+    },
+    nowMs: NOW_MS + 1,
+  });
+  assert.equal(retried.retried, true);
+  assert.equal(db.getAtPath(`notification_retention/v1/jobs/${retryJobId}/status`), 'queued');
+  assert.ok(db.getAtPath(`notification_retention/v1/queue/${retryAttention.queueKey}`));
+
+  const abandonAttention = db.getAtPath(`notification_retention/v1/attention/${abandonJobId}`);
+  const abandoned = await retention.abandonNotificationRetentionAttention({
+    db,
+    jobId: abandonJobId,
+    expected: {
+      generation: abandonAttention.generation,
+      attentionFingerprint: abandonAttention.attentionFingerprint,
+    },
+  });
+  assert.equal(abandoned.abandoned, true);
+  assert.equal(db.getAtPath(`notification_retention/v1/jobs/${abandonJobId}`), undefined);
+  assert.equal(db.getAtPath(`notification_retention/v1/attention/${abandonJobId}`), undefined);
+});
+
+test('zero-result requeue recovery does not mutate canonical state before its warning is durable', async () => {
+  const jobId = `notif_v1_${'2'.repeat(64)}`;
+  const job = terminalJob({
+    jobId,
+    status: 'retrying',
+    retentionGeneration: 1,
+    expiresAtMs: NOW_MS + DAY_MS,
+  });
+  const requeueState = {
+    schemaVersion: 1,
+    requeueId: 'requeue_v1_warning_first',
+    jobId,
+    sourceStatus: 'provider_rejected',
+    sourceCompletedAtMs: job.completedAtMs,
+    status: 'complete',
+    requeued: 0,
+    skipped: 1,
+    expiresAtMs: NOW_MS + DAY_MS,
+  };
+  const db = createNotificationRetentionMemoryDb({
+    notification_jobs: { [jobId]: job },
+    notification_requeue_jobs: { [jobId]: requeueState },
+  }, {
+    beforeTransaction: ({ pathName }) => {
+      if (pathName.startsWith('operations_terminal_warnings/v1/')) {
+        throw new Error('warning_store_unavailable');
+      }
+    },
+  });
+  const recovered = await retention.recoverZeroResultRequeue({
+    db, jobId, state: requeueState, nowMs: NOW_MS,
+  });
+  assert.equal(recovered.status, 'retrying');
+  assert.equal(db.getAtPath(`notification_jobs/${jobId}/status`), 'retrying');
+  assert.equal(db.getAtPath(`notification_retention/v1/jobs/${jobId}`), undefined);
+});
+
 test('legacy cleanup preserves held-parent attempts and marketing details', async () => {
   const held = terminalJob({
     retentionHold: true,
@@ -1394,7 +1811,7 @@ test('legacy cleanup preserves held-parent attempts and marketing details', asyn
   assert.ok(db.getAtPath('marketing_notification_details/held_detail'));
 });
 
-test('missing rollout remains an exact legacy-compatible cleanup default', async () => {
+test('missing rollout is a fail-closed non-destructive compatibility default', async () => {
   const job = terminalJob({ updatedAtMs: NOW_MS - (40 * DAY_MS) });
   const db = createNotificationRetentionMemoryDb({
     notification_jobs: { [JOB_ID]: job },
@@ -1405,11 +1822,12 @@ test('missing rollout remains an exact legacy-compatible cleanup default', async
     legacyCleanup: (options) => cleanupOldNotificationDeliveryData(options),
   });
   assert.equal(result.mode, 'legacy');
-  assert.equal(result.metrics.legacyDeletionPaths > 0, true);
-  assert.equal(db.getAtPath(`notification_jobs/${JOB_ID}`), undefined);
+  assert.equal(result.metrics.legacyDeletionPaths, 0);
+  assert.equal(result.budgetExhaustionReason, 'legacy_fail_closed');
+  assert.ok(db.getAtPath(`notification_jobs/${JOB_ID}`));
 });
 
-test('legacy cleanup cursor advances beyond an ineligible hundred-record prefix', async () => {
+test('legacy cleanup preserves every parent regardless of prefix size', async () => {
   const jobs = {};
   for (let index = 0; index < 100; index += 1) {
     const jobId = `blocked_${String(index).padStart(3, '0')}`;
@@ -1427,11 +1845,12 @@ test('legacy cleanup cursor advances beyond an ineligible hundred-record prefix'
   assert.equal(first.deleted, 0);
   assert.ok(db.getAtPath(`notification_jobs/${eligibleId}`));
   const second = await cleanupOldNotificationDeliveryData({ db, nowMs: NOW_MS });
-  assert.equal(second.deleted > 0, true);
-  assert.equal(db.getAtPath(`notification_jobs/${eligibleId}`), undefined);
+  assert.equal(second.deleted, 0);
+  assert.equal(second.failClosed, true);
+  assert.ok(db.getAtPath(`notification_jobs/${eligibleId}`));
 });
 
-test('legacy attempt cleanup cursor advances beyond a hundred retained parent records', async () => {
+test('legacy cleanup preserves parentless attempts as well as parent-owned attempts', async () => {
   const attempts = {};
   for (let index = 0; index < 100; index += 1) {
     const attemptId = `retained_attempt_${String(index).padStart(3, '0')}`;
@@ -1461,11 +1880,11 @@ test('legacy attempt cleanup cursor advances beyond a hundred retained parent re
   assert.ok(db.getAtPath('notification_delivery_attempts/zz_orphan_attempt'));
   assert.ok(db.getAtPath('notification_delivery_attempts/retained_attempt_000'));
   await cleanupOldNotificationDeliveryData({ db, nowMs: NOW_MS });
-  assert.equal(db.getAtPath('notification_delivery_attempts/zz_orphan_attempt'), undefined);
+  assert.ok(db.getAtPath('notification_delivery_attempts/zz_orphan_attempt'));
   assert.ok(db.getAtPath('notification_delivery_attempts/retained_attempt_099'));
 });
 
-test('legacy marketing cleanup cursor advances beyond a hundred retained parent records', async () => {
+test('legacy cleanup preserves parentless and parent-owned marketing details', async () => {
   const details = {};
   for (let index = 0; index < 100; index += 1) {
     const detailId = `retained_detail_${String(index).padStart(3, '0')}`;
@@ -1493,11 +1912,11 @@ test('legacy marketing cleanup cursor advances beyond a hundred retained parent 
   assert.ok(db.getAtPath('marketing_notification_details/zz_orphan_detail'));
   assert.ok(db.getAtPath('marketing_notification_details/retained_detail_000'));
   await cleanupOldNotificationDeliveryData({ db, nowMs: NOW_MS });
-  assert.equal(db.getAtPath('marketing_notification_details/zz_orphan_detail'), undefined);
+  assert.ok(db.getAtPath('marketing_notification_details/zz_orphan_detail'));
   assert.ok(db.getAtPath('marketing_notification_details/retained_detail_099'));
 });
 
-test('legacy requeue recovery cursor advances beyond a hundred unrecoverable records', async () => {
+test('legacy compatibility mode does not invoke requeue recovery callbacks', async () => {
   const requeues = {};
   for (let index = 0; index < 100; index += 1) {
     const jobId = `missing_legacy_requeue_${String(index).padStart(3, '0')}`;
@@ -1531,14 +1950,14 @@ test('legacy requeue recovery cursor advances beyond a hundred unrecoverable rec
   await cleanupOldNotificationDeliveryData({ db, nowMs: NOW_MS, resumeRequeue });
   assert.equal(resumed.includes('zz_recoverable_legacy_requeue'), false);
   await cleanupOldNotificationDeliveryData({ db, nowMs: NOW_MS, resumeRequeue });
-  assert.equal(resumed.includes('zz_recoverable_legacy_requeue'), true);
+  assert.equal(resumed.includes('zz_recoverable_legacy_requeue'), false);
   assert.equal(
     db.getAtPath('notification_requeue_jobs/zz_recoverable_legacy_requeue/recoveryDueAtMs'),
-    undefined,
+    NOW_MS,
   );
 });
 
-test('an expired legacy-fence owner cannot delete children after manual requeue takeover', async () => {
+test('fail-closed legacy cleanup never installs a fence or deletes children', async () => {
   const job = terminalJob({
     status: 'provider_rejected', updatedAtMs: NOW_MS - (40 * DAY_MS),
     expiresAtMs: NOW_MS + DAY_MS,
@@ -1562,13 +1981,13 @@ test('an expired legacy-fence owner cannot delete children after manual requeue 
   });
   armed = true;
   const result = await cleanupOldNotificationDeliveryData({ db, nowMs: NOW_MS });
-  assert.equal(tookOver, true);
+  assert.equal(tookOver, false);
   assert.equal(result.deleted, 0);
   assert.ok(db.getAtPath(`notification_job_recipients/${JOB_ID}/retained_recipient`));
   assert.ok(db.getAtPath(`notification_jobs/${JOB_ID}`));
 });
 
-test('manual requeue cannot take over an active legacy destructive commit', async () => {
+test('fail-closed legacy cleanup never creates a destructive commit', async () => {
   const job = terminalJob({
     status: 'provider_rejected',
     updatedAtMs: NOW_MS - (40 * DAY_MS),
@@ -1591,13 +2010,12 @@ test('manual requeue cannot take over an active legacy destructive commit', asyn
     },
   });
   const result = await cleanupOldNotificationDeliveryData({ db, nowMs: NOW_MS });
-  assert.equal(takeover?.success, false);
-  assert.equal(takeover?.reason, 'NOTIFICATION_RETENTION_IN_PROGRESS');
-  assert.equal(result.deleted > 0, true);
-  assert.equal(db.getAtPath(`notification_jobs/${JOB_ID}`), undefined);
+  assert.equal(takeover, null);
+  assert.equal(result.deleted, 0);
+  assert.ok(db.getAtPath(`notification_jobs/${JOB_ID}`));
 });
 
-test('legacy destructive recovery transfers the fence without a manual-requeue gap', async () => {
+test('retired legacy cleanup cannot enter its former destructive recovery path', async () => {
   const job = terminalJob({
     status: 'provider_rejected',
     updatedAtMs: NOW_MS - (40 * DAY_MS),
@@ -1630,19 +2048,16 @@ test('legacy destructive recovery transfers the fence without a manual-requeue g
       });
     },
   });
-  await assert.rejects(
-    cleanupOldNotificationDeliveryData({ db, nowMs: NOW_MS }),
-    /legacy_destructive_hard_crash/u,
-  );
+  const first = await cleanupOldNotificationDeliveryData({ db, nowMs: NOW_MS });
+  assert.equal(first.deleted, 0);
   recovering = true;
   const recovered = await cleanupOldNotificationDeliveryData({
     db,
     nowMs: NOW_MS + retention.DEFAULT_RETENTION_BUDGETS.destructiveCommitLeaseMs + 1,
   });
-  assert.equal(handoffTakeover?.success, false);
-  assert.equal(handoffTakeover?.reason, 'NOTIFICATION_RETENTION_IN_PROGRESS');
-  assert.equal(recovered.deleted > 0, true);
-  assert.equal(db.getAtPath(`notification_jobs/${JOB_ID}`), undefined);
+  assert.equal(handoffTakeover, null);
+  assert.equal(recovered.deleted, 0);
+  assert.ok(db.getAtPath(`notification_jobs/${JOB_ID}`));
 });
 
 test('legacy destructive recovery preserves both markers during compactor handoff', async () => {
@@ -1708,7 +2123,7 @@ test('legacy destructive recovery preserves both markers during compactor handof
   assert.equal(takeover.reason, 'NOTIFICATION_RETENTION_IN_PROGRESS');
 });
 
-test('legacy marketing cleanup honors the explicit detail retention boundary', async () => {
+test('legacy marketing cleanup is fail-closed before and after the detail boundary', async () => {
   const dueAtMs = NOW_MS + DAY_MS;
   const db = createNotificationRetentionMemoryDb({
     marketing_notification_details: {
@@ -1721,10 +2136,10 @@ test('legacy marketing cleanup honors the explicit detail retention boundary', a
   await cleanupOldNotificationDeliveryData({ db, nowMs: NOW_MS });
   assert.ok(db.getAtPath('marketing_notification_details/future_detail'));
   await cleanupOldNotificationDeliveryData({ db, nowMs: dueAtMs });
-  assert.equal(db.getAtPath('marketing_notification_details/future_detail'), undefined);
+  assert.ok(db.getAtPath('marketing_notification_details/future_detail'));
 });
 
-test('legacy cleanup cannot delete a privacy successor observed before fencing', async () => {
+test('legacy cleanup performs no canonical transaction or child deletion', async () => {
   let replaced = false;
   const oldJob = terminalJob({ updatedAtMs: NOW_MS - (40 * DAY_MS) });
   const db = createNotificationRetentionMemoryDb({
@@ -1745,7 +2160,8 @@ test('legacy cleanup cannot delete a privacy successor observed before fencing',
     },
   });
   await cleanupOldNotificationDeliveryData({ db, nowMs: NOW_MS });
-  assert.equal(db.getAtPath(`notification_jobs/${JOB_ID}/status`), 'privacy_deleted');
+  assert.equal(replaced, false);
+  assert.equal(db.getAtPath(`notification_jobs/${JOB_ID}/status`), 'provider_accepted');
   assert.ok(db.getAtPath(`notification_job_recipients/${JOB_ID}/successor`));
 });
 
@@ -1997,14 +2413,18 @@ test('a compare-safe rollback stops an in-flight compactor before its next page 
   assert.ok(db.getAtPath(`notification_job_recipients/${JOB_ID}/recipient_1`));
 
   await cleanupOldNotificationDeliveryData({ db, nowMs: NOW_MS + RETENTION_MS });
-  assert.equal(db.getAtPath(`notification_jobs/${JOB_ID}`), undefined);
+  assert.ok(db.getAtPath(`notification_jobs/${JOB_ID}`));
+  assert.equal(
+    db.getAtPath(`notification_jobs/${JOB_ID}/retentionFence/commitStatus`),
+    'destructive',
+  );
   const recoveryEvidence = compactorShadowEvidence(10);
   const recoveryCanary = compactorCanaryEvidence(11, recoveryEvidence);
   await db.ref('notification_retention/v1/evidence').set({
     shadow: recoveryEvidence,
     canary: recoveryCanary,
   });
-  await db.ref('notification_retention_rollout/v1').set({
+  await db.ref('notification_retention_rollout/v1').set(protocolRollout({
     schemaVersion: 1,
     phase: 'compactor',
     revision: 12,
@@ -2017,12 +2437,17 @@ test('a compare-safe rollback stops an in-flight compactor before its next page 
     canaryEvidenceFingerprint: recoveryCanary.evidenceFingerprint,
     canaryEvidenceRevision: 11,
     updatedAtMs: NOW_MS + RETENTION_MS + 1,
+  }));
+  await retention.writeRetentionDeploymentHeartbeat({
+    db, nowMs: NOW_MS + RETENTION_MS + 1,
   });
+  await db.ref('notification_retention/v1/deployment_attestations').remove();
+  const recoveredDb = createNotificationRetentionMemoryDb(db.data);
   const recovered = await retention.runNotificationRetentionCycle({
-    db, nowMs: NOW_MS + RETENTION_MS + 1, ownerId: 'rollback-recovery-worker',
+    db: recoveredDb, nowMs: NOW_MS + RETENTION_MS + 1, ownerId: 'rollback-recovery-worker',
   });
   assert.equal(recovered.metrics.jobsDeferred, 0);
-  assert.equal(db.getAtPath(`notification_retention/v1/jobs/${JOB_ID}`), undefined);
-  assert.equal(Object.keys(db.getAtPath('notification_retention/v1/queue') || {}).length, 0);
-  assert.equal(Object.keys(db.getAtPath('notification_delivery_attempts') || {}).length, 0);
+  assert.equal(recoveredDb.getAtPath(`notification_retention/v1/jobs/${JOB_ID}`), undefined);
+  assert.equal(Object.keys(recoveredDb.getAtPath('notification_retention/v1/queue') || {}).length, 0);
+  assert.equal(Object.keys(recoveredDb.getAtPath('notification_delivery_attempts') || {}).length, 0);
 });

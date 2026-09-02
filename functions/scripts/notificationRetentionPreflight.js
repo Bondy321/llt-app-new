@@ -27,12 +27,19 @@ const inspectRetentionRules = (rules) => {
   return {
     retentionJobIndexPresent: indexed('notification_jobs', 'retentionDueAtMs'),
     retentionAttemptIndexPresent: indexed('notification_delivery_attempts', 'retentionDueAtMs'),
+    retentionAttemptUpdatedIndexPresent: indexed('notification_delivery_attempts', 'updatedAtMs'),
     retentionMarketingIndexPresent: indexed('marketing_notification_details', 'retentionDueAtMs'),
     requeueRecoveryIndexPresent: indexed('notification_requeue_jobs', 'recoveryDueAtMs'),
     retentionRootPrivate: privateRoot('notification_retention'),
     retentionStateDueIndexPresent: Array.isArray(
       ruleRoots.notification_retention?.v1?.jobs?.['.indexOn'],
     ) && ruleRoots.notification_retention.v1.jobs['.indexOn'].includes('retentionDueAtMs'),
+    retentionStateStatusIndexPresent: Array.isArray(
+      ruleRoots.notification_retention?.v1?.jobs?.['.indexOn'],
+    ) && ruleRoots.notification_retention.v1.jobs['.indexOn'].includes('status'),
+    retentionStatePhaseIndexPresent: Array.isArray(
+      ruleRoots.notification_retention?.v1?.jobs?.['.indexOn'],
+    ) && ruleRoots.notification_retention.v1.jobs['.indexOn'].includes('phase'),
     rolloutRootPrivate: privateRoot('notification_retention_rollout'),
   };
 };
@@ -63,7 +70,15 @@ const run = async ({ admin, options, retention = require('../src/domains/notific
     db, nowMs, pageSize: options.pageSize, maxPages: options.maxPages,
     rolloutRevision: rollout.revision,
   });
-  return sanitizeOperationalOutput({ mode: 'dry-run', projectId, rollout, local, ...result });
+  const heartbeat = await retention.readRetentionDeploymentHeartbeat({ db });
+  const heartbeatStatus = retention.classifyRetentionHeartbeat({ heartbeat, nowMs });
+  return sanitizeOperationalOutput({
+    mode: 'dry-run', projectId, rollout, local,
+    compiledProtocol: retention.compiledRetentionProtocol(),
+    heartbeatStatus: heartbeatStatus.reason,
+    heartbeat: heartbeatStatus.valid ? heartbeat : null,
+    ...result,
+  });
 };
 
 if (require.main === module) {

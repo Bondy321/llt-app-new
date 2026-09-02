@@ -28,15 +28,19 @@ const run = async ({ admin, options, retention = require('../src/domains/notific
   if (options.apply && options.cursor && !options.restart) {
     throw new Error('Refusing apply cursor override without explicit --restart');
   }
+  if (options.restart && options.cursor) {
+    throw new Error('Retention preparation restart always begins at the canonical initial cursor');
+  }
   if (options.apply && (!Number.isSafeInteger(options.expectedRevision)
     || options.expectedRevision < 0)) {
     throw new Error('Retention preparation apply requires --expected-revision=<non-negative-integer>');
   }
   const db = admin.database();
   const rollout = await retention.readNotificationRetentionRollout({ db });
-  if (rollout.phase !== options.expectedPhase || rollout.phase !== 'legacy'
+  if (rollout.phase !== options.expectedPhase
+    || (options.apply && rollout.phase !== 'paused')
     || (options.apply && rollout.revision !== options.expectedRevision)) {
-    throw new Error('Retention preparation requires the exact legacy rollout phase');
+    throw new Error('Retention preparation apply requires the exact paused rollout phase');
   }
   const result = await retention.runNotificationRetentionPreparation({
     db,

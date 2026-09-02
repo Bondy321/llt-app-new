@@ -16,6 +16,7 @@ const { createNotificationJobRecord, enqueueNotificationJob } = require('./notif
 const { buildDeliveryAttemptId, transitionDeliveryAttempt } = require('./notificationWorker');
 const {
   NOTIFICATION_RETENTION_IN_PROGRESS,
+  isNotificationManualRequeueRetentionBlocked,
   recoverNotificationRetentionFenceIfInactive,
   recoverZeroResultNotificationRequeue,
   isNotificationLifecycleRetentionFenced,
@@ -324,9 +325,15 @@ const requeueRecipient = async ({ db, job, authUid, state, requeueId, nowMs }) =
 const requeueFailedNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.now() }) => {
   const jobRef = db.ref(`notification_jobs/${jobId}`);
   let job = (await jobRef.once('value')).val();
+  if (await isNotificationManualRequeueRetentionBlocked({ db, jobId, job })) {
+    return { success: false, reason: NOTIFICATION_RETENTION_IN_PROGRESS };
+  }
   if (isNotificationLifecycleRetentionFenced(job, nowMs)) {
     await recoverNotificationRetentionFenceIfInactive(db, jobId, nowMs);
     job = (await jobRef.once('value')).val();
+    if (await isNotificationManualRequeueRetentionBlocked({ db, jobId, job })) {
+      return { success: false, reason: NOTIFICATION_RETENTION_IN_PROGRESS };
+    }
     if (isNotificationLifecycleRetentionFenced(job, nowMs)) {
       return { success: false, reason: NOTIFICATION_RETENTION_IN_PROGRESS };
     }

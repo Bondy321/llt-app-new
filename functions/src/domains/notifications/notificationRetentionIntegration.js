@@ -7,6 +7,7 @@ const {
   RETENTION_MS,
   TERMINAL_NOTIFICATION_ATTEMPT_STATUSES,
   ensureNotificationRetentionScheduled,
+  isManualRequeueBlockedByRetentionState,
   isNotificationRetentionFenced,
   nextNotificationRetentionGeneration,
   recoverInactiveCompactorFence,
@@ -61,12 +62,16 @@ const recoverNotificationRetentionFenceIfInactive = async (db, jobId, nowMs) => 
   recoverInactiveCompactorFence({ db, jobId, nowMs })
 );
 const recoverZeroResultNotificationRequeue = (options) => recoverZeroResultRequeue(options);
+const isNotificationManualRequeueRetentionBlocked = (options) => (
+  isManualRequeueBlockedByRetentionState(options)
+);
 
 module.exports = {
   NOTIFICATION_RETENTION_IN_PROGRESS,
   NOTIFICATION_RETENTION_MS,
   TERMINAL_NOTIFICATION_ATTEMPT_STATUSES,
   isNotificationLifecycleRetentionFenced,
+  isNotificationManualRequeueRetentionBlocked,
   nextNotificationRetentionGeneration,
   recoverNotificationRetentionFenceIfInactive,
   recoverZeroResultNotificationRequeue,
