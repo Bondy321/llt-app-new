@@ -37,7 +37,7 @@ const expectedDeploymentProjection = () => ({
   },
   scheduler: {
     jobName: RETENTION_ENGINE_PROTOCOL_MANIFEST.trigger.schedulerJobName,
-    schedule: RETENTION_ENGINE_PROTOCOL_MANIFEST.trigger.schedulerCron,
+    schedule: RETENTION_ENGINE_PROTOCOL_MANIFEST.trigger.schedule,
     timeZone: RETENTION_ENGINE_PROTOCOL_MANIFEST.trigger.timeZone,
   },
 });
@@ -83,7 +83,7 @@ const deployedSchedulerMatches = ({ schedulerConfig, functionConfig, projectId }
   const expectedServiceAccount = functionConfig?.serviceConfig?.serviceAccountEmail;
   return schedulerConfig?.name === expectedName
     && ['ENABLED', 'PAUSED'].includes(schedulerConfig?.state)
-    && schedulerConfig?.schedule === expected.schedulerCron
+    && schedulerConfig?.schedule === expected.schedule
     && schedulerConfig?.timeZone === expected.timeZone
     && Boolean(functionUri)
     && schedulerUri === functionUri

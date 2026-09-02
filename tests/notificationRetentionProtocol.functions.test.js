@@ -158,7 +158,7 @@ const deployedArtifacts = (overrides = {}) => {
     schedulerConfig: {
       name: `projects/${projectId}/locations/${trigger.region}/jobs/${trigger.schedulerJobName}`,
       state: 'PAUSED',
-      schedule: trigger.schedulerCron,
+      schedule: trigger.schedule,
       timeZone: trigger.timeZone,
       httpTarget: {
         uri: `https://${trigger.functionName}.example.test`,
@@ -184,6 +184,12 @@ test('production attestation requires exact deployed rules, Function and schedul
     }],
     ['deployed_scheduler_mismatch', {
       schedulerConfig: { ...deployedArtifacts().schedulerConfig, schedule: '*/30 * * * *' },
+    }],
+    ['deployed_scheduler_mismatch', {
+      schedulerConfig: {
+        ...deployedArtifacts().schedulerConfig,
+        schedule: RETENTION_ENGINE_PROTOCOL_MANIFEST.trigger.schedulerCron,
+      },
     }],
     ['deployed_scheduler_mismatch', {
       schedulerConfig: {
