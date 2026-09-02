@@ -291,6 +291,11 @@ const commitRolloutTransition = async ({
   let reason = 'rollout_changed';
   // eslint-disable-next-line complexity -- the rollout record preserves every phase-specific proof field
   const result = await db.ref(NOTIFICATION_RETENTION_PATHS.rollout).transaction((currentValue) => {
+    // The Admin SDK may invoke a transaction with an initial local null before
+    // retrying with the server value. Returning undefined here would abort the
+    // CAS before that authoritative retry. A null proposal is a safe no-op when
+    // the server path is actually absent and forces a retry when it is present.
+    if (currentValue === null && !(expectedPhase === 'legacy' && expectedRevision === 0)) return null;
     const current = normalizeNotificationRetentionRollout(currentValue);
     if (current.phase !== expectedPhase || current.revision !== expectedRevision) return undefined;
     transitioned = true;
