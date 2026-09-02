@@ -201,12 +201,10 @@ const exactAttemptMatches = (current, expected) => Boolean(current
   && current.jobId === expected.jobId
   && current.status === expected.status
   && Number(current.retentionDueAtMs || 0) === Number(expected.retentionDueAtMs || 0));
-
 const withoutOrphanClaim = (attempt) => {
   const { retentionOrphanClaim: _claim, ...rest } = attempt;
   return rest;
 };
-
 const claimOrphanAttempt = async ({ db, attemptId, expected, claimId, nowMs, leaseMs, metrics }) => {
   let claimed = null;
   const result = await transactionWithAuthoritativeExistingValue(
@@ -225,7 +223,6 @@ const claimOrphanAttempt = async ({ db, attemptId, expected, claimId, nowMs, lea
   metrics.transactions += 1;
   return result?.committed ? claimed : null;
 };
-
 const releaseOrphanAttempt = async ({ db, attemptId, claimId, metrics }) => {
   await transactionWithAuthoritativeExistingValue(
     db.ref(`notification_delivery_attempts/${attemptId}`),
@@ -234,7 +231,6 @@ const releaseOrphanAttempt = async ({ db, attemptId, claimId, metrics }) => {
   );
   metrics.transactions += 1;
 };
-
 const restoreOrphanAttempt = async ({ db, attemptId, expected, claimId, metrics }) => {
   const clean = withoutOrphanClaim(expected);
   await db.ref(`notification_delivery_attempts/${attemptId}`).transaction((current) => {
@@ -244,7 +240,6 @@ const restoreOrphanAttempt = async ({ db, attemptId, expected, claimId, metrics 
   }, undefined, false);
   metrics.transactions += 1;
 };
-
 const compareDeleteAttemptQueuePointer = async ({ db, attemptId, attempt, metrics }) => {
   const root = QUEUE_ROOTS[attempt.queueKind];
   if (!root || typeof attempt.queueKey !== 'string' || !attempt.queueKey) return false;
@@ -264,7 +259,6 @@ const compareDeleteAttemptQueuePointer = async ({ db, attemptId, attempt, metric
   }
   return Boolean(deleted && result?.committed);
 };
-
 const deleteClaimedOrphanAttempt = async ({
   db, attemptId, expected, claimId, nowMs, metrics,
 }) => {
@@ -373,7 +367,6 @@ const sweepOrphanAttempts = async ({ db, nowMs, budgets, metrics, canContinue })
   });
   return { hasMore: pageHasMore, stopped };
 };
-
 const deleteOrphanMarketingDetail = async ({ db, detailId, expected, nowMs, metrics }) => {
   const jobId = expected?.deliveryJobId || expected?.notificationDeliveryJobId;
   if (typeof jobId !== 'string' || !jobId) return false;
