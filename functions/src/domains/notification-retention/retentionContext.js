@@ -2,17 +2,12 @@
 
 // @ts-check
 
-const { createHash } = require('node:crypto');
-const {
-  buildOperationsTerminalWarning,
-  persistOperationsTerminalWarning,
-} = require('../../../lib/operationsTerminalWarnings');
 const { NOTIFICATION_RETENTION_PATHS } = require('./constants');
 const {
   classifyNotificationRetentionEligibility,
   isNotificationRetentionFenced,
 } = require('./eligibility');
-const { maxMetric, safeInteger } = require('./retentionEngineRuntime');
+const { safeInteger } = require('./retentionEngineRuntime');
 const {
   canaryEvidenceStillMatches,
   readNotificationRetentionRollout,
@@ -25,102 +20,22 @@ const {
   recoverInactiveLegacyFence,
 } = require('./retentionFenceRecovery');
 
-const readActiveRequeue = async (db, jobId, nowMs, metrics) => {
-  const value = (await db.ref(`notification_requeue_jobs/${jobId}`).once('value')).val();
-  metrics.queries += 1;
-  return Boolean(value && value.status === 'processing');
-};
+const {
+  cancelCanonicalFence,
+  cumulativeFenceFields,
+  firstDestructiveCommitAtMs,
+  hasCommittedIrreversibleWork,
+  readActiveRequeue,
+  removeRetentionQueueEntry,
+  releaseStateLease,
+} = require('./retentionOwnership');
 
-const removeRetentionQueueEntry = async ({ db, queueKey, entry, metrics }) => {
-  let removed = false;
-  const result = await db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${queueKey}`)
-    .transaction((current) => {
-      if (!current || current.jobId !== entry?.jobId
-        || Number(current.generation) !== Number(entry?.generation)) return undefined;
-      removed = true;
-      return null;
-    }, undefined, false);
-  metrics.transactions += 1;
-  if (removed && result?.committed) {
-    metrics.queueEntriesRemoved += 1;
-    metrics.updatePaths += 1;
-    maxMetric(metrics, 'maxUpdatePaths', 1);
-  }
-  return Boolean(removed && result?.committed);
-};
-
-const releaseStateLease = async ({
-  db, jobId, ownerId, nowMs, status = 'queued', errorCode = null, metrics = null,
-}) => {
-  await db.ref(`${NOTIFICATION_RETENTION_PATHS.jobs}/${jobId}`).transaction((current) => {
-    if (!current || current.lease?.ownerId !== ownerId) return undefined;
-    return {
-      ...current,
-      status,
-      ...(status === 'requires_attention' ? { retentionDueAtMs: null } : {}),
-      ...(errorCode ? { lastErrorCode: String(errorCode).slice(0, 80) } : {}),
-      lease: null,
-      leaseExpiresAtMs: null,
-      updatedAtMs: nowMs,
-    };
-  }, undefined, false);
-  if (metrics) metrics.transactions += 1;
-};
-
-const cancelCanonicalFence = async ({ db, jobId, fenceId, metrics }) => {
-  await db.ref(`notification_jobs/${jobId}`).transaction((current) => {
-    if (!current || current.retentionFence?.fenceId !== fenceId) return undefined;
-    const fenceGeneration = safeInteger(current.retentionFence.generation);
-    return {
-      ...current,
-      retentionGeneration: Math.max(0, fenceGeneration - 1),
-      retentionFence: null,
-    };
-  }, undefined, false);
-  metrics.transactions += 1;
-};
-
-const persistRetentionWarning = async ({ db, jobId, reason, nowMs }) => {
-  const warning = buildOperationsTerminalWarning({
-    jobType: 'notification_retention',
-    reason,
-    identifiers: { retentionJobHash: createHash('sha256').update(jobId).digest('hex').slice(0, 24) },
-    attemptCount: 1,
-    firstAttemptAtMs: nowMs,
-    lastAttemptAtMs: nowMs,
-    expiresAtMs: nowMs,
-    nowMs,
-  });
-  return persistOperationsTerminalWarning({ db, warning });
-};
-
-const markRequiresAttention = async ({ context, reason, nowMs, metrics }) => {
-  metrics.jobsRequiresAttention += 1;
-  metrics.failures += 1;
-  try {
-    await persistRetentionWarning({ db: context.db, jobId: context.jobId, reason, nowMs });
-  } catch (_error) {
-    metrics.failures += 1;
-  }
-  if (!context.canonicalDeleted) {
-    await cancelCanonicalFence({
-      db: context.db, jobId: context.jobId, fenceId: context.fenceId, nowMs, metrics,
-    });
-  }
-  await releaseStateLease({
-    db: context.db,
-    jobId: context.jobId,
-    ownerId: context.ownerId,
-    nowMs,
-    status: 'requires_attention',
-    errorCode: reason,
-    metrics,
-  });
-  context.state = { ...context.state, status: 'requires_attention', lease: null };
-  await removeRetentionQueueEntry({
-    db: context.db, queueKey: context.queueKey, entry: context.entry, metrics,
-  });
-};
+const persistRetentionWarning = (options) => require('./attentionTransition')
+  .persistRetentionWarning(options);
+const markRequiresAttention = (options) => require('./attentionTransition')
+  .markRequiresAttention(options);
+const repairAttentionProjection = (options) => require('./attentionTransition')
+  .repairAttentionProjection(options);
 
 const claimStateLease = async ({ db, queueKey, entry, nowMs, ownerId, budgets, metrics }) => {
   const jobId = entry?.jobId;
@@ -130,8 +45,11 @@ const claimStateLease = async ({ db, queueKey, entry, nowMs, ownerId, budgets, m
   metrics.queries += 1;
   if (!observed || observed.queueKey !== queueKey
     || Number(observed.generation) !== Number(entry.generation)
-    || observed.status === 'completed' || observed.status === 'requires_attention') {
+    || observed.status === 'completed') {
     return { stale: true, jobId };
+  }
+  if (observed.status === 'requires_attention') {
+    return { attention: true, state: observed, jobId };
   }
   let claimed = false;
   let blockedByLease = false;
@@ -146,8 +64,21 @@ const claimStateLease = async ({ db, queueKey, entry, nowMs, ownerId, budgets, m
     }
     claimed = true;
     const leaseRevision = safeInteger(current.leaseRevision) + 1;
+    // A destructiveCommit is written before each destructive unit and cleared
+    // only after its cumulative outcome is recorded. If the previous worker
+    // died between the external mutation and that promotion, recovery cannot
+    // prove that the mutation did not commit. Promote the marker
+    // conservatively while claiming the next lease so rollout revocation,
+    // attention handling and manual recovery all remain fail-closed.
+    const recoveringAmbiguousCommit = Boolean(current.destructiveCommit)
+      && !hasCommittedIrreversibleWork(current);
     return {
       ...current,
+      ...(recoveringAmbiguousCommit ? {
+        irreversibleWorkStarted: true,
+        firstDestructiveCommitAtMs: firstDestructiveCommitAtMs(current, nowMs),
+        committedDeletionCount: safeInteger(current.committedDeletionCount),
+      } : {}),
       status: 'processing',
       leaseRevision,
       lease: { ownerId, revision: leaseRevision, expiresAtMs: nowMs + budgets.leaseMs },
@@ -161,7 +92,6 @@ const claimStateLease = async ({ db, queueKey, entry, nowMs, ownerId, budgets, m
   if (!claimed || !result?.committed) return { deferred: blockedByLease, stale: !blockedByLease, jobId };
   return { state: result.snapshot.val(), jobId };
 };
-
 const ownsExactFence = (job, state, fenceId) => Boolean(
   job?.retentionFence?.fenceId === fenceId
   && job.retentionFence.status === 'active'
@@ -193,6 +123,7 @@ const installOrReclaimCanonicalFence = async ({
           ...current.retentionFence,
           leaseRevision: state.leaseRevision,
           leaseExpiresAtMs: state.lease?.expiresAtMs || state.leaseExpiresAtMs,
+          ...cumulativeFenceFields(state, nowMs),
         },
       };
       return fencedJob;
@@ -220,6 +151,7 @@ const installOrReclaimCanonicalFence = async ({
         generation: state.generation,
         leaseRevision: state.leaseRevision,
         leaseExpiresAtMs: state.lease?.expiresAtMs || state.leaseExpiresAtMs,
+        ...cumulativeFenceFields(state, nowMs),
       },
     };
     return fencedJob;
@@ -291,6 +223,14 @@ const acquireRetentionContext = async ({
   allowPausedCanary = false, expectedEvidenceDigest = null,
 }) => {
   const claim = await claimStateLease({ db, queueKey, entry, nowMs, ownerId, budgets, metrics });
+  if (claim.attention) {
+    const repaired = await repairAttentionProjection({
+      db, jobId: claim.jobId, state: claim.state, metrics,
+    });
+    if (repaired) await removeRetentionQueueEntry({ db, queueKey, entry, metrics });
+    metrics.jobsDeferred += 1;
+    return { deferred: true, attention: true };
+  }
   if (!claim.state) {
     if (claim.stale) await removeRetentionQueueEntry({ db, queueKey, entry, metrics });
     if (claim.deferred) metrics.jobsDeferred += 1;
@@ -310,7 +250,7 @@ const acquireRetentionContext = async ({
       generation: claim.state.generation,
       leaseRevision: claim.state.leaseRevision,
       leaseExpiresAtMs: claim.state.lease?.expiresAtMs || claim.state.leaseExpiresAtMs,
-      commitStatus: claim.state.destructiveCommit ? 'destructive' : null,
+      ...cumulativeFenceFields(claim.state, nowMs),
     },
   });
   if (!(await rolloutAuthorizesCompactor({
@@ -363,7 +303,8 @@ const renewStateLease = async ({ context, nowMs, metrics, leaseMs = context.budg
     && Number(context.state.lease.expiresAtMs || 0) - nowMs
       > context.budgets.leaseRenewThresholdMs
     && (!extendedCommitLease
-      || Number(context.state.lease.expiresAtMs || 0) >= desiredExpiryMs)) {
+      || (Number(context.state.lease.expiresAtMs || 0) >= desiredExpiryMs
+        && context.state.destructiveCommit))) {
     return context.state;
   }
   let renewed = null;
@@ -454,7 +395,7 @@ const verifyAndRenewFence = async ({ context, nowMs, metrics, leaseMs = context.
         ...current.retentionFence,
         leaseRevision: state.leaseRevision,
         leaseExpiresAtMs: state.lease?.expiresAtMs || state.leaseExpiresAtMs,
-        commitStatus: state.destructiveCommit ? 'destructive' : null,
+        ...cumulativeFenceFields(state, nowMs),
       },
     };
     return renewedJob;
@@ -477,13 +418,16 @@ const transitionStatePhase = async ({ context, expectedPhase, nextPhase, nowMs, 
   metrics.transactions += 1;
   if (result?.committed && next) {
     context.state = next;
-    if (!next.destructiveCommit && !context.canonicalDeleted) {
+    if (!context.canonicalDeleted) {
       await context.db.ref(`notification_jobs/${context.jobId}`).transaction((current) => {
         if (!jobMatchesState(current, next, context.jobId)
           || !ownsExactFence(current, next, context.fenceId)) return undefined;
         return {
           ...current,
-          retentionFence: { ...current.retentionFence, commitStatus: null },
+          retentionFence: {
+            ...current.retentionFence,
+            ...cumulativeFenceFields(next, nowMs),
+          },
         };
       }, undefined, false);
       metrics.transactions += 1;
@@ -492,13 +436,62 @@ const transitionStatePhase = async ({ context, expectedPhase, nextPhase, nowMs, 
   return Boolean(result?.committed && next);
 };
 
+const commitIrreversibleWork = async ({ context, nowMs, deleted = 0, metrics }) => {
+  let committedState = null;
+  const result = await context.db.ref(`${NOTIFICATION_RETENTION_PATHS.jobs}/${context.jobId}`)
+    .transaction((current) => {
+      if (!current || current.lease?.ownerId !== context.ownerId
+        || current.queueKey !== context.queueKey
+        || Number(current.generation) !== Number(context.entry.generation)
+        || !current.destructiveCommit
+        || Number(current.destructiveCommit.generation) !== Number(current.generation)) {
+        return undefined;
+      }
+      const existingCount = Math.max(
+        safeInteger(current.committedDeletionCount),
+        safeInteger(current.deletionCount),
+        safeInteger(current.attemptsDeleted),
+      );
+      committedState = {
+        ...current,
+        irreversibleWorkStarted: true,
+        firstDestructiveCommitAtMs: firstDestructiveCommitAtMs(current, nowMs),
+        committedDeletionCount: existingCount + Math.max(0, safeInteger(deleted)),
+        updatedAtMs: nowMs,
+      };
+      return committedState;
+    }, undefined, false);
+  metrics.transactions += 1;
+  if (!result?.committed || !committedState) return false;
+  context.state = committedState;
+  if (!context.canonicalDeleted) {
+    await context.db.ref(`notification_jobs/${context.jobId}`).transaction((current) => {
+      if (!jobMatchesState(current, committedState, context.jobId)
+        || !ownsExactFence(current, committedState, context.fenceId)) return undefined;
+      return {
+        ...current,
+        retentionFence: {
+          ...current.retentionFence,
+          ...cumulativeFenceFields(committedState, nowMs),
+        },
+      };
+    }, undefined, false);
+    metrics.transactions += 1;
+  }
+  return true;
+};
+
 module.exports = {
   acquireRetentionContext,
   cancelCanonicalFence,
+  commitIrreversibleWork,
+  hasCommittedIrreversibleWork,
   jobMatchesState,
   markRequiresAttention,
   ownsExactFence,
+  persistRetentionWarning,
   readActiveRequeue,
+  removeRetentionQueueEntry,
   recoverInactiveCompactorFence,
   recoverInactiveLegacyFence,
   removeLegacyRetentionOwnership,

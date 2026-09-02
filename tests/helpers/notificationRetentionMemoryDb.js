@@ -1,6 +1,15 @@
 'use strict';
 
 const clone = (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+const fs = require('node:fs');
+const path = require('node:path');
+const {
+  RETENTION_ENGINE_PROTOCOL_MANIFEST,
+  compiledRetentionProtocol,
+} = require('../../functions/src/domains/notification-retention/protocol');
+const { buildRetentionDeploymentAttestation } = require(
+  '../../functions/src/domains/notification-retention/deploymentAttestation',
+);
 
 const pathKeys = (pathName) => String(pathName || '').split('/').filter(Boolean);
 
@@ -45,6 +54,79 @@ const snapshotFor = (value, ordered = null) => ({
 
 const createNotificationRetentionMemoryDb = (initial = {}, hooks = {}) => {
   const data = clone(initial);
+  let rollout = data?.notification_retention_rollout?.v1;
+  if (rollout?.preparationComplete === true && ['shadow', 'compactor'].includes(rollout.phase)
+    && !rollout.expectedEngineProtocolId && !rollout.retentionEngineProtocolId) {
+    Object.assign(rollout, compiledRetentionProtocol());
+    rollout.expectedEngineProtocolId = rollout.retentionEngineProtocolId;
+  }
+  const protocolId = rollout?.expectedEngineProtocolId || rollout?.retentionEngineProtocolId;
+  if (protocolId) {
+    data.notification_retention ||= {};
+    data.notification_retention.v1 ||= {};
+  }
+  const retentionV1 = data?.notification_retention?.v1;
+  if (protocolId && !Object.prototype.hasOwnProperty.call(retentionV1, 'deployment_heartbeats')) {
+    const observedAtMs = Number.isSafeInteger(rollout.updatedAtMs) ? rollout.updatedAtMs : 1;
+    retentionV1.deployment_heartbeats = {
+      [protocolId]: {
+        schemaVersion: 1,
+        retentionEngineProtocolId: protocolId,
+        engineSourceDigest: rollout.engineSourceDigest,
+        engineRulesDigest: rollout.engineRulesDigest,
+        engineTriggerDigest: rollout.engineTriggerDigest,
+        functionName: 'cleanupNotificationDeliveryData',
+        region: 'europe-west1',
+        sequence: 1,
+        observedAtMs,
+        expiresAtMs: observedAtMs + (45 * 60 * 1000),
+      },
+    };
+  }
+  if (protocolId && !Object.prototype.hasOwnProperty.call(retentionV1, 'deployment_attestations')) {
+    const heartbeat = retentionV1.deployment_heartbeats?.[protocolId];
+    if (heartbeat) {
+      const trigger = RETENTION_ENGINE_PROTOCOL_MANIFEST.trigger;
+      const projectId = 'retention-test-project';
+      const candidate = buildRetentionDeploymentAttestation({
+        projectId,
+        rules: fs.readFileSync(path.resolve(__dirname, '../../database.rules.json'), 'utf8'),
+        heartbeat,
+        nowMs: heartbeat.observedAtMs,
+        functionConfig: {
+          name: `projects/${projectId}/locations/${trigger.region}/functions/${trigger.functionName}`,
+          state: 'ACTIVE',
+          environment: 'GEN_2',
+          buildConfig: { runtime: trigger.runtime },
+          serviceConfig: {
+            timeoutSeconds: `${trigger.timeoutSeconds}s`,
+            maxInstanceCount: trigger.maxInstances,
+            allTrafficOnLatestRevision: true,
+            uri: `https://${trigger.functionName}.example.test`,
+            serviceAccountEmail: `${projectId}@appspot.gserviceaccount.com`,
+          },
+        },
+        schedulerConfig: {
+          name: `projects/${projectId}/locations/${trigger.region}/jobs/${trigger.schedulerJobName}`,
+          state: 'PAUSED',
+          schedule: trigger.schedulerCron,
+          timeZone: trigger.timeZone,
+          httpTarget: {
+            uri: `https://${trigger.functionName}.example.test`,
+            oidcToken: {
+              audience: `https://${trigger.functionName}.example.test`,
+              serviceAccountEmail: `${projectId}@appspot.gserviceaccount.com`,
+            },
+          },
+        },
+      });
+      if (candidate.valid) {
+        retentionV1.deployment_attestations = {
+          [protocolId]: candidate.attestation,
+        };
+      }
+    }
+  }
   const queryLog = [];
   const transactionLog = [];
   const updateLog = [];

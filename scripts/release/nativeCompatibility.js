@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { classifyProductionDependency } = require('./packageChange');
 
 const ROOT = path.resolve(__dirname, '../..');
 const CORE_INPUTS = ['package.json', 'package-lock.json', 'app.config.js', 'eas.json'];
@@ -67,9 +68,16 @@ const collectConfigReferences = (source, availablePaths) => {
 };
 
 const projectProductionPackageGraph = (packageJson, packageLock) => {
+  const selectNativeDependencies = (dependencies) => Object.fromEntries(
+    Object.entries(dependencies || {}).filter(([name]) => classifyProductionDependency(name) === 'native'),
+  );
+  const packageNameFromLockPath = (packagePath) => {
+    const segments = packagePath.split('/node_modules/').at(-1).replace(/^node_modules\//u, '').split('/');
+    return segments[0]?.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0];
+  };
   const root = {
-    dependencies: packageJson.dependencies || {},
-    optionalDependencies: packageJson.optionalDependencies || {},
+    dependencies: selectNativeDependencies(packageJson.dependencies),
+    optionalDependencies: selectNativeDependencies(packageJson.optionalDependencies),
     bundledDependencies: packageJson.bundledDependencies || packageJson.bundleDependencies || [],
     overrides: packageJson.overrides || {},
     expo: packageJson.expo || {},
@@ -77,7 +85,10 @@ const projectProductionPackageGraph = (packageJson, packageLock) => {
   };
   const packages = Object.fromEntries(
     Object.entries(packageLock.packages || {})
-      .filter(([packagePath, metadata]) => packagePath !== '' && metadata?.dev !== true && metadata?.devOptional !== true)
+      .filter(([packagePath, metadata]) => packagePath !== ''
+        && metadata?.dev !== true
+        && metadata?.devOptional !== true
+        && classifyProductionDependency(packageNameFromLockPath(packagePath)) === 'native')
       .map(([packagePath, metadata]) => [packagePath, metadata]),
   );
   return { root, packages };

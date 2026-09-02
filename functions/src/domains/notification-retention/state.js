@@ -6,15 +6,20 @@ const { createHash } = require('node:crypto');
 const {
   NOTIFICATION_RETENTION_PATHS,
   NOTIFICATION_RETENTION_ROLLOUT_PHASES,
-  ORDINARY_TERMINAL_NOTIFICATION_JOB_STATUSES,
-  RETENTION_MS,
+  NOTIFICATION_RETENTION_SCHEMA_VERSION,
 } = require('./constants');
 const {
-  classifyNotificationRetentionEligibility,
-} = require('./eligibility');
-const STATE_SCHEMA_VERSION = 1;
-const QUEUE_KEY_WIDTH = 13;
-const QUEUE_GENERATION_WIDTH = 16;
+  RETENTION_ENGINE_PROTOCOL_ID,
+  classifyRetentionHeartbeat,
+  compiledRetentionProtocol,
+  protocolEvidenceMatches,
+  readRetentionDeploymentHeartbeat,
+} = require('./protocol');
+const {
+  classifyRetentionDeploymentAttestation,
+  readRetentionDeploymentAttestation,
+} = require('./deploymentAttestation');
+const STATE_SCHEMA_VERSION = NOTIFICATION_RETENTION_SCHEMA_VERSION;
 const MAX_BOUNDED_TEXT = 80;
 const EVIDENCE_FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/u;
 /** @param {unknown} value */
@@ -41,6 +46,10 @@ const buildShadowEvidenceFingerprint = (value) => createHash('sha256').update(JS
   Number(value?.progressRevision || 0),
   Number(value?.evaluationNowMs || 0),
   value?.hasMore === true,
+  value?.retentionEngineProtocolId,
+  value?.engineSourceDigest,
+  value?.engineRulesDigest,
+  value?.engineTriggerDigest,
 ])).digest('hex');
 /** @param {any} value */
 // eslint-disable-next-line complexity -- the fingerprint binds every bounded canary proof field
@@ -58,6 +67,10 @@ const buildCanaryEvidenceFingerprint = (value) => createHash('sha256').update(JS
   Number(value?.failures || 0),
   boundedText(value?.fixtureFingerprint),
   value?.fixtureCompleted === true,
+  value?.retentionEngineProtocolId,
+  value?.engineSourceDigest,
+  value?.engineRulesDigest,
+  value?.engineTriggerDigest,
 ])).digest('hex');
 /** @param {unknown} value */
 const validEvidenceFingerprint = (value) => typeof value === 'string'
@@ -75,17 +88,6 @@ const canaryEvidenceProvesCompletedJobs = (value) => Boolean(
   && Number.isSafeInteger(value.failures)
   && value.failures === 0,
 );
-
-/** @param {string} jobId @param {number} dueAtMs @param {number} generation */
-const buildRetentionQueueKey = (jobId, dueAtMs, generation) => {
-  const digest = createHash('sha256').update(jobId).digest('hex').slice(0, 32);
-  return `${String(dueAtMs).padStart(QUEUE_KEY_WIDTH, '0')}~${digest}~${String(generation).padStart(QUEUE_GENERATION_WIDTH, '0')}`;
-};
-
-/** @param {unknown} value */
-const validJobId = (value) => typeof value === 'string'
-  && value.length > 0 && value.length <= 128
-  && !/[.#$\[\]/]/u.test(value);
 
 /** @param {any} value */
 // eslint-disable-next-line complexity -- strict fail-closed rollout schema validates all phase evidence
@@ -113,7 +115,7 @@ const normalizeNotificationRetentionRollout = (value) => {
     && value.preparationRolloutRevision >= 0
     ? value.preparationRolloutRevision
     : null;
-  const phaseEvidenceValid = value?.phase === 'legacy'
+  const phaseEvidenceValid = ['legacy', 'paused'].includes(value?.phase)
     || (value?.preparationComplete === true && Boolean(evidenceDigest)
       && preparationRolloutRevision !== null
       && (value?.phase !== 'compactor' || (Boolean(shadowEvidenceFingerprint)
@@ -134,7 +136,13 @@ const normalizeNotificationRetentionRollout = (value) => {
       canaryPassed: false,
       canaryEvidenceFingerprint: null,
       canaryEvidenceRevision: null,
+      expectedEngineProtocolId: null,
+      retentionEngineProtocolId: null,
+      engineSourceDigest: null,
+      engineRulesDigest: null,
+      engineTriggerDigest: null,
       updatedAtMs: null,
+      protocolValid: false,
       valid: false,
     };
   }
@@ -150,7 +158,17 @@ const normalizeNotificationRetentionRollout = (value) => {
     canaryPassed,
     canaryEvidenceFingerprint,
     canaryEvidenceRevision,
+    expectedEngineProtocolId: boundedText(
+      value.expectedEngineProtocolId || value.retentionEngineProtocolId,
+    ) || null,
+    retentionEngineProtocolId: boundedText(
+      value.retentionEngineProtocolId || value.expectedEngineProtocolId,
+    ) || null,
+    engineSourceDigest: boundedText(value.engineSourceDigest) || null,
+    engineRulesDigest: boundedText(value.engineRulesDigest) || null,
+    engineTriggerDigest: boundedText(value.engineTriggerDigest) || null,
     updatedAtMs: Number.isSafeInteger(value.updatedAtMs) ? value.updatedAtMs : null,
+    protocolValid: protocolEvidenceMatches(value),
     valid: true,
   };
 };
@@ -163,9 +181,10 @@ const readNotificationRetentionRollout = async ({ db }) => {
 
 const allowedRolloutTransition = (current, next) => {
   if (current === next) return true;
+  if (next === 'paused') return true;
   if (next === 'legacy') return true;
   if (current === 'compactor' && next === 'shadow') return true;
-  return (current === 'legacy' && next === 'shadow')
+  return (['legacy', 'paused'].includes(current) && next === 'shadow')
     || (current === 'shadow' && next === 'compactor');
 };
 
@@ -177,13 +196,14 @@ const invalidRolloutTransitionInput = ({ expectedPhase, expectedRevision, nextPh
 );
 
 const isForwardRolloutTransition = (expectedPhase, nextPhase) => (
-  nextPhase !== 'legacy'
+  !['legacy', 'paused'].includes(nextPhase)
   && !(expectedPhase === 'compactor' && nextPhase === 'shadow')
   && nextPhase !== expectedPhase
 );
 
 const completedPreparationEvidence = (prepared) => Boolean(prepared?.status === 'complete'
   && prepared?.preparationComplete === true
+  && protocolEvidenceMatches(prepared)
   && Number(prepared?.cumulative?.requiresAttention || prepared?.requiresAttention || 0) === 0);
 
 const activationEvidenceAccepted = ({
@@ -194,7 +214,8 @@ const activationEvidenceAccepted = ({
   const expectedPreparationRolloutRevision = expectedPhase === 'legacy'
     ? expectedRevision
     : currentRollout?.preparationRolloutRevision;
-  if (forward && (!preparationComplete || !completedPreparationEvidence(prepared)
+  if (forward && (!protocolEvidenceMatches(currentRollout)
+    || !preparationComplete || !completedPreparationEvidence(prepared)
     || !digest || prepared?.evidenceDigest !== digest
     || Number(prepared?.rolloutRevision) !== Number(expectedPreparationRolloutRevision))) return false;
   if (nextPhase !== 'compactor') return true;
@@ -209,6 +230,7 @@ const activationEvidenceAccepted = ({
         currentRollout.shadowEvidenceFingerprint,
       )
       && canaryEvidence?.schemaVersion === STATE_SCHEMA_VERSION
+      && protocolEvidenceMatches(canaryEvidence)
       && canaryEvidence.phase === 'canary'
       && canaryEvidenceProvesCompletedJobs(canaryEvidence)
       && Number(canaryEvidence.rolloutRevision) === Number(expectedRevision)
@@ -218,6 +240,7 @@ const activationEvidenceAccepted = ({
       && canaryEvidence.evidenceFingerprint === buildCanaryEvidenceFingerprint(canaryEvidence);
   }
   return shadowEvidence?.schemaVersion === STATE_SCHEMA_VERSION
+    && protocolEvidenceMatches(shadowEvidence)
     && shadowEvidence?.phase === 'shadow'
     && shadowEvidence?.status === 'passed'
     && Number(shadowEvidence?.rolloutRevision) === Number(expectedRevision)
@@ -235,6 +258,7 @@ const rejectedRolloutTransition = async (db, reason) => ({
 
 const shadowEvidenceStillMatches = (current, expectedRevision, fingerprint) => Boolean(
   current?.schemaVersion === STATE_SCHEMA_VERSION
+  && protocolEvidenceMatches(current)
   && current.phase === 'shadow'
   && current.status === 'passed'
   && Number(current.rolloutRevision) === Number(expectedRevision)
@@ -246,6 +270,8 @@ const shadowEvidenceStillMatches = (current, expectedRevision, fingerprint) => B
 
 const canaryEvidenceStillMatches = (current, rollout) => Boolean(
   current?.schemaVersion === STATE_SCHEMA_VERSION
+  && protocolEvidenceMatches(current)
+  && protocolEvidenceMatches(rollout)
   && current.phase === 'canary'
   && canaryEvidenceProvesCompletedJobs(current)
   && Number(current.rolloutRevision) === Number(rollout?.canaryEvidenceRevision)
@@ -273,8 +299,9 @@ const commitRolloutTransition = async ({
       schemaVersion: STATE_SCHEMA_VERSION,
       phase: nextPhase,
       revision: current.revision + 1,
-      preparationComplete: nextPhase === 'legacy' ? false : Boolean(preparationComplete || current.preparationComplete),
-      preparationRolloutRevision: nextPhase === 'legacy'
+      preparationComplete: ['legacy', 'paused'].includes(nextPhase)
+        ? false : Boolean(preparationComplete || current.preparationComplete),
+      preparationRolloutRevision: ['legacy', 'paused'].includes(nextPhase)
         ? null
         : (current.preparationRolloutRevision ?? current.revision),
       evidenceDigest: digest || current.evidenceDigest || null,
@@ -291,6 +318,8 @@ const commitRolloutTransition = async ({
       canaryEvidenceRevision: nextPhase === 'compactor' && canaryPassed
         ? canaryEvidenceRevision
         : null,
+      ...compiledRetentionProtocol(),
+      expectedEngineProtocolId: RETENTION_ENGINE_PROTOCOL_ID,
       actorHash: hashBoundedValue(actor),
       updatedAtMs: nowMs,
     };
@@ -330,6 +359,18 @@ const transitionNotificationRetentionRollout = async ({
   }
   const digest = boundedText(evidenceDigest);
   const forward = isForwardRolloutTransition(expectedPhase, nextPhase);
+  if (forward || (expectedPhase === 'compactor' && nextPhase === 'compactor')) {
+    const heartbeat = await readRetentionDeploymentHeartbeat({ db });
+    const heartbeatStatus = classifyRetentionHeartbeat({ heartbeat, nowMs });
+    if (!heartbeatStatus.valid) return rejectedRolloutTransition(db, heartbeatStatus.reason);
+    const attestation = await readRetentionDeploymentAttestation({ db });
+    const attestationStatus = classifyRetentionDeploymentAttestation({
+      attestation, heartbeat, nowMs,
+    });
+    if (!attestationStatus.valid) {
+      return rejectedRolloutTransition(db, attestationStatus.reason);
+    }
+  }
   const prepared = forward
     ? (await db.ref(NOTIFICATION_RETENTION_PATHS.preparation).once('value')).val()
     : null;
@@ -389,8 +430,8 @@ const transitionNotificationRetentionRollout = async ({
     db,
     expectedPhase: 'compactor',
     expectedRevision: committed.rollout.revision,
-    nextPhase: 'shadow',
-    preparationComplete: true,
+    nextPhase: 'paused',
+    preparationComplete: false,
     digest,
     shadowEvidenceFingerprint: null,
     shadowEvidenceRevision: null,
@@ -404,182 +445,21 @@ const transitionNotificationRetentionRollout = async ({
   };
 };
 
-/** @param {any} state */
-const activeRequeueState = (state) => Boolean(state
-  && state.status === 'processing');
-
-const scheduleResult = (scheduled, reason, dueAtMs = null, generation = 0) => ({
-  scheduled, reason, dueAtMs, generation,
-});
-
-const materializeCanonicalRetentionBoundary = async ({ db, jobId, job }) => {
-  if (!ORDINARY_TERMINAL_NOTIFICATION_JOB_STATUSES.has(job.status)
-    || !Number.isSafeInteger(job.completedAtMs) || job.completedAtMs <= 0
-    || (Number.isSafeInteger(job.retentionDueAtMs) && job.retentionDueAtMs > 0)) return job;
-  const retentionDueAtMs = job.completedAtMs + RETENTION_MS;
-  const boundary = await db.ref(`notification_jobs/${jobId}`).transaction((current) => {
-    if (!current || current.jobId !== jobId || current.status !== job.status
-      || current.completedAtMs !== job.completedAtMs) return undefined;
-    if (Number.isSafeInteger(current.retentionDueAtMs) && current.retentionDueAtMs > 0) {
-      return current.retentionDueAtMs === retentionDueAtMs ? current : undefined;
-    }
-    return Number.isSafeInteger(retentionDueAtMs) ? { ...current, retentionDueAtMs } : undefined;
-  }, undefined, false);
-  return boundary?.committed ? boundary.snapshot.val() : null;
-};
-
-const schedulableClassification = (classification) => classification.eligible
-  || classification.reason === 'not_due'
-  || classification.reason === 'privacy_not_due';
-
-const buildRetentionState = ({ jobId, job, classification, queueKey, nowMs }) => ({
-  schemaVersion: STATE_SCHEMA_VERSION,
-  jobId,
-  generation: classification.generation,
-  status: 'queued',
-  phase: 'attempts',
-  targetStatus: job.status,
-  targetCompletedAtMs: Number(job.completedAtMs || 0),
-  retentionDueAtMs: classification.dueAtMs,
-  privacyTombstone: classification.privacyTombstone,
-  queueKey,
-  queueVersion: classification.generation,
-  attemptCursor: null,
-  attemptPagesProcessed: 0,
-  attemptsScanned: 0,
-  attemptsDeleted: 0,
-  warnings: 0,
-  lease: null,
-  leaseExpiresAtMs: null,
-  leaseRevision: 0,
-  createdAtMs: nowMs,
-  updatedAtMs: nowMs,
-});
-
-const persistRetentionScheduling = async ({ db, jobId, job, classification, queueKey, nowMs }) => {
-  let outcome = 'conflict';
-  let persistedState = null;
-  let priorCompatibility = null;
-  // The per-job state is the authoritative indexed due queue. This transaction
-  // remains O(1) as the number of retained jobs grows.
-  const result = await db.ref(`${NOTIFICATION_RETENTION_PATHS.jobs}/${jobId}`)
-    // eslint-disable-next-line complexity -- one bounded transaction owns every generation conflict case
-    .transaction((current) => {
-    outcome = 'conflict';
-    if (current?.status === 'requires_attention'
-      && current.targetStatus === job.status
-      && Number(current.targetCompletedAtMs || 0) === Number(job.completedAtMs || 0)) {
-      outcome = 'requires_attention';
-      return undefined;
-    }
-    if (current && Number(current.generation || 0) > classification.generation) {
-      outcome = 'newer_generation';
-      return undefined;
-    }
-    if (current && Number(current.generation || 0) === classification.generation
-      && current.status === 'requires_attention') {
-      outcome = 'requires_attention';
-      return undefined;
-    }
-    if (current && Number(current.generation || 0) === classification.generation
-      && current.status === 'completed') {
-      outcome = 'already_completed';
-      return undefined;
-    }
-    const sameGeneration = current
-      && Number(current.generation || 0) === classification.generation
-      && current.targetCompletedAtMs === Number(job.completedAtMs || 0);
-    if (!sameGeneration && current?.queueKey && current.queueKey !== queueKey) {
-      priorCompatibility = { queueKey: current.queueKey, generation: current.generation };
-    }
-    persistedState = sameGeneration ? {
-      ...current,
-      targetStatus: job.status,
-      retentionDueAtMs: classification.dueAtMs,
-      privacyTombstone: classification.privacyTombstone,
-      queueKey,
-      queueVersion: classification.generation,
-      updatedAtMs: nowMs,
-    } : buildRetentionState({ jobId, job, classification, queueKey, nowMs });
-    outcome = !sameGeneration ? 'scheduled' : 'already_scheduled';
-    return persistedState;
-  }, undefined, false);
-  if (!result?.committed || !persistedState) return { committed: false, outcome };
-
-  // Keep the old queue as a non-authoritative rollback projection for the
-  // previously deployed worker. New workers never grant deletion authority
-  // from this record.
-  let compatibilityRepaired = false;
-  const queueResult = await db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${queueKey}`)
-    .transaction((current) => {
-    if (current && (current.jobId !== jobId
-      || Number(current.generation) !== Number(persistedState.generation))) return undefined;
-    compatibilityRepaired = !current;
-    return {
-      schemaVersion: STATE_SCHEMA_VERSION,
-      kind: 'notification_job_retention',
-      jobId,
-      generation: persistedState.generation,
-      dueAtMs: persistedState.retentionDueAtMs,
-      createdAtMs: Number(current?.createdAtMs || nowMs),
-    };
-  }, undefined, false);
-  if (queueResult?.committed && priorCompatibility) {
-    await db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${priorCompatibility.queueKey}`)
-      .transaction((current) => current?.jobId === jobId
-        && Number(current.generation) === Number(priorCompatibility.generation)
-        ? null : undefined, undefined, false);
-  }
-  if (outcome === 'already_scheduled' && compatibilityRepaired) outcome = 'queue_repaired';
-  return { committed: true, outcome, compatibilityRepaired };
-};
-
-/**
- * Creates or repairs one deterministic durable retention job and due queue
- * entry. The returned result contains aggregates and opaque identifiers only.
- * @param {{ db: any, jobId: string, job?: any, nowMs?: number }} options
- */
-const ensureNotificationRetentionScheduled = async ({
+const pauseNotificationRetentionRollout = async ({
+  db, expectedPhase, expectedRevision, actor = 'automatic-protocol-pause', nowMs = Date.now(),
+}) => transitionNotificationRetentionRollout({
   db,
-  jobId,
-  job: suppliedJob,
-  nowMs = Date.now(),
-}) => {
-  if (!validJobId(jobId)) return scheduleResult(false, 'invalid_job_id');
-  const canonicalJob = (await db.ref(`notification_jobs/${jobId}`).once('value')).val();
-  if (!canonicalJob || canonicalJob.jobId !== jobId) return scheduleResult(false, 'missing_job');
-  if (suppliedJob && suppliedJob.jobId !== jobId) {
-    return scheduleResult(false, 'job_identity_changed');
-  }
-  const job = await materializeCanonicalRetentionBoundary({ db, jobId, job: canonicalJob });
-  if (!job) return scheduleResult(false, 'retention_due_conflict');
-  const classification = classifyNotificationRetentionEligibility({
-    // Scheduling is only a durable candidate index. A live delivery lease is
-    // rechecked by the destructive compactor and must not make work disappear.
-    job: { ...job, lease: null },
-    nowMs,
-    // Scheduling is non-destructive. A requeue is rechecked by the compactor's
-    // canonical fence and defers execution without losing this durable due item.
-    activeRequeue: false,
-  });
-  if (!schedulableClassification(classification)) return scheduleResult(
-    false, classification.reason, classification.dueAtMs, classification.generation,
-  );
+  expectedPhase,
+  expectedRevision,
+  nextPhase: 'paused',
+  actor,
+  nowMs,
+});
 
-  const queueKey = buildRetentionQueueKey(jobId, classification.dueAtMs, classification.generation);
-  const persisted = await persistRetentionScheduling({
-    db, jobId, job, classification, queueKey, nowMs,
-  });
-  if (!persisted.committed) return scheduleResult(
-    false, persisted.outcome, classification.dueAtMs, classification.generation,
-  );
-  return scheduleResult(
-    ['scheduled', 'queue_repaired'].includes(persisted.outcome),
-    persisted.outcome,
-    classification.dueAtMs,
-    classification.generation,
-  );
-};
+const activeRequeueState = (state) => require('./retentionScheduling').activeRequeueState(state);
+const buildRetentionQueueKey = (...args) => require('./retentionScheduling').buildRetentionQueueKey(...args);
+const ensureNotificationRetentionScheduled = (options) => require('./retentionScheduling')
+  .ensureNotificationRetentionScheduled(options);
 
 module.exports = {
   STATE_SCHEMA_VERSION,
@@ -590,6 +470,7 @@ module.exports = {
   canaryEvidenceProvesCompletedJobs,
   ensureNotificationRetentionScheduled,
   normalizeNotificationRetentionRollout,
+  pauseNotificationRetentionRollout,
   readNotificationRetentionRollout,
   shadowEvidenceStillMatches,
   canaryEvidenceStillMatches,

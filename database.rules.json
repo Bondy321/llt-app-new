@@ -184,7 +184,7 @@
       ".write": false,
       "v1": {
         "jobs": {
-          ".indexOn": ["retentionDueAtMs", "leaseExpiresAtMs"]
+          ".indexOn": ["retentionDueAtMs", "leaseExpiresAtMs", "status", "phase"]
         }
       }
     },

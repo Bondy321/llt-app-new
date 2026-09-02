@@ -26,6 +26,16 @@ const {
 const { runOneJobStep } = require('./retentionJobPhases');
 const { runDurableShadowPlan } = require('./shadow');
 const {
+  classifyRetentionHeartbeat,
+  compiledRetentionProtocol,
+  protocolEvidenceMatches,
+  readRetentionDeploymentHeartbeat,
+} = require('./protocol');
+const {
+  classifyRetentionDeploymentAttestation,
+  readRetentionDeploymentAttestation,
+} = require('./deploymentAttestation');
+const {
   readExactCanaryFixture,
   verifyAndCompleteCanaryFixture,
 } = require('./canaryFixture');
@@ -33,6 +43,7 @@ const {
   buildCanaryEvidenceFingerprint,
   buildShadowEvidenceFingerprint,
   canaryEvidenceProvesCompletedJobs,
+  pauseNotificationRetentionRollout,
   readNotificationRetentionRollout,
 } = require('./state');
 
@@ -42,6 +53,7 @@ const buildResult = ({ mode, rollout, hasMore, budgetExhaustionReason, metrics }
   rolloutRevision: rollout.revision,
   hasMore: Boolean(hasMore),
   budgetExhaustionReason: budgetExhaustionReason || null,
+  retentionEngineProtocolId: rollout.expectedEngineProtocolId || null,
   metrics,
 });
 
@@ -60,6 +72,7 @@ const persistShadowEvidence = async ({ db, nowMs, rollout, planned, metrics }) =
     progressRevision: planned.progressRevision,
     evaluationNowMs: planned.evaluationNowMs,
     hasMore: Boolean(planned.hasMore),
+    ...compiledRetentionProtocol(),
   };
   candidate.evidenceFingerprint = buildShadowEvidenceFingerprint(candidate);
   const authorizedRollout = await readNotificationRetentionRollout({ db });
@@ -187,7 +200,9 @@ const processContextRound = async ({
 
 const releaseContextLeases = async ({ contexts, ownerId, nowMs, metrics, cancelFences = false }) => {
   for (const context of contexts) {
-    if (cancelFences && !context.canonicalDeleted && !context.state?.destructiveCommit) {
+    if (cancelFences && !context.canonicalDeleted && !context.state?.destructiveCommit
+      && !context.state?.irreversibleWorkStarted
+      && Number(context.state?.committedDeletionCount || 0) === 0) {
       await cancelCanonicalFence({
         db: context.db,
         jobId: context.jobId,
@@ -309,6 +324,8 @@ const resolveExecutionMode = ({ modeOverride, rollout, canary }) => {
 
 const validExistingCanaryEvidence = (value, rollout) => Boolean(
   value?.schemaVersion === 1
+  && protocolEvidenceMatches(value)
+  && protocolEvidenceMatches(rollout)
   && value.phase === 'canary'
   && canaryEvidenceProvesCompletedJobs(value)
   && Number(value.rolloutRevision) === Number(rollout.revision)
@@ -337,6 +354,7 @@ const persistCanaryEvidence = async ({
     failures: metrics.failures + metrics.rolloutAuthorizationFailures,
     fixtureFingerprint: fixture?.fixtureFingerprint || null,
     fixtureCompleted: Boolean(fixtureCompleted),
+    ...compiledRetentionProtocol(),
   };
   candidate.evidenceFingerprint = buildCanaryEvidenceFingerprint(candidate);
   let persisted = null;
@@ -382,39 +400,22 @@ const readPassedCanaryEvidence = async ({ db, rollout, metrics }) => {
   return validExistingCanaryEvidence(evidence, rollout) ? evidence : null;
 };
 
-const runLegacyMode = async ({
-  db, nowMs, legacyCleanup, metrics, mode, rollout, resumeRequeue,
-}) => {
-  const legacy = typeof legacyCleanup === 'function'
-    ? await legacyCleanup({
-      db, nowMs, expectedRolloutPhase: rollout.phase,
-      expectedRolloutRevision: rollout.revision, resumeRequeue,
-    })
-    : { deleted: 0 };
-  metrics.legacyDeletionPaths = safeInteger(legacy?.deleted);
-  const rolloutChanged = legacy?.rolloutChanged === true;
+const runLegacyMode = async ({ metrics, mode, rollout }) => {
   return buildResult({
     mode,
     rollout,
-    hasMore: rolloutChanged,
-    budgetExhaustionReason: rolloutChanged ? 'rollout_changed' : null,
+    hasMore: false,
+    budgetExhaustionReason: 'legacy_fail_closed',
     metrics,
   });
 };
 
 const runShadowMode = async ({
-  db, nowMs, budgets, legacyCleanup, metrics, mode, rollout, resumeRequeue,
+  db, nowMs, budgets, metrics, mode, rollout,
 }) => {
   const planned = await runDurableShadowPlan({ db, nowMs, budgets, metrics, rollout });
-  const legacy = !planned.hasMore && typeof legacyCleanup === 'function'
-    ? await legacyCleanup({
-      db, nowMs, expectedRolloutPhase: rollout.phase,
-      expectedRolloutRevision: rollout.revision, resumeRequeue,
-    })
-    : { deleted: 0 };
-  metrics.legacyDeletionPaths = safeInteger(legacy?.deleted);
   const evidencePersisted = await persistShadowEvidence({ db, nowMs, rollout, planned, metrics });
-  const rolloutChanged = legacy?.rolloutChanged === true || !evidencePersisted;
+  const rolloutChanged = !evidencePersisted;
   return buildResult({
     mode,
     rollout,
@@ -428,7 +429,7 @@ const runShadowMode = async ({
 
 /**
  * Production retention entrypoint. Missing or malformed rollout is normalized
- * to legacy. Shadow plans before the injected legacy mutation and performs no
+ * to fail-closed legacy. Shadow planning is read-only and performs no
  * compactor deletion. A canary is accepted only in the compactor phase.
  * @param {object} options
  */
@@ -437,7 +438,6 @@ const runNotificationRetentionCycle = async ({
   nowMs = Date.now(),
   ownerId = `retention_worker_${randomUUID().replace(/-/gu, '')}`,
   budgets: inputBudgets = {},
-  legacyCleanup = null,
   modeOverride = null,
   canary = null,
   clock = Date.now,
@@ -469,13 +469,49 @@ const runNotificationRetentionCycle = async ({
       metrics,
     });
   }
+  if (['shadow', 'compactor'].includes(rollout.phase)) {
+    const heartbeat = await readRetentionDeploymentHeartbeat({ db });
+    metrics.queries += 1;
+    const heartbeatStatus = classifyRetentionHeartbeat({ heartbeat, nowMs });
+    let attestationStatus = { valid: true, reason: 'not_required' };
+    if (rollout.phase === 'compactor' && heartbeatStatus.valid) {
+      const attestation = await readRetentionDeploymentAttestation({ db });
+      metrics.queries += 1;
+      attestationStatus = classifyRetentionDeploymentAttestation({
+        attestation, heartbeat, nowMs,
+      });
+    }
+    if (!protocolEvidenceMatches(rollout) || !heartbeatStatus.valid || !attestationStatus.valid) {
+      const reason = !protocolEvidenceMatches(rollout) ? 'protocol_mismatch'
+        : (!heartbeatStatus.valid ? heartbeatStatus.reason : attestationStatus.reason);
+      const paused = await pauseNotificationRetentionRollout({
+        db,
+        expectedPhase: rollout.phase,
+        expectedRevision: rollout.revision,
+        actor: `automatic-${reason}`,
+        nowMs,
+      });
+      return buildResult({
+        mode: paused.transitioned ? 'paused' : 'guard_rejected',
+        rollout: paused.rollout,
+        hasMore: true,
+        budgetExhaustionReason: reason,
+        metrics,
+      });
+    }
+  }
   const mode = resolveExecutionMode({ modeOverride, rollout, canary });
   if (mode === 'legacy') return runLegacyMode({
-    db, nowMs, legacyCleanup, metrics, mode, rollout, resumeRequeue,
+    metrics, mode, rollout,
   });
+  if (mode === 'paused') {
+    return buildResult({
+      mode, rollout, hasMore: false, budgetExhaustionReason: 'paused', metrics,
+    });
+  }
   if (mode === 'shadow') {
     return runShadowMode({
-      db, nowMs, budgets, legacyCleanup, metrics, mode, rollout, resumeRequeue,
+      db, nowMs, budgets, metrics, mode, rollout,
     });
   }
   if (mode === 'canary_paused') {

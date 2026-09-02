@@ -18,12 +18,10 @@ const run = async ({
   admin,
   options,
   retention = require('../src/domains/notification-retention/public'),
-  legacyCleanup = require('../src/domains/notifications/notificationReceipts')
-    .cleanupOldNotificationDeliveryData,
   nowMs = Date.now(),
 }) => {
   const projectId = requireExactProject({ admin, confirmProject: options.confirmProject });
-  if (!options.apply) throw new Error('Shadow cycle requires --apply because legacy cleanup remains authoritative');
+  if (!options.apply) throw new Error('Shadow cycle requires --apply to persist protocol-bound evidence');
   if (options.expectedPhase !== 'shadow') throw new Error('Shadow cycle requires --expected-phase=shadow');
   if (!Number.isSafeInteger(options.expectedRevision) || options.expectedRevision < 1) {
     throw new Error('Shadow cycle requires --expected-revision=<positive-integer>');
@@ -40,11 +38,6 @@ const run = async ({
     expectedPhase: options.expectedPhase,
     expectedRevision: options.expectedRevision,
     budgets: { maxJobs: options.maxJobs },
-    legacyCleanup: (cleanupOptions) => legacyCleanup({
-      ...cleanupOptions,
-      db: cleanupOptions.db || db,
-      nowMs: Number.isSafeInteger(cleanupOptions.nowMs) ? cleanupOptions.nowMs : nowMs,
-    }),
   });
   if (result?.budgetExhaustionReason === 'rollout_changed') {
     throw new Error('Shadow rollout phase/revision changed during execution; rerun status');

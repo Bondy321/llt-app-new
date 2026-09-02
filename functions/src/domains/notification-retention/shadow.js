@@ -7,6 +7,7 @@ const { NOTIFICATION_RETENTION_PATHS, RETENTION_MS } = require('./constants');
 const { classifyNotificationRetentionEligibility } = require('./eligibility');
 const { readActiveRequeue } = require('./retentionContext');
 const { maxMetric, orderedEntries, safeInteger } = require('./retentionEngineRuntime');
+const { compiledRetentionProtocol, protocolEvidenceMatches } = require('./protocol');
 
 const SHADOW_PROGRESS_SCHEMA_VERSION = 1;
 const ZERO_DIGEST = '0'.repeat(64);
@@ -38,11 +39,13 @@ const initialProgress = ({ rolloutRevision, evaluationNowMs }) => ({
   shadowLegacyEligible: 0,
   compactorDigest: ZERO_DIGEST,
   legacyDigest: ZERO_DIGEST,
+  ...compiledRetentionProtocol(),
 });
 
 const normalizeProgress = (value, { rolloutRevision, evaluationNowMs }) => {
   if (!value || value.schemaVersion !== SHADOW_PROGRESS_SCHEMA_VERSION
     || value.rolloutRevision !== rolloutRevision
+    || !protocolEvidenceMatches(value)
     || !Number.isSafeInteger(value.revision) || value.revision < 0
     || !Number.isSafeInteger(value.evaluationNowMs) || value.evaluationNowMs <= 0
     || !SHADOW_STAGES.has(value.stage)) {
@@ -64,6 +67,7 @@ const normalizeProgress = (value, { rolloutRevision, evaluationNowMs }) => {
       ? value.compactorDigest : ZERO_DIGEST,
     legacyDigest: /^[a-f0-9]{64}$/u.test(value.legacyDigest || '')
       ? value.legacyDigest : ZERO_DIGEST,
+    ...compiledRetentionProtocol(),
   };
 };
 
@@ -174,6 +178,8 @@ const scanLegacyPage = async ({ db, progress, limit, metrics }) => {
 };
 
 const sameProgressVersion = (current, expected) => current.rolloutRevision === expected.rolloutRevision
+  && protocolEvidenceMatches(current)
+  && protocolEvidenceMatches(expected)
   && current.revision === expected.revision
   && current.evaluationNowMs === expected.evaluationNowMs
   && current.stage === expected.stage

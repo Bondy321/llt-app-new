@@ -24,6 +24,8 @@
     "retention:shadow": "node scripts/notificationRetentionShadow.js",
     "retention:canary": "node scripts/notificationRetentionCanary.js",
     "retention:run": "node scripts/notificationRetentionRun.js",
+    "retention:attention": "node scripts/notificationRetentionAttention.js",
+    "retention:attest": "node scripts/notificationRetentionDeploymentAttestation.js",
     "preflight:strict-rules": "node scripts/strictRulesPreflight.js",
     "materialize:driver-policy": "node scripts/strictRulesPreflight.js --materialize"
   },

@@ -5,7 +5,7 @@ const {
   formatOperationalError, readArg, requireExactProject, runMain, sanitizeOperationalOutput,
 } = require('./notificationRetentionTooling');
 
-const PHASES = new Set(['legacy', 'shadow', 'compactor']);
+const PHASES = new Set(['legacy', 'paused', 'shadow', 'compactor']);
 
 const parseExpectedRevision = (argv) => {
   const value = readArg(argv, 'expected-revision');
@@ -33,7 +33,7 @@ const validateTransitionOptions = (options) => {
   if (!Number.isSafeInteger(options.expectedRevision) || options.expectedRevision < 0) {
     throw new Error('Rollout mutation requires --expected-revision=<non-negative-integer>');
   }
-  const forward = options.nextPhase !== 'legacy'
+  const forward = !['legacy', 'paused'].includes(options.nextPhase)
     && !(options.expectedPhase === 'compactor' && options.nextPhase === 'shadow')
     && options.nextPhase !== options.expectedPhase;
   if (forward && (!options.preparationComplete || !options.evidenceDigest)) {
@@ -51,7 +51,20 @@ const run = async ({ admin, options, retention = require('../src/domains/notific
   const db = admin.database();
   if (options.action === 'status') {
     const rollout = await retention.readNotificationRetentionRollout({ db });
-    return sanitizeOperationalOutput({ mode: 'read-only', projectId, rollout });
+    const heartbeat = await retention.readRetentionDeploymentHeartbeat({ db });
+    const heartbeatStatus = retention.classifyRetentionHeartbeat({ heartbeat, nowMs });
+    const attestation = await retention.readRetentionDeploymentProof({ db });
+    const attestationStatus = retention.classifyRetentionDeploymentProof({
+      attestation, heartbeat, nowMs,
+    });
+    return sanitizeOperationalOutput({
+      mode: 'read-only', projectId, rollout,
+      compiledProtocol: retention.compiledRetentionProtocol(),
+      heartbeat: heartbeatStatus.valid ? heartbeat : null,
+      heartbeatStatus: heartbeatStatus.reason,
+      deploymentProof: attestationStatus.valid ? attestation : null,
+      deploymentProofStatus: attestationStatus.reason,
+    });
   }
   if (options.action !== 'set') throw new Error('Expected rollout action: status or set');
   validateTransitionOptions(options);

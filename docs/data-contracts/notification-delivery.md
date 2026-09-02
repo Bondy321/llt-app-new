@@ -89,7 +89,8 @@ messages retain the ordinary chat-owned path.
   a leased job advances through bounded attempt pages and child/source cleanup phases, and every
   destructive page rereads the canonical notification job and exact rollout revision.
 - `notification_retention_rollout/v1` is the server-owned authority. Missing or malformed state means
-  `legacy`. A shadow pass binds its aggregate fingerprint and revision; the first `compactor` revision
+  fail-closed, non-destructive `legacy`; `paused` is the explicit operational stop phase. A shadow
+  pass binds its aggregate fingerprint and revision; the first `compactor` revision
   remains paused with `canaryPassed=false`. A bounded canary binds its own fingerprint and revision,
   and only a second compare-safe compactor transition activates scheduled deletion.
 - Attempt, recipient, UID/token-claim, runnable-queue, warning, coalescing, marketing-detail, and owned
@@ -98,17 +99,24 @@ messages retain the ordinary chat-owned path.
 - The parent job is deleted last. A crash before that point leaves resumable private state; a crash
   after it cannot expose a live child as delivery authority because delivery/retry paths require the
   canonical job and its current generation.
-- Destructive pages carry a durable commit marker and an extended lease longer than the scheduled
-  Function timeout. Manual requeue cannot cancel that marker after expiry; only retention recovery
-  may replay the bounded unit and clear the marker at a durable phase boundary.
+- Destructive pages carry a per-unit durable commit marker and an extended lease longer than the
+  scheduled Function timeout. The first successful mutation also once-writes cumulative
+  `irreversibleWorkStarted`, `firstDestructiveCommitAtMs`, and `committedDeletionCount` state and
+  mirrors the boundary on the canonical fence. Rollout change, attention handling, manual requeue and
+  ordinary cleanup cannot cancel that cumulative ownership; only exact retention recovery may finish it.
 - Orphan repair is key-paged, timestamp-watermarked, and bounded. It never treats an orphan attempt or
   queue pointer as delivery authority and never scans an unbounded root in one invocation.
 - A processing manual requeue persists `recoveryDueAtMs`. The scheduled retention worker resumes it
   through a rollout-bound compound cursor, so an unrecoverable bounded prefix cannot starve later
   crashed requeues. Completed states clear the recovery field before ordinary one-hour expiry.
-- Legacy compatibility cleanup keeps independent rollout-bound cursors for jobs, terminal attempts,
-  marketing details, and requeue recovery; preserved leading records cannot permanently block later
-  eligible cleanup.
+- Legacy compatibility cleanup is deliberately inert. Historical attempts without `retentionDueAtMs`
+  are discovered by a separate protocol-bound preparation stage ordered by exact
+  `(updatedAtMs, attemptId)` cursor before orphan discovery may complete.
+- Preparation, shadow, canary and rollout evidence bind a deterministic engine protocol ID plus
+  byte-derived source, exact rules and trigger digests. The scheduled Function writes the matching
+  server-owned heartbeat. A guarded production probe separately attests the deployed RTDB rules,
+  Functions v2 runtime/region/timeout/instance configuration and scheduler identity/cron/timezone;
+  stale, missing or mismatched heartbeat or deployment proof forces `paused` before deletion.
 - Marketing detail records remain through explicit expiry and then no more than 30 additional days.
   Audience previews and manual-requeue state retain their existing ten-minute and one-hour lifetimes.
 

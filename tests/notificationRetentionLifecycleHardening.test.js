@@ -21,6 +21,10 @@ const rolloutScript = require('../functions/scripts/notificationRetentionRollout
 const preparationScript = require('../functions/scripts/notificationRetentionPreparation');
 const preflightScript = require('../functions/scripts/notificationRetentionPreflight');
 const shadowScript = require('../functions/scripts/notificationRetentionShadow');
+const attentionScript = require('../functions/scripts/notificationRetentionAttention');
+const deploymentAttestationScript = require(
+  '../functions/scripts/notificationRetentionDeploymentAttestation',
+);
 const { sanitizeOperationalOutput } = require('../functions/scripts/notificationRetentionTooling');
 const {
   createNotificationRetentionMemoryDb,
@@ -156,6 +160,84 @@ test('rollout CLI requires an explicit post-canary activation flag', () => {
   }));
 });
 
+test('attention CLI is read-only by default and mutations require exact paused identity', async () => {
+  const parsed = attentionScript.parseArgs([
+    'retry', '--apply', '--job-id=private-job', '--expected-phase=paused',
+    '--expected-revision=4', '--expected-generation=2',
+    `--attention-fingerprint=attention_v1_${'a'.repeat(32)}`,
+  ]);
+  assert.doesNotThrow(() => attentionScript.validateMutation(parsed));
+  assert.throws(() => attentionScript.validateMutation({ ...parsed, apply: false }), /requires --apply/u);
+  assert.throws(() => attentionScript.validateMutation({ ...parsed, expectedPhase: 'compactor' }), /paused/u);
+
+  const jobId = 'private-job';
+  const db = createNotificationRetentionMemoryDb({
+    notification_retention_rollout: { v1: { schemaVersion: 1, phase: 'paused', revision: 4,
+      preparationComplete: false, updatedAtMs: nowMs } },
+    notification_retention: { v1: { attention: { [jobId]: {
+      jobId, generation: 2, status: 'requires_attention', reasonCode: 'bounded_reason',
+      attentionFingerprint: `attention_v1_${'a'.repeat(32)}`,
+    } } } },
+  });
+  const admin = {
+    app: () => ({ options: { projectId: 'project-test' } }), database: () => db,
+  };
+  const inspected = await attentionScript.run({
+    admin,
+    options: { action: 'inspect', confirmProject: 'project-test', jobId },
+    retention: {
+      NOTIFICATION_RETENTION_PATHS: {
+        attention: 'notification_retention/v1/attention', jobs: 'notification_retention/v1/jobs',
+      },
+      readNotificationRetentionRollout: async () => ({ phase: 'paused', revision: 4 }),
+    },
+    nowMs,
+  });
+  assert.equal(inspected.found, true);
+  assert.equal(inspected.attention.jobId, undefined);
+  assert.equal(inspected.attention.attentionFingerprint, `attention_v1_${'a'.repeat(32)}`);
+});
+
+test('deployment attestation probes only from an exact paused rollout revision', async () => {
+  const parsed = deploymentAttestationScript.parseArgs([
+    'attest', '--apply', '--confirm-project=project-test', '--expected-phase=paused',
+    '--expected-revision=4',
+  ]);
+  assert.doesNotThrow(() => deploymentAttestationScript.validateAttestOptions(parsed));
+  assert.throws(
+    () => deploymentAttestationScript.validateAttestOptions({ ...parsed, apply: false }),
+    /requires --apply/u,
+  );
+  let rolloutReads = 0;
+  let probeCalls = 0;
+  const result = await deploymentAttestationScript.run({
+    admin: {
+      app: () => ({ options: { projectId: 'project-test' } }),
+      database: () => ({}),
+    },
+    options: parsed,
+    nowMs,
+    probe: async () => { probeCalls += 1; return { exactRemoteArtifacts: true }; },
+    retention: {
+      RETENTION_ENGINE_PROTOCOL_MANIFEST: { trigger: {} },
+      readNotificationRetentionRollout: async () => {
+        rolloutReads += 1;
+        return { phase: 'paused', revision: 4 };
+      },
+      readRetentionDeploymentHeartbeat: async () => ({ sequence: 1 }),
+      readRetentionDeploymentProof: async () => null,
+      buildRetentionDeploymentProof: (input) => ({
+        valid: input.exactRemoteArtifacts === true,
+        attestation: { bounded: true },
+      }),
+      writeRetentionDeploymentProof: async () => ({ written: true, reason: 'attested' }),
+    },
+  });
+  assert.equal(rolloutReads, 2);
+  assert.equal(probeCalls, 1);
+  assert.equal(result.written, true);
+});
+
 test('shadow and normal runners require exact rollout state and invoke the production engine', async () => {
   const db = {};
   const admin = {
@@ -185,7 +267,7 @@ test('shadow and normal runners require exact rollout state and invoke the produ
   assert.equal(shadowObserved.modeOverride, 'shadow');
   assert.equal(shadowObserved.expectedPhase, 'shadow');
   assert.equal(shadowObserved.expectedRevision, 3);
-  assert.equal(typeof shadowObserved.legacyCleanup, 'function');
+  assert.equal(shadowObserved.legacyCleanup, undefined);
   assert.equal(shadow.mode, 'shadow');
 
   let normalObserved = null;
@@ -274,7 +356,7 @@ test('shadow and normal runners require exact rollout state and invoke the produ
   }), /changed during execution/u);
 });
 
-test('preparation is legacy-only and operational output removes identifiers and content', async () => {
+test('preparation apply is paused-only and operational output removes identifiers and content', async () => {
   assert.equal(preparationScript.parseArgs(['--apply']).expectedRevision, null);
   const db = {};
   const admin = {
@@ -291,7 +373,7 @@ test('preparation is legacy-only and operational output removes identifiers and 
       readNotificationRetentionRollout: async () => ({ phase: 'shadow', revision: 2 }),
     },
     nowMs,
-  }), /exact legacy rollout phase/u);
+  }), /exact paused rollout phase/u);
   const safe = sanitizeOperationalOutput({
     jobsDiscovered: 2,
     cursor: 'raw-attempt-key',
@@ -313,17 +395,17 @@ test('preflight rules checks exact privacy values and per-root indexes', () => {
       notification_retention: {
         '.read': false,
         '.write': false,
-        v1: { jobs: { '.indexOn': ['retentionDueAtMs'] } },
+        v1: { jobs: { '.indexOn': ['retentionDueAtMs', 'status', 'phase'] } },
       },
       notification_retention_rollout: { '.read': false, '.write': false },
       notification_jobs: { '.indexOn': ['retentionDueAtMs'] },
-      notification_delivery_attempts: { '.indexOn': ['retentionDueAtMs'] },
+      notification_delivery_attempts: { '.indexOn': ['retentionDueAtMs', 'updatedAtMs'] },
       marketing_notification_details: { '.indexOn': ['retentionDueAtMs'] },
       notification_requeue_jobs: { '.indexOn': ['expiresAtMs', 'recoveryDueAtMs'] },
     },
   };
   assert.deepEqual(Object.values(preflightScript.inspectRetentionRules(validRules)), [
-    true, true, true, true, true, true, true,
+    true, true, true, true, true, true, true, true, true, true,
   ]);
   const unsafe = clone(validRules);
   unsafe.rules.notification_retention['.read'] = true;

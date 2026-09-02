@@ -8,10 +8,9 @@ const KNOWN_MOBILE_FILES = new Set([
   'firebase.js',
   'index.js',
   'metro.config.js',
-  'package-lock.json',
-  'package.json',
   'theme.js',
 ]);
+const PACKAGE_FILES = new Set(['package-lock.json', 'package.json']);
 const KNOWN_MOBILE_PREFIXES = [
   'assets/',
   'components/',
@@ -46,6 +45,7 @@ const normalizePath = (value) => String(value || '').replaceAll('\\', '/').repla
 
 const classifyChangedPath = (input) => {
   const fileName = normalizePath(input);
+  if (PACKAGE_FILES.has(fileName)) return 'package-manifest';
   if (KNOWN_MOBILE_FILES.has(fileName) || KNOWN_MOBILE_PREFIXES.some((prefix) => fileName.startsWith(prefix))) {
     return 'mobile-bundle';
   }
@@ -59,7 +59,13 @@ const classifyChangedPath = (input) => {
   return 'unknown';
 };
 
-const createUpdatePlan = ({ eventName, changedPaths = [], nativeChanged = false, changeSetKnown = true } = {}) => {
+const createUpdatePlan = ({
+  eventName,
+  changedPaths = [],
+  nativeChanged = false,
+  changeSetKnown = true,
+  packageChange,
+} = {}) => {
   if (eventName === 'workflow_dispatch') {
     return {
       shouldPublish: true,
@@ -80,18 +86,25 @@ const createUpdatePlan = ({ eventName, changedPaths = [], nativeChanged = false,
   }
 
   const classified = changedPaths.map((fileName) => ({ fileName: normalizePath(fileName), type: classifyChangedPath(fileName) }));
-  const unknownPaths = classified.filter(({ type }) => type === 'unknown').map(({ fileName }) => fileName);
-  const bundleChanged = classified.some(({ type }) => type === 'mobile-bundle');
+  const packagePaths = classified.filter(({ type }) => type === 'package-manifest').map(({ fileName }) => fileName);
+  const packageType = packagePaths.length === 0 ? 'non-bundle' : packageChange?.type || 'unknown';
+  const unknownPaths = classified
+    .filter(({ type }) => type === 'unknown')
+    .map(({ fileName }) => fileName)
+    .concat(packageType === 'unknown' ? packagePaths : []);
+  const bundleChanged = classified.some(({ type }) => type === 'mobile-bundle') || packageType === 'mobile-bundle';
   if (unknownPaths.length > 0) {
     return {
       shouldPublish: false,
-      reason: 'unknown-path-manual-required',
+      reason: packageType === 'unknown' && packagePaths.length > 0
+        ? 'unknown-package-change-manual-required'
+        : 'unknown-path-manual-required',
       bundleChanged,
       nativeChanged: Boolean(nativeChanged),
       unknownPaths,
     };
   }
-  if (nativeChanged) {
+  if (nativeChanged || packageType === 'native') {
     return {
       shouldPublish: false,
       reason: 'native-change-binary-required',
