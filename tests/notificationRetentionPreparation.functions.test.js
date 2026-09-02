@@ -595,6 +595,38 @@ test('a 100k-attempt history keeps migration reads at page plus one', async () =
   assert.equal(attemptQuery.returned, 26);
 });
 
+test('paused rollout accepts preparation evidence from its exact nonzero revision', async () => {
+  const db = createPausedPreparationDb({
+    notification_retention_rollout: { v1: pausedRollout(3) },
+    notification_retention: { v1: { preparation: {
+      schemaVersion: 1,
+      revision: 2,
+      rolloutRevision: 3,
+      status: 'complete',
+      preparationComplete: true,
+      evidenceDigest: 'paused-revision-evidence',
+      cumulative: { requiresAttention: 0 },
+      ...compiledRetentionProtocol(),
+    } } },
+  });
+
+  const result = await transitionNotificationRetentionRollout({
+    db,
+    expectedPhase: 'paused',
+    expectedRevision: 3,
+    nextPhase: 'shadow',
+    actor: 'operations',
+    nowMs: NOW_MS,
+    preparationComplete: true,
+    evidenceDigest: 'paused-revision-evidence',
+  });
+
+  assert.equal(result.transitioned, true);
+  assert.equal(result.rollout.phase, 'shadow');
+  assert.equal(result.rollout.revision, 4);
+  assert.equal(result.rollout.preparationRolloutRevision, 3);
+});
+
 test('forward rollout transitions require matching completed preparation evidence', async () => {
   const db = createPausedPreparationDb({});
   const blocked = await transitionNotificationRetentionRollout({

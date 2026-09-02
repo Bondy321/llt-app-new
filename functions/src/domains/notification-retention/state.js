@@ -211,7 +211,7 @@ const activationEvidenceAccepted = ({
   currentRollout, shadowEvidence, canaryEvidence, expectedRevision,
 // eslint-disable-next-line complexity -- activation deliberately checks every independent proof field
 }) => {
-  const expectedPreparationRolloutRevision = expectedPhase === 'legacy'
+  const expectedPreparationRolloutRevision = ['legacy', 'paused'].includes(expectedPhase)
     ? expectedRevision
     : currentRollout?.preparationRolloutRevision;
   if (forward && (!protocolEvidenceMatches(currentRollout)
