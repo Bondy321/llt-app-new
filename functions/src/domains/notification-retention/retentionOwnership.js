@@ -3,7 +3,11 @@
 // @ts-check
 
 const { NOTIFICATION_RETENTION_PATHS } = require('./constants');
-const { maxMetric, safeInteger } = require('./retentionEngineRuntime');
+const {
+  maxMetric,
+  safeInteger,
+  transactionWithAuthoritativeExistingValue,
+} = require('./retentionEngineRuntime');
 
 const positiveSafeInteger = (value) => (
   Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null
@@ -45,13 +49,14 @@ const readActiveRequeue = async (db, jobId, nowMs, metrics) => {
 
 const removeRetentionQueueEntry = async ({ db, queueKey, entry, metrics }) => {
   let removed = false;
-  const result = await db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${queueKey}`)
-    .transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${queueKey}`), (current) => {
       if (!current || current.jobId !== entry?.jobId
         || Number(current.generation) !== Number(entry?.generation)) return undefined;
       removed = true;
       return null;
-    }, undefined, false);
+    },
+  );
   if (metrics) metrics.transactions += 1;
   if (removed && result?.committed) {
     metrics.queueEntriesRemoved += 1;
@@ -66,7 +71,8 @@ const releaseStateLease = async ({
   clearDestructiveCommit = false,
 }) => {
   let released = null;
-  const result = await db.ref(`${NOTIFICATION_RETENTION_PATHS.jobs}/${jobId}`).transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`${NOTIFICATION_RETENTION_PATHS.jobs}/${jobId}`), (current) => {
     if (!current || current.lease?.ownerId !== ownerId) return undefined;
     const irreversible = hasCommittedIrreversibleWork(current);
     released = {
@@ -80,7 +86,8 @@ const releaseStateLease = async ({
       updatedAtMs: nowMs,
     };
     return released;
-  }, undefined, false);
+    },
+  );
   if (metrics) metrics.transactions += 1;
   return result?.committed ? released : null;
 };
@@ -89,7 +96,8 @@ const cancelCanonicalFence = async ({
   db, jobId, fenceId, metrics, allowPreparedCommitCancellation = false,
 }) => {
   let cancelled = false;
-  const result = await db.ref(`notification_jobs/${jobId}`).transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`notification_jobs/${jobId}`), (current) => {
     if (!current || current.retentionFence?.fenceId !== fenceId) return undefined;
     if (current.retentionFence.irreversibleWorkStarted === true
       || (current.retentionFence.commitStatus === 'destructive'
@@ -101,7 +109,8 @@ const cancelCanonicalFence = async ({
       retentionGeneration: Math.max(0, fenceGeneration - 1),
       retentionFence: null,
     };
-  }, undefined, false);
+    },
+  );
   if (metrics) metrics.transactions += 1;
   return Boolean(cancelled && result?.committed);
 };

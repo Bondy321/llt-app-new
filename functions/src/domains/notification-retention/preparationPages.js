@@ -13,6 +13,7 @@ const {
   TERMINAL_NOTIFICATION_ATTEMPT_STATUSES,
 } = require('./constants');
 const { classifyNotificationRetentionEligibility } = require('./eligibility');
+const { transactionWithAuthoritativeExistingValue } = require('./retentionEngineRuntime');
 const { ensureNotificationRetentionScheduled } = require('./state');
 
 const PREPARATION_STAGES = new Set(['ordinary', 'privacy']);
@@ -205,7 +206,8 @@ const inspectPrivacy = (job) => (
 const materializeOrdinaryBoundary = async ({ db, jobId, observed }) => {
   const retentionDueAtMs = observed.completedAtMs + RETENTION_MS;
   let changed = false;
-  const result = await db.ref(`notification_jobs/${jobId}`).transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`notification_jobs/${jobId}`), (current) => {
     if (!current || current.jobId !== jobId || current.status !== observed.status
       || current.completedAtMs !== observed.completedAtMs) return undefined;
     if (Number.isSafeInteger(current.retentionDueAtMs) && current.retentionDueAtMs > 0) {
@@ -213,7 +215,8 @@ const materializeOrdinaryBoundary = async ({ db, jobId, observed }) => {
     }
     changed = true;
     return { ...current, retentionDueAtMs };
-  }, undefined, false);
+    },
+  );
   return { committed: Boolean(result?.committed), changed, job: result?.snapshot?.val?.() || null };
 };
 
@@ -367,7 +370,8 @@ const inspectHistoricalAttempt = (attemptId, attempt) => {
 const materializeAttemptBoundary = async ({ db, attemptId, observed }) => {
   const retentionDueAtMs = observed.updatedAtMs + RETENTION_MS;
   let changed = false;
-  const result = await db.ref(`notification_delivery_attempts/${attemptId}`).transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`notification_delivery_attempts/${attemptId}`), (current) => {
     if (!current || ![1, 2].includes(current.schemaVersion)
       || current.attemptId !== attemptId || current.jobId !== observed.jobId
       || current.status !== observed.status || current.createdAtMs !== observed.createdAtMs
@@ -381,7 +385,8 @@ const materializeAttemptBoundary = async ({ db, attemptId, observed }) => {
     }
     changed = true;
     return { ...current, retentionDueAtMs };
-  }, undefined, false);
+    },
+  );
   return { committed: Boolean(result?.committed), changed };
 };
 

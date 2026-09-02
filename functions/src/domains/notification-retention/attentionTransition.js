@@ -8,7 +8,10 @@ const {
   persistOperationsTerminalWarning,
 } = require('../../../lib/operationsTerminalWarnings');
 const { NOTIFICATION_RETENTION_PATHS } = require('./constants');
-const { safeInteger } = require('./retentionEngineRuntime');
+const {
+  safeInteger,
+  transactionWithAuthoritativeExistingValue,
+} = require('./retentionEngineRuntime');
 const {
   cancelCanonicalFence,
   hasCommittedIrreversibleWork,
@@ -107,8 +110,8 @@ const repairAttentionProjection = async ({ db, jobId, state, metrics = null }) =
 
 const commitRequiresAttentionState = async ({ context, reason, nowMs, metrics }) => {
   let committed = null;
-  const result = await context.db.ref(`${NOTIFICATION_RETENTION_PATHS.jobs}/${context.jobId}`)
-    .transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    context.db.ref(`${NOTIFICATION_RETENTION_PATHS.jobs}/${context.jobId}`), (current) => {
       if (!current || current.lease?.ownerId !== context.ownerId
         || current.queueKey !== context.queueKey
         || Number(current.generation) !== Number(context.entry?.generation)
@@ -127,7 +130,8 @@ const commitRequiresAttentionState = async ({ context, reason, nowMs, metrics })
         updatedAtMs: nowMs,
       };
       return committed;
-    }, undefined, false);
+    },
+  );
   metrics.transactions += 1;
   return result?.committed ? committed : null;
 };

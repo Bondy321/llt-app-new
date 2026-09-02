@@ -9,6 +9,7 @@ const {
 } = require('./constants');
 const { compiledRetentionProtocol, protocolEvidenceMatches } = require('./protocol');
 const { readNotificationRetentionRollout } = require('./state');
+const { transactionWithAuthoritativeExistingValue } = require('./retentionEngineRuntime');
 
 const PREPARATION_SCHEMA_VERSION = 1;
 const {
@@ -171,7 +172,8 @@ const commitPreparationProgress = async ({
   rolloutRevision,
 }) => {
   let advanced = false;
-  const progress = await db.ref(NOTIFICATION_RETENTION_PATHS.preparation).transaction((currentValue) => {
+  const progressRef = db.ref(NOTIFICATION_RETENTION_PATHS.preparation);
+  const updateProgress = (currentValue) => {
     const current = normalizeProgress(currentValue);
     if (current.revision !== base.revision || current.cursor !== base.cursor
       || current.attemptCursor !== base.attemptCursor
@@ -197,7 +199,10 @@ const commitPreparationProgress = async ({
       ...compiledRetentionProtocol(),
       updatedAtMs: nowMs,
     };
-  }, undefined, false);
+  };
+  const progress = base.revision > 0
+    ? await transactionWithAuthoritativeExistingValue(progressRef, updateProgress)
+    : await progressRef.transaction(updateProgress, undefined, false);
   return Boolean(advanced && progress?.committed);
 };
 

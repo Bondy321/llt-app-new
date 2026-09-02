@@ -8,6 +8,7 @@ const { classifyNotificationRetentionEligibility } = require('./eligibility');
 const { readActiveRequeue } = require('./retentionContext');
 const { maxMetric, orderedEntries, safeInteger } = require('./retentionEngineRuntime');
 const { compiledRetentionProtocol, protocolEvidenceMatches } = require('./protocol');
+const { transactionWithAuthoritativeExistingValue } = require('./retentionEngineRuntime');
 
 const SHADOW_PROGRESS_SCHEMA_VERSION = 1;
 const ZERO_DIGEST = '0'.repeat(64);
@@ -188,8 +189,8 @@ const sameProgressVersion = (current, expected) => current.rolloutRevision === e
 
 const commitProgress = async ({ db, base, next, nowMs, metrics }) => {
   let committed = false;
-  const result = await db.ref(`${NOTIFICATION_RETENTION_PATHS.repair}/shadow_progress`)
-    .transaction((currentValue) => {
+  const progressRef = db.ref(`${NOTIFICATION_RETENTION_PATHS.repair}/shadow_progress`);
+  const updateProgress = (currentValue) => {
       const current = normalizeProgress(currentValue, {
         rolloutRevision: base.rolloutRevision,
         evaluationNowMs: base.evaluationNowMs,
@@ -197,7 +198,10 @@ const commitProgress = async ({ db, base, next, nowMs, metrics }) => {
       if (!sameProgressVersion(current, base)) return undefined;
       committed = true;
       return { ...next, revision: base.revision + 1, updatedAtMs: nowMs };
-    }, undefined, false);
+    };
+  const result = base.revision > 0
+    ? await transactionWithAuthoritativeExistingValue(progressRef, updateProgress)
+    : await progressRef.transaction(updateProgress, undefined, false);
   metrics.transactions += 1;
   return committed && result?.committed
     ? normalizeProgress(result.snapshot.val(), {

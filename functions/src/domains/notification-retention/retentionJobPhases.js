@@ -21,6 +21,7 @@ const {
   orderedEntries,
   QUEUE_ROOTS,
   safeInteger,
+  transactionWithAuthoritativeExistingValue,
 } = require('./retentionEngineRuntime');
 const { recordCanaryFinalizationProof } = require('./canaryFixture');
 const { compiledRetentionProtocol } = require('./protocol');
@@ -379,12 +380,14 @@ const verifyFinalizationChildren = async ({ context, nowMs, metrics }) => {
 const deleteCanonicalJob = async ({ context, metrics }) => {
   if (context.canonicalDeleted) return true;
   let deleted = false;
-  const result = await context.db.ref(`notification_jobs/${context.jobId}`).transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    context.db.ref(`notification_jobs/${context.jobId}`), (current) => {
     if (!jobMatchesState(current, context.state, context.jobId)
       || !ownsExactFence(current, context.state, context.fenceId)) return undefined;
     deleted = true;
     return null;
-  }, undefined, false);
+    },
+  );
   metrics.transactions += 1;
   if (deleted && result?.committed) context.canonicalDeleted = true;
   return Boolean(deleted && result?.committed);
@@ -392,8 +395,8 @@ const deleteCanonicalJob = async ({ context, metrics }) => {
 
 const cleanupCompletedRetentionOwnership = async ({ context, metrics }) => {
   let stateRemoved = false;
-  const stateResult = await context.db.ref(`${NOTIFICATION_RETENTION_PATHS.jobs}/${context.jobId}`)
-    .transaction((current) => {
+  const stateResult = await transactionWithAuthoritativeExistingValue(
+    context.db.ref(`${NOTIFICATION_RETENTION_PATHS.jobs}/${context.jobId}`), (current) => {
       if (!current || current.queueKey !== context.queueKey
         || Number(current.generation) !== Number(context.entry.generation)
         || current.lease?.ownerId !== context.ownerId
@@ -403,16 +406,18 @@ const cleanupCompletedRetentionOwnership = async ({ context, metrics }) => {
           !== Number(context.state.targetCompletedAtMs || 0)) return undefined;
       stateRemoved = true;
       return null;
-    }, undefined, false);
+    },
+  );
   metrics.transactions += 1;
   let queueRemoved = false;
-  const queueResult = await context.db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${context.queueKey}`)
-    .transaction((current) => {
+  const queueResult = await transactionWithAuthoritativeExistingValue(
+    context.db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${context.queueKey}`), (current) => {
       if (!current || current.jobId !== context.jobId
         || Number(current.generation) !== Number(context.entry.generation)) return undefined;
       queueRemoved = true;
       return null;
-    }, undefined, false);
+    },
+  );
   metrics.transactions += 1;
   const removedPaths = Number(stateRemoved && stateResult?.committed)
     + Number(queueRemoved && queueResult?.committed);

@@ -4,6 +4,7 @@
 
 const { createHash } = require('node:crypto');
 const { NOTIFICATION_RETENTION_PATHS } = require('./constants');
+const { transactionWithAuthoritativeExistingValue } = require('./retentionEngineRuntime');
 const {
   normalizeNotificationRetentionRollout,
 } = require('./state');
@@ -29,7 +30,7 @@ const persistTransferredDestructiveState = async ({
   if (fence.commitStatus !== 'destructive') return { state, destructive: false };
   if (!replacementState) return { state, destructive: true };
   let persisted = null;
-  const result = await stateRef.transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(stateRef, (current) => {
     if (!current || current.lease?.ownerId !== replacementState.lease?.ownerId
       || Number(current.leaseRevision) !== Number(replacementState.leaseRevision)
       || Number(current.generation) !== Number(replacementState.generation)) return undefined;
@@ -43,7 +44,7 @@ const persistTransferredDestructiveState = async ({
       },
     };
     return persisted;
-  }, undefined, false);
+  });
   if (!result?.committed || !persisted) return null;
   Object.assign(replacementState, persisted);
   return { state: persisted, destructive: true };
@@ -96,7 +97,7 @@ const recoverInactiveLegacyFence = async ({
     ? { ...replacementFence, commitStatus: 'destructive' }
     : replacementFence;
   let recoveredJob = null;
-  const canonicalResult = await canonicalRef.transaction((current) => {
+  const canonicalResult = await transactionWithAuthoritativeExistingValue(canonicalRef, (current) => {
     if (!current || current.jobId !== jobId
       || current.retentionFence?.fenceId !== fence.fenceId
       || current.retentionFence?.kind !== 'legacy'
@@ -112,13 +113,13 @@ const recoverInactiveLegacyFence = async ({
       retentionFence: effectiveReplacementFence,
     };
     return recoveredJob;
-  }, undefined, false);
+  });
   if (!canonicalResult?.committed || !recoveredJob) return null;
   const recoveryIdentityAfter = await readRolloutRecoveryIdentity(db);
   const rolloutAfter = recoveryIdentityAfter.rollout;
   if (rolloutAfter.phase !== rolloutBefore.phase || rolloutAfter.revision !== rolloutBefore.revision
     || recoveryIdentityAfter.rawFingerprint !== recoveryIdentityBefore.rawFingerprint) {
-    await canonicalRef.transaction((current) => {
+    await transactionWithAuthoritativeExistingValue(canonicalRef, (current) => {
       const replacementStillOwned = effectiveReplacementFence
         ? current?.retentionFence?.fenceId === effectiveReplacementFence.fenceId
           && Number(current?.retentionFence?.generation)
@@ -127,7 +128,7 @@ const recoverInactiveLegacyFence = async ({
           && Number(current?.retentionGeneration) === Math.max(0, Number(fence.generation) - 1);
       if (!current || current.jobId !== jobId || !replacementStillOwned) return undefined;
       return { ...current, retentionGeneration: fence.generation, retentionFence: fence };
-    }, undefined, false);
+    });
     return null;
   }
   return recoveredJob;
@@ -158,7 +159,8 @@ const recoverInactiveCompactorFence = async ({
   if (!state || (!expiredProcessing && !releasedQueued)) return null;
   const fenceId = fenceIdFor(jobId, state.generation);
   let recoveredJob = null;
-  const canonicalResult = await db.ref(`notification_jobs/${jobId}`).transaction((current) => {
+  const canonicalResult = await transactionWithAuthoritativeExistingValue(
+    db.ref(`notification_jobs/${jobId}`), (current) => {
     if (!jobMatchesState(current, state, jobId)
       || current.retentionFence?.fenceId !== fenceId
       || current.retentionFence.status !== 'active'
@@ -175,13 +177,15 @@ const recoverInactiveCompactorFence = async ({
       retentionFence: replacementFence,
     };
     return recoveredJob;
-  }, undefined, false);
+    },
+  );
   if (!canonicalResult?.committed || !recoveredJob) return null;
   const recoveryIdentityAfter = await readRolloutRecoveryIdentity(db);
   const rolloutAfter = recoveryIdentityAfter.rollout;
   if (rolloutAfter.phase !== rolloutBefore.phase || rolloutAfter.revision !== rolloutBefore.revision
     || recoveryIdentityAfter.rawFingerprint !== recoveryIdentityBefore.rawFingerprint) {
-    await db.ref(`notification_jobs/${jobId}`).transaction((current) => {
+    await transactionWithAuthoritativeExistingValue(
+      db.ref(`notification_jobs/${jobId}`), (current) => {
       const replacementStillOwned = replacementFence
         ? current?.retentionFence?.fenceId === replacementFence.fenceId
           && Number(current?.retentionFence?.generation) === Number(replacementFence.generation)
@@ -200,10 +204,11 @@ const recoverInactiveCompactorFence = async ({
           commitStatus: state.destructiveCommit ? 'destructive' : null,
         },
       };
-    }, undefined, false);
+      },
+    );
     return null;
   }
-  await stateRef.transaction((current) => {
+  await transactionWithAuthoritativeExistingValue(stateRef, (current) => {
     if (!current || Number(current.leaseRevision) !== Number(state.leaseRevision)) return undefined;
     if (expiredProcessing && (current.status !== 'processing'
       || current.lease?.ownerId !== state.lease.ownerId
@@ -212,7 +217,7 @@ const recoverInactiveCompactorFence = async ({
     return {
       ...current, status: 'queued', lease: null, leaseExpiresAtMs: null, updatedAtMs: nowMs,
     };
-  }, undefined, false);
+  });
   return recoveredJob;
 };
 
