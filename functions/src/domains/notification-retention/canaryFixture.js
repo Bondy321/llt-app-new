@@ -6,6 +6,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { NOTIFICATION_RETENTION_PATHS, RETENTION_MS } = require('./constants');
 const { ensureNotificationRetentionScheduled, readNotificationRetentionRollout } = require('./state');
 const { compiledRetentionProtocol, protocolEvidenceMatches } = require('./protocol');
+const { transactionWithAuthoritativeExistingValue } = require('./retentionEngineRuntime');
 
 const fixtureIdentity = (rollout) => {
   const fixtureFingerprint = createHash('sha256').update(JSON.stringify([
@@ -106,42 +107,52 @@ const reconcileSupersededPriorControl = async ({ db, current, rollout, nowMs }) 
   const queueKey = observedState?.queueKey || current.queueKey || null;
   if (!(await rolloutStillMatches({ db, rollout }))) return null;
   let jobSafe = false;
-  await db.ref(`notification_jobs/${jobId}`).transaction((value) => {
+  const jobResult = await transactionWithAuthoritativeExistingValue(
+    db.ref(`notification_jobs/${jobId}`), (value) => {
     if (!value) { jobSafe = true; return value; }
     if (value.canaryFixtureFingerprint !== current.fixtureFingerprint) return undefined;
     jobSafe = true;
     return null;
-  }, undefined, false);
+    },
+  );
+  if (!jobResult?.snapshot?.exists?.()) jobSafe = true;
   if (!jobSafe || !(await rolloutStillMatches({ db, rollout }))) return null;
   let attemptSafe = false;
-  await db.ref(`notification_delivery_attempts/${attemptId}`).transaction((value) => {
+  const attemptResult = await transactionWithAuthoritativeExistingValue(
+    db.ref(`notification_delivery_attempts/${attemptId}`), (value) => {
     if (!value) { attemptSafe = true; return value; }
     if (value.canaryFixtureFingerprint !== current.fixtureFingerprint) return undefined;
     attemptSafe = true;
     return null;
-  }, undefined, false);
+    },
+  );
+  if (!attemptResult?.snapshot?.exists?.()) attemptSafe = true;
   if (!attemptSafe || !(await rolloutStillMatches({ db, rollout }))) return null;
   await db.ref(`${NOTIFICATION_RETENTION_PATHS.evidence}/canary_attempt_proofs/${current.fixtureFingerprint}`)
     .transaction((value) => (!value || value.fixtureFingerprint === current.fixtureFingerprint
       ? null : undefined), undefined, false);
   if (!(await rolloutStillMatches({ db, rollout }))) return null;
   let stateSafe = false;
-  await stateRef.transaction((value) => {
+  const stateResult = await transactionWithAuthoritativeExistingValue(stateRef, (value) => {
     if (!value) { stateSafe = true; return value; }
     if (value.jobId !== jobId || value.queueKey !== queueKey
       || (value.lease && Number(value.lease.expiresAtMs || 0) > nowMs)) return undefined;
     stateSafe = true;
     return null;
-  }, undefined, false);
+  });
+  if (!stateResult?.snapshot?.exists?.()) stateSafe = true;
   if (!stateSafe || !(await rolloutStillMatches({ db, rollout }))) return null;
   if (queueKey) {
     let queueSafe = false;
-    await db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${queueKey}`).transaction((value) => {
+    const queueResult = await transactionWithAuthoritativeExistingValue(
+      db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${queueKey}`), (value) => {
       if (!value) { queueSafe = true; return value; }
       if (value.jobId !== jobId) return undefined;
       queueSafe = true;
       return null;
-    }, undefined, false);
+      },
+    );
+    if (!queueResult?.snapshot?.exists?.()) queueSafe = true;
     if (!queueSafe || !(await rolloutStillMatches({ db, rollout }))) return null;
   }
   return current;
@@ -171,8 +182,8 @@ const recordCanaryFinalizationProof = async ({ context, nowMs }) => {
     || Number(attemptProof.generation) !== Number(context.state.generation)
     || attemptProof.attemptsDeleted !== 1) return false;
   let recorded = false;
-  const result = await context.db.ref(NOTIFICATION_RETENTION_PATHS.canaryFixture)
-    .transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    context.db.ref(NOTIFICATION_RETENTION_PATHS.canaryFixture), (current) => {
       if (!current || current.status !== 'ready'
         || current.fixtureFingerprint !== fingerprint
         || Number(current.rolloutRevision) !== Number(context.expectedRolloutRevision)
@@ -191,7 +202,8 @@ const recordCanaryFinalizationProof = async ({ context, nowMs }) => {
         },
         updatedAtMs: nowMs,
       };
-    }, undefined, false);
+    },
+  );
   return Boolean(recorded && result?.committed);
 };
 
@@ -275,7 +287,8 @@ const ensureNotificationRetentionCanaryFixture = async ({ db, rollout, nowMs = D
     .once('value')).val();
   if (!retentionState?.queueKey) return { ready: false, reason: 'fixture_state_missing' };
   let ready = false;
-  await db.ref(NOTIFICATION_RETENTION_PATHS.canaryFixture).transaction((current) => {
+  await transactionWithAuthoritativeExistingValue(
+    db.ref(NOTIFICATION_RETENTION_PATHS.canaryFixture), (current) => {
     if (!current || current.ownerId !== ownerId
       || current.fixtureFingerprint !== identity.fixtureFingerprint) return undefined;
     ready = true;
@@ -287,7 +300,8 @@ const ensureNotificationRetentionCanaryFixture = async ({ db, rollout, nowMs = D
       queueKey: retentionState.queueKey,
       updatedAtMs: nowMs,
     };
-  }, undefined, false);
+    },
+  );
   return ready ? { ready: true, ...identity } : { ready: false, reason: 'fixture_control_changed' };
 };
 
@@ -310,6 +324,7 @@ const readExactCanaryFixture = async ({ db, rollout, fixtureFingerprint, jobId }
 
 const verifyAndCompleteCanaryFixture = async ({
   db, rollout, fixture, nowMs = Date.now(), metrics = null,
+// eslint-disable-next-line complexity -- completion verifies every exact fixture path and proof
 }) => {
   const currentControl = (await db.ref(NOTIFICATION_RETENTION_PATHS.canaryFixture)
     .once('value')).val();
@@ -325,22 +340,31 @@ const verifyAndCompleteCanaryFixture = async ({
   const proof = currentControl.finalizationProof;
   let queueRemoved = false;
   let queueAlreadyAbsent = false;
-  const queueResult = await db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${currentControl.queueKey}`)
-    .transaction((current) => {
+  const queueResult = await transactionWithAuthoritativeExistingValue(
+    db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${currentControl.queueKey}`), (current) => {
       if (!current) {
         queueRemoved = true;
         queueAlreadyAbsent = true;
+        return current;
+      }
+      queueAlreadyAbsent = false;
+      if (current.jobId !== fixture.jobId
+        || Number(current.generation) !== Number(proof.generation)) {
+        queueRemoved = false;
         return undefined;
       }
-      if (current.jobId !== fixture.jobId
-        || Number(current.generation) !== Number(proof.generation)) return undefined;
       queueRemoved = true;
       return null;
-    }, undefined, false);
+    },
+  );
+  if (!queueResult?.snapshot?.exists?.()) {
+    queueRemoved = true;
+    queueAlreadyAbsent = true;
+  }
   if (!queueRemoved || (!queueAlreadyAbsent && !queueResult?.committed)) return false;
   let completionProof = null;
-  const result = await db.ref(NOTIFICATION_RETENTION_PATHS.canaryFixture)
-    .transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(NOTIFICATION_RETENTION_PATHS.canaryFixture), (current) => {
       if (!current || current.fixtureFingerprint !== fixture.fixtureFingerprint
         || Number(current.rolloutRevision) !== Number(rollout.revision)
         || !validFinalizationProof(current, rollout, fixture)) return undefined;
@@ -363,7 +387,8 @@ const verifyAndCompleteCanaryFixture = async ({
         updatedAtMs: nowMs,
       };
       return completionProof;
-    }, undefined, false);
+    },
+  );
   if (!completionProof || !result?.committed) return false;
   if (metrics) {
     metrics.jobsDiscovered = 1;

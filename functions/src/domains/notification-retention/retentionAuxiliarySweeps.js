@@ -18,6 +18,7 @@ const {
   orderedEntries,
   QUEUE_ROOTS,
   safeInteger,
+  transactionWithAuthoritativeExistingValue,
 } = require('./retentionEngineRuntime');
 const { sweepDueRequeueRecovery } = require('./retentionRequeueSweep');
 
@@ -50,7 +51,8 @@ const exactExpiryPage = async ({
     }
     let matched = false;
     let preservedCurrent = false;
-    const result = await db.ref(`${root}/${key}`).transaction((current) => {
+    const result = await transactionWithAuthoritativeExistingValue(
+      db.ref(`${root}/${key}`), (current) => {
       if (!current || Number(current[orderField] || 0) !== Number(expected[orderField] || 0)
         || Number(current[orderField] || 0) > nowMs) return undefined;
       if (preserveExpired?.(current)) {
@@ -59,7 +61,8 @@ const exactExpiryPage = async ({
       }
       matched = true;
       return null;
-    }, undefined, false);
+      },
+    );
     metrics.transactions += 1;
     deleted += Number(matched && result?.committed);
     preserved += Number(preservedCurrent && result?.committed);
@@ -206,7 +209,8 @@ const withoutOrphanClaim = (attempt) => {
 
 const claimOrphanAttempt = async ({ db, attemptId, expected, claimId, nowMs, leaseMs, metrics }) => {
   let claimed = null;
-  const result = await db.ref(`notification_delivery_attempts/${attemptId}`).transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`notification_delivery_attempts/${attemptId}`), (current) => {
     if (!exactAttemptMatches(current, expected)) return undefined;
     if (current.retentionOrphanClaim
       && current.retentionOrphanClaim.claimId !== claimId
@@ -216,15 +220,18 @@ const claimOrphanAttempt = async ({ db, attemptId, expected, claimId, nowMs, lea
       retentionOrphanClaim: { claimId, expiresAtMs: nowMs + leaseMs },
     };
     return claimed;
-  }, undefined, false);
+    },
+  );
   metrics.transactions += 1;
   return result?.committed ? claimed : null;
 };
 
 const releaseOrphanAttempt = async ({ db, attemptId, claimId, metrics }) => {
-  await db.ref(`notification_delivery_attempts/${attemptId}`).transaction((current) => (
-    current?.retentionOrphanClaim?.claimId === claimId ? withoutOrphanClaim(current) : undefined
-  ), undefined, false);
+  await transactionWithAuthoritativeExistingValue(
+    db.ref(`notification_delivery_attempts/${attemptId}`),
+    (current) => current?.retentionOrphanClaim?.claimId === claimId
+      ? withoutOrphanClaim(current) : undefined,
+  );
   metrics.transactions += 1;
 };
 
@@ -242,12 +249,14 @@ const compareDeleteAttemptQueuePointer = async ({ db, attemptId, attempt, metric
   const root = QUEUE_ROOTS[attempt.queueKind];
   if (!root || typeof attempt.queueKey !== 'string' || !attempt.queueKey) return false;
   let deleted = false;
-  const result = await db.ref(`${root}/${attempt.queueKey}`).transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`${root}/${attempt.queueKey}`), (current) => {
     if (!current || current.targetId !== attemptId
       || Number(current.version) !== Number(attempt.queueVersion)) return undefined;
     deleted = true;
     return null;
-  }, undefined, false);
+    },
+  );
   metrics.transactions += 1;
   if (deleted && result?.committed) {
     metrics.updatePaths += 1;
@@ -266,13 +275,15 @@ const deleteClaimedOrphanAttempt = async ({
     return false;
   }
   let deleted = false;
-  const result = await db.ref(`notification_delivery_attempts/${attemptId}`).transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`notification_delivery_attempts/${attemptId}`), (current) => {
     if (!exactAttemptMatches(current, expected)
       || current.retentionOrphanClaim?.claimId !== claimId
       || Number(current.retentionDueAtMs || 0) > nowMs) return undefined;
     deleted = true;
     return null;
-  }, undefined, false);
+    },
+  );
   metrics.transactions += 1;
   if (!deleted || !result?.committed) return false;
   const parentAfter = (await db.ref(`notification_jobs/${expected.jobId}`).once('value')).val();
@@ -370,14 +381,16 @@ const deleteOrphanMarketingDetail = async ({ db, detailId, expected, nowMs, metr
   metrics.queries += 1;
   if (parent) return false;
   let deleted = false;
-  const result = await db.ref(`marketing_notification_details/${detailId}`).transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`marketing_notification_details/${detailId}`), (current) => {
     const currentOwner = current?.deliveryJobId || current?.notificationDeliveryJobId;
     if (!current || currentOwner !== jobId
       || Number(current.retentionDueAtMs || 0) !== Number(expected.retentionDueAtMs || 0)
       || Number(current.retentionDueAtMs || 0) > nowMs) return undefined;
     deleted = true;
     return null;
-  }, undefined, false);
+    },
+  );
   metrics.transactions += 1;
   if (!deleted || !result?.committed) return false;
   const parentAfter = (await db.ref(`notification_jobs/${jobId}`).once('value')).val();

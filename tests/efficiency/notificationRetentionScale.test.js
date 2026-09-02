@@ -468,7 +468,7 @@ test('shadow evidence resumes durably beyond 500 jobs without retaining identity
     notification_retention_rollout: { v1: rollout('shadow') },
     notification_jobs: {},
     notification_delivery_attempts: {},
-  });
+  }, { nullFirstTransactions: true });
   for (let index = 0; index < 501; index += 1) {
     const id = `notif_v1_${index.toString(16).padStart(64, '0')}`;
     await seedScheduledJob(db, canonicalJob(id));

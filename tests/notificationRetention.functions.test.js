@@ -402,6 +402,62 @@ test('paused compactor permits only the explicit bounded canary before activatio
   assert.equal(normal.mode, 'compactor');
 });
 
+test('bounded canary completes when every RTDB transaction begins null-first', async () => {
+  const shadow = compactorShadowEvidence();
+  const pausedRollout = protocolRollout({
+    schemaVersion: 1,
+    phase: 'compactor',
+    revision: 9,
+    preparationComplete: true,
+    preparationRolloutRevision: 7,
+    evidenceDigest: 'null-first-canary-evidence',
+    shadowEvidenceFingerprint: shadow.evidenceFingerprint,
+    shadowEvidenceRevision: 8,
+    canaryPassed: false,
+    canaryEvidenceFingerprint: null,
+    canaryEvidenceRevision: null,
+    updatedAtMs: NOW_MS - 1,
+  });
+  const db = createNotificationRetentionMemoryDb({
+    notification_retention_rollout: { v1: pausedRollout },
+    notification_retention: { v1: { evidence: { shadow } } },
+  }, { nullFirstTransactions: true });
+
+  const fixture = await retention.ensureNotificationRetentionCanaryFixture({
+    db, rollout: { ...pausedRollout, valid: true }, nowMs: NOW_MS,
+  });
+  assert.equal(fixture.ready, true);
+  const result = await retention.runNotificationRetentionCycle({
+    db,
+    nowMs: NOW_MS,
+    ownerId: 'null-first-canary',
+    modeOverride: 'compactor',
+    budgets: {
+      maxJobs: 1,
+      maxAttemptPagesPerJob: 1,
+      maxAttemptPages: 1,
+      maxAttempts: 100,
+      pageSize: 100,
+      orphanPageSize: 1,
+      auxiliaryPageSize: 1,
+      maxAuxiliaryPages: 1,
+    },
+    canary: {
+      enabled: true,
+      expectedPhase: 'compactor',
+      expectedRevision: 9,
+      evidenceDigest: 'null-first-canary-evidence',
+      fixtureFingerprint: fixture.fixtureFingerprint,
+      fixtureJobId: fixture.jobId,
+    },
+  });
+
+  assert.equal(result.mode, 'canary');
+  assert.equal(result.canaryEvidenceStatus, 'passed');
+  assert.equal(result.metrics.jobsClaimed, 1);
+  assert.equal(result.metrics.jobsCompleted, 1);
+});
+
 test('a bounded partial canary fails, retains its cumulative fence and cannot activate', async () => {
   const shadow = compactorShadowEvidence();
   const pausedRollout = protocolRollout({

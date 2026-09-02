@@ -10,6 +10,7 @@ const {
   RETENTION_MS,
 } = require('./constants');
 const { classifyNotificationRetentionEligibility } = require('./eligibility');
+const { transactionWithAuthoritativeExistingValue } = require('./retentionEngineRuntime');
 
 const QUEUE_KEY_WIDTH = 13;
 const QUEUE_GENERATION_WIDTH = 16;
@@ -36,14 +37,16 @@ const materializeCanonicalRetentionBoundary = async ({ db, jobId, job }) => {
     || !Number.isSafeInteger(job.completedAtMs) || job.completedAtMs <= 0
     || (Number.isSafeInteger(job.retentionDueAtMs) && job.retentionDueAtMs > 0)) return job;
   const retentionDueAtMs = job.completedAtMs + RETENTION_MS;
-  const boundary = await db.ref(`notification_jobs/${jobId}`).transaction((current) => {
+  const boundary = await transactionWithAuthoritativeExistingValue(
+    db.ref(`notification_jobs/${jobId}`), (current) => {
     if (!current || current.jobId !== jobId || current.status !== job.status
       || current.completedAtMs !== job.completedAtMs) return undefined;
     if (Number.isSafeInteger(current.retentionDueAtMs) && current.retentionDueAtMs > 0) {
       return current.retentionDueAtMs === retentionDueAtMs ? current : undefined;
     }
     return Number.isSafeInteger(retentionDueAtMs) ? { ...current, retentionDueAtMs } : undefined;
-  }, undefined, false);
+    },
+  );
   return boundary?.committed ? boundary.snapshot.val() : null;
 };
 
@@ -139,10 +142,12 @@ const persistRetentionScheduling = async ({ db, jobId, job, classification, queu
     };
   }, undefined, false);
   if (queueResult?.committed && priorCompatibility) {
-    await db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${priorCompatibility.queueKey}`)
-      .transaction((current) => current?.jobId === jobId
+    await transactionWithAuthoritativeExistingValue(
+      db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${priorCompatibility.queueKey}`),
+      (current) => current?.jobId === jobId
         && Number(current.generation) === Number(priorCompatibility.generation)
-        ? null : undefined, undefined, false);
+        ? null : undefined,
+    );
   }
   if (outcome === 'already_scheduled' && compatibilityRepaired) outcome = 'queue_repaired';
   return { committed: true, outcome, compatibilityRepaired };

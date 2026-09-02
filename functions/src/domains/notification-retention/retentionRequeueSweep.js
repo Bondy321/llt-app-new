@@ -3,7 +3,11 @@
 // @ts-check
 
 const { NOTIFICATION_RETENTION_PATHS } = require('./constants');
-const { maxMetric, orderedEntries } = require('./retentionEngineRuntime');
+const {
+  maxMetric,
+  orderedEntries,
+  transactionWithAuthoritativeExistingValue,
+} = require('./retentionEngineRuntime');
 
 const validRecoveryCursor = (value, expectedRolloutRevision, expectedEvidenceDigest) => (
   value?.schemaVersion === 1
@@ -81,11 +85,11 @@ const sweepDueRequeueRecovery = async ({
     if (canContinue && !(await canContinue())) { stopped = true; break; }
     processed.push([jobId, state]);
     if (state?.status !== 'processing') {
-      await db.ref(`notification_requeue_jobs/${jobId}`).transaction((current) => (
-        current?.requeueId === state?.requeueId
+      await transactionWithAuthoritativeExistingValue(
+        db.ref(`notification_requeue_jobs/${jobId}`), (current) => current?.requeueId === state?.requeueId
           && Number(current?.recoveryDueAtMs) === Number(state?.recoveryDueAtMs)
-          ? { ...current, recoveryDueAtMs: null } : undefined
-      ), undefined, false);
+          ? { ...current, recoveryDueAtMs: null } : undefined,
+      );
       metrics.transactions += 1;
       continue;
     }

@@ -175,7 +175,20 @@ const createNotificationRetentionMemoryDb = (initial = {}, hooks = {}) => {
       transaction: async (updater) => {
         await hooks.beforeTransaction?.({ data, pathName });
         const current = clone(getAtPath(data, pathName));
-        const next = updater(current);
+        let next;
+        if (hooks.nullFirstTransactions) {
+          const initial = updater(null);
+          if (initial === undefined) {
+            transactionLog.push({ pathName, committed: false });
+            await hooks.afterTransaction?.({
+              data, pathName, committed: false, current, next: undefined,
+            });
+            return { committed: false, snapshot: snapshotFor(current) };
+          }
+          next = current === undefined || current === null ? initial : updater(current);
+        } else {
+          next = updater(current);
+        }
         const committed = next !== undefined;
         if (committed) setAtPath(data, pathName, next);
         transactionLog.push({ pathName, committed });

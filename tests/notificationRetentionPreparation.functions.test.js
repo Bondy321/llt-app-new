@@ -112,6 +112,31 @@ test('preparation preserves indexed order, resumes by CAS and schedules ordinary
   );
 });
 
+test('preparation resumes against authoritative RTDB values after null-first callbacks', async () => {
+  const firstId = jobId('a');
+  const secondId = jobId('b');
+  const db = createPausedPreparationDb({
+    notification_jobs: {
+      [firstId]: terminalJob(firstId, NOW_MS - RETENTION_MS - 2),
+      [secondId]: terminalJob(secondId, NOW_MS - RETENTION_MS - 1),
+    },
+    notification_delivery_attempts: {},
+  }, { nullFirstTransactions: true });
+
+  const first = await runNotificationRetentionPreparation({
+    db, nowMs: NOW_MS, apply: true, expectedRolloutRevision: 0, pageSize: 1,
+  });
+  const second = await runNotificationRetentionPreparation({
+    db, nowMs: NOW_MS, apply: true, expectedRolloutRevision: 0, pageSize: 1,
+  });
+
+  assert.equal(first.progressConflict, false);
+  assert.equal(second.progressConflict, false);
+  assert.equal(second.cumulative.scanned, 2);
+  assert.equal(second.cumulative.requiresAttention, 0);
+  assert.equal(db.getAtPath('notification_retention/v1/preparation/revision'), 2);
+});
+
 test('stale preparation progress cannot advance over a concurrent revision', async () => {
   const id = jobId('e');
   let injected = false;

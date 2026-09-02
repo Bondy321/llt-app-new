@@ -33,6 +33,26 @@ const maxMetric = (metrics, name, value) => {
   metrics[name] = Math.max(safeInteger(metrics[name]), safeInteger(value));
 };
 
+// The Admin RTDB client can invoke a transaction handler with an uncached local
+// null before it has fetched the authoritative server value. Returning
+// undefined from that first invocation aborts the transaction without a server
+// round trip. Existing-record compare-and-swap operations use this helper to
+// submit a harmless null probe first; an existing server value then causes the
+// handler to be retried with that authoritative value. This helper must not be
+// used for create-if-absent transactions because a genuinely absent path will
+// commit the null probe as a no-op.
+const transactionWithAuthoritativeExistingValue = async (ref, updater) => {
+  let awaitingAuthoritativeValue = true;
+  return ref.transaction((current) => {
+    if (awaitingAuthoritativeValue && (current === null || current === undefined)) {
+      awaitingAuthoritativeValue = false;
+      return null;
+    }
+    awaitingAuthoritativeValue = false;
+    return updater(current);
+  }, undefined, false);
+};
+
 const normalizeBudgets = (input = {}) => {
   const pageSize = positiveInteger(input.pageSize, DEFAULT_RETENTION_BUDGETS.pageSize, 250);
   const maxAttempts = positiveInteger(
@@ -130,4 +150,5 @@ module.exports = {
   normalizeBudgets,
   orderedEntries,
   safeInteger,
+  transactionWithAuthoritativeExistingValue,
 };

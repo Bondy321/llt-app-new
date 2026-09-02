@@ -10,6 +10,7 @@ const {
   persistRetentionWarning,
 } = require('./retentionContext');
 const { fenceIdFor } = require('./retentionFenceRecovery');
+const { transactionWithAuthoritativeExistingValue } = require('./retentionEngineRuntime');
 const { ensureNotificationRetentionScheduled } = require('./state');
 
 const REQUEUEABLE_STATUSES = new Set([
@@ -97,13 +98,14 @@ const upsertExactDueQueueEntry = async ({ db, attention }) => {
 
 const removeExactAttentionPointer = async ({ db, jobId, attention }) => {
   let removed = false;
-  const result = await db.ref(`${NOTIFICATION_RETENTION_PATHS.attention}/${jobId}`)
-    .transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`${NOTIFICATION_RETENTION_PATHS.attention}/${jobId}`), (current) => {
       if (!current || current.attentionFingerprint !== attention.attentionFingerprint
         || Number(current.generation) !== Number(attention.generation)) return undefined;
       removed = true;
       return null;
-    }, undefined, false);
+    },
+  );
   return Boolean(removed && result?.committed);
 };
 
@@ -127,8 +129,8 @@ const retryNotificationRetentionAttention = async ({
     return { retried: false, reason: 'queue_changed' };
   }
   let retried = false;
-  const result = await db.ref(`${NOTIFICATION_RETENTION_PATHS.jobs}/${jobId}`)
-    .transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`${NOTIFICATION_RETENTION_PATHS.jobs}/${jobId}`), (current) => {
       if (!exactAttentionIdentity(attention, current, jobId)
         || current.status !== 'requires_attention' || current.lease
         || hasCommittedIrreversibleWork(current)
@@ -144,7 +146,8 @@ const retryNotificationRetentionAttention = async ({
         lastErrorCode: null,
         updatedAtMs: nowMs,
       };
-    }, undefined, false);
+    },
+  );
   if (!retried || !result?.committed) {
     return { retried: false, reason: 'state_changed' };
   }
@@ -193,20 +196,23 @@ const abandonNotificationRetentionAttention = async ({
     if (!cancelled) return { abandoned: false, reason: 'canonical_fence_changed' };
   }
   let abandoned = false;
-  const result = await db.ref(`${NOTIFICATION_RETENTION_PATHS.jobs}/${jobId}`)
-    .transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`${NOTIFICATION_RETENTION_PATHS.jobs}/${jobId}`), (current) => {
       if (!exactAttentionIdentity(attention, current, jobId)
         || current.status !== 'requires_attention' || current.lease
         || current.destructiveCommit
         || hasCommittedIrreversibleWork(current)) return undefined;
       abandoned = true;
       return null;
-    }, undefined, false);
+    },
+  );
   if (!abandoned || !result?.committed) {
     return { abandoned: false, reason: 'state_changed' };
   }
-  await db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${attention.queueKey}`)
-    .transaction((current) => (exactQueueEntry(current, attention) ? null : undefined), undefined, false);
+  await transactionWithAuthoritativeExistingValue(
+    db.ref(`${NOTIFICATION_RETENTION_PATHS.queue}/${attention.queueKey}`),
+    (current) => (exactQueueEntry(current, attention) ? null : undefined),
+  );
   const attentionRemoved = await removeExactAttentionPointer({ db, jobId, attention });
   return { abandoned: true, generation: attention.generation, attentionRemoved };
 };
@@ -264,7 +270,7 @@ const recoverZeroResultRequeue = async ({ db, jobId, state, nowMs }) => {
   const expectedGeneration = Number(observed.retentionGeneration || 0);
   const restoredStatus = REQUEUEABLE_STATUSES.has(state.sourceStatus)
     ? state.sourceStatus : 'provider_rejected';
-  await jobRef.transaction((current) => {
+  await transactionWithAuthoritativeExistingValue(jobRef, (current) => {
     if (!exactRetryingRecoveryJob({ current, jobId, state, expectedGeneration })) return undefined;
     restored = {
       ...current,
@@ -273,7 +279,7 @@ const recoverZeroResultRequeue = async ({ db, jobId, state, nowMs }) => {
       updatedAtMs: nowMs,
     };
     return restored;
-  }, undefined, false);
+  });
   if (!restored) return (await jobRef.once('value')).val();
   const retention = await ensureNotificationRetentionScheduled({
     db, jobId, job: restored, nowMs,
@@ -281,13 +287,13 @@ const recoverZeroResultRequeue = async ({ db, jobId, state, nowMs }) => {
   if (ACCEPTED_RETENTION_SCHEDULE_REASONS.has(retention?.reason)) return restored;
 
   let rolledBack = null;
-  await jobRef.transaction((current) => {
+  await transactionWithAuthoritativeExistingValue(jobRef, (current) => {
     if (!exactRestoredRecoveryJob({
       current, jobId, restored, restoredStatus, expectedGeneration,
     })) return undefined;
     rolledBack = { ...current, status: 'retrying', updatedAtMs: nowMs };
     return rolledBack;
-  }, undefined, false);
+  });
   return rolledBack || (await jobRef.once('value')).val();
 };
 
@@ -299,7 +305,8 @@ const exactRequeueIdentity = (current, expected) => current
 
 const preserveExpiredState = async ({ db, jobId, expected, nowMs, malformed = false }) => {
   let preserved = false;
-  const result = await db.ref(`notification_requeue_jobs/${jobId}`).transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`notification_requeue_jobs/${jobId}`), (current) => {
     if (!exactRequeueIdentity(current, expected)) return undefined;
     preserved = true;
     const liveLease = !malformed && current.lease
@@ -312,7 +319,8 @@ const preserveExpiredState = async ({ db, jobId, expected, nowMs, malformed = fa
       ...(malformed ? { safeErrorCode: 'REQUEUE_STATE_MALFORMED' } : {}),
       updatedAtMs: liveLease ? current.updatedAtMs : nowMs,
     };
-  }, undefined, false);
+    },
+  );
   return { deleted: false, preserved: Boolean(preserved && result?.committed) };
 };
 
@@ -332,11 +340,13 @@ const cleanupExpiredNotificationRequeueState = async ({
     if (recovered?.status === 'retrying') return { deleted: false, preserved: true };
   }
   let deleted = false;
-  const result = await db.ref(`notification_requeue_jobs/${jobId}`).transaction((current) => {
+  const result = await transactionWithAuthoritativeExistingValue(
+    db.ref(`notification_requeue_jobs/${jobId}`), (current) => {
     if (!exactRequeueIdentity(current, expected)) return undefined;
     deleted = true;
     return null;
-  }, undefined, false);
+    },
+  );
   return { deleted: Boolean(deleted && result?.committed), preserved: false };
 };
 
