@@ -318,6 +318,56 @@ test('a concurrent rollout change prevents automatic pause from overwriting newe
   assert.equal(db.getAtPath('notification_retention_rollout/v1').phase, 'paused');
 });
 
+test('paused protocol refresh survives an RTDB null-first transaction callback', async () => {
+  const staleProtocol = {
+    retentionEngineProtocolId: '0'.repeat(64),
+    engineSourceDigest: '1'.repeat(64),
+    engineRulesDigest: PROTOCOL.engineRulesDigest,
+    engineTriggerDigest: PROTOCOL.engineTriggerDigest,
+  };
+  let rawRollout = {
+    schemaVersion: 1,
+    phase: 'paused',
+    revision: 1,
+    preparationComplete: false,
+    updatedAtMs: NOW_MS - 1,
+    ...staleProtocol,
+    expectedEngineProtocolId: staleProtocol.retentionEngineProtocolId,
+  };
+  let initialProposal;
+  const db = {
+    ref: (pathName) => {
+      assert.equal(pathName, 'notification_retention_rollout/v1');
+      return {
+        once: async () => ({ val: () => JSON.parse(JSON.stringify(rawRollout)) }),
+        transaction: async (updater) => {
+          initialProposal = updater(null);
+          const next = updater(JSON.parse(JSON.stringify(rawRollout)));
+          assert.notEqual(next, undefined);
+          rawRollout = next;
+          return { committed: true, snapshot: { val: () => next } };
+        },
+      };
+    },
+  };
+
+  const result = await retention.transitionNotificationRetentionRollout({
+    db,
+    expectedPhase: 'paused',
+    expectedRevision: 1,
+    nextPhase: 'paused',
+    actor: 'test-operator',
+    nowMs: NOW_MS,
+  });
+
+  assert.equal(initialProposal, null);
+  assert.equal(result.transitioned, true);
+  assert.equal(result.rollout.phase, 'paused');
+  assert.equal(result.rollout.revision, 2);
+  assert.equal(result.rollout.protocolValid, true);
+  assert.equal(result.rollout.retentionEngineProtocolId, PROTOCOL.retentionEngineProtocolId);
+});
+
 test('fresh exact deployment heartbeat permits the normal protocol-bound paused-canary gate', async () => {
   const db = protocolDb({ rollout: activeRollout({ canaryPassed: false,
     canaryEvidenceFingerprint: null, canaryEvidenceRevision: null }) });
