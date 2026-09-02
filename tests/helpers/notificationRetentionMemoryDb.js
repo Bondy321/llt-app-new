@@ -109,7 +109,7 @@ const createNotificationRetentionMemoryDb = (initial = {}, hooks = {}) => {
         schedulerConfig: {
           name: `projects/${projectId}/locations/${trigger.region}/jobs/${trigger.schedulerJobName}`,
           state: 'PAUSED',
-          schedule: trigger.schedulerCron,
+          schedule: trigger.schedule,
           timeZone: trigger.timeZone,
           httpTarget: {
             uri: `https://${trigger.functionName}.example.test`,
