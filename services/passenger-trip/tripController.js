@@ -11,8 +11,8 @@ const createPassengerTripController = ({ scope: inputScope, seed, cache, request
   let online = false;
   let foreground = true;
   let timer = null;
-  let retryTimer = null;
-  let retryCount = 0;
+  const retries = new Map();
+  const readStarted = new Set();
   let inFlight = null;
   let unsubscribe = null;
   let abort = null;
@@ -37,7 +37,7 @@ const createPassengerTripController = ({ scope: inputScope, seed, cache, request
       const saved = await cache.write(scope, { schemaVersion: 1, scope, parts: captured }, current);
       if (!current() || !saved) return;
       const parts = { ...state.parts };
-      for (const name of PARTS) if (parts[name] === captured[name] && parts[name]) {
+      for (const name of PARTS) if (parts[name] === captured[name] && parts[name] && !parts[name].persisted) {
         parts[name] = { ...parts[name], persisted: true };
       }
       state = { ...state, parts };
@@ -71,11 +71,13 @@ const createPassengerTripController = ({ scope: inputScope, seed, cache, request
     if (!validateContract('PassengerTripSnapshot', response).valid || !sameScope(response.scope, scope)
       || !Number.isSafeInteger(response.checkedAtMs) || response.checkedAtMs <= 0) throw new Error('INVALID_RESPONSE');
     const parts = { ...state.parts };
+    const unavailable = [];
     for (const name of requested) {
       const incoming = response.parts?.[name];
       const old = parts[name];
       if (incoming?.status === 'unavailable' || !incoming) {
         parts[name] = { ...old, status: 'error', error: 'SOURCE_UNAVAILABLE' };
+        unavailable.push(name);
         continue;
       }
       if (!versionValid(incoming.version)) throw new Error('INVALID_RESPONSE');
@@ -92,10 +94,33 @@ const createPassengerTripController = ({ scope: inputScope, seed, cache, request
     }
     state = { ...state, parts };
     emit();
+    return unavailable;
   };
   const kick = () => {
     if (timer || inFlight || !online || !foreground || !current()) return;
     timer = schedule(() => { timer = null; run(); }, coalesceMs);
+  };
+  const cancelRetries = (names, reset = false) => {
+    names.forEach((name) => {
+      const retry = retries.get(name);
+      if (retry?.timer) cancel(retry.timer);
+      if (reset) retries.delete(name);
+      else if (retry) retry.timer = null;
+    });
+  };
+  const retryParts = (names) => {
+    if (!current() || !online || !foreground) return;
+    names.forEach((name) => {
+      const retry = retries.get(name) || { count: 0, timer: null };
+      if (retry.timer || retry.count >= 3) return;
+      retry.count += 1;
+      retry.timer = schedule(() => {
+        retry.timer = null;
+        if (!current() || !online || !foreground) return;
+        dirty.add(name); kick();
+      }, 1000 * (2 ** (retry.count - 1)));
+      retries.set(name, retry);
+    });
   };
   const fail = (requested, error) => {
     const reason = error?.reason || error?.message || 'NETWORK_ERROR';
@@ -104,14 +129,7 @@ const createPassengerTripController = ({ scope: inputScope, seed, cache, request
     if (error?.invalidSession === true) {
       stop();
       onInvalidSession({ reason });
-    } else if (retryCount < 3 && online && foreground) {
-      retryCount += 1;
-      retryTimer = schedule(() => {
-        retryTimer = null;
-        requested.forEach((name) => dirty.add(name));
-        kick();
-      }, 1000 * (2 ** (retryCount - 1)));
-    }
+    } else retryParts(requested);
   };
   const run = () => {
     if (inFlight || !current() || !online || !foreground || !dirty.size) { settle(); return; }
@@ -120,6 +138,8 @@ const createPassengerTripController = ({ scope: inputScope, seed, cache, request
       if (!current() || !online || !foreground) return;
       const requested = PARTS.filter((part) => dirty.has(part));
       requested.forEach((part) => dirty.delete(part));
+      cancelRetries(requested);
+      requested.forEach((part) => readStarted.add(part));
       state = { ...state, checking: true, parts: { ...state.parts } };
       requested.forEach((name) => { state.parts[name] = { ...state.parts[name], status: 'checking' }; });
       emit();
@@ -130,8 +150,9 @@ const createPassengerTripController = ({ scope: inputScope, seed, cache, request
           versions: Object.fromEntries(requested.filter((name) => state.parts[name]?.version)
             .map((name) => [name, state.parts[name].version])), signal: abort.signal });
         if (!current()) return;
-        apply(response, requested);
-        retryCount = 0;
+        const unavailable = apply(response, requested);
+        cancelRetries(requested.filter((name) => !unavailable.includes(name)), true);
+        retryParts(unavailable);
         await persist();
       } catch (error) { if (current()) fail(requested, error); }
       finally { abort = null; }
@@ -146,10 +167,11 @@ const createPassengerTripController = ({ scope: inputScope, seed, cache, request
   };
   const refresh = (reason = 'manual', parts = PARTS) => {
     if (!current()) return Promise.resolve(state);
-    parts.filter((part) => PARTS.includes(part)).forEach((part) => dirty.add(part));
+    const requested = parts.filter((part) => PARTS.includes(part));
+    requested.forEach((part) => dirty.add(part));
+    cancelRetries(requested, reason !== 'signal');
     diagnostics('refresh_requested', { reason, coalesced: Boolean(inFlight || timer) });
     if (!online || !foreground) { markSaved(); return Promise.resolve(state); }
-    if (retryTimer) { cancel(retryTimer); retryTimer = null; }
     const result = new Promise((resolve) => waiters.push(resolve));
     if (reason === 'manual' && !inFlight) { if (timer) cancel(timer); timer = null; run(); }
     else kick();
@@ -160,7 +182,9 @@ const createPassengerTripController = ({ scope: inputScope, seed, cache, request
     const signature = JSON.stringify(value ?? null);
     const previous = signals.get(name);
     signals.set(name, signature);
-    if (previous === undefined || previous === signature) return;
+    // An initial callback is covered only if this part's read has not started.
+    // A delayed first delivery may already represent a newer source generation.
+    if (previous === signature || (previous === undefined && !readStarted.has(name))) return;
     refresh('signal', [name]);
   };
   const setAvailability = (connected, active = true) => {
@@ -172,7 +196,7 @@ const createPassengerTripController = ({ scope: inputScope, seed, cache, request
       if (!wasAvailable) refresh(hydrated ? 'reconnect' : 'start');
     } else {
       if (timer) cancel(timer); timer = null;
-      if (retryTimer) cancel(retryTimer); retryTimer = null;
+      cancelRetries(PARTS);
       unsubscribe?.(); unsubscribe = null;
       markSaved(); settle();
     }
@@ -180,7 +204,7 @@ const createPassengerTripController = ({ scope: inputScope, seed, cache, request
   const stop = () => {
     stopped = true;
     if (timer) cancel(timer);
-    if (retryTimer) cancel(retryTimer);
+    cancelRetries(PARTS, true);
     abort?.abort(); unsubscribe?.(); unsubscribe = null;
     listeners.clear(); settle();
   };

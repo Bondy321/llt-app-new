@@ -13,6 +13,14 @@ derives the booking from the server-owned profile. It verifies the private devic
 binding/principal, participant session, canonical booking/tour association and
 account-deletion barriers. The body cannot select a booking, tour or database path.
 
+Browser access is an exact-origin allowlist. Set `PASSENGER_APP_ALLOWED_ORIGINS`
+to the comma-separated production and staging web origins before deploying the
+Function. Local development permits `localhost` and `127.0.0.1`; origin-absent
+native requests remain compatible. The Firebase `onRequest` wrapper completes an
+allowed preflight before bearer/session/App Check verification and adds the origin
+grant to both successful and structured error responses. A denied origin receives
+no CORS grant, and an actual request from it is rejected before authentication.
+
 The generated v1 contracts are `PassengerTripScope`, `PassengerTripSnapshot`,
 `PassengerTripPart` and `PassengerTripCache`. Request: `expectedSessionId`, a
 nonempty subset of `booking`, `tour`, `itinerary`, and optional `versions`.
@@ -44,8 +52,16 @@ removes associated signals. Missing signals need no backfill: start, reconnect,
 foreground and manual checks read canonical data. Changed/disappeared signals only
 mark their respective parts dirty. A 40 ms burst window coalesces work; one active
 request and one accumulated follow-up preserve changes arriving during a request.
-Transient request failures have three exponential retries (1/2/4 seconds), paused
-offline/background and cancelled on cleanup. Manual refresh settles independently
+An initial signal delivered before its part's first read is covered by that read;
+a first delivery during or after the read triggers bounded revalidation, since it
+may represent a newer source generation. Cached essentials never await signal
+initialisation.
+Transient request failures and HTTP-200 `unavailable` parts have three exponential
+retries (1/2/4 seconds) per part, paused offline/background and cancelled on cleanup.
+Only failed parts retry; successful unrelated parts do not reset their budgets or
+check timestamps. Success clears that part's retry budget; explicit manual and
+lifecycle checks can start a fresh budget. Withdrawal/absence does not retry.
+Manual refresh settles independently
 of outgoing queues and optional manifest/location reads.
 
 Login projections are a nonblocking unverified seed because the legacy login
@@ -107,8 +123,18 @@ Remove the temporary legacy seed reader only after supported caches have migrate
 - Delay/fail boarding and GPS; check essentials, independent refresh settlement,
   large text and screen-reader wording. Verify date rollover/foreground day selection.
 - Logout/delete while a refresh/cache write is pending; reopen and confirm isolation.
+- In the enabled deployed web build, verify browser preflight, authorised snapshot
+  and structured session-error access from each configured passenger web origin.
 
 Automated integration invokes real domain/trigger handlers against synthetic DB
 state and renders React Native components with native hosts mocked. It verifies the
 real active-session/profile/booking boundaries; only outer bearer/App Check token
 verification is injected. It is not a deployed-trigger or physical-device test.
+The cross-stack integration test runs exactly once in `test:functions:scripts`,
+whose CI job installs root and Functions dependencies. Ordinary mobile aggregates
+require only the root dependency installation.
+The corrective local browser smoke used the real Firebase wrapper and real
+session/source checks against synthetic data, injecting only outer token
+verification. Browser-enforced cross-origin fetch returned the successful snapshot
+and a readable SESSION_CHANGED error: one preflight, two POSTs, two authorisations.
+This does not replace the deployed-origin or physical-device smoke above.

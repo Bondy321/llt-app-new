@@ -42,7 +42,11 @@ test('synthetic source changes cross real active-session endpoint, shared contro
     setItem: async (key, value) => disk.set(key, value), removeItem: async (key) => disk.delete(key) });
   let signal; let timer; let attaches = 0; let detaches = 0;
   const makeController = () => createPassengerTripController({ scope, cache, request,
-    subscribeSignals: (_scope, cb) => { signal = cb; attaches += 2; return () => { detaches += 2; }; },
+    subscribeSignals: (_scope, cb) => {
+      signal = cb; attaches += 2;
+      cb('booking', null); cb('tour', null); cb('itinerary', null);
+      return () => { detaches += 2; };
+    },
     schedule: (fn) => { timer = fn; return 1; }, cancel: () => { timer = null; } });
   const controller = makeController(); await controller.ready;
   controller.setAvailability(true);
@@ -56,7 +60,6 @@ test('synthetic source changes cross real active-session endpoint, shared contro
       tourCode: trip.parts.tour.data.tourCode, onNavigate() {}, onLogout() {}, isConnected };
   };
   const home = await renderPassengerTripHome(TourHomeScreen, displayProps(controller));
-  signal('booking', null); signal('tour', null); signal('itinerary', null);
   assert.equal(controller.getState().parts.itinerary.persisted, true);
   const before = structuredClone(get(`bookings/${scope.bookingRef}`));
   const after = { ...before, pickupTime: '09:45', seatNumbers: ['14', '15'] };

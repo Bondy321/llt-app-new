@@ -8,6 +8,10 @@ const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const { authorizeAppSessionMobileRequest } = require('../../infrastructure/auth/appSessionRequestAuth');
 const { validateContract } = require('../../contracts/generated/passengerTrip');
 const {
+  getPassengerAppCorsOrigins,
+  isAllowedPassengerAppOrigin,
+} = require('../../infrastructure/http/passengerAppCors');
+const {
   ensureNoActiveAccountDeletion,
   ensureNoActivePassengerAccountDeletion,
 } = require('../account-deletion/public');
@@ -22,11 +26,19 @@ const endpointOptions = Object.freeze({
   region: 'europe-west1',
   maxInstances: 20,
   timeoutSeconds: 30,
-  cors: false,
+  cors: getPassengerAppCorsOrigins(),
 });
 
 /** @param {any} res @param {number} status @param {string} reason */
 const sendFailure = (res, status, reason) => res.status(status).json({ success: false, reason });
+
+const sendSnapshotFailure = (res, error) => {
+  const code = /** @type {{ code?: string }} */ (error)?.code;
+  if (code === 'ACCOUNT_DELETION_IN_PROGRESS') return sendFailure(res, 409, code);
+  if (code === 'SESSION_SCOPE_MISMATCH') return sendFailure(res, 403, code);
+  if (code === 'TRIP_SOURCE_MISSING') return sendFailure(res, 409, code);
+  return sendFailure(res, 503, 'SERVICE_UNAVAILABLE');
+};
 
 /** @param {string} reason */
 const normalizeSessionFailure = (reason) => {
@@ -53,6 +65,9 @@ const createPassengerTripSnapshotHandler = ({
   dateParser = parseDateOnly,
   snapshotReader = readPassengerTripSnapshot,
 } = {}) => async (req, res) => {
+  if (!isAllowedPassengerAppOrigin(req.headers?.origin)) {
+    return sendFailure(res, 403, 'ORIGIN_NOT_ALLOWED');
+  }
   if (req.method !== 'POST') return sendFailure(res, 405, 'METHOD_NOT_ALLOWED');
   const request = normalizePassengerTripRequest(req.body);
   if (!request || !isValidAppSessionId(request.expectedSessionId)) {
@@ -102,13 +117,7 @@ const createPassengerTripSnapshotHandler = ({
     res.set('Cache-Control', 'private, no-store, max-age=0');
     return res.status(200).json(response);
   } catch (error) {
-    const code = /** @type {{ code?: string }} */ (error)?.code;
-    if (code === 'ACCOUNT_DELETION_IN_PROGRESS') {
-      return sendFailure(res, 409, 'ACCOUNT_DELETION_IN_PROGRESS');
-    }
-    if (code === 'SESSION_SCOPE_MISMATCH') return sendFailure(res, 403, code);
-    if (code === 'TRIP_SOURCE_MISSING') return sendFailure(res, 409, code);
-    return sendFailure(res, 503, 'SERVICE_UNAVAILABLE');
+    return sendSnapshotFailure(res, error);
   }
 };
 
