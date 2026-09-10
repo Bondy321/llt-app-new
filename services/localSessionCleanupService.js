@@ -2,6 +2,8 @@ const AsyncStorage = require('@react-native-async-storage/async-storage').defaul
 const offlineSyncService = require('./offlineSyncService');
 const driverOperationalLifecycleService = require('./driverOperationalLifecycleService');
 const { clearNotificationFeedCache } = require('./notificationInboxService');
+const { stopPassengerTrip, purgePassengerTrip } = require('./passenger-trip/tripLifecycle');
+const { createTripCache } = require('./passenger-trip/tripCache');
 
 const APP_LOCAL_KEYS = [
   '@LLT:tourData',
@@ -44,7 +46,11 @@ const createLocalSessionCleanupService = ({
   clearNotifications = clearNotificationFeedCache,
   photoCache = loadPhotoCacheService(),
   beforeSessionKeyCommit = null,
+  tripLifecycle = null,
 } = {}) => {
+  const trips = tripLifecycle || { stopPassengerTrip,
+    purgePassengerTrip: storage === AsyncStorage ? purgePassengerTrip : (scope) => createTripCache(storage).purge(scope),
+  };
   let cleanupInFlight = null;
   let scopedCleanupInFlight = null;
   let sessionKeyCommitInFlight = null;
@@ -116,6 +122,11 @@ const createLocalSessionCleanupService = ({
           },
         };
       }
+      const tripScope = role === 'passenger' ? {
+        authUid, principalId, bookingRef: ownerId, tourId, sessionId: appSession?.sessionId,
+      } : null;
+      // Fence incoming callbacks synchronously before the first awaited purge.
+      if (tripScope) trips.stopPassengerTrip(tripScope);
       const operations = {
         stopOfflineReplay: () => offline.setActiveSessionScope(null),
         clearNotificationLifecycle: () => storage.multiRemove(notificationLifecycleKeys({
@@ -125,6 +136,7 @@ const createLocalSessionCleanupService = ({
         clearNotificationCache: () => authUid ? clearNotifications({ userId: authUid }) : Promise.resolve(0),
         clearPhotoCache: () => photoCache?.clearPhotoViewerCache?.() || Promise.resolve({ success: true }),
       };
+      if (tripScope) operations.clearPassengerTrip = () => trips.purgePassengerTrip(tripScope);
 
       if (role === 'driver' && resolvedDriverOperationalScope) {
         operations.clearDriverOperationalData = () => driverLifecycle.purge(resolvedDriverOperationalScope);

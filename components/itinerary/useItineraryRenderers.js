@@ -10,7 +10,10 @@ import useItinerarySyncPresentation from './useItinerarySyncPresentation';
 const styles = createItineraryScreenStyles({ StyleSheet, COLORS, FONT_WEIGHT, Platform, RADIUS, SHADOWS, SPACING });
 
 export default function useItineraryRenderers(context) {
-  const { beginEditing, checkingForUpdates, dataSource, editedItinerary, errorMessage, filteredItinerary, formatShortDate, freshnessNow, getDayDate, handleJumpToDay, isDriver, isEditing, itinerary, lastSyncedAt, refreshing, searchQuery, setSearchQuery, todaysDayNumber, tourDayContext, tourName } = context;
+  const { beginEditing, checkingForUpdates, dataSource, editedItinerary, errorMessage, filteredItinerary,
+    formatShortDate, freshnessNow, getDayDate, handleJumpToDay, isDriver, isEditing, itinerary,
+    lastSyncedAt, passengerTripNowMs, passengerTripPart, refreshing, searchQuery, setSearchQuery,
+    todaysDayNumber, tourDayContext, tourName } = context;
   // --- LOADING SKELETON ---
   const renderLoadingSkeleton = () => (
     <View style={styles.skeletonContainer}>
@@ -90,6 +93,8 @@ export default function useItineraryRenderers(context) {
     itinerary,
     lastSyncedAt,
     refreshing,
+    passengerTripNowMs,
+    passengerTripPart,
   });
 
   const headerDaySummary = useMemo(() => {

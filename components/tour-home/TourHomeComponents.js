@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Animated, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -6,6 +6,7 @@ import createTourHomeScreenStyles from '../../screens/styles/TourHomeScreen.styl
 import { getPickupCountdownState } from '../../services/pickupTimeParser';
 import { COLORS } from './tourHomePresentation';
 import { RADIUS, SHADOWS, SPACING } from '../../theme';
+import { FONT_SCALE_LIMITS } from '../../utils/responsiveLayout';
 
 const styles = createTourHomeScreenStyles({ StyleSheet, COLORS, RADIUS, SHADOWS, SPACING });
 const PICKUP_COUNTDOWN_REFRESH_MS = 30 * 1000;

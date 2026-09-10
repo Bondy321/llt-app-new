@@ -22,6 +22,21 @@ const readJavaScriptTree = (directory) => fs.readdirSync(directory, { withFileTy
   })
   .join('\n');
 const EXPECTED_FUNCTION_EXPORTS = [
+  'getPassengerTripSnapshot',
+  'projectPassengerTripBooking',
+  'projectPassengerTripItinerary',
+  'projectPassengerTripTourName',
+  'projectPassengerTripTourTourCode',
+  'projectPassengerTripTourDestination',
+  'projectPassengerTripTourStartDate',
+  'projectPassengerTripTourEndDate',
+  'projectPassengerTripTourDuration',
+  'projectPassengerTripTourActive',
+  'projectPassengerTripTourCurrentParticipants',
+  'projectPassengerTripTourMaxParticipants',
+  'projectPassengerTripTourDriverName',
+  'projectPassengerTripTourDriverPhone',
+  'projectPassengerTripTourAssignmentRevision',
   '__testables',
   'assignDriverToTour',
   'cleanupDriverLoginPolicySessions',
@@ -149,6 +164,20 @@ const EXPECTED_SERVICE_EXPORTS = {
 };
 
 const EVENT_PATHS = {
+  projectPassengerTripBooking: 'bookings/{bookingRef}',
+  projectPassengerTripItinerary: 'tours/{tourId}/itinerary',
+  projectPassengerTripTourName: 'tours/{tourId}/name',
+  projectPassengerTripTourTourCode: 'tours/{tourId}/tourCode',
+  projectPassengerTripTourDestination: 'tours/{tourId}/destination',
+  projectPassengerTripTourStartDate: 'tours/{tourId}/startDate',
+  projectPassengerTripTourEndDate: 'tours/{tourId}/endDate',
+  projectPassengerTripTourDuration: 'tours/{tourId}/duration',
+  projectPassengerTripTourActive: 'tours/{tourId}/isActive',
+  projectPassengerTripTourCurrentParticipants: 'tours/{tourId}/currentParticipants',
+  projectPassengerTripTourMaxParticipants: 'tours/{tourId}/maxParticipants',
+  projectPassengerTripTourDriverName: 'tours/{tourId}/driverName',
+  projectPassengerTripTourDriverPhone: 'tours/{tourId}/driverPhone',
+  projectPassengerTripTourAssignmentRevision: 'tours/{tourId}/driverAssignmentRevision',
   processBroadcastWrite: 'broadcasts/{tourId}/{broadcastId}',
   processCategoryBroadcastWrite: 'category_broadcasts/{categoryKey}/{broadcastId}',
   processNotificationReadMigrationRequest: 'notification_read_migration_requests/{tourId}/{authUid}',

@@ -1,6 +1,206 @@
 {
   "schemaSetVersion": 1,
   "contracts": {
+    "PassengerTripScope": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "authUid",
+        "principalId",
+        "bookingRef",
+        "tourId",
+        "sessionId"
+      ],
+      "optionalProperties": [],
+      "properties": {
+        "authUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^pax_v2_[a-f0-9]{32}$"
+        },
+        "bookingRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "tourId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^sess_v1_[a-f0-9]{32}$"
+        }
+      },
+      "enumValues": [],
+      "idPatterns": {},
+      "maximumLengths": {},
+      "numericBounds": {},
+      "nullability": {},
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [
+        "authUid",
+        "principalId",
+        "bookingRef",
+        "tourId",
+        "sessionId"
+      ],
+      "forbiddenClientProjection": [
+        "services",
+        "contracts",
+        "driverItinerary",
+        "email",
+        "normalizedPassengerEmail",
+        "password"
+      ]
+    },
+    "PassengerTripSnapshot": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "schemaVersion",
+        "scope",
+        "checkedAtMs",
+        "parts"
+      ],
+      "optionalProperties": [],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1
+        },
+        "scope": {
+          "type": "object"
+        },
+        "checkedAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "parts": {
+          "type": "object"
+        }
+      },
+      "enumValues": [],
+      "idPatterns": {},
+      "maximumLengths": {},
+      "numericBounds": {},
+      "nullability": {},
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [
+        "schemaVersion",
+        "scope",
+        "checkedAtMs",
+        "parts"
+      ],
+      "forbiddenClientProjection": [
+        "services",
+        "contracts",
+        "driverItinerary",
+        "email",
+        "normalizedPassengerEmail",
+        "password"
+      ]
+    },
+    "PassengerTripCache": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "schemaVersion",
+        "scope",
+        "parts"
+      ],
+      "optionalProperties": [],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1
+        },
+        "scope": {
+          "type": "object"
+        },
+        "parts": {
+          "type": "object"
+        }
+      },
+      "enumValues": [],
+      "idPatterns": {},
+      "maximumLengths": {},
+      "numericBounds": {},
+      "nullability": {},
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [
+        "schemaVersion",
+        "scope",
+        "parts"
+      ],
+      "forbiddenClientProjection": [
+        "services",
+        "contracts",
+        "driverItinerary",
+        "email",
+        "normalizedPassengerEmail",
+        "password"
+      ]
+    },
+    "PassengerTripPart": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "status"
+      ],
+      "optionalProperties": [
+        "version",
+        "data"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "value",
+            "unchanged",
+            "absent",
+            "unavailable"
+          ]
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "maxLength": 64
+        },
+        "data": {
+          "type": "object",
+          "nullable": true
+        }
+      },
+      "enumValues": [],
+      "idPatterns": {},
+      "maximumLengths": {},
+      "numericBounds": {},
+      "nullability": {},
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [
+        "status",
+        "version",
+        "data"
+      ],
+      "forbiddenClientProjection": [
+        "services",
+        "contracts",
+        "driverItinerary",
+        "email",
+        "normalizedPassengerEmail",
+        "password"
+      ]
+    },
     "PassengerPrincipalId": {
       "schemaVersion": 2,
       "kind": "string",

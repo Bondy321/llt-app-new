@@ -192,6 +192,8 @@ const savePassengerOfflinePack = async (deps, context, passenger) => {
   const { diagnosticsContext, tour, tourDetails } = context;
   const { normalizedBookingData } = passenger;
   if (!tour.id) return;
+  // Reopening an authorised offline session is not fresh credential evidence.
+  if (context.loginOptions.offlineMode) return;
   await loginDiagnostics.recordLoginDiagnostic('passenger_offline_pack_save_started', {
     tourId: tour.id,
     bookingRef: normalizedBookingData.id || null,
@@ -199,6 +201,7 @@ const savePassengerOfflinePack = async (deps, context, passenger) => {
   await offlineSyncService.saveTourPack(tour.id, 'passenger', {
     tour: tourDetails,
     booking: normalizedBookingData,
+    itinerary: tourDetails?.itinerary || null,
     safety: { emergencyPhone: tour.driverPhone || null },
   }, { ownerId: normalizedBookingData.id });
   await offlineSyncService.setTourPackMeta(

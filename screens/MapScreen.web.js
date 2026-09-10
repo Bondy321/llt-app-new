@@ -83,6 +83,18 @@ export default function MapScreen({ onBack, tourData, bookingData }) {
           </TouchableOpacity>
         ) : null}
 
+        {tourData?.driverPhone ? (
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            accessibilityRole="button"
+            accessibilityLabel="Call your assigned driver"
+            onPress={() => Linking.openURL(`tel:${tourData.driverPhone.replace(/[^+\d]/g, '')}`)
+              .catch(() => Alert.alert('Phone unavailable', 'Please contact operations if you need help.'))}
+          >
+            <Text style={styles.secondaryButtonText}>Call {tourData.driverName || 'your driver'}</Text>
+          </TouchableOpacity>
+        ) : null}
+
         <TouchableOpacity
           style={styles.secondaryButton}
           onPress={onBack}

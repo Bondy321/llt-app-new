@@ -516,7 +516,7 @@ export default function MapScreenController({ onBack, tourId, tourData, bookingD
       });
       Alert.alert('Could not open phone app', 'Please try again, or contact your tour operator if you need help.');
     }
-  }, [tourData, tourId]);
+  }, [tourData?.driverPhone, tourId]);
 
 
   const spin = refreshRotation.interpolate({

@@ -1,5 +1,5 @@
 // screens/ChatScreen.js - Premium Chat Experience
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Keyboard, Platform } from 'react-native';
 import { setTypingStatus, setOnlinePresence } from '../../services/chatService';
 import offlineSyncService from '../../services/offlineSyncService';
@@ -25,6 +25,8 @@ export default function useChatDraftTypingLifecycle(context, late) {
     typingTimeoutRef,
     userName
   } = context;
+  const displayNameRef = useRef(userName);
+  displayNameRef.current = userName;
   // Subscribe to offline queue state updates
   useEffect(() => {
     if (!tourId) {
@@ -48,7 +50,7 @@ export default function useChatDraftTypingLifecycle(context, late) {
   // Set online presence on mount/unmount
   useEffect(() => {
     if (!tourId || !statusActorId) return;
-    const publishPresence = () => setOnlinePresence(tourId, statusActorId, userName, true, isDriver, undefined, {
+    const publishPresence = () => setOnlinePresence(tourId, statusActorId, displayNameRef.current, true, isDriver, undefined, {
       scope: chatScope,
       sessionScope: offlineSessionScope
     });
@@ -56,16 +58,16 @@ export default function useChatDraftTypingLifecycle(context, late) {
     const heartbeat = setInterval(publishPresence, CHAT_PRESENCE_HEARTBEAT_MS);
     return () => {
       clearInterval(heartbeat);
-      setOnlinePresence(tourId, statusActorId, userName, false, isDriver, undefined, {
+      setOnlinePresence(tourId, statusActorId, displayNameRef.current, false, isDriver, undefined, {
         scope: chatScope,
         sessionScope: offlineSessionScope
       });
-      setTypingStatus(tourId, statusActorId, userName, false, isDriver, undefined, {
+      setTypingStatus(tourId, statusActorId, displayNameRef.current, false, isDriver, undefined, {
         scope: chatScope,
         sessionScope: offlineSessionScope
       });
     };
-  }, [chatScope, tourId, statusActorId, userName, isDriver, offlineSessionScope]);
+  }, [chatScope, tourId, statusActorId, isDriver, offlineSessionScope]);
 
   // Keyboard listeners
   // Keyboard listeners

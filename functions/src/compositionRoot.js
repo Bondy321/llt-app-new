@@ -29,11 +29,27 @@ const notificationDevices = require('./domains/notifications/notificationDeviceF
 const notificationAdmin = require('./domains/notifications/notificationAdminFunctions');
 const notificationMarketingAudience = require('./domains/notifications/notificationMarketingAudienceProjection');
 const safetyNotifications = require('./domains/notifications/safetyNotificationFunction');
+const passengerTrip = require('./domains/passenger-trip/public');
 const passengerAuth = require('./domains/passenger-auth/passengerLoginFunction');
 const safety = require('./domains/safety/safetyFunction');
 const testableRegistry = require('./testableRegistry');
 
 module.exports = {
+  getPassengerTripSnapshot: passengerTrip.getPassengerTripSnapshot,
+  projectPassengerTripBooking: passengerTrip.projectPassengerTripBooking,
+  projectPassengerTripItinerary: passengerTrip.projectPassengerTripItinerary,
+  projectPassengerTripTourName: passengerTrip.projectPassengerTripTourName,
+  projectPassengerTripTourTourCode: passengerTrip.projectPassengerTripTourTourCode,
+  projectPassengerTripTourDestination: passengerTrip.projectPassengerTripTourDestination,
+  projectPassengerTripTourStartDate: passengerTrip.projectPassengerTripTourStartDate,
+  projectPassengerTripTourEndDate: passengerTrip.projectPassengerTripTourEndDate,
+  projectPassengerTripTourDuration: passengerTrip.projectPassengerTripTourDuration,
+  projectPassengerTripTourActive: passengerTrip.projectPassengerTripTourActive,
+  projectPassengerTripTourCurrentParticipants: passengerTrip.projectPassengerTripTourCurrentParticipants,
+  projectPassengerTripTourMaxParticipants: passengerTrip.projectPassengerTripTourMaxParticipants,
+  projectPassengerTripTourDriverName: passengerTrip.projectPassengerTripTourDriverName,
+  projectPassengerTripTourDriverPhone: passengerTrip.projectPassengerTripTourDriverPhone,
+  projectPassengerTripTourAssignmentRevision: passengerTrip.projectPassengerTripTourAssignmentRevision,
   __testables: testableRegistry,
   getAccountDeletionStatus: accountDeletion.getAccountDeletionStatus,
   projectDashboardDriver: adminDashboard.projectDashboardDriver,
