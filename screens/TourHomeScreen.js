@@ -3,20 +3,17 @@ import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import TourHomeView from '../components/tour-home/TourHomeView';
 import { SkeletonLoader } from '../components/tour-home/TourHomeComponents';
 import useTourHomeResponsiveStyles from '../components/tour-home/useTourHomeResponsiveStyles';
+import useTourHomeRefresh from '../components/tour-home/useTourHomeRefresh';
 import { COLORS, getTimeBasedGreeting, triggerHaptic } from '../components/tour-home/tourHomePresentation';
 import { View, Linking, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { MANIFEST_STATUS } from '../services/bookingServiceRealtime';
-import * as bookingService from '../services/bookingServiceRealtime';
-import * as chatService from '../services/chatService';
 import {
   isTourHomeRealtimeAvailable,
-  readTourHomeRealtimeSnapshot,
   subscribeToTourHomeRealtime,
 } from '../services/tourHomeRealtimeService';
-import offlineSyncService from '../services/offlineSyncService';
 import logger, { maskIdentifier } from '../services/loggerService';
 import { resolveTourId } from '../services/tourIdentityService';
 import { getDriverLocationPresentation } from '../utils/driverLocation';
@@ -27,14 +24,14 @@ export default function TourHomeScreen({
   tourCode,
   tourData,
   bookingData,
+  passengerTrip = null,
   onNavigate,
   onLogout,
   isConnected = true,
 }) {
   const { responsiveStyles, screenLayout } = useTourHomeResponsiveStyles();
   const [manifestStatus, setManifestStatus] = useState(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => !passengerTrip);
   const [manifestReady, setManifestReady] = useState(false);
   const [driverReady, setDriverReady] = useState(false);
   const [driverLocationRecord, setDriverLocationRecord] = useState(null);
@@ -56,6 +53,10 @@ export default function TourHomeScreen({
   const driverLocationActive = driverLocationPresentation.mode === 'live'
     && driverLocationPresentation.actionable;
   const driverLocationAvailable = driverLocationPresentation.available;
+  const usesPassengerTrip = Boolean(passengerTrip);
+  const { onRefresh, refreshing, refreshNotice } = useTourHomeRefresh({
+    activeTourId, bookingRef, isConnected, passengerTrip, setDriverLocationRecord, setManifestStatus,
+  });
 
   useEffect(() => {
     const freshnessTimer = setInterval(() => setDriverLocationNow(Date.now()), 30 * 1000);
@@ -109,6 +110,10 @@ export default function TourHomeScreen({
   }, [activeTourId, tourCode, bookingRef]);
 
   useEffect(() => {
+    if (usesPassengerTrip) {
+      setIsLoading(false);
+      return undefined;
+    }
     if (!manifestReady || !driverReady) {
       setIsLoading(true);
       return;
@@ -116,7 +121,7 @@ export default function TourHomeScreen({
 
     const timer = setTimeout(() => setIsLoading(false), 120);
     return () => clearTimeout(timer);
-  }, [manifestReady, driverReady]);
+  }, [driverReady, manifestReady, usesPassengerTrip]);
 
   useEffect(() => {
     if (!isTourHomeRealtimeAvailable() || !activeTourId || !bookingRef) return undefined;
@@ -199,59 +204,6 @@ export default function TourHomeScreen({
     };
   }, [activeTourId, bookingRef]);
 
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    triggerHaptic('light');
-
-    const sanitizedTourId = activeTourId;
-    logger.info('TourHome', 'Manual refresh started', {
-      sanitizedTourId,
-      bookingRef: maskIdentifier(bookingRef),
-      isConnected,
-    });
-    try {
-      const replayResult = await offlineSyncService.replayQueue({
-        services: { bookingService, chatService },
-      });
-      logger.info('TourHome', 'Manual refresh replay completed', {
-        sanitizedTourId,
-        success: Boolean(replayResult?.success),
-        processed: replayResult?.data?.processed ?? null,
-        failed: replayResult?.data?.failed ?? null,
-      });
-
-      if (sanitizedTourId && bookingRef && isTourHomeRealtimeAvailable()) {
-        const { driverSnapshot, manifestSnapshot } = await readTourHomeRealtimeSnapshot({
-          bookingRef,
-          tourId: sanitizedTourId,
-        });
-        setManifestStatus(manifestSnapshot.val()?.status || null);
-        const driverValue = driverSnapshot.val();
-        setDriverLocationRecord(driverValue || null);
-
-        logger.info('TourHome', 'Manual refresh realtime snapshots loaded', {
-          sanitizedTourId,
-          bookingRef: maskIdentifier(bookingRef),
-          manifestStatus: manifestSnapshot.val()?.status || null,
-          driverLocationExists: driverSnapshot.exists(),
-        });
-      }
-
-      logger.info('TourHome', 'Manual refresh completed', {
-        sanitizedTourId,
-        success: replayResult?.success !== false,
-      });
-    } catch (error) {
-      logger.error('TourHome', 'Manual refresh failed', {
-        sanitizedTourId,
-        bookingRef: maskIdentifier(bookingRef),
-        error: error?.message || String(error),
-      });
-    } finally {
-      setRefreshing(false);
-    }
-  }, [activeTourId, bookingRef, isConnected]);
-
   const manifestStatusMeta = useMemo(() => {
     switch (manifestStatus) {
       case MANIFEST_STATUS.BOARDED:
@@ -284,7 +236,6 @@ export default function TourHomeScreen({
           icon: 'account-group',
         };
       case MANIFEST_STATUS.PENDING:
-      default:
         return {
           title: 'Ready for pickup',
           message: 'Head to your pickup location. The driver will mark you as boarded when you arrive.',
@@ -292,6 +243,15 @@ export default function TourHomeScreen({
           toneLight: COLORS.lightBlue,
           badge: 'Pending',
           icon: 'clock-outline',
+        };
+      default:
+        return {
+          title: 'Boarding status pending',
+          message: 'We have not received boarding confirmation yet. Your pickup and seat details remain available below.',
+          tone: COLORS.primaryBlue,
+          toneLight: COLORS.lightBlue,
+          badge: 'Not confirmed',
+          icon: 'help-circle-outline',
         };
     }
   }, [manifestStatus]);
@@ -307,9 +267,9 @@ export default function TourHomeScreen({
     return getPickupCountdownState({
       pickupTime: primaryPickupTime,
       pickupDate: primaryPickupDate,
-      now: new Date(),
+      now: new Date(passengerTrip?.nowMs ?? Date.now()),
     });
-  }, [primaryPickupDate, primaryPickupTime]);
+  }, [passengerTrip?.nowMs, primaryPickupDate, primaryPickupTime]);
 
   const actionPlan = useMemo(
     () =>
@@ -362,6 +322,24 @@ export default function TourHomeScreen({
     });
     openDriverContactUrl(`tel:${phone}`, 'call');
   };
+
+  const handleMessageDriver = () => {
+    triggerHaptic('light');
+    const phone = resolveDriverPhoneNumber();
+    if (!phone) {
+      Alert.alert('Driver contact unavailable', 'Please reach out to your operator.');
+      return;
+    }
+    openDriverContactUrl(`sms:${phone}`, 'message');
+  };
+
+  const handleLogout = useCallback(() => {
+    logger.info('TourHome', 'Logout requested', {
+      tourId: activeTourId || null,
+      bookingRef: maskIdentifier(bookingRef),
+    });
+    onLogout();
+  }, [activeTourId, bookingRef, onLogout]);
 
   const navigateWithLog = useCallback((screen, params = {}, source = 'unknown') => {
     logger.info('TourHome', 'Navigation requested', {
@@ -465,8 +443,9 @@ export default function TourHomeScreen({
 
   return <TourHomeView {...{
       actionPlan, bookingData, driverLocationActive, driverLocationAvailable, driverLocationPresentation, greeting,
-      handleCallDriver, isHeaderMenuOpen, isNoShow, manifestStatusMeta, menuItems, navigateWithLog, noShowAcknowledged,
-      onLogout, onRefresh, orderedQuickActions, primaryPickupDate, primaryPickupTime, refreshing, responsiveStyles,
+      handleCallDriver, handleLogout, handleMessageDriver, isHeaderMenuOpen, isNoShow, manifestStatus,
+      manifestStatusMeta, menuItems, navigateWithLog, noShowAcknowledged, onRefresh, orderedQuickActions,
+      passengerTrip, primaryPickupDate, primaryPickupTime, refreshing, refreshNotice, responsiveStyles,
       screenLayout, scrollViewRef, setIsHeaderMenuOpen, setNoShowAcknowledged, tourCode, tourData,
   }} />;
 }

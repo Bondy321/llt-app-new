@@ -99,6 +99,7 @@ const renderTourHome = (context) => (
     tourCode={context.tourCode}
     tourData={context.tourData}
     bookingData={context.bookingData}
+    passengerTrip={context.passengerTrip}
     onNavigate={context.navigateTo}
     onLogout={context.handleLogout}
   />
@@ -139,6 +140,7 @@ const renderItinerary = (context) => {
       tourName={context.tourData?.name}
       startDate={context.tourData?.startDate}
       isDriver={isDriver}
+      passengerTrip={isDriver ? null : context.passengerTrip}
       offlineCacheOwnerId={context.bookingData?.id}
     />
   );

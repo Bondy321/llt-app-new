@@ -36,6 +36,7 @@ const buildTourDeletionUpdates = ({
     [`safety_submission_locks/${tourId}`]: null,
     [`driver_location_pickups/${tourId}`]: null,
     [`driver_location_projection_state/${tourId}`]: null,
+    [`passenger_trip_signals/v1/tours/${tourId}`]: null,
   };
 
   driverLocationSourceKeys.forEach((sourceKey) => {
@@ -48,6 +49,7 @@ const buildTourDeletionUpdates = ({
     updates[`passenger_identity_security/${bookingRef}`] = null;
     updates[`booking_access_grants/${bookingRef}`] = null;
     updates[`manual_booking_creation_locks/bookings/${bookingRef}`] = null;
+    updates[`passenger_trip_signals/v1/bookings/${bookingRef}`] = null;
   });
 
   Object.entries(drivers).forEach(([driverId, driver = {}]) => {

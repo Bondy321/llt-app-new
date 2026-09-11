@@ -1,5 +1,7 @@
+import SafetyContacts from './SafetyContacts';
 // screens/SafetySupportScreen.js - Premium Safety & Emergency Support
 import {
+  StyleSheet,
   Text,
   View,
   TouchableOpacity,
@@ -20,7 +22,8 @@ import {
   CATEGORY_META,
 } from '../../services/safetyService';
 import logger from '../../services/loggerService';
-import { COLORS as THEME } from '../../theme';
+import { COLORS as THEME, RADIUS, SHADOWS, SPACING } from '../../theme';
+import createSafetySupportScreenStyles from '../../screens/styles/SafetySupportScreen.styles';
 
 // Colors
 const COLORS = {
@@ -46,7 +49,7 @@ const styles = createSafetySupportScreenStyles({ StyleSheet, COLORS, RADIUS, SHA
 
 
 // ==================== SOS BUTTON COMPONENT ====================
-import { ContactButton, HistoryItem, IssuePresetButton, LiveLocationCard, SafetyTip, SeveritySelector, SOSButton, TrustedContactItem } from './SafetySupportComponents';
+import { HistoryItem, IssuePresetButton, LiveLocationCard, SafetyTip, SeveritySelector, SOSButton, TrustedContactItem } from './SafetySupportComponents';
 
 export default function SafetySupportView(props) {
   const { cancelSOS, confirmAccessibleSOS, confirmEmergencyCall, contactSaving, customMessage, emergencyNumber, fadeAnim, handleAddContact, handleRemoveContact, handleRequestDriverCall, handleRetrySafetyQueue, handleSelectCategory, handleSubmitReport, includeLocation, isConnected, isDriver, liveLocationLastUpdate, liveLocationSharing, liveLocationUpdating, loadHistory, loadingHistory, locationAccuracy, mode, newContactName, newContactPhone, offlineQueueCount, offlineQueueSummary, onBack, openDialer, operationsNumber, requestingDriverCall, safetyHistory, selectedCategory, selectedSeverity, setCustomMessage, setIncludeLocation, setNewContactName, setNewContactPhone, setSelectedSeverity, setShowAddContactModal, setShowHistoryModal, setShowReportModal, setTipsExpanded, showAddContactModal, showHistoryModal, showReportModal, slideAnim, sosActive, sosCountdown, sosDeliveryState, startSOS, submitting, syncingOfflineQueue, tipsExpanded, toggleLiveLocation, tourData, tourId, trustedContacts, visibleCategories } = props;
@@ -186,31 +189,10 @@ return (
               </View>
             </View>
 
-            <View style={styles.contactsGrid}>
-              <ContactButton
-                icon="hospital-box"
-                label="Emergency"
-                sublabel={emergencyNumber}
-                onPress={confirmEmergencyCall}
-                color={COLORS.error}
-              />
-              <ContactButton
-                icon="headset"
-                label="Operations"
-                sublabel={operationsNumber}
-                onPress={() => openDialer(operationsNumber)}
-                color={COLORS.primary}
-              />
-              {!isDriver && (
-                <ContactButton
-                  icon="phone-in-talk"
-                  label="Driver"
-                  sublabel={requestingDriverCall ? 'Requesting...' : 'Request callback'}
-                  onPress={handleRequestDriverCall}
-                  color={COLORS.accent}
-                />
-              )}
-            </View>
+            <SafetyContacts style={styles.contactsGrid} {...{
+              isDriver, tourData, emergencyNumber, operationsNumber, confirmEmergencyCall,
+              openDialer, requestingDriverCall, handleRequestDriverCall,
+            }} />
           </View>
 
           {/* Live Location Sharing */}

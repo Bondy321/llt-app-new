@@ -10,6 +10,7 @@ import {
   FONT_WEIGHT,
 } from '../theme';
 import { getTourDayContext } from '../services/itineraryDateParser';
+import { getTripPartPresentation } from './tour-home/TripDataStatus';
 
 const COLORS = {
   primary: THEME.primary,
@@ -52,7 +53,7 @@ const buildAgendaHighlights = (content) => {
   }));
 };
 
-export default function TodaysAgendaCard({ tourData, onNudge }) {
+export default function TodaysAgendaCard({ tourData, itineraryPart, nowMs, onNudge }) {
   const dayContext = useMemo(() => {
     if (!tourData?.startDate || !tourData?.itinerary?.days) {
       return null;
@@ -61,6 +62,7 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
     const context = getTourDayContext({
       startDate: tourData.startDate,
       itineraryDays: tourData.itinerary.days,
+      now: new Date(Number.isFinite(nowMs) ? nowMs : Date.now()),
     });
 
     if (context.status === 'INVALID_START_DATE' || context.status === 'NO_ITINERARY_DAYS') {
@@ -68,7 +70,9 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
     }
 
     return context;
-  }, [tourData]);
+  }, [nowMs, tourData]);
+
+  const itineraryStatus = getTripPartPresentation(itineraryPart, nowMs);
 
   if (!dayContext || dayContext.status === 'COMPLETED') {
     return null;
@@ -96,16 +100,14 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
             <Text style={styles.futureCounterLabel}>{daysToGo === 1 ? 'day to departure' : 'days to departure'}</Text>
           </View>
 
-          <View style={styles.futureChecklistRow}>
-            <View style={styles.futureChecklistPill}>
-              <MaterialCommunityIcons name="ticket-confirmation-outline" size={14} color={COLORS.white} />
-              <Text style={styles.futureChecklistText}>Booking synced</Text>
+          {itineraryPart ? (
+            <View style={styles.futureChecklistRow}>
+              <View style={styles.futureChecklistPill}>
+                <MaterialCommunityIcons name={itineraryStatus.icon} size={14} color={COLORS.white} />
+                <Text style={styles.futureChecklistText}>{itineraryStatus.text}</Text>
+              </View>
             </View>
-            <View style={styles.futureChecklistPill}>
-              <MaterialCommunityIcons name="bell-ring-outline" size={14} color={COLORS.white} />
-              <Text style={styles.futureChecklistText}>Alerts ready</Text>
-            </View>
-          </View>
+          ) : null}
         </LinearGradient>
       </View>
     );
@@ -119,10 +121,12 @@ export default function TodaysAgendaCard({ tourData, onNudge }) {
     <View style={styles.container}>
       <View style={styles.titleRow}>
         <Text style={styles.sectionTitle}>Today’s agenda</Text>
-        <View style={styles.livePill}>
-          <MaterialCommunityIcons name="check-decagram" size={12} color={COLORS.success} />
-          <Text style={styles.livePillText}>Live</Text>
-        </View>
+        {itineraryPart ? (
+          <View style={styles.livePill}>
+            <MaterialCommunityIcons name={itineraryStatus.icon} size={12} color={itineraryStatus.tone} />
+            <Text style={[styles.livePillText, { color: itineraryStatus.tone }]}>{itineraryStatus.text}</Text>
+          </View>
+        ) : null}
       </View>
 
       <TouchableOpacity

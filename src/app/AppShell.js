@@ -1,3 +1,5 @@
+import { runSaveSessionProjection } from './session/sessionSaveRunner';
+import { handlePassengerTripSessionInvalid } from './passenger/passengerTripSessionRunners';
 import { runPersistDriverIdentityForUser, runPersistPassengerIdentityForUser, runRepairIdentityBindingFromSession, runHydrateIdentityBindingForCurrentUser } from './session/identityBindingRunners';
 import { runRefreshAppData, runInitializeApp, runRetryInitialization, runHandleAuthStateChange, runRestoreSession } from './session/sessionBootstrapRunners';
 import { runLoadNotificationOnboardingState, runSaveNotificationOnboardingState, runShouldShowNotificationOnboarding, runHandleNotificationOnboardingComplete } from './notifications/notificationOnboardingRunners';
@@ -25,6 +27,7 @@ import appSessionService from '../../services/appSessionService';
 import localSessionCleanupService from '../../services/localSessionCleanupService';
 import driverTourPackService from '../../services/driverTourPackService';
 import useDriverTourPack from '../../hooks/useDriverTourPack';
+import usePassengerTrip, { passengerTripEnabled } from '../../hooks/usePassengerTrip';
 import useDriverTourPackActions from '../../hooks/useDriverTourPackActions';
 import driverTourPackActionService from '../../services/driverTourPackActionService';
 import useDriverTourPackFeatureFlag from '../../hooks/useDriverTourPackFeatureFlag';
@@ -187,6 +190,20 @@ export default function AppShell() {
     role: diagnosticsRole,
     offlineCacheOwnerId: bookingData?.id || null,
   });
+  const passengerTrip = usePassengerTrip({
+    scope: offlineSessionScope,
+    bookingData, tourData, isConnected,
+    enabled: passengerTripEnabled() && !isDriverSession && logoutStatus.state === 'idle',
+    onInvalidSession: () => handlePassengerTripSessionInvalid({ appSession, purgeLocalSession, appSessionService, setLogoutStatus }),
+  });
+  const displayBooking = passengerTrip?.parts.booking?.data || bookingData;
+  const hasPassengerTrip = Boolean(passengerTrip);
+  const tripTourData = passengerTrip?.parts.tour?.data;
+  const tripItineraryData = passengerTrip?.parts.itinerary?.data;
+  const displayTour = useMemo(() => hasPassengerTrip ? {
+    ...(tripTourData || tourData),
+    itinerary: tripItineraryData === undefined ? tourData?.itinerary : tripItineraryData,
+  } : tourData, [tripTourData, tripItineraryData, hasPassengerTrip, tourData]);
   const driverTourPackActions = useDriverTourPackActions({ pack: driverTourPackState.pack, driverId: bookingData?.id, authUid: user?.uid, isConnected });
   const insets = useSafeAreaInsets();
 
@@ -397,31 +414,10 @@ export default function AppShell() {
 
   const shouldShowNotificationOnboarding = (...args) => runShouldShowNotificationOnboarding({ NOTIFICATION_ONBOARDING_REMINDER_MS, loadNotificationOnboardingState, parseTimestampMs }, ...args);
 
-  const saveSession = async (overrides = {}) => {
-    try {
-      const persistedTourData = Object.prototype.hasOwnProperty.call(overrides, 'tourData') ? overrides.tourData : tourData;
-      const persistedBookingData = Object.prototype.hasOwnProperty.call(overrides, 'bookingData') ? overrides.bookingData : bookingData;
-      const persistedScreen = Object.prototype.hasOwnProperty.call(overrides, 'currentScreen') ? overrides.currentScreen : currentScreen;
-      const persistedIdentityBinding = Object.prototype.hasOwnProperty.call(overrides, 'identityBinding')
-        ? overrides.identityBinding
-        : identityBinding;
-
-      const sessionEntries = [
-        [SESSION_KEYS.TOUR_DATA, JSON.stringify(persistedTourData)],
-        [SESSION_KEYS.BOOKING_DATA, JSON.stringify(persistedBookingData)],
-        [SESSION_KEYS.LAST_SCREEN, persistedScreen],
-      ];
-
-      if (persistedIdentityBinding) {
-        sessionEntries.push([SESSION_KEYS.IDENTITY_BINDING, JSON.stringify(persistedIdentityBinding)]);
-      }
-
-      await SessionStorage.multiSet(sessionEntries);
-    } catch (error) {
-      logger.error('Session', 'Failed to save session', { error: error.message });
-    }
-  };
-
+  const saveSession = (overrides = {}) => runSaveSessionProjection({
+    SESSION_KEYS, SessionStorage, logger, tourData, bookingData, currentScreen, identityBinding,
+    passengerTripActive: passengerTripEnabled() && !isDriverSession,
+  }, overrides);
   const handleDriverAssignmentChange = (...args) => runHandleDriverAssignmentChange({ SESSION_KEYS, SessionStorage, auth, bookingData, currentDriverLifecycleScope, driverLifecyclePurgeRef, driverOperationalLifecycleService, driverTourPackService, logger, normalizeTourId, previousDriverOperationalScopeRef, realtimeDb, setBookingData, setDriverSessionGeneration, setTourCode, setTourData, user }, ...args);
   driverAssignmentChangeRef.current = handleDriverAssignmentChange;
 
@@ -568,7 +564,7 @@ export default function AppShell() {
       retryAccountDeletion={retryAccountDeletion}
       finishAccountDeletion={finishAccountDeletion}
       routerProps={{
-        bookingData,
+        bookingData: displayBooking,
         canonicalIdentity,
         currentScreen,
         driverSessionGeneration,
@@ -588,10 +584,11 @@ export default function AppShell() {
         navigateBack,
         navigateTo,
         offlineSessionScope,
+        passengerTrip,
         resolveOfflineLogin,
         screenParams,
         tourCode,
-        tourData,
+        tourData: displayTour,
         user,
       }}
     />

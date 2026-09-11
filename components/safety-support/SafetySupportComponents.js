@@ -1,6 +1,7 @@
 // screens/SafetySupportScreen.js - Premium Safety & Emergency Support
 import { useEffect, useRef } from 'react';
 import {
+  StyleSheet,
   Text,
   View,
   TouchableOpacity,
@@ -18,7 +19,8 @@ import {
   SEVERITY_META,
 } from '../../services/safetyService';
 import { parseTimestampMs } from '../../services/timeUtils';
-import { COLORS as THEME } from '../../theme';
+import { COLORS as THEME, RADIUS, SHADOWS, SPACING } from '../../theme';
+import createSafetySupportScreenStyles from '../../screens/styles/SafetySupportScreen.styles';
 
 const SAFETY_STATUS_META = {
   pending: { label: 'Submitted', color: '#2563EB' },

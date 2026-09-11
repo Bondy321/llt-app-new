@@ -21,10 +21,12 @@ const {
   createItineraryContentSignature,
   normalizeItineraryDocument,
 } = require('../../services/itineraryService');
-
-export default function ItineraryController({ onBack, tourId, tourName, startDate, isDriver, offlineCacheOwnerId }) {
-  const [itinerary, setItinerary] = useState(null);
-  const [loading, setLoading] = useState(true);
+export default function ItineraryController({ onBack, tourId, tourName, startDate, isDriver, offlineCacheOwnerId, passengerTrip = null }) {
+  const usesPassengerTrip = Boolean(passengerTrip) && !isDriver;
+  const sharedItineraryPart = usesPassengerTrip ? passengerTrip.parts?.itinerary : null;
+  const initialSharedItinerary = usesPassengerTrip ? normalizeItineraryDocument(sharedItineraryPart?.data) || null : null;
+  const [itinerary, setItinerary] = useState(initialSharedItinerary);
+  const [loading, setLoading] = useState(() => !usesPassengerTrip);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [collapsedDays, setCollapsedDays] = useState({});
@@ -43,10 +45,11 @@ export default function ItineraryController({ onBack, tourId, tourName, startDat
   // --- UI STATE ---
   const [cachedItinerary, setCachedItinerary] = useState(null);
   const [expandAll, setExpandAll] = useState(false);
-  const [lastSyncedAt, setLastSyncedAt] = useState(null);
-  const [dataSource, setDataSource] = useState(ITINERARY_DATA_SOURCE.NONE);
-  const [checkingForUpdates, setCheckingForUpdates] = useState(false);
-  const [freshnessNow, setFreshnessNow] = useState(Date.now());
+  const [lastSyncedAt, setLastSyncedAt] = useState(sharedItineraryPart?.checkedAtMs || null);
+  const [dataSource, setDataSource] = useState(usesPassengerTrip && initialSharedItinerary
+    ? ITINERARY_DATA_SOURCE.CACHE : ITINERARY_DATA_SOURCE.NONE);
+  const [checkingForUpdates, setCheckingForUpdates] = useState(sharedItineraryPart?.status === 'checking');
+  const [freshnessNow, setFreshnessNow] = useState(() => passengerTrip?.nowMs ?? Date.now());
   const [editConflict, setEditConflict] = useState(null);
   const [operationMessage, setOperationMessage] = useState('');
 
@@ -90,10 +93,30 @@ export default function ItineraryController({ onBack, tourId, tourName, startDat
   }, [isDriver, startDate, tourId, tourName]);
 
   useEffect(() => {
-    if (!lastSyncedAt) return undefined;
+    if (usesPassengerTrip || !lastSyncedAt) return undefined;
     const timer = setInterval(() => setFreshnessNow(Date.now()), 60 * 1000);
     return () => clearInterval(timer);
-  }, [lastSyncedAt]);
+  }, [lastSyncedAt, usesPassengerTrip]);
+
+  useEffect(() => {
+    if (!usesPassengerTrip) return;
+    const next = normalizeItineraryDocument(sharedItineraryPart?.data) || null;
+    setItinerary(next);
+    setEditedItinerary(next ? JSON.parse(JSON.stringify(next)) : null);
+    setCachedItinerary(next);
+    setLastSyncedAt(sharedItineraryPart?.checkedAtMs || null);
+    setCheckingForUpdates(sharedItineraryPart?.status === 'checking');
+    setDataSource(next
+      ? (sharedItineraryPart?.status === 'checked' && !sharedItineraryPart?.persisted
+        ? ITINERARY_DATA_SOURCE.LIVE
+        : ITINERARY_DATA_SOURCE.CACHE)
+      : ITINERARY_DATA_SOURCE.NONE);
+    setErrorMessage(sharedItineraryPart?.status === 'error' ? (next
+      ? 'The itinerary could not be refreshed. Your last saved version is still shown.'
+      : 'The itinerary could not be refreshed. Please try again.') : '');
+    setLoading(false);
+    editBaseSignatureRef.current = createItineraryContentSignature(next);
+  }, [sharedItineraryPart, usesPassengerTrip]);
 
   // --- INITIAL LOAD LIFECYCLE ---
   useEffect(() => {
@@ -104,18 +127,18 @@ export default function ItineraryController({ onBack, tourId, tourName, startDat
       isDriver: Boolean(isDriver),
     });
 
-    loadItineraryRef.current?.();
+    if (!usesPassengerTrip) loadItineraryRef.current?.();
     return () => {
       mountedRef.current = false;
       clearRetryTimeout();
       loadRequestIdRef.current += 1;
       logger.debug('ItineraryScreen', 'Itinerary load lifecycle cleaned up', { tourId });
     };
-  }, [tourId, isDriver, clearRetryTimeout, canUpdateForTour, offlineCacheOwnerId]);
+  }, [tourId, isDriver, clearRetryTimeout, canUpdateForTour, offlineCacheOwnerId, usesPassengerTrip]);
 
   // Editing deliberately pauses live replacement so a remote snapshot cannot erase a draft.
   useEffect(() => {
-    if (!tourId || isEditing) return undefined;
+    if (usesPassengerTrip || !tourId || isEditing) return undefined;
     logger.info('ItineraryScreen', 'Realtime itinerary listener starting', { tourId, isDriver: Boolean(isDriver) });
 
     const onUpdate = (snapshot) => {
@@ -155,7 +178,7 @@ export default function ItineraryController({ onBack, tourId, tourName, startDat
       unsubscribe();
       if (realtimeListener.current?.listener === onUpdate) realtimeListener.current = null;
     };
-  }, [tourId, isDriver, isEditing, canUpdateForTour]);
+  }, [tourId, isDriver, isEditing, canUpdateForTour, usesPassengerTrip]);
 
   // --- OFFLINE CACHING ---
   const cacheItinerary = async (data, syncedAt = new Date().toISOString()) => {
@@ -298,7 +321,8 @@ export default function ItineraryController({ onBack, tourId, tourName, startDat
   const tourDayContext = useMemo(() => getTourDayContext({
     startDate,
     itineraryDays: itinerary?.days || [],
-  }), [itinerary?.days, startDate]);
+    now: new Date(passengerTrip?.nowMs ?? Date.now()),
+  }), [itinerary?.days, passengerTrip?.nowMs, startDate]);
 
   const todaysDayNumber = useMemo(() => {
     if (tourDayContext.status !== 'ACTIVE' || !itinerary?.days?.length) return null;
@@ -323,6 +347,16 @@ export default function ItineraryController({ onBack, tourId, tourName, startDat
 
   // --- DATA LOADING WITH RETRY ---
   const loadItinerary = async ({ showSkeleton = true, retry = 0 } = {}) => {
+    if (usesPassengerTrip) {
+      setRefreshing(true);
+      setOperationMessage('');
+      try {
+        await passengerTrip.refresh('manual', ['itinerary']);
+      } finally {
+        if (mountedRef.current) setRefreshing(false);
+      }
+      return;
+    }
     const requestId = ++loadRequestIdRef.current;
     const isCurrentRequest = () => requestId === loadRequestIdRef.current;
     logger.info('ItineraryScreen', 'Itinerary load started', {
@@ -453,7 +487,7 @@ export default function ItineraryController({ onBack, tourId, tourName, startDat
     }
   };
 
-  cacheItineraryRef.current = cacheItinerary;
+  cacheItineraryRef.current = usesPassengerTrip ? null : cacheItinerary;
   loadItineraryRef.current = loadItinerary;
 
   const toggleDay = (day) => {
@@ -543,6 +577,8 @@ export default function ItineraryController({ onBack, tourId, tourName, startDat
     beginEditing, checkingForUpdates, dataSource, editedItinerary, errorMessage, filteredItinerary,
     formatShortDate, freshnessNow, getDayDate, handleJumpToDay, isDriver, isEditing, itinerary,
     lastSyncedAt, refreshing, searchQuery, setSearchQuery, todaysDayNumber, tourDayContext, tourName,
+    passengerTripPart: sharedItineraryPart,
+    passengerTripNowMs: passengerTrip?.nowMs,
   });
 
   if (loading) {

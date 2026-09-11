@@ -9,6 +9,8 @@ const definitionPath = path.join(repositoryRoot, 'contracts/definitions/contract
 const definitions = JSON.parse(fs.readFileSync(definitionPath, 'utf8'));
 
 const outputs = [
+  { path: 'src/shared/contracts/generated/passengerTrip.js', format: 'cjs', focus: 'passengerTrip' },
+  { path: 'functions/src/contracts/generated/passengerTrip.js', format: 'cjs', focus: 'passengerTrip' },
   { path: 'src/shared/contracts/generated/contracts.js', format: 'esm' },
   { path: 'functions/src/contracts/generated/contracts.js', format: 'cjs' },
   { path: 'web-admin/src/shared/contracts/generated/contracts.js', format: 'esm' },
@@ -32,6 +34,7 @@ const outputs = [
 ];
 
 const focusedContracts = Object.freeze({
+  passengerTrip: ['PassengerTripScope', 'PassengerTripSnapshot', 'PassengerTripCache', 'PassengerTripPart'],
   appSession: ['AppSession', 'ClientAppSession'],
   loginResponses: ['PassengerLoginResponse', 'DriverLoginResponse', 'DriverAssignmentResponse', 'ClientAppSession'],
   mediaResponses: ['ResolvedMediaResponse'],
@@ -259,6 +262,7 @@ const projectPendingAccountDeletionRecord = (value) => {
 const projectAccountDeletionRolloutRecord = (value) => projectContract('AccountDeletionRolloutRecord', value);
 `;
   const helpersByFocus = {
+    passengerTrip: '',
     appSession: sessionHelpers,
     loginResponses: loginHelpers,
     mediaResponses: mediaHelpers,
@@ -266,6 +270,7 @@ const projectAccountDeletionRolloutRecord = (value) => projectContract('AccountD
     accountDeletion: accountDeletionHelpers,
   };
   const exportsByFocus = {
+    passengerTrip: ['SCHEMA_SET_VERSION', 'CONTRACTS', 'validateContract'],
     appSession: ['SCHEMA_SET_VERSION', 'validateClientAppSession', 'validateRemoteAppSession'],
     loginResponses: ['SCHEMA_SET_VERSION', 'validatePassengerLoginResponse', 'validateDriverLoginResponse', 'validateDriverAssignmentResponse'],
     mediaResponses: ['SCHEMA_SET_VERSION', 'validateResolvedMediaResponse'],

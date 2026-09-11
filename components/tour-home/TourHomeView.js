@@ -5,14 +5,22 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import TodaysAgendaCard from '../TodaysAgendaCard';
 import createTourHomeScreenStyles from '../../screens/styles/TourHomeScreen.styles';
-import { COLORS } from './tourHomePresentation';
+import { COLORS, triggerHaptic } from './tourHomePresentation';
 import { AnimatedCard, DriverStatusIndicator, FeatureCard, PickupCountdown, QuickActionButton, StatusPulse } from './TourHomeComponents';
 import { RADIUS, SHADOWS, SPACING } from '../../theme';
+import { MANIFEST_STATUS } from '../../services/bookingServiceRealtime';
+import { formatPickupDate } from '../../utils/pickupPresentation';
+import { FONT_SCALE_LIMITS } from '../../utils/responsiveLayout';
+import TripDataStatus from './TripDataStatus';
 
 const styles = createTourHomeScreenStyles({ StyleSheet, COLORS, RADIUS, SHADOWS, SPACING });
 
 export default function TourHomeView(props) {
-  const { actionPlan, bookingData, driverLocationActive, driverLocationAvailable, greeting, handleCallDriver, isHeaderMenuOpen, isNoShow, manifestStatusMeta, menuItems, navigateWithLog, noShowAcknowledged, onLogout, onRefresh, orderedQuickActions, primaryPickupDate, primaryPickupTime, refreshing, responsiveStyles, scrollViewRef, setIsHeaderMenuOpen, setNoShowAcknowledged, tourCode, tourData } = props;
+  const { actionPlan, bookingData, driverLocationActive, driverLocationAvailable, greeting, handleCallDriver,
+    handleLogout, handleMessageDriver, isHeaderMenuOpen, isNoShow, manifestStatus, manifestStatusMeta,
+    menuItems, navigateWithLog, noShowAcknowledged, onRefresh, orderedQuickActions, passengerTrip,
+    primaryPickupDate, primaryPickupTime, refreshing, refreshNotice, responsiveStyles, scrollViewRef, setIsHeaderMenuOpen,
+    setNoShowAcknowledged, tourCode, tourData } = props;
 return (
     <View style={styles.screen}>
       <StatusBar style="light" backgroundColor={COLORS.statusBarBackground} />
@@ -120,11 +128,7 @@ return (
                     onPress={() => {
                       setIsHeaderMenuOpen(false);
                       triggerHaptic('light');
-                      logger.info('TourHome', 'Logout requested from header', {
-                        tourId: activeTourId || null,
-                        bookingRef: maskIdentifier(bookingRef),
-                      });
-                      onLogout();
+                      handleLogout();
                     }}
                     activeOpacity={0.7}
                     accessible={true}
@@ -140,6 +144,10 @@ return (
               ) : null}
             </View>
           </AnimatedCard>
+
+          {passengerTrip ? (
+            <TripDataStatus parts={passengerTrip.parts} nowMs={passengerTrip.nowMs} refreshNotice={refreshNotice} />
+          ) : null}
 
           {/* Pickup countdown timer */}
           {primaryPickupTime && manifestStatus !== MANIFEST_STATUS.BOARDED && (
@@ -383,7 +391,12 @@ return (
           {/* Today's Agenda */}
           {tourData && (
             <AnimatedCard delay={250}>
-              <TodaysAgendaCard tourData={tourData} onNudge={() => navigateWithLog('Itinerary', {}, 'agenda_nudge')} />
+              <TodaysAgendaCard
+                tourData={tourData}
+                itineraryPart={passengerTrip?.parts?.itinerary}
+                nowMs={passengerTrip?.nowMs}
+                onNudge={() => navigateWithLog('Itinerary', {}, 'agenda_nudge')}
+              />
             </AnimatedCard>
           )}
 
@@ -566,11 +579,7 @@ return (
               <TouchableOpacity
                 style={styles.modalLogoutButton}
                 onPress={() => {
-                  logger.info('TourHome', 'Logout requested from no-show modal', {
-                    tourId: activeTourId || null,
-                    bookingRef: maskIdentifier(bookingRef),
-                  });
-                  onLogout();
+                  handleLogout();
                 }}
                 activeOpacity={0.8}
                 accessibilityRole="button"
