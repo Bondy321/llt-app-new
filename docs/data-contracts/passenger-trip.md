@@ -105,8 +105,9 @@ procedure for these exact artifacts. Old retention evidence must not be reused,
 and deploying only rules without coordinating retention can pause that compactor.
 No retention rollout, scheduler, evidence or production heartbeat was changed here.
 Endpoint/rule unavailability leaves safe seed/saved details with truthful failed
-check state; it never falls back to raw records. Rollback disables the client gate
-and restores the existing passenger itinerary pipeline. Legacy authentication seed
+check state; it never falls back to raw records. Rollback publishes a compatible
+client build/update with the compile-time gate disabled and restores the existing
+passenger itinerary pipeline; this is not an instant remote switch. Legacy authentication seed
 data remains compatible but can be older; reconnect/sign in during rollback when
 current detail is required. Signals/endpoints are additive and may remain deployed.
 Remove the temporary legacy seed reader only after supported caches have migrated.
@@ -138,3 +139,28 @@ session/source checks against synthetic data, injecting only outer token
 verification. Browser-enforced cross-origin fetch returned the successful snapshot
 and a readable SESSION_CHANGED error: one preflight, two POSTs, two authorisations.
 This does not replace the deployed-origin or physical-device smoke above.
+
+## Dependency remediation for sign-off
+
+The audit correction changes only lockfile resolutions within existing supported
+ranges: root `@xmldom/xmldom` 0.8.13 to 0.8.15 under Expo's plist consumer,
+`fast-uri` 3.1.5 to 3.1.7 under Firebase tooling/Ajv, and `js-yaml` 3.15.1 to
+3.15.2 plus 4.3.1 to 4.3.2 under their separate v3/v4 parents. Functions updates
+its Jest tooling's `js-yaml` v3 and `sharp` 0.35.3 to 0.35.4 with the matching
+platform binaries/libvips packages. Web-admin updates ESLint's `js-yaml` v4.
+No manifest ranges, overrides, runtime baselines, feature code or audit thresholds
+change. The separate YAML majors remain separate.
+
+Final verification exposed a dated integration fixture: Home's day-one assertion
+used a tour fixed to 10 September 2026. The test now aligns its source dates with
+its captured display day, retaining real session-expiry checks, and always cleans
+up screens/controllers after failures. Its assertions and aggregate registration
+remain intact; no application behavior changes.
+
+Verification includes clean `npm ci` installations of all three trees, the real
+photo-variant processor with patched sharp, production Info.plist serialization,
+a production-mode mobile export, and the existing release audit/full test gates.
+The release audit must complete production-only and all-dependency stages for all
+three trees; lower-severity residual advisories remain visible. Exact final-head
+results are recorded in PR #455. This correction does not fulfil or remove any
+deployed-origin, device, writer/subscription or retention-attestation condition above.

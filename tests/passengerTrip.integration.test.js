@@ -13,10 +13,27 @@ require('@babel/register')({ extensions: ['.js', '.jsx'], presets: ['babel-prese
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const flush = async () => { for (let n = 0; n < 100; n += 1) await Promise.resolve(); };
 
-test('synthetic source changes cross real active-session endpoint, shared controller and offline restart', async () => {
+test('synthetic source changes cross real active-session endpoint, shared controller and offline restart', async (t) => {
+  const screens = new Set();
+  const controllers = new Set();
+  t.after(async () => {
+    for (const owner of controllers) owner.stop();
+    try {
+      for (const screen of screens) await screen.unmount();
+    } finally {
+      nativeMocks.restore();
+    }
+  });
   const fixture = createPassengerTripFixture();
   const { db, scope, set, get, snapshot } = fixture;
   const now = Date.now();
+  // Home's day-one agenda must use the same local day as its injected nowMs.
+  // Keep real session expiry checks on the wall clock; only move fixture dates.
+  const today = new Date(now);
+  const tripDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+  set(`bookings/${scope.bookingRef}/pickupDate`, tripDate);
+  set(`tours/${scope.tourId}/startDate`, tripDate);
+  set(`tours/${scope.tourId}/endDate`, tripDate);
   const session = buildPassengerSessionRecord({ authUid: scope.authUid, principalId: scope.principalId,
     tourId: scope.tourId, sessionId: scope.sessionId, nowMs: now, expiresAtMs: now + 60000 });
   set(`app_sessions/${scope.authUid}`, session);
@@ -48,7 +65,7 @@ test('synthetic source changes cross real active-session endpoint, shared contro
       return () => { detaches += 2; };
     },
     schedule: (fn) => { timer = fn; return 1; }, cancel: () => { timer = null; } });
-  const controller = makeController(); await controller.ready;
+  const controller = makeController(); controllers.add(controller); await controller.ready;
   controller.setAvailability(true);
   await controller.refresh('manual');
   nativeMocks.install();
@@ -60,6 +77,7 @@ test('synthetic source changes cross real active-session endpoint, shared contro
       tourCode: trip.parts.tour.data.tourCode, onNavigate() {}, onLogout() {}, isConnected };
   };
   const home = await renderPassengerTripHome(TourHomeScreen, displayProps(controller));
+  screens.add(home);
   assert.equal(controller.getState().parts.itinerary.persisted, true);
   const before = structuredClone(get(`bookings/${scope.bookingRef}`));
   const after = { ...before, pickupTime: '09:45', seatNumbers: ['14', '15'] };
@@ -94,8 +112,8 @@ test('synthetic source changes cross real active-session endpoint, shared contro
   assert.match(home.text().join(' '), /Revised published excursion/u);
   assert.deepEqual(requests[2], ['tour', 'itinerary']);
   assert.deepEqual(get(`app_sessions/${scope.authUid}`), session, 'content checks do not renew authentication');
-  await home.unmount(); controller.stop();
-  const restored = makeController(); await restored.ready;
+  await home.unmount(); screens.delete(home); controller.stop();
+  const restored = makeController(); controllers.add(restored); await restored.ready;
   assert.equal(restored.getState().parts.itinerary.data.days[0].content, 'Revised published excursion');
   assert.equal(restored.getState().parts.booking.data.pickupTime, '09:45');
   assert.equal(restored.getState().parts.itinerary.status, 'saved');
@@ -105,11 +123,12 @@ test('synthetic source changes cross real active-session endpoint, shared contro
     passengerTrip: offlineProps.passengerTrip, tourId: scope.tourId, tourName: offlineProps.tourData.name,
     startDate: offlineProps.tourData.startDate, isDriver: false, offlineCacheOwnerId: scope.bookingRef, onBack() {},
   });
+  screens.add(fullItinerary);
   assert.match(fullItinerary.text().join(' '), /Revised published excursion/u);
   assert.match(fullItinerary.text().join(' '), /Saved itinerary/u);
   assert.equal(nativeMocks.calls.itineraryFetch, 0); assert.equal(nativeMocks.calls.itineraryListener, 0);
   assert.equal(nativeMocks.calls.cacheWrite, 0);
-  await fullItinerary.unmount(); nativeMocks.restore();
+  await fullItinerary.unmount(); screens.delete(fullItinerary); nativeMocks.restore();
   // No new network request or subscription is needed for an offline screen visit.
   assert.equal(requests.length, 3); assert.equal(attaches, 2); assert.equal(detaches, 2);
   set(`users/${scope.authUid}/bookingRef`, 'OTHER');
