@@ -292,3 +292,31 @@ test('media mutation locks release from a fresh cache and cannot release a forei
     }
   } finally { await fresh.delete(); }
 });
+
+test('group and private photo variants reach ready across cold-cache transactions', async () => {
+  const { generatePhotoVariantsForRecord } = require('../functions/src/domains/media/photoVariants');
+  const sharp = require('../functions/node_modules/sharp');
+  const source = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#23439a' } }).png().toBuffer();
+  for (const visibility of ['group', 'private']) {
+    const collection = visibility === 'group' ? 'group_tour_photos/VARIANT_TEST' : 'private_tour_photos/VARIANT_TEST/owner1';
+    const record = { storagePath: `${collection}/source.png`, userId: 'owner1', variantStatus: 'processing' };
+    await db.ref(`${collection}/photo1`).set(record);
+    const saved = new Map();
+    const bucket = { file: (objectPath) => ({
+      download: async () => [source],
+      getMetadata: async () => [{ generation: '1', metadata: {} }],
+      setMetadata: async () => {},
+      save: async (buffer) => saved.set(objectPath, buffer),
+      delete: async () => saved.delete(objectPath),
+    }) };
+    const fresh = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), `variant-${visibility}`);
+    try {
+      const result = await generatePhotoVariantsForRecord({ bucketName: 'synthetic', visibility, tourId: 'VARIANT_TEST', ownerKey: visibility === 'private' ? 'owner1' : null, photoId: 'photo1', photoRecord: record, database: fresh.database(), dbRoot: fresh.database().ref(collection), storageBucket: bucket });
+      assert.equal(result.status, 'ready', JSON.stringify(result));
+      const stored = (await db.ref(`${collection}/photo1`).once('value')).val();
+      assert.equal(stored.variantStatus, 'ready');
+      assert.ok(saved.get(stored.viewerStoragePath)?.length);
+      assert.ok(saved.get(stored.thumbnailStoragePath)?.length);
+    } finally { await fresh.delete(); }
+  }
+});
