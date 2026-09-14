@@ -73,6 +73,11 @@ jobs:
       - run: npm ci
       - run: npm --prefix functions ci
       - run: npm run test:functions:scripts
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm run test:login:emulators
 
   firebase-rules:
     name: Firebase rules

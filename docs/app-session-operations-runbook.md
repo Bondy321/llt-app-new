@@ -87,3 +87,31 @@ Run after any session/rule/media change:
 - Notifications: ended-session user excluded even with stale membership/assignment/token; new valid login can register the current token.
 
 Run `npm test`, `npm run test:emulators`, and `npm run build:web-admin` before release.
+
+## Complete login regression gate
+
+Run `npm run test:login:emulators` with root and Functions dependencies installed.
+This gate uses real Auth tokens, the exported passenger/driver HTTP handlers and
+Realtime Database transactions in the local `demo-llt-login` project. It is also
+part of `test:all:with-emulators` and the Functions CI job. The dedicated emulator
+configuration loads the production rules into the default RTDB namespace so
+replacement-session cleanup queries exercise their real indexes.
+
+Coverage includes first/repeated passenger and assigned/unassigned driver login,
+passenger device binding, driver single-device enforcement, contention and retry,
+passenger/driver role switching, transient Auth failure recovery, and cold-cache
+lease ownership/expiry checks. A helper-only identity test is insufficient: login
+must finish session issuance, role claims and admission/lock cleanup.
+
+RTDB transactions can initially receive `null` from an empty local SDK cache even
+when the server record exists. Renewal and compare-delete callbacks must allow
+the server comparison/retry, then enforce owner, expiry, generation and exact-job
+fences. Passenger claim reconciliation borrows and revalidates the login-owned
+session lease; only its original owner releases it. The scheduled reconciler
+acquires/releases its own lease. Never fix login failures by clearing device
+bindings or disabling the single-device policy.
+
+The passenger app remains native-only. Keep `PASSENGER_APP_ALLOWED_ORIGINS` empty;
+Origin-less native requests remain supported. If a passenger web app is deployed
+later, configure only its exact production/staging origins, not the company
+website or web-admin origin. Emulator success does not replace handset acceptance.

@@ -173,7 +173,7 @@ const acquireDriverLoginAdmission = async ({
 const releaseDriverLoginAdmission = async ({ db, admissionId }) => {
   if (!admissionId) return false;
   const result = await db.ref(`${DRIVER_LOGIN_POLICY_PATH}/loginAdmissions/${admissionId}`)
-    .transaction((current) => current ? null : undefined, undefined, false);
+    .transaction(() => null, undefined, false);
   return Boolean(result?.committed);
 };
 
@@ -192,6 +192,8 @@ const buildDriverLoginAdmissionCompletionUpdates = ({ admissionId }) => ({
 const completeDriverLoginAdmission = async ({ db, admissionId, policy }) => {
   let completed = false;
   const result = await db.ref(DRIVER_LOGIN_POLICY_PATH).transaction((currentValue) => {
+    completed = false;
+    if (currentValue === null) return null; // Recheck the server before judging a cold cache.
     const normalized = normalizeDriverLoginPolicy(currentValue);
     const transition = readDriverPolicyTransition(currentValue);
     const currentAdmission = currentValue?.loginAdmissions?.[admissionId];
@@ -335,7 +337,7 @@ const reserveDriverLoginClaim = async ({
 /** @type {(...args: any[]) => Promise<boolean>} */
 const releaseDriverLoginClaim = async ({ db, driverId, admissionId }) => {
   const result = await db.ref(`driver_login_claim_reservations/${driverId}`).transaction((current) => (
-    current?.admissionId === admissionId ? null : undefined
+    current === null || current?.admissionId === admissionId ? null : undefined
   ), undefined, false);
   return Boolean(result?.committed);
 };
@@ -382,6 +384,7 @@ module.exports = {
   driverBindingAllowedByPolicy,
   driverSessionMatchesPolicyGeneration,
   ensureDriverLoginPolicy,
+  hashPolicyIdentifier,
   normalizeDriverLoginPolicy,
   readDriverLoginPolicy,
   readDriverPolicyTransition,

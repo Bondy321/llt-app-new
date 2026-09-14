@@ -53,6 +53,7 @@ const acquireDriverAssignmentLoginAdmission = async ({
 /** @type {(...args: any[]) => Promise<boolean>} */
 const releaseDriverAssignmentLoginAdmission = async ({ db, driverId, admissionId }) => {
   const result = await db.ref(`${ACTIVE_ASSIGNMENT_ROOT}/${driverId}`).transaction((current) => {
+    if (current === null) return null;
     if (!current?.loginAdmissions?.[admissionId]) return undefined;
     const nextAdmissions = { ...current.loginAdmissions };
     delete nextAdmissions[admissionId];

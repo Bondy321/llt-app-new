@@ -82,6 +82,7 @@ const renewPassengerAccountDeletionLock = async ({
 }) => {
   if (!lock?.ref || !lock.ownerId) return false;
   const result = await lock.ref.transaction((current) => {
+    if (current === null) return null; // Let the server compare/retry a cold cache.
     if (!current || current.ownerId !== lock.ownerId || Number(current.expiresAtMs || 0) <= nowMs) {
       return undefined;
     }
@@ -93,7 +94,7 @@ const renewPassengerAccountDeletionLock = async ({
 const releasePassengerAccountDeletionLock = async ({ lock }) => {
   if (!lock?.ref || !lock.ownerId) return false;
   const result = await lock.ref.transaction((current) => (
-    current?.ownerId === lock.ownerId ? null : undefined
+    current === null || current?.ownerId === lock.ownerId ? null : undefined
   ), undefined, false);
   return Boolean(result?.committed && !result.snapshot.exists());
 };
