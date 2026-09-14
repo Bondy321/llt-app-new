@@ -14,6 +14,8 @@ const admin = require('../functions/node_modules/firebase-admin');
 const express = require('../functions/node_modules/express');
 const { verifyPassengerLogin } = require('../functions/src/domains/passenger-auth/passengerLoginFunction');
 const { verifyDriverLogin } = require('../functions/src/domains/driver-auth/driverLoginFunction');
+const { endAppSession } = require('../functions/src/domains/app-sessions/sessionFunctions');
+const { updateNotificationDeviceRegistration, updateNotificationDevice } = require('../functions/src/domains/notifications/notificationDeviceFunctions');
 const { verifyCurrentTourPhotoAccess } = require('../functions/src/domains/media/mediaAccess');
 const writer = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'login-fixture-writer');
 const db = writer.database();
@@ -23,6 +25,8 @@ test.before(async () => {
   app.use(express.json());
   app.post('/passenger', verifyPassengerLogin);
   app.post('/driver', verifyDriverLogin);
+  app.post('/end', endAppSession);
+  app.post('/notifications', updateNotificationDeviceRegistration);
   app.use((error, _req, res, _next) => res.status(500).json({ testHandlerError: error.message }));
   server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -290,6 +294,88 @@ test('media mutation locks release from a fresh cache and cannot release a forei
       assert.equal(await releaseMediaRecordLock({ ref: foreign.ref, owner: 'wrong' }), false);
       assert.equal((await foreign.ref.once('value')).val().owner, 'foreign');
     }
+  } finally { await fresh.delete(); }
+});
+
+test('driver notification saves release locks and logout allows immediate re-login with live chat and location', async () => {
+  const identity = await newIdentity();
+  const tourId = 'DRIVER_CYCLE'; const driverId = 'D-CYCLE';
+  await db.ref().update({
+    [`drivers/${driverId}`]: { name: 'Synthetic Driver', currentTourId: tourId },
+    [`tour_manifests/${tourId}/assigned_drivers/${driverId}`]: true,
+    [`tours/${tourId}`]: { name: 'Synthetic Tour', isActive: true },
+  });
+  const signedIn = await login('driver', identity, { driverId });
+  assert.equal(signedIn.status, 200, JSON.stringify(signedIn.body));
+  const session = signedIn.body.session;
+  const input = { action: 'reconcile', permissionState: 'granted', pushToken: 'ExponentPushToken[synthetic-cycle-token]',
+    operationalEligible: true, tourId, appSessionId: session.sessionId, appSessionRevision: session.sessionRevision };
+  for (let index = 0; index < 3; index += 1) {
+    const saved = await login('notifications', identity, { ...input, action: index ? 'preferences' : 'reconcile' });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    assert.equal(saved.body.device.operationalEligible, true);
+    assert.equal((await db.ref(`notification_device_locks/${identity.uid}`).once('value')).exists(), false);
+  }
+  const nowMs = Date.now();
+  const record = { schemaVersion: 2, authUid: identity.uid, appSessionId: session.sessionId, principalId: session.principalId,
+    principalType: 'driver', actorKey: driverId, tourId, tourActorKey: `${tourId}|${driverId}`, scope: 'group',
+    name: 'Synthetic Driver', isDriver: true, timestamp: nowMs, expiresAtMs: nowMs + 300000 };
+  const { reconcileChatActorStatus } = require('../functions/lib/chatPresenceProjection');
+  const { reconcileDriverLocationProjection } = require('../functions/lib/driverLocationProjection');
+  await db.ref().update({
+    [`chat_presence_sessions/group/${session.sessionId}`]: record,
+    [`chat_typing_sessions/group/${session.sessionId}`]: record,
+    [`driver_location_sessions/${session.sessionId}`]: { ...record, source: 'auto', mode: 'live', driverId, latitude: 56, longitude: -4 },
+  });
+  // Independent SDK connections reproduce competing source triggers during logout.
+  const fresh = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'driver-cycle-projections');
+  try {
+    await Promise.all([
+      reconcileChatActorStatus({ database: fresh.database(), tourId, actorKey: driverId }),
+      reconcileChatActorStatus({ database: db, tourId, actorKey: driverId }),
+      reconcileDriverLocationProjection({ database: fresh.database(), tourId }),
+    ]);
+    const ended = await login('end', identity, { expectedSessionId: session.sessionId, reason: 'user_logout' });
+    assert.equal(ended.status, 200, JSON.stringify(ended.body));
+    assert.equal((await db.ref(`app_sessions/${identity.uid}`).once('value')).exists(), false);
+    assert.equal((await db.ref(`chat_presence_sessions/group/${session.sessionId}`).once('value')).exists(), false);
+    assert.equal((await db.ref(`driver_location_sessions/${session.sessionId}`).once('value')).exists(), false);
+    const repeated = await login('driver', identity, { driverId });
+    assert.equal(repeated.status, 200, JSON.stringify(repeated.body));
+    assert.notEqual(repeated.body.session.sessionId, session.sessionId);
+  } finally { await fresh.delete(); }
+});
+
+test('notification mutation holds both locks until persistence completes and cannot release another owner', async () => {
+  const { releaseNotificationDeviceLock } = require('../functions/lib/appSessionCleanup');
+  const fresh = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'notification-lock-cache');
+  const authUid = 'notification-lock-test';
+  const lockRef = db.ref(`notification_device_locks/${authUid}`);
+  try {
+    await lockRef.set({ owner: 'foreign', expiresAtMs: Date.now() + 30000 });
+    assert.equal(await releaseNotificationDeviceLock({ lockRef: fresh.database().ref(`notification_device_locks/${authUid}`), owner: 'wrong' }), false);
+    assert.equal((await lockRef.once('value')).val().owner, 'foreign');
+    assert.equal(await releaseNotificationDeviceLock({ lockRef: fresh.database().ref(`notification_device_locks/${authUid}`), owner: 'foreign' }), true);
+    let proceed; let entered;
+    const held = new Promise((resolve) => { proceed = resolve; });
+    const started = new Promise((resolve) => { entered = resolve; });
+    const database = fresh.database();
+    const wrapped = { ref: (path) => {
+      const ref = database.ref(path);
+      if (path === `notification_devices/${authUid}`) {
+        const original = ref.once.bind(ref);
+        ref.once = async (...args) => { entered(); await held; return original(...args); };
+      }
+      return ref;
+    } };
+    const operation = updateNotificationDevice({ db: wrapped, authUid, input: { action: 'preferences', permissionState: 'denied' } });
+    await started;
+    try {
+      assert.equal((await lockRef.once('value')).exists(), true);
+      assert.equal((await db.ref(`app_session_locks/${authUid}`).once('value')).exists(), true);
+    } finally { proceed(); }
+    assert.equal((await operation).status, 200);
+    assert.equal((await lockRef.once('value')).exists(), false);
   } finally { await fresh.delete(); }
 });
 

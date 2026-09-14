@@ -28,6 +28,7 @@ export const createNotificationRegistrationCoordinator = ({
   let tokenSubscription = null;
   let appStateSubscription = null;
   let active = false;
+  let lastNativeToken = null;
 
   const retryKey = (snapshot) => {
     const authUid = typeof snapshot?.authUid === 'string' ? snapshot.authUid.replace(/[^A-Za-z0-9_-]/g, '_') : 'anonymous';
@@ -142,6 +143,7 @@ export const createNotificationRegistrationCoordinator = ({
     return inFlight;
   };
   const update = (next) => {
+    if (JSON.stringify(next) === JSON.stringify(state)) return inFlight || Promise.resolve({ skipped: true, reason: 'unchanged' });
     const changedIdentity = next?.authUid !== state?.authUid || next?.sessionId !== state?.sessionId;
     state = next;
     if (changedIdentity) {
@@ -156,7 +158,14 @@ export const createNotificationRegistrationCoordinator = ({
     state = initial;
     generation += 1;
     initializeNotificationChannels().catch((error) => logger.warn('NotificationCoordinator', 'Android channel setup deferred', { error: error?.message || String(error) }));
-    tokenSubscription = notificationApi.addPushTokenListener?.(() => reconcileCurrent('native_token_rotation')) || null;
+    tokenSubscription = notificationApi.addPushTokenListener?.((token) => {
+      // iOS can emit the same APNs token each time Expo requests registration.
+      // Only a changed native token warrants fetching its Expo token again.
+      const value = typeof token?.data === 'string' ? `${token.type || ''}:${token.data}` : null;
+      if (!value || value === lastNativeToken) return;
+      lastNativeToken = value;
+      reconcileCurrent('native_token_rotation');
+    }) || null;
     appStateSubscription = AppState.addEventListener?.('change', (nextState) => {
       if (nextState === 'active') reconcileCurrent('foreground');
     }) || null;

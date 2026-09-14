@@ -196,6 +196,22 @@ test('native token rotation causes an Expo-token reconcile and never persists th
   assert.equal(JSON.stringify(harness.reconciliations).includes('native-apns-token-must-not-be-persisted'), false);
 });
 
+test('repeated iOS callbacks for the same native token do not create a registration loop', async () => {
+  const harness = buildCoordinator({ reconcileImpl: async () => {
+    harness.subscriptions.token.handler({ type: 'ios', data: 'same-native-token' });
+    return { success: true };
+  } });
+  await harness.coordinator.start(activeState());
+  assert.equal(harness.reconciliations.length, 2);
+  for (let i = 0; i < 20; i += 1) harness.subscriptions.token.handler({ type: 'ios', data: 'same-native-token' });
+  await harness.coordinator.update(activeState());
+  await flush();
+  assert.equal(harness.reconciliations.length, 2);
+  harness.subscriptions.token.handler({ type: 'ios', data: 'rotated-native-token' });
+  await flush();
+  assert.ok(harness.reconciliations.length <= 4);
+});
+
 test('persists a bounded durable retry after temporary Expo-token failure and replays it', async () => {
   const harness = buildCoordinator({ token: null });
   const result = await harness.coordinator.start(activeState());
@@ -348,4 +364,47 @@ test('logout awaits the session-bound notification disable before completing loc
   await pending;
   assert.equal(purged, true);
   assert.equal(completed, true);
+});
+
+test('notification HTTP client retries only transient lock conflicts with the same mutation revision', async () => {
+  const modulePath = require.resolve('../services/notifications/notificationDeviceApiService');
+  delete require.cache[modulePath];
+  const oldProject = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
+  process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = 'demo-notification-test';
+  Module._load = function mocked(request, parent, isMain) {
+    if (request === '../../firebase') return { auth: { currentUser: { getIdToken: async () => 'test-token' } } };
+    return originalLoad(request, parent, isMain);
+  };
+  try {
+    const { updateNotificationPreferences } = require(modulePath);
+    const bodies = []; const delays = [];
+    const result = await updateNotificationPreferences({ registrationRevision: 42 }, {
+      wait: async (ms) => delays.push(ms),
+      fetchFn: async (_url, options) => {
+        bodies.push(options.body);
+        return bodies.length < 3
+          ? { ok: false, status: 409, json: async () => ({ reason: 'DEVICE_UPDATE_IN_PROGRESS' }) }
+          : { ok: true, status: 200, json: async () => ({ success: true }) };
+      },
+    });
+    assert.equal(result.success, true);
+    assert.deepEqual(delays, [200, 400]);
+    assert.equal(new Set(bodies).size, 1);
+    let calls = 0;
+    await assert.rejects(updateNotificationPreferences({ registrationRevision: 43 }, {
+      wait: async () => {}, fetchFn: async () => {
+        calls += 1; return { ok: false, status: 409, json: async () => ({ reason: 'DEVICE_UPDATE_IN_PROGRESS' }) };
+      },
+    }), { code: 'DEVICE_UPDATE_IN_PROGRESS' });
+    assert.equal(calls, 5);
+    calls = 0;
+    await assert.rejects(updateNotificationPreferences({ registrationRevision: 44 }, {
+      fetchFn: async () => { calls += 1; return { ok: false, status: 403, json: async () => ({ reason: 'NOT_AUTHORIZED' }) }; },
+    }), { code: 'NOT_AUTHORIZED' });
+    assert.equal(calls, 1);
+  } finally {
+    delete require.cache[modulePath];
+    if (oldProject === undefined) delete process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
+    else process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = oldProject;
+  }
 });

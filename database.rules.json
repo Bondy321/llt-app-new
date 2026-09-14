@@ -51,7 +51,10 @@
 
     "account_deletion_queue": {
       ".read": false,
-      ".write": false
+      ".write": false,
+      "v1": {
+        ".indexOn": ["dueAtMs"]
+      }
     },
 
     "account_deletion_active": {
