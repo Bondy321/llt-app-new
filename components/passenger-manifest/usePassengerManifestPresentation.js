@@ -5,7 +5,7 @@ import { pickupTimeToMinutes } from '../../services/pickupTimeParser';
 import { buildBookingLeadPhoneIndex, normalizeBookingReference } from '../../utils/bookingLeadPhone';
 import { HEADER_WIDGETS_VISIBLE } from './passengerManifestPresentation';
 
-const priorityRank = (status) => {
+export const priorityRank = (status) => {
   if (status === MANIFEST_STATUS.PENDING || status === MANIFEST_STATUS.PARTIAL) return 0;
   if (status === MANIFEST_STATUS.BOARDED) return 1;
   return 2;

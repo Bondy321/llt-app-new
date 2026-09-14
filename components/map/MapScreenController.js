@@ -15,7 +15,7 @@ const { resolvePrimaryPickup } = require('../../utils/pickupPresentation');
 const DRIVER_LOCATION_INITIAL_TIMEOUT_MS = 10000;
 
 import MapScreenView from './MapScreenView';
-import { calculateDistanceKm, estimateEtaMinutes, formatRelativeTime, normalizeMapCoords, summarizeCoords } from './mapPresentationModel';
+import { getFreshnessConfig, calculateDistanceKm, estimateEtaMinutes, formatRelativeTime, normalizeMapCoords, summarizeCoords } from './mapPresentationModel';
 export default function MapScreenController({ onBack, tourId, tourData, bookingData }) {
   const MIN_REFRESH_SPINNER_MS = 120;
   const [driverLocation, setDriverLocation] = useState(null);
@@ -533,7 +533,9 @@ export default function MapScreenController({ onBack, tourId, tourData, bookingD
       driverLocationPresentation={driverLocationPresentation}
       etaMinutes={etaMinutes}
       fadeAnim={fadeAnim}
-      freshnessConfig={freshnessConfig}
+      freshnessConfig={getFreshnessConfig(locationFreshness)}
+      errorMsg={errorMsg}
+      driverLocation={driverLocation}
       getInitialRegion={getInitialRegion}
       handleCallDriver={handleCallDriver}
       handleGetDirections={handleGetDirections}

@@ -1129,6 +1129,8 @@ Use incremental verification during implementation:
 
 This keeps feedback fast without weakening the final release gate.
 
+Mobile JavaScript and JSX must pass `no-undef` and `react/jsx-no-undef` across all app entrypoints, screens, components, hooks, services, and utilities. Keep the scope guard in `tests/architecture/mobileRuntimeReferences.test.js`. `tests/appScreens.behavior.test.js` renders actual chat, photo/viewer, map, and manifest controllers and exercises their actions with only device/backend adapters mocked; include it in `test:mobile:ux`.
+
 Root orchestration:
 
 ```bash

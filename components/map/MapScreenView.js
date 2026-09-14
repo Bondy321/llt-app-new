@@ -49,6 +49,8 @@ export default function MapScreenView({
   connectionStatus,
   distanceKm,
   driverHasLocation,
+  driverLocation,
+  errorMsg,
   driverLocationPoint,
   driverLocationPresentation,
   etaMinutes,

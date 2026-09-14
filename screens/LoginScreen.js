@@ -1,7 +1,7 @@
 // screens/LoginScreen.js
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { validateBookingReference } from '../services/bookingServiceRealtime';
-import { Alert, Animated, Keyboard, Linking } from 'react-native';
+import { Alert, Animated, Keyboard, Linking, Platform } from 'react-native';
 import loggerService, { maskIdentifier } from '../services/loggerService';
 import { recordBreadcrumb as recordCrashBreadcrumb } from '../services/crashDiagnosticsService';
 

@@ -1,6 +1,6 @@
 // screens/ChatScreen.js - Premium Chat Experience
 import { useCallback, useEffect, useMemo } from 'react';
-import { URL_REGEX, isMessageOwnedByCurrentSession } from "./chatShared";
+import { buildChatTimelineItems, buildReplyTargetIndex, buildUnreadSummary, buildChatSearchResults, URL_REGEX, isMessageOwnedByCurrentSession } from "./chatShared";
 export default function useChatMessageGrouping(context, late) {
   const {
     canonicalIdentity,

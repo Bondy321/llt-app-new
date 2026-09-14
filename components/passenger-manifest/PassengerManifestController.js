@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import PassengerManifestView from './PassengerManifestView';
 import usePassengerManifestPresentation, {
+  priorityRank,
   computeStats,
   getUnresolvedBookingCount,
 } from './usePassengerManifestPresentation';
@@ -17,7 +18,6 @@ const { normalizeTourId } = require('../../services/tourIdentityService');
 const {
   toTelephoneUrl,
 } = require('../../utils/bookingLeadPhone');
-
 export default function PassengerManifestController({ route, navigation, driverTourPack = null, isConnected = true }) {
   const { tourId, actorPrincipalId, authUid, offlineCacheOwnerId, sessionGeneration = 0 } = route.params;
   const [loading, setLoading] = useState(true);
@@ -28,7 +28,6 @@ export default function PassengerManifestController({ route, navigation, driverT
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [filtersOpen, setFiltersOpen] = useState(false);
-
   const [selectedBooking, setSelectedBooking] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [partialMode, setPartialMode] = useState(false);
@@ -57,11 +56,9 @@ export default function PassengerManifestController({ route, navigation, driverT
       cacheOwnerId: offlineCacheOwnerId || principalId,
     };
   }, [actorPrincipalId, authUid, offlineCacheOwnerId, tourId]);
-
   useEffect(() => {
     manifestSourceRef.current = manifestSource;
   }, [manifestSource]);
-
   useEffect(() => {
     logger.trackScreen('PassengerManifest', { tourId });
   }, [tourId]);

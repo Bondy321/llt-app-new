@@ -1,6 +1,8 @@
+import logger, { maskIdentifier } from '../../services/loggerService';
+import { isLoadablePhotoUri } from '../../services/photoVariantService';
 import * as FileSystem from 'expo-file-system/legacy';
 import { parseTimestampMs } from '../../services/timeUtils';
-import { summarizeQueueAction } from '../../services/crashDiagnosticsService';
+import { summarizeQueueAction, summarizePhotoRecord } from '../../services/crashDiagnosticsService';
 
 export const formatPhotoDate = (timestamp, options) => {
   const parsedMs = parseTimestampMs(timestamp);
