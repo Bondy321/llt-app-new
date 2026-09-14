@@ -29,6 +29,15 @@ Force-closing the app is safe: the pending request is durable and is retried on 
 
 ## Same-installation and replacement-device behavior
 
+If a valid booking repeatedly returns `IDENTITY_INCOMPLETE`, distinguish a missing
+source record from a failure in the device-binding transaction. Firebase may first
+call a transaction with `null` because its local cache is empty. The binding helper
+must let the server compare/retry before interpreting that as absence, and must
+validate the committed opaque identity and exact UID before granting access. Do
+not repair this error by clearing the customer's device binding, replacing their
+opaque identity, or asking them to reinstall. Emulator coverage includes cold
+connections, absent/malformed/locked identities and competing first-device logins.
+
 Normal logout does not delete Firebase Auth or the passenger booking-to-device binding. The same installation can log in again and receives the same opaque `pax_v2_` principal with a new `sess_v1_` session. A different Firebase UID remains blocked with `REAUTHORIZE_REQUIRED`.
 
 If a customer genuinely replaces or loses a device, use the existing authorised identity-recovery procedure after revoking the old session. Do not manually copy identity bindings or manufacture an `app_sessions` record.
