@@ -146,10 +146,12 @@ const isActiveSessionRecord = (session, { nowMs = Date.now() } = {}) => {
   if (!Number.isSafeInteger(session.expiresAtMs) || session.expiresAtMs <= nowMs) return false;
   if (!Number.isSafeInteger(session.issuedAtMs) || !Number.isSafeInteger(session.lastAuthenticatedAtMs)) return false;
   if (!Number.isSafeInteger(session.sessionRevision) || session.sessionRevision < 1) return false;
+  // RTDB omits null children when a record is read back. These role-specific
+  // nullable fields may therefore be absent; conflicting non-null values remain invalid.
   if (session.principalType === 'passenger') {
     return isValidPassengerPrincipal(session.principalId)
       && isValidFirebaseKey(session.tourId)
-      && session.driverId === null;
+      && (session.driverId === null || session.driverId === undefined);
   }
   if (session.principalType === 'driver') {
     return isValidFirebaseKey(session.driverId)
@@ -157,7 +159,7 @@ const isActiveSessionRecord = (session, { nowMs = Date.now() } = {}) => {
       && (!Object.prototype.hasOwnProperty.call(session, 'driverLoginPolicyGeneration')
         || (Number.isSafeInteger(session.driverLoginPolicyGeneration)
           && session.driverLoginPolicyGeneration >= 0))
-      && (session.tourId === null || isValidFirebaseKey(session.tourId));
+      && (session.tourId === null || session.tourId === undefined || isValidFirebaseKey(session.tourId));
   }
   return false;
 };

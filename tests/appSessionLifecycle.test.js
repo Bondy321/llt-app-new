@@ -696,3 +696,17 @@ test('cutover migration closes every Firebase Admin app so CLI runs terminate', 
   });
   assert.deepEqual(closed.sort(), ['first', 'second']);
 });
+
+test('Firebase-omitted nullable fields remain valid without accepting conflicting role data', () => {
+  const nowMs = 1000;
+  const passenger = buildPassengerSessionRecord({ authUid: 'roundtrip-passenger', principalId: PASSENGER_ID, tourId: 'TOUR_A', sessionId: SESSION_ID, nowMs });
+  delete passenger.driverId;
+  assert.equal(isActiveSessionRecord(passenger, { nowMs }), true);
+  for (const driverId of ['', false, 0, 'D-1']) assert.equal(isActiveSessionRecord({ ...passenger, driverId }, { nowMs }), false);
+  assert.equal(isActiveSessionRecord({ ...passenger, status: 'ended' }, { nowMs }), false);
+  assert.equal(isActiveSessionRecord({ ...passenger, expiresAtMs: nowMs }, { nowMs }), false);
+  const driver = buildDriverSessionRecord({ authUid: 'roundtrip-driver', driverId: 'D-1', sessionId: SESSION_ID, nowMs });
+  delete driver.tourId;
+  assert.equal(isActiveSessionRecord(driver, { nowMs }), true);
+  for (const tourId of ['', false, 0]) assert.equal(isActiveSessionRecord({ ...driver, tourId }, { nowMs }), false);
+});

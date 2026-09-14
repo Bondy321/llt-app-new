@@ -13,7 +13,7 @@ import {
   resolveThumbnailDisplayUri,
   resolveViewerDisplayUri,
 } from '../../services/photoVariantService';
-import { getCurrentAuthUser, updateCurrentAuthUserProfile } from '../../services/authStateService';
+import { getCurrentAuthUser } from '../../services/authStateService';
 import logger, { maskIdentifier } from '../../services/loggerService';
 import { getCanonicalIdentity, toRealtimeKeySegment } from '../../services/identityService';
 import {
@@ -154,56 +154,6 @@ export default function PhotobookScreen({
     });
   }, [authUid, canonicalIdentity, principalId, privatePhotoOwnerId, privatePhotoOwnerKey, stablePassengerId, stablePrivateOwnerId, stablePrivateOwnerKey, tourId, tracePrivatePhotos]);
 
-  const ensurePrivatePhotoOwnerAccess = useCallback(async () => {
-    const currentAuthUid = getCurrentAuthUser()?.uid;
-    if (!currentAuthUid || !principalId || !stablePrivateOwnerId) {
-      tracePrivatePhotos('ensure_owner_access_skipped', {
-        hasCurrentAuthUid: Boolean(currentAuthUid),
-        hasPrincipalId: Boolean(principalId),
-        hasStablePrivateOwnerId: Boolean(stablePrivateOwnerId),
-        hasRealtimeDb: true,
-      });
-      return;
-    }
-
-    try {
-      tracePrivatePhotos('ensure_owner_access_start', {
-        currentAuthUid,
-        privatePhotoOwnerKey: summarizeRealtimeKey(privatePhotoOwnerKey),
-        stablePrivateOwnerKey: summarizeRealtimeKey(stablePrivateOwnerKey),
-      });
-      const updates = {
-        privatePhotoOwnerId: principalId,
-        privatePhotoOwnerKey,
-        privatePhotoOwnerType: 'stable_passenger',
-        lastUpdated: Date.now(),
-        stablePassengerId: stablePrivateOwnerId,
-        stablePassengerKey: stablePrivateOwnerKey,
-      };
-
-      await updateCurrentAuthUserProfile(updates);
-      tracePrivatePhotos('ensure_owner_access_success', {
-        currentAuthUid,
-        updateKeys: Object.keys(updates),
-        privatePhotoOwnerKey: summarizeRealtimeKey(privatePhotoOwnerKey),
-      });
-    } catch (error) {
-      tracePrivatePhotos('ensure_owner_access_error', {
-        error: error?.message,
-        code: error?.code || null,
-        stack: error?.stack,
-      }, { flush: true });
-      logger.error('Photobook', 'Failed to refresh private photo owner identity before private photo access', {
-        error: error.message,
-        code: error?.code || null,
-        authUid: currentAuthUid,
-        privatePhotoOwnerId: maskIdentifier(principalId),
-        privatePhotoOwnerKey: summarizeRealtimeKey(privatePhotoOwnerKey),
-        tourId,
-      });
-    }
-  }, [principalId, privatePhotoOwnerKey, stablePrivateOwnerId, stablePrivateOwnerKey, tourId, tracePrivatePhotos]);
-
   const mapPrivatePhoto = useCallback((photo) => {
     const sourcePhoto = photo || {};
     const hasDisplayVariant = isLoadablePhotoUri(sourcePhoto.viewerUrl)
@@ -242,7 +192,6 @@ export default function PhotobookScreen({
     visibility: 'private',
     tourId,
     ownerId: principalId,
-    beforeLoad: ensurePrivatePhotoOwnerAccess,
     mapPhoto: mapPrivatePhoto,
     pageSize: 30,
     liveLimit: 30,
@@ -450,7 +399,6 @@ export default function PhotobookScreen({
   ]);
 
   const { cancelUpload, discardUpload, handlePickFromGallery, handleTakePhoto, handleUpload, retryUpload, showUploadOptions } = createPrivatePhotoUploadActions({
-    ensurePrivatePhotoOwnerAccess,
     canonicalIdentity,
     caption,
     pendingImage,
