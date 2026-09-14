@@ -1,4 +1,6 @@
 const test = require('node:test');
+const assert = require('node:assert/strict');
+const { authorizePassengerLoginDevice } = require('../../functions/lib/passengerIdentity');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
@@ -30,6 +32,76 @@ let testEnv;
 let dbUrl;
 
 const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
+
+test('cold server credential transaction loads an existing identity before binding the first device', async () => {
+  const credentialPath = 'passenger_identity_security/COLD_LOGIN';
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref(credentialPath).set({
+      passengerPrincipalId: STABLE_ID, passengerIdentityVersion: 'pax_v2',
+    });
+  });
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const ref = context.database(dbUrl).ref(credentialPath);
+    const seen = [];
+    const result = await authorizePassengerLoginDevice({
+      authUid: USER_UID,
+      securityRef: { transaction: (update) => ref.transaction((current) => {
+        seen.push(current);
+        return update(current);
+      }) },
+    });
+    assert.equal(seen[0], null, 'fresh SDK connection has no cached security record');
+    assert.equal(result.authorizedAuthUid, USER_UID);
+    assert.equal(result.passengerPrincipalId, STABLE_ID);
+    assert.equal((await ref.once('value')).val().authorizedAuthUid, USER_UID);
+  });
+});
+
+test('cold credential checks preserve same-device access and reject missing, malformed, locked or other-device records', async () => {
+  for (const [name, record, reason] of [
+    ['same', { passengerPrincipalId: STABLE_ID, authorizedAuthUid: USER_UID }, null],
+    ['missing', null, 'IDENTITY_INCOMPLETE'],
+    ['malformed', { passengerPrincipalId: 'invalid' }, 'IDENTITY_INCOMPLETE'],
+    ['locked', { passengerPrincipalId: STABLE_ID, loginLocked: true }, 'REAUTHORIZE_REQUIRED'],
+    ['other', { passengerPrincipalId: STABLE_ID, authorizedAuthUid: 'another-device' }, 'REAUTHORIZE_REQUIRED'],
+  ]) {
+    const credentialPath = `passenger_identity_security/COLD_${name}`;
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await context.database(dbUrl).ref(credentialPath).set(record);
+    });
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const ref = context.database(dbUrl).ref(credentialPath);
+      const login = () => authorizePassengerLoginDevice({ securityRef: ref, authUid: USER_UID });
+      if (reason) await assert.rejects(login, (error) => error.code === reason, name);
+      else assert.equal((await login()).authorizedAuthUid, USER_UID);
+      assert.deepEqual((await ref.once('value')).val(), record, `${name} must not rewrite security state`);
+    });
+  }
+});
+
+test('concurrent cold device logins bind only one winner without replacing its identity', async () => {
+  const credentialPath = 'passenger_identity_security/COLD_RACE';
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref(credentialPath).set({ passengerPrincipalId: STABLE_ID });
+  });
+  const outcomes = await Promise.allSettled(['device-a', 'device-b'].map(async (authUid) => {
+    let identity;
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      identity = await authorizePassengerLoginDevice({
+        securityRef: context.database(dbUrl).ref(credentialPath), authUid,
+      });
+    });
+    return identity;
+  }));
+  assert.equal(outcomes.filter((result) => result.status === 'fulfilled').length, 1);
+  const rejected = outcomes.find((result) => result.status === 'rejected');
+  assert.equal(rejected.reason.code, 'REAUTHORIZE_REQUIRED');
+  const winner = outcomes.find((result) => result.status === 'fulfilled').value;
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    assert.deepEqual((await context.database(dbUrl).ref(credentialPath).once('value')).val(), winner);
+    assert.equal(winner.passengerPrincipalId, STABLE_ID);
+  });
+});
 
 test.before(async () => {
   const emulator = parseHost();

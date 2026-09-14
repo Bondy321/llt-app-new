@@ -63,6 +63,11 @@ const authorizePassengerLoginDevice = async ({ securityRef, authUid } = {}) => {
   }
   let rejectionReason = null;
   const result = await securityRef.transaction((current) => {
+    // RTDB may initially supply null from a cold local cache even when the
+    // server record exists. Submit the null no-op for server compare/retry;
+    // returning undefined here would abort before reading that record.
+    // A genuinely absent record is rejected after the transaction completes.
+    if (current === null) return null;
     if (!current || typeof current !== 'object' || Array.isArray(current)) {
       rejectionReason = 'IDENTITY_INCOMPLETE';
       return;
@@ -88,13 +93,15 @@ const authorizePassengerLoginDevice = async ({ securityRef, authUid } = {}) => {
       authorizedAuthUid: authUid,
       loginDeviceBoundAtMs: Date.now(),
     };
-  });
-  if (!result?.committed) {
+  }, undefined, false);
+  const identity = result?.snapshot?.val?.();
+  if (!result?.committed || !isOpaquePassengerId(identity?.passengerPrincipalId)
+    || identity?.authorizedAuthUid !== authUid || identity?.loginLocked === true) {
     const error = new Error(rejectionReason || 'Unable to authorize passenger login device');
     error.code = rejectionReason || 'IDENTITY_INCOMPLETE';
     throw error;
   }
-  return result.snapshot.val();
+  return identity;
 };
 
 const buildPassengerIdentitySecurityUpdates = ({
