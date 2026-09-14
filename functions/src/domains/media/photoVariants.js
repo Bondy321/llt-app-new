@@ -182,6 +182,7 @@ const generatePhotoVariantsForRecord = async (options) => {
     // the process dies after a Storage save, deletion can still discover and
     // generation-capture every possible variant under the same record lock.
     const targets = await recordRef.transaction((current) => {
+      if (current === null) return current;
       if (!current || current._serverDeletion?.status === 'deleting'
         || mediaRecordFingerprint(current) !== baselineFingerprint) return undefined;
       return {
@@ -193,7 +194,7 @@ const generatePhotoVariantsForRecord = async (options) => {
         variantError: null,
       };
     }, undefined, false);
-    if (!targets?.committed) return { status: 'skipped', reason: 'record-changed', photoId };
+    if (!targets?.committed || !targets.snapshot.val()) return { status: 'skipped', reason: 'record-changed', photoId };
     baselineFingerprint = mediaRecordFingerprint(targets.snapshot.val());
     const sourceFile = resolvedBucket.file(objectPath);
     const [sourceBuffer] = await sourceFile.download();
@@ -222,6 +223,7 @@ const generatePhotoVariantsForRecord = async (options) => {
     }
 
     const update = await recordRef.transaction((current) => {
+      if (current === null) return current;
       if (!current || current._serverDeletion?.status === 'deleting'
         || mediaRecordFingerprint(current) !== baselineFingerprint) return undefined;
       return {
@@ -235,7 +237,7 @@ const generatePhotoVariantsForRecord = async (options) => {
         variantError: null,
       };
     }, undefined, false);
-    if (!update?.committed) {
+    if (!update?.committed || !update.snapshot.val()) {
       await cleanupCreatedPhotoVariants(createdVariants);
       return { status: 'skipped', reason: 'record-changed', photoId };
     }
@@ -247,6 +249,7 @@ const generatePhotoVariantsForRecord = async (options) => {
       ? error.code
       : 'VARIANT_GENERATION_FAILED';
     await recordRef.transaction((current) => {
+      if (current === null) return current;
       if (!current || current._serverDeletion?.status === 'deleting'
         || !baselineFingerprint || mediaRecordFingerprint(current) !== baselineFingerprint) return undefined;
       return {
