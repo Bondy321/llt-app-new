@@ -6,22 +6,28 @@ const endpoint = (name) => {
   return projectId ? `https://europe-west1-${projectId}.cloudfunctions.net/${name}` : null;
 };
 
-const post = async (name, body, { fetchFn = fetch } = {}) => {
+const post = async (name, body, { fetchFn = fetch, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) => {
   const url = endpoint(name);
   const token = await auth?.currentUser?.getIdToken?.();
   if (!url || !token) throw new Error('Notification device service is unavailable.');
-  const response = await fetchFn(url, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload?.success === false) {
-    const error = new Error(payload?.reason || 'Notification device request failed.');
-    error.code = payload?.reason || `HTTP_${response.status}`;
-    throw error;
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetchFn(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (response.status === 409 && ['SESSION_IN_PROGRESS', 'DEVICE_UPDATE_IN_PROGRESS'].includes(payload?.reason) && attempt < 4) {
+      await wait(Math.min(1000, 200 * (2 ** attempt)));
+      continue;
+    }
+    if (!response.ok || payload?.success === false) {
+      const error = new Error(payload?.reason || 'Notification device request failed.');
+      error.code = payload?.reason || `HTTP_${response.status}`;
+      throw error;
+    }
+    return payload;
   }
-  return payload;
 };
 
 const withRegistrationRevision = async (input = {}) => {

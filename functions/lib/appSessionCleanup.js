@@ -98,6 +98,7 @@ const releaseNotificationDeviceLock = async ({ lockRef, owner } = {}) => {
   if (!lockRef || !owner) return false;
   let released = false;
   const result = await lockRef.transaction((current) => {
+    if (current === null) return current;
     if (current?.owner !== owner) return undefined;
     released = true;
     return null;

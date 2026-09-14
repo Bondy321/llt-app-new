@@ -294,7 +294,7 @@ const updateNotificationDevice = async ({ db = admin.database(), authUid, input,
   try {
     deviceLock = await acquireNotificationDeviceLock({ db, authUid, owner: operationOwner, nowMs });
     if (!deviceLock.acquired) return { status: 409, body: { success: false, reason: 'DEVICE_UPDATE_IN_PROGRESS' } };
-    return processLockedNotificationDeviceUpdate({ db, ref, authUid, input, action, nowMs });
+    return await processLockedNotificationDeviceUpdate({ db, ref, authUid, input, action, nowMs });
   } finally {
     if (deviceLock?.acquired) await releaseNotificationDeviceLock({ lockRef: deviceLock.lockRef, owner: operationOwner });
     await releaseAppSessionLock({ db, authUid, owner: operationOwner });

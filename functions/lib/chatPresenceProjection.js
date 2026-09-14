@@ -1,6 +1,7 @@
 'use strict';
 
 const { hasCurrentDriverAuthority } = require('./driverLocationProjection');
+const { retryProjection } = require('./projectionRetry');
 
 const CHAT_STATUS_SOURCE_SCHEMA_VERSION = 2;
 const CHAT_STATUS_PROJECTION_LEASE_MS = 30_000;
@@ -126,7 +127,7 @@ async function readStatusRecords(database, { statusType, scope, tourId, actorKey
     .map(([appSessionId, record]) => ({ appSessionId, record }));
 }
 
-async function reconcileChatActorStatus({
+async function reconcileChatActorStatusOnce({
   database,
   scope = 'group',
   tourId,
@@ -202,7 +203,7 @@ async function reconcileChatActorStatus({
         projectedAtMs: nowMs,
       };
     }, undefined, false);
-    if (finalized?.committed !== true) {
+    if (finalized?.committed !== true || !snapshotValue(finalized.snapshot)) {
       const error = new Error('Chat status projection lease changed before commit');
       error.code = 'CHAT_STATUS_PROJECTION_BUSY';
       throw error;
@@ -245,6 +246,10 @@ async function reconcileChatActorStatus({
     throw error;
   }
 }
+
+const reconcileChatActorStatus = (options) => retryProjection(
+  () => reconcileChatActorStatusOnce(options), 'CHAT_STATUS_PROJECTION_BUSY',
+);
 
 function collectChangedActors(before, after) {
   const unique = new Map();

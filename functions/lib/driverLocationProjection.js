@@ -1,4 +1,5 @@
 'use strict';
+const { retryProjection } = require('./projectionRetry');
 
 const {
   buildAssignmentOwnedDriverLocationPickup,
@@ -162,6 +163,7 @@ async function hasCurrentDriverAuthority(database, record, nowMs) {
 
 async function releaseProjectionLease(ref, leaseOwner) {
   await ref.transaction((current) => {
+    if (current === null) return current;
     if (!isObject(current) || current.leaseOwner !== leaseOwner) return undefined;
     const next = { ...current };
     delete next.leaseOwner;
@@ -242,6 +244,7 @@ async function releaseDriverLocationProjectionInvalidation({ database, invalidat
     throw new Error('A valid driver location projection invalidation is required');
   }
   await database.ref(`driver_location_projection_state/${tourId}`).transaction((current) => {
+    if (current === null) return current;
     if (!isObject(current)
       || current.leaseOwner !== invalidation.leaseOwner
       || current.leaseRevision !== invalidation.leaseRevision) return undefined;
@@ -252,7 +255,7 @@ async function releaseDriverLocationProjectionInvalidation({ database, invalidat
   }, undefined, false);
 }
 
-async function reconcileDriverLocationProjection({
+async function reconcileDriverLocationProjectionOnce({
   database,
   tourId,
   nowMs = Date.now(),
@@ -318,6 +321,7 @@ async function reconcileDriverLocationProjection({
     const leaseState = snapshotValue(leaseResult.snapshot) || {};
     const fingerprint = JSON.stringify(projection);
     const finalized = await stateRef.transaction((current) => {
+      if (current === null) return current;
       if (!isObject(current)
         || current.leaseOwner !== leaseOwner
         || current.leaseRevision !== leaseState.leaseRevision) return undefined;
@@ -330,7 +334,7 @@ async function reconcileDriverLocationProjection({
         projectedAtMs: nowMs,
       };
     }, undefined, false);
-    if (finalized?.committed !== true) {
+    if (finalized?.committed !== true || !snapshotValue(finalized.snapshot)) {
       const error = new Error('Driver location projection lease changed before commit');
       error.code = 'DRIVER_LOCATION_PROJECTION_BUSY';
       throw error;
@@ -378,6 +382,10 @@ async function reconcileDriverLocationProjection({
   }
 }
 
+const reconcileDriverLocationProjection = (options) => retryProjection(
+  () => reconcileDriverLocationProjectionOnce(options), 'DRIVER_LOCATION_PROJECTION_BUSY',
+);
+
 function collectChangedTours(before, after) {
   return [...new Set([before?.tourId, after?.tourId].map((value) => normalizeBoundedText(value, 100)).filter(Boolean))].sort();
 }
@@ -409,6 +417,7 @@ async function cleanupDriverLocationsForAppSession({
   let removed = 0;
   for (const [sourceKey, candidate] of matches) {
     const result = await database.ref(`driver_location_sessions/${sourceKey}`).transaction((current) => {
+      if (current === null) return current;
       if (!current || current.appSessionId !== normalizedSessionId) return undefined;
       return null;
     }, undefined, false);
