@@ -8,7 +8,8 @@ import createNotificationPreferencesScreenStyles from '../../screens/styles/Noti
 import { COLORS as THEME, SHADOWS } from '../../theme';
 import NotificationFeedCard from '../NotificationFeedCard';
 import { COLORS } from './notificationPreferenceTheme';
-
+import logger from '../../services/loggerService';
+import { DEFAULT_MARKETING_PREFERENCES_MODEL as defaultMarketingPrefs, DEFAULT_OPS_PREFERENCES as defaultOpsPrefs } from './notificationPreferenceModel';
 const styles = createNotificationPreferencesScreenStyles({ StyleSheet, COLORS, SHADOWS, THEME });
 
 const PreferenceSection = ({ title, subtitle, children, enabledCount, totalCount }) => (
@@ -121,13 +122,12 @@ const ToggleRow = ({
     />
   </View>
 );
-
-
 export default function NotificationPreferencesView({
   activeMarketingPreset,
   activeOnboardingCopy,
   activeOpsPreset,
   applyMarketingPreset,
+  setActiveMarketingPreset,
   applyOpsPreset,
   emptyStateMessage,
   deviceReadiness,

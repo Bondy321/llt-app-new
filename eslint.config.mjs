@@ -24,6 +24,10 @@ const presentationFiles = [
 
 export default [
   {
+    files: ['screens/TourHomeScreen.js', 'components/notification-preferences/**/*.js'],
+    rules: { 'no-undef': 'error' },
+  },
+  {
     ignores: [
       '**/node_modules/**',
       '**/dist/**',

@@ -5,7 +5,7 @@ import { SkeletonLoader } from '../components/tour-home/TourHomeComponents';
 import useTourHomeResponsiveStyles from '../components/tour-home/useTourHomeResponsiveStyles';
 import useTourHomeRefresh from '../components/tour-home/useTourHomeRefresh';
 import { COLORS, getTimeBasedGreeting, triggerHaptic } from '../components/tour-home/tourHomePresentation';
-import { View, Linking, Alert } from 'react-native';
+import { View, Linking, Alert, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
@@ -17,9 +17,11 @@ import {
 import logger, { maskIdentifier } from '../services/loggerService';
 import { resolveTourId } from '../services/tourIdentityService';
 import { getDriverLocationPresentation } from '../utils/driverLocation';
-import { COLORS as THEME } from '../theme';
+import { COLORS as THEME, RADIUS, SHADOWS, SPACING } from '../theme';
+import createTourHomeScreenStyles from './styles/TourHomeScreen.styles';
 import { getPickupCountdownState } from '../services/pickupTimeParser';
 const { buildTourHomeActionPlan } = require('../utils/tourHomeActionPlanner');
+const styles = createTourHomeScreenStyles({ StyleSheet, COLORS, RADIUS, SHADOWS, SPACING });
 export default function TourHomeScreen({
   tourCode,
   tourData,
