@@ -15,6 +15,7 @@ import {
 } from '../../utils/notificationCategories';
 
 import NotificationPreferencesView from './NotificationPreferencesView';
+import { COLORS } from './notificationPreferenceTheme';
 import useNotificationFeedController from './useNotificationFeedController';
 import {
   DEFAULT_MARKETING_PREFERENCES_MODEL as defaultMarketingPrefs,
@@ -550,6 +551,7 @@ export default function NotificationPreferencesScreen({
       activeOnboardingCopy={activeOnboardingCopy}
       activeOpsPreset={activeOpsPreset}
       applyMarketingPreset={applyMarketingPreset}
+      setActiveMarketingPreset={setActiveMarketingPreset}
       applyOpsPreset={applyOpsPreset}
       emptyStateMessage={emptyStateMessage}
       deviceReadiness={deviceReadiness}
