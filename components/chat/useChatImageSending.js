@@ -7,7 +7,7 @@ import * as photoService from '../../services/photoService';
 import { optimizeSourcePhotoForUpload } from '../../services/imageOptimizationService';
 import { maskIdentifier } from '../../services/loggerService';
 import { summarizeUri } from '../../services/crashDiagnosticsService';
-import { summarizeErrorForDiagnostics } from "./chatShared";
+import { mergeMessagesById, summarizeErrorForDiagnostics } from "./chatShared";
 export default function useChatImageSending(context, late) {
   const {
     authUid,

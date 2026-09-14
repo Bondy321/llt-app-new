@@ -1,7 +1,7 @@
 // Enhanced personal photobook with date grouping, camera capture, captions, and premium viewing experience
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  Alert,
+  Alert, StyleSheet, Platform,
   useWindowDimensions,
 } from 'react-native';
 import * as offlineSyncService from '../../services/offlineSyncService';
@@ -22,8 +22,9 @@ import {
   summarizePhotoRecord,
   summarizeQueueAction,
 } from '../../services/crashDiagnosticsService';
-import { SPACING } from '../../theme';
-
+import { COLORS, SPACING, RADIUS, SHADOWS } from '../../theme';
+import createPhotobookScreenStyles from '../../screens/styles/PhotobookScreen.styles';
+const styles = createPhotobookScreenStyles({ StyleSheet, COLORS, Platform, RADIUS, SHADOWS, SPACING });
 import PhotobookView from './PhotobookView';
 import { createPrivatePhotoUploadActions } from './privatePhotoUploadActions';
 import {
@@ -40,17 +41,14 @@ export default function PhotobookScreen({
 }) {
   const [photoQueueItems, setPhotoQueueItems] = useState([]);
   const [sortMode, setSortMode] = useState('newest');
-
   // Image viewer state
   const [viewerVisible, setViewerVisible] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
-
   useEffect(() => {
     if (typeof onViewerVisibilityChange === 'function') {
       onViewerVisibilityChange(viewerVisible);
     }
   }, [onViewerVisibilityChange, viewerVisible]);
-
   useEffect(() => {
     return () => {
       if (typeof onViewerVisibilityChange === 'function') {
@@ -452,6 +450,7 @@ export default function PhotobookScreen({
   ]);
 
   const { cancelUpload, discardUpload, handlePickFromGallery, handleTakePhoto, handleUpload, retryUpload, showUploadOptions } = createPrivatePhotoUploadActions({
+    ensurePrivatePhotoOwnerAccess,
     canonicalIdentity,
     caption,
     pendingImage,

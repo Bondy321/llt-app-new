@@ -2,7 +2,7 @@
 import { useEffect } from 'react';
 import { subscribeToChatMessages, subscribeToInternalDriverChat } from '../../services/chatService';
 import logger from '../../services/loggerService';
-import { LIVE_CHAT_MESSAGE_LIMIT, normalizeTimestamp, summarizeMessagesForReactionDebug, logChatReactionDebug } from "./chatShared";
+import { mergeMessagesById, LIVE_CHAT_MESSAGE_LIMIT, normalizeTimestamp, summarizeMessagesForReactionDebug, logChatReactionDebug } from "./chatShared";
 export default function useChatSubscriptionLifecycle(context, late) {
   const {
     currentReactionUserIds,

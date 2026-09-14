@@ -29,6 +29,8 @@ const createHost = (name) => {
 const nativeModule = () => {
   class AnimatedValue {
     interpolate() { return 1; }
+    setValue() {}
+    stopAnimation() {}
   }
   const animation = () => ({ start: (callback) => callback?.(), stop: () => {} });
   return {
@@ -44,13 +46,22 @@ const nativeModule = () => {
       timing: animation,
     },
     Image: createHost('Image'),
-    ActivityIndicator: createHost('ActivityIndicator'),
+    KeyboardAvoidingView: createHost('KeyboardAvoidingView'),
+    Pressable: createHost('Pressable'),
+    StatusBar: createHost('StatusBar'),
+    Keyboard: { addListener: () => ({ remove() {} }), dismiss() {} },
+    PanResponder: { create: () => ({ panHandlers: {} }) },
+    FlatList: ({ data = [], renderItem, ListEmptyComponent, ...props }) => React.createElement('FlatList', props, data.length ? data.map((item, index) => React.createElement(React.Fragment, { key: index }, renderItem({ item, index }))) : ListEmptyComponent && React.createElement(ListEmptyComponent)),
+    SectionList: ({ sections = [], renderItem, renderSectionHeader, ...props }) => {
+      const rows = sections.flatMap((section) => [renderSectionHeader?.({ section }), ...section.data.map((item, index) => renderItem({ item, index, section }))]);
+      return React.createElement('SectionList', props, rows.map((row, index) => React.createElement(React.Fragment, { key: index }, row)));
+    },
     Switch: createHost('Switch'),
     AppState: { addEventListener: () => ({ remove: () => {} }) },
     LayoutAnimation: { configureNext: () => {}, Presets: { easeInEaseOut: {} } },
     Linking: { openURL: async () => {} },
     Modal: createHost('Modal'),
-    Platform: { OS: 'ios' },
+    Platform: { OS: 'ios', select: (options) => options.ios || options.default },
     RefreshControl: createHost('RefreshControl'),
     ScrollView: createHost('ScrollView'),
     Share: { share: async () => ({}) },
@@ -73,7 +84,7 @@ const install = ({ resolveModule } = {}) => {
     const override = resolveModule?.(request, parent, isMain);
     if (override !== undefined) return override;
     if (request === 'react-native') return nativeModule();
-    if (request === 'react-native-safe-area-context') return { SafeAreaView: createHost('SafeAreaView') };
+    if (request === 'react-native-safe-area-context') return { SafeAreaView: createHost('SafeAreaView'), useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) };
     if (request === 'expo-linear-gradient') return { LinearGradient: createHost('LinearGradient') };
     if (request === 'expo-status-bar') return { StatusBar: createHost('StatusBar') };
     if (request === '@expo/vector-icons/build/MaterialCommunityIcons.js') return createHost('MaterialCommunityIcons');

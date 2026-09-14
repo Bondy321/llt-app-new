@@ -24,8 +24,9 @@ const presentationFiles = [
 
 export default [
   {
-    files: ['screens/TourHomeScreen.js', 'components/notification-preferences/**/*.js'],
-    rules: { 'no-undef': 'error' },
+    files: ['App.js', 'index.js', 'firebase.js', 'theme.js', '{screens,components,services,hooks,src,utils}/**/*.{js,jsx}'],
+    languageOptions: { globals: { __DEV__: 'readonly', ErrorUtils: 'readonly' } },
+    rules: { 'no-undef': 'error', 'react/jsx-no-undef': 'error' },
   },
   {
     ignores: [

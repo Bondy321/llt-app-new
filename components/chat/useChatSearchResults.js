@@ -1,6 +1,6 @@
 // screens/ChatScreen.js - Premium Chat Experience
 import { useMemo } from 'react';
-import { SEARCH_RESULT_PREVIEW_LIMIT, URL_REGEX, isMessageOwnedByCurrentSession } from "./chatShared";
+import { normalizeSearchQuery, SEARCH_RESULT_PREVIEW_LIMIT, URL_REGEX, isMessageOwnedByCurrentSession } from "./chatShared";
 export default function useChatSearchResults(context, late) {
   const {
     activeSearchResultIndex,

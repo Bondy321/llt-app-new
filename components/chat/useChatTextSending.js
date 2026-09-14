@@ -1,3 +1,4 @@
+import { mergeMessagesById } from './chatShared';
 // screens/ChatScreen.js - Premium Chat Experience
 import { useCallback } from 'react';
 import * as Haptics from '../../services/hapticsService';

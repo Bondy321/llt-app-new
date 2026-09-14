@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  Alert,
+  Alert, StyleSheet, Platform,
   useWindowDimensions,
 } from 'react-native';
 import * as offlineSyncService from '../../services/offlineSyncService';
@@ -14,7 +14,9 @@ import { usePhotoThumbnailPrefetch } from '../../hooks/usePhotoThumbnailPrefetch
 import { getCurrentAuthUser } from '../../services/authStateService';
 import { getCanonicalIdentity } from '../../services/identityService';
 import logger, { maskIdentifier } from '../../services/loggerService';
-import { SPACING } from '../../theme';
+import { COLORS, SPACING, RADIUS, SHADOWS } from '../../theme';
+import createGroupPhotobookScreenStyles from '../../screens/styles/GroupPhotobookScreen.styles';
+const styles = createGroupPhotobookScreenStyles({ StyleSheet, COLORS, Platform, RADIUS, SHADOWS, SPACING });
 
 import GroupPhotobookView from './GroupPhotobookView';
 import { createGroupPhotoUploadActions } from './groupPhotoUploadActions';
@@ -271,6 +273,7 @@ export default function GroupPhotobookScreen({
     retryUpload,
     showUploadOptions,
   } = createGroupPhotoUploadActions({
+    visiblePhotos, mineOnly, sortMode,
     canonicalIdentity,
     caption,
     pendingImage,
@@ -349,7 +352,7 @@ export default function GroupPhotobookScreen({
       contentId: photo.id,
       reason,
       reporterId: principalId,
-      reporterAuthUid: auth?.currentUser?.uid || principalId,
+      reporterAuthUid: getCurrentAuthUser()?.uid || principalId,
       reporterName: userName || 'Tour member',
       contentOwnerId: photo.userId || '',
       contentOwnerName: photo.uploaderName || 'Tour member',

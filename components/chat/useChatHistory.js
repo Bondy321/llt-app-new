@@ -4,7 +4,7 @@ import { getChatMessagesPage } from '../../services/chatService';
 import offlineSyncService from '../../services/offlineSyncService';
 import * as chatService from '../../services/chatService';
 import * as photoService from '../../services/photoService';
-import { CHAT_PAGE_MESSAGE_LIMIT } from "./chatShared";
+import { getOldestMessageCursor, mergeMessagesById, formatChatTimestamp, CHAT_PAGE_MESSAGE_LIMIT } from "./chatShared";
 export default function useChatHistory(context, late) {
   const {
     chatQueueScope,

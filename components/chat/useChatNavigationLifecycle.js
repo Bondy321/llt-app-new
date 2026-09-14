@@ -1,3 +1,4 @@
+import { normalizeSearchQuery } from './chatShared';
 // screens/ChatScreen.js - Premium Chat Experience
 import { useCallback, useEffect } from 'react';
 import { Text } from 'react-native';

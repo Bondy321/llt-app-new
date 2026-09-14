@@ -7,6 +7,7 @@ import { optimizeSourcePhotoForUpload, formatBytes } from '../../services/imageO
 import logger, { maskIdentifier } from '../../services/loggerService';
 
 export const createGroupPhotoUploadActions = ({
+  visiblePhotos, mineOnly, sortMode,
   canonicalIdentity,
   caption,
   pendingImage,

@@ -6,9 +6,10 @@ import { checkTextForObjectionableContent } from '../../services/contentModerati
 import { optimizeSourcePhotoForUpload, formatBytes } from '../../services/imageOptimizationService';
 import logger, { maskIdentifier } from '../../services/loggerService';
 import { summarizeQueueAction, summarizeUri } from '../../services/crashDiagnosticsService';
-import { verifyQueuedUploadSource } from './privatePhotoModel';
+import { verifyQueuedUploadSource, summarizeRealtimeKey } from './privatePhotoModel';
 
 export const createPrivatePhotoUploadActions = ({
+  ensurePrivatePhotoOwnerAccess,
   canonicalIdentity,
   caption,
   pendingImage,

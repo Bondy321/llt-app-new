@@ -1,3 +1,4 @@
+import { collectMessageIdCandidates, resolveReplyTargetIndex, mergeMessagesById } from './chatShared';
 // screens/ChatScreen.js - Premium Chat Experience
 import { useCallback, useEffect } from 'react';
 import { getChatMessageById } from '../../services/chatService';

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -19,7 +19,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Image as ExpoImage } from 'expo-image';
 import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons.js';
 import { COLORS, FONT_WEIGHT, RADIUS, SHADOWS, SPACING } from '../../theme';
-import { buildPhotoCacheKey } from '../../services/photoVariantService';
+import { buildPhotoCacheKey, resolveFullQualityUri, resolveViewerDisplayUri } from '../../services/photoVariantService';
 import createImageViewerStyles from '../styles/ImageViewer.styles';
 import { buildImageSource, buildNativeImageSource, getPhotoKey } from './imageViewerModel';
 
