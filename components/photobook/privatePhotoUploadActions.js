@@ -3,13 +3,12 @@ import * as ImagePicker from 'expo-image-picker';
 import * as offlineSyncService from '../../services/offlineSyncService';
 import * as photoService from '../../services/photoService';
 import { checkTextForObjectionableContent } from '../../services/contentModerationService';
-import { optimizeSourcePhotoForUpload, formatBytes } from '../../services/imageOptimizationService';
+import { optimizeSourcePhotoForUpload } from '../../services/imageOptimizationService';
 import logger, { maskIdentifier } from '../../services/loggerService';
 import { summarizeQueueAction, summarizeUri } from '../../services/crashDiagnosticsService';
 import { verifyQueuedUploadSource, summarizeRealtimeKey } from './privatePhotoModel';
 
 export const createPrivatePhotoUploadActions = ({
-  ensurePrivatePhotoOwnerAccess,
   canonicalIdentity,
   caption,
   pendingImage,
@@ -161,7 +160,6 @@ export const createPrivatePhotoUploadActions = ({
         uploadUri: summarizeUri(optimized?.uploadUri),
         metrics: optimized?.metrics || null,
       }, { remote: true });
-      await ensurePrivatePhotoOwnerAccess();
       const createdAt = new Date().toISOString();
       const jobId = `photo_upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const idempotencyKey = makePhotoIdempotencyKey({
@@ -254,12 +252,7 @@ export const createPrivatePhotoUploadActions = ({
         });
       tracePrivatePhotos('upload_replay_requested');
 
-      if (optimized.metrics?.originalSizeBytes && optimized.metrics?.optimizedSizeBytes) {
-        Alert.alert(
-          'Photo optimized',
-          `Saved ${formatBytes(optimized.metrics.originalSizeBytes - optimized.metrics.optimizedSizeBytes)} before upload.`
-        );
-      }
+
     } catch (error) {
       tracePrivatePhotos('upload_prepare_error', {
         error: error?.message,

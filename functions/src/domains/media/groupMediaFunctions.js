@@ -56,6 +56,7 @@ const acquireMediaRecordLock = async ({
 const releaseMediaRecordLock = async ({ ref, owner }) => {
   let released = false;
   const result = await ref.transaction((current) => {
+    if (current === null) return current;
     if (current?.owner !== owner) return undefined;
     released = true;
     return null;

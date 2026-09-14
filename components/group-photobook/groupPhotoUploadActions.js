@@ -3,7 +3,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as offlineSyncService from '../../services/offlineSyncService';
 import * as photoService from '../../services/photoService';
 import { checkTextForObjectionableContent } from '../../services/contentModerationService';
-import { optimizeSourcePhotoForUpload, formatBytes } from '../../services/imageOptimizationService';
+import { optimizeSourcePhotoForUpload } from '../../services/imageOptimizationService';
 import logger, { maskIdentifier } from '../../services/loggerService';
 
 export const createGroupPhotoUploadActions = ({
@@ -247,12 +247,7 @@ export const createGroupPhotoUploadActions = ({
         });
       });
 
-      if (optimized.metrics?.originalSizeBytes && optimized.metrics?.optimizedSizeBytes) {
-        Alert.alert(
-          'Photo optimized',
-          `Saved ${formatBytes(optimized.metrics.originalSizeBytes - optimized.metrics.optimizedSizeBytes)} before upload.`
-        );
-      }
+
     } catch (error) {
       logger.error('GroupPhotobook', 'Group photo preparation failed', {
         tourId,

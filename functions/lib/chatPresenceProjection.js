@@ -107,6 +107,7 @@ async function hasCurrentChatAuthority(database, record, nowMs) {
 
 async function releaseLease(ref, leaseOwner) {
   await ref.transaction((current) => {
+    if (current === null) return current;
     if (!isObject(current) || current.leaseOwner !== leaseOwner) return undefined;
     const next = { ...current };
     delete next.leaseOwner;
@@ -189,6 +190,9 @@ async function reconcileChatActorStatus({
     }
     const leaseState = snapshotValue(leaseResult.snapshot) || {};
     const finalized = await stateRef.transaction((current) => {
+      // RTDB may initially invoke this with an empty local cache. Return the
+      // observed value so the server retries against the persisted lease.
+      if (current === null) return current;
       if (!isObject(current)
         || current.leaseOwner !== leaseOwner
         || current.leaseRevision !== leaseState.leaseRevision) return undefined;

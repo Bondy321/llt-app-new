@@ -14,6 +14,7 @@ const admin = require('../functions/node_modules/firebase-admin');
 const express = require('../functions/node_modules/express');
 const { verifyPassengerLogin } = require('../functions/src/domains/passenger-auth/passengerLoginFunction');
 const { verifyDriverLogin } = require('../functions/src/domains/driver-auth/driverLoginFunction');
+const { verifyCurrentTourPhotoAccess } = require('../functions/src/domains/media/mediaAccess');
 const writer = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'login-fixture-writer');
 const db = writer.database();
 let server; let origin;
@@ -90,6 +91,10 @@ test('passenger HTTP login issues a complete session and supports an immediate r
     previous = result.body.session.sessionId;
     const session = (await db.ref(`app_sessions/${identity.uid}`).once('value')).val();
     assert.equal(session.sessionId, previous);
+    assert.equal(Object.hasOwn(session, 'driverId'), false, 'RTDB removes null fields');
+    const mediaAccess = await verifyCurrentTourPhotoAccess({ db, authUid: identity.uid, tourId: 'LOGIN_TOUR' });
+    assert.equal(mediaAccess.allowed, true, mediaAccess.reason);
+    assert.equal(mediaAccess.principalId, session.principalId);
     assert.equal((await db.ref(`tours/LOGIN_TOUR/participants/${identity.uid}/sessionId`).once('value')).val(), previous);
     assert.equal((await db.ref(`app_session_locks/${identity.uid}`).once('value')).exists(), false);
     assert.equal((await db.ref('account_deletion_passenger_locks').once('value')).exists(), false);
@@ -244,4 +249,46 @@ test('cold-cache lease renewal and release preserve foreign owners and reject mi
   assert.equal(await releasePassengerAccountDeletionLock({ lock: { ...cold, ownerId: 'foreign' } }), false);
   assert.equal(await releasePassengerAccountDeletionLock({ lock: cold }), true);
   assert.equal(await renewPassengerAccountDeletionLock({ lock: cold, nowMs }), false);
+});
+
+test('chat status projection finalizes and releases leases from fresh Admin SDK caches', async () => {
+  const { reconcileChatActorStatus } = require('../functions/lib/chatPresenceProjection');
+  const { buildPassengerSessionRecord, buildPassengerParticipantRecord } = require('../functions/lib/appSession');
+  const nowMs = Date.now();
+  const session = buildPassengerSessionRecord({ authUid: 'chat-cache-test', principalId: `pax_v2_${'e'.repeat(32)}`, tourId: 'CHAT_TEST', nowMs });
+  const record = { schemaVersion: 2, authUid: session.authUid, appSessionId: session.sessionId, principalId: session.principalId, principalType: 'passenger', actorKey: session.principalId, tourId: session.tourId, tourActorKey: `${session.tourId}|${session.principalId}`, scope: 'group', name: 'Synthetic passenger', isDriver: false, timestamp: nowMs, expiresAtMs: nowMs + 300000 };
+  await db.ref().update({
+    [`app_sessions/${session.authUid}`]: session,
+    [`tours/${session.tourId}/participants/${session.authUid}`]: buildPassengerParticipantRecord({ session }),
+    [`chat_presence_sessions/group/${session.sessionId}`]: record,
+    [`chat_typing_sessions/group/${session.sessionId}`]: record,
+  });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const fresh = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), `chat-fresh-${attempt}`);
+    try {
+      const result = await reconcileChatActorStatus({ database: fresh.database(), tourId: session.tourId, actorKey: session.principalId, nowMs });
+      assert.equal(result.ok, true);
+      assert.equal(result.presence.online, true);
+      assert.equal(result.typing.timestamp, nowMs);
+      const state = (await db.ref(`chat_status_projection_state/group/${session.tourId}/${session.principalId}`).once('value')).val();
+      assert.equal(state.leaseOwner, undefined);
+      assert.equal(state.revision, attempt + 1);
+    } finally { await fresh.delete(); }
+  }
+});
+
+test('media mutation locks release from a fresh cache and cannot release a foreign owner', async () => {
+  const { acquireMediaRecordLock, releaseMediaRecordLock } = require('../functions/src/domains/media/groupMediaFunctions');
+  const fresh = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'media-fresh-cache');
+  try {
+    for (const visibility of ['group', 'private']) {
+      const acquired = await acquireMediaRecordLock({ db: fresh.database(), visibility, tourId: 'MEDIA_TEST', photoId: 'photo1', ownerKey: 'owner1', owner: 'first' });
+      assert.equal(acquired.acquired, true);
+      assert.equal(await releaseMediaRecordLock(acquired), true);
+      assert.equal((await acquired.ref.once('value')).exists(), false);
+      const foreign = await acquireMediaRecordLock({ db, visibility, tourId: 'MEDIA_TEST', photoId: 'photo1', ownerKey: 'owner1', owner: 'foreign' });
+      assert.equal(await releaseMediaRecordLock({ ref: foreign.ref, owner: 'wrong' }), false);
+      assert.equal((await foreign.ref.once('value')).val().owner, 'foreign');
+    }
+  } finally { await fresh.delete(); }
 });

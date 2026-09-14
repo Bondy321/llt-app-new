@@ -120,7 +120,7 @@ for (const group of [false, true]) {
         await act(async () => view().handleUpload());
         assert.equal(enqueued.length, 1);
         assert.equal(enqueued[0].payload.visibility, group ? 'group' : 'private');
-        if (!group) assert.ok(ownerRefreshes > beforeOwnerRefreshes);
+        if (!group) assert.equal(ownerRefreshes, beforeOwnerRefreshes, 'photo screens must not rewrite server-owned identity');
         if (populated) {
           await act(async () => group ? view().openViewer(0, 0) : view().openViewer('photo1'));
           assert.equal(view().viewerVisible, true);
