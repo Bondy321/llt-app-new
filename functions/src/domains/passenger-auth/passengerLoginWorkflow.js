@@ -264,6 +264,7 @@ const issueVerifiedPassengerSession = async ({
       auth: admin.auth(),
       authUid,
       buildClaims: buildPassengerCustomClaims,
+      existingAppSessionLock: appSessionLock,
     });
     if (!claimResult.completed) return roleTransitionInProgressFailure();
   } catch (error) {

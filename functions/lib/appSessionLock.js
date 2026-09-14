@@ -69,6 +69,8 @@ const renewAppSessionLock = async ({
     throw new Error('Invalid app session lock renewal request');
   }
   const result = await db.ref(`app_session_locks/${authUid}`).transaction((current) => {
+    // A cold RTDB cache is not proof that the server lease is missing.
+    if (current === null) return null;
     if (!current || current.owner !== owner || Number(current.expiresAtMs || 0) <= nowMs) return undefined;
     return { ...current, expiresAtMs: nowMs + ttlMs };
   }, undefined, false);

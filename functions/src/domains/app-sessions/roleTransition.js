@@ -12,7 +12,7 @@ const {
 } = require('../driver-auth/public');
 
 const { isValidAppSessionId } = loadLegacyLibrary('appSession');
-const { acquireAppSessionLock, releaseAppSessionLock } = loadLegacyLibrary('appSessionLock');
+const { acquireAppSessionLock, releaseAppSessionLock, renewAppSessionLock } = loadLegacyLibrary('appSessionLock');
 const {
   boundedWarningCode,
   terminalizeOperationJob,
@@ -99,6 +99,7 @@ const recordPassengerRoleClaimFailure = async ({
   db, authUid, appSessionId, nowMs, reason,
 }) => {
   const result = await db.ref(`${ROLE_TRANSITION_CLAIM_ROOT}/${authUid}`).transaction((current) => {
+    if (current === null) return null;
     if (!current || current.appSessionId !== appSessionId || current.terminalWarningId) return undefined;
     const attemptCount = Number.isSafeInteger(current.attemptCount) ? current.attemptCount + 1 : 1;
     return {
@@ -109,7 +110,7 @@ const recordPassengerRoleClaimFailure = async ({
       lastFailureReason: boundedWarningCode(reason, 'claim_retry'),
     };
   }, undefined, false);
-  return result?.committed === true;
+  return result?.committed === true && result.snapshot.val()?.appSessionId === appSessionId;
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
@@ -134,7 +135,7 @@ const releaseFormerDriverScalarClaim = async ({ db, job, authUid }) => {
   if (!isValidFirebaseKey(job?.formerDriverId)
     || !isValidAppSessionId(job?.replacedAppSessionId)) return false;
   const result = await db.ref(`drivers/${job.formerDriverId}/authUid`).transaction((current) => (
-    current === authUid ? null : undefined
+    current === null || current === authUid ? null : undefined
   ), undefined, false);
   return result?.committed === true;
 };
@@ -145,6 +146,7 @@ const reconcilePassengerRoleClaimJob = async ({
   authUid,
   buildClaims,
   nowMs = Date.now(),
+  existingAppSessionLock = null,
 }) => {
   if (!db?.ref || !auth?.getUser || !auth?.setCustomUserClaims
     || !isValidFirebaseKey(authUid) || typeof buildClaims !== 'function') {
@@ -183,7 +185,14 @@ const reconcilePassengerRoleClaimJob = async ({
         return { status: 'retry', completed: false, errorCode: 'CLAIM_COORDINATION_BUSY' };
       }
     }
-    sessionLock = await acquireAppSessionLock({
+    // Login already owns this UID's lease through session issuance and claims.
+    // Revalidate that owner instead of deadlocking against a second owner.
+    sessionLock = existingAppSessionLock ? {
+      ...existingAppSessionLock,
+      acquired: existingAppSessionLock.acquired === true && Boolean(existingAppSessionLock.owner)
+        && await renewAppSessionLock({ db, authUid, owner: existingAppSessionLock.owner,
+          nowMs, ttlMs: ROLE_TRANSITION_LOCK_TTL_MS }),
+    } : await acquireAppSessionLock({
       db,
       authUid,
       operation: 'role_claim_cleanup',
@@ -217,7 +226,7 @@ const reconcilePassengerRoleClaimJob = async ({
     }
     if (!isCurrentPassengerRoleClaim({ job, session, authUid })) {
       await jobRef.transaction((current) => (
-        current?.appSessionId === job.appSessionId ? null : undefined
+        current === null || current?.appSessionId === job.appSessionId ? null : undefined
       ), undefined, false);
       return { status: 'stale', completed: false };
     }
@@ -228,7 +237,7 @@ const reconcilePassengerRoleClaimJob = async ({
       buildClaims(authUser.customClaims || {}, job.privatePhotoOwnerKey),
     );
     const completion = await jobRef.transaction((current) => (
-      current?.appSessionId === job.appSessionId ? null : undefined
+      current === null || current?.appSessionId === job.appSessionId ? null : undefined
     ), undefined, false);
     return {
       status: 'completed',
@@ -245,7 +254,7 @@ const reconcilePassengerRoleClaimJob = async ({
     });
     throw error;
   } finally {
-    if (sessionLock?.acquired) {
+    if (sessionLock?.acquired && !existingAppSessionLock) {
       await releaseAppSessionLock({ db, authUid, owner: sessionLock.owner });
     }
     if (claimReservation?.acquired) {
