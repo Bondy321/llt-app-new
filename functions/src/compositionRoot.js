@@ -12,6 +12,7 @@ const driverTourPacks = require('./domains/driver-tour-packs/ingestionFunction')
 const liveState = require('./domains/live-state/liveStateFunctions');
 const liveStateRollout = require('./domains/live-state/liveStateRolloutFunctions');
 const driverLocationPickup = require('./domains/live-state/driverLocationPickupFunctions');
+const driverTrackingStop = require('./domains/live-state/driverTrackingStopFunctions');
 const scheduledCleanup = require('./domains/maintenance/scheduledCleanupFunctions');
 const tourIndexes = require('./domains/maintenance/tourIndexFunctions');
 const manifests = require('./domains/manifests/manifestFunction');
@@ -109,6 +110,7 @@ module.exports = {
   projectChatTypingSession: liveState.projectChatTypingSession,
   projectDriverLocationPickup: liveState.projectDriverLocationPickup,
   projectDriverLocationSession: liveState.projectDriverLocationSession,
+  projectDriverTrackingSession: liveState.projectDriverTrackingSession,
   processNotificationReadMigrationRequest: notificationReads.processNotificationReadMigrationRequest,
   projectDriverTourPackActionState: tourIndexes.projectDriverTourPackActionState,
   removeReportedPhoto: administration.removeReportedPhoto,
@@ -130,6 +132,7 @@ module.exports = {
   previewNotificationAudience: notificationAdmin.previewNotificationAudience,
   updateNotificationDeviceRegistration: notificationDevices.updateNotificationDeviceRegistration,
   updateDriverLocationPickup: driverLocationPickup.updateDriverLocationPickup,
+  stopDriverTrackingSession: driverTrackingStop.stopDriverTrackingSession,
   uploadGroupPhoto: groupMedia.uploadGroupPhoto,
   uploadPrivatePhoto: privateMedia.uploadPrivatePhoto,
   verifyDriverLogin: driverAuth.verifyDriverLogin,

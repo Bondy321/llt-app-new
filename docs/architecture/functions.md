@@ -24,6 +24,16 @@ chat-status sources, the trusted assignment-owned pickup mutation, and private
 revision-checked live-state rollout administration. The pure projection modules
 live behind the legacy-library allowlist so session cleanup removes exact live
 leaves without erasing durable pickups and reconciles unchanged client read paths.
+`projectDriverTrackingSession` enforces the private explicit tracking stop fence;
+its domain re-reads current intent before removing an exact owned location source.
+The existing `cleanupExpiredDriverLocations` schedule also bounds indexed intent
+expiry work, retaining stopped tombstones until app-session expiry. See
+`docs/data-contracts/driver-location.md` for the schema and authority boundary.
+`stopDriverTrackingSession` is the authenticated POST recovery boundary for
+ambiguous tracking starts. It can retire exact owned state after authority loss,
+or create a missing stopped fence under locked strict current authority. It
+never activates sharing or projects an arbitrary tour without server ownership
+evidence.
 
 Driver assignment is one server-owned mutation for both operations admins and
 mobile self-assignment. The Function owns revision checks, sorted locks,

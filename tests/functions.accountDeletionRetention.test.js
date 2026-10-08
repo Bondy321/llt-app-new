@@ -739,3 +739,41 @@ test('receipt-derived IDs isolate capabilities without retaining or exposing the
   assert.equal(JSON.stringify(status).includes(RECEIPT), false);
   assert.equal(JSON.stringify(status).includes(DELETION_ID), false);
 });
+
+
+test('driver account-deletion live cleanup retires captured tracking fence after role loss and preserves another installation', async () => {
+  const driverId = 'D-CAPTURED'; const tourId = 'TOUR_CAPTURED';
+  const capturedUid = 'uid-captured-tracking'; const otherUid = 'uid-other-tracking';
+  const otherSid = `sess_v1_${'c'.repeat(32)}`;
+  const live = 'track_captured'; const otherLive = 'track_other';
+  const key = `${SESSION_ID}|${live}`; const otherKey = `${otherSid}|${otherLive}`;
+  const tracking = { schemaVersion: 1, authUid: capturedUid, appSessionId: SESSION_ID,
+    driverId, tourId, liveSharingSessionId: live, status: 'active', startedAtMs: NOW - 1000, expiresAtMs: NOW + 3600000 };
+  const otherTracking = { ...tracking, authUid: otherUid, appSessionId: otherSid, liveSharingSessionId: otherLive };
+  const point = { schemaVersion: 2, isSharing: true, source: 'auto', mode: 'live',
+    authUid: capturedUid, appSessionId: SESSION_ID, driverId, tourId, liveSharingSessionId: live,
+    latitude: 56.1, longitude: -4.2, accuracy: 10, timestamp: NOW - 100, cleanupAtMs: NOW + 1800000 };
+  const otherPoint = { ...point, authUid: otherUid, appSessionId: otherSid, liveSharingSessionId: otherLive };
+  const job = authDeleteJob({ phase: 'live_state_cleanup', privateScope: {
+    authUid: capturedUid, principalType: 'driver', principalId: `driver:${driverId}`,
+    expectedSessionId: SESSION_ID, driverId, tourId, actorKeys: [capturedUid, `driver:${driverId}`],
+  }, lease: { ownerId: 'auth-worker', revision: 4, phase: 'live_state_cleanup', acquiredAtMs: NOW - 100, expiresAtMs: NOW + 60000 } });
+  const db = createRetentionDb({
+    [`account_deletion_jobs/v1/${DELETION_ID}`]: job,
+    [`app_sessions/${capturedUid}`]: { principalType: 'passenger', sessionId: `sess_v1_${'d'.repeat(32)}` },
+    [`users/${capturedUid}`]: { principalType: 'passenger' },
+    [`tours/${tourId}`]: { driverId, driverAssignmentRevision: 1 },
+    [`driver_tracking_sessions/${key}`]: tracking,
+    [`driver_tracking_sessions/${otherKey}`]: otherTracking,
+    [`driver_location_sessions/${key}`]: point,
+    [`driver_location_sessions/${otherKey}`]: otherPoint,
+  });
+  const committed = await processLeasedAccountDeletionPhase({ db, bucket: {}, auth: {}, deletionId: DELETION_ID,
+    job, lease: { ...leaseFor(db), phase: 'live_state_cleanup' }, nowMs: NOW });
+  assert.equal(committed, true);
+  assert.equal(db.read(`account_deletion_jobs/v1/${DELETION_ID}/phase`), 'authority_release');
+  assert.deepEqual(db.read(`driver_tracking_sessions/${key}`), { ...tracking, status: 'stopped' });
+  assert.equal(db.read(`driver_location_sessions/${key}`), undefined);
+  assert.deepEqual(db.read(`driver_tracking_sessions/${otherKey}`), otherTracking);
+  assert.deepEqual(db.read(`driver_location_sessions/${otherKey}`), otherPoint);
+});

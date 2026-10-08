@@ -1,18 +1,15 @@
 import DriverHomeView from './DriverHomeView';
 import createDriverLocationCaptureActions from '../../services/driver-home/createDriverLocationCaptureActions';
-import createDriverLocationSharingActions from '../../services/driver-home/createDriverLocationSharingActions';
-import useDriverAutoSharePreference from '../../hooks/useDriverAutoSharePreference';
+import createDriverLocationPreviewActions from '../../services/driver-home/createDriverLocationPreviewActions';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Platform,
   Animated,
-  AppState,
 } from 'react-native';
 import * as Haptics from '../../services/hapticsService';
 import { readDriverLocation, subscribeToDriverLocation } from '../../services/driverLocationRealtimeRepository';
 import { assignDriverToTour } from '../../services/bookingServiceRealtime';
 import offlineSyncService from '../../services/offlineSyncService';
-import { createPersistenceProvider } from '../../services/persistenceProvider';
 import logger, { maskIdentifier } from '../../services/loggerService';
 import { getMinutesAgo } from '../../services/timeUtils';
 import { normalizeTourId, resolveTourId } from '../../services/tourIdentityService';
@@ -42,7 +39,7 @@ const COLORS = {
 };
 
 // Minimal map style for preview
-export default function DriverHomeController({ driverData, locationSessionScope = null, onLogout, onNavigate, onDriverAssignmentChange, driverTourPackState, driverTourPackFeature }) {
+export default function DriverHomeController({ driverData, locationSessionScope = null, driverTracking = null, onLogout, onNavigate, onDriverAssignmentChange, driverTourPackState, driverTourPackFeature }) {
   const [updatingLocation, setUpdatingLocation] = useState(false);
   const [lastLocationUpdate, setLastLocationUpdate] = useState(null);
   const [locationAccuracy, setLocationAccuracy] = useState(null);
@@ -54,15 +51,11 @@ export default function DriverHomeController({ driverData, locationSessionScope 
   const [addressText, setAddressText] = useState('');
   const [confirmingLocation, setConfirmingLocation] = useState(false);
   const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
-  const [autoShareSaving, setAutoShareSaving] = useState(false);
-  const [autoShareStatus, setAutoShareStatus] = useState('Auto-share is off');
-  const [autoShareLastRunAt, setAutoShareLastRunAt] = useState(null);
   const [, setBannerContract] = useState(null);
   const [, setBannerOutcomeText] = useState('');
   const [, setBannerRetryHandler] = useState(null);
   const [, setLastSuccessfulSyncAt] = useState(null);
   const [locationFreshnessNow, setLocationFreshnessNow] = useState(() => Date.now());
-  const [isAppActive, setIsAppActive] = useState(AppState.currentState === 'active');
 
   // Modal State for Joining Tour
   const [joinModalVisible, setJoinModalVisible] = useState(false);
@@ -73,23 +66,10 @@ export default function DriverHomeController({ driverData, locationSessionScope 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const successAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const persistenceRef = useRef(createPersistenceProvider({ namespace: 'LLT_DRIVER_HOME' }));
   const bannerTimerRef = useRef(null);
-  const autoShareInFlightRef = useRef(null);
-  const autoShareToggleInFlightRef = useRef(false);
-  const autoShareInitialLocationRef = useRef(null);
-  const autoShareGenerationRef = useRef(0);
-  const autoShareSessionRef = useRef(null);
-  const autoSharePendingWithdrawalsRef = useRef(new Map());
-  const autoSharePreferenceGenerationRef = useRef(0);
-  const autoShareEnabledRef = useRef(false);
-  const locationSessionScopeRef = useRef(locationSessionScope);
-  const isAppActiveRef = useRef(AppState.currentState === 'active');
   const activeTourIdRef = useRef('');
   const driverIdRef = useRef('');
   const previewRequestIdRef = useRef(0);
-  const locationBusyRef = useRef(false);
-  const lastLocationAddressRef = useRef('');
 
   // Derive active tour from canonical assignment fields.
   const activeTourId = resolveTourId(
@@ -100,17 +80,9 @@ export default function DriverHomeController({ driverData, locationSessionScope 
     driverData?.currentTourCode
   ) || '';
 
-  const autoSharePreferenceKey = `AUTO_SHARE_${driverData?.id || 'unknown'}`;
-  const { enabled: autoShareEnabled, setEnabled: setAutoShareEnabled } = useDriverAutoSharePreference({
-    persistenceRef, preferenceKey: autoSharePreferenceKey, driverId: driverData?.id,
-    generationRef: autoSharePreferenceGenerationRef, setStatus: setAutoShareStatus,
-  });
 
   activeTourIdRef.current = activeTourId;
   driverIdRef.current = driverData?.id || '';
-  autoShareEnabledRef.current = autoShareEnabled;
-  locationSessionScopeRef.current = locationSessionScope;
-  isAppActiveRef.current = isAppActive;
 
   const sanitizeTourId = useCallback((tourCode) => normalizeTourId(tourCode), []);
 
@@ -119,35 +91,20 @@ export default function DriverHomeController({ driverData, locationSessionScope 
       driverId: maskIdentifier(driverData?.id),
       activeTourId,
       hasAssignedTour: Boolean(activeTourId),
-      autoShareEnabled,
     });
-  }, [activeTourId, autoShareEnabled, driverData?.id]);
+  }, [activeTourId, driverData?.id]);
 
   const lastLocationPresentation = getDriverLocationPresentation(lastLocationUpdate, locationFreshnessNow);
   const lastLocationStatus = getDriverLocationStatusMeta(lastLocationPresentation);
   const isLocationStale = lastLocationStatus.needsRefresh;
 
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', (nextState) => {
-      const nextIsActive = nextState === 'active';
-      isAppActiveRef.current = nextIsActive;
-      setIsAppActive(nextIsActive);
-    });
-    return () => subscription.remove();
-  }, []);
 
   useEffect(() => {
     const freshnessTimer = setInterval(() => setLocationFreshnessNow(Date.now()), 30 * 1000);
     return () => clearInterval(freshnessTimer);
   }, []);
 
-  useEffect(() => {
-    locationBusyRef.current = updatingLocation || confirmingLocation;
-  }, [confirmingLocation, updatingLocation]);
 
-  useEffect(() => {
-    lastLocationAddressRef.current = lastLocationUpdate?.address || '';
-  }, [lastLocationUpdate?.address]);
 
   useEffect(() => {
     if (
@@ -283,7 +240,6 @@ export default function DriverHomeController({ driverData, locationSessionScope 
   useEffect(() => {
     setLastLocationUpdate(null);
     setLocationAccuracy(null);
-    lastLocationAddressRef.current = '';
     if (!activeTourId) return undefined;
 
     logger.debug('DriverHomeScreen', 'Driver location subscription started', { activeTourId });
@@ -321,9 +277,9 @@ export default function DriverHomeController({ driverData, locationSessionScope 
   }, [activeTourId, driverData?.id]);
 
   // Reverse geocode to get address
-  const { getAddressFromCoords, captureCurrentLocationWithPermission, uploadLocationUpdate, handleCaptureLocation, handleConfirmLocation } = createDriverLocationCaptureActions({ activeTourId, activeTourIdRef, addressText, driverData, driverIdRef, locationAccuracy, locationSessionScope, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setConfirmingLocation, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, successAnim });
+  const { getAddressFromCoords, captureCurrentLocationWithPermission, handleCaptureLocation, handleConfirmLocation } = createDriverLocationCaptureActions({ activeTourId, activeTourIdRef, addressText, driverData, driverIdRef, locationAccuracy, locationSessionScope, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setConfirmingLocation, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, successAnim });
 
-  const { handleToggleAutoShare, handleRefetchLocation } = createDriverLocationSharingActions({ activeTourId, activeTourIdRef, autoShareEnabled, autoShareEnabledRef, autoShareGenerationRef, autoShareInFlightRef, autoShareInitialLocationRef, autoSharePendingWithdrawalsRef, autoSharePreferenceGenerationRef, autoSharePreferenceKey, autoShareSessionRef, autoShareToggleInFlightRef, captureCurrentLocationWithPermission, driverData, driverIdRef, getAddressFromCoords, isAppActive, isAppActiveRef, lastLocationAddressRef, locationBusyRef, locationSessionScope, locationSessionScopeRef, persistenceRef, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setAutoShareEnabled, setAutoShareLastRunAt, setAutoShareSaving, setAutoShareStatus, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, uploadLocationUpdate });
+  const { handleRefetchLocation } = createDriverLocationPreviewActions({ activeTourId, activeTourIdRef, driverIdRef, captureCurrentLocationWithPermission, getAddressFromCoords, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner });
 
   const handleOpenChat = () => {
     if (!activeTourId) {
@@ -496,5 +452,5 @@ export default function DriverHomeController({ driverData, locationSessionScope 
         ? COLORS.muted
         : COLORS.primary;
 
-  return <DriverHomeView {...{ accuracyConfig, activeTourId, addressLoading, addressText, autoShareEnabled, autoShareLastRunAt, autoShareSaving, autoShareStatus, cacheStatusLabel, confirmingLocation, driverData, driverTourPackFeature, driverTourPackState, fadeAnim, formatTimeAgo, handleCaptureLocation, handleConfirmLocation, handleJoinTour, handleOpenChat, handleOpenDriverChat, handleRefetchLocation, handleToggleAutoShare, inputTourCode, isLocationStale, joinModalVisible, joining, lastLocationPresentation, lastLocationStatus, lastLocationStatusColor, lastLocationUpdate, locationAccuracy, onLogout, onNavigate, previewLocation, previewModalVisible, previewRequestIdRef, pulseAnim, setAddressLoading, setInputTourCode, setJoinModalVisible, setPreviewModalVisible, setUpdatingLocation, showBanner, successAnim, updatingLocation }} />;
+  return <DriverHomeView {...{ accuracyConfig, activeTourId, addressLoading, addressText, driverTracking, cacheStatusLabel, confirmingLocation, driverData, driverTourPackFeature, driverTourPackState, fadeAnim, formatTimeAgo, handleCaptureLocation, handleConfirmLocation, handleJoinTour, handleOpenChat, handleOpenDriverChat, handleRefetchLocation, inputTourCode, isLocationStale, joinModalVisible, joining, lastLocationPresentation, lastLocationStatus, lastLocationStatusColor, lastLocationUpdate, locationAccuracy, onLogout, onNavigate, previewLocation, previewModalVisible, previewRequestIdRef, pulseAnim, setAddressLoading, setInputTourCode, setJoinModalVisible, setPreviewModalVisible, setUpdatingLocation, showBanner, successAnim, updatingLocation }} />;
 }

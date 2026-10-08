@@ -96,12 +96,14 @@ module.exports = {
       [
         'expo-location',
         {
-          locationAlwaysAndWhenInUsePermission: false,
+          locationAlwaysAndWhenInUsePermission:
+            'Loch Lomond Travel uses your location while driver location sharing is switched on, including when the app is in the background or your phone is locked, so passengers can find their coach. You can stop sharing at any time.',
           locationAlwaysPermission: false,
           locationWhenInUsePermission:
             'Loch Lomond Travel uses your location for bus finding, meeting points, driver pickup sharing, and optional safety reports or live location sharing.',
-          isIosBackgroundLocationEnabled: false,
+          isIosBackgroundLocationEnabled: true,
           isAndroidBackgroundLocationEnabled: false,
+          isAndroidForegroundServiceEnabled: true,
         },
       ],
       [

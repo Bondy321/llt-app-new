@@ -2913,6 +2913,273 @@ const CONTRACTS = Object.freeze({
         "liveRequiresLifecycleCleanupAndAccuracy"
       ]
     },
+    "DriverTrackingSessionRecord": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "schemaVersion",
+        "authUid",
+        "appSessionId",
+        "driverId",
+        "tourId",
+        "liveSharingSessionId",
+        "startedAtMs",
+        "expiresAtMs",
+        "status"
+      ],
+      "optionalProperties": [],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1
+        },
+        "authUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "appSessionId": {
+          "type": "string",
+          "pattern": "^sess_v1_[a-f0-9]{32}$"
+        },
+        "driverId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "tourId": {
+          "type": "string",
+          "pattern": "^[^.#$/\\[\\]\\u0000-\\u001F\\u007F]{1,100}$"
+        },
+        "liveSharingSessionId": {
+          "type": "string",
+          "pattern": "^track_[A-Za-z0-9_-]{2,74}$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "stopped"
+          ]
+        },
+        "startedAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expiresAtMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "enumValues": {
+        "status": [
+          "active",
+          "stopped"
+        ]
+      },
+      "idPatterns": {
+        "appSessionId": "^sess_v1_[a-f0-9]{32}$",
+        "liveSharingSessionId": "^track_[A-Za-z0-9_-]{2,74}$"
+      },
+      "maximumLengths": {
+        "authUid": 128,
+        "driverId": 100,
+        "tourId": 100,
+        "liveSharingSessionId": 80
+      },
+      "numericBounds": {
+        "startedAtMs": {
+          "minimum": 1
+        },
+        "expiresAtMs": {
+          "minimum": 1
+        }
+      },
+      "nullability": {},
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [],
+      "forbiddenClientProjection": [
+        "schemaVersion",
+        "authUid",
+        "appSessionId",
+        "driverId",
+        "tourId",
+        "liveSharingSessionId",
+        "startedAtMs",
+        "expiresAtMs",
+        "status"
+      ],
+      "constraints": [
+        "trackingExpiryAfterStart"
+      ]
+    },
+    "DriverTrackingStopRequest": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "schemaVersion",
+        "authUid",
+        "appSessionId",
+        "driverId",
+        "tourId",
+        "liveSharingSessionId",
+        "startedAtMs",
+        "expiresAtMs",
+        "status"
+      ],
+      "optionalProperties": [],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1
+        },
+        "authUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "appSessionId": {
+          "type": "string",
+          "pattern": "^sess_v1_[a-f0-9]{32}$"
+        },
+        "driverId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "tourId": {
+          "type": "string",
+          "pattern": "^[^.#$/\\[\\]\\u0000-\\u001F\\u007F]{1,100}$"
+        },
+        "liveSharingSessionId": {
+          "type": "string",
+          "pattern": "^track_[A-Za-z0-9_-]{2,74}$"
+        },
+        "status": {
+          "type": "string",
+          "const": "stopped"
+        },
+        "startedAtMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expiresAtMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "enumValues": {
+        "status": [
+          "stopped"
+        ]
+      },
+      "idPatterns": {
+        "appSessionId": "^sess_v1_[a-f0-9]{32}$",
+        "liveSharingSessionId": "^track_[A-Za-z0-9_-]{2,74}$"
+      },
+      "maximumLengths": {
+        "authUid": 128,
+        "driverId": 100,
+        "tourId": 100,
+        "liveSharingSessionId": 80
+      },
+      "numericBounds": {
+        "startedAtMs": {
+          "minimum": 1
+        },
+        "expiresAtMs": {
+          "minimum": 1
+        }
+      },
+      "nullability": {},
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [],
+      "forbiddenClientProjection": [
+        "schemaVersion",
+        "authUid",
+        "appSessionId",
+        "driverId",
+        "tourId",
+        "liveSharingSessionId",
+        "startedAtMs",
+        "expiresAtMs",
+        "status"
+      ],
+      "constraints": [
+        "trackingExpiryAfterStart"
+      ]
+    },
+    "DriverTrackingStopResponse": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "success",
+        "withdrawalAcknowledged",
+        "reason",
+        "sourceRemoved",
+        "fencePersisted",
+        "stoppedAtMs"
+      ],
+      "optionalProperties": [],
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        },
+        "withdrawalAcknowledged": {
+          "type": "boolean",
+          "const": true
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "STOPPED",
+            "ALREADY_RETIRED"
+          ]
+        },
+        "sourceRemoved": {
+          "type": "boolean"
+        },
+        "fencePersisted": {
+          "type": "boolean"
+        },
+        "stoppedAtMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "enumValues": {
+        "reason": [
+          "STOPPED",
+          "ALREADY_RETIRED"
+        ]
+      },
+      "idPatterns": {},
+      "maximumLengths": {},
+      "numericBounds": {
+        "stoppedAtMs": {
+          "minimum": 1
+        }
+      },
+      "nullability": {},
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [
+        "success",
+        "withdrawalAcknowledged",
+        "reason",
+        "sourceRemoved",
+        "fencePersisted",
+        "stoppedAtMs"
+      ],
+      "forbiddenClientProjection": [
+        "authUid",
+        "appSessionId",
+        "driverId",
+        "tourId",
+        "liveSharingSessionId"
+      ],
+      "constraints": []
+    },
     "DriverLocationPickupRecord": {
       "schemaVersion": 1,
       "kind": "object",
@@ -4043,6 +4310,7 @@ const validateContract = (name, value, options = {}) => {
   for (const constraint of contract.constraints || []) {
     if (constraint === 'driverPrincipalMatchesDriverId' && value.principalType === 'driver' && value.principalId !== `driver:${value.driverId}`) errors.push('driver principal does not match driverId');
     if (constraint === 'passengerPrincipalIsOpaque' && value.principalType === 'passenger' && !/^pax_v2_[a-f0-9]{32}$/u.test(value.principalId || '')) errors.push('passenger principal is not opaque');
+    if (constraint === 'trackingExpiryAfterStart' && Number(value.expiresAtMs) <= Number(value.startedAtMs)) errors.push('tracking expiry must follow start');
     if (constraint === 'expiryAfterIssue' && Number(value.expiresAtMs) <= Number(value.lastAuthenticatedAtMs ?? value.issuedAtMs)) errors.push('session expiry must follow authentication');
     if (constraint === 'idempotencyEqualsId' && value.id && value.idempotencyKey !== value.id) errors.push('idempotency key must equal the record id');
     if (constraint === 'notificationRouteSemantics') {

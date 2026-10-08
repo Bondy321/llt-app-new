@@ -158,6 +158,10 @@ test('real persisted session projection uses the secure pending UID for cleanup 
     SessionStorage: appStorage,
     accountDeletionService,
     appSessionService,
+    purgeDriverTracking: async scope => {
+      assert.equal(scope.authUid, ORIGINAL_AUTH_UID);
+      calls.push(['tracking-stop', scope]);
+    },
     authHelpers: {
       replaceWithFreshAnonymous: async () => {
         assert.equal((await accountDeletionService.readPending()).localCleanupComplete, true);
@@ -184,6 +188,7 @@ test('real persisted session projection uses the secure pending UID for cleanup 
   assert.equal(calls[0][0], 'prepare');
   assert.equal(calls[0][1].authUid, ORIGINAL_AUTH_UID);
   assert.equal(Object.prototype.hasOwnProperty.call(calls[0][1].appSession, 'authUid'), false);
+  assert.ok(calls.findIndex(call => call?.[0] === 'tracking-stop') < calls.findIndex(call => call?.[0] === 'commit'));
   assert.equal(calls.at(-1)[0], 'user');
   const afterCleanup = await accountDeletionService.readPending();
   assert.equal(afterCleanup.localCleanupComplete, true);

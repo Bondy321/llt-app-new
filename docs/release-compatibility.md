@@ -2,9 +2,11 @@
 
 The mobile runtime uses Expo's `appVersion` runtime policy. `package.json` is the
 canonical marketing/runtime version source and `app.config.js` reads it directly.
-The dependency graph prepared in October 2026 uses version `1.0.6`, following the
-August `1.0.5` graph. The dependency changes require a matching new binary before
-an OTA for runtime `1.0.6` is useful.
+The dependency graph prepared in October 2026 used version `1.0.6`. Explicit
+background driver tracking adds Task Manager, iOS background mode/Always access
+and Android foreground-service configuration in version `1.0.7`. These changes
+require matching new iOS/Android binaries; an OTA cannot add native capabilities
+to an installed `1.0.6` or older binary.
 
 `appVersion` remains deliberate. It provides readable release identities and the
 least disruptive migration for installed `1.0.4` binaries. Expo fingerprinting is

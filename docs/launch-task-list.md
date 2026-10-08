@@ -68,18 +68,19 @@ Reference: [driver location contract](data-contracts/driver-location.md).
 
 ## 4 Add explicitly started background tracking
 
-Current behaviour shares location only while Driver Home is mounted and foregrounded. This stage requires native configuration changes and new binaries.
+The app now owns explicitly started tracking sessions across navigation. iOS uses background location with Always access; Android uses a visible service started while the app is open. This requires new version `1.0.7` binaries and backend/rules deployment before device acceptance.
 
-- [ ] Define the driver Start tracking and Stop tracking flow, persistent status and permission explanations.
-- [ ] Move session ownership out of the Driver Home screen and implement supported iOS and Android background location handling.
-- [ ] Handle permission denial or revocation, offline connectivity, session expiry, reassignment, logout and interrupted execution truthfully.
-- [ ] Stop sharing on explicit stop and authority loss; prevent tracking resuming for the wrong driver or tour.
-- [ ] Update native permissions, background modes, release configuration and the app/runtime version required by the compatibility guard.
+- [x] Define the driver Start tracking and Stop tracking flow, persistent status and permission explanations.
+- [x] Move session ownership out of the Driver Home screen and implement supported iOS and Android background location handling.
+- [x] Handle permission denial or revocation, offline connectivity, session expiry, reassignment, logout and interrupted execution truthfully.
+- [x] Stop sharing on explicit stop and authority loss; prevent tracking resuming for the wrong driver or tour.
+- [x] Update native permissions, background modes, release configuration and the app/runtime version required by the compatibility guard.
+- [ ] Deploy tracking rules, stop endpoint and projection/cleanup Functions; build the matching native apps.
 - [ ] Verify movement, locking, navigating within the app, switching apps and battery restrictions on real devices. Document force-stop and OS termination limitations.
 
 Complete when: a driver can explicitly start and stop a session, authorised updates continue during supported background operation, and stale or interrupted tracking is clearly reported.
 
-References: [driver location contract](data-contracts/driver-location.md), [release compatibility](release-compatibility.md).
+References: [driver location contract](data-contracts/driver-location.md), [release compatibility](release-compatibility.md), [device acceptance](operations/driver-tracking-acceptance.md).
 
 ## 5 Build Track Coaches in the web admin
 

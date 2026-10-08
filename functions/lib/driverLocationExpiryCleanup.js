@@ -1,6 +1,7 @@
 'use strict';
 
 const { reconcileDriverLocationProjection } = require('./driverLocationProjection');
+const { cleanupExpiredDriverTrackingIntents } = require('../src/domains/live-state/driverTrackingSessions');
 
 const DRIVER_LOCATION_EXPIRY_CLEANUP_LIMITS = Object.freeze({
   maxLocationsPerRun: 100,
@@ -80,15 +81,20 @@ async function cleanupExpiredDriverLocations({
     await reconcileProjection({ database, tourId, nowMs });
   }
 
+  const trackingIntents = await cleanupExpiredDriverTrackingIntents({ database, nowMs, limit, reconcileProjection });
+
   return {
     ok: true,
     scanned: Object.keys(candidates).length,
     removed,
     pickupsScanned: Object.keys(pickupCandidates).length,
     pickupsRemoved,
+    trackingIntentsScanned: trackingIntents.scanned,
+    trackingIntentsRemoved: trackingIntents.removed,
+    trackingSourcesRemoved: trackingIntents.sourcesRemoved,
     restoredPickups: 0,
-    reconciledTours,
-    hasMore: Object.keys(candidates).length >= limit || Object.keys(pickupCandidates).length >= limit,
+    reconciledTours: [...new Set([...reconciledTours, ...trackingIntents.reconciledTours])].sort(),
+    hasMore: Object.keys(candidates).length >= limit || Object.keys(pickupCandidates).length >= limit || trackingIntents.hasMore,
     cleanedAtMs: nowMs,
   };
 }

@@ -1,3 +1,4 @@
+import DriverTrackingStatusBar from '../../components/DriverTrackingStatusBar';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, Animated, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -6,7 +7,7 @@ import AccountDeletionPendingScreen from '../../screens/AccountDeletionPendingSc
 import AppScreenRouter from './navigation/AppScreenRouter';
 import { COLORS, styles } from './AppShell.styles';
 
-export default function AppShellView({
+function AppShellContent({
   accountDeletionStatus,
   authError,
   edgeSwipeResponder,
@@ -105,4 +106,14 @@ export default function AppShellView({
       </View>
     </>
   );
+}
+
+export default function AppShellView(props) {
+  const visible = props.driverTracking?.active || props.driverTracking?.pending || props.driverTracking?.state === 'starting';
+  return <>
+    {visible ? <View style={{ paddingTop: props.insets.top }}>
+      <DriverTrackingStatusBar tracking={props.driverTracking} />
+    </View> : null}
+    <AppShellContent {...props} />
+  </>;
 }

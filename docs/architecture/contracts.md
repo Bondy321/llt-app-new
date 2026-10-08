@@ -6,7 +6,8 @@ The schema set defines PassengerPrincipalId, DriverPrincipalId, AppSessionId, Ap
 PassengerParticipantRecord, PassengerLoginResponse, DriverLoginResponse, DriverAssignmentResponse,
 ChatMessage, ChatReaction, ChatPresenceRecord, ChatTypingRecord, ChatStatusSessionRecord,
 GroupPhotoRecord, PrivatePhotoRecord, ResolvedMediaResponse, NotificationPayload, SafetySubmission,
-DriverLocationRecord, DriverLocationSourceRecord, DriverTourPackActionResult, AccountDeletionReceipt,
+DriverLocationRecord, DriverLocationSourceRecord, DriverTrackingSessionRecord,
+DriverTrackingStopRequest, DriverTrackingStopResponse, DriverTourPackActionResult, AccountDeletionReceipt,
 AccountDeletionSafePhase, AccountDeletionSafeSummary, AccountDeletionRequest,
 AccountDeletionAcceptedResponse, AccountDeletionStatusRequest, AccountDeletionStatusResponse,
 AccountDeletionRolloutRecord, and StandardHttpErrorResponse.

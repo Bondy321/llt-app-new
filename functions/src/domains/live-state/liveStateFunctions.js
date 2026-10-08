@@ -10,7 +10,9 @@ const { log } = require('../../infrastructure/logging/safeLogger');
 
 const {
   reconcileDriverLocationSourceChange,
+  reconcileDriverLocationProjection,
 } = loadLegacyLibrary('driverLocationProjection');
+const { reconcileDriverTrackingIntentChange } = require('./driverTrackingSessions');
 const {
   cleanupExpiredChatStatusSessions: cleanupExpiredChatStatusRecords,
   reconcileChatStatusSourceChange,
@@ -42,6 +44,15 @@ const liveStateTriggerOptions = Object.freeze({
 const projectDriverLocationSession = onValueWrittenWithResult(
   { ...liveStateTriggerOptions, ref: 'driver_location_sessions/{sourceKey}' },
   reconcileDriverLocationEvent,
+);
+
+const projectDriverTrackingSession = onValueWrittenWithResult(
+  { ...liveStateTriggerOptions, ref: 'driver_tracking_sessions/{sourceKey}' },
+  (/** @type {any} */ event) => reconcileDriverTrackingIntentChange({
+    database: admin.database(), sourceKey: event.params.sourceKey,
+    before: event.data.before.val(), after: event.data.after.val(),
+    reconcileProjection: reconcileDriverLocationProjection,
+  }),
 );
 
 const projectDriverLocationPickup = onValueWrittenWithResult(
@@ -84,4 +95,5 @@ module.exports = {
   projectChatTypingSession,
   projectDriverLocationPickup,
   projectDriverLocationSession,
+  projectDriverTrackingSession,
 };

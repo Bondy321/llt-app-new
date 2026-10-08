@@ -86,7 +86,7 @@ test('removes expired disconnect-safe live driver locations and is idempotent', 
   const reconciled = [];
 
   const result = await cleanupExpiredDriverLocations({ database, nowMs, reconcileProjection: async ({ tourId }) => reconciled.push(tourId) });
-  assert.deepEqual(result, { ok: true, scanned: 1, removed: 1, pickupsScanned: 0, pickupsRemoved: 0, restoredPickups: 0, reconciledTours: ['expired'], hasMore: false, cleanedAtMs: nowMs });
+  assert.deepEqual(result, { ok: true, scanned: 1, removed: 1, pickupsScanned: 0, pickupsRemoved: 0, trackingIntentsScanned: 0, trackingIntentsRemoved: 0, trackingSourcesRemoved: 0, restoredPickups: 0, reconciledTours: ['expired'], hasMore: false, cleanedAtMs: nowMs });
   assert.equal(database.state.driver_location_sessions.expired, undefined);
   assert.ok(database.state.driver_location_sessions.future);
   assert.deepEqual(reconciled, ['expired']);

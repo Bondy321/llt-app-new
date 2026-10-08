@@ -366,6 +366,7 @@ required for exact finalisation.
 | `notification_devices/{uid}`, `notification_consents/{uid}` | UID installation/consent | Delete under device lock | Same |
 | `notification_device_tombstones/{uid}` | Existing UID-keyed anti-recreation fence | Create/preserve without a duplicate UID value and with monotonic revision | Same |
 | `driver_location_sessions`, `chat_presence_sessions`, `chat_typing_sessions` | Exact app-session raw live state | Delete exact captured session; reconcile projections | Same |
+| `driver_tracking_sessions` | Private exact driver UID/session/tour intent and stop fence | No passenger tracking authority | Retire exact captured driver intent to `stopped` before source removal; retain immutable fence until its original app-session expiry, then bounded indexed cleanup deletes it |
 | `driver_location_pickups` | Assignment/tour operational state | Preserve | Preserve |
 | Public driver-location/chat-status projections | Shared principal/tour projection | Reconcile only | Reconcile only |
 | `drivers/{driverId}/authUid` | Shared driver authority scalar | Not applicable | Compare-delete only if it still equals captured UID |

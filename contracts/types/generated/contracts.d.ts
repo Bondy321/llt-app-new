@@ -381,6 +381,39 @@ export interface DriverLocationSourceRecord {
   updatedBy?: string;
 }
 
+export interface DriverTrackingSessionRecord {
+  schemaVersion: number;
+  authUid: string;
+  appSessionId: string;
+  driverId: string;
+  tourId: string;
+  liveSharingSessionId: string;
+  startedAtMs: number;
+  expiresAtMs: number;
+  status: "active" | "stopped";
+}
+
+export interface DriverTrackingStopRequest {
+  schemaVersion: number;
+  authUid: string;
+  appSessionId: string;
+  driverId: string;
+  tourId: string;
+  liveSharingSessionId: string;
+  startedAtMs: number;
+  expiresAtMs: number;
+  status: string;
+}
+
+export interface DriverTrackingStopResponse {
+  success: boolean;
+  withdrawalAcknowledged: boolean;
+  reason: "STOPPED" | "ALREADY_RETIRED";
+  sourceRemoved: boolean;
+  fencePersisted: boolean;
+  stoppedAtMs: number;
+}
+
 export interface DriverLocationPickupRecord {
   schemaVersion: number;
   isSharing: boolean;

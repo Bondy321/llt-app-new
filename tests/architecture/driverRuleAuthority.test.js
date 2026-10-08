@@ -17,6 +17,7 @@ const EXPECTED_DRIVER_BRANCH_WRITERS = [
   'chat_typing_sessions/$scope/$appSessionId/.write',
   'content_reports/$reportId/.write',
   'driver_location_sessions/$sourceKey/.write',
+  'driver_tracking_sessions/$sourceKey/.write',
   'driver_tour_pack_actions/$departureKey/$driverId/hotelCompletion/$hotelId/state/.write',
   'driver_tour_pack_actions/$departureKey/$driverId/hotelCompletion/$hotelId/updatedAtMs/.write',
   'driver_tour_pack_actions/$departureKey/$driverId/issues/$issueId/category/.write',
@@ -66,7 +67,7 @@ const collectReviewedDriverBranchWriters = () => EXPECTED_DRIVER_BRANCH_WRITERS.
 
 test('explicit inventory resolves every reviewed driver-branch write authority', () => {
   const found = collectReviewedDriverBranchWriters();
-  assert.equal(found.length, 45, 'driver branch inventory changed without an authority review');
+  assert.equal(found.length, 46, 'driver branch inventory changed without an authority review');
   for (const { path: rulePath, expression } of found) {
     assert.equal(typeof expression, 'string', `${rulePath} is missing from the explicit driver branch inventory`);
   }
@@ -100,7 +101,7 @@ test('every driver branch directly binds complete active-session authority', () 
 
 test('every driver session write requires strict policy authority and no active assignment transition', () => {
   const found = collectReviewedDriverBranchWriters();
-  assert.equal(found.length, 45, 'driver write inventory changed without a strict-policy review');
+  assert.equal(found.length, 46, 'driver write inventory changed without a strict-policy review');
 
   const requiredFragments = [
     "driver_login_policy/v1/schemaVersion').val() === 1",
@@ -158,6 +159,9 @@ test('legacy projection writes are gated only by explicit rollout while raw clea
   }
 
   assert.deepEqual(rules.driver_location_sessions['.indexOn'], ['cleanupAtMs', 'tourId', 'appSessionId']);
+  assert.equal(rules.driver_tracking_sessions['.read'], false);
+  assert.equal(rules.driver_tracking_sessions['.write'], false);
+  assert.deepEqual(rules.driver_tracking_sessions['.indexOn'], ['expiresAtMs', 'appSessionId']);
   assert.equal(rules.driver_location_pickups['.write'], false);
   assert.equal(rules.driver_location_pickups.$tourId['.write'], false);
   assert.deepEqual(rules.driver_location_pickups['.indexOn'], ['expiresAtMs']);

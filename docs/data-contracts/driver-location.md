@@ -17,8 +17,8 @@ driver_location_sessions/{appSessionId}|{liveSharingSessionId}
 Its schema-v2 record contains exact `authUid`, `appSessionId`, `driverId`,
 `tourId`, `liveSharingSessionId`, bounded coordinates and accuracy, a server
 timestamp, and `cleanupAtMs`. The handset arms `onDisconnect` before writing.
-Logout, role/session replacement, unmount, backgrounding, and disabling sharing
-remove only the exact live leaf. The canonical key and Firebase rules bind its
+For screen-local foreground sources, logout, role/session replacement, unmount,
+backgrounding, and disabling sharing remove only the exact live leaf. The canonical key and Firebase rules bind its
 ownership. Client reads of private sources are always denied, so publication
 uses the `set()` acknowledgement and withdrawal uses direct `remove()`, never
 a source read or read-dependent transaction.
@@ -48,7 +48,7 @@ failed cancellation after successful deletion does not falsify the acknowledgeme
 A failed update leaves an earlier accepted source and its disconnect cleanup
 intact unless the sharing scope has been stopped.
 
-Driver Home switches updates off immediately, invalidates the generation and
+The legacy foreground-sharing compatibility actions switch updates off immediately, invalidate the generation and
 keeps each retired source identity in a pending map through failure and rerender.
 Retry deletes those same leaves, including after effect cleanup has cleared the
 active session. Preference loading is fenced against subsequent explicit toggles;
@@ -59,8 +59,113 @@ Until confirmed, the status says removal is pending or being
 confirmed. Successful removal clears only this session's optimistic local point;
 it preserves another handset's public point and the fixed pickup. The map is
 screen-local, not durable tracking state: disconnect handling, server authority
-cleanup and expiry remain the fallback after unmount or authority loss. Background
-tracking ownership is a separate implementation stage.
+cleanup and expiry remain the fallback after unmount or authority loss.
+
+## Explicit background tracking intent
+
+App-owned tracking uses a fresh `track_` live-sharing ID, with 8–80 characters
+in the same RTDB-safe identifier alphabet. Its durable server stop fence is private:
+
+```text
+driver_tracking_sessions/{appSessionId}|{liveSharingSessionId}
+```
+
+```ts
+{
+  schemaVersion: 1,
+  authUid: string,
+  appSessionId: string,
+  driverId: string,
+  tourId: string,
+  liveSharingSessionId: string,
+  status: 'active' | 'stopped',
+  startedAtMs: number,
+  expiresAtMs: number
+}
+```
+
+The client acknowledges the active intent write before starting native location
+updates. Creation requires the full current driver/app-session, policy, claim and
+assignment authority already required by live locations. The key and identity must
+match that authority; start time is within sixty seconds of server time and expiry
+equals the current app session's expiry exactly. A compensating absent `stopped`
+intent uses the identical creation checks, covering an ambiguous failed start.
+Extra fields are denied. This root grants no authority to any other root and clients
+cannot read it or delete its records.
+
+Native tracking stops through the authenticated recovery endpoint below. Rules
+also permit the owner to PUT the cached exact intent with only `status` changed
+to `stopped`, then remove its exact private live source. The record owner may stop
+and retry after expiry, reassignment, revocation, policy change or role loss.
+Every identity, start and expiry field is immutable, and an existing stopped
+record cannot become active again. Owned tracked-source deletion is also allowed
+after authority loss; an already-absent leaf needs its exact owner-matching fence
+to acknowledge absence. Existing `loc_`/legacy source rules remain unchanged.
+
+Every tracked-source publication needs its matching active, unexpired intent in
+addition to normal authority. The projector independently applies the same intent
+check, excluding retained stopped/expired sources without exposing private fields.
+`projectDriverTrackingSession` re-reads current intent state before retiring an
+exact owned leaf and reconciling the tour. Delayed events preserve a newer active
+intent, other live session IDs, other handsets and the assignment-owned pickup.
+
+The existing location cleanup schedule queries intent `expiresAtMs` in bounded
+indexed batches. It removes expired sources and compare-deletes matching expired
+intents. Stopped tombstones persist until their immutable app-session expiry, when
+session authority itself prevents delayed callbacks from recreating the source.
+Session replacement, logout, revocation and account deletion also query the indexed
+`appSessionId`, matching the captured server UID, session, driver and tour. They
+retire matching intents before deleting live sources, even when the current profile
+or role has changed. They preserve immutable fence metadata until expiry and leave
+other installations' intent/source records untouched. The private UID/session/tour
+metadata is bounded by original app-session expiry and is never projected publicly.
+
+### Authenticated stop recovery
+
+`stopDriverTrackingSession` is a POST-only mobile endpoint in `europe-west1`.
+It uses the same Firebase bearer-token and App Check boundary as app-session and
+pickup mutations. Clients supply the exact cached tracking schema directly as
+the request body, with `status: 'stopped'`; `authUid` must equal the authenticated
+UID. No anonymous sign-in or client read of either private root is needed.
+
+The endpoint transactionally stops an existing exact intent, preserving every
+immutable field, then compare-deletes only its matching source and reconciles
+the tour before acknowledging withdrawal. Conflicting ownership or identity is
+rejected. A matching retained source also proves old ownership when an intent is
+missing, even after session expiry, revocation or reassignment.
+
+When both private records are missing under a current active session, missing-fence
+creation still requires exact server session identity/expiry, a materialised stable
+policy with an explicit matching generation, driver claim, profile and assignment
+authority, and no assignment transition. Session and assignment locks protect
+this admission check. A stopped recovery intent may preserve an old or future
+device-clock start; it cannot activate location updates. Active client creation
+retains its sixty-second server-time window.
+
+If both private records are absent and the supplied app session is already expired,
+revoked, missing or replaced, the endpoint acknowledges exact source absence
+without creating a fence. With no server-owned evidence of the supplied tour, it
+does not reproject an arbitrary tour or clear a legacy compatibility location.
+This is the `ALREADY_RETIRED` result; all ownership-proven paths reconcile before
+returning `STOPPED`. Projection failures leave the stopped fence available for retry
+and never return a withdrawal acknowledgment.
+
+```ts
+{
+  success: true,
+  withdrawalAcknowledged: true,
+  reason: 'STOPPED' | 'ALREADY_RETIRED',
+  sourceRemoved: boolean,
+  fencePersisted: boolean,
+  stoppedAtMs: number
+}
+```
+
+Error responses have `success: false` and a reason, never a withdrawal
+acknowledgment. Invalid input is HTTP 400, wrong owner is 403, changed state or
+lock contention is 409, invalid policy configuration is 503, and an internal or
+projection failure is 500. Missing authentication/App Check follows the shared
+mobile boundary. The response contains no owner, session, driver or tour metadata.
 
 A manual fixed pickup is assignment owned, not installation owned:
 
@@ -170,6 +275,21 @@ remain before enabling that phase.
 
 ## Verification
 
+The app-level Task Manager handler publishes only from explicitly saved active
+intent in AsyncStorage. It persists no coordinates. Every awaited result is fenced
+against the current generation and identity. Samples must be valid, newer than
+the session start and no more than ninety seconds old. Server work is limited to
+one attempt per minute independently of native delivery cadence. GPS and intent
+writes use authenticated HTTP, preventing Firebase's offline coordinate replay;
+Auth, token, response and disconnect waits are bounded. An offline Stop persists
+stopping intent, shuts down native collection and retains exact cleanup identity.
+Cold UI launch retires interrupted tracking and requires a new explicit Start.
+Status and Stop remain visible across navigation, logout and deletion surfaces.
+The transport checks session validity and sample freshness again after token
+retrieval, immediately before dispatch. Serialized intent storage prevents a late
+active save from overwriting a Stop that is already in progress.
+See [physical device acceptance](../operations/driver-tracking-acceptance.md).
+
 ```text
 npm run test:mobile:ux
 npm run test:functions:scripts
@@ -187,3 +307,18 @@ owned deletion/disconnect removal, multi-device isolation, pickup fallback and
 projection exclusion after logout, revocation, expiry or reassignment. It invokes
 the real projector with trusted emulator access; it does not emulate deployed
 trigger delivery or replace physical device acceptance.
+
+`tests/functions.driverTrackingSessions.test.js` characterizes exact intent
+matching, delayed stop/delete events and bounded expiry comparisons.
+`tests/firebaseRules/driverTrackingSessions.rules.test.js` verifies private reads,
+strict creation, compensating stopped creation, immutable stop after authority
+loss, acknowledged absence, rejected resurrection and projection exclusion using
+trusted emulator access. Deployment and physical-device lifecycle acceptance are
+separate release checks.
+
+The mobile controller, native adapter, REST transport and root status tests cover
+explicit disclosure, platform permission differences, navigation-independent
+ownership, delayed callbacks, interrupted Start, storage/token races, bounded
+network waits and stopping across logout/deletion. The tracking service rules
+integration uses actual authenticated HTTP, matching the production transport,
+and verifies that a stopped fence rejects delayed GPS writes.
