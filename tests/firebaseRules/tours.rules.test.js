@@ -8,6 +8,7 @@ const {
   assertFails,
 } = require('@firebase/rules-unit-testing');
 const { passengerAuthorityUpdates, driverAuthorityUpdates, sessionIdFor } = require('./sessionFixtures');
+const { reconcileTourDateIndexes } = require('../../functions/lib/tourDateIndex');
 
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const PROJECT_ID = 'demo-llt-tour-rules';
@@ -43,6 +44,35 @@ let testEnv;
 let dbUrl;
 
 const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
+
+test('date index reconciliation loads an uncached existing tour and preserves operational fields', async () => {
+  const tourId = 'DATE_RECONCILIATION';
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database(dbUrl).ref(`tours/${tourId}`).set({
+      startDate: '12/10/2026', endDate: '14/10/2026',
+      participants: { active: true }, driverLocation: { latitude: 56 },
+    });
+  });
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const ref = context.database(dbUrl).ref(`tours/${tourId}`);
+    const result = await reconcileTourDateIndexes(ref);
+    assert.equal(result.committed, true);
+    assert.equal(result.snapshot.val().startDateEpochMs, Date.UTC(2026, 9, 12));
+    assert.equal(result.snapshot.val().endDateEpochMs, Date.UTC(2026, 9, 14));
+    assert.deepEqual(result.snapshot.val().participants, { active: true });
+    assert.deepEqual(result.snapshot.val().driverLocation, { latitude: 56 });
+    assert.equal((await reconcileTourDateIndexes(ref)).committed, false);
+    await ref.update({ endDate: '11/10/2026' });
+    assert.equal((await reconcileTourDateIndexes(ref)).committed, true);
+    const invalid = (await ref.get()).val();
+    assert.equal(invalid.startDateEpochMs ?? null, null);
+    assert.equal(invalid.endDateEpochMs ?? null, null);
+    assert.deepEqual(invalid.participants, { active: true });
+    await ref.remove();
+    assert.equal((await reconcileTourDateIndexes(ref)).committed, false);
+    assert.equal((await ref.get()).exists(), false);
+  });
+});
 
 const buildRawDriverLocation = ({
   uid = DRIVER_AUTH_UID,

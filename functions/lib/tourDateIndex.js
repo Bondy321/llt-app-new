@@ -27,4 +27,20 @@ function deriveTourDateIndexUpdate(tour) {
   return { startDateEpochMs, endDateEpochMs };
 }
 
-module.exports = { deriveTourDateIndexUpdate, parseDateOnly };
+// Derive inside the transaction: a delayed date trigger or maintenance scan
+// must not overwrite indexes for dates that changed since its initial read.
+async function reconcileTourDateIndexes(tourRef) {
+  if (typeof tourRef?.transaction !== 'function') throw new Error('A tour reference is required');
+  const result = await tourRef.transaction((current) => {
+    // The SDK can first invoke this with an empty local cache. Returning null
+    // lets its compare-and-set load/retry the existing server value; aborting
+    // here would silently skip an uncached tour. An absent tour stays absent.
+    if (current === null) return null;
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
+    const update = deriveTourDateIndexUpdate(current);
+    return update ? { ...current, ...update } : undefined;
+  }, undefined, false);
+  return { committed: result?.committed === true && Boolean(result.snapshot?.val?.()), snapshot: result?.snapshot };
+}
+
+module.exports = { deriveTourDateIndexUpdate, parseDateOnly, reconcileTourDateIndexes };

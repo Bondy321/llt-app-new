@@ -9,6 +9,23 @@ This contract prevents locale drift (UK vs US parsing issues) across mobile and 
 
 No other date string shape is valid.
 
+## CSV ingestion boundary
+
+The trusted `llt-app-sync` importer normalizes Coach Manager source values such as
+`09/10/2026 00:00:00` and `12/10/2026 0:00:00` before persistence. It validates the
+whole date and time, then uses the civil calendar date without timezone conversion.
+These source shapes are not accepted by mobile, admin or backend date-only readers.
+
+The importer writes canonical UK start/end dates, ISO date companions, positive
+whole-day duration and both UTC-midnight epoch indexes as a coherent multi-path
+patch. End date is start date plus `days - 1`. Invalid source dates or durations
+produce warnings and exclude the complete date family, preserving existing live
+dates. Backend index reconciliation derives against the latest tour transactionally.
+
+Historical repairs require a reviewed metadata-only preview, exact target checks
+and bounded transactions. Conflicting saved end dates are excluded for source
+review. The procedure lives in `llt-app-sync/docs/tour-date-repair.md`.
+
 ## Accepted timestamp strings
 
 - Epoch milliseconds (`number` or numeric string)

@@ -2,6 +2,8 @@
 
 Welcome, Agent. This file is the operational source of truth for contributors working in this repo. Keep it practical: update it whenever architecture, contracts, commands, or release assumptions materially change.
 
+For the current launch work, the user authorizes committing and pushing completed fixes directly to `main`. Keep the implementation and required verification standards; use a short implement, verify, push loop without adding staged rollout or PR approval steps. Record any required service deployment and live checks truthfully; a Git push alone does not make backend changes live.
+
 Last updated: August 29, 2026
 
 Architecture source of truth: start with `docs/architecture/overview.md`, then follow `module-boundaries.md` and the runtime-specific document. Account deletion is specified by `docs/data-contracts/account-deletion.md`, ADR 0009 and `docs/operations/account-deletion.md`; do not duplicate or weaken that preservation boundary. Keep `App.js` and `functions/index.js` as composition roots; preserve compatibility facades; place Firebase, HTTP, and persistence access behind adapters; update canonical contracts and generated copies together; run `npm run verify:refactor` for structural changes. The detailed rationale lives in `docs/architecture/decisions/` and should not be duplicated here.
@@ -1030,8 +1032,8 @@ deletion remains functional while client variant creation/overwrite is denied.
 Admin scaling migrations:
 
 ```bash
-npm --prefix functions run backfill:tour-date-indexes
-npm --prefix functions run backfill:tour-date-indexes -- --apply --allow-full-scan
+npm --prefix functions run backfill:tour-date-indexes -- --project=loch-lomond-travel --database-url=https://loch-lomond-travel-default-rtdb.europe-west1.firebasedatabase.app
+npm --prefix functions run backfill:tour-date-indexes -- --project=loch-lomond-travel --database-url=https://loch-lomond-travel-default-rtdb.europe-west1.firebasedatabase.app --apply --confirm-project=loch-lomond-travel --confirm-database=https://loch-lomond-travel-default-rtdb.europe-west1.firebasedatabase.app
 npm --prefix functions run backfill:driver-tour-pack-issues
 npm --prefix functions run backfill:driver-tour-pack-issues -- --apply --allow-full-scan
 ```
