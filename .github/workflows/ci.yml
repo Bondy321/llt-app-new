@@ -129,4 +129,5 @@ jobs:
       - run: npm ci
       - run: npm --prefix functions ci
       - run: npm --prefix web-admin ci
+      - run: npm run test:security
       - run: npm run security:audit:release

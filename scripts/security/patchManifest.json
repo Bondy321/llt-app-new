@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "reviewedOn": "2026-10-08",
+  "hashEncoding": "sha256 of UTF-8 source with CRLF normalized to LF",
+  "patches": [
+    {
+      "package": "braces",
+      "version": "3.0.3",
+      "integrity": "sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==",
+      "advisory": "GHSA-vfj7-8cjw-p6xm",
+      "range": "<=3.0.3",
+      "severity": "high",
+      "sources": [
+        "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+        "https://github.com/micromatch/braces/issues/70"
+      ],
+      "files": {
+        "lib/parse.js": {
+          "before": "e572166565f15fa6ad9865ae49d678218e32aabfd1b3720f6d0d43d39800d310",
+          "after": "8e5d7bbe8be26378850c950c0bf35c207bc9af824a2025dbd5779766adecc9cb"
+        },
+        "lib/compile.js": {
+          "before": "dc98f22eee3d511785d92a00758d5f0d48efed5f5813bdecc2de430c529b5c9f",
+          "after": "111571ab672aae462f20d6343e668f8f2a5d8f45176650cb25523fe8e6780b01"
+        },
+        "lib/expand.js": {
+          "before": "41ccc196ebfa7b7781a634e721eb744e4e7bcb54cba427a7e3d6806a1b9e58f7",
+          "after": "ea1e6850c4306eecd11be894a2952978b2343f522ed5825fbb95f2183cb64df4"
+        },
+        "lib/stringify.js": {
+          "before": "379f22d77bfa1478341ccd49c5e4267464aabcbba03558bab332aac23fc6f23a",
+          "after": "e78f224806526a3a619f82041a82b5988ec02364f8443a5fefd0a96249ccb03f"
+        },
+        "lib/depth.js": {
+          "before": null,
+          "after": "98a78beb83bbb5eb2fb55863963b65dc55c9c67923518b1a2fea1b75e3876a37"
+        }
+      },
+      "auditRecord": {
+        "source": 1240992,
+        "name": "braces",
+        "dependency": "braces",
+        "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+        "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+        "severity": "high",
+        "cwe": [
+          "CWE-674"
+        ],
+        "cvss": {
+          "score": 7.5,
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "range": "<=3.0.3"
+      }
+    },
+    {
+      "package": "node-forge",
+      "version": "1.4.0",
+      "integrity": "sha512-LarFH0+6VfriEhqMMcLX2F7SwSXeWwnEAJEsYm5QKWchiVYVvJyV9v7UDvUv+w5HO23ZpQTXDv/GxdDdMyOuoQ==",
+      "advisory": "GHSA-86w9-cpqp-85rv",
+      "range": "<=1.4.0",
+      "severity": "high",
+      "sources": [
+        "https://github.com/advisories/GHSA-86w9-cpqp-85rv",
+        "https://github.com/digitalbazaar/forge/pull/1152/files"
+      ],
+      "files": {
+        "lib/rsa.js": {
+          "before": "fd4740238145ec26470eb3f06a627c72039538ce1307dbdce40521f94dfd0a50",
+          "after": "c9b1e3799e230528b6d6815c1f6cd3c6058b9d45975264b55d995abb976589af"
+        }
+      },
+      "auditRecord": {
+        "source": 1240912,
+        "name": "node-forge",
+        "dependency": "node-forge",
+        "title": "node-forge RSA PKCS#1 v1.5 signature verification accepts extra nested DigestAlgorithm elements",
+        "url": "https://github.com/advisories/GHSA-86w9-cpqp-85rv",
+        "severity": "high",
+        "cwe": [
+          "CWE-347"
+        ],
+        "cvss": {
+          "score": 7.5,
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "range": "<=1.4.0"
+      }
+    },
+    {
+      "package": "sprintf-js",
+      "version": "1.0.3",
+      "integrity": "sha512-D9cPgkvLlV3t3IzL0D0YLvGA9Ahk4PcvVwUbN0dSGr1aP0Nrt4AEnTUbuGvquEC0mA64Gqt1fzirlRs5ibXx8g==",
+      "advisory": "GHSA-hp3w-g68c-fv3c",
+      "range": "<=1.1.3",
+      "severity": "moderate",
+      "sources": [
+        "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+        "https://github.com/alexei/sprintf.js/issues/237"
+      ],
+      "files": {
+        "src/sprintf.js": {
+          "before": "9904b0d448280bfdfcb0329bdac995883033597727404f9c058d051d9174b7c7",
+          "after": "c54de69c6302cc4bb330614c9a41b5f82d1c9260035d0c50ea956b76dc673578"
+        }
+      },
+      "auditRecord": {
+        "source": 1241202,
+        "name": "sprintf-js",
+        "dependency": "sprintf-js",
+        "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+        "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+        "severity": "moderate",
+        "cwe": [
+          "CWE-1284"
+        ],
+        "cvss": {
+          "score": 5.3,
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "range": "<=1.1.3"
+      }
+    }
+  ]
+}

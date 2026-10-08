@@ -2,8 +2,9 @@
 
 The mobile runtime uses Expo's `appVersion` runtime policy. `package.json` is the
 canonical marketing/runtime version source and `app.config.js` reads it directly.
-The native graph prepared in August 2026 is version `1.0.5`; it must be shipped in
-a new binary before an OTA for runtime `1.0.5` is useful.
+The dependency graph prepared in October 2026 uses version `1.0.6`, following the
+August `1.0.5` graph. The dependency changes require a matching new binary before
+an OTA for runtime `1.0.6` is useful.
 
 `appVersion` remains deliberate. It provides readable release identities and the
 least disruptive migration for installed `1.0.4` binaries. Expo fingerprinting is

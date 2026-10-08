@@ -38,16 +38,18 @@ Complete when: the affected departures have valid canonical dates and indexes, t
 
 References: [date contract](date-contract.md), [admin date contract](date-contract-web-admin.md).
 
-## 2 Resolve dependency audit failures and investigate crashes
+## 2 Resolve dependency audits and establish stable tooling
 
-Confirmed issue: the current checkout fails its security audit gate across mobile, Functions and admin dependencies. The audit counts include shared dependency chains and build tooling; they are not counts of independently exploitable shipped defects. TestFlight also reports seven crashes for build 13, whose crash detail page did not load during inspection.
+Confirmed issue: the initial checkout failed its security audit gate across mobile, Functions and admin dependencies. Counts include shared dependency chains and build tooling. Crash investigation is deferred at the user's direction on 8 October; its separate local changes are preserved outside this dependency change.
 
-- [ ] Trace the high and critical advisories to installed packages and choose compatible updates or a justified, reviewed resolution. Avoid forced downgrades from `npm audit fix --force`.
-- [ ] Update affected lockfiles and run the relevant integration checks, Expo compatibility checks and security audit gates.
-- [ ] Obtain crash details or equivalent diagnostics and compare affected app/runtime/update versions with fixes already in main.
-- [ ] Fix reproducible remaining crashes and record the disposition of unavailable or resolved reports.
+- [x] Trace the high and critical advisories to installed packages and choose compatible updates or a justified, reviewed resolution. Avoid forced downgrades from `npm audit fix --force`.
+- [x] Update affected lockfiles and pass the release audit and complete app regression suite. Firebase integration checks remain required in CI.
+- [x] Verify a clean dependency install and matching Expo package versions, without a forced framework downgrade.
+- [ ] Keep verification resource use bounded and pass the complete required checks before merging to main.
 
-Complete when: the release audit gates pass and the reported crashes have an evidence-backed disposition with no unresolved reproducible launch blocker.
+Complete when: the audit gates, SDK compatibility, clean installation and required regression checks pass on the final dependency graph. Report any lower-severity development-tool findings explicitly.
+
+Dependency baseline: [implementation and verification notes](dependency-stability.md). Functions/admin raw audits are zero; the mobile build toolchain's unreleased fixes are source-verified. One moderate development-only telemetry advisory remains visible.
 
 ## 3 Fix location publication and withdrawal
 

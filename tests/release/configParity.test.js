@@ -17,8 +17,8 @@ test('binary and OTA contexts resolve identical Expo config for every update tar
   ]);
   for (const result of results) {
     assert.deepEqual(result.binary, result.update, result.targetName);
-    assert.equal(result.binary.version, '1.0.5');
-    assert.equal(result.binary.runtimeVersion, '1.0.5');
+    assert.equal(result.binary.version, '1.0.6');
+    assert.equal(result.binary.runtimeVersion, '1.0.6');
     assert.match(result.binary.updateUrl, /^https:\/\/u\.expo\.dev\//u);
     assert.equal(result.binary.owner, 'lochlomondtravel');
     assert.ok(result.binary.projectId);

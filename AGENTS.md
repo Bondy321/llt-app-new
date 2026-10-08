@@ -44,10 +44,10 @@ Backend region rule:
 
 Mobile:
 
-- Expo SDK `55` (`expo ~55.0.30`)
+- Expo SDK `55` (`expo ~55.0.31`)
 - React Native `0.83.10`
 - React `19.2.0`
-- Firebase JS SDK `12.17.1` (lockfile resolution)
+- Firebase JS SDK `12.19.0` (mobile lockfile resolution)
 - `expo-notifications ~55.0.27`
 - `expo-image ~55.0.11`
 - `expo-image-manipulator ~55.0.21`
@@ -1124,6 +1124,9 @@ If changing any protected data shape, update all of:
 
 Use incremental verification during implementation:
 
+- Keep local verification sequential. Node test scripts cap file concurrency at two; admin Vitest uses one thread worker. Preserve assertions and timeouts while avoiding laptop overload.
+- Root dependency installation applies the reviewed security backports in `scripts/security/`. Run `npm run security:audit:release`; raw npm findings are reported separately from exact, source-verified mitigations. Unknown source bytes, versions or advisories fail the gate. See `docs/dependency-security-patches.md`.
+
 - After a known-green baseline, run only the test files or named suites affected by each subsequent change.
 - Expand to adjacent contract, security-rule, or integration suites when a shared boundary changes; do not repeatedly rerun unrelated green suites.
 - Before sign-off, deployment, or release, run one complete repository verification pass (including emulators when rules changed).
@@ -1222,7 +1225,7 @@ Many root npm scripts use POSIX-style `NODE_ENV=test`. CI runs on Linux. On nati
 Mobile config:
 
 - Use `app.config.js`; there is no static `app.json`.
-- Version: `1.0.5` (canonical source: `package.json`; `app.config.js` must require it)
+- Version: `1.0.6` (canonical source: `package.json`; `app.config.js` must require it)
 - iOS build number: `3` local baseline; production increments are managed remotely by EAS
 - Android version code: `3` local baseline; production increments are managed remotely by EAS
 - Runtime version policy: `appVersion`
