@@ -1,6 +1,7 @@
 import DriverHomeView from './DriverHomeView';
 import createDriverLocationCaptureActions from '../../services/driver-home/createDriverLocationCaptureActions';
 import createDriverLocationSharingActions from '../../services/driver-home/createDriverLocationSharingActions';
+import useDriverAutoSharePreference from '../../hooks/useDriverAutoSharePreference';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Platform,
@@ -53,7 +54,6 @@ export default function DriverHomeController({ driverData, locationSessionScope 
   const [addressText, setAddressText] = useState('');
   const [confirmingLocation, setConfirmingLocation] = useState(false);
   const [cacheStatusLabel, setCacheStatusLabel] = useState('Not synced yet');
-  const [autoShareEnabled, setAutoShareEnabled] = useState(false);
   const [autoShareSaving, setAutoShareSaving] = useState(false);
   const [autoShareStatus, setAutoShareStatus] = useState('Auto-share is off');
   const [autoShareLastRunAt, setAutoShareLastRunAt] = useState(null);
@@ -80,7 +80,10 @@ export default function DriverHomeController({ driverData, locationSessionScope 
   const autoShareInitialLocationRef = useRef(null);
   const autoShareGenerationRef = useRef(0);
   const autoShareSessionRef = useRef(null);
+  const autoSharePendingWithdrawalsRef = useRef(new Map());
+  const autoSharePreferenceGenerationRef = useRef(0);
   const autoShareEnabledRef = useRef(false);
+  const locationSessionScopeRef = useRef(locationSessionScope);
   const isAppActiveRef = useRef(AppState.currentState === 'active');
   const activeTourIdRef = useRef('');
   const driverIdRef = useRef('');
@@ -97,13 +100,19 @@ export default function DriverHomeController({ driverData, locationSessionScope 
     driverData?.currentTourCode
   ) || '';
 
+  const autoSharePreferenceKey = `AUTO_SHARE_${driverData?.id || 'unknown'}`;
+  const { enabled: autoShareEnabled, setEnabled: setAutoShareEnabled } = useDriverAutoSharePreference({
+    persistenceRef, preferenceKey: autoSharePreferenceKey, driverId: driverData?.id,
+    generationRef: autoSharePreferenceGenerationRef, setStatus: setAutoShareStatus,
+  });
+
   activeTourIdRef.current = activeTourId;
   driverIdRef.current = driverData?.id || '';
   autoShareEnabledRef.current = autoShareEnabled;
+  locationSessionScopeRef.current = locationSessionScope;
   isAppActiveRef.current = isAppActive;
 
   const sanitizeTourId = useCallback((tourCode) => normalizeTourId(tourCode), []);
-  const autoSharePreferenceKey = `AUTO_SHARE_${driverData?.id || 'unknown'}`;
 
   useEffect(() => {
     logger.trackScreen('DriverHome', {
@@ -207,42 +216,6 @@ export default function DriverHomeController({ driverData, locationSessionScope 
       clearTimeout(bannerTimerRef.current);
     }
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadAutoSharePreference = async () => {
-      try {
-        logger.debug('DriverHomeScreen', 'Auto-share preference load started', {
-          driverId: maskIdentifier(driverData?.id),
-        });
-        const stored = await persistenceRef.current.getItemAsync(autoSharePreferenceKey);
-        if (cancelled) return;
-        const enabled = stored === 'true';
-        setAutoShareEnabled(enabled);
-        setAutoShareStatus(enabled ? 'Waiting for the next in-app location share' : 'Auto-share is off');
-        logger.info('DriverHomeScreen', 'Auto-share preference loaded', {
-          driverId: maskIdentifier(driverData?.id),
-          enabled,
-        });
-      } catch (error) {
-        if (!cancelled) {
-          setAutoShareEnabled(false);
-          setAutoShareStatus('Auto-share is off');
-        }
-        logger.warn('DriverHomeScreen', 'Auto-share preference load failed', {
-          driverId: maskIdentifier(driverData?.id),
-          error: error?.message || String(error),
-        });
-      }
-    };
-
-    loadAutoSharePreference();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [autoSharePreferenceKey, driverData?.id]);
 
   useEffect(() => {
     if (!activeTourId) return;
@@ -350,7 +323,7 @@ export default function DriverHomeController({ driverData, locationSessionScope 
   // Reverse geocode to get address
   const { getAddressFromCoords, captureCurrentLocationWithPermission, uploadLocationUpdate, handleCaptureLocation, handleConfirmLocation } = createDriverLocationCaptureActions({ activeTourId, activeTourIdRef, addressText, driverData, driverIdRef, locationAccuracy, locationSessionScope, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setConfirmingLocation, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, successAnim });
 
-  const { handleToggleAutoShare, handleRefetchLocation } = createDriverLocationSharingActions({ activeTourId, activeTourIdRef, autoShareEnabled, autoShareEnabledRef, autoShareGenerationRef, autoShareInFlightRef, autoShareInitialLocationRef, autoSharePreferenceKey, autoShareSessionRef, autoShareToggleInFlightRef, captureCurrentLocationWithPermission, driverData, driverIdRef, getAddressFromCoords, isAppActive, isAppActiveRef, lastLocationAddressRef, locationBusyRef, locationSessionScope, persistenceRef, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setAutoShareEnabled, setAutoShareLastRunAt, setAutoShareSaving, setAutoShareStatus, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, uploadLocationUpdate });
+  const { handleToggleAutoShare, handleRefetchLocation } = createDriverLocationSharingActions({ activeTourId, activeTourIdRef, autoShareEnabled, autoShareEnabledRef, autoShareGenerationRef, autoShareInFlightRef, autoShareInitialLocationRef, autoSharePendingWithdrawalsRef, autoSharePreferenceGenerationRef, autoSharePreferenceKey, autoShareSessionRef, autoShareToggleInFlightRef, captureCurrentLocationWithPermission, driverData, driverIdRef, getAddressFromCoords, isAppActive, isAppActiveRef, lastLocationAddressRef, locationBusyRef, locationSessionScope, locationSessionScopeRef, persistenceRef, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setAutoShareEnabled, setAutoShareLastRunAt, setAutoShareSaving, setAutoShareStatus, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, uploadLocationUpdate });
 
   const handleOpenChat = () => {
     if (!activeTourId) {

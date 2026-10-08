@@ -213,31 +213,26 @@ test('publish and withdraw use separate durable pickup and exact live-session pa
   assert.deepEqual(calls.map((call) => call.path), [
     `driver_location_sessions/${TEST_APP_SESSION_ID}|session_live_1`,
   ]);
-  assert.equal(liveWithdrawal.removed, false);
+  assert.equal(liveWithdrawal.withdrawalAcknowledged, true);
+  assert.equal(calls[0].remove, 1);
   assert.equal(calls[0].transactionValue, undefined);
 });
 
-test('stopping live sharing does not mutate a missing exact live leaf', async () => {
-  let transactionResult = 'not-run';
-  const dbInstance = {
-    ref() {
-      return {
-        async transaction(updater) {
-          transactionResult = updater(null);
-          return { committed: false };
-        },
-      };
-    },
-  };
-
+test('stopping an already absent live leaf acknowledges absence without reading it', async () => {
+  const events = [];
+  const dbInstance = { ref() { return {
+    async remove() { events.push('remove'); },
+    async once() { throw new Error('private read denied'); },
+    async transaction() { throw new Error('private transaction denied'); },
+    onDisconnect() { return { async cancel() { events.push('cancel'); } }; },
+  }; } };
   const result = await withdrawLiveDriverLocation({
-    tourId: 'TOUR_1',
-    appSessionId: TEST_APP_SESSION_ID,
-    expectedSessionId: 'session_live_1',
-    dbInstance,
+    tourId: 'TOUR_1', appSessionId: TEST_APP_SESSION_ID,
+    expectedSessionId: 'session_live_1', dbInstance,
   });
-  assert.equal(result.removed, false);
-  assert.equal(transactionResult, undefined);
+  assert.equal(result.withdrawalAcknowledged, true);
+  assert.equal(result.removed, true); // Ack proves absence, not previous existence.
+  assert.deepEqual(events, ['remove', 'cancel']);
 });
 
 test('a location captured for a revoked tour scope cannot reach Firebase', async () => {
@@ -276,64 +271,49 @@ test('a location captured for a revoked tour scope cannot reach Firebase', async
   assert.deepEqual(writes, []);
 });
 
-test('auto publication arms disconnect removal and reports the authoritative server timestamp', async () => {
+test('auto publication arms cleanup and returns an acknowledged source with an explicit time estimate', async () => {
   const events = [];
-  const stored = { timestamp: 9876, source: 'auto', mode: 'live', sessionId: 'session_live' };
-  const dbInstance = {
-    ref() {
-      return {
-        async set() { events.push('set'); },
-        onDisconnect() { return { async remove() { events.push('disconnect-remove'); } }; },
-        async once() { return { val: () => stored }; },
-      };
-    },
-  };
+  let stored;
+  const dbInstance = { ref(path) {
+    if (path === '.info/serverTimeOffset') return { async once() { events.push('clock'); return { val: () => 8642 }; } };
+    return {
+      async set(value) { events.push('set'); stored = value; },
+      onDisconnect() { return { async remove() { events.push('disconnect-remove'); } }; },
+      async once() { throw new Error('private read denied'); },
+    };
+  } };
   const result = await publishDriverLocation({
-    tourId: 'TOUR_1',
-    location: { latitude: 56, longitude: -4, accuracy: 8 },
-    source: 'auto',
-    sessionId: 'session_live',
-    sessionScope: TEST_SESSION_SCOPE,
-    dbInstance,
-    now: () => 1234,
+    tourId: 'TOUR_1', location: { latitude: 56, longitude: -4, accuracy: 8 },
+    source: 'auto', sessionId: 'session_live', sessionScope: TEST_SESSION_SCOPE,
+    dbInstance, now: () => 1234,
   });
-  assert.deepEqual(events, ['disconnect-remove', 'set']);
+  assert.deepEqual(events, ['disconnect-remove', 'clock', 'set']);
   assert.equal(result.timestamp, 9876);
-  assert.equal(result.storedLocation, stored);
+  assert.equal(result.timestampSource, 'server_estimate');
+  assert.equal(result.publicationAcknowledged, true);
+  assert.equal(result.storedLocation, null);
+  assert.deepEqual(stored.timestamp, { '.sv': 'timestamp' });
+  assert.equal(stored.cleanupAtMs, 9876 + 30 * 60 * 1000);
 });
 
 test('post-write scope revocation removes only the publication session', async () => {
-  let scopeChecks = 0;
-  let transactionInput;
   let current = null;
-  const dbInstance = {
-    ref() {
-      return {
-        onDisconnect() { return { async remove() {}, async cancel() {} }; },
-        async set(value) { current = value; },
-        async transaction(updater) {
-          transactionInput = updater(current);
-          if (transactionInput === undefined) return { committed: false };
-          current = transactionInput;
-          return { committed: true, snapshot: { val: () => current } };
-        },
-      };
-    },
-  };
+  let scopeCurrent = true;
+  const paths = [];
+  const dbInstance = { ref(path) { return {
+    onDisconnect() { return { async remove() {}, async cancel() {} }; },
+    async set(value) { current = value; scopeCurrent = false; },
+    async remove() { paths.push(path); current = null; },
+  }; } };
   const result = await publishDriverLocation({
-    tourId: 'TOUR_1',
-    location: { latitude: 56, longitude: -4, accuracy: 8 },
-    source: 'auto',
-    sessionId: 'session_live',
-    sessionScope: TEST_SESSION_SCOPE,
-    dbInstance,
-    isScopeCurrent: () => {
-      scopeChecks += 1;
-      return scopeChecks === 1;
-    },
+    tourId: 'TOUR_1', location: { latitude: 56, longitude: -4, accuracy: 8 },
+    source: 'auto', sessionId: 'session_live', sessionScope: TEST_SESSION_SCOPE,
+    dbInstance, isScopeCurrent: () => scopeCurrent,
   });
   assert.equal(result.reason, 'DRIVER_LOCATION_SCOPE_REVOKED_AFTER_WRITE');
-  assert.equal(transactionInput, null);
+  assert.equal(result.withdrawalAcknowledged, true);
+  assert.equal(current, null);
+  assert.deepEqual(paths, [`driver_location_sessions/${TEST_APP_SESSION_ID}|session_live`]);
 });
 
 test('live sharing and fixed pickup remain separate across withdrawal', async () => {
@@ -358,6 +338,7 @@ test('live sharing and fixed pickup remain separate across withdrawal', async ()
     ref(path) {
       return {
         async set(value) { values.set(path, value); },
+        async remove() { values.delete(path); },
         async transaction(updater) {
           const current = values.get(path) || null;
           const next = updater(current);
@@ -410,31 +391,19 @@ test('live sharing and fixed pickup remain separate across withdrawal', async ()
   assert.equal(values.has(`driver_location_sessions/${TEST_APP_SESSION_ID}|session_live`), false);
 });
 
-test('session-scoped withdrawal cannot delete a newer live session', async () => {
-  let next;
-  const dbInstance = {
-    ref() {
-      return {
-        async transaction(updater) {
-          next = updater({
-            schemaVersion: 2,
-            source: 'auto',
-            mode: 'live',
-            appSessionId: TEST_APP_SESSION_ID,
-            liveSharingSessionId: 'new_session',
-            tourId: 'TOUR_1',
-          });
-          return { committed: false };
-        },
-      };
-    },
-  };
+test('session-scoped withdrawal targets only the old canonical key', async () => {
+  const oldPath = `driver_location_sessions/${TEST_APP_SESSION_ID}|old_session`;
+  const newPath = `driver_location_sessions/${TEST_APP_SESSION_ID}|new_session`;
+  const values = new Map([[oldPath, { latitude: 56 }], [newPath, { latitude: 57 }]]);
+  const dbInstance = { ref(path) { return {
+    async remove() { values.delete(path); },
+    async once() { throw new Error('private read denied'); },
+    async transaction() { throw new Error('private transaction denied'); },
+  }; } };
   const result = await withdrawLiveDriverLocation({
-    tourId: 'TOUR_1',
-    appSessionId: TEST_APP_SESSION_ID,
-    dbInstance,
-    expectedSessionId: 'old_session',
+    tourId: 'TOUR_1', appSessionId: TEST_APP_SESSION_ID, dbInstance, expectedSessionId: 'old_session',
   });
-  assert.equal(next, undefined);
-  assert.equal(result.removed, false);
+  assert.equal(result.withdrawalAcknowledged, true);
+  assert.equal(values.has(oldPath), false);
+  assert.equal(values.get(newPath).latitude, 57);
 });

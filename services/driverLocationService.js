@@ -2,8 +2,72 @@ import { normalizeTourId } from './tourIdentityService.js';
 import {
   buildDriverLocationSessionKey,
   buildDriverLocationSourcePayload,
-  resolveDriverLocationMode,
 } from '../utils/driverLocation.js';
+
+// Serialize only the exact private leaf. Separate installations/sharing sessions
+// remain independent, and settled queues release their references.
+const liveOperations = new WeakMap();
+const getLiveOperationState = (dbInstance, sessionKey) => {
+  let queues = liveOperations.get(dbInstance);
+  if (!queues) { queues = new Map(); liveOperations.set(dbInstance, queues); }
+  let state = queues.get(sessionKey);
+  if (!state) {
+    state = { tail: Promise.resolve(), withdrawalRequested: false };
+    queues.set(sessionKey, state);
+  }
+  return { queues, state };
+};
+
+const runLiveOperation = (dbInstance, sessionKey, operation, withdraw = false) => {
+  const { queues, state } = getLiveOperationState(dbInstance, sessionKey);
+  if (withdraw) state.withdrawalRequested = true;
+  const result = state.tail.catch(() => {}).then(() => operation(state));
+  state.tail = result;
+  const release = () => {
+    if (queues.get(sessionKey) === state && state.tail === result) queues.delete(sessionKey);
+  };
+  result.then(release, release);
+  return result;
+};
+
+const removeLiveSource = async (locationRef) => {
+  await locationRef.remove();
+  let disconnectCancelled = false;
+  try {
+    const handler = locationRef.onDisconnect?.();
+    if (typeof handler?.cancel === 'function') {
+      await handler.cancel();
+      disconnectCancelled = true;
+    }
+  } catch {
+    // Deletion already has a server acknowledgement. A remaining disconnect
+    // delete on this retired leaf is harmless; do not report a false failure.
+  }
+  return { success: true, removed: true, withdrawalAcknowledged: true, disconnectCancelled };
+};
+
+const skippedLivePublication = async (locationRef, reason) => {
+  try {
+    const cleanup = await removeLiveSource(locationRef);
+    return { success: false, skipped: true, reason, withdrawalAcknowledged: cleanup.withdrawalAcknowledged };
+  } catch {
+    return { success: false, skipped: true, reason, withdrawalAcknowledged: false, cleanupPending: true };
+  }
+};
+
+const estimatePublicationTime = async (dbInstance, now) => {
+  let offset = null;
+  try {
+    // Built-in connection metadata is readable; private location sources are not.
+    const snapshot = await dbInstance.ref('.info/serverTimeOffset').once('value');
+    const value = snapshot?.val?.();
+    if (typeof value === 'number' && Number.isFinite(value)) offset = value;
+  } catch { /* A clock estimate is still available when metadata cannot be read. */ }
+  return {
+    timestamp: Math.trunc(now() + (offset ?? 0)),
+    timestampSource: offset === null ? 'client_estimate' : 'server_estimate',
+  };
+};
 
 export const createDriverLocationSessionId = (now = Date.now, random = Math.random) => (
   `loc_${Math.trunc(now()).toString(36)}_${random().toString(36).slice(2, 12)}`
@@ -12,7 +76,7 @@ export const createDriverLocationSessionId = (now = Date.now, random = Math.rand
 const resolveTourScope = (tourId, dbInstance) => {
   const normalizedTourId = normalizeTourId(tourId);
   if (!normalizedTourId) throw new Error('A valid tour ID is required');
-  if (!dbInstance?.ref) throw new Error('Realtime Database is unavailable');
+  if (typeof dbInstance?.ref !== 'function') throw new Error('Realtime Database is unavailable');
   return normalizedTourId;
 };
 
@@ -30,6 +94,12 @@ const resolveSessionOwnership = ({ sessionScope, appSessionId, authUid, driverId
     driverId: driverId || scope.cacheOwnerId || principalDriverId,
     tourId: normalizedTourId,
   };
+  for (const [provided, expected] of [
+    [appSessionId, scope.sessionId], [authUid, scope.authUid],
+    [driverId, scope.cacheOwnerId || principalDriverId],
+  ]) {
+    if (provided && expected && provided !== expected) throw new Error('The location identity conflicts with its app session');
+  }
   if (scopeTourId && scopeTourId !== normalizedTourId) {
     throw new Error('The app session does not own this tour');
   }
@@ -62,7 +132,6 @@ export const publishDriverLocation = async ({
   driverId,
   pickupMutation,
 }) => {
-  const publishedAtMs = now();
   const normalizedTourId = resolveTourScope(tourId, dbInstance);
   const ownership = resolveSessionOwnership({
     sessionScope,
@@ -79,6 +148,7 @@ export const publishDriverLocation = async ({
     };
   }
   if (source !== 'auto') {
+    const publishedAtMs = now();
     const mutatePickup = pickupMutation
       || (await import('./driverLocationPickupApi.js')).mutateDriverLocationPickup;
     const result = await mutatePickup({
@@ -96,63 +166,44 @@ export const publishDriverLocation = async ({
       storedLocation,
     };
   }
-  const payload = buildDriverLocationSourcePayload({
-    ...location,
-    source,
-    address,
-    updatedBy,
-    liveSharingSessionId: sessionId,
-    ...ownership,
-    nowMs: publishedAtMs,
+  const { locationRef, sessionKey } = resolveLiveLocationRef({
+    appSessionId: ownership.appSessionId, liveSharingSessionId: sessionId, dbInstance,
   });
-  const { locationRef, sessionKey = null } = resolveLiveLocationRef({
-      appSessionId: ownership.appSessionId,
-      liveSharingSessionId: sessionId,
-      dbInstance,
-    });
-  const disconnectHandler = locationRef.onDisconnect?.();
-  try {
+  return runLiveOperation(dbInstance, sessionKey, async (state) => {
+    if (state.withdrawalRequested || !isScopeCurrent()) {
+      return { success: false, skipped: true, reason: 'DRIVER_LOCATION_SCOPE_REVOKED' };
+    }
+    // Validate before arming any remote operation; refresh the lease after waits.
+    buildDriverLocationSourcePayload({ ...location, source, address, updatedBy,
+      liveSharingSessionId: sessionId, ...ownership, nowMs: now() });
+    const disconnectHandler = locationRef.onDisconnect?.();
     if (typeof disconnectHandler?.remove !== 'function') throw new Error('Realtime disconnect cleanup is unavailable');
     await disconnectHandler.remove();
-    await locationRef.set(payload);
-  } catch (error) {
-    await withdrawLiveDriverLocation({
-      tourId: normalizedTourId,
-      appSessionId: ownership.appSessionId,
-      dbInstance,
-      expectedSessionId: payload.liveSharingSessionId,
-    }).catch(() => {});
-    throw error;
-  }
-
-  if (!isScopeCurrent()) {
-    if (source === 'auto') {
-      await withdrawLiveDriverLocation({
-        tourId: normalizedTourId,
-        appSessionId: ownership.appSessionId,
-        dbInstance,
-        expectedSessionId: payload.liveSharingSessionId,
-      });
+    if (state.withdrawalRequested || !isScopeCurrent()) {
+      return skippedLivePublication(locationRef, 'DRIVER_LOCATION_SCOPE_REVOKED_BEFORE_WRITE');
     }
-    return {
-      success: false,
-      skipped: true,
-      reason: 'DRIVER_LOCATION_SCOPE_REVOKED_AFTER_WRITE',
-    };
-  }
-
-  let storedLocation = null;
-  if (typeof locationRef.once === 'function') {
-    const snapshot = await locationRef.once('value');
-    storedLocation = snapshot?.val?.() || null;
-  }
-  return {
-    success: true,
-    ...payload,
-    sessionKey,
-    timestamp: storedLocation?.timestamp ?? publishedAtMs,
-    storedLocation,
-  };
+    const estimate = await estimatePublicationTime(dbInstance, now);
+    if (state.withdrawalRequested || !isScopeCurrent()) {
+      return skippedLivePublication(locationRef, 'DRIVER_LOCATION_SCOPE_REVOKED_BEFORE_WRITE');
+    }
+    const payload = buildDriverLocationSourcePayload({ ...location, source, address, updatedBy,
+      liveSharingSessionId: sessionId, ...ownership, nowMs: estimate.timestamp });
+    try {
+      await locationRef.set(payload);
+    } catch (error) {
+      // A rejected write is rolled back by Firebase. Preserve an earlier good
+      // publication and its disconnect cleanup unless the scope was stopped.
+      if (state.withdrawalRequested || !isScopeCurrent()) {
+        await skippedLivePublication(locationRef, 'DRIVER_LOCATION_SCOPE_REVOKED_AFTER_WRITE');
+      }
+      throw error;
+    }
+    if (state.withdrawalRequested || !isScopeCurrent()) {
+      return skippedLivePublication(locationRef, 'DRIVER_LOCATION_SCOPE_REVOKED_AFTER_WRITE');
+    }
+    return { success: true, ...payload, sessionKey, timestamp: estimate.timestamp,
+      timestampSource: estimate.timestampSource, publicationAcknowledged: true, storedLocation: null };
+  });
 };
 
 export const withdrawDriverLocation = async ({ tourId, sessionScope, pickupMutation }) => {
@@ -170,21 +221,14 @@ export const withdrawLiveDriverLocation = async ({
   dbInstance,
   expectedSessionId,
 } = {}) => {
-  const normalizedTourId = resolveTourScope(tourId, dbInstance);
+  resolveTourScope(tourId, dbInstance);
   const resolvedAppSessionId = appSessionId || sessionScope?.sessionId || '';
-  const { locationRef } = resolveLiveLocationRef({
+  const { locationRef, sessionKey } = resolveLiveLocationRef({
     appSessionId: resolvedAppSessionId,
     liveSharingSessionId: expectedSessionId,
     dbInstance,
   });
-  const transactionResult = await locationRef.transaction((current) => {
-    if (!current || resolveDriverLocationMode(current) !== 'live') return undefined;
-    if (current.appSessionId !== resolvedAppSessionId) return undefined;
-    if (current.liveSharingSessionId !== expectedSessionId) return undefined;
-    if (normalizeTourId(current.tourId) !== normalizedTourId) return undefined;
-    return null;
-  }, undefined, false);
-  const removed = transactionResult?.committed === true;
-  if (removed) await locationRef.onDisconnect?.().cancel?.();
-  return { success: true, removed };
+  // The canonical key and server rules bind ownership. A client transaction
+  // would require forbidden reads and can falsely abort on an empty SDK cache.
+  return runLiveOperation(dbInstance, sessionKey, () => removeLiveSource(locationRef), true);
 };

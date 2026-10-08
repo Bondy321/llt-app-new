@@ -1177,7 +1177,8 @@ test('Static contract: driver auto-share is in-app, non-overlapping, and durably
   assert.match(source, /locationBusyRef\.current/);
   assert.match(source, /withdrawLiveDriverLocation/);
   assert.match(source, /publishDriverLocation/);
-  assert.match(source, /change could not be saved/);
+  assert.match(source, /Location updates are off/);
+  assert.match(source, /live location removal is pending/);
   assert.match(source, /every 3 minutes while active and tour-assigned/);
   assert.doesNotMatch(source, /background location share/);
 });

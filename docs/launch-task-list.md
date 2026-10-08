@@ -45,7 +45,7 @@ Confirmed issue: the initial checkout failed its security audit gate across mobi
 - [x] Trace the high and critical advisories to installed packages and choose compatible updates or a justified, reviewed resolution. Avoid forced downgrades from `npm audit fix --force`.
 - [x] Update affected lockfiles and pass the release audit and complete app regression suite. Firebase integration checks remain required in CI.
 - [x] Verify a clean dependency install and matching Expo package versions, without a forced framework downgrade.
-- [ ] Keep verification resource use bounded and pass the complete required checks before merging to main.
+- [x] Keep verification resource use bounded and pass the complete required checks before merging to main.
 
 Complete when: the audit gates, SDK compatibility, clean installation and required regression checks pass on the final dependency graph. Report any lower-severity development-tool findings explicitly.
 
@@ -55,10 +55,12 @@ Dependency baseline: [implementation and verification notes](dependency-stabilit
 
 Confirmed issue: the mobile location service reads its private source after writing it and uses a read-dependent transaction during withdrawal, while deployed rules deny client reads of that source. The service/rules combination reproduces publication errors and a withdrawal that reports success without removing the source.
 
-- [ ] Fix `services/driverLocationService.js` to use operations permitted by the current ownership contract.
-- [ ] Preserve exact session ownership and protection against old callbacks removing newer sources.
-- [ ] Add a regression test exercising the actual service against the emulator rules, covering publication, withdrawal and multiple devices.
-- [ ] Verify logout, reassignment, expiry and passenger projection cleanup.
+- [x] Fix `services/driverLocationService.js` to use operations permitted by the current ownership contract.
+- [x] Preserve exact session ownership and protection against old callbacks removing newer sources.
+- [x] Add a regression test exercising the actual service against the emulator rules, covering publication, withdrawal and multiple devices.
+- [x] Verify logout, reassignment, expiry and passenger projection cleanup through service/rules integration and backend regression tests. Physical-device release acceptance remains in stage 8.
+
+The switch now stops local updates immediately and retains the exact retired session for failed-removal retries. Server acknowledgement is distinguished from the estimated UI timestamp and asynchronous passenger projection. This stage changes mobile JavaScript only; it does not deploy rules or Functions, change the compatibility phase, or introduce background tracking.
 
 Complete when: valid writes succeed, owned sources are actually withdrawn, and another session or device cannot overwrite or remove them incorrectly.
 

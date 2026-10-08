@@ -1,9 +1,10 @@
 # Driver Location and Find My Bus Contract
 
-Date: 28 August 2026
+Updated: 8 October 2026
 
 Passengers continue to read the server-owned compatibility projection at
-`tours/{tourId}/driverLocation`. Clients cannot write or remove that projection.
+`tours/{tourId}/driverLocation`. Current clients never write or remove that
+projection; legacy shared-path permissions remain during compatibility below.
 
 ## Private sources
 
@@ -17,7 +18,49 @@ Its schema-v2 record contains exact `authUid`, `appSessionId`, `driverId`,
 `tourId`, `liveSharingSessionId`, bounded coordinates and accuracy, a server
 timestamp, and `cleanupAtMs`. The handset arms `onDisconnect` before writing.
 Logout, role/session replacement, unmount, backgrounding, and disabling sharing
-compare-delete only the exact live leaf.
+remove only the exact live leaf. The canonical key and Firebase rules bind its
+ownership. Client reads of private sources are always denied, so publication
+uses the `set()` acknowledgement and withdrawal uses direct `remove()`, never
+a source read or read-dependent transaction.
+
+The service serializes publication and withdrawal per database instance and
+exact source key. A stop request immediately fences queued publications. Scope
+guards run after disconnect registration, clock estimation and the write
+acknowledgement; a superseded write is removed from its own retired leaf.
+Independent live sessions remain independent. Every sharing start needs a fresh
+live session ID and the caller must invalidate its scope immediately on stop.
+Settled queues release their references; they are not permanent retired-ID stores.
+
+The publication result carries `publicationAcknowledged: true`,
+`storedLocation: null`, and an explicitly estimated numeric `timestamp` with
+`timestampSource: 'server_estimate' | 'client_estimate'`. Only readable built-in
+`.info/serverTimeOffset` metadata is consulted. The stored timestamp uses Firebase
+server time, and passengers receive the authoritative time from the projection.
+The cleanup lease is built after asynchronous waits rather than before them.
+Null, boolean or blank GPS inputs cannot be coerced into valid zero coordinates
+or perfect accuracy; genuine zero coordinates remain valid.
+
+`withdrawalAcknowledged: true` means the exact leaf is acknowledged absent,
+including an already-absent leaf. It does not prove a record previously existed
+or that the asynchronous passenger projection has finished. Disconnect cleanup
+is cancelled only after acknowledged removal. Failed deletion retains it;
+failed cancellation after successful deletion does not falsify the acknowledgement.
+A failed update leaves an earlier accepted source and its disconnect cleanup
+intact unless the sharing scope has been stopped.
+
+Driver Home switches updates off immediately, invalidates the generation and
+keeps each retired source identity in a pending map through failure and rerender.
+Retry deletes those same leaves, including after effect cleanup has cleared the
+active session. Preference loading is fenced against subsequent explicit toggles;
+an abandoned enable after a scope change restores its saved preference to off.
+The enabled preference is bound to its driver and storage key, so a reused
+controller pauses immediately while a different driver's preference is loading.
+Until confirmed, the status says removal is pending or being
+confirmed. Successful removal clears only this session's optimistic local point;
+it preserves another handset's public point and the fixed pickup. The map is
+screen-local, not durable tracking state: disconnect handling, server authority
+cleanup and expiry remain the fallback after unmount or authority loss. Background
+tracking ownership is a separate implementation stage.
 
 A manual fixed pickup is assignment owned, not installation owned:
 
@@ -133,3 +176,14 @@ npm run test:functions:scripts
 npm run test:emulators
 npm run test:contracts
 ```
+
+`tests/driverLocation.lifecycle.test.mjs` covers serialized races, failed writes,
+retry identity, clock estimates and malformed coordinates using write-only fakes.
+`tests/driverLocationSharing.behavior.test.js` exercises the real React actions
+through stop/retry, rerender, login/assignment changes, background and unmount.
+`tests/firebaseRules/driverLocationService.rules.test.js` runs the real service
+against the repository rules, verifies unreadable sources, actual server timestamps,
+owned deletion/disconnect removal, multi-device isolation, pickup fallback and
+projection exclusion after logout, revocation, expiry or reassignment. It invokes
+the real projector with trusted emulator access; it does not emulate deployed
+trigger delivery or replace physical device acceptance.

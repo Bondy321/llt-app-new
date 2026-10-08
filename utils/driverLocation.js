@@ -44,9 +44,15 @@ export const buildDriverLocationSessionKey = (appSessionId, liveSharingSessionId
   return `${normalizedAppSessionId}|${normalizedLiveSharingSessionId}`;
 };
 
+const isNumericInput = (value) => typeof value === 'number'
+  || (typeof value === 'string' && value.trim().length > 0);
+
 export const normalizeDriverCoordinates = (value) => {
-  const latitude = Number(value?.latitude ?? value?.lat);
-  const longitude = Number(value?.longitude ?? value?.lng);
+  const rawLatitude = value?.latitude ?? value?.lat;
+  const rawLongitude = value?.longitude ?? value?.lng;
+  if (!isNumericInput(rawLatitude) || !isNumericInput(rawLongitude)) return null;
+  const latitude = Number(rawLatitude);
+  const longitude = Number(rawLongitude);
   if (
     !Number.isFinite(latitude)
     || latitude < -90
@@ -223,7 +229,7 @@ export const buildDriverLocationPayload = ({
   };
 
   const normalizedAccuracy = Number(accuracy);
-  const hasBoundedAccuracy = Number.isFinite(normalizedAccuracy)
+  const hasBoundedAccuracy = isNumericInput(accuracy) && Number.isFinite(normalizedAccuracy)
     && normalizedAccuracy >= 0
     && normalizedAccuracy <= 10000;
 

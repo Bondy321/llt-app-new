@@ -8,8 +8,8 @@ import { realtimeDb } from '../../firebase';
 import logger, { maskIdentifier } from '../loggerService';
 import {
   createDriverLocationSessionId,
-  withdrawLiveDriverLocation,
 } from '../driverLocationService';
+import { withdrawDriverLiveLocationSession, withdrawPendingDriverLiveLocations } from './driverLiveLocationWithdrawal';
 import {
   DRIVER_LOCATION_MAX_ACTIONABLE_ACCURACY_METERS,
 } from '../../utils/driverLocation';
@@ -17,7 +17,7 @@ const AUTO_SHARE_INTERVAL_MS = 3 * 60 * 1000;
 
 
 export default function createDriverLocationSharingActions(context) {
-  const { activeTourId, activeTourIdRef, autoShareEnabled, autoShareEnabledRef, autoShareGenerationRef, autoShareInFlightRef, autoShareInitialLocationRef, autoSharePreferenceKey, autoShareSessionRef, autoShareToggleInFlightRef, captureCurrentLocationWithPermission, driverData, driverIdRef, getAddressFromCoords, isAppActive, isAppActiveRef, lastLocationAddressRef, locationBusyRef, locationSessionScope, persistenceRef, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setAutoShareEnabled, setAutoShareLastRunAt, setAutoShareSaving, setAutoShareStatus, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, uploadLocationUpdate } = context;
+  const { activeTourId, activeTourIdRef, autoShareEnabled, autoShareEnabledRef, autoShareGenerationRef, autoShareInFlightRef, autoShareInitialLocationRef, autoSharePendingWithdrawalsRef, autoSharePreferenceGenerationRef, autoSharePreferenceKey, autoShareSessionRef, autoShareToggleInFlightRef, captureCurrentLocationWithPermission, driverData, driverIdRef, getAddressFromCoords, isAppActive, isAppActiveRef, lastLocationAddressRef, locationBusyRef, locationSessionScope, locationSessionScopeRef, persistenceRef, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setAutoShareEnabled, setAutoShareLastRunAt, setAutoShareSaving, setAutoShareStatus, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, uploadLocationUpdate } = context;
   const handleToggleAutoShare = async (enabled) => {
     logger.info('DriverHomeScreen', 'Auto-share toggle requested', {
       activeTourId,
@@ -40,7 +40,13 @@ export default function createDriverLocationSharingActions(context) {
 
     if (autoShareToggleInFlightRef.current) return;
     autoShareToggleInFlightRef.current = true;
+    autoSharePreferenceGenerationRef.current += 1;
     setAutoShareSaving(true);
+    let removalAcknowledged = false;
+    const isEnableScopeCurrent = () => activeTourIdRef.current === activeTourId
+      && driverIdRef.current === driverData?.id && isAppActiveRef.current
+      && (!locationSessionScopeRef || (locationSessionScopeRef.current?.sessionId === locationSessionScope?.sessionId
+        && locationSessionScopeRef.current?.authUid === locationSessionScope?.authUid));
     try {
       if (enabled) {
         const permission = await captureCurrentLocationWithPermission(Location.Accuracy.Balanced);
@@ -52,23 +58,48 @@ export default function createDriverLocationSharingActions(context) {
           });
           return;
         }
+        if (!isEnableScopeCurrent()) {
+          showBanner({ type: 'warning', message: 'Your driver session or assignment changed. Try enabling sharing again.' });
+          return;
+        }
         autoShareInitialLocationRef.current = permission.location;
-      } else if (activeTourId) {
+      } else {
         const activeSession = autoShareSessionRef.current;
         autoShareGenerationRef.current += 1;
         autoShareSessionRef.current = null;
         autoShareEnabledRef.current = false;
-        const withdrawal = await withdrawLiveDriverLocation({
-          tourId: activeSession?.tourId || activeTourId,
-          appSessionId: activeSession?.appSessionId || locationSessionScope?.sessionId,
-          dbInstance: realtimeDb,
-          expectedSessionId: activeSession?.sessionId,
-        });
-        if (withdrawal.removed) setLastLocationUpdate(null);
+        autoShareInitialLocationRef.current = null;
+        setAutoShareEnabled(false);
         setAutoShareLastRunAt(null);
+        setAutoShareStatus('Updates are off: confirming live location removal');
+        const pending = autoSharePendingWithdrawalsRef.current;
+        const retiredSessions = [...pending.values()].map(entry => entry.session);
+        if (activeSession) retiredSessions.push(activeSession);
+        withdrawDriverLiveLocationSession({ session: activeSession, pending, dbInstance: realtimeDb }).catch(() => {});
+        const [saved, withdrawn] = await Promise.allSettled([
+          persistenceRef.current.setItemAsync(autoSharePreferenceKey, 'false'),
+          withdrawPendingDriverLiveLocations({ pending, dbInstance: realtimeDb }),
+        ]);
+        removalAcknowledged = withdrawn.status === 'fulfilled';
+        if (withdrawn.status === 'rejected') throw withdrawn.reason;
+        if (saved.status === 'rejected') throw saved.reason;
+        // Only discard our own optimistic point. The server projection may now
+        // show a fixed pickup or another device's still-valid location.
+        setLastLocationUpdate(current => retiredSessions.some(retired => current?.appSessionId === retired.appSessionId
+          && current?.liveSharingSessionId === retired.sessionId) ? null : current);
+        setAutoShareStatus('Auto-share is off');
+        return;
       }
 
       await persistenceRef.current.setItemAsync(autoSharePreferenceKey, enabled ? 'true' : 'false');
+      if (!isEnableScopeCurrent()) {
+        autoShareInitialLocationRef.current = null;
+        // The completed write belongs to the captured driver preference. An
+        // aborted enable must not silently resume sharing after a remount.
+        await persistenceRef.current.setItemAsync(autoSharePreferenceKey, 'false');
+        showBanner({ type: 'warning', message: 'Your driver session or assignment changed. Try enabling sharing again.' });
+        return;
+      }
       setAutoShareEnabled(enabled);
       setAutoShareStatus(enabled ? 'Waiting for the first live update' : 'Auto-share is off');
       logger.info('DriverHomeScreen', 'Auto-share preference saved', {
@@ -76,14 +107,16 @@ export default function createDriverLocationSharingActions(context) {
         enabled,
       });
     } catch (error) {
-      setAutoShareStatus(autoShareEnabled
-        ? 'Live sharing is still on: could not safely turn it off'
-        : 'Auto-share is off: change could not be saved');
+      setAutoShareStatus(enabled
+        ? 'Auto-share could not be enabled safely'
+        : removalAcknowledged ? 'Auto-share is off: preference could not be saved'
+          : 'Updates are off: live location removal is pending');
       showBanner({
         type: 'error',
         message: enabled
           ? 'Live sharing could not be enabled safely. Try again.'
-          : 'Live sharing could not be withdrawn. Check your connection and try again.',
+          : removalAcknowledged ? 'Sharing stopped, but the preference could not be saved. Retry.'
+            : 'Location updates are off. The last live position could not yet be removed. Check your connection and retry.',
         actionLabel: 'Retry',
         actionHandler: () => handleToggleAutoShare(enabled),
       });
@@ -104,6 +137,10 @@ export default function createDriverLocationSharingActions(context) {
       setAutoShareStatus('Paused: join a tour to resume auto-share');
       return undefined;
     }
+    if (!locationSessionScope?.sessionId || !locationSessionScope?.authUid || !driverData?.id) {
+      setAutoShareStatus('Paused: secure driver session is syncing');
+      return undefined;
+    }
     if (!isAppActive) {
       setAutoShareStatus('Paused while the app is in the background');
       return undefined;
@@ -119,7 +156,9 @@ export default function createDriverLocationSharingActions(context) {
     const session = { generation, sessionId, appSessionId, tourId: targetTourId, driverId: targetDriverId };
     autoShareGenerationRef.current = generation;
     autoShareSessionRef.current = session;
-    const isScopeCurrent = () => (
+    const isScopeCurrent = () => {
+      const currentScope = locationSessionScopeRef ? locationSessionScopeRef.current : locationSessionScope;
+      return (
       !cancelled
       && autoShareGenerationRef.current === generation
       && autoShareSessionRef.current?.sessionId === sessionId
@@ -127,8 +166,10 @@ export default function createDriverLocationSharingActions(context) {
       && isAppActiveRef.current
       && activeTourIdRef.current === targetTourId
       && driverIdRef.current === targetDriverId
-      && locationSessionScope?.sessionId === appSessionId
-    );
+      && currentScope?.sessionId === appSessionId
+      && currentScope?.authUid === locationSessionScope.authUid
+      );
+    };
 
     const runAutoShare = async () => {
       if (!isScopeCurrent() || locationBusyRef.current || autoShareInFlightRef.current === generation) return;
@@ -216,11 +257,8 @@ export default function createDriverLocationSharingActions(context) {
         autoShareSessionRef.current = null;
         autoShareGenerationRef.current += 1;
       }
-      withdrawLiveDriverLocation({
-        tourId: targetTourId,
-        appSessionId,
-        dbInstance: realtimeDb,
-        expectedSessionId: sessionId,
+      withdrawDriverLiveLocationSession({
+        session, pending: autoSharePendingWithdrawalsRef.current, dbInstance: realtimeDb,
       }).catch((error) => {
         logger.warn('DriverHomeScreen', 'Live location withdrawal on lifecycle change failed', {
           activeTourId: targetTourId,
