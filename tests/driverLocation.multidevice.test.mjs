@@ -33,9 +33,11 @@ function createRealtimeHarness() {
           values.delete(path);
         },
         async once() {
+          if (path.startsWith('driver_location_sessions/')) throw new Error('private read denied');
           return buildSnapshot(path);
         },
         async transaction(update) {
+          if (path.startsWith('driver_location_sessions/')) throw new Error('private transaction denied');
           const current = clone(values.get(path) ?? null);
           const next = update(current);
           if (next === undefined) return { committed: false, snapshot: buildSnapshot(path) };
@@ -121,7 +123,8 @@ test('live withdrawal compares both app-session and live-sharing ownership', asy
     dbInstance: db,
     expectedSessionId: 'live_session_a',
   });
-  assert.equal(stale.removed, false);
+  assert.equal(stale.withdrawalAcknowledged, true);
+  assert.equal(db.writes.at(-1).path, `driver_location_sessions/${APP_SESSION_B}|live_session_a`);
   assert.ok(db.values.has(`driver_location_sessions/${APP_SESSION_B}|live_session_b`));
 });
 
