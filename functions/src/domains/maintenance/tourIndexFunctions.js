@@ -8,7 +8,7 @@ const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { buildDriverTourPackActionProjectionUpdates } = loadLegacyLibrary('driverTourPackOperations');
-const { deriveTourDateIndexUpdate } = loadLegacyLibrary('tourDateIndex');
+const { reconcileTourDateIndexes } = loadLegacyLibrary('tourDateIndex');
 
 /** @param {any} snapshot */
 const readSnapshotValue = (snapshot) => (
@@ -20,15 +20,11 @@ const normalizeTourDateIndexesForEvent = async (event) => {
   const tourId = event.params.tourId;
   if (!isValidFirebaseKey(tourId)) return null;
   const tourRef = admin.database().ref(`tours/${tourId}`);
-  const tourSnapshot = await tourRef.once('value');
-  const tour = tourSnapshot.val() || null;
-  if (!tour) return null;
-  const indexUpdate = deriveTourDateIndexUpdate(tour);
-  if (!indexUpdate) return null;
-  await tourRef.update(indexUpdate);
+  const result = await reconcileTourDateIndexes(tourRef);
+  if (!result.committed) return null;
   log.info('Tour date query indexes normalized', {
     tourId,
-    indexed: indexUpdate.startDateEpochMs !== null,
+    indexed: result.snapshot?.val()?.startDateEpochMs != null,
   });
   return null;
 };

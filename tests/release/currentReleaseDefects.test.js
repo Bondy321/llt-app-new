@@ -12,7 +12,7 @@ test('the native graph has the next appVersion compatibility identity from one c
   const packageJson = JSON.parse(read('package.json'));
   const appConfigSource = read('app.config.js');
 
-  assert.equal(packageJson.version, '1.0.5');
+  assert.equal(packageJson.version, '1.0.6');
   assert.match(appConfigSource, /require\(['"]\.\/package\.json['"]\)/u);
   assert.doesNotMatch(appConfigSource, /version:\s*['"]1\.0\.\d+['"]/u);
 });
