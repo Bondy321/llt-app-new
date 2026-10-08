@@ -1,9 +1,6 @@
+import createDriverLocationPreviewActions from './createDriverLocationPreviewActions';
 import { useEffect } from 'react';
-import {
-  Platform,
-} from 'react-native';
 import * as Location from 'expo-location';
-import * as Haptics from '../hapticsService';
 import { realtimeDb } from '../../firebase';
 import logger, { maskIdentifier } from '../loggerService';
 import {
@@ -17,7 +14,7 @@ const AUTO_SHARE_INTERVAL_MS = 3 * 60 * 1000;
 
 
 export default function createDriverLocationSharingActions(context) {
-  const { activeTourId, activeTourIdRef, autoShareEnabled, autoShareEnabledRef, autoShareGenerationRef, autoShareInFlightRef, autoShareInitialLocationRef, autoSharePendingWithdrawalsRef, autoSharePreferenceGenerationRef, autoSharePreferenceKey, autoShareSessionRef, autoShareToggleInFlightRef, captureCurrentLocationWithPermission, driverData, driverIdRef, getAddressFromCoords, isAppActive, isAppActiveRef, lastLocationAddressRef, locationBusyRef, locationSessionScope, locationSessionScopeRef, persistenceRef, previewLocation, previewRequestIdRef, setAddressLoading, setAddressText, setAutoShareEnabled, setAutoShareLastRunAt, setAutoShareSaving, setAutoShareStatus, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, setPreviewLocation, setPreviewModalVisible, setUpdatingLocation, showBanner, uploadLocationUpdate } = context;
+  const { activeTourId, activeTourIdRef, autoShareEnabled, autoShareEnabledRef, autoShareGenerationRef, autoShareInFlightRef, autoShareInitialLocationRef, autoSharePendingWithdrawalsRef, autoSharePreferenceGenerationRef, autoSharePreferenceKey, autoShareSessionRef, autoShareToggleInFlightRef, captureCurrentLocationWithPermission, driverData, driverIdRef, isAppActive, isAppActiveRef, lastLocationAddressRef, locationBusyRef, locationSessionScope, locationSessionScopeRef, persistenceRef, setAutoShareEnabled, setAutoShareLastRunAt, setAutoShareSaving, setAutoShareStatus, setJoinModalVisible, setLastLocationUpdate, setLocationAccuracy, showBanner, uploadLocationUpdate } = context;
   const handleToggleAutoShare = async (enabled) => {
     logger.info('DriverHomeScreen', 'Auto-share toggle requested', {
       activeTourId,
@@ -275,83 +272,7 @@ export default function createDriverLocationSharingActions(context) {
     locationSessionScope?.sessionId,
   ]);
 
-  // Refetch location in preview modal
-  const handleRefetchLocation = async () => {
-    const currentPreview = previewLocation;
-    if (!currentPreview) return;
-    if (
-      activeTourIdRef.current !== currentPreview.tourId
-      || driverIdRef.current !== currentPreview.driverId
-    ) {
-      setPreviewModalVisible(false);
-      setPreviewLocation(null);
-      showBanner({ type: 'warning', message: 'Your tour assignment changed. Capture the pickup point again.' });
-      return;
-    }
-    const requestId = previewRequestIdRef.current + 1;
-    previewRequestIdRef.current = requestId;
-    if (Platform.OS === 'ios') {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    }
-
-    setUpdatingLocation(true);
-    logger.info('DriverHomeScreen', 'Location preview refresh started', { activeTourId });
-
-    try {
-      const captureResult = await captureCurrentLocationWithPermission(Location.Accuracy.High);
-      if (!captureResult.success) {
-        showBanner({ type: 'warning', message: 'Allow location access before refreshing the pickup point.' });
-        return;
-      }
-      const location = captureResult.location;
-
-      const { latitude, longitude, accuracy } = location.coords;
-
-      const nextPreview = {
-        latitude,
-        longitude,
-        accuracy,
-        timestamp: new Date().toISOString(),
-        tourId: currentPreview.tourId,
-        driverId: currentPreview.driverId,
-        requestId,
-      };
-
-      setAddressLoading(true);
-      const address = await getAddressFromCoords(latitude, longitude, currentPreview.tourId);
-      if (
-        previewRequestIdRef.current !== requestId
-        || activeTourIdRef.current !== currentPreview.tourId
-        || driverIdRef.current !== currentPreview.driverId
-      ) return;
-      setPreviewLocation(nextPreview);
-      setLocationAccuracy(accuracy);
-      setAddressText(address);
-      setAddressLoading(false);
-      logger.info('DriverHomeScreen', 'Location preview refresh completed', {
-        activeTourId,
-        accuracy: Number.isFinite(Number(accuracy)) ? Math.round(Number(accuracy)) : null,
-      });
-
-    } catch (error) {
-      logger.error('DriverHomeScreen', 'Location preview refresh failed', {
-        activeTourId,
-        error: error?.message || String(error),
-      });
-      showBanner({
-        type: 'error',
-        message: 'Couldn’t refresh location. Retry.',
-        actionLabel: 'Retry',
-        actionHandler: handleRefetchLocation,
-      });
-    } finally {
-      if (previewRequestIdRef.current === requestId) {
-        setAddressLoading(false);
-        setUpdatingLocation(false);
-      }
-    }
-  };
-
+  const { handleRefetchLocation } = createDriverLocationPreviewActions(context);
 
   return { handleToggleAutoShare, handleRefetchLocation };
 }

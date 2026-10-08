@@ -37,6 +37,7 @@ const renderDriverHome = (context) => (
   <DriverHomeScreen
     driverData={context.bookingData}
     locationSessionScope={context.offlineSessionScope}
+    driverTracking={context.driverTracking}
     onLogout={context.handleLogout}
     onNavigate={context.navigateTo}
     onDriverAssignmentChange={context.handleDriverAssignmentChange}

@@ -104,6 +104,7 @@ const validateContract = (name, value, options = {}) => {
   for (const constraint of contract.constraints || []) {
     if (constraint === 'driverPrincipalMatchesDriverId' && value.principalType === 'driver' && value.principalId !== \`driver:${'${value.driverId}'}\`) errors.push('driver principal does not match driverId');
     if (constraint === 'passengerPrincipalIsOpaque' && value.principalType === 'passenger' && !/^pax_v2_[a-f0-9]{32}$/u.test(value.principalId || '')) errors.push('passenger principal is not opaque');
+    if (constraint === 'trackingExpiryAfterStart' && Number(value.expiresAtMs) <= Number(value.startedAtMs)) errors.push('tracking expiry must follow start');
     if (constraint === 'expiryAfterIssue' && Number(value.expiresAtMs) <= Number(value.lastAuthenticatedAtMs ?? value.issuedAtMs)) errors.push('session expiry must follow authentication');
     if (constraint === 'idempotencyEqualsId' && value.id && value.idempotencyKey !== value.id) errors.push('idempotency key must equal the record id');
     if (constraint === 'notificationRouteSemantics') {

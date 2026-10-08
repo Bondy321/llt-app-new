@@ -4,7 +4,7 @@ Welcome, Agent. This file is the operational source of truth for contributors wo
 
 For the current launch work, the user authorizes committing and pushing completed fixes directly to `main`. Keep the implementation and required verification standards; use a short implement, verify, push loop without adding staged rollout or PR approval steps. Record any required service deployment and live checks truthfully; a Git push alone does not make backend changes live.
 
-Last updated: August 29, 2026
+Last updated: October 8, 2026
 
 Architecture source of truth: start with `docs/architecture/overview.md`, then follow `module-boundaries.md` and the runtime-specific document. Account deletion is specified by `docs/data-contracts/account-deletion.md`, ADR 0009 and `docs/operations/account-deletion.md`; do not duplicate or weaken that preservation boundary. Keep `App.js` and `functions/index.js` as composition roots; preserve compatibility facades; place Firebase, HTTP, and persistence access behind adapters; update canonical contracts and generated copies together; run `npm run verify:refactor` for structural changes. The detailed rationale lives in `docs/architecture/decisions/` and should not be duplicated here.
 Notification retention is specified by `docs/data-contracts/notification-delivery.md`, `docs/performance/notification-retention-scale.md`, and `docs/operations/notification-retention.md`.
@@ -173,6 +173,7 @@ Do not rename these Realtime Database roots without a full migration:
 - transition fields under `driver_login_policy/v1`, plus `driver_login_policy_cleanup` and `driver_login_policy_events` (server-private resumable transition state, exact-session cleanup and audit)
 - `driver_assignment_locks`, `driver_assignment_idempotency`, `driver_assignment_transitions` (server-private assignment serialization, replay and continuation state; assignment audit uses bounded `app_session_events`)
 - `driver_location_sessions`, `driver_location_pickups`, `driver_location_projection_state`, `live_state_rollout` (private per-session live sources, assignment-owned canonical pickup, projection fencing, and explicit rollout authority)
+- `driver_tracking_sessions` (write-only exact tracking intent and monotonic stop fence; stopped tombstones persist until immutable app-session expiry, and `stopDriverTrackingSession` provides authenticated missing-fence retirement recovery)
 - `chat_presence_sessions`, `chat_typing_sessions`, `chat_status_projection_state` (private per-session status sources and projection fencing)
 - `account_deletion_jobs`, `account_deletion_queue`, `account_deletion_active`, `account_deletion_passenger_active`, `account_deletion_locks`, `account_deletion_passenger_locks`, `account_deletion_uid_tombstones`, `account_deletion_completion_tombstones`, `account_deletion_rollout` (server-private durable deletion work, queue/leases, UID and passenger admission barriers, serialization, permanent deleted-UID/completion fencing and compatibility policy)
 - `media_record_locks` (server-private per-photo serialization shared by normal upload/delete endpoints and durable account deletion)
@@ -742,8 +743,10 @@ Driver location:
 
 - Canonical passenger read path: server-owned `tours/{tourId}/driverLocation`.
 - Source contract: `docs/data-contracts/driver-location.md`.
-- Driver Home writes schema-v2 live sources through `services/driverLocationService.js` at `driver_location_sessions/{appSessionId}|{liveSharingSessionId}`. Manual pickup publication uses the trusted `updateDriverLocationPickup` Function; clients never access `driver_location_pickups/{tourId}` directly.
-- Each foreground auto-share lifecycle arms disconnect removal against only its exact private leaf before publishing. It never stores a fixed pickup as a shared fallback.
+- App-owned background tracking uses `services/driver-tracking/` and `useDriverTracking` in AppShell. `index.js` registers the Task Manager handler globally for headless delivery. Driver Home exposes explicit Start/disclosure/Stop; saved foreground auto-share preferences cannot enable this feature.
+- Schema-v2 live sources remain at `driver_location_sessions/{appSessionId}|{liveSharingSessionId}`. `track_` sources require an active, private `driver_tracking_sessions` stop fence and exact current driver authority. HTTP publication avoids Firebase's offline GPS replay queue; each network phase is bounded. Manual pickup publication uses `updateDriverLocationPickup`; clients never access the private pickup root.
+- Tracking persists minimal intent (no coordinates) in AsyncStorage for execution while locked. iOS requires Always/background mode; Android uses a visible user-started foreground service and never requests Android background permission. Neither platform silently starts tracking headlessly or after cold UI recovery.
+- Each tracking lifecycle arms disconnect removal against only its exact private leaf before publishing. `stopDriverTrackingSession` authenticates the exact owner, persists a monotonic stopped fence, deletes its matching source and reconciles public state. Missing-fence recovery uses strict current authority or owned server evidence. Session/deletion cleanup retires captured intents before deleting live state; immutable fences expire with their original app sessions.
 - Live source reads are denied. Treat `set()` as publication acknowledgement and use ownership-bound direct `remove()` for withdrawal, never a read or transaction. Serialize operations per exact private key, fence stopped callbacks, and keep retired session identities for retries. Estimated UI timestamps are labelled by `timestampSource`; the public projection supplies authoritative server time. Acknowledged source deletion is not acknowledgement of asynchronous projection delivery. See the driver-location contract and its service/rules and React lifecycle regression tests.
 - Retryable Functions validate current authority and project the newest valid live leaf, or the separate pickup, with monotonic revisions. Clients cannot write the projection.
 - Auto locations require bounded accuracy and carry a server-validated `cleanupAtMs` lease. Assignment-owned pickups contain the current driver/tour/revision without Auth or app-session lifetime fields and have a bounded `expiresAtMs`. `cleanupExpiredDriverLocations` runs every 15 minutes, queries both indexed leases in bounded batches, compare-deletes only exact expired publications, and reconciles affected tours.
@@ -752,7 +755,7 @@ Driver location:
 - Find My Bus does not require passenger location permission to show the driver point. Permission is requested only when the passenger chooses to show/refresh their own position.
 - Driver reassignment/unassignment clears affected assignment-owned pickups, cleans raw live state for every reconciled app session, and reprojects former tours so passengers never inherit another driver's coordinates.
 - `live_state_rollout/v1` is private explicit operations state: missing means compatibility and source writes never advance phase. This release refuses cutover with `LIVE_STATE_CUTOVER_PREREQUISITE_NOT_MET`; an untouched 1.0.4 direct RTDB writer cannot receive a literal update-required response, so compatibility remains mandatory until a future reviewed client-mapping or zero-supported-legacy-client prerequisite is proven.
-- Auto-share checks lifecycle cancellation after native location capture and after the service write. Logout, backgrounding, reassignment, disable, or unmount must revoke the exact session so late coordinates never return to the former tour.
+- Tracking fences every asynchronous result by generation and exact identity. Stop, permission loss, expiry, reassignment, logout and root teardown revoke it; navigation and backgrounding retain an explicitly started session. Fresh samples only, at most one server attempt per minute, no durable GPS queue. Cold UI launch retires interrupted intent and requires a new Start. Physical-device acceptance and OS termination limits: `docs/operations/driver-tracking-acceptance.md`.
 
 Safety UX:
 
@@ -1226,7 +1229,7 @@ Many root npm scripts use POSIX-style `NODE_ENV=test`. CI runs on Linux. On nati
 Mobile config:
 
 - Use `app.config.js`; there is no static `app.json`.
-- Version: `1.0.6` (canonical source: `package.json`; `app.config.js` must require it)
+- Version: `1.0.7` (canonical source: `package.json`; `app.config.js` must require it; background tracking requires matching new binaries)
 - iOS build number: `3` local baseline; production increments are managed remotely by EAS
 - Android version code: `3` local baseline; production increments are managed remotely by EAS
 - Runtime version policy: `appVersion`

@@ -11,6 +11,7 @@ export default function useAccountDeletionShellLifecycle({
   accountDeletionStatus,
   appSession,
   driverOperationalScope,
+  purgeDriverTracking,
   isConnected,
   setAccountDeletionStatus,
   setAppSession,
@@ -25,9 +26,10 @@ export default function useAccountDeletionShellLifecycle({
     authHelpers,
     driverOperationalScope,
     localSessionCleanupService,
+    purgeDriverTracking,
     setAppSession,
     setUser,
-  }), [driverOperationalScope, setAppSession, setUser]);
+  }), [driverOperationalScope, purgeDriverTracking, setAppSession, setUser]);
 
   const { resumeAccountDeletion, startAccountDeletion } = useAccountDeletionLifecycle({
     accountDeletionStatus,

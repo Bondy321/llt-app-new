@@ -1,3 +1,4 @@
+import useDriverTracking from '../../hooks/useDriverTracking';
 import { runSaveSessionProjection } from './session/sessionSaveRunner';
 import { handlePassengerTripSessionInvalid } from './passenger/passengerTripSessionRunners';
 import { runPersistDriverIdentityForUser, runPersistPassengerIdentityForUser, runRepairIdentityBindingFromSession, runHydrateIdentityBindingForCurrentUser } from './session/identityBindingRunners';
@@ -112,7 +113,6 @@ export default function AppShell() {
     homeScreen,
     persistScreen: (...args) => saveSession(...args),
   });
-
   const diagnosticsTourId = isDriverSession
     ? resolveTourId(bookingData?.assignedTourId, tourData?.id, tourData?.tourCode)
     : resolveTourId(tourData?.id, tourData?.tourCode);
@@ -130,6 +130,7 @@ export default function AppShell() {
       sessionId: appSession.sessionId,
     };
   }, [accountDeletionStatus.state, appSession, bookingData?.id, canonicalIdentity?.authUid, canonicalIdentity?.principalId, diagnosticsRole, diagnosticsTourId]);
+  const driverTracking = useDriverTracking(offlineSessionScope, { initializing, logoutState: logoutStatus.state, expiresAtMs: appSession?.expiresAtMs });
   const offlineSessionScopeKey = offlineSessionScope
     ? `${offlineSessionScope.tourId}|${offlineSessionScope.role}|${offlineSessionScope.principalId}|${offlineSessionScope.cacheOwnerId}`
     : 'none';
@@ -518,9 +519,9 @@ export default function AppShell() {
 
   const clearSessionState = (...args) => runClearSessionState({ SESSION_KEYS, SessionStorage, logger, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setScreenParams, setTourCode, setTourData }, ...args);
 
-  const purgeLocalSession = (...args) => runPurgeLocalSession({ appSession, auth, bookingData, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, localSessionCleanupService, previousDriverOperationalScopeRef, setAppSession, setDriverSessionGeneration, tourData, user }, ...args);
+  const purgeLocalSession = (...args) => runPurgeLocalSession({ appSession, auth, bookingData, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, localSessionCleanupService, previousDriverOperationalScopeRef, purgeDriverTracking: driverTracking.purgeScope, setAppSession, setDriverSessionGeneration, tourData, user }, ...args);
 
-  const handleLogout = (...args) => runHandleLogout({ appSession, appSessionService, auth, bookingData, currentDriverLifecycleScope, logger, logoutContextRef, purgeLocalSession, setAppSession, setLogoutStatus, tourData, user }, ...args);
+  const handleLogout = (...args) => runHandleLogout({ appSession, appSessionService, auth, bookingData, currentDriverLifecycleScope, logger, logoutContextRef, purgeLocalSession, setAppSession, setLogoutStatus, stopDriverTracking: driverTracking.stop, tourData, user }, ...args);
 
   const retryPendingLogout = useLogoutLifecycle({
     appSession, disabled: accountDeletionStatus.state !== 'idle', isConnected,
@@ -530,7 +531,7 @@ export default function AppShell() {
   });
 
   const { finishAccountDeletion, handleStartAccountDeletion, retryAccountDeletion } = useAccountDeletionShellLifecycle({
-    accountDeletionStatus, appSession, driverOperationalScope: currentDriverLifecycleScope, isConnected,
+    accountDeletionStatus, appSession, driverOperationalScope: currentDriverLifecycleScope, isConnected, purgeDriverTracking: driverTracking.purgeScope,
     setAccountDeletionStatus, setAppSession, setCurrentScreen, setUser,
   });
   useEffect(() => {
@@ -552,6 +553,7 @@ export default function AppShell() {
     <AppShellView
       accountDeletionStatus={accountDeletionStatus}
       authError={authError}
+      driverTracking={driverTracking}
       edgeSwipeResponder={edgeSwipeResponder}
       initializing={initializing}
       insets={insets}
@@ -568,6 +570,7 @@ export default function AppShell() {
         canonicalIdentity,
         currentScreen,
         driverSessionGeneration,
+        driverTracking,
         driverTourPackActions,
         driverTourPackFeature,
         driverTourPackState,

@@ -94,6 +94,7 @@ const EXPECTED_FUNCTION_EXPORTS = [
   'projectDashboardTourStartIndex',
   'projectDriverLocationPickup',
   'projectDriverLocationSession',
+  'projectDriverTrackingSession',
   'projectDriverTourPackActionState',
   'projectNotificationMarketingAudience',
   'projectNotificationMarketingAudienceConsent',
@@ -117,6 +118,7 @@ const EXPECTED_FUNCTION_EXPORTS = [
   'submitSafetyReport',
   'updateNotificationDeviceRegistration',
   'updateDriverLocationPickup',
+  'stopDriverTrackingSession',
   'uploadGroupPhoto',
   'uploadPrivatePhoto',
   'verifyDriverLogin',
@@ -205,6 +207,7 @@ const EVENT_PATHS = {
   projectDashboardTourStartIndex: 'tours/{tourId}/startDateEpochMs',
   projectDriverLocationPickup: 'driver_location_pickups/{tourId}',
   projectDriverLocationSession: 'driver_location_sessions/{sourceKey}',
+  projectDriverTrackingSession: 'driver_tracking_sessions/{sourceKey}',
   projectDriverTourPackActionState: 'driver_tour_pack_actions/{departureKey}/{driverId}',
   projectNotificationMarketingAudience: 'notification_devices/{authUid}',
   projectNotificationMarketingAudienceConsent: 'notification_consents/{authUid}',
@@ -304,6 +307,10 @@ test('Function trigger type, path, schedule, region, and resource settings remai
     if (name !== 'generatePhotoVariants') assert.deepEqual(endpoint.region, ['europe-west1'], name);
   }
   assert.equal(endpoints.processNotificationReadMigrationRequest.retry, true);
+  assert.equal(endpoints.projectDriverTrackingSession.retry, true);
+  assert.equal(endpoints.projectDriverTrackingSession.maxInstances, 20);
+  assert.equal(endpoints.stopDriverTrackingSession.maxInstances, 20);
+  assert.equal(endpoints.stopDriverTrackingSession.timeout, 30);
   assert.deepEqual(
     Object.fromEntries(Object.entries(endpoints).filter(([, value]) => value.memory !== null).map(([name, value]) => [name, value.memory])),
     {

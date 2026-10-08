@@ -32,6 +32,7 @@ export const runPurgePendingAccountDeletion = async ({
   authHelpers,
   driverOperationalScope,
   localSessionCleanupService,
+  purgeDriverTracking,
   setAppSession,
   setUser,
 }) => {
@@ -82,6 +83,10 @@ export const runPurgePendingAccountDeletion = async ({
     }
   }
 
+  if (purgeDriverTracking) {
+    try { await purgeDriverTracking({ authUid: normalizeOriginalAuthUid(commitPending.originalAuthUid) }); }
+    catch { return localCommitFailure('stopDriverTracking', 'LOCAL_TRACKING_STOP_FAILED', commitPending); }
+  }
   const commit = await localSessionCleanupService.commitSessionKeys();
   if (!commit.success) return { ...commit, pending: commitPending };
   let nextPending;

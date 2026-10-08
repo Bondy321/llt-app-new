@@ -51,12 +51,12 @@ test('the previous 1.0.4 native input and current graph have distinct compatibil
   assert.equal(current.runtimeIdentity, 'appVersion:1.0.5');
 });
 
-test('the repository 1.0.4 release graph and prepared 1.0.6 graph are actually distinct', () => {
+test('the repository 1.0.4 release graph and prepared 1.0.7 graph are actually distinct', () => {
   const previous = buildNativeSnapshot(PREVIOUS_1_0_4_RELEASE_COMMIT);
   const current = buildNativeSnapshot('WORKTREE');
 
   assert.equal(previous.runtimeIdentity, 'appVersion:1.0.4');
-  assert.equal(current.runtimeIdentity, 'appVersion:1.0.6');
+  assert.equal(current.runtimeIdentity, 'appVersion:1.0.7');
   assert.notEqual(previous.nativeDigest, current.nativeDigest);
   assert.doesNotThrow(() => compareNativeSnapshots(previous, current));
 });

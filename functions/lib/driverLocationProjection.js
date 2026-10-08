@@ -1,5 +1,6 @@
 'use strict';
 const { retryProjection } = require('./projectionRetry');
+const { hasActiveTrackingIntent } = require('../src/domains/live-state/driverTrackingSessions');
 
 const {
   buildAssignmentOwnedDriverLocationPickup,
@@ -124,12 +125,13 @@ async function readLiveSources(database, tourId) {
 }
 
 async function hasCurrentDriverAuthority(database, record, nowMs) {
-  const [session, user, policy, driver, assigned] = await Promise.all([
+  const [session, user, policy, driver, assigned, activeTrackingIntent] = await Promise.all([
     readValue(database.ref(`app_sessions/${record.authUid}`)),
     readValue(database.ref(`users/${record.authUid}`)),
     readValue(database.ref('driver_login_policy/v1')),
     readValue(database.ref(`drivers/${record.driverId}`)),
     readValue(database.ref(`tour_manifests/${record.tourId}/assigned_drivers/${record.driverId}`)),
+    hasActiveTrackingIntent(database, record, nowMs),
   ]);
   const validPolicy = Boolean(
     isObject(policy)
@@ -143,6 +145,7 @@ async function hasCurrentDriverAuthority(database, record, nowMs) {
     : 0;
   return Boolean(
     validPolicy
+    && activeTrackingIntent
     && session
     && session.sessionId === record.appSessionId
     && session.authUid === record.authUid

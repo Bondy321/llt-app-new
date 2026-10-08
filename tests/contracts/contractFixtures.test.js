@@ -65,6 +65,30 @@ test('credential, identity, session, media, bounds, route, and version fixtures 
   }
 });
 
+test('private tracking intents enforce exact identifier bounds, immutable schema fields and safe expiry', () => {
+  const fixture = fixtures.valid.find(({ contract }) => contract === 'DriverTrackingSessionRecord').value;
+  for (const liveSharingSessionId of ['track_xx', `track_${'x'.repeat(74)}`]) {
+    assert.equal(generated.validateContract('DriverTrackingSessionRecord', { ...fixture, liveSharingSessionId }).valid, true);
+  }
+  for (const changes of [{ liveSharingSessionId: 'loc_legacy' }, { liveSharingSessionId: 'track_x' },
+    { liveSharingSessionId: `track_${'x'.repeat(75)}` }, { status: 'paused' }, { schemaVersion: 2 },
+    { startedAtMs: 0 }, { expiresAtMs: fixture.startedAtMs }, { extraPermission: true }]) {
+    assert.equal(generated.validateContract('DriverTrackingSessionRecord', { ...fixture, ...changes }).valid, false);
+  }
+  assert.equal(generated.validateContract('DriverTrackingSessionRecord', fixture, { clientProjection: true }).valid, false);
+});
+
+test('tracking stop contracts require stopped input and a privacy-safe positive acknowledgment response', () => {
+  const request = fixtures.valid.find(({ contract }) => contract === 'DriverTrackingStopRequest').value;
+  const response = fixtures.valid.find(({ contract }) => contract === 'DriverTrackingStopResponse').value;
+  assert.equal(generated.validateContract('DriverTrackingStopRequest', { ...request, status: 'active' }).valid, false);
+  assert.equal(generated.validateContract('DriverTrackingStopRequest', { ...request, extra: true }).valid, false);
+  assert.equal(generated.validateContract('DriverTrackingStopResponse', response, { clientProjection: true }).valid, true);
+  for (const changes of [{ authUid: 'private-uid' }, { withdrawalAcknowledged: false }, { reason: 'UNKNOWN' }]) {
+    assert.equal(generated.validateContract('DriverTrackingStopResponse', { ...response, ...changes }).valid, false);
+  }
+});
+
 test('generated adapters expose identical canonical definitions in every runtime', async () => {
   const mobile = await import('../../src/shared/contracts/generated/contracts.js');
   const web = await import('../../web-admin/src/shared/contracts/generated/contracts.js');

@@ -4,6 +4,7 @@ const { createHash } = require('crypto');
 const { isActiveSessionRecord, isValidAppSessionId } = require('./appSession');
 const { cleanupChatStatusForAppSession } = require('./chatPresenceProjection');
 const { cleanupDriverLocationsForAppSession } = require('./driverLocationProjection');
+const { retireDriverTrackingIntentsForAppSession } = require('../src/domains/live-state/driverTrackingSessions');
 
 const NOTIFICATION_DEVICE_LOCK_TTL_MS = 30 * 1000;
 
@@ -124,8 +125,9 @@ const buildAppSessionEvent = ({ session, eventType, reason, actorType, nowMs = D
 
 const cleanupLiveStateForSession = async ({ db, session, nowMs = Date.now() } = {}) => {
   if (!db || !isValidAppSessionId(session?.sessionId)) {
-    return { location: { removed: 0 }, chat: { removed: 0 } };
+    return { tracking: { retired: 0 }, location: { removed: 0 }, chat: { removed: 0 } };
   }
+  const tracking = await retireDriverTrackingIntentsForAppSession({ database: db, session });
   const [location, chat] = await Promise.all([
     cleanupDriverLocationsForAppSession({
       database: db,
@@ -142,7 +144,7 @@ const cleanupLiveStateForSession = async ({ db, session, nowMs = Date.now() } = 
       nowMs,
     }),
   ]);
-  return { location, chat };
+  return { tracking, location, chat };
 };
 
 const cleanupDriverLocationForSession = cleanupLiveStateForSession;

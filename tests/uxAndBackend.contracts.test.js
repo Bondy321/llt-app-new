@@ -758,16 +758,17 @@ test('Static contract: customer-facing date labels use strict shared timestamp p
   });
 });
 
-test('Static contract: native location permissions stay foreground-only', () => {
+test('Static contract: native tracking uses iOS background mode and user-initiated Android foreground service', () => {
   const source = readText('app.config.js');
 
   assert.match(source, /const isProductionBuild = \['production', 'testflight'\]\.includes\(process\.env\.EAS_BUILD_PROFILE\);/);
   assert.match(source, /NSAppTransportSecurity: appTransportSecurity/);
   assert.match(source, /NSAllowsArbitraryLoads: false/);
   assert.match(source, /NSLocationWhenInUseUsageDescription/);
-  assert.match(source, /locationAlwaysAndWhenInUsePermission: false/);
+  assert.match(source, /locationAlwaysAndWhenInUsePermission:/);
   assert.match(source, /locationAlwaysPermission: false/);
-  assert.match(source, /isIosBackgroundLocationEnabled: false/);
+  assert.match(source, /isIosBackgroundLocationEnabled: true/);
+  assert.match(source, /isAndroidForegroundServiceEnabled: true/);
   assert.match(source, /isAndroidBackgroundLocationEnabled: false/);
   assert.doesNotMatch(source, /ACCESS_BACKGROUND_LOCATION/);
   assert.doesNotMatch(source, /NSLocationAlwaysAndWhenInUseUsageDescription/);
@@ -1171,16 +1172,19 @@ test('Static contract: mobile icon imports do not bundle unused font families', 
   }
 });
 
-test('Static contract: driver auto-share is in-app, non-overlapping, and durably enabled', () => {
-  const source = readMobileModuleSource('screens/DriverHomeScreen.js');
-  assert.match(source, /autoShareInFlightRef\.current/);
-  assert.match(source, /locationBusyRef\.current/);
-  assert.match(source, /withdrawLiveDriverLocation/);
-  assert.match(source, /publishDriverLocation/);
-  assert.match(source, /Location updates are off/);
-  assert.match(source, /live location removal is pending/);
-  assert.match(source, /every 3 minutes while active and tour-assigned/);
-  assert.doesNotMatch(source, /background location share/);
+test('Static contract: driver tracking is explicit, app-owned, globally registered and fenced', () => {
+  const home = readText('components/driver-home/DriverHomeController.js');
+  const runtime = readText('services/driver-tracking/driverTrackingRuntime.js');
+  const controller = readText('services/driver-tracking/createDriverTrackingController.js');
+  assert.doesNotMatch(home, /useDriverAutoSharePreference|createDriverLocationSharingActions/);
+  assert.match(home, /driverTracking/);
+  assert.match(readText('index.js'), /registerDriverTrackingTask/);
+  assert.match(runtime, /TaskManager.defineTask/);
+  assert.match(runtime, /killServiceOnDestroy: true/);
+  assert.match(readText('src/app/AppShell.js'), /useDriverTracking\(offlineSessionScope/);
+  assert.match(controller, /disclosureAccepted/);
+  assert.match(controller, /deliveryGeneration/);
+  assert.match(controller, /retireSession/);
 });
 
 test('Static contract: optional haptics cannot reject app actions and pickup countdown avoids second-by-second churn', () => {

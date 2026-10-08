@@ -1,3 +1,4 @@
+import DriverTrackingCard from './DriverTrackingCard';
 import DriverLocationPreviewModal from './DriverLocationPreviewModal';
 import createDriverHomeScreenStyles from '../../screens/styles/DriverHomeScreen.styles';
 import {
@@ -5,7 +6,6 @@ import {
   Text,
   View,
   TouchableOpacity,
-  Switch,
   ScrollView,
   ActivityIndicator,
   Modal,
@@ -46,7 +46,7 @@ const styles = createDriverHomeScreenStyles({ StyleSheet, COLORS });
 
 
 export default function DriverHomeView(props) {
-  const { accuracyConfig, activeTourId, addressLoading, addressText, autoShareEnabled, autoShareLastRunAt, autoShareSaving, autoShareStatus, cacheStatusLabel, confirmingLocation, driverData, driverTourPackFeature, driverTourPackState, fadeAnim, formatTimeAgo, handleCaptureLocation, handleConfirmLocation, handleJoinTour, handleOpenChat, handleOpenDriverChat, handleRefetchLocation, handleToggleAutoShare, inputTourCode, isLocationStale, joinModalVisible, joining, lastLocationPresentation, lastLocationStatus, lastLocationStatusColor, lastLocationUpdate, locationAccuracy, onLogout, onNavigate, previewLocation, previewModalVisible, previewRequestIdRef, pulseAnim, setAddressLoading, setInputTourCode, setJoinModalVisible, setPreviewModalVisible, setUpdatingLocation, showBanner, successAnim, updatingLocation } = props;
+  const { accuracyConfig, activeTourId, addressLoading, addressText, driverTracking, cacheStatusLabel, confirmingLocation, driverData, driverTourPackFeature, driverTourPackState, fadeAnim, formatTimeAgo, handleCaptureLocation, handleConfirmLocation, handleJoinTour, handleOpenChat, handleOpenDriverChat, handleRefetchLocation, inputTourCode, isLocationStale, joinModalVisible, joining, lastLocationPresentation, lastLocationStatus, lastLocationStatusColor, lastLocationUpdate, locationAccuracy, onLogout, onNavigate, previewLocation, previewModalVisible, previewRequestIdRef, pulseAnim, setAddressLoading, setInputTourCode, setJoinModalVisible, setPreviewModalVisible, setUpdatingLocation, showBanner, successAnim, updatingLocation } = props;
 return (
     <SafeAreaView style={styles.container}>
       <LinearGradient
@@ -177,24 +177,7 @@ return (
               </View>
             )}
 
-            <View style={styles.autoShareCard}>
-              <View style={{ flex: 1, marginRight: 12 }}>
-                <Text style={styles.autoShareTitle}>Auto-share location</Text>
-                <Text style={styles.autoShareSubtitle}>When enabled, this screen shares every 3 minutes while active and tour-assigned.</Text>
-              </View>
-              <Switch
-                value={autoShareEnabled}
-                onValueChange={handleToggleAutoShare}
-                disabled={autoShareSaving}
-                trackColor={{ false: `${COLORS.muted}50`, true: `${COLORS.primary}80` }}
-                thumbColor={autoShareEnabled ? COLORS.white : '#F4F4F5'}
-                accessibilityLabel="Toggle automatic location sharing"
-              />
-            </View>
-            <Text style={styles.autoShareStatus}>{autoShareStatus}</Text>
-            {autoShareLastRunAt && (
-              <Text style={styles.autoShareLastRun}>Last auto-share: {formatTimeAgo(autoShareLastRunAt)}</Text>
-            )}
+            <DriverTrackingCard tracking={driverTracking} />
 
             {/* Primary Action Grid */}
             <View style={styles.grid}>

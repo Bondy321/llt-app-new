@@ -30,9 +30,13 @@ export const runClearSessionState = async ({ SESSION_KEYS, SessionStorage, logge
     }
   };
 
-export const runPurgeLocalSession = async ({ appSession, auth, bookingData, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, localSessionCleanupService, previousDriverOperationalScopeRef, setAppSession, setDriverSessionGeneration, tourData, user }, {
+export const runPurgeLocalSession = async ({ appSession, auth, bookingData, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, localSessionCleanupService, purgeDriverTracking, previousDriverOperationalScopeRef, setAppSession, setDriverSessionGeneration, tourData, user }, {
   capturedSession = appSession
 } = {}) => {
+    if (purgeDriverTracking) {
+      try { await purgeDriverTracking({ authUid: user?.uid || auth?.currentUser?.uid, sessionId: capturedSession?.sessionId }); }
+      catch { return { success: false, failures: [{ name: 'stopDriverTracking', error: 'LOCAL_TRACKING_STOP_FAILED' }] }; }
+    }
     const result = await localSessionCleanupService.cleanup({
       authUid: user?.uid || auth?.currentUser?.uid || null,
       appSession: capturedSession,
@@ -48,7 +52,9 @@ export const runPurgeLocalSession = async ({ appSession, auth, bookingData, clea
     return result;
   };
 
-export const runHandleLogout = async ({ appSession, appSessionService, auth, bookingData, currentDriverLifecycleScope, logger, logoutContextRef, notificationDeviceEnd = endNotificationDeviceSession, purgeLocalSession, setAppSession, setLogoutStatus, tourData, user }) => {
+export const runHandleLogout = async ({ appSession, appSessionService, auth, bookingData, currentDriverLifecycleScope, logger, logoutContextRef, notificationDeviceEnd = endNotificationDeviceSession, purgeLocalSession, setAppSession, setLogoutStatus, stopDriverTracking, tourData, user }) => {
+    // Revoke local publications synchronously before any remote session work.
+    if (stopDriverTracking) stopDriverTracking().catch(() => {});
     const authUid = user?.uid || auth?.currentUser?.uid || null;
     const capturedSession = appSession;
     // Server policy keeps marketing only where explicit consent remains, while
