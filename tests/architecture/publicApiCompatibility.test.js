@@ -22,6 +22,14 @@ const readJavaScriptTree = (directory) => fs.readdirSync(directory, { withFileTy
   })
   .join('\n');
 const EXPECTED_FUNCTION_EXPORTS = [
+  'projectCoachTrackingDriverCurrentTour',
+  'projectCoachTrackingDriverName',
+  'projectCoachTrackingLocation',
+  'projectCoachTrackingTourActive',
+  'projectCoachTrackingTourCode',
+  'projectCoachTrackingTourEndIndex',
+  'projectCoachTrackingTourName',
+  'projectCoachTrackingTourStartIndex',
   'getPassengerTripSnapshot',
   'projectPassengerTripBooking',
   'projectPassengerTripItinerary',
@@ -166,6 +174,14 @@ const EXPECTED_SERVICE_EXPORTS = {
 };
 
 const EVENT_PATHS = {
+  projectCoachTrackingDriverCurrentTour: 'drivers/{driverId}/currentTourId',
+  projectCoachTrackingDriverName: 'drivers/{driverId}/name',
+  projectCoachTrackingLocation: 'tours/{tourId}/driverLocation',
+  projectCoachTrackingTourActive: 'tours/{tourId}/isActive',
+  projectCoachTrackingTourCode: 'tours/{tourId}/tourCode',
+  projectCoachTrackingTourEndIndex: 'tours/{tourId}/endDateEpochMs',
+  projectCoachTrackingTourName: 'tours/{tourId}/name',
+  projectCoachTrackingTourStartIndex: 'tours/{tourId}/startDateEpochMs',
   projectPassengerTripBooking: 'bookings/{bookingRef}',
   projectPassengerTripItinerary: 'tours/{tourId}/itinerary',
   projectPassengerTripTourName: 'tours/{tourId}/name',
@@ -309,6 +325,11 @@ test('Function trigger type, path, schedule, region, and resource settings remai
   assert.equal(endpoints.processNotificationReadMigrationRequest.retry, true);
   assert.equal(endpoints.projectDriverTrackingSession.retry, true);
   assert.equal(endpoints.projectDriverTrackingSession.maxInstances, 20);
+  for (const name of EXPECTED_FUNCTION_EXPORTS.filter(value => value.startsWith('projectCoachTracking'))) {
+    assert.equal(endpoints[name].type, 'google.firebase.database.ref.v1.written', name);
+    assert.equal(endpoints[name].retry, true, name);
+    assert.equal(endpoints[name].maxInstances, 20, name);
+  }
   assert.equal(endpoints.stopDriverTrackingSession.maxInstances, 20);
   assert.equal(endpoints.stopDriverTrackingSession.timeout, 30);
   assert.deepEqual(

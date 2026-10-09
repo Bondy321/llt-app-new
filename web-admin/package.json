@@ -23,6 +23,7 @@
     "@mantine/notifications": "^8.3.12",
     "@tabler/icons-react": "^3.36.1",
     "firebase": "^12.17.1",
+    "leaflet": "1.9.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.18.2"

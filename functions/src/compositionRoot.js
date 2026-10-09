@@ -2,6 +2,7 @@
 
 const administration = require('./domains/administration/administrationFunctions');
 const adminDashboard = require('./domains/admin-dashboard/dashboardProjectionFunctions');
+const coachTracking = require('./domains/admin-dashboard/coachTrackingFunctions');
 const accountDeletion = require('./domains/account-deletion/accountDeletionFunctions');
 const sessions = require('./domains/app-sessions/sessionFunctions');
 const roleTransitionClaims = require('./domains/app-sessions/roleTransitionClaimFunctions');
@@ -73,6 +74,14 @@ module.exports = {
   projectDashboardTourStartDate: adminDashboard.projectDashboardTourStartDate,
   projectDashboardTourStartIndex: adminDashboard.projectDashboardTourStartIndex,
   refreshDashboardTimeWindows: adminDashboard.refreshDashboardTimeWindowsScheduled,
+  projectCoachTrackingDriverCurrentTour: coachTracking.projectCoachTrackingDriverCurrentTour,
+  projectCoachTrackingDriverName: coachTracking.projectCoachTrackingDriverName,
+  projectCoachTrackingLocation: coachTracking.projectCoachTrackingLocation,
+  projectCoachTrackingTourActive: coachTracking.projectCoachTrackingTourActive,
+  projectCoachTrackingTourCode: coachTracking.projectCoachTrackingTourCode,
+  projectCoachTrackingTourEndIndex: coachTracking.projectCoachTrackingTourEndIndex,
+  projectCoachTrackingTourName: coachTracking.projectCoachTrackingTourName,
+  projectCoachTrackingTourStartIndex: coachTracking.projectCoachTrackingTourStartIndex,
   projectNotificationMarketingAudienceConsent: notificationMarketingAudience.projectNotificationMarketingAudienceOnConsentWrite,
   projectNotificationMarketingAudience: notificationMarketingAudience.projectNotificationMarketingAudienceOnDeviceWrite,
   processAccountDeletionJobs: accountDeletion.processAccountDeletionJobs,

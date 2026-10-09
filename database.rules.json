@@ -366,6 +366,7 @@
     "drivers": {
       ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
       ".write": false,
+      ".indexOn": ["currentTourId"],
       "$driverId": {
         ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/principalType').val() === 'driver' && ((!root.child('driver_login_policy/v1').exists() && (!root.child('app_sessions/' + auth.uid + '/driverLoginPolicyGeneration').exists() || root.child('app_sessions/' + auth.uid + '/driverLoginPolicyGeneration').val() === 0)) || (root.child('driver_login_policy/v1/schemaVersion').val() === 1 && root.child('driver_login_policy/v1/enforceSingleDevice').isBoolean() && root.child('driver_login_policy/v1/generation').isNumber() && root.child('driver_login_policy/v1/generation').val() >= 0 && ((root.child('driver_login_policy/v1/generation').val() === 0 && !root.child('app_sessions/' + auth.uid + '/driverLoginPolicyGeneration').exists()) || root.child('app_sessions/' + auth.uid + '/driverLoginPolicyGeneration').val() === root.child('driver_login_policy/v1/generation').val()) && (root.child('driver_login_policy/v1/enforceSingleDevice').val() === false || (root.child('driver_login_policy/v1/enforceSingleDevice').val() === true && root.child('drivers/' + root.child('app_sessions/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid)))) && root.child('app_sessions/' + auth.uid + '/driverId').val() === $driverId && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now))",
         ".write": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true) && newData.child('currentTourId').val() === data.child('currentTourId').val() && newData.child('currentTourCode').val() === data.child('currentTourCode').val() && newData.child('assignments').val() === data.child('assignments').val() && newData.child('assignmentRevision').val() === data.child('assignmentRevision').val()",
@@ -445,7 +446,7 @@
     "tours": {
       ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
       ".write": false,
-      ".indexOn": ["startDateEpochMs", "endDateEpochMs", "isActive", "driverId", "driverLocation/cleanupAtMs"],
+      ".indexOn": ["startDateEpochMs", "endDateEpochMs", "isActive", "driverId", "driverLocation/cleanupAtMs", "driverLocation/isSharing", "driverLocation/timestamp"],
       "$tourId": {
         ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true || (root.child('app_sessions/' + auth.uid + '/status').val() === 'active' && root.child('app_sessions/' + auth.uid + '/authUid').val() === auth.uid && root.child('app_sessions/' + auth.uid + '/principalType').val() === 'driver' && root.child('app_sessions/' + auth.uid + '/tourId').val() === $tourId && root.child('app_sessions/' + auth.uid + '/expiresAtMs').val() > now && root.child('users/' + auth.uid + '/driverId').val() === root.child('app_sessions/' + auth.uid + '/driverId').val() && root.child('users/' + auth.uid + '/driverAssignedTourId').val() === $tourId && ((!root.child('driver_login_policy/v1').exists() && (!root.child('app_sessions/' + auth.uid + '/driverLoginPolicyGeneration').exists() || root.child('app_sessions/' + auth.uid + '/driverLoginPolicyGeneration').val() === 0)) || (root.child('driver_login_policy/v1/schemaVersion').val() === 1 && root.child('driver_login_policy/v1/enforceSingleDevice').isBoolean() && root.child('driver_login_policy/v1/generation').isNumber() && root.child('driver_login_policy/v1/generation').val() >= 0 && ((root.child('driver_login_policy/v1/generation').val() === 0 && !root.child('app_sessions/' + auth.uid + '/driverLoginPolicyGeneration').exists()) || root.child('app_sessions/' + auth.uid + '/driverLoginPolicyGeneration').val() === root.child('driver_login_policy/v1/generation').val()) && (root.child('driver_login_policy/v1/enforceSingleDevice').val() === false || (root.child('driver_login_policy/v1/enforceSingleDevice').val() === true && root.child('drivers/' + root.child('app_sessions/' + auth.uid + '/driverId').val() + '/authUid').val() === auth.uid)))) && root.child('tour_manifests/' + $tourId + '/assigned_drivers/' + root.child('app_sessions/' + auth.uid + '/driverId').val()).val() === true))",
         ".write": "auth != null && newData.exists() && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true) && newData.child('driverId').val() === data.child('driverId').val() && newData.child('driverName').val() === data.child('driverName').val() && newData.child('driverPhone').val() === data.child('driverPhone').val() && newData.child('driverAssignmentRevision').val() === data.child('driverAssignmentRevision').val() && newData.child('driverLocation').val() === data.child('driverLocation').val()",
@@ -1413,6 +1414,15 @@
           ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
           ".write": false,
           ".indexOn": ["startAtMs", "endAtMs"]
+        },
+        "coach_tracking": {
+          ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+          ".write": false,
+          ".indexOn": ["listed"]
+        },
+        "coach_tracking_status": {
+          ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",
+          ".write": false
         },
         "safety_attention": {
           ".read": "auth != null && (auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true)",

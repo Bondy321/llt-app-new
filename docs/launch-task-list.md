@@ -84,13 +84,15 @@ References: [driver location contract](data-contracts/driver-location.md), [rele
 
 ## 5 Build Track Coaches in the web admin
 
-- [ ] Add a lazy-loaded navigation section consistent with the existing admin UI and service boundaries.
-- [ ] Use an authorised, bounded data path that covers the fleet without silently truncating it to the existing 500-tour directory limit.
-- [ ] Join locations to current tour assignments. The existing public projection selects one source per tour; do not label it as independent tracking of every driver or coach.
-- [ ] Provide a map and accessible list with tour and driver context, last update time, accuracy and live, recent, stale or unavailable states.
-- [ ] Distinguish a fixed published pickup from a live position and avoid presenting expired coordinates as current.
-- [ ] Resolve map provider configuration, attribution and Hosting content security policy compatibility.
-- [ ] Test loading, empty, error, reconnect, multiple-tour and mobile-width views, including browser verification.
+- [x] Add a lazy-loaded navigation section consistent with the existing admin UI and service boundaries.
+- [x] Use an authorised, bounded data path that covers the fleet without silently truncating it to the existing 500-tour directory limit.
+- [x] Join locations to current tour assignments. The existing public projection selects one source per tour; do not label it as independent tracking of every driver or coach.
+- [x] Provide a map and accessible list with tour and driver context, last update time, accuracy and live, recent, stale or unavailable states.
+- [x] Distinguish a fixed published pickup from a live position and avoid presenting expired coordinates as current.
+- [x] Resolve map provider configuration, attribution and Hosting content security policy compatibility.
+- [x] Test loading, empty, error, reconnect, multiple-tour and mobile-width views, including browser verification.
+
+- [ ] Deploy the map rules, projection Functions and initial feed, then verify the live admin and labelled board demo.
 
 Complete when: an admin can reliably identify which tracked tour each marker represents, its freshness and its tracking state, with accurate assignment changes and no silent fleet omission.
 
