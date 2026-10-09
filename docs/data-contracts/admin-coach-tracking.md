@@ -84,3 +84,29 @@ Deploy the Functions with the exact exported names:
 ```sh
 firebase deploy --only functions:projectCoachTrackingDriverCurrentTour,functions:projectCoachTrackingDriverName,functions:projectCoachTrackingLocation,functions:projectCoachTrackingTourActive,functions:projectCoachTrackingTourCode,functions:projectCoachTrackingTourEndIndex,functions:projectCoachTrackingTourName,functions:projectCoachTrackingTourStartIndex
 ```
+
+For initial creation, the pinned Firebase CLI requires `--force` to acknowledge
+the deliberately retryable policy. Keep the eight-function filter exact; do not
+use an unfiltered forced deployment. Source rereads and generation fences make
+retries safe. Before running the local backfill, provide public target config in
+`FIREBASE_CONFIG` with `projectId: loch-lomond-travel` and database URL
+`https://loch-lomond-travel-default-rtdb.europe-west1.firebasedatabase.app`;
+use an existing authorised Application Default Credential. The apply guard
+checks the actual project and database URL and rejects emulator targets.
+
+## Verified deployment
+
+On 9 October 2026, the exact rules and eight Node 22 / Gen 2 projection exports
+were deployed in europe-west1, followed by a complete six-candidate backfill and
+the admin Hosting release. Real authentication, the complete six-tour feed,
+expired-position exclusion, demo separation and map rendering were checked live.
+A temporary inactive source tour proved deployed publication and withdrawal;
+its source was removed and its derived row became an unlisted, coordinate-free
+tombstone. No real booking or driver assignment was changed. Notification
+retention remained paused at revision 8; its new rules protocol requires the
+existing attestation procedure before any future activation.
+
+Board presentation: open `/track-coaches?demo=1` in the authenticated admin.
+The demo uses example positions and has a Restart demo action. Real tracking
+selects one position per tour, and reliable locked-phone acceptance still needs
+the matching native 1.0.7 apps and physical devices.

@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { buildCoachRows, filterCoachRows, presentCoachLocation, formatCoachTime } from './coachTrackingPresentation';
+import { buildCoachRows, filterCoachRows, presentCoachLocation, formatCoachTime, formatPositionAge } from './coachTrackingPresentation';
 const NOW = Date.parse('2026-10-09T12:00:00Z');
 const live = age => ({ isSharing: true, mode: 'live', source: 'auto', latitude: 56, longitude: -4, timestamp: NOW - age, accuracy: 10 });
 const row = (location, other = {}) => ({ T1: { schemaVersion: 1, tourId: 'T1', tourCode: 'CODE 1', name: 'Test tour', assignedDrivers: [{ driverId: 'D-1', name: 'Driver One' }], location, ...other } });
 
 describe('coach position presentation', () => {
+  it('presents old production receipts in hours/days, with an explicit calendar year', () => {
+    expect(formatPositionAge(176725 * 60_000)).toBe('122 days ago');
+    expect(formatPositionAge(3_600_000)).toBe('1 hour ago');
+    expect(formatPositionAge(86_400_000)).toBe('1 day ago');
+    expect(formatCoachTime(Date.parse('2025-06-08T17:07:01Z'))).toContain('2025');
+  });
   it.each([[239999, 'live'], [240000, 'recent'], [599999, 'recent'], [600000, 'stale'], [1799999, 'stale'], [1800000, 'unavailable']])('ages a position at the exact %i ms boundary', (age, state) => {
     const result = presentCoachLocation(live(age), NOW);
     expect(result.state).toBe(state);

@@ -8,6 +8,7 @@ export default function CoachMapPanel({ rows, selectedTour, onSelect, showPickup
   const selectRef = useRef(onSelect);
   const [tileStatus, setTileStatus] = useState('loading');
   const [failed, setFailed] = useState(false);
+  const canFocus = rows.some(row => row.tourId === selectedTour && (row.position || (showPickups && row.pickup)));
   useEffect(() => { selectRef.current = onSelect; }, [onSelect]);
   useEffect(() => {
     let active = true;
@@ -23,7 +24,7 @@ export default function CoachMapPanel({ rows, selectedTour, onSelect, showPickup
     <Group justify="space-between" px="md" py="sm" className="coach-map-toolbar">
       <div><Text fw={700} size="sm">Tour positions</Text><Text size="xs" c="dimmed">{rows.filter(row => row.position).length} live or last-known positions · scroll the page; use + / − to zoom</Text></div>
       <Group gap="xs">
-        {selectedTour ? <Button variant="light" size="xs" onClick={() => renderer.current?.focus(selectedTour)} disabled={failed}>Focus selected tour</Button> : null}
+        {selectedTour ? <Button variant="light" size="xs" onClick={() => renderer.current?.focus(selectedTour)} disabled={failed || !canFocus}>Focus selected tour</Button> : null}
         <Button variant="default" size="xs" onClick={() => renderer.current?.fit()} disabled={failed}>Show all positions</Button>
       </Group>
     </Group>

@@ -92,7 +92,14 @@ References: [driver location contract](data-contracts/driver-location.md), [rele
 - [x] Resolve map provider configuration, attribution and Hosting content security policy compatibility.
 - [x] Test loading, empty, error, reconnect, multiple-tour and mobile-width views, including browser verification.
 
-- [ ] Deploy the map rules, projection Functions and initial feed, then verify the live admin and labelled board demo.
+- [x] Deploy the map rules, projection Functions and initial feed, then verify the live admin and labelled board demo.
+
+Live verification on 9 October 2026: six source tour candidates reconciled; the
+authenticated real feed showed six tours and zero fresh live GPS positions.
+An isolated, inactive synthetic tour verified deployed event-driven publication
+and withdrawal, then was removed. Demo mode showed eight explicitly fictional
+tours without writing them to Firebase. Notification retention remained paused
+at revision 8; native background device acceptance remains in stage 4.
 
 Complete when: an admin can reliably identify which tracked tour each marker represents, its freshness and its tracking state, with accurate assignment changes and no silent fleet omission.
 

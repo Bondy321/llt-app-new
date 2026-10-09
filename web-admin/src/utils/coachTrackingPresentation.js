@@ -75,9 +75,12 @@ export function filterCoachRows(rows, { search = '', status = 'all' } = {}) {
       .some(value => value.toLocaleLowerCase().includes(needle))));
 }
 
+const ageText = (count, unit) => `${count} ${unit}${count === 1 ? '' : 's'} ago`;
 export const formatPositionAge = ageMs => ageMs === null ? 'No update' : ageMs < 60_000 ? 'Just now'
+  : ageMs >= 86_400_000 ? ageText(Math.floor(ageMs / 86_400_000), 'day')
+    : ageMs >= 3_600_000 ? ageText(Math.floor(ageMs / 3_600_000), 'hour')
   : `${Math.floor(ageMs / 60_000)} min ago`;
 const coachTimeFormatter = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Europe/London', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  timeZone: 'Europe/London', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
 });
 export const formatCoachTime = value => !validDate(value) ? 'Unavailable' : coachTimeFormatter.format(value);
