@@ -31,8 +31,9 @@ Confirmed issue: the 7am TourSummary reports include UK dates with a midnight ti
 - [x] Fix and regression-test `llt-app-sync/src/models.py` using the exact report strings and invalid-date cases.
 - [x] Check parsing, calculated end dates and index consistency across the importer, backend and admin date contracts.
 - [x] Produce a bounded dry-run repair showing affected tour fields and counts. Preserve human-edited itineraries and runtime operational data.
-- [ ] Apply the reviewed repair and reconcile derived indexes through the existing supported maintenance path.
-- [ ] Verify representative current and future tours in the admin and app, then confirm the next scheduled 7am import preserves valid dates.
+- [x] Apply the reviewed repair and reconcile derived indexes through the existing supported maintenance path.
+- [x] Verify current/future tours in the live admin and all 507 source date families after a real production import of the 9 October 7am reports.
+- [ ] Confirm the next scheduled morning execution and native app display during the release acceptance checks in stage 8.
 
 Complete when: the affected departures have valid canonical dates and indexes, the current-tour view includes them, and a subsequent import does not recreate the problem.
 
@@ -164,4 +165,4 @@ Complete when: the intended versions are publicly available, fresh installs work
 
 ## Current progress
 
-Stage 1 ingestion fixes, date-index concurrency hardening and repair tooling are implemented locally. The 8 October preview covers 2,136 tours and 8,817 changed date fields, with six historical end-date conflicts excluded. Deployment, reviewed live repair, admin/app verification and the next morning import check remain open. See `llt-app-sync/docs/tour-date-repair.md` for the rollout and repair procedure.
+Stage 1 production repair was applied on 9 October: 2,139 tours and 8,835 date fields repaired, with six conflicting historical records preserved. A fresh audit after the production importer completed found zero eligible repairs and matched all 507 source date families. There are 517 indexed current/upcoming departures; the live admin loads a clearly labelled 500-record window, with verified exact-code access to departures outside it. The importer now uses bounded atomic record groups rather than one root update that exceeded Firebase's Function trigger limit. Source fixes are on main and the importer, date-index Functions and admin are deployed. Native display and the next automatically scheduled execution remain part of stage 8 acceptance. See `llt-app-sync/docs/tour-date-repair.md` for the procedure and `docs/operations/tour-date-production-verification.md` for production evidence.
