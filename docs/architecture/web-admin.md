@@ -24,3 +24,17 @@ valid current sessions. `DRIVER_POLICY_CHANGE_IN_PROGRESS` is presented as a
 temporary settings transition, never as abuse or too-many-attempts wording.
 
 To add an admin section, create a feature folder, expose a stable route component, add a `React.lazy` route in `App.jsx`, provide an accessible loading state, keep Firebase calls in a repository/service, and add visible behavior tests plus a production-build chunk check.
+
+Track Coaches has one Leaflet renderer per mounted map view, with URL-backed
+filters, selection, map/list choice and pickup visibility. The renderer owns map
+lifecycle and tile failures; the repository owns four bounded subscriptions and
+automatically expands the listed-row query with a sentinel, independently of the
+500-tour dashboard window. Presentation ages points every fifteen seconds using
+the server clock offset, clears invalid/expired positions, marks offline caches
+and never sends names or GPS records to the tile provider. Numbered markers
+group nearby tour positions; an accessible list provides the same selection.
+
+Demo mode is an explicit, labelled presentation-only data source that closes the
+real feed. Leaving it mounts a fresh real subscription and clears sample
+selection/filters. It never writes to Firebase or restores sample data as live.
+See [the tracking contract](../data-contracts/admin-coach-tracking.md).

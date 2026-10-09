@@ -54,12 +54,14 @@ const ToursManager = lazy(() => import('./components/ToursManager'));
 const BroadcastPanel = lazy(() => import('./components/BroadcastPanel').then((module) => ({ default: module.BroadcastPanel })));
 const ContentModerationPanel = lazy(() => import('./components/ContentModerationPanel').then((module) => ({ default: module.ContentModerationPanel })));
 const Settings = lazy(() => import('./components/Settings'));
+const TrackCoaches = lazy(() => import('./components/TrackCoaches'));
 
 // Navigation items configuration
 const navItems = [
   { path: '/', label: 'Dashboard', icon: IconDashboard, color: 'brand' },
   { path: '/drivers', label: 'Driver Management', icon: IconUsers, color: 'blue' },
   { path: '/tours', label: 'Tours', icon: IconMap, color: 'green' },
+  { path: '/track-coaches', label: 'Track Coaches', icon: IconBus, color: 'teal' },
   { path: '/broadcast', label: 'Broadcast', icon: IconSpeakerphone, color: 'orange' },
   { path: '/moderation', label: 'Moderation', icon: IconFlag, color: 'red' },
   { path: '/settings', label: 'Settings', icon: IconSettings, color: 'gray' },
@@ -406,6 +408,7 @@ function AppLayout({ user }) {
             <Route path="/" element={<Dashboard />} />
             <Route path="/drivers" element={<DriversManager />} />
             <Route path="/tours" element={<ToursManager />} />
+            <Route path="/track-coaches" element={<TrackCoaches />} />
             <Route path="/broadcast" element={<BroadcastPanel />} />
             <Route path="/moderation" element={<ContentModerationPanel />} />
             <Route path="/settings" element={<Settings />} />

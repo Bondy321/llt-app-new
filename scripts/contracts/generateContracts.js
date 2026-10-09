@@ -375,13 +375,15 @@ const contentFor = (output) => output.format === 'types'
   : output.format === 'focused-types' ? generateFocusedTypes(output.focus)
   : output.focus ? generateFocusedRuntime(output.format, output.focus) : generateRuntime(output.format);
 
+const matchesGeneratedSource = (actual, expected) => actual.replaceAll('\r\n', '\n') === expected;
+
 const run = ({ check = false } = {}) => {
   const stale = [];
   for (const output of outputs) {
     const absolutePath = path.join(repositoryRoot, output.path);
     const expected = contentFor(output);
     if (check) {
-      if (!fs.existsSync(absolutePath) || fs.readFileSync(absolutePath, 'utf8') !== expected) stale.push(output.path);
+      if (!fs.existsSync(absolutePath) || !matchesGeneratedSource(fs.readFileSync(absolutePath, 'utf8'), expected)) stale.push(output.path);
       continue;
     }
     fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
@@ -404,4 +406,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { definitions, generateFocusedRuntime, generateFocusedTypes, generateRuntime, generateTypes, run };
+module.exports = { definitions, generateFocusedRuntime, generateFocusedTypes, generateRuntime, generateTypes, matchesGeneratedSource, run };

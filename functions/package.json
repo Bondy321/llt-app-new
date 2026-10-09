@@ -18,6 +18,7 @@
     "migrate:notification-devices": "node scripts/migrateNotificationDevices.js",
     "backfill:notification-marketing-audience": "node scripts/backfillNotificationMarketingAudience.js",
     "backfill:admin-dashboard": "node scripts/backfillAdminDashboard.js",
+    "backfill:coach-tracking": "node scripts/backfillCoachTracking.js",
     "retention:preflight": "node scripts/notificationRetentionPreflight.js",
     "retention:prepare": "node scripts/notificationRetentionPreparation.js",
     "retention:rollout": "node scripts/notificationRetentionRollout.js",
