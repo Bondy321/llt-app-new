@@ -6,7 +6,27 @@ import {
   formatTimeForDisplay,
   parseTimestampStrict,
   toEpochMsStrict,
+  getUKCalendarDayEpochMs,
+  hasTourFinished,
 } from './dateUtils';
+
+describe('UK tour calendar boundaries', () => {
+  it('uses the UK civil day at midnight in summer and winter', () => {
+    expect(getUKCalendarDayEpochMs(Date.UTC(2026, 9, 8, 23, 30))).toBe(Date.UTC(2026, 9, 9));
+    expect(getUKCalendarDayEpochMs(Date.UTC(2026, 0, 8, 23, 30))).toBe(Date.UTC(2026, 0, 8));
+    expect(getUKCalendarDayEpochMs(Date.UTC(2026, 2, 29, 23, 30))).toBe(Date.UTC(2026, 2, 30));
+    expect(getUKCalendarDayEpochMs(Date.UTC(2026, 9, 25, 23, 30))).toBe(Date.UTC(2026, 9, 25));
+  });
+
+  it('keeps a tour current throughout its UK end day and accepts strict date formats', () => {
+    const today = Date.UTC(2026, 9, 9);
+    expect(hasTourFinished({ endDate: '09/10/2026' }, today)).toBe(false);
+    expect(hasTourFinished({ endDate: '2026-10-08' }, today)).toBe(true);
+    expect(hasTourFinished({ startDate: '10/10/2026' }, today)).toBe(false);
+    expect(hasTourFinished({ endDate: '31/02/2026' }, today)).toBe(false);
+    expect(hasTourFinished({ endDate: '09/10/2026 00:00:00' }, today)).toBe(false);
+  });
+});
 
 describe('dateUtils timestamp parsing contract', () => {
   it('accepts epoch number and numeric epoch string', () => {

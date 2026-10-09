@@ -10,6 +10,7 @@ import {
   ref,
   startAt,
 } from 'firebase/database';
+import { getUKCalendarDayEpochMs } from '../utils/dateUtils';
 
 export const TOUR_WINDOW_LIMIT = 500;
 export const DRIVER_DIRECTORY_LIMIT = 500;
@@ -21,14 +22,9 @@ const clampLimit = (value, maximum) => (
   Number.isSafeInteger(value) && value > 0 && value <= maximum ? value : maximum
 );
 
-const utcStartOfLocalDay = (nowMs) => {
-  const date = new Date(nowMs);
-  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
-};
-
 export function getTourWindowQueryPlan({ dateScope = 'current', nowMs = Date.now(), limit = TOUR_WINDOW_LIMIT } = {}) {
   const boundedLimit = clampLimit(limit, TOUR_WINDOW_LIMIT);
-  const todayMs = utcStartOfLocalDay(nowMs);
+  const todayMs = getUKCalendarDayEpochMs(nowMs);
 
   if (dateScope === 'past') {
     return { orderByChild: 'endDateEpochMs', endAt: todayMs - 1, limitToLast: boundedLimit };

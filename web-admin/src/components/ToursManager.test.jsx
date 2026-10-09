@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
@@ -115,6 +115,7 @@ async function changeDateScope(container, label) {
 
 beforeEach(() => {
   mockRef.mockClear();
+  mockOnValue.mockClear();
   currentToursFixture = toursFixture;
   currentPackStatusFixture = {};
   mockOnValue.mockImplementation((dbRef, callback) => {
@@ -127,7 +128,41 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => vi.restoreAllMocks());
+
 describe('ToursManager query-param status behavior', () => {
+  it('does not claim an empty date window means the database has no tours', async () => {
+    currentToursFixture = {};
+    renderAt();
+    expect(await screen.findByText('No tours found in this date view matching your criteria.')).toBeInTheDocument();
+    expect(screen.queryByText('Create First Tour')).not.toBeInTheDocument();
+  });
+
+  it('reports query failure instead of presenting an empty database', async () => {
+    const normalSubscribe = mockOnValue.getMockImplementation();
+    mockOnValue.mockImplementation((dbRef, callback, onError) => {
+      if (dbRef.path === 'tours') {
+        onError(new Error('permission denied'));
+        return vi.fn();
+      }
+      return normalSubscribe(dbRef, callback, onError);
+    });
+    renderAt();
+    expect(await screen.findByText('Tours could not be loaded. Check your connection and refresh the page.')).toBeInTheDocument();
+    expect(screen.queryByText('Create First Tour')).not.toBeInTheDocument();
+  });
+
+  it('moves the query to the new UK day when an open page regains focus', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 9, 8, 22, 59));
+    renderAt();
+    await screen.findByText('Tour 1');
+    const lastTourQuery = () => mockOnValue.mock.calls.filter(([reference]) => reference.path === 'tours').at(-1)[0];
+    expect(lastTourQuery().constraints).toContainEqual({ type: 'startAt', value: Date.UTC(2026, 9, 8) });
+    now.mockReturnValue(Date.UTC(2026, 9, 8, 23, 1));
+    fireEvent.focus(window);
+    await waitFor(() => expect(lastTourQuery().constraints)
+      .toContainEqual({ type: 'startAt', value: Date.UTC(2026, 9, 9) }));
+  });
   const asyncAssertionTimeoutMs = 15000;
   it('hydrates Select and filtered list from ?status=unassigned', async () => {
     renderAt('?status=unassigned');

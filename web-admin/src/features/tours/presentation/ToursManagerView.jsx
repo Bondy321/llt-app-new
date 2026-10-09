@@ -90,6 +90,7 @@ export default function ToursManagerView(props) {
     totalParticipants,
     totalTours,
     tourWindow,
+    tourWindowStatus,
     tours,
     unassignedTours,
     updatingIssueId,
@@ -328,7 +329,7 @@ export default function ToursManagerView(props) {
 
       {/* Tours Display */}
       {tourWindow.atLimit ? <Alert color="yellow" icon={<IconAlertCircle size={16} />} mb="md">
-          This date view is capped at {tourWindow.limit} indexed tours. Refine the date/status filters before exporting or treating these totals as the complete archive.
+          This date view is capped at {tourWindow.limit} indexed tours. Search by an exact tour code to open a tour outside this window. These totals and exports cover the loaded window only.
         </Alert> : null}
       {driverDirectoryAtLimit ? <Alert color="yellow" icon={<IconAlertCircle size={16} />} mb="md">
           This screen keeps the first {500} drivers live for assignment coverage. Use the paged Drivers directory or an exact Driver ID search to manage drivers outside this live window.
@@ -346,11 +347,12 @@ export default function ToursManagerView(props) {
                 <IconMap size={30} />
               </ThemeIcon>
               <Text c="dimmed" ta="center">
-                {totalTours === 0 ? 'No tours yet. Click "Add Tour" to create your first tour.' : 'No tours found matching your criteria'}
+                {tourWindowStatus === 'error'
+                  ? 'Tours could not be loaded. Check your connection and refresh the page.'
+                  : tourWindowStatus === 'loading'
+                    ? 'Loading tours for this date view...'
+                    : 'No tours found in this date view matching your criteria.'}
               </Text>
-              {totalTours === 0 && <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
-                  Create First Tour
-                </Button>}
             </Stack>
           </Center>
         </Card> : viewMode === 'grid' ? <SimpleGrid cols={{
