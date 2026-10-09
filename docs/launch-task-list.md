@@ -136,6 +136,7 @@ Complete when: store declarations and in-app information match the actual build,
 - [ ] Run physical iPhone and Android acceptance for fresh install, upgrade, login, assignment changes, itinerary, manifests, boarding, chat, photos, notifications, Find My Bus and background tracking.
 - [ ] Exercise offline recovery, reconnect, session expiry, logout, reinstall/device recovery and account deletion using appropriate test identities.
 - [ ] Confirm the 7am sync and deployed backend compatibility. Inspect notification delivery and cleanup health; keep the paused notification retention job paused unless its preparation and canary protocol justify a separate activation.
+- [ ] Review retained booking rows with seat/date/pickup changes against the current source before the pilot. The additive merge preserves distinct existing entries; do not infer that every difference is a cancellation or remove manual passengers.
 - [ ] Record exact source revision, binary versions, runtime versions, environment, deployed backend/rules and device results. Deploy reviewed backend access changes in the documented order.
 
 Complete when: all required checks pass for the actual pilot candidates and each remaining limitation has an explicit disposition.

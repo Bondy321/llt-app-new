@@ -10,10 +10,10 @@ and historical repair had not been applied.
 - Admin change: PR #468, main `7bfd060b65e477a3c6fbe5ebc129a33c350a26f8`.
   All six required CI gates passed. The production Hosting HTML matches the local
   production build.
-- Importer: `llt-app-sync` main `22f8a6df522100964e920414661f313c9285afa4`.
-  Cloud Build `86ee8622-76f9-4efd-97d1-ccdab4554e9d` succeeded.
-- Job `llt-app-sync-daily`, `europe-west1`, generation 24, uses the pinned image
-  `europe-west2-docker.pkg.dev/loch-lomond-travel/llt-sync/llt-app-sync@sha256:0fcc51652943406b63997f591a701fd9f975a56e257c939f27107a5a2572a569`.
+- Importer: `llt-app-sync` main `e6ba892cfe6967b0289a851bbe04db45410e21db`.
+  Cloud Build `15acb34e-fa54-47d4-959c-54b7525bfda1` succeeded.
+- Job `llt-app-sync-daily`, `europe-west1`, generation 25, uses the pinned image
+  `europe-west2-docker.pkg.dev/loch-lomond-travel/llt-sync/llt-app-sync@sha256:d902bf04f696e213263178ab7f74e803fea1ec6d24b022c333dbe9f3c5d4896d`.
   Only its image was changed; service account, secrets, live-write arguments and
   resource configuration were preserved.
 - Functions `normalizeTourDateIndexes` and `normalizeTourEndDateIndex` were
@@ -53,12 +53,40 @@ A second normal execution, `llt-app-sync-daily-p2fg6`, also succeeded. It planne
 zero paths and made zero write requests, confirming that repeating the same
 morning reports is a successful no-op in the deployed pipeline.
 
+## Pickup and passenger consistency
+
+Visual verification exposed another consequence of changing the date parser:
+the existing merge compared raw pickup dates, so timestamped and date-only
+representations of the same pickup/passenger were appended as separate rows.
+The final importer normalizes recognized civil dates before matching and repairs
+those duplicate representations while preserving existing nonblank coordinates,
+contact fields and other operator details. Different dates, times, locations,
+names and seats remain distinct; repeated same-name/unassigned passengers retain
+their multiplicity across reports rather than becoming a set.
+
+The preview identified 13,523 format-duplicate passenger rows and 1,453
+format-duplicate pickup rows. The merge retains every booking's source passenger
+count and also preserves 673 existing passenger rows and 46 pickup rows with
+different identity dimensions from the current reports. Those differences are
+recorded for pilot data review, not automatically treated as cancellations.
+
+Final execution `llt-app-sync-daily-t9vk8` succeeded in 2m7.78s with 558 requests
+and 31,707 paths. Replay `llt-app-sync-daily-lrjd5` succeeded with zero writes.
+A fresh UTF-8 audit found 14,196 retained passenger rows and 1,499 pickup rows,
+no pending list changes, and no booking below its source row count. A separate
+container smoke test confirmed both runtime module hashes match the reviewed
+local code and that same-name/unassigned party multiplicity is preserved. The
+final date audit still has zero eligible repairs and the six unchanged historical
+conflicts. Early local list-audit counts were corrected after an audit-only
+Windows text-encoding error; production CSV readers and JSON writers use UTF-8.
+
 ## Validation and visible behaviour
 
-The importer passed 66 ordinary tests and four actual RTDB emulator tests. These
+The importer passed 72 ordinary tests and four actual RTDB emulator tests. These
 cover CAS repair retries, deletion, operational-field preservation, bounded SDK
 writes, indexed query inclusion, idempotence, payload growth, failure midway
-through a report and refreshed itinerary ownership checks. The admin passed 27
+through a report, refreshed itinerary ownership checks, list-date normalization,
+preserved contact/coordinate fields and same-name party multiplicity. The admin passed 27
 targeted tests, lint, production build, architecture/contracts checks and all six
 full CI gates.
 
