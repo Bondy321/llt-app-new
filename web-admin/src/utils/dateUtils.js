@@ -3,6 +3,27 @@ const ISO_DATE_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
 const ISO_DATETIME_REGEX = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)(Z|[+-]\d{2}:\d{2})$/;
 const NUMERIC_STRING_REGEX = /^\d+$/;
 
+const ukCalendarFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
+});
+
+// Tour query indexes represent civil dates at UTC midnight, not instants in
+// the browser's timezone. Match the UK's calendar day even when abroad or in BST.
+export const getUKCalendarDayEpochMs = (nowMs = Date.now()) => {
+  const parts = Object.fromEntries(ukCalendarFormatter.formatToParts(nowMs)
+    .map(({ type, value }) => [type, value]));
+  return Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+};
+
+export const hasTourFinished = (tour, todayMs = getUKCalendarDayEpochMs()) => {
+  const value = tour?.endDate || tour?.startDate;
+  const parsed = parseUKDateStrict(value);
+  const date = parsed.success ? parsed.date : parseISODateStrict(value).date;
+  if (!date) return false;
+  const endMs = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+  return endMs < todayMs;
+};
+
 const buildValidationError = (code, message, input, expectedFormat) => ({
   code,
   message,

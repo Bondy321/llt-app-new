@@ -47,6 +47,13 @@ describe('admin directory subscriptions', () => {
     });
   });
 
+  it('uses complementary UK boundaries for current and past queries in BST', () => {
+    const nowMs = Date.UTC(2026, 9, 8, 23, 30);
+    const boundary = Date.UTC(2026, 9, 9);
+    expect(getTourWindowQueryPlan({ dateScope: 'current', nowMs }).startAt).toBe(boundary);
+    expect(getTourWindowQueryPlan({ dateScope: 'past', nowMs }).endAt).toBe(boundary - 1);
+  });
+
   it('reports a capped tour window instead of silently presenting it as complete', () => {
     onValueMock.mockImplementation((...args) => {
       expect(args).toHaveLength(3);

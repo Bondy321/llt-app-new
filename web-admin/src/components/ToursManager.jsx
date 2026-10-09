@@ -35,39 +35,19 @@ import { notifications } from '@mantine/notifications';
 import { Text, Stack, Loader, Center } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { duplicateTour } from '../services/tourService';
-import { parseUKDateStrict, parseISODateStrict } from '../utils/dateUtils';
+import { getUKCalendarDayEpochMs, hasTourFinished } from '../utils/dateUtils';
 import { buildTourPackCoverage, subscribeToDriverTourPackAdminStatuses } from '../services/driverTourPackAdminStatusService';
 import { buildDriverTourPackOperationsByTour, departureKeyForTour, subscribeToDriverTourPackOperations, updateDriverTourPackIssueStatus } from '../services/driverTourPackOperationsService';
 import { fetchTourByExactId, subscribeToDriverDirectory, subscribeToTourWindow } from '../services/adminDirectoryService';
 const db = getAdminDatabase();
-const getTodayAtNoon = () => {
-  const today = new Date();
-  today.setHours(12, 0, 0, 0);
-  return today;
-};
-const parseTourDate = value => {
-  const ukParsed = parseUKDateStrict(value);
-  if (ukParsed.success) return ukParsed.date;
-  const isoParsed = parseISODateStrict(value);
-  if (isoParsed.success) return isoParsed.date;
-  return null;
-};
-const hasTourFinished = (tour, today = getTodayAtNoon()) => {
-  const finishDate = parseTourDate(tour?.endDate || tour?.startDate);
-  if (!finishDate) return false;
-  return finishDate.getTime() < today.getTime();
-};
+const EMPTY_TOUR_WINDOW = Object.freeze({ tours: {}, atLimit: false, limit: 0, status: 'loading' });
 
 // Tour Card Component for grid view
 export default function ToursManager() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [tourWindowTours, setTourWindowTours] = useState({});
+  const [tourWindowData, setTourWindowData] = useState(EMPTY_TOUR_WINDOW);
   const [exactTourMatch, setExactTourMatch] = useState(null);
   const [drivers, setDrivers] = useState({});
-  const [tourWindow, setTourWindow] = useState({
-    atLimit: false,
-    limit: 0
-  });
   const [driverDirectoryAtLimit, setDriverDirectoryAtLimit] = useState(false);
   const [packStatusSnapshot, setPackStatusSnapshot] = useState({
     statuses: {},
@@ -85,6 +65,7 @@ export default function ToursManager() {
   const [viewMode, setViewMode] = useState('grid');
   const [currentPage, setCurrentPage] = useState(1);
   const [syncStatus, setSyncStatus] = useState('syncing');
+  const [todayMs, setTodayMs] = useState(getUKCalendarDayEpochMs);
   const itemsPerPage = 12;
   const allowedStatusParams = useMemo(() => new Set(['all', 'assigned', 'unassigned', 'active', 'inactive']), []);
   const allowedDateScopeParams = useMemo(() => new Set(['current', 'past', 'all']), []);
@@ -92,6 +73,10 @@ export default function ToursManager() {
   const filterStatus = statusParam && allowedStatusParams.has(statusParam) ? statusParam : 'all';
   const dateScopeParam = searchParams.get('dateScope');
   const filterDateScope = dateScopeParam && allowedDateScopeParams.has(dateScopeParam) ? dateScopeParam : 'current';
+  const tourWindow = tourWindowData.dateScope === filterDateScope && tourWindowData.todayMs === todayMs
+    ? tourWindowData : EMPTY_TOUR_WINDOW;
+  const tourWindowTours = tourWindow.tours;
+  const tourWindowStatus = tourWindow.status;
   const queryParam = searchParams.get('q') || '';
   const searchTerm = queryParam;
   const activeExactTourMatch = exactTourMatch?.query === queryParam.trim() ? exactTourMatch.match : null;
@@ -202,22 +187,38 @@ export default function ToursManager() {
       unsubPackStatuses();
     };
   }, []);
-  useEffect(() => subscribeToTourWindow(db, {
-    dateScope: filterDateScope
-  }, ({
-    tours: nextTours,
-    atLimit,
-    limit
-  }) => {
-    setTourWindowTours(nextTours);
-    setTourWindow({
+  useEffect(() => {
+    const refreshDay = () => setTodayMs(getUKCalendarDayEpochMs());
+    const timer = window.setInterval(refreshDay, 60_000);
+    window.addEventListener('focus', refreshDay);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshDay);
+    };
+  }, []);
+  useEffect(() => {
+    return subscribeToTourWindow(db, {
+      dateScope: filterDateScope,
+      nowMs: todayMs
+    }, ({
+      tours: nextTours,
       atLimit,
       limit
+    }) => {
+      setTourWindowData({
+        tours: nextTours,
+        atLimit,
+        limit,
+        dateScope: filterDateScope,
+        todayMs,
+        status: 'ready'
+      });
+      setSyncStatus('connected');
+    }, () => {
+      setSyncStatus('error');
+      setTourWindowData({ ...EMPTY_TOUR_WINDOW, dateScope: filterDateScope, todayMs, status: 'error' });
     });
-    setSyncStatus('connected');
-  }, () => {
-    setSyncStatus('error');
-  }), [filterDateScope]);
+  }, [filterDateScope, todayMs]);
   useEffect(() => {
     let cancelled = false;
     if (!queryParam.trim()) {
@@ -244,17 +245,16 @@ export default function ToursManager() {
 
   // Filter and search tours
   const filteredTours = useMemo(() => {
-    const today = getTodayAtNoon();
     return Object.entries(tours).filter(([id, tour]) => {
       const matchesSearch = id.toLowerCase().includes(searchTerm.toLowerCase()) || tour.name && tour.name.toLowerCase().includes(searchTerm.toLowerCase()) || tour.tourCode && tour.tourCode.toLowerCase().includes(searchTerm.toLowerCase()) || tour.driverName && tour.driverName.toLowerCase().includes(searchTerm.toLowerCase());
       const isAssigned = tour.driverName && tour.driverName !== 'TBA';
       const matchesStatus = filterStatus === 'all' || filterStatus === 'assigned' && isAssigned || filterStatus === 'unassigned' && !isAssigned || filterStatus === 'active' && tour.isActive || filterStatus === 'inactive' && !tour.isActive;
-      const isPastTour = hasTourFinished(tour, today);
+      const isPastTour = hasTourFinished(tour, todayMs);
       const isExactDeepLink = activeExactTourMatch?.tourId === id && queryParam.trim().length > 0;
       const matchesDateScope = isExactDeepLink || filterDateScope === 'all' || filterDateScope === 'past' && isPastTour || filterDateScope === 'current' && !isPastTour;
       return matchesSearch && matchesStatus && matchesDateScope;
     });
-  }, [tours, searchTerm, filterStatus, filterDateScope, activeExactTourMatch, queryParam]);
+  }, [tours, searchTerm, filterStatus, filterDateScope, activeExactTourMatch, queryParam, todayMs]);
 
   // Pagination
   const totalPages = Math.ceil(filteredTours.length / itemsPerPage);
@@ -412,6 +412,7 @@ export default function ToursManager() {
     totalParticipants,
     totalTours,
     tourWindow,
+    tourWindowStatus,
     tours,
     unassignedTours,
     updatingIssueId,

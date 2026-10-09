@@ -26,6 +26,9 @@ Use only `web-admin/src/utils/dateUtils.js` for parsing and display:
 
 - Parsing/normalization: `parseUKDateStrict`, `parseISODateStrict`, `parseTimestampStrict`, `toEpochMsStrict`
 - Formatting: `formatDateForDisplay`, `formatDateRangeForDisplay`, `formatTimeForDisplay`, `formatDateTimeForDisplay`, `formatLongDateForDisplay`
+- Tour windows: `getUKCalendarDayEpochMs`, `hasTourFinished`. Query indexes encode civil dates at UTC midnight; current/past boundaries use the calendar day in `Europe/London`, regardless of the viewer's timezone. A tour remains current through its end day. Open Tours pages refresh this boundary every minute and when the window regains focus.
+
+The Tours view queries `endDateEpochMs` and cannot include unindexed historical records. Fix the importer and repair the source date family through the supported maintenance tool; do not compensate with an unbounded tour listener. Empty windows, loading and subscription failures have distinct messages. The 500-record window is explicit, and exact tour-code lookup can open a departure outside it.
 
 ## Disallowed patterns
 
