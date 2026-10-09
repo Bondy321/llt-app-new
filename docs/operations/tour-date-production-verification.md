@@ -49,6 +49,10 @@ job arguments and the 9 October 7am reports. The subsequent metadata audit found
 - The same six excluded historical conflicts, requiring authoritative source
   evidence before their dates can be changed.
 
+A second normal execution, `llt-app-sync-daily-p2fg6`, also succeeded. It planned
+zero paths and made zero write requests, confirming that repeating the same
+morning reports is a successful no-op in the deployed pipeline.
+
 ## Validation and visible behaviour
 
 The importer passed 66 ordinary tests and four actual RTDB emulator tests. These
