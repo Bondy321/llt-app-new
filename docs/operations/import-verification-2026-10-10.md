@@ -44,6 +44,13 @@ then detaches it. Actual emulator tests cover fresh-client resume, competing
 revision/cursor/deletion, and cleanup. This changes only the maintenance tool;
 it does not need another Function deployment.
 
+The refreshed maintenance run completed 22 pages and 2,176 tours. Validation
+of all 2,002 records with imported count fields found zero missing projections
+and zero passenger-count/source mismatches. An independent sum of all nondeleted
+projection rows matched the public dashboard summary. Its all-time operational
+total is 54,601 passengers on 2,176 active-flagged tours; it includes historical
+records and must not be interpreted as today's departures or the 500-row view.
+
 ## Remaining roster risks
 
 The importer matches its inputs, but its pickup report is not a complete roster.
@@ -53,6 +60,23 @@ with booking references across 5,211 bookings. All 13,396 pickup-report rows
 matched it. Another 312 roster rows were absent from both the pickup report
 and live app data. There were also 361 named rows without booking references
 whose operational meaning has not been established.
+
+All ten tours missing the 312 referenced passengers depart on 11 December.
+Their TourSummary sold total and TourPerfExtract Pax total are both 312; their
+TourPerf status is noncancelled under the existing management classifier.
+Neither their booking references nor passengers appear in BookrefEmail,
+PaxByDepPoint or canonical live bookings. Tour cancellation does not explain
+these missing passengers; the pickup/email report selection remains unverified.
+
+The exact 7am TourPerfExtract report also exposes a separate tour lifecycle
+problem. Using the actual management cancellation classifier, 106 current-source
+tours are cancelled but still have `isActive: true` in the app. All are eligible
+for the current/upcoming date query (10 October–11 December) before its 500-row
+limit. Eight still have 52 sold/listed source passengers, and live bookings on
+these cancelled tours contain 398 normalized passenger rows across 182 bookings.
+The current app importer does not consume this lifecycle report. A tour-level
+cancelled status is useful evidence; it does not specify individual passenger
+cancellation, operator ownership or safe deletion of runtime records.
 
 The actual live manifest helper returned 14,295 normalized rows across 5,343
 bookings for these source tours: 899 additional rows compared with the current
@@ -89,7 +113,8 @@ binary build-time cohort eligibility was not verified. No real app sessions,
 GPS movement, native offline persistence or notification delivery were created
 by this audit. Physical-device acceptance remains outstanding.
 
-Next work: establish the full roster and cancellation semantics, explicitly
+Next work: reconcile source tour lifecycle with app visibility, establish the
+full roster and passenger cancellation semantics, explicitly
 separate source-managed and operator-managed rows, then implement and verify
 bounded reconciliation without losing boarding/runtime state. Resolve pilot
 booking login coverage and itinerary suitability before passenger invitations.
