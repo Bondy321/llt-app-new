@@ -41,6 +41,7 @@ After validation, the function writes one atomic multi-path update:
 - `tours/{tourId}/pickupPoints` merged with the submitted pickup point.
 - `pickupPoints/{tourId}` merged with the submitted pickup point.
 - Capacity uses the maximum of valid imported counters, active source booking rows, the runtime counter, and active source count plus existing manual roster rows. Manual rows are counted once; `sold`, `bookedPassengerCount`, `manifestPassengerCount`, and runtime-owned `currentParticipants` are not rewritten by this endpoint.
+- `tours/{tourId}/manualPassengerCount` records the exact manual overlay count in the same atomic update. Dashboard/admin booked totals combine the largest valid source counter with this separate scalar. Source/runtime counters keep their original ownership.
 
 The function does not write `users/{uid}` or `tours/{tourId}/participants/{uid}`. The verified server login/join flow owns those identity and membership records. A roster-only booking has no `booking_identities/{bookingRef}` record and cannot sign in; the server does not invent an email or credentials.
 
@@ -48,6 +49,8 @@ The function does not write `users/{uid}` or `tours/{tourId}/participants/{uid}`
 
 Manual creation uses short-lived server-side locks under `manual_booking_creation_locks` for the booking reference and selected tour. This serializes manual additions enough to prevent duplicate booking references and seat collisions through this endpoint.
 It also acquires the same five-minute `sync_roster_control/{tourId}` lease used by the importer before reading canonical capacity and seats, and renews it before the atomic write. Owner-only release preserves source publication cursors. Failed imports still marked updating reject creation even after their lease expires. Superseded source rows neither occupy capacity nor reserve their former seats.
+Rejected transaction callbacks return unchanged current data so Firebase's server CAS can refresh stale SDK cache values; an immediate local abort would falsely reject a released lease. Final owner and expiry checks remain authoritative. The HTTP response waits for cleanup, preserving a successful creation outcome if cleanup only logs a warning. Actual independent-connection and sequential HTTP tests cover this boundary.
+The importer recomputes the manual scalar and merges current manual booking pickups into both aggregate pickup projections. It removes obsolete source pickup entries, preserves manual stops and does not include operator overlays in the source generation hash.
 
 ## Release order
 

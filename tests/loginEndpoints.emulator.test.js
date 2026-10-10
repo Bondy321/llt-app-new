@@ -14,6 +14,9 @@ const admin = require('../functions/node_modules/firebase-admin');
 const express = require('../functions/node_modules/express');
 const { verifyPassengerLogin } = require('../functions/src/domains/passenger-auth/passengerLoginFunction');
 const { verifyDriverLogin } = require('../functions/src/domains/driver-auth/driverLoginFunction');
+const { createManualPassengerBooking } = require('../functions/src/domains/administration/administrationFunctions');
+const { acquireManualBookingLock, releaseManualBookingLock } = require('../functions/src/infrastructure/database/operationLock');
+const { recomputeTourProjection } = require('../functions/src/domains/admin-dashboard/dashboardProjectionFunctions');
 const { getTourManifest } = require('../functions/src/domains/manifests/manifestFunction');
 const { endAppSession } = require('../functions/src/domains/app-sessions/sessionFunctions');
 const { updateNotificationDeviceRegistration, updateNotificationDevice } = require('../functions/src/domains/notifications/notificationDeviceFunctions');
@@ -31,6 +34,7 @@ test.before(async () => {
   app.post('/passenger', verifyPassengerLogin);
   app.post('/driver', verifyDriverLogin);
   app.post('/manifest', getTourManifest);
+  app.post('/manual', createManualPassengerBooking);
   app.post('/end', endAppSession);
   app.post('/notifications', updateNotificationDeviceRegistration);
   app.use((error, _req, res, _next) => res.status(500).json({ testHandlerError: error.message }));
@@ -52,13 +56,32 @@ const newIdentity = async () => {
   const body = await response.json();
   return { uid: body.localId, token: body.idToken };
 };
-const login = async (kind, identity, body) => {
+const login = async (kind, identity, body, extraHeaders = {}) => {
   const response = await fetch(`${origin}/${kind}`, { method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${identity.token}` },
+    headers: { ...extraHeaders, 'Content-Type': 'application/json', Authorization: `Bearer ${identity.token}` },
     body: JSON.stringify(body), signal: AbortSignal.timeout(15000) });
   const result = { status: response.status, body: await response.json() };
   await handlersIdle();
   return result;
+};
+
+const waitForManualMutationCleanup = async (tourId, bookingRefs = []) => {
+  let clearReads = 0;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const [tourLock, control, ...bookingLocks] = await Promise.all([
+      admin.database().ref(`manual_booking_creation_locks/tours/${tourId}`).once('value'),
+      admin.database().ref(`sync_roster_control/${tourId}`).once('value'),
+      ...bookingRefs.map(ref => admin.database().ref(`manual_booking_creation_locks/bookings/${ref}`).once('value')),
+    ]);
+    if (!tourLock.exists() && !control.val()?.owner && bookingLocks.every(lock => !lock.exists())) {
+      clearReads += 1;
+      if (clearReads >= 3) return;
+    } else {
+      clearReads = 0;
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.fail('Manual booking mutation fences were not released');
 };
 
 // Wait for the driver's post-response admission cleanup through the real DB.
@@ -138,8 +161,10 @@ test.beforeEach(() => seedPolicy(false));
 test('manual source-roster lease contends across Admin connections and releases a cold-cache owner safely', async () => {
   const contenderApp = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'manual-lease-contender');
   const releaseApp = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'manual-lease-cold-release');
+  const staleReaderApp = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'manual-lease-stale-reader');
   const contenderDb = contenderApp.database();
   const releaseDb = releaseApp.database();
+  const staleReaderDb = staleReaderApp.database();
   const tourId = `LEASE_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
   const leaseRef = db.ref(`sync_roster_control/${tourId}`);
   await leaseRef.set({
@@ -153,6 +178,10 @@ test('manual source-roster lease contends across Admin connections and releases 
   assert.equal(held.completedGeneration, 'fixture-generation');
   assert.equal(held.completedReportDate, '2026-10-09');
 
+  // Warm another connection with the old owner before that owner releases.
+  const staleHeld = await staleReaderDb.ref(`sync_roster_control/${tourId}`).get();
+  assert.equal(staleHeld.val().owner, 'manual-owner');
+
   // A new Admin app has not read this path; release must still read the server
   // state before its transaction so it cannot mistake the owner for null.
   await releaseManualSourceRosterLease({ db: releaseDb, tourId, owner: 'manual-owner' });
@@ -161,9 +190,149 @@ test('manual source-roster lease contends across Admin connections and releases 
   assert.equal(Object.hasOwn(released, 'leaseUntilMs'), false);
   assert.equal(released.completedGeneration, 'fixture-generation');
   assert.equal(released.completedReportDate, '2026-10-09');
-  assert.equal(await acquireManualSourceRosterLease({ db: contenderDb, tourId, owner: 'publisher-owner' }), true);
+  assert.equal(await acquireManualSourceRosterLease({ db: staleReaderDb, tourId, owner: 'publisher-owner' }), true);
   await releaseManualSourceRosterLease({ db: db, tourId, owner: 'publisher-owner' });
+
+  const operationLockPath = `manual_booking_creation_locks/tours/${tourId}`;
+  assert.equal(await acquireManualBookingLock({
+    db, path: operationLockPath, owner: 'manual-owner', nowMs: Date.now(),
+  }), true);
+  const staleOperationLock = await staleReaderDb.ref(operationLockPath).get();
+  assert.equal(staleOperationLock.val().owner, 'manual-owner');
+  await releaseManualBookingLock({ db: releaseDb, path: operationLockPath, owner: 'manual-owner' });
+  assert.equal(await acquireManualBookingLock({
+    db: staleReaderDb, path: operationLockPath, owner: 'publisher-owner', nowMs: Date.now(),
+  }), true);
+  await releaseManualBookingLock({ db, path: operationLockPath, owner: 'publisher-owner' });
   await leaseRef.remove();
+  await db.ref(operationLockPath).remove();
+});
+
+test('manual HTTP creation is lease-fenced, preserves source counts, and separates login eligibility from the driver roster', async () => {
+  const adminIdentity = await newIdentity();
+  const adminUid = adminIdentity.uid;
+  const tourId = `MANUAL_HTTP_${Date.now()}`;
+  const generation = 'd'.repeat(64);
+  const sourceBookingRef = `SOURCE_${Date.now()}`;
+  const absentBookingRef = `ABSENT_${Date.now()}`;
+  const rosterOnlyRef = `ROSTER_${Date.now()}`;
+  const loginEligibleRef = `EMAIL_${Date.now()}`;
+  const heldLeaseRef = `HELD_${Date.now()}`;
+  const updatingRef = `UPDATING_${Date.now()}`;
+  await db.ref().update({
+    [`admin_users/${adminUid}`]: true,
+    [`tours/${tourId}`]: {
+      tourCode: tourId.replaceAll('_', ' '), name: 'Synthetic manual test tour',
+      isActive: true, startDate: '01/11/2026', endDate: '01/11/2026',
+      maxParticipants: 53, sold: 1, bookedPassengerCount: 1, manifestPassengerCount: 1,
+      manualPassengerCount: 0, currentParticipants: 0,
+      rosterSync: { schemaVersion: 1, state: 'ready', generation, reportDate: '2026-10-10' },
+    },
+    [`bookings/${sourceBookingRef}`]: {
+      bookingRef: sourceBookingRef, tourId, passengerNames: ['Synthetic source passenger'], seatNumbers: [1],
+    },
+    [`bookings/${absentBookingRef}`]: {
+      bookingRef: absentBookingRef, tourId, passengerNames: ['Synthetic absent passenger'], seatNumbers: [2],
+      sourceRoster: { schemaVersion: 1, state: 'not_in_report', revision: 'e'.repeat(64) },
+    },
+    [`tour_manifests/${tourId}/bookings/${sourceBookingRef}`]: { status: 'PENDING' },
+    [`sync_roster_control/${tourId}`]: {
+      schemaVersion: 1, completedGeneration: generation, completedReportDate: '2026-10-10',
+    },
+  });
+
+  const manualCreate = (bookingRef, seatNumber, email = '') => login('manual', adminIdentity, {
+    tourId, bookingRef, email, pickupDate: '2026-11-01', pickupTime: '08:30',
+    pickupLocation: 'Synthetic Test Stop',
+    passengers: [{ name: `Synthetic ${bookingRef}`, phone: '+44 7700 900001', seatNumber }],
+  }, { Origin: 'http://localhost' });
+
+  const activeSeat = await manualCreate(`ACTIVE_${Date.now()}`, 1);
+  assert.equal(activeSeat.status, 409);
+  assert.equal(activeSeat.body.reason, 'SEAT_ALREADY_ASSIGNED');
+  await waitForManualMutationCleanup(tourId, []);
+  const absentSeat = await manualCreate(rosterOnlyRef, 2);
+  assert.equal(absentSeat.status, 201, JSON.stringify(absentSeat.body));
+  assert.equal(absentSeat.body.loginEligible, false);
+  await waitForManualMutationCleanup(tourId, [rosterOnlyRef]);
+  const rosterOnlyBooking = (await db.ref(`bookings/${rosterOnlyRef}`).once('value')).val();
+  assert.equal(rosterOnlyBooking.loginEligible, false);
+  assert.equal((await db.ref(`booking_identities/${rosterOnlyRef}`).once('value')).exists(), false);
+  assert.equal((await db.ref(`tours/${tourId}/manualPassengerCount`).once('value')).val(), 1);
+
+  const emailBooking = await manualCreate(loginEligibleRef, 3, 'manual-passenger@example.invalid');
+  assert.equal(emailBooking.status, 201, JSON.stringify(emailBooking.body));
+  assert.equal(emailBooking.body.loginEligible, true);
+  await waitForManualMutationCleanup(tourId, [loginEligibleRef]);
+  const identityRecord = (await db.ref(`booking_identities/${loginEligibleRef}`).once('value')).val();
+  assert.equal(identityRecord.normalizedEmail, 'manual-passenger@example.invalid');
+  const passengerIdentity = await newIdentity();
+  assert.equal((await login('passenger', passengerIdentity, {
+    bookingRef: loginEligibleRef, email: 'manual-passenger@example.invalid',
+  })).status, 200);
+
+  const driverIdentity = await newIdentity();
+  const driverId = `D_MANUAL_${Date.now()}`;
+  await db.ref().update({
+    [`drivers/${driverId}`]: { name: 'Synthetic test driver', currentTourId: tourId, authUid: driverIdentity.uid },
+    [`tour_manifests/${tourId}/assigned_drivers/${driverId}`]: true,
+  });
+  assert.equal((await login('driver', driverIdentity, { driverId })).status, 200);
+  const driverManifest = await login('manifest', driverIdentity, { tourId });
+  assert.equal(driverManifest.status, 200, JSON.stringify(driverManifest.body));
+  const driverBooking = driverManifest.body.bookings.find(booking => booking.id === rosterOnlyRef);
+  assert.ok(driverBooking);
+  assert.deepEqual(driverBooking.passengerNames, [`Synthetic ${rosterOnlyRef}`]);
+  assert.deepEqual(driverBooking.seatNumbers, [2]);
+
+  const tourAfterCreates = (await db.ref(`tours/${tourId}`).once('value')).val();
+  assert.equal(tourAfterCreates.manualPassengerCount, 2);
+  assert.equal(tourAfterCreates.sold, 1);
+  assert.equal(tourAfterCreates.bookedPassengerCount, 1);
+  assert.equal(tourAfterCreates.manifestPassengerCount, 1);
+  assert.equal(tourAfterCreates.currentParticipants, 0);
+  await recomputeTourProjection({
+    db: admin.database(), tourId,
+    order: { sourceEventAtMs: Date.now(), sourceEventId: `manual-count-test:${tourId}` },
+  });
+  const adminProjection = (await db.ref(`admin_dashboard/v1/tours/${tourId}`).once('value')).val();
+  assert.equal(adminProjection.passengerCount, 3);
+  assert.equal(adminProjection.passengerCountSource, 'tour.sold+tour.manualPassengerCount');
+  const completedControl = (await db.ref(`sync_roster_control/${tourId}`).once('value')).val();
+  assert.equal(completedControl.completedGeneration, generation);
+  assert.equal(completedControl.completedReportDate, '2026-10-10');
+  assert.equal(Object.hasOwn(completedControl, 'owner'), false);
+  assert.equal(Object.hasOwn(completedControl, 'leaseUntilMs'), false);
+
+  await db.ref(`sync_roster_control/${tourId}`).update({ owner: 'synthetic-publisher', leaseUntilMs: Date.now() + 60000 });
+  const heldLease = await manualCreate(heldLeaseRef, 4);
+  assert.equal(heldLease.status, 409);
+  assert.equal(heldLease.body.reason, 'ROSTER_SYNC_IN_PROGRESS');
+  assert.equal((await db.ref(`bookings/${heldLeaseRef}`).once('value')).exists(), false);
+  assert.equal((await db.ref(`sync_roster_control/${tourId}/owner`).once('value')).val(), 'synthetic-publisher');
+  await db.ref(`sync_roster_control/${tourId}`).update({ owner: null, leaseUntilMs: null });
+  await waitForManualMutationCleanup(tourId, [heldLeaseRef]);
+
+  await db.ref(`tours/${tourId}/rosterSync/state`).set('updating');
+  const updating = await manualCreate(updatingRef, 4);
+  assert.equal(updating.status, 409);
+  assert.equal(updating.body.reason, 'ROSTER_SYNC_IN_PROGRESS');
+  assert.equal((await db.ref(`bookings/${updatingRef}`).once('value')).exists(), false);
+  await waitForManualMutationCleanup(tourId, [heldLeaseRef, updatingRef]);
+  await db.ref().update({
+    [`admin_users/${adminUid}`]: null,
+    [`tours/${tourId}`]: null,
+    [`bookings/${sourceBookingRef}`]: null,
+    [`bookings/${absentBookingRef}`]: null,
+    [`bookings/${rosterOnlyRef}`]: null,
+    [`bookings/${loginEligibleRef}`]: null,
+    [`booking_identities/${loginEligibleRef}`]: null,
+    [`tour_manifests/${tourId}`]: null,
+    [`sync_roster_control/${tourId}`]: null,
+    [`drivers/${driverId}`]: null,
+    [`app_sessions/${driverIdentity.uid}`]: null,
+    [`app_sessions/${passengerIdentity.uid}`]: null,
+  });
 });
 
 test('passenger HTTP login issues a complete session and supports an immediate repeat', async () => {

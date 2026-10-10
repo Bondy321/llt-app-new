@@ -11,16 +11,43 @@ const collectionSize = value => Array.isArray(value)
   : value && typeof value === 'object' ? Object.keys(value).length : 0;
 
 export function resolveTourPassengerCount(tour = {}, { manifestPassengerCount = 0 } = {}) {
-  for (const field of ['sold', 'bookedPassengerCount', 'manifestPassengerCount']) {
-    const count = normalizePassengerCount(tour?.[field]);
-    if (count !== null) return { count, source: `tour.${field}` };
+  const manualCount = normalizePassengerCount(tour?.manualPassengerCount) ?? 0;
+  const sourceCounts = ['sold', 'bookedPassengerCount', 'manifestPassengerCount']
+    .map(field => ({ field, count: normalizePassengerCount(tour?.[field]) }))
+    .filter(item => item.count !== null);
+  if (sourceCounts.length > 0) {
+    const source = sourceCounts.reduce((largest, candidate) => (
+      candidate.count > largest.count ? candidate : largest
+    ));
+    const total = source.count + manualCount;
+    return {
+      count: Number.isSafeInteger(total) ? total : source.count,
+      source: manualCount > 0 ? `tour.${source.field}+tour.manualPassengerCount` : `tour.${source.field}`,
+    };
   }
   const manifestCount = normalizePassengerCount(manifestPassengerCount);
-  if (manifestCount > 0) return { count: manifestCount, source: 'tour_manifests.bookings' };
+  if (manifestCount > 0) {
+    return manifestCount >= manualCount
+      ? { count: manifestCount, source: 'tour_manifests.bookings' }
+      : { count: manualCount, source: 'tour.manualPassengerCount' };
+  }
   const legacyCount = normalizePassengerCount(tour?.currentParticipants);
-  if (legacyCount !== null) return { count: legacyCount, source: 'tour.currentParticipants' };
+  if (legacyCount !== null) {
+    const total = legacyCount + manualCount;
+    return {
+      count: Number.isSafeInteger(total) ? total : legacyCount,
+      source: manualCount > 0 ? 'tour.currentParticipants+tour.manualPassengerCount' : 'tour.currentParticipants',
+    };
+  }
   const participants = collectionSize(tour?.participants);
-  if (participants > 0) return { count: participants, source: 'tours.participants' };
+  if (participants > 0) {
+    const total = participants + manualCount;
+    return {
+      count: Number.isSafeInteger(total) ? total : participants,
+      source: manualCount > 0 ? 'tours.participants+tour.manualPassengerCount' : 'tours.participants',
+    };
+  }
+  if (manualCount > 0) return { count: manualCount, source: 'tour.manualPassengerCount' };
   return { count: 0, source: 'none' };
 }
 
@@ -36,7 +63,8 @@ export function getTourPassengerSummary(tour = {}) {
       : 'passengers';
   return {
     ...resolved, known, label, reportCount, capacity,
-    reportMismatch: reportCount !== null && resolved.source === 'tour.sold' && resolved.count !== reportCount,
+    reportMismatch: reportCount !== null && resolved.source.startsWith('tour.sold')
+      && resolved.count - (normalizePassengerCount(tour.manualPassengerCount) ?? 0) !== reportCount,
     loadPercent: known && capacity ? resolved.count / capacity * 100 : null,
     text: known ? `${resolved.count}${capacity ? ` / ${capacity}` : ''} ${label}` : 'Passenger count unavailable',
   };

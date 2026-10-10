@@ -35,6 +35,12 @@ test('primitive boarding codes are authoritative and stay bound to their stored 
     passengerIdsJson:JSON.stringify([id('a'),id('b')]),passengerStatusCodes:'BN',
     passengerIds:[id('b'),id('a')],passengerStatus:['PENDING','PENDING']});
   assert.deepEqual(result.statuses,['NO_SHOW','BOARDED']);
+  const reviewed=resolveSourcePassengerStatuses({...current,reviewRequired:true},{rosterRevision:revision,
+    passengerIdsJson:JSON.stringify([id('a'),id('b')]),passengerStatusCodes:'BN'});
+  assert.equal(reviewed.needsReview,false);
+  const unmapped=resolveSourcePassengerStatuses(roster([id('c')],{reviewRequired:true}),{rosterRevision:revision,
+    passengerIdsJson:JSON.stringify([id('a')]),passengerStatusCodes:'B'});
+  assert.equal(unmapped.needsReview,true);
   const invalid=resolveSourcePassengerStatuses(current,{rosterRevision:revision,
     passengerIdsJson:JSON.stringify([id('a'),id('b')]),passengerStatusCodes:'B'});
   assert.deepEqual(invalid.statuses,['PENDING','PENDING']);

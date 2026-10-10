@@ -270,7 +270,7 @@ export default function AddPassengerModal({
                   onChange={(event) => updateDraft('bookingRef', event.currentTarget.value.toUpperCase())}
                   required
                   error={validation.errors.bookingRef}
-                  description="Must be globally unique and will be used to sign in."
+                description="Must be globally unique. Used for sign-in when a valid email is supplied."
                 />
               </Grid.Col>
               <Grid.Col span={{ base: 12, sm: 6 }}>

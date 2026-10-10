@@ -13,7 +13,10 @@ const acquireManualBookingLock = async ({ db, path, owner, nowMs, ttlMs = MANUAL
       && typeof current === 'object'
       && Number(current.expiresAtMs) > nowMs
       && current.owner !== owner;
-    if (activeLock) return undefined;
+    // A negative transaction result still needs to reach Firebase's compare
+    // and set. Returning undefined aborts locally and can reject a stale
+    // cached owner even after another connection has released the lock.
+    if (activeLock) return current;
     return {
       owner,
       acquiredAtMs: nowMs,

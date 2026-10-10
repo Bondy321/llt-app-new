@@ -51,7 +51,9 @@ projection rows matched the public dashboard summary. Its all-time operational
 total is 54,601 passengers on 2,176 active-flagged tours; it includes historical
 records and must not be interpreted as today's departures or the 500-row view.
 
-## Remaining roster risks
+## Roster risks observed before the follow-up repair
+
+These findings describe the initial additive import. The same-day [source roster production verification](source-roster-production-verification-2026-10-10.md) records the completed reconciliation, cancellation, identity/cache and itinerary-hash fixes. Missing email is valid roster-only coverage. All 361 named blank-reference rows were subsequently confirmed reserved-seat labels.
 
 The importer matches its inputs, but its pickup report is not a complete roster.
 The separate exact 7am TourPax file `XPO_SCHED_TourPax_20261010_070018.csv`,

@@ -12,13 +12,20 @@ const MANIFEST_STATUS = Object.freeze({
 });
 const SOURCE_ROSTER_LOCK_TTL_MS = 5 * 60 * 1000;
 
+const readManualSourceRosterControl = async (ref) => {
+  // Help warm the transaction view, but do not rely on this as a freshness
+  // guarantee: RTDB may serve cached values. Returning unchanged state from
+  // negative transaction callbacks is what lets its CAS detect stale hashes.
+  return typeof ref.get === 'function' ? ref.get() : ref.once('value');
+};
+
 /** Acquire the same private lease used by source roster publication. */
 const acquireManualSourceRosterLease = async ({ db, tourId, owner, nowMs = Date.now() }) => {
   const ref = db.ref(`sync_roster_control/${tourId}`);
-  await ref.once('value');
+  await readManualSourceRosterControl(ref);
   const result = await ref.transaction((current) => {
     const state = current && typeof current === 'object' ? current : {};
-    if (state.owner && Number(state.leaseUntilMs) > nowMs && state.owner !== owner) return undefined;
+    if (state.owner && Number(state.leaseUntilMs) > nowMs && state.owner !== owner) return current;
     return { ...state, owner, leaseUntilMs: nowMs + SOURCE_ROSTER_LOCK_TTL_MS };
   }, undefined, false);
   const value = result.snapshot?.val?.();
@@ -28,9 +35,9 @@ const acquireManualSourceRosterLease = async ({ db, tourId, owner, nowMs = Date.
 /** Extend our lease immediately before the final multi-path write. */
 const renewManualSourceRosterLease = async ({ db, tourId, owner, nowMs = Date.now() }) => {
   const ref = db.ref(`sync_roster_control/${tourId}`);
-  await ref.once('value');
+  await readManualSourceRosterControl(ref);
   const result = await ref.transaction((current) => {
-    if (!current || current.owner !== owner || Number(current.leaseUntilMs) <= nowMs) return undefined;
+    if (!current || current.owner !== owner || Number(current.leaseUntilMs) <= nowMs) return current;
     return { ...current, leaseUntilMs: nowMs + SOURCE_ROSTER_LOCK_TTL_MS };
   }, undefined, false);
   const value = result.snapshot?.val?.();
@@ -40,7 +47,7 @@ const renewManualSourceRosterLease = async ({ db, tourId, owner, nowMs = Date.no
 /** Release only this owner's lease fields, retaining publication cursors/metadata. */
 const releaseManualSourceRosterLease = async ({ db, tourId, owner }) => {
   const ref = db.ref(`sync_roster_control/${tourId}`);
-  await ref.once('value');
+  await readManualSourceRosterControl(ref);
   await ref.transaction((current) => {
     if (!current || current.owner !== owner) return current;
     const { owner: _owner, leaseUntilMs: _leaseUntilMs, ...metadata } = current;
@@ -320,7 +327,7 @@ const buildManualPassengerBookingUpdates = ({
   const passengerNames = normalized.passengers.map(/** @param {any} passenger */ (passenger) => passenger.name);
   const seatNumbers = normalized.passengers.map(/** @param {any} passenger */ (passenger) => passenger.seatNumber);
   const seatLabels = normalized.passengers.map(/** @param {any} passenger */ (passenger) => passenger.seatLabel);
-  const { occupiedCount } = resolveManualBookingCapacityCount(tourData, existingTourBookings);
+  const { occupiedCount, manualOverlayCount } = resolveManualBookingCapacityCount(tourData, existingTourBookings);
   const totalPassengerCount = occupiedCount + passengerNames.length;
   const maxParticipants = Number.isInteger(tourData?.maxParticipants) && tourData.maxParticipants > 0
     ? tourData.maxParticipants
@@ -373,6 +380,7 @@ const buildManualPassengerBookingUpdates = ({
     totalPassengerCount,
     updates: {
       [`bookings/${normalized.bookingRef}`]: booking,
+      [`tours/${normalized.tourId}/manualPassengerCount`]: manualOverlayCount + passengerNames.length,
       ...(identity ? { [`booking_identities/${normalized.bookingRef}`]: identity } : {}),
       [`tour_manifests/${normalized.tourId}/bookings/${normalized.bookingRef}`]: manifest,
       [`tours/${normalized.tourId}/pickupPoints`]: mergePickupPoint(tourData.pickupPoints, pickupPoint),

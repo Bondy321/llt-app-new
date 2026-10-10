@@ -33,6 +33,7 @@ const SERVER_OWNED_TOUR_FIELDS = new Set([
   'sourceLifecycle',
   'rosterSync',
   'itinerarySource',
+  'manualPassengerCount',
 ]);
 
 const stripServerOwnedAssignmentFields = (tourData = {}) => Object.fromEntries(
