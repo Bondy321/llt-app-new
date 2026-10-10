@@ -10,6 +10,43 @@ const { normalizeBookingRef, normalizeEmail } = require('../../infrastructure/va
 const MANIFEST_STATUS = Object.freeze({
   PENDING: 'PENDING', BOARDED: 'BOARDED', NO_SHOW: 'NO_SHOW', PARTIAL: 'PARTIAL',
 });
+const SOURCE_ROSTER_LOCK_TTL_MS = 5 * 60 * 1000;
+
+/** Acquire the same private lease used by source roster publication. */
+const acquireManualSourceRosterLease = async ({ db, tourId, owner, nowMs = Date.now() }) => {
+  const ref = db.ref(`sync_roster_control/${tourId}`);
+  await ref.once('value');
+  const result = await ref.transaction((current) => {
+    const state = current && typeof current === 'object' ? current : {};
+    if (state.owner && Number(state.leaseUntilMs) > nowMs && state.owner !== owner) return undefined;
+    return { ...state, owner, leaseUntilMs: nowMs + SOURCE_ROSTER_LOCK_TTL_MS };
+  }, undefined, false);
+  const value = result.snapshot?.val?.();
+  return Boolean(result.committed && value?.owner === owner && Number(value.leaseUntilMs) > nowMs);
+};
+
+/** Extend our lease immediately before the final multi-path write. */
+const renewManualSourceRosterLease = async ({ db, tourId, owner, nowMs = Date.now() }) => {
+  const ref = db.ref(`sync_roster_control/${tourId}`);
+  await ref.once('value');
+  const result = await ref.transaction((current) => {
+    if (!current || current.owner !== owner || Number(current.leaseUntilMs) <= nowMs) return undefined;
+    return { ...current, leaseUntilMs: nowMs + SOURCE_ROSTER_LOCK_TTL_MS };
+  }, undefined, false);
+  const value = result.snapshot?.val?.();
+  return Boolean(result.committed && value?.owner === owner && Number(value.leaseUntilMs) > nowMs);
+};
+
+/** Release only this owner's lease fields, retaining publication cursors/metadata. */
+const releaseManualSourceRosterLease = async ({ db, tourId, owner }) => {
+  const ref = db.ref(`sync_roster_control/${tourId}`);
+  await ref.once('value');
+  await ref.transaction((current) => {
+    if (!current || current.owner !== owner) return current;
+    const { owner: _owner, leaseUntilMs: _leaseUntilMs, ...metadata } = current;
+    return metadata;
+  }, undefined, false);
+};
 
 /** @type {(...args: any[]) => any} */
 const createManualPassengerError = (code, message) => {
@@ -233,6 +270,7 @@ const resolveManualBookingCapacityCount = (tourData = {}, existingTourBookings =
 const findManualPassengerSeatConflicts = (bookings = {}, requestedPassengers = []) => {
   const occupiedSeats = new Set();
   Object.values(bookings || {}).forEach((booking) => {
+    if (booking?.sourceRoster?.state === 'not_in_report') return;
     getBookingSeatNumbers(booking).forEach(/** @param {number} seat */ (seat) => occupiedSeats.add(seat));
   });
   return requestedPassengers
@@ -346,6 +384,7 @@ const buildManualPassengerBookingUpdates = ({
 
 
 module.exports = {
+  acquireManualSourceRosterLease,
   buildManualPassengerBookingUpdates,
   createManualPassengerError,
   findManualPassengerSeatConflicts,
@@ -356,4 +395,6 @@ module.exports = {
   normalizeEmail,
   normalizeManualPassengerPayload,
   parseStrictDateOnly,
+  releaseManualSourceRosterLease,
+  renewManualSourceRosterLease,
 };

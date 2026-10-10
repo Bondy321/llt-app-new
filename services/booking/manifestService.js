@@ -103,7 +103,7 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
           rosterConflict = Boolean(hasStoredIdentity && !rosterIdentity.rosterRevision);
           if (rosterConflict) return undefined;
           duplicateDelivery = Boolean(
-            !differentRoster && payload.idempotencyKey
+            !differentRoster && (!hasStoredIdentity || typeof current.passengerStatusCodes === 'string') && payload.idempotencyKey
             && current.idempotencyKey === payload.idempotencyKey
           );
           if (duplicateDelivery) return current;
@@ -126,6 +126,9 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
     const serverValue = transactionResult?.snapshot?.val?.() || observedServerValue || {};
 
     if (rosterConflict) return { success: false, error: ROSTER_REFRESH_MESSAGE, code: 'ROSTER_REFRESH_REQUIRED', retryable: false };
+    if (rosterIdentity.rosterRevision && !transactionResult?.committed && serverValue.passengerStatusCodes === undefined) {
+      return { success: false, error: ROSTER_REFRESH_MESSAGE, code: 'ROSTER_REFRESH_REQUIRED', retryable: false };
+    }
     let serverPassengerStatus = Array.isArray(serverValue.passengerStatus) ? serverValue.passengerStatus : [];
     let serverStatus = serverValue.status || MANIFEST_STATUS.PENDING;
     if (serverValue.passengerStatusCodes !== undefined) {

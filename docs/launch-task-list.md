@@ -139,7 +139,7 @@ Complete when: store declarations and in-app information match the actual build,
 - [ ] Review retained booking rows with seat/date/pickup changes against the current source before the pilot. The additive merge preserves distinct existing entries; do not infer that every difference is a cancellation or remove manual passengers.
 - [ ] Establish the full roster/cancellation semantics: the 10 October TourPax comparison found 312 referenced passengers missing from the pickup report and live app, plus 899 retained normalized manifest rows. Separate imported rows from operator additions before reconciliation.
 - [ ] Import and reconcile tour lifecycle: TourPerfExtract marks 106 current-source tours cancelled, but all remain active in the app. Preserve runtime/boarding data and establish separate source and operator ownership; do not treat tour cancellation as passenger deletion authority.
-- [ ] Resolve the oversized retained booking that rejects one tour's offline cache, missing login emails on 260 current-source bookings, and placeholder itineraries for the chosen pilot departures.
+- [ ] Resolve the oversized retained booking that rejects one tour's offline cache and verify itinerary suitability for the chosen pilot departures. Missing email is valid roster-only data: retain these passengers for drivers and do not invent app credentials.
 - [ ] Record exact source revision, binary versions, runtime versions, environment, deployed backend/rules and device results. Deploy reviewed backend access changes in the documented order.
 
 Complete when: all required checks pass for the actual pilot candidates and each remaining limitation has an explicit disposition.

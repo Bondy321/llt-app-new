@@ -315,6 +315,69 @@ test('findManualPassengerSeatConflicts catches seats already assigned on the tou
   assert.deepEqual(conflicts, [19]);
 });
 
+test('seat checks ignore bookings omitted from the authoritative source roster', () => {
+  const bookings = {
+    ABSENT: { seatNumbers: [19], sourceRoster: { state: 'not_in_report' } },
+    SOURCE: { seatNumbers: [20], sourceRoster: { state: 'active' } },
+    MANUAL: { seatNumbers: [21], source: 'web-admin-manual' },
+  };
+  assert.deepEqual(__testables.findManualPassengerSeatConflicts(bookings, [
+    { seatNumber: 19 }, { seatNumber: 20 }, { seatNumber: 21 }, { seatNumber: 22 },
+  ]), [20, 21]);
+});
+
+test('manual roster lease contends with source publication and preserves completion metadata', async () => {
+  const state = {
+    sync_roster_control: {
+      TOUR: { schemaVersion: 1, completedGeneration: 'generation-1', completedReportDate: '2026-10-09' },
+    },
+  };
+  const db = {
+    ref(path) {
+      return {
+        async once() {
+          const [root, key] = path.split('/');
+          return { val: () => state[root]?.[key] ?? null };
+        },
+        async transaction(update) {
+          const [root, key] = path.split('/');
+          const current = state[root]?.[key] ?? null;
+          const proposed = update(current);
+          if (proposed === undefined) return { committed: false, snapshot: { val: () => current } };
+          state[root] ||= {};
+          state[root][key] = proposed;
+          return { committed: true, snapshot: { val: () => proposed } };
+        },
+      };
+    },
+  };
+  assert.equal(await __testables.acquireManualSourceRosterLease({
+    db, tourId: 'TOUR', owner: 'manual-owner', nowMs: 1000,
+  }), true);
+  assert.equal(state.sync_roster_control.TOUR.completedGeneration, 'generation-1');
+  assert.equal(state.sync_roster_control.TOUR.completedReportDate, '2026-10-09');
+  assert.equal(await __testables.acquireManualSourceRosterLease({
+    db, tourId: 'TOUR', owner: 'import-owner', nowMs: 1001,
+  }), false);
+  assert.equal(await __testables.renewManualSourceRosterLease({
+    db, tourId: 'TOUR', owner: 'manual-owner', nowMs: 1002,
+  }), true);
+  assert.equal(await __testables.renewManualSourceRosterLease({
+    db, tourId: 'TOUR', owner: 'manual-owner', nowMs: 301003,
+  }), false);
+  assert.equal(await __testables.acquireManualSourceRosterLease({
+    db, tourId: 'TOUR', owner: 'import-owner', nowMs: 301003,
+  }), true);
+  await __testables.releaseManualSourceRosterLease({ db, tourId: 'TOUR', owner: 'other-owner' });
+  assert.equal(state.sync_roster_control.TOUR.owner, 'import-owner');
+  await __testables.releaseManualSourceRosterLease({ db, tourId: 'TOUR', owner: 'manual-owner' });
+  assert.equal(state.sync_roster_control.TOUR.owner, 'import-owner');
+  await __testables.releaseManualSourceRosterLease({ db, tourId: 'TOUR', owner: 'import-owner' });
+  assert.deepEqual(state.sync_roster_control.TOUR, {
+    schemaVersion: 1, completedGeneration: 'generation-1', completedReportDate: '2026-10-09',
+  });
+});
+
 test('manual passenger write plan rejects a booking that exceeds tour capacity', () => {
   const normalized = __testables.normalizeManualPassengerPayload({
     tourId: 'SMALL_1',

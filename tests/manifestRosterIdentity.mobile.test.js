@@ -136,6 +136,15 @@ test('same-roster reconciliation trusts encoded statuses over incompatible optio
   assert.deepEqual(result.conflict.serverPassengerStatus, ['NO_SHOW', 'PENDING']);
 });
 
+test('unproven pre-encoded typed history never becomes successful source-roster reconciliation', async () => {
+  const current = { ...identity, passengerStatus: ['BOARDED', 'BOARDED'], status: 'BOARDED', lastUpdated: '2026-08-01T09:00:00Z' };
+  const db = { ref: () => ({ transaction: async updater => ({ committed: updater(current) !== undefined, snapshot: { val: () => current } }) }) };
+  const result = await applyManifestUpdateDirect({ ...identity, tourCode: scope.tourId, bookingRef: 'ROSTER1', passengerStatuses: ['PENDING', 'PENDING'], lastUpdated: '2026-08-01T08:00:00Z' }, db);
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'ROSTER_REFRESH_REQUIRED');
+  assert.equal(result.retryable, false);
+});
+
 test('an authoritative rules rejection fences an outdated typed roster even when stored history matches it', async () => {
   const result = await applyManifestUpdateDirect({ ...identity, tourCode: scope.tourId, bookingRef: 'ROSTER1', passengerStatuses: ['BOARDED', 'PENDING'] }, denyDb);
   assert.equal(result.success, false);

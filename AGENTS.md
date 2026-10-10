@@ -23,8 +23,8 @@ LLT is a production-oriented monorepo for Loch Lomond Travel:
 High-level data flow:
 
 ```text
-Google Sheets CMS
-  -> Apps Script sync
+Scheduled 7am operational CSV reports in Gmail
+  -> llt-app-sync Python Cloud Run job (full TourPax roster + source enrichment)
      -> Firebase Realtime Database
         -> Mobile app
         -> Web admin

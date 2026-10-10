@@ -25,7 +25,7 @@ test('unassigned manual party members remain distinct while assigned legacy dupl
 });
 test('boarding statuses follow IDs through reorder/removal/addition rather than current positions', () => {
   const result = resolveSourcePassengerStatuses(roster([id('b'),id('c'),id('a')]), {
-    passengerIds:[id('a'),id('b'),id('d')],passengerStatus:['BOARDED','NO_SHOW','BOARDED'],
+    rosterRevision:revision,passengerIdsJson:JSON.stringify([id('a'),id('b'),id('d')]),passengerStatusCodes:'BNB',
   });
   assert.deepEqual(result.statuses,['NO_SHOW','PENDING','BOARDED']);
 });
@@ -52,6 +52,9 @@ test('legacy raw indices cannot prove presented status order and require review'
   const sameLength = resolveSourcePassengerStatuses(value,{passengerStatus:['BOARDED','NO_SHOW']});
   assert.deepEqual(sameLength.statuses,['PENDING','PENDING']);
   assert.equal(sameLength.needsReview,true);
+  const unprovenTyped = resolveSourcePassengerStatuses(value,{passengerIds:[id('a'),id('b')],passengerStatus:['BOARDED','NO_SHOW']});
+  assert.deepEqual(unprovenTyped.statuses,['PENDING','PENDING']);
+  assert.equal(unprovenTyped.needsReview,true);
 });
 test('malformed or duplicate IDs fail closed without falling back to positional data', () => {
   for (const ids of [[id('a')],[id('a'),id('a')],['Passenger name',id('b')]]) {
@@ -73,7 +76,7 @@ test('whole manifest includes no-email and manual rows but excludes superseded s
     ACTIVE:{tourId:'TOUR_1',loginEligible:false,passengerDetails:[{name:'Passenger A',seatNo:1}],sourceRoster:roster([id('a')])},
     OLD:{tourId:'TOUR_1',passengerNames:['Old row'],sourceRoster:{schemaVersion:1,state:'not_in_report',revision}},
     MANUAL:{tourId:'TOUR_1',source:'web-admin-manual',passengerNames:['Manual row']},
-  },tour_manifests:{TOUR_1:{bookings:{ACTIVE:{passengerIds:[id('a')],passengerStatus:['BOARDED']}}}}};
+  },tour_manifests:{TOUR_1:{bookings:{ACTIVE:{rosterRevision:revision,passengerIdsJson:JSON.stringify([id('a')]),passengerStatusCodes:'B'}}}}};
   const result=await buildTourManifestPayload({tourId:'TOUR_1',db:database(state)});
   assert.deepEqual(result.bookings.map(row=>row.id),['ACTIVE','MANUAL']);
   assert.deepEqual(result.stats,{totalBookings:2,totalPax:2,checkedIn:1,noShows:0});

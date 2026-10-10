@@ -1027,7 +1027,7 @@ test('Static contract: preference and manifest screens guard stale async state',
   assert.match(manifestSource, /subscribeQueuedActions/);
   assert.match(manifestSource, /normalizeTourId\(action\.tourId\) === activeTourId/);
   assert.match(manifestSource, /return \(\) => unsubscribe\?\.\(\)/);
-  assert.match(manifestSource, /setManifestLoadError\('Could not load the passenger manifest/);
+  assert.match(manifestSource, /setManifestLoadError\(\['ROSTER_UPDATING', 'SOURCE_ROSTER_INVALID', 'TOUR_INACTIVE'\]\.includes\(error\?\.code\)[\s\S]*?error\.message : 'Could not load the passenger manifest/);
   assert.match(manifestSource, /manifestLoadError[\s\S]*onPress=\{\(\) => loadManifest\(\)\}/);
   assert.doesNotMatch(manifestSource, /Failed to load manifest: ' \+ error\.message/);
 

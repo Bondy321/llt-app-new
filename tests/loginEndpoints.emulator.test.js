@@ -18,6 +18,10 @@ const { getTourManifest } = require('../functions/src/domains/manifests/manifest
 const { endAppSession } = require('../functions/src/domains/app-sessions/sessionFunctions');
 const { updateNotificationDeviceRegistration, updateNotificationDevice } = require('../functions/src/domains/notifications/notificationDeviceFunctions');
 const { verifyCurrentTourPhotoAccess } = require('../functions/src/domains/media/mediaAccess');
+const {
+  acquireManualSourceRosterLease,
+  releaseManualSourceRosterLease,
+} = require('../functions/src/domains/administration/manualPassengerBooking');
 const writer = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'login-fixture-writer');
 const db = writer.database();
 let server; let origin;
@@ -130,6 +134,37 @@ test('full roster HTTP endpoint is driver-only and keeps roster-only passengers 
   await db.ref('tours/LOGIN_TOUR/rosterSync').remove();
 });
 test.beforeEach(() => seedPolicy(false));
+
+test('manual source-roster lease contends across Admin connections and releases a cold-cache owner safely', async () => {
+  const contenderApp = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'manual-lease-contender');
+  const releaseApp = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'manual-lease-cold-release');
+  const contenderDb = contenderApp.database();
+  const releaseDb = releaseApp.database();
+  const tourId = `LEASE_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+  const leaseRef = db.ref(`sync_roster_control/${tourId}`);
+  await leaseRef.set({
+    schemaVersion: 1, completedGeneration: 'fixture-generation', completedReportDate: '2026-10-09',
+  });
+
+  assert.equal(await acquireManualSourceRosterLease({ db, tourId, owner: 'manual-owner' }), true);
+  assert.equal(await acquireManualSourceRosterLease({ db: contenderDb, tourId, owner: 'publisher-owner' }), false);
+  const held = (await leaseRef.once('value')).val();
+  assert.equal(held.owner, 'manual-owner');
+  assert.equal(held.completedGeneration, 'fixture-generation');
+  assert.equal(held.completedReportDate, '2026-10-09');
+
+  // A new Admin app has not read this path; release must still read the server
+  // state before its transaction so it cannot mistake the owner for null.
+  await releaseManualSourceRosterLease({ db: releaseDb, tourId, owner: 'manual-owner' });
+  const released = (await leaseRef.once('value')).val();
+  assert.equal(Object.hasOwn(released, 'owner'), false);
+  assert.equal(Object.hasOwn(released, 'leaseUntilMs'), false);
+  assert.equal(released.completedGeneration, 'fixture-generation');
+  assert.equal(released.completedReportDate, '2026-10-09');
+  assert.equal(await acquireManualSourceRosterLease({ db: contenderDb, tourId, owner: 'publisher-owner' }), true);
+  await releaseManualSourceRosterLease({ db: db, tourId, owner: 'publisher-owner' });
+  await leaseRef.remove();
+});
 
 test('passenger HTTP login issues a complete session and supports an immediate repeat', async () => {
   const identity = await newIdentity();

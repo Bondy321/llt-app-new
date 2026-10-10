@@ -1,7 +1,7 @@
 const { normalizeTourId } = require('./tourIdentityService');
 
 const MAX_PICKUPS = 20;
-const MAX_PASSENGERS = 100;
+const MAX_PASSENGERS = 250;
 const MAX_ITINERARY_DAYS = 60;
 
 const cleanString = (value, maxLength = 500) => (

@@ -49,9 +49,9 @@ const resolveSourcePassengerStatuses = (roster, live = {}) => {
   const currentIds = roster.passengerIds;
   const encoded = decodeStoredBoarding(live);
   if (encoded?.invalid) return {statuses:currentIds.map(()=>'PENDING'),needsReview:true};
-  const priorIds = encoded ? encoded.ids : live.passengerIds;
+  const priorIds = encoded?.ids;
   const priorStatuses = encoded ? encoded.statuses : Array.isArray(live.passengerStatus) ? live.passengerStatus : [];
-  const validPriorIds = Array.isArray(priorIds) && priorIds.length === priorStatuses.length
+  const validPriorIds = encoded && Array.isArray(priorIds) && priorIds.length === priorStatuses.length
     && priorIds.every(id => typeof id === 'string' && SOURCE_PASSENGER_ID.test(id))
     && new Set(priorIds).size === priorIds.length;
   if (validPriorIds) {

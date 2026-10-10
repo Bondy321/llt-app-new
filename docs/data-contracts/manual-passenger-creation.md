@@ -47,6 +47,7 @@ The function does not write `users/{uid}` or `tours/{tourId}/participants/{uid}`
 ## Concurrency
 
 Manual creation uses short-lived server-side locks under `manual_booking_creation_locks` for the booking reference and selected tour. This serializes manual additions enough to prevent duplicate booking references and seat collisions through this endpoint.
+It also acquires the same five-minute `sync_roster_control/{tourId}` lease used by the importer before reading canonical capacity and seats, and renews it before the atomic write. Owner-only release preserves source publication cursors. Failed imports still marked updating reject creation even after their lease expires. Superseded source rows neither occupy capacity nor reserve their former seats.
 
 ## Release order
 
