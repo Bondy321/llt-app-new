@@ -63,7 +63,8 @@ const functionOptions = Object.freeze({
 const readTourSource = async ({ db, tourId, instrumentation }) => {
   const scalarFields = [
     'tourCode', 'name', 'startDate', 'startDateEpochMs', 'endDateEpochMs',
-    'isActive', 'currentParticipants', 'maxParticipants', 'driverName',
+    'isActive', 'sold', 'bookedPassengerCount', 'manifestPassengerCount',
+    'currentParticipants', 'maxParticipants', 'driverName',
   ];
   const values = await Promise.all([
     ...scalarFields.map((field) => readValue(db, `tours/${tourId}/${field}`, instrumentation)),
@@ -487,7 +488,10 @@ const tourFieldDefinitions = Object.freeze({
   projectDashboardTourStartIndex: 'startDateEpochMs',
   projectDashboardTourEndIndex: 'endDateEpochMs',
   projectDashboardTourActive: 'isActive',
+  projectDashboardTourBookedCount: 'bookedPassengerCount',
+  projectDashboardTourManifestCount: 'manifestPassengerCount',
   projectDashboardTourPassengerScalar: 'currentParticipants',
+  projectDashboardTourSold: 'sold',
   projectDashboardTourCapacity: 'maxParticipants',
   projectDashboardTourDriverName: 'driverName',
   projectDashboardTourAssignmentRevision: 'driverAssignmentRevision',

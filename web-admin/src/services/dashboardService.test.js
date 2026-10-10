@@ -26,6 +26,15 @@ import {
 describe('dashboardService operations model', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('uses imported sold totals instead of zero app participation for dispatch load', () => {
+    const model = buildOperationsDashboardModel({ tours: {
+      IMPORTED: { startDate: '29/05/2026', sold: 32, bookedPassengerCount: 30,
+        manifestPassengerCount: 30, currentParticipants: 0, maxParticipants: 53, isActive: true },
+    } }, { now: new Date(2026, 4, 28) });
+    expect(model.metrics.totalPassengers).toBe(32);
+    expect(model.tourRows[0].passengerCountSource).toBe('tour.sold');
+  });
+
   it('derives dispatch coverage and passenger load from real tour, driver, and manifest data', () => {
     const model = buildOperationsDashboardModel({
       drivers: {

@@ -287,6 +287,23 @@ describe('tour identity invariants', () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 
+  it('protects imported booked capacity even when runtime participants is zero', async () => {
+    getMock.mockResolvedValue(buildSnapshot({ tourCode: 'IMPORTED 1', sold: 32,
+      bookedPassengerCount: 30, maxParticipants: 53, currentParticipants: 0 }));
+    const { updateTour } = await import('./tourService.js');
+    await expect(updateTour('IMPORTED_1', { maxParticipants: 31 })).rejects.toThrow(/cannot be lower/i);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('exports reported passenger totals without changing the read-only legacy count', async () => {
+    const { exportToursToCSV } = await import('./tourService.js');
+    const csv = exportToursToCSV({ IMPORTED: { sold: 32, manifestPassengerCount: 30,
+      currentParticipants: 0, maxParticipants: 53, isActive: true } });
+    expect(csv).toContain('Booked Places (Report),Passenger List Rows (Report),Displayed Passenger Count,Passenger Count Source');
+    expect(csv).toContain('"32","30","32","tour.sold"');
+    expect(csv).toContain('"53","0"');
+  });
+
   it('duplicates only reusable tour definition fields and drops live operational state', async () => {
     const pathValues = {
       'tours/TOUR_A': {

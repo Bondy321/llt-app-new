@@ -44,6 +44,7 @@ import { ref, update, get, onValue, runTransaction } from 'firebase/database';
 import { db } from '../../../firebase';
 import { validateTourCsvRows } from '../../../services/tourCsvService';
 import { postAdminAction } from '../../../services/adminActionService';
+import { resolveTourPassengerCount } from '../../../utils/tourPassengerCounts';
 import {
   parseUKDateStrict,
   parseISODateStrict,
@@ -307,7 +308,8 @@ export const assertValidTourCapacity = (tourData = {}) => {
   if (!Number.isInteger(currentParticipants) || currentParticipants < 0) {
     throw new Error('Booked participant count must be a non-negative whole number.');
   }
-  if (currentParticipants > maxParticipants) {
+  const bookedPlaces = resolveTourPassengerCount(tourData).count;
+  if (Math.max(currentParticipants, bookedPlaces) > maxParticipants) {
     throw new Error('Tour capacity cannot be lower than the booked participant count.');
   }
 };
