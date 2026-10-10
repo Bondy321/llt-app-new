@@ -51,6 +51,24 @@ const cursorHash = (cursor) => cursor
   ? createHash('sha256').update(cursor).digest('hex').slice(0, 16)
   : null;
 
+const transactionWithHydratedValue = async (reference, updater) => {
+  // A transaction runs its first updater synchronously against local cache.
+  // once() releases that cache: an uncached existing progress row can appear
+  // null and an optimistic-concurrency updater would abort before a server read.
+  // Retain a value listener through the transaction, without substituting an
+  // earlier snapshot for its current value or relaxing the compare-and-swap.
+  let listener;
+  try {
+    await new Promise((resolve, reject) => {
+      listener = resolve;
+      reference.on('value', listener, reject);
+    });
+    return await reference.transaction(updater, undefined, false);
+  } finally {
+    if (listener) reference.off('value', listener);
+  }
+};
+
 const mapWithConcurrency = async (items, limit, mapper) => {
   const output = new Array(items.length);
   let cursor = 0;
@@ -386,7 +404,7 @@ const run = async ({ admin, options, nowMs = Date.now() }) => {
   } while (!options.apply && page.nextCursor);
   const complete = !page.nextCursor;
   if (options.apply) {
-    const progressResult = await db.ref(PROGRESS_PATH).transaction((current) => {
+    const progressResult = await transactionWithHydratedValue(db.ref(PROGRESS_PATH), (current) => {
       if (Number(current?.revision || 0) !== progressRevision) return undefined;
       if (!options.restart && String(current?.lastTourCursor || '') !== pageStartCursor) return undefined;
       return {
@@ -455,4 +473,5 @@ module.exports = {
   readKeyPage,
   run,
   scanMemberSummary,
+  transactionWithHydratedValue,
 };
