@@ -189,11 +189,19 @@ test('tour passenger count uses validated source scalars before operational fall
       project({ sold: 12, bookedPassengerCount: 11, manifestPassengerCount: 10 }, 9, 8).passengerCountSource],
     [12, 'tour.sold'],
   );
-  assert.equal(project({ sold: '0', bookedPassengerCount: 11 }, 9, 8).passengerCount, 0);
+  assert.equal(project({ sold: '0', bookedPassengerCount: 11 }, 9, 8).passengerCount, 11);
   assert.equal(project({ sold: null, bookedPassengerCount: '11' }, 9, 8).passengerCountSource, 'tour.bookedPassengerCount');
-  assert.equal(project({ bookedPassengerCount: 0, manifestPassengerCount: 10 }, 9, 8).passengerCount, 0);
+  assert.equal(project({ bookedPassengerCount: 0, manifestPassengerCount: 10 }, 9, 8).passengerCount, 10);
   assert.equal(project({ manifestPassengerCount: '10' }, 9, 8).passengerCountSource, 'tour.manifestPassengerCount');
+  const manualOverlay = project({ sold: 1, bookedPassengerCount: 1, manifestPassengerCount: 1, manualPassengerCount: 2 });
+  assert.equal(manualOverlay.passengerCount, 3);
+  assert.equal(manualOverlay.passengerCountSource, 'tour.sold+tour.manualPassengerCount');
+  const maxImported = project({ sold: 0, bookedPassengerCount: 3, manualPassengerCount: 2 });
+  assert.equal(maxImported.passengerCount, 5);
+  assert.equal(maxImported.passengerCountSource, 'tour.bookedPassengerCount+tour.manualPassengerCount');
   assert.equal(project({}, 9, 8).passengerCountSource, 'tour_manifests.bookings');
+  assert.equal(project({ manualPassengerCount: 2 }, 9, 8).passengerCount, 8);
+  assert.equal(project({ manualPassengerCount: 2 }, 0, 0).passengerCount, 2);
   assert.equal(project({ currentParticipants: 2 }, 9, 8).passengerCount, 8);
   assert.equal(project({ currentParticipants: '3' }, 9, 0).passengerCount, 3);
   assert.equal(project({}, 9, 0).passengerCountSource, 'tours.participants');
@@ -827,7 +835,7 @@ test('tour recomputation has fixed reads independent of unrelated history and us
   const instrumentation = {};
   await recomputeTourProjection({ db, tourId: 'TOUR_1', order: { sourceEventAtMs: 10, sourceEventId: 'event' }, instrumentation });
   assert.equal(instrumentation.toursRecomputed, 1);
-  assert.equal(instrumentation.directReads, 23);
+  assert.equal(instrumentation.directReads, 24);
   assert.equal(instrumentation.queries, 1);
   assert.equal(db.read('admin_dashboard/v1/tours/TOUR_1').passengerCount, 50_000);
   assert.equal(db.read('admin_dashboard/v1/tours/TOUR_1').isAssigned, true);
@@ -841,7 +849,7 @@ test('tour recomputation has fixed reads independent of unrelated history and us
     order: { sourceEventAtMs: 11, sourceEventId: 'duplicate-child-trigger' },
     instrumentation,
   });
-  assert.equal(instrumentation.directReads - firstReadCount, 19);
+  assert.equal(instrumentation.directReads - firstReadCount, 20);
   assert.equal(instrumentation.tourAggregateRecomputationsSkipped, 1);
   db.write('tours/TOUR_1', null);
   await recomputeTourProjection({

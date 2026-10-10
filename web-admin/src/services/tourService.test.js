@@ -133,7 +133,7 @@ describe('tour identity invariants', () => {
     const updater = runTransactionMock.mock.calls[0][1];
     expect(updater(null)).toEqual(expect.objectContaining({ name: 'Highlands', tourCode: '5112D 8' }));
     for (const reservedField of ['driverName', 'driverPhone', 'driverId', 'driverAssignmentRevision',
-      'sourceLifecycle', 'sourceLifecycle/managedDisable', 'rosterSync', 'itinerarySource']) {
+      'sourceLifecycle', 'sourceLifecycle/managedDisable', 'rosterSync', 'itinerarySource', 'manualPassengerCount']) {
       expect(result.tour).not.toHaveProperty(reservedField);
       expect(updater(null)).not.toHaveProperty(reservedField);
     }
@@ -250,7 +250,7 @@ describe('tour identity invariants', () => {
     getMock.mockResolvedValue(buildSnapshot({ tourCode: '5112D 8' }));
     const { updateTour } = await import('./tourService.js');
 
-    for (const reservedField of ['driverName', 'driverPhone', 'driverId', 'driverAssignmentRevision']) {
+    for (const reservedField of ['driverName', 'driverPhone', 'driverId', 'driverAssignmentRevision', 'manualPassengerCount']) {
       await expect(updateTour('5112D_8', { [reservedField]: 'forged' }))
         .rejects.toThrow(/server-owned/i);
     }

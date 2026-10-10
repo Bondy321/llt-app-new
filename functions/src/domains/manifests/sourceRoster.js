@@ -56,8 +56,10 @@ const resolveSourcePassengerStatuses = (roster, live = {}) => {
     && new Set(priorIds).size === priorIds.length;
   if (validPriorIds) {
     const byId = new Map(priorIds.map((id, index) => [id, priorStatuses[index]]));
+    const current = new Set(currentIds);
     return { statuses: currentIds.map(id => VALID_STATUSES.has(byId.get(id)) ? byId.get(id) : 'PENDING'),
-      needsReview: roster.reviewRequired === true && priorStatuses.some(status => status !== 'PENDING') };
+      needsReview: roster.reviewRequired === true
+        && priorIds.some((id, index) => !current.has(id) && priorStatuses[index] !== 'PENDING') };
   }
   // Legacy status positions came from a deduplicated presentation, whereas the
   // archived source positions describe raw rows. Even equal lengths cannot prove

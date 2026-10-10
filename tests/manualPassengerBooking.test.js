@@ -218,6 +218,7 @@ test('buildManualPassengerBookingUpdates creates the same effective booking and 
   assert.equal('tours/5112D_8/bookedPassengerCount' in plan.updates, false);
   assert.equal('tours/5112D_8/manifestPassengerCount' in plan.updates, false);
   assert.equal('tours/5112D_8/currentParticipants' in plan.updates, false);
+  assert.equal(plan.updates['tours/5112D_8/manualPassengerCount'], 2);
   assert.deepEqual(plan.updates['tours/5112D_8/pickupPoints'], [
     { date: '15/06/2026', time: '07:30', location: 'Existing' },
     { date: '15/06/2026', time: '08:30', location: 'Buchanan Bus Station' },
@@ -240,6 +241,7 @@ test('roster-only manual booking writes no login identity and retains capacity a
   assert.equal(plan.updates['bookings/ROSTER1'].loginEligible, false);
   assert.equal('booking_identities/ROSTER1' in plan.updates, false);
   assert.equal(plan.updates['tour_manifests/5112D_8/bookings/ROSTER1'].status, 'PENDING');
+  assert.equal(plan.updates['tours/5112D_8/manualPassengerCount'], 1);
   assert.equal('tours/5112D_8/currentParticipants' in plan.updates, false);
   assert.equal('tours/5112D_8/bookedPassengerCount' in plan.updates, false);
   assert.equal('tours/5112D_8/manifestPassengerCount' in plan.updates, false);
@@ -445,6 +447,7 @@ test('manual capacity adds the explicit manual overlay once and does not rewrite
   });
 
   assert.equal(plan.totalPassengerCount, 34);
+  assert.equal(plan.updates['tours/SOLD_1/manualPassengerCount'], 2);
   assert.equal('tours/SOLD_1/currentParticipants' in plan.updates, false);
   assert.equal('tours/SOLD_1/bookedPassengerCount' in plan.updates, false);
   assert.equal('tours/SOLD_1/manifestPassengerCount' in plan.updates, false);
@@ -471,5 +474,6 @@ test('source bookings marked not_in_report do not consume active source capacity
   });
 
   assert.equal(plan.totalPassengerCount, 1);
+  assert.equal(plan.updates['tours/SOLD_1/manualPassengerCount'], 1);
   assert.equal('tours/SOLD_1/currentParticipants' in plan.updates, false);
 });

@@ -72,6 +72,7 @@ module.exports = {
   projectDashboardTourEndIndex: adminDashboard.projectDashboardTourEndIndex,
   projectDashboardTourName: adminDashboard.projectDashboardTourName,
   projectDashboardTourManifestCount: adminDashboard.projectDashboardTourManifestCount,
+  projectDashboardTourManualCount: adminDashboard.projectDashboardTourManualCount,
   projectDashboardTourPassengerScalar: adminDashboard.projectDashboardTourPassengerScalar,
   projectDashboardTourSold: adminDashboard.projectDashboardTourSold,
   projectDashboardTourStartDate: adminDashboard.projectDashboardTourStartDate,

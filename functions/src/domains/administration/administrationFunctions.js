@@ -124,18 +124,21 @@ const acquireRequiredManualBookingLocks = async ({ db, lockPaths, owner, acquire
 const acquireManualPassengerMutationFences = async ({ db, tourId, lockPaths, owner, acquiredLocks }) => {
   await acquireRequiredManualBookingLocks({ db, lockPaths, owner, acquiredLocks });
   if (!(await acquireManualSourceRosterLease({ db, tourId, owner }))) {
+    log.warn('Manual passenger source-roster lease unavailable', { tourId, stage: 'acquire' });
     throw createManualPassengerError('ROSTER_SYNC_IN_PROGRESS', 'This tour roster is being updated. Try again shortly.');
   }
 };
 
 const assertManualTourRosterReady = (tourData) => {
   if (tourData.rosterSync?.state === 'updating') {
+    log.warn('Manual passenger roster state is updating', { tourId: tourData.tourCode, stage: 'read' });
     throw createManualPassengerError('ROSTER_SYNC_IN_PROGRESS', 'This tour roster is being updated. Try again shortly.');
   }
 };
 
 const renewManualPassengerMutationFence = async ({ db, tourId, owner }) => {
   if (!(await renewManualSourceRosterLease({ db, tourId, owner }))) {
+    log.warn('Manual passenger source-roster lease unavailable', { tourId, stage: 'renew' });
     throw createManualPassengerError('ROSTER_SYNC_IN_PROGRESS', 'The tour roster update lease expired. Try again shortly.');
   }
 };
@@ -190,6 +193,9 @@ const createManualPassengerBooking = onRequestWithResult(
     /** @type {string[]} */
     const acquiredLocks = [];
     let sourceRosterLeaseAcquired = false;
+    let responseStatus = 201;
+    /** @type {Record<string, unknown>} */
+    let responseBody = {};
 
     try {
       await acquireManualPassengerMutationFences({
@@ -235,7 +241,7 @@ const createManualPassengerBooking = onRequestWithResult(
         passengerCount: normalized.passengers.length,
       });
 
-      return res.status(201).json({
+      responseBody = {
         success: true,
         bookingRef: normalized.bookingRef,
         tourId: normalized.tourId,
@@ -243,11 +249,11 @@ const createManualPassengerBooking = onRequestWithResult(
         email: normalized.email,
         loginEligible: normalized.loginEligible,
         passengerCount: normalized.passengers.length,
-      });
+      };
     } catch (error) {
       const reason = /** @type {{ code?: string }} */ (error)?.code || 'INTERNAL_ERROR';
-      const status = MANUAL_BOOKING_STATUS_BY_REASON[reason] || 500;
-      if (status >= 500) {
+      responseStatus = MANUAL_BOOKING_STATUS_BY_REASON[reason] || 500;
+      if (responseStatus >= 500) {
         log.error('Manual passenger booking creation failed', error, {
           authUid,
           bookingRef: requestedBookingRef,
@@ -261,7 +267,7 @@ const createManualPassengerBooking = onRequestWithResult(
           reason,
         });
       }
-      return res.status(status).json({ success: false, reason });
+      responseBody = { success: false, reason };
     } finally {
       if (sourceRosterLeaseAcquired) {
         try {
@@ -273,12 +279,20 @@ const createManualPassengerBooking = onRequestWithResult(
           });
         }
       }
-      await Promise.all(acquiredLocks.map((path) => releaseManualBookingLock({
-        db,
-        path,
-        owner: lockOwner,
-      })));
+      try {
+        await Promise.all(acquiredLocks.map((path) => releaseManualBookingLock({
+          db,
+          path,
+          owner: lockOwner,
+        })));
+      } catch (error) {
+        log.warn('Manual passenger booking lock release failed', {
+          tourId: requestedTourId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
+    return res.status(responseStatus).json(responseBody);
   },
 );
 
