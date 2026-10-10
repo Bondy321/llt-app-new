@@ -1,6 +1,6 @@
 # Web Admin Live Operations Dashboard
 
-Last updated: August 11, 2026
+Last updated: October 10, 2026
 
 The web-admin dashboard is the central live command hub for LLT operations. It must show only data that is backed by Firebase branches or deterministic derived metrics. Do not add placeholder trends, fake percentages, decorative status cards, or controls that do not perform a real action.
 
@@ -29,10 +29,13 @@ Driver coverage:
 
 Passenger load:
 
-- Passenger count prefers `tours/{tourId}/currentParticipants`.
-- If that is missing, it falls back to `tours/{tourId}/participants`.
-- If both are missing, it falls back to passenger-like counts in `tour_manifests/{tourId}/bookings`.
+- Booked places prefer the validated `tours/{tourId}/sold` value from TourSummary.
+- Fallbacks are `bookedPassengerCount`, then `manifestPassengerCount` from the passenger report, then a positive actual manifest summary, then the legacy `currentParticipants`/participant count. Counts must be nonnegative safe integers; nulls, booleans, fractions and malformed strings are not zero counts.
+- A present source zero is authoritative. Runtime membership counters must not override imported totals and are never overwritten by this display/projection policy.
+- Tours cards, table, details, edit display, totals and CSV exports use the same browser helper. Report counts are exported in separate read-only columns. Where sold and passenger-list rows differ, the tour explicitly shows the list count for review.
+- Dashboard server projections read and react to all three imported count leaves. Every handler that recomputes a tour row must be deployed together; the existing paginated dashboard backfill refreshes historical rows after deployment. Browser/server precedence has a parity regression test.
 - Capacity percentages are shown only when `maxParticipants` is present and positive.
+- Capacity edits cannot lower the limit below the reported booked places or existing runtime counter.
 
 Safety:
 

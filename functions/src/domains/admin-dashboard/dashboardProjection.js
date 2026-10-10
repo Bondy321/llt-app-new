@@ -82,16 +82,46 @@ const countManifestBooking = (booking) => {
 const countManifestBookings = (manifest) => Object.values(asRecord(manifest?.bookings))
   .reduce((total, booking) => total + countManifestBooking(booking), 0);
 
+const toNonnegativeSafePassengerCount = (value) => {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const firstValidPassengerCount = (candidates) => candidates.find(({ value }) => (
+  toNonnegativeSafePassengerCount(value) !== null
+));
+
 const resolvePassengerCount = ({ tour = {}, participantCount = 0, manifestPassengerCount = 0 } = {}) => {
-  const explicitCount = toFiniteNumber(tour.currentParticipants);
-  if (explicitCount !== null && explicitCount >= 0) {
-    return { passengerCount: explicitCount, passengerCountSource: 'tour.currentParticipants' };
+  const authoritative = firstValidPassengerCount([
+    { value: tour.sold, source: 'tour.sold' },
+    { value: tour.bookedPassengerCount, source: 'tour.bookedPassengerCount' },
+    { value: tour.manifestPassengerCount, source: 'tour.manifestPassengerCount' },
+  ]);
+  if (authoritative) {
+    return {
+      passengerCount: toNonnegativeSafePassengerCount(authoritative.value),
+      passengerCountSource: authoritative.source,
+    };
   }
-  if (participantCount > 0) {
-    return { passengerCount: participantCount, passengerCountSource: 'tours.participants' };
+  const actualManifestCount = toNonnegativeSafePassengerCount(manifestPassengerCount);
+  if (actualManifestCount > 0) {
+    return { passengerCount: actualManifestCount, passengerCountSource: 'tour_manifests.bookings' };
   }
-  if (manifestPassengerCount > 0) {
-    return { passengerCount: manifestPassengerCount, passengerCountSource: 'tour_manifests.bookings' };
+  const legacy = firstValidPassengerCount([
+    { value: tour.currentParticipants, source: 'tour.currentParticipants' },
+    { value: participantCount, source: 'tours.participants' },
+  ]);
+  if (legacy) {
+    const count = toNonnegativeSafePassengerCount(legacy.value);
+    if (count > 0 || legacy.source === 'tour.currentParticipants') {
+      return { passengerCount: count, passengerCountSource: legacy.source };
+    }
   }
   return { passengerCount: 0, passengerCountSource: 'none' };
 };

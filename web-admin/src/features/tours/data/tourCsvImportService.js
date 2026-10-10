@@ -8,6 +8,7 @@ import {
 } from './tourServiceContext';
 
 import { createTour, updateTour } from './tourCrudService';
+import { resolveTourPassengerCount, normalizePassengerCount } from '../../../utils/tourPassengerCounts';
 import {
   applyDriverAssignmentMutation,
   unassignDriver,
@@ -20,6 +21,7 @@ const buildTourCsvRow = (id, tour, drivers, driverByTourId) => {
   const driver = drivers[resolvedDriverId] || {};
   const driverName = resolvedDriverId ? valueOr(tour.driverName, valueOr(driver.name, 'TBA')) : 'TBA';
   const driverPhone = resolvedDriverId ? valueOr(tour.driverPhone, valueOr(driver.phone, '')) : '';
+  const passengers = resolveTourPassengerCount(tour);
   return [
     id,
     valueOr(tour.tourCode, ''),
@@ -34,6 +36,10 @@ const buildTourCsvRow = (id, tour, drivers, driverByTourId) => {
     valueOr(tour.maxParticipants, 53),
     valueOr(tour.currentParticipants, 0),
     JSON.stringify(Array.isArray(tour.pickupPoints) ? tour.pickupPoints : []),
+    normalizePassengerCount(tour.sold) ?? '',
+    normalizePassengerCount(tour.manifestPassengerCount) ?? normalizePassengerCount(tour.bookedPassengerCount) ?? '',
+    passengers.source === 'none' ? '' : passengers.count,
+    passengers.source,
   ];
 };
 
@@ -52,6 +58,10 @@ export const exportToursToCSV = (tours, { drivers = {} } = {}) => {
     'Max Participants',
     'Current Participants',
     'Pickup Points',
+    'Booked Places (Report)',
+    'Passenger List Rows (Report)',
+    'Displayed Passenger Count',
+    'Passenger Count Source',
   ];
 
   const driverByTourId = new Map();

@@ -36,6 +36,7 @@ import { Text, Stack, Loader, Center } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { duplicateTour } from '../services/tourService';
 import { getUKCalendarDayEpochMs, hasTourFinished } from '../utils/dateUtils';
+import { resolveTourPassengerCount } from '../utils/tourPassengerCounts';
 import { buildTourPackCoverage, subscribeToDriverTourPackAdminStatuses } from '../services/driverTourPackAdminStatusService';
 import { buildDriverTourPackOperationsByTour, departureKeyForTour, subscribeToDriverTourPackOperations, updateDriverTourPackIssueStatus } from '../services/driverTourPackOperationsService';
 import { fetchTourByExactId, subscribeToDriverDirectory, subscribeToTourWindow } from '../services/adminDirectoryService';
@@ -265,7 +266,7 @@ export default function ToursManager() {
   const assignedTours = Object.values(tours).filter(t => t.driverName && t.driverName !== 'TBA').length;
   const unassignedTours = totalTours - assignedTours;
   const activeTours = Object.values(tours).filter(t => t.isActive).length;
-  const totalParticipants = Object.values(tours).reduce((sum, t) => sum + (t.currentParticipants || 0), 0);
+  const totalParticipants = Object.values(tours).reduce((sum, tour) => sum + resolveTourPassengerCount(tour).count, 0);
   const visibleDepartureKeys = useMemo(() => paginatedTours.map(([tourId, tour]) => departureKeyForTour(tourId, tour)).filter(Boolean), [paginatedTours]);
   const visibleDepartureKeySignature = JSON.stringify(visibleDepartureKeys);
   const visibleTours = useMemo(() => Object.fromEntries(paginatedTours), [paginatedTours]);

@@ -171,12 +171,44 @@ test('tour projection preserves every passenger-count fallback without personal 
   } }), 6);
 
   const base = { tourId: 'TOUR_1', tour: { tourCode: '5001D 1', name: 'Tour', maxParticipants: 20 } };
-  assert.equal(buildTourProjection({ ...base, tour: { ...base.tour, currentParticipants: 0 }, participantCount: 9, manifestPassengerCount: 7 }).passengerCountSource, 'tour.currentParticipants');
-  assert.equal(buildTourProjection({ ...base, participantCount: 9, manifestPassengerCount: 7 }).passengerCountSource, 'tours.participants');
+  assert.equal(buildTourProjection({ ...base, tour: { ...base.tour, currentParticipants: 0 }, participantCount: 9, manifestPassengerCount: 7 }).passengerCountSource, 'tour_manifests.bookings');
+  assert.equal(buildTourProjection({ ...base, participantCount: 9, manifestPassengerCount: 7 }).passengerCountSource, 'tour_manifests.bookings');
   const manifestRow = buildTourProjection({ ...base, manifestPassengerCount: 7 });
   assert.equal(manifestRow.passengerCountSource, 'tour_manifests.bookings');
   assert.equal(manifestRow.passengerCount, 7);
   assert.equal(hasProhibitedProjectionField(manifestRow), false);
+});
+
+test('tour passenger count uses validated source scalars before operational fallbacks', () => {
+  const project = (tour = {}, participantCount = 0, manifestPassengerCount = 0) => buildTourProjection({
+    tourId: 'TOUR_COUNT', tour: { tourCode: 'COUNT', ...tour }, participantCount, manifestPassengerCount,
+  });
+
+  assert.deepEqual(
+    [project({ sold: 12, bookedPassengerCount: 11, manifestPassengerCount: 10 }, 9, 8).passengerCount,
+      project({ sold: 12, bookedPassengerCount: 11, manifestPassengerCount: 10 }, 9, 8).passengerCountSource],
+    [12, 'tour.sold'],
+  );
+  assert.equal(project({ sold: '0', bookedPassengerCount: 11 }, 9, 8).passengerCount, 0);
+  assert.equal(project({ sold: null, bookedPassengerCount: '11' }, 9, 8).passengerCountSource, 'tour.bookedPassengerCount');
+  assert.equal(project({ bookedPassengerCount: 0, manifestPassengerCount: 10 }, 9, 8).passengerCount, 0);
+  assert.equal(project({ manifestPassengerCount: '10' }, 9, 8).passengerCountSource, 'tour.manifestPassengerCount');
+  assert.equal(project({}, 9, 8).passengerCountSource, 'tour_manifests.bookings');
+  assert.equal(project({ currentParticipants: 2 }, 9, 8).passengerCount, 8);
+  assert.equal(project({ currentParticipants: '3' }, 9, 0).passengerCount, 3);
+  assert.equal(project({}, 9, 0).passengerCountSource, 'tours.participants');
+  assert.equal(project({ currentParticipants: 0 }, 9, 0).passengerCount, 0);
+
+  for (const invalid of [null, true, false, 1.5, -1, '1.5', ' 2 ', '', '1e2', Number.MAX_SAFE_INTEGER + 1]) {
+    const row = project({
+      sold: invalid,
+      bookedPassengerCount: invalid,
+      manifestPassengerCount: invalid,
+      currentParticipants: invalid,
+    }, invalid, invalid);
+    assert.equal(row.passengerCount, 0, `invalid count ${String(invalid)} must be ignored`);
+    assert.equal(row.passengerCountSource, 'none');
+  }
 });
 
 test('tour projection assignment includes bounded internal legacy driver contributions', () => {
@@ -795,7 +827,7 @@ test('tour recomputation has fixed reads independent of unrelated history and us
   const instrumentation = {};
   await recomputeTourProjection({ db, tourId: 'TOUR_1', order: { sourceEventAtMs: 10, sourceEventId: 'event' }, instrumentation });
   assert.equal(instrumentation.toursRecomputed, 1);
-  assert.equal(instrumentation.directReads, 20);
+  assert.equal(instrumentation.directReads, 23);
   assert.equal(instrumentation.queries, 1);
   assert.equal(db.read('admin_dashboard/v1/tours/TOUR_1').passengerCount, 50_000);
   assert.equal(db.read('admin_dashboard/v1/tours/TOUR_1').isAssigned, true);
@@ -809,7 +841,7 @@ test('tour recomputation has fixed reads independent of unrelated history and us
     order: { sourceEventAtMs: 11, sourceEventId: 'duplicate-child-trigger' },
     instrumentation,
   });
-  assert.equal(instrumentation.directReads - firstReadCount, 16);
+  assert.equal(instrumentation.directReads - firstReadCount, 19);
   assert.equal(instrumentation.tourAggregateRecomputationsSkipped, 1);
   db.write('tours/TOUR_1', null);
   await recomputeTourProjection({

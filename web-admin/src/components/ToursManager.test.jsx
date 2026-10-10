@@ -131,6 +131,22 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('ToursManager query-param status behavior', () => {
+  it('shows imported bookings in grid, totals, details and table when runtime participants is zero', async () => {
+    currentToursFixture = { IMPORTED: {
+      ...toursFixture.TOUR_1, name: 'Imported Tour', sold: 32, bookedPassengerCount: 30,
+      manifestPassengerCount: 30, currentParticipants: 0,
+    } };
+    renderAt();
+    expect(await screen.findByText('32 / 53 booked places')).toBeInTheDocument();
+    expect(screen.getByText('Passenger report lists 30; check the difference')).toBeInTheDocument();
+    expect(screen.getByText('Booked places in view')).toBeInTheDocument();
+    expect(screen.getByText('32')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'View Details', exact: true }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('32 / 53 booked places');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Table' }));
+    expect(await screen.findByRole('table')).toHaveTextContent('32 / 53 booked places');
+  }, 15000);
   it('does not claim an empty date window means the database has no tours', async () => {
     currentToursFixture = {};
     renderAt();

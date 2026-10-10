@@ -8,6 +8,7 @@ import {
   summarizeFirebaseSnapshot,
 } from './firebaseDebug';
 import { nowAsISOString, toEpochMsStrict } from '../utils/dateUtils';
+import { resolveTourPassengerCount } from '../utils/tourPassengerCounts';
 import { postAdminAction } from './adminActionService';
 import {
   calculateDayDelta,
@@ -180,22 +181,7 @@ function getManifestPassengerCount(manifest) {
 }
 
 function getTourPassengerCount(tour, manifest) {
-  const explicitCount = toFiniteNumber(tour?.currentParticipants);
-  if (explicitCount !== null && explicitCount >= 0) {
-    return { count: explicitCount, source: 'tour.currentParticipants' };
-  }
-
-  const participantsCount = countCollection(tour?.participants);
-  if (participantsCount > 0) {
-    return { count: participantsCount, source: 'tours.participants' };
-  }
-
-  const manifestCount = getManifestPassengerCount(manifest);
-  if (manifestCount > 0) {
-    return { count: manifestCount, source: 'tour_manifests.bookings' };
-  }
-
-  return { count: 0, source: 'none' };
+  return resolveTourPassengerCount(tour, { manifestPassengerCount: getManifestPassengerCount(manifest) });
 }
 
 function getTourCapacity(tour) {

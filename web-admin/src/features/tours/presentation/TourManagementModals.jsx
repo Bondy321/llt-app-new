@@ -29,10 +29,11 @@
 
 import { useState } from 'react';
 import { notifications } from '@mantine/notifications';
-import { Text, Title, Group, Button, Stack, Badge, ActionIcon, Tooltip, Modal, Paper, ThemeIcon, Avatar, SimpleGrid, Alert, Progress, Timeline, CopyButton, Code, Accordion } from '@mantine/core';
+import { Text, Title, Group, Button, Stack, Badge, ActionIcon, Tooltip, Modal, Paper, ThemeIcon, Avatar, SimpleGrid, Alert, Timeline, CopyButton, Code, Accordion } from '@mantine/core';
 import { IconMap, IconPhone, IconUsers, IconMapPin, IconTrash, IconCopy, IconAlertCircle, IconCalendarEvent } from '@tabler/icons-react';
 import { deleteTour } from '../../../services/tourService';
 import { formatDateForDisplay } from '../../../utils/dateUtils';
+import { TourPassengerSummary } from './TourPassengerSummary';
 // Tour Card Component for grid view
 export function DeleteTourModal({
   opened,
@@ -105,7 +106,6 @@ export function TourDetailsModal({
     title: '',
     days: []
   };
-  const capacityPercent = (tour.currentParticipants || 0) / (tour.maxParticipants || 53) * 100;
   return <Modal opened={opened} onClose={onClose} title={<Group gap="xs">
           <ThemeIcon color="brand" variant="light" size="md">
             <IconMap size={16} />
@@ -158,8 +158,7 @@ export function TourDetailsModal({
               <IconUsers size={16} color="gray" />
               <Text fw={500}>Capacity</Text>
             </Group>
-            <Text size="xl" fw={700}>{tour.currentParticipants || 0} / {tour.maxParticipants || 53}</Text>
-            <Progress value={capacityPercent} color={capacityPercent > 90 ? 'red' : capacityPercent > 70 ? 'orange' : 'blue'} size="sm" mt="xs" />
+            <TourPassengerSummary tour={tour} />
           </Paper>
         </SimpleGrid>
 

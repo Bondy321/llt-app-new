@@ -29,11 +29,12 @@
 
 import { useState } from 'react';
 import { notifications } from '@mantine/notifications';
-import { Card, Text, Group, Button, Select, Stack, Badge, ActionIcon, Tooltip, Modal, Paper, ThemeIcon, Menu, Progress } from '@mantine/core';
+import { Card, Text, Group, Button, Select, Stack, Badge, ActionIcon, Tooltip, Modal, Paper, ThemeIcon, Menu } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { IconMap, IconUser, IconEdit, IconDotsVertical, IconX, IconCalendar, IconUsers, IconMapPin, IconTrash, IconCopy, IconEye, IconUserPlus } from '@tabler/icons-react';
 import { assignDriver, unassignDriver } from '../../../services/tourService';
 import { formatDateRangeForDisplay, formatDateTimeForDisplay } from '../../../utils/dateUtils';
+import { TourPassengerSummary } from './TourPassengerSummary';
 // Tour Card Component for grid view
 const PACK_STATUS_COLOR = {
   ready: 'green',
@@ -173,7 +174,6 @@ export function TourCard({
     }
   };
   const isAssigned = tour.driverName && tour.driverName !== 'TBA';
-  const capacityPercent = (tour.currentParticipants || 0) / (tour.maxParticipants || 53) * 100;
   return <>
       <Card shadow="sm" padding="lg" radius="md" withBorder className="interactive-card">
         <Group justify="space-between" mb="xs">
@@ -252,11 +252,8 @@ export function TourCard({
           </Group>
           <Group gap="xs">
             <IconUsers size={14} color="gray" />
-            <Text size="sm" c="dimmed">
-              {tour.currentParticipants || 0} / {tour.maxParticipants || 53} participants
-            </Text>
+            <TourPassengerSummary tour={tour} />
           </Group>
-          <Progress value={capacityPercent} color={capacityPercent > 90 ? 'red' : capacityPercent > 70 ? 'orange' : 'blue'} size="sm" />
           {tour.pickupPoints && tour.pickupPoints.length > 0 && <Group gap="xs">
               <IconMapPin size={14} color="gray" />
               <Text size="sm" c="dimmed" truncate="end">

@@ -34,6 +34,8 @@ import { IconMap, IconEdit, IconCheck, IconCalendar, IconUsers, IconCopy } from 
 import { parseTourPickupPointsText } from '../../../services/tourFormService';
 import { DEFAULT_TOUR, updateTour, ddmmyyyyToInputFormat, inputFormatToDDMMYYYY } from '../../../services/tourService';
 import { parseISODateStrict } from '../../../utils/dateUtils';
+import { TourPassengerSummary } from './TourPassengerSummary';
+import { resolveTourPassengerCount } from '../../../utils/tourPassengerCounts';
 const getIsoDateFieldError = (value, fieldLabel) => {
   const parsed = parseISODateStrict(value);
   if (parsed.success) return null;
@@ -161,10 +163,11 @@ export function EditTourModal({
 
           <Grid>
             <Grid.Col span={6}>
-              <NumberInput label="Max Participants" value={formData.maxParticipants} onChange={val => handleInputChange('maxParticipants', val)} min={Math.max(1, Number(formData.currentParticipants) || 0)} max={100} leftSection={<IconUsers size={16} />} description="Cannot be lower than booked participants" />
+              <NumberInput label="Max Participants" value={formData.maxParticipants} onChange={val => handleInputChange('maxParticipants', val)} min={Math.max(1, Number(formData.currentParticipants) || 0, resolveTourPassengerCount(formData).count)} max={100} leftSection={<IconUsers size={16} />} description="Cannot be lower than the booked total or the runtime participation counter" />
             </Grid.Col>
             <Grid.Col span={6}>
-              <NumberInput label="Booked Participants" value={formData.currentParticipants} readOnly description="Managed automatically from booking operations" />
+              <Text size="sm" fw={500} mb={4}>Passenger totals</Text>
+              <TourPassengerSummary tour={formData} compact />
             </Grid.Col>
           </Grid>
 

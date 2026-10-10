@@ -197,7 +197,7 @@ export function CreateTourModal({
               </Grid>
 
               <Alert icon={<IconUsers size={16} />} color="gray" variant="light">
-                Booked participants starts at 0 and is maintained automatically when bookings are added.
+                Imported tours show booked places from TourSummary and passenger-list counts from the morning reports. New manual tours use the legacy booking counter until report data is available.
               </Alert>
 
               <Switch label="Tour is Active" checked={formData.isActive} onChange={e => handleInputChange('isActive', e.currentTarget.checked)} />

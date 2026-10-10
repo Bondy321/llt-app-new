@@ -32,7 +32,8 @@ import { IconSearch, IconFilter, IconRefresh, IconMap, IconEdit, IconCheck, Icon
 import AddPassengerModal from '../../../components/AddPassengerModal';
 import { formatDateForDisplay } from '../../../utils/dateUtils';
 // Tour Card Component for grid view
-import { TourCard } from './TourCards';
+import { TourCard, TourPackStatus, DriverPackOperations } from './TourCards';
+import { TourPassengerSummary } from './TourPassengerSummary';
 import { CreateTourModal } from './CreateTourModal';
 import { EditTourModal } from './EditTourModal';
 import { DeleteTourModal, TourDetailsModal } from './TourManagementModals';
@@ -264,7 +265,7 @@ export default function ToursManagerView(props) {
         <Paper p="md" radius="md" withBorder className="stat-card">
           <Group justify="space-between">
             <div>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Participants</Text>
+              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Booked places in view</Text>
               <Text size="xl" fw={700} c="grape">{totalParticipants}</Text>
             </div>
             <ThemeIcon color="grape" variant="light" size="xl" radius="md">
@@ -372,7 +373,7 @@ export default function ToursManagerView(props) {
                   <Table.Th>Days</Table.Th>
                   <Table.Th>Dates</Table.Th>
                   <Table.Th>Driver</Table.Th>
-                  <Table.Th>Capacity</Table.Th>
+                  <Table.Th>Passengers</Table.Th>
                   <Table.Th>Status</Table.Th>
                   <Table.Th>Driver pack</Table.Th>
                   <Table.Th>Live operations</Table.Th>
@@ -415,7 +416,7 @@ export default function ToursManagerView(props) {
                         </Group>
                       </Table.Td>
                       <Table.Td>
-                        <Text size="sm">{tour.currentParticipants || 0}/{tour.maxParticipants || 53}</Text>
+                        <TourPassengerSummary tour={tour} compact />
                       </Table.Td>
                       <Table.Td>
                         <Badge variant="light" color={tour.isActive ? 'green' : 'gray'} size="sm">
