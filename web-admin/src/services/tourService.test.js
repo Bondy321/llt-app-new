@@ -132,7 +132,8 @@ describe('tour identity invariants', () => {
     );
     const updater = runTransactionMock.mock.calls[0][1];
     expect(updater(null)).toEqual(expect.objectContaining({ name: 'Highlands', tourCode: '5112D 8' }));
-    for (const reservedField of ['driverName', 'driverPhone', 'driverId', 'driverAssignmentRevision']) {
+    for (const reservedField of ['driverName', 'driverPhone', 'driverId', 'driverAssignmentRevision',
+      'sourceLifecycle', 'sourceLifecycle/managedDisable', 'rosterSync', 'itinerarySource']) {
       expect(result.tour).not.toHaveProperty(reservedField);
       expect(updater(null)).not.toHaveProperty(reservedField);
     }
@@ -251,7 +252,7 @@ describe('tour identity invariants', () => {
 
     for (const reservedField of ['driverName', 'driverPhone', 'driverId', 'driverAssignmentRevision']) {
       await expect(updateTour('5112D_8', { [reservedField]: 'forged' }))
-        .rejects.toThrow(/server-owned driver assignment/i);
+        .rejects.toThrow(/server-owned/i);
     }
     expect(updateMock).not.toHaveBeenCalled();
   });
@@ -272,6 +273,16 @@ describe('tour identity invariants', () => {
     await expect(updateTour('MISSING_1', { name: 'Ghost tour' }))
       .rejects.toThrow(/no longer exists/i);
     expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('explicit inactive updates release source disable ownership even if the value is unchanged', async () => {
+    getMock.mockResolvedValue(buildSnapshot({tourCode:'LIFE 1',isActive:false,
+      sourceLifecycle:{schemaVersion:1,status:'cancelled',managedDisable:true}}));
+    const {updateTour}=await import('./tourService.js');
+    await updateTour('LIFE_1',{isActive:false});
+    expect(updateMock).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({
+      isActive:false,'sourceLifecycle/managedDisable':false,
+    }));
   });
 
   it('does not let an edit lower capacity below the trusted booked count', async () => {

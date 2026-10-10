@@ -130,8 +130,10 @@ export default function AddPassengerModal({
       setCreatedBooking(result);
       onSuccess?.(result);
       notifications.show({
-        title: 'Passenger booking created',
-        message: `${result.bookingRef} can now sign in to ${result.tourCode}.`,
+        title: result.loginEligible ? 'Passenger booking created' : 'Operational roster entry created',
+        message: result.loginEligible
+          ? `${result.bookingRef} can sign in to ${result.tourCode}.`
+          : `${result.bookingRef} is on the ${result.tourCode} roster but has no app login identity.`,
         color: 'green',
       });
     } catch (error) {
@@ -172,8 +174,14 @@ export default function AddPassengerModal({
     >
       {createdBooking ? (
         <Stack gap="lg">
-          <Alert color="green" icon={<IconCheck size={18} />} title="Ready for app login">
-            The booking, login identity, pickup data, tour counts, and manifest row were created together.
+          <Alert
+            color={createdBooking.loginEligible ? 'green' : 'blue'}
+            icon={<IconCheck size={18} />}
+            title={createdBooking.loginEligible ? 'Ready for app login' : 'Operational roster entry created'}
+          >
+            {createdBooking.loginEligible
+              ? 'The booking, login identity, pickup data, tour counts, and manifest row were created together.'
+              : 'The booking, pickup data, tour counts, and manifest row were created. No login identity was created, so the roster entry cannot sign in to the app.'}
           </Alert>
 
           <Paper withBorder p="lg" radius="md">
@@ -204,21 +212,28 @@ export default function AddPassengerModal({
                 </Group>
               </div>
 
-              <div>
-                <Text size="xs" c="dimmed" mb={4}>Login email</Text>
-                <Group gap="xs">
-                  <Code>{createdBooking.email}</Code>
-                  <CopyButton value={createdBooking.email}>
-                    {({ copied, copy }) => (
-                      <Tooltip label={copied ? 'Copied' : 'Copy login email'}>
-                        <ActionIcon color={copied ? 'green' : 'blue'} variant="light" onClick={copy}>
-                          {copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
-                        </ActionIcon>
-                      </Tooltip>
-                    )}
-                  </CopyButton>
-                </Group>
-              </div>
+              {createdBooking.loginEligible ? (
+                <div>
+                  <Text size="xs" c="dimmed" mb={4}>Login email</Text>
+                  <Group gap="xs">
+                    <Code>{createdBooking.email}</Code>
+                    <CopyButton value={createdBooking.email}>
+                      {({ copied, copy }) => (
+                        <Tooltip label={copied ? 'Copied' : 'Copy login email'}>
+                          <ActionIcon color={copied ? 'green' : 'blue'} variant="light" onClick={copy}>
+                            {copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
+                          </ActionIcon>
+                        </Tooltip>
+                      )}
+                    </CopyButton>
+                  </Group>
+                </div>
+              ) : (
+                <div>
+                  <Text size="xs" c="dimmed" mb={4}>Login eligibility</Text>
+                  <Text size="sm">Roster only · no login identity created</Text>
+                </div>
+              )}
             </Stack>
           </Paper>
 
@@ -230,8 +245,8 @@ export default function AddPassengerModal({
         <form onSubmit={handleSubmit}>
           <Stack gap="lg">
             <Alert color="blue" variant="light">
-              Every field is required. The booking is only created after the server confirms the tour,
-              booking reference, dates, and seats are viable.
+              Email is optional for an operational roster entry. A valid email creates a passenger app login identity;
+              without one, this booking remains roster-only. The server confirms the tour, booking reference, dates, and seats before creation.
             </Alert>
 
             <Select
@@ -260,13 +275,13 @@ export default function AddPassengerModal({
               </Grid.Col>
               <Grid.Col span={{ base: 12, sm: 6 }}>
                 <TextInput
-                  label="Login email"
+                  label="Login email (optional)"
                   type="email"
                   placeholder="reviewer@example.com"
                   value={draft.email}
                   onChange={(event) => updateDraft('email', event.currentTarget.value)}
-                  required
                   error={validation.errors.email}
+                  description="Leave blank for a roster-only booking. No email or login credential will be invented."
                 />
               </Grid.Col>
             </Grid>

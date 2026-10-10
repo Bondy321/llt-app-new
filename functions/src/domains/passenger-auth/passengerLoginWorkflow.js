@@ -17,6 +17,7 @@ const {
 } = require('../app-sessions/public');
 const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { buildPassengerSafeBooking, buildPassengerSafeTour } = require('./passengerProjection');
+const { readSourceRoster } = require('../manifests/public');
 const { normalizeBookingRef, normalizeEmail } = require('./passengerSanitizer');
 const {
   checkPassengerLoginRateLimits,
@@ -44,6 +45,8 @@ const PASSENGER_LOGIN_LOCK_TTL_MS = 3 * 60 * 1000;
 
 /** @param {number} status @param {string} reason */
 const failure = (status, reason) => ({ ok: false, status, body: { valid: false, reason } });
+const isBookingLoginEligible = (booking) => booking.loginEligible !== false
+  && readSourceRoster(booking)?.state !== 'not_in_report';
 const identityIncompleteFailure = () => ({
   ok: false,
   status: 200,
@@ -164,6 +167,13 @@ const loadPassengerLoginContext = async ({ bookingRef, email, networkDimension }
     return identityIncompleteFailure();
   }
   const tourData = tourSnapshot.val() || {};
+  const bookingData = bookingSnapshot.val() || {};
+  let eligible;
+  try { eligible = isBookingLoginEligible(bookingData); } catch { return failure(503, 'SERVICE_UNAVAILABLE'); }
+  if (!eligible) {
+    return failure(401, 'INVALID_CREDENTIALS');
+  }
+  if (tourData.rosterSync?.state === 'updating') return failure(503, 'SERVICE_UNAVAILABLE');
   if (tourData.isActive === false) {
     log.warn('Passenger login rejected for inactive tour', { bookingRef, tourId: canonicalTourId });
     return failure(200, 'TOUR_INACTIVE');

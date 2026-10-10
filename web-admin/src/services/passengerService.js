@@ -60,7 +60,7 @@ export const validateManualPassengerDraft = (draft, tours = {}) => {
     errors.bookingRef = 'Use letters, numbers, hyphens, or underscores (not a driver code).';
   }
 
-  if (!email || email.length > 254 || !EMAIL_PATTERN.test(email)) {
+  if (email && (email.length > 254 || !EMAIL_PATTERN.test(email))) {
     errors.email = 'Enter a valid email address.';
   }
 
@@ -180,6 +180,7 @@ const REASON_MESSAGES = {
   TOUR_CAPACITY_EXCEEDED: 'This booking would exceed the selected tour capacity.',
   INVALID_PHONE: 'One or more passenger phone numbers are invalid.',
   CREATE_IN_PROGRESS: 'Another booking is currently being added. Wait a moment and retry.',
+  ROSTER_SYNC_IN_PROGRESS: 'This tour roster is being updated. Wait a moment and retry.',
   INTERNAL_ERROR: 'The passenger could not be added safely. No partial booking was created.',
 };
 

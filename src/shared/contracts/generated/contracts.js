@@ -4255,6 +4255,47 @@ const CONTRACTS = Object.freeze({
         "email",
         "authUid"
       ]
+    },
+    "ManifestRosterIdentity": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "rosterRevision",
+        "passengerIds"
+      ],
+      "optionalProperties": [],
+      "properties": {
+        "rosterRevision": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "maxLength": 64
+        },
+        "passengerIds": {
+          "type": "array",
+          "maxItems": 250
+        }
+      },
+      "enumValues": {},
+      "idPatterns": {
+        "passengerId": "^srcpax_v1_[a-f0-9]{64}$"
+      },
+      "maximumLengths": {
+        "rosterRevision": 64
+      },
+      "numericBounds": {},
+      "nullability": {},
+      "constraints": [
+        "sourcePassengerIdsAreOpaqueAndUnique"
+      ],
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [
+        "rosterRevision",
+        "passengerIds"
+      ],
+      "forbiddenClientProjection": [
+        "legacyStatusIndexes",
+        "previousArchiveHash"
+      ]
     }
   }
 }.contracts);
@@ -4308,6 +4349,11 @@ const validateContract = (name, value, options = {}) => {
     if (Object.prototype.hasOwnProperty.call(value, property)) errors.push(`${property} is forbidden from client projections`);
   });
   for (const constraint of contract.constraints || []) {
+    if (constraint === 'sourcePassengerIdsAreOpaqueAndUnique') {
+      const ids = value.passengerIds;
+      if (!Array.isArray(ids) || ids.length === 0 || ids.some(id => typeof id !== 'string' || !/^srcpax_v1_[a-f0-9]{64}$/u.test(id))
+        || new Set(ids).size !== ids.length) errors.push('passenger IDs must be opaque and unique');
+    }
     if (constraint === 'driverPrincipalMatchesDriverId' && value.principalType === 'driver' && value.principalId !== `driver:${value.driverId}`) errors.push('driver principal does not match driverId');
     if (constraint === 'passengerPrincipalIsOpaque' && value.principalType === 'passenger' && !/^pax_v2_[a-f0-9]{32}$/u.test(value.principalId || '')) errors.push('passenger principal is not opaque');
     if (constraint === 'trackingExpiryAfterStart' && Number(value.expiresAtMs) <= Number(value.startedAtMs)) errors.push('tracking expiry must follow start');

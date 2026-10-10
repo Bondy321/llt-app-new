@@ -35,6 +35,7 @@ import { IconMap, IconUser, IconEdit, IconDotsVertical, IconX, IconCalendar, Ico
 import { assignDriver, unassignDriver } from '../../../services/tourService';
 import { formatDateRangeForDisplay, formatDateTimeForDisplay } from '../../../utils/dateUtils';
 import { TourPassengerSummary } from './TourPassengerSummary';
+import { TourItineraryReadiness } from './TourItineraryReadiness';
 // Tour Card Component for grid view
 const PACK_STATUS_COLOR = {
   ready: 'green',
@@ -254,6 +255,7 @@ export function TourCard({
             <IconUsers size={14} color="gray" />
             <TourPassengerSummary tour={tour} />
           </Group>
+          <TourItineraryReadiness tour={tour} />
           {tour.pickupPoints && tour.pickupPoints.length > 0 && <Group gap="xs">
               <IconMapPin size={14} color="gray" />
               <Text size="sm" c="dimmed" truncate="end">

@@ -107,6 +107,9 @@ export default function ManifestBookingCard({ booking, onPress, isSearchResult, 
       <View style={styles.mainContent}>
         <View style={styles.contentColumn}>
           <Text style={styles.leadName}>{primaryName}</Text>
+          {booking.boardingReviewRequired === true ? <Text style={[styles.subNames, { color: THEME.sync.warning.foreground }]}>
+            Boarding history needs review after a roster change.
+          </Text> : null}
           {otherNames ? (
             <Text style={styles.subNames} numberOfLines={1}>+ {otherNames}</Text>
           ) : null}

@@ -34,6 +34,7 @@ import { IconMap, IconPhone, IconUsers, IconMapPin, IconTrash, IconCopy, IconAle
 import { deleteTour } from '../../../services/tourService';
 import { formatDateForDisplay } from '../../../utils/dateUtils';
 import { TourPassengerSummary } from './TourPassengerSummary';
+import { TourItineraryReadiness } from './TourItineraryReadiness';
 // Tour Card Component for grid view
 export function DeleteTourModal({
   opened,
@@ -196,6 +197,10 @@ export function TourDetailsModal({
           </Paper>}
 
         {/* Itinerary */}
+        <Paper p="md" radius="md" withBorder>
+          <Text fw={500} mb="xs">Itinerary readiness</Text>
+          <TourItineraryReadiness tour={tour} showDetail />
+        </Paper>
         {itinerary.days && itinerary.days.length > 0 && <Paper p="md" radius="md" withBorder>
             <Text fw={500} mb="sm">Itinerary: {itinerary.title || tour.name}</Text>
             <Accordion variant="separated">

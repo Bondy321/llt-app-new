@@ -36,7 +36,7 @@ const bookingRefs = {
 
 const mockManifest = {
   bookings: [
-    { id: bookingRefs.queued, pickupLocation: 'Glasgow Buchanan Bus Station', pickupTime: '10:30', passengerNames: ['Q One'], status: 'PENDING' },
+    { id: bookingRefs.queued, pickupLocation: 'Glasgow Buchanan Bus Station', pickupTime: '10:30', passengerNames: ['Q One'], passengerIds: [`srcpax_v1_${'a'.repeat(64)}`], rosterRevision: 'b'.repeat(64), status: 'PENDING' },
     { id: bookingRefs.syncing, pickupLocation: 'Glasgow Buchanan Bus Station', pickupTime: '10:30', passengerNames: ['S One'], status: 'BOARDED' },
     { id: bookingRefs.failed, pickupLocation: 'Balloch Tourist Information Centre', pickupTime: '11:15', passengerNames: ['F One'], status: 'PENDING' },
     { id: bookingRefs.malformed, pickupLocation: 'Balloch Tourist Information Centre', pickupTime: '11:15', passengerNames: ['M One'], status: 'BOARDED' },
@@ -331,6 +331,34 @@ test('PassengerManifestScreen offers the active Tour Pack booking phone in board
   await act(async () => renderer.unmount());
 });
 
+test('PassengerManifestScreen keeps cached roster and review warnings while source publication is fenced', async () => {
+  cachedReplacements = [];
+  cachedManifest = { ...mockManifest, tourId: 'TOUR-1', driverId: 'D-CACHE', bookings: mockManifest.bookings.map((booking, index) => ({ ...booking, boardingReviewRequired: index === 0 })) };
+  manifestLoader = async () => { const error = new Error('The passenger roster is being updated. Retry shortly for the latest roster.'); error.code = 'ROSTER_UPDATING'; throw error; };
+  const PassengerManifestScreen = require('../screens/PassengerManifestScreen').default;
+  let renderer;
+  await act(async () => { renderer = TestRenderer.create(React.createElement(PassengerManifestScreen, {
+    route: { params: { tourId: 'TOUR-1', offlineCacheOwnerId: 'D-CACHE' } }, navigation: { goBack: () => {} },
+  })); });
+  await waitForEffects();
+  const text = () => renderer.root.findAll(node => node.type === 'Text').map(node => String(node.props.children || '')).join(' ');
+  assert.match(text(), /Q One/);
+  assert.match(text(), /roster is being updated/);
+  assert.match(text(), /Boarding history needs review after a roster change/);
+  assert.equal(cachedReplacements.length, 0);
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: `Booking ${bookingRefs.queued}. PENDING. 1 passengers.` }).props.onPress());
+  assert.match(text(), /Earlier statuses could not be matched safely/);
+  manifestLoader = async () => { const error = new Error('The current passenger roster could not be verified. Retry or contact operations if this continues.'); error.code = 'SOURCE_ROSTER_INVALID'; throw error; };
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Retry loading the passenger manifest' }).props.onPress());
+  await waitForEffects();
+  assert.match(text(), /roster could not be verified/);
+  assert.match(text(), /Q One/);
+  assert.equal(cachedReplacements.length, 0);
+  await act(async () => renderer.unmount());
+  cachedManifest = null;
+  manifestLoader = async () => mockManifest;
+});
+
 test('PassengerManifestScreen queues a boarding update immediately when connectivity is offline', async () => {
   cachedManifest = null;
   cachedReplacements = [];
@@ -372,6 +400,31 @@ test('PassengerManifestScreen queues a boarding update immediately when connecti
   assert.equal(manifestUpdateCalls.length, 1);
   assert.equal(manifestUpdateCalls[0][3].online, false);
   assert.equal(manifestUpdateCalls[0][3].actorPrincipalId, 'driver:D-OFFLINE');
+  assert.deepEqual(manifestUpdateCalls[0][3].passengerIds, mockManifest.bookings[0].passengerIds);
+  assert.equal(manifestUpdateCalls[0][3].rosterRevision, mockManifest.bookings[0].rosterRevision);
+  await act(async () => renderer.unmount());
+});
+
+test('PassengerManifestScreen offers a fresh roster after a stale boarding rejection', async () => {
+  cachedManifest = null;
+  manifestLoader = async () => mockManifest;
+  manifestUpdater = async () => { const error = new Error('Refresh the manifest before recording boarding statuses.'); error.code = 'ROSTER_REFRESH_REQUIRED'; throw error; };
+  const PassengerManifestScreen = require('../screens/PassengerManifestScreen').default;
+  let renderer;
+  await act(async () => { renderer = TestRenderer.create(React.createElement(PassengerManifestScreen, {
+    route: { params: { tourId: 'TOUR-1' } }, navigation: { goBack: () => {} }, isConnected: true,
+  })); });
+  await waitForEffects();
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: `Booking ${bookingRefs.queued}. PENDING. 1 passengers.` }).props.onPress());
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: `Mark all passengers here for booking ${bookingRefs.queued}` }).props.onPress());
+  await waitForEffects();
+  const text = renderer.root.findAll(node => node.type === 'Text').map(node => String(node.props.children || '')).join(' ');
+  assert.match(text, /Refresh the manifest before recording boarding statuses/);
+  const before = getTourManifestCalls;
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Refresh manifest' }).props.onPress());
+  await waitForEffects();
+  assert.ok(getTourManifestCalls > before);
+  assert.equal(renderer.root.findAllByProps({ accessibilityLabel: `Mark all passengers here for booking ${bookingRefs.queued}` }).length, 0);
   await act(async () => renderer.unmount());
 });
 

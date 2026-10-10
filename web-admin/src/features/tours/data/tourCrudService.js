@@ -25,21 +25,24 @@ import {
   formatDateToDDMMYYYY,
 } from './tourServiceContext';
 
-const SERVER_OWNED_ASSIGNMENT_FIELDS = new Set([
+const SERVER_OWNED_TOUR_FIELDS = new Set([
   'driverId',
   'driverName',
   'driverPhone',
   'driverAssignmentRevision',
+  'sourceLifecycle',
+  'rosterSync',
+  'itinerarySource',
 ]);
 
 const stripServerOwnedAssignmentFields = (tourData = {}) => Object.fromEntries(
-  Object.entries(tourData).filter(([field]) => !SERVER_OWNED_ASSIGNMENT_FIELDS.has(field)),
+  Object.entries(tourData).filter(([field]) => !SERVER_OWNED_TOUR_FIELDS.has(field.split('/')[0])),
 );
 
 const assertNoServerOwnedAssignmentFields = (updates = {}) => {
-  const reservedField = Object.keys(updates).find((field) => SERVER_OWNED_ASSIGNMENT_FIELDS.has(field));
+  const reservedField = Object.keys(updates).find((field) => SERVER_OWNED_TOUR_FIELDS.has(field.split('/')[0]));
   if (reservedField) {
-    throw new Error(`${reservedField} is a server-owned driver assignment field. Use the assignment action instead.`);
+    throw new Error(`${reservedField} is server-owned. Use the appropriate assignment or import action instead.`);
   }
 };
 
@@ -141,6 +144,9 @@ export const updateTour = async (tourId, updates) => {
   const indexedUpdates = {
     ...updates,
     ...buildTourDateIndexFields({ ...existingTour, ...updates }),
+    ...(hasOwn(updates, 'isActive') && existingTour.sourceLifecycle ? {
+      'sourceLifecycle/managedDisable': false,
+    } : {}),
   };
 
   await update(tourRef, indexedUpdates);

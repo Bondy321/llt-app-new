@@ -1,9 +1,11 @@
 const { createPersistenceProvider } = require('./persistenceProvider');
 const { normalizeTourId } = require('./tourIdentityService');
+const { manifestRosterIdentity } = require('../utils/manifestRosterIdentity');
 
 const SCHEMA_VERSION = 1;
 const MAX_BOOKINGS = 1_500;
-const MAX_PASSENGERS_PER_BOOKING = 80;
+const MAX_PASSENGERS_PER_BOOKING = 250;
+const MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 const MAX_PICKUP_POINTS_PER_BOOKING = 20;
 const MAX_BOOKING_ID_LENGTH = 120;
 const MAX_TEXT_LENGTH = 500;
@@ -25,6 +27,19 @@ const text = (value, max = MAX_TEXT_LENGTH) => {
   if (typeof value !== 'string') return '';
   const normalized = value.trim();
   return normalized && normalized.length <= max ? normalized : '';
+};
+
+const utf8ByteLength = (value) => {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && value.charCodeAt(index + 1) >= 0xdc00 && value.charCodeAt(index + 1) <= 0xdfff) {
+      bytes += 4; index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
 };
 
 const normalizeDriverId = (value) => {
@@ -58,6 +73,9 @@ const normalizeBooking = (input) => {
   const id = text(input.id, MAX_BOOKING_ID_LENGTH).toUpperCase();
   const passengerNames = Array.isArray(input.passengerNames) ? input.passengerNames.map((name) => text(name, 180)) : [];
   if (!id || passengerNames.length === 0 || passengerNames.length > MAX_PASSENGERS_PER_BOOKING || passengerNames.some((name) => !name)) return null;
+  let rosterIdentity;
+  try { rosterIdentity = manifestRosterIdentity(input, passengerNames.length); } catch { return null; }
+  if (input.boardingReviewRequired !== undefined && typeof input.boardingReviewRequired !== 'boolean') return null;
   const rawStatuses = Array.isArray(input.passengerStatus) ? input.passengerStatus : [];
   if (rawStatuses.length && rawStatuses.length !== passengerNames.length) return null;
   const passengerStatus = (rawStatuses.length ? rawStatuses : passengerNames.map(() => input.status || 'PENDING'))
@@ -83,6 +101,8 @@ const normalizeBooking = (input) => {
   // generic booking copy and keeps the local PII surface bounded.
   return {
     id,
+    ...rosterIdentity,
+    ...(typeof input.boardingReviewRequired === 'boolean' ? { boardingReviewRequired: input.boardingReviewRequired } : {}),
     passengerNames,
     passengerStatus,
     seatNumbers: normalizedSeatNumbers,
@@ -139,6 +159,7 @@ function createDriverManifestCacheService({ storage = defaultStorage, now = () =
     try {
       const raw = await storage.getItemAsync(cacheKey(identity.tourId, identity.driverId));
       if (!raw) return response.ok(null);
+      if (utf8ByteLength(raw) > MAX_SNAPSHOT_BYTES) return response.fail('Cached manifest exceeds the snapshot size limit.');
       let parsed;
       try { parsed = JSON.parse(raw); } catch { return response.fail('Cached manifest is malformed.'); }
       const snapshot = normalizeSnapshot(parsed, { ...identity, now: now() });
@@ -157,13 +178,15 @@ function createDriverManifestCacheService({ storage = defaultStorage, now = () =
       fetchedAtMs,
     }, { ...identity, now: now() });
     if (!snapshot) return response.fail('Manifest snapshot did not pass validation.');
+    const serialized = JSON.stringify(snapshot);
+    if (utf8ByteLength(serialized) > MAX_SNAPSHOT_BYTES) return response.fail('Manifest snapshot exceeds the snapshot size limit.');
     const key = cacheKey(identity.tourId, identity.driverId);
     try {
-      await withLock(key, () => storage.setItemAsync(key, JSON.stringify(snapshot)));
+      await withLock(key, () => storage.setItemAsync(key, serialized));
       return response.ok(snapshot);
     } catch (error) { return response.fail(error); }
   };
-  const applyOptimisticUpdate = async ({ tourId, driverId, bookingRef, passengerStatuses } = {}) => {
+  const applyOptimisticUpdate = async ({ tourId, driverId, bookingRef, passengerStatuses, passengerIds, rosterRevision } = {}) => {
     const identity = validateIdentity(tourId, driverId);
     const bookingId = text(bookingRef, MAX_BOOKING_ID_LENGTH).toUpperCase();
     if (!identity || !bookingId || !Array.isArray(passengerStatuses)) return response.fail('A scoped manifest booking update is required.');
@@ -172,19 +195,27 @@ function createDriverManifestCacheService({ storage = defaultStorage, now = () =
       return await withLock(key, async () => {
         const raw = await storage.getItemAsync(key);
         if (!raw) return response.fail('No complete manifest snapshot is cached.');
+        if (utf8ByteLength(raw) > MAX_SNAPSHOT_BYTES) return response.fail('Cached manifest exceeds the snapshot size limit.');
         let parsed; try { parsed = JSON.parse(raw); } catch { return response.fail('Cached manifest is malformed.'); }
         const snapshot = normalizeSnapshot(parsed, { ...identity, now: now() });
         if (!snapshot) return response.fail('Cached manifest did not pass validation.');
         const bookingIndex = snapshot.bookings.findIndex((booking) => booking.id === bookingId);
         if (bookingIndex < 0) return response.fail('Booking is not present in the cached manifest.');
         const booking = snapshot.bookings[bookingIndex];
+        const rosterIdentity = manifestRosterIdentity({ passengerIds, rosterRevision }, passengerStatuses.length);
+        if ((booking.rosterRevision || rosterIdentity.rosterRevision) && (booking.rosterRevision !== rosterIdentity.rosterRevision
+          || JSON.stringify(booking.passengerIds) !== JSON.stringify(rosterIdentity.passengerIds))) {
+          return response.fail('The cached passenger roster changed. Refresh the manifest before recording boarding statuses.');
+        }
         if (passengerStatuses.length !== booking.passengerNames.length) return response.fail('Passenger status count does not match the cached booking.');
         const statuses = passengerStatuses.map((status) => text(status, 20).toUpperCase());
         if (statuses.some((status) => !MANIFEST_STATUSES.has(status))) return response.fail('Passenger status is invalid.');
         const bookings = [...snapshot.bookings];
         bookings[bookingIndex] = { ...booking, passengerStatus: statuses, status: deriveStatus(statuses) };
         const next = { ...snapshot, bookings, stats: recomputeStats(bookings) };
-        await storage.setItemAsync(key, JSON.stringify(next));
+        const serialized = JSON.stringify(next);
+        if (utf8ByteLength(serialized) > MAX_SNAPSHOT_BYTES) return response.fail('Manifest snapshot exceeds the snapshot size limit.');
+        await storage.setItemAsync(key, serialized);
         return response.ok(next);
       });
     } catch (error) { return response.fail(error); }

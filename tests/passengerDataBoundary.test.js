@@ -6,6 +6,14 @@ const {
   normalizePassengerTourProjection,
 } = require('../services/passengerDataBoundary');
 
+test('the mobile passenger boundary retains a complete canonical 250-person party', () => {
+  const party = { id: 'LARGE-PARTY', tourId: 'TOUR_1', passengerNames: Array.from({ length: 250 }, (_, index) => `Passenger ${index + 1}`), seatNumbers: Array.from({ length: 250 }, (_, index) => index + 1), totalPax: 250 };
+  const normalized = normalizePassengerBookingProjection(party, party.id);
+  assert.deepEqual(normalized.passengerNames, party.passengerNames);
+  assert.deepEqual(normalized.seatNumbers, party.seatNumbers);
+  assert.equal(normalized.totalPax, 250);
+});
+
 test('passenger tour projection drops driver-only and contract/service data recursively', () => {
   const projected = normalizePassengerTourProjection({
     id: '5112D_8',

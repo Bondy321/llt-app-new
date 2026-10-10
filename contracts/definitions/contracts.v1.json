@@ -1410,6 +1410,47 @@
       "rejectUnknownProperties": true,
       "safeClientProjection": ["success", "reason", "message", "retryable", "status", "correlationId"],
       "forbiddenClientProjection": ["stack", "token", "authorization", "signedUrl", "bookingRef", "email", "authUid"]
+    },
+    "ManifestRosterIdentity": {
+      "schemaVersion": 1,
+      "kind": "object",
+      "requiredProperties": [
+        "rosterRevision",
+        "passengerIds"
+      ],
+      "optionalProperties": [],
+      "properties": {
+        "rosterRevision": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "maxLength": 64
+        },
+        "passengerIds": {
+          "type": "array",
+          "maxItems": 250
+        }
+      },
+      "enumValues": {},
+      "idPatterns": {
+        "passengerId": "^srcpax_v1_[a-f0-9]{64}$"
+      },
+      "maximumLengths": {
+        "rosterRevision": 64
+      },
+      "numericBounds": {},
+      "nullability": {},
+      "constraints": [
+        "sourcePassengerIdsAreOpaqueAndUnique"
+      ],
+      "rejectUnknownProperties": true,
+      "safeClientProjection": [
+        "rosterRevision",
+        "passengerIds"
+      ],
+      "forbiddenClientProjection": [
+        "legacyStatusIndexes",
+        "previousArchiveHash"
+      ]
     }
   }
 }

@@ -17,7 +17,8 @@ const { verifyOperationsAdminAccess } = require('./adminAuthorization');
 const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const {
   buildManualPassengerBookingUpdates, createManualPassengerError, findManualPassengerSeatConflicts,
-  normalizeBookingRef, normalizeManualPassengerPayload,
+  acquireManualSourceRosterLease, normalizeBookingRef, normalizeManualPassengerPayload,
+  releaseManualSourceRosterLease, renewManualSourceRosterLease,
 } = require('./manualPassengerBooking');
 const { buildTourDeletionUpdates, getBookingsForTour, resolveReportedPhotoStoragePaths } = require('./tourDeletion');
 
@@ -63,7 +64,7 @@ const MANUAL_BOOKING_STATUS_BY_REASON = Object.freeze({
   INVALID_PHONE: 400, DUPLICATE_SEAT_IN_BOOKING: 400, PICKUP_DATE_OUTSIDE_TOUR: 400,
   TOUR_DATES_INVALID: 409, TOUR_IDENTITY_MISMATCH: 409, TOUR_INACTIVE: 409,
   TOUR_NOT_FOUND: 404, BOOKING_REFERENCE_EXISTS: 409, SEAT_ALREADY_ASSIGNED: 409,
-  TOUR_CAPACITY_EXCEEDED: 409, CREATE_IN_PROGRESS: 409,
+  TOUR_CAPACITY_EXCEEDED: 409, CREATE_IN_PROGRESS: 409, ROSTER_SYNC_IN_PROGRESS: 409,
 });
 
 /** @type {(...args: any[]) => Promise<any>} */
@@ -120,6 +121,49 @@ const acquireRequiredManualBookingLocks = async ({ db, lockPaths, owner, acquire
   }
 };
 
+const acquireManualPassengerMutationFences = async ({ db, tourId, lockPaths, owner, acquiredLocks }) => {
+  await acquireRequiredManualBookingLocks({ db, lockPaths, owner, acquiredLocks });
+  if (!(await acquireManualSourceRosterLease({ db, tourId, owner }))) {
+    throw createManualPassengerError('ROSTER_SYNC_IN_PROGRESS', 'This tour roster is being updated. Try again shortly.');
+  }
+};
+
+const assertManualTourRosterReady = (tourData) => {
+  if (tourData.rosterSync?.state === 'updating') {
+    throw createManualPassengerError('ROSTER_SYNC_IN_PROGRESS', 'This tour roster is being updated. Try again shortly.');
+  }
+};
+
+const renewManualPassengerMutationFence = async ({ db, tourId, owner }) => {
+  if (!(await renewManualSourceRosterLease({ db, tourId, owner }))) {
+    throw createManualPassengerError('ROSTER_SYNC_IN_PROGRESS', 'The tour roster update lease expired. Try again shortly.');
+  }
+};
+
+const prepareManualPassengerWrite = ({ body, tourData, existingTourBookings, existingTopLevelPickupPoints, actorUid }) => {
+  const normalized = normalizeManualPassengerPayload(body, tourData);
+  const seatConflicts = findManualPassengerSeatConflicts(existingTourBookings, normalized.passengers);
+  if (seatConflicts.length > 0) {
+    throw createManualPassengerError(
+      'SEAT_ALREADY_ASSIGNED',
+      `Seat ${seatConflicts.join(', ')} is already assigned on this tour.`,
+    );
+  }
+  const writePlan = buildManualPassengerBookingUpdates({
+    normalized, actorUid, tourData, existingTourBookings, existingTopLevelPickupPoints,
+  });
+  return { normalized, writePlan };
+};
+
+const assertManualBookingReferencesAvailable = ({ tourSnapshot, bookingSnapshot, identitySnapshot, manifestSnapshot }) => {
+  if (!tourSnapshot.exists()) {
+    throw createManualPassengerError('TOUR_NOT_FOUND', 'The selected tour no longer exists.');
+  }
+  if (bookingSnapshot.exists() || identitySnapshot.exists() || manifestSnapshot.exists()) {
+    throw createManualPassengerError('BOOKING_REFERENCE_EXISTS', 'That booking reference is already in use.');
+  }
+};
+
 const onRequestWithResult = /** @type {any} */ (onRequest);
 
 const createManualPassengerBooking = onRequestWithResult(
@@ -145,9 +189,13 @@ const createManualPassengerBooking = onRequestWithResult(
     const lockPaths = buildManualBookingLockPaths(requestedBookingRef, requestedTourId);
     /** @type {string[]} */
     const acquiredLocks = [];
+    let sourceRosterLeaseAcquired = false;
 
     try {
-      await acquireRequiredManualBookingLocks({ db, lockPaths, owner: lockOwner, acquiredLocks });
+      await acquireManualPassengerMutationFences({
+        db, tourId: requestedTourId, lockPaths, owner: lockOwner, acquiredLocks,
+      });
+      sourceRosterLeaseAcquired = true;
 
       const [
         tourSnapshot,
@@ -165,37 +213,19 @@ const createManualPassengerBooking = onRequestWithResult(
         db.ref(`pickupPoints/${requestedTourId}`).once('value'),
       ]);
 
-      if (!tourSnapshot.exists()) {
-        throw createManualPassengerError('TOUR_NOT_FOUND', 'The selected tour no longer exists.');
-      }
-      if (bookingSnapshot.exists() || identitySnapshot.exists() || manifestSnapshot.exists()) {
-        throw createManualPassengerError(
-          'BOOKING_REFERENCE_EXISTS',
-          'That booking reference is already in use.',
-        );
-      }
+      assertManualBookingReferencesAvailable({ tourSnapshot, bookingSnapshot, identitySnapshot, manifestSnapshot });
 
       const tourData = tourSnapshot.val() || {};
-      const normalized = normalizeManualPassengerPayload(req.body, tourData);
+      assertManualTourRosterReady(tourData);
       const existingTourBookings = bookingsByTourSnapshot.val() || {};
-      const seatConflicts = findManualPassengerSeatConflicts(
-        existingTourBookings,
-        normalized.passengers,
-      );
-      if (seatConflicts.length > 0) {
-        throw createManualPassengerError(
-          'SEAT_ALREADY_ASSIGNED',
-          `Seat ${seatConflicts.join(', ')} is already assigned on this tour.`,
-        );
-      }
-
-      const writePlan = buildManualPassengerBookingUpdates({
-        normalized,
-        actorUid: authUid,
+      const { normalized, writePlan } = prepareManualPassengerWrite({
+        body: req.body,
         tourData,
         existingTourBookings,
         existingTopLevelPickupPoints: pickupPointsSnapshot.val() || [],
+        actorUid: authUid,
       });
+      await renewManualPassengerMutationFence({ db, tourId: requestedTourId, owner: lockOwner });
       await db.ref().update(writePlan.updates);
 
       log.info('Manual passenger booking created', {
@@ -211,6 +241,7 @@ const createManualPassengerBooking = onRequestWithResult(
         tourId: normalized.tourId,
         tourCode: normalized.tourCode,
         email: normalized.email,
+        loginEligible: normalized.loginEligible,
         passengerCount: normalized.passengers.length,
       });
     } catch (error) {
@@ -232,6 +263,16 @@ const createManualPassengerBooking = onRequestWithResult(
       }
       return res.status(status).json({ success: false, reason });
     } finally {
+      if (sourceRosterLeaseAcquired) {
+        try {
+          await releaseManualSourceRosterLease({ db, tourId: requestedTourId, owner: lockOwner });
+        } catch (error) {
+          log.warn('Manual passenger source roster lease release failed', {
+            tourId: requestedTourId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       await Promise.all(acquiredLocks.map((path) => releaseManualBookingLock({
         db,
         path,

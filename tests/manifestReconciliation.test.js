@@ -121,3 +121,18 @@ test('mobile manifest fallback removes duplicated sync rows without collapsing r
   });
   assert.deepEqual(sameName.normalizedBooking.passengerNames, ['Alex Smith', 'Alex Smith']);
 });
+
+test('manual same-name unassigned passengers remain separate while assigned legacy duplicates deduplicate', async () => {
+  for (const label of ['TBA', 'TBC', 'UNKNOWN', 'UNASSIGNED', '-', 'N/A', '0', 'S0', '']) {
+    const unassigned = await ensureBookingSchemaConsistency('MANUAL-PARTY', {
+      passengerNames: ['Alex Smith', 'Alex Smith'], seatNumbers: [0, 0], seatLabels: [label, label],
+    });
+    assert.deepEqual(unassigned.normalizedBooking.passengerNames, ['Alex Smith', 'Alex Smith'], label);
+    assert.equal(unassigned.duplicatePassengerCount, 0, label);
+  }
+  const assigned = await ensureBookingSchemaConsistency('LEGACY-DUPLICATE', {
+    passengerNames: ['Alex Smith', 'Alex Smith'], seatNumbers: [12, 12], seatLabels: ['S12', 'S12'],
+  });
+  assert.deepEqual(assigned.normalizedBooking.passengerNames, ['Alex Smith']);
+  assert.equal(assigned.duplicatePassengerCount, 1);
+});

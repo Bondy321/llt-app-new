@@ -9,6 +9,7 @@ const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../i
 const { cleanPassengerString } = require('../../infrastructure/validation/passengerNormalization');
 const { normalizeManifestPassengerRows } = loadLegacyLibrary('manifestPassengers');
 const { verifyActiveAppSession } = loadLegacyLibrary('appSessionAccess');
+const { readSourceRoster, resolveSourcePassengerStatuses } = require('./sourceRoster');
 
 const OPERATIONS_ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const MANIFEST_STATUS = Object.freeze({
@@ -46,6 +47,7 @@ const deriveParentStatusFromPassengers = (passengerStatuses = []) => {
 
 /** @type {(...args: any[]) => any} */
 const normalizeManifestBooking = (bookingRef, bookingData = {}) => {
+  const sourceRoster = readSourceRoster(bookingData);
   const { rows: rawRows, duplicateCount } = normalizeManifestPassengerRows(bookingData);
   const rows = /** @type {any[]} */ (rawRows);
   const passengerNames = rows.map((row) => row.name);
@@ -76,6 +78,10 @@ const normalizeManifestBooking = (bookingRef, bookingData = {}) => {
     pickupDate: firstPickup.date || bookingData.pickupDate || 'TBA',
     pickupTime: firstPickup.time || bookingData.pickupTime || 'TBA',
     pickupLocation: firstPickup.location || bookingData.pickupLocation || bookingData.pickupAddress || 'To be confirmed',
+    ...(sourceRoster?.state === 'active' ? {
+      passengerIds: sourceRoster.passengerIds,
+      rosterRevision: sourceRoster.revision,
+    } : {}),
   };
   Object.defineProperty(normalizedBooking, '_manifestPassengerSourceIndexes', {
     value: rows.map((row) => row.sourceIndexes),
@@ -109,11 +115,51 @@ const buildDriverManifestBooking = ({ bookingRef, normalizedBooking, passengerSt
   )),
   passengerStatus,
   hasPassengerStatuses: true,
+  ...(normalizedBooking.rosterRevision ? {
+    passengerIds: normalizedBooking.passengerIds,
+    rosterRevision: normalizedBooking.rosterRevision,
+    boardingReviewRequired: normalizedBooking.boardingReviewRequired === true,
+  } : {}),
   status,
   pickupDate: cleanPassengerString(normalizedBooking.pickupDate, 40) || 'TBA',
   pickupLocation: cleanPassengerString(normalizedBooking.pickupLocation, 250) || 'To be confirmed',
   pickupTime: cleanPassengerString(normalizedBooking.pickupTime, 40) || 'TBA',
 });
+
+const buildBookingWithStatuses = (bookingRef, bookingData = {}, liveStatus = {}) => {
+  const normalizedBooking = normalizeManifestBooking(bookingRef, bookingData);
+  const totalPax = normalizedBooking.passengerNames.length;
+  const sourceRoster = readSourceRoster(bookingData);
+  const sourceStatuses = sourceRoster?.state === 'active'
+    ? resolveSourcePassengerStatuses(sourceRoster, liveStatus) : null;
+  const legacyParentStatus = MANIFEST_STATUS_VALUES.has(liveStatus.status) ? liveStatus.status : MANIFEST_STATUS.PENDING;
+  const legacyStatuses = Array.isArray(liveStatus.passengerStatus)
+    ? normalizedBooking._manifestPassengerSourceIndexes.map((indexes) => {
+      const statuses = indexes.map(index => liveStatus.passengerStatus[index])
+        .filter(status => MANIFEST_STATUS_VALUES.has(status));
+      return statuses.find(status => status !== MANIFEST_STATUS.PENDING) || statuses[0] || MANIFEST_STATUS.PENDING;
+    }) : Array(totalPax).fill(legacyParentStatus);
+  if (sourceStatuses) normalizedBooking.boardingReviewRequired = sourceStatuses.needsReview;
+  const passengerStatus = normalizePassengerStatuses(sourceStatuses ? sourceStatuses.statuses : legacyStatuses, totalPax);
+  return buildDriverManifestBooking({bookingRef, normalizedBooking, passengerStatus,
+    status:deriveParentStatusFromPassengers(passengerStatus)});
+};
+
+const assertManifestTourAvailable = (tourData) => {
+  if (tourData.isActive === false) {
+    throw Object.assign(new Error('This tour is inactive'), {code:'TOUR_INACTIVE'});
+  }
+  if (tourData.rosterSync?.state === 'updating') {
+    throw Object.assign(new Error('The passenger roster is updating; refresh shortly'), {code:'ROSTER_UPDATING'});
+  }
+};
+
+const assertRosterGenerationUnchanged = (initial, final) => {
+  if (final?.state === 'updating' || (initial?.generation || null) !== (final?.generation || null)
+    || (initial?.reportDate || null) !== (final?.reportDate || null)) {
+    throw Object.assign(new Error('The passenger roster changed while loading; refresh shortly'), {code:'ROSTER_UPDATING'});
+  }
+};
 
 /** @type {(...args: any[]) => Promise<any>} */
 const verifyTourManifestAccess = async ({ authUid, tourId, db = admin.database() }) => {
@@ -169,6 +215,7 @@ const buildTourManifestPayload = async ({ tourId, requestedTourCode = null, db =
   }
 
   const tourData = tourSnapshot.val() || {};
+  assertManifestTourAvailable(tourData);
   const tourCode = resolveTrimmedString(tourData.tourCode)
     || resolveTrimmedString(requestedTourCode)
     || canonicalTourId.replace(/_/g, ' ');
@@ -176,33 +223,9 @@ const buildTourManifestPayload = async ({ tourId, requestedTourCode = null, db =
   const rawBookings = bookingsByTourIdSnapshot.val() || {};
   const manifestData = manifestSnapshot.val() || {};
   const bookingStatuses = manifestData.bookings || {};
-  const bookings = Object.entries(rawBookings).map(([bookingRef, bookingData]) => {
-    const normalizedBooking = normalizeManifestBooking(bookingRef, bookingData || {});
-    const liveStatus = bookingStatuses[bookingRef] || {};
-    const totalPax = normalizedBooking.passengerNames.length;
-    const hasPassengerStatuses = Array.isArray(liveStatus.passengerStatus);
-    const legacyParentStatus = MANIFEST_STATUS_VALUES.has(liveStatus.status)
-      ? liveStatus.status
-      : MANIFEST_STATUS.PENDING;
-    const rawPassengerStatuses = hasPassengerStatuses
-      ? normalizedBooking._manifestPassengerSourceIndexes.map((/** @type {number[]} */ indexes) => {
-        const statuses = indexes
-          .map((/** @type {number} */ index) => liveStatus.passengerStatus[index])
-          .filter((/** @type {string} */ status) => MANIFEST_STATUS_VALUES.has(status));
-        const resolved = statuses.find((/** @type {string} */ status) => status !== MANIFEST_STATUS.PENDING);
-        return resolved || statuses[0] || MANIFEST_STATUS.PENDING;
-      })
-      : Array(totalPax).fill(legacyParentStatus);
-    const passengerStatus = normalizePassengerStatuses(rawPassengerStatuses, totalPax);
-    const status = deriveParentStatusFromPassengers(passengerStatus);
-
-    return buildDriverManifestBooking({
-      bookingRef,
-      normalizedBooking,
-      passengerStatus,
-      status,
-    });
-  });
+  const bookings = Object.entries(rawBookings)
+    .filter(([, booking]) => readSourceRoster(booking || {})?.state !== 'not_in_report')
+    .map(([bookingRef, bookingData]) => buildBookingWithStatuses(bookingRef, bookingData || {}, bookingStatuses[bookingRef] || {}));
 
   const stats = bookings.reduce((acc, booking) => {
     const paxCount = booking.passengerNames.length;
@@ -221,6 +244,11 @@ const buildTourManifestPayload = async ({ tourId, requestedTourCode = null, db =
 
     return acc;
   }, { totalBookings: bookings.length, totalPax: 0, checkedIn: 0, noShows: 0 });
+
+  // Source and manifest queries are separate reads. Fence a generation change
+  // that begins or completes between them so a partial roster is never cached.
+  const finalSync = (await db.ref(`tours/${canonicalTourId}/rosterSync`).once('value')).val();
+  assertRosterGenerationUnchanged(tourData.rosterSync, finalSync);
 
   return {
     schemaVersion: 1,

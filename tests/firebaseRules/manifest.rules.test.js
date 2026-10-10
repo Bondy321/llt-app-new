@@ -149,3 +149,55 @@ test('allows admin manifest update', async () => {
     idempotencyKey: 'manifest-test-admin',
   }));
 });
+
+test('source-managed boarding requires the exact current revision and aligned passenger IDs', async () => {
+  const ids = ['a','b'].map(char => `srcpax_v1_${char.repeat(64)}`);
+  const firstRevision = 'a'.repeat(64);
+  const secondRevision = 'b'.repeat(64);
+  const seed = async updates => testEnv.withSecurityRulesDisabled(context => context.database(dbUrl).ref().update(updates));
+  await seed({
+    [`bookings/${BOOKING_REF}/sourceRoster`]: {schemaVersion:1,state:'active',revision:firstRevision,passengerIds:ids,
+      passengerCount:2,passengerIdsJson:JSON.stringify(ids)},
+    [`tours/${TOUR_ID}/rosterSync`]: {schemaVersion:1,state:'ready',generation:firstRevision,reportDate:'2026-10-10'},
+  });
+  const current = {...manifestUpdate,rosterRevision:firstRevision,passengerIds:ids,passengerStatus:['BOARDED','PENDING'],
+    passengerIdsJson:JSON.stringify(ids),passengerStatusCodes:'BP'};
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(MANIFEST_PATH).set(manifestUpdate));
+  for (const codes of ['B','BPP','BX','']) {
+    await assertFails(dbFor(DRIVER_AUTH_UID).ref(MANIFEST_PATH).set({...current,passengerStatusCodes:codes}));
+  }
+  for (const field of ['passengerIdsJson','passengerStatusCodes','rosterRevision']) {
+    const incomplete = {...current};
+    delete incomplete[field];
+    await assertFails(dbFor(DRIVER_AUTH_UID).ref(MANIFEST_PATH).set(incomplete));
+  }
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(MANIFEST_PATH).set(current));
+  await seed({[`bookings/${BOOKING_REF}/sourceRoster/revision`]:secondRevision,
+    [`bookings/${BOOKING_REF}/sourceRoster/passengerIds`]:[ids[1],ids[0]],
+    [`bookings/${BOOKING_REF}/sourceRoster/passengerIdsJson`]:JSON.stringify([ids[1],ids[0]])});
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(MANIFEST_PATH).set(current));
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(MANIFEST_PATH).set({...current,rosterRevision:secondRevision}));
+  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(MANIFEST_PATH).set({
+    ...current,rosterRevision:secondRevision,passengerIds:[ids[1],ids[0]],passengerStatus:['PENDING','BOARDED'],
+    passengerIdsJson:JSON.stringify([ids[1],ids[0]]),passengerStatusCodes:'PB',
+  }));
+  await seed({[`tours/${TOUR_ID}/rosterSync/state`]:'updating'});
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(MANIFEST_PATH).set(current));
+  await seed({[`tours/${TOUR_ID}/rosterSync/state`]:'ready',
+    [`bookings/${BOOKING_REF}/sourceRoster/state`]:'not_in_report'});
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(MANIFEST_PATH).set(current));
+  await seed({[`bookings/${BOOKING_REF}/sourceRoster`]:null,[`tours/${TOUR_ID}/rosterSync`]:null});
+});
+
+test('archive and publisher control are server-private for every app role including browser admin', async () => {
+  await testEnv.withSecurityRulesDisabled(context => context.database(dbUrl).ref().update({
+    'sync_roster_archive/SYNTHETIC/hash':{snapshot:{passengerNames:['Synthetic archived row']}},
+    'sync_roster_control/SYNTHETIC':{owner:'opaque-owner'},
+  }));
+  for (const uid of [ADMIN_UID,DRIVER_AUTH_UID,PASSENGER_AUTH_UID]) {
+    for (const root of ['sync_roster_archive','sync_roster_control']) {
+      await assertFails(dbFor(uid).ref(root).once('value'));
+      await assertFails(dbFor(uid).ref(`${root}/SYNTHETIC`).set({forged:true}));
+    }
+  }
+});

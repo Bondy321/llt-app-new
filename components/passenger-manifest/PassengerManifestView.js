@@ -250,6 +250,14 @@ const renderHeader = () => (
     <SafeAreaView style={styles.container}>
       {renderHeader()}
 
+      {manifestLoadError && manifestData.bookings.length > 0 ? <View style={styles.emptyStateCard} accessibilityRole="alert">
+        <Text style={styles.emptyStateBody}>{manifestLoadError} Showing the last loaded manifest.</Text>
+        <TouchableOpacity style={styles.emptyStateRetryButton} onPress={() => loadManifest()}
+          accessibilityRole="button" accessibilityLabel="Retry loading the passenger manifest">
+          <Text style={styles.emptyStateRetryText}>Retry</Text>
+        </TouchableOpacity>
+      </View> : null}
+
       {loading && !refreshing ? (
         <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 20 }} />
       ) : (
@@ -345,6 +353,9 @@ const renderHeader = () => (
                   keyboardShouldPersistTaps="handled"
                   showsVerticalScrollIndicator
                 >
+                {selectedBooking.boardingReviewRequired === true ? <Text style={styles.modalSubtitle}>
+                  Boarding history needs review. Earlier statuses could not be matched safely after the roster changed. Check these passengers before confirming.
+                </Text> : null}
                 {partialMode ? (
                   <>
                     <Text style={styles.modalSectionLabel}>Select Passengers</Text>

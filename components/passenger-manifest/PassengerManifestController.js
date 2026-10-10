@@ -1,12 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import PassengerManifestView from './PassengerManifestView';
-import usePassengerManifestPresentation, {
-  priorityRank,
-  computeStats,
-  getUnresolvedBookingCount,
-} from './usePassengerManifestPresentation';
-import { Alert, Linking, Keyboard
-} from 'react-native';
+import usePassengerManifestPresentation, { priorityRank, computeStats, getUnresolvedBookingCount } from './usePassengerManifestPresentation';
+import { Alert, Linking, Keyboard } from 'react-native';
 import { getTourManifest, updateManifestBooking, MANIFEST_STATUS } from '../../services/bookingServiceRealtime';
 import offlineSyncService from '../../services/offlineSyncService';
 import * as driverManifestCache from '../../services/driverManifestCacheService';
@@ -15,9 +10,7 @@ import * as chatService from '../../services/chatService';
 import logger, { maskIdentifier } from '../../services/loggerService';
 const { normalizeSyncState } = require('../../utils/manifestSyncState');
 const { normalizeTourId } = require('../../services/tourIdentityService');
-const {
-  toTelephoneUrl,
-} = require('../../utils/bookingLeadPhone');
+const { toTelephoneUrl } = require('../../utils/bookingLeadPhone');
 export default function PassengerManifestController({ route, navigation, driverTourPack = null, isConnected = true }) {
   const { tourId, actorPrincipalId, authUid, offlineCacheOwnerId, sessionGeneration = 0 } = route.params;
   const [loading, setLoading] = useState(true);
@@ -122,8 +115,9 @@ export default function PassengerManifestController({ route, navigation, driverT
         tourId,
         error: error?.message || String(error),
       });
-      if (canApplyRequest() && manifestSourceRef.current !== 'cache') {
-        setManifestLoadError('Could not load the passenger manifest. Check your connection and retry.');
+      if (canApplyRequest() && (manifestSourceRef.current !== 'cache' || ['ROSTER_UPDATING', 'SOURCE_ROSTER_INVALID', 'TOUR_INACTIVE'].includes(error?.code))) {
+        setManifestLoadError(['ROSTER_UPDATING', 'SOURCE_ROSTER_INVALID', 'TOUR_INACTIVE'].includes(error?.code)
+          ? error.message : 'Could not load the passenger manifest. Check your connection and retry.');
       }
       return null;
     } finally {
@@ -285,6 +279,8 @@ export default function PassengerManifestController({ route, navigation, driverT
         : selectedBooking.passengerNames.map(() => MANIFEST_STATUS.PENDING);
 
       const result = await updateManifestBooking(tourId, selectedBooking.id, statusesToPersist, {
+        passengerIds: selectedBooking.passengerIds,
+        rosterRevision: selectedBooking.rosterRevision,
         online: isConnected,
         actorPrincipalId,
         authUid,
@@ -339,6 +335,8 @@ export default function PassengerManifestController({ route, navigation, driverT
           driverId: offlineCacheOwnerId,
           bookingRef: selectedBooking.id,
           passengerStatuses: appliedPassengerStatuses,
+          passengerIds: selectedBooking.passengerIds,
+          rosterRevision: selectedBooking.rosterRevision,
         })
         : null;
       if (cacheScopeEnabled && !cachePatch.success) {
@@ -407,9 +405,14 @@ export default function PassengerManifestController({ route, navigation, driverT
       });
       showStatusFeedback({
         variant: 'error',
-        message: 'Save failed. Retry now.',
-        ctaLabel: 'Retry now',
-        onCtaPress: () => submitUpdate(passengerStatuses),
+        message: error?.code === 'ROSTER_REFRESH_REQUIRED' ? error.message : 'Save failed. Retry now.',
+        ctaLabel: error?.code === 'ROSTER_REFRESH_REQUIRED' ? 'Refresh manifest' : 'Retry now',
+        onCtaPress: error?.code === 'ROSTER_REFRESH_REQUIRED' ? () => {
+          setModalVisible(false);
+          setSelectedBooking(null);
+          setPartialMode(false);
+          return loadManifest();
+        } : () => submitUpdate(passengerStatuses),
       });
     } finally {
       if (mountedRef.current) {

@@ -10,7 +10,7 @@ This path is for rare operations/admin use, including creating a test passenger 
 
 - Existing active `tourId` selected from web admin.
 - Unique booking reference.
-- Login email address.
+- Optional login email address. A valid email enables passenger login; a blank email creates an operational roster entry only.
 - Pickup date, time, and location.
 - One or more passenger rows, each with full name, seat number, and phone number.
 
@@ -22,7 +22,7 @@ The function rejects the write unless all of these are true:
 - Tour exists, is active, and `tourCode` still maps to the selected `tourId`.
 - Pickup date is a strict date and falls within the tour start/end dates.
 - Booking reference is Firebase-key safe, is not a driver code, and does not already exist under `bookings`, `booking_identities`, or the tour manifest.
-- Email is normalized and non-empty.
+- A supplied email is normalized and valid. Blank email is allowed for a roster-only booking.
 - Passenger names, phones, and seat numbers are present and valid.
 - Seats are unique inside the submitted booking and not already assigned on the selected tour.
 
@@ -35,17 +35,19 @@ After validation, the function writes one atomic multi-path update:
   - `passengerNames`, `passengers`, `passengerDetails`
   - `pickupPoints`, `pickupDate`, `pickupTime`, `pickupLocation`
   - `seatNumbers`, `seatLabels`
-- `booking_identities/{bookingRef}` with normalized login email fields.
+- `booking_identities/{bookingRef}` with normalized login email fields only when a valid email is supplied.
+- `bookings/{bookingRef}/loginEligible` set to `true` when that identity is created, or `false` for a roster-only entry.
 - `tour_manifests/{tourId}/bookings/{bookingRef}` initialized to `PENDING` for all passengers.
 - `tours/{tourId}/pickupPoints` merged with the submitted pickup point.
 - `pickupPoints/{tourId}` merged with the submitted pickup point.
-- `tours/{tourId}/bookedPassengerCount` and `tours/{tourId}/manifestPassengerCount` recalculated from existing tour bookings plus the new booking.
+- Capacity uses the maximum of valid imported counters, active source booking rows, the runtime counter, and active source count plus existing manual roster rows. Manual rows are counted once; `sold`, `bookedPassengerCount`, `manifestPassengerCount`, and runtime-owned `currentParticipants` are not rewritten by this endpoint.
 
-The function does not write `users/{uid}` or `tours/{tourId}/participants/{uid}`. The passenger app writes those when the passenger signs in and joins the tour through the normal verified-login path.
+The function does not write `users/{uid}` or `tours/{tourId}/participants/{uid}`. The verified server login/join flow owns those identity and membership records. A roster-only booking has no `booking_identities/{bookingRef}` record and cannot sign in; the server does not invent an email or credentials.
 
 ## Concurrency
 
 Manual creation uses short-lived server-side locks under `manual_booking_creation_locks` for the booking reference and selected tour. This serializes manual additions enough to prevent duplicate booking references and seat collisions through this endpoint.
+It also acquires the same five-minute `sync_roster_control/{tourId}` lease used by the importer before reading canonical capacity and seats, and renews it before the atomic write. Owner-only release preserves source publication cursors. Failed imports still marked updating reject creation even after their lease expires. Superseded source rows neither occupy capacity nor reserve their former seats.
 
 ## Release order
 

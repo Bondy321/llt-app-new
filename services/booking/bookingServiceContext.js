@@ -386,8 +386,11 @@ const mapTourManifestFunctionReason = (reason) => {
     METHOD_NOT_ALLOWED: 'Manifest service is currently unavailable. Please update the app and try again shortly.',
     NOT_AUTHORIZED: 'You do not have access to this passenger manifest.',
     TOUR_NOT_FOUND: 'This tour manifest is no longer available.',
+    TOUR_INACTIVE: 'This tour is inactive or has been cancelled. Contact the office before recording boarding statuses.',
     TRY_AGAIN_LATER: 'Too many manifest refreshes. Please wait a moment and try again.',
     INTERNAL_ERROR: 'Manifest service is temporarily unavailable. Please try again shortly.',
+    ROSTER_UPDATING: 'The passenger roster is being updated. Retry shortly for the latest roster.',
+    SOURCE_ROSTER_INVALID: 'The current passenger roster could not be verified. Retry or contact operations if this continues.',
   };
 
   return reasonToMessage[reason] || 'Manifest service is temporarily unavailable. Please try again shortly.';
@@ -442,7 +445,9 @@ const fetchTourManifestFromFunction = async (tourCodeOriginal) => {
       if (response.status === 404 && endpoint !== endpointCandidates[endpointCandidates.length - 1]) {
         continue;
       }
-      throw new Error(mapTourManifestFunctionReason(payload.reason));
+      const error = new Error(mapTourManifestFunctionReason(payload.reason));
+      error.code = payload.reason;
+      throw error;
     }
 
       return {
