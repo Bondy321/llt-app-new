@@ -101,7 +101,7 @@ const buildValidManualPassengerPlan = () => {
   });
 };
 
-test('normalizeManualPassengerPayload enforces the fields needed for passenger app login', () => {
+test('normalizeManualPassengerPayload requires valid nonblank email but permits roster-only entries', () => {
   assert.throws(
     () => __testables.normalizeManualPassengerPayload({
       tourId: '5112D_8',
@@ -120,6 +120,27 @@ test('normalizeManualPassengerPayload enforces the fields needed for passenger a
     }),
     /Booking reference/,
   );
+
+  const rosterOnly = __testables.normalizeManualPassengerPayload({
+    tourId: '5112D_8',
+    bookingRef: 'ROSTER-1',
+    email: '  ',
+    pickupDate: '2026-06-15',
+    pickupTime: '08:30',
+    pickupLocation: 'Buchanan Bus Station',
+    passengers: [{ name: 'Roster Passenger', seatNumber: 19, phone: '+44 7700 900000' }],
+  }, {
+    tourCode: '5112D 8', startDate: '15/06/2026', endDate: '15/06/2026', isActive: true, maxParticipants: 53,
+  });
+  assert.equal(rosterOnly.email, '');
+  assert.equal(rosterOnly.loginEligible, false);
+  assert.throws(() => __testables.normalizeManualPassengerPayload({
+    tourId: '5112D_8', bookingRef: 'ROSTER-2', email: 'not-an-email', pickupDate: '2026-06-15',
+    pickupTime: '08:30', pickupLocation: 'Buchanan Bus Station',
+    passengers: [{ name: 'Roster Passenger', seatNumber: 19, phone: '+44 7700 900000' }],
+  }, {
+    tourCode: '5112D 8', startDate: '15/06/2026', endDate: '15/06/2026', isActive: true, maxParticipants: 53,
+  }), (error) => error?.code === 'INVALID_EMAIL');
 });
 
 test('buildManualPassengerBookingUpdates creates the same effective booking and identity shape as uploads', () => {
@@ -176,6 +197,7 @@ test('buildManualPassengerBookingUpdates creates the same effective booking and 
     pickupTime: '08:30',
     pickupLocation: 'Buchanan Bus Station',
     source: 'web-admin-manual',
+    loginEligible: true,
     createdAt: '2026-06-15T09:00:00.000Z',
     createdBy: 'admin-uid-1',
   });
@@ -193,13 +215,34 @@ test('buildManualPassengerBookingUpdates creates the same effective booking and 
     lastUpdated: '2026-06-15T09:00:00.000Z',
     idempotencyKey: 'manual-create:test',
   });
-  assert.equal(plan.updates['tours/5112D_8/bookedPassengerCount'], 3);
-  assert.equal(plan.updates['tours/5112D_8/manifestPassengerCount'], 3);
-  assert.equal(plan.updates['tours/5112D_8/currentParticipants'], 3);
+  assert.equal('tours/5112D_8/bookedPassengerCount' in plan.updates, false);
+  assert.equal('tours/5112D_8/manifestPassengerCount' in plan.updates, false);
+  assert.equal('tours/5112D_8/currentParticipants' in plan.updates, false);
   assert.deepEqual(plan.updates['tours/5112D_8/pickupPoints'], [
     { date: '15/06/2026', time: '07:30', location: 'Existing' },
     { date: '15/06/2026', time: '08:30', location: 'Buchanan Bus Station' },
   ]);
+});
+
+test('roster-only manual booking writes no login identity and retains capacity and manifest updates', () => {
+  const normalized = __testables.normalizeManualPassengerPayload({
+    tourId: '5112D_8', bookingRef: 'ROSTER1', email: '', pickupDate: '2026-06-15', pickupTime: '08:30',
+    pickupLocation: 'Buchanan Bus Station',
+    passengers: [{ name: 'Roster Passenger', seatNumber: 19, phone: '+44 7700 900000' }],
+  }, {
+    tourCode: '5112D 8', startDate: '15/06/2026', endDate: '15/06/2026', isActive: true, maxParticipants: 53,
+  });
+  const plan = __testables.buildManualPassengerBookingUpdates({
+    normalized, actorUid: 'admin-uid-1', nowIso: '2026-06-15T09:00:00.000Z', tourData: { maxParticipants: 53 },
+  });
+
+  assert.equal(plan.loginEligible, false);
+  assert.equal(plan.updates['bookings/ROSTER1'].loginEligible, false);
+  assert.equal('booking_identities/ROSTER1' in plan.updates, false);
+  assert.equal(plan.updates['tour_manifests/5112D_8/bookings/ROSTER1'].status, 'PENDING');
+  assert.equal('tours/5112D_8/currentParticipants' in plan.updates, false);
+  assert.equal('tours/5112D_8/bookedPassengerCount' in plan.updates, false);
+  assert.equal('tours/5112D_8/manifestPassengerCount' in plan.updates, false);
 });
 
 test('manual passenger write plan appears in app manifest payload as a normal pending booking', async () => {
@@ -300,4 +343,70 @@ test('manual passenger write plan rejects a booking that exceeds tour capacity',
     }),
     (error) => error?.code === 'TOUR_CAPACITY_EXCEEDED',
   );
+});
+
+test('manual passenger capacity guard uses imported passenger totals even when runtime participants are zero', () => {
+  const normalized = __testables.normalizeManualPassengerPayload({
+    tourId: 'SOLD_1', bookingRef: 'NEWBOOKING', email: '', pickupDate: '2026-06-15', pickupTime: '08:30',
+    pickupLocation: 'Buchanan Bus Station',
+    passengers: [{ name: 'New Guest', seatNumber: 1, phone: '+44 7700 900000' }],
+  }, {
+    tourCode: 'SOLD 1', startDate: '15/06/2026', endDate: '15/06/2026', isActive: true, maxParticipants: 53,
+  });
+
+  assert.throws(() => __testables.buildManualPassengerBookingUpdates({
+    normalized,
+    actorUid: 'admin-uid-1',
+    tourData: { maxParticipants: 53, sold: 53, currentParticipants: 0 },
+    existingTourBookings: {},
+  }), (error) => error?.code === 'TOUR_CAPACITY_EXCEEDED');
+});
+
+test('manual capacity adds the explicit manual overlay once and does not rewrite source totals', () => {
+  const normalized = __testables.normalizeManualPassengerPayload({
+    tourId: 'SOLD_1', bookingRef: 'NEWBOOKING', email: '', pickupDate: '2026-06-15', pickupTime: '08:30',
+    pickupLocation: 'Buchanan Bus Station',
+    passengers: [{ name: 'New Guest', seatNumber: 31, phone: '+44 7700 900000' }],
+  }, {
+    tourCode: 'SOLD 1', startDate: '15/06/2026', endDate: '15/06/2026', isActive: true, maxParticipants: 53,
+  });
+  const existingTourBookings = Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`SRC${index}`, {
+    passengerNames: [`Passenger ${index}`],
+  }]));
+  existingTourBookings.MANUAL = { source: 'web-admin-manual', passengerNames: ['Manual Overlay'] };
+  const plan = __testables.buildManualPassengerBookingUpdates({
+    normalized,
+    actorUid: 'admin-uid-1',
+    tourData: { maxParticipants: 53, sold: 32, bookedPassengerCount: 30, manifestPassengerCount: 30, currentParticipants: 0 },
+    existingTourBookings,
+  });
+
+  assert.equal(plan.totalPassengerCount, 34);
+  assert.equal('tours/SOLD_1/currentParticipants' in plan.updates, false);
+  assert.equal('tours/SOLD_1/bookedPassengerCount' in plan.updates, false);
+  assert.equal('tours/SOLD_1/manifestPassengerCount' in plan.updates, false);
+});
+
+test('source bookings marked not_in_report do not consume active source capacity', () => {
+  const normalized = __testables.normalizeManualPassengerPayload({
+    tourId: 'SOLD_1', bookingRef: 'NEWBOOKING', email: '', pickupDate: '2026-06-15', pickupTime: '08:30',
+    pickupLocation: 'Buchanan Bus Station',
+    passengers: [{ name: 'New Guest', seatNumber: 1, phone: '+44 7700 900000' }],
+  }, {
+    tourCode: 'SOLD 1', startDate: '15/06/2026', endDate: '15/06/2026', isActive: true, maxParticipants: 53,
+  });
+  const plan = __testables.buildManualPassengerBookingUpdates({
+    normalized,
+    actorUid: 'admin-uid-1',
+    tourData: { maxParticipants: 53, sold: 0, bookedPassengerCount: 0, manifestPassengerCount: 0, currentParticipants: 0 },
+    existingTourBookings: {
+      RETAINED: {
+        sourceRoster: { state: 'not_in_report' },
+        passengerNames: Array.from({ length: 52 }, (_, index) => `Legacy ${index}`),
+      },
+    },
+  });
+
+  assert.equal(plan.totalPassengerCount, 1);
+  assert.equal('tours/SOLD_1/currentParticipants' in plan.updates, false);
 });

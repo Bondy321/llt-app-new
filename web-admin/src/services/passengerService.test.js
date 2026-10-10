@@ -29,13 +29,13 @@ describe('passengerService manual booking validation', () => {
     getIdTokenMock.mockResolvedValue('token-123');
   });
 
-  it('requires all app-critical booking, identity, pickup, passenger, and seat fields', async () => {
+  it('requires all operational booking, pickup, passenger, and seat fields while allowing blank email', async () => {
     const { validateManualPassengerDraft } = await import('./passengerService.js');
 
     const result = validateManualPassengerDraft({
       tourId: '5112D_8',
       bookingRef: '',
-      email: 'not-an-email',
+      email: '',
       pickupDate: '',
       pickupTime: '',
       pickupLocation: '',
@@ -44,13 +44,26 @@ describe('passengerService manual booking validation', () => {
 
     expect(result.valid).toBe(false);
     expect(result.errors.bookingRef).toBeTruthy();
-    expect(result.errors.email).toBeTruthy();
+    expect(result.errors.email).toBeFalsy();
     expect(result.errors.pickupDate).toBeTruthy();
     expect(result.errors.pickupTime).toBeTruthy();
     expect(result.errors.pickupLocation).toBeTruthy();
     expect(result.errors.passengerRows[0].name).toBeTruthy();
     expect(result.errors.passengerRows[0].seatNumber).toBeTruthy();
     expect(result.errors.passengerRows[0].phone).toBeTruthy();
+  });
+
+  it('rejects a nonblank malformed email while accepting an empty login email', async () => {
+    const { validateManualPassengerDraft } = await import('./passengerService.js');
+    const draft = {
+      tourId: '5112D_8', bookingRef: 'ROSTER1', email: '', pickupDate: '2026-06-15',
+      pickupTime: '08:30', pickupLocation: 'Buchanan Bus Station',
+      passengers: [{ name: 'Roster Passenger', seatNumber: 19, phone: '+44 7700 900000' }],
+    };
+    const rosterOnly = validateManualPassengerDraft(draft, tours);
+    expect(rosterOnly.valid).toBe(true);
+    expect(rosterOnly.normalized.email).toBe('');
+    expect(validateManualPassengerDraft({ ...draft, email: 'invalid' }, tours).errors.email).toBeTruthy();
   });
 
   it('normalizes a complete booking draft for the Cloud Function contract', async () => {

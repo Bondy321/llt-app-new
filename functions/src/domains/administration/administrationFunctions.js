@@ -211,6 +211,7 @@ const createManualPassengerBooking = onRequestWithResult(
         tourId: normalized.tourId,
         tourCode: normalized.tourCode,
         email: normalized.email,
+        loginEligible: normalized.loginEligible,
         passengerCount: normalized.passengers.length,
       });
     } catch (error) {

@@ -121,3 +121,26 @@ test('getTourManifest fails closed when the verified endpoint is not configured'
     else process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = projectId;
   }
 });
+
+test('getTourManifest rejects fenced source rosters with actionable reasons instead of an empty complete manifest', async () => {
+  const originalFetch = global.fetch;
+  process.env.EXPO_PUBLIC_GET_TOUR_MANIFEST_URL = 'https://example.test/getTourManifest';
+  try {
+    for (const [reason, message, status] of [
+      ['ROSTER_UPDATING', /roster is being updated.*Retry shortly/, 503],
+      ['SOURCE_ROSTER_INVALID', /roster could not be verified.*contact operations/, 503],
+      ['TOUR_INACTIVE', /tour is inactive or has been cancelled.*Contact the office/, 403],
+    ]) {
+      global.fetch = async () => ({ ok: false, status, json: async () => ({ success: false, reason }) });
+      const service = loadService();
+      await assert.rejects(service.getTourManifest('5112D_8'), error => {
+        assert.equal(error.code, reason);
+        assert.match(error.message, message);
+        return true;
+      });
+    }
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_GET_TOUR_MANIFEST_URL;
+  }
+});

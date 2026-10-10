@@ -60,7 +60,7 @@ export const validateManualPassengerDraft = (draft, tours = {}) => {
     errors.bookingRef = 'Use letters, numbers, hyphens, or underscores (not a driver code).';
   }
 
-  if (!email || email.length > 254 || !EMAIL_PATTERN.test(email)) {
+  if (email && (email.length > 254 || !EMAIL_PATTERN.test(email))) {
     errors.email = 'Enter a valid email address.';
   }
 

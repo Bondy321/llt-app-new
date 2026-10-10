@@ -68,7 +68,7 @@ const validateManualBookingIdentity = ({ tourId, tourCode, bookingRef, tourData 
 
 /** @param {any} input */
 const validateManualPickupFields = ({ email, pickupDate, pickupTime, pickupLocation, rawPassengers }) => {
-  if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) {
+  if (email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email))) {
     throw createManualPassengerError('INVALID_EMAIL', 'Enter a valid passenger email address.');
   }
   if (!pickupDate) throw createManualPassengerError('INVALID_PICKUP_DATE', 'Pickup date must be a valid date.');
@@ -164,6 +164,7 @@ const normalizeManualPassengerPayload = (payload = {}, tourData = {}) => {
     tourCode,
     bookingRef,
     email,
+    loginEligible: Boolean(email),
     pickupDate: pickupDate.uk,
     pickupDateISO: pickupDate.iso,
     pickupTime,
@@ -196,6 +197,36 @@ const getBookingSeatNumbers = (booking = {}) => {
     });
   }
   return seats;
+};
+
+/** @param {unknown} value */
+const normalizeNonnegativePassengerCount = (value) => {
+  if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d+$/u.test(value))) return null;
+  const count = Number(value);
+  return Number.isSafeInteger(count) && count >= 0 ? count : null;
+};
+
+/** @param {any} tourData @param {Record<string, any>} existingTourBookings */
+const resolveManualBookingCapacityCount = (tourData = {}, existingTourBookings = {}) => {
+  let sourceBookingCount = 0;
+  let manualOverlayCount = 0;
+  Object.values(existingTourBookings).forEach((booking) => {
+    const count = getBookingPassengerCount(booking);
+    if (booking?.source === 'web-admin-manual') {
+      manualOverlayCount += count;
+    } else if (booking?.sourceRoster?.state !== 'not_in_report') {
+      sourceBookingCount += count;
+    }
+  });
+
+  const importedCounts = [tourData.sold, tourData.bookedPassengerCount, tourData.manifestPassengerCount]
+    .map(normalizeNonnegativePassengerCount)
+    .filter((count) => count !== null);
+  const sourceBaseCount = Math.max(sourceBookingCount, ...importedCounts);
+  const sourceAndManualCount = sourceBaseCount + manualOverlayCount;
+  const runtimeCount = normalizeNonnegativePassengerCount(tourData.currentParticipants);
+  const occupiedCount = Math.max(sourceAndManualCount, runtimeCount ?? 0);
+  return { sourceBookingCount, manualOverlayCount, occupiedCount };
 };
 
 /** @type {(...args: any[]) => any} */
@@ -251,9 +282,8 @@ const buildManualPassengerBookingUpdates = ({
   const passengerNames = normalized.passengers.map(/** @param {any} passenger */ (passenger) => passenger.name);
   const seatNumbers = normalized.passengers.map(/** @param {any} passenger */ (passenger) => passenger.seatNumber);
   const seatLabels = normalized.passengers.map(/** @param {any} passenger */ (passenger) => passenger.seatLabel);
-  const existingPassengerCount = Object.values(existingTourBookings || {})
-    .reduce((total, booking) => total + getBookingPassengerCount(booking), 0);
-  const totalPassengerCount = existingPassengerCount + passengerNames.length;
+  const { occupiedCount } = resolveManualBookingCapacityCount(tourData, existingTourBookings);
+  const totalPassengerCount = occupiedCount + passengerNames.length;
   const maxParticipants = Number.isInteger(tourData?.maxParticipants) && tourData.maxParticipants > 0
     ? tourData.maxParticipants
     : 53;
@@ -278,17 +308,18 @@ const buildManualPassengerBookingUpdates = ({
     pickupTime: normalized.pickupTime,
     pickupLocation: normalized.pickupLocation,
     source: 'web-admin-manual',
+    loginEligible: normalized.loginEligible === true,
     createdAt: nowIso,
     createdBy: actorUid,
   };
-  const identity = {
+  const identity = normalized.loginEligible ? {
     bookingRef: normalized.bookingRef,
     normalizedBookingRef: normalized.bookingRef,
     tourId: normalized.tourId,
     tourCode: normalized.tourCode,
     email: normalized.email,
     normalizedEmail: normalized.email,
-  };
+  } : null;
   const manifest = {
     status: MANIFEST_STATUS.PENDING,
     passengerStatus: passengerNames.map(() => MANIFEST_STATUS.PENDING),
@@ -300,16 +331,14 @@ const buildManualPassengerBookingUpdates = ({
     booking,
     identity,
     manifest,
+    loginEligible: normalized.loginEligible === true,
     totalPassengerCount,
     updates: {
       [`bookings/${normalized.bookingRef}`]: booking,
-      [`booking_identities/${normalized.bookingRef}`]: identity,
+      ...(identity ? { [`booking_identities/${normalized.bookingRef}`]: identity } : {}),
       [`tour_manifests/${normalized.tourId}/bookings/${normalized.bookingRef}`]: manifest,
       [`tours/${normalized.tourId}/pickupPoints`]: mergePickupPoint(tourData.pickupPoints, pickupPoint),
       [`pickupPoints/${normalized.tourId}`]: mergePickupPoint(existingTopLevelPickupPoints, pickupPoint),
-      [`tours/${normalized.tourId}/currentParticipants`]: totalPassengerCount,
-      [`tours/${normalized.tourId}/bookedPassengerCount`]: totalPassengerCount,
-      [`tours/${normalized.tourId}/manifestPassengerCount`]: totalPassengerCount,
     },
   };
 

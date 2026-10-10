@@ -14,6 +14,7 @@ const admin = require('../functions/node_modules/firebase-admin');
 const express = require('../functions/node_modules/express');
 const { verifyPassengerLogin } = require('../functions/src/domains/passenger-auth/passengerLoginFunction');
 const { verifyDriverLogin } = require('../functions/src/domains/driver-auth/driverLoginFunction');
+const { getTourManifest } = require('../functions/src/domains/manifests/manifestFunction');
 const { endAppSession } = require('../functions/src/domains/app-sessions/sessionFunctions');
 const { updateNotificationDeviceRegistration, updateNotificationDevice } = require('../functions/src/domains/notifications/notificationDeviceFunctions');
 const { verifyCurrentTourPhotoAccess } = require('../functions/src/domains/media/mediaAccess');
@@ -25,6 +26,7 @@ test.before(async () => {
   app.use(express.json());
   app.post('/passenger', verifyPassengerLogin);
   app.post('/driver', verifyDriverLogin);
+  app.post('/manifest', getTourManifest);
   app.post('/end', endAppSession);
   app.post('/notifications', updateNotificationDeviceRegistration);
   app.use((error, _req, res, _next) => res.status(500).json({ testHandlerError: error.message }));
@@ -75,6 +77,57 @@ const passengerBody = (ref) => ({ bookingRef: ref, email: 'passenger@example.inv
 const seedPolicy = (enforceSingleDevice) => db.ref('driver_login_policy/v1').set({
   schemaVersion: 1, enforceSingleDevice, generation: 1, revision: 1,
   updatedAtMs: Date.now(), transitionPhase: 'stable',
+});
+
+test('retained credentials do not admit roster-only or superseded source bookings', async () => {
+  await db.ref('tours/LOGIN_TOUR').set({isActive:true,name:'Synthetic tour'});
+  for (const [ref,patch] of [['ROSTER_ONLY',{loginEligible:false}],
+    ['ROSTER_OLD',{sourceRoster:{schemaVersion:1,state:'not_in_report',revision:'a'.repeat(64)}}]]) {
+    await seedBooking(ref);
+    await db.ref(`bookings/${ref}`).update(patch);
+    const identity=await newIdentity();
+    const result=await login('passenger',identity,passengerBody(ref));
+    assert.equal(result.status,401);
+    assert.equal(result.body.reason,'INVALID_CREDENTIALS');
+    assert.equal((await db.ref(`app_sessions/${identity.uid}`).once('value')).exists(),false);
+    assert.equal((await db.ref(`bookings/${ref}`).once('value')).exists(),true);
+  }
+});
+
+test('full roster HTTP endpoint is driver-only and keeps roster-only passengers available to the assigned driver', async () => {
+  const ids=['a','b'].map(char=>`srcpax_v1_${char.repeat(64)}`);
+  const rev='c'.repeat(64);
+  await db.ref().update({
+    'tours/LOGIN_TOUR':{isActive:true,name:'Synthetic tour',rosterSync:{schemaVersion:1,state:'ready',generation:rev,reportDate:'2026-10-10'}},
+    'bookings/HTTP_ROSTER':{tourId:'LOGIN_TOUR',loginEligible:false,
+      passengerDetails:[{name:'Synthetic A'},{name:'Synthetic B'}],
+      sourceRoster:{schemaVersion:1,state:'active',revision:rev,passengerIds:ids,
+        passengerCount:2,passengerIdsJson:JSON.stringify(ids)}},
+    'tour_manifests/LOGIN_TOUR/bookings/HTTP_ROSTER':{
+      rosterRevision:rev,passengerIdsJson:JSON.stringify(ids),passengerStatusCodes:'BP'},
+  });
+  await seedBooking('HTTP_PASSENGER');
+  const passenger=await newIdentity();
+  assert.equal((await login('passenger',passenger,passengerBody('HTTP_PASSENGER'))).status,200);
+  const denied=await login('manifest',passenger,{tourId:'LOGIN_TOUR'});
+  assert.equal(denied.status,403);
+  assert.equal(denied.body.reason,'NOT_AUTHORIZED');
+  assert.equal(Object.hasOwn(denied.body,'bookings'),false);
+  const driver=await newIdentity();
+  await db.ref().update({
+    'drivers/D-HTTP-ROSTER':{name:'Synthetic Driver',currentTourId:'LOGIN_TOUR',authUid:driver.uid},
+    'tour_manifests/LOGIN_TOUR/assigned_drivers/D-HTTP-ROSTER':true,
+  });
+  assert.equal((await login('driver',driver,{driverId:'D-HTTP-ROSTER'})).status,200);
+  const allowed=await login('manifest',driver,{tourId:'LOGIN_TOUR'});
+  assert.equal(allowed.status,200);
+  const booking=allowed.body.bookings.find(row=>row.id==='HTTP_ROSTER');
+  assert.deepEqual(booking.passengerNames,['Synthetic A','Synthetic B']);
+  assert.deepEqual(booking.passengerStatus,['BOARDED','PENDING']);
+  assert.equal(booking.rosterRevision,rev);
+  assert.equal(Object.hasOwn(booking,'sourceRoster'),false);
+  assert.equal(Object.hasOwn(booking,'loginEligible'),false);
+  await db.ref('tours/LOGIN_TOUR/rosterSync').remove();
 });
 test.beforeEach(() => seedPolicy(false));
 

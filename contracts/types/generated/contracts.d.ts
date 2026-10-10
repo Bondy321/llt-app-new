@@ -526,6 +526,11 @@ export interface StandardHttpErrorResponse {
   correlationId?: string;
 }
 
+export interface ManifestRosterIdentity {
+  rosterRevision: string;
+  passengerIds: unknown[];
+}
+
 export interface ContractValidationResult {
   valid: boolean;
   errors: string[];

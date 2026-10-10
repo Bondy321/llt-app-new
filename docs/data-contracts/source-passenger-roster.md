@@ -1,0 +1,19 @@
+# Source passenger roster
+
+The daily importer uses the full, departure-scoped TourPax roster. Pickup data enriches those passengers; it does not define membership. Reserved seats without a booking reference are excluded. A missing email is valid operational data: the passenger remains visible to the driver, with `loginEligible: false` and no invented login identity.
+
+`bookings/{ref}/sourceRoster` is server-owned schema version 1. Its state is `active` or `not_in_report`; its SHA-256 revision, unique opaque `passengerIds`, count and compact `passengerIdsJson` describe the canonical passenger details. Explicit `web-admin-manual` rows remain separate operator additions. An incoming source reference that overlaps a manual reference requires resolution before publication.
+
+Source absence excludes an old booking from current manifests and login without deleting the booking or runtime history. Before replacing source fields, the importer writes an immutable private predecessor under `sync_roster_archive/{ref}/{hash}`, including the original boarding snapshot. `sync_roster_control/{tourId}` serializes publishers; `tours/{tourId}/rosterSync` fences incomplete generations. Both private roots deny all client access, including browser admins.
+
+The manifest endpoint requires an active assigned driver session. It rejects inactive tours and returns retryable `ROSTER_UPDATING` or `SOURCE_ROSTER_INVALID` instead of a partial roster. A second generation read prevents an import racing the manifest query. Passenger projections expose only the passenger's own booking, with a 250-person bound shared by source identities and offline caching.
+
+Boarding writes bind `rosterRevision`, the exact `passengerIdsJson` and one `P/B/N/R` status code per passenger to the current source roster. Rules reject stale generations, changed ordering, absent bookings and writes during publication. Optional compatibility arrays do not override the primitive encoded status sequence. Statuses follow passenger IDs through safe reorder and seat changes. Ambiguous identity changes require review; no positive boarding state is guessed. ID-less legacy statuses also require review because raw source positions cannot prove the order of the former deduplicated manifest. Their original values remain archived.
+
+The mobile cache retains up to 250 passengers per booking and a bounded 4 MiB serialized payload. Invalid or oversized responses preserve the last good cache. Offline actions carry roster identity; rejected stale actions become visible terminal failures requiring refresh, rather than silently replaying positional changes against a new passenger list.
+
+TourPerfExtract provides explicit source cancellation. A cancellation disables the tour while preserving bookings, boarding and runtime data. Only an importer-owned disable may be automatically reactivated; an explicit admin activation choice clears that ownership. Source status, roster publication and itinerary readiness metadata cannot be copied or changed through ordinary tour editing.
+
+Recovery: investigate the failed tour and attested source batch, then retry the same publication after correcting its cause. Do not manually mark an incomplete tour ready. To recover archived facts, an authorized operator must inspect the exact private predecessor through Admin SDK access, compare it with the current source and runtime state, and perform a scoped reviewed repair. Never restore an entire booking or manifest blindly over newer runtime edits. Archives are retained; ordinary clients cannot restore or delete them.
+
+This contract is enforced by source publisher SDK tests, actual RTDB rules tests, actual login/manifest HTTP tests, shared generated identity contracts and mobile replay/cache tests. Native release acceptance remains separate from backend deployment.

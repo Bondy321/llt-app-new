@@ -69,6 +69,13 @@ const verifyActiveAppSession = async ({
       || user.principalType !== 'passenger') {
       return denied('PASSENGER_PROFILE_MISMATCH');
     }
+    if (typeof user.bookingRef === 'string' && isValidFirebaseKey(user.bookingRef)) {
+      const bookingSnapshot = await db.ref(`bookings/${user.bookingRef}`).once('value');
+      const booking = bookingSnapshot.val();
+      if (booking?.loginEligible === false || booking?.sourceRoster?.state === 'not_in_report') {
+        return denied('BOOKING_NOT_LOGIN_ELIGIBLE');
+      }
+    }
   } else {
     const [userSnapshot, driverSnapshot, policySnapshot] = await Promise.all([
       db.ref(`users/${authUid}`).once('value'),

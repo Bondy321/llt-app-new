@@ -119,7 +119,8 @@
     { "name": "private account-deletion rollout", "contract": "AccountDeletionRolloutRecord", "clientProjection": false, "value": { "schemaVersion": 1, "phase": "compatibility", "revision": 1, "updatedAtMs": 1000 } },
     { "name": "private explicit live-state rollout", "contract": "LiveStateRolloutRecord", "clientProjection": false, "value": { "schemaVersion": 1, "phase": "compatibility", "projectionRevision": 1, "updatedAtMs": 1000 } },
     { "name": "queued tour-pack action", "contract": "DriverTourPackActionResult", "value": { "success": true, "queued": true } },
-    { "name": "safe HTTP error", "contract": "StandardHttpErrorResponse", "value": { "success": false, "reason": "INVALID_INPUT", "status": 400, "retryable": false } }
+    { "name": "safe HTTP error", "contract": "StandardHttpErrorResponse", "value": { "success": false, "reason": "INVALID_INPUT", "status": 400, "retryable": false } },
+    {"name": "source roster identity preserves distinct occurrences", "contract": "ManifestRosterIdentity", "value": {"rosterRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passengerIds": ["srcpax_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "srcpax_v1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]}}
   ],
   "invalid": [
     { "name": "booking reference in public identity", "contract": "PassengerPrincipalId", "value": "pax_v1:T123456:person@example.com" },
@@ -238,6 +239,9 @@
         "type": "text",
         "idempotencyKey": "msg_001"
       }
-    }
+    },
+    {"name": "duplicate source passenger identity", "contract": "ManifestRosterIdentity", "value": {"rosterRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passengerIds": ["srcpax_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "srcpax_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}},
+    {"name": "invalid source passenger identity", "contract": "ManifestRosterIdentity", "value": {"rosterRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passengerIds": ["a name"]}},
+    {"name": "invalid roster revision", "contract": "ManifestRosterIdentity", "value": {"rosterRevision": "invalid", "passengerIds": ["srcpax_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "srcpax_v1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]}}
   ]
 }

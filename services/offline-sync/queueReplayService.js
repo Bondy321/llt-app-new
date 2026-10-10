@@ -285,7 +285,7 @@ const replayQueue = async ({ db, services = {}, scope = runtimeState.activeSessi
           error: result?.error || 'Replay failed',
         });
         const attempts = (action.attempts || 0) + 1;
-        const shouldFail = attempts >= MAX_ATTEMPTS;
+        const shouldFail = result?.retryable === false || attempts >= MAX_ATTEMPTS;
         const delayMinutes = Math.min(2 ** attempts, 60);
         logger.warn('OfflineSync', 'Queue replay action failed', {
           action: summarizeQueueActionForLog(action),
@@ -298,7 +298,7 @@ const replayQueue = async ({ db, services = {}, scope = runtimeState.activeSessi
           attempts,
           status: shouldFail ? 'failed' : (action.type === 'PHOTO_UPLOAD' ? 'retrying' : 'queued'),
           lastError: result?.error || 'Replay failed',
-          nextAttemptAt: new Date(Date.now() + delayMinutes * 60 * 1000).toISOString(),
+          nextAttemptAt: shouldFail ? null : new Date(Date.now() + delayMinutes * 60 * 1000).toISOString(),
         }, { silent: true, scope: replayScope });
       }
     }

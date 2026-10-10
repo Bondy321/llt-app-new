@@ -34,6 +34,7 @@ import { formatDateForDisplay } from '../../../utils/dateUtils';
 // Tour Card Component for grid view
 import { TourCard, TourPackStatus, DriverPackOperations } from './TourCards';
 import { TourPassengerSummary } from './TourPassengerSummary';
+import { TourItineraryReadiness } from './TourItineraryReadiness';
 import { CreateTourModal } from './CreateTourModal';
 import { EditTourModal } from './EditTourModal';
 import { DeleteTourModal, TourDetailsModal } from './TourManagementModals';
@@ -374,6 +375,7 @@ export default function ToursManagerView(props) {
                   <Table.Th>Dates</Table.Th>
                   <Table.Th>Driver</Table.Th>
                   <Table.Th>Passengers</Table.Th>
+                  <Table.Th>Itinerary</Table.Th>
                   <Table.Th>Status</Table.Th>
                   <Table.Th>Driver pack</Table.Th>
                   <Table.Th>Live operations</Table.Th>
@@ -418,6 +420,7 @@ export default function ToursManagerView(props) {
                       <Table.Td>
                         <TourPassengerSummary tour={tour} compact />
                       </Table.Td>
+                      <Table.Td><TourItineraryReadiness tour={tour} /></Table.Td>
                       <Table.Td>
                         <Badge variant="light" color={tour.isActive ? 'green' : 'gray'} size="sm">
                           {tour.isActive ? 'Active' : 'Inactive'}

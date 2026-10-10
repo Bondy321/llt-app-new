@@ -14,6 +14,9 @@ const {
   validateAppSession,
 } = require('./bookingServiceContext');
 const { isDriverAssignmentResponse } = require('../../src/shared/api/responseBoundaries');
+const { manifestRosterIdentity, ROSTER_REFRESH_MESSAGE } = require('../../utils/manifestRosterIdentity');
+const BOARDING_CODES = { PENDING: 'P', BOARDED: 'B', NO_SHOW: 'N', PARTIAL: 'R' };
+const BOARDING_STATUSES = { P: 'PENDING', B: 'BOARDED', N: 'NO_SHOW', R: 'PARTIAL' };
 const {
   deriveParentStatusFromPassengers,
   sanitizeTourId,
@@ -28,6 +31,7 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
     const validatedTourCode = validateTourCode(payload.tourCode);
     const validatedBookingRef = validateBookingRef(payload.bookingRef);
     validatePassengerStatuses(payload.passengerStatuses || []);
+    const rosterIdentity = manifestRosterIdentity(payload, (payload.passengerStatuses || []).length);
     logBookingEvent('info', 'Direct manifest update started', {
       tourCode: maskIdentifier(validatedTourCode),
       bookingRef: maskIdentifier(validatedBookingRef),
@@ -67,6 +71,11 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
     const localUpdatedAt = Number.isFinite(parsedLocalUpdatedAt) ? parsedLocalUpdatedAt : Date.now();
     const parentStatus = deriveParentStatusFromPassengers(payload.passengerStatuses || []);
     const manifestUpdate = {
+      ...rosterIdentity,
+      ...(rosterIdentity.rosterRevision ? {
+        passengerIdsJson: JSON.stringify(rosterIdentity.passengerIds),
+        passengerStatusCodes: (payload.passengerStatuses || []).map(status => BOARDING_CODES[status]).join(''),
+      } : {}),
       passengerStatus: payload.passengerStatuses || [],
       status: parentStatus,
       lastUpdated: payload.lastUpdated || new Date().toISOString(),
@@ -75,6 +84,7 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
     const bookingManifestRef = db.ref(`tour_manifests/${tourId}/bookings/${validatedBookingRef}`);
     let observedServerValue = {};
     let duplicateDelivery = false;
+    let rosterConflict = false;
     let transactionTimeoutId;
     let transactionResult;
     try {
@@ -82,15 +92,28 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
         bookingManifestRef.transaction((currentValue) => {
           const current = currentValue || {};
           observedServerValue = current;
+          // Stored history can describe the previous roster. A fresh typed
+          // payload may replace it; RTDB rules check the canonical roster at
+          // commit. ID-less legacy writes must never overwrite typed history.
+          const hasStoredIdentity = Boolean(current.rosterRevision || current.passengerIdsJson || Array.isArray(current.passengerIds));
+          const differentRoster = Boolean(hasStoredIdentity && (
+            current.rosterRevision !== rosterIdentity.rosterRevision
+            || (current.passengerIdsJson || JSON.stringify(current.passengerIds)) !== JSON.stringify(rosterIdentity.passengerIds)
+          ));
+          rosterConflict = Boolean(hasStoredIdentity && !rosterIdentity.rosterRevision);
+          if (rosterConflict) return undefined;
           duplicateDelivery = Boolean(
-            payload.idempotencyKey
+            !differentRoster && payload.idempotencyKey
             && current.idempotencyKey === payload.idempotencyKey
           );
           if (duplicateDelivery) return current;
 
           const parsedServerUpdatedAt = parseTimestampMs(current.lastUpdated);
           const serverUpdatedAt = Number.isFinite(parsedServerUpdatedAt) ? parsedServerUpdatedAt : 0;
-          if (serverUpdatedAt > localUpdatedAt) return undefined;
+          if (serverUpdatedAt > localUpdatedAt) {
+            rosterConflict = differentRoster;
+            return undefined;
+          }
           return manifestUpdate;
         }),
         new Promise((_, reject) => {
@@ -102,27 +125,39 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
     }
     const serverValue = transactionResult?.snapshot?.val?.() || observedServerValue || {};
 
+    if (rosterConflict) return { success: false, error: ROSTER_REFRESH_MESSAGE, code: 'ROSTER_REFRESH_REQUIRED', retryable: false };
+    let serverPassengerStatus = Array.isArray(serverValue.passengerStatus) ? serverValue.passengerStatus : [];
+    let serverStatus = serverValue.status || MANIFEST_STATUS.PENDING;
+    if (serverValue.passengerStatusCodes !== undefined) {
+      const codes = serverValue.passengerStatusCodes;
+      if (typeof codes !== 'string' || !/^[PBNR]*$/.test(codes) || codes.length !== (payload.passengerStatuses || []).length) {
+        return { success: false, error: ROSTER_REFRESH_MESSAGE, code: 'ROSTER_REFRESH_REQUIRED', retryable: false };
+      }
+      serverPassengerStatus = [...codes].map(code => BOARDING_STATUSES[code]);
+      serverStatus = deriveParentStatusFromPassengers(serverPassengerStatus);
+    }
+
     if (!transactionResult?.committed) {
       logger?.warn?.('Manifest', 'Queued update reconciled to newer server data', {
         bookingRef: maskIdentifier(validatedBookingRef),
         tourId,
         localUpdatedAt: payload.lastUpdated,
         serverUpdatedAt: serverValue.lastUpdated || null,
-        serverStatus: serverValue.status || MANIFEST_STATUS.PENDING,
+        serverStatus,
       });
       return {
         success: true,
         reconciled: true,
         overwrite: 'server',
         bookingRef: validatedBookingRef,
-        status: serverValue.status || MANIFEST_STATUS.PENDING,
-        passengerStatus: Array.isArray(serverValue.passengerStatus) ? serverValue.passengerStatus : [],
+        status: serverStatus,
+        passengerStatus: serverPassengerStatus,
         lastUpdated: serverValue.lastUpdated || null,
         conflict: {
           reason: 'SERVER_NEWER',
           bookingRef: validatedBookingRef,
-          serverStatus: serverValue.status || MANIFEST_STATUS.PENDING,
-          serverPassengerStatus: Array.isArray(serverValue.passengerStatus) ? serverValue.passengerStatus : [],
+          serverStatus,
+          serverPassengerStatus,
           serverLastUpdated: serverValue.lastUpdated || null,
           attemptedStatus: parentStatus,
           attemptedPassengerStatus: payload.passengerStatuses || [],
@@ -166,7 +201,10 @@ const applyManifestUpdateDirect = async (payload, dbInstance = realtimeDb) => {
       error: error?.message || String(error),
       code: error?.code || null,
     });
-    return { success: false, error: error.message };
+    const permissionDenied = /permission[_ -]?denied/i.test(`${error?.code || ''} ${error?.message || ''}`);
+    return permissionDenied
+      ? { success: false, error: ROSTER_REFRESH_MESSAGE, code: 'ROSTER_REFRESH_REQUIRED', retryable: false }
+      : { success: false, error: error.message, ...(error.retryable === false ? { code: error.code, retryable: false } : {}) };
   }
 };
 
@@ -188,6 +226,7 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
     const idempotencyKey = options.idempotencyKey || `manifest_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     const directPayload = {
+      ...manifestRosterIdentity(options, passengerStatuses.length),
       tourCode: validatedTourCode,
       bookingRef: validatedBookingRef,
       passengerStatuses,
@@ -236,7 +275,10 @@ const updateManifestBooking = async (tourCode, bookingRef, passengerStatuses = [
         shouldQueue,
         hasOfflineSync: Boolean(offlineSyncService?.enqueueAction),
       });
-      throw new Error(onlineResult.error || 'Failed to update manifest');
+      const error = new Error(onlineResult.error || 'Failed to update manifest');
+      error.code = onlineResult.code;
+      error.retryable = onlineResult.retryable;
+      throw error;
     }
 
     const queued = await offlineSyncService.enqueueAction({

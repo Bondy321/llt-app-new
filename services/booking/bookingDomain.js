@@ -143,6 +143,8 @@ const normalizeManifestPassengerRows = (bookingData = {}) => {
   const seatNumbers = Array.isArray(bookingData.seatNumbers) ? bookingData.seatNumbers : [];
   const seatLabels = Array.isArray(bookingData.seatLabels) ? bookingData.seatLabels : [];
   const rowCount = Math.max(details.length, names.length, seatNumbers.length, seatLabels.length);
+  const { manifestRosterIdentity } = require('../../utils/manifestRosterIdentity');
+  const rosterIdentity = manifestRosterIdentity(bookingData, rowCount);
   const strongIdentityRows = new Map();
   const rows = [];
   const toTrimmedString = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -157,16 +159,17 @@ const normalizeManifestPassengerRows = (bookingData = {}) => {
     const hasNumericSeat = rawSeatNumber !== null
       && rawSeatNumber !== ''
       && Number.isInteger(numericSeat)
-      && numericSeat >= 0;
+      && numericSeat > 0;
     const seatNumber = hasNumericSeat ? numericSeat : rawSeatNumber;
     const seatLabel = toTrimmedString(detail.seatLabel) || toTrimmedString(seatLabels[index]);
     const labelSeatMatch = seatLabel.match(/^S?0*(\d+)$/i);
+    const placeholderLabel = !seatLabel || /^(?:0|S0+|TBA|TBC|UNKNOWN|UNASSIGNED|-|N\/A)$/i.test(seatLabel);
     const seatIdentity = hasNumericSeat
       ? `number:${numericSeat}`
-      : (labelSeatMatch ? `number:${Number(labelSeatMatch[1])}` : (seatLabel ? `label:${seatLabel.toUpperCase()}` : null));
-    const strongIdentity = seatIdentity
+      : (labelSeatMatch && Number(labelSeatMatch[1]) > 0 ? `number:${Number(labelSeatMatch[1])}` : (!placeholderLabel && !labelSeatMatch ? `label:${seatLabel.toUpperCase()}` : null));
+    const strongIdentity = rosterIdentity.passengerIds?.[index] || (seatIdentity
       ? `${name.replace(/\s+/g, ' ').trim().toLowerCase()}|${seatIdentity}`
-      : null;
+      : null);
 
     if (strongIdentity && strongIdentityRows.has(strongIdentity)) {
       rows[strongIdentityRows.get(strongIdentity)].sourceIndexes.push(index);
@@ -191,6 +194,9 @@ const normalizeManifestPassengerRows = (bookingData = {}) => {
 };
 
 const ensureBookingSchemaConsistency = async (bookingRef, bookingData) => {
+  if (bookingData.boardingReviewRequired !== undefined && typeof bookingData.boardingReviewRequired !== 'boolean') {
+    throw new Error('The boarding review flag is invalid. Refresh the manifest.');
+  }
   const { rows, duplicateCount } = normalizeManifestPassengerRows(bookingData);
   const passengerNames = rows.map((row) => row.name);
   const seatNumbers = rows.map((row) => row.seatNumber ?? 'TBA');

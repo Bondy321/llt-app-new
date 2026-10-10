@@ -80,10 +80,10 @@ const buildPassengerSafeBooking = (bookingRef, bookingData = {}, tourId = '') =>
     const fallback = buildPassengerSafePickup(fallbackPickup);
     if (fallback) pickupPoints.push(fallback);
   }
-  const passengerNames = normalized.passengerNames.slice(0, 100)
+  const passengerNames = normalized.passengerNames.slice(0, 250)
     .map(/** @param {unknown} name */ (name) => cleanPassengerString(name, 160))
     .filter(Boolean);
-  const seatNumbers = normalized.seatNumbers.slice(0, 100).map(/** @param {unknown} seat */ (seat) => (
+  const seatNumbers = normalized.seatNumbers.slice(0, 250).map(/** @param {unknown} seat */ (seat) => (
     typeof seat === 'number' && Number.isFinite(seat)
       ? seat
       : cleanPassengerString(seat, 40)
@@ -103,7 +103,8 @@ const buildPassengerSafeBooking = (bookingRef, bookingData = {}, tourId = '') =>
       bookingData.pickupLocation || primaryPickup.location || primaryPickup.address,
       250,
     ),
-    totalPax: Number.isSafeInteger(bookingData.totalPax) && bookingData.totalPax >= 0
+    totalPax: bookingData.sourceRoster?.state === 'active' ? passengerNames.length
+      : Number.isSafeInteger(bookingData.totalPax) && bookingData.totalPax >= 0
       ? bookingData.totalPax
       : passengerNames.length,
   });

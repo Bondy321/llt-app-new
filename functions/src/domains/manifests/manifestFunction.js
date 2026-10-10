@@ -51,6 +51,7 @@ const getTourManifest = onRequestWithResult(
         db: admin.database(),
         authUid: requestAuth.uid,
         expectedTourId: tourId,
+        expectedRole: 'driver',
       });
       if (!access.allowed) {
         log.warn('Tour manifest request denied', {
@@ -75,13 +76,16 @@ const getTourManifest = onRequestWithResult(
       return res.status(200).json({ success: true, ...manifest });
     } catch (error) {
       const errorCode = /** @type {{ code?: string }} */ (error)?.code;
-      const reason = errorCode === 'TOUR_NOT_FOUND' ? 'TOUR_NOT_FOUND' : 'INTERNAL_ERROR';
+      const reason = ['TOUR_NOT_FOUND', 'TOUR_INACTIVE', 'ROSTER_UPDATING', 'SOURCE_ROSTER_INVALID'].includes(errorCode)
+        ? errorCode : 'INTERNAL_ERROR';
       log.error('Tour manifest request failed', error, {
         authUid: requestAuth.uid,
         tourId,
         reason,
       });
-      return res.status(reason === 'TOUR_NOT_FOUND' ? 404 : 500).json({ success: false, reason });
+      return res.status(reason === 'TOUR_NOT_FOUND' ? 404 : reason === 'TOUR_INACTIVE' ? 403
+        : reason === 'ROSTER_UPDATING' || reason === 'SOURCE_ROSTER_INVALID' ? 503 : 500)
+        .json({ success: false, reason });
     }
   }
 );
