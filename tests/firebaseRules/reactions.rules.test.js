@@ -488,8 +488,17 @@ test('legacy chat status remains compatible until the explicit rollout cutover',
   }));
 });
 
-test('denies principal-based chat writes when identity_bindings ownership is missing', async () => {
+test('denies principal-based chat writes when identity_bindings ownership is missing', async (t) => {
   const foreignPrincipalId = 'pax:FOREIGN';
+  t.after(() => testEnv.withSecurityRulesDisabled(async (context) => {
+    // This negative fixture must not leave a corrupted server profile behind
+    // for later tests that exercise an otherwise valid passenger session.
+    await context.database(dbUrl).ref().update({
+      [`users/${PASSENGER_AUTH_UID}/stablePassengerId`]: PASSENGER_PRINCIPAL_ID,
+      [`users/${PASSENGER_AUTH_UID}/privatePhotoOwnerId`]: PASSENGER_PRINCIPAL_ID,
+      [`identity_bindings/${PASSENGER_PRINCIPAL_KEY}/${PASSENGER_AUTH_UID}`]: true,
+    });
+  }));
 
   await testEnv.withSecurityRulesDisabled(async (context) => {
     await context.database(dbUrl).ref(`users/${PASSENGER_AUTH_UID}/stablePassengerId`).set(foreignPrincipalId);
