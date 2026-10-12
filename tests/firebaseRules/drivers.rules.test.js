@@ -8,6 +8,7 @@ const {
   assertFails,
 } = require('@firebase/rules-unit-testing');
 const { driverAuthorityUpdates } = require('./sessionFixtures');
+const { findDriverAuthorityRulesWithoutPolicy } = require('../helpers/driverAuthorityRules');
 
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const PROJECT_ID = 'demo-llt-driver-rules';
@@ -26,22 +27,6 @@ const parseHost = () => {
 };
 
 const rules = fs.readFileSync(path.resolve(__dirname, '../../database.rules.json'), 'utf8');
-
-const findDriverAuthorityRulesWithoutPolicy = (value, currentPath = [], missing = []) => {
-  if (typeof value === 'string') {
-    if (value.includes("root.child('app_sessions/' + auth.uid + '/principalType').val() === 'driver'")
-      && !value.includes('driver_login_policy/v1')) {
-      missing.push(currentPath.join('/'));
-    }
-    return missing;
-  }
-  if (value && typeof value === 'object') {
-    Object.entries(value).forEach(([key, child]) => {
-      findDriverAuthorityRulesWithoutPolicy(child, [...currentPath, key], missing);
-    });
-  }
-  return missing;
-};
 
 let testEnv;
 let dbUrl;
