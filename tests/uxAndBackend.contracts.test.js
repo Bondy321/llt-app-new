@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { constrainSourcePassengerRule } = require('./helpers/sourcePassengerScopeRules');
 const {
   readAppArchitectureSource,
   readFunctionsArchitectureSource,
@@ -85,7 +86,7 @@ test('Static contract: principal-owned chat reaction/typing/presence writes stay
   const expectedInternalDriverLastReadWrite = internalChatRules.lastRead.$principalId['.write'];
 
   assert.notEqual(chatRules['.read'], 'auth != null');
-  assert.equal(chatRules['.read'], chatRules['.validate']);
+  assert.equal(chatRules['.read'], constrainSourcePassengerRule(chatRules['.validate'], '$tourId'));
   assert.match(chatRules['.read'], /tours\/' \+ \$tourId \+ '\/participants\/' \+ auth\.uid/);
   assert.match(chatRules['.read'], /assigned_drivers/);
   assert.notEqual(internalChatRules['.read'], 'auth != null');
@@ -174,7 +175,8 @@ test('Static contract: sensitive database writes remain ownership or admin gated
   assert.match(privateOwnerAccess, /principalId'\)\.val\(\) === \$ownerId/);
   assert.match(privateOwnerAccess, /participants\/' \+ auth\.uid \+ '\/sessionId/);
   assert.notEqual(rules.rules.group_tour_photos.$tourId['.read'], 'auth != null');
-  assert.equal(rules.rules.group_tour_photos.$tourId['.read'], rules.rules.group_tour_photos.$tourId['.validate']);
+  assert.equal(rules.rules.group_tour_photos.$tourId['.read'],
+    constrainSourcePassengerRule(rules.rules.group_tour_photos.$tourId['.validate'], '$tourId'));
   assert.match(rules.rules.group_tour_photos.$tourId['.read'], /tours\/' \+ \$tourId \+ '\/participants\/' \+ auth\.uid/);
   assert.match(rules.rules.group_tour_photos.$tourId['.read'], /assigned_drivers/);
   ['privatePhotoOwnerKey', 'stablePassengerKey'].forEach((field) => {
