@@ -5,6 +5,7 @@ const {
   isValidAppSessionId,
   isValidFirebaseKey,
 } = require('./appSession');
+const { normalizeTourKeyForComparison } = require('../src/infrastructure/validation/stringNormalization');
 
 const denied = (reason) => ({ allowed: false, reason });
 
@@ -74,6 +75,13 @@ const verifyActiveAppSession = async ({
       const booking = bookingSnapshot.val();
       if (booking?.loginEligible === false || booking?.sourceRoster?.state === 'not_in_report') {
         return denied('BOOKING_NOT_LOGIN_ELIGIBLE');
+      }
+      // Source publication can move a booking while retaining its former
+      // participant/profile/history. That former session cannot confer access
+      // to the old tour; a fresh login must establish the new passenger scope.
+      if (booking?.sourceRoster !== undefined && booking?.sourceRoster !== null
+        && normalizeTourKeyForComparison(booking.tourId) !== normalizeTourKeyForComparison(session.tourId)) {
+        return denied('SESSION_TOUR_MISMATCH');
       }
     }
   } else {
