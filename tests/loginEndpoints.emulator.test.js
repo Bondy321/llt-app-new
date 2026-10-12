@@ -21,6 +21,8 @@ const { getTourManifest } = require('../functions/src/domains/manifests/manifest
 const { endAppSession } = require('../functions/src/domains/app-sessions/sessionFunctions');
 const { updateNotificationDeviceRegistration, updateNotificationDevice } = require('../functions/src/domains/notifications/notificationDeviceFunctions');
 const { verifyCurrentTourPhotoAccess } = require('../functions/src/domains/media/mediaAccess');
+const { resolvePrivatePhotoMedia } = require('../functions/src/domains/media/privateMediaFunctions');
+const { getPassengerTripSnapshot } = require('../functions/src/domains/passenger-trip/passengerTripFunctions');
 const {
   acquireManualSourceRosterLease,
   releaseManualSourceRosterLease,
@@ -37,6 +39,8 @@ test.before(async () => {
   app.post('/manual', createManualPassengerBooking);
   app.post('/end', endAppSession);
   app.post('/notifications', updateNotificationDeviceRegistration);
+  app.post('/private-media', resolvePrivatePhotoMedia);
+  app.post('/trip', getPassengerTripSnapshot);
   app.use((error, _req, res, _next) => res.status(500).json({ testHandlerError: error.message }));
   server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -363,6 +367,95 @@ test('passenger HTTP login issues a complete session and supports an immediate r
     const claims = (await writer.auth().getUser(identity.uid)).customClaims;
     assert.match(claims.privatePhotoOwnerKey, /^pax_v2_/);
   }
+});
+
+test('source booking transfer denies the retained old session until fresh login without deleting old history', async () => {
+  const bookingRef = 'HTTP_SOURCE_TRANSFER';
+  const oldTourId = 'HTTP_TRANSFER_OLD';
+  const newTourId = 'HTTP_TRANSFER_NEW';
+  const oldPassengerId = `srcpax_v1_${'d'.repeat(64)}`;
+  const newPassengerId = `srcpax_v1_${'e'.repeat(64)}`;
+  const oldRevision = 'f'.repeat(64);
+  const newRevision = 'a'.repeat(64);
+  const sourceRoster = (revision, passengerId) => ({ schemaVersion: 1, state: 'active', revision,
+    passengerIds: [passengerId], passengerCount: 1, passengerIdsJson: JSON.stringify([passengerId]) });
+  const boarding = { rosterRevision: oldRevision, passengerIdsJson: JSON.stringify([oldPassengerId]),
+    passengerStatusCodes: 'B', status: 'BOARDED' };
+  const oldMessage = { text: 'Synthetic retained history', timestamp: Date.now() };
+  await db.ref().update({
+    [`tours/${oldTourId}`]: { isActive: true, name: 'Synthetic former tour', tourCode: 'HTTP TRANSFER OLD',
+      startDate: '14/09/2026', endDate: '20/09/2026' },
+    [`tours/${newTourId}`]: { isActive: true, name: 'Synthetic destination tour', tourCode: 'HTTP TRANSFER NEW',
+      startDate: '14/09/2026', endDate: '20/09/2026' },
+    [`bookings/${bookingRef}`]: { bookingRef, tourId: ' http transfer old ', loginEligible: true,
+      passengerNames: ['Synthetic transferred passenger'], passengerDetails: [{ name: 'Synthetic transferred passenger' }],
+      sourceRoster: sourceRoster(oldRevision, oldPassengerId) },
+    [`booking_identities/${bookingRef}`]: { bookingRef, email: 'passenger@example.invalid', tourId: oldTourId },
+    [`tour_manifests/${oldTourId}/bookings/${bookingRef}`]: boarding,
+    [`chats/${oldTourId}/messages/retained_transfer_history`]: oldMessage,
+  });
+  const identity = await newIdentity();
+  const initial = await login('passenger', identity, passengerBody(bookingRef));
+  assert.equal(initial.status, 200, JSON.stringify(initial.body));
+  const oldSession = (await db.ref(`app_sessions/${identity.uid}`).get()).val();
+  assert.equal(oldSession.tourId, oldTourId);
+  const oldParticipant = (await db.ref(`tours/${oldTourId}/participants/${identity.uid}`).get()).val();
+  const oldProfile = (await db.ref(`users/${identity.uid}`).get()).val();
+  const mediaRequest = { tourId: oldTourId, ownerKey: oldSession.principalId, photoIds: ['missing_fixture_photo'] };
+  // A missing photo returns 404 only after the real authenticated session guard
+  // has granted access. No Storage emulator or signed URL stub is needed.
+  const before = await login('private-media', identity, mediaRequest);
+  assert.equal(before.status, 404, JSON.stringify(before.body));
+  assert.equal(before.body.reason, 'NOT_FOUND');
+
+  // Simulate only the authoritative importer write through the local Admin SDK.
+  // Preserve the old runtime so denial cannot be explained by removed authority.
+  await db.ref().update({
+    [`bookings/${bookingRef}/tourId`]: ' http transfer new ',
+    [`bookings/${bookingRef}/sourceRoster`]: sourceRoster(newRevision, newPassengerId),
+    [`booking_identities/${bookingRef}/tourId`]: 'http transfer new',
+    [`tour_manifests/${newTourId}/bookings/${bookingRef}`]: { rosterRevision: newRevision,
+      passengerIdsJson: JSON.stringify([newPassengerId]), passengerStatusCodes: 'P', status: 'PENDING' },
+  });
+  assert.deepEqual((await db.ref(`app_sessions/${identity.uid}`).get()).val(), oldSession);
+  assert.deepEqual((await db.ref(`users/${identity.uid}`).get()).val(), oldProfile);
+  assert.deepEqual((await db.ref(`tours/${oldTourId}/participants/${identity.uid}`).get()).val(), oldParticipant);
+  const oldAccess = await verifyCurrentTourPhotoAccess({ db, authUid: identity.uid, tourId: oldTourId });
+  assert.equal(oldAccess.allowed, false);
+  assert.equal(oldAccess.reason, 'SESSION_TOUR_MISMATCH');
+  const deniedMedia = await login('private-media', identity, mediaRequest);
+  assert.equal(deniedMedia.status, 403, JSON.stringify(deniedMedia.body));
+  assert.deepEqual(deniedMedia.body, { success: false, reason: 'NOT_AUTHORIZED' });
+
+  const trip = async sessionId => {
+    const response = await fetch(`${origin}/trip`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${identity.token}`,
+        Origin: 'http://localhost:19006' },
+      body: JSON.stringify({ expectedSessionId: sessionId, parts: ['booking', 'tour'], versions: {} }),
+      signal: AbortSignal.timeout(15000) });
+    return { status: response.status, body: await response.json(),
+      corsOrigin: response.headers.get('access-control-allow-origin') };
+  };
+  const deniedTrip = await trip(oldSession.sessionId);
+  assert.equal(deniedTrip.status, 403, JSON.stringify(deniedTrip.body));
+  assert.deepEqual(deniedTrip.body, { success: false, reason: 'SESSION_SCOPE_MISMATCH' });
+  assert.equal(deniedTrip.corsOrigin, 'http://localhost:19006');
+
+  const fresh = await login('passenger', identity, passengerBody(bookingRef));
+  assert.equal(fresh.status, 200, JSON.stringify(fresh.body));
+  assert.equal(fresh.body.session.tourId, newTourId);
+  assert.notEqual(fresh.body.session.sessionId, oldSession.sessionId);
+  assert.equal(fresh.body.session.principalId, oldSession.principalId);
+  const freshTrip = await trip(fresh.body.session.sessionId);
+  assert.equal(freshTrip.status, 200, JSON.stringify(freshTrip.body));
+  assert.equal(freshTrip.body.scope.tourId, newTourId);
+  assert.equal(freshTrip.body.parts.booking.data.tourId, newTourId);
+  assert.equal(freshTrip.corsOrigin, 'http://localhost:19006');
+  const staleTrip = await trip(oldSession.sessionId);
+  assert.equal(staleTrip.status, 409);
+  assert.equal(staleTrip.body.reason, 'SESSION_CHANGED');
+  assert.deepEqual((await db.ref(`tour_manifests/${oldTourId}/bookings/${bookingRef}`).get()).val(), boarding);
+  assert.deepEqual((await db.ref(`chats/${oldTourId}/messages/retained_transfer_history`).get()).val(), oldMessage);
 });
 
 test('passenger rejects a second installation without changing the active session', async () => {
