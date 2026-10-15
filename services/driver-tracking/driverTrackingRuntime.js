@@ -2,9 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { AppState, Platform } from 'react-native';
-import { auth, realtimeDb } from '../../firebase';
+import { auth } from '../../firebase';
 import appSessionService from '../appSessionService';
-import { publishDriverLocation, withdrawLiveDriverLocation } from '../driverLocationService';
 import { createDriverTrackingController } from './createDriverTrackingController';
 import { createTrackingRestRepository } from './trackingRestRepository';
 import { TRACKING_TASK_NAME, TRACKING_INTERVAL_MS } from './trackingIntent';
@@ -50,7 +49,7 @@ const native = {
   }[error?.message] || 'Tracking could not start. Check your connection and driver session, then try again.'),
 };
 
-const transport = createTrackingRestRepository({ database: realtimeDb, auth,
+const transport = createTrackingRestRepository({ auth,
   baseUrl: process.env.EXPO_PUBLIC_FIREBASE_DATABASE_URL || '',
   retireEndpoint: process.env.EXPO_PUBLIC_DRIVER_TRACKING_STOP_URL?.trim()
     || (process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID
@@ -66,22 +65,17 @@ const verifyAuthority = async scope => {
     || local.tourId !== scope.tourId) return { valid: false, reason: 'SESSION_CHANGED' };
   if (!await native.hasPermissions()) return { valid: false, reason: 'PERMISSION_REVOKED' };
   try {
-    const connected = (await withTrackingTimeout(() => realtimeDb.ref('.info/connected').once('value'))).val();
-    if (connected !== true) return { valid: false, reason: 'OFFLINE' };
-    const result = await withTrackingTimeout(() => appSessionService.verifyCurrent({ authUid: scope.authUid, expectedSession: local }));
+    const result = await withTrackingTimeout(() => appSessionService.verifyCurrent({ authUid: scope.authUid,
+      expectedSession: local, readRemoteSession: transport.readCurrentSession }));
     return { ...result, expiresAtMs: result.session?.expiresAtMs };
-  } catch { return { valid: false, reason: 'OFFLINE' }; }
+  } catch (error) {
+    return { valid: false, reason: ['AUTH_UID_CHANGED', 'PERMISSION_DENIED'].includes(error?.code || error?.message)
+      ? 'AUTHORITY_CHANGED' : 'OFFLINE' };
+  }
 };
 export const driverTracking = createDriverTrackingController({ storage: AsyncStorage, native,
   verifyAuthority, writeFence: transport.writeFence, retireSession: transport.retireSession,
-  publish: (intent, sample, isScopeCurrent) => transport.withPublicationGuard(intent, isScopeCurrent, () => publishDriverLocation({
-    tourId: intent.scope.tourId, sessionScope: intent.scope, source: 'auto',
-    sessionId: intent.liveSharingSessionId, dbInstance: transport.database,
-    location: sample.coords, isScopeCurrent,
-  })),
-  withdraw: intent => withdrawLiveDriverLocation({ tourId: intent.scope.tourId,
-    appSessionId: intent.scope.sessionId, expectedSessionId: intent.liveSharingSessionId,
-    dbInstance: transport.database }),
+  publish: transport.publish,
 });
 
 export const registerDriverTrackingTask = () => {

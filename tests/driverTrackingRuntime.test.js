@@ -18,6 +18,7 @@ let permissions;
 let registered = false;
 let nativeOptions;
 let network = true;
+let sessionValid = true;
 let services = true;
 const location = {
   Accuracy: { High: 4 }, ActivityType: { AutomotiveNavigation: 3 },
@@ -41,20 +42,25 @@ Module._load = function load(request, parent, isMain) {
   if (request === '@react-native-async-storage/async-storage') return { __esModule: true, default: storage };
   if (request === '../../firebase') return { auth: { authStateReady: async () => {},
     currentUser: { uid: scope.authUid, getIdToken: async () => 'synthetic' } }, realtimeDb: {
-    ref: path => ({ once: async () => ({ val: () => path === '.info/connected' ? network : 0 }),
-      onDisconnect: () => ({ remove: async () => {}, cancel: async () => {} }) }),
+    ref: () => { throw Error('RTDB SDK socket is unavailable in this background task'); },
   } };
   if (request === '../appSessionService') return { __esModule: true, default: {
     readPendingEnd: async () => null, readSession: async () => scope,
-    verifyCurrent: async () => ({ valid: true, session: scope }),
+    verifyCurrent: async ({ authUid, readRemoteSession }) => {
+      assert.deepEqual(await readRemoteSession(authUid), { sessionValid });
+      return { valid: sessionValid, reason: sessionValid ? undefined : 'SESSION_CHANGED', session: scope };
+    },
   } };
   return originalLoad(request, parent, isMain);
 };
 process.env.EXPO_PUBLIC_FIREBASE_DATABASE_URL = 'https://synthetic.firebaseio.test';
 process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = 'synthetic-test';
 const originalFetch = global.fetch;
-global.fetch = async (_url, options) => { events.push(options.method === 'POST' ? 'retire' : 'http_write');
-  return { ok: true, json: async () => ({ success: true, withdrawalAcknowledged: true }) }; };
+global.fetch = async (_url, options) => {
+  if (!network) throw Error('Synthetic HTTP offline');
+  events.push(options.method === 'GET' ? 'http_read' : options.method === 'POST' ? 'retire' : 'http_write');
+  return { ok: true, json: async () => options.method === 'GET' ? { sessionValid } : { success: true, withdrawalAcknowledged: true } };
+};
 const { driverTracking, registerDriverTrackingTask } = require('../services/driver-tracking/driverTrackingRuntime');
 const Card = require('../components/driver-home/DriverTrackingCard').default;
 Module._load = originalLoad;
@@ -62,7 +68,7 @@ Module._load = originalLoad;
 test.beforeEach(async () => {
   await driverTracking.stop(); map.clear(); events.length = 0;
   permissions = { foreground: 'granted', background: 'granted' }; registered = false;
-  network = true; services = true; appState.currentState = 'active'; platform.OS = 'android';
+  network = true; sessionValid = true; services = true; appState.currentState = 'active'; platform.OS = 'android';
   await driverTracking.setScope(scope);
 });
 test.after(async () => { await driverTracking.stop(); global.fetch = originalFetch; });
@@ -76,7 +82,7 @@ test('task is globally registered once without prompting or native start', () =>
 test('Android starts a visible foreground service with foreground access only', async () => {
   assert.equal((await start()).success, true);
   assert.equal(events.includes('background_permission'), false);
-  assert.deepEqual(events, ['foreground_permission', 'http_write', 'start']);
+  assert.deepEqual(events, ['foreground_permission', 'http_read', 'http_write', 'start']);
   const { options } = nativeOptions;
   assert.equal(options.foregroundService.killServiceOnDestroy, true);
   assert.match(options.foregroundService.notificationBody, /Open LLT to stop/);
@@ -108,13 +114,21 @@ test('turning device location services off causes periodic health check to retir
   assert.equal(registered, false); assert.equal(events.includes('retire'), true);
 });
 
-test('registered background task shares while app is backgrounded without restarting a service', async () => {
+test('background task shares through HTTP when every RTDB SDK call throws, without restarting a service', async () => {
   registerDriverTrackingTask(); await start(); appState.currentState = 'background';
   await [...tasks.values()][0]({ data: { locations: [{ timestamp: Date.now(), coords: { latitude: 56.1, longitude: -4.2, accuracy: 15 } }] } });
   assert.equal(driverTracking.getSnapshot().state, 'sharing');
   assert.equal(events.filter(event => event === 'start').length, 1);
   assert.equal(events.filter(event => event === 'http_write').length, 2);
   assert.doesNotMatch([...map.values()].join(''), /latitude|longitude/);
+});
+
+test('a changed REST session retires the explicit intent before sending GPS', async () => {
+  await start(); sessionValid = false;
+  await driverTracking.handleLocations({ locations: [{ timestamp: Date.now(), coords: { latitude: 56.1, longitude: -4.2, accuracy: 15 } }] });
+  assert.equal(driverTracking.getSnapshot().active, false);
+  assert.equal(events.includes('retire'), true);
+  assert.equal(events.filter(event => event === 'http_write').length, 1);
 });
 
 test('offline task delivery reports paused and does not dispatch GPS writes', async () => {

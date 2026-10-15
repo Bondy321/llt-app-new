@@ -243,11 +243,12 @@ const createAppSessionService = ({
     return true;
   });
 
-  const verifyCurrent = async ({ authUid, expectedSession } = {}) => {
+  const verifyCurrent = async ({ authUid, expectedSession, readRemoteSession } = {}) => {
     if (!isSafeKey(authUid) || !expectedSession) return { valid: false, reason: 'INVALID_INPUT' };
-    const firebase = getFirebase();
-    const snapshot = await firebase.realtimeDb.ref(`app_sessions/${authUid}`).once('value');
-    const remote = validateAppSession(snapshot.val(), { nowMs: now() });
+    const raw = readRemoteSession
+      ? await readRemoteSession(authUid)
+      : (await getFirebase().realtimeDb.ref(`app_sessions/${authUid}`).once('value')).val();
+    const remote = validateAppSession(raw, { nowMs: now() });
     if (!remote) return { valid: false, reason: 'SESSION_INACTIVE' };
     if (remote.sessionId !== expectedSession.sessionId
       || remote.principalId !== expectedSession.principalId
