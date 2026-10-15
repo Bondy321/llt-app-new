@@ -69,6 +69,7 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             functions/package-lock.json
+            web-admin/package-lock.json
 
       - name: Setup Java for Firebase emulators
         uses: actions/setup-java@v4
@@ -84,6 +85,9 @@ jobs:
 
       - name: Install Functions dependencies
         run: npm --prefix functions ci
+
+      - name: Install web admin dependencies for integration tests
+        run: npm --prefix web-admin ci
 
       - name: Run mobile smoke tests
         run: npm run test:mobile:ota
