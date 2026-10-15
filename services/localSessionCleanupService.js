@@ -181,12 +181,17 @@ const createLocalSessionCleanupService = ({
     try { return await scopedCleanupInFlight; } finally { scopedCleanupInFlight = null; }
   };
 
-  const commitSessionKeys = async () => {
+  const commitSessionKeys = async ({ preservePendingSessionEnd = true } = {}) => {
     if (sessionKeyCommitInFlight) return sessionKeyCommitInFlight;
     sessionKeyCommitInFlight = (async () => {
       try {
         if (beforeSessionKeyCommit) await beforeSessionKeyCommit();
-        const value = await storage.multiRemove(APP_LOCAL_KEYS);
+        // Generic purges must not erase an unacknowledged server operation.
+        // Only acknowledged account deletion explicitly clears it here.
+        const keys = preservePendingSessionEnd
+          ? APP_LOCAL_KEYS.filter(key => key !== '@LLT:pendingSessionEnd:v1')
+          : APP_LOCAL_KEYS;
+        const value = await storage.multiRemove(keys);
         return {
           success: true,
           attempted: ['clearSessionKeys'],
