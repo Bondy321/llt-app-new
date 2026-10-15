@@ -523,6 +523,10 @@ test('canonical assignment location cleanup uses shared projection fences for ev
         tourId,
         leaseOwner,
         publicPath: `tours/${tourId}/driverLocation`,
+        revision,
+        fencePath: `tours/${tourId}/driverLocationProjectionRevision`,
+        fenceEpochPath: `tours/${tourId}/driverLocationProjectionEpoch`,
+        leaseToken: `synthetic-${tourId}`,
         tombstone: {
           schemaVersion: 1, isSharing: false, timestamp: 500, projectionRevision: revision,
         },
@@ -533,6 +537,10 @@ test('canonical assignment location cleanup uses shared projection fences for ev
   assert.deepEqual(acquired.map(({ tourId }) => tourId), ['TOUR_NEW', 'TOUR_OLD']);
   assert.equal(updates['tours/TOUR_NEW/driverLocation'].projectionRevision, 20);
   assert.equal(updates['tours/TOUR_OLD/driverLocation'].projectionRevision, 21);
+  assert.equal(updates['tours/TOUR_NEW/driverLocationProjectionRevision'], 20);
+  assert.equal(updates['tours/TOUR_OLD/driverLocationProjectionRevision'], 21);
+  assert.equal(updates['tours/TOUR_NEW/driverLocationProjectionEpoch'], 'synthetic-TOUR_NEW');
+  assert.equal(updates['tours/TOUR_OLD/driverLocationProjectionEpoch'], 'synthetic-TOUR_OLD');
   assert.equal(updates['drivers/D-ONE/currentTourId'], 'TOUR_NEW');
   assert.equal(invalidations.length, 2);
   assert.deepEqual(released, []);

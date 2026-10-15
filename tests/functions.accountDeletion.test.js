@@ -62,6 +62,7 @@ const createMemoryDb = (initial = {}, options = {}) => {
     failRootUpdates: Number(options.failRootUpdates || 0),
     beforeRootUpdate: options.beforeRootUpdate || null,
     beforeTransaction: options.beforeTransaction || null,
+    coldTransactionPaths: new Set(options.coldTransactionPaths || []),
   };
 
   const createRef = (path = '', query = {}) => {
@@ -116,6 +117,9 @@ const createMemoryDb = (initial = {}, options = {}) => {
       },
       async transaction(updater) {
         if (controls.beforeTransaction) await controls.beforeTransaction({ path: normalized, state });
+        if (controls.coldTransactionPaths.delete(normalized) && updater(null) === undefined) {
+          return { committed: false, snapshot: makeSnapshot(null) };
+        }
         const current = clone(readPath(state, normalized) ?? null);
         const next = updater(current);
         if (next === undefined) return { committed: false, snapshot: makeSnapshot(current) };
@@ -390,6 +394,128 @@ test('passenger authority release is compare-safe and preserves metadata and suc
   assert.equal(await releaseOwnedPassengerAuthority({ db, scope }), 0);
   assert.equal(db.read('passenger_identity_security/BOOK_DELETE/authorizedAuthUid'), 'successor-uid');
   assert.deepEqual(db.read(`identity_bindings/${PASSENGER_ID}/${AUTH_UID}`), { successor: true });
+});
+
+test('a second authorized passenger phone can delete its account without revoking the first phone', async () => {
+  const firstUid = 'uid-first-phone';
+  const db = createMemoryDb(passengerFixture({
+    'passenger_identity_security/BOOK_DELETE': {
+      deviceAuthorizationVersion: 2,
+      authorizedAuthUid: firstUid,
+      authorizedAuthUids: { [firstUid]: true, [AUTH_UID]: true },
+      passengerPrincipalId: PASSENGER_ID,
+      immutableMetadata: 'preserve',
+    },
+    [`identity_bindings/${PASSENGER_ID}/${firstUid}`]: true,
+    [`app_sessions/${firstUid}`]: { sessionId: 'first-phone-session', principalId: PASSENGER_ID },
+    [`tours/TOUR_DELETE/participants/${firstUid}`]: { sessionId: 'first-phone-session' },
+  }));
+  const result = await reserveAccountDeletion({
+    db, authUid: AUTH_UID, deletionId: deriveAccountDeletionId(RECEIPT),
+    input: { expectedSessionId: SESSION_ID, deletionReceipt: RECEIPT }, nowMs: NOW,
+  });
+  assert.equal(result.status, 202);
+  const scope = result.job.privateScope;
+  assert.deepEqual(scope.actorKeys, [AUTH_UID, PASSENGER_ID]);
+  assert.equal(await releaseOwnedPassengerAuthority({ db, scope }), 2);
+  assert.deepEqual(db.read('passenger_identity_security/BOOK_DELETE'), {
+    deviceAuthorizationVersion: 2,
+    authorizedAuthUid: firstUid,
+    authorizedAuthUids: { [firstUid]: true },
+    passengerPrincipalId: PASSENGER_ID,
+    immutableMetadata: 'preserve',
+  });
+  assert.equal(db.read(`identity_bindings/${PASSENGER_ID}/${firstUid}`), true);
+  assert.deepEqual(db.read(`app_sessions/${firstUid}`), {
+    sessionId: 'first-phone-session', principalId: PASSENGER_ID,
+  });
+  assert.deepEqual(db.read(`tours/TOUR_DELETE/participants/${firstUid}`), { sessionId: 'first-phone-session' });
+  assert.equal(await releaseOwnedPassengerAuthority({ db, scope }), 0);
+  assert.equal(db.read('bookings/BOOK_DELETE/customerName'), 'Must remain');
+});
+
+test('passenger deletion requires an exact authorized device, unlocked principal and identity binding', async () => {
+  for (const security of [
+    { authorizedAuthUids: { [AUTH_UID]: 'true' } },
+    { authorizedAuthUids: { [AUTH_UID]: false } },
+    { authorizedAuthUids: { 'some-other-phone': true } },
+    { deviceAuthorizationVersion: 99, authorizedAuthUid: AUTH_UID, authorizedAuthUids: { [AUTH_UID]: true } },
+    { authorizedAuthUid: AUTH_UID, authorizedAuthUids: { 'some-other-phone': true } },
+    { authorizedAuthUids: { [AUTH_UID]: true }, loginLocked: true },
+    { authorizedAuthUids: { [AUTH_UID]: true }, passengerPrincipalId: `pax_v2_${'d'.repeat(32)}` },
+  ]) {
+    const db = createMemoryDb(passengerFixture({
+      'passenger_identity_security/BOOK_DELETE': {
+        deviceAuthorizationVersion: 2, passengerPrincipalId: PASSENGER_ID, ...security,
+      },
+    }));
+    const before = clone(db.state);
+    const result = await reserveAccountDeletion({
+      db, authUid: AUTH_UID, deletionId: deriveAccountDeletionId(RECEIPT),
+      input: { expectedSessionId: SESSION_ID, deletionReceipt: RECEIPT }, nowMs: NOW,
+    });
+    assert.equal(result.status, 422);
+    // Request locks are compare-removed; no account, session or workflow data changes.
+    assert.deepEqual(db.read('passenger_identity_security'), before.passenger_identity_security);
+    assert.deepEqual(db.read(`app_sessions/${AUTH_UID}`), before.app_sessions[AUTH_UID]);
+    assert.equal(db.read(`account_deletion_jobs/v1/${deriveAccountDeletionId(RECEIPT)}`), undefined);
+  }
+  const db = createMemoryDb(passengerFixture({
+    'passenger_identity_security/BOOK_DELETE': {
+      deviceAuthorizationVersion: 2,
+      authorizedAuthUids: { [AUTH_UID]: true }, passengerPrincipalId: PASSENGER_ID,
+    },
+    [`identity_bindings/${PASSENGER_ID}/${AUTH_UID}`]: false,
+  }));
+  const result = await reserveAccountDeletion({
+    db, authUid: AUTH_UID, deletionId: deriveAccountDeletionId(RECEIPT),
+    input: { expectedSessionId: SESSION_ID, deletionReceipt: RECEIPT }, nowMs: NOW,
+  });
+  assert.equal(result.status, 422);
+});
+
+test('deletion retires map and legacy authority through cold-cache retries and preserves sibling phones', async () => {
+  const mapPath = `passenger_identity_security/BOOK_DELETE/authorizedAuthUids/${AUTH_UID}`;
+  const scalarPath = 'passenger_identity_security/BOOK_DELETE/authorizedAuthUid';
+  const bindingPath = `identity_bindings/${PASSENGER_ID}/${AUTH_UID}`;
+  const db = createMemoryDb(passengerFixture({
+    'passenger_identity_security/BOOK_DELETE/deviceAuthorizationVersion': 2,
+    [mapPath]: true,
+    'passenger_identity_security/BOOK_DELETE/authorizedAuthUids/sibling-phone': true,
+    [`identity_bindings/${PASSENGER_ID}/sibling-phone`]: true,
+  }), { coldTransactionPaths: [mapPath, scalarPath, bindingPath] });
+  const scope = { authUid: AUTH_UID, bookingRef: BOOKING_REF, stablePassengerKey: PASSENGER_ID };
+  assert.equal(await releaseOwnedPassengerAuthority({ db, scope }), 3);
+  assert.equal(db.read(mapPath), undefined);
+  assert.equal(db.read(scalarPath), undefined);
+  assert.equal(db.read(bindingPath), undefined);
+  assert.equal(db.read('passenger_identity_security/BOOK_DELETE/authorizedAuthUids/sibling-phone'), true);
+  assert.equal(db.read(`identity_bindings/${PASSENGER_ID}/sibling-phone`), true);
+  assert.equal(db.read('passenger_identity_security/BOOK_DELETE/passengerPrincipalId'), PASSENGER_ID);
+  assert.equal(await releaseOwnedPassengerAuthority({ db, scope }), 0);
+});
+
+test('partial passenger authority cleanup resumes without deleting changed or sibling authorization', async () => {
+  const mapPath = `passenger_identity_security/BOOK_DELETE/authorizedAuthUids/${AUTH_UID}`;
+  const scalarPath = 'passenger_identity_security/BOOK_DELETE/authorizedAuthUid';
+  let failOnce = true;
+  const db = createMemoryDb(passengerFixture({
+    'passenger_identity_security/BOOK_DELETE/deviceAuthorizationVersion': 2,
+    [mapPath]: true,
+    'passenger_identity_security/BOOK_DELETE/authorizedAuthUids/sibling-phone': true,
+  }), { beforeTransaction: ({ path }) => {
+    if (path === scalarPath && failOnce) { failOnce = false; throw new Error('injected interruption'); }
+  } });
+  const scope = { authUid: AUTH_UID, bookingRef: BOOKING_REF, stablePassengerKey: PASSENGER_ID };
+  await assert.rejects(() => releaseOwnedPassengerAuthority({ db, scope }), /injected interruption/);
+  assert.equal(db.read(mapPath), undefined);
+  assert.equal(db.read(scalarPath), AUTH_UID);
+  db.write(scalarPath, 'successor-phone');
+  db.write(mapPath, { successor: true });
+  assert.equal(await releaseOwnedPassengerAuthority({ db, scope }), 1);
+  assert.deepEqual(db.read(mapPath), { successor: true });
+  assert.equal(db.read(scalarPath), 'successor-phone');
+  assert.equal(db.read('passenger_identity_security/BOOK_DELETE/authorizedAuthUids/sibling-phone'), true);
 });
 
 test('driver authority release preserves successor and policy-off secondary ownership', async () => {

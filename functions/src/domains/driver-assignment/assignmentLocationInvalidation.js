@@ -36,6 +36,8 @@ const acquireAssignmentLocationInvalidations = async ({
     }
     invalidations.forEach((invalidation) => {
       updates[invalidation.publicPath] = invalidation.tombstone;
+      if (invalidation.fencePath) updates[invalidation.fencePath] = invalidation.revision;
+      if (invalidation.fenceEpochPath) updates[invalidation.fenceEpochPath] = invalidation.leaseToken;
     });
     return invalidations;
   } catch (error) {

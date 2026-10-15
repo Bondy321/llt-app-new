@@ -912,7 +912,7 @@ test('network and requires-attention states remain recoverable with bounded clie
 
 test('account privacy wording distinguishes passenger deletion from retained driver operations records', () => {
   const privacySource = fs.readFileSync(path.join(__dirname, '..', 'screens', 'AccountPrivacyScreen.js'), 'utf8');
-  assert.match(privacySource, /passenger-authored active-tour chat and media/iu);
+  assert.match(privacySource, /Active-tour chat and photos shared by this booking/iu);
   assert.match(privacySource, /Shared operational chat, media, assignments, and canonical operations records are retained/iu);
   assert.match(privacySource, /Travel booking may still be retained/iu);
   assert.match(privacySource, /operations, safety, legal, or accounting/iu);

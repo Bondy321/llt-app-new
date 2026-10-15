@@ -99,6 +99,14 @@ reconstructed from operational data.
 - Passenger participant/grant/session authority is revoked in the atomic reservation. In this phase,
   confirm security/binding compare conditions still refer to the captured UID and principal. A
   replacement value must never be deleted.
+- For a booking used on several phones, remove only the requesting UID's exact `true` leaf under
+  `passenger_identity_security/{booking}/authorizedAuthUids` and its exact binding. Remove the legacy
+  `authorizedAuthUid` scalar only when it equals that UID. Preserve sibling authorization, sessions,
+  participants and bindings; never clear the entire map or security record. A replay after partial
+  cleanup must finish the remaining owned leaves without touching a replacement value.
+- Passenger deletion continues to scrub active-tour content owned by the shared booking principal.
+  Other phones can retain app access while that shared chat/media disappears. The passenger-facing
+  confirmation explains this; ordinary Log out preserves shared content and affects only this phone.
 - For drivers, `drivers/{driverId}/authUid` is removed only if it still equals the captured UID. Preserve
   the canonical driver record and assignment.
 - Role-claim and driver-policy cleanup jobs are compare-deleted only for the captured session.

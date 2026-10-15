@@ -6,6 +6,7 @@ const {
   isValidFirebaseKey,
 } = require('./appSession');
 const { normalizeTourKeyForComparison } = require('../src/infrastructure/validation/stringNormalization');
+const { readSourceRoster } = require('../src/domains/manifests/sourceRoster');
 
 const denied = (reason) => ({ allowed: false, reason });
 
@@ -70,19 +71,23 @@ const verifyActiveAppSession = async ({
       || user.principalType !== 'passenger') {
       return denied('PASSENGER_PROFILE_MISMATCH');
     }
-    if (typeof user.bookingRef === 'string' && isValidFirebaseKey(user.bookingRef)) {
-      const bookingSnapshot = await db.ref(`bookings/${user.bookingRef}`).once('value');
-      const booking = bookingSnapshot.val();
-      if (booking?.loginEligible === false || booking?.sourceRoster?.state === 'not_in_report') {
-        return denied('BOOKING_NOT_LOGIN_ELIGIBLE');
-      }
-      // Source publication can move a booking while retaining its former
-      // participant/profile/history. That former session cannot confer access
-      // to the old tour; a fresh login must establish the new passenger scope.
-      if (booking?.sourceRoster !== undefined && booking?.sourceRoster !== null
-        && normalizeTourKeyForComparison(booking.tourId) !== normalizeTourKeyForComparison(session.tourId)) {
-        return denied('SESSION_TOUR_MISMATCH');
-      }
+    if (typeof user.bookingRef !== 'string' || user.bookingRef.length > 160 || !isValidFirebaseKey(user.bookingRef)) {
+      return denied('PASSENGER_PROFILE_MISMATCH');
+    }
+    const bookingSnapshot = await db.ref(`bookings/${user.bookingRef}`).once('value');
+    const booking = bookingSnapshot.val();
+    if (!booking || typeof booking !== 'object' || Array.isArray(booking)
+      || booking.loginEligible === false || booking.sourceRoster?.state === 'not_in_report') {
+      return denied('BOOKING_NOT_LOGIN_ELIGIBLE');
+    }
+    let roster;
+    try { roster = readSourceRoster(booking); } catch { return denied('SOURCE_ROSTER_INVALID'); }
+    if (roster && roster.state !== 'active') return denied('BOOKING_NOT_LOGIN_ELIGIBLE');
+    // Source publication can move a booking while retaining its former
+    // participant/profile/history. That former session cannot confer access
+    // to the old tour; a fresh login must establish the new passenger scope.
+    if (normalizeTourKeyForComparison(booking.tourId) !== normalizeTourKeyForComparison(session.tourId)) {
+      return denied('SESSION_TOUR_MISMATCH');
     }
   } else {
     const [userSnapshot, driverSnapshot, policySnapshot] = await Promise.all([

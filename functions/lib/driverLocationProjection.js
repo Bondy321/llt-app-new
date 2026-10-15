@@ -1,5 +1,7 @@
 'use strict';
 const { retryProjection } = require('./projectionRetry');
+const { TOUR_FENCE_FIELD, TOUR_EPOCH_FIELD, claimProjectionFence, refreshProjectionFence,
+  publishProjectionFence, releaseProjectionFence } = require('./driverLocationProjectionFence');
 const { hasActiveTrackingIntent } = require('../src/domains/live-state/driverTrackingSessions');
 
 const {
@@ -164,73 +166,34 @@ async function hasCurrentDriverAuthority(database, record, nowMs) {
   );
 }
 
-async function releaseProjectionLease(ref, leaseOwner) {
-  await ref.transaction((current) => {
-    if (current === null) return current;
-    if (!isObject(current) || current.leaseOwner !== leaseOwner) return undefined;
-    const next = { ...current };
-    delete next.leaseOwner;
-    delete next.leaseExpiresAtMs;
-    return next;
-  }, undefined, false);
-}
-
-function publicProjectionRevision(value) {
-  return Number.isSafeInteger(value?.projectionRevision) && value.projectionRevision >= 0
-    ? value.projectionRevision
-    : 0;
-}
-
 async function acquireDriverLocationProjectionInvalidation({
   database,
   tourId,
   nowMs = Date.now(),
   leaseOwner = `driver_location_invalidation_${nowMs}_${Math.random().toString(36).slice(2, 10)}`,
+  clock = Date.now,
 } = {}) {
   if (!database?.ref) throw new Error('A Realtime Database instance is required');
   const normalizedTourId = normalizeBoundedText(tourId, 100);
   if (!normalizedTourId) throw new Error('A tour ID is required');
   if (!isSafeTimestamp(nowMs)) throw new Error('nowMs must be a non-negative safe integer');
 
-  const stateRef = database.ref(`driver_location_projection_state/${normalizedTourId}`);
-  const [publicLocation, rolloutContext] = await Promise.all([
-    readValue(database.ref(`tours/${normalizedTourId}/driverLocation`)),
-    readLiveStateRollout({ database }),
-  ]);
+  const context = await claimProjectionFence({ database, tourId: normalizedTourId, leaseOwner, clock });
+  if (!context) throw Object.assign(new Error('Tour is missing'), { code: 'DRIVER_LOCATION_TOUR_MISSING' });
+  let rolloutContext;
+  try { rolloutContext = await readLiveStateRollout({ database }); }
+  catch (error) { await releaseProjectionFence(context).catch(() => {}); throw error; }
   const cutover = rolloutContext.rollout.phase === LIVE_STATE_CUTOVER_PHASE;
-  const publicRevision = publicProjectionRevision(publicLocation);
-  const leaseResult = await stateRef.transaction((current) => {
-    const state = isObject(current) ? current : {};
-    if (state.leaseOwner && state.leaseOwner !== leaseOwner && Number(state.leaseExpiresAtMs) > nowMs) {
-      return undefined;
-    }
-    const leaseRevision = Number.isSafeInteger(state.leaseRevision) ? state.leaseRevision + 1 : 1;
-    const revision = Math.max(
-      Number.isSafeInteger(state.revision) ? state.revision : 0,
-      publicRevision,
-    ) + 1;
-    return {
-      ...state,
-      leaseOwner,
-      leaseRevision,
-      leaseExpiresAtMs: nowMs + PROJECTION_LEASE_MS,
-      revision,
-      fingerprint: JSON.stringify(null),
-      projectedAtMs: nowMs,
-    };
-  }, undefined, false);
-  if (leaseResult?.committed !== true) {
-    const error = new Error('Driver location projection is busy');
-    error.code = 'DRIVER_LOCATION_PROJECTION_BUSY';
-    throw error;
-  }
-  const state = snapshotValue(leaseResult.snapshot) || {};
+  const state = context.lease;
   return {
     tourId: normalizedTourId,
     leaseOwner,
     leaseRevision: state.leaseRevision,
+    leaseToken: state.leaseToken,
     revision: state.revision,
     publicPath: `tours/${normalizedTourId}/driverLocation`,
+    fencePath: `tours/${normalizedTourId}/${TOUR_FENCE_FIELD}`,
+    fenceEpochPath: `tours/${normalizedTourId}/${TOUR_EPOCH_FIELD}`,
     tombstone: {
       schemaVersion: PUBLIC_DRIVER_LOCATION_SCHEMA_VERSION,
       isSharing: false,
@@ -246,16 +209,9 @@ async function releaseDriverLocationProjectionInvalidation({ database, invalidat
   if (!tourId || !normalizeBoundedText(invalidation?.leaseOwner, 200)) {
     throw new Error('A valid driver location projection invalidation is required');
   }
-  await database.ref(`driver_location_projection_state/${tourId}`).transaction((current) => {
-    if (current === null) return current;
-    if (!isObject(current)
-      || current.leaseOwner !== invalidation.leaseOwner
-      || current.leaseRevision !== invalidation.leaseRevision) return undefined;
-    const next = { ...current };
-    delete next.leaseOwner;
-    delete next.leaseExpiresAtMs;
-    return next;
-  }, undefined, false);
+  await releaseProjectionFence({
+    stateRef: database.ref(`driver_location_projection_state/${tourId}`), lease: invalidation,
+  });
 }
 
 async function reconcileDriverLocationProjectionOnce({
@@ -265,84 +221,40 @@ async function reconcileDriverLocationProjectionOnce({
   leaseOwner = `driver_location_${nowMs}_${Math.random().toString(36).slice(2, 10)}`,
   validateLiveRecord = hasCurrentDriverAuthority,
   readRollout = readLiveStateRollout,
+  clock = Date.now,
 } = {}) {
   if (!database?.ref) throw new Error('A Realtime Database instance is required');
   const normalizedTourId = normalizeBoundedText(tourId, 100);
   if (!normalizedTourId) throw new Error('A tour ID is required');
   if (!isSafeTimestamp(nowMs)) throw new Error('nowMs must be a non-negative safe integer');
-  const tourRecord = await readValue(database.ref(`tours/${normalizedTourId}`));
-  if (!isObject(tourRecord)) {
-    return {
-      ok: true,
-      tourId: normalizedTourId,
-      revision: null,
-      projection: null,
-      published: false,
-      reason: 'TOUR_MISSING',
-    };
-  }
-  const stateRef = database.ref(`driver_location_projection_state/${normalizedTourId}`);
-  const leaseResult = await stateRef.transaction((current) => {
-    const state = isObject(current) ? current : {};
-    if (state.leaseOwner && state.leaseOwner !== leaseOwner && Number(state.leaseExpiresAtMs) > nowMs) {
-      return undefined;
-    }
-    const leaseRevision = Number.isSafeInteger(state.leaseRevision) ? state.leaseRevision + 1 : 1;
-    return {
-      ...state,
-      leaseOwner,
-      leaseRevision,
-      leaseExpiresAtMs: nowMs + PROJECTION_LEASE_MS,
-    };
-  }, undefined, false);
-  if (leaseResult?.committed !== true) {
-    const error = new Error('Driver location projection is busy');
-    error.code = 'DRIVER_LOCATION_PROJECTION_BUSY';
-    throw error;
-  }
-
+  const startedAt = clock();
+  const sourceTime = () => nowMs + Math.max(0, clock() - startedAt);
+  const context = await claimProjectionFence({ database, tourId: normalizedTourId, leaseOwner, clock });
+  if (!context) return { ok: true, tourId: normalizedTourId, revision: null,
+    projection: null, published: false, reason: 'TOUR_MISSING' };
+  const revision = context.lease.revision;
+  let fingerprint;
+  let published = false;
   try {
-    const [liveEntries, manualRecord, currentPublicLocation, rolloutContext] = await Promise.all([
+    const [liveEntries, manualRecord, rolloutContext] = await Promise.all([
       readLiveSources(database, normalizedTourId),
       readValue(database.ref(`driver_location_pickups/${normalizedTourId}`)),
-      readValue(database.ref(`tours/${normalizedTourId}/driverLocation`)),
       readRollout({ database }),
     ]);
     const authority = await Promise.all(liveEntries.map(async ({ sourceKey, record }) => ({
       sourceKey,
       record,
-      valid: isValidLiveSource(record, nowMs)
-        && await validateLiveRecord(database, record, nowMs, sourceKey),
+      valid: isValidLiveSource(record, sourceTime())
+        && await validateLiveRecord(database, record, sourceTime(), sourceKey),
     })));
-    const validManualRecord = isValidManualSource(manualRecord, nowMs)
-      && await hasCurrentPickupAssignmentAuthority(database, manualRecord, nowMs);
+    const validManualRecord = isValidManualSource(manualRecord, sourceTime())
+      && await hasCurrentPickupAssignmentAuthority(database, manualRecord, sourceTime());
     const projection = buildDriverLocationProjection({
       liveRecords: authority.filter(({ valid }) => valid).map(({ record }) => record),
       manualRecord: validManualRecord ? manualRecord : null,
-      nowMs,
+      nowMs: sourceTime(),
     });
-    const leaseState = snapshotValue(leaseResult.snapshot) || {};
-    const fingerprint = JSON.stringify(projection);
-    const finalized = await stateRef.transaction((current) => {
-      if (current === null) return current;
-      if (!isObject(current)
-        || current.leaseOwner !== leaseOwner
-        || current.leaseRevision !== leaseState.leaseRevision) return undefined;
-      return {
-        revision: Math.max(
-          Number.isSafeInteger(current.revision) ? current.revision : 0,
-          publicProjectionRevision(currentPublicLocation),
-        ) + 1,
-        fingerprint,
-        projectedAtMs: nowMs,
-      };
-    }, undefined, false);
-    if (finalized?.committed !== true || !snapshotValue(finalized.snapshot)) {
-      const error = new Error('Driver location projection lease changed before commit');
-      error.code = 'DRIVER_LOCATION_PROJECTION_BUSY';
-      throw error;
-    }
-    const revision = snapshotValue(finalized.snapshot)?.revision;
+    fingerprint = JSON.stringify(projection);
     const latestRolloutContext = await readRollout({ database });
     const rolloutChanged = latestRolloutContext.isDefault !== rolloutContext.isDefault
       || latestRolloutContext.rollout.phase !== rolloutContext.rollout.phase
@@ -362,16 +274,11 @@ async function reconcileDriverLocationProjectionOnce({
           timestamp: nowMs,
           ...(cutover ? { projectionRevision: revision } : {}),
         };
-    const publicResult = await database.ref(`tours/${normalizedTourId}/driverLocation`).transaction((current) => {
-      const currentRevision = publicProjectionRevision(current);
-      if (cutover && currentRevision >= revision) return undefined;
-      return publicProjection;
-    }, undefined, false);
-    if (publicResult?.committed !== true) {
-      const error = new Error('Driver location projection was superseded before publication');
-      error.code = 'DRIVER_LOCATION_PROJECTION_SUPERSEDED';
-      throw error;
-    }
+    const lease = await refreshProjectionFence({ ...context, clock });
+    const publication = await publishProjectionFence({ ...context, lease, publicProjection, clock });
+    if (!publication.published) return { ok: true, tourId: normalizedTourId, revision,
+      projection: null, ...publication };
+    published = true;
     return {
       ok: true,
       tourId: normalizedTourId,
@@ -379,15 +286,19 @@ async function reconcileDriverLocationProjectionOnce({
       projection,
       published: true,
     };
-  } catch (error) {
-    await releaseProjectionLease(stateRef, leaseOwner).catch(() => {});
-    throw error;
+  } finally {
+    await releaseProjectionFence({ ...context, fingerprint: published ? fingerprint : undefined,
+      projectedAtMs: sourceTime() });
   }
 }
 
-const reconcileDriverLocationProjection = (options) => retryProjection(
-  () => reconcileDriverLocationProjectionOnce(options), 'DRIVER_LOCATION_PROJECTION_BUSY',
-);
+const reconcileDriverLocationProjection = (options = {}) => {
+  const clock = options.clock || Date.now;
+  const startedAt = clock();
+  const initialNow = options.nowMs ?? startedAt;
+  return retryProjection(() => reconcileDriverLocationProjectionOnce({ ...options, clock,
+    nowMs: initialNow + Math.max(0, clock() - startedAt) }), 'DRIVER_LOCATION_PROJECTION_BUSY');
+};
 
 function collectChangedTours(before, after) {
   return [...new Set([before?.tourId, after?.tourId].map((value) => normalizeBoundedText(value, 100)).filter(Boolean))].sort();
@@ -407,6 +318,7 @@ async function cleanupDriverLocationsForAppSession({
   appSessionId,
   expectedTourId = null,
   nowMs = Date.now(),
+  clock = Date.now,
 } = {}) {
   if (!database?.ref) throw new Error('A Realtime Database instance is required');
   const normalizedSessionId = normalizeBoundedText(appSessionId, 100);
@@ -438,7 +350,7 @@ async function cleanupDriverLocationsForAppSession({
   }
   const reconciledTours = [...tours].sort();
   for (const tourId of reconciledTours) {
-    await reconcileDriverLocationProjection({ database, tourId, nowMs });
+    await reconcileDriverLocationProjection({ database, tourId, nowMs, clock });
   }
   return { ok: true, appSessionId: normalizedSessionId, removed, reconciledTours };
 }

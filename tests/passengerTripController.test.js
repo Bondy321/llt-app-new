@@ -180,6 +180,41 @@ test('a confirmed invalid session uses lifecycle callback; ordinary service fail
   assert.equal(h.counts().detached, 2);
 });
 
+test('a sibling phone deletion barrier retries without purging this session or saved trip, then recovers', async () => {
+  let reason = 'ACCOUNT_DELETION_IN_PROGRESS';
+  let h;
+  const revoked = [];
+  const api = createTripApi({
+    getFirebase: () => ({ auth: { currentUser: { uid: scope.authUid, getIdToken: async () => 'fixture-token' } } }),
+    endpoint: () => 'https://example.test/trip',
+    fetchFn: async (_url, options) => ({
+      ok: reason === null,
+      json: async () => reason ? { reason } : h.response(JSON.parse(options.body)),
+    }),
+  });
+  h = harness({ controller: { request: args => api.request(args), onInvalidSession: value => revoked.push(value) } });
+  await h.controller.ready;
+  const saved = await h.cache.read(scope);
+  h.controller.setAvailability(true);
+  h.drain(); await flush();
+  assert.equal(revoked.length, 0);
+  assert.equal(h.controller.getState().parts.booking.error, 'ACCOUNT_DELETION_IN_PROGRESS');
+  assert.equal(h.controller.getState().parts.booking.data.id, booking.id);
+  assert.deepEqual(await h.cache.read(scope), saved);
+  assert.equal(h.counts().detached, 0);
+  assert.equal(h.delays.size, 3);
+  reason = null;
+  await h.controller.refresh('manual');
+  assert.equal(h.controller.getState().parts.booking.status, 'checked');
+  assert.equal(h.delays.size, 0);
+  assert.equal(revoked.length, 0);
+  // This phone's own missing/revoked session remains a terminal lifecycle event.
+  reason = 'SESSION_NOT_FOUND';
+  await h.controller.refresh('manual');
+  assert.deepEqual(revoked, [{ reason: 'SESSION_NOT_FOUND' }]);
+  assert.equal(h.counts().detached, 2);
+});
+
 test('first signal before, during or after the first read is covered with bounded revalidation', async () => {
   for (const timing of ['before', 'during', 'after']) {
     const h = harness(); await h.controller.ready; h.controller.setAvailability(true);

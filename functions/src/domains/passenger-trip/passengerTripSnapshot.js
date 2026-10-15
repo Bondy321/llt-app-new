@@ -3,6 +3,8 @@
 // @ts-check
 
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
+const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
+const { isPassengerDeviceAuthorized } = loadLegacyLibrary('passengerIdentity');
 const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const {
   buildPassengerSafeBooking,
@@ -94,15 +96,17 @@ const resolvePassengerTripAuthority = async ({
   }
   await ensureNoActivePassengerAccountDeletion({ db, bookingRef });
 
-  const [authorizedAuthUid, passengerPrincipalId, identityVersion, loginLocked, booking] = await Promise.all([
+  const [authorizedAuthUid, deviceAuthorizationVersion, authorizedDevice, passengerPrincipalId, identityVersion, loginLocked, booking] = await Promise.all([
     readValue(db, `passenger_identity_security/${bookingRef}/authorizedAuthUid`),
+    readValue(db, `passenger_identity_security/${bookingRef}/deviceAuthorizationVersion`),
+    readValue(db, `passenger_identity_security/${bookingRef}/authorizedAuthUids/${authUid}`),
     readValue(db, `passenger_identity_security/${bookingRef}/passengerPrincipalId`),
     readValue(db, `passenger_identity_security/${bookingRef}/passengerIdentityVersion`),
     readValue(db, `passenger_identity_security/${bookingRef}/loginLocked`),
     readValue(db, `bookings/${bookingRef}`),
   ]);
-  if (authorizedAuthUid !== authUid || passengerPrincipalId !== access.principalId
-    || identityVersion !== 'pax_v2' || loginLocked === true) {
+  if (!isPassengerDeviceAuthorized({ authorizedAuthUid, deviceAuthorizationVersion, authorizedAuthUids: { [authUid]: authorizedDevice }, loginLocked }, authUid)
+    || passengerPrincipalId !== access.principalId || identityVersion !== 'pax_v2') {
     throw passengerTripError('SESSION_SCOPE_MISMATCH');
   }
   if (!booking || typeof booking !== 'object' || Array.isArray(booking)) {
@@ -140,10 +144,12 @@ const ensurePassengerTripAuthorityStillCurrent = async ({
   ensureNoActiveAccountDeletion,
   ensureNoActivePassengerAccountDeletion,
 }) => {
-  const [profileBookingRef, authorizedAuthUid, passengerPrincipalId, identityVersion,
+  const [profileBookingRef, authorizedAuthUid, deviceAuthorizationVersion, authorizedDevice, passengerPrincipalId, identityVersion,
     loginLocked, bookingTourId, tourCode] = await Promise.all([
     readValue(db, `users/${authUid}/bookingRef`),
     readValue(db, `passenger_identity_security/${scope.bookingRef}/authorizedAuthUid`),
+    readValue(db, `passenger_identity_security/${scope.bookingRef}/deviceAuthorizationVersion`),
+    readValue(db, `passenger_identity_security/${scope.bookingRef}/authorizedAuthUids/${authUid}`),
     readValue(db, `passenger_identity_security/${scope.bookingRef}/passengerPrincipalId`),
     readValue(db, `passenger_identity_security/${scope.bookingRef}/passengerIdentityVersion`),
     readValue(db, `passenger_identity_security/${scope.bookingRef}/loginLocked`),
@@ -152,9 +158,10 @@ const ensurePassengerTripAuthorityStillCurrent = async ({
     ensureNoActiveAccountDeletion({ db, authUid }),
     ensureNoActivePassengerAccountDeletion({ db, bookingRef: scope.bookingRef }),
   ]);
-  if (profileBookingRef !== scope.bookingRef || authorizedAuthUid !== authUid
+  if (profileBookingRef !== scope.bookingRef
+    || !isPassengerDeviceAuthorized({ authorizedAuthUid, deviceAuthorizationVersion, authorizedAuthUids: { [authUid]: authorizedDevice }, loginLocked }, authUid)
     || passengerPrincipalId !== scope.principalId || identityVersion !== 'pax_v2'
-    || loginLocked === true || normalizeTourKeyForComparison(bookingTourId) !== scope.tourId) {
+    || normalizeTourKeyForComparison(bookingTourId) !== scope.tourId) {
     throw passengerTripError('SESSION_SCOPE_MISMATCH');
   }
   if (!tourCode || normalizeTourKeyForComparison(tourCode) !== scope.tourId) {

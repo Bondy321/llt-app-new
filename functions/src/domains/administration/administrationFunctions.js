@@ -29,6 +29,11 @@ const {
 
 const TOUR_DELETION_LOCK_TTL_MS = 10 * 60 * 1000;
 
+const resolveDeletionTourId = (value) => {
+  const tourId = normalizeTourKeyForComparison(value);
+  return isValidFirebaseKey(tourId) ? tourId : null;
+};
+
 const acquireTourDeletionFences = async ({ db, tourId, lockOwner }) => {
   const assignmentTourLockPath = `driver_assignment_locks/tours/${tourId}`;
   const assignmentTourLockAcquired = await acquireManualBookingLock({
@@ -48,8 +53,16 @@ const acquireTourDeletionFences = async ({ db, tourId, lockOwner }) => {
     });
     return { acquired: true, assignmentTourLockPath, locationInvalidation };
   } catch (error) {
-    await releaseManualBookingLock({ db, path: assignmentTourLockPath, owner: lockOwner });
-    if (error?.code === 'DRIVER_LOCATION_PROJECTION_BUSY') {
+    let targetMissing = false;
+    try {
+      if (error?.code === 'DRIVER_LOCATION_TOUR_MISSING') {
+        targetMissing = !(await db.ref(`tours/${tourId}`).once('value')).exists();
+      }
+    } finally {
+      if (!targetMissing) await releaseManualBookingLock({ db, path: assignmentTourLockPath, owner: lockOwner });
+    }
+    if (targetMissing) return { acquired: true, assignmentTourLockPath, tourMissing: true };
+    if (['DRIVER_LOCATION_PROJECTION_BUSY', 'DRIVER_LOCATION_TOUR_MISSING'].includes(error?.code)) {
       return { acquired: false, assignmentTourLockPath };
     }
     throw error;
@@ -307,8 +320,8 @@ const deleteTourData = onRequestWithResult(
     if (!access.allowed) return access.response;
     const { db } = access;
 
-    const tourId = normalizeTourKeyForComparison(req.body?.tourId);
-    if (!tourId || !isValidFirebaseKey(tourId)) {
+    const tourId = resolveDeletionTourId(req.body?.tourId);
+    if (!tourId) {
       return res.status(400).json({ success: false, reason: 'INVALID_TOUR' });
     }
 
@@ -332,6 +345,13 @@ const deleteTourData = onRequestWithResult(
       assignmentTourLockPath = fences.assignmentTourLockPath;
       locationInvalidation = fences.locationInvalidation || null;
       if (!fences.acquired) return res.status(409).json({ success: false, reason: 'DELETE_IN_PROGRESS' });
+      // A repeat request cannot reserve a public fence on an absent tour. It is
+      // already complete: do not create a tour or broadly delete data that a
+      // concurrently recreated departure might now own.
+      if (fences.tourMissing) return res.status(200).json({
+        success: true, tourId, alreadyDeleted: true,
+        summary: { bookingsDeleted: 0, storageObjectsDeleted: 0, databasePathsDeleted: 0, alreadyDeleted: true },
+      });
       const [tourSnapshot, driversSnapshot, driverUsersSnapshot, reportsSnapshot, safetySnapshot, locationSourcesSnapshot] = await Promise.all([
         db.ref(`tours/${tourId}`).once('value'),
         db.ref('drivers').once('value'),

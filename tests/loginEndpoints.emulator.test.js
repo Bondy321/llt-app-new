@@ -18,7 +18,7 @@ const { createManualPassengerBooking } = require('../functions/src/domains/admin
 const { acquireManualBookingLock, releaseManualBookingLock } = require('../functions/src/infrastructure/database/operationLock');
 const { recomputeTourProjection } = require('../functions/src/domains/admin-dashboard/dashboardProjectionFunctions');
 const { getTourManifest } = require('../functions/src/domains/manifests/manifestFunction');
-const { endAppSession } = require('../functions/src/domains/app-sessions/sessionFunctions');
+const { endAppSession, revokeAppSession } = require('../functions/src/domains/app-sessions/sessionFunctions');
 const { updateNotificationDeviceRegistration, updateNotificationDevice } = require('../functions/src/domains/notifications/notificationDeviceFunctions');
 const { verifyCurrentTourPhotoAccess } = require('../functions/src/domains/media/mediaAccess');
 const { resolvePrivatePhotoMedia } = require('../functions/src/domains/media/privateMediaFunctions');
@@ -38,6 +38,7 @@ test.before(async () => {
   app.post('/manifest', getTourManifest);
   app.post('/manual', createManualPassengerBooking);
   app.post('/end', endAppSession);
+  app.post('/revoke', revokeAppSession);
   app.post('/notifications', updateNotificationDeviceRegistration);
   app.post('/private-media', resolvePrivatePhotoMedia);
   app.post('/trip', getPassengerTripSnapshot);
@@ -458,17 +459,50 @@ test('source booking transfer denies the retained old session until fresh login 
   assert.deepEqual((await db.ref(`chats/${oldTourId}/messages/retained_transfer_history`).get()).val(), oldMessage);
 });
 
-test('passenger rejects a second installation without changing the active session', async () => {
+test('two passenger phones share the booking identity while logout and revocation remain installation-local', async () => {
   await seedBooking('DEVICE123');
+  await db.ref('tours/LOGIN_TOUR/tourCode').set('LOGIN_TOUR');
   const first = await newIdentity();
   const second = await newIdentity();
   assert.equal((await login('passenger', first, passengerBody('DEVICE123'))).status, 200);
   const before = (await db.ref(`app_sessions/${first.uid}`).once('value')).val();
-  const rejected = await login('passenger', second, passengerBody('DEVICE123'));
-  assert.equal(rejected.status, 403);
-  assert.equal(rejected.body.reason, 'REAUTHORIZE_REQUIRED');
+  const admitted = await login('passenger', second, passengerBody('DEVICE123'));
+  assert.equal(admitted.status, 200, JSON.stringify(admitted.body));
+  assert.equal(admitted.body.valid, true);
+  assert.equal(admitted.body.stablePassengerId, before.principalId);
+  assert.notEqual(admitted.body.session.sessionId, before.sessionId);
   assert.deepEqual((await db.ref(`app_sessions/${first.uid}`).once('value')).val(), before);
-  assert.equal((await db.ref(`app_sessions/${second.uid}`).once('value')).exists(), false);
+  const security = (await db.ref('passenger_identity_security/DEVICE123').get()).val();
+  assert.equal(security.deviceAuthorizationVersion, 2);
+  assert.equal(security.authorizedAuthUids[first.uid], true);
+  assert.equal(security.authorizedAuthUids[second.uid], true);
+  const trip = await login('trip', second, { expectedSessionId: admitted.body.session.sessionId,
+    parts: ['booking','tour'], versions: {} }, { Origin: 'http://localhost:19006' });
+  assert.equal(trip.status, 200, JSON.stringify(trip.body));
+  assert.equal(trip.body.parts.booking.data.id, 'DEVICE123');
+  const media = await login('private-media', second, { tourId: before.tourId,
+    ownerKey: before.principalId, photoIds: ['missing_fixture_photo'] });
+  assert.equal(media.status, 404, JSON.stringify(media.body));
+  const wrong = await newIdentity();
+  const refused = await login('passenger', wrong, { bookingRef: 'DEVICE123', email: 'incorrect@example.invalid' });
+  assert.equal(refused.status, 401);
+  assert.equal((await db.ref(`app_sessions/${wrong.uid}`).get()).exists(), false);
+  assert.equal((await db.ref(`passenger_identity_security/DEVICE123/authorizedAuthUids/${wrong.uid}`).get()).exists(), false);
+  const ended = await login('end', second, { expectedSessionId: admitted.body.session.sessionId, reason: 'user_logout' });
+  assert.equal(ended.status, 200, JSON.stringify(ended.body));
+  assert.equal((await db.ref(`app_sessions/${second.uid}`).get()).exists(), false);
+  assert.deepEqual((await db.ref(`app_sessions/${first.uid}`).get()).val(), before);
+  const repeated = await login('passenger', second, passengerBody('DEVICE123'));
+  assert.equal(repeated.status, 200, JSON.stringify(repeated.body));
+  const operator = await newIdentity();
+  await db.ref(`admin_users/${operator.uid}`).set(true);
+  const revoked = await login('revoke', operator, { authUid: second.uid,
+    expectedSessionId: repeated.body.session.sessionId, reason: 'staff_request' },
+  { Origin: 'https://loch-lomond-travel-admin.web.app' });
+  assert.equal(revoked.status, 200, JSON.stringify(revoked.body));
+  assert.equal((await db.ref(`app_sessions/${second.uid}`).get()).exists(), false);
+  assert.deepEqual((await db.ref(`app_sessions/${first.uid}`).get()).val(), before);
+  assert.equal((await db.ref('passenger_identity_security/DEVICE123').get()).val().authorizedAuthUids[first.uid], true);
   assert.equal((await db.ref(`app_session_locks/${second.uid}`).once('value')).exists(), false);
   assert.equal((await db.ref('account_deletion_passenger_locks').once('value')).exists(), false);
 });

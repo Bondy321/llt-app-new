@@ -25,6 +25,7 @@ const {
 const mapDriverVerifierReason = (reason) => {
   const reasonToMessage = {
     ASSIGNMENT_IN_PROGRESS: 'Driver assignment is being updated. Please try again.',
+    ASSIGNMENT_UNAVAILABLE: 'Your assigned tour is unavailable or its driver assignment needs attention. Please contact dispatch, then try signing in again.',
     DRIVER_ALREADY_LINKED: 'This driver code is already linked to another device. Please contact dispatch if this is unexpected.',
     DRIVER_LOGIN_IN_PROGRESS: 'Another sign-in for this driver is finishing. Please try again.',
     DRIVER_NOT_FOUND: 'Driver code not found',

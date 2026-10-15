@@ -109,7 +109,7 @@ export default function AccountPrivacyScreen({
       'Delete account?',
       isDriverSession
         ? 'This removes your driver app account, notification preferences, and local offline data. Shared operational chat, media, assignments, and canonical operations records are retained. Deletion may continue securely after this app is closed.'
-        : 'This removes your app account, notification preferences, local offline data, and passenger-authored active-tour chat and media where possible. Deletion may continue securely after this app is closed. Your travel booking may still be retained by Loch Lomond Travel where required.',
+        : 'This removes this phone’s app access, notification preferences and local offline data. Active-tour chat and photos shared by this booking are also removed where possible, including content used on other phones. Other phones keep their own app access. To leave shared content intact, choose Log out instead. Deletion may continue securely after this app is closed. Your travel booking may still be retained by Loch Lomond Travel where required.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -180,7 +180,7 @@ export default function AccountPrivacyScreen({
             title="Delete account"
             subtitle={isDriverSession
               ? 'Remove this driver app account and local data; shared operational records are retained.'
-              : 'Remove this app account, local data, and passenger-authored active-tour content.'}
+              : 'Remove this phone’s app access, local data, and active-tour content shared by this booking.'}
             onPress={handleDeletePress}
             destructive
             disabled={deleting}
@@ -191,7 +191,9 @@ export default function AccountPrivacyScreen({
         <View style={styles.notice}>
           <MaterialCommunityIcons name="information-outline" size={20} color={COLORS.primary} />
           <Text style={styles.noticeText}>
-            Deleting your account removes the app account used for this device. Travel booking records may be kept by Loch Lomond Travel where they are needed for operations, safety, legal, or accounting reasons.
+            {isDriverSession
+              ? 'Deleting your account removes the app account used for this device. Travel booking records may be kept by Loch Lomond Travel where they are needed for operations, safety, legal, or accounting reasons.'
+              : 'Deleting your account also removes active-tour content shared by this booking on other phones. Log out only signs out this phone and preserves shared content. Travel booking records may be kept where needed for operations, safety, legal, or accounting reasons.'}
           </Text>
         </View>
 

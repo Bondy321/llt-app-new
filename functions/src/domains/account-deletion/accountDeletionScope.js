@@ -6,7 +6,7 @@ const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKe
 const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 
 const { isActiveSessionRecord, isValidAppSessionId } = loadLegacyLibrary('appSession');
-const { isOpaquePassengerId } = loadLegacyLibrary('passengerIdentity');
+const { isOpaquePassengerId, isPassengerDeviceAuthorized } = loadLegacyLibrary('passengerIdentity');
 
 const scopeFailure = (reason = 'ACCOUNT_DELETION_SCOPE_INCOMPLETE') => ({ valid: false, reason });
 
@@ -68,7 +68,7 @@ const deriveTrustedAccountDeletionScope = async ({ db, authUid, expectedSessionI
     db.ref(`identity_bindings/${stablePassengerKey}/${authUid}`).once('value'),
   ]);
   const security = securitySnapshot.val();
-  if (!security || security.authorizedAuthUid !== authUid
+  if (!isPassengerDeviceAuthorized(security, authUid)
     || security.passengerPrincipalId !== stablePassengerId || bindingSnapshot.val() !== true) return scopeFailure();
   return {
     valid: true,

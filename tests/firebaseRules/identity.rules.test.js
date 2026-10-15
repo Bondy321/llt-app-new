@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { authorizePassengerLoginDevice } = require('../../functions/lib/passengerIdentity');
+const { authorizePassengerLoginDevice, isPassengerDeviceAuthorized } = require('../../functions/lib/passengerIdentity');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
@@ -57,13 +57,13 @@ test('cold server credential transaction loads an existing identity before bindi
   });
 });
 
-test('cold credential checks preserve same-device access and reject missing, malformed, locked or other-device records', async () => {
+test('cold credential admission preserves existing phones and rejects missing, malformed or locked records', async () => {
   for (const [name, record, reason] of [
     ['same', { passengerPrincipalId: STABLE_ID, authorizedAuthUid: USER_UID }, null],
     ['missing', null, 'IDENTITY_INCOMPLETE'],
     ['malformed', { passengerPrincipalId: 'invalid' }, 'IDENTITY_INCOMPLETE'],
     ['locked', { passengerPrincipalId: STABLE_ID, loginLocked: true }, 'REAUTHORIZE_REQUIRED'],
-    ['other', { passengerPrincipalId: STABLE_ID, authorizedAuthUid: 'another-device' }, 'REAUTHORIZE_REQUIRED'],
+    ['other', { passengerPrincipalId: STABLE_ID, authorizedAuthUid: 'another-device' }, null],
   ]) {
     const credentialPath = `passenger_identity_security/COLD_${name}`;
     await testEnv.withSecurityRulesDisabled(async (context) => {
@@ -72,14 +72,21 @@ test('cold credential checks preserve same-device access and reject missing, mal
     await testEnv.withSecurityRulesDisabled(async (context) => {
       const ref = context.database(dbUrl).ref(credentialPath);
       const login = () => authorizePassengerLoginDevice({ securityRef: ref, authUid: USER_UID });
-      if (reason) await assert.rejects(login, (error) => error.code === reason, name);
-      else assert.equal((await login()).authorizedAuthUid, USER_UID);
-      assert.deepEqual((await ref.once('value')).val(), record, `${name} must not rewrite security state`);
+      if (reason) {
+        await assert.rejects(login, (error) => error.code === reason, name);
+        assert.deepEqual((await ref.once('value')).val(), record, `${name} must not rewrite security state`);
+      } else {
+        const identity = await login();
+        assert.equal(isPassengerDeviceAuthorized(identity, USER_UID), true);
+        assert.equal(identity.passengerPrincipalId, STABLE_ID);
+        if (record.authorizedAuthUid) assert.equal(isPassengerDeviceAuthorized(identity, record.authorizedAuthUid), true);
+        assert.deepEqual((await ref.once('value')).val(), identity);
+      }
     });
   }
 });
 
-test('concurrent cold device logins bind only one winner without replacing its identity', async () => {
+test('concurrent cold device logins admit both phones without replacing the shared identity', async () => {
   const credentialPath = 'passenger_identity_security/COLD_RACE';
   await testEnv.withSecurityRulesDisabled(async (context) => {
     await context.database(dbUrl).ref(credentialPath).set({ passengerPrincipalId: STABLE_ID });
@@ -93,13 +100,13 @@ test('concurrent cold device logins bind only one winner without replacing its i
     });
     return identity;
   }));
-  assert.equal(outcomes.filter((result) => result.status === 'fulfilled').length, 1);
-  const rejected = outcomes.find((result) => result.status === 'rejected');
-  assert.equal(rejected.reason.code, 'REAUTHORIZE_REQUIRED');
-  const winner = outcomes.find((result) => result.status === 'fulfilled').value;
+  assert.equal(outcomes.filter((result) => result.status === 'fulfilled').length, 2);
   await testEnv.withSecurityRulesDisabled(async (context) => {
-    assert.deepEqual((await context.database(dbUrl).ref(credentialPath).once('value')).val(), winner);
-    assert.equal(winner.passengerPrincipalId, STABLE_ID);
+    const saved = (await context.database(dbUrl).ref(credentialPath).once('value')).val();
+    assert.deepEqual(saved.authorizedAuthUids, { 'device-a': true, 'device-b': true });
+    assert.equal(saved.passengerPrincipalId, STABLE_ID);
+    assert.equal(saved.deviceAuthorizationVersion, 2);
+    for (const result of outcomes) assert.equal(result.value.passengerPrincipalId, STABLE_ID);
   });
 });
 

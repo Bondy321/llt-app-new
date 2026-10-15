@@ -1,5 +1,5 @@
 const INVALID_SESSION_REASONS = new Set(['SESSION_CHANGED', 'SESSION_EXPIRED', 'SESSION_NOT_FOUND',
-  'SESSION_REVOKED', 'SESSION_SCOPE_MISMATCH', 'ACCOUNT_DELETION_IN_PROGRESS', 'SESSION_INACTIVE',
+  'SESSION_REVOKED', 'SESSION_SCOPE_MISMATCH', 'SESSION_INACTIVE',
   'SESSION_UID_MISMATCH', 'SESSION_ROLE_MISMATCH', 'SESSION_TOUR_MISMATCH', 'PARTICIPANT_MISSING',
   'PARTICIPANT_SESSION_MISMATCH', 'PASSENGER_PROFILE_MISMATCH', 'BOOKING_SCOPE_MISMATCH',
   'PASSENGER_IDENTITY_MISMATCH', 'REAUTHORIZE_REQUIRED']);
@@ -29,6 +29,9 @@ const createTripApi = ({ getFirebase = () => require('../../firebase'), fetchFn 
       const payload = await response.json();
       if (!response.ok) {
         const reason = payload?.reason || 'SERVICE_UNAVAILABLE';
+        // The booking-wide deletion barrier can belong to another authorized
+        // phone. Retry it without purging this phone's still-valid session/cache.
+        // This phone's own deletion already revokes its exact server session.
         throw Object.assign(new Error(reason), { reason, invalidSession: INVALID_SESSION_REASONS.has(reason) });
       }
       return payload;

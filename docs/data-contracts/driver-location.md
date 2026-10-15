@@ -1,6 +1,6 @@
 # Driver Location and Find My Bus Contract
 
-Updated: 8 October 2026
+Updated: 15 October 2026
 
 Passengers continue to read the server-owned compatibility projection at
 `tours/{tourId}/driverLocation`. Current clients never write or remove that
@@ -232,7 +232,22 @@ The public schema remains:
 }
 ```
 
-Projection leases prevent concurrent regressions. Rollout state is private and
+Projection leases remain held through the public write acknowledgement and use
+fresh wall-clock expiry checks. Before reading sources, the worker atomically
+reserves server-owned `driverLocationProjectionRevision` and
+`driverLocationProjectionEpoch` siblings under the exact tour. The epoch is a
+bounded random UUID allocated once per reservation, with no driver or handset
+identity. The final exact-tour transaction requires both values to match and
+preserves all concurrent source, operator and runtime fields. This also fences
+expired workers in compatibility mode without adding fields to `driverLocation`;
+the epoch prevents a deleted and recreated tour from reusing an old worker's
+authority when counters reset. Malformed or exhausted watermarks fail closed.
+Assignment invalidation publishes the reserved watermark and tombstone in the
+same canonical update. Normal clients cannot change these sibling fields,
+including through whole-tour driver writes; admin create/copy/update helpers
+strip or reject them. No database-root transaction is used.
+
+Rollout state is private and
 explicit at `live_state_rollout/v1`:
 
 ```ts
