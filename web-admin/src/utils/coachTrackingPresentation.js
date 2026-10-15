@@ -1,4 +1,4 @@
-import { formatUKCalendarDate } from './dateUtils';
+import { formatUKCalendarDate } from './dateUtils.js';
 
 // Same cadence thresholds as the passenger location contract. No coordinates
 // are persisted, and expired/malformed points never enter the map renderer.
