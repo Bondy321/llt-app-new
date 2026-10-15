@@ -79,6 +79,20 @@ test('CI enforces native compatibility and resolved Expo profile parity against 
   assert.match(packageJson.scripts['release:config:check'], /checkExpoConfigParity\.js/u);
 });
 
+test('native release workflows install and cache the web SDK used by real rules integration tests', () => {
+  for (const workflow of ['eas-build.yml', 'eas-testflight.yml']) {
+    const source = read(`.github/workflows/${workflow}`);
+    const buildJob = source.split(/\n  submit-testflight:/u)[0];
+    const install = buildJob.indexOf('run: npm --prefix web-admin ci');
+    const rulesTest = buildJob.indexOf('run: npm run test:emulators');
+    assert.ok(install >= 0 && rulesTest > install, `${workflow}: install the real web SDK before rules tests`);
+    assert.match(buildJob, /cache-dependency-path:\s*\|[^]*?web-admin\/package-lock\.json/u, workflow);
+    if (workflow === 'eas-testflight.yml') {
+      assert.match(buildJob, /name: Install web admin dependencies for integration tests\s+if: \$\{\{ !inputs\.eas_build_id \}\}\s+run: npm --prefix web-admin ci/u);
+    }
+  }
+});
+
 test('automatic OTA planning happens before the production environment and preserves manual dispatch', () => {
   const source = read('.github/workflows/eas-update.yml');
   const planIndex = source.indexOf('  plan-update:');

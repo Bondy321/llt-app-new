@@ -82,6 +82,7 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             functions/package-lock.json
+            web-admin/package-lock.json
 
       - name: Setup Java for Firebase emulators
         if: ${{ !inputs.eas_build_id }}
@@ -101,6 +102,10 @@ jobs:
       - name: Install Functions dependencies
         if: ${{ !inputs.eas_build_id }}
         run: npm --prefix functions ci
+
+      - name: Install web admin dependencies for integration tests
+        if: ${{ !inputs.eas_build_id }}
+        run: npm --prefix web-admin ci
 
       - name: Run complete mobile tests
         if: ${{ !inputs.eas_build_id }}
