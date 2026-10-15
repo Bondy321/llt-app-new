@@ -7,6 +7,11 @@ const ukCalendarFormatter = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
 });
 
+export const formatUKCalendarDate = (value, fallback = '-') => (
+  typeof value === 'number' && Number.isFinite(value) && Number.isFinite(new Date(value).getTime())
+    ? ukCalendarFormatter.format(value) : fallback
+);
+
 // Tour query indexes represent civil dates at UTC midnight, not instants in
 // the browser's timezone. Match the UK's calendar day even when abroad or in BST.
 export const getUKCalendarDayEpochMs = (nowMs = Date.now()) => {
