@@ -36,6 +36,7 @@ const readTransitionDriverIds = (transition) => [...new Set([
 /** @type {(...args: any[]) => Promise<boolean>} */
 const recordAssignmentTransitionFailure = async ({ db, transitionId, nowMs, reason }) => {
   const result = await db.ref(`${TRANSITION_ROOT}/${transitionId}`).transaction((current) => {
+    if (current === null) return null;
     if (!current || ['completed', 'failed', 'aborted'].includes(current.status)) return undefined;
     const attemptCount = Number.isSafeInteger(current.attemptCount) ? current.attemptCount + 1 : 1;
     return {
@@ -46,7 +47,7 @@ const recordAssignmentTransitionFailure = async ({ db, transitionId, nowMs, reas
       lastFailureReason: boundedWarningCode(reason, 'cleanup_retry'),
     };
   }, undefined, false);
-  return result?.committed === true;
+  return result?.committed === true && Boolean(result.snapshot.val());
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
@@ -68,6 +69,7 @@ const terminalizeExpiredAssignmentTransition = async ({ db, transitionId, transi
   };
   const initialWarning = buildOperationsTerminalWarning(warningInput);
   const claimed = await db.ref(`${TRANSITION_ROOT}/${transitionId}`).transaction((current) => {
+    if (current === null) return null;
     if (!current
       || current.transitionId !== transitionId
       || current.status !== transition.status
@@ -83,7 +85,9 @@ const terminalizeExpiredAssignmentTransition = async ({ db, transitionId, transi
       terminalizationStartedAtMs: current.terminalizationStartedAtMs || nowMs,
     };
   }, undefined, false);
-  if (!claimed?.committed) return { status: 'source_changed', terminalized: false };
+  if (!claimed?.committed || claimed.snapshot.val()?.terminalWarningId !== initialWarning.warningId) {
+    return { status: 'source_changed', terminalized: false };
+  }
 
   const claimedTransition = claimed.snapshot.val() || transition;
   const warning = buildOperationsTerminalWarning({
@@ -244,7 +248,7 @@ const cleanupExpiredDriverAssignmentRecords = async ({ db, nowMs = Date.now(), l
     if (transition?.admissionId) updates[`driver_login_policy/v1/loginAdmissions/${transition.admissionId}`] = null;
     for (const driverId of readTransitionDriverIds(transition)) {
       await db.ref(`${ACTIVE_ASSIGNMENT_ROOT}/${driverId}`).transaction((current) => (
-        current?.transitionId === transitionId ? null : undefined
+        current === null || current?.transitionId === transitionId ? null : undefined
       ), undefined, false);
     }
   }

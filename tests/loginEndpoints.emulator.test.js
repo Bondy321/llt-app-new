@@ -23,6 +23,7 @@ const { updateNotificationDeviceRegistration, updateNotificationDevice } = requi
 const { verifyCurrentTourPhotoAccess } = require('../functions/src/domains/media/mediaAccess');
 const { resolvePrivatePhotoMedia } = require('../functions/src/domains/media/privateMediaFunctions');
 const { getPassengerTripSnapshot } = require('../functions/src/domains/passenger-trip/passengerTripFunctions');
+const { assignDriverToTour } = require('../functions/src/domains/driver-assignment/driverAssignmentFunction');
 const {
   acquireManualSourceRosterLease,
   releaseManualSourceRosterLease,
@@ -42,6 +43,7 @@ test.before(async () => {
   app.post('/notifications', updateNotificationDeviceRegistration);
   app.post('/private-media', resolvePrivatePhotoMedia);
   app.post('/trip', getPassengerTripSnapshot);
+  app.post('/assignment', assignDriverToTour);
   app.use((error, _req, res, _next) => res.status(500).json({ testHandlerError: error.message }));
   server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -789,4 +791,30 @@ test('group and private photo variants reach ready across cold-cache transaction
       assert.ok(saved.get(stored.thumbnailStoragePath)?.length);
     } finally { await fresh.delete(); }
   }
+});
+
+test('authenticated admin assignment finishes its durable transition and exact replay preserves passenger history', async () => {
+  const operator = await newIdentity();
+  await db.ref().update({
+    [`admin_users/${operator.uid}`]: true,
+    'drivers/D-ASSIGNMENT-COLD': { currentTourId: 'ASSIGNMENT_OLD', assignmentRevision: 0, name: 'Synthetic driver' },
+    'tours/ASSIGNMENT_OLD': { tourCode: 'ASSIGNMENT OLD', name: 'Old synthetic tour', driverId: 'D-ASSIGNMENT-COLD', driverAssignmentRevision: 0 },
+    'tours/ASSIGNMENT_NEXT': { tourCode: 'ASSIGNMENT NEXT', name: 'New synthetic tour', isActive: true, driverAssignmentRevision: 0 },
+    'tour_manifests/ASSIGNMENT_OLD/assigned_drivers/D-ASSIGNMENT-COLD': true,
+    'tour_manifests/ASSIGNMENT_NEXT/bookings/retained-history': { passengerCount: 2, boardingStatus: 'BOARDED' },
+  });
+  const input = { driverId: 'D-ASSIGNMENT-COLD', tourId: 'ASSIGNMENT_NEXT', operation: 'assign',
+    expectedDriverRevision: 0, expectedTourRevision: 0, idempotencyKey: 'synthetic-admin-assignment-cold-replay' };
+  const headers = { Origin: 'https://loch-lomond-travel-admin.web.app' };
+  const assigned = await login('assignment', operator, input, headers);
+  assert.equal(assigned.status, 200, JSON.stringify(assigned));
+  assert.equal(assigned.body.success, true);
+  assert.equal((await db.ref('drivers/D-ASSIGNMENT-COLD/currentTourId').get()).val(), 'ASSIGNMENT_NEXT');
+  assert.equal((await db.ref('driver_assignment_active/v1/D-ASSIGNMENT-COLD').get()).exists(), false);
+  const revision = (await db.ref('drivers/D-ASSIGNMENT-COLD/assignmentRevision').get()).val();
+  const replay = await login('assignment', operator, input, headers);
+  assert.equal(replay.status, 200, JSON.stringify(replay));
+  assert.equal((await db.ref('drivers/D-ASSIGNMENT-COLD/assignmentRevision').get()).val(), revision);
+  assert.deepEqual((await db.ref('tour_manifests/ASSIGNMENT_NEXT/bookings/retained-history').get()).val(),
+    { passengerCount: 2, boardingStatus: 'BOARDED' });
 });

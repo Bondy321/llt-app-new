@@ -307,8 +307,8 @@ const renewDriverLoginAdmission = async ({ db, admissionId, nowMs = Date.now() }
       ...(current.durableUntilExplicitRelease === true
         ? { expiresAtMs: null }
         : { expiresAtMs: nowMs + DRIVER_LOGIN_ADMISSION_TTL_MS }),
-    } : undefined, undefined, false);
-  return Boolean(result?.committed);
+    } : null, undefined, false);
+  return Boolean(result?.committed && result.snapshot.val());
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
