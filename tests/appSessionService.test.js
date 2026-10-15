@@ -35,6 +35,23 @@ const memoryStorage = () => {
   };
 };
 
+test('an independent remote reader preserves session validation without initializing the RTDB SDK', async () => {
+  const service = createAppSessionService({ now: () => 2000,
+    getFirebase: () => { throw Error('SDK socket unavailable'); } });
+  const read = async uid => { assert.equal(uid, 'uid-a'); return SESSION; };
+  assert.deepEqual(await service.verifyCurrent({ authUid: 'uid-a', expectedSession: SESSION, readRemoteSession: read }),
+    { valid: true, session: SESSION });
+  for (const remote of [null, { ...SESSION, expiresAtMs: 1999 }, { ...SESSION, bookingRef: 'FORBIDDEN' }]) {
+    assert.equal((await service.verifyCurrent({ authUid: 'uid-a', expectedSession: SESSION,
+      readRemoteSession: async () => remote })).reason, 'SESSION_INACTIVE');
+  }
+  for (const patch of [{ sessionId: `sess_v1_${'c'.repeat(32)}` }, { tourId: 'TOUR_B' },
+    { principalId: `pax_v2_${'d'.repeat(32)}` }]) {
+    assert.equal((await service.verifyCurrent({ authUid: 'uid-a', expectedSession: SESSION,
+      readRemoteSession: async () => ({ ...SESSION, ...patch }) })).reason, 'SESSION_CHANGED');
+  }
+});
+
 test('mobile session validation rejects credentials, extras and expired records', () => {
   assert.deepEqual(validateAppSession(SESSION, { nowMs: 2_000 }), SESSION);
   assert.deepEqual(validateAppSession({

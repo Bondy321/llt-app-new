@@ -36,7 +36,6 @@ test.before(async () => {
   modules = await Promise.all([
     import('../../services/driver-tracking/createDriverTrackingController.js'),
     import('../../services/driver-tracking/trackingRestRepository.js'),
-    import('../../services/driverLocationService.js'),
   ]);
 });
 test.after(async () => { await environment?.cleanup(); });
@@ -58,12 +57,13 @@ test.beforeEach(async () => {
 });
 
 const harness = async (live = 'track_integration_one', fetchOverride = null) => {
-  const [{ createDriverTrackingController }, { createTrackingRestRepository }, locationService] = modules;
+  const [{ createDriverTrackingController }, { createTrackingRestRepository }] = modules;
   const map = new Map(); const httpWrites = []; const stopResponses = []; let nativeStarted = false;
   const client = environment.authenticatedContext(UID).database(databaseURL);
   const auth = { currentUser: { uid: UID, getIdToken: async () => createMockUserToken({ sub: UID, user_id: UID }, PROJECT) } };
   const realFetch = fetch;
-  const transport = createTrackingRestRepository({ database: client, auth, baseUrl: restURL, retireEndpoint: 'https://synthetic.test/stop',
+  const transport = createTrackingRestRepository({ database: { ref: () => { throw Error('SDK socket unavailable'); } }, auth,
+    baseUrl: restURL, retireEndpoint: 'https://synthetic.test/stop',
     fetchFn: async (url, options) => {
       if (options.method === 'POST') {
         const result = await trusted(db => performDriverTrackingStop({ db, authUid: UID, input: JSON.parse(options.body) }));
@@ -80,18 +80,17 @@ const harness = async (live = 'track_integration_one', fetchOverride = null) => 
     native: { isForeground: () => true, isStarted: async () => nativeStarted, hasPermissions: async () => true,
       requestPermissions: async () => {}, start: async () => { nativeStarted = true; }, stop: async () => { nativeStarted = false; }, permissionMessage: error => error.message },
     verifyAuthority: async () => ({ valid: true }), writeFence: transport.writeFence, retireSession: transport.retireSession,
-    publish: (intent, sample, isScopeCurrent) => locationService.publishDriverLocation({
-      dbInstance: transport.database, tourId: TOUR, source: 'auto', sessionScope: intent.scope,
-      sessionId: intent.liveSharingSessionId, location: sample.coords, isScopeCurrent,
-    }),
+    publish: transport.publish,
   });
   await tracking.setScope(scope());
-  return { tracking, client, map, httpWrites, stopResponses, sample: () => ({ timestamp: Date.now(), coords: { latitude: 56.15, longitude: -4.25, accuracy: 12 } }),
+  return { tracking, client, map, httpWrites, stopResponses, readCurrentSession: () => transport.readCurrentSession(UID),
+    sample: () => ({ timestamp: Date.now(), coords: { latitude: 56.15, longitude: -4.25, accuracy: 12 } }),
     start: () => tracking.start({ scope: scope(), disclosureAccepted: true }), nativeStarted: () => nativeStarted };
 };
 
 test('real controller + authenticated REST publish behind write-only rules; Stop fences delayed HTTP replay and preserves fixed pickup', async () => {
   const h = await harness();
+  assert.equal((await h.readCurrentSession()).sessionId, SID, 'own session reads use the independent authenticated HTTP transport');
   assert.equal((await h.start()).success, true);
   const result = await h.tracking.handleLocations({ locations: [h.sample()] });
   assert.equal(result.publicationAcknowledged, true);

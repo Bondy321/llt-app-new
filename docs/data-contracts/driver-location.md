@@ -295,8 +295,17 @@ intent in AsyncStorage. It persists no coordinates. Every awaited result is fenc
 against the current generation and identity. Samples must be valid, newer than
 the session start and no more than ninety seconds old. Server work is limited to
 one attempt per minute independently of native delivery cadence. GPS and intent
-writes use authenticated HTTP, preventing Firebase's offline coordinate replay;
-Auth, token, response and disconnect waits are bounded. An offline Stop persists
+writes and exact-own-UID session reads use authenticated HTTP, preventing
+Firebase's offline coordinate replay. Native tracking does not consult the RTDB
+SDK socket, connection metadata or `onDisconnect`: suspension of that socket
+cannot block an otherwise reachable HTTP request or delete an HTTP-owned point.
+The tracking-specific publisher uses the shared source payload builder and server
+timestamp; its returned acknowledgement time is a client estimate. The exact
+source expires after thirty minutes without another publication. Explicit Stop,
+session revocation and reassignment still fence source writes server-side and
+withdraw their projections. Auth, token, HTTP and body parsing share one bounded
+deadline per request, and late token completion cannot dispatch a timed-out write.
+An offline Stop persists
 stopping intent, shuts down native collection and retains exact cleanup identity.
 Cold UI launch retires interrupted tracking and requires a new explicit Start.
 Status and Stop remain visible across navigation, logout and deletion surfaces.
