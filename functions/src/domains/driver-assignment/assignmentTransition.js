@@ -96,6 +96,7 @@ const abandonDriverAssignmentReservation = async ({
   db, transitionId, reservationOwner, reason = 'ASSIGNMENT_RESERVATION_ABORTED', nowMs = Date.now(),
 }) => {
   const result = await db.ref(`${TRANSITION_ROOT}/${transitionId}`).transaction((current) => {
+    if (current === null) return null;
     if (!current || current.status !== 'reserving' || current.reservationOwner !== reservationOwner) {
       return undefined;
     }
@@ -108,8 +109,9 @@ const abandonDriverAssignmentReservation = async ({
       reservationExpiresAtMs: null,
     };
   }, undefined, false);
-  if (!result?.committed) return false;
-  const transition = result.snapshot.val() || {};
+  const transition = result?.snapshot?.val?.() || {};
+  if (!result?.committed || transition.status !== 'aborted'
+    || transition.reservationOwner !== reservationOwner) return false;
   const updates = { [`${TRANSITION_QUEUE_ROOT}/${transitionId}`]: null };
   if (transition.admissionId) {
     updates[`driver_login_policy/v1/loginAdmissions/${transition.admissionId}`] = null;
@@ -117,6 +119,19 @@ const abandonDriverAssignmentReservation = async ({
   await db.ref().update(updates);
   await releaseTransitionBarriers({ db, transitionId, transition });
   return true;
+};
+
+/** @type {(...args: any[]) => Promise<boolean>} */
+const queueOwnedDriverAssignmentTransition = async ({ db, transitionId, reservationOwner, policy, nowMs = Date.now() }) => {
+  const result = await db.ref(`${TRANSITION_ROOT}/${transitionId}`).transaction((current) => {
+    // A reservation written on another connection may be absent from this SDK
+    // cache. Null must reach the server CAS; it is never evidence to recreate it.
+    if (current === null) return null;
+    if (current.status !== 'reserving' || current.reservationOwner !== reservationOwner) return undefined;
+    return { ...current, status: 'queued', policy, updatedAtMs: nowMs, reservationExpiresAtMs: null };
+  }, undefined, false);
+  const stored = result?.snapshot?.val?.();
+  return Boolean(result?.committed && stored?.status === 'queued' && stored.reservationOwner === reservationOwner);
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
@@ -439,6 +454,7 @@ const acquireAssignmentTransitionWorker = async ({
   db, transitionId, owner = randomUUID(), nowMs = Date.now(),
 }) => {
   const result = await db.ref(`${TRANSITION_ROOT}/${transitionId}`).transaction((current) => {
+    if (current === null) return null;
     if (!current || ['completed', 'failed', 'aborted'].includes(current.status)) return undefined;
     if (current.workerOwner && current.workerOwner !== owner
       && Number(current.workerExpiresAtMs || 0) > nowMs) return undefined;
@@ -448,20 +464,26 @@ const acquireAssignmentTransitionWorker = async ({
       workerExpiresAtMs: nowMs + TRANSITION_WORKER_TTL_MS,
     };
   }, undefined, false);
+  const transition = result?.snapshot?.val?.() || null;
   return {
-    acquired: Boolean(result?.committed),
+    acquired: Boolean(result?.committed && transition?.workerOwner === owner
+      && transition.workerExpiresAtMs > nowMs),
     owner,
-    transition: result?.snapshot?.val?.() || null,
+    transition,
   };
 };
 
 /** @type {(...args: any[]) => Promise<boolean>} */
 const releaseAssignmentTransitionWorker = async ({ db, transitionId, owner }) => {
+  let released = false;
   const result = await db.ref(`${TRANSITION_ROOT}/${transitionId}`).transaction((current) => {
+    released = false;
+    if (current === null) return null;
     if (!current || current.workerOwner !== owner) return undefined;
+    released = true;
     return { ...current, workerOwner: null, workerExpiresAtMs: null };
   }, undefined, false);
-  return Boolean(result?.committed);
+  return Boolean(result?.committed && released);
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
@@ -471,8 +493,15 @@ const advanceDriverAssignmentTransition = async ({
   const snapshot = await db.ref(`${TRANSITION_ROOT}/${transitionId}`).once('value');
   if (!snapshot.exists()) return { status: 'missing', progressed: false };
   let transition = snapshot.val() || {};
-  if (transition.status === 'completed') return { status: 'completed', completed: true, result: transition.result };
-  if (transition.status === 'failed') return { status: 'failed', reason: transition.reason, progressed: false };
+  if (['completed', 'failed'].includes(transition.status)) {
+    // Older workers may have persisted the terminal result before failing to
+    // release a cold-cache barrier. Exact replay repairs only its own barriers;
+    // a successor's barrier and the immutable result remain untouched.
+    await releaseTransitionBarriers({ db, transitionId, transition });
+    return transition.status === 'completed'
+      ? { status: 'completed', completed: true, result: transition.result }
+      : { status: 'failed', reason: transition.reason, progressed: false };
+  }
   if (transition.status === 'reserving') {
     if (Number(transition.reservationExpiresAtMs || 0) > nowMs) {
       return { status: 'reserving', progressed: false };
@@ -559,6 +588,8 @@ module.exports = {
   cleanupExpiredDriverAssignmentRecords,
   commitReconciliationAfterCleanup,
   processDriverAssignmentTransitions,
+  queueOwnedDriverAssignmentTransition,
+  releaseAssignmentTransitionWorker,
   recordAssignmentTransitionFailure,
   readDriverSessionPage,
   reconcileTransitionSessionPage,

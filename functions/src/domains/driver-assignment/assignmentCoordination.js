@@ -26,10 +26,13 @@ const acquireDriverAssignmentBarrier = async ({ db, driverId, transitionId, nowM
 
 /** @type {(...args: any[]) => Promise<boolean>} */
 const releaseDriverAssignmentBarrier = async ({ db, driverId, transitionId }) => {
-  const result = await db.ref(`${ACTIVE_ASSIGNMENT_ROOT}/${driverId}`).transaction((current) => (
-    current?.transitionId === transitionId ? null : undefined
-  ), undefined, false);
-  return Boolean(result?.committed);
+  let removed = false;
+  const result = await db.ref(`${ACTIVE_ASSIGNMENT_ROOT}/${driverId}`).transaction((current) => {
+    removed = current?.transitionId === transitionId;
+    if (current === null) return null; // Cold SDK cache: let the server compare/retry.
+    return removed ? null : undefined;
+  }, undefined, false);
+  return Boolean(result?.committed && removed);
 };
 
 /** @type {(...args: any[]) => Promise<any>} */

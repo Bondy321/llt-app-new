@@ -69,6 +69,20 @@ phase or orphaning an admission. Assignment admissions and driver barriers do
 not expire while work is incomplete; only explicit completion, terminal failure,
 or expired reservation recovery releases them.
 
+An Admin SDK transaction may first receive `null` from its local cache even
+when the server record exists. Existing-record comparisons return that `null`
+unchanged so the server can compare and retry, then verify the committed owner
+and state before acknowledging success. They never reconstruct missing records
+from an earlier read or treat a committed absent value as an acquired lease.
+
+The scheduled `cleanupDriverLoginPolicySessions` worker recovers interrupted,
+expired reservations, including reservations with no admitted credential, and
+releases only their exact driver barriers. Failed intent records remain available
+for diagnosis. Replaying an original terminal failed/completed request also
+repairs its exact remaining barriers; a successor transition's barrier is
+preserved. Operations then submit a fresh assignment with current revisions and
+a new idempotency key, without manually editing private database roots.
+
 ## Handset and notification reconciliation
 
 With single-device enforcement off, the backend queries every active,

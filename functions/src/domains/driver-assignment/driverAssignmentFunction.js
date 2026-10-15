@@ -33,6 +33,7 @@ const {
   normalizeDriverId,
   readAssignmentRevision,
   reserveDriverAssignmentTransition,
+  queueOwnedDriverAssignmentTransition,
   releaseDriverAssignmentBarrier,
 } = require('./public');
 const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
@@ -432,19 +433,10 @@ const assignDriverToTour = onRequestWithResult(
       }
 
       const nowMs = Date.now();
-      const queuedResult = await db.ref(`${ASSIGNMENT_TRANSITION_ROOT}/${transitionId}`).transaction((current) => {
-        if (!current || current.status !== 'reserving' || current.reservationOwner !== lockOwner) {
-          return undefined;
-        }
-        return {
-          ...current,
-          status: 'queued',
-          policy,
-          updatedAtMs: nowMs,
-          reservationExpiresAtMs: null,
-        };
-      }, undefined, false);
-      if (!queuedResult?.committed) return inProgress(res, { status: 'reserving' });
+      const queued = await queueOwnedDriverAssignmentTransition({
+        db, transitionId, reservationOwner: lockOwner, policy, nowMs,
+      });
+      if (!queued) return inProgress(res, { status: 'reserving' });
       transitionHandedOff = true;
       admissionHandedOff = true;
       barriersHandedOff = true;
