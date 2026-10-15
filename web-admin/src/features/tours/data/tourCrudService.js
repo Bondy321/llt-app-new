@@ -30,6 +30,8 @@ const SERVER_OWNED_TOUR_FIELDS = new Set([
   'driverName',
   'driverPhone',
   'driverAssignmentRevision',
+  'driverLocationProjectionRevision',
+  'driverLocationProjectionEpoch',
   'sourceLifecycle',
   'rosterSync',
   'itinerarySource',

@@ -30,15 +30,28 @@ const readAccountDeletionKeyPage = async (ref, afterKey, limit) => {
 };
 
 const releaseOwnedPassengerAuthority = async ({ db, scope, leaseGuard = null }) => {
-  const securityRef = db.ref(`passenger_identity_security/${scope.bookingRef}/authorizedAuthUid`);
-  const bindingRef = db.ref(`identity_bindings/${scope.stablePassengerKey}/${scope.authUid}`);
-  if (leaseGuard) await assertCurrentJobLease(leaseGuard);
-  const security = await securityRef.transaction(
-    (current) => current === scope.authUid ? null : undefined, undefined, false,
-  );
-  if (leaseGuard) await assertCurrentJobLease(leaseGuard);
-  const binding = await bindingRef.transaction((current) => current === true ? null : undefined, undefined, false);
-  return Number(security?.committed === true) + Number(binding?.committed === true);
+  // Each phone owns only its exact device leaf and binding. Unversioned records
+  // authorize via the legacy scalar, so remove it too only for this exact UID.
+  // Never replace the whole security record or the shared authorization map.
+  const ownedLeaves = [
+    [`passenger_identity_security/${scope.bookingRef}/authorizedAuthUids/${scope.authUid}`, true],
+    [`passenger_identity_security/${scope.bookingRef}/authorizedAuthUid`, scope.authUid],
+    [`identity_bindings/${scope.stablePassengerKey}/${scope.authUid}`, true],
+  ];
+  let recordsRemoved = 0;
+  for (const [path, expected] of ownedLeaves) {
+    if (leaseGuard) await assertCurrentJobLease(leaseGuard);
+    let removed = false;
+    const result = await db.ref(path).transaction((current) => {
+      removed = current === expected;
+      // A cold Admin SDK cache can present null before the server value. A null
+      // no-op permits the server compare/retry instead of aborting prematurely.
+      if (current === null) return null;
+      return removed ? null : undefined;
+    }, undefined, false);
+    recordsRemoved += Number(result?.committed === true && removed);
+  }
+  return recordsRemoved;
 };
 
 const releaseOwnedDriverAuthority = async ({ db, scope, leaseGuard = null }) => {

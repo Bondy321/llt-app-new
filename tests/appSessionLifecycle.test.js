@@ -189,13 +189,41 @@ test('active access requires the matching live session and schema-v2 participant
   const db = createTransactionDb({
     'app_sessions/uid-p': session,
     'tours/TOUR_A/participants/uid-p': participant,
-    'users/uid-p': { principalType: 'passenger', stablePassengerId: PASSENGER_ID, identityVersion: 'pax_v2' },
+    'users/uid-p': { principalType: 'passenger', stablePassengerId: PASSENGER_ID, identityVersion: 'pax_v2', bookingRef: 'BOOK-1' },
+    'bookings/BOOK-1': { tourId: 'TOUR_A' },
   });
   assert.equal((await verifyActiveAppSession({ db, authUid: 'uid-p', expectedTourId: 'TOUR_A', nowMs })).allowed, true);
   delete db.state['app_sessions/uid-p'];
   assert.equal((await verifyActiveAppSession({ db, authUid: 'uid-p', expectedTourId: 'TOUR_A', nowMs })).reason, 'SESSION_INACTIVE');
   db.state['app_sessions/uid-p'] = { ...session, expiresAtMs: 999 };
   assert.equal((await verifyActiveAppSession({ db, authUid: 'uid-p', expectedTourId: 'TOUR_A', nowMs })).reason, 'SESSION_INACTIVE');
+});
+
+test('passenger HTTP authority fails closed on incomplete canonical booking or profile scope', async () => {
+  const nowMs = 1_000;
+  const session = buildPassengerSessionRecord({ authUid: 'uid-p', principalId: PASSENGER_ID,
+    tourId: 'TOUR_A', sessionId: SESSION_ID, nowMs, expiresAtMs: 20_000 });
+  const validProfile = { principalType: 'passenger', stablePassengerId: PASSENGER_ID,
+    identityVersion: 'pax_v2', bookingRef: 'BOOK-1' };
+  const db = createTransactionDb({ 'app_sessions/uid-p': session,
+    'tours/TOUR_A/participants/uid-p': buildPassengerParticipantRecord({ session }),
+    'users/uid-p': validProfile, 'bookings/BOOK-1': { tourId: 'TOUR_A', loginEligible: true } });
+  const check = () => verifyActiveAppSession({ db, authUid: 'uid-p', expectedTourId: 'TOUR_A', nowMs });
+  assert.equal((await check()).allowed, true);
+  for (const bookingRef of [undefined, '', 'bad/key', 'x'.repeat(161)]) {
+    db.state['users/uid-p'] = { ...validProfile, bookingRef };
+    assert.equal((await check()).reason, 'PASSENGER_PROFILE_MISMATCH');
+  }
+  db.state['users/uid-p'] = validProfile;
+  for (const booking of [null, [], 'invalid', { tourId: 'TOUR_A', loginEligible: false },
+    { tourId: 'TOUR_A', sourceRoster: { state: 'not_in_report' } }]) {
+    db.state['bookings/BOOK-1'] = booking;
+    assert.equal((await check()).reason, 'BOOKING_NOT_LOGIN_ELIGIBLE');
+  }
+  db.state['bookings/BOOK-1'] = { tourId: 'TOUR_B' };
+  assert.equal((await check()).reason, 'SESSION_TOUR_MISMATCH');
+  db.state['bookings/BOOK-1'] = { tourId: 'TOUR_A', sourceRoster: { state: 'active' } };
+  assert.equal((await check()).reason, 'SOURCE_ROSTER_INVALID');
 });
 
 test('driver access follows policy generation and applies the scalar claim only when enabled', async () => {

@@ -1,6 +1,6 @@
 # Stable Identity Rollout Checklist
 
-Use this checklist to validate opaque passenger identity ownership across restarts, migration, and device-bound login.
+Use this checklist to validate opaque passenger identity ownership across restarts, migration, and verified login on multiple phones.
 
 ## Identity security contract
 
@@ -14,15 +14,26 @@ booking reference, email, phone number, name, or other passenger data. It is alr
 `toRealtimeKeySegment()` at path boundaries for a consistent contract. Clients must never generate or bind a
 passenger principal. New `pax_v1:` values are rejected by client validation, Database rules, and Storage rules.
 
-After the first successful login, `passenger_identity_security/{bookingRef}/authorizedAuthUid` binds the booking to the
-Firebase Auth credential held by that installation. A different Auth UID cannot replay the booking-reference/email
-pair. That security branch is deliberately separate from sync-owned booking credential records, so a booking refresh
-cannot erase the binding or rotate the opaque principal. Migration locks bookings with several legacy Auth UIDs for
-operations review instead of guessing ownership.
+Each phone verifies the booking reference and email with the server. The private security record uses
+`deviceAuthorizationVersion: 2` and `authorizedAuthUids/{authUid}: true` for independently authorized installations.
+Each installation receives its own session and participant row, while all phones for that booking keep the same
+opaque passenger principal and shared booking-account content. A second verified phone does not replace the first.
+Normal logout and session revocation affect only the captured installation/session.
 
-Clients cannot read, create, replace, or reassign security records. During explicit account deletion only, rules allow
-the currently bound Auth UID to remove its own `authorizedAuthUid` leaf in the same cleanup update; this prevents a
-deleted anonymous Auth account from permanently stranding the booking.
+Existing records without a device authorization version retain their exact `authorizedAuthUid` compatibility proof.
+The next successful verified login atomically promotes that original UID and the requesting UID into the version-2
+map without rotating the principal. Once version 2 exists, only a true map leaf grants device authorization; a retained
+legacy scalar cannot bypass removal of that leaf. Unknown versions and `loginLocked: true` fail closed. Explicit
+migration/security-review locks remain in force; enabling multiple phones does not remove them.
+
+This security state remains separate from sync-owned booking credential records, so a booking refresh cannot erase
+authorized phones or rotate the principal. Booking absence, email eligibility, canonical tour and current session
+checks continue to apply independently on every phone.
+
+Clients cannot read, create, replace or enumerate device authorization records. The server-owned account-deletion
+workflow removes only the requesting phone's exact map leaf and matching legacy scalar; other phones retain access.
+Deletion still removes shared passenger-principal app content under the existing account-deletion contract, which
+the passenger confirmation explains. The older compatibility scalar-cleanup permission remains bounded to its owner.
 
 ## Production migration
 
@@ -100,28 +111,30 @@ Storage objects before deleting legacy copies, and refuses to commit while any k
 
 ---
 
-## 3) Unauthorised second-device replay protection
+## 3) Independent verified login on two phones
 
-**Goal:** A copied booking reference and email cannot authenticate from another Firebase Auth identity.
+**Goal:** Two phones using the same valid booking reference/email share the stable account identity with independent sessions.
 
 ### Steps
 1. On device A, log in and send a chat message.
 2. On device B, attempt login with the same booking reference and email.
-3. Confirm the verifier returns `REAUTHORIZE_REQUIRED`.
-4. Use the operations recovery process before deliberately transferring a booking to another installation.
+3. Confirm both phones receive different session IDs and the same opaque passenger principal.
+4. Log out on B. Confirm A can still use the app and its session remains unchanged.
+5. Log in again on B. Revoke B's exact session; confirm A still has access.
+6. Verify wrong credentials, locked identities, source absence and missing email still fail on both phones.
 
 ### Firebase paths to inspect
 - `users/{uid}`
 - `chats/{tourId}/messages/{messageId}/senderStableId`
 
 ### Pass criteria
-- Device B is denied without an operations-approved recovery.
-- Device A retains the opaque identity and ownership scope.
+- Device B is admitted only after server credential verification.
+- Device A retains its session, opaque identity and ownership scope.
 - The response and logs contain no raw credential-derived identity.
 
 ### Fail criteria
-- Device B receives access using only the ordinary booking pair.
-- A second Auth UID is silently added to the identity binding.
+- A phone receives a session with wrong credentials or without server admission.
+- Logging out/revoking one phone invalidates another phone's session.
 - An ambiguous migrated booking remains unlocked.
 
 ---

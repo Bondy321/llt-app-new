@@ -63,11 +63,35 @@ const loadAuthorizedDriver = async ({ db, driverId, authUid, policy }) => {
   return { allowed: true, driverData };
 };
 
+const unavailableAssignment = () => {
+  const error = /** @type {Error & { code?: string }} */ (new Error('Driver assignment is unavailable'));
+  error.code = 'ASSIGNMENT_UNAVAILABLE';
+  return error;
+};
+
 /** @type {(...args: any[]) => Promise<any>} */
-const resolveDriverLoginTour = async ({ db, assignment }) => {
-  if (!assignment.assignedTourId) return null;
-  const tourSnapshot = await db.ref(`tours/${assignment.assignedTourId}`).once('value');
-  return tourSnapshot.exists() ? { id: assignment.assignedTourId, ...(tourSnapshot.val() || {}) } : null;
+const resolveDriverLoginTour = async ({ db, assignment, driverData, driverId }) => {
+  const { assignedTourId } = assignment;
+  if (!assignedTourId) {
+    if (driverData.currentTourId !== undefined && driverData.currentTourId !== null
+      && !(typeof driverData.currentTourId === 'string' && !driverData.currentTourId.trim())) {
+      throw unavailableAssignment();
+    }
+    return null;
+  }
+  // Operational authorization uses the exact canonical key, not a normalized
+  // replacement for malformed/stale assignment data. Login never repairs it.
+  if (driverData.currentTourId !== assignedTourId || !isValidFirebaseKey(assignedTourId)) {
+    throw unavailableAssignment();
+  }
+  const [tourSnapshot, assignedSnapshot] = await Promise.all([
+    db.ref(`tours/${assignedTourId}`).once('value'),
+    db.ref(`tour_manifests/${assignedTourId}/assigned_drivers/${driverId}`).once('value'),
+  ]);
+  const tour = tourSnapshot.val();
+  if (!tour || typeof tour !== 'object' || Array.isArray(tour)
+    || tour.isActive === false || assignedSnapshot.val() !== true) throw unavailableAssignment();
+  return { ...tour, id: assignedTourId };
 };
 
 const verifyDriverLogin = onRequestWithResult(
@@ -150,7 +174,7 @@ const verifyDriverLogin = onRequestWithResult(
 
       const assignment = await resolveDriverAssignment({ driverId, driverData, db });
       const assignedTourCode = assignment.assignedTourCode;
-      const resolvedTour = await resolveDriverLoginTour({ db, assignment });
+      const resolvedTour = await resolveDriverLoginTour({ db, assignment, driverData, driverId });
 
       const nowMs = Date.now();
       const driverProfileUpdates = buildDriverIdentityProfileUpdates({
@@ -212,6 +236,13 @@ const verifyDriverLogin = onRequestWithResult(
       const code = /** @type {{ code?: string }} */ (error)?.code;
       if (code === 'ACCOUNT_DELETION_IN_PROGRESS') {
         return res.status(409).json({ valid: false, reason: 'ACCOUNT_DELETION_IN_PROGRESS' });
+      }
+      if (code === 'ASSIGNMENT_UNAVAILABLE') {
+        log.warn('Driver login rejected: assignment unavailable', {
+          driverId,
+          authUidHash: hashPolicyIdentifier(requestAuth.uid),
+        });
+        return res.status(503).json({ valid: false, reason: code });
       }
       log.error('Driver login verification failed', error, {
         driverId,

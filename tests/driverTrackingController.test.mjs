@@ -59,6 +59,50 @@ test('permission rejection and remote authority loss never create tracking inten
   assert.equal(h.events.length, 0);
 });
 
+test('failed fence or native Start remains visible after successful compensating cleanup', async () => {
+  for (const failureAt of ['fence', 'nativeStart']) {
+    const h = harness();
+    h.control[failureAt] = async () => { throw Error('SYNTHETIC_START_FAILURE'); };
+    assert.deepEqual(await h.start(), { success: false, reason: 'SYNTHETIC_START_FAILURE' });
+    assert.equal(h.tracking.getSnapshot().state, 'error', failureAt);
+    assert.equal(h.tracking.getSnapshot().error, 'SYNTHETIC_START_FAILURE', failureAt);
+    assert.equal(h.tracking.getSnapshot().status, 'SYNTHETIC_START_FAILURE', failureAt);
+    assert.equal(h.tracking.getSnapshot().pending, false, failureAt);
+    assert.equal(h.tracking.getSnapshot().active, false, failureAt);
+    assert.equal(h.storageMap.size, 0, failureAt);
+    assert.equal(h.events.includes('retire'), true, failureAt);
+  }
+});
+
+test('failed Start preserves Stop/retry state when compensating cleanup fails', async () => {
+  const h = harness();
+  h.control.fence = async () => { throw Error('SYNTHETIC_START_FAILURE'); };
+  h.control.retire = async () => { throw Error('SYNTHETIC_CLEANUP_FAILURE'); };
+  assert.equal((await h.start()).reason, 'SYNTHETIC_START_FAILURE');
+  assert.equal(h.tracking.getSnapshot().state, 'stop_pending');
+  assert.equal(h.tracking.getSnapshot().error, 'STOP_PENDING');
+  assert.equal(h.tracking.getSnapshot().pending, true);
+  assert.equal(h.stored().status, 'stopping');
+});
+
+test('a prior Start failure finishing cleanup cannot overwrite a replacement Start status', async () => {
+  const h = harness();
+  const retirement = deferred();
+  let retiring = false;
+  h.control.fence = async () => { throw Error('OLD_START_FAILURE'); };
+  h.control.retire = () => { retiring = true; return retirement.promise; };
+  const failedStart = h.start();
+  await until(() => retiring);
+  h.control.fence = async () => {};
+  const replacement = h.start();
+  retirement.resolve({ withdrawalAcknowledged: true });
+  assert.equal((await failedStart).reason, 'OLD_START_FAILURE');
+  assert.equal((await replacement).success, true);
+  assert.equal(h.tracking.getSnapshot().active, true);
+  assert.equal(h.tracking.getSnapshot().error, null);
+  assert.equal(h.tracking.getSnapshot().state, 'waiting');
+});
+
 test('stop fences immediately during a permission prompt; late approval cannot restart it or disturb a newer Start', async () => {
   const h = harness(); const permission = deferred();
   h.control.permissions = () => permission.promise;

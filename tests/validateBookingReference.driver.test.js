@@ -292,3 +292,26 @@ test('validateBookingReference maps driver policy transitions to accurate retria
     delete process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL;
   }
 });
+
+test('driver login explains an unavailable assignment and allows retry after dispatch corrects it', async () => {
+  process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL = 'https://example.test/verifyDriverLogin';
+  const originalFetch = global.fetch;
+  let available = false;
+  global.fetch = async () => ({
+    ok: available,
+    status: available ? 200 : 503,
+    json: async () => available ? verifiedDriverPayload() : { valid: false, reason: 'ASSIGNMENT_UNAVAILABLE' },
+  });
+  try {
+    const service = loadServiceWithDb({ drivers: {}, tours: {}, tour_manifests: {} });
+    const rejected = await service.validateBookingReference('D-BONDY');
+    assert.equal(rejected.valid, false);
+    assert.match(rejected.error, /assigned tour is unavailable/iu);
+    assert.match(rejected.error, /contact dispatch/iu);
+    available = true;
+    assert.equal((await service.validateBookingReference('D-BONDY')).valid, true);
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.EXPO_PUBLIC_VERIFY_DRIVER_LOGIN_URL;
+  }
+});

@@ -78,13 +78,57 @@ const buildEndpoint = (functionName) => {
     : null;
 };
 
+// This transport owns no durable state. A late token, fetch or body response
+// after its deadline cannot write a marker or complete a different logout.
+const requestSessionEndWithDeadline = async ({
+  firebase, currentUser, endpoint, pending, fetchFn, scheduleTimer, cancelTimer, timeoutMs,
+}) => {
+  const controller = new AbortController();
+  let timer;
+  const assertActive = () => {
+    if (controller.signal.aborted) throw new Error('Logout request timed out');
+  };
+  const deadline = new Promise((_resolve, reject) => {
+    timer = scheduleTimer(() => {
+      controller.abort();
+      reject(new Error('Logout request timed out'));
+    }, timeoutMs);
+  });
+  const transport = async () => {
+    const token = await currentUser.getIdToken();
+    assertActive();
+    const appCheckToken = await firebase.getCurrentAppCheckToken?.();
+    assertActive();
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+    if (appCheckToken) headers['x-firebase-appcheck'] = appCheckToken;
+    const response = await fetchFn(endpoint, {
+      method: 'POST', headers, signal: controller.signal,
+      body: JSON.stringify({ expectedSessionId: pending.sessionId, reason: 'user_logout' }),
+    });
+    assertActive();
+    const payload = await response.json().catch(() => null);
+    assertActive();
+    return { response, payload };
+  };
+  try {
+    return await Promise.race([transport(), deadline]);
+  } finally {
+    cancelTimer(timer);
+  }
+};
+
 const createAppSessionService = ({
   storage = AsyncStorage,
   fetchFn = (...args) => fetch(...args),
   now = () => Date.now(),
+  scheduleTimer = (callback, delay) => setTimeout(callback, delay),
+  cancelTimer = (timer) => clearTimeout(timer),
+  requestTimeoutMs = 15_000,
   getFirebase = () => require('../firebase'),
 } = {}) => {
   let endInFlight = null;
+  const endRequestTimeoutMs = Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
+    ? Math.min(requestTimeoutMs, 60_000) : 15_000;
 
   const persistSession = async (session) => {
     const valid = validateAppSession(session, { nowMs: now() });
@@ -135,23 +179,17 @@ const createAppSessionService = ({
     }
     const endpoint = process.env.EXPO_PUBLIC_END_APP_SESSION_URL?.trim() || buildEndpoint('endAppSession');
     if (!endpoint) return { success: false, reason: 'ENDPOINT_UNAVAILABLE' };
-    const token = await currentUser.getIdToken();
-    const appCheckToken = await firebase.getCurrentAppCheckToken?.();
-    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
-    if (appCheckToken) headers['x-firebase-appcheck'] = appCheckToken;
     const nextPending = { ...validPending, attemptCount: validPending.attemptCount + 1 };
     await storage.setItem(PENDING_SESSION_END_KEY, JSON.stringify(nextPending));
-    let response;
+    let response; let payload;
     try {
-      response = await fetchFn(endpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ expectedSessionId: validPending.sessionId, reason: 'user_logout' }),
-      });
+      ({ response, payload } = await requestSessionEndWithDeadline({
+        firebase, currentUser, endpoint, pending: validPending, fetchFn,
+        scheduleTimer, cancelTimer, timeoutMs: endRequestTimeoutMs,
+      }));
     } catch (error) {
       return { success: false, reason: 'NETWORK_ERROR', error: error?.message || String(error), pending: nextPending };
     }
-    const payload = await response.json().catch(() => null);
     if (response.status === 409 && payload?.reason === 'SESSION_CHANGED') {
       return { success: false, reason: 'SESSION_CHANGED', pending: nextPending };
     }
@@ -197,26 +235,52 @@ const createAppSessionService = ({
     return { valid: true, session: remote };
   };
 
-  const subscribe = ({ authUid, expectedSession, onRevoked, onError }) => {
+  const subscribe = ({ authUid, expectedSession, onRevoked, onError, subscribeToForeground }) => {
     if (!isSafeKey(authUid) || !expectedSession) return () => {};
     const firebase = getFirebase();
     const ref = firebase.realtimeDb.ref(`app_sessions/${authUid}`);
     let active = true;
+    let notified = false;
+    let expiryTimer = null;
+    const clearExpiryTimer = () => {
+      if (expiryTimer !== null) cancelTimer(expiryTimer);
+      expiryTimer = null;
+    };
+    const revoke = (reason) => {
+      if (!active || notified) return;
+      notified = true;
+      clearExpiryTimer();
+      onRevoked?.({ reason });
+    };
+    const checkExpiry = () => {
+      clearExpiryTimer();
+      if (!active || notified) return;
+      const remaining = expectedSession.expiresAtMs - now();
+      if (!Number.isFinite(remaining) || remaining <= 0) {
+        revoke('SESSION_EXPIRED');
+        return;
+      }
+      expiryTimer = scheduleTimer(checkExpiry, Math.min(remaining, 2_147_483_647));
+    };
     const onValue = (snapshot) => {
-      if (!active) return;
+      if (!active || notified) return;
       const remote = validateAppSession(snapshot.val(), { nowMs: now() });
       if (!remote
         || remote.sessionId !== expectedSession.sessionId
         || remote.principalId !== expectedSession.principalId
         || remote.principalType !== expectedSession.principalType
         || remote.tourId !== expectedSession.tourId) {
-        onRevoked?.({ reason: remote ? 'SESSION_CHANGED' : 'SESSION_ENDED' });
+        revoke(remote ? 'SESSION_CHANGED' : 'SESSION_ENDED');
       }
     };
     const cancelled = (error) => { if (active) onError?.(error); };
+    const stopForeground = subscribeToForeground?.(checkExpiry);
+    checkExpiry();
     ref.on('value', onValue, cancelled);
     return () => {
       active = false;
+      clearExpiryTimer();
+      stopForeground?.();
       ref.off('value', onValue);
     };
   };

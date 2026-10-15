@@ -38,9 +38,9 @@ not repair this error by clearing the customer's device binding, replacing their
 opaque identity, or asking them to reinstall. Emulator coverage includes cold
 connections, absent/malformed/locked identities and competing first-device logins.
 
-Normal logout does not delete Firebase Auth or the passenger booking-to-device binding. The same installation can log in again and receives the same opaque `pax_v2_` principal with a new `sess_v1_` session. A different Firebase UID remains blocked with `REAUTHORIZE_REQUIRED`.
+Normal logout does not delete Firebase Auth or the passenger's private device authorization. The same installation can log in again with the same opaque `pax_v2_` principal and a new `sess_v1_` session. Other phones may independently verify the same booking reference/email, receive their own sessions, and use the same booking-account principal. Version-2 `authorizedAuthUids/{uid}: true` membership preserves other phones; session revocation/logout never removes their authorization or sessions.
 
-If a customer genuinely replaces or loses a device, use the existing authorised identity-recovery procedure after revoking the old session. Do not manually copy identity bindings or manufacture an `app_sessions` record.
+If a customer replaces or loses a phone, they can verify the booking normally on the replacement. Revoke the old phone's exact session when required; never manufacture a session or reset the stable principal. `REAUTHORIZE_REQUIRED` now indicates an explicit booking security/migration lock, not an ordinary second phone. Follow operations review for that lock; account deletion is not a device-reset workaround.
 
 ## Incident checks
 

@@ -4,7 +4,7 @@
 
 `app_sessions/{authUid}` is the only authority that turns a persistent Firebase Auth account into a currently authorised mobile-app session. Firebase Auth, a passenger participant row, a driver identity mapping, an assignment, or a push token is never sufficient on its own.
 
-Normal logout deliberately preserves the Firebase Auth UID and the opaque passenger binding so the same installation can log in again without weakening second-device replay protection.
+Normal logout deliberately preserves the Firebase Auth UID and opaque passenger binding. Each phone can independently verify the same booking reference/email and receive its own app session, sharing the booking's stable passenger principal. Private version-2 device authorizations are additive; logout or revocation of one session does not affect another phone. Legacy single-UID records are atomically promoted on verified login, while explicit security locks remain enforced. See the [stable identity contract](../stable-identity-rollout-checklist.md).
 
 ## Canonical session
 

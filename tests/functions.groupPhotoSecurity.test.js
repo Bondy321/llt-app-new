@@ -48,7 +48,8 @@ test('group media access accepts only a current passenger or coherently assigned
       expiresAtMs,
       sessionRevision: 1,
     },
-    'users/passengerA': { stablePassengerId: passengerId, identityVersion: 'pax_v2', principalType: 'passenger' },
+    'users/passengerA': { stablePassengerId: passengerId, identityVersion: 'pax_v2', principalType: 'passenger', bookingRef: 'BOOK-A' },
+    'bookings/BOOK-A': { tourId: 'TOUR_A' },
     'admin_users/passengerA': null,
     'tours/TOUR_B': { participants: {} },
     'app_sessions/driverA': {

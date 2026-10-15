@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { AppState } from 'react-native';
 import appSessionService from '../../../services/appSessionService';
 import localSessionCleanupService from '../../../services/localSessionCleanupService';
 import logger from '../../../services/loggerService';
@@ -61,6 +62,12 @@ export default function useLogoutLifecycle({
     const unsubscribe = appSessionService.subscribe({
       authUid: userUid,
       expectedSession: appSession,
+      subscribeToForeground: (checkExpiry) => {
+        const subscription = AppState.addEventListener('change', (state) => {
+          if (state === 'active') checkExpiry();
+        });
+        return () => subscription.remove();
+      },
       onRevoked: async ({ reason }) => {
         if (generation !== sessionGenerationRef.current) return;
         setLogoutStatus({ state: 'requesting', error: null, diagnostic: appSession.sessionId.slice(-6) });

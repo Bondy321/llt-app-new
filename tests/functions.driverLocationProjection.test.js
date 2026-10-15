@@ -77,6 +77,27 @@ const rolloutContext = (phase, projectionRevision) => ({
   rollout: { schemaVersion: 1, phase, projectionRevision, updatedAtMs: projectionRevision * 100 },
 });
 
+const deferred = () => {
+  let resolve;
+  const promise = new Promise(complete => { resolve = complete; });
+  return { promise, resolve };
+};
+
+function pauseBeforePublication(database, clock, validateLiveRecord = async () => true) {
+  const reached = deferred();
+  const resume = deferred();
+  let reads = 0;
+  const operation = reconcileDriverLocationProjection({
+    database, tourId: 'TOUR_1', nowMs: clock(), clock, leaseOwner: 'paused-old-worker',
+    validateLiveRecord,
+    readRollout: async () => {
+      if (++reads === 2) { reached.resolve(); await resume.promise; }
+      return rolloutContext('compatibility', 1);
+    },
+  });
+  return { reached: reached.promise, resume: resume.resolve, operation };
+}
+
 test('private live-source validation rejects identifiers beyond canonical limits', () => {
   const source = live('app_a', 'live_a', 100, 56.1);
   source.authUid = 'a'.repeat(128);
@@ -475,6 +496,7 @@ test('location cleanup preserves assignment-owned pickup while retrying the expe
     appSessionId: 'app-old',
     expectedTourId: 'TOUR_1',
     nowMs: 300,
+    clock: () => 300,
   }), (error) => error.code === 'DRIVER_LOCATION_PROJECTION_BUSY');
   assert.deepEqual(database.state.driver_location_pickups.TOUR_1, manual);
   assert.equal(database.state.tours.TOUR_1.driverLocation.isSharing, true);
@@ -488,5 +510,240 @@ test('location cleanup preserves assignment-owned pickup while retrying the expe
   });
   assert.equal(retry.removed, 0);
   assert.deepEqual(retry.reconciledTours, ['TOUR_1']);
+  assert.equal(database.state.tours.TOUR_1.driverLocation.isSharing, false);
+});
+
+test('compatibility retains its lease until public acknowledgement, then Stop publishes last', async () => {
+  const database = createProjectionDatabase({ tours: { TOUR_1: { name: 'Operator title' } },
+    driver_location_sessions: { app_a: live('app_a', 'live_a', 100, 56.1) } });
+  const paused = pauseBeforePublication(database, () => 300);
+  await paused.reached;
+  assert.equal(database.state.driver_location_projection_state.TOUR_1.leaseOwner, 'paused-old-worker');
+  await assert.rejects(acquireDriverLocationProjectionInvalidation({ database, tourId: 'TOUR_1',
+    nowMs: 300, clock: () => 300, leaseOwner: 'concurrent-stop' }),
+  { code: 'DRIVER_LOCATION_PROJECTION_BUSY' });
+  paused.resume();
+  await paused.operation;
+  await reconcileDriverLocationProjection({ database, tourId: 'TOUR_1', nowMs: 301, clock: () => 301,
+    validateLiveRecord: async () => false, readRollout: async () => rolloutContext('compatibility', 1) });
+  assert.equal(database.state.tours.TOUR_1.driverLocation.isSharing, false);
+  assert.equal(database.state.tours.TOUR_1.driverLocationProjectionRevision, 2);
+  assert.equal(database.state.tours.TOUR_1.driverLocation.projectionRevision, undefined);
+  assert.equal(database.state.tours.TOUR_1.name, 'Operator title');
+});
+
+for (const replacement of ['stop', 'newer point', 'assignment invalidation']) {
+  test(`expired older compatibility worker cannot replace ${replacement}`, async () => {
+    let time = 300;
+    const database = createProjectionDatabase({ tours: { TOUR_1: { operatorNote: 'Preserve' } },
+      driver_location_sessions: { app_a: live('app_a', 'live_a', 100, 56.1) } });
+    const paused = pauseBeforePublication(database, () => time);
+    await paused.reached;
+    time += 30_001;
+    if (replacement === 'assignment invalidation') {
+      const invalidation = await acquireDriverLocationProjectionInvalidation({ database,
+        tourId: 'TOUR_1', nowMs: time, clock: () => time, leaseOwner: 'new-assignment' });
+      await database.ref().update({ [invalidation.publicPath]: invalidation.tombstone,
+        [invalidation.fencePath]: invalidation.revision });
+      // The failed old worker must not release this new owner's live lease.
+      paused.resume();
+      await assert.rejects(paused.operation, { code: 'DRIVER_LOCATION_PROJECTION_SUPERSEDED' });
+      assert.equal(database.state.driver_location_projection_state.TOUR_1.leaseOwner, 'new-assignment');
+      await releaseDriverLocationProjectionInvalidation({ database, invalidation });
+    } else {
+      if (replacement === 'newer point') {
+        database.state.driver_location_sessions.app_a = live('app_a', 'live_a', time, 56.8);
+      }
+      await reconcileDriverLocationProjection({ database, tourId: 'TOUR_1', nowMs: time, clock: () => time,
+        leaseOwner: 'replacement', validateLiveRecord: async () => replacement === 'newer point',
+        readRollout: async () => rolloutContext('compatibility', 1) });
+      paused.resume();
+      await assert.rejects(paused.operation, { code: 'DRIVER_LOCATION_PROJECTION_SUPERSEDED' });
+    }
+    const point = database.state.tours.TOUR_1.driverLocation;
+    assert.equal(point.isSharing, replacement === 'newer point');
+    if (replacement === 'newer point') assert.equal(point.latitude, 56.8);
+    assert.equal(point.projectionRevision, undefined);
+    assert.equal(database.state.tours.TOUR_1.driverLocationProjectionRevision, 2);
+    assert.equal(database.state.tours.TOUR_1.operatorNote, 'Preserve');
+  });
+}
+
+test('expiry during the target transaction cannot publish after a later Stop', async () => {
+  let time = 300;
+  const database = createProjectionDatabase({ tours: { TOUR_1: {} },
+    driver_location_sessions: { app_a: live('app_a', 'live_a', 100, 56.1) } });
+  const reached = deferred();
+  const resume = deferred();
+  const originalRef = database.ref.bind(database);
+  let paused = false;
+  database.ref = path => {
+    const ref = originalRef(path);
+    if (path !== 'tours/TOUR_1') return ref;
+    const transaction = ref.transaction.bind(ref);
+    ref.transaction = async update => {
+      const candidate = update(structuredClone(database.state.tours.TOUR_1));
+      if (!paused && candidate?.driverLocation?.isSharing === true) {
+        paused = true;
+        reached.resolve();
+        await resume.promise;
+      }
+      return transaction(update);
+    };
+    return ref;
+  };
+  const old = reconcileDriverLocationProjection({ database, tourId: 'TOUR_1', nowMs: time,
+    clock: () => time, validateLiveRecord: async () => true });
+  await reached.promise;
+  time += 30_001;
+  await reconcileDriverLocationProjection({ database, tourId: 'TOUR_1', nowMs: time,
+    clock: () => time, validateLiveRecord: async () => false });
+  resume.resolve();
+  await assert.rejects(old, { code: 'DRIVER_LOCATION_PROJECTION_SUPERSEDED' });
+  assert.equal(database.state.tours.TOUR_1.driverLocation.isSharing, false);
+  assert.equal(database.state.tours.TOUR_1.driverLocationProjectionRevision, 2);
+});
+
+test('lost private lease prevents publication and preserves its replacement owner', async () => {
+  const database = createProjectionDatabase({ tours: { TOUR_1: {} },
+    driver_location_sessions: { app_a: live('app_a', 'live_a', 100, 56.1) } });
+  const paused = pauseBeforePublication(database, () => 300);
+  await paused.reached;
+  Object.assign(database.state.driver_location_projection_state.TOUR_1,
+    { leaseOwner: 'replacement-owner', leaseRevision: 2 });
+  paused.resume();
+  await assert.rejects(paused.operation, { code: 'DRIVER_LOCATION_PROJECTION_SUPERSEDED' });
+  assert.equal(database.state.tours.TOUR_1.driverLocation, undefined);
+  assert.equal(database.state.driver_location_projection_state.TOUR_1.leaseOwner, 'replacement-owner');
+});
+
+test('tour deletion during preparation is never recreated by the delayed transaction', async () => {
+  const database = createProjectionDatabase({ tours: { TOUR_1: {} },
+    driver_location_sessions: { app_a: live('app_a', 'live_a', 100, 56.1) } });
+  const paused = pauseBeforePublication(database, () => 300);
+  await paused.reached;
+  delete database.state.tours.TOUR_1;
+  paused.resume();
+  const result = await paused.operation;
+  assert.equal(result.reason, 'TOUR_MISSING');
+  assert.equal(result.published, false);
+  assert.equal(database.state.tours.TOUR_1, undefined);
+});
+
+test('malformed and exhausted public/private projection watermarks fail closed without resetting', async () => {
+  for (const invalid of [-1, 0.5, '4', {}, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1]) {
+    for (const field of ['tour', 'state', 'lease']) {
+      const database = createProjectionDatabase({ tours: { TOUR_1: { name: 'Unchanged' } },
+        driver_location_projection_state: { TOUR_1: {} } });
+      if (field === 'tour') database.state.tours.TOUR_1.driverLocationProjectionRevision = invalid;
+      else database.state.driver_location_projection_state.TOUR_1[field === 'state' ? 'revision' : 'leaseRevision'] = invalid;
+      const before = structuredClone(database.state);
+      await assert.rejects(reconcileDriverLocationProjection({ database, tourId: 'TOUR_1', nowMs: 300,
+        clock: () => 300 }), { code: 'DRIVER_LOCATION_PROJECTION_STATE_INVALID' });
+      assert.deepEqual(database.state, before, `${field}: ${JSON.stringify(invalid)}`);
+    }
+  }
+});
+
+test('tour transaction retries preserve concurrent source/operator/runtime fields', async () => {
+  const database = createProjectionDatabase({ tours: { TOUR_1: { name: 'Original', rosterSync: { state: 'ready' } } } });
+  const originalRef = database.ref.bind(database);
+  database.ref = path => {
+    const ref = originalRef(path);
+    if (path !== 'tours/TOUR_1') return ref;
+    const transaction = ref.transaction.bind(ref);
+    ref.transaction = async update => {
+      const candidate = update(structuredClone(database.state.tours.TOUR_1));
+      if (candidate?.driverLocation) {
+        Object.assign(database.state.tours.TOUR_1,
+          { name: 'Edited', rosterSync: { state: 'updating', generation: 'new' }, liveTracking: { synthetic: true } });
+      }
+      return transaction(update);
+    };
+    return ref;
+  };
+  await reconcileDriverLocationProjection({ database, tourId: 'TOUR_1', nowMs: 300, clock: () => 300 });
+  assert.equal(database.state.tours.TOUR_1.name, 'Edited');
+  assert.deepEqual(database.state.tours.TOUR_1.rosterSync, { state: 'updating', generation: 'new' });
+  assert.deepEqual(database.state.tours.TOUR_1.liveTracking, { synthetic: true });
+});
+
+test('delete and recreate with reset counters cannot admit an older projection from the previous tour', async () => {
+  const database = createProjectionDatabase({ tours: { TOUR_1: { name: 'Previous departure' } },
+    driver_location_sessions: { app_a: live('app_a', 'live_a', 100, 56.1) } });
+  const reached = deferred();
+  const resume = deferred();
+  const originalRef = database.ref.bind(database);
+  let paused = false;
+  database.ref = path => {
+    const ref = originalRef(path);
+    if (path !== 'tours/TOUR_1') return ref;
+    const transaction = ref.transaction.bind(ref);
+    ref.transaction = async update => {
+      const candidate = update(structuredClone(database.state.tours.TOUR_1));
+      if (!paused && candidate?.driverLocation?.latitude === 56.1) {
+        paused = true;
+        reached.resolve();
+        await resume.promise;
+      }
+      return transaction(update);
+    };
+    return ref;
+  };
+  const old = reconcileDriverLocationProjection({ database, tourId: 'TOUR_1', nowMs: 300,
+    clock: () => 300, leaseOwner: 'same-worker-name', validateLiveRecord: async () => true });
+  await reached.promise;
+  const oldEpoch = database.state.tours.TOUR_1.driverLocationProjectionEpoch;
+  // This mirrors tour deletion removing both the tour and private projection
+  // state, followed immediately by a fresh tour with the same reusable code.
+  delete database.state.tours.TOUR_1;
+  delete database.state.driver_location_projection_state.TOUR_1;
+  database.state.tours.TOUR_1 = { name: 'New departure' };
+  database.state.driver_location_sessions.app_a = live('app_a', 'live_a', 301, 56.8);
+  await reconcileDriverLocationProjection({ database, tourId: 'TOUR_1', nowMs: 301,
+    clock: () => 301, leaseOwner: 'same-worker-name', validateLiveRecord: async () => true });
+  const newEpoch = database.state.tours.TOUR_1.driverLocationProjectionEpoch;
+  assert.equal(database.state.tours.TOUR_1.driverLocationProjectionRevision, 1);
+  assert.notEqual(newEpoch, oldEpoch);
+  resume.resolve();
+  await assert.rejects(old, { code: 'DRIVER_LOCATION_PROJECTION_SUPERSEDED' });
+  assert.equal(database.state.tours.TOUR_1.driverLocation.latitude, 56.8);
+  assert.equal(database.state.tours.TOUR_1.driverLocationProjectionEpoch, newEpoch);
+  assert.equal(database.state.tours.TOUR_1.name, 'New departure');
+});
+
+test('an existing malformed epoch is never reset into a new valid publication', async () => {
+  for (const invalid of ['', 'forged', 1, {}, 'a'.repeat(100)]) {
+    const database = createProjectionDatabase({ tours: { TOUR_1: {
+      driverLocationProjectionRevision: 7, driverLocationProjectionEpoch: invalid,
+      driverLocation: { isSharing: false, timestamp: 200 },
+    } } });
+    const before = structuredClone(database.state);
+    await assert.rejects(reconcileDriverLocationProjection({ database, tourId: 'TOUR_1', nowMs: 300,
+      clock: () => 300 }), { code: 'DRIVER_LOCATION_PROJECTION_STATE_INVALID' });
+    assert.deepEqual(database.state, before);
+  }
+});
+
+test('contention retries advance source expiry checks instead of freezing invocation time', async () => {
+  let time = 300;
+  const database = createProjectionDatabase({ tours: { TOUR_1: {} },
+    driver_location_sessions: { app_a: { ...live('app_a', 'live_a', 100, 56.1), cleanupAtMs: 950 } },
+    driver_location_projection_state: { TOUR_1: { leaseOwner: 'previous-worker',
+      leaseRevision: 1, leaseExpiresAtMs: 900, revision: 1 } } });
+  const originalRef = database.ref.bind(database);
+  database.ref = path => {
+    const ref = originalRef(path);
+    if (path !== 'driver_location_projection_state/TOUR_1') return ref;
+    const transaction = ref.transaction.bind(ref);
+    ref.transaction = async update => {
+      const result = await transaction(update);
+      if (!result.committed) time = 1_000;
+      return result;
+    };
+    return ref;
+  };
+  await reconcileDriverLocationProjection({ database, tourId: 'TOUR_1', nowMs: 300,
+    clock: () => time, validateLiveRecord: async () => true });
   assert.equal(database.state.tours.TOUR_1.driverLocation.isSharing, false);
 });

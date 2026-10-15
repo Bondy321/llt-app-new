@@ -45,6 +45,39 @@ let dbUrl;
 
 const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
 
+test('clients cannot forge or remove location publication fences through direct or parent tour writes', async () => {
+  const fence = { driverLocationProjectionRevision: 7,
+    driverLocationProjectionEpoch: '12345678-1234-4234-8234-123456789abc' };
+  await testEnv.withSecurityRulesDisabled(async context => {
+    await context.database(dbUrl).ref(`tours/${TOUR_ID}`).update(fence);
+  });
+  try {
+    const driver = dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}`);
+    const original = (await driver.get()).val();
+    await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}`).update({ name: original.name }));
+    await assertSucceeds(driver.child('itinerary').set(original.itinerary));
+    for (const patch of [
+      { driverLocationProjectionRevision: 8 }, { driverLocationProjectionRevision: null },
+      { driverLocationProjectionEpoch: 'ffffffff-ffff-4fff-8fff-ffffffffffff' },
+      { driverLocationProjectionEpoch: null },
+    ]) {
+      await assertFails(driver.update(patch));
+      await assertFails(dbFor(PASSENGER_AUTH_UID).ref(`tours/${TOUR_ID}`).update(patch));
+      await assertFails(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}`).update(patch));
+    }
+    const forgedParent = { ...original, driverLocationProjectionRevision: 0 };
+    await assertFails(driver.set(forgedParent));
+    await assertFails(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}`).set(forgedParent));
+    const saved = (await driver.get()).val();
+    assert.equal(saved.driverLocationProjectionRevision, fence.driverLocationProjectionRevision);
+    assert.equal(saved.driverLocationProjectionEpoch, fence.driverLocationProjectionEpoch);
+  } finally {
+    await testEnv.withSecurityRulesDisabled(context => context.database(dbUrl).ref(`tours/${TOUR_ID}`).update({
+      driverLocationProjectionRevision: null, driverLocationProjectionEpoch: null,
+    }));
+  }
+});
+
 test('date index reconciliation loads an uncached existing tour and preserves operational fields', async () => {
   const tourId = 'DATE_RECONCILIATION';
   await testEnv.withSecurityRulesDisabled(async (context) => {

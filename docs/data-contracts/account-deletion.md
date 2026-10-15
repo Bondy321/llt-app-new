@@ -11,6 +11,17 @@ The public promise is to remove the app account/installation, current app author
 device state, local/offline data, active-tour passenger content owned by that principal, and Firebase
 Auth. It does not erase booking, legal, accounting, safety, reporting or operational records.
 
+Several phones may use the same booking and opaque passenger principal. Ordinary logout and session
+revocation affect only the exact phone/session. Account deletion still removes the captured
+principal's active-tour chat and media, which are shared by those phones; the passenger confirmation
+must explain this. It removes only the requesting phone's Auth/account/authorization and preserves
+other authorized phones, their sessions and their identity bindings. The booking-wide deletion barrier
+temporarily blocks new login admission while shared content cleanup runs; it does not revoke an
+already active sibling session. This does not broaden deletion to other bookings or principals.
+The passenger-trip API treats `ACCOUNT_DELETION_IN_PROGRESS` as a temporary refresh failure rather
+than proof that this phone's session is invalid. The handset retains its last saved trip and retries;
+its own revoked, expired or missing session still follows the normal invalid-session cleanup path.
+
 ## Public protocol
 
 All three endpoints are authenticated HTTPS `POST` Functions in `europe-west1`, with CORS disabled.
@@ -37,7 +48,12 @@ receipt itself is never stored in RTDB or logs.
 The Function requires the authenticated UID to own the exact active, non-expired session. It derives:
 
 - Passenger: opaque principal, tour, booking reference, stable identity/key and private-photo owner
-  from the session, profile, security record and exact identity binding.
+  from the session, profile, security record and exact identity binding. The security record must
+  authorize this exact UID through `authorizedAuthUids/{uid}: true` when
+  `deviceAuthorizationVersion: 2`, or the legacy `authorizedAuthUid` scalar only when the version is
+  absent/null. The record must not be login-locked and must name the same opaque principal. An unknown
+  version, a sibling's authorization, a truthy non-boolean map value or a missing exact identity binding
+  is insufficient. A retained legacy scalar cannot restore a device removed from a version-2 map.
 - Driver: canonical `driver:{driverId}` principal, driver record and optional current tour from the
   session/profile/driver records.
 
@@ -362,7 +378,7 @@ required for exact finalisation.
 | Passenger-principal notification read state | Passenger principal | Delete exact captured active-tour branch | Not applicable |
 | `identity_bindings/{stableKey}/{uid}` | Passenger principal/UID binding | Compare-delete exact `true` binding | Not applicable |
 | `identity_bindings_meta/{stableKey}` | Booking identity metadata | Preserve | Not applicable |
-| `passenger_identity_security/{booking}` | Booking security record | Compare-delete only exact `authorizedAuthUid`; preserve the record and principal metadata | Not applicable |
+| `passenger_identity_security/{booking}` | Booking security record | Compare-delete only `authorizedAuthUids/{capturedUid}` when exactly `true` and legacy `authorizedAuthUid` when exactly the captured UID; preserve sibling UIDs, the record and principal metadata | Not applicable |
 | `notification_devices/{uid}`, `notification_consents/{uid}` | UID installation/consent | Delete under device lock | Same |
 | `notification_device_tombstones/{uid}` | Existing UID-keyed anti-recreation fence | Create/preserve without a duplicate UID value and with monotonic revision | Same |
 | `driver_location_sessions`, `chat_presence_sessions`, `chat_typing_sessions` | Exact app-session raw live state | Delete exact captured session; reconcile projections | Same |
@@ -384,6 +400,12 @@ required for exact finalisation.
 Notification cleanup must use the internal helper that removes `notification_devices/{uid}` and
 `notification_consents/{uid}` and creates/preserves `notification_device_tombstones/{uid}` with a
 monotonic registration revision. Later registration cannot recreate a tombstoned UID.
+
+Passenger authority cleanup uses separate exact-leaf transactions under the current job lease, never
+a security-record or authorization-map replacement. A cold SDK-cache null is submitted as a no-op so
+the transaction can compare/retry with the server value; absent leaves do not increase removed-record
+counts. Replays finish any remaining owned leaves and preserve changed/successor values. The existing
+permanent deleted-UID tombstone prevents a stale token from re-adding that phone after completion.
 
 Passenger-authored notification privacy replacement refuses to proceed while the parent notification
 job has a live lease. Initial fanout and individual retry submission both acquire and immediately

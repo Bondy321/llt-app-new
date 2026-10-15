@@ -32,6 +32,7 @@ const {
   isOpaquePassengerId,
 } = loadLegacyLibrary('passengerIdentity');
 const { buildPassengerCustomClaims } = require('./passengerRoleClaims');
+const { confirmIssuedPassengerSource, isBookingTourConsistent } = require('./passengerLoginSource');
 const { toClientSession } = loadLegacyLibrary('appSession');
 const { acquireAppSessionLock, releaseAppSessionLock } = loadLegacyLibrary('appSessionLock');
 const {
@@ -173,6 +174,7 @@ const loadPassengerLoginContext = async ({ bookingRef, email, networkDimension }
   if (!eligible) {
     return failure(401, 'INVALID_CREDENTIALS');
   }
+  if (!isBookingTourConsistent(bookingData, canonicalTourId)) return failure(503, 'SERVICE_UNAVAILABLE');
   if (tourData.rosterSync?.state === 'updating') return failure(503, 'SERVICE_UNAVAILABLE');
   if (tourData.isActive === false) {
     log.warn('Passenger login rejected for inactive tour', { bookingRef, tourId: canonicalTourId });
@@ -214,7 +216,7 @@ const authorizePassengerIdentity = async ({ authUid, context, bookingRef, networ
   } catch (authorizationError) {
     const typedError = /** @type {{ code?: string }} */ (authorizationError);
     const reason = typedError?.code === 'REAUTHORIZE_REQUIRED' ? 'REAUTHORIZE_REQUIRED' : 'IDENTITY_INCOMPLETE';
-    log.warn('Passenger login rejected by device-bound credential', {
+    log.warn('Passenger login rejected by credential security', {
       bookingRef,
       networkDimension,
       reason,
@@ -226,9 +228,10 @@ const authorizePassengerIdentity = async ({ authUid, context, bookingRef, networ
 
 /** @type {(...args: any[]) => Promise<any>} */
 const issueVerifiedPassengerSession = async ({
-  authUid, context, stablePassengerId, appSessionLock = null, passengerDeletionLock = null,
+  authUid, context, stablePassengerId, bookingRef, email, networkDimension,
+  appSessionLock = null, passengerDeletionLock = null,
 }) => {
-  const { bookingSnapshot, canonicalTourId, database, resolvedBookingRef, tourData } = context;
+  const { canonicalTourId, database, resolvedBookingRef } = context;
   const sessionIssuedAtMs = Date.now();
   const grantUpdates = buildVerifiedLoginGrantUpdates({
     authUid,
@@ -268,6 +271,7 @@ const issueVerifiedPassengerSession = async ({
     existingAppSessionLock: appSessionLock,
     existingPassengerDeletionLock: passengerDeletionLock,
   });
+  let roleClaimsReady = false;
   try {
     const claimResult = await reconcilePassengerRoleClaimJob({
       db: database,
@@ -276,27 +280,38 @@ const issueVerifiedPassengerSession = async ({
       buildClaims: buildPassengerCustomClaims,
       existingAppSessionLock: appSessionLock,
     });
-    if (!claimResult.completed) return roleTransitionInProgressFailure();
+    roleClaimsReady = claimResult.completed === true;
   } catch (error) {
     log.warn('Passenger role claim projection remains retryable', {
       errorCode: error?.code || 'CLAIM_RETRY',
     });
-    return roleTransitionInProgressFailure();
   }
+  const confirmed = await confirmIssuedPassengerSource({
+    context, authUid, appSession, appSessionLock, bookingRef, email, networkDimension,
+    loadContext: loadPassengerLoginContext,
+  });
+  if (!confirmed.ok) return confirmed;
+  if (!roleClaimsReady) return roleTransitionInProgressFailure();
   return {
     ok: true,
     status: 200,
     body: buildPassengerLoginResponse({
       bookingRef: resolvedBookingRef,
       tourId: canonicalTourId,
-      tourCode: tourData.tourCode,
+      tourCode: confirmed.tourData.tourCode,
       stablePassengerId,
       session: toClientSession(appSession),
-      booking: buildPassengerSafeBooking(resolvedBookingRef, bookingSnapshot.val() || {}, canonicalTourId),
-      tour: buildPassengerSafeTour(canonicalTourId, tourData),
+      booking: buildPassengerSafeBooking(resolvedBookingRef, confirmed.bookingSnapshot.val() || {}, canonicalTourId),
+      tour: buildPassengerSafeTour(canonicalTourId, confirmed.tourData),
       grantExpiresAtMs: grantUpdates[`tour_access_grants/${canonicalTourId}/${authUid}`].expiresAtMs,
     }),
   };
+};
+
+const reloadLockedPassengerContext = async ({ context, bookingRef, email, networkDimension }) => {
+  const current = await loadPassengerLoginContext({ bookingRef, email, networkDimension });
+  if (!current.ok) return current;
+  return current.resolvedBookingRef === context.resolvedBookingRef ? current : failure(503, 'SOURCE_CHANGED');
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
@@ -346,16 +361,20 @@ const executePassengerLogin = async ({ req, bookingRef, email }) => {
     await ensureNoActivePassengerAccountDeletion({
       db: context.database, bookingRef: context.resolvedBookingRef,
     });
+    const currentContext = await reloadLockedPassengerContext({ context, bookingRef, email,
+      networkDimension: requestAccess.networkDimension });
+    if (!currentContext.ok) return currentContext;
     const identityAccess = await authorizePassengerIdentity({
       authUid: requestAccess.authUid,
-      context,
+      context: currentContext,
       bookingRef,
       networkDimension: requestAccess.networkDimension,
     });
     if (!identityAccess.ok) return identityAccess;
     return await issueVerifiedPassengerSession({
       authUid: requestAccess.authUid,
-      context,
+      context: currentContext,
+      bookingRef, email, networkDimension: requestAccess.networkDimension,
       stablePassengerId: identityAccess.stablePassengerId,
       appSessionLock,
       passengerDeletionLock,

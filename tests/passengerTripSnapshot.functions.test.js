@@ -27,7 +27,7 @@ const createSnapshot = (value) => ({
   val: () => value,
 });
 
-const createReadDb = (state, { failures = new Set() } = {}) => {
+const createReadDb = (state, { failures = new Set(), onRead = () => {} } = {}) => {
   const reads = [];
   return {
     reads,
@@ -36,6 +36,7 @@ const createReadDb = (state, { failures = new Set() } = {}) => {
         async once(event) {
           assert.equal(event, 'value');
           reads.push(path);
+          onRead(path, state);
           if (failures.has(path)) throw new Error('synthetic read failure');
           return createSnapshot(getAtPath(state, path));
         },
@@ -123,8 +124,8 @@ const allowedAccess = {
 
 const noDeletion = async () => true;
 
-const runHandler = async ({ state = baseState(), body, failures, verifySession, authorizeRequest } = {}) => {
-  const db = createReadDb(state, { failures });
+const runHandler = async ({ state = baseState(), body, failures, onRead, verifySession, authorizeRequest } = {}) => {
+  const db = createReadDb(state, { failures, onRead });
   const res = createResponse();
   const verifyCalls = [];
   const handler = createPassengerTripSnapshotHandler({
@@ -220,6 +221,84 @@ test('conditional versions still perform canonical reads before returning unchan
   assert.ok(second.db.reads.includes(`bookings/${BOOKING_REF}`));
   assert.ok(second.db.reads.includes(`tours/${TOUR_ID}/driverPhone`));
   assert.ok(second.db.reads.includes(`tours/${TOUR_ID}/itinerary`));
+});
+
+test('an additional authorized phone reads the same trip without enumerating device authorizations', async () => {
+  const state = baseState();
+  state.passenger_identity_security[BOOKING_REF].deviceAuthorizationVersion = 2;
+  state.passenger_identity_security[BOOKING_REF].authorizedAuthUid = 'original-phone';
+  state.passenger_identity_security[BOOKING_REF].authorizedAuthUids = {
+    'original-phone': true,
+    [AUTH_UID]: true,
+    'another-private-phone': true,
+  };
+  const { db, res } = await runHandler({ state });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.scope.principalId, PRINCIPAL_ID);
+  assert.equal(res.body.parts.booking.status, 'value');
+  assert.equal(db.reads.filter((path) => path === `passenger_identity_security/${BOOKING_REF}/authorizedAuthUids/${AUTH_UID}`).length, 2);
+  assert.equal(db.reads.includes(`passenger_identity_security/${BOOKING_REF}/authorizedAuthUids`), false);
+  const payload = JSON.stringify(res.body);
+  for (const forbidden of ['authorizedAuthUid', 'authorizedAuthUids', 'original-phone', 'another-private-phone']) {
+    assert.equal(payload.includes(forbidden), false, forbidden);
+  }
+});
+
+test('map-only authorization works while a legacy record still supports its original phone', async () => {
+  for (const legacyOwner of [undefined, AUTH_UID]) {
+    const state = baseState();
+    state.passenger_identity_security[BOOKING_REF].authorizedAuthUid = legacyOwner;
+    if (!legacyOwner) state.passenger_identity_security[BOOKING_REF].deviceAuthorizationVersion = 2;
+    state.passenger_identity_security[BOOKING_REF].authorizedAuthUids = legacyOwner
+      ? { 'second-phone': true } : { [AUTH_UID]: true };
+    const { res } = await runHandler({ state });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.parts.booking.status, 'value');
+  }
+});
+
+test('unknown phones, non-boolean authorization values and locked bookings cannot read a trip', async () => {
+  for (const value of [undefined, null, false, 'true', 1, {}]) {
+    const state = baseState();
+    state.passenger_identity_security[BOOKING_REF].deviceAuthorizationVersion = 2;
+    // A retained legacy owner must not override removal from the current map.
+    state.passenger_identity_security[BOOKING_REF].authorizedAuthUids = { [AUTH_UID]: value };
+    const { res } = await runHandler({ state });
+    assert.equal(res.statusCode, 403);
+    assert.deepEqual(res.body, { success: false, reason: 'SESSION_SCOPE_MISMATCH' });
+  }
+  const state = baseState();
+  state.passenger_identity_security[BOOKING_REF].deviceAuthorizationVersion = 2;
+  state.passenger_identity_security[BOOKING_REF].authorizedAuthUids = { [AUTH_UID]: true };
+  state.passenger_identity_security[BOOKING_REF].loginLocked = true;
+  const { res } = await runHandler({ state });
+  assert.equal(res.statusCode, 403);
+  assert.deepEqual(res.body, { success: false, reason: 'SESSION_SCOPE_MISMATCH' });
+  state.passenger_identity_security[BOOKING_REF].loginLocked = false;
+  state.passenger_identity_security[BOOKING_REF].deviceAuthorizationVersion = 3;
+  const unknownVersion = await runHandler({ state });
+  assert.equal(unknownVersion.res.statusCode, 403);
+});
+
+test('device revocation during a conditional read prevents an unchanged trip response', async () => {
+  const first = await runHandler();
+  const versions = Object.fromEntries(Object.entries(first.res.body.parts)
+    .map(([part, value]) => [part, value.version]));
+  const state = baseState();
+  state.passenger_identity_security[BOOKING_REF].deviceAuthorizationVersion = 2;
+  delete state.passenger_identity_security[BOOKING_REF].authorizedAuthUid;
+  state.passenger_identity_security[BOOKING_REF].authorizedAuthUids = { [AUTH_UID]: true };
+  const { res } = await runHandler({
+    state,
+    body: { expectedSessionId: SESSION_ID, parts: ['booking', 'tour', 'itinerary'], versions },
+    onRead: (path) => {
+      if (path === `tours/${TOUR_ID}/itinerary`) {
+        delete state.passenger_identity_security[BOOKING_REF].authorizedAuthUids[AUTH_UID];
+      }
+    },
+  });
+  assert.equal(res.statusCode, 403);
+  assert.deepEqual(res.body, { success: false, reason: 'SESSION_SCOPE_MISMATCH' });
 });
 
 test('withdrawn itinerary has a deterministic absence version', async () => {

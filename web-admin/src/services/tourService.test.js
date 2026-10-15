@@ -121,6 +121,9 @@ describe('tour identity invariants', () => {
       driverPhone: '+44 7000 000000',
       driverId: 'D-FORGED',
       driverAssignmentRevision: 99,
+      driverLocationProjectionRevision: 99,
+      driverLocationProjectionEpoch: 'forged',
+      'driverLocationProjectionRevision/forged': 99,
     });
 
     expect(result.id).toBe('5112D_8');
@@ -132,7 +135,7 @@ describe('tour identity invariants', () => {
     );
     const updater = runTransactionMock.mock.calls[0][1];
     expect(updater(null)).toEqual(expect.objectContaining({ name: 'Highlands', tourCode: '5112D 8' }));
-    for (const reservedField of ['driverName', 'driverPhone', 'driverId', 'driverAssignmentRevision',
+    for (const reservedField of ['driverName', 'driverPhone', 'driverId', 'driverAssignmentRevision', 'driverLocationProjectionRevision', 'driverLocationProjectionEpoch',
       'sourceLifecycle', 'sourceLifecycle/managedDisable', 'rosterSync', 'itinerarySource', 'manualPassengerCount']) {
       expect(result.tour).not.toHaveProperty(reservedField);
       expect(updater(null)).not.toHaveProperty(reservedField);
@@ -250,7 +253,9 @@ describe('tour identity invariants', () => {
     getMock.mockResolvedValue(buildSnapshot({ tourCode: '5112D 8' }));
     const { updateTour } = await import('./tourService.js');
 
-    for (const reservedField of ['driverName', 'driverPhone', 'driverId', 'driverAssignmentRevision', 'manualPassengerCount']) {
+    for (const reservedField of ['driverName', 'driverPhone', 'driverId', 'driverAssignmentRevision',
+      'driverLocationProjectionRevision', 'driverLocationProjectionEpoch', 'driverLocationProjectionRevision/forged',
+      'driverLocationProjectionEpoch/forged', 'manualPassengerCount']) {
       await expect(updateTour('5112D_8', { [reservedField]: 'forged' }))
         .rejects.toThrow(/server-owned/i);
     }
@@ -326,6 +331,8 @@ describe('tour identity invariants', () => {
         safetyAlerts: { alert_1: { status: 'pending' } },
         liveTracking: { user_1: { isSharing: true } },
         driverLocation: { latitude: 1, longitude: 2 },
+        driverLocationProjectionRevision: 17,
+        driverLocationProjectionEpoch: 'forged',
         bookedPassengerCount: 8,
       },
       'tours/TA_1_COPY': null,
@@ -341,6 +348,8 @@ describe('tour identity invariants', () => {
     expect(result.tour).not.toHaveProperty('safetyAlerts');
     expect(result.tour).not.toHaveProperty('liveTracking');
     expect(result.tour).not.toHaveProperty('driverLocation');
+    expect(result.tour).not.toHaveProperty('driverLocationProjectionRevision');
+    expect(result.tour).not.toHaveProperty('driverLocationProjectionEpoch');
     expect(result.tour).not.toHaveProperty('bookedPassengerCount');
   });
 

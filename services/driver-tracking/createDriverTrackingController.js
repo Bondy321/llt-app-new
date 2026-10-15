@@ -151,10 +151,15 @@ export const createDriverTrackingController = ({ storage, native, verifyAuthorit
     } catch (error) {
       if (generation !== epoch) return { success: false, reason: 'START_INTERRUPTED' };
       // Do not use stop() recursively from the serialized operation.
-      generation += 1;
+      const failureGeneration = ++generation;
       starting = false;
-      if (intent) await serialize(() => finishStop(intent));
-      else emit({ ...off, state: 'error', status: native.permissionMessage(error), error: error?.message || 'START_FAILED' });
+      const cleanup = intent ? await serialize(() => finishStop(intent)) : { success: true };
+      // Compensating cleanup must not erase the reason Start failed. A failed
+      // cleanup keeps its actionable Stop/retry state, and a late failure must
+      // never replace a newer explicit Start's status.
+      if (generation === failureGeneration && cleanup.success) {
+        emit({ ...off, state: 'error', status: native.permissionMessage(error), error: error?.message || 'START_FAILED' });
+      }
       return { success: false, reason: error?.message || 'START_FAILED' };
     }
   };

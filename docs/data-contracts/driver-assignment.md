@@ -114,3 +114,20 @@ Security rules authorize that write when all of the following are true:
 reservation before persisting server-owned driver profile helpers. Clients cannot
 claim a driver, change assignment authority fields, add their own manifest
 assignment, or mutate the canonical assignment directly.
+
+Before issuing a tour-scoped session, driver login requires the canonical `currentTourId`
+to be the exact resolved key, the tour to exist as an object and not be explicitly
+inactive, and the driver's exact `assigned_drivers` leaf to be `true`. Missing,
+malformed, inactive or incoherent assignment state returns HTTP 503 with
+`ASSIGNMENT_UNAVAILABLE` before profile/session issuance. The client directs the driver
+to dispatch and permits retry after correction. Login preserves operational assignment
+records; it never silently repairs, assigns or unassigns them. A genuinely unassigned
+driver can still sign in without a tour-scoped grant. Past departure dates and a source
+roster refresh do not independently invalidate an otherwise coherent assignment.
+
+Tour deletion holds the assignment-tour lock while checking location-projection fencing. If the
+canonical tour is already absent, the admin endpoint acknowledges `alreadyDeleted` with zero deleted
+records/objects and performs no content or Storage cleanup. This repeat acknowledgement cannot
+recreate the tour or erase a concurrently recreated successor. Orphan data for an absent canonical
+tour requires a separate explicitly scoped maintenance operation; an `alreadyDeleted` response does
+not claim that those records were purged.

@@ -1,10 +1,25 @@
 'use strict';
 
 const { randomUUID } = require('crypto');
+const { isValidFirebaseKey } = require('../src/infrastructure/database/firebaseKey');
 
 const PASSENGER_IDENTITY_VERSION = 'pax_v2';
 const OPAQUE_PASSENGER_ID_PATTERN = /^pax_v2_[a-f0-9]{32}$/;
 const LEGACY_PASSENGER_ID_PATTERN = /^pax_v1:/;
+const PASSENGER_DEVICE_AUTHORIZATION_VERSION = 2;
+const isRecord = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const isAuthUid = value => isValidFirebaseKey(value) && value.length <= 128 && value === value.trim();
+
+// Versioned membership prevents a retained legacy scalar from bypassing an
+// explicitly withdrawn device. Readers can fetch just the version and own leaf.
+const isPassengerDeviceAuthorized = (identity, authUid) => {
+  if (!isRecord(identity) || !isAuthUid(authUid) || identity.loginLocked === true) return false;
+  if (identity.deviceAuthorizationVersion === undefined || identity.deviceAuthorizationVersion === null) {
+    return identity.authorizedAuthUid === authUid;
+  }
+  return identity.deviceAuthorizationVersion === PASSENGER_DEVICE_AUTHORIZATION_VERSION
+    && isRecord(identity.authorizedAuthUids) && identity.authorizedAuthUids[authUid] === true;
+};
 
 const createOpaquePassengerId = ({ uuid = randomUUID } = {}) => (
   `pax_v2_${uuid().replace(/-/g, '').toLowerCase()}`
@@ -58,7 +73,7 @@ const ensureOpaquePassengerIdentity = async ({
 };
 
 const authorizePassengerLoginDevice = async ({ securityRef, authUid } = {}) => {
-  if (!securityRef?.transaction || typeof authUid !== 'string' || !authUid.trim()) {
+  if (!securityRef?.transaction || !isAuthUid(authUid)) {
     throw new Error('A passenger security reference and authenticated UID are required');
   }
   let rejectionReason = null;
@@ -72,7 +87,10 @@ const authorizePassengerLoginDevice = async ({ securityRef, authUid } = {}) => {
       rejectionReason = 'IDENTITY_INCOMPLETE';
       return;
     }
-    if (!isOpaquePassengerId(current.passengerPrincipalId)) {
+    if (!isOpaquePassengerId(current.passengerPrincipalId)
+      || current.passengerPrincipalId !== current.passengerPrincipalId.trim()
+      || (current.passengerIdentityVersion !== undefined && current.passengerIdentityVersion !== null
+        && current.passengerIdentityVersion !== PASSENGER_IDENTITY_VERSION)) {
       rejectionReason = 'IDENTITY_INCOMPLETE';
       return;
     }
@@ -80,23 +98,36 @@ const authorizePassengerLoginDevice = async ({ securityRef, authUid } = {}) => {
       rejectionReason = 'REAUTHORIZE_REQUIRED';
       return;
     }
-    const authorizedAuthUid = typeof current.authorizedAuthUid === 'string'
-      ? current.authorizedAuthUid.trim()
-      : '';
-    if (authorizedAuthUid && authorizedAuthUid !== authUid) {
-      rejectionReason = 'REAUTHORIZE_REQUIRED';
+    const version = current.deviceAuthorizationVersion;
+    if (version !== undefined && version !== null && version !== PASSENGER_DEVICE_AUTHORIZATION_VERSION) {
+      rejectionReason = 'IDENTITY_INCOMPLETE';
       return;
     }
-    if (authorizedAuthUid === authUid) return current;
+    if (current.authorizedAuthUids !== undefined && current.authorizedAuthUids !== null
+      && !isRecord(current.authorizedAuthUids)) {
+      rejectionReason = 'IDENTITY_INCOMPLETE';
+      return;
+    }
+    if (version === PASSENGER_DEVICE_AUTHORIZATION_VERSION && current.authorizedAuthUids?.[authUid] === true
+      && current.passengerIdentityVersion === PASSENGER_IDENTITY_VERSION) return current;
+    const devices = version === PASSENGER_DEVICE_AUTHORIZATION_VERSION ? current.authorizedAuthUids || {} : {};
+    const legacyUid = isAuthUid(current.authorizedAuthUid) ? current.authorizedAuthUid : null;
     return {
       ...current,
-      authorizedAuthUid: authUid,
-      loginDeviceBoundAtMs: Date.now(),
+      passengerIdentityVersion: PASSENGER_IDENTITY_VERSION,
+      deviceAuthorizationVersion: PASSENGER_DEVICE_AUTHORIZATION_VERSION,
+      authorizedAuthUids: {
+        ...devices,
+        ...(version !== PASSENGER_DEVICE_AUTHORIZATION_VERSION && legacyUid ? { [legacyUid]: true } : {}),
+        [authUid]: true,
+      },
+      ...(!legacyUid ? { authorizedAuthUid: authUid } : {}),
+      ...(current.loginDeviceBoundAtMs === undefined ? { loginDeviceBoundAtMs: Date.now() } : {}),
     };
   }, undefined, false);
   const identity = result?.snapshot?.val?.();
   if (!result?.committed || !isOpaquePassengerId(identity?.passengerPrincipalId)
-    || identity?.authorizedAuthUid !== authUid || identity?.loginLocked === true) {
+    || !isPassengerDeviceAuthorized(identity, authUid)) {
     const error = new Error(rejectionReason || 'Unable to authorize passenger login device');
     error.code = rejectionReason || 'IDENTITY_INCOMPLETE';
     throw error;
@@ -146,6 +177,7 @@ const buildPassengerIdentitySecurityUpdates = ({
 
 module.exports = {
   PASSENGER_IDENTITY_VERSION,
+  PASSENGER_DEVICE_AUTHORIZATION_VERSION,
   OPAQUE_PASSENGER_ID_PATTERN,
   buildPassengerIdentitySecurityUpdates,
   authorizePassengerLoginDevice,
@@ -153,4 +185,5 @@ module.exports = {
   ensureOpaquePassengerIdentity,
   isLegacyPassengerId,
   isOpaquePassengerId,
+  isPassengerDeviceAuthorized,
 };

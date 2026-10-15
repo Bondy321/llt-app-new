@@ -1,6 +1,7 @@
 'use strict';
 
 const { createOpaquePassengerId, isOpaquePassengerId } = require('./passengerIdentity');
+const { isValidFirebaseKey } = require('../src/infrastructure/database/firebaseKey');
 
 const LEGACY_ID_PATTERN = /^pax_v1:/;
 const LEGACY_KEY_PATTERN = /^pax_v1:/;
@@ -21,10 +22,45 @@ const BOOKING_SECURITY_FIELDS = Object.freeze([
   'passengerIdentityVersion',
   'passengerIdentityIssuedAtMs',
   'authorizedAuthUid',
+  'deviceAuthorizationVersion',
+  'authorizedAuthUids',
   'loginDeviceBoundAtMs',
   'loginLocked',
   'loginLockReason',
 ]);
+
+const invalidDeviceAuthorization = () => Object.assign(
+  new Error('Passenger device authorization cannot be migrated safely'),
+  { code: 'MIGRATION_DEVICE_AUTHORIZATION_INVALID' },
+);
+const record = value => value && typeof value === 'object' && !Array.isArray(value);
+const authUid = value => typeof value === 'string' && value === value.trim()
+  && value.length <= 128 && isValidFirebaseKey(value);
+
+// A maintenance replay must never demote explicit multi-phone membership to
+// the retained legacy scalar, infer devices from profiles, or rotate its owner.
+const validateVersionedDeviceAuthorization = value => {
+  if (value === undefined || value === null) return false;
+  if (!record(value)) throw invalidDeviceAuthorization();
+  const version = value.deviceAuthorizationVersion;
+  if (version === undefined || version === null) {
+    if (value.authorizedAuthUids !== undefined && value.authorizedAuthUids !== null) throw invalidDeviceAuthorization();
+    return false;
+  }
+  if (version !== 2 || !isOpaquePassengerId(value.passengerPrincipalId)
+    || value.passengerPrincipalId !== value.passengerPrincipalId.trim()
+    || value.passengerIdentityVersion !== 'pax_v2') throw invalidDeviceAuthorization();
+  const devices = value.authorizedAuthUids;
+  if (devices !== undefined && devices !== null && (!record(devices)
+    || Object.entries(devices).some(([uid, allowed]) => !authUid(uid) || typeof allowed !== 'boolean'))) {
+    throw invalidDeviceAuthorization();
+  }
+  if (value.authorizedAuthUid !== undefined && value.authorizedAuthUid !== null && !authUid(value.authorizedAuthUid)) {
+    throw invalidDeviceAuthorization();
+  }
+  if (value.loginLocked !== undefined && typeof value.loginLocked !== 'boolean') throw invalidDeviceAuthorization();
+  return true;
+};
 
 const encodeRealtimeKey = (value, { encodeAt = false } = {}) => String(value).replace(
   encodeAt ? /[.#$\/\[\]@\x00-\x1F\x7F]/g : /[.#$\/\[\]\x00-\x1F\x7F]/g,
@@ -92,8 +128,12 @@ const buildIdentityPlan = ({
 } = {}) => {
   const identities = {};
   const aliasMap = new Map();
+  Object.values(passengerIdentitySecurity || {}).forEach(validateVersionedDeviceAuthorization);
   Object.entries(bookingIdentities || {}).forEach(([bookingKey, value]) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    // These fields belong only to the private security root. Do not manufacture
+    // a new authorization map from credential-source or ambiguous old data.
+    if (value.deviceAuthorizationVersion != null || value.authorizedAuthUids != null) throw invalidDeviceAuthorization();
     const bookingRef = String(value.bookingRef || bookingKey || '').trim().toUpperCase();
     const existingSecurity = passengerIdentitySecurity?.[bookingKey];
     const opaqueId = isOpaquePassengerId(existingSecurity?.passengerPrincipalId)
@@ -182,6 +222,16 @@ const buildDatabaseMigration = ({ snapshot = {}, nowMs = Date.now(), createId } 
       .map(([authUid]) => authUid);
     const existingIdentity = next.booking_identities[bookingKey] || {};
     const existingSecurity = next.passenger_identity_security[bookingKey] || {};
+    if (validateVersionedDeviceAuthorization(existingSecurity)) {
+      next.passenger_identity_security[bookingKey] = {
+        ...existingSecurity,
+        ...(existingSecurity.authorizedAuthUids ? { authorizedAuthUids: { ...existingSecurity.authorizedAuthUids } } : {}),
+      };
+      const credentialIdentity = { ...existingIdentity };
+      BOOKING_SECURITY_FIELDS.forEach(field => delete credentialIdentity[field]);
+      next.booking_identities[bookingKey] = credentialIdentity;
+      return;
+    }
     const existingAuthorizedAuthUid = [
       existingSecurity.authorizedAuthUid,
       existingIdentity.authorizedAuthUid,

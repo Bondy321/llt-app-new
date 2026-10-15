@@ -130,6 +130,138 @@ test('logout compare failure preserves the pending marker and cannot end a newer
   assert.equal(storage.values.has(PENDING_SESSION_END_KEY), false);
 });
 
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+};
+const flushMicrotasks = async () => { for (let turn = 0; turn < 12; turn += 1) await Promise.resolve(); };
+const successfulEndResponse = () => ({ ok: true, status: 200,
+  json: async () => ({ success: true, reason: 'ENDED' }) });
+const controlledTimers = () => {
+  const timers = new Map();
+  return { timers,
+    scheduleTimer: (callback, delay) => { const key = Symbol('deadline'); timers.set(key, { callback, delay }); return key; },
+    cancelTimer: (key) => timers.delete(key),
+    expire: () => {
+      assert.equal(timers.size, 1);
+      [...timers.values()][0].callback();
+    },
+  };
+};
+
+test('stalled logout times out, retries its exact durable marker and cannot complete a later role logout', async () => {
+  const storage = memoryStorage();
+  const clock = controlledTimers();
+  const oldFetch = deferred();
+  const newFetch = deferred();
+  const requests = [];
+  const service = createAppSessionService({ storage, now: () => 2_000, ...clock,
+    getFirebase: () => ({ auth: { currentUser: { uid: 'uid-a', getIdToken: async () => 'id-token' } } }),
+    fetchFn: async (_url, options) => {
+      requests.push(options);
+      if (requests.length === 1) return oldFetch.promise;
+      if (requests.length === 2) return successfulEndResponse();
+      return newFetch.promise;
+    },
+  });
+  const first = service.endSession({ authUid: 'uid-a', session: SESSION });
+  await flushMicrotasks();
+  assert.equal(requests.length, 1);
+  assert.equal([...clock.timers.values()][0].delay, 15_000);
+  clock.expire();
+  const timedOut = await first;
+  assert.equal(timedOut.success, false);
+  assert.equal(timedOut.reason, 'NETWORK_ERROR');
+  assert.equal(requests[0].signal.aborted, true);
+  const pending = await service.readPendingEnd();
+  assert.deepEqual(pending, { authUid: 'uid-a', sessionId: SESSION.sessionId, tourId: SESSION.tourId,
+    principalType: 'passenger', requestedAtMs: 2_000, attemptCount: 1 });
+  assert.equal(clock.timers.size, 0);
+
+  const retry = await service.retryPendingEnd();
+  assert.equal(retry.success, true);
+  assert.equal(retry.pending.sessionId, SESSION.sessionId);
+  assert.equal(retry.pending.attemptCount, 2);
+  await service.completeEnd();
+  const driverSession = { ...SESSION, sessionId: `sess_v1_${'d'.repeat(32)}`,
+    principalId: 'driver:D-SYNTHETIC', principalType: 'driver', driverId: 'D-SYNTHETIC' };
+  await service.persistSession(driverSession);
+  let laterCompleted = false;
+  const later = service.endSession({ authUid: 'uid-a', session: driverSession })
+    .then((result) => { laterCompleted = true; return result; });
+  await flushMicrotasks();
+  assert.equal(requests.length, 3);
+  oldFetch.resolve(successfulEndResponse()); // Simulates a native fetch ignoring abort.
+  await flushMicrotasks();
+  assert.equal(laterCompleted, false);
+  assert.equal((await service.readPendingEnd()).sessionId, driverSession.sessionId);
+  assert.equal((await service.readSession()).sessionId, driverSession.sessionId);
+  assert.equal(JSON.parse(requests[2].body).expectedSessionId, driverSession.sessionId);
+  newFetch.resolve(successfulEndResponse());
+  assert.equal((await later).success, true);
+  assert.equal(clock.timers.size, 0);
+  await service.completeEnd();
+});
+
+test('logout deadline includes stalled Auth and App Check token preparation without late network requests', async () => {
+  for (const stage of ['auth', 'appcheck']) {
+    const storage = memoryStorage();
+    const clock = controlledTimers();
+    const token = deferred();
+    let fetches = 0;
+    let prepareStalls = true;
+    const service = createAppSessionService({ storage, now: () => 2_000, ...clock,
+      getFirebase: () => ({
+        auth: { currentUser: { uid: 'uid-a', getIdToken: async () => stage === 'auth' && prepareStalls ? token.promise : 'id-token' } },
+        getCurrentAppCheckToken: async () => stage === 'appcheck' && prepareStalls ? token.promise : 'app-check-token',
+      }),
+      fetchFn: async () => { fetches += 1; return successfulEndResponse(); },
+    });
+    const request = service.endSession({ authUid: 'uid-a', session: SESSION });
+    await flushMicrotasks();
+    assert.equal(fetches, 0, stage);
+    clock.expire();
+    assert.equal((await request).reason, 'NETWORK_ERROR', stage);
+    assert.equal((await service.readPendingEnd()).sessionId, SESSION.sessionId, stage);
+    prepareStalls = false;
+    assert.equal((await service.retryPendingEnd()).success, true, stage);
+    assert.equal(fetches, 1, stage);
+    const markerAfterRetry = storage.values.get(PENDING_SESSION_END_KEY);
+    token.resolve('late-token');
+    await flushMicrotasks();
+    assert.equal(fetches, 1, stage);
+    assert.equal(storage.values.get(PENDING_SESSION_END_KEY), markerAfterRetry, stage);
+    assert.equal(clock.timers.size, 0, stage);
+    await service.completeEnd();
+  }
+});
+
+test('logout deadline also bounds a stalled response body and releases its timer on ordinary failures', async () => {
+  const storage = memoryStorage();
+  const clock = controlledTimers();
+  const body = deferred();
+  let stallBody = true;
+  const service = createAppSessionService({ storage, now: () => 2_000, ...clock,
+    getFirebase: () => ({ auth: { currentUser: { uid: 'uid-a', getIdToken: async () => 'id-token' } } }),
+    fetchFn: async () => {
+      if (!stallBody) throw new Error('Synthetic connection failure');
+      return { ok: true, status: 200, json: () => body.promise };
+    },
+  });
+  const request = service.endSession({ authUid: 'uid-a', session: SESSION });
+  await flushMicrotasks();
+  clock.expire();
+  assert.equal((await request).reason, 'NETWORK_ERROR');
+  assert.equal(clock.timers.size, 0);
+  stallBody = false;
+  assert.equal((await service.retryPendingEnd()).reason, 'NETWORK_ERROR');
+  assert.equal(clock.timers.size, 0);
+  body.resolve({ success: true });
+  await flushMicrotasks();
+  assert.equal((await service.readPendingEnd()).attemptCount, 2);
+});
+
 test('remote session subscription reports deletion or replacement immediately', () => {
   let listener;
   let detached = false;
@@ -154,6 +286,68 @@ test('remote session subscription reports deletion or replacement immediately', 
   assert.deepEqual(revoked, [{ reason: 'SESSION_ENDED' }]);
   unsubscribe();
   assert.equal(detached, true);
+});
+
+const expiryHarness = () => {
+  let nowMs = 2_000;
+  let remoteListener;
+  let foreground;
+  let foregroundRemoved = false;
+  const timers = new Map();
+  const revoked = [];
+  const service = createAppSessionService({
+    now: () => nowMs,
+    scheduleTimer: (callback, delay) => { const key = Symbol('timer'); timers.set(key, { callback, delay }); return key; },
+    cancelTimer: (key) => timers.delete(key),
+    getFirebase: () => ({ realtimeDb: { ref: () => ({
+      on: (_event, callback) => { remoteListener = callback; }, off() {},
+    }) } }),
+  });
+  const unsubscribe = service.subscribe({ authUid: 'uid-a', expectedSession: SESSION,
+    onRevoked: (event) => revoked.push(event),
+    subscribeToForeground: (callback) => { foreground = callback; return () => { foregroundRemoved = true; }; },
+  });
+  return { timers, revoked, unsubscribe, setNow: (value) => { nowMs = value; },
+    foreground: () => foreground(), remote: (value) => remoteListener({ val: () => value }),
+    foregroundRemoved: () => foregroundRemoved };
+};
+
+test('session expiry closes an offline open session without waiting for a remote database event', () => {
+  const harness = expiryHarness();
+  const [timer] = harness.timers.values();
+  assert.equal(timer.delay, 18_000);
+  harness.setNow(20_000);
+  timer.callback();
+  assert.deepEqual(harness.revoked, [{ reason: 'SESSION_EXPIRED' }]);
+  harness.remote(null);
+  harness.foreground();
+  assert.equal(harness.revoked.length, 1);
+  assert.equal(harness.timers.size, 0);
+  harness.unsubscribe();
+});
+
+test('foreground immediately checks an expired session after suspended timers', () => {
+  const harness = expiryHarness();
+  harness.setNow(21_000);
+  harness.foreground();
+  assert.deepEqual(harness.revoked, [{ reason: 'SESSION_EXPIRED' }]);
+  assert.equal(harness.timers.size, 0);
+  harness.unsubscribe();
+  assert.equal(harness.foregroundRemoved(), true);
+});
+
+test('foreground before expiry replaces its timer without duplicate expiry callbacks', () => {
+  const harness = expiryHarness();
+  harness.setNow(10_000);
+  harness.foreground();
+  assert.equal(harness.timers.size, 1);
+  assert.equal([...harness.timers.values()][0].delay, 10_000);
+  assert.deepEqual(harness.revoked, []);
+  harness.unsubscribe();
+  assert.equal(harness.timers.size, 0);
+  harness.setNow(21_000);
+  harness.foreground();
+  assert.deepEqual(harness.revoked, []);
 });
 
 test('central local cleanup stops replay and reports any durable purge failure', async () => {

@@ -55,8 +55,8 @@ const RETENTION_ENGINE_PROTOCOL_MANIFEST = Object.freeze({
   }),
   rules: Object.freeze({
     revision: 'notification-retention-private-indexes-v2',
-    artifactDigest: '0878e2851e7ea8937db0837a73d571a690d0436ff03b15971441f562077d82b4',
-    semanticArtifactDigest: '577a4433361886fdfb14482b05a7da9d538b617a7ff2acebbb587000c3924349',
+    artifactDigest: '71abdf1ce26aec7d481a3d28ffce0a106c6d99609c50b26ba0cefed4fe5066ae',
+    semanticArtifactDigest: '886b50009ce68929ff39c21756e6f67dd70ba32e83da6ff02cc938dbe6ff020f',
     privateRoots: Object.freeze(['notification_retention/v1', 'notification_retention_rollout/v1']),
     indexes: Object.freeze({
       notification_delivery_attempts: Object.freeze(['jobId', 'retentionDueAtMs', 'updatedAtMs']),

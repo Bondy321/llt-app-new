@@ -38,6 +38,71 @@ test('active bound passenger reads own exact signals, including missing bootstra
   await env.withSecurityRulesDisabled((context) => context.database(url).ref('passenger_trip_signals/v1/tours/TRIP_1').remove());
   await assertSucceeds(read(uid, 'tours/TRIP_1'));
 });
+test('two independently authorized phones read their shared booking through exact active sessions', async () => {
+  const secondUid = 'synthetic-trip-second-phone';
+  const secondSession = `sess_v1_${'d'.repeat(32)}`;
+  const expiresAtMs = Date.now() + 60000;
+  await seed({
+    'passenger_identity_security/TEST123/deviceAuthorizationVersion': 2,
+    [`passenger_identity_security/TEST123/authorizedAuthUids/${uid}`]: true,
+    [`passenger_identity_security/TEST123/authorizedAuthUids/${secondUid}`]: true,
+    [`app_sessions/${secondUid}`]: { schemaVersion: 1, authUid: secondUid, principalType: 'passenger',
+      principalId: principal, sessionId: secondSession, tourId: 'TRIP_1', status: 'active', expiresAtMs },
+    [`users/${secondUid}`]: { principalType: 'passenger', stablePassengerId: principal,
+      identityVersion: 'pax_v2', bookingRef: 'TEST123' },
+    [`tours/TRIP_1/participants/${secondUid}`]: { schemaVersion: 2, userId: secondUid,
+      principalId: principal, sessionId: secondSession, sessionExpiresAtMs: expiresAtMs },
+  });
+  for (const deviceUid of [uid, secondUid]) {
+    await assertSucceeds(read(deviceUid, 'bookings/TEST123'));
+    await assertSucceeds(read(deviceUid, 'tours/TRIP_1'));
+  }
+  await env.withSecurityRulesDisabled((context) => context.database(url)
+    .ref(`passenger_identity_security/TEST123/authorizedAuthUids/${secondUid}`).remove());
+  await assertFails(read(secondUid, 'bookings/TEST123'));
+  await assertFails(read(secondUid, 'tours/TRIP_1'));
+  await assertSucceeds(read(uid, 'bookings/TEST123'));
+  await assertSucceeds(read(uid, 'tours/TRIP_1'));
+});
+test('map-only authorization is exact boolean and cannot override a booking lock or scope withdrawal', async () => {
+  await seed({
+    'passenger_identity_security/TEST123/deviceAuthorizationVersion': 2,
+    'passenger_identity_security/TEST123/authorizedAuthUid': null,
+    [`passenger_identity_security/TEST123/authorizedAuthUids/${uid}`]: true,
+  });
+  await assertSucceeds(read(uid, 'bookings/TEST123'));
+  await assertSucceeds(read(uid, 'tours/TRIP_1'));
+  for (const patch of [
+    { [`passenger_identity_security/TEST123/authorizedAuthUids/${uid}`]: false },
+    { [`passenger_identity_security/TEST123/authorizedAuthUids/${uid}`]: 'true' },
+    { [`passenger_identity_security/TEST123/authorizedAuthUids/${uid}`]: 1 },
+    { 'passenger_identity_security/TEST123/deviceAuthorizationVersion': 3 },
+    { 'passenger_identity_security/TEST123/loginLocked': true },
+    { 'bookings/TEST123/loginEligible': false },
+    { 'bookings/TEST123/tourId': 'TRIP_2' },
+  ]) {
+    await seed({
+      // Keep the legacy scalar to prove it cannot bypass a revoked version-2 entry.
+      'passenger_identity_security/TEST123/deviceAuthorizationVersion': 2,
+      [`passenger_identity_security/TEST123/authorizedAuthUids/${uid}`]: true,
+      ...patch,
+    });
+    await assertFails(read(uid, 'bookings/TEST123'));
+    await assertFails(read(uid, 'tours/TRIP_1'));
+  }
+});
+test('passengers cannot inspect or register device authorization even for their own booking', async () => {
+  await seed({ 'passenger_identity_security/TEST123/deviceAuthorizationVersion': 2,
+    [`passenger_identity_security/TEST123/authorizedAuthUids/${uid}`]: true });
+  const db = env.authenticatedContext(uid).database(url);
+  for (const path of ['passenger_identity_security/TEST123',
+    'passenger_identity_security/TEST123/authorizedAuthUids',
+    `passenger_identity_security/TEST123/authorizedAuthUids/${uid}`]) {
+    await assertFails(db.ref(path).get());
+  }
+  await assertFails(db.ref('passenger_identity_security/TEST123/authorizedAuthUids/another-phone').set(true));
+  await assertFails(db.ref(`passenger_identity_security/TEST123/authorizedAuthUids/${uid}`).set(false));
+});
 test('parent enumeration, unrelated users/scopes and client writes remain denied', async () => {
   await seed();
   for (const suffix of ['', 'bookings', 'tours', 'bookings/OTHER', 'tours/TRIP_2']) await assertFails(read(uid, suffix));
