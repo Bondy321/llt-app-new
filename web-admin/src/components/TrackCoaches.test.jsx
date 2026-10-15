@@ -52,6 +52,22 @@ describe('Track Coaches operational workspace', () => {
     await waitFor(() => expect(mocks.subscribe).toHaveBeenCalledOnce());
     expect(screen.queryByRole('button', { name: /View DEMO-01/ })).not.toBeInTheDocument();
   });
+  it('shows calendar-only tour dates while retaining the precise UK location-update time', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-15T09:00:00Z'));
+    try {
+      mount();
+      const source = { ...row('SKYE'), startAtMs: Date.UTC(2026, 9, 19), endAtMs: Date.UTC(2026, 9, 23),
+        location: { ...row('SKYE').location, timestamp: Date.parse('2026-10-15T08:59:30Z') } };
+      await deliver({ SKYE: source });
+      fireEvent.click(screen.getByRole('button', { name: 'View SKYE, Tour SKYE' }));
+      const details = screen.getByRole('region', { name: 'Details for SKYE' });
+      expect(details).toHaveTextContent('Tour dates19/10/2026 – 23/10/2026');
+      expect(details).not.toHaveTextContent('Tour dates · UK time');
+      expect(details).toHaveTextContent('Last location update · UK time15 Oct 2026, 09:59:30');
+      expect(details).not.toHaveTextContent('01:00:00');
+    } finally { vi.useRealTimers(); }
+  });
   it('provides a list-only view, fixed pickup controls and truthful tile failure fallback', async () => {
     mount('/track-coaches?demo=1&view=list');
     expect(screen.queryByRole('region', { name: 'Coach location map' })).not.toBeInTheDocument();

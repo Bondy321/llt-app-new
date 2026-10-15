@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildCoachRows, filterCoachRows, presentCoachLocation, formatCoachTime, formatPositionAge } from './coachTrackingPresentation';
+import { buildCoachRows, filterCoachRows, presentCoachLocation, formatCoachDateRange, formatCoachTime, formatPositionAge } from './coachTrackingPresentation';
 const NOW = Date.parse('2026-10-09T12:00:00Z');
 const live = age => ({ isSharing: true, mode: 'live', source: 'auto', latitude: 56, longitude: -4, timestamp: NOW - age, accuracy: 10 });
 const row = (location, other = {}) => ({ T1: { schemaVersion: 1, tourId: 'T1', tourCode: 'CODE 1', name: 'Test tour', assignedDrivers: [{ driverId: 'D-1', name: 'Driver One' }], location, ...other } });
@@ -53,5 +53,13 @@ describe('coach position presentation', () => {
     expect(formatCoachTime(Date.parse('2026-11-09T12:00:00Z'))).toContain('12:00:00');
     expect(formatCoachTime(1e20)).toBe('Unavailable');
     expect(buildCoachRows(row(live(0), { startAtMs: 1e20 }), NOW)[0].startAtMs).toBeNull();
+  });
+  it('presents date-only tour indexes without inventing times across the BST boundary', () => {
+    expect(formatCoachDateRange(Date.UTC(2026, 9, 19), Date.UTC(2026, 9, 23))).toBe('19/10/2026 – 23/10/2026');
+    expect(formatCoachDateRange(Date.UTC(2026, 9, 24), Date.UTC(2026, 9, 26))).toBe('24/10/2026 – 26/10/2026');
+    expect(formatCoachDateRange(Date.UTC(2026, 10, 9), Date.UTC(2026, 10, 9))).toBe('09/11/2026');
+    expect(formatCoachDateRange(Date.UTC(2026, 9, 19), null)).toBe('19/10/2026');
+    expect(formatCoachDateRange(null, Date.UTC(2026, 9, 23))).toBe('Dates unavailable');
+    expect(formatCoachDateRange(1e20, 1e20)).toBe('Dates unavailable');
   });
 });

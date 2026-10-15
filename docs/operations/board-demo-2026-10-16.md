@@ -18,14 +18,20 @@ The agreed real departure is **5503L 6, Skye & North Coast 500, 19–23 October*
 - [x] Exercise two real Firebase Auth emulator identities through passenger login, trip access, logout and exact administrator revocation, preserving the other phone.
 - [x] Exercise actual RTDB rules for private device authorization, source withdrawal, tracking, and protected location publication metadata.
 - [x] Reproduce and then prevent delayed-worker Stop resurrection and hidden Start failures.
-- [ ] Merge the exact reviewed candidate after required CI checks.
-- [ ] Deploy all affected login, media, deletion, assignment, location projection and cleanup callers, including the missing tracking-session trigger. Verify their deployed source, not just Function existence. Keep notification delivery retention paused and exclude its Function from deployment.
-- [ ] Deploy the reviewed RTDB rules and admin build; verify live rules fingerprint and unchanged scheduler states.
-- [ ] Assign CBOND to the agreed departure and verify canonical assignment/session/projection consistency.
-- [ ] Build and submit the exact green main revision; verify Apple processing and tester availability.
+- [x] Merge the exact reviewed candidate after required CI checks: [PR 478](https://github.com/Bondy321/llt-app-new/pull/478), `c0ed93a1b7d2cc0bf13a7e96d3b63989c0dc7595`, and the assignment recovery fix [PR 480](https://github.com/Bondy321/llt-app-new/pull/480), `043327a64cc13591e92a6d73dc851f9153f38fc5`. All six required checks passed on both reviewed branches.
+- [x] Deploy all 31 affected login, media, deletion, assignment, location projection and cleanup callers, including the tracking-session trigger. Downloaded source archives match all 215 compared source files per Function. The 29 unchanged callers match `c0ed93a`; `assignDriverToTour` and `cleanupDriverLoginPolicySessions` match the follow-up `043327a`. Notification delivery retention remains paused and its Function was excluded.
+- [x] Deploy the reviewed RTDB rules and initial admin build. Live rules match semantic fingerprint `886b50009ce68929ff39c21756e6f67dd70ba32e83da6ff02cc938dbe6ff020f`; scheduler states are unchanged, including the enabled 07:10 Europe/London import and paused delivery retention.
+- [x] Assign CBOND to the agreed departure and verify canonical assignment/session/projection consistency. Driver and tour revisions are 1, canonical manifest assignment is present, no active barrier or incomplete transition remains, and the real Track Coaches feed shows the selected departure. Before/after hashes confirm that booking records, boarding records and all other drivers are unchanged. An earlier unsuccessful reservation was failed safely before the successful supported retry.
+- [ ] Publish the date-only Track Coaches details correction after its own green merge; tour date indexes must not appear as 01:00 coach departure times. Actual GPS receipt timestamps retain UK date and time.
+- [x] Build and submit native 1.0.7 (14) from exact green main revision `043327a`; Apple accepted the upload at 09:39:49 UTC on 15 October.
+- [ ] Verify Apple processing completes and the candidate is available to the intended TestFlight testers.
 - [ ] Record the physical results below before calling background tracking accepted.
 
 The deployment must include older callers bundled with the previous projector: location session/pickup triggers, tracking trigger/Stop, pickup mutation, login/session end/revoke, assignment continuation/cleanup, driver-policy session cleanup, expiry cleanup and account-deletion workers. Deploying only the new Stop endpoint leaves old writers able to bypass its publication fence.
+
+The built and submitted native release candidate is **1.0.7 (14)**, EAS build `205b1192-5c9d-4826-9ea1-0184f8584bb9`, from exact green revision `043327a`, through workflow `38713370531`. Apple accepted the upload at 09:39:49 UTC on 15 October; the build was processing when checked. The native release workflow dependency fix is [PR 479](https://github.com/Bondy321/llt-app-new/pull/479). The Apple programme agreement was accepted by the operator and its previous banner is gone. Normal distribution targets the existing LLT internal TestFlight group with six testers, including the MD. Completion of Apple processing, tester availability and the physical checks below remain unverified until separately recorded.
+
+The selected departure's read-only reconciliation passed 25 current bookings and 50 passengers, including 23 login-eligible bookings and two valid roster-only bookings. All parties have pickup date, time, location and seats; all passenger projections and the actual driver manifest/cache round-trip pass. Its five itinerary days contain valid content. Two internal editorial warnings concern removed decorative adjectives; the native itinerary view does not display them. CBOND's phone field is blank: Call/Message actions show the existing contact-unavailable guidance rather than launching an invalid phone link.
 
 ## iPhone acceptance
 

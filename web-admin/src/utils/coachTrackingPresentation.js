@@ -1,3 +1,5 @@
+import { formatUKCalendarDate } from './dateUtils';
+
 // Same cadence thresholds as the passenger location contract. No coordinates
 // are persisted, and expired/malformed points never enter the map renderer.
 export const TRACKING_LIVE_MS = 4 * 60_000;
@@ -84,3 +86,12 @@ const coachTimeFormatter = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Europe/London', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
 });
 export const formatCoachTime = value => !validDate(value) ? 'Unavailable' : coachTimeFormatter.format(value);
+
+// Projection indexes encode date-only tour boundaries at UTC midnight. They
+// describe calendar dates, never coach departure or arrival times.
+export const formatCoachDateRange = (startAtMs, endAtMs) => {
+  const start = validDate(startAtMs) ? formatUKCalendarDate(startAtMs, '') : '';
+  const end = validDate(endAtMs) ? formatUKCalendarDate(endAtMs, '') : '';
+  if (!start) return 'Dates unavailable';
+  return !end || end === start ? start : `${start} – ${end}`;
+};

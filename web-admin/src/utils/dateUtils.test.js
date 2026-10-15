@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatDateForDisplay,
+  formatUKCalendarDate,
   formatDateTimeForDisplay,
   formatLongDateForDisplay,
   formatTimeForDisplay,
@@ -11,6 +12,14 @@ import {
 } from './dateUtils';
 
 describe('UK tour calendar boundaries', () => {
+  it('formats explicit UK calendar dates independently of the browser timezone', () => {
+    expect(formatUKCalendarDate(Date.UTC(2026, 9, 19))).toBe('19/10/2026');
+    expect(formatUKCalendarDate(Date.UTC(2026, 9, 24, 23, 30))).toBe('25/10/2026');
+    expect(formatUKCalendarDate(Date.UTC(2026, 9, 25, 23, 30))).toBe('25/10/2026');
+    for (const value of [null, undefined, '2026-10-19', NaN, Infinity, 1e20]) {
+      expect(formatUKCalendarDate(value, 'Unknown')).toBe('Unknown');
+    }
+  });
   it('uses the UK civil day at midnight in summer and winter', () => {
     expect(getUKCalendarDayEpochMs(Date.UTC(2026, 9, 8, 23, 30))).toBe(Date.UTC(2026, 9, 9));
     expect(getUKCalendarDayEpochMs(Date.UTC(2026, 0, 8, 23, 30))).toBe(Date.UTC(2026, 0, 8));
