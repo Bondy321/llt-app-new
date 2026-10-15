@@ -125,7 +125,7 @@ test('logout compare failure preserves the pending marker and cannot end a newer
   const result = await service.endSession({ authUid: 'uid-a', session: SESSION });
   assert.equal(result.reason, 'SESSION_CHANGED');
   assert.ok(storage.values.has(PENDING_SESSION_END_KEY));
-  await service.completeEnd();
+  await service.completeEnd({ expectedSessionId: SESSION.sessionId });
   assert.equal(storage.values.has(APP_SESSION_KEY), false);
   assert.equal(storage.values.has(PENDING_SESSION_END_KEY), false);
 });
@@ -135,7 +135,25 @@ const deferred = () => {
   const promise = new Promise((done) => { resolve = done; });
   return { promise, resolve };
 };
-const flushMicrotasks = async () => { for (let turn = 0; turn < 12; turn += 1) await Promise.resolve(); };
+const flushMicrotasks = async () => { for (let turn = 0; turn < 32; turn += 1) await Promise.resolve(); };
+
+test('late completion cannot clear a newer session or pending logout operation', async () => {
+  const storage = memoryStorage();
+  const service = createAppSessionService({ storage, now: () => 2000 });
+  await service.persistSession(SESSION);
+  await service.persistPendingEnd({ authUid: 'uid-a', session: SESSION });
+  assert.equal(await service.completeEnd(), false, 'completion must identify its acknowledged session');
+  const newer = { ...SESSION, sessionId: `sess_v1_${'c'.repeat(32)}` };
+  await service.persistSession(newer);
+  assert.equal(await service.completeEnd({ expectedSessionId: SESSION.sessionId }), false);
+  assert.equal((await service.readSession()).sessionId, newer.sessionId);
+  await service.persistPendingEnd({ authUid: 'uid-a', session: newer });
+  assert.equal(await service.completeEnd({ expectedSessionId: SESSION.sessionId }), false);
+  assert.equal((await service.readPendingEnd()).sessionId, newer.sessionId);
+  assert.equal(await service.completeEnd({ expectedSessionId: newer.sessionId }), true);
+  assert.equal(await service.readPendingEnd(), null);
+  assert.equal(await service.readSession(), null);
+});
 const successfulEndResponse = () => ({ ok: true, status: 200,
   json: async () => ({ success: true, reason: 'ENDED' }) });
 const controlledTimers = () => {
@@ -183,7 +201,7 @@ test('stalled logout times out, retries its exact durable marker and cannot comp
   assert.equal(retry.success, true);
   assert.equal(retry.pending.sessionId, SESSION.sessionId);
   assert.equal(retry.pending.attemptCount, 2);
-  await service.completeEnd();
+  await service.completeEnd({ expectedSessionId: SESSION.sessionId });
   const driverSession = { ...SESSION, sessionId: `sess_v1_${'d'.repeat(32)}`,
     principalId: 'driver:D-SYNTHETIC', principalType: 'driver', driverId: 'D-SYNTHETIC' };
   await service.persistSession(driverSession);
@@ -201,7 +219,7 @@ test('stalled logout times out, retries its exact durable marker and cannot comp
   newFetch.resolve(successfulEndResponse());
   assert.equal((await later).success, true);
   assert.equal(clock.timers.size, 0);
-  await service.completeEnd();
+  await service.completeEnd({ expectedSessionId: driverSession.sessionId });
 });
 
 test('logout deadline includes stalled Auth and App Check token preparation without late network requests', async () => {
@@ -233,7 +251,7 @@ test('logout deadline includes stalled Auth and App Check token preparation with
     assert.equal(fetches, 1, stage);
     assert.equal(storage.values.get(PENDING_SESSION_END_KEY), markerAfterRetry, stage);
     assert.equal(clock.timers.size, 0, stage);
-    await service.completeEnd();
+    await service.completeEnd({ expectedSessionId: SESSION.sessionId });
   }
 });
 

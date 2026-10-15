@@ -87,7 +87,7 @@ export const runPurgePendingAccountDeletion = async ({
     try { await purgeDriverTracking({ authUid: normalizeOriginalAuthUid(commitPending.originalAuthUid) }); }
     catch { return localCommitFailure('stopDriverTracking', 'LOCAL_TRACKING_STOP_FAILED', commitPending); }
   }
-  const commit = await localSessionCleanupService.commitSessionKeys();
+  const commit = await localSessionCleanupService.commitSessionKeys({ preservePendingSessionEnd: false });
   if (!commit.success) return { ...commit, pending: commitPending };
   let nextPending;
   try {

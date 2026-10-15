@@ -127,24 +127,30 @@ const createAppSessionService = ({
   getFirebase = () => require('../firebase'),
 } = {}) => {
   let endInFlight = null;
+  let storageMutation = Promise.resolve();
+  const mutateStorage = (operation) => {
+    const result = storageMutation.catch(() => {}).then(operation);
+    storageMutation = result;
+    return result;
+  };
   const endRequestTimeoutMs = Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
     ? Math.min(requestTimeoutMs, 60_000) : 15_000;
 
   const persistSession = async (session) => {
     const valid = validateAppSession(session, { nowMs: now() });
     if (!valid) throw new Error('The server returned an invalid or expired app session.');
-    await storage.setItem(APP_SESSION_KEY, JSON.stringify(valid));
+    await mutateStorage(() => storage.setItem(APP_SESSION_KEY, JSON.stringify(valid)));
     return valid;
   };
 
-  const readSession = async ({ allowExpired = false } = {}) => {
+  const readSession = ({ allowExpired = false } = {}) => mutateStorage(async () => {
     const raw = await storage.getItem(APP_SESSION_KEY);
     const parsed = parseValidatedJson(raw, validateAppSession, { nowMs: now(), allowExpired });
     if (!parsed && raw) await storage.removeItem(APP_SESSION_KEY);
     return parsed;
-  };
+  });
 
-  const clearSession = () => storage.removeItem(APP_SESSION_KEY);
+  const clearSession = () => mutateStorage(() => storage.removeItem(APP_SESSION_KEY));
 
   const persistPendingEnd = async ({ authUid, session }) => {
     const validSession = validateAppSession(session, { nowMs: now(), allowExpired: true });
@@ -157,17 +163,17 @@ const createAppSessionService = ({
       requestedAtMs: now(),
       attemptCount: 0,
     };
-    await storage.setItem(PENDING_SESSION_END_KEY, JSON.stringify(pending));
+    await mutateStorage(() => storage.setItem(PENDING_SESSION_END_KEY, JSON.stringify(pending)));
     return pending;
   };
 
-  const readPendingEnd = async () => {
+  const readPendingEnd = () => mutateStorage(async () => {
     const raw = await storage.getItem(PENDING_SESSION_END_KEY);
     const parsed = parseValidatedJson(raw, validatePendingSessionEnd);
     if (!parsed && raw) await storage.removeItem(PENDING_SESSION_END_KEY);
     return parsed;
-  };
-  const clearPendingEnd = () => storage.removeItem(PENDING_SESSION_END_KEY);
+  });
+  const clearPendingEnd = () => mutateStorage(() => storage.removeItem(PENDING_SESSION_END_KEY));
 
   const requestEnd = async (pending) => {
     const validPending = validatePendingSessionEnd(pending);
@@ -180,7 +186,14 @@ const createAppSessionService = ({
     const endpoint = process.env.EXPO_PUBLIC_END_APP_SESSION_URL?.trim() || buildEndpoint('endAppSession');
     if (!endpoint) return { success: false, reason: 'ENDPOINT_UNAVAILABLE' };
     const nextPending = { ...validPending, attemptCount: validPending.attemptCount + 1 };
-    await storage.setItem(PENDING_SESSION_END_KEY, JSON.stringify(nextPending));
+    const updated = await mutateStorage(async () => {
+      const current = parseValidatedJson(await storage.getItem(PENDING_SESSION_END_KEY), validatePendingSessionEnd);
+      if (!current || current.authUid !== validPending.authUid || current.sessionId !== validPending.sessionId
+        || current.requestedAtMs !== validPending.requestedAtMs) return false;
+      await storage.setItem(PENDING_SESSION_END_KEY, JSON.stringify(nextPending));
+      return true;
+    });
+    if (!updated) return { success: false, reason: 'PENDING_SESSION_CHANGED' };
     let response; let payload;
     try {
       ({ response, payload } = await requestSessionEndWithDeadline({
@@ -216,9 +229,19 @@ const createAppSessionService = ({
     try { return await endInFlight; } finally { endInFlight = null; }
   };
 
-  const completeEnd = async () => {
+  const completeEnd = ({ expectedSessionId } = {}) => mutateStorage(async () => {
+    const [sessionRaw, pendingRaw] = await Promise.all([
+      storage.getItem(APP_SESSION_KEY), storage.getItem(PENDING_SESSION_END_KEY),
+    ]);
+    if (!sessionRaw && !pendingRaw) return true;
+    if (!SESSION_ID_PATTERN.test(expectedSessionId || '')) return false;
+    const session = parseValidatedJson(sessionRaw, validateAppSession, { nowMs: now(), allowExpired: true });
+    const pending = parseValidatedJson(pendingRaw, validatePendingSessionEnd);
+    if ((sessionRaw && session?.sessionId !== expectedSessionId)
+      || (pendingRaw && pending?.sessionId !== expectedSessionId)) return false;
     await storage.multiRemove([APP_SESSION_KEY, PENDING_SESSION_END_KEY]);
-  };
+    return true;
+  });
 
   const verifyCurrent = async ({ authUid, expectedSession } = {}) => {
     if (!isSafeKey(authUid) || !expectedSession) return { valid: false, reason: 'INVALID_INPUT' };

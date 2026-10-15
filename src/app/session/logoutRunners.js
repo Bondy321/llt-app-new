@@ -31,7 +31,7 @@ export const runClearSessionState = async ({ SESSION_KEYS, SessionStorage, logge
   };
 
 export const runPurgeLocalSession = async ({ appSession, auth, bookingData, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, localSessionCleanupService, purgeDriverTracking, previousDriverOperationalScopeRef, setAppSession, setDriverSessionGeneration, tourData, user }, {
-  capturedSession = appSession
+  capturedSession = appSession,
 } = {}) => {
     if (purgeDriverTracking) {
       try { await purgeDriverTracking({ authUid: user?.uid || auth?.currentUser?.uid, sessionId: capturedSession?.sessionId }); }
@@ -59,7 +59,7 @@ export const runHandleLogout = async ({ appSession, appSessionService, auth, boo
     const capturedSession = appSession;
     // Server policy keeps marketing only where explicit consent remains, while
     // immediately removing operational eligibility for this app session.
-    const notificationDeviceEndPromise = authUid
+    const endNotifications = () => authUid
       ? notificationDeviceEnd({
         appSessionId: capturedSession?.sessionId || null,
         appSessionRevision: Number.isSafeInteger(capturedSession?.sessionRevision)
@@ -81,16 +81,16 @@ export const runHandleLogout = async ({ appSession, appSessionService, auth, boo
       driverOperationalScope: currentDriverLifecycleScope,
     };
     if (!authUid || !capturedSession) {
-      await notificationDeviceEndPromise;
+      await endNotifications();
       const cleanup = await purgeLocalSession({ capturedSession });
-      if (cleanup.success) await appSessionService.completeEnd();
+      if (cleanup.success && capturedSession) await appSessionService.completeEnd({ expectedSessionId: capturedSession.sessionId });
       return;
     }
     setLogoutStatus({ state: 'requesting', error: null, diagnostic: capturedSession.sessionId.slice(-6) });
-    const [serverResult] = await Promise.all([
-      appSessionService.endSession({ authUid, session: capturedSession }),
-      notificationDeviceEndPromise,
-    ]);
+    // Both endpoints acquire the same per-device app-session lock. End the
+    // session first; its atomic cleanup already disables operational delivery.
+    const serverResult = await appSessionService.endSession({ authUid, session: capturedSession });
+    await endNotifications();
     if (serverResult.reason === 'SESSION_CHANGED') {
       try {
         const current = await appSessionService.verifyCurrent({ authUid, expectedSession: capturedSession });
@@ -116,7 +116,7 @@ export const runHandleLogout = async ({ appSession, appSessionService, auth, boo
       return;
     }
     if (serverResult.success) {
-      await appSessionService.completeEnd();
+      if (await appSessionService.completeEnd({ expectedSessionId: capturedSession.sessionId }) === false) return;
       logoutContextRef.current = null;
       setLogoutStatus({ state: 'complete', error: null, diagnostic: null });
       return;

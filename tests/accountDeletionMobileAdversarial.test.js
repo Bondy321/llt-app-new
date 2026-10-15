@@ -205,7 +205,7 @@ test('the durable receipt survives the actual local purge while offline and noti
   });
 
   assert.equal(result.success, true);
-  APP_LOCAL_KEYS.forEach((key) => assert.equal(localValues.has(key), false, key));
+  APP_LOCAL_KEYS.forEach((key) => assert.equal(localValues.has(key), key === '@LLT:pendingSessionEnd:v1', key));
   assert.deepEqual(calls[0], ['offline-scope', null]);
   assert.equal(calls.some(([kind]) => kind === 'offline-actions'), true);
   assert.equal(calls.some(([kind]) => kind === 'notification-cache'), true);

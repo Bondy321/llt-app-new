@@ -20,6 +20,8 @@ Each installation receives its own session and participant row, while all phones
 opaque passenger principal and shared booking-account content. A second verified phone does not replace the first.
 Normal logout and session revocation affect only the captured installation/session.
 
+End the app session before issuing notification logout: both endpoints acquire the same per-device server lock. Generic local cleanup preserves the pending logout operation until exact-session completion; acknowledged account deletion explicitly clears it. Session persistence is serialized, and a delayed completion cannot remove a newer session or pending operation. Notification requests have a 15-second total deadline covering revision allocation, authentication, retries and response bodies. Connected logout retries back off from one second to 30 seconds and pause offline.
+
 Existing records without a device authorization version retain their exact `authorizedAuthUid` compatibility proof.
 The next successful verified login atomically promotes that original UID and the requesting UID into the version-2
 map without rotating the principal. Once version 2 exists, only a true map leaf grants device authorization; a retained

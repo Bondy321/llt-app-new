@@ -17,42 +17,53 @@ export default function useLogoutLifecycle({
   userUid,
 }) {
   const appSessionListenerRef = useRef(null);
+  const retryAttemptRef = useRef(0);
+  const retryInFlightRef = useRef(false);
 
   const retryPendingLogout = useCallback(async () => {
-    if (logoutStatus.state === 'requesting') return;
-    setLogoutStatus((current) => ({ ...current, state: 'requesting', error: null }));
-    if (logoutStatus.state === 'failed') {
-      const cleanup = await localSessionCleanupService.cleanup(logoutContextRef.current || {});
-      if (!cleanup.success) {
-        setLogoutStatus((current) => ({
-          ...current,
-          state: 'failed',
-          error: 'Some private data still could not be removed from this device. Please try again.',
-        }));
+    if (logoutStatus.state === 'requesting' || retryInFlightRef.current) return;
+    retryInFlightRef.current = true;
+    retryAttemptRef.current += 1;
+    try {
+      setLogoutStatus((current) => ({ ...current, state: 'requesting', error: null }));
+      if (logoutStatus.state === 'failed') {
+        const cleanup = await localSessionCleanupService.cleanup(logoutContextRef.current || {});
+        if (!cleanup.success) {
+          setLogoutStatus((current) => ({
+            ...current,
+            state: 'failed',
+            error: 'Some private data still could not be removed from this device. Please try again.',
+          }));
+          return;
+        }
+      }
+      const result = await appSessionService.retryPendingEnd();
+      if (result.success) {
+        retryAttemptRef.current = 0;
+        if (await appSessionService.completeEnd({ expectedSessionId: result.pending?.sessionId }) === false) return;
+        logoutContextRef.current = null;
+        setLogoutStatus({ state: 'complete', error: null, diagnostic: null });
+        setCurrentScreen('Login');
         return;
       }
+      setLogoutStatus((current) => ({
+        ...current,
+        state: 'pending_network',
+        error: result.reason === 'NETWORK_ERROR'
+          ? 'We still cannot reach the server. We will keep trying when the connection returns.'
+          : 'Logout is still awaiting server confirmation. Please try again.',
+      }));
+    } finally {
+      retryInFlightRef.current = false;
     }
-    const result = await appSessionService.retryPendingEnd();
-    if (result.success) {
-      await appSessionService.completeEnd();
-      logoutContextRef.current = null;
-      setLogoutStatus({ state: 'complete', error: null, diagnostic: null });
-      setCurrentScreen('Login');
-      return;
-    }
-    setLogoutStatus((current) => ({
-      ...current,
-      state: 'pending_network',
-      error: result.reason === 'NETWORK_ERROR'
-        ? 'We still cannot reach the server. We will keep trying when the connection returns.'
-        : 'Logout is still awaiting server confirmation. Please try again.',
-    }));
   }, [logoutContextRef, logoutStatus.state, setCurrentScreen, setLogoutStatus]);
 
   useEffect(() => {
     if (!isConnected || logoutStatus.state !== 'pending_network') return;
-    retryPendingLogout();
-  }, [isConnected, logoutStatus.state, retryPendingLogout]);
+    const delay = Math.min(30_000, 1000 * (2 ** Math.min(retryAttemptRef.current, 5)));
+    const timer = setTimeout(() => { void retryPendingLogout(); }, delay);
+    return () => clearTimeout(timer);
+  }, [isConnected, logoutStatus, retryPendingLogout]);
 
   useEffect(() => {
     if (typeof appSessionListenerRef.current === 'function') appSessionListenerRef.current();
@@ -73,7 +84,7 @@ export default function useLogoutLifecycle({
         setLogoutStatus({ state: 'requesting', error: null, diagnostic: appSession.sessionId.slice(-6) });
         const cleanup = await purgeLocalSession({ capturedSession: appSession });
         if (cleanup.success) {
-          await appSessionService.completeEnd();
+          if (await appSessionService.completeEnd({ expectedSessionId: appSession.sessionId }) === false) return;
           setLogoutStatus({ state: 'complete', error: null, diagnostic: null });
         } else {
           setLogoutStatus({
