@@ -1,3 +1,36 @@
+import { loadAssignedTour, projectDriverAssignment } from '../driver/driverAssignmentRunners';
+
+const restoreDriverProjection = async (deps, session, projection) => {
+  const authUid = deps.auth?.currentUser?.uid || deps.getCurrentContext?.().userUid || null;
+  const isCurrent = () => deps.appSessionRef.current === session
+    && (deps.auth?.currentUser?.uid || deps.getCurrentContext?.().userUid || null) === authUid;
+  try {
+    if (!isCurrent()) throw new Error('Restore authority changed');
+    const oldTourId = deps.normalizeTourId(projection.tourData?.id || projection.bookingData.assignedTourId);
+    const operations = [deps.stopDriverTracking?.()];
+    if (oldTourId && oldTourId !== session.tourId) operations.push(deps.driverOperationalLifecycleService.purge({
+      authUid, driverId: session.driverId, tourId: oldTourId,
+      departureKey: projection.bookingData.assignedDepartureKey || null,
+      startDate: projection.tourData?.startDate || null,
+    }));
+    const retired = await Promise.all(operations);
+    if (retired.some(result => result?.success === false) || !isCurrent()) throw new Error('Previous tour retirement is pending');
+    const { tour, departure } = await loadAssignedTour(deps, session.tourId);
+    if (!isCurrent()) throw new Error('Restore authority changed');
+    projection.tourData = tour;
+    projection.bookingData = projectDriverAssignment(projection.bookingData, session.tourId, tour, departure);
+    const committed = await deps.appSessionService.persistSessionTransition({
+      expectedSession: session, session, isCurrent,
+      projectionEntries: [[deps.SESSION_KEYS.BOOKING_DATA, JSON.stringify(projection.bookingData)],
+        [deps.SESSION_KEYS.TOUR_DATA, JSON.stringify(tour)], [deps.SESSION_KEYS.LAST_SCREEN, 'DriverHome']],
+    });
+    if (!committed || !isCurrent()) throw new Error('Restore authority changed');
+  } catch {
+    throw Object.assign(new Error('Driver assignment restoration is pending. Please reconnect and retry.'),
+      { code: 'DRIVER_ASSIGNMENT_RESTORE_PENDING' });
+  }
+};
+
 const sessionStorageKeys = (SESSION_KEYS) => [
   SESSION_KEYS.TOUR_DATA,
   SESSION_KEYS.BOOKING_DATA,
@@ -97,6 +130,13 @@ export const restoreStoredSessionProjection = async (deps, validAppSession, save
     return false;
   }
   const projection = normalizeStoredProjection(deps, storedBookingData, storedTourData);
+  if (projection.isDriverBooking && validAppSession.principalType === 'driver'
+    && validAppSession.driverId === projection.bookingData.id && !matchesActiveSession(validAppSession, projection)) {
+    // Assignment may have changed while the process was absent. The verified
+    // current session supplies the tour; stored profile helpers supply no grant.
+    await restoreDriverProjection(deps, validAppSession, projection);
+    lastScreen[1] = 'DriverHome';
+  }
   if (!matchesActiveSession(validAppSession, projection)) {
     await clearStoredSessionProjection(deps);
     logger.warn('Session', 'Saved app data does not match the active secure session');

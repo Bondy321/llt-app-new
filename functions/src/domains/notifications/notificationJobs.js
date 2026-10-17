@@ -2,6 +2,8 @@
 
 // @ts-check
 
+const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
+
 const { createHash, randomUUID } = require('node:crypto');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
@@ -201,7 +203,7 @@ const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalesc
   }
 
   if (supersededByJobId) {
-    await jobRef.transaction((current) => current?.status === 'preparing' ? {
+    await transactExistingRecord(jobRef, (current) => current?.status === 'preparing' ? {
       ...current,
       status: 'expired',
       supersededByJobId,
@@ -211,7 +213,7 @@ const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalesc
     } : undefined);
   } else {
     let activation = null;
-    const activated = await jobRef.transaction((current) => {
+    const activated = await transactExistingRecord(jobRef, (current) => {
       if (current?.status !== 'preparing') return undefined;
       const queueVersion = Number(current.queueVersion || 0) + 1;
       const queueKey = buildNotificationQueueKey(job.availableAtMs, job.jobId, queueVersion);
@@ -225,7 +227,7 @@ const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalesc
         updatedAtMs: job.createdAtMs,
       };
     });
-    if (activated?.committed && activation) await ensureNotificationFanoutQueue(db, {
+    if (activated?.applied && activation) await ensureNotificationFanoutQueue(db, {
       ...job, status: 'queued', queueKind: 'fanout', ...activation,
     });
   }
@@ -247,7 +249,7 @@ const acquireNotificationJobLease = async ({
   leaseExpiresAtMs = nowMs + leaseMs,
 }) => {
   let acquired = false;
-  const transaction = await jobRef.transaction((job) => {
+  const transaction = await transactExistingRecord(jobRef, (job) => {
     if (!job || !['queued', 'fanout_in_progress'].includes(job.status)) return;
     if (isNotificationLifecycleRetentionFenced(job, nowMs)) return;
     if (Number(job.expiresAtMs) <= nowMs || job.supersededByJobId) {
@@ -264,7 +266,7 @@ const acquireNotificationJobLease = async ({
     };
   });
   const job = transaction?.snapshot?.val?.() || null;
-  return { acquired: Boolean(acquired && job?.lease?.ownerId === ownerId), ownerId, job };
+  return { acquired: Boolean(transaction?.applied && acquired && job?.lease?.ownerId === ownerId), ownerId, job };
 };
 
 const calculateRetryDelayMs = (attemptCount, priorityClass = 'standard') => {

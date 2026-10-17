@@ -133,8 +133,16 @@ const acquireDriverLoginAdmission = async ({
   let rejectionReason = null;
   let admittedPolicy = null;
   const result = await db.ref(DRIVER_LOGIN_POLICY_PATH).transaction((currentValue) => {
+    admittedPolicy = null;
+    // A one-off read does not retain the Admin SDK cache. Compare a cold null
+    // with the server, but never manufacture admission authority without the
+    // complete materialised policy that login established first.
+    if (currentValue === null) {
+      rejectionReason = 'POLICY_CONFIGURATION_INVALID';
+      return null;
+    }
     const normalized = normalizeDriverLoginPolicy(currentValue);
-    if (!normalized.valid) {
+    if (!normalized.valid || normalized.isDefault) {
       rejectionReason = 'POLICY_CONFIGURATION_INVALID';
       return undefined;
     }
@@ -224,6 +232,14 @@ const beginDriverPolicyTransition = async ({
 }) => {
   let outcome = null;
   const result = await db.ref(DRIVER_LOGIN_POLICY_PATH).transaction((currentValue) => {
+    outcome = null;
+    // A missing policy can be created only for expected revision zero. For an
+    // existing revision, null first means compare/retry rather than reject a
+    // valid cold instance or fabricate a replacement policy.
+    if (currentValue === null && expectedRevision !== 0) {
+      outcome = { reason: 'POLICY_CHANGED' };
+      return null;
+    }
     const normalized = normalizeDriverLoginPolicy(currentValue);
     if (!normalized.valid) {
       outcome = { reason: 'POLICY_CONFIGURATION_INVALID' };
@@ -355,6 +371,21 @@ const driverBindingAllowedByPolicy = ({ policy, authUid, claimedAuthUid }) => (
   policy.enforceSingleDevice !== true || String(claimedAuthUid || '').trim() === authUid
 );
 
+/**
+ * Login admission may enter the serialized claim reservation when no owner has
+ * been established yet. Existing-authority consumers deliberately continue to
+ * use driverBindingAllowedByPolicy, which rejects an unclaimed driver.
+ * @param {{ policy: any, authUid: string, claimedAuthUid?: unknown }} input
+ */
+const driverLoginClaimAllowedByPolicy = ({ policy, authUid, claimedAuthUid }) => {
+  if (typeof authUid !== 'string' || !authUid.trim()) return false;
+  if (policy.enforceSingleDevice !== true) return true;
+  if (claimedAuthUid === null || claimedAuthUid === undefined) return true;
+  if (typeof claimedAuthUid !== 'string') return false;
+  const claim = claimedAuthUid.trim();
+  return !claim || claim === authUid;
+};
+
 /** @param {{ db: any, owner?: string, nowMs?: number }} input */
 const acquireDriverLoginPolicyLock = async ({ db, owner = randomUUID(), nowMs = Date.now() }) => ({
   acquired: await acquireManualBookingLock({
@@ -382,6 +413,7 @@ module.exports = {
   completeDriverLoginAdmission,
   defaultDriverLoginPolicy,
   driverBindingAllowedByPolicy,
+  driverLoginClaimAllowedByPolicy,
   driverSessionMatchesPolicyGeneration,
   ensureDriverLoginPolicy,
   hashPolicyIdentifier,

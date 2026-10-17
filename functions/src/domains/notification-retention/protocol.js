@@ -41,6 +41,7 @@ const RETENTION_ENGINE_SOURCE_PATHS = Object.freeze([
   '../notifications/notificationLegacyFence.js',
   '../notifications/notificationReceipts.js',
   '../notifications/notificationRetentionIntegration.js',
+  '../../infrastructure/database/existingRecordTransaction.js',
   '../../../scripts/notificationRetentionDeploymentAttestation.js',
 ]);
 
@@ -55,8 +56,8 @@ const RETENTION_ENGINE_PROTOCOL_MANIFEST = Object.freeze({
   }),
   rules: Object.freeze({
     revision: 'notification-retention-private-indexes-v2',
-    artifactDigest: '71abdf1ce26aec7d481a3d28ffce0a106c6d99609c50b26ba0cefed4fe5066ae',
-    semanticArtifactDigest: '886b50009ce68929ff39c21756e6f67dd70ba32e83da6ff02cc938dbe6ff020f',
+    artifactDigest: 'f24ed3aff6de19f3bd8883613e022cca58c0fba997dc4bae1a8cb3742d5b3325',
+    semanticArtifactDigest: '645c4da896164c05f68722e248e6cfe8d9a61ac90ec22769a2a1bf1c885ba4ff',
     privateRoots: Object.freeze(['notification_retention/v1', 'notification_retention_rollout/v1']),
     indexes: Object.freeze({
       notification_delivery_attempts: Object.freeze(['jobId', 'retentionDueAtMs', 'updatedAtMs']),

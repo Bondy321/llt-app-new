@@ -44,7 +44,7 @@ const endAppSession = onRequestWithResult(
     }
 
     const db = admin.database();
-    const lock = await acquireAppSessionLock({ db, authUid: requestAuth.uid, operation: 'end' });
+    const lock = await acquireAppSessionLock({ db, authUid: requestAuth.uid, operation: 'end', expectedSessionId });
     if (!lock.acquired) return res.status(409).json({ success: false, reason: 'SESSION_IN_PROGRESS' });
     try {
       const snapshot = await db.ref(`app_sessions/${requestAuth.uid}`).once('value');
@@ -70,7 +70,8 @@ const endAppSession = onRequestWithResult(
         reason: 'user_logout',
         actorType: session.principalType,
         nowMs: endedAtMs,
-        createEventId: () => db.ref('app_session_events').push().key,
+        appSessionLock: lock,
+        createEventId: (/** @type {string} */ eventId) => eventId,
       });
       log.info('App session ended by user', {
         authUid: requestAuth.uid,
@@ -123,7 +124,7 @@ const revokeAppSession = onRequestWithResult(
       || (expectedSessionId && !isValidAppSessionId(expectedSessionId))) {
       return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
     }
-    const lock = await acquireAppSessionLock({ db, authUid: targetAuthUid, operation: 'revoke' });
+    const lock = await acquireAppSessionLock({ db, authUid: targetAuthUid, operation: 'revoke', expectedSessionId });
     if (!lock.acquired) return res.status(409).json({ success: false, reason: 'SESSION_IN_PROGRESS' });
     try {
       const snapshot = await db.ref(`app_sessions/${targetAuthUid}`).once('value');
@@ -143,7 +144,8 @@ const revokeAppSession = onRequestWithResult(
         reason,
         actorType: 'operations_admin',
         nowMs: endedAtMs,
-        createEventId: () => db.ref('app_session_events').push().key,
+        appSessionLock: lock,
+        createEventId: (/** @type {string} */ eventId) => eventId,
       });
       log.info('App session revoked by operations', {
         authUid: targetAuthUid,

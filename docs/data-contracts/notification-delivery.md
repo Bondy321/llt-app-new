@@ -30,6 +30,11 @@ retained until page completion, so a killed worker is rediscoverable. A worker b
 foreign job lease retains the queue for that lease boundary; only missing, terminal, superseded,
 expired or stale-version work removes the pointer.
 
+Failure recovery compares the exact live job lease and page before changing job state or queue
+revision. It then publishes the replacement queue leaf before retiring the old exact-owned pointer.
+If publication crashes, discovery through the retained old pointer repairs the canonical queued
+pointer before retiring the stale entry. This handoff cannot rewrite a successor's job or lease.
+
 Audience accounting uses `eligible + skipped = audience`: audience is the unique UID/installations
 considered, eligible means a durable delivery attempt represents the candidate, and duplicate-token
 losers are skipped only. Each cursor page has a deterministic ID and commits counts plus cursor in
@@ -61,6 +66,11 @@ messages retain the ordinary chat-owned path.
 - One source event maps to one deterministic job ID. Repeated Function delivery is idempotent.
 - Leases, cursors, attempts, tickets, receipt state, subscriber indexes and retry metadata are
   client-write denied.
+- Existing-record queue/job/attempt transactions tolerate a cold Admin SDK cache: a provisional
+  null proposes a null no-op for the server comparison. Acquisition, progress and removal require
+  the final accepted existing record and the operation's exact owner/status/version predicates;
+  `committed: true` on an absent-record no-op never grants a lease. Bounded one-off due queries do
+  not imply retained cache, and missing jobs/attempts are never recreated by these continuations.
 - Audience processing is paged until exhaustion. There is no recipient-count cap.
 - Eligibility is evaluated at send time. Skip counts distinguish `no_token`, `permission_denied`,
   `permission_blocked`, `permission_unavailable`, `inactive_token`, `invalid_token`, `opted_out`,

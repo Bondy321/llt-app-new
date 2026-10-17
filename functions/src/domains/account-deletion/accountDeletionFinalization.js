@@ -2,6 +2,8 @@
 
 // @ts-check
 
+const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
+
 const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const {
   ACCOUNT_DELETION_ACTIVE_ROOT,
@@ -59,10 +61,10 @@ const reconcileCompletedAccountDeletion = async ({ db, deletionId, completed }) 
     throw error;
   }
 
-  const removeMatchingBarrier = async (ref) => ref.transaction((current) => {
+  const removeMatchingBarrier = async (ref) => transactExistingRecord(ref, (current) => {
     const currentDeletionId = typeof current === 'string' ? current : current?.deletionId;
     return currentDeletionId === deletionId ? null : undefined;
-  }, undefined, false);
+  });
   await removeMatchingBarrier(db.ref(`${ACCOUNT_DELETION_ACTIVE_ROOT}/${cleanup.authUid}`));
   if (cleanup.passengerBarrierKey) {
     await removeMatchingBarrier(db.ref(
@@ -70,17 +72,17 @@ const reconcileCompletedAccountDeletion = async ({ db, deletionId, completed }) 
     ));
   }
   if (cleanup.terminalWarningId) {
-    await db.ref(`operations_terminal_warnings/v1/${cleanup.terminalWarningId}`).transaction((warning) => {
+    await transactExistingRecord(db.ref(`operations_terminal_warnings/v1/${cleanup.terminalWarningId}`), (warning) => {
       if (warning?.jobType !== 'account_deletion'
         || warning?.identifierHashes?.deletionId !== hashTerminalWarningIdentifier(deletionId)) {
         return undefined;
       }
       return null;
-    }, undefined, false);
+    });
   }
 
   let reconciled = null;
-  const jobResult = await db.ref(`${ACCOUNT_DELETION_JOB_ROOT}/${deletionId}`).transaction((current) => {
+  const jobResult = await transactExistingRecord(db.ref(`${ACCOUNT_DELETION_JOB_ROOT}/${deletionId}`), (current) => {
     if (!current || current.status !== 'completed' || current.phase !== 'completed'
       || current.completionCleanup?.authUid !== cleanup.authUid
       || current.completionCleanup?.completionRevision !== cleanup.completionRevision
@@ -88,8 +90,8 @@ const reconcileCompletedAccountDeletion = async ({ db, deletionId, completed }) 
     reconciled = { ...current };
     delete reconciled.completionCleanup;
     return reconciled;
-  }, undefined, false);
-  if (!reconciled || !jobResult?.committed) {
+  });
+  if (!reconciled || !jobResult?.applied) {
     const current = (await db.ref(`${ACCOUNT_DELETION_JOB_ROOT}/${deletionId}`).once('value')).val();
     if (current?.status === 'completed' && current.completedAtMs === completed.completedAtMs
       && !current.completionCleanup) return current;
@@ -117,7 +119,7 @@ const finalizeCompletedAccountDeletion = async ({ db, deletionId, lease, job, no
       ? scope.passengerBarrierKey
       : null;
     let completed = null;
-    const completionResult = await db.ref(`${ACCOUNT_DELETION_JOB_ROOT}/${deletionId}`).transaction((currentJob) => {
+    const completionResult = await transactExistingRecord(db.ref(`${ACCOUNT_DELETION_JOB_ROOT}/${deletionId}`), (currentJob) => {
       const checkedAtMs = typeof lease.clock === 'function' ? lease.clock() : nowMs;
       if (!jobLeaseMatches(currentJob, lease) || currentJob.phase !== 'auth_delete'
         || Number(currentJob.lease?.expiresAtMs || 0) <= checkedAtMs) return undefined;
@@ -141,16 +143,16 @@ const finalizeCompletedAccountDeletion = async ({ db, deletionId, lease, job, no
         },
       };
       return completed;
-    }, undefined, false);
-    if (!completed || !completionResult?.committed) {
+    });
+    if (!completed || !completionResult?.applied) {
       const error = /** @type {Error & { code?: string }} */ (new Error('Account deletion finalization changed'));
       error.code = 'ACCOUNT_DELETION_FINALIZATION_CHANGED';
       throw error;
     }
     const reconciled = await reconcileCompletedAccountDeletion({ db, deletionId, completed });
-    await db.ref(`${ACCOUNT_DELETION_QUEUE_ROOT}/${deletionId}`).transaction((current) => (
+    await transactExistingRecord(db.ref(`${ACCOUNT_DELETION_QUEUE_ROOT}/${deletionId}`), (current) => (
       current?.deletionId === deletionId ? null : undefined
-    ), undefined, false);
+    ));
     return reconciled;
   } finally {
     await releaseAppSessionLock({ db, authUid: scope.authUid, owner: lease.ownerId });

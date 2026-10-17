@@ -299,7 +299,7 @@ test('lease acquisition is exclusive and retry backoff is bounded and monotonic'
     transaction: async (update) => {
       const next = update(value);
       if (next !== undefined) value = next;
-      return { snapshot: { val: () => value } };
+      return { committed: next !== undefined, snapshot: { val: () => value } };
     },
   };
   const first = await __testables.acquireNotificationJobLease({ jobRef, nowMs, ownerId: 'worker-a' });

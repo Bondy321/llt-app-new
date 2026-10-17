@@ -4,12 +4,13 @@ import { handlePassengerTripSessionInvalid } from './passenger/passengerTripSess
 import { runPersistDriverIdentityForUser, runPersistPassengerIdentityForUser, runRepairIdentityBindingFromSession, runHydrateIdentityBindingForCurrentUser } from './session/identityBindingRunners';
 import { runRefreshAppData, runInitializeApp, runRetryInitialization, runHandleAuthStateChange, runRestoreSession } from './session/sessionBootstrapRunners';
 import { runLoadNotificationOnboardingState, runSaveNotificationOnboardingState, runShouldShowNotificationOnboarding, runHandleNotificationOnboardingComplete } from './notifications/notificationOnboardingRunners';
-import { runHandleDriverAssignmentChange } from './driver/driverAssignmentRunners';
+import { runHandleDriverAssignmentChange, settleDriverAssignmentRetirement } from './driver/driverAssignmentRunners';
 import { runResolveOfflineLogin, runHandleLoginSuccess } from './session/loginRunners';
 import { runClearSessionState, runPurgeLocalSession, runHandleLogout } from './session/logoutRunners';
 import AppShellView from './AppShellView';
 import useNotificationSessionNavigation from './notifications/useNotificationSessionNavigation';
 import useLogoutLifecycle from './session/useLogoutLifecycle';
+import { runHandleSessionRevisionChange } from './session/sessionRevisionRunners';
 import useAccountDeletionShellLifecycle from './session/useAccountDeletionShellLifecycle';
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -25,6 +26,7 @@ import { processOfflineQueue as processOfflineSafetyQueue } from '../../services
 import offlineLoginResolver from '../../services/offlineLoginResolver';
 import driverOperationalLifecycleService from '../../services/driverOperationalLifecycleService';
 import appSessionService from '../../services/appSessionService';
+import { sessionOwnsScope } from '../../services/appSessionTransition';
 import localSessionCleanupService from '../../services/localSessionCleanupService';
 import driverTourPackService from '../../services/driverTourPackService';
 import useDriverTourPack from '../../hooks/useDriverTourPack';
@@ -69,7 +71,12 @@ export default function AppShell() {
   const [tourData, setTourData] = useState(null);
   const [bookingData, setBookingData] = useState(null);
   const [identityBinding, setIdentityBinding] = useState(null);
-  const [appSession, setAppSession] = useState(null);
+  const [appSession, setAppSessionState] = useState(null);
+  const appSessionRef = useRef(null);
+  const setAppSession = useCallback((session) => {
+    appSessionRef.current = session;
+    setAppSessionState(session);
+  }, []);
   const [logoutStatus, setLogoutStatus] = useState({ state: 'idle', error: null, diagnostic: null });
   const [accountDeletionStatus, setAccountDeletionStatus] = useState({ state: 'idle', phase: null, retryable: false, error: null, completedAtMs: null });
 
@@ -87,6 +94,9 @@ export default function AppShell() {
   const driverLifecyclePurgeRef = useRef(null);
   const driverAssignmentChangeRef = useRef(null);
   const assignmentValidationSeqRef = useRef(0);
+  const assignmentReconciliationRef = useRef(null);
+  const assignmentContextRef = useRef(null);
+  const offlineSessionScopeRef = useRef(null);
   const sessionGenerationRef = useRef(0);
   const logoutContextRef = useRef(null);
 
@@ -130,6 +140,7 @@ export default function AppShell() {
       sessionId: appSession.sessionId,
     };
   }, [accountDeletionStatus.state, appSession, bookingData?.id, canonicalIdentity?.authUid, canonicalIdentity?.principalId, diagnosticsRole, diagnosticsTourId]);
+  offlineSessionScopeRef.current = offlineSessionScope;
   const driverTracking = useDriverTracking(offlineSessionScope, { initializing, logoutState: logoutStatus.state, expiresAtMs: appSession?.expiresAtMs });
   const offlineSessionScopeKey = offlineSessionScope
     ? `${offlineSessionScope.tourId}|${offlineSessionScope.role}|${offlineSessionScope.principalId}|${offlineSessionScope.cacheOwnerId}`
@@ -182,8 +193,11 @@ export default function AppShell() {
         currentDriverLifecycleScope.tourId || '',
       ].join('|')
     : 'none';
+  assignmentContextRef.current = { appSession, bookingData, tourData, currentDriverLifecycleScope,
+    userUid: auth?.currentUser?.uid || user?.uid || null,
+    active: logoutStatus.state === 'idle' && accountDeletionStatus.state === 'idle' };
 
-  const refreshAppData = (...args) => runRefreshAppData({ bookingService, chatService, driverTourPackActionService, isConnected, logger, offlineSessionScope, offlineSyncService, photoService, processOfflineSafetyQueue }, ...args);
+  const refreshAppData = (...args) => runRefreshAppData({ bookingService, chatService, driverTourPackActionService, isConnected, logger, offlineSessionScope: offlineSessionScope === offlineSessionScopeRef.current && sessionOwnsScope(appSessionRef.current, offlineSessionScope) ? offlineSessionScope : null, offlineSyncService, photoService, processOfflineSafetyQueue }, ...args);
 
   const { isConnected, firebaseConnected } = useDiagnostics({
     onForeground: refreshAppData,
@@ -209,6 +223,8 @@ export default function AppShell() {
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
+    if (offlineSessionScope !== offlineSessionScopeRef.current) return;
+    if (offlineSessionScope && !sessionOwnsScope(appSessionRef.current, offlineSessionScope)) return;
     offlineSyncService.setActiveSessionScope(offlineSessionScope).catch((error) => {
       logger.warn('OfflineSync', 'Could not update active offline session scope', {
         error: error?.message || String(error),
@@ -245,7 +261,8 @@ export default function AppShell() {
       }).finally(() => {
         // The purge deliberately invalidates the previous replay generation. Restore
         // the newly-derived session scope only after that invalidation has finished.
-        if (offlineSessionScope) {
+        if (offlineSessionScope && offlineSessionScope === offlineSessionScopeRef.current
+          && sessionOwnsScope(appSessionRef.current, offlineSessionScope)) {
           offlineSyncService.setActiveSessionScope(offlineSessionScope).catch(() => {});
         }
       });
@@ -407,7 +424,7 @@ export default function AppShell() {
 
   const handleAuthStateChange = (...args) => runHandleAuthStateChange({ initializing, logger, maskIdentifier, recordCrashBreadcrumb, setDiagnosticsAuthUid, setDiagnosticsContext, setInitializing, setUser }, ...args);
 
-  const restoreSession = (...args) => runRestoreSession({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, logger, normalizePassengerIdentityProjection, normalizePassengerTourProjection, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setTourCode, setTourData }, ...args);
+  const restoreSession = (...args) => runRestoreSession({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, appSessionService, appSessionRef, auth, driverTourPackService, driverOperationalLifecycleService, stopDriverTracking: driverTracking.stop, normalizeTourId, realtimeDb, isOpaquePassengerId, logger, normalizePassengerIdentityProjection, normalizePassengerTourProjection, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setTourCode, setTourData }, ...args);
 
   const loadNotificationOnboardingState = (...args) => runLoadNotificationOnboardingState({ SESSION_KEYS, SessionStorage, logger }, ...args);
 
@@ -417,9 +434,10 @@ export default function AppShell() {
 
   const saveSession = (overrides = {}) => runSaveSessionProjection({
     SESSION_KEYS, SessionStorage, logger, tourData, bookingData, currentScreen, identityBinding,
+    appSession, appSessionService, appSessionRef,
     passengerTripActive: passengerTripEnabled() && !isDriverSession,
   }, overrides);
-  const handleDriverAssignmentChange = (...args) => runHandleDriverAssignmentChange({ SESSION_KEYS, SessionStorage, auth, bookingData, currentDriverLifecycleScope, driverLifecyclePurgeRef, driverOperationalLifecycleService, driverTourPackService, logger, normalizeTourId, previousDriverOperationalScopeRef, realtimeDb, setBookingData, setDriverSessionGeneration, setTourCode, setTourData, user }, ...args);
+  const handleDriverAssignmentChange = (...args) => runHandleDriverAssignmentChange({ SESSION_KEYS, appSessionService, appSessionRef, assignmentReconciliationRef, getCurrentContext: () => assignmentContextRef.current, sessionGenerationRef, offlineSyncService, stopDriverTracking: driverTracking.stop, driverLifecyclePurgeRef, driverOperationalLifecycleService, driverTourPackService, logger, normalizeTourId, previousDriverOperationalScopeRef, realtimeDb, setAppSession, setBookingData, setCurrentScreen, setScreenParams, routeHistoryRef, setDriverSessionGeneration, setTourCode, setTourData }, ...args);
   driverAssignmentChangeRef.current = handleDriverAssignmentChange;
 
   useEffect(() => {
@@ -435,41 +453,11 @@ export default function AppShell() {
       if (handlingInvalidation || validationSeq !== assignmentValidationSeqRef.current) return;
       handlingInvalidation = true;
       try {
-        const profileSnapshot = await realtimeDb.ref(`users/${currentAuthUid}/driverAssignedTourId`).once('value');
-        const authoritativeTourId = normalizeTourId(profileSnapshot.val());
-        if (authoritativeTourId && authoritativeTourId !== scope.tourId) {
-          await driverAssignmentChangeRef.current?.({ assignedTourId: authoritativeTourId });
-          return;
-        }
-
-        const purgeResult = await driverOperationalLifecycleService.purge(scope);
-        if (!purgeResult.success) {
-          logger.warn('DriverTourPack', 'Assignment validation failure only partially purged local data', {
-            reason,
-            failedOperations: purgeResult.failures?.map((failure) => failure.name) || [],
-          });
-        }
         if (validationSeq !== assignmentValidationSeqRef.current) return;
-
-        const clearedBookingData = {
-          ...(bookingData || {}),
-          assignedTourId: null,
-          assignedTourCode: null,
-          assignedDepartureKey: null,
-        };
-        previousDriverOperationalScopeRef.current = null;
-        setBookingData(clearedBookingData);
-        setTourData(null);
-        setTourCode('');
-        setScreenParams({});
-        routeHistoryRef.current.reset();
-        setCurrentScreen('DriverHome');
-        setDriverSessionGeneration((value) => value + 1);
-        await SessionStorage.multiSet([
-          [SESSION_KEYS.BOOKING_DATA, JSON.stringify(clearedBookingData)],
-          [SESSION_KEYS.TOUR_DATA, JSON.stringify(null)],
-          [SESSION_KEYS.LAST_SCREEN, 'DriverHome'],
-        ]);
+        // The own session is authoritative, including a null (unassigned) tour.
+        // Never infer a transition from a profile helper or clear projections
+        // independently of the accepted session revision.
+        await driverAssignmentChangeRef.current?.({});
       } catch (error) {
         logger.warn('DriverTourPack', 'Could not reconcile failed driver assignment validation', {
           reason,
@@ -519,12 +507,16 @@ export default function AppShell() {
 
   const clearSessionState = (...args) => runClearSessionState({ SESSION_KEYS, SessionStorage, logger, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setScreenParams, setTourCode, setTourData }, ...args);
 
-  const purgeLocalSession = (...args) => runPurgeLocalSession({ appSession, auth, bookingData, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, localSessionCleanupService, previousDriverOperationalScopeRef, purgeDriverTracking: driverTracking.purgeScope, setAppSession, setDriverSessionGeneration, tourData, user }, ...args);
+  const purgeLocalSession = (...args) => runPurgeLocalSession({ appSession, appSessionRef, auth, bookingData, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, localSessionCleanupService, logoutContextRef, previousDriverOperationalScopeRef, purgeDriverTracking: driverTracking.purgeScope, settleDriverAssignmentRetirement: () => settleDriverAssignmentRetirement(assignmentReconciliationRef), setAppSession, setDriverSessionGeneration, tourData, user }, ...args);
 
   const handleLogout = (...args) => runHandleLogout({ appSession, appSessionService, auth, bookingData, currentDriverLifecycleScope, logger, logoutContextRef, purgeLocalSession, setAppSession, setLogoutStatus, stopDriverTracking: driverTracking.stop, tourData, user }, ...args);
 
   const retryPendingLogout = useLogoutLifecycle({
-    appSession, disabled: accountDeletionStatus.state !== 'idle', isConnected,
+    appSession, appSessionRef, onSession: event => runHandleSessionRevisionChange({
+      appSessionRef, appSessionService, getCurrentContext: () => assignmentContextRef.current,
+      setAppSession, reconcileDriverSession: handleDriverAssignmentChange,
+    }, event),
+    disabled: initializing || Boolean(authError) || accountDeletionStatus.state !== 'idle', isConnected,
     logoutContextRef, logoutStatus, purgeLocalSession, sessionGenerationRef,
     setCurrentScreen, setLogoutStatus,
     userUid: user?.uid,
@@ -536,6 +528,7 @@ export default function AppShell() {
   });
   useEffect(() => {
     if (accountDeletionStatus.state !== 'idle' || !isConnected || !firebaseConnected || !offlineSessionScope) return;
+    if (offlineSessionScope !== offlineSessionScopeRef.current || !sessionOwnsScope(appSessionRef.current, offlineSessionScope)) return;
     Promise.allSettled([
       offlineSyncService.replayQueue({
         services: { bookingService, chatService, photoService, driverTourPackActionService },

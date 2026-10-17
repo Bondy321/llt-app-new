@@ -5,6 +5,7 @@ const { isActiveSessionRecord, isValidAppSessionId } = require('./appSession');
 const { cleanupChatStatusForAppSession } = require('./chatPresenceProjection');
 const { cleanupDriverLocationsForAppSession } = require('./driverLocationProjection');
 const { retireDriverTrackingIntentsForAppSession } = require('../src/domains/live-state/driverTrackingSessions');
+const { cleanupOwnedSessionRecords, mutateCleanupSession } = require('./appSessionCleanupAuthority');
 
 const NOTIFICATION_DEVICE_LOCK_TTL_MS = 30 * 1000;
 
@@ -123,6 +124,27 @@ const buildAppSessionEvent = ({ session, eventType, reason, actorType, nowMs = D
   expiresAtMs: nowMs + (30 * 24 * 60 * 60 * 1000),
 });
 
+const persistCleanupEvent = async ({ db, session, eventType, reason, actorType, nowMs, createEventId }) => {
+  if (typeof createEventId !== 'function') return null;
+  const key = `cleanup_v1_${createHash('sha256')
+    .update(JSON.stringify([session.sessionId, eventType, reason])).digest('hex')}`;
+  const eventId = createEventId(key);
+  if (!eventId) return null;
+  const event = buildAppSessionEvent({ session, eventType, reason, actorType, nowMs });
+  const sameEvent = current => ['eventType', 'reason', 'actorType', 'authUidHash', 'principalType', 'tourId', 'driverId']
+    .every(field => (current?.[field] ?? null) === (event[field] ?? null));
+  const result = await db.ref(`app_session_events/${eventId}`).transaction(current => {
+    if (current === null) return event;
+    return sameEvent(current) ? current : undefined;
+  }, undefined, false);
+  if (!result?.committed || !sameEvent(result.snapshot.val())) {
+    const error = new Error('App session cleanup audit changed');
+    error.code = 'SESSION_CLEANUP_AUDIT_CHANGED';
+    throw error;
+  }
+  return eventId;
+};
+
 const cleanupLiveStateForSession = async ({ db, session, nowMs = Date.now() } = {}) => {
   if (!db || !isValidAppSessionId(session?.sessionId)) {
     return { tracking: { retired: 0 }, location: { removed: 0 }, chat: { removed: 0 } };
@@ -157,6 +179,8 @@ const cleanupAppSession = async ({
   reason,
   actorType,
   nowMs = Date.now(),
+  clock = Date.now,
+  appSessionLock = null,
   createEventId,
   disableAllNotificationDelivery = eventType === 'ended_by_admin' || reason === 'account_deletion',
 } = {}) => {
@@ -166,12 +190,24 @@ const cleanupAppSession = async ({
     error.code = 'SESSION_CHANGED';
     throw error;
   }
-  const notificationLockOwner = `session_cleanup:${session.sessionId}`;
+  const sessionLockOwner = appSessionLock?.owner;
+  if (!sessionLockOwner) {
+    const error = new Error('App session cleanup lease is required');
+    error.code = 'SESSION_CHANGED';
+    throw error;
+  }
+  const lease = (await db.ref(`app_session_locks/${session.authUid}`).once('value')).val();
+  if (!lease || lease.owner !== sessionLockOwner) {
+    const error = new Error('App session cleanup lease changed');
+    error.code = 'SESSION_CHANGED';
+    throw error;
+  }
+  const notificationLockOwner = `${sessionLockOwner}:notification_cleanup`;
   const notificationLock = await acquireNotificationDeviceLock({
     db,
     authUid: session.authUid,
     owner: notificationLockOwner,
-    nowMs,
+    nowMs: clock(),
   });
   if (!notificationLock.acquired) {
     const error = new Error('Notification device mutation in progress');
@@ -179,24 +215,26 @@ const cleanupAppSession = async ({
     throw error;
   }
   try {
+    await mutateCleanupSession({ db, session, lease, clock });
     const [userSnapshot, notificationDeviceSnapshot] = await Promise.all([
       db.ref(`users/${session.authUid}`).once('value'),
       db.ref(`notification_devices/${session.authUid}`).once('value'),
     ]);
     await cleanupLiveStateForSession({ db, session, nowMs });
-    const updates = buildAppSessionCleanupUpdates({
+    await cleanupOwnedSessionRecords({
+      db,
       session,
       userProfile: userSnapshot.exists() ? (userSnapshot.val() || {}) : null,
       notificationDevice: notificationDeviceSnapshot.val() || null,
       disableAllNotificationDelivery,
       nowMs,
+      buildNotificationDeviceCleanupUpdates,
     });
-    const eventId = typeof createEventId === 'function' ? createEventId() : null;
-    if (eventId) {
-      updates[`app_session_events/${eventId}`] = buildAppSessionEvent({ session, eventType, reason, actorType, nowMs });
-    }
-    await db.ref().update(updates);
-    return { updates, eventId };
+    // Persist the exact old-session event before deleting retry scope. Its stable
+    // key retains the first timestamp across retries and never names a successor.
+    const eventId = await persistCleanupEvent({ db, session, eventType, reason, actorType, nowMs, createEventId });
+    const result = await mutateCleanupSession({ db, session, lease, clock, remove: true });
+    return { eventId, ...result };
   } finally {
     await releaseNotificationDeviceLock({ lockRef: notificationLock.lockRef, owner: notificationLockOwner });
   }

@@ -104,7 +104,7 @@ test('server workflow derives trusted scope, reserves atomically, and deletes Au
   const completionCall = workerSource.indexOf('finalizeCompletedAccountDeletion', authDeleteCall);
   assert.ok(authDeleteBranch > 0 && authDeleteCall > authDeleteBranch && completionCall > authDeleteCall);
   assert.match(finalizationSource, /removeMatchingBarrier\(db\.ref\(`\$\{ACCOUNT_DELETION_ACTIVE_ROOT\}/u);
-  assert.match(finalizationSource, /ACCOUNT_DELETION_QUEUE_ROOT[^\n]*transaction/u);
+  assert.match(finalizationSource, /transactExistingRecord\(db\.ref\(`\$\{ACCOUNT_DELETION_QUEUE_ROOT\}/u);
 });
 
 test('worker destructive helpers are lease-fenced and media deletion remains exact-owner compare-safe', () => {

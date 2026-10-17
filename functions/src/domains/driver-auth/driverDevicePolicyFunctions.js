@@ -53,6 +53,7 @@ const policyCleanupIdentity = (job) => ({
 /** @type {(...args: any[]) => Promise<boolean>} */
 const recordDriverPolicyCleanupFailure = async ({ db, authUid, job, nowMs, reason }) => {
   const result = await db.ref(`${POLICY_CLEANUP_ROOT}/${authUid}`).transaction((current) => {
+    if (current === null) return null;
     if (!current || current.sessionId !== job?.sessionId || current.expiresAtMs !== job?.expiresAtMs
       || current.terminalWarningId) {
       return undefined;
@@ -66,7 +67,9 @@ const recordDriverPolicyCleanupFailure = async ({ db, authUid, job, nowMs, reaso
       lastFailureReason: boundedWarningCode(reason, 'session_cleanup_retry'),
     };
   }, undefined, false);
-  return result?.committed === true;
+  const saved = result?.snapshot?.val?.();
+  return Boolean(result?.committed && saved?.sessionId === job?.sessionId
+    && saved?.expiresAtMs === job?.expiresAtMs && saved?.lastAttemptAtMs === nowMs);
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
@@ -272,6 +275,7 @@ const advanceDriverPolicyTransition = async ({
   if (transition.phase === 'draining') {
     let drainOutcome = 'waiting';
     const drainResult = await policyRef.transaction((currentValue) => {
+      if (currentValue === null) return null;
       const current = normalizeDriverLoginPolicy(currentValue);
       const currentTransition = readDriverPolicyTransition(currentValue);
       if (!current.valid || currentTransition.phase !== 'draining'
@@ -294,7 +298,7 @@ const advanceDriverPolicyTransition = async ({
         loginAdmissions: null,
       };
     }, undefined, false);
-    if (!drainResult?.committed) return { status: 'contended', progressed: false };
+    if (!drainResult?.committed || !drainResult.snapshot.exists()) return { status: 'contended', progressed: false };
     if (drainOutcome === 'waiting') return { status: 'draining', progressed: true };
     rawPolicy = drainResult.snapshot.val();
     normalized = normalizeDriverLoginPolicy(rawPolicy);
@@ -365,7 +369,7 @@ const advanceDriverPolicyTransition = async ({
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
-const processDriverLoginPolicyCleanupJobs = async ({ db = admin.database(), nowMs = Date.now(), limit = 50 } = {}) => {
+const processDriverLoginPolicyCleanupJobs = async ({ db = admin.database(), nowMs = Date.now(), clock = Date.now, limit = 50 } = {}) => {
   const snapshot = await db.ref(POLICY_CLEANUP_ROOT).orderByChild('createdAtMs').limitToFirst(limit).once('value');
   const jobs = snapshot.val() || {};
   const summary = {
@@ -389,7 +393,8 @@ const processDriverLoginPolicyCleanupJobs = async ({ db = admin.database(), nowM
       }
       continue;
     }
-    const lock = await acquireAppSessionLock({ db, authUid, operation: 'policy_cleanup', nowMs });
+    const lock = await acquireAppSessionLock({ db, authUid, operation: 'policy_cleanup', nowMs: clock(), clock,
+      expectedSessionId: job.sessionId });
     if (!lock.acquired) {
       await recordDriverPolicyCleanupFailure({
         db, authUid, job, nowMs, reason: 'app_session_busy',
@@ -402,7 +407,7 @@ const processDriverLoginPolicyCleanupJobs = async ({ db = admin.database(), nowM
       const session = sessionSnapshot.val();
       if (!session || session.sessionId !== job.sessionId) {
         await db.ref(`${POLICY_CLEANUP_ROOT}/${authUid}`).transaction((current) => (
-          current?.sessionId === job.sessionId && current?.expiresAtMs === job.expiresAtMs
+          current === null || (current?.sessionId === job.sessionId && current?.expiresAtMs === job.expiresAtMs)
             ? null : undefined
         ), undefined, false);
         summary.obsolete += 1;
@@ -415,12 +420,14 @@ const processDriverLoginPolicyCleanupJobs = async ({ db = admin.database(), nowM
         eventType: 'ended_by_admin',
         reason: 'driver_single_device_policy_enabled',
         actorType: 'operations_admin',
-        nowMs,
+        nowMs: clock(),
+        clock,
+        appSessionLock: lock,
         disableAllNotificationDelivery: true,
-        createEventId: () => db.ref('app_session_events').push().key,
+        createEventId: (/** @type {string} */ eventId) => eventId,
       });
       await db.ref(`${POLICY_CLEANUP_ROOT}/${authUid}`).transaction((current) => (
-        current?.sessionId === job.sessionId && current?.expiresAtMs === job.expiresAtMs
+        current === null || (current?.sessionId === job.sessionId && current?.expiresAtMs === job.expiresAtMs)
           ? null : undefined
       ), undefined, false);
       summary.cleaned += 1;

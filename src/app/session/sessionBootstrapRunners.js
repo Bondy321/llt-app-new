@@ -74,6 +74,7 @@ export const runInitializeApp = async ({ SESSION_KEYS, STARTUP_CONNECTION_ERROR_
             const verification = await appSessionService.verifyCurrent({
               authUid: currentUser.uid,
               expectedSession: cachedSession,
+              allowDriverAssignment: cachedSession.principalType === 'driver',
             });
             activeSession = verification.valid ? verification.session : null;
             if (activeSession) await appSessionService.persistSession(activeSession);
@@ -140,8 +141,8 @@ export const runHandleAuthStateChange = async ({ initializing, logger, maskIdent
     if (initializing) setInitializing(false);
   };
 
-export const runRestoreSession = async ({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, logger, normalizePassengerIdentityProjection, normalizePassengerTourProjection, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setTourCode, setTourData }, validAppSession) => {
-    const deps = { IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, logger, normalizePassengerIdentityProjection, normalizePassengerTourProjection, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setTourCode, setTourData };
+export const runRestoreSession = async (deps, validAppSession) => {
+    const { logger } = deps;
     try {
       if (!validAppSession) {
         await clearStoredSessionProjection(deps);
@@ -151,6 +152,7 @@ export const runRestoreSession = async ({ IDENTITY_VERSION, SESSION_KEYS, Sessio
       restoreStoredIdentityBinding(deps, savedEntries[3]);
       return restoreStoredSessionProjection(deps, validAppSession, savedEntries);
     } catch (error) {
+      if (error?.code === 'DRIVER_ASSIGNMENT_RESTORE_PENDING') throw error;
       logger.warn('Session', 'Failed to restore session', { error: error.message });
       return false;
     }

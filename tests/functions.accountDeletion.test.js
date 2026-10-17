@@ -455,10 +455,17 @@ test('passenger deletion requires an exact authorized device, unlocked principal
       input: { expectedSessionId: SESSION_ID, deletionReceipt: RECEIPT }, nowMs: NOW,
     });
     assert.equal(result.status, 422);
-    // Request locks are compare-removed; no account, session or workflow data changes.
-    assert.deepEqual(db.read('passenger_identity_security'), before.passenger_identity_security);
-    assert.deepEqual(db.read(`app_sessions/${AUTH_UID}`), before.app_sessions[AUTH_UID]);
+    // Failed admission advances only the compatible operation revision fence.
+    // Its exact session identity, scope, validity and all account data survive.
+    assert.deepEqual(db.read(`app_sessions/${AUTH_UID}`), {
+      ...before.app_sessions[AUTH_UID], sessionRevision: before.app_sessions[AUTH_UID].sessionRevision + 1,
+    });
+    for (const root of ['passenger_identity_security', 'identity_bindings', 'users', 'tours',
+      'bookings', 'notification_devices', 'notification_consents', 'notification_device_tombstones']) {
+      assert.deepEqual(db.read(root), before[root], root);
+    }
     assert.equal(db.read(`account_deletion_jobs/v1/${deriveAccountDeletionId(RECEIPT)}`), undefined);
+    assert.equal(db.read(`account_deletion_active/v1/${AUTH_UID}`), undefined);
   }
   const db = createMemoryDb(passengerFixture({
     'passenger_identity_security/BOOK_DELETE': {

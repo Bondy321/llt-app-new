@@ -105,14 +105,14 @@ test('policy-on transition releases only the former uid scalar and delayed clean
   };
 
   assert.deepEqual(await reconcilePassengerRoleClaimJob({
-    db, auth, authUid: AUTH_UID, buildClaims: buildPassengerCustomClaims, nowMs: 2,
+    db, auth, authUid: AUTH_UID, buildClaims: buildPassengerCustomClaims, nowMs: 2, clock: () => 2,
   }), { status: 'completed', completed: true, driverClaimReleased: true });
   assert.equal(db.state[`drivers/${FORMER_DRIVER_ID}/authUid`], undefined);
 
   db.state[`drivers/${FORMER_DRIVER_ID}/authUid`] = 'uid-successor';
   db.state[jobPath] = job;
   assert.deepEqual(await reconcilePassengerRoleClaimJob({
-    db, auth, authUid: AUTH_UID, buildClaims: buildPassengerCustomClaims, nowMs: 3,
+    db, auth, authUid: AUTH_UID, buildClaims: buildPassengerCustomClaims, nowMs: 3, clock: () => 3,
   }), { status: 'completed', completed: true, driverClaimReleased: false });
   assert.equal(db.state[`drivers/${FORMER_DRIVER_ID}/authUid`], 'uid-successor');
   assert.equal(db.state[`drivers/${FORMER_DRIVER_ID}/currentTourId`], undefined);
@@ -135,7 +135,7 @@ test('claim reconciliation scrubs driver claims and completes exactly once', asy
     setCustomUserClaims: async (uid, claims) => writes.push({ uid, claims }),
   };
   const result = await reconcilePassengerRoleClaimJob({
-    db, auth, authUid: AUTH_UID, buildClaims: buildPassengerCustomClaims, nowMs: 2,
+    db, auth, authUid: AUTH_UID, buildClaims: buildPassengerCustomClaims, nowMs: 2, clock: () => 2,
   });
   assert.deepEqual(result, { status: 'completed', completed: true });
   assert.equal(db.state[jobPath], undefined);
@@ -148,7 +148,7 @@ test('claim reconciliation scrubs driver claims and completes exactly once', asy
     },
   }]);
   assert.deepEqual(await reconcilePassengerRoleClaimJob({
-    db, auth, authUid: AUTH_UID, buildClaims: buildPassengerCustomClaims, nowMs: 2,
+    db, auth, authUid: AUTH_UID, buildClaims: buildPassengerCustomClaims, nowMs: 2, clock: () => 2,
   }), { status: 'missing', completed: false });
   assert.equal(writes.length, 1);
 });
@@ -174,6 +174,7 @@ test('a stale role claim job cannot touch a replacement session', async () => {
     authUid: AUTH_UID,
     buildClaims: buildPassengerCustomClaims,
     nowMs: 2,
+    clock: () => 2,
   });
   assert.deepEqual(result, { status: 'stale', completed: false });
   assert.equal(db.state[jobPath], undefined);
@@ -202,6 +203,7 @@ test('bounded worker retains an exact current job when Auth is retryable', async
     buildClaims: buildPassengerCustomClaims,
     limit: 10,
     nowMs: 2,
+    clock: () => 2,
   });
   assert.deepEqual(result, {
     scanned: 1, completed: 0, retryable: 1, stale: 0, expired: 0, terminalWarnings: 0,

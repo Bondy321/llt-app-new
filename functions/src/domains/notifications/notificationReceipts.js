@@ -2,6 +2,7 @@
 
 // @ts-check
 
+const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { expoAccessTokenSecret, getExpoPushClient } = require('../../infrastructure/notifications/expoPushClient');
@@ -88,22 +89,18 @@ const resolveJobStatus = (job) => {
 /** Current-state status refresh is O(1): transition helpers maintain job counters. */
 const refreshNotificationJobStatus = async (db, jobId, nowMs) => {
   const jobRef = db.ref(`notification_jobs/${jobId}`);
-  let updated = null;
-  let retained = null;
-  await jobRef.transaction((job) => {
-    if (!job) return job;
+  const result = await transactExistingRecord(jobRef, (job) => {
     if (job.status === 'privacy_deleted' || isNotificationLifecycleRetentionFenced(job, nowMs)) {
-      retained = job;
       return job;
     }
     const status = resolveJobStatus(job);
-    updated = { ...job, status, updatedAtMs: nowMs, ...(isTerminalNotificationJobStatus(status) ? { completedAtMs: Number(job.completedAtMs || nowMs) } : {}) };
-    return updated;
+    return { ...job, status, updatedAtMs: nowMs, ...(isTerminalNotificationJobStatus(status) ? { completedAtMs: Number(job.completedAtMs || nowMs) } : {}) };
   });
-  if (retained) return {
-    status: retained.status, counts: retained.counts || {}, job: retained, retentionFenced: true,
-  };
+  const updated = result?.applied ? result.snapshot.val() : null;
   if (!updated) return null;
+  if (updated.status === 'privacy_deleted' || isNotificationLifecycleRetentionFenced(updated, nowMs)) return {
+    status: updated.status, counts: updated.counts || {}, job: updated, retentionFenced: true,
+  };
   let schedulingError = null;
   try {
     await scheduleNotificationRetentionIfEligible(db, updated, nowMs);

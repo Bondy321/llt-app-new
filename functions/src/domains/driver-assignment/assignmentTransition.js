@@ -316,7 +316,7 @@ const applyCanonicalTransition = async ({ db, transitionId, transition, nowMs })
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
-const reconcileTransitionSessionPage = async ({ db, transitionId, transition, nowMs, pageSize }) => {
+const reconcileTransitionSessionPage = async ({ db, transitionId, transition, nowMs, pageSize, clock = Date.now }) => {
   const incumbent = transition.status === 'incumbent_sessions';
   const displacedDriverIds = readDisplacedDriverIds(transition);
   const displacedDriverIndex = Number.isSafeInteger(transition.displacedDriverIndex)
@@ -338,13 +338,13 @@ const reconcileTransitionSessionPage = async ({ db, transitionId, transition, no
   try {
     for (const authUid of authUids) {
       const lock = await acquireAppSessionLock({
-        db, authUid, operation: 'assign', nowMs, ttlMs: ASSIGNMENT_LOCK_TTL_MS,
+        db, authUid, operation: 'assign', nowMs: clock(), clock, ttlMs: ASSIGNMENT_LOCK_TTL_MS,
       });
       if (!lock.acquired) return { status: 'contended', progressed: false };
       sessionLocks.push({ authUid, owner: lock.owner });
       const deviceOwner = `assignment_transition:${transitionId}`;
       const deviceLock = await acquireNotificationDeviceLock({
-        db, authUid, owner: deviceOwner, nowMs, ttlMs: ASSIGNMENT_LOCK_TTL_MS,
+        db, authUid, owner: deviceOwner, nowMs: clock(), ttlMs: ASSIGNMENT_LOCK_TTL_MS,
       });
       if (!deviceLock.acquired) return { status: 'contended', progressed: false };
       deviceLocks.push({ lockRef: deviceLock.lockRef, owner: deviceOwner });

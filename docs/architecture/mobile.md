@@ -8,6 +8,12 @@ Auth UID and remains separate from operational app-session authority.
 
 `App.js` delegates to `src/app/AppRoot.js`. `AppRoot` owns providers; `AppShell` coordinates state; runners and hooks own login, restore, logout, notification, offline, and assignment workflows. `AppScreenRouter` renders the stable route registry.
 
+Driver session revisions reconcile through `driverAssignmentRunners`, shared by the own-session
+listener, assignment HTTP completion and manifest invalidation refresh. The session service owns
+monotonic identity validation, expiry and serialized guarded storage. Actual tour transitions
+retire tracking/replay and old scoped work before exposing the new tour. Revision-only changes
+preserve the active operational scope. See `docs/data-contracts/app-session.md`.
+
 Account deletion is a separate blocking lifecycle, not an expanded logout. The service generates an
 opaque receipt and captures the validated original Auth UID in a secure schema-v3 local record before
 requesting deletion. It sends only the receipt and exact app-session ID, never the local cleanup UID,

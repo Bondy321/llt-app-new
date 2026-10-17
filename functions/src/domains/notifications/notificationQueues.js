@@ -2,6 +2,8 @@
 
 // @ts-check
 
+const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
+
 const { createHash, randomUUID } = require('node:crypto');
 
 const QUEUE_ROOTS = Object.freeze({
@@ -80,14 +82,14 @@ const loadDueQueueEntries = async (db, kind, nowMs, limit) => {
 const claimQueueEntry = async (queueRef, nowMs, leaseMs = 2 * 60 * 1000, requestedOwnerId = null) => {
   const ownerId = requestedOwnerId || randomUUID();
   let claimed = false;
-  const transaction = await queueRef.transaction((entry) => {
+  const transaction = await transactExistingRecord(queueRef, (entry) => {
     if (!entry || Number(entry.dueAtMs || 0) > nowMs) return;
     if (entry.lease && Number(entry.lease.expiresAtMs || 0) > nowMs) return;
     claimed = true;
     return { ...entry, lease: { ownerId, acquiredAtMs: nowMs, expiresAtMs: nowMs + leaseMs } };
   });
   const entry = transaction?.snapshot?.val?.() || null;
-  return { claimed: Boolean(claimed && entry?.lease?.ownerId === ownerId), ownerId, entry };
+  return { claimed: Boolean(transaction?.applied && claimed && entry?.lease?.ownerId === ownerId), ownerId, entry };
 };
 
 /**
@@ -99,7 +101,7 @@ const claimQueueEntry = async (queueRef, nowMs, leaseMs = 2 * 60 * 1000, request
  */
 const releaseClaimedQueueEntry = async (queueRef, ownerId, dueAtMs = null) => {
   let released = false;
-  const transaction = await queueRef.transaction((entry) => {
+  const transaction = await transactExistingRecord(queueRef, (entry) => {
     if (!entry || entry.lease?.ownerId !== ownerId) return;
     released = true;
     return {
@@ -108,18 +110,18 @@ const releaseClaimedQueueEntry = async (queueRef, ownerId, dueAtMs = null) => {
       lease: null,
     };
   });
-  return { released: Boolean(released && transaction?.committed), entry: transaction?.snapshot?.val?.() || null };
+  return { released: Boolean(released && transaction?.applied), entry: transaction?.snapshot?.val?.() || null };
 };
 
 /** @param {any} queueRef @param {string} ownerId */
 const removeClaimedQueueEntry = async (queueRef, ownerId) => {
   let removed = false;
-  const transaction = await queueRef.transaction((entry) => {
+  const transaction = await transactExistingRecord(queueRef, (entry) => {
     if (!entry || entry.lease?.ownerId !== ownerId) return;
     removed = true;
     return null;
   });
-  return Boolean(removed && transaction?.committed);
+  return Boolean(removed && transaction?.applied);
 };
 
 module.exports = {

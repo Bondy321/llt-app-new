@@ -151,14 +151,14 @@ test('session IDs have the required entropy-shaped opaque format and expiry is c
 
 test('per-UID lock serialises contenders, recovers expiry and releases only for its owner', async () => {
   const db = createTransactionDb();
-  const first = await acquireAppSessionLock({ db, authUid: 'uid-1', operation: 'issue', owner: 'owner-a', nowMs: 100 });
+  const first = await acquireAppSessionLock({ db, authUid: 'uid-1', operation: 'issue', owner: 'owner-a', nowMs: 100, clock: () => 100 });
   assert.equal(first.acquired, true);
   assert.equal((await acquireAppSessionLock({
-    db, authUid: 'uid-1', operation: 'end', owner: 'owner-b', nowMs: 101,
+    db, authUid: 'uid-1', operation: 'end', owner: 'owner-b', nowMs: 101, clock: () => 101,
   })).acquired, false);
   assert.equal(await releaseAppSessionLock({ db, authUid: 'uid-1', owner: 'owner-b' }), false);
   assert.equal((await acquireAppSessionLock({
-    db, authUid: 'uid-1', operation: 'cleanup', owner: 'owner-c', nowMs: 31_000,
+    db, authUid: 'uid-1', operation: 'cleanup', owner: 'owner-c', nowMs: 31_000, clock: () => 31_000,
   })).acquired, true);
   assert.equal(await releaseAppSessionLock({ db, authUid: 'uid-1', owner: 'owner-c' }), true);
 });
@@ -171,6 +171,7 @@ test('policy cleanup is an admitted app-session lock operation', async () => {
     operation: 'policy_cleanup',
     owner: 'policy-cleanup-owner',
     nowMs: 100,
+    clock: () => 100,
   });
   assert.equal(lock.acquired, true);
   assert.equal(lock.lock.operation, 'policy_cleanup');

@@ -2,11 +2,31 @@
 
 // @ts-check
 
+const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
+
 const { randomUUID } = require('node:crypto');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { getExpoPushClient } = require('../../infrastructure/notifications/expoPushClient');
 const { DEFAULT_LEASE_MS } = require('./notificationJobs');
 const { isNotificationLifecycleRetentionFenced } = require('./notificationRetentionIntegration');
+
+const acquireNotificationAttemptRetryLease = async ({ attemptRef, attempt, nowMs }) => {
+  const ownerId = randomUUID();
+  let acquired = false;
+  const lease = await transactExistingRecord(attemptRef, (current) => {
+    if (!current || current.status !== 'retrying'
+      || Number(current.availableAtMs || 0) > nowMs) return undefined;
+    if (current.retryLease && Number(current.retryLease.expiresAtMs || 0) > nowMs) return undefined;
+    acquired = true;
+    return {
+      ...current,
+      retryLease: { ownerId, acquiredAtMs: nowMs, expiresAtMs: nowMs + 120_000 },
+      updatedAtMs: nowMs,
+    };
+  });
+  const leased = lease?.snapshot?.val?.() || attempt;
+  return { attempt: leased, acquired: Boolean(lease?.applied && acquired && leased.retryLease?.ownerId === ownerId) };
+};
 
 const createNotificationRetrySubmission = ({
   buildExpoPushMessage,
@@ -19,7 +39,7 @@ const createNotificationRetrySubmission = ({
     jobRef, observedJob, nowMs, ownerId = randomUUID(),
   }) => {
     let acquired = false;
-    const result = await jobRef.transaction((current) => {
+    const result = await transactExistingRecord(jobRef, (current) => {
       if (!current || current.jobId !== observedJob?.jobId
         || isNotificationLifecycleRetentionFenced(current, nowMs)
         || current.status === 'privacy_deleted' || current.status === 'expired'
@@ -34,17 +54,17 @@ const createNotificationRetrySubmission = ({
       };
     });
     const job = result?.snapshot?.val?.() || null;
-    return { acquired: Boolean(acquired && job?.lease?.ownerId === ownerId), job, ownerId };
+    return { acquired: Boolean(result?.applied && acquired && job?.lease?.ownerId === ownerId), job, ownerId };
   };
 
   const releaseNotificationRetrySubmissionFence = async ({ jobRef, ownerId }) => {
     let released = false;
-    const result = await jobRef.transaction((current) => {
+    const result = await transactExistingRecord(jobRef, (current) => {
       if (!current || current.lease?.ownerId !== ownerId) return undefined;
       released = true;
       return { ...current, lease: null };
     });
-    return Boolean(released && result?.committed);
+    return Boolean(released && result?.applied);
   };
 
   /** Retry worker is the only owner allowed to submit a retry generation. */
@@ -68,23 +88,9 @@ const createNotificationRetrySubmission = ({
         }, nowMs);
         return { success: false, reason: 'PAYLOAD_TOO_LARGE' };
       }
-      const ownerId = randomUUID();
-      let acquired = false;
-      const lease = await attemptRef.transaction((current) => {
-        if (!current || current.status !== 'retrying'
-          || Number(current.availableAtMs || 0) > nowMs) return undefined;
-        if (current.retryLease && Number(current.retryLease.expiresAtMs || 0) > nowMs) return undefined;
-        acquired = true;
-        return {
-          ...current,
-          retryLease: { ownerId, acquiredAtMs: nowMs, expiresAtMs: nowMs + 120_000 },
-          updatedAtMs: nowMs,
-        };
-      });
-      const leased = lease?.snapshot?.val?.() || attempt;
-      if (!acquired || leased.retryLease?.ownerId !== ownerId) {
-        return { success: false, reason: 'NOT_CLAIMED' };
-      }
+      const claim = await acquireNotificationAttemptRetryLease({ attemptRef, attempt, nowMs });
+      if (!claim.acquired) return { success: false, reason: 'NOT_CLAIMED' };
+      const leased = claim.attempt;
       const sending = await transitionDeliveryAttempt(db, attemptId, leased, {
         status: 'request_started',
         requestStartedAtMs: nowMs,

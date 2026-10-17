@@ -140,14 +140,14 @@ async function removeExactStoppedSource({ sourceRef, input }) {
  * @param {any} options
  */
 async function performDriverTrackingStop({ db, authUid, input: rawInput,
-  nowMs = Date.now(), reconcileProjection = reconcileDriverLocationProjection }) {
+  nowMs = Date.now(), clock = Date.now, reconcileProjection = reconcileDriverLocationProjection }) {
   const input = parseTrackingStopInput(rawInput);
   if (!input || !isValidStopTime(nowMs)) return denied(400, 'INVALID_INPUT');
   if (!isValidFirebaseKey(authUid) || input.authUid !== authUid) return denied(403, 'NOT_AUTHORIZED');
   const sourceKey = trackingSourceKey(input);
   const intentRef = db.ref(`${DRIVER_TRACKING_SESSIONS_ROOT}/${sourceKey}`);
   const sourceRef = db.ref(`driver_location_sessions/${sourceKey}`);
-  const sessionLock = await acquireAppSessionLock({ db, authUid, operation: 'driver_tracking_stop', nowMs });
+  const sessionLock = await acquireAppSessionLock({ db, authUid, operation: 'driver_tracking_stop', nowMs: clock(), clock });
   if (!sessionLock.acquired) return denied(409, 'SESSION_IN_PROGRESS');
   const owner = randomUUID();
   const assignmentLocks = [];

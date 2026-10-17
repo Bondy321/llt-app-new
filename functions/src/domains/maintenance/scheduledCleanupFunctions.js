@@ -72,18 +72,9 @@ const cleanupExpiredLoginRateLimits = onScheduleWithResult(
   },
 );
 
-const cleanupExpiredAppSessions = onScheduleWithResult(
-  {
-    schedule: 'every 15 minutes',
-    timeZone: 'Europe/London',
-    region: 'europe-west1',
-    memory: '256MiB',
-    timeoutSeconds: 120,
-    maxInstances: 1,
-  },
-  async () => {
-    const db = admin.database();
-    const nowMs = Date.now();
+/** @type {(...args: any[]) => Promise<any>} */
+const processExpiredAppSessions = async ({ db = admin.database(), clock = Date.now } = {}) => {
+    const nowMs = clock();
     const snapshot = await db.ref('app_sessions')
       .orderByChild('expiresAtMs')
       .endAt(nowMs)
@@ -94,7 +85,8 @@ const cleanupExpiredAppSessions = onScheduleWithResult(
     for (const [authUid, candidateValue] of Object.entries(candidates)) {
       const candidate = /** @type {any} */ (candidateValue);
       summary.scanned += 1;
-      const lock = await acquireAppSessionLock({ db, authUid, operation: 'cleanup', nowMs });
+      const lock = await acquireAppSessionLock({ db, authUid, operation: 'cleanup', nowMs: clock(), clock,
+        expectedSessionId: candidate.sessionId, expectedSessionRevision: candidate.sessionRevision });
       if (!lock.acquired) {
         summary.locked += 1;
         continue;
@@ -106,7 +98,7 @@ const cleanupExpiredAppSessions = onScheduleWithResult(
           summary.alreadyEnded += 1;
           continue;
         }
-        if (Number(current.expiresAtMs) > nowMs) continue;
+        if (Number(current.expiresAtMs) > clock()) continue;
         await cleanupAppSession({
           db,
           session: current,
@@ -114,8 +106,10 @@ const cleanupExpiredAppSessions = onScheduleWithResult(
           eventType: 'expired',
           reason: 'session_expired',
           actorType: 'system',
-          nowMs,
-          createEventId: () => db.ref('app_session_events').push().key,
+          nowMs: clock(),
+          clock,
+          appSessionLock: lock,
+          createEventId: (/** @type {string} */ eventId) => eventId,
         });
         summary.expired += 1;
       } catch (error) {
@@ -140,7 +134,18 @@ const cleanupExpiredAppSessions = onScheduleWithResult(
     }
     log.info('Expired app session cleanup completed', summary);
     return summary;
+};
+
+const cleanupExpiredAppSessions = onScheduleWithResult(
+  {
+    schedule: 'every 15 minutes',
+    timeZone: 'Europe/London',
+    region: 'europe-west1',
+    memory: '256MiB',
+    timeoutSeconds: 120,
+    maxInstances: 1,
   },
+  () => processExpiredAppSessions(),
 );
 
 module.exports = {
@@ -148,4 +153,5 @@ module.exports = {
   cleanupExpiredDriverLocations,
   cleanupExpiredDriverTourPacks,
   cleanupExpiredLoginRateLimits,
+  processExpiredAppSessions,
 };
